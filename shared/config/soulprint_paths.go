@@ -1,34 +1,34 @@
 package config
 
-// Статическая модель путей `soulprint.self.<...>` для статпроверки CEL-предикатов
+// Static model of `soulprint.self.<...>` paths for static-checking CEL predicates
 // (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`/`loop.when:`).
 //
-// Источник истины — [ADR-018](docs/adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp)
-// и [docs/soul/soulprint.md]: typed-схема `SoulprintFacts` (`os`/`kernel`/`cpu`/
-// `memory`/`network`) плюс корневые `sid`/`hostname` и registry-проекции
-// (`covens`, `choirs`, `role`). Каноническая форма обязательна: голая `soulprint.<x>` без
-// `.self`/`.hosts`/`.where` — ошибка (см. soulprint.md «Каноническая форма»).
+// Source of truth — [ADR-018](docs/adr/0018-soulprint-typed.md) and
+// [docs/soul/soulprint.md]: the typed `SoulprintFacts` schema
+// (`os`/`kernel`/`cpu`/`memory`/`network`) plus root `sid`/`hostname` and registry
+// projections (`covens`, `choirs`, `role`). The canonical form is mandatory: a bare
+// `soulprint.<x>` without `.self`/`.hosts`/`.where` is an error (see soulprint.md
+// "Canonical form").
 //
-// Линтер сверяет ТОЛЬКО префикс известных полей. Хвост после массивного поля
-// (`soulprint.self.network.interfaces[0].ipv4`) и опционально-вложенные ветки
-// `extra` (зарезервированное расширение по ADR-018) принимаются как valid: они
-// либо имеют динамическую форму (массивы, ключи интерфейса), либо относятся
-// к будущим полям. Цель — ловить опечатки (`os.familly`/`memmory.total_mb`),
-// а не быть полной типовой системой.
+// The linter checks ONLY the prefix of known fields. The tail after an array field
+// (`soulprint.self.network.interfaces[0].ipv4`) and the optionally-nested `extra`
+// branches (a reserved ADR-018 extension) are accepted as valid: they are either
+// dynamic in shape (arrays, interface keys) or belong to future fields. The goal is
+// to catch typos (`os.familly`/`memmory.total_mb`), not to be a full type system.
 
-// soulprintSelfPaths — закрытый whitelist голых сегментов первого уровня под
-// `soulprint.self.<segment>`. Дальнейший спуск проверяется через
-// soulprintSelfSubPaths (вложенные сообщения).
+// soulprintSelfTopLevel — closed whitelist of bare first-level segments under
+// `soulprint.self.<segment>`. Deeper descent is checked via soulprintSelfSubPaths
+// (nested messages).
 //
-// Регистрируется только то, что есть в SoulprintFacts (ADR-018) + registry-
-// проекции (`covens`/`choirs`/`role`, see docs/soul/soulprint.md «Граница
-// `Soulprint`↔`souls`-registry»).
+// Only what exists in SoulprintFacts (ADR-018) is registered + registry projections
+// (`covens`/`choirs`/`role`, see docs/soul/soulprint.md "Boundary
+// `Soulprint`↔`souls`-registry").
 var soulprintSelfTopLevel = map[string]bool{
 	"sid":      true, // string, registry+collected
 	"hostname": true, // string
-	"covens":   true, // list<string>, registry-проекция
-	"choirs":   true, // list<string>, registry-проекция (ADR-044, зеркало covens)
-	"traits":   true, // map<string, scalar|list>, registry-проекция (ADR-060); ключи динамичны — третий сегмент не статпроверяется
+	"covens":   true, // list<string>, registry projection
+	"choirs":   true, // list<string>, registry projection (ADR-044, mirror of covens)
+	"traits":   true, // map<string, scalar|list>, registry projection (ADR-060); keys are dynamic — the third segment is not static-checked
 	"role":     true, // string|null, declared (bootstrap-create only)
 	"os":       true, // OsFacts
 	"kernel":   true, // KernelFacts
@@ -37,12 +37,11 @@ var soulprintSelfTopLevel = map[string]bool{
 	"network":  true, // NetworkFacts
 }
 
-// soulprintSelfSubPaths — точные двухсегментные пути под `soulprint.self.<msg>.<field>`.
-// Используются для проверки опечаток в полях вложенных сообщений. Если top-level
-// сегмент есть, но второй неизвестен — флагаем (явно сверяемая опечатка типа
-// `os.familly`). Если top-level — массив/строка (`covens`/`sid`/…), вторая
-// проверка не запускается (любой суффикс принимается как dyn-доступ или
-// runtime-индекс).
+// soulprintSelfSubPaths — exact two-segment paths under `soulprint.self.<msg>.<field>`.
+// Used to check typos in nested-message fields. If the top-level segment exists but
+// the second is unknown — flag it (a clearly checkable typo like `os.familly`). If
+// the top-level is an array/string (`covens`/`sid`/…), the second check does not run
+// (any suffix is accepted as dynamic access or a runtime index).
 var soulprintSelfSubPaths = map[string]map[string]bool{
 	"os": {
 		"family":      true,
@@ -70,14 +69,14 @@ var soulprintSelfSubPaths = map[string]map[string]bool{
 	"network": {
 		"primary_ip": true,
 		"fqdn":       true,
-		"interfaces": true, // список — дальнейший спуск динамический
+		"interfaces": true, // list — deeper descent is dynamic
 	},
 }
 
-// soulprintScalarTopLevel — top-level сегменты с не-message-типом: спуска
-// глубже регистра нет (нечего опечатать в имени поля). Используется, чтобы
-// `soulprint.self.sid.startsWith(...)` (вызов метода) проходил без флага на
-// «третий сегмент `startsWith`».
+// soulprintScalarTopLevel — top-level segments with a non-message type: no descent
+// past the register (no field name to mistype). Used so that
+// `soulprint.self.sid.startsWith(...)` (a method call) passes without flagging the
+// "third segment `startsWith`".
 var soulprintScalarTopLevel = map[string]bool{
 	"sid":      true,
 	"hostname": true,
@@ -86,42 +85,42 @@ var soulprintScalarTopLevel = map[string]bool{
 	"role":     true,
 }
 
-// CovenLabelValidator — хук валидации coven-метки в `on: [coven, …]`-литералах
-// за пределами формата (regex). Зеркалит интерфейс из keeper/internal/soul
-// (которому shared/config принципиально не подчинён); в пилоте — no-op, потому
-// что справочника окружений (Q1b ADR-008-amend) ещё нет. Когда справочник
-// появится, его клиент подменяет [activeCovenLabelValidator] через
-// [SetCovenLabelValidator] на старте бинаря; soul-lint без подмены продолжает
-// работать как format-only (regex).
+// CovenLabelValidator — a hook validating a coven label in `on: [coven, …]`
+// literals beyond the format (regex). Mirrors the interface from
+// keeper/internal/soul (which shared/config deliberately does not depend on); a
+// no-op in the pilot, since the environment registry (Q1b ADR-008-amend) does not
+// exist yet. Once it does, its client swaps [activeCovenLabelValidator] via
+// [SetCovenLabelValidator] at binary startup; soul-lint without the swap keeps
+// working as format-only (regex).
 type CovenLabelValidator interface {
 	Validate(label string) error
 }
 
-// NoopCovenLabelValidator — формат-only проверка (регекс делает [reCovenName]).
-// Совместим по форме с keeper/internal/soul.NoopCovenLabelValidator.
+// NoopCovenLabelValidator — format-only check (the regex is done by [reCovenName]).
+// Shape-compatible with keeper/internal/soul.NoopCovenLabelValidator.
 type NoopCovenLabelValidator struct{}
 
-// Validate всегда пропускает.
+// Validate always passes.
 func (NoopCovenLabelValidator) Validate(string) error { return nil }
 
-// activeCovenLabelValidator — package-level хук, который применяется внутри
-// [validateOnField] поверх regex-формы (regex остаётся первой линией). nil →
-// no-op (см. [covenLabelValidator]). Тесты могут установить кастомный хук через
-// [SetCovenLabelValidator]; soul-lint в основном flow не вызывает Set и видит
-// no-op. Поток «справочник из БД на keeper-стороне» — отдельный consumer,
-// shared/config о нём не знает.
+// activeCovenLabelValidator — package-level hook applied inside [validateOnField]
+// over the regex form (regex stays the first line). nil → no-op (see
+// [covenLabelValidator]). Tests may install a custom hook via
+// [SetCovenLabelValidator]; soul-lint in the main flow never calls Set and sees the
+// no-op. The "registry from DB on the keeper side" flow is a separate consumer that
+// shared/config knows nothing about.
 var activeCovenLabelValidator CovenLabelValidator
 
-// SetCovenLabelValidator подменяет глобальный хук. Возвращает предыдущий — для
-// детерминированного restore в тестах. nil-аргумент сбрасывает в no-op.
+// SetCovenLabelValidator swaps the global hook. Returns the previous one for
+// deterministic restore in tests. A nil argument resets to the no-op.
 func SetCovenLabelValidator(v CovenLabelValidator) CovenLabelValidator {
 	prev := activeCovenLabelValidator
 	activeCovenLabelValidator = v
 	return prev
 }
 
-// covenLabelValidator — текущий активный хук (или no-op, если не настроен).
-// Возвращается [validateOnField] для проверки каждой не-CEL-обёрнутой метки.
+// covenLabelValidator — the currently active hook (or no-op if unset). Returned to
+// [validateOnField] to check each non-CEL-wrapped label.
 func covenLabelValidator() CovenLabelValidator {
 	if activeCovenLabelValidator == nil {
 		return NoopCovenLabelValidator{}

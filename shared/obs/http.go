@@ -8,22 +8,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// HTTPMetrics — набор Prometheus-collector-ов HTTP-инструментации
-// (Operator API под `/v1/*`). Регистрируется отдельно от registry-core
-// через [RegisterHTTPMetrics]: registry-core компонент-агностичен, а
-// собственные метрики вешаются helper-ами поверх него. HTTPMetrics
-// остаётся в shared/obs — middleware нейтральна к internal-типам обоих
-// бинарей (параметризуется injected path-extractor-ом), поэтому это
-// сквозной фундамент, а НЕ subsystem-local collector. Контраст:
-// keeper-only collector-ы (Reaper и пр.) тянут internal-типы и потому
-// живут рядом с подсистемой в keeper/internal/* (docs/observability.md §4.0).
+// HTTPMetrics is the set of Prometheus collectors for HTTP instrumentation
+// (Operator API under `/v1/*`). Registered separately from the registry core
+// via [RegisterHTTPMetrics]: the registry core is component-agnostic, and
+// dedicated metrics are attached by helpers on top of it. HTTPMetrics stays in
+// shared/obs — the middleware is neutral to both binaries' internal types (it
+// is parameterized by an injected path-extractor), so it is a cross-cutting
+// foundation, NOT a subsystem-local collector. Contrast: keeper-only collectors
+// (Reaper etc.) pull internal types and therefore live next to their subsystem
+// in keeper/internal/* (docs/observability.md §4.0).
 //
-// Имена метрик — Prometheus convention (snake_case, _total для counters,
-// _seconds для durations; ADR-024 §2.1). Labels подобраны под наблюдаемые
-// вопросы оператора:
-//   - method/path/status — стандартный split request-rate;
-//   - path берётся из chi-RouteContext (route pattern, не raw URL) — без
-//     него /v1/operators/{aid}/revoke даст cardinality-blow-up по AID
+// Metric names follow Prometheus convention (snake_case, _total for counters,
+// _seconds for durations; ADR-024 §2.1). Labels are chosen for the operator's
+// observable questions:
+//   - method/path/status — standard request-rate split;
+//   - path comes from chi-RouteContext (route pattern, not raw URL) — without
+//     it /v1/operators/{aid}/revoke would blow up cardinality by AID
 //     (ADR-024 §2.2).
 type HTTPMetrics struct {
 	requestsTotal *prometheus.CounterVec
@@ -31,11 +31,11 @@ type HTTPMetrics struct {
 	inFlight      prometheus.Gauge
 }
 
-// RegisterHTTPMetrics создаёт keeper_http_*-collectors и регистрирует их в
-// Registry-е. Возвращает дескриптор для wire-up в HTTP-роутер Keeper-а.
+// RegisterHTTPMetrics creates the keeper_http_* collectors and registers them
+// in the Registry. Returns a descriptor for wire-up into the Keeper HTTP router.
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды
-// на одном Registry); падать сразу удобнее, чем носить ленивую init.
+// MustRegister: duplicate registration is a programmer error (called twice on
+// one Registry); failing immediately is simpler than carrying lazy init.
 func RegisterHTTPMetrics(r *Registry) *HTTPMetrics {
 	m := &HTTPMetrics{
 		requestsTotal: prometheus.NewCounterVec(
@@ -49,11 +49,11 @@ func RegisterHTTPMetrics(r *Registry) *HTTPMetrics {
 			prometheus.HistogramOpts{
 				Name: "keeper_http_request_duration_seconds",
 				Help: "Latency HTTP-запросов под /v1/*, в секундах.",
-				// Buckets под Operator API: типичные запросы — 1-50ms,
-				// PG-write-path — 10-200ms, slow — 1s+. Default-buckets
-				// Prometheus (0.005..10) рассчитаны на web-traffic с длинным
-				// хвостом; Keeper-API короче — сужаем верхнюю границу до 5s,
-				// добавляем гранулярность в зоне 5-100ms.
+				// Buckets tuned for the Operator API: typical requests 1-50ms,
+				// PG-write-path 10-200ms, slow 1s+. Prometheus default buckets
+				// (0.005..10) target web traffic with a long tail; the Keeper
+				// API is shorter — narrow the upper bound to 5s and add
+				// granularity in the 5-100ms zone.
 				Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 			},
 			[]string{"method", "path"},
@@ -67,23 +67,23 @@ func RegisterHTTPMetrics(r *Registry) *HTTPMetrics {
 	return m
 }
 
-// MiddlewareForPath возвращает middleware, инструментирующий HTTP-handler:
-// считает requests_total / duration / in_flight, лейбля по результату
-// pathExtractor(r). pathExtractor вытягивает chi-pattern; каллер обычно
-// использует [chi.RouteContext](r).RoutePattern().
+// MiddlewareForPath returns middleware that instruments an HTTP handler: it
+// counts requests_total / duration / in_flight, labeling by the result of
+// pathExtractor(r). pathExtractor pulls the chi pattern; the caller usually
+// uses [chi.RouteContext](r).RoutePattern().
 //
-// `path` — pattern маршрута (`/v1/operators/{aid}/revoke`), не raw URL.
-// Для не-chi handler-ов / fallback-ов / nil-extractor-а path-параметр
-// будет пустым — это допустимо (метрика собирается с label `path=""`,
-// нелитеральные пути не размывают cardinality).
+// `path` is the route pattern (`/v1/operators/{aid}/revoke`), not the raw URL.
+// For non-chi handlers / fallbacks / a nil extractor the path label will be
+// empty — that is acceptable (the metric is collected with label `path=""`;
+// non-literal paths do not smear cardinality).
 //
-// Подход «через injected extractor», а не через прямой import chi, чтобы
-// shared/obs не тянул chi в зависимости (по ADR-011 shared/ — поперечный
-// код без привязки к конкретному роутеру; роутер выбирает keeper-сторона).
+// The "injected extractor" approach, rather than a direct chi import, keeps
+// shared/obs from depending on chi (per ADR-011 shared/ is cross-cutting code
+// with no tie to a specific router; the keeper side picks the router).
 //
-// Middleware применяется ВНУТРИ chi.Route("/v1") после того, как
-// chi-router вычислил RoutePattern; снаружи (на root r.Use(...)) chi ещё
-// не знает pattern-а, label получится пустым.
+// The middleware applies INSIDE chi.Route("/v1") after the chi router has
+// computed RoutePattern; outside (at root r.Use(...)) chi does not yet know the
+// pattern and the label would be empty.
 func (m *HTTPMetrics) MiddlewareForPath(pathExtractor func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -106,13 +106,13 @@ func (m *HTTPMetrics) MiddlewareForPath(pathExtractor func(*http.Request) string
 	}
 }
 
-// statusRecorder — wrap для http.ResponseWriter, запоминающий фактический
-// status (WriteHeader). Лёгкий, без буферизации body — нам нужен только code.
+// statusRecorder wraps http.ResponseWriter to remember the actual status
+// (WriteHeader). Lightweight, no body buffering — we only need the code.
 //
-// Дублирует приватный recorder middleware/audit.go; не выношу в общий
-// helper, так как audit-middleware живёт в keeper/, а obs/ — в shared/,
-// и тянуть зависимость shared→keeper нельзя. Три строки лучше
-// преждевременной абстракции (CLAUDE.md «без over-engineering»).
+// Duplicates the private recorder in middleware/audit.go; not extracted into a
+// shared helper because the audit middleware lives in keeper/ while obs/ is in
+// shared/, and a shared→keeper dependency is not allowed. Three lines beat a
+// premature abstraction (CLAUDE.md "no over-engineering").
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int
@@ -128,11 +128,11 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// Write обеспечивает корректный учёт статуса, если handler пишет body
-// без явного WriteHeader (stdlib подразумевает 200).
+// Write records the status correctly when a handler writes the body without an
+// explicit WriteHeader (stdlib implies 200).
 func (s *statusRecorder) Write(b []byte) (int, error) {
 	if !s.wroteHeader {
-		s.wroteHeader = true // status уже 200 из конструктора
+		s.wroteHeader = true // status already 200 from the constructor
 	}
 	return s.ResponseWriter.Write(b)
 }

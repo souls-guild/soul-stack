@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// TestKeysetCursor_RoundTrip — encode→decode возвращает исходные значения
-// (composite (registered_at, sid)). registered_at сериализуется в UTC.
+// TestKeysetCursor_RoundTrip — encode→decode returns the original values
+// (composite (registered_at, sid)). registered_at is serialized as UTC.
 func TestKeysetCursor_RoundTrip(t *testing.T) {
 	at := time.Date(2026, 5, 20, 15, 29, 55, 0, time.UTC)
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: at, SID: "web-01.example.com"})
@@ -28,9 +28,9 @@ func TestKeysetCursor_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestKeysetCursor_Opaque — кодировка base64url(JSON): курсор непрозрачен, но
-// валидно декодируется как base64url. Гарантирует, что клиент не парсит
-// внутренности (контракт opaque-курсора).
+// TestKeysetCursor_Opaque — base64url(JSON) encoding: the cursor is opaque but
+// decodes validly as base64url. Guarantees the client does not parse its
+// internals (the opaque-cursor contract).
 func TestKeysetCursor_Opaque(t *testing.T) {
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: time.Now().UTC(), SID: "h.example.com"})
 	if _, err := base64.RawURLEncoding.DecodeString(enc); err != nil {
@@ -38,17 +38,17 @@ func TestKeysetCursor_Opaque(t *testing.T) {
 	}
 }
 
-// TestDecodeKeysetCursor_Bad — битый курсор → ошибка (handler маппит в 400),
-// НЕ паника и НЕ молчаливый zero-value.
+// TestDecodeKeysetCursor_Bad — a malformed cursor → error (handler maps to 400),
+// NOT a panic and NOT a silent zero value.
 func TestDecodeKeysetCursor_Bad(t *testing.T) {
 	for _, c := range []string{
 		"!!!not-base64!!!",
 		base64.RawURLEncoding.EncodeToString([]byte("{not-json")),
-		base64.RawURLEncoding.EncodeToString([]byte(`{"sid":""}`)), // пустой sid.
+		base64.RawURLEncoding.EncodeToString([]byte(`{"sid":""}`)), // empty sid.
 		base64.RawURLEncoding.EncodeToString([]byte(`{"registered_at":"bad"}`)),
-		// Валидный JSON, непустой sid, но нулевой timestamp → ветка
-		// `missing registered_at` (IsZero): курсор по zero-time вернул бы
-		// неверную страницу, поэтому отвергаем.
+		// Valid JSON, non-empty sid, but a zero timestamp → the
+		// `missing registered_at` branch (IsZero): a zero-time cursor would
+		// return the wrong page, so we reject it.
 		base64.RawURLEncoding.EncodeToString([]byte(`{"sid":"x","registered_at":"0001-01-01T00:00:00Z"}`)),
 	} {
 		if _, err := DecodeKeysetCursor(c); err == nil {
@@ -57,7 +57,7 @@ func TestDecodeKeysetCursor_Bad(t *testing.T) {
 	}
 }
 
-// TestParseCursor_FromQuery — извлечение opaque-курсора из query.
+// TestParseCursor_FromQuery — extracts the opaque cursor from the query.
 func TestParseCursor_FromQuery(t *testing.T) {
 	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: at, SID: "h.example.com"})
@@ -74,7 +74,7 @@ func TestParseCursor_FromQuery(t *testing.T) {
 	}
 }
 
-// TestParseCursor_Absent — без cursor-param → (nil, nil).
+// TestParseCursor_Absent — no cursor param → (nil, nil).
 func TestParseCursor_Absent(t *testing.T) {
 	cur, err := ParseCursor(url.Values{})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestParseCursor_Absent(t *testing.T) {
 	}
 }
 
-// TestParseCursor_Bad — битый cursor → *PaginationError (handler → 400).
+// TestParseCursor_Bad — malformed cursor → *PaginationError (handler → 400).
 func TestParseCursor_Bad(t *testing.T) {
 	q := url.Values{"cursor": []string{"!!!bad!!!"}}
 	_, err := ParseCursor(q)
@@ -98,19 +98,19 @@ func TestParseCursor_Bad(t *testing.T) {
 	}
 }
 
-// TestParsePage_OffsetAndCursorConflict — offset>0 И cursor одновременно →
-// ошибка (клиентский баг не маскируется). offset=0 + cursor — ок (offset
-// по умолчанию).
+// TestParsePage_OffsetAndCursorConflict — offset>0 AND cursor together →
+// error (a client bug is not masked). offset=0 + cursor is ok (default
+// offset).
 func TestParsePage_OffsetAndCursorConflict(t *testing.T) {
 	enc := EncodeKeysetCursor(KeysetCursor{RegisteredAt: time.Now().UTC(), SID: "h.example.com"})
 
-	// offset>0 + cursor → конфликт.
+	// offset>0 + cursor → conflict.
 	q := url.Values{"offset": []string{"10"}, "cursor": []string{enc}}
 	if _, _, err := ParsePageWithCursor(q); err == nil {
 		t.Error("offset=10 + cursor → nil err; want конфликт")
 	}
 
-	// offset=0 (default) + cursor → ок.
+	// offset=0 (default) + cursor → ok.
 	q2 := url.Values{"cursor": []string{enc}}
 	page, cur, err := ParsePageWithCursor(q2)
 	if err != nil {

@@ -80,7 +80,7 @@ spec: { provider_kind: vault_ssh_ca }
 		t.Fatalf("found = %d, want 3", len(found))
 	}
 
-	// FilterByKinds: soul-side keeps только soul_module.
+	// FilterByKinds: soul-side keeps only soul_module.
 	soulOnly, w := FilterByKinds(found, []string{sharedplugin.KindSoulModule})
 	if len(soulOnly) != 1 || soulOnly[0].Manifest.Name != "redis-failover" {
 		t.Errorf("soul filter: %v", soulOnly)
@@ -99,12 +99,12 @@ spec: { provider_kind: vault_ssh_ca }
 func TestDiscoverSkipsBadEntries(t *testing.T) {
 	root := t.TempDir()
 
-	// 1. Невалидный manifest.
+	// 1. Invalid manifest.
 	d1 := filepath.Join(root, "broken")
 	_ = os.Mkdir(d1, 0o755)
 	writeManifest(t, d1, `not: a valid manifest`)
 
-	// 2. Manifest есть, бинаря нет.
+	// 2. Manifest present, binary missing.
 	d2 := filepath.Join(root, "wb-noop")
 	_ = os.Mkdir(d2, 0o755)
 	writeManifest(t, d2, `kind: soul_module
@@ -114,7 +114,7 @@ name: noop
 spec: { states: { run: {} } }
 `)
 
-	// 3. Бинарь без +x.
+	// 3. Binary without +x.
 	d3 := filepath.Join(root, "wb-nx")
 	_ = os.Mkdir(d3, 0o755)
 	writeManifest(t, d3, `kind: soul_module
@@ -125,12 +125,12 @@ spec: { states: { run: {} } }
 `)
 	writeFakeBinary(t, d3, "soul-mod-nx", false)
 
-	// 4. Файл в корне (не директория) — игнорируется без warning.
+	// 4. File at the root (not a directory) — ignored without warning.
 	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// 5. Валидный плагин — должен найтись.
+	// 5. Valid plugin — must be found.
 	d5 := filepath.Join(root, "wb-ok")
 	_ = os.Mkdir(d5, 0o755)
 	writeManifest(t, d5, `kind: soul_module

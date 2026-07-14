@@ -6,7 +6,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// hasWarn — есть ли WARNING-диагностика с данным кодом (hasCode не различает level).
+// hasWarn — whether there is a WARNING diagnostic with the given code (hasCode ignores level).
 func hasWarn(ds []diag.Diagnostic, code string) bool {
 	for _, d := range ds {
 		if d.Code == code && d.Level == diag.LevelWarning {
@@ -16,8 +16,8 @@ func hasWarn(ds []diag.Diagnostic, code string) bool {
 	return false
 }
 
-// TestForm_Valid — валидный `form:` с двумя секциями, все поля ∈ input, все
-// покрыты, key уникальны → нет ни одной диагностики (errors+warnings).
+// TestForm_Valid — a valid `form:` with two sections, all fields ∈ input, all covered,
+// keys unique → no diagnostics at all (errors+warnings).
 func TestForm_Valid(t *testing.T) {
 	src := `name: x
 input:
@@ -56,7 +56,7 @@ tasks: []
 	}
 }
 
-// TestForm_FieldUnknown — field.name, которого нет в input: → form_field_unknown ERROR.
+// TestForm_FieldUnknown — a field.name absent from input: → form_field_unknown ERROR.
 func TestForm_FieldUnknown(t *testing.T) {
 	src := `name: x
 input:
@@ -76,7 +76,7 @@ tasks: []
 	}
 }
 
-// TestForm_FieldDuplicate — одно имя поля в >1 секции → form_field_duplicate ERROR.
+// TestForm_FieldDuplicate — one field name in >1 section → form_field_duplicate ERROR.
 func TestForm_FieldDuplicate(t *testing.T) {
 	src := `name: x
 input:
@@ -100,7 +100,7 @@ tasks: []
 	}
 }
 
-// TestForm_DuplicateSectionKey — повтор section.key → duplicate_key ERROR.
+// TestForm_DuplicateSectionKey — a repeated section.key → duplicate_key ERROR.
 func TestForm_DuplicateSectionKey(t *testing.T) {
 	src := `name: x
 input:
@@ -123,8 +123,8 @@ tasks: []
 	}
 }
 
-// TestForm_Uncovered — поле input без секции → form_field_uncovered WARNING (НЕ error):
-// форма валидна, прогон не падает; новое input-поле не ломает form.
+// TestForm_Uncovered — an input field with no section → form_field_uncovered WARNING (NOT
+// error): the form is valid, the run does not fail; a new input field does not break form.
 func TestForm_Uncovered(t *testing.T) {
 	src := `name: x
 input:
@@ -148,8 +148,8 @@ tasks: []
 	}
 }
 
-// TestForm_EmptyLabel — label: "" → form_field_empty_label WARNING (НЕ error):
-// fallback на description/имя.
+// TestForm_EmptyLabel — label: "" → form_field_empty_label WARNING (NOT error):
+// fallback to description/name.
 func TestForm_EmptyLabel(t *testing.T) {
 	src := `name: x
 input:
@@ -172,7 +172,7 @@ tasks: []
 	}
 }
 
-// TestForm_MissingSectionKey — секция без key → missing_required_field ERROR.
+// TestForm_MissingSectionKey — a section without key → missing_required_field ERROR.
 func TestForm_MissingSectionKey(t *testing.T) {
 	src := `name: x
 input:
@@ -191,7 +191,7 @@ tasks: []
 	}
 }
 
-// TestForm_BadSectionKeyFormat — невалидный формат key → name_invalid_format ERROR.
+// TestForm_BadSectionKeyFormat — an invalid key format → name_invalid_format ERROR.
 func TestForm_BadSectionKeyFormat(t *testing.T) {
 	src := `name: x
 input:
@@ -210,8 +210,8 @@ tasks: []
 	}
 }
 
-// TestForm_UnknownKeyInSection — лишний ключ в секции → unknown_key ERROR, ровно один
-// (reflect-walker подавлен formLayoutType, без дубля).
+// TestForm_UnknownKeyInSection — an extra key in a section → unknown_key ERROR, exactly
+// one (reflect-walker suppressed by formLayoutType, no duplicate).
 func TestForm_UnknownKeyInSection(t *testing.T) {
 	src := `name: x
 input:
@@ -231,7 +231,7 @@ tasks: []
 	}
 }
 
-// TestForm_Absent — нет ключа form: → Form==nil, ноль form-диагностик (forward-compat).
+// TestForm_Absent — no form: key → Form==nil, zero form diagnostics (forward-compat).
 func TestForm_Absent(t *testing.T) {
 	src := `name: x
 input:
@@ -251,8 +251,8 @@ tasks: []
 	}
 }
 
-// TestForm_ShowWhen_Valid — show_when над input.* на секции И поле → нет
-// диагностик; строки попадают в распарсенную форму как есть (eval — client-side).
+// TestForm_ShowWhen_Valid — show_when over input.* on a section AND a field → no
+// diagnostics; the strings land in the parsed form as-is (eval is client-side).
 func TestForm_ShowWhen_Valid(t *testing.T) {
 	src := `name: x
 input:
@@ -281,8 +281,8 @@ tasks: []
 	}
 }
 
-// TestForm_ShowWhen_EssenceRef — show_when ссылается на essence.* (вне input-only
-// sandbox) → form_show_when_invalid ERROR (undeclared-reference compile-ошибка).
+// TestForm_ShowWhen_EssenceRef — show_when references essence.* (outside the input-only
+// sandbox) → form_show_when_invalid ERROR (undeclared-reference compile error).
 func TestForm_ShowWhen_FieldEssenceRef(t *testing.T) {
 	src := `name: x
 input:
@@ -301,7 +301,7 @@ tasks: []
 	}
 }
 
-// TestForm_ShowWhen_SectionEssenceRef — то же на уровне секции.
+// TestForm_ShowWhen_SectionEssenceRef — the same at the section level.
 func TestForm_ShowWhen_SectionEssenceRef(t *testing.T) {
 	src := `name: x
 input:
@@ -322,7 +322,7 @@ tasks: []
 }
 
 // TestForm_ShowWhen_Empty — show_when: "" → form_show_when_invalid ERROR
-// (бессмысленный «никогда не видимо»; симметрия с пустым required_when).
+// (a meaningless "never visible"; symmetric with an empty required_when).
 func TestForm_ShowWhen_Empty(t *testing.T) {
 	src := `name: x
 input:
@@ -341,8 +341,8 @@ tasks: []
 	}
 }
 
-// TestForm_PlaceholderHint_Valid — placeholder/hint парсятся, непустые → нет
-// диагностик; omitempty-семантика: отсутствие ключей не эмитит ничего.
+// TestForm_PlaceholderHint_Valid — placeholder/hint parse, non-empty → no diagnostics;
+// omitempty semantics: absent keys emit nothing.
 func TestForm_PlaceholderHint_Valid(t *testing.T) {
 	src := `name: x
 input:
@@ -372,7 +372,7 @@ tasks: []
 }
 
 // TestForm_PlaceholderHint_Empty — placeholder: "" / hint: "" → form_field_empty_label
-// WARNING (не error), как у пустого label.
+// WARNING (not error), like an empty label.
 func TestForm_PlaceholderHint_Empty(t *testing.T) {
 	src := `name: x
 input:

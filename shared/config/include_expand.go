@@ -6,91 +6,90 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// IncludeResolver резолвит include-цель по имени файла в её содержимое и
-// канонический display-путь. Display-путь — стабильный идентификатор источника
-// (используется в детекции циклов и в диагностике), не обязательно файловый: для
-// двухуровневого scenario-резолва (orchestration.md §6) это resolved-путь
-// «локально или service-level», для within-destiny — путь внутри каталога
-// destiny.
+// IncludeResolver resolves an include target by file name into its contents and
+// a canonical display path. The display path is a stable source identifier (used
+// in cycle detection and diagnostics), not necessarily a file path: for the
+// two-level scenario resolution (orchestration.md §6) it is the resolved path
+// "local or service-level", for within-destiny it is a path inside the destiny
+// directory.
 //
-// Резолвер инкапсулирует ВЕСЬ I/O и весь выбор источника (двухуровневый fallback,
-// securejoin-кламп). [ExpandIncludes] остаётся чистой над содержимым: парсит,
-// раскрывает, детектит циклы.
+// The resolver encapsulates ALL I/O and all source selection (two-level fallback,
+// securejoin clamp). [ExpandIncludes] stays pure over the contents: it parses,
+// expands, and detects cycles.
 type IncludeResolver func(name string) (data []byte, displayPath string, err error)
 
-// maxIncludeDepth — жёсткий потолок глубины include-цепочки. Защита-страховка
-// поверх cycle-detection (visited-stack): даже без прямого цикла бесконтрольно
-// глубокая цепочка — почти всегда ошибка автора, а не легитимная композиция.
+// maxIncludeDepth — hard ceiling on include-chain depth. A safety net over cycle
+// detection (visited-stack): even without a direct cycle, an uncontrolled deep
+// chain is almost always an author error, not legitimate composition.
 const maxIncludeDepth = 32
 
-// ExpandIncludes раскрывает include-задачи в ПЛОСКИЙ список задач до фазы
-// рендера (orchestration.md §6, destiny/tasks.md §4). Каждая include-задача
-// заменяется задачами подключённого файла inline, на их месте; вложенные
-// include раскрываются рекурсивно.
+// ExpandIncludes expands include-tasks into a FLAT task list before the render
+// phase (orchestration.md §6, destiny/tasks.md §4). Each include-task is replaced
+// inline, in place, by the tasks of the included file; nested includes expand
+// recursively.
 //
-// resolve инкапсулирует выбор источника (двухуровневый scenario-резолв или
-// within-destiny) и I/O. Подключённый файл парсится тем же task-парсером
-// ([LoadDestinyTasksFromBytes]) — top-level YAML-список задач без обёртки.
+// resolve encapsulates source selection (two-level scenario resolution or
+// within-destiny) and I/O. The included file is parsed by the same task parser
+// ([LoadDestinyTasksFromBytes]) — a top-level YAML task list without a wrapper.
 //
-// Циклы (a→b→a, прямой self-include) детектируются по display-пути через
-// visited-stack: повторное вхождение пути в активную цепочку → ошибка
-// `include_cycle` (не бесконечная рекурсия). Глубина ограничена
-// [maxIncludeDepth].
+// Cycles (a→b→a, direct self-include) are detected by display path via a
+// visited-stack: re-entry of a path into the active chain → `include_cycle` error
+// (not infinite recursion). Depth is bounded by [maxIncludeDepth].
 //
-// Контракт возврата:
-//   - parse/cycle/depth/resolve-ошибки подключённых файлов → diagnostics уровня
-//     error (caller отбраковывает через [diag.HasErrors]); tasks возвращается
-//     максимально раскрытым (для частичной диагностики).
-//   - error != nil — никогда (зарезервировано симметрично прочим Load*).
+// Return contract:
+//   - parse/cycle/depth/resolve errors of included files → error-level
+//     diagnostics (the caller rejects via [diag.HasErrors]); tasks is returned as
+//     fully expanded as possible (for partial diagnostics).
+//   - error != nil — never (reserved for symmetry with other Load*).
 //
-// Splice-семантика (слайс B): чистый `include: <file>` (опц. `name:`) splice'ится
-// плоско. На include-задаче допустимы поля `include:`/`name:` И `when:` (условный
-// include, ADR-009 amendment) — whitelist; любой другой непустой модификатор
-// scope/контроля раскрытие отвергает диагностикой `include_modifier_unsupported`,
-// чтобы не потерять scope молча.
+// Splice semantics (slice B): a plain `include: <file>` (optional `name:`) is
+// spliced flat. On an include-task the fields `include:`/`name:` AND `when:`
+// (conditional include, ADR-009 amendment) are allowed — a whitelist; any other
+// non-empty scope/control modifier is rejected with an
+// `include_modifier_unsupported` diagnostic, so scope isn't lost silently.
 //
-// Условный include (`when:` на include-задаче): include-when ОБЯЗАН быть
-// статическим (input./essence./incarnation./vars. — [IsStaticIncludeWhen]),
-// поскольку раскрытие идёт ДО фазы Stratify, когда register ещё не собран, а
-// per-host soulprint неизвестен. Динамический when → `include_when_dynamic_unsupported`.
-// Статический when и id группы протаскиваются в КАЖДУЮ вклеенную задачу
-// (Task.IncludeWhen/IncludeGroupID) — keeper-side render дропает всю группу одним
-// вычислением include-when (group-drop, реальное исключение из плана).
+// Conditional include (`when:` on an include-task): the include-when MUST be
+// static (input./essence./incarnation./vars. — [IsStaticIncludeWhen]), since
+// expansion runs BEFORE the Stratify phase, when register isn't assembled yet and
+// the per-host soulprint is unknown. A dynamic when → `include_when_dynamic_unsupported`.
+// The static when and the group id are stamped into EVERY spliced task
+// (Task.IncludeWhen/IncludeGroupID) — keeper-side render drops the whole group in
+// one include-when evaluation (group-drop, a real exclusion from the plan).
 //
-// Каскад вложенных условных include: эффективный include-when ВЛОЖЕННОЙ условной
-// группы = конъюнкция предков `(<ancestor include-when>) && (<inner include-when>)`.
-// Накопленный ancestor-when протаскивается вниз по рекурсии раскрытия; вложенная
-// группа получает СВОЙ group-id, чей include-when кодирует полную конъюнкцию
-// предков. Тогда дроп родителя (например, `outer=='no'`) каскадит на потомка
-// естественно: его конъюнктивный include-when тоже вычисляется в false.
+// Nested conditional include cascade: the effective include-when of a NESTED
+// conditional group = conjunction of ancestors `(<ancestor include-when>) && (<inner include-when>)`.
+// The accumulated ancestor-when is carried down the expansion recursion; the
+// nested group gets its OWN group-id whose include-when encodes the full ancestor
+// conjunction. So dropping a parent (e.g. `outer=='no'`) cascades to the child
+// naturally: its conjunctive include-when also evaluates to false.
 func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
 	e := &includeExpander{resolve: resolve}
 	out := e.expand(tasks, nil, "")
-	// Уникальность адресного пространства подписки (register ∪ id) по ПЛОСКОМУ
-	// списку прогона: per-file validateTaskRefs ловит дубль в пределах одного
-	// файла, но не между основным файлом и раскрытым include (каждый файл там
-	// валидируется в своём scope). Эта проверка работает на финальном плоском
-	// `[]Task` — единый прогон после flatten — и ловит cross-include дубль.
-	// Координат line/col на этом уровне нет (раскрытие стёрло AST-позиции);
-	// диагностика адресует по имени.
+	// Uniqueness of the subscription address space (register ∪ id) over the FLAT
+	// run list: per-file validateTaskRefs catches a duplicate within one file, but
+	// not between the main file and an expanded include (each file there is
+	// validated in its own scope). This check runs on the final flat `[]Task` —
+	// one pass after flatten — and catches a cross-include duplicate. There are no
+	// line/col coordinates at this level (expansion erased AST positions); the
+	// diagnostic addresses by name.
 	if !diag.HasErrors(e.diags) {
 		e.diags = append(e.diags, validateFlatTaskAddresses(out)...)
 	}
 	return out, e.diags
 }
 
-// validateFlatTaskAddresses проверяет уникальность адресного пространства
-// подписки `register ∪ id` (destiny/tasks.md §8) по плоскому списку задач
-// прогона — после раскрытия include. Дубль (два register, два id, либо
-// пересечение register/id) → duplicate_task_address. Рекурсивно обходит
-// вложенные block: (его адреса живут в том же плоском пространстве плана).
+// validateFlatTaskAddresses checks uniqueness of the `register ∪ id` subscription
+// address space (destiny/tasks.md §8) over the flat run task list — after include
+// expansion. A duplicate (two registers, two ids, or a register/id intersection)
+// → duplicate_task_address. Recurses into nested block: (its addresses live in
+// the same flat plan space).
 //
-// Вызывается на выходе ExpandIncludes только при отсутствии error-диагностик
-// раскрытия: на полуразвёрнутом списке (parse/cycle/resolve-фейл) проверять
-// адреса бессмысленно. Per-file дубли (в одном файле) уже отловлены
-// validateTaskRefs при загрузке файла — здесь ловятся именно cross-file дубли,
-// поэтому одиночный файл без include эта проверка дублирующих диагностик не даёт
-// (валидный per-file список уникален и тут).
+// Called at the ExpandIncludes exit only when there are no error-level expansion
+// diagnostics: checking addresses on a half-expanded list (parse/cycle/resolve
+// failure) is pointless. Per-file duplicates (within one file) are already caught
+// by validateTaskRefs at file load — here we catch specifically cross-file
+// duplicates, so a single file without includes produces no duplicate diagnostics
+// (a valid per-file list is unique here too).
 func validateFlatTaskAddresses(tasks []Task) []diag.Diagnostic {
 	seen := map[string]bool{}
 	var out []diag.Diagnostic
@@ -98,9 +97,9 @@ func validateFlatTaskAddresses(tasks []Task) []diag.Diagnostic {
 	return out
 }
 
-// collectFlatAddresses наполняет seen именами register/id из плоского списка
-// (рекурсивно через block:); повторное имя → duplicate_task_address. Порядок
-// детерминирован обходом списка.
+// collectFlatAddresses fills seen with register/id names from the flat list
+// (recursively via block:); a repeated name → duplicate_task_address. Order is
+// deterministic by list traversal.
 func collectFlatAddresses(tasks []Task, seen map[string]bool, out *[]diag.Diagnostic) {
 	for i := range tasks {
 		t := &tasks[i]
@@ -128,26 +127,27 @@ func collectFlatAddresses(tasks []Task, seen map[string]bool, out *[]diag.Diagno
 type includeExpander struct {
 	resolve IncludeResolver
 	diags   []diag.Diagnostic
-	// lastGroupID — счётчик id условных include-групп (carry-through group-drop).
-	// Монотонно растёт на КАЖДЫЙ include с непустым `when:`; 0 зарезервирован за
-	// «вне условного include» (Task.IncludeGroupID==0). Вложенные условные include
-	// получают разные id, дроп каждого — независимое вычисление своего include-when.
+	// lastGroupID — id counter for conditional include-groups (carry-through
+	// group-drop). Monotonically grows on EVERY include with a non-empty `when:`;
+	// 0 is reserved for "outside a conditional include" (Task.IncludeGroupID==0).
+	// Nested conditional includes get distinct ids; dropping each is an independent
+	// evaluation of its own include-when.
 	lastGroupID int
 }
 
-// expand рекурсивно раскрывает список задач. stack — активная цепочка
-// display-путей (для cycle-detection и глубины); nil на верхнем уровне.
-// ancestorWhen — накопленный include-when условных include-предков (конъюнкция
-// для каскадного дропа); "" на верхнем уровне и под безусловными include.
+// expand recursively expands a task list. stack is the active chain of display
+// paths (for cycle detection and depth); nil at the top level. ancestorWhen is
+// the accumulated include-when of conditional include ancestors (a conjunction
+// for cascading drop); "" at the top level and under unconditional includes.
 func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen string) []Task {
 	out := make([]Task, 0, len(tasks))
 	for i := range tasks {
 		task := tasks[i]
 
-		// Не-include или block: splice не нужен. block раскрывается в render-фазе
-		// (renderBlockTask, как loop) — здесь passthrough. within-block include
-		// в pilot C1 не поддержан (guardPilotBlockChild отвергает include-потомок
-		// как ErrUnexpandedInclude) — рекурсия в block на этом слое не нужна.
+		// Non-include or block: no splice needed. block is expanded in the render
+		// phase (renderBlockTask, like loop) — passthrough here. within-block
+		// include isn't supported in pilot C1 (guardPilotBlockChild rejects an
+		// include child as ErrUnexpandedInclude) — no block recursion needed here.
 		if task.Include == nil {
 			out = append(out, task)
 			continue
@@ -155,7 +155,7 @@ func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen stri
 
 		expanded, ok := e.expandOne(task, stack, ancestorWhen)
 		if !ok {
-			// Диагностика уже зафиксирована; задачу не вклеиваем (нечего).
+			// Diagnostic already recorded; don't splice the task (nothing to splice).
 			continue
 		}
 		out = append(out, expanded...)
@@ -163,11 +163,12 @@ func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen stri
 	return out
 }
 
-// conjoinIncludeWhen строит эффективный include-when вложенной условной группы:
-// конъюнкция накопленного ancestor-when и собственного include-when. Каждый
-// операнд оборачивается в скобки, чтобы CEL-приоритет операторов внутри предиката
-// (например `a || b`) не «протёк» через &&. Пустой ancestor (верхний уровень или
-// безусловный родитель) → собственный when без обёртки (single-level не меняется).
+// conjoinIncludeWhen builds the effective include-when of a nested conditional
+// group: the conjunction of the accumulated ancestor-when and the own
+// include-when. Each operand is parenthesized so that CEL operator precedence
+// inside a predicate (e.g. `a || b`) doesn't "leak" across &&. An empty ancestor
+// (top level or unconditional parent) → the own when without wrapping (single
+// level unchanged).
 func conjoinIncludeWhen(ancestorWhen, ownWhen string) string {
 	if ancestorWhen == "" {
 		return ownWhen
@@ -175,22 +176,23 @@ func conjoinIncludeWhen(ancestorWhen, ownWhen string) string {
 	return fmt.Sprintf("(%s) && (%s)", ancestorWhen, ownWhen)
 }
 
-// stampIncludeGroup протаскивает include-when и id группы в КАЖДУЮ вклеенную
-// задачу (рекурсивно через block:, чтобы потомки block-задачи внутри условного
-// include тоже дропались целиком). Вложенный условный include уже проставил СВОЙ
-// (более конкретный) IncludeGroupID на свои задачи раньше (recursion expandOne →
-// expand → stampIncludeGroup), поэтому здесь НЕ перезаписываем уже проставленную
-// группу. Дроп каждого уровня каскадит через КОНЪЮНКЦИЮ: вложенная группа уже
-// застамплена эффективным include-when `(ancestor) && (own)` (conjoinIncludeWhen),
-// поэтому ложный предок гасит и потомка, даже если собственный when потомка истинен.
-// Зеркалит идею block.when-инжекта (mergeBlockInheritance), но через отдельную
-// carry-through-ось, не через AND во when самой задачи (render дропает группу до
-// emitStaticWhenSkip по её IncludeWhen, а не гасит её placeholder-ом).
+// stampIncludeGroup stamps the include-when and group id into EVERY spliced task
+// (recursively via block:, so children of a block-task inside a conditional
+// include are also dropped as a whole). A nested conditional include has already
+// stamped its OWN (more specific) IncludeGroupID onto its tasks earlier (recursion
+// expandOne → expand → stampIncludeGroup), so we do NOT overwrite an
+// already-stamped group here. Dropping each level cascades via CONJUNCTION: the
+// nested group is already stamped with the effective include-when `(ancestor) &&
+// (own)` (conjoinIncludeWhen), so a false ancestor also silences the child even if
+// the child's own when is true. Mirrors the block.when-injection idea
+// (mergeBlockInheritance), but via a separate carry-through axis, not via an AND in
+// the task's own when (render drops the group before emitStaticWhenSkip by its
+// IncludeWhen, rather than silencing it with a placeholder).
 func stampIncludeGroup(tasks []Task, when string, groupID int) {
 	for i := range tasks {
 		t := &tasks[i]
 		if t.IncludeGroupID != 0 {
-			continue // вложенный условный include уже застампил свою группу.
+			continue // nested conditional include already stamped its own group.
 		}
 		t.IncludeWhen = when
 		t.IncludeGroupID = groupID
@@ -200,15 +202,15 @@ func stampIncludeGroup(tasks []Task, when string, groupID int) {
 	}
 }
 
-// expandOne раскрывает одну include-задачу: проверяет модификаторы, резолвит и
-// парсит цель, детектит цикл/глубину, рекурсивно раскрывает её задачи.
+// expandOne expands one include-task: checks modifiers, resolves and parses the
+// target, detects cycle/depth, and recursively expands its tasks.
 //
-// ancestorWhen — накопленный include-when условных предков. Если у этого include
-// есть собственный `when:`, эффективный include-when группы = конъюнкция
-// `(ancestorWhen) && (own)` (conjoinIncludeWhen) — именно она стампится в задачи и
-// протаскивается дальше вниз. Если `when:` пуст (безусловный include), группа не
-// заводится, но ancestorWhen протаскивается дальше БЕЗ изменения — потомок-условный
-// получит конъюнкцию с предком через своё раскрытие.
+// ancestorWhen is the accumulated include-when of conditional ancestors. If this
+// include has its own `when:`, the effective group include-when = conjunction
+// `(ancestorWhen) && (own)` (conjoinIncludeWhen) — that's what's stamped into the
+// tasks and carried further down. If `when:` is empty (unconditional include), no
+// group is created, but ancestorWhen is carried further UNCHANGED — a conditional
+// descendant gets the conjunction with the ancestor through its own expansion.
 func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen string) ([]Task, bool) {
 	name := task.Include.Include
 
@@ -219,16 +221,16 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 		return nil, false
 	}
 
-	// Условный include (`when:` на include): предикат ОБЯЗАН быть статическим —
-	// include раскрывается ДО Stratify, register предыдущих задач ещё не собран,
-	// per-host soulprint неизвестен. Динамический when (register./soulprint.) →
-	// include_when_dynamic_unsupported. Допустимый when резолвится в group-id,
-	// который stampIncludeGroup протащит в каждую вклеенную задачу.
+	// Conditional include (`when:` on an include): the predicate MUST be static —
+	// the include expands BEFORE Stratify, register of prior tasks isn't assembled
+	// yet, the per-host soulprint is unknown. A dynamic when (register./soulprint.)
+	// → include_when_dynamic_unsupported. An allowed when resolves to a group-id
+	// that stampIncludeGroup carries into every spliced task.
 	//
-	// effectiveWhen — конъюнкция с накопленным ancestor-when (каскадный дроп
-	// вложенных условных include): вложенная группа дропается, если ложен ЛЮБОЙ
-	// предок ИЛИ собственный предикат. Этот же effectiveWhen протаскивается вниз
-	// как ancestorWhen для следующего уровня раскрытия.
+	// effectiveWhen — conjunction with the accumulated ancestor-when (cascading
+	// drop of nested conditional includes): the nested group is dropped if ANY
+	// ancestor OR its own predicate is false. This same effectiveWhen is carried
+	// down as ancestorWhen for the next expansion level.
 	groupID := 0
 	effectiveWhen := ancestorWhen
 	if task.When != "" {
@@ -277,17 +279,18 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 	return expanded, true
 }
 
-// includeModifierReason возвращает человекочитаемую причину, если include-задача
-// несёт любое поле помимо `include:`/`name:`/`when:`. На include-задаче допустимы
-// эти поля (`when:` — условный include, ADR-009 amendment); любой другой непустой
-// модификатор scope/контроля splice'ом потерялся бы молча — раскрытие его отвергает.
-// Whitelist (а не blacklist) устойчив к будущим полям Task: новое поле по умолчанию
-// запрещено на include. Пустая строка — задача чистая.
+// includeModifierReason returns a human-readable reason if an include-task
+// carries any field besides `include:`/`name:`/`when:`. These fields are allowed
+// on an include-task (`when:` — conditional include, ADR-009 amendment); any other
+// non-empty scope/control modifier would be lost silently by the splice — so
+// expansion rejects it. A whitelist (not a blacklist) is robust to future Task
+// fields: a new field is forbidden on include by default. An empty string means
+// the task is clean.
 //
-// `when:` НЕ в этом списке (условный include) — его статичность проверяет
-// отдельно expandOne (IsStaticIncludeWhen → include_when_dynamic_unsupported для
-// динамического). `loop:` остаётся запрещён: loop на include не реализован (drift
-// docs↔code, docs/destiny/tasks.md §7) → include_modifier_unsupported.
+// `when:` is NOT in this list (conditional include) — its staticness is checked
+// separately by expandOne (IsStaticIncludeWhen → include_when_dynamic_unsupported
+// for dynamic). `loop:` stays forbidden: loop on include is not implemented
+// (docs↔code drift, docs/destiny/tasks.md §7) → include_modifier_unsupported.
 func includeModifierReason(task Task) string {
 	switch {
 	case task.Loop != nil:
@@ -328,8 +331,8 @@ func includeModifierReason(task Task) string {
 	return ""
 }
 
-// addError фиксирует семантическую диагностику раскрытия (cycle/depth/modifier/
-// resolve): это cross-field/cross-file инварианты, а не проверка структуры узла.
+// addError records a semantic expansion diagnostic (cycle/depth/modifier/
+// resolve): these are cross-field/cross-file invariants, not a node-structure check.
 func (e *includeExpander) addError(code, msg, hint string) {
 	e.diags = append(e.diags, diag.Diagnostic{
 		Level:   diag.LevelError,

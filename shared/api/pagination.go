@@ -1,7 +1,7 @@
-// Package api — общие HTTP-хелперы Operator API (offset/limit pagination
-// под operator-api.md § Pagination, и т. п.). Живёт в shared/, чтобы и
-// keeper-handler-ы, и MCP-фасад (M0.7+), и будущие push/cloud handler-ы
-// читали один и тот же контракт без дублирования парсинга.
+// Package api holds shared Operator API HTTP helpers (offset/limit pagination per
+// operator-api.md § Pagination, etc.). Lives in shared/ so keeper handlers, the MCP
+// facade (M0.7+), and future push/cloud handlers read one contract without
+// duplicating parsing.
 package api
 
 import (
@@ -10,63 +10,63 @@ import (
 	"strconv"
 )
 
-// Page-defaults / limits под operator-api.md → § Pagination.
+// Page defaults / limits per operator-api.md → § Pagination.
 const (
-	// DefaultPageLimit — limit по умолчанию, если query-param не задан.
+	// DefaultPageLimit is the default limit when the query param is unset.
 	DefaultPageLimit = 50
 
-	// MaxPageLimit — верхняя граница limit-а. Запрос с limit > MaxPageLimit
-	// отклоняется как malformed-request (operator-api.md: «1..1000»).
+	// MaxPageLimit is the upper bound on limit. A request with limit > MaxPageLimit
+	// is rejected as a malformed-request (operator-api.md: "1..1000").
 	MaxPageLimit = 1000
 )
 
-// Page — нормализованные параметры пагинации. Offset ≥ 0, Limit ∈ [1, MaxPageLimit].
-// Конструктор [ParsePage] гарантирует инварианты — внутрь структуру можно
-// не валидировать повторно.
+// Page holds normalized pagination parameters. Offset ≥ 0, Limit ∈ [1, MaxPageLimit].
+// The [ParsePage] constructor guarantees the invariants — no need to re-validate the
+// struct internally.
 type Page struct {
 	Offset int
 	Limit  int
 }
 
-// PagedResponse — общий конверт для list-эндпоинтов:
+// PagedResponse is the shared envelope for list endpoints:
 //
 //	{ "items": [...], "offset": 0, "limit": 50, "total": 137 }
 //
-// Items типизируется на call-site (PagedResponse[IncarnationDTO] и т. п.).
-// total — общее количество элементов с учётом фильтров endpoint-а.
+// Items is typed at the call site (PagedResponse[IncarnationDTO], etc.). total is the
+// total element count under the endpoint's filters.
 //
-// Гибрид offset/keyset (ADR-047 S3b-2, additive): один и тот же конверт
-// обслуживает оба режима пагинации; режим выбирает СЕРВЕР (не клиент):
-//   - offset-режим (SQL-pushdown полон, дрейфа total нет): total — точное
-//     число, [PagedResponse.TotalApproximate]=false (поле опущено),
-//     [PagedResponse.NextCursor]=nil. Это backward-compatible дефолт прежних
-//     list-эндпоинтов — zero-value не сериализуется, wire-форма не меняется.
-//   - keyset-режим (Go-постфильтр поверх внутренних страниц — точный COUNT
-//     дорог/недоступен): total опускается (0), TotalApproximate=true, NextCursor
-//     несёт opaque-курсор следующей страницы (nil ⟺ БД исчерпана).
+// Offset/keyset hybrid (ADR-047 S3b-2, additive): one envelope serves both pagination
+// modes; the SERVER (not the client) picks the mode:
+//   - offset mode (full SQL pushdown, no total drift): total is exact,
+//     [PagedResponse.TotalApproximate]=false (field omitted),
+//     [PagedResponse.NextCursor]=nil. This is the backward-compatible default of the
+//     former list endpoints — the zero-value is not serialized, the wire form is unchanged.
+//   - keyset mode (Go post-filter over internal pages — an exact COUNT is
+//     costly/unavailable): total is omitted (0), TotalApproximate=true, NextCursor
+//     carries an opaque cursor to the next page (nil ⟺ DB exhausted).
 type PagedResponse[T any] struct {
 	Items  []T `json:"items"`
 	Offset int `json:"offset"`
 	Limit  int `json:"limit"`
 	Total  int `json:"total"`
 
-	// NextCursor — opaque keyset-курсор следующей страницы (keyset-режим).
-	// nil/отсутствует в offset-режиме И когда keyset-обход исчерпал БД.
+	// NextCursor is an opaque keyset cursor to the next page (keyset mode).
+	// nil/absent in offset mode AND when the keyset walk has exhausted the DB.
 	NextCursor *string `json:"next_cursor,omitempty"`
 
-	// TotalApproximate — Total НЕ точен (keyset-режим: COUNT не считается, поле
-	// опущено в 0). Инвертированный флаг с omitempty: zero-value (все offset-
-	// эндпоинты) не сериализуется → точный total по умолчанию, без протечки
-	// wire-поля на не-keyset-хендлеры. Выставляет только keyset-path souls.
+	// TotalApproximate — Total is NOT exact (keyset mode: COUNT is not computed, field
+	// omitted to 0). Inverted flag with omitempty: the zero-value (all offset
+	// endpoints) is not serialized → exact total by default, without leaking the wire
+	// field onto non-keyset handlers. Set only by the keyset path of souls.
 	TotalApproximate bool `json:"total_approximate,omitempty"`
 }
 
-// PaginationError — sentinel для ошибок парсинга. Caller (handler) маппит
-// в RFC 7807 malformed-request (400) с err.Error() в detail.
+// PaginationError is a sentinel for parse errors. The caller (handler) maps it to an
+// RFC 7807 malformed-request (400) with err.Error() in detail.
 //
-// conflict=true помечает offset+cursor-конфликт (см. [ParsePageWithCursor]):
-// это клиентский баг (смешение двух пагинаций), handler маппит его в 422
-// (validation-failed), а не в 400 — отличается через [PaginationError.IsConflict].
+// conflict=true marks an offset+cursor conflict (see [ParsePageWithCursor]): a client
+// bug (mixing two paginations), which the handler maps to 422 (validation-failed),
+// not 400 — distinguished via [PaginationError.IsConflict].
 type PaginationError struct {
 	msg      string
 	conflict bool
@@ -74,19 +74,19 @@ type PaginationError struct {
 
 func (e *PaginationError) Error() string { return e.msg }
 
-// IsConflict — это offset+cursor-конфликт (422), а не обычная malformed-ошибка
-// парсинга (400)?
+// IsConflict reports whether this is an offset+cursor conflict (422) rather than an
+// ordinary malformed parse error (400).
 func (e *PaginationError) IsConflict() bool { return e.conflict }
 
-// ParsePage парсит offset/limit из url.Values (обычно r.URL.Query()).
+// ParsePage parses offset/limit from url.Values (usually r.URL.Query()).
 //
-// Контракт:
-//   - offset отсутствует или пуст → 0; иначе должен быть валидное неотрицательное число.
-//   - limit  отсутствует или пуст → [DefaultPageLimit]; иначе ∈ [1, MaxPageLimit].
-//   - "abc" / отрицательные / превышение MaxPageLimit → *PaginationError.
+// Contract:
+//   - offset absent or empty → 0; otherwise must be a valid non-negative integer.
+//   - limit  absent or empty → [DefaultPageLimit]; otherwise ∈ [1, MaxPageLimit].
+//   - "abc" / negative / exceeding MaxPageLimit → *PaginationError.
 //
-// Ошибки возвращаются как *PaginationError, чтобы handler мог отличить
-// pagination-validation от других malformed-сценариев.
+// Errors are returned as *PaginationError so the handler can distinguish
+// pagination-validation from other malformed scenarios.
 func ParsePage(q url.Values) (Page, error) {
 	p := Page{Offset: 0, Limit: DefaultPageLimit}
 
@@ -112,13 +112,13 @@ func ParsePage(q url.Values) (Page, error) {
 	return p, nil
 }
 
-// CheckPageBounds валидирует ДИАПАЗОН уже-распарсенных offset/limit (offset ≥ 0,
-// limit ∈ [1, MaxPageLimit]), возвращая *PaginationError с тем же сообщением, что и
-// [ParsePage]. Вынесено отдельной функцией ради ЕДИНОГО источника правды границ:
-// typed-query-эндпоинты (ADR-054 четвёртый tier), где int-bind делает huma (а не
-// ParsePage из url.Values), всё равно обязаны держать тот же 400-контракт на
-// out-of-range (иначе wire-change limit=0/1001/offset<0). Caller (handler) маппит
-// ошибку в RFC 7807 malformed-request (400).
+// CheckPageBounds validates the RANGE of already-parsed offset/limit (offset ≥ 0,
+// limit ∈ [1, MaxPageLimit]), returning a *PaginationError with the same message as
+// [ParsePage]. Split into a separate function for a SINGLE source of truth for the
+// bounds: typed-query endpoints (ADR-054 fourth tier), where the int-bind is done by
+// huma (not ParsePage from url.Values), must still hold the same 400 contract on
+// out-of-range (otherwise a wire-change limit=0/1001/offset<0). The caller (handler)
+// maps the error to an RFC 7807 malformed-request (400).
 func CheckPageBounds(offset, limit int) error {
 	if offset < 0 {
 		return &PaginationError{msg: fmt.Sprintf("invalid offset %d: must be >= 0", offset)}

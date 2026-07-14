@@ -12,7 +12,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestNew_WritesToFile — при заданном File логи уходят в файл, не в stderr.
+// TestNew_WritesToFile — with File set, logs go to the file, not stderr.
 func TestNew_WritesToFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -34,28 +34,30 @@ func TestNew_WritesToFile(t *testing.T) {
 	}
 }
 
-// TestNew_RotatesBySize — маленький max_size вынуждает создать backup-файлы.
+// TestNew_RotatesBySize — a small max_size forces backup files to be created.
 //
-// lumberjack ротирует, когда запись НЕ влезает в текущий файл при достигнутом
-// лимите. С max_size=1 МБ пишем несколько записей по ~0.59 МБ — каждая вторая
-// не влезает и вызывает ротацию; в каталоге остаются активный + backup-файлы.
+// lumberjack rotates when a write does NOT fit the current file at the reached
+// limit. With max_size=1 MB we write several ~0.59 MB records — every second one
+// does not fit and triggers a rotation; the directory keeps the active file plus
+// backups.
 //
-// Корень прежней flakiness (падало под параллельным `go test ./...`, не
-// изолированно): lumberjack на каждом Write запускает фоновую mill-горутину
-// (compress/removal backup-ов). Close() её НЕ дожидается — при MaxBackups>0 она
-// продолжала сканировать и трогать каталог уже после возврата тела теста, и
-// гонка с t.TempDir() cleanup (RemoveAll) давала «directory not empty».
+// Root of the previous flakiness (failed under parallel `go test ./...`, not in
+// isolation): on every Write lumberjack starts a background mill goroutine
+// (compress/remove backups). Close() does NOT wait for it — with MaxBackups>0 it
+// kept scanning and touching the directory after the test body returned, and the
+// race with t.TempDir() cleanup (RemoveAll) produced "directory not empty".
 //
-// Детерминизм:
-//   - MaxBackups: 0 → millRunOnce делает ранний return и НЕ обращается к ФС
-//     (оставляем все backup-ы; ротация по размеру при этом полноценно
-//     работает). Фоновая горутина каталог не трогает — гонки с cleanup нет.
-//   - Пишем напрямую в ротатор, минуя slog-handler: точный контроль числа и
-//     размера записей, без зависимости от буферизации handler-а.
-//   - Close() перед ReadDir: текущий файл закрыт, синхронные rename-ы ротаций
-//     гарантированно на диске.
-//   - Записи >0.5 МБ разносят ротации во времени, исключая коллизию backup-имён
-//     (гранулярность lumberjack — миллисекунда).
+// Determinism:
+//   - MaxBackups: 0 → millRunOnce returns early and does NOT touch the FS (keeps
+//     all backups; size rotation still works fully). The background goroutine
+//     does not touch the directory — no race with cleanup.
+//   - We write directly into the rotator, bypassing the slog handler: exact
+//     control of the count and size of records, no dependency on handler
+//     buffering.
+//   - Close() before ReadDir: the current file is closed and the synchronous
+//     rotation renames are guaranteed on disk.
+//   - Records >0.5 MB spread rotations in time, avoiding backup-name collisions
+//     (lumberjack granularity is a millisecond).
 func TestNew_RotatesBySize(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -63,15 +65,15 @@ func TestNew_RotatesBySize(t *testing.T) {
 
 	rot := &lumberjackWriter{
 		Filename:   logPath,
-		MaxSize:    1, // МБ
-		MaxBackups: 0, // см. комментарий: mill-горутина не трогает каталог
+		MaxSize:    1, // MB
+		MaxBackups: 0, // see comment: the mill goroutine does not touch the directory
 		MaxAge:     0,
 		Compress:   false,
 	}
 
-	// Запись чуть больше половины лимита: каждая вторая не влезает и вызывает
-	// ротацию. 9 записей → 4 ротации (4 backup-а) + активный файл.
-	line := append([]byte(strings.Repeat("x", 600*1024)), '\n') // ~0.59 МБ
+	// A record just over half the limit: every second one does not fit and
+	// triggers a rotation. 9 records → 4 rotations (4 backups) + the active file.
+	line := append([]byte(strings.Repeat("x", 600*1024)), '\n') // ~0.59 MB
 	const writes = 9
 	for i := 0; i < writes; i++ {
 		if _, err := rot.Write(line); err != nil {
@@ -92,7 +94,7 @@ func TestNew_RotatesBySize(t *testing.T) {
 		case e.Name() == "soul.log":
 			active++
 		case strings.HasPrefix(e.Name(), "soul-") && strings.HasSuffix(e.Name(), ".log"):
-			backups++ // архивный backup вида soul-2006-01-02T15-04-05.000.log
+			backups++ // archived backup like soul-2006-01-02T15-04-05.000.log
 		}
 	}
 	if active != 1 {
@@ -106,7 +108,7 @@ func TestNew_RotatesBySize(t *testing.T) {
 	}
 }
 
-// TestNew_FallbackStderr — без File writer = stderr, файл не создаётся.
+// TestNew_FallbackStderr — without File the writer is stderr, no file is created.
 func TestNew_FallbackStderr(t *testing.T) {
 	t.Parallel()
 	if w := writer(Options{}); w != os.Stderr {
@@ -114,7 +116,7 @@ func TestNew_FallbackStderr(t *testing.T) {
 	}
 }
 
-// TestParseLevel — уровень из конфига, мягкий фолбэк на info.
+// TestParseLevel — level from config, soft fallback to info.
 func TestParseLevel(t *testing.T) {
 	t.Parallel()
 	cases := map[string]slog.Level{
@@ -134,7 +136,7 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
-// TestNew_LevelFiltersDebug — при level=info debug-записи отбрасываются.
+// TestNew_LevelFiltersDebug — at level=info debug records are dropped.
 func TestNew_LevelFiltersDebug(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -154,10 +156,10 @@ func TestNew_LevelFiltersDebug(t *testing.T) {
 	}
 }
 
-// TestLevelSet_ChangesFiltering — NewWithLevel возвращает handle, и Level.Set
-// реально меняет порог фильтрации уже работающего логгера (hot-reload
-// logging.level, ADR-021). До Set debug отбрасывается; после Set("debug") —
-// проходит.
+// TestLevelSet_ChangesFiltering — NewWithLevel returns a handle, and Level.Set
+// actually changes the filtering threshold of an already-running logger
+// (hot-reload logging.level, ADR-021). Before Set debug is dropped; after
+// Set("debug") it passes.
 func TestLevelSet_ChangesFiltering(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -188,8 +190,8 @@ func TestLevelSet_ChangesFiltering(t *testing.T) {
 	}
 }
 
-// TestLevelSet_Fallback — неизвестный/пустой уровень в Set → мягкий фолбэк на
-// info (симметрия с parseLevel на initial-build).
+// TestLevelSet_Fallback — an unknown/empty level in Set → soft fallback to info
+// (symmetric to parseLevel at initial build).
 func TestLevelSet_Fallback(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -210,8 +212,8 @@ func TestLevelSet_Fallback(t *testing.T) {
 	}
 }
 
-// TestRotationMaxAgeOverridesDefault — rotation.max_age_days доезжает до
-// ротатора, остальные поля остаются дефолтными.
+// TestRotationMaxAgeOverridesDefault — rotation.max_age_days reaches the
+// rotator, the other fields keep their defaults.
 func TestRotationMaxAgeOverridesDefault(t *testing.T) {
 	t.Parallel()
 	w := writer(Options{File: "/tmp/soul.log", Rotation: &config.LoggingRotation{MaxAgeDays: 21}})
@@ -227,7 +229,7 @@ func TestRotationMaxAgeOverridesDefault(t *testing.T) {
 	}
 }
 
-// TestRotationDefaults — File задан, Rotation nil → все дефолты на ротаторе.
+// TestRotationDefaults — File set, Rotation nil → all defaults on the rotator.
 func TestRotationDefaults(t *testing.T) {
 	t.Parallel()
 	w := writer(Options{File: "/tmp/soul.log"})
@@ -241,7 +243,7 @@ func TestRotationDefaults(t *testing.T) {
 	}
 }
 
-// TestFromSoul / TestFromKeeper — builders переносят поля в Options без потерь.
+// TestFromSoul / TestFromKeeper — the builders carry fields into Options without loss.
 func TestFromSoul(t *testing.T) {
 	t.Parallel()
 	opts := FromSoul(config.SoulLogging{

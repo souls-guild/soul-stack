@@ -10,11 +10,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// stubKV — герметичный KVReader для тестов vault(). Возвращает заранее заданные
-// секреты по relative-пути; missing → ошибка (как Vault без секрета).
+// stubKV is a hermetic KVReader for vault() tests. Returns preset secrets by
+// relative path; missing → error (like Vault without the secret).
 type stubKV struct {
 	secrets map[string]map[string]any
-	calls   []string // история запрошенных путей (проверка резолва пути)
+	calls   []string // history of requested paths (verifies path resolution)
 }
 
 func (s *stubKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
@@ -35,7 +35,7 @@ func newVaultEngine(t *testing.T, kv KVReader) *Engine {
 	return e
 }
 
-// vault('secret/x') без #field → весь map; доступ к полю через CEL `.field`.
+// vault('secret/x') without #field → the whole map; field access via CEL `.field`.
 func TestVault_MapThenField(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t", "user": "admin"},
@@ -54,7 +54,7 @@ func TestVault_MapThenField(t *testing.T) {
 	}
 }
 
-// vault('secret/x#field') → одно поле напрямую (#-суффикс).
+// vault('secret/x#field') → a single field directly (#-suffix).
 func TestVault_HashField(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -73,7 +73,7 @@ func TestVault_HashField(t *testing.T) {
 	}
 }
 
-// Резолв keeper-side: реальное значение в результате, не ref-строка.
+// Keeper-side resolve: the real value in the result, not a ref string.
 func TestVault_ResolvesRealValue(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/db": {"dsn": "postgres://real-secret-value"},
@@ -89,7 +89,7 @@ func TestVault_ResolvesRealValue(t *testing.T) {
 	}
 }
 
-// Путь vault() из доверенного контекста (vars/incarnation), не строковая склейка.
+// vault() path from trusted context (vars/incarnation), not string concatenation.
 func TestVault_PathFromContext(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/svc-redis/admin": {"password": "fromctx"},
@@ -98,7 +98,7 @@ func TestVault_PathFromContext(t *testing.T) {
 
 	vars := Vars{
 		Incarnation: map[string]any{"service": "redis"},
-		Loop:        map[string]any{}, // нет loop
+		Loop:        map[string]any{}, // no loop
 	}
 	out, err := e.EvalInterpolation("${ vault('secret/svc-' + incarnation.service + '/admin').password }", vars)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestVault_PathFromContext(t *testing.T) {
 	}
 }
 
-// Missing secret → render-ошибка (ErrEval), не паника.
+// Missing secret → render error (ErrEval), not a panic.
 func TestVault_MissingSecret(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	e := newVaultEngine(t, kv)
@@ -127,7 +127,7 @@ func TestVault_MissingSecret(t *testing.T) {
 	}
 }
 
-// Missing #field в существующем секрете → render-ошибка.
+// Missing #field in an existing secret → render error.
 func TestVault_MissingField(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "x"},
@@ -140,7 +140,7 @@ func TestVault_MissingField(t *testing.T) {
 	}
 }
 
-// vault() компилится (guard снят) при Engine с KVReader.
+// vault() compiles (guard lifted) when the Engine has a KVReader.
 func TestVault_GuardLiftedWithReader(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{"secret/x": {"v": "1"}}}
 	e := newVaultEngine(t, kv)
@@ -151,9 +151,9 @@ func TestVault_GuardLiftedWithReader(t *testing.T) {
 	}
 }
 
-// Без KVReader vault() остаётся ErrUnsupported (guard сохранён).
+// Without a KVReader vault() stays ErrUnsupported (guard kept).
 func TestVault_GuardKeptWithoutReader(t *testing.T) {
-	e := newEngine(t) // без WithVault
+	e := newEngine(t) // no WithVault
 	_, err := e.EvalExpression("vault('secret/x').v == '1'", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
@@ -161,7 +161,7 @@ func TestVault_GuardKeptWithoutReader(t *testing.T) {
 	}
 }
 
-// ctx из Vars прокидывается в ReadKV (отмена/таймаут).
+// ctx from Vars is propagated to ReadKV (cancel/timeout).
 func TestVault_CtxPropagation(t *testing.T) {
 	type ctxKey struct{}
 	captured := make(chan context.Context, 1)
@@ -188,11 +188,12 @@ func (c captureCtxKV) ReadKV(ctx context.Context, _ string) (map[string]any, err
 	return map[string]any{"v": "ok"}, nil
 }
 
-// ── security-blocker: обход macro vault() через прямой __vault_read ──────────
+// ── security-blocker: bypassing macro vault() via direct __vault_read ────────
 
-// Прямой вызов __vault_read(path, __vault_resolver) в авторском выражении читал
-// бы ЛЮБОЙ путь, минуя macro vault()/guard/mask. guard на `__`-идентификатор
-// должен отвергать такое выражение ДО compile (ErrUnsupported), и НЕ дёргать kv.
+// A direct __vault_read(path, __vault_resolver) call in an author expression would
+// read ANY path, bypassing macro vault()/guard/mask. The guard on the `__`
+// identifier must reject such an expression BEFORE compile (ErrUnsupported) and NOT
+// hit kv.
 func TestVault_DirectInternalReadRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -219,7 +220,7 @@ func TestVault_DirectInternalReadRejected(t *testing.T) {
 	}
 }
 
-// Голая ссылка на resolver-переменную __vault_resolver тоже отвергается.
+// A bare reference to the resolver var __vault_resolver is also rejected.
 func TestVault_DirectResolverVarRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{"secret/x": {"v": "1"}}}
 	e := newVaultEngine(t, kv)
@@ -231,10 +232,10 @@ func TestVault_DirectResolverVarRejected(t *testing.T) {
 	}
 }
 
-// guard на `__` действует и БЕЗ KVReader (vault-функция не зарегистрирована):
-// `__`-идентификатор зарезервирован независимо от наличия vault-клиента.
+// The `__` guard applies even WITHOUT a KVReader (vault function not registered):
+// the `__` identifier is reserved regardless of a vault client being present.
 func TestVault_InternalIdentRejectedWithoutReader(t *testing.T) {
-	e := newEngine(t) // без WithVault
+	e := newEngine(t) // no WithVault
 	_, err := e.EvalExpression("__vault_read('secret/x', __vault_resolver).v == '1'", Vars{})
 	var ue *ErrUnsupported
 	if !errors.As(err, &ue) {
@@ -242,14 +243,14 @@ func TestVault_InternalIdentRejectedWithoutReader(t *testing.T) {
 	}
 }
 
-// guard не должен ложно-срабатывать на `__`-подстроку ВНУТРИ строкового литерала
-// (это данные, не идентификатор) и на легальный vault().
+// The guard must not false-positive on a `__` substring INSIDE a string literal
+// (that is data, not an identifier) nor on a legitimate vault().
 func TestVault_InternalGuardNoFalsePositive(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{"secret/db__primary/x": {"dsn": "v"}}}
 	e := newVaultEngine(t, kv)
 
-	// `__` ВНУТРИ литерала-пути — данные, не идентификатор; vault() легален и
-	// guard не должен это отвергать.
+	// `__` INSIDE a path literal is data, not an identifier; vault() is legit and
+	// the guard must not reject it.
 	out, err := e.EvalInterpolation("${ vault('secret/db__primary/x#dsn') }", Vars{})
 	if err != nil {
 		t.Fatalf("ложное срабатывание guard на `__` в литерале-пути: %v", err)
@@ -259,11 +260,11 @@ func TestVault_InternalGuardNoFalsePositive(t *testing.T) {
 	}
 }
 
-// ── vault-not-found — actionable-путь, переживает маскинг (NIM-73) ───────────
+// ── vault-not-found — actionable path, survives masking (NIM-73) ─────────────
 
-// Текст ошибки missing-secret несёт путь в ПЛОСКОЙ форме (secret/…, без
-// vault:-префикса) и переживает production-маскинг status_details/error_summary:
-// оператор видит, ЧТО досеять, а не `***MASKED***`.
+// The missing-secret error text carries the path in FLAT form (secret/…, without
+// the vault: prefix) and survives production masking of status_details/error_summary:
+// the operator sees WHAT to provision, not `***MASKED***`.
 func TestVault_MissingSecretErrorActionable(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	e := newVaultEngine(t, kv)
@@ -275,8 +276,8 @@ func TestVault_MissingSecretErrorActionable(t *testing.T) {
 	assertVaultPathActionable(t, err.Error(), "secret/redis/admin")
 }
 
-// Форма с #field (как redis add_user: users/<name>#password): текст называет и
-// путь, и требуемое поле; плоская форма переживает маскинг.
+// The #field form (like redis add_user: users/<name>#password): the text names
+// both the path and the required field; the flat form survives masking.
 func TestVault_MissingSecretWithFieldActionable(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	e := newVaultEngine(t, kv)
@@ -291,8 +292,8 @@ func TestVault_MissingSecretWithFieldActionable(t *testing.T) {
 	}
 }
 
-// Missing #field в существующем секрете: путь+имя поля в плоской форме,
-// переживает маскинг; значения других полей не утекают (см. …NoSecretLeak).
+// Missing #field in an existing secret: path + field name in flat form, survives
+// masking; other fields' values do not leak (see …NoSecretLeak).
 func TestVault_MissingFieldErrorActionable(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "x"},
@@ -309,11 +310,11 @@ func TestVault_MissingFieldErrorActionable(t *testing.T) {
 	}
 }
 
-// assertVaultPathActionable: текст ошибки vault() (а) несёт путь в ПЛОСКОЙ форме,
-// (б) НЕ несёт vault:-ref-маркер (иначе маскинг съел бы строку целиком), (в)
-// переживает production-маскинг (audit.MaskSecretsSealed — тот же, что
-// status_details/error_summary в lockIncarnation, с непустым seal-набором без
-// ключа error): результат НЕ `***MASKED***` и всё ещё содержит путь.
+// assertVaultPathActionable: the vault() error text (a) carries the path in FLAT
+// form, (b) does NOT carry a vault: ref marker (else masking would eat the whole
+// string), (c) survives production masking (audit.MaskSecretsSealed — the same as
+// status_details/error_summary in lockIncarnation, with a non-empty seal set
+// without an error key): the result is NOT `***MASKED***` and still contains the path.
 func assertVaultPathActionable(t *testing.T, errText, path string) {
 	t.Helper()
 	if !strings.Contains(errText, path) {
@@ -335,8 +336,8 @@ func assertVaultPathActionable(t *testing.T, errText, path string) {
 	}
 }
 
-// Plaintext-секрет не попадает в текст ошибки (missing-field не печатает
-// значения других полей секрета).
+// A plaintext secret does not reach the error text (missing-field does not print
+// other fields' values of the secret).
 func TestVault_MissingFieldNoSecretLeak(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "TOP-SECRET-VALUE"},
@@ -352,7 +353,7 @@ func TestVault_MissingFieldNoSecretLeak(t *testing.T) {
 	}
 }
 
-// ── path-format: vault('foo') без слеша → понятная ошибка формата ───────────
+// ── path-format: vault('foo') without a slash → a clear format error ─────────
 
 func TestVault_PathFormatValidation(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
@@ -365,17 +366,17 @@ func TestVault_PathFormatValidation(t *testing.T) {
 			t.Fatalf("vault('%s'): ожидали ошибку формата пути", p)
 		}
 	}
-	// kv не должен дёргаться при невалидном формате (ошибка до ReadKV).
+	// kv must not be hit on an invalid format (error before ReadKV).
 	if len(kv.calls) != 0 {
 		t.Fatalf("ReadKV дёрнулся при невалидном формате пути: %v", kv.calls)
 	}
 }
 
-// ── concurrency: общий Engine + параллельные vault() с разным ctx ───────────
+// ── concurrency: shared Engine + parallel vault() with different ctx ─────────
 
-// Общий Engine, параллельные vault()-прогоны с разными секретами и разными ctx.
-// Закрепляет заявленную concurrency-safety (per-eval resolver в активации, kv
-// immutable). Гонять под `go test -race`.
+// Shared Engine, parallel vault() runs with different secrets and different ctx.
+// Pins the claimed concurrency-safety (per-eval resolver in the activation, kv
+// immutable). Run under `go test -race`.
 func TestVault_ConcurrentEvals(t *testing.T) {
 	kv := &concurrentKV{secrets: map[string]map[string]any{
 		"secret/a": {"v": "AAA"},
@@ -407,8 +408,8 @@ func TestVault_ConcurrentEvals(t *testing.T) {
 	wg.Wait()
 }
 
-// concurrentKV — потокобезопасный KVReader для concurrency-теста (read-only
-// карта, без записи в общий slice calls).
+// concurrentKV is a thread-safe KVReader for the concurrency test (read-only map,
+// no writes to a shared calls slice).
 type concurrentKV struct {
 	secrets map[string]map[string]any
 }
@@ -421,9 +422,9 @@ func (c *concurrentKV) ReadKV(_ context.Context, path string) (map[string]any, e
 	return data, nil
 }
 
-// ── per-render-pass memo: дедуп vault()-резолвов в одном проходе ─────────────
+// ── per-render-pass memo: dedup of vault() resolves within one pass ──────────
 
-// countingKV — KVReader со счётчиком backend-вызовов по пути (проверка дедупа).
+// countingKV is a KVReader with a per-path backend-call counter (dedup check).
 type countingKV struct {
 	secrets map[string]map[string]any
 	mu      sync.Mutex
@@ -451,7 +452,7 @@ func (c *countingKV) calls(path string) int {
 	return c.count[path]
 }
 
-// Повторный vault(тот-же-путь) в ОДНОМ render-pass = ровно 1 backend-вызов.
+// Repeated vault(same-path) within ONE render pass = exactly 1 backend call.
 func TestVaultMemo_SamePathOneBackendCall(t *testing.T) {
 	kv := newCountingKV(map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -460,7 +461,7 @@ func TestVaultMemo_SamePathOneBackendCall(t *testing.T) {
 
 	ctx := WithVaultMemo(context.Background())
 	const expr = "${ vault('secret/redis/admin#password') }"
-	for i := 0; i < 16; i++ { // redis-масштаб: десятки одинаковых vault()
+	for i := 0; i < 16; i++ { // redis scale: dozens of identical vault()
 		out, err := e.EvalInterpolation(expr, Vars{Ctx: ctx})
 		if err != nil {
 			t.Fatalf("eval #%d: %v", i, err)
@@ -474,8 +475,8 @@ func TestVaultMemo_SamePathOneBackendCall(t *testing.T) {
 	}
 }
 
-// Разные #field одного секрета бьют один backend-вызов (ReadKV видит body без
-// #field), но каждое поле резолвится корректно из кешированного map.
+// Different #field of one secret hit a single backend call (ReadKV sees the body
+// without #field), but each field resolves correctly from the cached map.
 func TestVaultMemo_DifferentFieldsSameSecretOneCall(t *testing.T) {
 	kv := newCountingKV(map[string]map[string]any{
 		"secret/redis/inc": {"password": "PWD", "tls": "TLS-CERT"},
@@ -499,8 +500,8 @@ func TestVaultMemo_DifferentFieldsSameSecretOneCall(t *testing.T) {
 	}
 }
 
-// Разные render-pass-ы НЕ делят кеш: каждый pass со своим memo-ctx → отдельный
-// backend-вызов. Закрепляет per-pass scope (нет межзапросной утечки/stale).
+// Different render passes do NOT share the cache: each pass with its own memo-ctx →
+// a separate backend call. Pins per-pass scope (no cross-request leak/stale).
 func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 	kv := newCountingKV(map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -509,7 +510,7 @@ func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 
 	const expr = "${ vault('secret/redis/admin#password') }"
 	for pass := 0; pass < 3; pass++ {
-		ctx := WithVaultMemo(context.Background()) // новый pass = новый memo
+		ctx := WithVaultMemo(context.Background()) // new pass = new memo
 		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err != nil {
 			t.Fatalf("pass #%d: %v", pass, err)
 		}
@@ -517,14 +518,15 @@ func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 			t.Fatalf("pass #%d (повтор): %v", pass, err)
 		}
 	}
-	// 3 pass-а × дедуп внутри pass-а = 3 backend-вызова (не 1, не 6).
+	// 3 passes × dedup within a pass = 3 backend calls (not 1, not 6).
 	if got := kv.calls("secret/redis/admin"); got != 3 {
 		t.Fatalf("backend-вызовов = %d, want 3 (по одному на pass, кеш не общий)", got)
 	}
 }
 
-// Без WithVaultMemo (ctx без кеша — soul-lint/Trial/прямой unit-eval) поведение
-// прежнее: каждый vault() бьёт backend. Memo — оптимизация, не контракт.
+// Without WithVaultMemo (ctx without a cache — soul-lint/Trial/direct unit-eval) the
+// behavior is unchanged: every vault() hits the backend. Memo is an optimization,
+// not a contract.
 func TestVaultMemo_NoMemoEveryCallHitsBackend(t *testing.T) {
 	kv := newCountingKV(map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -542,10 +544,10 @@ func TestVaultMemo_NoMemoEveryCallHitsBackend(t *testing.T) {
 	}
 }
 
-// Ошибка ReadKV НЕ кешируется: retry того же пути в pass-е повторяет чтение
-// (транзиентный сбой Vault не «залипает» на весь прогон).
+// A ReadKV error is NOT cached: a retry of the same path within a pass repeats the
+// read (a transient Vault failure does not "stick" for the whole run).
 func TestVaultMemo_ErrorsNotCached(t *testing.T) {
-	kv := newCountingKV(map[string]map[string]any{}) // секрета нет → ошибка
+	kv := newCountingKV(map[string]map[string]any{}) // no secret → error
 	e := newVaultEngine(t, kv)
 
 	ctx := WithVaultMemo(context.Background())

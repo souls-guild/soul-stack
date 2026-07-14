@@ -8,19 +8,19 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// LoadDestinyVars парсит `vars.yml` destiny — top-level YAML-map
-// destiny-локалов (docs/destiny/vars.md). Возвращает RAW-карту имя→значение
-// БЕЗ схемо-валидации: vars не типизированы спекой (plain map значений от
-// автора destiny, см. таблицу `vars` vs `input` в vars.md), поэтому путь
-// parseAndValidate (как у destiny.yml/scenario.yml) тут неуместен — простой
-// yaml.Unmarshal.
+// LoadDestinyVars parses destiny `vars.yml` — the top-level YAML map of destiny
+// locals (docs/destiny/vars.md). Returns a RAW name→value map WITHOUT schema
+// validation: vars are not typed by the spec (a plain map of values from the
+// destiny author, see the `vars` vs `input` table in vars.md), so the
+// parseAndValidate path (as for destiny.yml/scenario.yml) does not apply here —
+// a plain yaml.Unmarshal.
 //
-// Значения проходят насквозь как Go-данные (string/число/bool/коллекция);
-// CEL-выражения `${ … }` в строковых ячейках резолвятся ПОЗЖЕ, в render-фазе
-// (renderApplyDestiny над input+soulprint.self), не здесь.
+// Values pass through as Go data (string/number/bool/collection); CEL
+// expressions `${ … }` in string cells are resolved LATER, in the render phase
+// (renderApplyDestiny over input+soulprint.self), not here.
 //
-// Отсутствие файла — НЕ ошибка: destiny без локалов (vars.yml не обязателен)
-// даёт nil-карту, обращение `${ vars.<x> }` тогда упадёт штатным no-such-key.
+// A missing file is NOT an error: destiny without locals (vars.yml is optional)
+// yields a nil map, and `${ vars.<x> }` then fails with the normal no-such-key.
 func LoadDestinyVars(path string) (map[string]any, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -32,9 +32,10 @@ func LoadDestinyVars(path string) (map[string]any, error) {
 	return LoadDestinyVarsFromBytes(path, src)
 }
 
-// LoadDestinyVarsFromBytes — точка входа без I/O (снапшот destiny уже прочитан,
-// тесты с in-memory фикстурами). Пустой документ (только комментарии/пробелы) →
-// nil-карта, не ошибка. filename используется лишь как метка в сообщении.
+// LoadDestinyVarsFromBytes is the I/O-free entry point (the destiny snapshot is
+// already read, in-memory fixtures in tests). An empty document (only
+// comments/whitespace) → nil map, not an error. filename is used only as a label
+// in the message.
 func LoadDestinyVarsFromBytes(filename string, data []byte) (map[string]any, error) {
 	data = stripBOM(data)
 	if len(data) == 0 {
@@ -47,12 +48,12 @@ func LoadDestinyVarsFromBytes(filename string, data []byte) (map[string]any, err
 	return out, nil
 }
 
-// DestinyVarsCollisions возвращает отсортированный список имён, объявленных И в
-// file-level `vars.yml` (fileVars), И в task-level `vars:` хотя бы одной задачи
-// (tasks). Это не ошибка — Вариант A (vars.md «Слияние file-vars ↔ task-vars»)
-// детерминирован: task-var переопределяет одноимённый file-var. Но коллизия —
-// частый источник недоразумений («почему мой file-var игнорируется?»), поэтому
-// soul-lint поднимает warn. Пустой результат → пересечений нет.
+// DestinyVarsCollisions returns a sorted list of names declared in BOTH the
+// file-level `vars.yml` (fileVars) AND the task-level `vars:` of at least one task
+// (tasks). This is not an error — Variant A (vars.md "Merging file-vars ↔
+// task-vars") is deterministic: a task-var overrides a file-var of the same name.
+// But a collision is a common source of confusion ("why is my file-var
+// ignored?"), so soul-lint raises a warn. An empty result → no overlaps.
 func DestinyVarsCollisions(fileVars map[string]any, tasks []Task) []string {
 	if len(fileVars) == 0 || len(tasks) == 0 {
 		return nil

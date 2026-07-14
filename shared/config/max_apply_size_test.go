@@ -2,12 +2,12 @@ package config
 
 import "testing"
 
-// Лимит размера ApplyRequest (контракт Keeper↔Soul по EventStream, ADR-012):
-// Keeper-send (`listen.grpc.event_stream.max_apply_size_mb`) и Soul-recv
-// (`keeper.max_apply_size_mb`). Оба — int в МиБ, дефолт 8, валидация ≥ 1 MiB.
+// ApplyRequest size limit (Keeper↔Soul EventStream contract, ADR-012):
+// Keeper-send (`listen.grpc.event_stream.max_apply_size_mb`) and Soul-recv
+// (`keeper.max_apply_size_mb`). Both int MiB, default 8, validation ≥ 1 MiB.
 
-// keeperBaseNoEventStreamApply — keeperBaseRequired с многострочным
-// event_stream-блоком, чтобы тест мог дописать `max_apply_size_mb` под него.
+// keeperBaseNoEventStreamApply — keeperBaseRequired with a multi-line
+// event_stream block so a test can append `max_apply_size_mb` under it.
 const keeperBaseNoEventStreamApply = `kid: keeper-eu-west-01
 listen:
   grpc:
@@ -65,7 +65,7 @@ func TestKeeperMaxApplySize_ParsedAndResolved(t *testing.T) {
 
 func TestKeeperMaxApplySize_BelowMin(t *testing.T) {
 	src := keeperBaseNoEventStreamApply + "      max_apply_size_mb: 0\n" + keeperBaseTailApply
-	// 0 трактуется как «не задан» — НЕ ошибка, резолвится в дефолт.
+	// 0 is treated as "unset" — NOT an error, resolves to the default.
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if hasCodeAt(diags, "value_out_of_range", "$.listen.grpc.event_stream.max_apply_size_mb") {
 		dump(t, diags)

@@ -2,10 +2,10 @@ package config
 
 import "testing"
 
-// Vendor-extension `x-*` в input-схеме (конвенция OpenAPI/JSON-Schema): backend
-// прокидывает такие ключи в сырой DTO input_schema как аннотации UI (NIM-76:
-// `x-directives: redis`). Валидатор их не трогает (passthrough), но НЕ-x-ключи —
-// по-прежнему unknown_key (error).
+// Vendor-extension `x-*` in the input schema (OpenAPI/JSON-Schema convention): the
+// backend passes such keys into the raw input_schema DTO as UI annotations (NIM-76:
+// `x-directives: redis`). The validator leaves them alone (passthrough), but non-x-
+// keys are still unknown_key (error).
 
 func TestInputSchema_VendorExtensionKeyAllowed(t *testing.T) {
 	src := `name: x

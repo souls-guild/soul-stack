@@ -18,9 +18,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// mockWriter — тестовый [audit.Writer] для проверки audit-эмиссии из
-// [Store.Reload]. Захватывает события под mutex для безопасного чтения
-// из тестов с горутинами (WatchSIGHUP).
+// mockWriter is a test [audit.Writer] for checking audit emission from
+// [Store.Reload]. Captures events under a mutex for safe reads from tests with
+// goroutines (WatchSIGHUP).
 type mockWriter struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -48,8 +48,8 @@ func (m *mockWriter) len() int {
 	return len(m.events)
 }
 
-// fixtureKeeperPath копирует golden keeper.yml во временный файл, который
-// тест может править. Возвращает абсолютный путь.
+// fixtureKeeperPath copies the golden keeper.yml into a temp file the test can
+// edit. Returns the absolute path.
 func fixtureKeeperPath(t *testing.T) string {
 	t.Helper()
 	src := filepath.FromSlash("../../examples/keeper/keeper.yml")
@@ -123,7 +123,7 @@ func TestStore_ReloadNoOp(t *testing.T) {
 	if after.KID != before.KID {
 		t.Errorf("KID changed: before=%q after=%q", before.KID, after.KID)
 	}
-	// Swap всё равно произошёл (re-parsed) — указатель новый.
+	// A swap happened anyway (re-parsed) — the pointer is new.
 	if after == before {
 		t.Log("note: same pointer after reload — possible but not required")
 	}
@@ -139,8 +139,8 @@ func TestStore_ReloadAfterExternalEdit(t *testing.T) {
 		t.Fatalf("initial KID wrong: %q", store.Get().KID)
 	}
 
-	// Прямая запись на диск симулирует внешний редактор / API-edit; Patch
-	// через AST не нужен для проверки контракта Reload-а.
+	// A direct write to disk simulates an external editor / API-edit; an AST Patch
+	// is not needed to check the Reload contract.
 	newSrc := []byte(`kid: keeper-eu-west-99
 listen:
   grpc:
@@ -191,7 +191,7 @@ func TestStore_ReloadFailureKeepsOldSnapshot(t *testing.T) {
 	}
 	prevKID := prev.KID
 
-	// Битый YAML — заведомо parse-fail.
+	// Broken YAML — a guaranteed parse-fail.
 	bad := []byte("kid: [\n  unterminated\n")
 	if err := os.WriteFile(path, bad, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -260,7 +260,7 @@ func TestStore_ConcurrentReadersDuringReload(t *testing.T) {
 		}
 	}()
 
-	// Дать reloader-у 50 итераций.
+	// Give the reloader 50 iterations.
 	time.Sleep(50 * time.Millisecond)
 	close(stop)
 	wg.Wait()
@@ -280,7 +280,7 @@ func TestStore_CorrelationIDUnique(t *testing.T) {
 	if a.CorrelationID == b.CorrelationID {
 		t.Errorf("CorrelationID collision: %q", a.CorrelationID)
 	}
-	// ULID — 26 символов Crockford base32 (ADR-022(c)).
+	// ULID — 26 Crockford base32 chars (ADR-022(c)).
 	ulidRe := regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 	if !ulidRe.MatchString(a.CorrelationID) {
 		t.Errorf("CorrelationID %q does not match ULID pattern %s", a.CorrelationID, ulidRe)
@@ -301,7 +301,7 @@ func TestWatchSIGHUP_FireAndDelivery(t *testing.T) {
 	defer cancel()
 	out := WatchSIGHUP(ctx, store)
 
-	// Дать watcher-у время зарегистрировать signal.Notify.
+	// Give the watcher time to register signal.Notify.
 	time.Sleep(20 * time.Millisecond)
 
 	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
@@ -340,8 +340,8 @@ func TestWatchSIGHUP_ContextCancelClosesChannel(t *testing.T) {
 	select {
 	case _, ok := <-out:
 		if ok {
-			// Может прилететь один последний результат — допускаем,
-			// но следующее чтение обязано получить closed.
+			// One last result may arrive — that's allowed, but the next read
+			// must get closed.
 			select {
 			case _, ok2 := <-out:
 				if ok2 {
@@ -368,9 +368,9 @@ func TestWatchSIGHUP_BufferedChannelDoesntBlock(t *testing.T) {
 	out := WatchSIGHUP(ctx, store)
 	time.Sleep(20 * time.Millisecond)
 
-	// Намеренно НЕ читаем из out. Шлём SIGHUP несколько раз — handler
-	// не должен залипнуть. Если бы он блокировался, ctx.Cancel() ниже
-	// не привёл бы к закрытию канала в разумное время.
+	// Intentionally do NOT read from out. Send SIGHUP several times — the handler
+	// must not get stuck. If it blocked, the ctx.Cancel() below would not close
+	// the channel in reasonable time.
 	for i := 0; i < 5; i++ {
 		if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
 			t.Fatalf("kill SIGHUP: %v", err)
@@ -378,7 +378,7 @@ func TestWatchSIGHUP_BufferedChannelDoesntBlock(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Прочитаем единственный буферизованный результат.
+	// Read the single buffered result.
 	select {
 	case res, ok := <-out:
 		if !ok {
@@ -391,8 +391,8 @@ func TestWatchSIGHUP_BufferedChannelDoesntBlock(t *testing.T) {
 		t.Fatal("no result in channel — handler likely deadlocked")
 	}
 
-	// Дополнительные SIGHUP-ы прошли мимо переполненного канала —
-	// проверка, что watcher жив и канал корректно закроется на cancel.
+	// Extra SIGHUPs passed by the full channel — checking the watcher is alive
+	// and the channel closes correctly on cancel.
 	cancel()
 	deadline := time.After(2 * time.Second)
 	for {
@@ -407,7 +407,7 @@ func TestWatchSIGHUP_BufferedChannelDoesntBlock(t *testing.T) {
 	}
 }
 
-// fixtureSoulPath — аналог `fixtureKeeperPath` для golden `soul.yml`.
+// fixtureSoulPath is the analog of `fixtureKeeperPath` for the golden `soul.yml`.
 func fixtureSoulPath(t *testing.T) string {
 	t.Helper()
 	src := filepath.FromSlash("../../examples/soul/soul.yml")
@@ -438,8 +438,8 @@ func TestLoadSoulStore_GoldenInitial(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("Get() == nil after successful initial load")
 	}
-	// SID — опционально (auto-detect через FQDN); фикстура его не задаёт,
-	// проверяем что endpoints-список приехал.
+	// SID is optional (auto-detected via FQDN); the fixture does not set it, we
+	// check that the endpoints list arrived.
 	if got := len(cfg.Keeper.Endpoints); got != 5 {
 		t.Errorf("Keeper.Endpoints len = %d, want 5", got)
 	}
@@ -457,7 +457,7 @@ func TestLoadSoulStore_GoldenInitial(t *testing.T) {
 	}
 }
 
-// Reload на удалённый файл — I/O-error, snapshot сохранён.
+// Reload on a deleted file — I/O error, snapshot preserved.
 func TestStore_ReloadOnDeletedFile(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -488,7 +488,7 @@ func TestStore_ReloadOnDeletedFile(t *testing.T) {
 	}
 }
 
-// Reload на schema-error (unknown top-level key) — snapshot сохранён,
+// Reload on a schema error (unknown top-level key) — snapshot preserved,
 // Phase = schema_validate.
 func TestStore_ReloadFailsOnSchemaError(t *testing.T) {
 	path := fixtureKeeperPath(t)
@@ -497,7 +497,7 @@ func TestStore_ReloadFailsOnSchemaError(t *testing.T) {
 		t.Fatalf("LoadKeeperStore: %v", err)
 	}
 
-	// Берём golden и дописываем неизвестный top-level ключ.
+	// Take the golden and append an unknown top-level key.
 	orig, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -519,7 +519,7 @@ func TestStore_ReloadFailsOnSchemaError(t *testing.T) {
 	}
 }
 
-// Reload на semantic-error (невалидный KID) — snapshot сохранён,
+// Reload on a semantic error (invalid KID) — snapshot preserved,
 // Phase = semantic_validate.
 func TestStore_ReloadFailsOnSemanticError(t *testing.T) {
 	path := fixtureKeeperPath(t)
@@ -532,7 +532,7 @@ func TestStore_ReloadFailsOnSemanticError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	// KID должен быть `^[a-z][a-z0-9-]{0,62}$`, верхний регистр запрещён.
+	// KID must be `^[a-z][a-z0-9-]{0,62}$`, uppercase is forbidden.
 	corrupt := bytes.Replace(orig, []byte("kid: keeper-eu-west-01"), []byte("kid: KEEPER_BAD"), 1)
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -547,12 +547,12 @@ func TestStore_ReloadFailsOnSemanticError(t *testing.T) {
 	}
 }
 
-// Initial load с validation-error возвращает живой Store: Get()==nil,
-// Document()!=nil, после исправления файла Reload восстанавливает Get().
+// Initial load with a validation error returns a live Store: Get()==nil,
+// Document()!=nil, and after fixing the file Reload restores Get().
 func TestLoadKeeperStore_InitialValidationErrorKeepsStoreLive(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "keeper.yml")
-	// Битый: только postgres-маркер, остальные обязательные блоки отсутствуют.
+	// Broken: only the postgres marker, the other required blocks are absent.
 	bad := []byte("postgres: {}\n")
 	if err := os.WriteFile(path, bad, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -575,7 +575,7 @@ func TestLoadKeeperStore_InitialValidationErrorKeepsStoreLive(t *testing.T) {
 		t.Error("Document() == nil on broken initial load (must be non-nil for re-Reload)")
 	}
 
-	// Подменяем файл на golden, делаем Reload — Get() должен оживиться.
+	// Swap the file for the golden, do Reload — Get() must come alive.
 	goldenSrc, err := os.ReadFile(filepath.FromSlash("../../examples/keeper/keeper.yml"))
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
@@ -592,7 +592,7 @@ func TestLoadKeeperStore_InitialValidationErrorKeepsStoreLive(t *testing.T) {
 	}
 }
 
-// Document() после неудачного Reload — старый AST, не nil и не новый.
+// Document() after a failed Reload — the old AST, not nil and not new.
 func TestStore_DocumentAfterFailedReloadStaysOld(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -622,8 +622,8 @@ func TestStore_DocumentAfterFailedReloadStaysOld(t *testing.T) {
 	}
 }
 
-// Empty-file Reload — должен пометить parse-error с кодом empty_document
-// и не панировать (regression для qa.1 blocker bug 1).
+// Empty-file Reload — must flag a parse error with code empty_document and not
+// panic (regression for qa.1 blocker bug 1).
 func TestStore_ReloadOnEmptyFileDoesNotPanic(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -656,8 +656,8 @@ func TestStore_ReloadOnEmptyFileDoesNotPanic(t *testing.T) {
 	}
 }
 
-// nil-store в WatchSIGHUP — panic в стеке вызывающего, до запуска goroutine
-// (regression для qa.1 blocker bug 2).
+// nil-store in WatchSIGHUP — panic in the caller's stack, before the goroutine
+// starts (regression for qa.1 blocker bug 2).
 func TestWatchSIGHUP_NilStorePanics(t *testing.T) {
 	defer func() {
 		r := recover()
@@ -678,9 +678,9 @@ func TestWatchSIGHUP_NilStorePanics(t *testing.T) {
 	_ = WatchSIGHUP[KeeperConfig](ctx, nil)
 }
 
-// TestStore_ReloadEmitsAuditOnSuccess — успешный Reload порождает один
-// audit-event типа `config.reload_succeeded` с корректным Source и тем же
-// CorrelationID, что в [ReloadResult].
+// TestStore_ReloadEmitsAuditOnSuccess — a successful Reload produces one
+// audit event of type `config.reload_succeeded` with the correct Source and the
+// same CorrelationID as in [ReloadResult].
 func TestStore_ReloadEmitsAuditOnSuccess(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{}
@@ -724,14 +724,14 @@ func TestStore_ReloadEmitsAuditOnSuccess(t *testing.T) {
 			t.Errorf("Payload[validation_errors] present on success: %v", last.Payload)
 		}
 		if _, ok := last.Payload["changed_paths"]; ok {
-			// ChangedPaths пустой в M0.3 — ключ должен отсутствовать.
+			// ChangedPaths is empty in M0.3 — the key must be absent.
 			t.Errorf("Payload[changed_paths] present when empty: %v", last.Payload)
 		}
 	}
 }
 
-// TestStore_ReloadEmitsAuditOnFailure — validation-fail (битый YAML)
-// порождает audit-event `config.reload_failed` с phase + validation_errors.
+// TestStore_ReloadEmitsAuditOnFailure — a validation failure (broken YAML)
+// produces an audit event `config.reload_failed` with phase + validation_errors.
 func TestStore_ReloadEmitsAuditOnFailure(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{}
@@ -782,7 +782,7 @@ func TestStore_ReloadEmitsAuditOnFailure(t *testing.T) {
 	if len(ve) == 0 {
 		t.Fatalf("validation_errors empty on schema-fail")
 	}
-	// Проверяем что есть mandatory ключи по ADR-022(j).
+	// Check the mandatory keys per ADR-022(j) are present.
 	for _, key := range []string{"code", "message", "phase", "level"} {
 		if _, ok := ve[0][key]; !ok {
 			t.Errorf("validation_errors[0] missing key %q: %#v", key, ve[0])
@@ -790,8 +790,8 @@ func TestStore_ReloadEmitsAuditOnFailure(t *testing.T) {
 	}
 }
 
-// TestStore_ReloadEmitsAuditOnIOFatal — удалённый файл порождает
-// `config.reload_failed` с Phase=parse и validation_errors c io_error.
+// TestStore_ReloadEmitsAuditOnIOFatal — a deleted file produces
+// `config.reload_failed` with Phase=parse and validation_errors with io_error.
 func TestStore_ReloadEmitsAuditOnIOFatal(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{}
@@ -832,9 +832,9 @@ func TestStore_ReloadEmitsAuditOnIOFatal(t *testing.T) {
 	}
 }
 
-// TestStore_ReloadWithoutAuditWriter_NoEmit — стандартный LoadKeeperStore
-// (без audit) Reload работает корректно, в Store auditWriter==nil,
-// audit-эмиссии не происходит.
+// TestStore_ReloadWithoutAuditWriter_NoEmit — the standard LoadKeeperStore
+// (no audit) Reload works correctly, in the Store auditWriter==nil, and no audit
+// emission happens.
 func TestStore_ReloadWithoutAuditWriter_NoEmit(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -849,7 +849,7 @@ func TestStore_ReloadWithoutAuditWriter_NoEmit(t *testing.T) {
 	if !res.Swapped {
 		t.Fatalf("Swapped=false on golden Reload")
 	}
-	// Доп. косвенная проверка: failure-Reload тоже не падает без writer-а.
+	// Extra indirect check: a failure-Reload also does not crash without a writer.
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -859,10 +859,11 @@ func TestStore_ReloadWithoutAuditWriter_NoEmit(t *testing.T) {
 	}
 }
 
-// TestStore_SetAuditWriter_LateBindingEmits — Store создан без audit
-// (LoadKeeperStore), reload до SetAuditWriter не эмитит; после late-binding
-// SetAuditWriter каждый reload пишет config.reload_*. Это путь init-фазы
-// бинаря `keeper` (Store создаётся до подъёма audit-writer-а).
+// TestStore_SetAuditWriter_LateBindingEmits — the Store is created without audit
+// (LoadKeeperStore), a reload before SetAuditWriter does not emit; after
+// late-binding SetAuditWriter every reload writes config.reload_*. This is the
+// `keeper` binary's init-phase path (the Store is created before the audit-writer
+// comes up).
 func TestStore_SetAuditWriter_LateBindingEmits(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -870,7 +871,7 @@ func TestStore_SetAuditWriter_LateBindingEmits(t *testing.T) {
 		t.Fatalf("LoadKeeperStore: %v", err)
 	}
 
-	// До инъекции — reload не эмитит.
+	// Before injection — reload does not emit.
 	if res := store.Reload(context.Background(), ReloadSourceSignal); !res.Swapped {
 		t.Fatalf("Swapped=false before SetAuditWriter")
 	}
@@ -893,7 +894,7 @@ func TestStore_SetAuditWriter_LateBindingEmits(t *testing.T) {
 		t.Errorf("CorrelationID mismatch: event=%q result=%q", evs[0].CorrelationID, res.CorrelationID)
 	}
 
-	// nil-сброс — снова без эмиссии (back-compat).
+	// nil reset — no emission again (back-compat).
 	store.SetAuditWriter(nil)
 	if res := store.Reload(context.Background(), ReloadSourceSignal); !res.Swapped {
 		t.Fatalf("Swapped=false after SetAuditWriter(nil)")
@@ -903,8 +904,8 @@ func TestStore_SetAuditWriter_LateBindingEmits(t *testing.T) {
 	}
 }
 
-// TestStore_AuditWriterError_DoesNotBlockReload — Writer возвращает error,
-// Reload всё равно отдаёт корректный ReloadResult со Swapped=true.
+// TestStore_AuditWriterError_DoesNotBlockReload — the Writer returns an error,
+// Reload still returns a correct ReloadResult with Swapped=true.
 func TestStore_AuditWriterError_DoesNotBlockReload(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{err: errors.New("audit backend down")}
@@ -920,15 +921,14 @@ func TestStore_AuditWriterError_DoesNotBlockReload(t *testing.T) {
 	if res.CorrelationID == "" {
 		t.Errorf("CorrelationID empty on success despite audit-write fail")
 	}
-	// Writer всё равно вызывался — просто вернул error.
+	// The Writer was still called — it just returned an error.
 	if w.len() != 1 {
 		t.Errorf("writer calls = %d, want 1 (write attempted, error logged)", w.len())
 	}
 }
 
-// TestStore_ReloadAuditCorrelationIDConsistency — два последовательных
-// Reload-а имеют разные CorrelationID, и каждый совпадает с тем, что
-// получил audit-event.
+// TestStore_ReloadAuditCorrelationIDConsistency — two consecutive Reloads have
+// different CorrelationIDs, and each matches the one the audit event received.
 func TestStore_ReloadAuditCorrelationIDConsistency(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{}
@@ -956,9 +956,8 @@ func TestStore_ReloadAuditCorrelationIDConsistency(t *testing.T) {
 	}
 }
 
-// TestStore_LoadSoulStoreWithAudit_EmitsOnReload — симметричный тест для
-// Soul-варианта конструктора (нужен для регрессии: оба `kind`-а должны
-// эмитить audit).
+// TestStore_LoadSoulStoreWithAudit_EmitsOnReload — the symmetric test for the
+// Soul constructor variant (needed for regression: both `kind`s must emit audit).
 func TestStore_LoadSoulStoreWithAudit_EmitsOnReload(t *testing.T) {
 	path := fixtureSoulPath(t)
 	w := &mockWriter{}
@@ -980,9 +979,9 @@ func TestStore_LoadSoulStoreWithAudit_EmitsOnReload(t *testing.T) {
 	}
 }
 
-// TestStore_LoadKeeperStoreWithAudit_NilWriterIsBackwardCompat — передача
-// nil-writer не должна валить конструктор и должна вести себя как
-// LoadKeeperStore без audit-эмиссии.
+// TestStore_LoadKeeperStoreWithAudit_NilWriterIsBackwardCompat — passing a
+// nil-writer must not break the constructor and must behave like LoadKeeperStore
+// without audit emission.
 func TestStore_LoadKeeperStoreWithAudit_NilWriterIsBackwardCompat(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStoreWithAudit(path, ValidateOptions{}, nil)
@@ -998,8 +997,8 @@ func TestStore_LoadKeeperStoreWithAudit_NilWriterIsBackwardCompat(t *testing.T) 
 	}
 }
 
-// TestWatchSIGHUP_EmitsAuditOnReload — конец-в-конец: SIGHUP → WatchSIGHUP
-// триггерит Reload → Store.auditWriter получает event.
+// TestWatchSIGHUP_EmitsAuditOnReload — end-to-end: SIGHUP → WatchSIGHUP triggers
+// Reload → Store.auditWriter receives the event.
 func TestWatchSIGHUP_EmitsAuditOnReload(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	w := &mockWriter{}
@@ -1025,8 +1024,8 @@ func TestWatchSIGHUP_EmitsAuditOnReload(t *testing.T) {
 		if !res.Swapped {
 			t.Fatalf("Swapped=false on SIGHUP reload")
 		}
-		// audit-write — best-effort, выполняется внутри Reload до возврата
-		// результата в канал, так что к моменту чтения событие уже там.
+		// audit-write is best-effort, done inside Reload before the result is
+		// returned to the channel, so by read time the event is already there.
 		evs := w.snapshot()
 		if len(evs) != 1 {
 			t.Fatalf("event count = %d, want 1", len(evs))
@@ -1042,8 +1041,8 @@ func TestWatchSIGHUP_EmitsAuditOnReload(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_FiresOnSwap — успешный Reload зовёт callback ровно
-// один раз; old/new содержат соответствующие snapshot-указатели.
+// TestStore_OnReload_FiresOnSwap — a successful Reload calls the callback exactly
+// once; old/new contain the corresponding snapshot pointers.
 func TestStore_OnReload_FiresOnSwap(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1083,8 +1082,8 @@ func TestStore_OnReload_FiresOnSwap(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_NotCalledOnFailure — validation-fail и I/O-fatal
-// не должны триггерить callback (старый снимок не меняется).
+// TestStore_OnReload_NotCalledOnFailure — a validation failure and an I/O-fatal
+// must not trigger the callback (the old snapshot does not change).
 func TestStore_OnReload_NotCalledOnFailure(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1098,7 +1097,7 @@ func TestStore_OnReload_NotCalledOnFailure(t *testing.T) {
 	})
 	defer unsub()
 
-	// Битый YAML — parse-fail.
+	// Broken YAML — parse-fail.
 	bad := []byte("kid: [\n  unterminated\n")
 	if err := os.WriteFile(path, bad, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -1108,7 +1107,7 @@ func TestStore_OnReload_NotCalledOnFailure(t *testing.T) {
 		t.Fatalf("Swapped=true on broken YAML")
 	}
 
-	// I/O-fatal — удалённый файл.
+	// I/O-fatal — a deleted file.
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -1117,15 +1116,15 @@ func TestStore_OnReload_NotCalledOnFailure(t *testing.T) {
 		t.Fatalf("Swapped=true on missing file")
 	}
 
-	// Дать notify-goroutine-ам (которых не должно быть) шанс выстрелить.
+	// Give the notify-goroutines (which should not exist) a chance to fire.
 	time.Sleep(50 * time.Millisecond)
 	if got := called.Load(); got != 0 {
 		t.Errorf("callback invoked %d times on failed reloads; want 0", got)
 	}
 }
 
-// TestStore_OnReload_Unsubscribe — после unsub callback больше не вызывается;
-// повторный unsub — no-op.
+// TestStore_OnReload_Unsubscribe — after unsub the callback is no longer called;
+// a repeated unsub is a no-op.
 func TestStore_OnReload_Unsubscribe(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1138,7 +1137,7 @@ func TestStore_OnReload_Unsubscribe(t *testing.T) {
 		called.Add(1)
 	})
 
-	// Первый Reload — callback должен сработать.
+	// First Reload — the callback must fire.
 	res := store.Reload(context.Background(), ReloadSourceAPI)
 	if !res.Swapped {
 		t.Fatalf("Swapped=false")
@@ -1152,7 +1151,7 @@ func TestStore_OnReload_Unsubscribe(t *testing.T) {
 	}
 
 	unsub()
-	// Повторный unsub — idempotent, не должен паниковать.
+	// Repeated unsub — idempotent, must not panic.
 	unsub()
 
 	res = store.Reload(context.Background(), ReloadSourceAPI)
@@ -1165,8 +1164,8 @@ func TestStore_OnReload_Unsubscribe(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_MultipleSubscribers — несколько подписчиков получают
-// уведомление независимо; slow subscriber не блокирует остальных.
+// TestStore_OnReload_MultipleSubscribers — multiple subscribers are notified
+// independently; a slow subscriber does not block the others.
 func TestStore_OnReload_MultipleSubscribers(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1192,9 +1191,9 @@ func TestStore_OnReload_MultipleSubscribers(t *testing.T) {
 	if !res.Swapped {
 		t.Fatalf("Swapped=false")
 	}
-	// Reload не должен блокироваться slow subscriber-ом — параллельные
-	// goroutine-ы. 100 ms — порог slow subscriber; Reload должен вернуться
-	// заметно раньше (закладываем 50 ms для CI).
+	// Reload must not block on the slow subscriber — parallel goroutines. 100 ms
+	// is the slow-subscriber threshold; Reload must return noticeably earlier
+	// (we budget 50 ms for CI).
 	if elapsed > 50*time.Millisecond {
 		t.Errorf("Reload blocked by slow subscriber: elapsed=%v", elapsed)
 	}
@@ -1211,8 +1210,8 @@ func TestStore_OnReload_MultipleSubscribers(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_PanicIsolated — panic в одном subscriber-е не должен
-// валить процесс и не должен затирать вызовы других subscriber-ов.
+// TestStore_OnReload_PanicIsolated — a panic in one subscriber must not crash the
+// process and must not wipe out calls to other subscribers.
 func TestStore_OnReload_PanicIsolated(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1243,8 +1242,8 @@ func TestStore_OnReload_PanicIsolated(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_UnsubscribeFromCallback — вызов unsubscribe из самого
-// callback-а не должен deadlock-ить (RWMutex + notify под RLock).
+// TestStore_OnReload_UnsubscribeFromCallback — calling unsubscribe from within
+// the callback itself must not deadlock (RWMutex + notify under RLock).
 func TestStore_OnReload_UnsubscribeFromCallback(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1271,7 +1270,7 @@ func TestStore_OnReload_UnsubscribeFromCallback(t *testing.T) {
 		t.Fatal("callback did not finish — possible deadlock on unsubscribe from callback")
 	}
 
-	// Второй Reload — callback уже отписан, count не должен расти.
+	// Second Reload — the callback is already unsubscribed, count must not grow.
 	res = store.Reload(context.Background(), ReloadSourceAPI)
 	if !res.Swapped {
 		t.Fatalf("Swapped=false on second reload")
@@ -1282,7 +1281,7 @@ func TestStore_OnReload_UnsubscribeFromCallback(t *testing.T) {
 	}
 }
 
-// TestStore_OnReload_NilCallbackPanics — программная ошибка caller-а.
+// TestStore_OnReload_NilCallbackPanics — a programming error by the caller.
 func TestStore_OnReload_NilCallbackPanics(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1297,8 +1296,8 @@ func TestStore_OnReload_NilCallbackPanics(t *testing.T) {
 	store.OnReload(nil)
 }
 
-// TestStore_OnReload_ConcurrentSubscribeAndReload — race-resistant
-// проверка под -race: параллельно OnReload/unsubscribe + Reload.
+// TestStore_OnReload_ConcurrentSubscribeAndReload — a race-resistant check under
+// -race: concurrent OnReload/unsubscribe + Reload.
 func TestStore_OnReload_ConcurrentSubscribeAndReload(t *testing.T) {
 	path := fixtureKeeperPath(t)
 	store, _, err := LoadKeeperStore(path, ValidateOptions{})
@@ -1309,7 +1308,7 @@ func TestStore_OnReload_ConcurrentSubscribeAndReload(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
-	// Subscriber-churn goroutine: постоянно подписывается/отписывается.
+	// Subscriber-churn goroutine: constantly subscribes/unsubscribes.
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -1326,7 +1325,7 @@ func TestStore_OnReload_ConcurrentSubscribeAndReload(t *testing.T) {
 		}()
 	}
 
-	// Постоянный subscriber, считающий вызовы.
+	// A persistent subscriber counting calls.
 	var hits atomic.Int32
 	unsub := store.OnReload(func(_, _ *KeeperConfig) {
 		hits.Add(1)
@@ -1350,9 +1349,9 @@ func TestStore_OnReload_ConcurrentSubscribeAndReload(t *testing.T) {
 	close(stop)
 	wg.Wait()
 
-	// Не проверяем точное значение hits — callback запускается в
-	// отдельной goroutine, последние Reload-ы могут не успеть до момента
-	// проверки. Ключевое — отсутствие race/deadlock под `go test -race`.
+	// We don't check the exact hits value — the callback runs in a separate
+	// goroutine, and the last Reloads may not finish before the check. The key
+	// thing is the absence of race/deadlock under `go test -race`.
 	if hits.Load() == 0 {
 		t.Error("persistent subscriber never invoked")
 	}

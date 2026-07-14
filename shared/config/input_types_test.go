@@ -7,15 +7,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Тесты переиспользуемых именованных типов input-схемы (types.yml + $type-ref).
-// Покрытие: парсинг каталога; резолв $type-поля + items:{$type}; вложенность
-// тип→тип; cycle (НЕ зависание); unknown; duplicate; ref_conflict ($type+inline);
-// back-compat (схемы без $type).
+// Tests for reusable named input-schema types (types.yml + $type-ref).
+// Coverage: catalog parsing; resolving a $type field + items:{$type}; type→type
+// nesting; cycle (NO hang); unknown; duplicate; ref_conflict ($type+inline);
+// back-compat (schemas without $type).
 
-// --- $type как самостоятельное поле в input: (schema-валидация узла) ---
+// --- $type as a standalone field in input: (node schema validation) ---
 
 func TestTypeRef_BareField_NoTypeRequired(t *testing.T) {
-	// Узел с $type не обязан объявлять type: — он ссылка, форму даёт тип.
+	// A node with $type need not declare type: — it is a reference, the type gives the shape.
 	src := `name: x
 input:
   cfg:
@@ -32,7 +32,7 @@ input:
 	}
 }
 
-// --- ref_conflict: $type ВМЕСТЕ с inline type/properties/items ---
+// --- ref_conflict: $type TOGETHER WITH inline type/properties/items ---
 
 func TestTypeRef_ConflictWithType(t *testing.T) {
 	src := `name: x
@@ -79,7 +79,7 @@ input:
 	}
 }
 
-// items:{$type} — НЕ конфликт: items-ссылка живёт на родителе-array.
+// items:{$type} is NOT a conflict: the items reference lives on the array parent.
 func TestTypeRef_ItemsRef_NotConflict(t *testing.T) {
 	src := `name: x
 input:
@@ -95,7 +95,7 @@ input:
 	}
 }
 
-// $type невалидной формы (mapping / плохое имя).
+// $type of invalid form (mapping / bad name).
 func TestTypeRef_NonStringValue(t *testing.T) {
 	src := `name: x
 input:
@@ -123,7 +123,7 @@ input:
 	}
 }
 
-// --- ParseTypeCatalog: парсинг types.yml ---
+// --- ParseTypeCatalog: parsing types.yml ---
 
 func TestParseTypeCatalog_Basic(t *testing.T) {
 	src := `types:
@@ -203,7 +203,7 @@ func TestParseTypeCatalog_Duplicate(t *testing.T) {
 	}
 }
 
-// --- вложенность тип→тип (резолв $type внутри типа) ---
+// --- type→type nesting (resolving $type inside a type) ---
 
 func TestParseTypeCatalog_NestedTypeRef(t *testing.T) {
 	src := `types:
@@ -249,7 +249,7 @@ func TestParseTypeCatalog_NestedTypeRef(t *testing.T) {
 	}
 }
 
-// --- input_type_cycle: НЕ зависание, а ошибка ---
+// --- input_type_cycle: NOT a hang, but an error ---
 
 func TestParseTypeCatalog_DirectCycle(t *testing.T) {
 	src := `types:
@@ -322,7 +322,7 @@ func TestParseTypeCatalog_UnknownRef(t *testing.T) {
 	}
 }
 
-// --- ResolveTypeRefs: резолв input: сценария по каталогу ---
+// --- ResolveTypeRefs: resolving a scenario's input: against the catalog ---
 
 func TestResolveTypeRefs_BareField(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
@@ -396,7 +396,7 @@ func TestResolveTypeRefs_Unknown(t *testing.T) {
 	}
 }
 
-// --- back-compat: схемы без $type не ломаются ---
+// --- back-compat: schemas without $type do not break ---
 
 func TestResolveTypeRefs_NoRef_PassThrough(t *testing.T) {
 	cat := TypeCatalog{}
@@ -429,8 +429,8 @@ func TestResolveTypeRefs_Nil(t *testing.T) {
 	}
 }
 
-// Резолв НЕ мутирует каталог: общий тип, использованный дважды, не вызывает
-// ложного цикла и не «портится» между потребителями.
+// Resolve does NOT mutate the catalog: a shared type used twice causes no false
+// cycle and does not "corrupt" between consumers.
 func TestResolveTypeRefs_SharedTypeNoFalseCycle(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   Endpoint:
@@ -457,12 +457,12 @@ func TestResolveTypeRefs_SharedTypeNoFalseCycle(t *testing.T) {
 	}
 }
 
-// TestResolveTypeRefs_DeepPlainObject_NoFalseCycle — регрессия MINOR 2: глубоко
-// вложенный ОБЫЧНЫЙ object (структурный спуск properties глубже typeRefResolveLimit)
-// БЕЗ единой $type-ссылки НЕ должен ложно давать input_type_cycle. Лимит считает
-// только type-ref-хопы (свойство ref-графа), структурный спуск не лимитируется.
+// TestResolveTypeRefs_DeepPlainObject_NoFalseCycle — MINOR 2 regression: a deeply
+// nested PLAIN object (structural properties descent past typeRefResolveLimit)
+// WITHOUT a single $type reference must NOT falsely produce input_type_cycle. The
+// limit counts only type-ref hops (a ref-graph property), structural descent is not limited.
 func TestResolveTypeRefs_DeepPlainObject_NoFalseCycle(t *testing.T) {
-	// Строим цепочку object→properties→object… глубиной заметно больше лимита.
+	// Build an object→properties→object… chain noticeably deeper than the limit.
 	depth := typeRefResolveLimit + 50
 	leaf := &InputSchema{Type: "string"}
 	cur := leaf
@@ -485,8 +485,8 @@ func TestResolveTypeRefs_DeepPlainObject_NoFalseCycle(t *testing.T) {
 	}
 }
 
-// TestParseTypeCatalog_NameNotPascalCase — регрессия MINOR 1: имя типа со
-// `snake_case`/underscore (мягче PascalCase-спеки) отвергается
+// TestParseTypeCatalog_NameNotPascalCase — MINOR 1 regression: a type name with
+// `snake_case`/underscore (looser than the PascalCase spec) is rejected with
 // input_type_ref_name_invalid. PascalCase ^[A-Z][A-Za-z0-9]*$ (naming-rules.md).
 func TestParseTypeCatalog_NameNotPascalCase(t *testing.T) {
 	cases := []string{"acl_user", "Acl_User", "aclUser"}
@@ -500,8 +500,8 @@ func TestParseTypeCatalog_NameNotPascalCase(t *testing.T) {
 	}
 }
 
-// TestParseTypeCatalog_NamePascalCase_OK — PascalCase-имя проходит без
-// name-ошибки (граница MINOR 1: ужесточение не задевает валидные имена).
+// TestParseTypeCatalog_NamePascalCase_OK — a PascalCase name passes without a
+// name error (MINOR 1 boundary: the tightening does not touch valid names).
 func TestParseTypeCatalog_NamePascalCase_OK(t *testing.T) {
 	for _, name := range []string{"AclUser", "Endpoint", "Cluster2", "A"} {
 		src := "types:\n  " + name + ":\n    type: string\n"
@@ -513,11 +513,11 @@ func TestParseTypeCatalog_NamePascalCase_OK(t *testing.T) {
 	}
 }
 
-// --- NIM-72: overlay field-level required/required_when с узла-ссылки $type ---
+// --- NIM-72: overlay field-level required/required_when from a $type reference node ---
 
-// TestResolveTypeRefs_OverlayRequired — field-level `required: true` на узле-
-// ссылке НЕ теряется при резолве $type; object-level required-children типа
-// (RequiredProps) при этом сохраняются — это РАЗНЫЕ поля модели.
+// TestResolveTypeRefs_OverlayRequired — a field-level `required: true` on the
+// reference node is NOT lost when resolving $type; the type's object-level
+// required-children (RequiredProps) are preserved — they are DIFFERENT model fields.
 func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
@@ -547,28 +547,28 @@ func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 	if u == nil || u.TypeRef != "" {
 		t.Fatalf("user должен быть резолвнут (TypeRef очищен), got %+v", u)
 	}
-	// (а) форма типа подставлена.
+	// (a) the type's shape is substituted.
 	if u.Type != "object" || u.Properties["name"] == nil || u.Properties["perms"] == nil || u.Properties["state"] == nil {
 		t.Fatalf("user должен нести форму AclUser (object + name/perms/state), got %+v", u)
 	}
-	// (б) object-level required-children сохранены.
+	// (b) object-level required-children are preserved.
 	if len(u.RequiredProps) != 2 || u.RequiredProps[0] != "name" || u.RequiredProps[1] != "perms" {
 		t.Fatalf("object-level required [name perms] должны сохраниться, got %v", u.RequiredProps)
 	}
-	// (в) field-mandatory перенесён с узла-ссылки.
+	// (c) field-mandatory carried over from the reference node.
 	if !u.Required {
 		t.Fatalf("field-level `required: true` узла-ссылки должен перенестись (Required=true)")
 	}
-	// (г) description перенесён (регресс-защита прежнего overlay).
+	// (d) description carried over (regression guard for the former overlay).
 	if u.Description != "ACL user" {
 		t.Fatalf("description узла-ссылки должен перенестись, got %q", u.Description)
 	}
 }
 
-// TestResolveTypeRefs_OverlayRequired_Enforced — поведенческий: после резолва
-// $type field-mandatory отсекает отсутствующий параметр, а сохранённые object-
-// level required-children отсекают неполный объект. До фикса пустой user молча
-// проходил (requiredKind типа == requiredList не триггерил field-mandatory).
+// TestResolveTypeRefs_OverlayRequired_Enforced — behavioral: after resolving $type,
+// field-mandatory rejects a missing parameter, and the preserved object-level
+// required-children reject an incomplete object. Before the fix an empty user passed
+// silently (the type's requiredKind == requiredList did not trigger field-mandatory).
 func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
@@ -591,11 +591,11 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 		dump(t, rdiags)
 		t.Fatalf("резолв не должен давать ошибок")
 	}
-	// user не передан → field-mandatory отсекает (регресс NIM-72).
+	// user not passed → field-mandatory rejects (NIM-72 regression).
 	if _, err := ResolveInputValues(resolved, map[string]any{}); err == nil {
 		t.Fatalf("отсутствующий field-mandatory user должен отсекаться")
 	}
-	// user передан, но без обязательного perms → object-level required отсекает.
+	// user passed but without the required perms → object-level required rejects.
 	_, err := ResolveInputValues(resolved, map[string]any{
 		"user": map[string]any{"name": "app"},
 	})
@@ -605,7 +605,7 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 	if !strings.Contains(err.Error(), "perms") {
 		t.Fatalf("ошибка должна указывать на perms, got %v", err)
 	}
-	// полный user → OK.
+	// full user → OK.
 	if _, err := ResolveInputValues(resolved, map[string]any{
 		"user": map[string]any{"name": "app", "perms": "on"},
 	}); err != nil {
@@ -613,8 +613,9 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 	}
 }
 
-// TestResolveTypeRefs_OverlayRequiredWhen — required_when узла-ссылки переносится
-// на резолвнутую схему, если тип его не задал (условная обязательность не теряется).
+// TestResolveTypeRefs_OverlayRequiredWhen — a required_when on the reference node
+// carries over to the resolved schema if the type did not set it (conditional
+// requiredness is not lost).
 func TestResolveTypeRefs_OverlayRequiredWhen(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   Endpoint:
@@ -640,9 +641,9 @@ func TestResolveTypeRefs_OverlayRequiredWhen(t *testing.T) {
 	}
 }
 
-// TestResolveTypeRefs_OverlayRequiredFalse — краевая: явный `required: false` на
-// узле-ссылке НЕ делает поле обязательным (overlay не выдумывает обязательность,
-// ложь ссылки не превращается в field-mandatory).
+// TestResolveTypeRefs_OverlayRequiredFalse — edge case: an explicit `required: false`
+// on the reference node does NOT make the field mandatory (overlay does not invent
+// requiredness, a false on the reference does not become field-mandatory).
 func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
@@ -668,15 +669,15 @@ func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
 	if resolved["user"].Required {
 		t.Fatalf("явный `required: false` узла-ссылки НЕ должен делать поле обязательным")
 	}
-	// Поведенчески: отсутствующий user НЕ отсекается (не field-mandatory).
+	// Behaviorally: a missing user is NOT rejected (not field-mandatory).
 	if _, err := ResolveInputValues(resolved, map[string]any{}); err != nil {
 		t.Fatalf("required:false → отсутствующий user должен проходить, got %v", err)
 	}
 }
 
-// TestResolveTypeRefs_OverlayRequiredWhen_TypeWins — краевая: required_when задан
-// И на типе (types.yml), И на узле-ссылке → побеждает required_when ТИПА (overlay
-// переносит только когда у типа его нет, ветка `resolved.RequiredWhen == ""`).
+// TestResolveTypeRefs_OverlayRequiredWhen_TypeWins — edge case: required_when set
+// BOTH on the type (types.yml) AND on the reference node → the TYPE's required_when
+// wins (overlay carries over only when the type lacks it, branch `resolved.RequiredWhen == ""`).
 func TestResolveTypeRefs_OverlayRequiredWhen_TypeWins(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   Endpoint:

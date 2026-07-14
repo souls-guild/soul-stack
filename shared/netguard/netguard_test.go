@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// --- SSRF-guard: классификатор адресов ---
+// --- SSRF guard: address classifier ---
 
 func TestIsBlockedIP(t *testing.T) {
 	blocked := []string{
@@ -19,32 +19,32 @@ func TestIsBlockedIP(t *testing.T) {
 		"169.254.1.1",     // link-local v4
 		"169.254.0.10",    // link-local v4
 		"127.0.0.1",       // loopback v4
-		"127.10.20.30",    // loopback v4 (весь 127/8)
+		"127.10.20.30",    // loopback v4 (all of 127/8)
 		"::1",             // loopback v6
 		"10.0.0.5",        // RFC1918
-		"172.16.0.1",      // RFC1918 нижняя граница
+		"172.16.0.1",      // RFC1918 lower bound
 		"172.16.31.9",     // RFC1918
-		"172.31.255.255",  // RFC1918 верхняя граница
+		"172.31.255.255",  // RFC1918 upper bound
 		"192.168.1.1",     // RFC1918
 		"0.0.0.0",         // unspecified v4
 		"::",              // unspecified v6
 		"fc00::1",         // ULA (private v6)
 		"fe80::1",         // link-local v6
-		// CGNAT / Shared Address Space (RFC 6598), границы /10.
-		"100.64.0.0",      // CGNAT нижняя граница
+		// CGNAT / Shared Address Space (RFC 6598), /10 bounds.
+		"100.64.0.0",      // CGNAT lower bound
 		"100.64.0.1",      // CGNAT
-		"100.100.50.50",   // CGNAT середина
-		"100.127.255.255", // CGNAT верхняя граница
-		// Устаревший IPv6 site-local (RFC 3879), границы /10.
-		"fec0::",  // site-local нижняя граница
+		"100.100.50.50",   // CGNAT middle
+		"100.127.255.255", // CGNAT upper bound
+		// Legacy IPv6 site-local (RFC 3879), /10 bounds.
+		"fec0::",  // site-local lower bound
 		"fec0::1", // site-local
-		"feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", // site-local верхняя граница
-		// IPv4-mapped IPv6: заблокированный v4 не должен обходиться через v6-форму.
-		"::ffff:127.0.0.1",   // loopback через v6-mapped
-		"::ffff:10.0.0.5",    // RFC1918 через v6-mapped
-		"::ffff:10.0.0.1",    // RFC1918 через v6-mapped
-		"::ffff:169.254.1.1", // link-local через v6-mapped
-		"::ffff:100.64.0.1",  // CGNAT через v6-mapped
+		"feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", // site-local upper bound
+		// IPv4-mapped IPv6: a blocked v4 must not be bypassed via the v6 form.
+		"::ffff:127.0.0.1",   // loopback via v6-mapped
+		"::ffff:10.0.0.5",    // RFC1918 via v6-mapped
+		"::ffff:10.0.0.1",    // RFC1918 via v6-mapped
+		"::ffff:169.254.1.1", // link-local via v6-mapped
+		"::ffff:100.64.0.1",  // CGNAT via v6-mapped
 	}
 	for _, s := range blocked {
 		ip := net.ParseIP(s)
@@ -57,16 +57,16 @@ func TestIsBlockedIP(t *testing.T) {
 	}
 
 	allowed := []string{
-		"8.8.8.8",              // публичный v4
-		"1.1.1.1",              // публичный v4
-		"172.32.0.1",           // вне RFC1918 (172.16–172.31)
-		"172.15.0.1",           // вне RFC1918
-		"203.0.113.10",         // публичный (TEST-NET-3, но не private/loopback)
-		"2606:4700:4700::1111", // публичный v6
-		"100.63.255.255",       // на 1 ниже CGNAT 100.64.0.0/10 — не CGNAT
-		"100.128.0.0",          // на 1 выше CGNAT 100.64.0.0/10 — не CGNAT
-		"::ffff:8.8.8.8",       // публичный v4 через v6-mapped — не должен блокироваться
-		"2001:4860:4860::8888", // публичный v6 (вне fec0::/10 site-local)
+		"8.8.8.8",              // public v4
+		"1.1.1.1",              // public v4
+		"172.32.0.1",           // outside RFC1918 (172.16–172.31)
+		"172.15.0.1",           // outside RFC1918
+		"203.0.113.10",         // public (TEST-NET-3, but not private/loopback)
+		"2606:4700:4700::1111", // public v6
+		"100.63.255.255",       // one below CGNAT 100.64.0.0/10 — not CGNAT
+		"100.128.0.0",          // one above CGNAT 100.64.0.0/10 — not CGNAT
+		"::ffff:8.8.8.8",       // public v4 via v6-mapped — must not be blocked
+		"2001:4860:4860::8888", // public v6 (outside fec0::/10 site-local)
 	}
 	for _, s := range allowed {
 		ip := net.ParseIP(s)
@@ -79,7 +79,7 @@ func TestIsBlockedIP(t *testing.T) {
 	}
 }
 
-// --- https-only валидация ---
+// --- https-only validation ---
 
 func TestValidateHTTPSURL(t *testing.T) {
 	t.Run("https ok", func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestValidateHTTPSURL(t *testing.T) {
 	})
 
 	t.Run("malformed url reject", func(t *testing.T) {
-		// Управляющий символ в URL делает url.Parse ошибкой.
+		// A control character in the URL makes url.Parse fail.
 		if err := netguard.ValidateHTTPSURL("https://ok.example/\x7f"); err == nil {
 			t.Fatal("ValidateHTTPSURL пропустил кривой URL")
 		}
@@ -140,10 +140,10 @@ func TestValidateEndpoint(t *testing.T) {
 	}
 }
 
-// --- редиректы: downgrade + лимит ---
+// --- redirects: downgrade + limit ---
 
-// mkRedirReq собирает минимальный *http.Request только с URL — CheckRedirect
-// смотрит лишь на req.URL.Scheme/Host.
+// mkRedirReq builds a minimal *http.Request with just a URL — CheckRedirect
+// looks only at req.URL.Scheme/Host.
 func mkRedirReq(t *testing.T, raw string) *http.Request {
 	t.Helper()
 	u, err := stdurl.Parse(raw)
@@ -186,7 +186,7 @@ func TestNewCheckRedirect(t *testing.T) {
 		if err := check(mkRedirReq(t, "https://ok.example/x"), via); err == nil {
 			t.Fatalf("CheckRedirect не остановил цепочку на лимите %d", maxRedirects)
 		}
-		// На один hop меньше лимита — ещё разрешено.
+		// One hop below the limit — still allowed.
 		via = make([]*http.Request, maxRedirects-1)
 		if err := check(mkRedirReq(t, "https://ok.example/x"), via); err != nil {
 			t.Fatalf("CheckRedirect отверг цепочку короче лимита: %v", err)
@@ -194,13 +194,13 @@ func TestNewCheckRedirect(t *testing.T) {
 	})
 }
 
-// --- SSRF-guard: dial с resolve-then-check-then-dial ---
+// --- SSRF guard: dial with resolve-then-check-then-dial ---
 
-// fakeConn — пустышка net.Conn: dial-успех не должен реально открывать сокет.
+// fakeConn is a dummy net.Conn: a successful dial must not actually open a socket.
 type fakeConn struct{ net.Conn }
 
-// recordingDial фиксирует addr, по которому реально пошёл бы dial (проверка
-// rebind-safety: коннект идёт по проверенному IP, а не по имени).
+// recordingDial records the addr the dial would actually use (rebind-safety
+// check: the connect goes to the verified IP, not the name).
 func recordingDial(got *string) netguard.DialFunc {
 	return func(_ context.Context, _, addr string) (net.Conn, error) {
 		*got = addr
@@ -208,7 +208,7 @@ func recordingDial(got *string) netguard.DialFunc {
 	}
 }
 
-// staticResolver — резолвер с заранее заданным набором IP для любого host-а.
+// staticResolver returns a preset set of IPs for any host.
 type staticResolver struct {
 	addrs []string
 	err   error
@@ -225,7 +225,7 @@ func (s staticResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr,
 	return out, nil
 }
 
-// byHostResolver резолвит по карте host→IP (rebind / multi-IP кейсы).
+// byHostResolver resolves via a host→IP map (rebind / multi-IP cases).
 type byHostResolver struct {
 	byHost map[string][]net.IPAddr
 	err    error
@@ -329,7 +329,7 @@ func TestGuardedDialContext(t *testing.T) {
 
 	t.Run("multi-IP with one private blocked entirely", func(t *testing.T) {
 		var dialed string
-		// Один публичный + один metadata: классическая попытка обхода.
+		// One public + one metadata: the classic bypass attempt.
 		dc := netguard.GuardedDialContext(staticResolver{addrs: []string{"8.8.8.8", "169.254.169.254"}}, recordingDial(&dialed))
 		if _, err := dc(context.Background(), "tcp", "mixed.evil.example:443"); err == nil {
 			t.Fatal("multi-IP с приватным адресом не заблокирован (обход «public+metadata»)")
@@ -347,7 +347,7 @@ func TestGuardedDialContext(t *testing.T) {
 		if _, err := dc(context.Background(), "tcp", "good.example:443"); err != nil {
 			t.Fatalf("публичное DNS-имя заблокировано: %v", err)
 		}
-		// Dial по конкретному резолвнутому IP, а не по имени (rebind-safe).
+		// Dial to the specific resolved IP, not the name (rebind-safe).
 		if dialed != "8.8.8.8:443" {
 			t.Fatalf("dial по %q, ожидался 8.8.8.8:443 (по проверенному IP, не имени)", dialed)
 		}

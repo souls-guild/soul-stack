@@ -7,11 +7,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Covenant (extends:) — config-слой S1: типы ScenarioFragment, MergeCovenant
-// (add-only merge), валидация формы фрагмента/extends. Резолв covenant.yml по
-// ФС снапшота — keeper-side S2, здесь не тестируется.
+// Covenant (extends:) — config-layer S1: the ScenarioFragment, MergeCovenant types
+// (add-only merge), fragment/extends form validation. Resolving covenant.yml over the
+// snapshot FS is keeper-side S2, not tested here.
 
-// loadFragment — covenant.yml без ошибок (helper для merge-тестов).
+// loadFragment — covenant.yml without errors (helper for merge tests).
 func loadFragment(t *testing.T, src string) *ScenarioFragment {
 	t.Helper()
 	frag, _, diags := LoadCovenantFragmentFromBytes("covenant.yml", []byte(src), ValidateOptions{})
@@ -22,7 +22,7 @@ func loadFragment(t *testing.T, src string) *ScenarioFragment {
 	return frag
 }
 
-// loadScenario — main.yml без ошибок (helper для merge-тестов).
+// loadScenario — main.yml without errors (helper for merge tests).
 func loadScenario(t *testing.T, src string) *ScenarioManifest {
 	t.Helper()
 	m, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -70,7 +70,7 @@ tasks: []
 		t.Fatalf("happy-path merge must not error: %v", err)
 	}
 
-	// input: union обоих полей.
+	// input: union of both fields.
 	if _, ok := local.Input["password_ref"]; !ok {
 		t.Errorf("merged input missing covenant field password_ref")
 	}
@@ -81,12 +81,12 @@ tasks: []
 		t.Errorf("merged input: want 2 fields, got %d", len(local.Input))
 	}
 
-	// compute: covenant-первым → [base, full].
+	// compute: covenant first → [base, full].
 	if len(local.Compute) != 2 || local.Compute[0].Name != "base" || local.Compute[1].Name != "full" {
 		t.Errorf("merged compute order wrong: %+v", local.Compute)
 	}
 
-	// state_changes: covenant-первым → [set provisioned, set size].
+	// state_changes: covenant first → [set provisioned, set size].
 	if local.StateChanges == nil || len(local.StateChanges.Ops) != 2 {
 		t.Fatalf("merged state_changes: want 2 ops, got %+v", local.StateChanges)
 	}
@@ -94,13 +94,13 @@ tasks: []
 		t.Errorf("merged state_changes order wrong: %+v", local.StateChanges.Ops)
 	}
 
-	// validate: covenant-первым, оба правила накоплены.
+	// validate: covenant first, both rules accumulated.
 	if len(local.Validate) != 2 || local.Validate[0].Message != "password_ref required" || local.Validate[1].Message != "size positive" {
 		t.Errorf("merged validate order/content wrong: %+v", local.Validate)
 	}
 }
 
-// covenant-only секции (сценарий не объявляет своих) приходят как есть.
+// covenant-only sections (the scenario declares none of its own) come through as-is.
 func TestMergeCovenant_CovenantOnlySections(t *testing.T) {
 	frag := loadFragment(t, `
 input:
@@ -155,7 +155,7 @@ func TestMergeCovenant_StateSetFieldConflict(t *testing.T) {
 	assertSectionConflict(t, err, "state_changes", "set field")
 }
 
-// Не-set глаголы на одном поле НЕ конфликтуют (несколько add/modify легитимны).
+// Non-set verbs on the same field do NOT conflict (multiple add/modify are legitimate).
 func TestMergeCovenant_NonSetSameFieldNoConflict(t *testing.T) {
 	frag := loadFragment(t, "state_changes:\n  - add: users\n    value: \"${ 'a' }\"\n")
 	local := loadScenario(t, "name: create\nstate_changes:\n  - add: users\n    value: \"${ 'b' }\"\ntasks: []\n")
@@ -168,19 +168,18 @@ func TestMergeCovenant_NonSetSameFieldNoConflict(t *testing.T) {
 	}
 }
 
-// --- forward-compat: сценарий без extends ----------------------------------
+// --- forward-compat: scenario without extends ----------------------------
 
-// Сценарий без extends парсится валидно, Extends пуст, MergeCovenant не
-// вызывается резолвером (S2 пропускает при пустом extends). Здесь проверяем,
-// что Extends == "" и что пустой fragment-merge — no-op (на случай вызова с
-// нулевым фрагментом).
+// A scenario without extends parses valid, Extends is empty, and the resolver does not
+// call MergeCovenant (S2 skips it on empty extends). Here we check that Extends == ""
+// and that an empty fragment-merge is a no-op (in case it is called with a zero fragment).
 func TestScenario_NoExtends_ForwardCompat(t *testing.T) {
 	m := loadScenario(t, "name: create\ninput:\n  x:\n    type: string\ntasks: []\n")
 	if m.Extends != "" {
 		t.Fatalf("expected empty Extends, got %q", m.Extends)
 	}
 
-	// Пустой фрагмент (нулевой ScenarioFragment) merge-ится как no-op.
+	// An empty fragment (zero ScenarioFragment) merges as a no-op.
 	before := len(m.Input)
 	if err := MergeCovenant(ScenarioFragment{}, m); err != nil {
 		t.Fatalf("empty-fragment merge must be no-op, got %v", err)
@@ -225,7 +224,7 @@ func TestScenario_ExtendsTraversalRejected(t *testing.T) {
 	}
 }
 
-// ValidExtendsName — единый источник правды о форме (резолвер S2 опирается на него).
+// ValidExtendsName — single source of truth about the form (resolver S2 relies on it).
 func TestValidExtendsName(t *testing.T) {
 	ok := []string{"base", "redis-common", "a", "x1"}
 	for _, n := range ok {
@@ -253,7 +252,7 @@ func TestLoadCovenant_UnexpectedKey(t *testing.T) {
 				dump(t, diags)
 				t.Fatalf("expected covenant_unexpected_key for covenant field %q", key)
 			}
-			// Ровно один covenant_unexpected_key на ключ — generic unknown_key подавлен.
+			// Exactly one covenant_unexpected_key per key — generic unknown_key suppressed.
 			if n := countCode(diags, "unknown_key"); n != 0 {
 				t.Errorf("generic unknown_key not suppressed for covenant key %q (got %d)", key, n)
 			}
@@ -261,7 +260,7 @@ func TestLoadCovenant_UnexpectedKey(t *testing.T) {
 	}
 }
 
-// covenant с только 4 секциями — без ошибок.
+// covenant with only the 4 sections — no errors.
 func TestLoadCovenant_OnlySectionsOK(t *testing.T) {
 	src := `
 input:
@@ -286,8 +285,8 @@ validate:
 	}
 }
 
-// Структурная валидация секции covenant работает (тот же DSL, что у сценария):
-// невалидное имя compute внутри covenant ловится.
+// Structural validation of a covenant section works (same DSL as the scenario): an
+// invalid compute name inside a covenant is caught.
 func TestLoadCovenant_SectionStructureValidated(t *testing.T) {
 	src := "compute:\n  bad-name: \"${ 1 }\"\n"
 	_, _, diags := LoadCovenantFragmentFromBytes("covenant.yml", []byte(src), ValidateOptions{})
@@ -316,9 +315,8 @@ func assertSectionConflict(t *testing.T, err error, section, key string) {
 	}
 }
 
-// unexpectedKeyValue даёт типобезопасное значение для каждого «чужого» covenant
-// ключа, чтобы YAML распарсился (covenant_unexpected_key поднимается на форме, а
-// не на типе значения).
+// unexpectedKeyValue gives a type-safe value for each "foreign" covenant key so the
+// YAML parses (covenant_unexpected_key is raised on the form, not on the value type).
 func unexpectedKeyValue(key string) string {
 	switch key {
 	case "tasks":

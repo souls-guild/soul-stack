@@ -43,8 +43,8 @@ func TestSource_Valid(t *testing.T) {
 }
 
 func TestEventType_ConstantsStable(t *testing.T) {
-	// Эти строки попадают в audit_log.event_type → они стабильны
-	// по нормировке ADR-021(g) / docs/naming-rules.md.
+	// These strings go into audit_log.event_type → they are stable per the
+	// normalization of ADR-021(g) / docs/naming-rules.md.
 	if string(EventConfigReloadSucceeded) != "config.reload_succeeded" {
 		t.Errorf("EventConfigReloadSucceeded = %q", EventConfigReloadSucceeded)
 	}
@@ -67,10 +67,9 @@ func TestEventType_ConstantsStable(t *testing.T) {
 		t.Errorf("EventIncarnationUnlocked = %q", EventIncarnationUnlocked)
 	}
 
-	// Voyage-область (ADR-043, S5). Имена
-	// зафиксированы в docs/naming-rules.md (Audit-events таблица, `scenario_run.*`
-	// / `command_run.*` блоки). Любое расхождение со строкой ниже = breaking
-	// change для существующих audit-log записей.
+	// Voyage area (ADR-043, S5). Names are pinned in docs/naming-rules.md (the
+	// Audit-events table, `scenario_run.*` / `command_run.*` blocks). Any deviation
+	// from the string below = a breaking change for existing audit-log records.
 	voyageCases := map[EventType]string{
 		EventScenarioRunStarted:       "scenario_run.started",
 		EventCommandRunInvoked:        "command_run.invoked",
@@ -98,17 +97,16 @@ func TestEventType_ConstantsStable(t *testing.T) {
 		}
 	}
 
-	// Reaper-recovery область (ADR-027 amend (m)). Имя зафиксировано
-	// пользователем (propose-and-wait): standalone-orphan reconcile снятия
-	// осиротевшего applying-lock. Расхождение = breaking change для существующих
-	// audit-log записей.
+	// Reaper-recovery area (ADR-027 amend (m)). The name was pinned by the user
+	// (propose-and-wait): standalone-orphan reconcile that releases an orphaned
+	// applying-lock. A deviation = a breaking change for existing audit-log records.
 	if string(EventReconcileOrphanApplyingExecuted) != "reaper.reconcile_orphan_applying.executed" {
 		t.Errorf("EventReconcileOrphanApplyingExecuted = %q", EventReconcileOrphanApplyingExecuted)
 	}
 
-	// Synod-область (ADR-049). Имена зафиксированы в docs/naming-rules.md
-	// (Audit-events таблица, `synod.*` блок). Расхождение = breaking change
-	// для существующих audit-log записей.
+	// Synod area (ADR-049). Names are pinned in docs/naming-rules.md (the
+	// Audit-events table, `synod.*` block). A deviation = a breaking change for
+	// existing audit-log records.
 	synodCases := map[EventType]string{
 		EventSynodCreated:         "synod.created",
 		EventSynodDeleted:         "synod.deleted",
@@ -125,9 +123,9 @@ func TestEventType_ConstantsStable(t *testing.T) {
 }
 
 func TestEvent_CreatedAtUTC(t *testing.T) {
-	// Smoke: на момент INSERT write-path-реализация переводит CreatedAt в
-	// UTC; здесь проверяем, что time.Time с разной локалью успешно равен
-	// по моменту.
+	// Smoke: at INSERT time the write-path implementation converts CreatedAt to
+	// UTC; here we check that time.Time values in different locales are equal by
+	// instant.
 	loc, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
 		t.Skip("no Moscow tz")

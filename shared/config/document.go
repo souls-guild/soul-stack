@@ -6,17 +6,17 @@ import (
 	"github.com/goccy/go-yaml/ast"
 )
 
-// Document — opaque handle на AST + исходные байты для round-trip write-back
-// под [ADR-021](docs/architecture.md).
+// Document is an opaque handle over the AST + source bytes for round-trip
+// write-back under [ADR-021](docs/architecture.md).
 //
-// Поля приватные: внешние пакеты не должны зависеть от внутренней раскладки.
-// Все мутации идут через свободные функции пакета (`PatchKeeper`/`PatchSoul`),
-// все записи — через `SaveKeeper`/`SaveSoul` / `*ToBytes`.
+// Fields are private: external packages must not depend on the internal layout.
+// All mutations go through the package's free functions (`PatchKeeper`/`PatchSoul`),
+// all writes through `SaveKeeper`/`SaveSoul` / `*ToBytes`.
 //
-// `mutated` фиксирует факт того, что хотя бы один Patch* успешно отработал
-// над этим документом: для немутированного документа `Save*ToBytes` отдаёт
-// исходные байты (гарантия byte-identical round-trip), для мутированного —
-// рендер AST через `file.String()` с приложенным `round_trip_warning`-ом.
+// `mutated` records that at least one Patch* has successfully run over this
+// document: for an unmutated document `Save*ToBytes` returns the source bytes
+// (byte-identical round-trip guarantee), for a mutated one it renders the AST
+// via `file.String()` with a `round_trip_warning` attached.
 type Document struct {
 	file    *ast.File
 	source  []byte

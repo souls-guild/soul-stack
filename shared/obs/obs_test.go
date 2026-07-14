@@ -13,12 +13,12 @@ func TestNewRegistry_HasGoCollector(t *testing.T) {
 	r := NewRegistry()
 	body := obstest.Scrape(t, r.Gatherer())
 
-	// go_goroutines — кросс-платформенный go-collector sample.
-	// registry-core компонент-агностичен: keeper_http_*-метрик здесь нет,
-	// пока не вызван RegisterHTTPMetrics (см. тест ниже).
+	// go_goroutines — a cross-platform go-collector sample.
+	// registry-core is component-agnostic: no keeper_http_* metrics here until
+	// RegisterHTTPMetrics is called (see the test below).
 	//
-	// process_* collectors не проверяем: на macOS process_open_fds
-	// отсутствует (linux-only метрика).
+	// We don't check process_* collectors: on macOS process_open_fds is absent
+	// (a linux-only metric).
 	if !strings.Contains(body, "go_goroutines") {
 		t.Errorf("metrics output missing %q", "go_goroutines")
 	}
@@ -29,9 +29,9 @@ func TestRegisterHTTPMetrics_AddsInFlightGauge(t *testing.T) {
 	_ = RegisterHTTPMetrics(reg)
 	body := obstest.Scrape(t, reg.Gatherer())
 
-	// in_flight_requests — единственная HTTP-метрика с гарантированным
-	// sample без вызова handler-а (Gauge с 0). Counter/Histogram видны
-	// только после первой WithLabelValues — покрывается middleware-тестом.
+	// in_flight_requests — the only HTTP metric with a guaranteed sample without
+	// calling a handler (a Gauge at 0). Counter/Histogram are visible only after
+	// the first WithLabelValues — covered by the middleware test.
 	if !strings.Contains(body, "keeper_http_in_flight_requests") {
 		t.Errorf("metrics output missing %q after RegisterHTTPMetrics", "keeper_http_in_flight_requests")
 	}
@@ -41,9 +41,8 @@ func TestMiddlewareForPath_RecordsRequest(t *testing.T) {
 	reg := NewRegistry()
 	httpM := RegisterHTTPMetrics(reg)
 
-	// Симулируем chi-эффект: pathExtractor возвращает фиксированный
-	// pattern, как если бы chi.RouteContext.RoutePattern() уже
-	// записал /v1/operators.
+	// Simulate the chi effect: pathExtractor returns a fixed pattern, as if
+	// chi.RouteContext.RoutePattern() had already recorded /v1/operators.
 	mw := httpM.MiddlewareForPath(func(r *http.Request) string {
 		return "/v1/operators"
 	})
@@ -70,7 +69,7 @@ func TestMiddlewareForPath_RecordsRequest(t *testing.T) {
 	if !strings.Contains(body, `keeper_http_requests_total{method="POST",path="/v1/operators",status="201"} 1`) {
 		t.Errorf("requests_total sample не найден; got=\n%s", body)
 	}
-	// duration_seconds_count{...} 1 — гарантия, что Observe() вызвался.
+	// duration_seconds_count{...} 1 — a guarantee that Observe() was called.
 	if !strings.Contains(body, `keeper_http_request_duration_seconds_count{method="POST",path="/v1/operators"} 1`) {
 		t.Errorf("duration_seconds_count sample не найден; got=\n%s", body)
 	}
@@ -80,7 +79,7 @@ func TestMiddlewareForPath_DefaultStatusOK(t *testing.T) {
 	reg := NewRegistry()
 	mw := RegisterHTTPMetrics(reg).MiddlewareForPath(func(r *http.Request) string { return "/v1/x" })
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Намеренно НЕ вызываем WriteHeader — stdlib подразумевает 200.
+		// Deliberately do NOT call WriteHeader — stdlib implies 200.
 		_, _ = w.Write([]byte("ok"))
 	}))
 	rec := httptest.NewRecorder()
@@ -102,7 +101,7 @@ func TestMiddlewareForPath_NilExtractor(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
 	handler.ServeHTTP(rec, req)
-	// path=""; собрать не должно паниковать
+	// path=""; scraping must not panic
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, `path=""`) {
 		t.Errorf("expected empty path label; got=\n%s", body)

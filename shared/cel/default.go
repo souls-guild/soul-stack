@@ -8,81 +8,77 @@ import (
 	"github.com/google/cel-go/parser"
 )
 
-// CEL-функция default(x, y) ([templating.md §2.3], [ADR-010 Amendment
-// 2026-06-23]). Значение-или-дефолт, parity Ansible `| default()`: если x
-// присутствует/доступен — вернуть x, иначе y. Сокращает канонический has()-guard
-// ([docs/input.md]):
+// CEL function default(x, y) ([templating.md §2.3], [ADR-010 Amendment
+// 2026-06-23]). Value-or-default, parity with Ansible `| default()`: return x if
+// present/available, else y. Shortens the canonical has()-guard ([docs/input.md]):
 //
 //	default(essence.tls_enable, false)   ≡  has(essence.tls_enable) ? essence.tls_enable : false
 //	default(input.redis_settings, {})    ≡  has(input.redis_settings) ? input.redis_settings : {}
 //	int(default(essence.tls_port, 7379)) ≡  int(has(essence.tls_port) ? essence.tls_port : 7379)
 //
-// Механизм — custom macro (compile-time AST-rewrite), как vault() ([vault.go]).
-// CEL вычисляет аргументы ЖАДНО: будь default() обычной функцией,
-// default(essence.tls_enable, false) упал бы «no such key» на отсутствующем
-// ключе ДО вызова. Макрос видит AST первого аргумента ДО eval и переписывает
-// его в проверенную форму has(x) ? x : y — та же техника обхода жадности, что у
-// vault(). Это compile-time rewrite, не runtime-исполнение строки.
+// Implemented as a custom macro (compile-time AST rewrite), like vault()
+// ([vault.go]). CEL evaluates arguments EAGERLY: as a plain function,
+// default(essence.tls_enable, false) would fail "no such key" on a missing key
+// BEFORE the call. The macro sees the first argument's AST BEFORE eval and rewrites
+// it to the guarded has(x) ? x : y — the same eagerness-bypass technique as vault().
+// Compile-time rewrite, not runtime execution of a string.
 //
-// Ограничение (семантика Ansible-default): x обязан быть select-chain или
-// идентификатором. has() в CEL применим ТОЛЬКО к доступу к полю (select),
-// поэтому:
+// Constraint (Ansible-default semantics): x must be a select-chain or an
+// identifier. has() in CEL applies ONLY to field access (select), so:
 //   - Select x (essence.tls_enable, a.b.c) → has(x) ? x : y;
-//   - голый идентификатор-корень (input/essence/…) всегда присутствует в
-//     активации ([Vars.activation] биндит корни как пустой map, не
-//     «отсутствуют») → разворачивается в сам x (fallback недостижим — корректная
-//     вырожденная семантика; has(ident) в CEL вообще не компилируется);
-//   - аргумент-выражение (default(size(x), 0), default(a+b, 0), индекс-доступ
-//     default(a['k'], 0)) → внятная compile-ошибка (*common.Error). Это корректная
-//     семантика: default над переменной/полем, не над вычислением (для последнего
-//     у автора есть тернар).
+//   - a bare root identifier (input/essence/…) is always present in the
+//     activation ([Vars.activation] binds roots as an empty map, not "absent")
+//     → expands into x itself (fallback unreachable — correct degenerate
+//     semantics; has(ident) does not compile in CEL at all);
+//   - an expression argument (default(size(x), 0), default(a+b, 0), index access
+//     default(a['k'], 0)) → a clear compile error (*common.Error). Correct
+//     semantics: default over a variable/field, not over a computation (for the
+//     latter the author has a ternary).
 //
-// Pure: без I/O/секретов/крипты/eval-time состояния (синтаксический сахар над
-// has()?:). Регистрируется в Keeper-full env ([New]) и Soul flow-control env
-// ([NewFlowControl]); в migration-CEL ([NewMigration], [ADR-019]) НЕ
-// регистрируется — hermetic-песочница с минимумом surface area (симметрия с
-// merge()/glob()).
+// Pure: no I/O/secrets/crypto/eval-time state (syntactic sugar over has()?:).
+// Registered in the Keeper-full env ([New]) and the Soul flow-control env
+// ([NewFlowControl]); NOT registered in migration-CEL ([NewMigration], [ADR-019])
+// — hermetic sandbox with minimal surface area (symmetric with merge()/glob()).
 //
-// Masking-инвариант: default(x, y) НЕ переименовывает ключ назначения, поэтому
-// секрет, подставленный через default(essence.x, vault('…#password')) или
-// присвоенный sensitive-именованному ключу (password/secret/token/tls_key/…),
-// маскируется выходным слоем (shared/audit.MaskSecrets) ИДЕНТИЧНО прямой
-// подстановке; границу маскинга не расширяет и не сужает (симметрия с merge()).
+// Masking invariant: default(x, y) does NOT rename the destination key, so a secret
+// substituted via default(essence.x, vault('…#password')) or assigned to a
+// sensitive-named key (password/secret/token/tls_key/…) is masked by the output
+// layer (shared/audit.MaskSecrets) IDENTICALLY to a direct substitution; it neither
+// widens nor narrows the masking boundary (symmetric with merge()).
 
-// defaultMacroName — имя функции в CEL-env. Пользователь пишет default(x, y).
+// defaultMacroName is the function name in the CEL env; users write default(x, y).
 const defaultMacroName = "default"
 
-// defaultEnvOptions возвращает EnvOption-ы регистрации default(): глобальный
-// 2-арный макрос. Реальной cel.Function НЕТ — макрос полностью разворачивается в
-// has()?:-тернар на parse-фазе, binding не нужен. Симметрично vault() в части
-// macro-механизма, но без сопутствующей функции (vault() оставляет
-// __vault_read-binding, default() — чистый rewrite).
+// defaultEnvOptions returns the EnvOptions registering default(): a global 2-arg
+// macro. There is NO real cel.Function — the macro fully expands into a has()?:
+// ternary at parse time, no binding needed. Symmetric with vault()'s macro
+// mechanism but without a companion function (vault() leaves a __vault_read
+// binding; default() is a pure rewrite).
 func defaultEnvOptions() []cel.EnvOption {
 	return []cel.EnvOption{
 		cel.Macros(parser.NewGlobalMacro(defaultMacroName, 2, expandDefaultMacro)),
 	}
 }
 
-// expandDefaultMacro раскрывает default(x, y) в has(x) ? x : y (для select) либо
-// в сам x (для голого идентификатора-корня — он всегда present в активации,
-// has(ident) в CEL не компилируется). x обязан быть Select или Ident; иначе —
-// внятная compile-ошибка (default над выражением не имеет смысла «значения-или-
-// дефолта»: для вычислений автор пишет явный тернар).
+// expandDefaultMacro expands default(x, y) into has(x) ? x : y (for a select) or
+// into x itself (for a bare root identifier — always present in the activation,
+// has(ident) does not compile in CEL). x must be a Select or Ident; otherwise a
+// clear compile error (default over an expression has no value-or-default meaning:
+// for computations the author writes an explicit ternary).
 func expandDefaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
 	x, fallback := args[0], args[1]
 	switch x.Kind() {
 	case ast.SelectKind:
 		s := x.AsSelect()
-		// Index-доступ (a['k']) — не Select, а CallKind (_[_]), он сюда не
-		// попадает. TestOnly-select (has(...) сам) тоже сюда не попадёт от
-		// пользователя в позиции аргумента. Строим has(operand.field):
-		// presence-test над тем же operand/field, что у исходного select.
+		// Index access (a['k']) is not a Select but a CallKind (_[_]) — it does
+		// not reach here. A TestOnly select (has(...) itself) also cannot reach
+		// here from a user in argument position. Build has(operand.field): a
+		// presence test over the same operand/field as the original select.
 		presence := mef.NewPresenceTest(mef.Copy(s.Operand()), s.FieldName())
 		return mef.NewCall(operators.Conditional, presence, mef.Copy(x), fallback), nil
 	case ast.IdentKind:
-		// Корневой идентификатор всегда присутствует в активации
-		// ([Vars.activation]); has(ident) в CEL не компилируется. Fallback
-		// недостижим — разворачиваем в сам x.
+		// A root identifier is always present in the activation ([Vars.activation]);
+		// has(ident) does not compile in CEL. Fallback unreachable — expand into x.
 		return mef.Copy(x), nil
 	default:
 		return nil, mef.NewError(x.ID(),

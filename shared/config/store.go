@@ -1,46 +1,44 @@
 package config
 
-// Store[T] — снимок типизированного конфига (`KeeperConfig` или `SoulConfig`)
-// с atomic-swap-семантикой под [ADR-021](docs/architecture.md) (b) и (c):
+// Store[T] is a snapshot of a typed config (`KeeperConfig` or `SoulConfig`)
+// with atomic-swap semantics per [ADR-021](docs/architecture.md) (b) and (c):
 //
-//   - (b) hot-reload по SIGHUP: см. [shared/config/sighup.go];
-//   - (c) validation pipeline + atomic swap: на любую error-диагностику
-//     `Reload` НЕ выполняет swap, прошлый снимок остаётся актуальным.
+//   - (b) hot-reload on SIGHUP: see [shared/config/sighup.go];
+//   - (c) validation pipeline + atomic swap: on any error diagnostic `Reload`
+//     does NOT swap, and the previous snapshot stays current.
 //
-// Контракт чтения:
+// Read contract:
 //
-//   - `Get()` возвращает `*T`. Указатель immutable, caller НЕ ДОЛЖЕН
-//     мутировать поля возвращённой структуры. Для мутации с последующей
-//     записью на диск использовать `Document()` + соответствующие
-//     `Patch*`/`Save*` свободные функции пакета.
-//   - Множественные конкурентные `Get()` безопасны: значение хранится в
+//   - `Get()` returns `*T`. The pointer is immutable; the caller MUST NOT
+//     mutate the returned struct's fields. To mutate and then persist to disk,
+//     use `Document()` + the package's `Patch*`/`Save*` free functions.
+//   - Concurrent `Get()` calls are safe: the value lives in
 //     `atomic.Pointer[T]`, read-side wait-free.
 //
-// Контракт перезагрузки:
+// Reload contract:
 //
-//   - `Reload(ctx, source)` читает файл (`ReadFile`), парсит через
-//     соответствующий `Load*FromBytes`, и при отсутствии error-диагностик
-//     атомарно подменяет указатели снимка и `Document`. Source — значение
-//     `ReloadSource` (см. константы `ReloadSourceSignal`/`API`/`MCP`);
-//     попадает в audit-payload.
-//   - На I/O-fatal — `ReloadResult.Swapped=false`,
-//     `Phase = diag.PhaseParse`, в `Diagnostics` одна запись `io_error`.
-//   - На validation-error — `Swapped=false`, `Phase` = первая error-фаза
-//     из диагностик, `Diagnostics` содержит все собранные записи.
-//   - На success — `Swapped=true`, `Phase=""`, `Diagnostics` — warnings (если есть).
+//   - `Reload(ctx, source)` reads the file (`ReadFile`), parses via the
+//     matching `Load*FromBytes`, and with no error diagnostics atomically
+//     swaps the snapshot and `Document` pointers. Source is a `ReloadSource`
+//     (see `ReloadSourceSignal`/`API`/`MCP`); recorded in the audit payload.
+//   - On I/O-fatal: `ReloadResult.Swapped=false`, `Phase = diag.PhaseParse`,
+//     one `io_error` entry in `Diagnostics`.
+//   - On validation-error: `Swapped=false`, `Phase` = the first error phase
+//     from the diagnostics, `Diagnostics` holds all collected entries.
+//   - On success: `Swapped=true`, `Phase=""`, `Diagnostics` = warnings (if any).
 //
 // CorrelationID:
 //
-//   - 26-символьный ULID (Crockford base32, sortable timestamp prefix).
-//     Формат нормирован [ADR-022(c)](docs/architecture.md); используется
-//     одна реализация — `shared/audit.NewULID()` — чтобы avoid drift
-//     между `config.reload_*` событиями и остальным audit-pipeline-ом.
-//   - Каждый `Reload` генерирует свой ID; передаётся audit-пайплайну как
-//     ключ корреляции запроса reload-а и его результата.
+//   - 26-char ULID (Crockford base32, sortable timestamp prefix). Format per
+//     [ADR-022(c)](docs/architecture.md); one implementation —
+//     `shared/audit.NewULID()` — to avoid drift between `config.reload_*`
+//     events and the rest of the audit pipeline.
+//   - Each `Reload` generates its own ID, passed to the audit pipeline as the
+//     correlation key between the reload request and its result.
 //
 // ChangedPaths:
 //
-//   - Пустой slice в M0.3; вычисление diff source↔source отложено до M0.3.5.
+//   - Empty slice in M0.3; source↔source diff computation deferred to M0.3.5.
 
 import (
 	"context"
@@ -60,15 +58,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// tracer для in-process span-а hot-reload-а конфига (ADR-024). Берёт
-// глобальный TracerProvider, поднятый [obs.SetupOTel] в cmd/keeper и
-// cmd/soul; при OTel disabled провайдер no-op — span бесплатен, код не
-// ветвится (симметрично keeper/render, keeper/scenario).
+// tracer for the in-process config hot-reload span (ADR-024). Uses the global
+// TracerProvider set up by [obs.SetupOTel] in cmd/keeper and cmd/soul; when OTel
+// is disabled the provider is no-op — the span is free and the code does not
+// branch (symmetric with keeper/render, keeper/scenario).
 var tracer = otel.Tracer("shared/config")
 
-// storeKind — внутренний дискриминатор для выбора Load-функции при Reload.
-// Внешним пакетам не нужен: конкретный тип хранилища определяется через
-// конструкторы `LoadKeeperStore` / `LoadSoulStore`.
+// storeKind is the internal discriminator for picking the Load function on
+// Reload. External packages don't need it: the concrete store type is set via
+// the `LoadKeeperStore` / `LoadSoulStore` constructors.
 type storeKind int
 
 const (
@@ -76,14 +74,14 @@ const (
 	storeKindSoul
 )
 
-// ReloadSource — closed enum инициаторов reload-а. Type alias на
-// [audit.Source] (ADR-022(b)) — единый источник правды для source enum
-// audit-pipeline-а; caller-ы hot-reload получают тот же набор констант,
-// что и любой другой write-path-инициатор.
+// ReloadSource is the closed enum of reload initiators. Type alias for
+// [audit.Source] (ADR-022(b)) — the single source of truth for the audit
+// pipeline's source enum; hot-reload callers get the same constants as any
+// other write-path initiator.
 //
-// Cast произвольной строки (`ReloadSource("hax0r")`) технически возможен —
-// инвариант валидируется write-path-инициатором перед audit-INSERT
-// (см. [audit.Source.Valid]).
+// Casting an arbitrary string (`ReloadSource("hax0r")`) is technically possible
+// — the invariant is validated by the write-path initiator before the audit
+// INSERT (see [audit.Source.Valid]).
 type ReloadSource = audit.Source
 
 const (
@@ -92,117 +90,115 @@ const (
 	ReloadSourceMCP    = audit.SourceMCP
 )
 
-// ReloadCallback — opt-in подписчик на успешные swap-ы [Store.Reload].
-// Вызывается **только** при `ReloadResult.Swapped=true`; на validation-fail /
-// I/O-fatal subscriber-ы не получают уведомлений (старый снимок остаётся
-// актуальным, и реагировать не на что).
+// ReloadCallback is an opt-in subscriber to successful [Store.Reload] swaps.
+// Called **only** when `ReloadResult.Swapped=true`; on validation-fail /
+// I/O-fatal subscribers get no notification (the old snapshot stays current,
+// nothing to react to).
 //
-// Контракт аргументов:
+// Argument contract:
 //
-//   - `old` — указатель на снимок ДО swap-а. Может быть `nil` для
-//     случая, когда initial load свалился на validation-error, а
-//     первый успешный Reload подменил `nil → *T`.
-//   - `new` — указатель на снимок ПОСЛЕ swap-а. Всегда non-nil
-//     (callback вызывается только при Swapped=true).
+//   - `old` — pointer to the snapshot BEFORE the swap. May be `nil` when the
+//     initial load failed on a validation-error and the first successful Reload
+//     swapped `nil → *T`.
+//   - `new` — pointer to the snapshot AFTER the swap. Always non-nil (the
+//     callback runs only when Swapped=true).
 //
-// Оба указателя — snapshot-значения с atomic-swap-семантикой [Store]: их
-// **запрещено мутировать** (см. doc-comment [Store.Get]).
+// Both pointers are snapshot values with [Store] atomic-swap semantics: they
+// **must not be mutated** (see the [Store.Get] doc comment).
 //
-// Subscriber запускается в **отдельной goroutine** per-callback (защита от
-// блокировки одного subscriber-а другими). **Порядок вызова не
-// гарантируется** — subscribers НЕ должны зависеть от order. Panic внутри
-// callback-а ловится `recover` + slog.Error и не валит другие callback-и.
+// Each subscriber runs in a **separate goroutine** per callback (so one
+// subscriber can't block others). **Call order is not guaranteed** —
+// subscribers must not depend on it. A panic inside a callback is caught by
+// `recover` + slog.Error and does not take down other callbacks.
 type ReloadCallback[T any] func(old, new *T)
 
-// Store — типизированный конфигурационный снимок с atomic-swap-семантикой.
-// Параметризован конкретным типом конфига (`KeeperConfig`/`SoulConfig`);
-// внутренний `kind` определяет, какой `Load*FromBytes` вызвать при `Reload`.
+// Store is a typed config snapshot with atomic-swap semantics. Parameterized by
+// the concrete config type (`KeeperConfig`/`SoulConfig`); the internal `kind`
+// decides which `Load*FromBytes` to call on `Reload`.
 type Store[T any] struct {
 	snapshot atomic.Pointer[T]
 
-	mu   sync.Mutex // защищает doc/path/opts при Reload
+	mu   sync.Mutex // guards doc/path/opts during Reload
 	doc  *Document
 	path string
 	kind storeKind
 	opts ValidateOptions
 
-	// auditWriter — опциональный [audit.Writer]. Если не nil, на каждый
-	// Reload эмитится `config.reload_succeeded`/`config.reload_failed`
-	// событие через [audit.Writer.Write] (best-effort; ошибка write-а
-	// логируется через slog.Warn, но не блокирует возврат
-	// [ReloadResult]). nil — backward compat: Reload работает без
-	// audit-эмиссии (конструктор `LoadKeeperStore`/`LoadSoulStore` без
-	// суффикса WithAudit).
+	// auditWriter is an optional [audit.Writer]. If non-nil, each Reload emits a
+	// `config.reload_succeeded`/`config.reload_failed` event via
+	// [audit.Writer.Write] (best-effort; a write error is logged via slog.Warn
+	// but does not block the [ReloadResult] return). nil = backward compat:
+	// Reload works without audit emission (the `LoadKeeperStore`/`LoadSoulStore`
+	// constructors without the WithAudit suffix).
 	auditWriter audit.Writer
 
-	// subsMu защищает slice subscribers. Отдельный mutex от `mu` — чтобы
-	// notify-фаза (после swap-а) могла читать список без блокировки
-	// reload-pipeline-а, и наоборот: OnReload-вызов из callback-а
-	// (вложенный subscribe / unsubscribe) не deadlock-ится с reload-mutex-ом.
+	// subsMu guards the subscribers slice. A separate mutex from `mu` so the
+	// notify phase (after the swap) can read the list without blocking the
+	// reload pipeline, and vice versa: an OnReload call from within a callback
+	// (nested subscribe/unsubscribe) does not deadlock on the reload mutex.
 	//
-	// RWMutex: notify читает slice под RLock (allows concurrent OnReload),
-	// subscribe/unsubscribe — под Lock.
+	// RWMutex: notify reads the slice under RLock (allows concurrent OnReload),
+	// subscribe/unsubscribe under Lock.
 	subsMu sync.RWMutex
 
-	// subscribers — slice опциональных reload-callback-ов. Каждый
-	// зарегистрирован через [Store.OnReload]. Порядок не значим (callback-и
-	// вызываются в отдельных goroutine-ах).
+	// subscribers is the slice of optional reload callbacks, each registered via
+	// [Store.OnReload]. Order is irrelevant (callbacks run in separate
+	// goroutines).
 	//
-	// Тип stored: `*subscription[T]` — pointer-обёртка, чтобы unsubscribe
-	// мог идентифицировать запись по адресу без необходимости сравнивать
-	// функции (несравнимые в Go).
+	// Stored type `*subscription[T]` is a pointer wrapper so unsubscribe can
+	// identify an entry by address without comparing functions (not comparable
+	// in Go).
 	subscribers []*subscription[T]
 }
 
-// subscription — внутренняя запись subscriber-а. Хранит сам callback и его
-// pointer-identity, который unsubscribe использует для O(n)-поиска и
-// удаления. Поле `cb` immutable за время жизни subscription-а; pointer
-// сам по себе — стабильный identity, что делает unsubscribe идемпотентным.
+// subscription is an internal subscriber record. Holds the callback and its
+// pointer identity, which unsubscribe uses for O(n) lookup and removal. `cb` is
+// immutable for the subscription's lifetime; the pointer itself is a stable
+// identity, making unsubscribe idempotent.
 type subscription[T any] struct {
 	cb ReloadCallback[T]
 }
 
-// ReloadResult — payload одного reload-а. Подразумевается дальнейшее
-// форматирование caller-ом в audit-event `config.reload_succeeded` или
-// `config.reload_failed` (имена событий и dual-write — отдельный slice M0.4).
+// ReloadResult is the payload of a single reload. Meant to be formatted by the
+// caller into a `config.reload_succeeded` or `config.reload_failed` audit event
+// (event names and dual-write are a separate slice, M0.4).
 type ReloadResult struct {
-	// Swapped — был ли применён atomic swap. false означает, что снимок
-	// остался прежним (I/O fatal или validation-error).
+	// Swapped reports whether the atomic swap happened. false means the snapshot
+	// is unchanged (I/O fatal or validation-error).
 	Swapped bool
 
-	// Source — кто инициировал reload. См. константы `ReloadSourceSignal` /
+	// Source — who initiated the reload. See `ReloadSourceSignal` /
 	// `ReloadSourceAPI` / `ReloadSourceMCP`.
 	Source ReloadSource
 
-	// Phase — фаза первой error-диагностики, если reload свалился; пустая
-	// для успешного reload-а или для случая, когда диагностик уровня error
-	// не было.
+	// Phase — phase of the first error diagnostic if the reload failed; empty
+	// for a successful reload or when there were no error-level diagnostics.
 	Phase diag.Phase
 
-	// Diagnostics — все диагностики этого reload-а (error + warning + hint).
+	// Diagnostics — all diagnostics from this reload (error + warning + hint).
 	Diagnostics []diag.Diagnostic
 
-	// ChangedPaths — YAML-пути изменившихся полей в формате goccy
-	// ("$.auth.jwt.signing_key_ref"). Пустой в M0.3 (вычисление diff —
-	// отложено в M0.3.5). Поле объявлено сейчас, чтобы консьюмеры
-	// (audit-pipeline M0.4, Operator API) могли разрабатываться параллельно.
+	// ChangedPaths — YAML paths of changed fields in goccy format
+	// ("$.auth.jwt.signing_key_ref"). Empty in M0.3 (diff computation deferred
+	// to M0.3.5). Declared now so consumers (audit pipeline M0.4, Operator API)
+	// can be developed in parallel.
 	ChangedPaths []string
 
-	// CorrelationID — 26-символьный ULID (Crockford base32),
-	// уникальный на reload. Формат нормирован [ADR-022(c)] и совпадает с
-	// `audit_log.correlation_id` для events `config.reload_*`.
+	// CorrelationID — 26-char ULID (Crockford base32), unique per reload. Format
+	// per [ADR-022(c)] and matches `audit_log.correlation_id` for
+	// `config.reload_*` events.
 	CorrelationID string
 
-	// Timestamp — момент завершения reload-а (момент решения о swap/не-swap).
+	// Timestamp — when the reload finished (the swap/no-swap decision point).
 	Timestamp time.Time
 }
 
-// LoadKeeperStore читает `keeper.yml` и оборачивает результат в Store.
+// LoadKeeperStore reads `keeper.yml` and wraps the result in a Store.
 //
-// Возвращает Store даже при validation-errors: первый снимок может быть
-// `nil` (через `Get()` вернётся zero-value pointer), но caller увидит
-// диагностики и решит, прерывать ли старт. На I/O-fatal Store не создаётся
-// — возвращаются (nil, diags, err).
+// Returns a Store even on validation-errors: the first snapshot may be `nil`
+// (`Get()` then returns a zero-value pointer), but the caller sees the
+// diagnostics and decides whether to abort startup. On I/O-fatal no Store is
+// created — returns (nil, diags, err).
 func LoadKeeperStore(path string, opts ValidateOptions) (*Store[KeeperConfig], []diag.Diagnostic, error) {
 	cfg, doc, diags, err := LoadKeeper(path, opts)
 	if err != nil {
@@ -220,7 +216,7 @@ func LoadKeeperStore(path string, opts ValidateOptions) (*Store[KeeperConfig], [
 	return s, diags, nil
 }
 
-// LoadSoulStore — то же для `soul.yml`. См. `LoadKeeperStore`.
+// LoadSoulStore is the same for `soul.yml`. See `LoadKeeperStore`.
 func LoadSoulStore(path string, opts ValidateOptions) (*Store[SoulConfig], []diag.Diagnostic, error) {
 	cfg, doc, diags, err := LoadSoul(path, opts)
 	if err != nil {
@@ -238,20 +234,20 @@ func LoadSoulStore(path string, opts ValidateOptions) (*Store[SoulConfig], []dia
 	return s, diags, nil
 }
 
-// LoadKeeperStoreWithAudit — то же что [LoadKeeperStore], плюс инъекция
-// [audit.Writer]. На каждый [Store.Reload] Store будет эмитить событие
-// `config.reload_succeeded` или `config.reload_failed` (см. контракт
-// файла + [ADR-022(j)](docs/architecture.md) для payload-структуры).
+// LoadKeeperStoreWithAudit is [LoadKeeperStore] plus an injected [audit.Writer].
+// Each [Store.Reload] then emits a `config.reload_succeeded` or
+// `config.reload_failed` event (see the file contract +
+// [ADR-022(j)](docs/architecture.md) for the payload structure).
 //
-// w может быть nil — в этом случае поведение идентично [LoadKeeperStore].
-// Это удобно для конструкторов, у которых Writer ещё не инициализирован
-// (например, до подъёма Postgres-пула на bootstrap-фазе): caller передаёт
-// nil сейчас и переинициализирует Store позже.
+// w may be nil — behavior is then identical to [LoadKeeperStore]. Handy for
+// constructors whose Writer isn't initialized yet (e.g. before the Postgres
+// pool comes up in the bootstrap phase): the caller passes nil now and
+// reinitializes the Store later.
 //
-// audit-write выполняется best-effort: ошибка [audit.Writer.Write]
-// логируется через `slog.Warn`, но не блокирует возврат [ReloadResult] и
-// не меняет `Swapped`. Атомарный swap снимка не зависит от успеха
-// audit-эмиссии (audit — наблюдаемость, не корректность).
+// The audit write is best-effort: an [audit.Writer.Write] error is logged via
+// `slog.Warn` but does not block the [ReloadResult] return or change `Swapped`.
+// The atomic snapshot swap does not depend on audit emission succeeding (audit
+// is observability, not correctness).
 func LoadKeeperStoreWithAudit(path string, opts ValidateOptions, w audit.Writer) (*Store[KeeperConfig], []diag.Diagnostic, error) {
 	s, diags, err := LoadKeeperStore(path, opts)
 	if s != nil {
@@ -260,7 +256,7 @@ func LoadKeeperStoreWithAudit(path string, opts ValidateOptions, w audit.Writer)
 	return s, diags, err
 }
 
-// LoadSoulStoreWithAudit — то же для `soul.yml`. См. [LoadKeeperStoreWithAudit].
+// LoadSoulStoreWithAudit is the same for `soul.yml`. See [LoadKeeperStoreWithAudit].
 func LoadSoulStoreWithAudit(path string, opts ValidateOptions, w audit.Writer) (*Store[SoulConfig], []diag.Diagnostic, error) {
 	s, diags, err := LoadSoulStore(path, opts)
 	if s != nil {
@@ -269,79 +265,79 @@ func LoadSoulStoreWithAudit(path string, opts ValidateOptions, w audit.Writer) (
 	return s, diags, err
 }
 
-// SetAuditWriter инъектирует [audit.Writer] в уже созданный Store —
-// late-binding-вариант [LoadKeeperStoreWithAudit] / [LoadSoulStoreWithAudit].
+// SetAuditWriter injects an [audit.Writer] into an already-created Store — the
+// late-binding variant of [LoadKeeperStoreWithAudit] / [LoadSoulStoreWithAudit].
 //
-// Нужен порядку init бинаря `keeper`/`soul`, где Store создаётся ДО подъёма
-// audit-writer-а (Vault → pool → migrations → writer, выверенная
-// последовательность). Caller создаёт Store через `LoadKeeperStore` (без
-// audit), а после поднятия writer-а вызывает `SetAuditWriter(w)` — далее
-// каждый [Store.Reload] эмитит `config.reload_succeeded`/`config.reload_failed`
-// (см. [Store.emitAudit], ADR-022(j)).
+// Needed by the `keeper`/`soul` binary init order, where the Store is created
+// BEFORE the audit writer comes up (Vault → pool → migrations → writer, a
+// deliberate sequence). The caller builds the Store via `LoadKeeperStore` (no
+// audit) and, once the writer is up, calls `SetAuditWriter(w)` — from then on
+// each [Store.Reload] emits `config.reload_succeeded`/`config.reload_failed`
+// (see [Store.emitAudit], ADR-022(j)).
 //
-// w может быть nil (тогда audit-эмиссия выключена — back-compat). Безопасен
-// для вызова до запуска [WatchSIGHUP]; конкурентный вызов с Reload не
-// предполагается (вызывается один раз на init-фазе) — поле защищено `mu`
-// на запись, чтение в `emitAudit` идёт под тем же `mu` через snapshot.
+// w may be nil (audit emission then off — back-compat). Safe to call before
+// [WatchSIGHUP] starts; concurrent use with Reload is not expected (called once
+// in the init phase) — the field is guarded by `mu` on write, and the read in
+// `emitAudit` goes under the same `mu` via a snapshot.
 func (s *Store[T]) SetAuditWriter(w audit.Writer) {
 	s.mu.Lock()
 	s.auditWriter = w
 	s.mu.Unlock()
 }
 
-// Get возвращает текущий снимок. Указатель immutable — caller не должен
-// мутировать поля. Для модификации с последующей записью использовать
-// `Document()` + `Patch*` + `Save*`.
+// Get returns the current snapshot. The pointer is immutable — the caller must
+// not mutate fields. To modify and then persist, use `Document()` + `Patch*` +
+// `Save*`.
 //
-// При failed initial load (validation-errors на первом чтении файла)
-// `Get() == nil`, но `Document() != nil` — используй Document для
-// Patch/Save и повтори Reload после исправления файла. После первого
-// успешного Reload `Get()` начинает возвращать валидный указатель.
+// On a failed initial load (validation-errors on the first file read)
+// `Get() == nil` but `Document() != nil` — use Document for Patch/Save and retry
+// Reload after fixing the file. After the first successful Reload `Get()` starts
+// returning a valid pointer.
 //
-// Согласованность пары `Get()` ↔ `Document()` между вызовами не
-// гарантируется: между ними может произойти Reload-swap. Caller, которому
-// нужен согласованный snapshot+doc, должен опираться только на один из
-// двух (например, `Document()` и парсить нужные поля сам).
+// Consistency of the `Get()` ↔ `Document()` pair across calls is not guaranteed:
+// a Reload swap may happen between them. A caller needing a consistent
+// snapshot+doc must rely on only one of the two (e.g. `Document()` and parse the
+// needed fields itself).
 func (s *Store[T]) Get() *T {
 	return s.snapshot.Load()
 }
 
-// Document возвращает текущий AST-handle (для Patch/Save). Replace-ится
-// под локом одновременно со снимком на успешном Reload. О согласованности
-// с `Get()` — см. doc-comment `Get()`.
+// Document returns the current AST handle (for Patch/Save). Replaced under the
+// lock together with the snapshot on a successful Reload. For consistency with
+// `Get()`, see the `Get()` doc comment.
 func (s *Store[T]) Document() *Document {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.doc
 }
 
-// Path возвращает путь к файлу, с которым связан Store. Immutable за время
-// жизни Store-а — Reload читает тот же путь.
+// Path returns the file path the Store is bound to. Immutable for the Store's
+// lifetime — Reload reads the same path.
 func (s *Store[T]) Path() string {
 	return s.path
 }
 
-// Reload перечитывает файл и атомарно подменяет снимок при отсутствии
-// error-диагностик. См. doc-comment файла для контракта по полям результата.
+// Reload re-reads the file and atomically swaps the snapshot when there are no
+// error diagnostics. See the file doc comment for the result-field contract.
 //
-// `ctx` зарезервирован под будущие отмены долгих semantic-проверок
-// (например, vault reachability в `AllowNetworkCalls=true` режиме);
-// в M0.3 валидация синхронная, ctx не прерывается внутри.
+// `ctx` is reserved for future cancellation of long semantic checks (e.g. vault
+// reachability in `AllowNetworkCalls=true` mode); in M0.3 validation is
+// synchronous and ctx is not interrupted inside.
 //
-// `Timestamp` — момент принятия решения о swap/не-swap, выставляется
-// прямо перед return на каждой ветке.
+// `Timestamp` is the swap/no-swap decision point, set right before return on
+// each branch.
 //
-// При `Swapped=true` всем зарегистрированным через [Store.OnReload]
-// подписчикам шлются уведомления (отдельные goroutine-ы, recover-panic).
-// На `Swapped=false` notify не происходит — старый снимок продолжает
-// действовать. См. [ReloadCallback] для контракта аргументов.
+// On `Swapped=true` all subscribers registered via [Store.OnReload] are notified
+// (separate goroutines, recover-panic). On `Swapped=false` there is no notify —
+// the old snapshot stays in effect. See [ReloadCallback] for the argument
+// contract.
 func (s *Store[T]) Reload(ctx context.Context, source ReloadSource) ReloadResult {
-	// In-process span на весь hot-reload (parse → validation → semantic →
-	// swap) — ADR-024. source совпадает с reload-audit-event-ом
-	// (config.reload_succeeded/failed); span — отдельный observability-канал,
-	// не дублирует audit. Секретов (содержимое конфига, vault-значения) в
-	// атрибуты НЕ кладём: только source + исход + путь файла. При OTel
-	// disabled tracer no-op — Start/End бесплатны.
+	// In-process span over the whole hot-reload (parse → validation → semantic →
+	// swap) — ADR-024. source matches the reload audit event
+	// (config.reload_succeeded/failed); the span is a separate observability
+	// channel, not a duplicate of audit. No secrets (config contents, vault
+	// values) go into attributes: only source + outcome + file path. When OTel
+	// is disabled the tracer is no-op — Start/End are free.
 	ctx, span := tracer.Start(ctx, "config.reload",
 		trace.WithAttributes(
 			attribute.String("source", string(source)),
@@ -361,9 +357,9 @@ func (s *Store[T]) Reload(ctx context.Context, source ReloadSource) ReloadResult
 			attribute.String("outcome", "failed"),
 			attribute.String("phase", string(res.Phase)),
 		)
-		// Первая error-диагностика как span-error: видимость причины
-		// провала в трейсе без раскрытия содержимого конфига (code+message
-		// диагностики — те же, что в reload-audit validation_errors).
+		// First error diagnostic as a span error: the failure reason is visible
+		// in the trace without exposing config contents (the diagnostic
+		// code+message are the same as in reload-audit validation_errors).
 		if d := firstErrorDiag(res.Diagnostics); d != nil {
 			span.RecordError(fmt.Errorf("%s: %s", d.Code, d.Message))
 		}
@@ -372,28 +368,28 @@ func (s *Store[T]) Reload(ctx context.Context, source ReloadSource) ReloadResult
 	return res
 }
 
-// OnReload регистрирует subscriber-callback на успешные Reload-swap-ы.
-// Возвращает функцию `unsubscribe` для отмены подписки.
+// OnReload registers a subscriber callback for successful Reload swaps. Returns
+// an `unsubscribe` function to cancel the subscription.
 //
-// Контракт:
+// Contract:
 //
-//   - `fn` вызывается **только** при `ReloadResult.Swapped=true`. На
-//     validation-fail / I/O-fatal subscriber не уведомляется.
-//   - Каждый вызов происходит в **отдельной goroutine** — slow subscriber
-//     не блокирует ни Reload, ни других подписчиков.
-//   - Порядок вызовов между subscriber-ами **не определён**.
-//   - Panic внутри `fn` ловится `recover` + slog.Error с полем
-//     `correlation_id` пустое (notify не привязан к Reload-correlation,
-//     но callback может сам читать поля из new-snapshot).
-//   - `unsubscribe` идемпотентна: повторный вызов — no-op. Вызов из
-//     callback-а самого subscriber-а безопасен (RWMutex, без deadlock).
-//   - `fn == nil` — panic (программная ошибка caller-а, аналогично
+//   - `fn` is called **only** when `ReloadResult.Swapped=true`. On
+//     validation-fail / I/O-fatal the subscriber is not notified.
+//   - Each call runs in a **separate goroutine** — a slow subscriber blocks
+//     neither Reload nor other subscribers.
+//   - Call order between subscribers is **undefined**.
+//   - A panic inside `fn` is caught by `recover` + slog.Error with an empty
+//     `correlation_id` field (notify is not tied to the Reload correlation, but
+//     the callback can read fields from the new snapshot itself).
+//   - `unsubscribe` is idempotent: a repeat call is a no-op. Calling it from the
+//     subscriber's own callback is safe (RWMutex, no deadlock).
+//   - `fn == nil` panics (a caller programming error, like
 //     `signal.Notify(nil, ...)`).
 //
-// Видимость snapshot-а в callback-е: на момент вызова `s.snapshot.Load()`
-// гарантированно возвращает `new` (swap уже произошёл). Конкурентный
-// последующий Reload может ещё раз поменять snapshot — callback при этом
-// видит **тот** snapshot, который вызвал notify (через аргумент `new`).
+// Snapshot visibility in the callback: at call time `s.snapshot.Load()` is
+// guaranteed to return `new` (the swap already happened). A concurrent later
+// Reload may swap the snapshot again — the callback still sees **the** snapshot
+// that triggered its notify (via the `new` argument).
 func (s *Store[T]) OnReload(fn ReloadCallback[T]) func() {
 	if fn == nil {
 		panic("config.Store.OnReload: callback is nil")
@@ -408,10 +404,10 @@ func (s *Store[T]) OnReload(fn ReloadCallback[T]) func() {
 		defer s.subsMu.Unlock()
 		for i, x := range s.subscribers {
 			if x == sub {
-				// Сдвигаем хвост и обнуляем последний элемент, чтобы
-				// не держать unreachable callback-references в backing
-				// array (важно для долго живущих Store-ов, через которые
-				// прокручиваются subscribe/unsubscribe-серии).
+				// Shift the tail and nil out the last element so we don't keep
+				// unreachable callback references in the backing array (matters
+				// for long-lived Stores that cycle through subscribe/unsubscribe
+				// series).
 				last := len(s.subscribers) - 1
 				s.subscribers[i] = s.subscribers[last]
 				s.subscribers[last] = nil
@@ -422,16 +418,15 @@ func (s *Store[T]) OnReload(fn ReloadCallback[T]) func() {
 	}
 }
 
-// notify рассылает уведомление об успешном swap-е всем зарегистрированным
-// subscriber-ам. Snapshot slice-а под RLock, чтобы:
+// notify delivers the successful-swap notification to all registered
+// subscribers. The slice is snapshotted under RLock so that:
 //
-//   - параллельные OnReload-вызовы (Lock) дожидались окончания snapshot-а;
-//   - unsubscribe из callback-а самого subscriber-а не deadlock-ился
-//     (RWMutex permitted upgrade via separate goroutine — callback
-//     запускается в отдельной goroutine, и Lock в его unsubscribe-вызове
-//     не пересекается с уже отпущенным RLock).
+//   - concurrent OnReload calls (Lock) wait for the snapshot to finish;
+//   - unsubscribe from the subscriber's own callback does not deadlock (the
+//     callback runs in a separate goroutine, so the Lock in its unsubscribe call
+//     does not overlap the already-released RLock).
 //
-// Каждый callback — в своей goroutine с recover-panic.
+// Each callback runs in its own goroutine with recover-panic.
 func (s *Store[T]) notify(old, new *T) {
 	s.subsMu.RLock()
 	subs := make([]*subscription[T], len(s.subscribers))
@@ -452,10 +447,10 @@ func (s *Store[T]) notify(old, new *T) {
 	}
 }
 
-// reload — внутреннее тело Reload без audit-эмиссии. Вынесено, чтобы
-// emitAudit обернул единый ReloadResult, а не дублировался на каждой
-// return-ветке. ctx читателю не нужен (валидация синхронная в M0.3);
-// audit-вызов получает ctx из Reload-обёртки.
+// reload is the internal body of Reload without audit emission. Split out so
+// emitAudit wraps a single ReloadResult instead of being duplicated on every
+// return branch. This body doesn't need ctx (validation is synchronous in M0.3);
+// the audit call gets ctx from the Reload wrapper.
 func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 	res := ReloadResult{
 		Source:        source,
@@ -489,7 +484,7 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 	case storeKindSoul:
 		newCfgSoul, newDoc, diags, _ = LoadSoulFromBytes(s.path, src, s.opts)
 	default:
-		// Программная ошибка — конструкторы должны выставить kind.
+		// Programming error — constructors must set kind.
 		res.Phase = diag.PhaseParse
 		res.Diagnostics = []diag.Diagnostic{{
 			Level:   diag.LevelError,
@@ -513,8 +508,8 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 	s.mu.Lock()
 	switch s.kind {
 	case storeKindKeeper:
-		// Cast через any: дженерик `Store[T]` не знает, что T==KeeperConfig
-		// именно для этого kind-а. Гарантирует конструктор.
+		// Cast via any: the generic `Store[T]` doesn't know that T==KeeperConfig
+		// for this kind. The constructor guarantees it.
 		s.snapshot.Store(any(newCfgKeeper).(*T))
 	case storeKindSoul:
 		s.snapshot.Store(any(newCfgSoul).(*T))
@@ -527,27 +522,25 @@ func (s *Store[T]) reload(source ReloadSource) ReloadResult {
 	return res
 }
 
-// emitAudit публикует одно `config.reload_*` событие в [audit.Writer].
-// Безопасен при `s.auditWriter == nil` (no-op). Контракт по ADR-022(j):
+// emitAudit publishes one `config.reload_*` event to the [audit.Writer]. Safe
+// when `s.auditWriter == nil` (no-op). Contract per ADR-022(j):
 //
 //   - EventType  = config.reload_succeeded | config.reload_failed.
-//   - Source     = [ReloadSource] (alias на [audit.Source]).
+//   - Source     = [ReloadSource] (alias for [audit.Source]).
 //   - Payload    = `{ "path": ..., ?"phase": ..., ?"validation_errors": [...],
-//     ?"changed_paths": [...] }` — опциональные ключи присутствуют только
-//     при failure (phase/validation_errors) или при наличии данных
-//     (changed_paths). В M0.3 changed_paths всегда пустой
-//     (diff source↔source отложен в M0.3.5).
-//   - CorrelationID — тот же, что [ReloadResult.CorrelationID] (один
-//     request — одна цепочка событий).
-//   - CreatedAt — тот же, что [ReloadResult.Timestamp].
+//     ?"changed_paths": [...] }` — optional keys are present only on failure
+//     (phase/validation_errors) or when data exists (changed_paths). In M0.3
+//     changed_paths is always empty (source↔source diff deferred to M0.3.5).
+//   - CorrelationID — same as [ReloadResult.CorrelationID] (one request = one
+//     event chain).
+//   - CreatedAt — same as [ReloadResult.Timestamp].
 //
-// audit-write выполняется best-effort: ошибка [audit.Writer.Write]
-// логируется через `slog.Warn`, но не пропагируется — наблюдаемость не
-// должна ломать hot-reload.
+// The audit write is best-effort: an [audit.Writer.Write] error is logged via
+// `slog.Warn` but not propagated — observability must not break hot-reload.
 func (s *Store[T]) emitAudit(ctx context.Context, res ReloadResult) {
-	// Снимок writer-а под `mu`: [SetAuditWriter] может выставить его
-	// late-binding на init-фазе. Чтение копии (а не повторное обращение к
-	// полю) делает race-free и сам nil-check, и последующий Write.
+	// Snapshot the writer under `mu`: [SetAuditWriter] may set it late-binding in
+	// the init phase. Reading a copy (rather than touching the field again) makes
+	// both the nil-check and the subsequent Write race-free.
 	s.mu.Lock()
 	w := s.auditWriter
 	s.mu.Unlock()
@@ -593,8 +586,8 @@ func (s *Store[T]) emitAudit(ctx context.Context, res ReloadResult) {
 	}
 }
 
-// firstErrorPhase — фаза первой error-диагностики, ключ к
-// `config.reload_failed.phase` audit-event-а.
+// firstErrorPhase returns the phase of the first error diagnostic, the key for
+// the `config.reload_failed.phase` audit event.
 func firstErrorPhase(ds []diag.Diagnostic) diag.Phase {
 	for i := range ds {
 		if ds[i].Level == diag.LevelError {
@@ -604,10 +597,10 @@ func firstErrorPhase(ds []diag.Diagnostic) diag.Phase {
 	return ""
 }
 
-// newCorrelationID — 26-символьный ULID (см. [audit.NewULID]).
-// Делегируется в `shared/audit` — единственный источник ULID-генерации
-// в проекте; формат совпадает с `audit_id` и `correlation_id` в
-// `audit_log` ([ADR-022(c)](docs/architecture.md)).
+// newCorrelationID returns a 26-char ULID (see [audit.NewULID]). Delegated to
+// `shared/audit` — the project's single source of ULID generation; the format
+// matches `audit_id` and `correlation_id` in `audit_log`
+// ([ADR-022(c)](docs/architecture.md)).
 func newCorrelationID() string {
 	return audit.NewULID()
 }

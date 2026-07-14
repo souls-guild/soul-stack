@@ -2,11 +2,11 @@ package tmpl
 
 import "testing"
 
-// TestUsesRootField — детектор обращения шаблона к корневому полю `.<field>`
-// ([ADR-010] §3.2, условная инъекция render_context.input, Вариант B). Должен
-// ловить РЕАЛЬНЫЕ action-обращения (`{{ .input.X }}`/`range`/`if`/`with`/
-// вложенные шаблоны) и НЕ реагировать на упоминание `.input` в литеральном
-// тексте/комментариях тела шаблона (redis.conf.tmpl: `# ... apply.input ...`).
+// TestUsesRootField — detector of a template accessing the root field `.<field>`
+// ([ADR-010] §3.2, conditional injection of render_context.input, Variant B). Must
+// catch REAL action accesses (`{{ .input.X }}`/`range`/`if`/`with`/nested
+// templates) and NOT react to a mention of `.input` in literal text/comments of
+// the template body (redis.conf.tmpl: `# ... apply.input ...`).
 func TestUsesRootField(t *testing.T) {
 	e := newEngine(t)
 
@@ -26,9 +26,9 @@ func TestUsesRootField(t *testing.T) {
 
 		{"only vars", "input", `socket {{ .vars.socket }}`, false},
 		{"self only", "input", `family {{ .self.os.family }}`, false},
-		// ★КЛЮЧЕВОЙ кейс: упоминание `.input` в литеральном тексте/комментарии
-		// (как в redis.conf.tmpl/sentinel.conf.tmpl) НЕ должно считаться
-		// обращением — это TextNode, не FieldNode.
+		// ★KEY case: a mention of `.input` in literal text/a comment (as in
+		// redis.conf.tmpl/sentinel.conf.tmpl) must NOT be counted as an access —
+		// it's a TextNode, not a FieldNode.
 		{"input in comment text", "input", "# .vars.config: apply.input резолвится host-инвариантно\nbind 0.0.0.0", false},
 		{"input substring in literal", "input", `# describes .input.textfile_dir contract`, false},
 		{"empty template", "input", `bind 0.0.0.0`, false},
@@ -46,8 +46,8 @@ func TestUsesRootField(t *testing.T) {
 	}
 }
 
-// TestUsesRootField_ParseError — битый шаблон → ErrParse (caller падает так же,
-// как при Render, расхождения поведения нет).
+// TestUsesRootField_ParseError — a broken template → ErrParse (the caller fails
+// the same way as on Render, no behavior divergence).
 func TestUsesRootField_ParseError(t *testing.T) {
 	e := newEngine(t)
 	if _, err := e.UsesRootField(`{{ .input.x `, "input"); err == nil {
@@ -55,11 +55,11 @@ func TestUsesRootField_ParseError(t *testing.T) {
 	}
 }
 
-// TestRootFieldSubKeys — сбор подключей `.<field>.<subkey>`, реально читаемых
-// шаблоном (AST). Основа точечной инъекции file-vars в render_context.vars:
-// инъектим РОВНО те file-vars, чей ключ шаблон читает. Должен ловить subkey в
-// action/range/if/with/pipeline/вложенном define и игнорировать упоминание в
-// литеральном тексте/комментарии и голое `.<field>` без подключа.
+// TestRootFieldSubKeys — collects subkeys `.<field>.<subkey>` actually read by the
+// template (AST). The basis for pinpoint injection of file-vars into
+// render_context.vars: we inject EXACTLY the file-vars whose key the template
+// reads. Must catch a subkey in action/range/if/with/pipeline/nested define and
+// ignore a mention in literal text/a comment and a bare `.<field>` without a subkey.
 func TestRootFieldSubKeys(t *testing.T) {
 	e := newEngine(t)
 
@@ -77,11 +77,11 @@ func TestRootFieldSubKeys(t *testing.T) {
 		{"nested define", "vars", `{{ define "t" }}{{ .vars.users }}{{ end }}{{ template "t" . }}`, map[string]bool{"users": true}},
 		{"deep chain takes second ident", "vars", `{{ .vars.config.maxmemory }}`, map[string]bool{"config": true}},
 
-		// Голое `.vars` без подключа — подключей нет.
+		// A bare `.vars` without a subkey — no subkeys.
 		{"bare field no subkey", "vars", `{{ .vars }}`, map[string]bool{}},
-		// Другое поле игнорируется.
+		// Another field is ignored.
 		{"other field ignored", "vars", `{{ .input.user }}{{ .self.os.family }}`, map[string]bool{}},
-		// Упоминание в комментарии/тексте — TextNode, не обращение.
+		// A mention in a comment/text — TextNode, not an access.
 		{"in comment text", "vars", "# .vars.bin_path резолвится из vars.yml\nbind 0.0.0.0", map[string]bool{}},
 		{"empty template", "vars", `bind 0.0.0.0`, map[string]bool{}},
 	}
@@ -103,7 +103,7 @@ func TestRootFieldSubKeys(t *testing.T) {
 	}
 }
 
-// TestRootFieldSubKeys_ParseError — битый шаблон → ErrParse (симметрично
+// TestRootFieldSubKeys_ParseError — a broken template → ErrParse (symmetric to
 // UsesRootField).
 func TestRootFieldSubKeys_ParseError(t *testing.T) {
 	e := newEngine(t)

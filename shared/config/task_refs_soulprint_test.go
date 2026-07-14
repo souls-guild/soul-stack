@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestSoulprintRef_OKPaths — каноническая форма soulprint.self.<top>.<sub> с
-// валидными полями typed-схемы (ADR-018) не должна давать errors.
+// TestSoulprintRef_OKPaths — the canonical form soulprint.self.<top>.<sub> with
+// valid typed-schema fields (ADR-018) must not produce errors.
 func TestSoulprintRef_OKPaths(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -49,10 +49,10 @@ tasks:
 	}
 }
 
-// TestSoulprintRef_ChoirsTargeting — рекомендованный ADR-044 choir-таргетинг
-// через `where: "'x' in soulprint.self.choirs"` не должен флагаться (choirs —
-// registry-проекция list<string>, зеркало covens; cel_render.go её уже
-// проецирует и в self, и в hosts[]). Регресс на латентный баг S-T4.
+// TestSoulprintRef_ChoirsTargeting — the ADR-044-recommended choir targeting
+// via `where: "'x' in soulprint.self.choirs"` must not be flagged (choirs is a
+// registry projection list<string>, a mirror of covens; cel_render.go already
+// projects it into both self and hosts[]). Regression for latent bug S-T4.
 func TestSoulprintRef_ChoirsTargeting(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -72,9 +72,9 @@ tasks:
 	}
 }
 
-// TestSoulprintRef_ChoirsTypoStillFlagged — рядом стоящая опечатка в проекции
-// (`choir` без s) по-прежнему должна ловиться как unknown top-level path:
-// добавление choirs не ослабляет линтер.
+// TestSoulprintRef_ChoirsTypoStillFlagged — an adjacent typo in the projection
+// (`choir` without the s) must still be caught as an unknown top-level path:
+// adding choirs does not weaken the linter.
 func TestSoulprintRef_ChoirsTypoStillFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -91,10 +91,10 @@ tasks:
 }
 
 // TestSoulprintRef_TraitsTargeting — GUARD (ADR-060): operator-set traits
-// таргетинг через `soulprint.self.traits.<key>` (скаляр и список) не флагается.
-// Ключ traits динамичен (произвольное имя оператора) — третий сегмент НЕ
-// статпроверяется (как у covens/choirs); soul-lint сверяет только что
-// `traits` — известное top-level поле под soulprint.self.*.
+// targeting via `soulprint.self.traits.<key>` (scalar and list) is not flagged.
+// The traits key is dynamic (an arbitrary operator name) — the third segment is
+// NOT statically checked (like covens/choirs); soul-lint only verifies that
+// `traits` is a known top-level field under soulprint.self.*.
 func TestSoulprintRef_TraitsTargeting(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -118,9 +118,9 @@ tasks:
 	}
 }
 
-// TestSoulprintRef_TraitsTypoStillFlagged — опечатка в проекции (`trait` без s)
-// по-прежнему ловится как unknown top-level path: добавление traits не ослабляет
-// линтер (регресс-страховка симметрично choirs).
+// TestSoulprintRef_TraitsTypoStillFlagged — a typo in the projection (`trait`
+// without the s) is still caught as an unknown top-level path: adding traits
+// does not weaken the linter (regression safety, symmetric to choirs).
 func TestSoulprintRef_TraitsTypoStillFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -136,15 +136,15 @@ tasks:
 	}
 }
 
-// TestSoulprintRef_TypoFamilyFlagged — опечатка `os.familly` (двойная l)
-// не валидируется как top-level поле SoulprintFacts, поэтому
-// soulprint_unknown_path должен быть.
+// TestSoulprintRef_TypoFamilyFlagged — the typo `os.familly` (double l) does
+// not validate as a top-level SoulprintFacts field, so soulprint_unknown_path
+// must appear.
 //
-// Замечание: текущая статпроверка ловит первый сегмент после `soulprint.self.`
-// (top-level — os/kernel/cpu/...). Опечатка во ВТОРОМ сегменте (`os.familly`)
-// без перехода глубже не флагается — это отложено отдельным слайсом
-// (checkSoulprintSubPath placeholder). Чтобы зафиксировать сейчас рабочий
-// scope линтера, тест проверяет опечатку именно в первом сегменте.
+// Note: the current static check catches the first segment after
+// `soulprint.self.` (top-level — os/kernel/cpu/...). A typo in the SECOND
+// segment (`os.familly`) without going deeper is not flagged — that is deferred
+// to a separate slice (checkSoulprintSubPath placeholder). To pin the linter's
+// current working scope, the test checks a typo in the first segment.
 func TestSoulprintRef_UnknownTopFieldFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -160,8 +160,8 @@ tasks:
 	}
 }
 
-// TestSoulprintRef_NakedFormFlagged — голая форма `soulprint.<x>` без .self/
-// .hosts/.where — ошибка (docs/soul/soulprint.md «Каноническая форма обязательна»).
+// TestSoulprintRef_NakedFormFlagged — the bare form `soulprint.<x>` without
+// .self/.hosts/.where is an error (docs/soul/soulprint.md "canonical form is required").
 func TestSoulprintRef_NakedFormFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -178,8 +178,8 @@ tasks:
 }
 
 // TestSoulprintRef_HostsAccessorAllowed — soulprint.hosts / soulprint.where(...)
-// проходят без флага (это scenario-only аксессоры, проверяются shared/cel в
-// render-фазе).
+// pass without a flag (these are scenario-only accessors, checked by shared/cel
+// in the render phase).
 func TestSoulprintRef_HostsAccessorAllowed(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -196,8 +196,8 @@ tasks:
 }
 
 // TestSoulprintRef_NestedCELLiteralIgnored — `soulprint.hosts.where("role ==
-// 'primary'")` содержит вложенную CEL-строку — её содержимое не должно
-// извлекаться как `soulprint.<...>` опечатка.
+// 'primary'")` contains a nested CEL string — its contents must not be
+// extracted as a `soulprint.<...>` typo.
 func TestSoulprintRef_NestedCELLiteralIgnored(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -208,16 +208,16 @@ tasks:
         master_addr: '${ soulprint.hosts.where("role == ''primary''")[0].network.primary_ip }'
 `
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	// apply.input — не CEL-предикат в смысле task_refs (он не проходит через
-	// checkSoulprintRefs), но даже если бы проходил, вложенная литерал-строка
-	// должна быть вырезана. Гарантия — ноль soulprint-флагов.
+	// apply.input is not a CEL predicate in the task_refs sense (it does not go
+	// through checkSoulprintRefs), but even if it did, the nested literal string
+	// must be stripped out. The guarantee is zero soulprint flags.
 	if hasCode(diags, "soulprint_naked_reference") || hasCode(diags, "soulprint_unknown_path") {
 		dump(t, diags)
 		t.Fatalf("вложенный CEL-литерал-аргумент .where(...) не должен порождать soulprint-флаги")
 	}
 }
 
-// TestSoulprintRef_RetryUntil — soulprint в retry.until покрыт обходом.
+// TestSoulprintRef_RetryUntil — soulprint in retry.until is covered by the walk.
 func TestSoulprintRef_RetryUntil(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -235,9 +235,9 @@ tasks:
 	}
 }
 
-// TestCovenLabelValidatorHook_Active — кастомный validator подменяемый, и
-// возвращает coven_label_unknown с осмысленным сообщением. После теста
-// возвращаем no-op обратно (детерминизм для параллельных тестов).
+// TestCovenLabelValidatorHook_Active — the custom validator is swappable and
+// returns coven_label_unknown with a meaningful message. After the test we
+// restore the no-op (determinism for parallel tests).
 func TestCovenLabelValidatorHook_Active(t *testing.T) {
 	prev := SetCovenLabelValidator(rejectAllCovenValidator{})
 	t.Cleanup(func() { SetCovenLabelValidator(prev) })
@@ -255,8 +255,8 @@ tasks:
 	}
 }
 
-// TestCovenLabelValidatorHook_Noop — по умолчанию (no-op) валидный coven-id
-// проходит без флага.
+// TestCovenLabelValidatorHook_Noop — by default (no-op) a valid coven-id passes
+// without a flag.
 func TestCovenLabelValidatorHook_Noop(t *testing.T) {
 	src := `name: x
 tasks:

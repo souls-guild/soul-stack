@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// TestWebUIMounted_FootgunGuard — ADR-055 default-ON: не задано (nil-config /
-// nil-поле) → true (UI из коробки); явный true → true; явный false → false
-// (opt-out). Параллель TempoEnabled/Toll, но без зависимости от инфраструктуры.
+// TestWebUIMounted_FootgunGuard — ADR-055 default-ON: unset (nil config /
+// nil field) → true (UI out of the box); explicit true → true; explicit false → false
+// (opt-out). Parallels TempoEnabled/Toll, but without an infrastructure dependency.
 func TestWebUIMounted_FootgunGuard(t *testing.T) {
 	tru, fal := true, false
 	cases := []struct {
@@ -26,10 +26,10 @@ func TestWebUIMounted_FootgunGuard(t *testing.T) {
 	}
 }
 
-// TestWebUIEnabled_StrictWalkerKnowsKey — strict unknown-key walker (walk.go)
-// знает `web_ui_enabled` (поле в KeeperConfig). Регресс (забыли поле / опечатка
-// в yaml-теге) дал бы unknown_key, как у reactor:/rbac:. Заодно проверяет, что
-// явный false парсится и резолвится в WebUIMounted()=false.
+// TestWebUIEnabled_StrictWalkerKnowsKey — the strict unknown-key walker (walk.go)
+// knows `web_ui_enabled` (a field in KeeperConfig). A regression (missing field /
+// yaml-tag typo) would yield unknown_key, as with reactor:/rbac:. Also checks that
+// an explicit false parses and resolves to WebUIMounted()=false.
 func TestWebUIEnabled_StrictWalkerKnowsKey(t *testing.T) {
 	src := []byte(`kid: keeper-eu-west-01
 listen:

@@ -91,8 +91,8 @@ state_schema:
 	}
 }
 
-// TestLoadServiceManifest_Lifecycle — блок lifecycle с обоими флагами
-// принимается (НЕ unknown_key), флаги декодятся в *bool.
+// TestLoadServiceManifest_Lifecycle — a lifecycle block with both flags is accepted
+// (NOT unknown_key), the flags decode into *bool.
 func TestLoadServiceManifest_Lifecycle(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -118,8 +118,8 @@ lifecycle:
 	}
 }
 
-// TestLoadServiceManifest_LifecycleAbsent — без блока lifecycle оба флага
-// дефолтно true (backcompat), nil-safe аксессоры работают.
+// TestLoadServiceManifest_LifecycleAbsent — without a lifecycle block both flags
+// default to true (backcompat), the nil-safe accessors work.
 func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
 	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
@@ -130,14 +130,14 @@ func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
 	if cfg.Lifecycle != nil {
 		t.Error("Lifecycle должен быть nil без блока")
 	}
-	// nil-safe: оба true.
+	// nil-safe: both true.
 	if !cfg.Lifecycle.AutoCreateEnabled() || !cfg.Lifecycle.AutoDestroyEnabled() {
 		t.Error("nil-блок должен трактоваться как оба true (backcompat)")
 	}
 }
 
-// TestLoadServiceManifest_LifecycleUnknownKey — опечатка под lifecycle:
-// (напр. auto_creat) ловится reflect-walker-ом как unknown_key.
+// TestLoadServiceManifest_LifecycleUnknownKey — a typo under lifecycle:
+// (e.g. auto_creat) is caught by the reflect-walker as unknown_key.
 func TestLoadServiceManifest_LifecycleUnknownKey(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -176,8 +176,8 @@ func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
 }
 
 func TestLoadServiceManifest_DeprecatedKeyNoDuplicate(t *testing.T) {
-	// Аналог destiny: deprecated top-level ключ должен дать ровно одну
-	// диагностику (от schemaValidateService с hint), а не дубль из reflect-walker-а.
+	// Like destiny: a deprecated top-level key must yield exactly one diagnostic
+	// (from schemaValidateService with a hint), not a duplicate from the reflect-walker.
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -247,7 +247,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_StateSchemaNullValue(t *testing.T) {
-	// state_schema: (null) — присутствует ключ, но не mapping.
+	// state_schema: (null) — key present, but not a mapping.
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -260,7 +260,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_StateSchemaNoType(t *testing.T) {
-	// type на корне отсутствует — `state_schema_root_not_object` (как root not object).
+	// type absent on the root — `state_schema_root_not_object` (as root not object).
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -275,7 +275,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_StateSchemaRequiredNotArray(t *testing.T) {
-	// required должен быть массивом строк; nested-схема (под `users`) → recursive.
+	// required must be an array of strings; nested schema (under `users`) → recursive.
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -293,8 +293,8 @@ state_schema:
 }
 
 func TestLoadServiceManifest_StateSchemaPropertiesRecursive(t *testing.T) {
-	// Корректный nested state_schema со вложенными properties/required/items.
-	// Регрессия: рекурсия не должна добавлять ложные diagnostics.
+	// A correct nested state_schema with nested properties/required/items.
+	// Regression: recursion must not add spurious diagnostics.
 	src := `name: svc-golden
 state_schema_version: 2
 state_schema:
@@ -385,7 +385,7 @@ modules:
 }
 
 func TestLoadServiceManifest_ModuleNamespacedName(t *testing.T) {
-	// Двухуровневая форма — единственная валидная для modules[] (strict).
+	// The two-level form is the only valid one for modules[] (strict).
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -401,7 +401,7 @@ modules:
 }
 
 func TestLoadServiceManifest_ModuleSingleLevelName(t *testing.T) {
-	// Одноуровневая форма больше не принимается (strict <ns>.<module>).
+	// The one-level form is no longer accepted (strict <ns>.<module>).
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -424,7 +424,7 @@ modules:
 }
 
 func TestLoadServiceManifest_ModuleUnderscoreInName(t *testing.T) {
-	// underscore запрещён обеими частями (kebab-case naming-rules.md §57/§186).
+	// underscore is forbidden in both parts (kebab-case naming-rules.md §57/§186).
 	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
@@ -468,8 +468,8 @@ destiny:
 	}
 }
 
-// TestLoadServiceManifest_DestinyGitOverride — per-entry git override валиден
-// для destiny[] (гибрид источника, override default_destiny_source).
+// TestLoadServiceManifest_DestinyGitOverride — a per-entry git override is valid
+// for destiny[] (hybrid source, overrides default_destiny_source).
 func TestLoadServiceManifest_DestinyGitOverride(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -488,8 +488,8 @@ destiny:
 	}
 }
 
-// TestLoadServiceManifest_ModuleGitRejected — per-entry git override запрещён
-// для modules[] (поддержан только destiny[]); один unknown_key на $.modules[0].git.
+// TestLoadServiceManifest_ModuleGitRejected — a per-entry git override is forbidden
+// for modules[] (supported only for destiny[]); one unknown_key at $.modules[0].git.
 func TestLoadServiceManifest_ModuleGitRejected(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -511,8 +511,8 @@ modules:
 	}
 }
 
-// TestLoadServiceManifest_ModuleCoreModule — core-модули в `modules:` не
-// перечисляются (ADR-009/ADR-015), отдельный код вместо name_invalid_format.
+// TestLoadServiceManifest_ModuleCoreModule — core modules are not listed in
+// `modules:` (ADR-009/ADR-015), a dedicated code instead of name_invalid_format.
 func TestLoadServiceManifest_ModuleCoreModule(t *testing.T) {
 	src := `name: svc-golden
 state_schema_version: 1
@@ -533,7 +533,7 @@ modules:
 		dump(t, diags)
 		t.Fatalf("expected core_module_in_modules_list on core.haproxy in modules[]")
 	}
-	// Не должно быть параллельного name_invalid_format на той же ноде.
+	// Must not have a parallel name_invalid_format on the same node.
 	for _, d := range diags {
 		if d.Code == "name_invalid_format" && d.YAMLPath == "$.modules[0].name" {
 			dump(t, diags)
@@ -542,9 +542,9 @@ modules:
 	}
 }
 
-// TestLoadServiceManifest_KebabCaseStrict — canonical kebab-case: dash только
-// между алфанумериков, без trailing/leading/double-dash. Симметрично для
-// reServiceName / reDependencyDestinyName / reDependencyModuleName.
+// TestLoadServiceManifest_KebabCaseStrict — canonical kebab-case: dash only between
+// alphanumerics, no trailing/leading/double-dash. Symmetric for reServiceName /
+// reDependencyDestinyName / reDependencyModuleName.
 func TestLoadServiceManifest_KebabCaseStrict(t *testing.T) {
 	cases := []struct {
 		name    string

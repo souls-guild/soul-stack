@@ -1,19 +1,20 @@
 package config
 
-// Презентационный слой input-формы — опциональный top-level ключ `form:` в
-// scenario-манифесте (`scenario/<name>/main.yml`). Чистая ПРЕЗЕНТАЦИЯ: как UI
-// группирует и подписывает поля `input:` в day-2/create-форме. Контракт ввода
-// (типы, валидация, обязательность) живёт ИСКЛЮЧИТЕЛЬНО в `input:` — `form:` его
-// не дублирует и не меняет, ссылается на поля по имени.
+// The presentation layer of the input form — the optional top-level `form:` key
+// in the scenario manifest (`scenario/<name>/main.yml`). Pure PRESENTATION: how
+// the UI groups and labels the `input:` fields in the operational/create form.
+// The input contract (types, validation, requiredness) lives EXCLUSIVELY in
+// `input:` — `form:` neither duplicates nor changes it, it references fields by name.
 //
-// Граница ответственности:
-//   - `input:` — что за поля, какого типа, обязательны ли (API/валидация);
-//   - `form:` — в каких секциях и под какими подписями их рисует UI.
+// Responsibility boundary:
+//   - `input:` — which fields, of what type, whether required (API/validation);
+//   - `form:` — in which sections and under which labels the UI renders them.
 //
-// FORWARD-COMPAT: ключ опционален. Нет `form:` → Form==nil, listing-проекция без
-// поля, UI рисует input плоско (как до фичи). Новое поле в `input:`, не попавшее
-// ни в одну секцию, НЕ ломает форму — UI дорисует его в дефолтную секцию в конце
-// (поэтому "поле input без секции" — WARNING, не ERROR; см. validateFormLayout).
+// FORWARD-COMPAT: the key is optional. No `form:` → Form==nil, listing projection
+// without the field, the UI renders input flat (as before the feature). A new
+// `input:` field not placed in any section does NOT break the form — the UI
+// appends it to a default section at the end (so "input field without a section"
+// is a WARNING, not an ERROR; see validateFormLayout).
 
 import (
 	"fmt"
@@ -24,26 +25,27 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// FormLayout — содержимое top-level `form:`: упорядоченный список секций. Порядок
-// объявления = порядок отрисовки секций в UI.
+// FormLayout is the content of the top-level `form:`: an ordered list of sections.
+// Declaration order = section render order in the UI.
 type FormLayout struct {
 	Sections []FormSection `yaml:"sections,omitempty"`
 }
 
-// FormSection — одна визуальная группа полей формы.
+// FormSection is one visual group of form fields.
 //
-// Key — стабильный машинный id секции (для запоминания collapsed-state в UI между
-// прогонами); обязан быть уникален в пределах формы. Title — заголовок группы.
-// Description — опц. пояснение под заголовком. Collapsed — стартовое состояние
-// «свёрнута» (default false). Fields — поля input, отрисовываемые в этой секции,
-// в порядке объявления.
+// Key is the stable machine id of the section (to remember collapsed-state in the
+// UI across runs); must be unique within the form. Title is the group heading.
+// Description is an optional note under the heading. Collapsed is the initial
+// "collapsed" state (default false). Fields are the input fields rendered in this
+// section, in declaration order.
 //
-// ShowWhen — опц. CEL-предикат над `input.*`: секция видима в UI, КОГДА он истинен
-// (нет ключа → видима всегда, бит-в-бит forward-compat). КАВЕТ: это ПРЕЗЕНТАЦИЯ,
-// НЕ валидационный гейт. Вычисляется client-side в UI (вариант A): backend отдаёт
-// строку как есть, сам предикат не вычисляет. Скрытие секции не отменяет валидацию
-// и резолв её полей backend-ом — если значение прислано, оно проверяется как
-// обычно. Пара с required_when: show_when прячет, required_when требует.
+// ShowWhen is an optional CEL predicate over `input.*`: the section is visible in
+// the UI WHEN it is true (no key → always visible, bit-for-bit forward-compat).
+// CAVEAT: this is PRESENTATION, NOT a validation gate. Evaluated client-side in
+// the UI (variant A): the backend serves the string as-is and does not evaluate
+// the predicate. Hiding a section does not cancel backend validation and
+// resolution of its fields — if a value is sent, it is checked as usual. Pairs
+// with required_when: show_when hides, required_when requires.
 type FormSection struct {
 	Key         string      `yaml:"key"`
 	Title       string      `yaml:"title,omitempty"`
@@ -53,18 +55,19 @@ type FormSection struct {
 	Fields      []FormField `yaml:"fields,omitempty"`
 }
 
-// FormField — ссылка на одно поле `input:` с опц. человекочитаемой подписью.
+// FormField references one `input:` field with an optional human-readable label.
 //
-// Name — имя ключа из `input:` (обязан существовать там; cross-инвариант
-// form_field_unknown). Label — подпись в UI; опционален: пустой → UI берёт
-// fallback (description поля input или само имя).
+// Name is the key name from `input:` (must exist there; cross-invariant
+// form_field_unknown). Label is the UI caption; optional: empty → the UI uses a
+// fallback (the input field's description or the name itself).
 //
-// ShowWhen — опц. CEL-предикат над `input.*` для условной видимости поля
-// (семантика и кавет — как у FormSection.ShowWhen: презентация, client-side eval,
-// НЕ гейт валидации). Placeholder / Hint — чистая презентация UI-виджета (текст в
-// пустом поле / подсказка под полем); НЕ дублируют `input:`-контракт (description
-// поля остаётся в `input:`, типы/обязательность тоже). Все три опциональны;
-// отсутствие любого → бит-в-бит как до фичи.
+// ShowWhen is an optional CEL predicate over `input.*` for conditional field
+// visibility (semantics and caveat as for FormSection.ShowWhen: presentation,
+// client-side eval, NOT a validation gate). Placeholder / Hint are pure UI-widget
+// presentation (text in an empty field / hint below the field); they do NOT
+// duplicate the `input:` contract (the field's description stays in `input:`, so
+// do types/requiredness). All three are optional; the absence of any → bit-for-bit
+// as before the feature.
 type FormField struct {
 	Name        string `yaml:"name"`
 	Label       string `yaml:"label,omitempty"`
@@ -73,20 +76,21 @@ type FormField struct {
 	Hint        string `yaml:"hint,omitempty"`
 }
 
-// reFormSectionKey — стабильный машинный id секции: kebab/snake-идентификатор
-// (буква/цифра/дефис/подчёркивание, старт с буквы). Совпадает по форме с именами
-// covens/секций — пригоден как persistent UI-key без экранирования.
+// reFormSectionKey is the stable machine id of a section: a kebab/snake
+// identifier (letter/digit/dash/underscore, starting with a letter). Matches the
+// form of coven/section names — usable as a persistent UI-key without escaping.
 var reFormSectionKey = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
 
-// validateFormLayout — структурная + cross-инвариантная проверка `form:`-блока в
-// SEMANTIC-фазе (non-extends сценарий): inputKeys берутся из уже декодированного
-// `m.Input`. Тонкая обёртка над [validateFormAgainstInputKeys] — единственная
-// разница с пост-merge-путём — источник множества input-ключей.
+// validateFormLayout is the structural + cross-invariant check of the `form:`
+// block in the SEMANTIC phase (non-extends scenario): inputKeys come from the
+// already-decoded `m.Input`. A thin wrapper over [validateFormAgainstInputKeys] —
+// the only difference from the post-merge path is the source of the input-key set.
 //
-// Caller вызывает по topKeys["form"] И только когда extends НЕ задан: у covenant-
-// сценария эффективный input существует лишь ПОСЛЕ merge фрагмента (keeper-side,
-// нужен ФС), поэтому form там проверяется пост-merge тем же ядром на смерженном
-// `m.Input` (см. ResolveScenarioCovenant). Гейт — scenario.go schemaValidateScenario.
+// The caller invokes it on topKeys["form"] AND only when extends is NOT set: for a
+// covenant scenario the effective input exists only AFTER merging the fragment
+// (keeper-side, needs the FS), so form there is checked post-merge by the same
+// core on the merged `m.Input` (see ResolveScenarioCovenant). Gate — scenario.go
+// schemaValidateScenario.
 func validateFormLayout(root *ast.MappingNode, m *ScenarioManifest, pathPrefix string) []diag.Diagnostic {
 	inputKeys := make(map[string]bool, len(m.Input))
 	for name := range m.Input {
@@ -95,25 +99,25 @@ func validateFormLayout(root *ast.MappingNode, m *ScenarioManifest, pathPrefix s
 	return validateFormAgainstInputKeys(root, inputKeys, pathPrefix)
 }
 
-// validateFormAgainstInputKeys — ЯДРО form-проверки с ПАРАМЕТРИЗОВАННЫМ источником
-// inputKeys: множество имён эффективного `input:` передаётся снаружи (из AST/типи-
-// зированного `m.Input` non-extends-сценария ИЛИ из СМЕРЖЕННОГО `m.Input` covenant-
-// сценария пост-merge). Все инварианты — ERROR, КРОМЕ form_field_uncovered и пустого
-// label/placeholder/hint (WARNING):
+// validateFormAgainstInputKeys is the CORE form check with a PARAMETERIZED
+// inputKeys source: the set of effective `input:` names is passed in (from the
+// AST/typed `m.Input` of a non-extends scenario OR from the MERGED `m.Input` of a
+// covenant scenario post-merge). All invariants are ERROR, EXCEPT
+// form_field_uncovered and an empty label/placeholder/hint (WARNING):
 //
-//   - блок — mapping с единственным значимым ключом `sections:` (sequence);
-//   - section.key — обязателен, формат reFormSectionKey, УНИКАЛЕН (ERROR при дубле);
-//   - field.name — обязателен, существует ключом в input (ERROR form_field_unknown);
-//   - имя поля не встречается в >1 секции суммарно (ERROR form_field_duplicate);
-//   - field.label/placeholder/hint — пустая строка → WARNING (fallback / drop ключ);
-//   - section/field.show_when — если есть, компилируемый CEL над input.* (иначе
-//     ERROR form_show_when_invalid; input-only sandbox, как required_when);
-//   - поле input, не попавшее ни в одну секцию → WARNING form_field_uncovered.
+//   - the block is a mapping with a single meaningful key `sections:` (sequence);
+//   - section.key — required, reFormSectionKey format, UNIQUE (ERROR on duplicate);
+//   - field.name — required, exists as a key in input (ERROR form_field_unknown);
+//   - a field name appears in no more than 1 section total (ERROR form_field_duplicate);
+//   - field.label/placeholder/hint — empty string → WARNING (fallback / drop key);
+//   - section/field.show_when — if present, CEL over input.* that compiles (else
+//     ERROR form_show_when_invalid; input-only sandbox, like required_when);
+//   - an input field placed in no section → WARNING form_field_uncovered.
 //
-// inputKeys — множество имён эффективного input (nil-безопасно: nil → form_field_
-// unknown на каждом поле, uncovered не эмитится — нечего покрывать). root — AST
-// корня манифеста/документа (узел `form:` находится по нему; позиции/якоря — из
-// него же, чтобы диагностики указывали на реальные строки исходника).
+// inputKeys is the set of effective input names (nil-safe: nil → form_field_unknown
+// on every field, uncovered is not emitted — nothing to cover). root is the AST of
+// the manifest/document root (the `form:` node is found through it; positions/anchors
+// come from it too, so diagnostics point at real source lines).
 func validateFormAgainstInputKeys(root *ast.MappingNode, inputKeys map[string]bool, pathPrefix string) []diag.Diagnostic {
 	node := findValueNode(root, "form")
 	mm, ok := node.(*ast.MappingNode)
@@ -137,8 +141,8 @@ func validateFormAgainstInputKeys(root *ast.MappingNode, inputKeys map[string]bo
 	}
 
 	seenKeys := make(map[string]bool, len(sectionsNode.Values))
-	// fieldToSection — имя поля → индекс первой секции, где оно объявлено
-	// (для form_field_duplicate). Покрытые поля параллельно собираем в covered.
+	// fieldToSection — field name → index of the first section where it is declared
+	// (for form_field_duplicate). Covered fields are collected in covered in parallel.
 	covered := make(map[string]bool, len(inputKeys))
 	fieldOwner := make(map[string]int, len(inputKeys))
 
@@ -147,10 +151,11 @@ func validateFormAgainstInputKeys(root *ast.MappingNode, inputKeys map[string]bo
 		out = append(out, validateFormSection(item, secPath, seenKeys, inputKeys, covered, fieldOwner, si)...)
 	}
 
-	// form_field_uncovered — поля input без секции (WARNING, не ERROR): UI дорисует
-	// их в дефолтную секцию в конце; новое input-поле не должно ломать form.
-	// Якорь — на ключ `form` (поле объявлено в input, не во form — точной позиции
-	// внутри form нет). Эмитим только когда input известен (inputKeys непуст).
+	// form_field_uncovered — input fields with no section (WARNING, not ERROR): the
+	// UI appends them to a default section at the end; a new input field must not
+	// break the form. Anchored at the `form` key (the field is declared in input,
+	// not in form — there is no exact position inside form). Emitted only when input
+	// is known (inputKeys non-empty).
 	if len(inputKeys) > 0 {
 		formTok := findValueNode(root, "form").GetToken()
 		line, col := 0, 0
@@ -174,9 +179,9 @@ func validateFormAgainstInputKeys(root *ast.MappingNode, inputKeys map[string]bo
 	return out
 }
 
-// formSectionsNode извлекает sequence-узел `sections:` из mapping-а `form:`,
-// отбраковывая прочие ключи (unknown_key) и неверную форму. Возвращает (nil, diags)
-// при отсутствии/неверной форме `sections:` (caller прекращает обход).
+// formSectionsNode extracts the `sections:` sequence node from the `form:`
+// mapping, rejecting other keys (unknown_key) and a wrong form. Returns (nil, diags)
+// when `sections:` is missing/malformed (the caller stops the walk).
 func formSectionsNode(mm *ast.MappingNode, pathPrefix string) (*ast.SequenceNode, []diag.Diagnostic) {
 	var out []diag.Diagnostic
 	var sections *ast.MappingValueNode
@@ -228,8 +233,8 @@ func formSectionsNode(mm *ast.MappingNode, pathPrefix string) (*ast.SequenceNode
 	return seq, out
 }
 
-// validateFormSection — валидация одной секции + накопление cross-state (seenKeys
-// для уникальности section.key; covered/fieldOwner для покрытия/дублей полей).
+// validateFormSection validates one section + accumulates cross-state (seenKeys
+// for section.key uniqueness; covered/fieldOwner for field coverage/duplicates).
 func validateFormSection(
 	node ast.Node, path string,
 	seenKeys map[string]bool, inputKeys, covered map[string]bool, fieldOwner map[string]int, secIdx int,
@@ -259,8 +264,8 @@ func validateFormSection(
 		case "show_when":
 			showWhenKV = kv
 		case "title", "description", "collapsed":
-			// презентационные скаляры — форму проверяет reflect-walker по тегам;
-			// здесь только cross-инварианты.
+			// presentation scalars — form checked by the reflect-walker via tags;
+			// here only cross-invariants.
 		default:
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -278,25 +283,26 @@ func validateFormSection(
 	return out
 }
 
-// validateFormShowWhen — schema-time проверка опц. ключа `show_when` (секции или
-// поля): если присутствует — это непустая, компилируемая через [compileRequiredWhen]
-// CEL-строка над `input.*` (тот же input-only sandbox, что у required_when).
-// Обращение к essence/soulprint/register/vault/now → undeclared-reference compile-
-// ошибка → form_show_when_invalid (зеркало input_required_when_invalid).
+// validateFormShowWhen is the schema-time check of the optional `show_when` key
+// (section or field): if present, it is a non-empty CEL string over `input.*` that
+// compiles via [compileRequiredWhen] (the same input-only sandbox as
+// required_when). Referencing essence/soulprint/register/vault/now →
+// undeclared-reference compile error → form_show_when_invalid (mirror of
+// input_required_when_invalid).
 //
-// КАВЕТ (вариант A, client-side eval): show_when — ПРЕЗЕНТАЦИЯ, не валидационный
-// гейт. Линтер проверяет лишь компилируемость; сам предикат вычисляет UI. Скрытое
-// поле всё равно валидируется/резолвится backend-ом, если значение прислано.
+// CAVEAT (variant A, client-side eval): show_when is PRESENTATION, not a validation
+// gate. The linter only checks that it compiles; the UI evaluates the predicate. A
+// hidden field is still validated/resolved by the backend if a value is sent.
 //
-// kv == nil (ключа нет) → видимо всегда, ноль диагностик (forward-compat).
+// kv == nil (no key) → always visible, zero diagnostics (forward-compat).
 func validateFormShowWhen(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if kv == nil {
 		return nil
 	}
 	sn, isStr := kv.Value.(*ast.StringNode)
 	if !isStr || sn.Value == "" {
-		// Пустая строка / не-строка — бессмысленный предикат: тихо «никогда не
-		// видимо» — footgun автора. Отвергаем явно (симметрия с required_when).
+		// Empty string / non-string — a meaningless predicate: silently "never
+		// visible" — an author footgun. Rejected explicitly (symmetry with required_when).
 		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "form_show_when_invalid",
@@ -317,7 +323,7 @@ func validateFormShowWhen(kv *ast.MappingValueNode, path string) []diag.Diagnost
 	return nil
 }
 
-// validateFormSectionKey — key обязателен, формата reFormSectionKey, уникален.
+// validateFormSectionKey — key is required, of reFormSectionKey format, unique.
 func validateFormSectionKey(keyKV *ast.MappingValueNode, path string, seenKeys map[string]bool) []diag.Diagnostic {
 	if keyKV == nil {
 		return []diag.Diagnostic{diag.Diagnostic{
@@ -358,9 +364,9 @@ func validateFormSectionKey(keyKV *ast.MappingValueNode, path string, seenKeys m
 	return out
 }
 
-// validateFormFields — fields[] секции: каждое field.name ∈ input (иначе
-// form_field_unknown), не в >1 секции (form_field_duplicate), label непуст (иначе
-// WARNING). Накопление covered/fieldOwner — для cross-секционных инвариантов.
+// validateFormFields — a section's fields[]: each field.name ∈ input (else
+// form_field_unknown), not in >1 section (form_field_duplicate), label non-empty
+// (else WARNING). Accumulates covered/fieldOwner for cross-section invariants.
 func validateFormFields(
 	fieldsKV *ast.MappingValueNode, path string,
 	inputKeys, covered map[string]bool, fieldOwner map[string]int, secIdx int,
@@ -391,7 +397,7 @@ func validateFormFields(
 	return out
 }
 
-// validateFormField — одно поле fields[i].
+// validateFormField — one field fields[i].
 func validateFormField(
 	node ast.Node, path string,
 	inputKeys, covered map[string]bool, fieldOwner map[string]int, secIdx int,
@@ -452,8 +458,8 @@ func validateFormField(
 		out = append(out, checkFormFieldName(name, nameKV, path, inputKeys, covered, fieldOwner, secIdx)...)
 	}
 
-	// label опционален; пустая строка (label: "") — WARNING (fallback на
-	// description/имя), не ошибка.
+	// label is optional; an empty string (label: "") is a WARNING (fallback to
+	// description/name), not an error.
 	if labelKV != nil {
 		if sn, isStr := labelKV.Value.(*ast.StringNode); isStr && sn.Value == "" {
 			out = append(out, diagAtKV(labelKV, diag.Diagnostic{
@@ -467,16 +473,17 @@ func validateFormField(
 	}
 
 	out = append(out, validateFormShowWhen(showWhenKV, path)...)
-	// placeholder / hint — презентационные подсказки UI; пустая строка
-	// бессмысленна (drop ключ) → WARNING, как у пустого label.
+	// placeholder / hint — presentational UI hints; an empty string is meaningless
+	// (drop the key) → WARNING, like an empty label.
 	out = append(out, warnEmptyPresentation(placeholderKV, name, "placeholder", path)...)
 	out = append(out, warnEmptyPresentation(hintKV, name, "hint", path)...)
 	return out
 }
 
-// warnEmptyPresentation — пустая строка у опц. презентационного ключа (placeholder
-// / hint) бессмысленна: drop ключ. Эмитит form_field_empty_label WARNING (тот же
-// класс, что у label — «пустая презентационная подпись»). kv == nil → ничего.
+// warnEmptyPresentation — an empty string on an optional presentational key
+// (placeholder / hint) is meaningless: drop the key. Emits a form_field_empty_label
+// WARNING (the same class as label — an "empty presentational caption"). kv == nil
+// → nothing.
 func warnEmptyPresentation(kv *ast.MappingValueNode, name, key, path string) []diag.Diagnostic {
 	if kv == nil {
 		return nil
@@ -493,8 +500,8 @@ func warnEmptyPresentation(kv *ast.MappingValueNode, name, key, path string) []d
 	return nil
 }
 
-// checkFormFieldName — name ∈ input (form_field_unknown), не дубль между секциями
-// (form_field_duplicate); помечает поле covered.
+// checkFormFieldName — name ∈ input (form_field_unknown), not a duplicate across
+// sections (form_field_duplicate); marks the field covered.
 func checkFormFieldName(
 	name string, nameKV *ast.MappingValueNode, path string,
 	inputKeys, covered map[string]bool, fieldOwner map[string]int, secIdx int,

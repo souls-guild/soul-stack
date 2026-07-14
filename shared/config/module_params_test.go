@@ -23,9 +23,9 @@ func hasCodeP(ds []diag.Diagnostic, code string) bool {
 	return false
 }
 
-// TestModuleParams_ExecCommandTypo — `command:` вместо `cmd:` у core.exec.run:
-// ловится и как unknown_param (command неизвестен), и как missing_required_param
-// (cmd обязателен и не передан). Ключевой негативный кейс ТЗ.
+// TestModuleParams_ExecCommandTypo — `command:` instead of `cmd:` on core.exec.run:
+// caught both as unknown_param (command is unknown) and as missing_required_param
+// (cmd is required and not passed). Key negative case.
 func TestModuleParams_ExecCommandTypo(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    command: \"true\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -37,7 +37,7 @@ func TestModuleParams_ExecCommandTypo(t *testing.T) {
 	}
 }
 
-// TestModuleParams_ExecValid — корректный core.exec.run (cmd + args) проходит.
+// TestModuleParams_ExecValid — a correct core.exec.run (cmd + args) passes.
 func TestModuleParams_ExecValid(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: install\n    args: [\"-d\", \"/var/run/x\"]\n    creates: /var/run/x\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -46,7 +46,7 @@ func TestModuleParams_ExecValid(t *testing.T) {
 	}
 }
 
-// TestModuleParams_FileUnknownParam — неизвестный param у core.file.present.
+// TestModuleParams_FileUnknownParam — an unknown param on core.file.present.
 func TestModuleParams_FileUnknownParam(t *testing.T) {
 	src := "- name: t\n  module: core.file.present\n  params:\n    path: /etc/x\n    contnet: hi\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -55,7 +55,7 @@ func TestModuleParams_FileUnknownParam(t *testing.T) {
 	}
 }
 
-// TestModuleParams_FileMissingPath — core.file.absent без обязательного path.
+// TestModuleParams_FileMissingPath — core.file.absent without the required path.
 func TestModuleParams_FileMissingPath(t *testing.T) {
 	src := "- name: t\n  module: core.file.absent\n  params: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -64,9 +64,9 @@ func TestModuleParams_FileMissingPath(t *testing.T) {
 	}
 }
 
-// TestModuleParams_RenderedAuthorForm — author-форма core.file.rendered
-// (template:+vars:) валидна; template_content/render_context тут НЕ ожидаются
-// (это runtime-форма Keeper-side).
+// TestModuleParams_RenderedAuthorForm — the author form of core.file.rendered
+// (template:+vars:) is valid; template_content/render_context are NOT expected here
+// (that's the Keeper-side runtime form).
 func TestModuleParams_RenderedAuthorForm(t *testing.T) {
 	src := "- name: t\n  module: core.file.rendered\n  params:\n    path: /etc/x.conf\n    template: templates/x.conf.tmpl\n    mode: \"0640\"\n    vars:\n      a: \"${ input.a }\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -75,7 +75,7 @@ func TestModuleParams_RenderedAuthorForm(t *testing.T) {
 	}
 }
 
-// TestModuleParams_RenderedMissingTemplate — rendered без template: → ошибка.
+// TestModuleParams_RenderedMissingTemplate — rendered without template: → error.
 func TestModuleParams_RenderedMissingTemplate(t *testing.T) {
 	src := "- name: t\n  module: core.file.rendered\n  params:\n    path: /etc/x.conf\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -84,7 +84,7 @@ func TestModuleParams_RenderedMissingTemplate(t *testing.T) {
 	}
 }
 
-// TestModuleParams_TypeMismatch — args должен быть list; строка → param_type_mismatch.
+// TestModuleParams_TypeMismatch — args must be a list; a string → param_type_mismatch.
 func TestModuleParams_TypeMismatch(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: ls\n    args: \"not a list\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -93,8 +93,8 @@ func TestModuleParams_TypeMismatch(t *testing.T) {
 	}
 }
 
-// TestModuleParams_CELWrappedSkipsTypeCheck — args как `${ … }` (CEL non-string
-// результат) не должен ловиться type-check-ом: рантайм-тип статически неизвестен.
+// TestModuleParams_CELWrappedSkipsTypeCheck — args as `${ … }` (a CEL non-string
+// result) must not be caught by the type check: the runtime type is statically unknown.
 func TestModuleParams_CELWrappedSkipsTypeCheck(t *testing.T) {
 	src := "- name: t\n  module: core.exec.run\n  params:\n    cmd: ls\n    args: \"${ input.args }\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -103,7 +103,7 @@ func TestModuleParams_CELWrappedSkipsTypeCheck(t *testing.T) {
 	}
 }
 
-// TestModuleParams_UnknownState — core.exec.runn (модуль есть, state нет).
+// TestModuleParams_UnknownState — core.exec.runn (module exists, state doesn't).
 func TestModuleParams_UnknownState(t *testing.T) {
 	src := "- name: t\n  module: core.exec.runn\n  params:\n    cmd: ls\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -112,8 +112,8 @@ func TestModuleParams_UnknownState(t *testing.T) {
 	}
 }
 
-// TestModuleParams_CustomNamespaceSkipped — non-core namespace не валидируется
-// против coremanifest (custom-manifest лежит на диске, отдельный путь).
+// TestModuleParams_CustomNamespaceSkipped — a non-core namespace is not validated
+// against coremanifest (the custom manifest lives on disk, a separate path).
 func TestModuleParams_CustomNamespaceSkipped(t *testing.T) {
 	src := "- name: t\n  module: wb.haproxy.running\n  params:\n    whatever: 1\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -122,7 +122,7 @@ func TestModuleParams_CustomNamespaceSkipped(t *testing.T) {
 	}
 }
 
-// TestModuleParams_ScenarioPath — фаза работает и через scenario-манифест.
+// TestModuleParams_ScenarioPath — the phase also works through the scenario manifest.
 func TestModuleParams_ScenarioPath(t *testing.T) {
 	src := "name: x\ntasks:\n  - module: core.exec.run\n    params: { command: \"true\" }\n"
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -131,9 +131,9 @@ func TestModuleParams_ScenarioPath(t *testing.T) {
 	}
 }
 
-// --- Тираж H2: негативы на тиражированных модулях. ---
+// --- Batch H2: negative cases on the replicated modules. ---
 
-// TestModuleParams_ServiceUnknownParam — опечатка `enabledd` у core.service.running.
+// TestModuleParams_ServiceUnknownParam — the `enabledd` typo on core.service.running.
 func TestModuleParams_ServiceUnknownParam(t *testing.T) {
 	src := "- name: t\n  module: core.service.running\n  params:\n    name: nginx\n    enabledd: true\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -142,7 +142,7 @@ func TestModuleParams_ServiceUnknownParam(t *testing.T) {
 	}
 }
 
-// TestModuleParams_GitMissingRequired — core.git.cloned без обязательного path.
+// TestModuleParams_GitMissingRequired — core.git.cloned without the required path.
 func TestModuleParams_GitMissingRequired(t *testing.T) {
 	src := "- name: t\n  module: core.git.cloned\n  params:\n    repo: https://x/y.git\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -151,8 +151,8 @@ func TestModuleParams_GitMissingRequired(t *testing.T) {
 	}
 }
 
-// TestModuleParams_CronMissingPerState — core.cron.present без schedule/command
-// (per-state required приходят из manifest, не из захардкоженного Validate).
+// TestModuleParams_CronMissingPerState — core.cron.present without schedule/command
+// (per-state required params come from the manifest, not a hardcoded Validate).
 func TestModuleParams_CronMissingPerState(t *testing.T) {
 	src := "- name: t\n  module: core.cron.present\n  params:\n    name: nightly\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -161,8 +161,8 @@ func TestModuleParams_CronMissingPerState(t *testing.T) {
 	}
 }
 
-// TestModuleParams_UserNewParamsValid — новые params system/group (коммит 2b2c4cc)
-// признаются валидными у core.user.present (а не unknown_param).
+// TestModuleParams_UserNewParamsValid — the new system/group params (commit 2b2c4cc)
+// are recognized as valid on core.user.present (not unknown_param).
 func TestModuleParams_UserNewParamsValid(t *testing.T) {
 	src := "- name: t\n  module: core.user.present\n  params:\n    name: redis\n    system: true\n    group: redis\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
@@ -171,10 +171,10 @@ func TestModuleParams_UserNewParamsValid(t *testing.T) {
 	}
 }
 
-// TestModuleParams_KeeperSoulRegistered — keeper-side core.soul.registered:
-// 3-сегментный адрес ns=core/mod=soul/state=registered резолвится в манифест
-// shared/coremanifest/soul.yaml. Валидная форма (sid+coven) проходит, неизвестный
-// param ловится.
+// TestModuleParams_KeeperSoulRegistered — keeper-side core.soul.registered: the
+// 3-segment address ns=core/mod=soul/state=registered resolves to the manifest
+// shared/coremanifest/soul.yaml. The valid form (sid+coven) passes, an unknown
+// param is caught.
 func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 	valid := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    mode: append\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(valid), ValidateOptions{})
@@ -188,10 +188,10 @@ func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 	}
 }
 
-// TestModuleParams_KeeperSoulRegistered_AwaitFields — барьер онбординга
-// (ADR-061): новые await-поля проходят статическую валидацию author-формы;
-// sid-список через CEL-выражение от register предыдущего шага не реджектится
-// type-check-ом (CEL-значение статически не типизируется, ADR-010).
+// TestModuleParams_KeeperSoulRegistered_AwaitFields — onboarding barrier
+// (ADR-061): the new await fields pass static validation of the author form; an
+// sid list via a CEL expression from a previous step's register is not rejected
+// by the type check (a CEL value is not statically typed, ADR-010).
 func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
 	valid := "- name: provision\n  on: keeper\n  module: core.exec.run\n  register: provision\n" +
 		"  changed_when: \"false\"\n" +

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// hostsFixture — три хоста прогона со стабильными фактами для тестов
-// soulprint.hosts / .where.
+// hostsFixture — three run hosts with stable facts for soulprint.hosts /
+// .where tests.
 func hostsFixture() []map[string]any {
 	return []map[string]any{
 		{
@@ -89,7 +89,7 @@ func TestHosts_WhereByOs(t *testing.T) {
 
 func TestHosts_WhereWithExternalContext(t *testing.T) {
 	e := newEngine(t)
-	// incarnation.name НЕ квалифицируется в __host.*; covens — квалифицируется.
+	// incarnation.name is NOT qualified into __host.*; covens is.
 	out, err := e.EvalExpression(`soulprint.hosts.where("incarnation.name in covens").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -120,7 +120,7 @@ func TestHosts_WhereEqualsSoulprintWhere(t *testing.T) {
 
 func TestHosts_FirstElementIndex0(t *testing.T) {
 	e := newEngine(t)
-	// [0] нативно; .first НЕ вводится.
+	// [0] is native; .first is not introduced.
 	out, err := e.EvalExpression(`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -143,7 +143,7 @@ func TestHosts_Interpolation(t *testing.T) {
 
 func TestHosts_NonLiteralPredicate(t *testing.T) {
 	e := newEngine(t)
-	// Динамический предикат (склейка строк) → понятная compile-ошибка.
+	// Dynamic predicate (string concatenation) → clear compile error.
 	_, err := e.EvalExpression(`soulprint.hosts.where("'" + incarnation.name + "' in covens").size()`, scenarioVars())
 	if err == nil {
 		t.Fatalf("ожидали ошибку для не-литерального предиката")
@@ -163,7 +163,7 @@ func TestHosts_NonStringLiteralPredicate(t *testing.T) {
 
 func TestHosts_ReceiverNotSoulprint(t *testing.T) {
 	e := newEngine(t)
-	// generic .where на произвольном list запрещён.
+	// generic .where on an arbitrary list is forbidden.
 	_, err := e.EvalExpression(`input.xs.where("x > 0").size()`, Vars{
 		Input:      map[string]any{"xs": []any{int64(1), int64(2)}},
 		AllowHosts: true,
@@ -189,7 +189,7 @@ func TestHosts_NestedWhere(t *testing.T) {
 
 func TestHosts_DestinyIsolation(t *testing.T) {
 	e := newEngine(t)
-	// AllowHosts=false (destiny-проход) → обращение к soulprint.hosts — ошибка.
+	// AllowHosts=false (destiny pass) → accessing soulprint.hosts is an error.
 	v := scenarioVars()
 	v.AllowHosts = false
 	_, err := e.EvalExpression("soulprint.hosts.size()", v)
@@ -197,7 +197,7 @@ func TestHosts_DestinyIsolation(t *testing.T) {
 	if !errors.As(err, &ue) {
 		t.Fatalf("ожидали *ErrUnsupported (изоляция destiny), получили %T: %v", err, err)
 	}
-	// soulprint.where тоже отсекается изоляцией.
+	// soulprint.where is cut off by isolation too.
 	_, err = e.EvalExpression(`soulprint.where("'web' in covens").size()`, v)
 	if !errors.As(err, &ue) {
 		t.Fatalf("ожидали *ErrUnsupported для soulprint.where в destiny, получили %T: %v", err, err)
@@ -206,7 +206,7 @@ func TestHosts_DestinyIsolation(t *testing.T) {
 
 func TestHosts_DestinyIsolationDoesNotAffectSelf(t *testing.T) {
 	e := newEngine(t)
-	// soulprint.self.* остаётся доступен и при AllowHosts=false.
+	// soulprint.self.* stays available even with AllowHosts=false.
 	out, err := e.EvalExpression("soulprint.self.sid", Vars{
 		SoulprintSelf: map[string]any{"sid": "web-1.example.com"},
 		AllowHosts:    false,
@@ -221,8 +221,8 @@ func TestHosts_DestinyIsolationDoesNotAffectSelf(t *testing.T) {
 
 func TestHosts_IterVarCollision(t *testing.T) {
 	e := newEngine(t)
-	// `__host` встречается в выражении как поле — iter-переменная получает суффикс,
-	// фильтр всё равно работает корректно.
+	// `__host` appears in the expression as a field — the iter variable gets a
+	// suffix, the filter still works correctly.
 	hosts := []map[string]any{
 		{"role": "primary", "__host": "x"},
 		{"role": "replica", "__host": "y"},
@@ -235,8 +235,8 @@ func TestHosts_IterVarCollision(t *testing.T) {
 	if got := out.Value(); got != int64(1) {
 		t.Fatalf("ожидали 1, получили %v", got)
 	}
-	// Предикат, явно ссылающийся на поле __host элемента: iter-переменная не должна
-	// его затенять (она переименована в __host0).
+	// Predicate explicitly referencing the element's __host field: the iter
+	// variable must not shadow it (it is renamed to __host0).
 	out, err = e.EvalExpression(`soulprint.hosts.where("__host == 'x'").size()`, v)
 	if err != nil {
 		t.Fatalf("EvalExpression (__host field): %v", err)
@@ -248,7 +248,7 @@ func TestHosts_IterVarCollision(t *testing.T) {
 
 func TestHosts_EmptyHostsList(t *testing.T) {
 	e := newEngine(t)
-	// nil SoulprintHosts при AllowHosts=true → пустой список (не паника, не ошибка).
+	// nil SoulprintHosts with AllowHosts=true → empty list (no panic, no error).
 	out, err := e.EvalExpression("soulprint.hosts.size()", Vars{AllowHosts: true})
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -269,12 +269,12 @@ func TestHosts_SizeFunctionForm(t *testing.T) {
 	}
 }
 
-// --- MAJOR-фикс: макрос внутри/рядом с .where (no-macro round-trip) ---
+// --- MAJOR fix: macro inside/adjacent to .where (no-macro round-trip) ---
 
 func TestHosts_WhereWithMacroExistsPredicate(t *testing.T) {
 	e := newEngine(t)
-	// covens.exists(c, c == 'db') — идиоматичный фильтр по списку внутри предиката.
-	// covens квалифицируется в __host.covens, iter-переменная c макроса — нет.
+	// covens.exists(c, c == 'db') — idiomatic list filter inside the predicate.
+	// covens is qualified into __host.covens, the macro's iter variable c is not.
 	out, err := e.EvalExpression(`soulprint.hosts.where("covens.exists(c, c == 'db')").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -286,7 +286,7 @@ func TestHosts_WhereWithMacroExistsPredicate(t *testing.T) {
 
 func TestHosts_WhereWithMacroAllPredicate(t *testing.T) {
 	e := newEngine(t)
-	// covens.all(c, c != 'staging') — у всех хостов нет коврена staging.
+	// covens.all(c, c != 'staging') — no host has the staging coven.
 	out, err := e.EvalExpression(`soulprint.hosts.where("covens.all(c, c != 'staging')").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -298,8 +298,8 @@ func TestHosts_WhereWithMacroAllPredicate(t *testing.T) {
 
 func TestHosts_MacroAdjacentToWhere(t *testing.T) {
 	e := newEngine(t)
-	// Макрос input.xs.exists(...) РЯДОМ с .where в одном выражении: оба должны
-	// корректно round-trip'нуться и раскрыться нативно при финальном compile.
+	// Macro input.xs.exists(...) ADJACENT to .where in one expression: both must
+	// round-trip correctly and expand natively at the final compile.
 	v := scenarioVars()
 	v.Input = map[string]any{"xs": []any{int64(1), int64(2), int64(3)}}
 	out, err := e.EvalExpression(
@@ -314,9 +314,9 @@ func TestHosts_MacroAdjacentToWhere(t *testing.T) {
 
 func TestHosts_WhereWithMacroMapPredicate(t *testing.T) {
 	e := newEngine(t)
-	// covens.map(c, c) — трансформ-форма макроса; iter-переменная c не
-	// квалифицируется, covens → __host.covens. Хост попадает, если 'web' среди
-	// маппинга ковенов (т.е. среди covens) — эквивалент 'web' in covens.
+	// covens.map(c, c) — transform form of the macro; iter variable c is not
+	// qualified, covens → __host.covens. A host matches if 'web' is among the
+	// mapped covens (i.e. among covens) — equivalent to 'web' in covens.
 	out, err := e.EvalExpression(`soulprint.hosts.where("'web' in covens.map(c, c)").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -326,12 +326,12 @@ func TestHosts_WhereWithMacroMapPredicate(t *testing.T) {
 	}
 }
 
-// --- Пробелы покрытия (qa) ---
+// --- Coverage gaps (qa) ---
 
 func TestHosts_EmptyFilterIndex0(t *testing.T) {
 	e := newEngine(t)
-	// where никого не отобрал → [0] над пустым списком → понятная runtime-ошибка
-	// (index out of bounds / no such overload), НЕ паника, НЕ opaque internal.
+	// where selected nobody → [0] over an empty list → clear runtime error
+	// (index out of bounds / no such overload), NOT a panic, NOT opaque internal.
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'no-such-role'")[0].sid`, scenarioVars())
 	if err == nil {
 		t.Fatalf("ожидали runtime-ошибку для [0] над пустым фильтром")
@@ -344,11 +344,11 @@ func TestHosts_EmptyFilterIndex0(t *testing.T) {
 
 func TestHosts_WhereOnHostMissingFact(t *testing.T) {
 	e := newEngine(t)
-	// Хост без секции os: where("os.family == ...") над таким хостом — это
-	// no-such-key (понятная runtime-ошибка), НЕ паника.
+	// Host without an os section: where("os.family == ...") over it is a
+	// no-such-key (clear runtime error), NOT a panic.
 	hosts := []map[string]any{
 		{"sid": "a", "os": map[string]any{"family": "debian"}},
-		{"sid": "b"}, // без os
+		{"sid": "b"}, // no os
 	}
 	v := Vars{SoulprintHosts: hosts, AllowHosts: true}
 	_, err := e.EvalExpression(`soulprint.hosts.where("os.family == 'debian'").size()`, v)
@@ -363,9 +363,9 @@ func TestHosts_WhereOnHostMissingFact(t *testing.T) {
 
 func TestHosts_Index0NetworkOnHostMissingFact(t *testing.T) {
 	e := newEngine(t)
-	// [0].network.primary_ip над хостом без секции network — no-such-key, не паника.
+	// [0].network.primary_ip over a host without a network section — no-such-key, not a panic.
 	hosts := []map[string]any{
-		{"sid": "a", "role": "primary"}, // без network
+		{"sid": "a", "role": "primary"}, // no network
 	}
 	v := Vars{SoulprintHosts: hosts, AllowHosts: true}
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`, v)
@@ -380,8 +380,8 @@ func TestHosts_Index0NetworkOnHostMissingFact(t *testing.T) {
 
 func TestHosts_PredicateUnbalancedParen(t *testing.T) {
 	e := newEngine(t)
-	// Инъекция: несбалансированная ) в литерале предиката → понятная Syntax
-	// error предиката (не слом окружающего выражения, не паника).
+	// Injection: an unbalanced ) in the predicate literal → clear predicate
+	// syntax error (does not break the surrounding expression, no panic).
 	_, err := e.EvalExpression(`soulprint.hosts.where("role == 'primary')").size()`, scenarioVars())
 	if err == nil {
 		t.Fatalf("ожидали syntax-ошибку для несбалансированной скобки в предикате")
@@ -394,8 +394,8 @@ func TestHosts_PredicateUnbalancedParen(t *testing.T) {
 
 func TestHosts_PredicateNestedQuoteOk(t *testing.T) {
 	e := newEngine(t)
-	// Вложенная кавычка через экранирование внутри литерала предиката —
-	// корректно парсится, инъекции в окружающее выражение нет.
+	// Escaped nested quote inside the predicate literal — parses correctly, no
+	// injection into the surrounding expression.
 	out, err := e.EvalExpression(`soulprint.hosts.where("sid == \"web-1.example.com\"").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)
@@ -407,9 +407,9 @@ func TestHosts_PredicateNestedQuoteOk(t *testing.T) {
 
 func TestHosts_MixedPredicateBothSides(t *testing.T) {
 	e := newEngine(t)
-	// Смешанный предикат: sid (поле элемента → __host.sid) сравнивается с
-	// soulprint.self.sid (внешний контекст, не квалифицируется). Должен
-	// отобрать ровно тот хост, sid которого == self.
+	// Mixed predicate: sid (element field → __host.sid) is compared to
+	// soulprint.self.sid (external context, not qualified). Must select exactly
+	// the host whose sid == self.
 	out, err := e.EvalExpression(`soulprint.hosts.where("sid == soulprint.self.sid").size()`, scenarioVars())
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)

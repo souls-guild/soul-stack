@@ -7,9 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestCadenceScheduler_EnabledFootgunGuard — ADR-048 §5: default-ON при наличии
-// Redis. Не задано (nil блок / nil поле) → ON (Cadence без планировщика молча не
-// спавнит); явный false → OFF; явный true → ON.
+// TestCadenceScheduler_EnabledFootgunGuard — ADR-048 §5: default-ON when Redis is
+// present. Unset (nil block / nil field) → ON (Cadence must not silently skip
+// spawning without a scheduler); explicit false → OFF; explicit true → ON.
 func TestCadenceScheduler_EnabledFootgunGuard(t *testing.T) {
 	tru, fal := true, false
 	cases := []struct {
@@ -31,8 +31,7 @@ func TestCadenceScheduler_EnabledFootgunGuard(t *testing.T) {
 	}
 }
 
-// TestCadenceScheduler_ResolvedLockTTL — пустое/невалидное → дефолт 5m; валидное →
-// оно само.
+// TestCadenceScheduler_ResolvedLockTTL — empty/invalid → default 5m; valid → itself.
 func TestCadenceScheduler_ResolvedLockTTL(t *testing.T) {
 	cases := []struct {
 		name string
@@ -53,9 +52,9 @@ func TestCadenceScheduler_ResolvedLockTTL(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_Parse — блок cadence_scheduler парсится из
-// keeper.yml (enabled/interval/lock_ttl) и проходит semantic-валидацию формата
-// duration.
+// TestLoadKeeper_CadenceScheduler_Parse — the cadence_scheduler block parses from
+// keeper.yml (enabled/interval/lock_ttl) and passes semantic validation of the
+// duration format.
 func TestLoadKeeper_CadenceScheduler_Parse(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   enabled: true
@@ -84,8 +83,8 @@ func TestLoadKeeper_CadenceScheduler_Parse(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_BadDuration — невалидный формат interval
-// отвергается semantic-фазой (стиль reaper.interval / acolyte_*).
+// TestLoadKeeper_CadenceScheduler_BadDuration — an invalid interval format is
+// rejected by the semantic phase (like reaper.interval / acolyte_*).
 func TestLoadKeeper_CadenceScheduler_BadDuration(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   interval: not-a-duration
@@ -97,8 +96,8 @@ func TestLoadKeeper_CadenceScheduler_BadDuration(t *testing.T) {
 	}
 }
 
-// TestCadenceScheduler_ResolvedPollFloor — пустое/невалидное → дефолт 30s;
-// валидное → оно само (профиль «Спокойный», ADR-048 «Adaptive interval»).
+// TestCadenceScheduler_ResolvedPollFloor — empty/invalid → default 30s; valid →
+// itself ("Calm" profile, ADR-048 "Adaptive interval").
 func TestCadenceScheduler_ResolvedPollFloor(t *testing.T) {
 	cases := []struct {
 		name string
@@ -122,9 +121,9 @@ func TestCadenceScheduler_ResolvedPollFloor(t *testing.T) {
 	}
 }
 
-// TestCadenceScheduler_ResolvedPollCeiling — пустое → дефолт 60s; backcompat-alias:
-// если interval задан, а poll_ceiling нет → ceiling = max(interval, poll_floor)
-// (clamp ВВЕРХ до floor — старый суб-30s interval не роняет инвариант floor≤ceiling).
+// TestCadenceScheduler_ResolvedPollCeiling — empty → default 60s; backcompat alias:
+// if interval is set but poll_ceiling is not → ceiling = max(interval, poll_floor)
+// (clamp UP to floor — an old sub-30s interval must not break the floor≤ceiling invariant).
 func TestCadenceScheduler_ResolvedPollCeiling(t *testing.T) {
 	cases := []struct {
 		name string
@@ -152,7 +151,7 @@ func TestCadenceScheduler_ResolvedPollCeiling(t *testing.T) {
 	}
 }
 
-// TestCadenceScheduler_ResolvedPollIdle — пустое → дефолт 120s; валидное → оно.
+// TestCadenceScheduler_ResolvedPollIdle — empty → default 120s; valid → itself.
 func TestCadenceScheduler_ResolvedPollIdle(t *testing.T) {
 	cases := []struct {
 		name string
@@ -176,8 +175,8 @@ func TestCadenceScheduler_ResolvedPollIdle(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_PollProfile — профиль «Спокойный» парсится из
-// keeper.yml и проходит валидацию.
+// TestLoadKeeper_CadenceScheduler_PollProfile — the "Calm" profile parses from
+// keeper.yml and passes validation.
 func TestLoadKeeper_CadenceScheduler_PollProfile(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   enabled: true
@@ -204,12 +203,12 @@ func TestLoadKeeper_CadenceScheduler_PollProfile(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_BackcompatInterval — старый keeper.yml с одним
-// interval НЕ падает, даже если interval < poll_floor (dev ставил 5s): alias
-// clamp-ит ceiling вверх до floor, конфиг грузится без error-диагностик, эмитится
-// warning. Проверяет именно суб-floor значения (5s/15s/29s) — прежний тест на 45s
-// был выше floor и скрывал дефект (interval < floor роняло конфиг через
-// floor ≤ ceiling).
+// TestLoadKeeper_CadenceScheduler_BackcompatInterval — an old keeper.yml with a
+// single interval does NOT fail, even if interval < poll_floor (dev used 5s): the
+// alias clamps ceiling up to floor, the config loads with no error diagnostics, a
+// warning is emitted. Tests exactly the sub-floor values (5s/15s/29s) — the prior
+// 45s test was above floor and hid the defect (interval < floor broke the config
+// via floor ≤ ceiling).
 func TestLoadKeeper_CadenceScheduler_BackcompatInterval(t *testing.T) {
 	for _, iv := range []string{"5s", "15s", "29s"} {
 		t.Run("interval "+iv+" грузится с warning", func(t *testing.T) {
@@ -220,16 +219,16 @@ func TestLoadKeeper_CadenceScheduler_BackcompatInterval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadKeeperFromBytes: %v (суб-floor interval не должен ронять конфиг)", err)
 			}
-			// 0 error-диагностик: конфиг ГРУЗИТСЯ (backcompat-инвариант).
+			// 0 error diagnostics: the config LOADS (backcompat invariant).
 			if diag.HasErrors(diags) {
 				dump(t, diags)
 				t.Fatalf("interval=%s alias не должен давать error-диагностик (clamp вверх до floor)", iv)
 			}
-			// ceiling поднят до floor (30s).
+			// ceiling raised to floor (30s).
 			if got := cfg.CadenceScheduler.ResolvedPollCeiling(); got != 30*time.Second {
 				t.Errorf("backcompat ceiling = %v, want 30s (clamp до floor)", got)
 			}
-			// Warning о подъёме эмитится.
+			// Warning about the raise is emitted.
 			if !hasCodeAt(diags, "value_clamped", "$.cadence_scheduler.interval") {
 				dump(t, diags)
 				t.Errorf("ожидался warning value_clamped на $.cadence_scheduler.interval (interval %s < floor 30s)", iv)
@@ -239,7 +238,7 @@ func TestLoadKeeper_CadenceScheduler_BackcompatInterval(t *testing.T) {
 }
 
 // TestLoadKeeper_CadenceScheduler_BackcompatIntervalAboveFloor — interval >= floor
-// (45s) грузится без warning: подъёма нет, ceiling = interval.
+// (45s) loads without a warning: no raise, ceiling = interval.
 func TestLoadKeeper_CadenceScheduler_BackcompatIntervalAboveFloor(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   interval: 45s
@@ -261,9 +260,9 @@ func TestLoadKeeper_CadenceScheduler_BackcompatIntervalAboveFloor(t *testing.T) 
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_ExplicitFloorAboveCeiling — ЯВНЫЙ poll_floor >
-// poll_ceiling — это реальная конфиг-ошибка оператора (не alias-случай) → error.
-// Отличие от backcompat: alias-clamp здесь не применяется (poll_ceiling задан явно).
+// TestLoadKeeper_CadenceScheduler_ExplicitFloorAboveCeiling — an EXPLICIT poll_floor
+// > poll_ceiling is a real operator config error (not the alias case) → error.
+// Unlike backcompat, the alias-clamp does not apply here (poll_ceiling set explicitly).
 func TestLoadKeeper_CadenceScheduler_ExplicitFloorAboveCeiling(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   poll_floor: 40s
@@ -276,8 +275,8 @@ func TestLoadKeeper_CadenceScheduler_ExplicitFloorAboveCeiling(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_PollFloorBelowMinimum — poll_floor < 30s
-// отвергается (абсолютный минимум, DB-CHECK Pass B тоже 30).
+// TestLoadKeeper_CadenceScheduler_PollFloorBelowMinimum — poll_floor < 30s is
+// rejected (absolute minimum, DB-CHECK Pass B is also 30).
 func TestLoadKeeper_CadenceScheduler_PollFloorBelowMinimum(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   poll_floor: 10s
@@ -290,7 +289,7 @@ func TestLoadKeeper_CadenceScheduler_PollFloorBelowMinimum(t *testing.T) {
 }
 
 // TestLoadKeeper_CadenceScheduler_FloorGreaterThanCeiling — poll_floor > poll_ceiling
-// отвергается (коридор вырожден).
+// is rejected (degenerate corridor).
 func TestLoadKeeper_CadenceScheduler_FloorGreaterThanCeiling(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   poll_floor: 90s
@@ -303,8 +302,8 @@ func TestLoadKeeper_CadenceScheduler_FloorGreaterThanCeiling(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_CadenceScheduler_IdleBelowCeiling — poll_idle < poll_ceiling
-// отвергается (idle не должен быть чаще обычного опроса).
+// TestLoadKeeper_CadenceScheduler_IdleBelowCeiling — poll_idle < poll_ceiling is
+// rejected (idle must not be more frequent than a normal poll).
 func TestLoadKeeper_CadenceScheduler_IdleBelowCeiling(t *testing.T) {
 	src := keeperBaseRequired + `cadence_scheduler:
   poll_ceiling: 60s

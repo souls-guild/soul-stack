@@ -1,50 +1,46 @@
-// Package audit — структурированный audit-log Soul Stack: канонические
-// EventType-имена (ADR-022), сериализация payload в jsonb, маскирование
-// секретов через MaskSecrets (см. mask.go).
+// Package audit — the structured audit log of Soul Stack: canonical EventType names
+// (ADR-022), payload serialization to jsonb, secret masking via MaskSecrets (see mask.go).
 //
-// Канон wire-format-имён событий — docs/naming-rules.md → Audit-events.
-// Каждое событие пишет через audit.Writer интерфейс; для тестов есть
-// in-memory fake (audittest пакет).
+// The canon for event wire-format names is docs/naming-rules.md → Audit-events. Every
+// event is written through the audit.Writer interface; for tests there's an in-memory
+// fake (the audittest package).
 package audit
 
 import "time"
 
-// Event — одна запись audit-pipeline-а. Соответствует строке `audit_log`
-// в Postgres (ADR-022(a)).
+// Event — one record of the audit pipeline. Corresponds to a row in `audit_log` in
+// Postgres (ADR-022(a)).
 //
-// Заполняется write-path-инициатором (HTTP-middleware, MCP-handler,
-// hot-reload pipeline, Reaper, bootstrap, Soul gRPC forwarder) и
-// передаётся `Writer.Write` (см. [writer.go]). [Writer]-реализация
-// (`keeper/internal/auditpg`) маскирует секреты в `Payload` через
-// [MaskSecrets] и заполняет zero-поля (`AuditID`, `CreatedAt`) перед
-// INSERT.
+// Populated by the write-path initiator (HTTP middleware, MCP handler, hot-reload
+// pipeline, Reaper, bootstrap, Soul gRPC forwarder) and passed to `Writer.Write` (see
+// [writer.go]). The [Writer] implementation (`keeper/internal/auditpg`) masks secrets in
+// `Payload` via [MaskSecrets] and fills zero fields (`AuditID`, `CreatedAt`) before INSERT.
 type Event struct {
-	// AuditID — ULID (26 chars). Если пуст, write-path-реализация
-	// сгенерирует через [NewULID] перед INSERT.
+	// AuditID — ULID (26 chars). If empty, the write-path implementation generates one
+	// via [NewULID] before INSERT.
 	AuditID string
 
-	// EventType — `<area>.<action>` (см. [EventType]).
+	// EventType — `<area>.<action>` (see [EventType]).
 	EventType EventType
 
-	// Source — кто инициировал событие (closed enum [Source]).
+	// Source — who initiated the event (closed enum [Source]).
 	Source Source
 
-	// ArchonAID — AID Архонта, инициировавшего событие. Пустая строка
-	// означает «не применимо» (для `signal` / `keeper_internal` /
-	// `soul_grpc`) — write-path-реализация запишет NULL.
+	// ArchonAID — the AID of the Archon that initiated the event. An empty string means
+	// "not applicable" (for `signal` / `keeper_internal` / `soul_grpc`) — the write-path
+	// implementation writes NULL.
 	ArchonAID string
 
-	// CorrelationID — ULID цепочки связанных событий. Опционально (см.
-	// ADR-022(c)). Пустая строка → NULL в `audit_log.correlation_id`.
+	// CorrelationID — ULID of a chain of related events. Optional (see ADR-022(c)). An
+	// empty string → NULL in `audit_log.correlation_id`.
 	CorrelationID string
 
-	// Payload — kind-specific полезная нагрузка для `audit_log.payload`
-	// (JSONB). Может быть nil — write-path-реализация запишет
-	// `'{}'::jsonb`. Секреты в Payload (по known-keys list и
-	// `vault:`-prefix value) маскируются перед INSERT — см. [MaskSecrets].
+	// Payload — kind-specific payload for `audit_log.payload` (JSONB). May be nil — the
+	// write-path implementation writes `'{}'::jsonb`. Secrets in Payload (by the
+	// known-keys list and `vault:`-prefix value) are masked before INSERT — see [MaskSecrets].
 	Payload map[string]any
 
-	// CreatedAt — момент возникновения события. Zero-value → DEFAULT
-	// `NOW()` Postgres-а (через nil-параметр в INSERT).
+	// CreatedAt — when the event occurred. Zero-value → Postgres DEFAULT `NOW()`
+	// (via a nil parameter in INSERT).
 	CreatedAt time.Time
 }

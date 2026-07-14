@@ -2,7 +2,7 @@ package cel
 
 import "testing"
 
-// TestEvalInterpolation_Vars — `${ vars.* }` резолвится из Vars.Vars (task-level
+// TestEvalInterpolation_Vars — `${ vars.* }` resolves from Vars.Vars (task-level
 // vars:, destiny/tasks.md §9).
 func TestEvalInterpolation_Vars(t *testing.T) {
 	e := newEngine(t)
@@ -17,8 +17,8 @@ func TestEvalInterpolation_Vars(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_Vars — vars доступны в expression-key (where:/when:) голой
-// формой vars.<key>.
+// TestEvalExpression_Vars — vars are available in expression keys (where:/when:) in
+// the bare form vars.<key>.
 func TestEvalExpression_Vars(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Vars: map[string]any{"target": "b.example.com"}}
@@ -32,8 +32,8 @@ func TestEvalExpression_Vars(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_VarsEmptyNoPanic — пустой Vars не даёт паники; обращение к
-// vars.<key> — штатный no-such-key (ErrEval), не leak в env.
+// TestEvalExpression_VarsEmptyNoPanic — empty Vars does not panic; a vars.<key>
+// access is a normal no-such-key (ErrEval), not an env leak.
 func TestEvalExpression_VarsEmptyNoPanic(t *testing.T) {
 	e := newEngine(t)
 

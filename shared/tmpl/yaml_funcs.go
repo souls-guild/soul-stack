@@ -8,10 +8,10 @@ import (
 	goyaml "github.com/goccy/go-yaml"
 )
 
-// customFuncs — собственные функции Soul Stack, добавляемые в FuncMap
-// поверх sprig-allowlist-а. Это НЕ функции sprig: `toYaml`/`fromYaml` в
-// upstream sprig отсутствуют (Helm-only), поэтому реализованы здесь через
-// goccy/go-yaml. Учитываются в allowlist-инварианте отдельно от sprig
+// customFuncs — Soul Stack's own functions added to the FuncMap on top of the
+// sprig allowlist. These are NOT sprig functions: `toYaml`/`fromYaml` are absent
+// from upstream sprig (Helm-only), so they are implemented here via goccy/go-yaml.
+// They are counted in the allowlist invariant separately from sprig
 // ([templating.md §3.3]).
 //
 // [templating.md §3.3]: docs/templating.md
@@ -22,14 +22,14 @@ func customFuncs() template.FuncMap {
 	}
 }
 
-// toYaml сериализует значение в YAML. В отличие от Helm-варианта (который
-// глотает ошибку и возвращает пустую строку), здесь ошибка пробрасывается
-// и проваливает рендер штатно — молчаливая подстановка мусора в конфиг
-// опаснее упавшего шага ([templating.md §10]).
+// toYaml serializes a value to YAML. Unlike the Helm variant (which swallows the
+// error and returns an empty string), here the error is propagated and fails the
+// render normally — silently substituting garbage into a config is more dangerous
+// than a failed step ([templating.md §10]).
 //
-// Хвостовой перевод строки goccy-энкодера срезается: внутри шаблона
-// результат обычно встраивается в более крупный YAML, лишний `\n` ломает
-// отступы.
+// The trailing newline from the goccy encoder is trimmed: inside a template the
+// result is usually embedded into a larger YAML, and an extra `\n` breaks
+// indentation.
 func toYaml(v any) (string, error) {
 	out, err := goyaml.Marshal(v)
 	if err != nil {
@@ -38,9 +38,9 @@ func toYaml(v any) (string, error) {
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
-// fromYaml парсит YAML-строку в произвольную структуру (map/list/scalar),
-// доступную дальше в шаблоне через индексацию. Ошибка парсинга проваливает
-// рендер ([templating.md §10]).
+// fromYaml parses a YAML string into an arbitrary structure (map/list/scalar),
+// available further in the template via indexing. A parse error fails the render
+// ([templating.md §10]).
 func fromYaml(s string) (any, error) {
 	var v any
 	if err := goyaml.Unmarshal([]byte(s), &v); err != nil {

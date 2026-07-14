@@ -1,30 +1,29 @@
-// Инвариант P5 — согласованность встроенного manifest-а core-модуля и того, что
-// реально проверяет валидатор `params:` задачи (shared/config).
+// Invariant P5 — consistency between a core module's embedded manifest and what
+// the task `params:` validator actually checks (shared/config).
 //
-// Зачем отдельный пакет `coremanifest_test`, а не дополнение к internal-тесту:
-// production-код `shared/config` импортирует `shared/coremanifest`
-// (config/module_params.go берёт схему через coremanifest.Default()). Internal
-// тест `package coremanifest` не может импортировать config — это циклический
-// импорт. Внешний тест-пакет в графе импортов production-кода не участвует,
-// поэтому здесь допустимо тянуть и coremanifest, и config одновременно. Файл
-// физически в shared/coremanifest/, production-код не меняется (зона ТЗ).
+// Why a separate `coremanifest_test` package rather than an internal test:
+// production code `shared/config` imports `shared/coremanifest`
+// (config/module_params.go pulls the schema via coremanifest.Default()). An
+// internal `package coremanifest` test cannot import config — import cycle. An
+// external test package is not part of the production import graph, so here both
+// coremanifest and config may be imported at once. The file lives physically in
+// shared/coremanifest/; production code is untouched.
 //
-// АРХИТЕКТУРНАЯ ЗАМЕТКА (важна для понимания, что именно стережёт тест).
-// У валидатора `params:` НЕТ собственного источника правды о наборе/required/типах
-// параметров: validateModuleParams читает def.Input прямо из coremanifest.State.
-// То есть «множество имён params в манифесте == множество имён, известных
-// валидатору» сейчас верно ПО ПОСТРОЕНИЮ (один источник). TestP5_* фиксируют это
-// как regression-guard: если кто-то заведёт валидатору второй источник params
-// (хардкод-список, отдельная таблица допустимых ключей, кодген) — поведенческие
-// проверки ниже начнут расходиться с манифестом и тест упадёт.
+// Architecture note (key to what the test guards): the `params:` validator has NO
+// own source of truth for the param set/required/types — validateModuleParams
+// reads def.Input straight from coremanifest.State. So "param names in the manifest
+// == names known to the validator" currently holds BY CONSTRUCTION (one source).
+// TestP5_* pin this as a regression guard: if someone gives the validator a second
+// params source (hardcoded list, separate allow-table, codegen), the behavioural
+// checks below start diverging from the manifest and the test fails.
 //
-// Содержательная (не тавтологичная) часть инварианта — ТИПЫ: manifest-парсер
-// (shared/plugin.validInputTypes) допускает более широкий набор type, чем валидатор
-// params умеет интерпретировать на уровне литералов. Если в манифесте появится
-// type, который валидатор молча проглатывает (ветка default в astMatchesType —
-// «неизвестный тип, type-check пропускаем»), это тихая дыра: param_type_mismatch
-// для такого параметра никогда не сработает. TestP5_DeclaredTypesAreEnforceable
-// ловит это поведенчески, через публичный путь config.LoadDestinyTasksFromBytes.
+// The substantive (non-tautological) part is TYPES: the manifest parser
+// (shared/plugin.validInputTypes) accepts a wider set of type than the params
+// validator can interpret at the literal level. If the manifest gains a type the
+// validator silently swallows (the default branch in astMatchesType — "unknown
+// type, skip type-check"), that is a silent hole: param_type_mismatch never fires
+// for such a param. TestP5_DeclaredTypesAreEnforceable catches this behaviourally,
+// via the public config.LoadDestinyTasksFromBytes path.
 package coremanifest_test
 
 import (
@@ -38,13 +37,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// keeperSideModules — core-модули с диспетчером `on: keeper` (ADR-017). У них нет
-// Soul-side destiny-формы «задача в tasks/main.yml», но `params:`-валидатор всё
-// равно резолвит их через тот же coremanifest.State (config.module_params), так
-// что синтетическая задача-проба ниже корректна и для них.
+// keeperSideModules — core modules dispatched `on: keeper` (ADR-017). They have no
+// Soul-side destiny form ("task in tasks/main.yml"), but the `params:` validator
+// still resolves them through the same coremanifest.State (config.module_params),
+// so the synthetic probe task below is valid for them too.
 //
-// Перечисление здесь — только чтобы тест-сообщения помечали такие модули, а не
-// чтобы их пропускать: проверка одинакова для обеих сторон.
+// Listed here only so test messages can tag such modules, not to skip them: the
+// check is identical for both sides.
 var keeperSideModules = map[string]bool{
 	"core.soul":  true,
 	"core.cloud": true,
@@ -52,46 +51,46 @@ var keeperSideModules = map[string]bool{
 	"core.choir": true,
 }
 
-// allRegisteredModules — детерминированный список всех зарегистрированных
-// core-модулей. Берётся из самого реестра (Names() отсортирован), а не из
-// хардкод-таблицы, чтобы «забыли новый модуль» не обходило P5.
+// allRegisteredModules — deterministic list of all registered core modules. Taken
+// from the registry itself (Names() is sorted), not a hardcoded table, so a
+// "forgot the new module" case cannot bypass P5.
 func allRegisteredModules() []string {
 	return coremanifest.Default().Names()
 }
 
-// dummyForType подбирает YAML-литерал, который для КАЖДОГО типа из манифеста
-// заведомо НЕ совпадает по структуре с этим типом, — чтобы спровоцировать
-// param_type_mismatch у валидатора, если он этот тип интерпретирует. Для string
-// валидатор принимает почти всё, поэтому строке противопоставляем list-литерал, и
-// наоборот. Возврат "" означает «для этого типа осмысленную проверку построить
-// нельзя» (тогда type-проверку пропускаем, но факт залогируем).
+// mismatchLiteralFor picks a YAML literal that, for EACH manifest type,
+// deliberately does NOT match that type structurally — to provoke
+// param_type_mismatch from the validator if it interprets the type. The validator
+// accepts almost anything for string, so a string is opposed with a list literal
+// and vice versa. Returning "" means "no meaningful check can be built for this
+// type" (type-check skipped, but the fact is logged).
 func mismatchLiteralFor(declaredType string) (literal string, ok bool) {
 	switch declaredType {
 	case "string":
-		return "[a, b]", true // list вместо string
+		return "[a, b]", true // list instead of string
 	case "int", "integer", "number":
-		return "[a, b]", true // list вместо числа
+		return "[a, b]", true // list instead of a number
 	case "bool", "boolean":
-		return "[a, b]", true // list вместо bool
+		return "[a, b]", true // list instead of bool
 	case "list", "array":
-		return "\"scalar\"", true // строка вместо list
+		return "\"scalar\"", true // string instead of list
 	case "map", "object":
-		return "\"scalar\"", true // строка вместо map
+		return "\"scalar\"", true // string instead of map
 	default:
-		// Тип, не известный построителю мисматч-литералов. Это и есть кандидат на
-		// тихую дыру — сигналим вызывающему через ok=false.
+		// Type unknown to the mismatch-literal builder — the silent-hole candidate;
+		// signal the caller via ok=false.
 		return "", false
 	}
 }
 
-// firstState возвращает имя любого state модуля в детерминированном порядке.
-// Нужно для построения адреса core.<mod>.<state> в синтетической задаче.
+// firstStateWithRequiredOrAny returns the name of any module state in deterministic
+// order. Used to build the core.<mod>.<state> address in the synthetic task.
 func firstStateWithRequiredOrAny(m *plugin.Manifest) (state string, def plugin.StateDef, ok bool) {
 	names := make([]string, 0, len(m.Spec.States))
 	for s := range m.Spec.States {
 		names = append(names, s)
 	}
-	// Лексикографический порядок — воспроизводимость.
+	// Lexicographic order for reproducibility.
 	for i := 1; i < len(names); i++ {
 		for j := i; j > 0 && names[j-1] > names[j]; j-- {
 			names[j-1], names[j] = names[j], names[j-1]
@@ -103,10 +102,10 @@ func firstStateWithRequiredOrAny(m *plugin.Manifest) (state string, def plugin.S
 	return names[0], m.Spec.States[names[0]], true
 }
 
-// TestP5_AllModulesResolvableByValidator — каждый зарегистрированный core-модуль
-// и каждый его state резолвится валидатором params через тот же реестр, что отдаёт
-// manifest. Это base-инвариант: валидатор и manifest «видят» один и тот же набор
-// модулей/states. Падение здесь = валидатор и manifest разошлись по источнику.
+// TestP5_AllModulesResolvableByValidator — every registered core module and each of
+// its states resolves through the params validator via the same registry that serves
+// the manifest. Base invariant: validator and manifest "see" the same set of
+// modules/states. A failure here = validator and manifest diverged on source.
 func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 	reg := coremanifest.Default()
 	for _, mod := range allRegisteredModules() {
@@ -125,8 +124,8 @@ func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 				t.Errorf("%s.%s: State() не нашёл задекларированный state", mod, state)
 				continue
 			}
-			// def, который читает валидатор (config.module_params), — это ровно тот
-			// же объект из Spec.States; проверяем непустоту контракта.
+			// The def the validator reads (config.module_params) is exactly the
+			// same object from Spec.States; check the contract is non-empty.
 			if def.Input == nil && len(m.Spec.States[state].Input) != 0 {
 				t.Errorf("%s.%s: State().Input расходится с Spec.States", mod, state)
 			}
@@ -134,17 +133,16 @@ func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 	}
 }
 
-// TestP5_DeclaredTypesAreEnforceable — для каждого param КАЖДОГО state КАЖДОГО
-// модуля: если manifest объявил `type`, валидатор params обязан этот тип реально
-// интерпретировать. Проверка поведенческая — через публичный config-путь
-// (LoadDestinyTasksFromBytes), без обращения к приватным хелперам config.
+// TestP5_DeclaredTypesAreEnforceable — for every param of EVERY state of EVERY
+// module: if the manifest declared a `type`, the params validator must actually
+// interpret it. Behavioural check via the public config path
+// (LoadDestinyTasksFromBytes), without touching private config helpers.
 //
-// Метод: подаём задаче литерал заведомо ДРУГОГО типа в этот param и заполняем все
-// прочие required-поля валидными значениями (чтобы missing_required_param не
-// зашумлял картину). Ожидаем param_type_mismatch ровно по проверяемому param.
-// Если его нет — тип в манифесте необязателен (валидатор его игнорирует): это
-// либо тихая дыра, либо CEL-обёртка/особый тип. Все такие случаи table-driven
-// собираются в один отчёт.
+// Method: feed the param a literal of a deliberately DIFFERENT type and fill every
+// other required field with valid values (so missing_required_param adds no noise).
+// Expect param_type_mismatch on exactly the probed param. If absent, the manifest
+// type is unenforced (validator ignores it): either a silent hole or a
+// CEL-wrapper/special type. All such cases are collected into one report.
 func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 	reg := coremanifest.Default()
 
@@ -160,13 +158,13 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 		for state, def := range m.Spec.States {
 			for pname, p := range def.Input {
 				if p.Type == "" {
-					continue // тип не объявлен — нечего сверять.
+					continue // type not declared — nothing to check.
 				}
 				mismatch, buildable := mismatchLiteralFor(p.Type)
 				if !buildable {
-					// Тип, под который мы не умеем строить мисматч-литерал. Это
-					// сигнал: либо новый тип в манифесте, не покрытый ни тестом, ни
-					// (возможно) валидатором. Фиксируем как находку, не как pass.
+					// A type we can't build a mismatch literal for. Signals a new
+					// manifest type covered neither by the test nor (possibly) the
+					// validator. Record as a finding, not a pass.
 					unenforced = append(unenforced, miss{
 						addr: fmt.Sprintf("core.%s.%s.%s", strings.TrimPrefix(mod, "core."), state, pname),
 						typ:  p.Type,
@@ -202,10 +200,10 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 	}
 }
 
-// TestP5_RequiredEnforcedByValidator — для каждого state с хотя бы одним required
-// param: задача БЕЗ params: должна дать missing_required_param по каждому такому
-// полю. Стережёт расхождение «manifest пометил required, валидатор не требует».
-// Источник required — manifest; проверяем, что валидатор его уважает.
+// TestP5_RequiredEnforcedByValidator — for each state with at least one required
+// param: a task WITHOUT params: must yield missing_required_param for every such
+// field. Guards the "manifest marked required, validator doesn't require it"
+// divergence. Source of required is the manifest; we check the validator honours it.
 func TestP5_RequiredEnforcedByValidator(t *testing.T) {
 	reg := coremanifest.Default()
 	for _, mod := range allRegisteredModules() {
@@ -215,7 +213,7 @@ func TestP5_RequiredEnforcedByValidator(t *testing.T) {
 			if len(req) == 0 {
 				continue
 			}
-			// Адрес без params: — все required отсутствуют по определению.
+			// Address without params: — all required are absent by definition.
 			src := fmt.Sprintf("- name: probe\n  module: %s.%s\n", mod, state)
 			_, diags, _ := config.LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), config.ValidateOptions{})
 			for _, name := range req {
@@ -228,14 +226,14 @@ func TestP5_RequiredEnforcedByValidator(t *testing.T) {
 	}
 }
 
-// buildTaskProbing собирает синтетическую задачу destiny: проверяемому param
-// подсовывает мисматч-литерал, остальным required-полям — валидные заглушки по их
-// типу, чтобы missing_required_param не перекрывал ожидаемый param_type_mismatch.
+// buildTaskProbing builds a synthetic destiny task: it feeds the probed param a
+// mismatch literal and other required fields valid stubs of their type, so
+// missing_required_param doesn't mask the expected param_type_mismatch.
 func buildTaskProbing(mod, state string, def plugin.StateDef, probeParam, probeLiteral string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- name: probe\n  module: %s.%s\n  params:\n", mod, state)
 	fmt.Fprintf(&b, "    %s: %s\n", probeParam, probeLiteral)
-	// Прочие required заполняем валидными значениями их типа.
+	// Fill other required fields with valid values of their type.
 	for _, name := range requiredNames(def) {
 		if name == probeParam {
 			continue
@@ -245,8 +243,8 @@ func buildTaskProbing(mod, state string, def plugin.StateDef, probeParam, probeL
 	return b.String()
 }
 
-// validLiteralFor — валидный YAML-литерал для типа (для заполнения соседних
-// required-полей в probing-задаче).
+// validLiteralFor — a valid YAML literal for a type (to fill sibling required
+// fields in the probing task).
 func validLiteralFor(t string) string {
 	switch t {
 	case "int", "integer", "number":
@@ -257,7 +255,7 @@ func validLiteralFor(t string) string {
 		return "[x]"
 	case "map", "object":
 		return "{k: v}"
-	default: // string и неизвестные — строка безопасна.
+	default: // string and unknown — a string is safe.
 		return "\"x\""
 	}
 }

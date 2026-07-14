@@ -7,8 +7,8 @@ import (
 	"syscall"
 )
 
-// statOwner извлекает (uid, gid) из FileInfo на unix-системах.
-// На не-unix платформах (Windows) возвращает ok=false и chown не выполняется.
+// statOwner extracts (uid, gid) from FileInfo on unix systems.
+// On non-unix platforms (Windows) it returns ok=false and chown is skipped.
 func statOwner(info os.FileInfo) (uid, gid int, ok bool) {
 	st, ok2 := info.Sys().(*syscall.Stat_t)
 	if !ok2 || st == nil {

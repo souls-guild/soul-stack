@@ -6,9 +6,9 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// Guard yaml-тегов KeeperCloudInit: event_stream_port (6-я стена ADR-063) обязан
-// парситься из keeper.yml — опечатка в теге тихо оставила бы оба порта soul.yml
-// равными bootstrap-порту.
+// Guard for KeeperCloudInit yaml tags: event_stream_port (6th wall, ADR-063) must
+// parse from keeper.yml — a tag typo would silently leave both soul.yml ports
+// equal to the bootstrap port.
 func TestKeeperCloudInit_EventStreamPortTag(t *testing.T) {
 	src := []byte(`bootstrap_endpoint: "lb:9442"
 event_stream_port: 9443

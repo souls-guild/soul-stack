@@ -67,9 +67,9 @@ func TestMaskSecrets_VaultRefValue(t *testing.T) {
 }
 
 func TestMaskSecrets_VaultRefSubstring(t *testing.T) {
-	// vault-ref склеен внутри строки (типичный кейс для status_details.error /
-	// error_summary: gRPC/render-ошибка эхнула vault-путь не префиксом). Раньше
-	// prefix-фильтр это пропускал → plaintext leak в наблюдаемый канал.
+	// vault-ref glued inside a string (typical for status_details.error /
+	// error_summary: a gRPC/render error echoed a vault path, not as a prefix). The
+	// prefix filter used to let this through → plaintext leak into an observable channel.
 	in := map[string]any{
 		"error":     "scenario: render task \"db\": resolve vault:secret/keeper/db failed",
 		"reason":    "render_failed",
@@ -87,9 +87,9 @@ func TestMaskSecrets_VaultRefSubstring(t *testing.T) {
 	}
 }
 
-// Сужение маркера до vault:secret/ (review-минор vault()-pilot): реальный
-// vault-ref на дефолтный KV-mount маскируется; легитимные строки с подстрокой
-// "vault:" но без секрета (endpoint / docker-тег / диагностика) — НЕ маскируются.
+// Marker narrowed to vault:secret/ (review-minor of the vault() pilot): a real
+// vault-ref to the default KV mount is masked; legitimate strings with the
+// substring "vault:" but no secret (endpoint / docker tag / diagnostic) are NOT masked.
 func TestMaskSecrets_VaultRefMarkerNarrowed(t *testing.T) {
 	in := map[string]any{
 		"real_ref":      "vault:secret/keeper/db",
@@ -117,17 +117,17 @@ func TestMaskSecrets_VaultRefMarkerNarrowed(t *testing.T) {
 	}
 }
 
-// K5 (security-аудит): кастомный KV-mount. Оператор вправе настроить mount,
-// отличный от дефолтного `secret` (config.Vault.KVMount). Маркер `vault:secret/`
-// такие ref-ы НЕ ловил → plaintext-leak vault-пути в audit/OTel/SSE/error.
-// После K5-фикса маскинг идёт по форме `vault:<mount>/` (любой mount).
+// K5 (security audit): custom KV mount. An operator may configure a mount other
+// than the default `secret` (config.Vault.KVMount). The `vault:secret/` marker did
+// NOT catch such refs → plaintext leak of the vault path into audit/OTel/SSE/error.
+// After the K5 fix, masking uses the form `vault:<mount>/` (any mount).
 func TestMaskSecrets_VaultRefCustomMount(t *testing.T) {
 	in := map[string]any{
 		"kv_ref":       "vault:kv/keeper/db",
 		"dbcreds_ref":  "vault:db-creds/role/app",
 		"kv_in_error":  "render: resolve vault:kv-v2/redis/admin failed",
 		"dotted_mount": "vault:secret.v2/x",
-		// passthrough-инварианты должны сохраниться и при регэксп-маркере.
+		// passthrough invariants must hold even with the regexp marker.
 		"endpoint": "https://vault:8200",
 		"image":    "hashicorp/vault:1.18",
 		"kv_diag":  "vault: KV error",
@@ -213,8 +213,8 @@ func TestMaskSecrets_SliceWalk(t *testing.T) {
 }
 
 func TestMaskSecrets_SubstringKeys(t *testing.T) {
-	// Security-review H1: exact-match пропускал составные ключи. Теперь
-	// substring-regex маскирует любой ключ, содержащий секрет-фрагмент.
+	// Security-review H1: exact-match missed composite keys. Now a substring regex
+	// masks any key containing a secret fragment.
 	in := map[string]any{
 		"bootstrap_token":       "secret123",
 		"aws_secret_access_key": "AKIA...",
@@ -224,8 +224,8 @@ func TestMaskSecrets_SubstringKeys(t *testing.T) {
 		"refresh_token":         "rt-abc",
 		"api_key":               "ak-1",
 		"credentials_ref":       "vault:secret/x",
-		// Несекретные ключи, частично пересекающиеся по буквам, но не по
-		// фрагменту — проходят без маскировки.
+		// Non-secret keys that overlap by letters but not by fragment pass without
+		// masking.
 		"description": "human text",
 		"keyboard":    "qwerty-layout",
 		"count":       42,
@@ -254,20 +254,20 @@ func TestMaskSecrets_SubstringKeys(t *testing.T) {
 }
 
 func TestMaskSecrets_TLSPEMKeys(t *testing.T) {
-	// redis-консолидация TLS (community.redis): PEM-материал коннекта приходит в
-	// params под ключами tls_key / tls_cert / tls_ca. Голый фрагмент key/cert/ca
-	// в каталог не входит, поэтому добавлен tls[_-]?(key|cert|ca) — иначе целый
-	// приватный ключ утекал бы plaintext в логи/OTel/RunResult (модель маскинга —
-	// ИМЯ ключа). Это BLOCKER masking-guard класса merge-masking.
+	// Redis-consolidation TLS (community.redis): connection PEM material arrives in
+	// params under keys tls_key / tls_cert / tls_ca. The bare fragment key/cert/ca
+	// is not in the catalog, so tls[_-]?(key|cert|ca) was added — otherwise a whole
+	// private key would leak plaintext into logs/OTel/RunResult (the masking model
+	// keys on the NAME). This is a BLOCKER masking-guard of the merge-masking class.
 	const pemKey = "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----"
 	const pemCert = "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
 	in := map[string]any{
 		"tls_key":     pemKey,
 		"tls_cert":    pemCert,
 		"tls_ca":      pemCert,
-		"tls-key":     pemKey,  // дефисная форма
-		"tls_ca_data": pemCert, // *-data форма
-		// Несекретные TLS-параметры коннекта — НЕ маскируются (булевы/числа/имена).
+		"tls-key":     pemKey,  // dashed form
+		"tls_ca_data": pemCert, // *-data form
+		// Non-secret TLS connection params are NOT masked (booleans/numbers/names).
 		"tls":             true,
 		"tls_enable":      true,
 		"tls_port":        7379,
@@ -294,20 +294,20 @@ func TestMaskSecrets_TLSPEMKeys(t *testing.T) {
 	}
 }
 
-// TestMaskSecrets_RedisRenderContextTLSVars фиксирует ИБ-фикс redis-консолидации
-// (medium-secrets): PEM render-vars destiny `redis` переименованы cert/key/ca →
-// tls_cert/tls_key/tls_ca, чтобы каталог маскинга ловил их ПО ИМЕНИ. Тест
-// моделирует форму payload core.file.rendered (render_context.vars с PEM) и
-// доказывает контраст:
-//   - голые cert/key/ca (как было ДО фикса) НЕ маскируются → leak в логи/OTel/
-//     RunResult (демонстрация закрытой дыры);
-//   - tls_cert/tls_key/tls_ca (как стало ПОСЛЕ фикса) маскируются.
+// TestMaskSecrets_RedisRenderContextTLSVars pins the redis-consolidation security
+// fix (medium-secrets): the PEM render-vars of destiny `redis` were renamed
+// cert/key/ca → tls_cert/tls_key/tls_ca so the masking catalog catches them BY
+// NAME. The test models the core.file.rendered payload shape (render_context.vars
+// with PEM) and proves the contrast:
+//   - bare cert/key/ca (as BEFORE the fix) are NOT masked → leak into logs/OTel/
+//     RunResult (demonstrates the closed hole);
+//   - tls_cert/tls_key/tls_ca (as AFTER the fix) are masked.
 func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 	const pemKey = "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
 	const pemCert = "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
 	const pemCA = "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
-	// payload в форме core.file.rendered: params.render_context.vars.{tls_*}.
+	// payload shaped like core.file.rendered: params.render_context.vars.{tls_*}.
 	payload := map[string]any{
 		"path": "/etc/redis/tls/redis.key",
 		"render_context": map[string]any{
@@ -329,10 +329,10 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 		t.Errorf("path = %v, want passthrough", out["path"])
 	}
 
-	// Контраст: ПРЕЖНИЕ голые имена cert/key/ca под фильтр НЕ попадают (дыра,
-	// которую закрыло переименование). Если этот ассерт когда-нибудь упадёт —
-	// каталог расширился и var-имена можно вернуть к голым; пока он стережёт
-	// причину, по которой имена обязаны нести tls_-префикс.
+	// Contrast: the FORMER bare names cert/key/ca do NOT match the filter (the hole
+	// the rename closed). If this assert ever fails — the catalog widened and the
+	// var names can revert to bare; until then it guards the reason the names must
+	// carry the tls_ prefix.
 	bareOut := MaskSecrets(map[string]any{"cert": pemCert, "key": pemKey, "ca": pemCA})
 	for _, k := range []string{"cert", "key", "ca"} {
 		if bareOut[k] == maskedValue {
@@ -341,14 +341,14 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 	}
 }
 
-// TestMaskSecrets_MigrateClusterSecrets — security-blocker S1-пилота
-// migrate_cluster (community.redis): задача миграции получает secret-поля
-// источника/мастера (master_*/source_*), которые попадают в params коннект-
-// задачи и через RunResult/audit-payload утекли бы plaintext в логи/OTel/UI.
-// Имена несут фрагменты password / tls_(key|cert|ca), поэтому ловятся
-// substring-каталогом БЕЗ его расширения — тест доказывает покрытие как
-// поведенческий инвариант (регрессия на leak), а не вводит новые ключи.
-// master_username — НЕ секрет (фрагмента user в каталоге нет) → passthrough.
+// TestMaskSecrets_MigrateClusterSecrets — security blocker of the migrate_cluster
+// S1 pilot (community.redis): the migration task receives secret fields of the
+// source/master (master_*/source_*) that land in the connection task's params and
+// through RunResult/audit-payload would leak plaintext into logs/OTel/UI. The names
+// carry password / tls_(key|cert|ca) fragments, so they are caught by the substring
+// catalog WITHOUT extending it — the test proves coverage as a behavioral invariant
+// (regression on leak), not by introducing new keys. master_username is NOT a secret
+// (no user fragment in the catalog) → passthrough.
 func TestMaskSecrets_MigrateClusterSecrets(t *testing.T) {
 	const pemKey = "-----BEGIN PRIVATE KEY-----\nMIGRSRC\n-----END PRIVATE KEY-----"
 	const pemCert = "-----BEGIN CERTIFICATE-----\nMIGRSRC\n-----END CERTIFICATE-----"
@@ -361,7 +361,7 @@ func TestMaskSecrets_MigrateClusterSecrets(t *testing.T) {
 		"source_tls_key":  pemKey,
 		"source_tls_cert": pemCert,
 		"source_tls_ca":   pemCert,
-		// Несекретные поля коннекта миграции — passthrough.
+		// Non-secret migration connection fields — passthrough.
 		"master_username": "admin",
 		"master_host":     "10.0.0.1",
 		"master_port":     6379,
@@ -388,11 +388,11 @@ func TestMaskSecrets_MigrateClusterSecrets(t *testing.T) {
 	}
 }
 
-// TestMaskSecrets_MigrateClusterRunResultShape — те же secret-поля, но в форме
-// RunResult/audit-payload задачи миграции: TaskEvent.params вложены под именем
-// задачи. Доказывает, что рекурсивный walk маскирует master_password/
-// source_password/source_tls_ca на вложенном уровне (а не только в top-level
-// map), т.е. инвариант держится в реальном наблюдаемом канале.
+// TestMaskSecrets_MigrateClusterRunResultShape — the same secret fields, but in the
+// RunResult/audit-payload shape of the migration task: TaskEvent.params nested under
+// the task name. Proves the recursive walk masks master_password/source_password/
+// source_tls_ca at the nested level (not only in a top-level map), i.e. the invariant
+// holds in the real observable channel.
 func TestMaskSecrets_MigrateClusterRunResultShape(t *testing.T) {
 	const pemCA = "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 	payload := map[string]any{
@@ -421,7 +421,7 @@ func TestMaskSecrets_MigrateClusterRunResultShape(t *testing.T) {
 }
 
 func TestMaskSecrets_BootstrapTokenExact(t *testing.T) {
-	// Конкретный кейс из verification-плана: {"bootstrap_token":"secret123"}
+	// Concrete case from the verification plan: {"bootstrap_token":"secret123"}
 	// → {"bootstrap_token":"***MASKED***"}.
 	out := MaskSecrets(map[string]any{"bootstrap_token": "secret123"})
 	if out["bootstrap_token"] != maskedValue {
@@ -430,7 +430,7 @@ func TestMaskSecrets_BootstrapTokenExact(t *testing.T) {
 }
 
 func TestMaskSecrets_TypedStringMap(t *testing.T) {
-	// map[string]string внутри payload — раньше walker не обходил его.
+	// map[string]string inside a payload — the walker did not previously descend into it.
 	in := map[string]any{
 		"attributes": map[string]string{
 			"region":          "eu-west-1",
@@ -497,8 +497,8 @@ func TestMaskSecrets_Struct(t *testing.T) {
 }
 
 func TestMaskSecrets_NestedTypedInAny(t *testing.T) {
-	// map[string]string вложен в []any — reflect-fallback должен сработать
-	// на уровне slice-элемента.
+	// map[string]string nested in []any — the reflect fallback must fire at the
+	// slice-element level.
 	in := map[string]any{
 		"hosts": []any{
 			map[string]string{"sid": "h1", "bootstrap_token": "t1"},

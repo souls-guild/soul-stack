@@ -6,9 +6,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// compute: — scenario-level вычисляемые vars (ADR-009 amendment 2026-06-23).
-// Тесты структурной валидации (validateComputeBlock) + декода с сохранением
-// порядка объявления (ComputeBlock.UnmarshalYAML).
+// compute: — scenario-level computed vars (ADR-009 amendment 2026-06-23).
+// Tests structural validation (validateComputeBlock) + decoding that preserves
+// declaration order (ComputeBlock.UnmarshalYAML).
 
 func TestLoadScenarioManifest_ComputeOK(t *testing.T) {
 	src := `name: create
@@ -26,12 +26,12 @@ tasks: []
 	if len(cfg.Compute) != 3 {
 		t.Fatalf("expected 3 compute vars, got %d", len(cfg.Compute))
 	}
-	// Порядок объявления сохранён (compute.full ссылается на compute.base — base
-	// обязан идти раньше).
+	// Declaration order preserved (compute.full references compute.base — base
+	// must come first).
 	if cfg.Compute[0].Name != "base" || cfg.Compute[1].Name != "full" || cfg.Compute[2].Name != "count" {
 		t.Fatalf("compute declaration order not preserved: %+v", cfg.Compute)
 	}
-	// Литерал (число) проходит насквозь как non-string.
+	// A literal (number) passes through as non-string.
 	if cfg.Compute[2].Value != uint64(3) {
 		t.Fatalf("compute.count literal: want uint64(3), got %#v", cfg.Compute[2].Value)
 	}

@@ -6,10 +6,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestStateRef_IncarnationStateOK — каноническая форма `incarnation.state.<path>`
-// (read-only снимок incarnation.state в scenario render, ADR-009/010 Вариант A)
-// валидна в предикате и apply.input. Не должна давать state_naked_reference:
-// `state` тут — поле incarnation (перед ним стоит `.`), не корневой идентификатор.
+// TestStateRef_IncarnationStateOK — the canonical form `incarnation.state.<path>`
+// (a read-only snapshot of incarnation.state in scenario render, ADR-009/010
+// Variant A) is valid in a predicate and in apply.input. Must not yield
+// state_naked_reference: `state` here is a field of incarnation (preceded by `.`),
+// not a root identifier.
 func TestStateRef_IncarnationStateOK(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -31,8 +32,8 @@ tasks:
 	}
 }
 
-// TestStateRef_NakedInPredicateFlagged — голый `state.<path>` в where: (state в
-// scenario-CEL не объявлен, migration-only) → state_naked_reference.
+// TestStateRef_NakedInPredicateFlagged — a naked `state.<path>` in where: (state is
+// not declared in scenario-CEL, migration-only) → state_naked_reference.
 func TestStateRef_NakedInPredicateFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -48,8 +49,8 @@ tasks:
 	}
 }
 
-// TestStateRef_NakedInApplyInputFlagged — канонический кейс update_acl: голый
-// `${ state.redis_users }` в apply.input (забыт префикс incarnation.) → ошибка.
+// TestStateRef_NakedInApplyInputFlagged — the canonical update_acl case: a naked
+// `${ state.redis_users }` in apply.input (the incarnation. prefix is forgotten) → error.
 func TestStateRef_NakedInApplyInputFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -66,7 +67,7 @@ tasks:
 	}
 }
 
-// TestStateRef_NakedInParamsFlagged — голый state.* в params: (интерполяция).
+// TestStateRef_NakedInParamsFlagged — a naked state.* in params: (interpolation).
 func TestStateRef_NakedInParamsFlagged(t *testing.T) {
 	src := `name: bad
 tasks:
@@ -82,8 +83,8 @@ tasks:
 	}
 }
 
-// TestStateRef_NestedCELLiteralIgnored — `state.x` внутри строкового литерала CEL
-// (данные, не ссылка) не флагается: literal вырезается перед извлечением.
+// TestStateRef_NestedCELLiteralIgnored — `state.x` inside a CEL string literal
+// (data, not a reference) is not flagged: the literal is stripped before extraction.
 func TestStateRef_NestedCELLiteralIgnored(t *testing.T) {
 	src := `name: ok
 tasks:
@@ -99,9 +100,9 @@ tasks:
 	}
 }
 
-// TestStateRef_SubstringIdentNotFlagged — идентификаторы, в которые `state`
-// входит как подстрока (`mystate.x`, `restate.y`) или как поле другого объекта
-// (`foo.state.z`), НЕ корневой `state` — не флагаются.
+// TestStateRef_SubstringIdentNotFlagged — identifiers where `state` appears as a
+// substring (`mystate.x`, `restate.y`) or as a field of another object
+// (`foo.state.z`) are NOT the root `state` — not flagged.
 func TestStateRef_SubstringIdentNotFlagged(t *testing.T) {
 	src := `name: ok
 tasks:

@@ -1,18 +1,18 @@
 package config
 
-// InputSchema / InputSchemaMap — типизированное представление блока `input:`
-// (и симметричного `output:`) по нормативной спеке [`docs/input.md`]. Один и
-// тот же DSL используется в destiny.yml / scenario/<name>/main.yml / манифесте
-// модуля; реализация общая.
+// InputSchema / InputSchemaMap is the typed representation of the `input:` block
+// (and the symmetric `output:`) per the normative spec [`docs/input.md`]. The same
+// DSL is used in destiny.yml / scenario/<name>/main.yml / a module manifest; the
+// implementation is shared.
 //
-// `required` в DSL имеет два смысла, разделённых по контексту:
-//   - на уровне параметра (любой type) — bool «обязателен ли параметр»;
-//   - внутри type=object — []string список обязательных под-ключей `properties`.
+// `required` in the DSL has two context-split meanings:
+//   - at the parameter level (any type) — a bool "is the parameter required";
+//   - inside type=object — a []string list of required `properties` sub-keys.
 //
-// Чтобы downstream-код не парсил `any`, разделяем эти смыслы в Go: поля
-// `Required` и `RequiredProps`. Кастомный `UnmarshalYAML` решает по типу
-// YAML-ноды (`!!bool` → Required, `!!seq` → RequiredProps); semantic-validate
-// проверяет согласованность с `type`.
+// So downstream code need not parse `any`, we split these in Go: fields `Required`
+// and `RequiredProps`. A custom `UnmarshalYAML` decides by YAML node type
+// (`!!bool` → Required, `!!seq` → RequiredProps); semantic-validate checks
+// consistency with `type`.
 
 import (
 	"fmt"
@@ -26,19 +26,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// InputSchemaMap — отображение «имя параметра» → схема.
+// InputSchemaMap maps a parameter name → schema.
 type InputSchemaMap map[string]*InputSchema
 
-// InputSchema — схема одного параметра по [`docs/input.md`].
+// InputSchema is the schema of one parameter per [`docs/input.md`].
 //
-// Все поля валидны на разных type-ах одновременно по форме (YAML принимает
-// «лишний ключ для типа»), но semantic-validate отвергает их как
-// `input_key_invalid_for_type`. Pointer-ы (*int/*float64) различают
-// «отсутствует» и «zero-value»; bool-флаги хранятся как bool (отсутствие = false).
+// All fields are form-valid across types at once (YAML accepts an "extra key for the
+// type"), but semantic-validate rejects them as `input_key_invalid_for_type`.
+// Pointers (*int/*float64) distinguish "absent" from "zero-value"; bool flags are
+// stored as bool (absent = false).
 //
-// Поля `Required` и `RequiredProps` помечены `yaml:"-"` — заполняются через
-// `UnmarshalYAML` ниже, чтобы reflect-walker не возмущался отсутствием
-// `required` среди известных ключей.
+// `Required` and `RequiredProps` are tagged `yaml:"-"` — filled via `UnmarshalYAML`
+// below so the reflect-walker does not complain about a missing `required` among the
+// known keys.
 type InputSchema struct {
 	Type        string `yaml:"type"`
 	Default     any    `yaml:"default,omitempty"`
@@ -50,33 +50,33 @@ type InputSchema struct {
 	RequiredProps []string `yaml:"-"`
 	requiredKind  requiredKind
 
-	// RequiredWhen — CEL-предикат над `input.*`: параметр обязателен, КОГДА
-	// предикат истинен (docs/input.md → «Условная обязательность»). Применим к
-	// любому type. Условная пара безусловного Required: тот всегда обязателен,
-	// этот — при истинном предикате. Контекст предиката — только input.* (это
-	// input-валидация, не render): прочие имена → compile-ошибка узкого env
-	// (см. requireInputValues / input_required_when.go). Пустая строка =
-	// отсутствие ключа.
+	// RequiredWhen is a CEL predicate over `input.*`: the parameter is required WHEN
+	// the predicate is true (docs/input.md → "Conditional requiredness"). Applies to
+	// any type. The conditional counterpart of the unconditional Required: that one is
+	// always required, this one only on a true predicate. The predicate context is
+	// input.* only (this is input validation, not render): other names → compile error
+	// of the narrow env (see requireInputValues / input_required_when.go). Empty = key
+	// absent.
 	RequiredWhen string `yaml:"required_when,omitempty"`
 
-	// PrefillFromState — путь `state.<path>` (dot-нотация) в incarnation.state,
-	// чьё ТЕКУЩЕЕ значение UI подставляет как pre-fill day-2-формы сценария
-	// (docs/input.md → «Pre-fill из state»). Это ПОДСКАЗКА формы, НЕ часть
-	// резолва значений: ключ намеренно НЕ участвует в [ResolveInputValues] /
-	// [mergeInputDefaults] (incarnation.state не должен протечь в эффективный
-	// input — иначе day-2-prefill незаметно стал бы create-дефолтом). Граница с
-	// `default`: `default` — статичный create-дефолт (в merge, в эффективный
-	// input); `prefill_from_state` — day-2 UI-hint, виден только form-prefill-
-	// эндпоинту. Они сосуществуют на одном поле.
+	// PrefillFromState is a `state.<path>` (dot notation) reference into
+	// incarnation.state whose CURRENT value the UI pre-fills into the scenario's
+	// operational form (docs/input.md → "Pre-fill from state"). It is a form HINT, NOT
+	// part of value resolution: the key deliberately does NOT participate in
+	// [ResolveInputValues] / [mergeInputDefaults] (incarnation.state must not leak into
+	// the effective input — else the operational prefill would quietly become a create
+	// default). Boundary with `default`: `default` is a static create default (in
+	// merge, in the effective input); `prefill_from_state` is an operational UI hint,
+	// visible only to the form-prefill endpoint. They coexist on one field.
 	//
-	// Синтаксис корня `state.<path>` переиспользует statepredicate ADR-047 (тот
-	// же корень `state` + dot-нотация), но здесь это ЛИТЕРАЛЬНЫЙ путь-ссылка на
-	// одно значение, а не CEL-предикат. Пустая строка = отсутствие ключа.
+	// The `state.<path>` root reuses statepredicate ADR-047 (same `state` root + dot
+	// notation), but here it is a LITERAL path reference to one value, not a CEL
+	// predicate. Empty = key absent.
 	PrefillFromState string `yaml:"prefill_from_state,omitempty"`
-	// rawRequired сохраняет исходный AST-узел `required:` до классификации
-	// в `requiredKind`. Используется в `validateInputSchemaNode`, чтобы
-	// поднять `input_required_value_invalid`, когда значение не bool и не
-	// sequence строк (см. UnmarshalYAML, ветка default).
+	// rawRequired keeps the original `required:` AST node before classification into
+	// `requiredKind`. Used in `validateInputSchemaNode` to raise
+	// `input_required_value_invalid` when the value is neither a bool nor a sequence of
+	// strings (see UnmarshalYAML, default branch).
 	rawRequired ast.Node
 
 	Pattern    string `yaml:"pattern,omitempty"`
@@ -85,12 +85,12 @@ type InputSchema struct {
 	MaxLength  *int   `yaml:"max_length,omitempty"`
 	AllowEmpty bool   `yaml:"allow_empty,omitempty"`
 
-	// VaultScope — единственный prefix-glob, ограничивающий, какие пути Vault
-	// KV оператор вправе зарезолвить через `vault:`-ref в значении ЭТОГО поля
-	// (docs/input.md → «vault_scope»). Применим только к `type: string` +
-	// `secret: true`. Без объявленного scope `vault:`-ref в значении поля —
-	// ошибка резолва (default-deny). Авторских `vault:`-refs в task params это
-	// НЕ касается — там отдельный доверенный канал (ADR-010).
+	// VaultScope is the single prefix-glob limiting which Vault KV paths the operator
+	// may resolve via a `vault:` ref in THIS field's value (docs/input.md →
+	// "vault_scope"). Applies only to `type: string` + `secret: true`. Without a
+	// declared scope, a `vault:` ref in the field value is a resolve error
+	// (default-deny). This does NOT concern author `vault:` refs in task params —
+	// those use a separate trusted channel (ADR-010).
 	VaultScope string `yaml:"vault_scope,omitempty"`
 
 	Min          *float64 `yaml:"min,omitempty"`
@@ -103,39 +103,39 @@ type InputSchema struct {
 	MaxItems *int         `yaml:"max_items,omitempty"`
 	Unique   bool         `yaml:"unique,omitempty"`
 
-	// Source — каталог-источник допустимых значений поля (ADR-044 S-T1).
-	// Объект-дискриминатор: ровно один под-ключ задаёт множество, из которого
-	// backend строит форму выбора оператору (напр. список SID инкарнации).
-	// Применим к type=string (single-выбор) и type=array с items.type=string
-	// (multi-выбор; лимиты — через min_items/max_items). Schema-валидация
-	// проверяет только СТРУКТУРУ source (известный под-ключ + тип значения);
-	// само множество резолвит backend при подготовке формы — не здесь.
+	// Source is the catalog of allowed field values (ADR-044 S-T1). An
+	// object-discriminator: exactly one sub-key defines the set from which the backend
+	// builds the operator's choice form (e.g. the incarnation's SID list). Applies to
+	// type=string (single choice) and type=array with items.type=string (multi choice;
+	// limits via min_items/max_items). Schema validation checks only the STRUCTURE of
+	// source (known sub-key + value type); the set itself is resolved by the backend at
+	// form preparation — not here.
 	Source *InputSource `yaml:"source,omitempty"`
 
 	Properties           InputSchemaMap `yaml:"properties,omitempty"`
 	AdditionalProperties any            `yaml:"additional_properties,omitempty"`
 
-	// TypeRef — имя переиспользуемого именованного типа из `service/<name>/
-	// types.yml` (ключ-дискриминатор `$type` в input-DSL). Узел `{$type: <Имя>}`
-	// — ссылка: при резолве сервиса схема типа подставляется на место узла
-	// (ResolveTypeRefs). Самостоятельная форма поля (`<param>: { $type: T }`) ИЛИ
-	// массива элементов (`items: { $type: T }`). `$type` ВМЕСТЕ с любым из
-	// `type:`/`properties:`/`items:` — input_type_ref_conflict (непонятно, что
-	// побеждает; items:{$type} — это items-ССЫЛКА на уровне родителя, не conflict).
+	// TypeRef is the name of a reusable named type from `service/<name>/types.yml`
+	// (the `$type` discriminator key in the input DSL). A node `{$type: <Name>}` is a
+	// reference: on service resolution the type schema is substituted for the node
+	// (ResolveTypeRefs). It is the standalone form of a field (`<param>: { $type: T }`)
+	// OR of array elements (`items: { $type: T }`). `$type` TOGETHER with any of
+	// `type:`/`properties:`/`items:` → input_type_ref_conflict (unclear which wins;
+	// items:{$type} is an items REFERENCE at the parent level, not a conflict).
 	//
-	// Поле помечено `yaml:"-"`: заполняется в UnmarshalYAML из `$type`-узла (имя
-	// `$type` невалидно как Go-yaml-тег). Пустая строка = ссылки нет.
+	// Tagged `yaml:"-"`: filled in UnmarshalYAML from the `$type` node (the name
+	// `$type` is invalid as a Go-yaml tag). Empty = no reference.
 	TypeRef string `yaml:"-"`
 }
 
-// InputSource — объект-дискриминатор каталога-источника значений поля (ADR-044
-// S-T1). Ровно один под-ключ задаёт множество:
-//   - IncarnationHosts (`incarnation_hosts: true`) — все SID текущей инкарнации;
-//   - Choir (`choir: <name>`) — SID-ы конкретной Choir-партии инкарнации.
+// InputSource is the object-discriminator of the field-value source catalog (ADR-044
+// S-T1). Exactly one sub-key defines the set:
+//   - IncarnationHosts (`incarnation_hosts: true`) — all SIDs of the current incarnation;
+//   - Choir (`choir: <name>`) — the SIDs of a specific Choir part of the incarnation.
 //
-// Schema-валидация проверяет только структурную валидность (известные под-ключи,
-// типы значений); резолв самого множества и проверку «значение ∈ множество» —
-// backend при подготовке формы (см. input_value.go).
+// Schema validation checks only structural validity (known sub-keys, value types);
+// resolving the set and the "value ∈ set" check are done by the backend at form
+// preparation (see input_value.go).
 type InputSource struct {
 	IncarnationHosts bool   `yaml:"incarnation_hosts,omitempty" json:"incarnation_hosts,omitempty"`
 	Choir            string `yaml:"choir,omitempty" json:"choir,omitempty"`
@@ -145,36 +145,35 @@ type requiredKind int
 
 const (
 	requiredAbsent requiredKind = iota
-	requiredBool                // верхнеуровневый `required: true/false`
-	requiredList                // `required: [name1, name2]` внутри object
+	requiredBool                // top-level `required: true/false`
+	requiredList                // `required: [name1, name2]` inside an object
 )
 
-// Допустимые значения `type` и `format` — фиксированы [`docs/input.md`].
+// Allowed `type` and `format` values — fixed by [`docs/input.md`].
 var (
 	inputTypeEnum   = []string{"string", "integer", "number", "boolean", "array", "object"}
 	inputFormatEnum = []string{
 		"hostname", "fqdn", "ipv4", "ipv6", "cidr",
 		"email", "uri", "uuid", "semver", "duration",
-		"sid", // FQDN-форма SID (ADR-044 S-T1), валидатор reSID в input_value.go
+		"sid", // FQDN form of SID (ADR-044 S-T1), validator reSID in input_value.go
 	}
 
-	// reInputParamName — имена input-параметров (ключи map). Параметр
-	// доступен в шаблонах как `input.<name>` (CEL / text/template); точки,
-	// пробелы, leading digit ломают template-resolution, поэтому форма
-	// строго snake_case.
+	// reInputParamName — input parameter names (map keys). A parameter is available in
+	// templates as `input.<name>` (CEL / text/template); dots, spaces, a leading digit
+	// break template resolution, so the form is strictly snake_case.
 	reInputParamName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-	// rePrefillFromStatePath — путь `prefill_from_state` (ADR-047 statepredicate
-	// корень `state` + dot-нотация, но литеральный путь, не CEL): обязательный
-	// корень `state` + ≥1 сегмент. Каждый сегмент — snake_case `[a-z][a-z0-9_]*`,
-	// что совпадает с формой имён state-полей (statePathQueryPattern в keeper) и
-	// input-параметров (reInputParamName). Индексы массивов / map-ключи с иными
-	// символами вне MVP — prefill целит в именованное state-поле.
+	// rePrefillFromStatePath — the `prefill_from_state` path (ADR-047 statepredicate
+	// `state` root + dot notation, but a literal path, not CEL): a required `state`
+	// root + ≥1 segment. Each segment is snake_case `[a-z][a-z0-9_]*`, matching the
+	// form of state field names (statePathQueryPattern in keeper) and input parameters
+	// (reInputParamName). Array indices / map keys with other characters are out of MVP
+	// — prefill targets a named state field.
 	rePrefillFromStatePath = regexp.MustCompile(`^state(\.[a-z][a-z0-9_]*)+$`)
 
-	// Закрытый набор YAML-ключей внутри одной InputSchema-ноды.
-	// Используется для unknown_key-проверки (вне reflect-walker, потому
-	// что у InputSchema особый смысл `required` и рекурсивные поля).
+	// The closed set of YAML keys inside one InputSchema node. Used for the unknown_key
+	// check (outside the reflect-walker, because InputSchema has a special `required`
+	// meaning and recursive fields).
 	inputSchemaKnownKeys = map[string]bool{
 		"type": true, "required": true, "required_when": true, "default": true, "enum": true,
 		"secret": true, "description": true, "prefill_from_state": true,
@@ -190,42 +189,41 @@ var (
 
 		"source": true,
 
-		// $type — ключ-дискриминатор ссылки на переиспользуемый именованный тип
-		// (service/<name>/types.yml). Узел с `$type` = ссылка, резолвится при
-		// загрузке сервиса (ResolveTypeRefs). Конфликт с type:/properties:/items:
-		// ловит validateInputSchemaNode (input_type_ref_conflict).
+		// $type — the discriminator key of a reference to a reusable named type
+		// (service/<name>/types.yml). A node with `$type` is a reference, resolved on
+		// service load (ResolveTypeRefs). A conflict with type:/properties:/items: is
+		// caught by validateInputSchemaNode (input_type_ref_conflict).
 		"$type": true,
 	}
 
-	// inputSourceKnownKeys — закрытый набор под-ключей объекта-дискриминатора
-	// source: (ADR-044 S-T1). Любой иной под-ключ — unknown_key.
+	// inputSourceKnownKeys — the closed sub-key set of the source: object-discriminator
+	// (ADR-044 S-T1). Any other sub-key is unknown_key.
 	inputSourceKnownKeys = map[string]bool{
 		"incarnation_hosts": true,
 		"choir":             true,
 	}
 )
 
-// UnmarshalYAML — кастомный декод для разрешения двух смыслов `required`.
+// UnmarshalYAML — custom decode to resolve the two meanings of `required`.
 //
-// goccy зовёт этот метод вместо стандартного reflect-decode-а, передавая
-// AST-узел. Мы:
-//  1. снимаем подмаппинг по известным ключам, разрешая `required` отдельно;
-//  2. для остальных ключей зовём общий goccy-decoder через временный
-//     alias-тип (чтобы не словить рекурсию в UnmarshalYAML).
+// goccy calls this method instead of the standard reflect-decode, passing the AST
+// node. We:
+//  1. peel off the sub-mapping of known keys, resolving `required` separately;
+//  2. for the rest, call the shared goccy decoder via a temporary alias type (to
+//     avoid recursion into UnmarshalYAML).
 //
-// Если value `required` — bool, кладём в `Required` (kind=requiredBool).
-// Если sequence строк — в `RequiredProps` (kind=requiredList).
-// Если что-то третье — кладём kind=requiredAbsent и поднимаем
-// `input_required_value_invalid` в semantic-validate (через осмотр AST).
+// If the `required` value is a bool → `Required` (kind=requiredBool). If a sequence of
+// strings → `RequiredProps` (kind=requiredList). If anything else → kind=requiredAbsent
+// and `input_required_value_invalid` is raised in semantic-validate (by inspecting the AST).
 func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 	m, ok := node.(*ast.MappingNode)
 	if !ok {
 		return fmt.Errorf("input schema must be a mapping, got %T", node)
 	}
-	// Snapshot `required`-узел, `additional_properties`-узел и `$type`-узел,
-	// выкусываем их из mapping-а перед общим decode-ом: все три — поля с особой
-	// семантикой (см. doc-комменты), goccy не знает, как их типизировать
-	// корректно (`$type` — ещё и невалидный Go-yaml-тег с `$`).
+	// Snapshot the `required`, `additional_properties` and `$type` nodes and cut them
+	// out of the mapping before the shared decode: all three are fields with special
+	// semantics (see doc comments) that goccy cannot type correctly (`$type` is also an
+	// invalid Go-yaml tag with `$`).
 	var reqNode, apNode, typeRefNode ast.Node
 	filtered := &ast.MappingNode{
 		BaseNode:    m.BaseNode,
@@ -252,9 +250,9 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 		filtered.Values = append(filtered.Values, kv)
 	}
 
-	// Декодируем «всё кроме required/additional_properties» через alias-тип,
-	// чтобы избежать рекурсии в UnmarshalYAML. Используем yaml.NodeToValue
-	// по той же механике, что и общий parser.
+	// Decode "everything except required/additional_properties" via the alias type to
+	// avoid recursion into UnmarshalYAML. We use yaml.NodeToValue the same way as the
+	// shared parser.
 	type rawSchema InputSchema
 	var raw rawSchema
 	if err := yaml.NodeToValue(filtered, &raw); err != nil {
@@ -262,10 +260,9 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 	}
 	*s = InputSchema(raw)
 
-	// additional_properties: bool | schema. Под schema требуется
-	// рекурсивный декод через *InputSchema, иначе recurseItemsProperties
-	// не знает типа дочерней схемы (см. Bug 2 — pattern на integer внутри
-	// AP-схемы не ловился).
+	// additional_properties: bool | schema. A schema needs recursive decode via
+	// *InputSchema, else recurseItemsProperties does not know the child schema's type
+	// (see Bug 2 — pattern on integer inside an AP schema was not caught).
 	switch n := apNode.(type) {
 	case nil:
 		// not present
@@ -278,18 +275,18 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 		}
 		s.AdditionalProperties = sub
 	default:
-		// Любой иной тип — `validateObjectSchema` поднимет type_mismatch
-		// по AST; здесь оставляем nil.
+		// Any other type — `validateObjectSchema` raises type_mismatch over the AST;
+		// leave nil here.
 	}
 
-	// $type: <Имя> — ссылка на именованный тип. Допустимо только строковое
-	// значение; иные виды узла (mapping/sequence/число) оставляют TypeRef
-	// пустым, а validateInputSchemaNode поднимает type_mismatch по AST.
+	// $type: <Name> — a reference to a named type. Only a string value is allowed;
+	// other node kinds (mapping/sequence/number) leave TypeRef empty, and
+	// validateInputSchemaNode raises type_mismatch over the AST.
 	if sn, ok := typeRefNode.(*ast.StringNode); ok {
 		s.TypeRef = sn.Value
 	}
 
-	// Разбор `required` по типу узла.
+	// Parse `required` by node type.
 	s.rawRequired = reqNode
 	switch n := reqNode.(type) {
 	case nil:
@@ -311,25 +308,25 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 		}
 		s.requiredKind = requiredList
 	default:
-		// Любой другой тип (число, mapping, scalar-строка, null) — оставляем
-		// requiredAbsent; `validateInputSchemaNode` поднимет диагностику
-		// `input_required_value_invalid` по сохранённой rawRequired-ноде.
+		// Any other type (number, mapping, scalar string, null) — leave requiredAbsent;
+		// `validateInputSchemaNode` raises `input_required_value_invalid` from the saved
+		// rawRequired node.
 		s.requiredKind = requiredAbsent
 	}
 
 	return nil
 }
 
-// validateInputSchemaMap — публичная точка входа для рекурсивной валидации
-// блока input: (или output:). `pathPrefix` — yaml-path до самого блока
-// (например, `$.input` или `$.output`). `node` — соответствующий
-// MappingNode из AST (nil безопасен, проверки не выполняются).
+// validateInputSchemaMap is the public entry point for recursive validation of an
+// input: (or output:) block. `pathPrefix` is the yaml-path to the block itself (e.g.
+// `$.input` or `$.output`). `node` is the corresponding AST MappingNode (nil is safe,
+// no checks run).
 func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	if m == nil && node == nil {
 		return nil
 	}
 	if node == nil {
-		// schema-проверки без позиций — лучше ничего, чем падать.
+		// schema checks without positions — better nothing than a crash.
 		return nil
 	}
 	var out []diag.Diagnostic
@@ -368,15 +365,15 @@ func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix 
 	return out
 }
 
-// validateInputSchemaNode — валидация одной схемы (одного параметра).
-// Делает unknown_key + per-key schema-проверки + рекурсию в items/properties.
+// validateInputSchemaNode validates one schema (one parameter). Does unknown_key +
+// per-key schema checks + recursion into items/properties.
 func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string) []diag.Diagnostic {
 	if node == nil {
 		return nil
 	}
 	var out []diag.Diagnostic
 
-	// Сбор присутствующих ключей и их AST-позиций.
+	// Collect present keys and their AST positions.
 	present := map[string]*ast.MappingValueNode{}
 	for _, kv := range node.Values {
 		keyTok := kv.Key.GetToken()
@@ -385,10 +382,10 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		}
 		name := keyTok.Value
 		if !inputSchemaKnownKeys[name] {
-			// `x-*` — vendor-extension (конвенция OpenAPI/JSON-Schema): backend
-			// прокидывает такие ключи в сырой DTO input_schema как аннотации для UI
-			// (напр. `x-directives: redis` — валидировать ключи против каталога
-			// директив, NIM-76). Не валидируем — passthrough, не unknown_key.
+			// `x-*` — vendor extension (OpenAPI/JSON-Schema convention): the backend
+			// passes such keys into the raw input_schema DTO as UI annotations (e.g.
+			// `x-directives: redis` — validate keys against the directive catalog,
+			// NIM-76). Not validated — passthrough, not unknown_key.
 			if strings.HasPrefix(name, "x-") {
 				continue
 			}
@@ -403,11 +400,11 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		present[name] = kv
 	}
 
-	// $type — ссылка на именованный тип. Узел с `$type` НЕ объявляет `type`/
-	// собственную форму — он подменяется схемой типа при резолве сервиса
-	// (ResolveTypeRefs). Поэтому такой узел пропускает per-type валидацию ниже
-	// (type-required + per-key проверки) — здесь только структурные инварианты
-	// ССЫЛКИ: непустое строковое имя + отсутствие конфликтующих ключей.
+	// $type — a reference to a named type. A node with `$type` does NOT declare `type`/
+	// its own shape — it is replaced by the type schema on service resolution
+	// (ResolveTypeRefs). So such a node skips the per-type validation below
+	// (type-required + per-key checks) — here only the REFERENCE's structural
+	// invariants: a non-empty string name + no conflicting keys.
 	if refKV, ok := present["$type"]; ok {
 		out = append(out, validateTypeRefNode(s, refKV, present, path)...)
 		return out
@@ -422,25 +419,25 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 			Hint:     "type: one of string|integer|number|boolean|array|object",
 			YAMLPath: path + ".type",
 		}))
-		// Без type дальнейшие per-type проверки невозможны.
-		// Но items/properties всё равно валидируем, чтобы поднять и их ошибки.
+		// Without type, further per-type checks are impossible. But we still validate
+		// items/properties to surface their errors too.
 		out = append(out, recurseItemsProperties(s, present, path)...)
 		return out
 	}
 
 	if s == nil {
-		// schema нет (decode-fatal раньше — diag уже выпущена).
+		// no schema (decode-fatal earlier — the diag was already emitted).
 		return out
 	}
 
-	// `required:` с не-bool / не-sequence значением (например `required: "foo"`,
-	// `required: 1`, `required: null`). UnmarshalYAML классифицирует такое в
-	// requiredAbsent и сохраняет исходную ноду в rawRequired; здесь поднимаем
-	// диагностику. nil-ноду (ключа нет) и BoolNode / SequenceNode — пропускаем.
+	// `required:` with a non-bool / non-sequence value (e.g. `required: "foo"`,
+	// `required: 1`, `required: null`). UnmarshalYAML classifies that as requiredAbsent
+	// and keeps the original node in rawRequired; here we raise the diagnostic. A nil
+	// node (key absent) and BoolNode / SequenceNode are skipped.
 	if s.rawRequired != nil {
 		switch s.rawRequired.(type) {
 		case *ast.BoolNode, *ast.SequenceNode:
-			// валидные формы — уже разобраны
+			// valid forms — already parsed
 		default:
 			if kv, ok := present["required"]; ok {
 				tok := kv.Value.GetToken()
@@ -455,17 +452,17 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		}
 	}
 
-	// required_when — статически парсимый CEL над input.* (docs/input.md →
-	// «Условная обязательность»). Применим к любому type, поэтому проверяется до
-	// per-type-fork. Непарсимое/недопустимое выражение → input_required_when_invalid.
+	// required_when — a statically parsable CEL over input.* (docs/input.md →
+	// "Conditional requiredness"). Applies to any type, so checked before the
+	// per-type fork. An unparsable/invalid expression → input_required_when_invalid.
 	if kv, ok := present["required_when"]; ok {
 		out = append(out, validateRequiredWhen(s, kv, path)...)
 	}
 
-	// prefill_from_state — путь `state.<path>` (dot-нотация) day-2 UI-prefill-
-	// hint (docs/input.md → «Pre-fill из state»). Применим к любому type (форма
-	// поля резолвится из значения state любого типа), поэтому проверяется до
-	// per-type-fork. Невалидный путь → input_prefill_from_state_invalid.
+	// prefill_from_state — a `state.<path>` (dot notation) operational UI prefill hint
+	// (docs/input.md → "Pre-fill from state"). Applies to any type (the field shape
+	// resolves from a state value of any type), so checked before the per-type fork. An
+	// invalid path → input_prefill_from_state_invalid.
 	if kv, ok := present["prefill_from_state"]; ok {
 		out = append(out, validatePrefillFromState(s, kv, path)...)
 	}
@@ -480,12 +477,12 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 			Message:  fmt.Sprintf("type %q is not in %v", s.Type, inputTypeEnum),
 			YAMLPath: path + ".type",
 		}))
-		// при неизвестном type продолжаем валидировать рекурсию без per-type-fork.
+		// on an unknown type, keep validating recursion without the per-type fork.
 		out = append(out, recurseItemsProperties(s, present, path)...)
 		return out
 	}
 
-	// per-key проверки «ключ применим к данному type».
+	// per-key checks "key applicable to this type".
 	out = append(out, checkKeyTypeApplicability(s, present, path)...)
 
 	// per-type checks.
@@ -495,31 +492,31 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 	case "integer", "number":
 		out = append(out, validateNumericSchema(s, present, path)...)
 	case "boolean":
-		// без специфики; ограничения — только общие.
+		// nothing specific; only the common constraints.
 	case "array":
 		out = append(out, validateArraySchema(s, present, path)...)
 	case "object":
 		out = append(out, validateObjectSchema(s, present, path)...)
 	}
 
-	// source — структурная валидность каталога-источника (ADR-044 S-T1).
-	// Применимость по type уже проверена checkKeyTypeApplicability; здесь —
-	// форма дискриминатора + (для array) items.type=string.
+	// source — structural validity of the source catalog (ADR-044 S-T1). Applicability
+	// by type is already checked by checkKeyTypeApplicability; here — the discriminator
+	// form + (for array) items.type=string.
 	if _, has := present["source"]; has {
 		out = append(out, validateSource(s, present, path)...)
 	}
 
-	// общие кросс-инварианты.
+	// common cross-invariants.
 	out = append(out, validateCommonInvariants(s, present, path)...)
 
-	// рекурсия в items/properties — после остальных проверок текущего уровня.
+	// recurse into items/properties — after the other checks of the current level.
 	out = append(out, recurseItemsProperties(s, present, path)...)
 
 	return out
 }
 
-// checkKeyTypeApplicability — ловит ключи, применённые к неподходящему type.
-// Действует только когда type валиден (иначе ложные срабатывания).
+// checkKeyTypeApplicability catches keys applied to an inapplicable type. Acts only
+// when the type is valid (else false positives).
 func checkKeyTypeApplicability(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	type rule struct {
 		key       string
@@ -546,9 +543,9 @@ func checkKeyTypeApplicability(s *InputSchema, present map[string]*ast.MappingVa
 		{"properties", []string{"object"}},
 		{"additional_properties", []string{"object"}},
 
-		// source применим к single-выбору (string) и multi-выбору (array);
-		// для array дополнительно требуется items.type=string —
-		// проверяется в validateSource (структурная валидность источника).
+		// source applies to single choice (string) and multi choice (array); for array
+		// it additionally requires items.type=string — checked in validateSource
+		// (structural validity of the source).
 		{"source", []string{"string", "array"}},
 	}
 	var out []diag.Diagnostic
@@ -568,7 +565,7 @@ func checkKeyTypeApplicability(s *InputSchema, present map[string]*ast.MappingVa
 			}))
 		}
 	}
-	// `required` как []string — только при type=object.
+	// `required` as []string — only for type=object.
 	if s.requiredKind == requiredList && s.Type != "object" {
 		if kv, ok := present["required"]; ok {
 			tok := kv.Key.GetToken()
@@ -656,11 +653,11 @@ func validateStringSchema(s *InputSchema, present map[string]*ast.MappingValueNo
 	return out
 }
 
-// validateVaultScope — семантика ключа `vault_scope` (docs/input.md →
-// «vault_scope»). Применим только к secret-полю: vault_scope открывает
-// оператору ограниченное чтение Vault через input-ref, что осмысленно лишь
-// для секретов. Сам glob должен быть непустым и нести prefix (`<mount>/...`),
-// иначе сужения нет. type=string уже гарантирован checkKeyTypeApplicability.
+// validateVaultScope — semantics of the `vault_scope` key (docs/input.md →
+// "vault_scope"). Applies only to a secret field: vault_scope grants the operator a
+// scoped Vault read via an input ref, which is meaningful only for secrets. The glob
+// itself must be non-empty and carry a prefix (`<mount>/...`), else there is no
+// narrowing. type=string is already guaranteed by checkKeyTypeApplicability.
 func validateVaultScope(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if !s.Secret {
@@ -684,14 +681,14 @@ func validateVaultScope(s *InputSchema, present map[string]*ast.MappingValueNode
 	return out
 }
 
-// validatePrefillFromState — статическая проверка синтаксиса пути
-// `prefill_from_state` (docs/input.md → «Pre-fill из state»). Применим к любому
-// type. Путь обязан быть непустой dot-формой `state.<path>` (корень `state` +
-// ≥1 сегмент snake_case): без корня `state` / пустой / с недопустимыми
-// сегментами → input_prefill_from_state_invalid. Резолв самого значения из
-// incarnation.state и path-whitelist делает backend form-prefill-эндпоинта —
-// здесь только синтаксис (симметрия с validateSource: схема проверяет форму,
-// множество резолвит backend). kv — `prefill_from_state` MappingValueNode.
+// validatePrefillFromState statically checks the syntax of the `prefill_from_state`
+// path (docs/input.md → "Pre-fill from state"). Applies to any type. The path must be
+// a non-empty dot form `state.<path>` (`state` root + ≥1 snake_case segment): without
+// the `state` root / empty / with invalid segments → input_prefill_from_state_invalid.
+// Resolving the value from incarnation.state and the path whitelist is done by the
+// form-prefill endpoint's backend — only syntax here (symmetric with validateSource:
+// the schema checks the form, the backend resolves the set). kv is the
+// `prefill_from_state` MappingValueNode.
 func validatePrefillFromState(s *InputSchema, kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if s == nil {
 		return nil
@@ -708,16 +705,15 @@ func validatePrefillFromState(s *InputSchema, kv *ast.MappingValueNode, path str
 	return nil
 }
 
-// validateSource — структурная валидность каталога-источника `source:`
-// (ADR-044 S-T1). Проверяет ТОЛЬКО форму: source — mapping; под-ключи из
-// inputSourceKnownKeys; тип значения каждого под-ключа корректен
-// (`incarnation_hosts` — bool, `choir` — string). Само множество (резолв SID-ов
-// инкарнации / Choir-партии) и проверку «значение ∈ множество» делает backend
-// при подготовке формы — здесь только синтаксис.
+// validateSource — structural validity of the `source:` catalog (ADR-044 S-T1).
+// Checks ONLY the form: source is a mapping; sub-keys from inputSourceKnownKeys; each
+// sub-key's value type is correct (`incarnation_hosts` — bool, `choir` — string). The
+// set itself (resolving incarnation / Choir-part SIDs) and the "value ∈ set" check are
+// done by the backend at form preparation — only syntax here.
 //
-// Дополнительно: для type=array source осмыслен лишь когда items.type=string
-// (multi-выбор SID-ов). Применимость source к самому type уже проверена
-// checkKeyTypeApplicability (string|array); здесь добавляется array→items.
+// Also: for type=array, source is meaningful only when items.type=string (multi choice
+// of SIDs). Applicability of source to the type itself is already checked by
+// checkKeyTypeApplicability (string|array); here the array→items part is added.
 func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	kv := present["source"]
@@ -752,12 +748,12 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 		out = append(out, validateSourceSubKey(name, sub, path)...)
 	}
 
-	// Инвариант дискриминатора: РОВНО ОДИН активный источник (см. doc-коммент
-	// InputSource). Активным считается incarnation_hosts только при true и choir
-	// только при непустой строке: `incarnation_hosts: false` / `choir: ""` /
-	// пустой `source: {}` дают 0 активных, два заданных — 2. Любое != 1 — ошибка.
-	// (Пустую choir отдельно ловит validateSourceSubKey осмысленным message; здесь
-	// мы её просто не считаем активной, чтобы не дублировать диагностику.)
+	// Discriminator invariant: EXACTLY ONE active source (see the InputSource doc
+	// comment). incarnation_hosts counts as active only when true, and choir only when
+	// a non-empty string: `incarnation_hosts: false` / `choir: ""` / an empty
+	// `source: {}` give 0 active, two set give 2. Anything != 1 is an error. (An empty
+	// choir is caught separately by validateSourceSubKey with a meaningful message; here
+	// we just do not count it active, to avoid duplicating the diagnostic.)
 	active := 0
 	if s.Source != nil {
 		if s.Source.IncarnationHosts {
@@ -777,7 +773,7 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 		}))
 	}
 
-	// Для array source требует items.type=string (multi-выбор SID-ов).
+	// For array, source requires items.type=string (multi choice of SIDs).
 	if s.Type == "array" && (s.Items == nil || s.Items.Type != "string") {
 		out = append(out, diagAtKV(kv, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
@@ -791,8 +787,8 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 	return out
 }
 
-// validateSourceSubKey — проверка типа значения одного известного под-ключа
-// source. incarnation_hosts — bool, choir — непустая строка.
+// validateSourceSubKey checks the value type of one known source sub-key.
+// incarnation_hosts — bool, choir — a non-empty string.
 func validateSourceSubKey(name string, sub *ast.MappingValueNode, path string) []diag.Diagnostic {
 	subPath := path + ".source." + name
 	switch name {
@@ -848,7 +844,7 @@ func validateNumericSchema(s *InputSchema, present map[string]*ast.MappingValueN
 			YAMLPath: path + ".exclusive_max",
 		}))
 	}
-	// min <= max если оба заданы (включительные границы).
+	// min <= max if both set (inclusive bounds).
 	if s.Min != nil && s.Max != nil && *s.Min > *s.Max {
 		out = append(out, diagAtKV(present["max"], diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -862,7 +858,7 @@ func validateNumericSchema(s *InputSchema, present map[string]*ast.MappingValueN
 
 func validateArraySchema(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
-	// items — обязателен для array.
+	// items — required for array.
 	if _, ok := present["items"]; !ok {
 		out = append(out, diagAtKV(present["type"], diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -908,7 +904,7 @@ func validateObjectSchema(s *InputSchema, present map[string]*ast.MappingValueNo
 			YAMLPath: path + ".properties",
 		}))
 	}
-	// additional_properties — bool или mapping (схема). Никаких других типов.
+	// additional_properties — bool or mapping (schema). No other types.
 	if kv, ok := present["additional_properties"]; ok {
 		v := kv.Value
 		_, isMap := v.(*ast.MappingNode)
@@ -923,7 +919,7 @@ func validateObjectSchema(s *InputSchema, present map[string]*ast.MappingValueNo
 			}))
 		}
 	}
-	// `required: [name1, name2]` — каждое имя должно быть среди properties.
+	// `required: [name1, name2]` — each name must be among properties.
 	if s.requiredKind == requiredList && s.Properties != nil {
 		for _, name := range s.RequiredProps {
 			if _, ok := s.Properties[name]; !ok {
@@ -940,15 +936,15 @@ func validateObjectSchema(s *InputSchema, present map[string]*ast.MappingValueNo
 	return out
 }
 
-// validateCommonInvariants — кросс-проверки на общих ключах (enum/default/required).
+// validateCommonInvariants — cross-checks on common keys (enum/default/required).
 func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
-	// enum для array/object — запрещено в MVP. Литералы массивов и объектов
-	// не comparable в Go runtime, а reflect.DeepEqual для редкого
-	// «enum-литералов-композитов» — over-engineering до появления реального
-	// запроса. См. ADR-комментарий в input.md (post-MVP). enum-проверка ниже
-	// и `default in enum` ниже для этих типов пропускаются.
+	// enum for array/object is forbidden in MVP. Array and object literals are not
+	// comparable in the Go runtime, and reflect.DeepEqual for the rare "composite enum
+	// literals" is over-engineering until a real request. See the ADR comment in
+	// input.md (post-MVP). The enum check below and `default in enum` below are skipped
+	// for these types.
 	enumOnComposite := len(s.Enum) > 0 && (s.Type == "array" || s.Type == "object")
 	if enumOnComposite {
 		out = append(out, diagAtKV(present["enum"], diag.Diagnostic{
@@ -960,8 +956,8 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 		}))
 	}
 
-	// enum — каждый элемент соответствует type. Для array/object пропускаем,
-	// диагностика уже выпущена выше.
+	// enum — each element matches type. For array/object we skip, the diagnostic was
+	// already emitted above.
 	if len(s.Enum) > 0 && !enumOnComposite {
 		for i, v := range s.Enum {
 			if !valueMatchesType(v, s.Type) {
@@ -975,9 +971,9 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 		}
 	}
 
-	// default — соответствует type. Особый случай: string-default может быть
-	// CEL/template-выражением (`${ ... }` или `{{ ... }}`); такие пропускаем —
-	// для type=string синтаксис как строка валиден всегда.
+	// default — matches type. Special case: a string default may be a CEL/template
+	// expression (`${ ... }` or `{{ ... }}`); we skip those — for type=string any
+	// string is syntactically valid.
 	if _, has := present["default"]; has {
 		if !defaultMatchesType(s.Default, s.Type) {
 			out = append(out, diagAtKV(present["default"], diag.Diagnostic{
@@ -987,15 +983,15 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 				YAMLPath: path + ".default",
 			}))
 		} else {
-			// Top-level type ok — спускаемся в содержимое для array/object,
-			// чтобы не пропустить mismatching элементы/поля внутри литерала.
+			// Top-level type ok — descend into content for array/object so we do not
+			// miss mismatching elements/fields inside the literal.
 			out = append(out, validateDefaultContent(s, present["default"], path+".default")...)
 		}
 
-		// default должен быть в enum, если оба заданы. Для array/object enum
-		// запрещён (см. выше) — пропускаем, иначе пришлось бы сравнивать
-		// composite-литералы. Без этого проверка скрытого расхождения
-		// «выбор только из enum, но default — мимо» остаётся для scalar-типов.
+		// default must be in enum if both are set. For array/object enum is forbidden
+		// (see above) — we skip, else we would have to compare composite literals.
+		// Without this, the hidden-mismatch check "choice only from enum, but default
+		// is outside" remains for scalar types.
 		if len(s.Enum) > 0 && !enumOnComposite {
 			if !enumContains(s.Enum, s.Default) {
 				out = append(out, diagAtKV(present["default"], diag.Diagnostic{
@@ -1009,7 +1005,7 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 		}
 	}
 
-	// required: true + default → конфликт (warning).
+	// required: true + default → conflict (warning).
 	if s.requiredKind == requiredBool && s.Required {
 		if _, has := present["default"]; has {
 			out = append(out, diagAtKV(present["default"], diag.Diagnostic{
@@ -1025,11 +1021,11 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 	return out
 }
 
-// recurseItemsProperties — рекурсия в items (array), properties (object) и
-// additional_properties (object, когда задано как schema, а не bool).
-// Делается отдельно от per-type, чтобы спускаться и в schema без type
-// (там мы уже выдали missing_required_field, но вложенные ошибки тоже хотим
-// показать пользователю в одном проходе).
+// recurseItemsProperties recurses into items (array), properties (object) and
+// additional_properties (object, when given as a schema, not a bool). Done separately
+// from per-type so it also descends into a schema without type (there we already
+// emitted missing_required_field, but we still want to surface nested errors in one
+// pass).
 func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if kv, ok := present["items"]; ok {
@@ -1051,9 +1047,9 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 		}
 	}
 	if kv, ok := present["additional_properties"]; ok {
-		// additional_properties: <schema> — это форма «map произвольных
-		// ключей с общей schema-значением» (см. examples/destiny/redis
-		// → users). Голый bool не валидируем (там нет вложенной схемы).
+		// additional_properties: <schema> — the "map of arbitrary keys with a shared
+		// value schema" form (see examples/destiny/redis → users). A bare bool is not
+		// validated (no nested schema there).
 		if apNode, isMap := kv.Value.(*ast.MappingNode); isMap {
 			var sub *InputSchema
 			if s != nil {
@@ -1067,10 +1063,10 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 	return out
 }
 
-// valueMatchesType — true, если literal Go-значение соответствует input-type.
-// Используется для enum и default. `array` / `object` намеренно прозрачны:
-// для enum-литералов и default-литералов «соответствие type» в форме
-// «не противоречит» — нативный YAML-decode уже типизировал scalar.
+// valueMatchesType — true if a literal Go value matches the input type. Used for enum
+// and default. `array` / `object` are deliberately transparent: for enum and default
+// literals "type match" means "not contradictory" — the native YAML decode already
+// typed the scalar.
 func valueMatchesType(v any, t string) bool {
 	switch t {
 	case "string":
@@ -1084,8 +1080,8 @@ func valueMatchesType(v any, t string) bool {
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			return true
 		case float64:
-			// goccy YAML отдаёт `42` как uint64; `42.0` — как float64.
-			// Если literal — целое в float-обёртке, всё ещё ок.
+			// goccy YAML yields `42` as uint64; `42.0` as float64. If the literal is an
+			// integer in a float wrapper, still ok.
 			return x == float64(int64(x))
 		}
 		return false
@@ -1106,9 +1102,9 @@ func valueMatchesType(v any, t string) bool {
 	return false
 }
 
-// defaultMatchesType — обёртка над valueMatchesType с послаблением для
-// type=string: literal с `${ ... }` или `{{ ... }}` — допустимый выражение-
-// default, любая string-форма валидна.
+// defaultMatchesType wraps valueMatchesType with a relaxation for type=string: a
+// literal with `${ ... }` or `{{ ... }}` is a valid expression default — any string
+// form is valid.
 func defaultMatchesType(v any, t string) bool {
 	if t == "string" {
 		_, ok := v.(string)
@@ -1128,8 +1124,8 @@ func formatLiteral(v any) string {
 	}
 }
 
-// formatEnum — рендер enum-литерала для диагностики (стабильный порядок,
-// тот же что в YAML — не сортируем).
+// formatEnum renders an enum literal for diagnostics (stable order, same as in YAML —
+// not sorted).
 func formatEnum(es []any) string {
 	out := make([]string, 0, len(es))
 	for _, v := range es {
@@ -1138,8 +1134,8 @@ func formatEnum(es []any) string {
 	return "[" + strings.Join(out, ", ") + "]"
 }
 
-// enumContains — сравнение по семантике YAML-scalar-ов: для чисел учитываем
-// смешанные int/float ровно как в valueMatchesType (`42` ≡ `42.0`).
+// enumContains compares by YAML-scalar semantics: for numbers we treat mixed int/float
+// exactly as in valueMatchesType (`42` ≡ `42.0`).
 func enumContains(enum []any, v any) bool {
 	for _, e := range enum {
 		if equalScalar(e, v) {
@@ -1149,15 +1145,13 @@ func enumContains(enum []any, v any) bool {
 	return false
 }
 
-// equalScalar — равенство по значению с послаблением int↔float, чтобы
-// `default: 1` и `enum: [1, 2]` (где goccy типизирует элементы как uint64)
-// совпадали без ложного срабатывания.
+// equalScalar — value equality with an int↔float relaxation so `default: 1` and
+// `enum: [1, 2]` (where goccy types elements as uint64) match without a false positive.
 //
-// Defensive: slice/map не comparable в runtime — `a == b` для них паникует
-// (видели на enum-литералах массивов до того, как ввели
-// `input_enum_unsupported_for_type`). Эти типы не должны сюда долетать,
-// validateCommonInvariants отрезает их раньше; здесь — страховка на случай
-// будущего расширения enum для composites.
+// Defensive: slice/map are not comparable at runtime — `a == b` panics for them (seen
+// on array enum literals before `input_enum_unsupported_for_type` was introduced).
+// These types should not reach here — validateCommonInvariants cuts them off earlier;
+// this is a safeguard for a future extension of enum to composites.
 func equalScalar(a, b any) bool {
 	if !isComparableScalar(a) || !isComparableScalar(b) {
 		return false
@@ -1173,8 +1167,8 @@ func equalScalar(a, b any) bool {
 	return false
 }
 
-// isComparableScalar — true для значений, которые безопасно сравнивать через
-// оператор `==` (scalar Go-типы). Slice/map не comparable в runtime → false.
+// isComparableScalar — true for values safe to compare with `==` (scalar Go types).
+// Slice/map are not comparable at runtime → false.
 func isComparableScalar(v any) bool {
 	switch v.(type) {
 	case nil, bool, string,
@@ -1216,19 +1210,17 @@ func toFloat64(v any) (float64, bool) {
 	return 0, false
 }
 
-// validateDefaultContent — рекурсивная проверка содержимого default-литерала
-// против вложенной схемы. Применяется для array (каждый элемент против
-// items.type) и object (каждое поле против properties.<name>.type) на
-// произвольную глубину вложенности (qa.1 явно требовала рекурсии: 1-уровневая
-// проверка пропускала mismatches в array[object[array]]).
+// validateDefaultContent recursively checks a default literal's content against the
+// nested schema. Applied for array (each element against items.type) and object (each
+// field against properties.<name>.type) at arbitrary nesting depth (qa.1 explicitly
+// required recursion: a 1-level check missed mismatches in array[object[array]]).
 //
-// `kv` — `default:` MappingValueNode (для line/col диагностик; внутрь не
-// спускаемся по AST — default — литерал, AST-позиций под-элементов нет).
+// `kv` is the `default:` MappingValueNode (for line/col diagnostics; we do not descend
+// into the AST — default is a literal, sub-elements have no AST positions).
 //
-// CEL/template-обёртки `${...}` / `{{...}}` оставляем нетронутыми внутри
-// (defaultMatchesType уже пропустил их на верхнем уровне; в элементах
-// массива/полях объекта это сейчас не встречается на практике, чтобы городить
-// разбор обёрток).
+// CEL/template wrappers `${...}` / `{{...}}` are left untouched inside
+// (defaultMatchesType already skipped them at the top level; in array elements/object
+// fields they do not occur in practice, so no wrapper parsing).
 func validateDefaultContent(s *InputSchema, kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if s == nil || s.Default == nil {
 		return nil
@@ -1236,15 +1228,15 @@ func validateDefaultContent(s *InputSchema, kv *ast.MappingValueNode, path strin
 	return validateDefaultValue(s, s.Default, kv, path)
 }
 
-// validateDefaultValue — проверяет одно значение `v` против схемы `sub` и
-// рекурсивно спускается в array/object элементы. Отдельная функция (а не
-// inline в validateDefaultContent), чтобы рекурсия не тащила за собой
-// `s.Default` верхнего уровня — каждый зов получает своё под-значение.
+// validateDefaultValue checks one value `v` against schema `sub` and recurses into
+// array/object elements. A separate function (not inline in validateDefaultContent) so
+// the recursion does not drag the top-level `s.Default` along — each call gets its own
+// sub-value.
 //
-// На корневом вызове top-level type-match уже проверен `defaultMatchesType`
-// в validateCommonInvariants — поэтому здесь, на корневом уровне, type-mismatch
-// не дублируется. Сравнение типа делается только при спуске в дочерние
-// элементы (см. ниже в array/object-ветках).
+// On the root call the top-level type match is already checked by `defaultMatchesType`
+// in validateCommonInvariants — so at the root level type-mismatch is not duplicated.
+// The type comparison is done only when descending into child elements (see the
+// array/object branches below).
 func validateDefaultValue(sub *InputSchema, v any, kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if sub == nil || sub.Type == "" {
 		return nil
@@ -1295,7 +1287,7 @@ func validateDefaultValue(sub *InputSchema, v any, kv *ast.MappingValueNode, pat
 	return out
 }
 
-// diagAt — обёртка для удобства: проставляет line/col, остальное оставляет.
+// diagAt is a convenience wrapper: sets line/col, leaves the rest.
 func diagAt(line, col int, d diag.Diagnostic) diag.Diagnostic {
 	d.Line = line
 	d.Column = col
@@ -1315,8 +1307,8 @@ func diagAtKV(kv *ast.MappingValueNode, d diag.Diagnostic) diag.Diagnostic {
 	return d
 }
 
-// findInputMapping ищет MappingNode под top-level ключом блока (`input` /
-// `output` / etc.) и возвращает его. Если ключа нет — nil.
+// findInputMapping finds and returns the MappingNode under a top-level block key
+// (`input` / `output` / etc.). nil if the key is absent.
 func findInputMapping(root *ast.MappingNode, topKey string) *ast.MappingNode {
 	if root == nil {
 		return nil

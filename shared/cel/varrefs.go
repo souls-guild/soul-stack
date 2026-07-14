@@ -6,36 +6,36 @@ import (
 	"github.com/google/cel-go/common/ast"
 )
 
-// ErrVarIndexForm — интерполяция обращается к слою vars индекс-формой
-// (`vars['k']` / `vars[expr]`) вместо select-формы (`vars.k`). Для построения
-// графа зависимостей var→var (resolveVarLayer) имя ключа должно быть статически
-// известно из AST; индекс-форма с произвольным выражением (в т.ч. динамическим
-// `vars[input.x]`) этого не гарантирует. Детерминированно отвергаем её ЦЕЛИКОМ,
-// а не пытаемся вытащить строковый литерал из части случаев: единая граница
-// проще и предсказуемее для автора (canonical-форма vars.* — единственная, как и
-// soulprint.self.<path> в ADR-018). Отдельный sentinel — caller отличает его от
-// синтаксической ErrCompile через errors.Is.
+// ErrVarIndexForm — interpolation reaches the vars layer in index form
+// (`vars['k']` / `vars[expr]`) instead of select form (`vars.k`). Building the
+// var→var dependency graph (resolveVarLayer) needs the key statically known from
+// the AST, which an arbitrary (or dynamic `vars[input.x]`) index does not
+// guarantee. Rejected entirely and deterministically — a single boundary is
+// simpler for the author (canonical vars.* is the only form, like
+// soulprint.self.<path> in ADR-018). Dedicated sentinel so the caller can tell it
+// apart from the syntactic ErrCompile via errors.Is.
 var ErrVarIndexForm = fmt.Errorf("обращение к vars индекс-формой vars[...] не поддерживается — используй vars.<имя>")
 
-// VarRefs извлекает имена `vars.<X>`, на которые ссылается интерполяционная
-// строка raw (`${ … }`-блоки). Зеркало механизма DetectSealed (seal.go):
-// scanInterpolation → per-block parseNoMacro → PostOrderVisit → собрать
-// selectBaseField, где base=="vars". Это AST-обход, не regex: `vars.x` в
-// литеральном тексте ВНЕ `${ … }` ссылкой не считается, а `vars` внутри строкового
-// литерала CEL (`"vars.x"`) — тоже нет (это StringConstant, не Select).
+// VarRefs extracts the `vars.<X>` names referenced by an interpolation string raw
+// (`${ … }` blocks). Mirror of DetectSealed (seal.go): scanInterpolation →
+// per-block parseNoMacro → PostOrderVisit → collect selectBaseField where
+// base=="vars". This is an AST walk, not regex: `vars.x` in literal text OUTSIDE
+// `${ … }` is not a reference, and `vars` inside a CEL string literal (`"vars.x"`)
+// is not either (that's a StringConstant, not a Select).
 //
-// Возврат — имена в порядке первого появления при PostOrderVisit (дедуплицируются);
-// порядок не значим для caller-а (resolveVarLayer строит граф). raw без `${ … }`
-// или без vars-ссылок → пустой срез, nil-ошибка.
+// Returns names in order of first appearance in PostOrderVisit (deduplicated);
+// order is not significant for the caller (resolveVarLayer builds a graph). raw
+// with no `${ … }` or no vars references → empty slice, nil error.
 //
-// Index-форма `vars['k']` / `vars[expr]` → [ErrVarIndexForm] (детерминированно,
-// см. её док): имя ключа не извлекается из AST единообразно.
+// Index form `vars['k']` / `vars[expr]` → [ErrVarIndexForm] (deterministic, see its
+// doc): the key name is not extracted from the AST uniformly.
 //
-// Синтаксически-битый блок до per-block parseNoMacro не доходит: scanInterpolation
-// (parseBlock) сам гейтит границу блока через env.Parse и на невалидном выражении
-// возвращает *ErrCompile раньше. `continue` на perr ниже — защитный (зеркало
-// DetectSealed, на случай ослабления parseBlock или прямого вызова): VarRefs не
-// дублирует валидацию, а собирает ссылки у разбираемых выражений.
+// A syntactically broken block never reaches per-block parseNoMacro:
+// scanInterpolation (parseBlock) gates the block boundary via env.Parse and returns
+// *ErrCompile earlier on an invalid expression. The `continue` on perr below is
+// defensive (mirror of DetectSealed, in case parseBlock is relaxed or called
+// directly): VarRefs doesn't duplicate validation, it just collects references from
+// parseable expressions.
 func (e *Engine) VarRefs(raw string) ([]string, error) {
 	segs, err := e.scanInterpolation(raw)
 	if err != nil {
@@ -49,7 +49,7 @@ func (e *Engine) VarRefs(raw string) ([]string, error) {
 		}
 		parsed, perr := e.parseNoMacro(s.text)
 		if perr != nil {
-			continue // битый CEL — не наша забота (зеркало DetectSealed)
+			continue // broken CEL — not our concern (mirror of DetectSealed)
 		}
 		var visitErr error
 		ast.PostOrderVisit(parsed.Expr(), ast.NewExprVisitor(func(n ast.Expr) {
@@ -77,10 +77,10 @@ func (e *Engine) VarRefs(raw string) ([]string, error) {
 	return refs, nil
 }
 
-// isVarsIndex — узел вида `vars[<expr>]` (CEL index-оператор `_[_]` над голым
-// идентификатором `vars`). cel-go представляет `a[b]` глобальным вызовом с
-// FunctionName == operators.Index и двумя аргументами; первый аргумент —
-// IdentKind `vars`. Член-вызов (`x[y]()`) исключён формой узла.
+// isVarsIndex — a node of the form `vars[<expr>]` (CEL index operator `_[_]` over
+// the bare identifier `vars`). cel-go represents `a[b]` as a global call with
+// FunctionName == operators.Index and two arguments; the first argument is
+// IdentKind `vars`. A member call (`x[y]()`) is excluded by the node's shape.
 func isVarsIndex(n ast.Expr) bool {
 	c := n.AsCall()
 	if c.IsMemberFunction() || c.FunctionName() != "_[_]" {

@@ -1,15 +1,15 @@
 package config
 
-// Узкий CEL-эвалуатор для input-схемного ключа `required_when` (docs/input.md →
-// «Условная обявательность»). Намеренно НЕ зависит от shared/cel: тот несёт
-// полный Engine (vault()/glob()/merge()/coverage/soulprint.hosts) и весь
-// контекст scenario/destiny. required_when — input-валидация ДО render-фазы,
-// чистая функция от input.*; ей нужен минимальный env с ЕДИНСТВЕННОЙ переменной
-// `input`. Обращение к любому другому имени (essence/soulprint/register/…) →
-// compile-ошибка undeclared reference — sandbox обеспечивается необъявленностью,
-// симметрично migration-CEL ([ADR-019]). cel-go уже в модуле shared (тянет
-// shared/cel) — package-level зависимость config→cel-go не добавляет нового
-// module-dep и не создаёт цикла (cel-go — внешняя библиотека).
+// Narrow CEL evaluator for the input-schema key `required_when` (docs/input.md →
+// "Conditional requiredness"). Deliberately does NOT depend on shared/cel: that
+// carries the full Engine (vault()/glob()/merge()/coverage/soulprint.hosts) and
+// all scenario/destiny context. required_when is input validation BEFORE the
+// render phase, a pure function of input.*; it needs a minimal env with the SINGLE
+// variable `input`. Any other name (essence/soulprint/register/…) → compile-error
+// undeclared reference — the sandbox comes from undeclaration, like migration-CEL
+// ([ADR-019]). cel-go is already in the shared module (pulls shared/cel), so a
+// package-level config→cel-go dependency adds no new module-dep and creates no
+// cycle (cel-go is an external library).
 
 import (
 	"fmt"
@@ -21,11 +21,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// inputEnv — CEL-окружение required_when: единственная объявленная переменная
-// `input` (DynType, как остальной контекст Soul Stack — типизация по схемам
-// backlog). Иммутабелен после первой сборки; собирается лениво (env-сборка не
-// бесплатна, а большинство схем required_when не несут). Кеш программ —
-// inputPrograms (по нормализованному тексту выражения).
+// inputEnv — the required_when CEL environment: a single declared variable
+// `input` (DynType, like the rest of Soul Stack context — schema-based typing is
+// backlog). Immutable after first build; built lazily (env build is not free, and
+// most schemas carry no required_when). Program cache is inputPrograms (keyed by
+// normalized expression text).
 var (
 	inputEnvOnce sync.Once
 	inputEnv     *cel.Env
@@ -48,10 +48,10 @@ func requiredWhenEnv() (*cel.Env, error) {
 	return inputEnv, inputEnvErr
 }
 
-// compileRequiredWhen компилирует (и кеширует) предикат required_when против
-// inputEnv. Ошибка компиляции (синтаксис / неизвестный идентификатор вне `input`
-// / несовместимые типы) возвращается caller-у для классификации:
-// schema-валидатор → input_required_when_invalid, runtime → input-ошибка.
+// compileRequiredWhen compiles (and caches) a required_when predicate against
+// inputEnv. A compile error (syntax / unknown identifier outside `input` /
+// incompatible types) is returned to the caller for classification: schema
+// validator → input_required_when_invalid, runtime → input error.
 func compileRequiredWhen(expr string) (cel.Program, error) {
 	inputProgMu.RLock()
 	prg, ok := inputProgs[expr]
@@ -79,10 +79,10 @@ func compileRequiredWhen(expr string) (cel.Program, error) {
 	return prg, nil
 }
 
-// evalRequiredWhen вычисляет предикат required_when над смерженным input и
-// приводит результат к bool. Используется requireInputValues на input-стадии
-// (ПОСЛЕ mergeInputDefaults). merged nil-безопасен (пустой контекст). Не-bool
-// результат предиката — ошибка (required_when обязан возвращать булево).
+// evalRequiredWhen evaluates a required_when predicate over the merged input and
+// coerces the result to bool. Used by requireInputValues at the input stage (AFTER
+// mergeInputDefaults). merged is nil-safe (empty context). A non-bool predicate
+// result is an error (required_when must return a boolean).
 func evalRequiredWhen(expr string, merged map[string]any) (bool, error) {
 	prg, err := compileRequiredWhen(expr)
 	if err != nil {
@@ -102,18 +102,18 @@ func evalRequiredWhen(expr string, merged map[string]any) (bool, error) {
 	return b, nil
 }
 
-// validateRequiredWhen — schema-time статическая проверка: required_when —
-// непустая, парсимая/компилируемая против inputEnv CEL-строка. Применим к любому
-// type (условие — над прочим input, не над самим полем). Парс-ошибка или
-// обращение к имени вне `input` → input_required_when_invalid. kv — `required_when`
-// MappingValueNode (для line/col диагностики).
+// validateRequiredWhen — schema-time static check: required_when is a non-empty
+// CEL string that parses/compiles against inputEnv. Applies to any type (the
+// condition is over the rest of input, not the field itself). A parse error or a
+// name outside `input` → input_required_when_invalid. kv is the `required_when`
+// MappingValueNode (for line/col diagnostics).
 func validateRequiredWhen(s *InputSchema, kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if s == nil {
 		return nil
 	}
 	if s.RequiredWhen == "" {
-		// Пустая строка — бессмысленный предикат (нет условия). Отвергаем явно,
-		// иначе тихо никогда-не-обязателен (footgun автора схемы).
+		// Empty string is a meaningless predicate (no condition). Rejected
+		// explicitly, else it's silently never-required (schema author footgun).
 		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "input_required_when_invalid",

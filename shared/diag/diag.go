@@ -1,15 +1,14 @@
-// Package diag описывает структурную диагностику валидаторов Soul Stack.
+// Package diag describes the structured diagnostics of Soul Stack validators.
 //
-// Используется парсерами YAML (`shared/config`, `shared/manifest`, парсеры
-// destiny/scenario), офлайн-линтером (`soul-lint`) и hot-reload-pipeline
+// Used by the YAML parsers (`shared/config`, `shared/manifest`, the destiny/scenario
+// parsers), the offline linter (`soul-lint`), and the hot-reload pipeline
 // (`config.reload_failed → validation_errors[]`, [ADR-021](docs/architecture.md),
-// [ADR-022](docs/architecture.md)). Каталог `Code` — стабильные snake_case-имена
-// из категории Parser / validation errors ([docs/naming-rules.md → Error codes]).
+// [ADR-022](docs/architecture.md)). The `Code` catalog holds stable snake_case names
+// from the Parser / validation errors category ([docs/naming-rules.md → Error codes]).
 package diag
 
-// Level — открытый, но ограниченный enum уровней диагностики.
-// Maps на семантику apply-channel-а / Operator API: error блокирует, warning
-// не блокирует, hint только показывается.
+// Level is the open but bounded enum of diagnostic levels. Maps onto apply-channel /
+// Operator API semantics: error blocks, warning does not block, hint is only shown.
 type Level string
 
 const (
@@ -18,16 +17,16 @@ const (
 	LevelHint    Level = "hint"
 )
 
-// Phase — фаза validation pipeline, на которой обнаружена ошибка.
-// Используется в audit-event `config.reload_failed` ([ADR-021](docs/architecture.md))
-// и в выводе `soul-lint` для группировки.
+// Phase is the validation-pipeline phase at which an error was found. Used in the
+// `config.reload_failed` audit event ([ADR-021](docs/architecture.md)) and in
+// `soul-lint` output for grouping.
 //
-// Значения:
-//   - PhaseParse            — синтаксический parse YAML → AST.
-//   - PhaseSchemaValidate   — проверка структуры/типов/enum/range.
-//   - PhaseSemanticValidate — regex и cross-field invariant-ы.
-//   - PhaseWriteBack        — фаза записи (rendering AST → bytes, atomic
-//     rename, symlink-reject, round-trip degradation) под [ADR-021].
+// Values:
+//   - PhaseParse            — syntactic YAML → AST parse.
+//   - PhaseSchemaValidate   — structure/type/enum/range checks.
+//   - PhaseSemanticValidate — regex and cross-field invariants.
+//   - PhaseWriteBack        — the write phase (rendering AST → bytes, atomic
+//     rename, symlink-reject, round-trip degradation) under [ADR-021].
 type Phase string
 
 const (
@@ -37,12 +36,12 @@ const (
 	PhaseWriteBack        Phase = "write_back"
 )
 
-// Diagnostic — одна запись валидатора.
+// Diagnostic is a single validator record.
 //
-// `File`/`Line`/`Column` — позиция в исходном файле (если известна; для
-// cross-field invariant Line/Column могут быть 0).
-// `YAMLPath` — путь в формате goccy/go-yaml (`$.auth.jwt.signing_key_ref`).
-// `Hint` опционален: подсказка оператору, как починить.
+// `File`/`Line`/`Column` — position in the source file (if known; for a cross-field
+// invariant Line/Column may be 0).
+// `YAMLPath` — path in goccy/go-yaml format (`$.auth.jwt.signing_key_ref`).
+// `Hint` is optional: a hint to the operator on how to fix it.
 type Diagnostic struct {
 	Level    Level  `json:"level"`
 	Phase    Phase  `json:"phase"`
@@ -55,7 +54,7 @@ type Diagnostic struct {
 	YAMLPath string `json:"yaml_path,omitempty"`
 }
 
-// HasErrors — true, если в slice есть хотя бы одна запись уровня error.
+// HasErrors returns true if the slice has at least one error-level record.
 func HasErrors(ds []Diagnostic) bool {
 	for i := range ds {
 		if ds[i].Level == LevelError {

@@ -1,22 +1,22 @@
 package config
 
-// Переиспользуемые именованные типы input-схемы (`service/<name>/types.yml`).
+// Reusable named types of the input schema (`service/<name>/types.yml`).
 //
-// Сервис может объявить каталог типов — секцию `types:` (имя → схема в том же
-// InputSchema-DSL). Сценарии ссылаются на тип ключом-дискриминатором `$type`:
-// самостоятельным полем (`<param>: { $type: T }`) или элементом массива
-// (`items: { $type: T }`). При загрузке сервиса ссылки резолвятся —
-// [ResolveTypeRefs] подставляет схему типа на место узла-ссылки.
+// A service may declare a type catalog — the `types:` section (name → schema in the
+// same InputSchema DSL). Scenarios reference a type via the discriminator key `$type`:
+// as a standalone field (`<param>: { $type: T }`) or an array element
+// (`items: { $type: T }`). At service load the references are resolved —
+// [ResolveTypeRefs] substitutes the type's schema in place of the reference node.
 //
-// Резолв чистый (без I/O): caller (artifact/soul-lint) читает types.yml и
-// input-схемы, парсит их `shared/config`-ом, затем зовёт [ParseTypeCatalog] +
-// [ResolveTypeRefs]. Это параллель к резолву vars/templates-ресурсов на загрузке
-// сервиса (см. artifact/service.go): схема каталога валидируется один раз,
-// результат — самодостаточная input-схема без `$type`.
+// Resolution is pure (no I/O): the caller (artifact/soul-lint) reads types.yml and
+// the input schemas, parses them with `shared/config`, then calls [ParseTypeCatalog] +
+// [ResolveTypeRefs]. This parallels resolving vars/templates resources at service
+// load (see artifact/service.go): the catalog schema is validated once,
+// the result is a self-contained input schema without `$type`.
 //
-// MVP-границы (решение пользователя): object + array-of-type + вложенность
-// тип→тип с cycle-detection. БЕЗ scalar-alias, кросс-сервисных каталогов и
-// local-per-scenario типов.
+// MVP scope (user's decision): object + array-of-type + type→type nesting
+// with cycle-detection. WITHOUT scalar-alias, cross-service catalogs, and
+// local-per-scenario types.
 
 import (
 	"fmt"
@@ -29,48 +29,48 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// typesCatalogFile — имя каталога типов в корне Service-репо, рядом с
-// `service.yml`/`scenario/`/`migrations/`. Экспортируемая константа — caller
-// (artifact/soul-lint) читает файл сам, пакет config остаётся без I/O.
+// typesCatalogFile — the type-catalog file name at the Service repo root, next to
+// `service.yml`/`scenario/`/`migrations/`. An exported constant — the caller
+// (artifact/soul-lint) reads the file itself, the config package stays I/O-free.
 const TypesCatalogFile = "types.yml"
 
-// typesSectionKey — единственный top-level ключ в `types.yml`.
+// typesSectionKey — the only top-level key in `types.yml`.
 const typesSectionKey = "types"
 
-// reInputTypeName — имя именованного типа (ключ в `types:` и значение `$type:`).
-// Отдельное пространство имён от input-параметров (snake_case): тип — это
-// логический «класс» формы, поэтому строго PascalCase `^[A-Z][A-Za-z0-9]*$`
-// (naming-rules.md §«Named input types»). Стартует с заглавной буквы; внутри —
-// только буквы/цифры (без `_`/дефисов/точек/пробелов): имя пишется как есть в
-// `$type:` и должно быть однозначным токеном-классом.
+// reInputTypeName — a named type's name (the key in `types:` and the `$type:` value).
+// A separate namespace from input params (snake_case): a type is a
+// logical "class" of shape, hence strictly PascalCase `^[A-Z][A-Za-z0-9]*$`
+// (naming-rules.md §"Named input types"). Starts with an uppercase letter; inside —
+// only letters/digits (no `_`/dashes/dots/spaces): the name is written verbatim in
+// `$type:` and must be an unambiguous class token.
 var reInputTypeName = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 
-// typeRefResolveLimit — страховочный предел числа ПЕРЕХОДОВ ПО type-ref-ссылкам
-// (хопов A→$type B→$type C…) на случай, если cycle-detection пропустит патологию
-// (он не должен). Считается ТОЛЬКО type-ref-хоп — структурный спуск в items/
-// properties/additional_properties глубину НЕ инкрементит (иначе глубоко
-// вложенный обычный object даёт ложный input_type_cycle). Глубина графа типов в
-// реальных каталогах — единицы; 64 заведомо достаточно и ловит runaway по
-// ref-графу без переполнения стека.
+// typeRefResolveLimit — a safety cap on the number of type-ref HOPS
+// (A→$type B→$type C…) in case cycle-detection misses a pathology
+// (it should not). ONLY a type-ref hop is counted — structural descent into items/
+// properties/additional_properties does NOT increment depth (otherwise a deeply
+// nested plain object gives a false input_type_cycle). The type-graph depth in
+// real catalogs is single digits; 64 is amply sufficient and catches a runaway over
+// the ref-graph without a stack overflow.
 const typeRefResolveLimit = 64
 
-// validateTypeRefNode — структурная валидность одного узла-ссылки `{$type: T}`.
-// Узел уже опознан как ссылка (есть ключ `$type`), per-type-валидация для него
-// пропущена. Проверяем ИНВАРИАНТЫ ССЫЛКИ:
-//   - `$type` — непустая строка валидной формы (reInputTypeName);
-//   - конфликта с собственной формой нет: `type:`/`properties:`/`items:`
-//     ВМЕСТЕ с `$type` → input_type_ref_conflict (непонятно, что побеждает).
-//     `items: { $type: T }` — это items-ССЫЛКА уровня РОДИТЕЛЯ, она НЕ попадает
-//     сюда (родитель = array с items, а не узел с `$type`); здесь любой `items`
-//     рядом с `$type` — именно конфликт.
+// validateTypeRefNode — structural validity of one reference node `{$type: T}`.
+// The node is already identified as a reference (has a `$type` key); per-type
+// validation is skipped for it. We check the REFERENCE INVARIANTS:
+//   - `$type` — a non-empty string of valid form (reInputTypeName);
+//   - no conflict with an own shape: `type:`/`properties:`/`items:`
+//     TOGETHER with `$type` → input_type_ref_conflict (unclear which wins).
+//     `items: { $type: T }` is a PARENT-level items REFERENCE; it does NOT land
+//     here (the parent = an array with items, not a node with `$type`); here any
+//     `items` next to `$type` is exactly a conflict.
 //
-// Само существование типа T в каталоге проверяет [ResolveTypeRefs] (нужен
-// каталог) — здесь только локальная форма узла (симметрия validateSource:
-// форма локально, множество — резолвером).
+// The very existence of type T in the catalog is checked by [ResolveTypeRefs] (needs
+// the catalog) — here only the node's local shape (symmetric to validateSource:
+// shape locally, membership by the resolver).
 func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
-	// $type — должен быть непустой строкой валидной формы.
+	// $type — must be a non-empty string of valid form.
 	if _, ok := refKV.Value.(*ast.StringNode); !ok {
 		tok := refKV.Value.GetToken()
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -95,8 +95,8 @@ func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present ma
 		}))
 	}
 
-	// Конфликт: $type ВМЕСТЕ с собственной формой узла. Любой из этих ключей
-	// рядом с $type делает узел двусмысленным.
+	// Conflict: $type TOGETHER with the node's own shape. Any of these keys
+	// next to $type makes the node ambiguous.
 	for _, key := range []string{"type", "properties", "items"} {
 		kv, ok := present[key]
 		if !ok {
@@ -115,7 +115,7 @@ func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present ma
 	return out
 }
 
-// typeRef — безопасный геттер TypeRef (nil-safe).
+// typeRef — a safe TypeRef getter (nil-safe).
 func (s *InputSchema) typeRef() string {
 	if s == nil {
 		return ""
@@ -123,44 +123,44 @@ func (s *InputSchema) typeRef() string {
 	return s.TypeRef
 }
 
-// TypeCatalog — резолвнутый каталог именованных типов сервиса: имя → схема.
-// Значения — самодостаточные input-схемы (внутри них `$type`-ссылки уже
-// разрешены при построении каталога, с cycle-detection).
+// TypeCatalog — a service's resolved named-type catalog: name → schema.
+// The values are self-contained input schemas (their `$type` references are already
+// resolved when the catalog is built, with cycle-detection).
 type TypeCatalog map[string]*InputSchema
 
-// ParseTypeCatalog парсит `types.yml` (top-level секция `types:`: имя → схема в
-// InputSchema-DSL) и резолвит `$type`-ссылки МЕЖДУ типами с cycle-detection.
-// data — сырое содержимое types.yml; filename — для File-поля диагностик.
+// ParseTypeCatalog parses `types.yml` (top-level `types:` section: name → schema in
+// the InputSchema DSL) and resolves `$type` references BETWEEN types with cycle-detection.
+// data is the raw types.yml content; filename is for the diagnostics' File field.
 //
-// Возвращает каталог (имена → резолвнутые схемы) и diagnostics. При наличии
-// error-диагностик каталог может быть частичным/nil — caller проверяет
-// diag.HasErrors и не использует битый каталог.
+// Returns the catalog (names → resolved schemas) and diagnostics. When there are
+// error diagnostics the catalog may be partial/nil — the caller checks
+// diag.HasErrors and does not use a broken catalog.
 //
-// Ошибки:
-//   - input_type_duplicate — два типа с одним именем (ключ-коллизия в `types:`);
-//   - input_type_unknown   — `$type` ссылается на отсутствующий в каталоге тип;
-//   - input_type_cycle     — циклическая ссылка (A→$type B→$type A);
-//   - плюс обычные schema/semantic-ошибки самих схем типов (через
-//     validateInputSchemaMap — type-required, формат имён и т.п.).
+// Errors:
+//   - input_type_duplicate — two types with the same name (key collision in `types:`);
+//   - input_type_unknown   — `$type` references a type absent from the catalog;
+//   - input_type_cycle     — a cyclic reference (A→$type B→$type A);
+//   - plus the usual schema/semantic errors of the type schemas themselves (via
+//     validateInputSchemaMap — type-required, name format, etc.).
 //
-// Пустой/отсутствующий `types:` → пустой каталог без ошибок (сервис без типов
-// валиден).
+// An empty/absent `types:` → an empty catalog without errors (a service without types
+// is valid).
 func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnostic) {
 	data = stripBOM(data)
-	// AllowDuplicateMapKey: дубликат имени типа goccy иначе отверг бы parse-
-	// ошибкой; разрешаем парс, чтобы поднять доменный input_type_duplicate по AST.
+	// AllowDuplicateMapKey: goccy would otherwise reject a duplicate type name with a
+	// parse error; we allow the parse to raise the domain input_type_duplicate via the AST.
 	file, err := parser.ParseBytes(data, parser.ParseComments, parser.AllowDuplicateMapKey())
 	if err != nil {
 		return nil, []diag.Diagnostic{yamlParseDiag(filename, err)}
 	}
 	if len(file.Docs) == 0 || file.Docs[0].Body == nil {
-		// Пустой файл — пустой каталог. types.yml опционален.
+		// Empty file — empty catalog. types.yml is optional.
 		return TypeCatalog{}, nil
 	}
 	root, ok := file.Docs[0].Body.(*ast.MappingNode)
 	if !ok {
-		// Comment-only / whitespace-only файл → не mapping, но это валидный
-		// «нет типов» (types.yml опционален). Скаляр/sequence на корне — ошибка.
+		// A comment-only / whitespace-only file → not a mapping, but a valid
+		// "no types" (types.yml is optional). A scalar/sequence at the root — an error.
 		switch file.Docs[0].Body.(type) {
 		case *ast.CommentGroupNode, *ast.NullNode:
 			return TypeCatalog{}, nil
@@ -180,22 +180,22 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 	}
 
 	typesNode := findInputMapping(root, typesSectionKey)
-	// Декод секции в InputSchemaMap (тот же DSL, что input:). Декодируем весь
-	// файл в обёртку, чтобы переиспользовать UnmarshalYAML InputSchema.
+	// Decode the section into InputSchemaMap (the same DSL as input:). Decode the whole
+	// file into a wrapper to reuse InputSchema's UnmarshalYAML.
 	type typesFileYAML struct {
 		Types InputSchemaMap `yaml:"types"`
 	}
 	var decoded typesFileYAML
-	// AllowDuplicateMapKey на decode-фазе: дубликат имени типа уже разрешён на
-	// parse-фазе (см. выше); без него NodeToValue отверг бы decode `type_mismatch`,
-	// маскируя доменный input_type_duplicate (его поднимает AST-скан ниже).
+	// AllowDuplicateMapKey at the decode phase: a duplicate type name is already allowed at
+	// the parse phase (see above); without it NodeToValue would reject the decode with
+	// `type_mismatch`, masking the domain input_type_duplicate (raised by the AST scan below).
 	if derr := yaml.NodeToValue(root, &decoded, yaml.AllowDuplicateMapKey()); derr != nil {
 		return nil, []diag.Diagnostic{decodeErrorDiag(filename, derr)}
 	}
 
 	var diags []diag.Diagnostic
 
-	// Unknown top-level ключи (только `types:` допустим).
+	// Unknown top-level keys (only `types:` is allowed).
 	for _, kv := range root.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil || tok.Value == typesSectionKey {
@@ -211,12 +211,12 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 	}
 
 	if typesNode == nil {
-		// Нет секции types: (или она не mapping) → пустой каталог.
+		// No types: section (or it is not a mapping) → empty catalog.
 		return TypeCatalog{}, withFile(diags, filename)
 	}
 
-	// input_type_duplicate — два типа с одним именем. goccy декодирует map с
-	// last-wins, теряя дубликат; ловим по AST до того, как он схлопнется.
+	// input_type_duplicate — two types with the same name. goccy decodes the map
+	// last-wins, losing the duplicate; catch it via the AST before it collapses.
 	seen := map[string]bool{}
 	for _, kv := range typesNode.Values {
 		tok := kv.Key.GetToken()
@@ -246,12 +246,12 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 		}
 	}
 
-	// Schema/semantic-валидация самих схем типов (type-required, формат полей,
-	// $type-ref-conflict внутри типа и т.п.). НЕ через validateInputSchemaMap:
-	// тот применяет к ключам snake_case-regex input-параметров, а имена типов —
-	// PascalCase (своя проверка имени уже сделана в duplicate-loop выше). Здесь
-	// валидируем только ТЕЛО каждого типа. $type-ссылка ВНУТРИ типа на другой тип
-	// допустима (вложенность тип→тип); её существование проверит резолв ниже.
+	// Schema/semantic validation of the type schemas themselves (type-required, field format,
+	// $type-ref-conflict inside a type, etc.). NOT via validateInputSchemaMap:
+	// that applies the input-param snake_case regex to keys, but type names are
+	// PascalCase (their own name check is already done in the duplicate loop above). Here
+	// we validate only the BODY of each type. A $type reference INSIDE a type to another type
+	// is allowed (type→type nesting); its existence is checked by the resolve below.
 	for _, kv := range typesNode.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -270,9 +270,9 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 		diags = append(diags, validateInputSchemaNode(decoded.Types[tok.Value], bodyNode, "$.types."+tok.Value)...)
 	}
 
-	// Резолв `$type`-ссылок между типами с cycle-detection. Работаем на КОПИИ
-	// схем (resolveSchemaRefs мутирует поддерево), чтобы каталог отдавал
-	// самодостаточные значения.
+	// Resolve `$type` references between types with cycle-detection. We work on a COPY
+	// of the schemas (resolveSchemaRefs mutates the subtree) so the catalog returns
+	// self-contained values.
 	catalog := make(TypeCatalog, len(decoded.Types))
 	for name, schema := range decoded.Types {
 		catalog[name] = schema
@@ -288,30 +288,30 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 	return catalog, withFile(diags, filename)
 }
 
-// resolveOneType резолвит схему одного типа `name` из каталога: рекурсивно
-// подставляет все `$type`-ссылки внутри неё, отслеживая путь обхода для
-// cycle-detection. `path` — yaml-path для диагностик.
+// resolveOneType resolves the schema of one type `name` from the catalog: recursively
+// substitutes all `$type` references inside it, tracking the traversal path for
+// cycle-detection. `path` is the yaml-path for diagnostics.
 func resolveOneType(name string, catalog TypeCatalog, path string) (*InputSchema, []diag.Diagnostic) {
 	schema := catalog[name]
 	if schema == nil {
 		return nil, nil
 	}
-	// Стек активных типов на текущей ветке обхода — для обнаружения цикла.
+	// The stack of active types on the current traversal branch — for cycle detection.
 	stack := map[string]bool{name: true}
 	return resolveSchemaRefs(schema, catalog, stack, path, 0)
 }
 
-// resolveSchemaRefs возвращает копию `schema` со всеми `$type`-ссылками,
-// разрешёнными подстановкой схем из каталога. `stack` — множество типов на
-// текущей ветке обхода (cycle-detection: повторный заход в тип на стеке =
-// input_type_cycle). Резолв НЕ мутирует исходную схему — строит новую,
-// поэтому общий тип, использованный дважды в разных ветках, резолвится
-// независимо без ложного цикла.
+// resolveSchemaRefs returns a copy of `schema` with all `$type` references
+// resolved by substituting schemas from the catalog. `stack` is the set of types on
+// the current traversal branch (cycle-detection: re-entering a type on the stack =
+// input_type_cycle). Resolution does NOT mutate the source schema — it builds a new one,
+// so a shared type used twice in different branches resolves
+// independently without a false cycle.
 //
-// `depth` — число пройденных type-ref-ХОПОВ на текущей ветке (цикл — свойство
-// ref-графа): инкрементится ТОЛЬКО при заходе в целевой тип ссылки. Структурный
-// спуск в items/properties/additional_properties глубину НЕ трогает, иначе
-// глубоко вложенный обычный object ложно превысил бы лимит и дал input_type_cycle.
+// `depth` is the number of type-ref HOPS traversed on the current branch (a cycle is a
+// property of the ref-graph): incremented ONLY when entering a reference's target type.
+// Structural descent into items/properties/additional_properties leaves depth untouched,
+// otherwise a deeply nested plain object would falsely exceed the limit and give input_type_cycle.
 func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[string]bool, path string, depth int) (*InputSchema, []diag.Diagnostic) {
 	if schema == nil {
 		return nil, nil
@@ -325,7 +325,7 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 		}}
 	}
 
-	// Узел-ссылка: подставляем схему целевого типа (рекурсивно резолвнутую).
+	// Reference node: substitute the target type's schema (recursively resolved).
 	if schema.TypeRef != "" {
 		ref := schema.TypeRef
 		if stack[ref] {
@@ -350,18 +350,18 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 		stack[ref] = true
 		resolved, diags := resolveSchemaRefs(target, catalog, stack, path, depth+1)
 		delete(stack, ref)
-		// Собственные ключи узла-ссылки (description/required/required_when) поверх
-		// резолвнутого типа — applyRefOverlay (форму типа не трогает). Конфликтующие
-		// ключи (type/properties/items) уже отвергнуты conflict-проверкой.
+		// The reference node's own keys (description/required/required_when) over the
+		// resolved type — applyRefOverlay (does not touch the type's shape). Conflicting
+		// keys (type/properties/items) are already rejected by the conflict check.
 		if resolved != nil {
 			applyRefOverlay(schema, resolved)
 		}
 		return resolved, diags
 	}
 
-	// Обычный узел: копируем и рекурсивно резолвим items/properties/AP.
-	// Структурный спуск НЕ инкрементит depth — лимит считает только type-ref-хопы
-	// (см. doc-комментарий): глубокий обычный object не должен ложно сработать.
+	// Plain node: copy and recursively resolve items/properties/AP.
+	// Structural descent does NOT increment depth — the limit counts only type-ref hops
+	// (see the doc comment): a deep plain object must not trip it falsely.
 	out := *schema
 	var diags []diag.Diagnostic
 
@@ -388,15 +388,15 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 	return &out, diags
 }
 
-// applyRefOverlay накладывает собственные ключи узла-ссылки `{ $type: T, … }`
-// поверх резолвнутой схемы типа — хирургически, форму типа не меняя:
-//   - description — подпись ссылки;
-//   - field-level обязательность ссылки (`required: <bool>`, requiredKind==
-//     requiredBool) → поле Required. requiredKind/RequiredProps резолвнутого типа
-//     НЕ трогаем: object-level `required: [a,b]` типа (requiredList) и field-
-//     mandatory ссылки — РАЗНЫЕ поля модели, сосуществуют (requireInputValues
-//     читает Required, validateObjectFields — RequiredProps);
-//   - required_when — CEL-условная обязательность ссылки, если тип её не задал.
+// applyRefOverlay overlays the reference node's own keys `{ $type: T, … }`
+// on top of the resolved type schema — surgically, without changing the type's shape:
+//   - description — the reference's label;
+//   - the reference's field-level requiredness (`required: <bool>`, requiredKind==
+//     requiredBool) → the Required field. The resolved type's requiredKind/RequiredProps
+//     are left untouched: the type's object-level `required: [a,b]` (requiredList) and the
+//     reference's field-mandatory flag are DIFFERENT model fields that coexist (requireInputValues
+//     reads Required, validateObjectFields reads RequiredProps);
+//   - required_when — the reference's CEL-conditional requiredness, if the type did not set it.
 func applyRefOverlay(ref, resolved *InputSchema) {
 	if ref.Description != "" {
 		resolved.Description = ref.Description
@@ -409,13 +409,13 @@ func applyRefOverlay(ref, resolved *InputSchema) {
 	}
 }
 
-// ResolveTypeRefs резолвит `$type`-ссылки в input-схеме `in` (например, input:
-// сценария) по каталогу типов сервиса. Возвращает НОВУЮ схему-map с
-// подставленными типами и diagnostics (input_type_unknown / input_type_cycle).
+// ResolveTypeRefs resolves `$type` references in the input schema `in` (e.g. a scenario's
+// input:) against the service's type catalog. Returns a NEW schema map with
+// the types substituted and diagnostics (input_type_unknown / input_type_cycle).
 //
-// Исходный `in` не мутируется. Узлы без `$type` копируются как есть (back-compat:
-// схемы без типов проходят насквозь). Каталог `catalog` уже резолвнут
-// внутри себя ([ParseTypeCatalog]); здесь резолвится только сторона потребителя.
+// The source `in` is not mutated. Nodes without `$type` are copied as-is (back-compat:
+// schemas without types pass straight through). The `catalog` is already resolved
+// within itself ([ParseTypeCatalog]); here only the consumer side is resolved.
 func ResolveTypeRefs(in InputSchemaMap, catalog TypeCatalog) (InputSchemaMap, []diag.Diagnostic) {
 	if in == nil {
 		return nil, nil
@@ -423,9 +423,9 @@ func ResolveTypeRefs(in InputSchemaMap, catalog TypeCatalog) (InputSchemaMap, []
 	out := make(InputSchemaMap, len(in))
 	var diags []diag.Diagnostic
 	for name, schema := range in {
-		// Свежий стек на каждый параметр: ссылка из параметра в тип не образует
-		// цикла сама по себе; циклы — только МЕЖДУ типами (уже отловлены в
-		// ParseTypeCatalog), но проверяем повторно для надёжности.
+		// A fresh stack per parameter: a reference from a param into a type does not form
+		// a cycle by itself; cycles are only BETWEEN types (already caught in
+		// ParseTypeCatalog), but we re-check for robustness.
 		stack := map[string]bool{}
 		resolved, d := resolveSchemaRefs(schema, catalog, stack, "$.input."+name, 0)
 		out[name] = resolved
@@ -434,8 +434,8 @@ func ResolveTypeRefs(in InputSchemaMap, catalog TypeCatalog) (InputSchemaMap, []
 	return out, diags
 }
 
-// withFile проставляет File тем диагностикам, где оно пустое (унификация с
-// parseAndValidate). Возвращает тот же slice (мутирует in-place).
+// withFile sets File on diagnostics where it is empty (unification with
+// parseAndValidate). Returns the same slice (mutates in place).
 func withFile(ds []diag.Diagnostic, file string) []diag.Diagnostic {
 	for i := range ds {
 		if ds[i].File == "" {

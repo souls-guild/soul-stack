@@ -12,29 +12,28 @@ import (
 	"path/filepath"
 )
 
-// ErrPluginDigestMismatch — бинарь плагина не совпал с зафиксированным в
-// sidecar SHA-256. Сигнализирует подмену бинаря в кеше host-а после первой
-// загрузки (security fix H2, docs/keeper/plugins.md → Integrity-model).
+// ErrPluginDigestMismatch — the plugin binary did not match the SHA-256 pinned
+// in the sidecar. Signals binary tampering in the host cache after first load
+// (security fix H2, docs/keeper/plugins.md → Integrity-model).
 //
-// Caller-ы сверяют через errors.Is, чтобы отличить tamper от прочих
-// I/O-ошибок Spawn.
+// Callers compare via errors.Is to distinguish tamper from other Spawn I/O errors.
 var ErrPluginDigestMismatch = errors.New("pluginhost: plugin binary digest mismatch")
 
-// DigestSidecarName — имя sidecar-файла рядом с бинарём плагина в кеше host-а.
-// Точкой в начале файл не прячется в общем листинге, но визуально отделён от
-// бинаря и manifest.yaml. Экспортировано для install-flow core.module.installed
-// (ADR-065): при замене бинаря слота stale-sidecar удаляется до atomic rename.
+// DigestSidecarName is the sidecar file next to the plugin binary in the host
+// cache. The leading dot doesn't hide it from a listing but visually separates it
+// from the binary and manifest.yaml. Exported for the core.module.installed
+// install-flow (ADR-065): on slot binary replacement the stale sidecar is removed
+// before the atomic rename.
 const DigestSidecarName = ".sha256"
 
-// digestSidecarMode — sidecar пишется read-only: после первой загрузки запись
-// в него не предполагается, а защита от подмены digest-а вместе с бинарём
-// держится на правах каталога (least-privilege service-user, см.
+// digestSidecarMode — the sidecar is written read-only: no writes are expected
+// after first load, and protection against swapping the digest along with the
+// binary rests on directory permissions (least-privilege service-user, see
 // docs/keeper/plugins.md → Permissions).
 const digestSidecarMode = 0o400
 
-// computeFileDigest считает SHA-256 файла потоково (без чтения целиком в
-// память — бинари плагинов могут быть десятки МБ). Возвращает hex-строку
-// нижним регистром.
+// computeFileDigest streams the file's SHA-256 (without reading it wholly into
+// memory — plugin binaries can be tens of MB). Returns a lowercase hex string.
 func computeFileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -49,35 +48,34 @@ func computeFileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// verifySigilAndSeal — fail-closed verify бинаря плагина против печати доверия
-// Sigil (ADR-026, slice S6b), заменивший TOFU-ветку first-load. Возвращает nil
-// только если плагин допущен и целостность подтверждена; любой провал →
-// *VerifyError (errors.Is(err, ErrSigilVerify)) и плагин НЕ запускается.
+// verifySigilAndSeal — fail-closed verify of the plugin binary against the Sigil
+// trust seal (ADR-026, slice S6b), replacing the first-load TOFU branch. Returns
+// nil only if the plugin is allowed and integrity is confirmed; any failure →
+// *VerifyError (errors.Is(err, ErrSigilVerify)) and the plugin does NOT start.
 //
-// Шаги (нормативный порядок, симметричный Keeper-side Sign из keeper/internal/sigil):
-//  1. digest бинаря с диска (binDigestHex);
-//  2. lookup допуска по (ns, name); rec == nil → fail-closed no_sigil
-//     (не-доехавший Sigil = «не допущен», НЕ «ошибка → допустить»);
-//  3. пустой набор якорей → fail-closed no_trust_anchor (Sigil не настроен на Keeper);
-//  4. сверка digest бинаря с допущенным хешем (binary_sha256) → digest_mismatch;
-//  5. manifest_sha256 = SHA-256(NormalizeManifestBytes(rec.Manifest)) — байты ИЗ
-//     ТРАНСПОРТА (M1), НЕ файл с диска;
-//  6. block = BuildSigilBlock(...) — тот же helper, что Keeper при Sign
-//     (симметрия sign↔verify гарантируется компилятором, не второй имплементацией);
-//  7. OR-цикл по набору якорей (ADR-026(h), multi-anchor): подпись валидна, если
-//     ed25519.Verify подтвердил её ЛЮБОЙ якорь из набора → pass; ни один из
-//     непустого набора → bad_signature. OR-семантика даёт безразрывную ротацию
-//     ключа подписи (старый и новый anchor сосуществуют в наборе);
-//  8. OK → seal sidecar (для re-exec defense-in-depth) + nil.
+// Steps (normative order, symmetric to the Keeper-side Sign in keeper/internal/sigil):
+//  1. binary digest from disk (binDigestHex);
+//  2. lookup by (ns, name); rec == nil → fail-closed no_sigil (a Sigil that didn't
+//     arrive = "not allowed", NOT "error → allow");
+//  3. empty anchor set → fail-closed no_trust_anchor (Sigil not configured on Keeper);
+//  4. compare the binary digest with the allowed hash (binary_sha256) → digest_mismatch;
+//  5. manifest_sha256 = SHA-256(NormalizeManifestBytes(rec.Manifest)) — bytes FROM
+//     TRANSPORT (M1), NOT the file on disk;
+//  6. block = BuildSigilBlock(...) — the same helper Keeper uses at Sign (sign↔verify
+//     symmetry guaranteed by the compiler, not a second implementation);
+//  7. OR loop over the anchor set (ADR-026(h), multi-anchor): the signature is valid
+//     if ANY anchor in the set verifies it via ed25519.Verify → pass; none of a
+//     non-empty set → bad_signature. OR semantics give seamless signing-key rotation
+//     (old and new anchor coexist in the set);
+//  8. OK → seal sidecar (for re-exec defense-in-depth) + nil.
 //
-// re-exec остаётся defense-in-depth: при последующих exec из shared-кеша
-// проверяется sidecar (см. [Host.Spawn] вызывает повторно — sidecar совпадёт).
-// НО отсутствие sidecar больше НЕ значит «доверяй»: это значит «нужен
-// Sigil-verify», который и выполняется здесь каждый раз.
+// re-exec stays defense-in-depth: subsequent execs from the shared cache check the
+// sidecar (see [Host.Spawn] calls again — the sidecar matches). But a missing sidecar
+// no longer means "trust": it means "Sigil-verify needed", performed here every time.
 //
-// ns/name берутся из manifest плагина (d.Manifest.Namespace/.Name); ref — из
-// rec (operator-asserted, с диска не сверяется, single-slot). anchors — снимок
-// набора trust-anchor-ов (ADR-026(h)); пустой набор → no_trust_anchor.
+// ns/name come from the plugin manifest (d.Manifest.Namespace/.Name); ref from rec
+// (operator-asserted, not checked against disk, single-slot). anchors — a snapshot of
+// the trust-anchor set (ADR-026(h)); empty set → no_trust_anchor.
 func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed25519.PublicKey, sigils SigilLookup) error {
 	binDigestHex, err := computeFileDigest(binaryPath)
 	if err != nil {
@@ -92,8 +90,8 @@ func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed255
 		return err
 	}
 
-	// Verify пройден → seal sidecar для re-exec defense-in-depth. Если sidecar
-	// уже есть (повторный Spawn из кеша) — сверяем digest вместо записи.
+	// Verify passed → seal sidecar for re-exec defense-in-depth. If the sidecar
+	// already exists (repeat Spawn from cache), compare the digest instead of writing.
 	sidecarPath := filepath.Join(dir, DigestSidecarName)
 	want, rerr := os.ReadFile(sidecarPath)
 	switch {
@@ -106,11 +104,11 @@ func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed255
 	}
 }
 
-// VerifyArtifactBytes — fail-closed Sigil-verify СКАЧАННЫХ байтов артефакта ДО
-// материализации на диск (ADR-065(f), install-flow core.module.installed).
-// Та же нормативная цепочка, что у [verifySigilAndSeal] (digest → подпись по
-// блоку), но вход — байты в памяти; sidecar-seal не выполняется — файла ещё нет,
-// его запечатает первый Spawn после установки.
+// VerifyArtifactBytes — fail-closed Sigil-verify of DOWNLOADED artifact bytes
+// BEFORE materializing to disk (ADR-065(f), core.module.installed install-flow).
+// Same normative chain as [verifySigilAndSeal] (digest → signature over the block),
+// but the input is in-memory bytes; no sidecar-seal is done — the file doesn't exist
+// yet, the first Spawn after install seals it.
 func VerifyArtifactBytes(data []byte, rec *SigilRecord, anchors *AnchorSet) error {
 	sum := sha256.Sum256(data)
 	var namespace, name string
@@ -120,10 +118,10 @@ func VerifyArtifactBytes(data []byte, rec *SigilRecord, anchors *AnchorSet) erro
 	return verifyRecordAgainstDigest(hex.EncodeToString(sum[:]), namespace, name, rec, anchors.snapshot())
 }
 
-// verifyRecordAgainstDigest — общая середина verify (шаги 2–7 нормативного
-// порядка [verifySigilAndSeal]): lookup-результат → anchors → digest-сверка →
-// подпись блока. binDigestHex — фактический digest проверяемого артефакта
-// (файл или байты в памяти).
+// verifyRecordAgainstDigest — the shared middle of verify (steps 2–7 of the
+// normative order in [verifySigilAndSeal]): lookup result → anchors → digest compare
+// → block signature. binDigestHex is the actual digest of the artifact under check
+// (file or in-memory bytes).
 func verifyRecordAgainstDigest(binDigestHex, namespace, name string, rec *SigilRecord, anchors []ed25519.PublicKey) error {
 	if rec == nil {
 		return verifyErrorFor(VerifyReasonNoSigil, namespace, name, "")
@@ -134,13 +132,13 @@ func verifyRecordAgainstDigest(binDigestHex, namespace, name string, rec *SigilR
 
 	binRaw, err := hex.DecodeString(rec.BinarySHA256hex)
 	if err != nil {
-		// Допущенный хеш не hex — допуск битый, fail-closed как mismatch (бинарь
-		// заведомо не совпадёт с невалидным эталоном).
+		// Allowed hash isn't hex — the record is broken, fail-closed as mismatch
+		// (the binary can't match an invalid reference).
 		return verifyErrorFor(VerifyReasonDigestMismatch, namespace, name, rec.Ref)
 	}
 	actualRaw, err := hex.DecodeString(binDigestHex)
 	if err != nil {
-		// computeFileDigest всегда отдаёт валидный hex — defensive.
+		// computeFileDigest always returns valid hex — defensive.
 		return fmt.Errorf("pluginhost: decode binary digest %q: %w", binDigestHex, err)
 	}
 	if subtle.ConstantTimeCompare(binRaw, actualRaw) != 1 {
@@ -155,14 +153,14 @@ func verifyRecordAgainstDigest(binDigestHex, namespace, name string, rec *SigilR
 	return nil
 }
 
-// verifyAnyAnchor — OR-проверка подписи против набора trust-anchor-ов
-// (ADR-026(h), multi-anchor). Возвращает true, если подпись подтвердил хотя бы
-// один якорь из набора; перебор останавливается на первом успехе.
+// verifyAnyAnchor — OR-check of the signature against the trust-anchor set
+// (ADR-026(h), multi-anchor). Returns true if at least one anchor verifies the
+// signature; iteration stops at the first success.
 //
-// Перебор последовательный (не constant-time по числу якорей): набор якорей —
-// publicly-known публичные ключи, не секрет, а само ed25519.Verify
-// constant-time относительно подписи. Якорей единицы (primary + ротируемые),
-// поэтому стоимость перебора пренебрежима в холодном Spawn-пути.
+// Iteration is sequential (not constant-time in the anchor count): anchors are
+// publicly-known public keys, not secret, and ed25519.Verify itself is constant-time
+// with respect to the signature. Anchors number a few (primary + rotated), so the
+// scan cost is negligible on the cold Spawn path.
 func verifyAnyAnchor(anchors []ed25519.PublicKey, block, signature []byte) bool {
 	for _, pub := range anchors {
 		if len(pub) == 0 {
@@ -175,8 +173,8 @@ func verifyAnyAnchor(anchors []ed25519.PublicKey, block, signature []byte) bool 
 	return false
 }
 
-// verifyDigest сверяет фактический digest бинаря с ожидаемым (из sidecar).
-// Лишние пробелы/перевод строки в sidecar игнорируются.
+// verifyDigest compares the binary's actual digest with the expected one (from the
+// sidecar). Surrounding whitespace/newlines in the sidecar are ignored.
 func verifyDigest(binaryPath, wantRaw string) error {
 	want := trimDigest(wantRaw)
 	got, err := computeFileDigest(binaryPath)
@@ -189,10 +187,10 @@ func verifyDigest(binaryPath, wantRaw string) error {
 	return nil
 }
 
-// sealDigest фиксирует digest бинаря в sidecar при первой загрузке.
-// Запись атомарна через temp-файл + rename, чтобы конкурентные Spawn не
-// увидели полупустой sidecar. Если sidecar успел появиться между проверкой и
-// записью (гонка двух first-load Spawn) — переключаемся на verify.
+// sealDigest records the binary digest into the sidecar on first load. The write is
+// atomic via temp-file + rename so concurrent Spawns don't see a half-written sidecar.
+// If the sidecar appeared between check and write (a race of two first-load Spawns),
+// switch to verify.
 func sealDigest(binaryPath, sidecarPath string) error {
 	digest, err := computeFileDigest(binaryPath)
 	if err != nil {
@@ -225,7 +223,7 @@ func sealDigest(binaryPath, sidecarPath string) error {
 	return nil
 }
 
-// trimDigest убирает окружающие пробелы/перевод строки из содержимого sidecar.
+// trimDigest strips surrounding whitespace/newlines from the sidecar content.
 func trimDigest(s string) string {
 	start, end := 0, len(s)
 	for start < end && isSpaceByte(s[start]) {

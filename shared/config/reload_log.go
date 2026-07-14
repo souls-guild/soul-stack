@@ -6,11 +6,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// SignalEnabled — включён ли SIGHUP-reload (ADR-021(b)) по этому блоку
-// hot_reload. Default true: блок `hot_reload` в keeper.yml/soul.yml
-// опционален, его отсутствие = поведение по умолчанию (watcher работает).
-// Явное `enable_signal: false` отключает. Nil-receiver-guard — оба main-а
-// передают опц. указатель из конфига без предварительной nil-проверки.
+// SignalEnabled reports whether SIGHUP reload (ADR-021(b)) is enabled for this
+// hot_reload block. Default true: the `hot_reload` block in keeper.yml/soul.yml
+// is optional, and its absence = default behavior (the watcher runs). An
+// explicit `enable_signal: false` disables it. Nil-receiver guard — both mains
+// pass the optional config pointer without a prior nil check.
 func (hr *HotReload) SignalEnabled() bool {
 	if hr == nil {
 		return true
@@ -18,12 +18,12 @@ func (hr *HotReload) SignalEnabled() bool {
 	return hr.EnableSignal
 }
 
-// LogReloads читает результаты SIGHUP-reload-ов из канала [WatchSIGHUP] и
-// логирует каждый: succeeded (с correlation_id) или failed (с phase и первой
-// error-диагностикой). Завершается, когда watcher закрывает канал (на
-// ctx.Done). Audit-эмиссия config.reload_* идёт внутри Store.Reload — здесь
-// только slog-наблюдаемость (на Soul-е audit_log-БД нет, поэтому это
-// единственный канал видимости reload-ов).
+// LogReloads reads SIGHUP reload results from the [WatchSIGHUP] channel and
+// logs each: succeeded (with correlation_id) or failed (with phase and the
+// first error diagnostic). Returns when the watcher closes the channel (on
+// ctx.Done). Audit emission of config.reload_* happens inside Store.Reload —
+// here only slog observability (Soul has no audit_log DB, so this is the only
+// visibility channel for reloads).
 func LogReloads(ch <-chan ReloadResult, logger *slog.Logger) {
 	for res := range ch {
 		if res.Swapped {
@@ -47,7 +47,7 @@ func LogReloads(ch <-chan ReloadResult, logger *slog.Logger) {
 	}
 }
 
-// firstErrorDiag — первая error-диагностика для лога failed-reload-а.
+// firstErrorDiag returns the first error diagnostic for the failed-reload log.
 func firstErrorDiag(ds []diag.Diagnostic) *diag.Diagnostic {
 	for i := range ds {
 		if ds[i].Level == diag.LevelError {

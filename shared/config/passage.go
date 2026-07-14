@@ -1,76 +1,79 @@
 package config
 
-// Passage-стратификация ([ADR-056](../../docs/adr/0056-staged-render-passage.md)).
-// ЧИСТАЯ функция над планом задач прогона ([]Task после ExpandIncludes): вычисляет
-// для каждой задачи её Passage-индекс (0-based) по графу cross-task register-
-// зависимости и валидирует граф (цикл / висячая ссылка). НИЧЕГО не исполняет и не
-// рендерит — stage-loop (render→dispatch→barrier→повтор) живёт keeper-side.
+// Passage stratification ([ADR-056](../../docs/adr/0056-staged-render-passage.md)).
+// A PURE function over a run's task plan ([]Task after ExpandIncludes): computes
+// each task's 0-based Passage index from the cross-task register-dependency graph
+// and validates that graph (cycle / dangling reference). It executes and renders
+// nothing — the stage-loop (render→dispatch→barrier→repeat) lives keeper-side.
 //
-// Живёт в shared/config (а не keeper-internal): один и тот же граф register-
-// зависимости обязан строиться (а) keeper-рантаймом перед dispatch, (б) keeper-
-// тестами, (в) ОФЛАЙН soul-lint-ом ДО apply. Дубль логики между ними = риск
-// silent-wrong-target (расхождение графа). keeper/internal/render держит тонкие
-// alias-ы (Stratify/Passage/коды) на эти символы.
+// It lives in shared/config (not keeper-internal) because the same register-
+// dependency graph must be built by (a) the keeper runtime before dispatch, (b)
+// keeper tests, (c) OFFLINE soul-lint BEFORE apply. Duplicated logic between them
+// risks silent-wrong-target (graph divergence). keeper/internal/render keeps thin
+// aliases (Stratify/Passage/codes) onto these symbols.
 //
-// Зачем (ADR-056, §«Риски — silent-wrong-target»). Задача, читающая `register.X`
-// в любом passage-определяющем register-источнике, ОБЯЗАНА исполниться строго
-// ПОСЛЕ probe-шага, эмитящего `register: X` (probe и его потребитель не могут
-// оказаться в одном Passage) — иначе `where:` отберёт хосты по пустому/устаревшему
-// register и разрушительная операция уйдёт не на те хосты МОЛЧА.
+// Why (ADR-056, §"Risks — silent-wrong-target"): a task reading `register.X` in any
+// passage-defining register source MUST run strictly AFTER the probe step emitting
+// `register: X` (probe and its consumer cannot share a Passage) — else `where:`
+// selects hosts on an empty/stale register and a destructive operation SILENTLY hits
+// the wrong hosts.
 //
-// Канонический реестр passage-определяющих register-источников Task (ADR-056):
+// Canonical registry of passage-defining register sources of a Task (ADR-056):
 //
-//	where · vars · params · apply.input · output · loop.items · loop.when · block (рекурсия).
+//	where · vars · params · apply.input · output · loop.items · loop.when · block (recursion).
 //
-// Все они резолвятся Keeper-side ДО dispatch, поэтому обязаны видеть register
-// предыдущего Passage → определяют Passage.
+// All resolve Keeper-side BEFORE dispatch, so they must see the previous Passage's
+// register → they define Passage.
 //
-// roster-refresh граница (ADR-0061 §S2, ОТДЕЛЬНАЯ ОСЬ от register): задача
-// `core.soul.registered` с `refresh_soulprint: true` — passage-определяющий эмиттер
-// «roster-refreshed»; roster-потребитель (on:[incarnation.name] / soulprint.hosts /
-// soulprint.self.* / опущенный on:) ПОСЛЕ него едет в следующий Passage. Это не
-// register-граф (refresh не вводит register-ссылок → reads⊆refs не затрагивается);
-// логика — в passage_refresh.go, ребро вшито в visit() ниже. См. passage_refresh.go.
+// roster-refresh boundary (ADR-0061 §S2, a SEPARATE AXIS from register): a
+// `core.soul.registered` task with `refresh_soulprint: true` is a passage-defining
+// "roster-refreshed" emitter; a roster consumer (on:[incarnation.name] /
+// soulprint.hosts / soulprint.self.* / omitted on:) after it moves to the next
+// Passage. This is not the register graph (refresh introduces no register refs →
+// reads⊆refs is untouched); logic lives in passage_refresh.go, the edge is wired into
+// visit() below.
 //
-// requisites (`onchanges`/`onfail`/`require`) — НЕ passage-определяющие (адресные
-// ссылки, не интерполяция). Flow-control CEL `when`/`changed_when`/`failed_when`/
-// `retry.until` тоже НЕ определяет passage (ADR-056:85) — это Soul-side per-task
-// gating ([ADR-012(d)], исполняется в срезе одного ApplyRequest из своего register).
-// Они НЕ входят в collectTaskReads: иначе register-зависимый `when` расщеплял бы
-// probe и same-passage потребителя по разным Passage, где Soul cross-passage
-// register не видит → `no such key` (FC-5). Genuinely cross-passage `when`
-// (probe в раннем Passage по ДРУГОЙ причине) — UNSUPPORTED, ловится отдельным
-// детектором CrossPassageWhenGating (fail-closed, симметрия within-block).
+// requisites (`onchanges`/`onfail`/`require`) are NOT passage-defining (addressed
+// references, not interpolation). Flow-control CEL `when`/`changed_when`/
+// `failed_when`/`retry.until` also does not define passage (ADR-056:85) — it is
+// Soul-side per-task gating ([ADR-012(d)], evaluated within one ApplyRequest from its
+// own register). They are excluded from collectTaskReads: otherwise a register-
+// dependent `when` would split a probe and its same-passage consumer across Passages,
+// where the Soul cannot see cross-passage register → `no such key` (FC-5). Genuinely
+// cross-passage `when` (probe in an earlier Passage for ANOTHER reason) is
+// UNSUPPORTED, caught by the separate CrossPassageWhenGating detector (fail-closed,
+// symmetric to within-block).
 //
-// Инвариант сопровождения: новое keeper-рендеримое passage-определяющее register-
-// читающее поле Task обязано синхронно появиться в collectTaskReads (тут) И в
-// collectRefs (cross-ref-валидатор task_refs.go) И в реестре ADR-056. Flow-control
-// (`when`/`changed_when`/`failed_when`) — НАМЕРЕННАЯ асимметрия: ∈ collectRefs
-// (refs — проверка существования register), но ∉ collectTaskReads (не определяет
-// Passage). Guard-тест reads ⊆ refs (а для flow-control reads ⊊ refs).
+// Maintenance invariant: a new keeper-rendered, passage-defining, register-reading
+// Task field must appear in lockstep in collectTaskReads (here) AND collectRefs
+// (cross-ref validator task_refs.go) AND the ADR-056 registry. Flow-control
+// (`when`/`changed_when`/`failed_when`) is a DELIBERATE asymmetry: ∈ collectRefs
+// (refs check register existence) but ∉ collectTaskReads (does not define Passage).
+// Guard-test reads ⊆ refs (and for flow-control reads ⊊ refs).
 
 import (
 	"fmt"
 	"sort"
 )
 
-// Passage — стратификационный план прогона: для каждой top-level задачи её
-// passage-индекс (0-based) + общее число Passage. Index ссылается на позицию в
-// плане (Tasks после ExpandIncludes), совпадает с RenderedTask.Index.
+// Passage is a run's stratification plan: each top-level task's 0-based passage
+// index plus the total Passage count. Index refers to the position in the plan
+// (Tasks after ExpandIncludes), matching RenderedTask.Index.
 //
-// TaskPassage[i] — passage i-й задачи плана. Count = max(TaskPassage)+1 (>=1).
-// Count==1 — fast-path: ни одной cross-task register-зависимости, все задачи в
-// passage 0, поведение идентично up-front render (backward-compat).
+// TaskPassage[i] is task i's passage. Count = max(TaskPassage)+1 (>=1). Count==1 is
+// the fast-path: no cross-task register dependency, all tasks in passage 0,
+// behaviour identical to up-front render (backward-compat).
 type Passage struct {
 	TaskPassage []int
 	Count       int
 }
 
-// StratifyError — ошибка стратификации register-графа. Несёт код (для caller-а:
-// keeper run.go → render_failed; soul-lint → офлайн-диагностика) и человекочитаемое
-// сообщение. Это невалидный граф зависимостей автора сценария (цикл / ссылка на
-// несуществующий register), который обязан остановить прогон ЯВНО, а не молча
-// (симметрия unknown_register_reference в config-валидаторе и silent-wrong-target).
+// StratifyError is a register-graph stratification error. It carries a code (for the
+// caller: keeper run.go → render_failed; soul-lint → offline diagnostic) and a
+// human-readable message. The author's dependency graph is invalid (cycle /
+// reference to a nonexistent register) and must stop the run EXPLICITLY, not silently
+// (symmetric to unknown_register_reference in the config validator and to silent-
+// wrong-target).
 type StratifyError struct {
 	Code string
 	Msg  string
@@ -78,56 +81,59 @@ type StratifyError struct {
 
 func (e *StratifyError) Error() string { return e.Msg }
 
-// StratifyError-коды.
+// StratifyError codes.
 const (
-	// StratifyCycle — register-зависимость по кругу (probe A читает register.B,
-	// probe B читает register.A): топологического порядка нет.
+	// StratifyCycle — a circular register dependency (probe A reads register.B,
+	// probe B reads register.A): no topological order exists.
 	StratifyCycle = "register_dependency_cycle"
-	// StratifyUnknownRegister — задача читает register.X, но НИ ОДНА задача плана
-	// не эмитит `register: X`. Дублирует cross-ref-валидатор config-а (страховка:
-	// стратификация обязана падать явно, а не молча стратифицировать по неполному
-	// графу — silent-wrong-target).
+	// StratifyUnknownRegister — a task reads register.X but NO task in the plan
+	// emits `register: X`. Duplicates the config cross-ref validator (a safeguard:
+	// stratification must fail explicitly rather than silently stratify on an
+	// incomplete graph — silent-wrong-target).
 	StratifyUnknownRegister = "unknown_register_reference"
-	// CodeWithinBlockRegisterDependency — потомок block: читает register, эмитнутый
-	// СОСЕДНИМ потомком ТОГО ЖЕ блока. block атомарен по Passage (весь fan-out в
-	// одном Passage, ADR-056), peer-register доступен только Soul-side ПОСЛЕ probe,
-	// а where/when/params резолвятся Keeper-side ДО dispatch → where отберёт хосты
-	// по устаревшему/внешнему register молча (silent-wrong-target). Fail-closed
-	// reject офлайн (soul-lint) и runtime-страховкой (run.go), а не молчаливый
-	// мисфайр. Лечится выносом probe на top-level (probe и потребитель — разные
-	// Passage; Stratify тогда упорядочит их штатно). Имя кода держим отдельным от
-	// функции-детектора WithinBlockRegisterDependency (одноимённый const+func в
-	// одном пакете недопустим в Go).
+	// CodeWithinBlockRegisterDependency — a block child reads a register emitted by
+	// a SIBLING child of the SAME block. A block is atomic per Passage (its whole
+	// fan-out in one Passage, ADR-056), peer-register is available only Soul-side
+	// AFTER the probe, but where/when/params resolve Keeper-side BEFORE dispatch →
+	// where selects hosts on a stale/external register silently (silent-wrong-
+	// target). Fail-closed reject offline (soul-lint) and as a runtime safeguard
+	// (run.go), not a silent misfire. Fixed by lifting the probe to top-level (probe
+	// and consumer in different Passages; Stratify then orders them normally). The
+	// code name is kept distinct from the detector function
+	// WithinBlockRegisterDependency (a same-named const+func in one package is
+	// illegal in Go).
 	CodeWithinBlockRegisterDependency = "within_block_register_dependency"
-	// CodeCrossPassageWhenGating — задача гейтит `when:`/`changed_when:`/
-	// `failed_when:` по register, эмитнутому в БОЛЕЕ РАННЕМ Passage (ADR-056:85,
-	// FC-5). flow-control = Soul-side per-task gating ([ADR-012(d)]), видит только
-	// register СВОЕГО Passage; cross-passage register ему недоступен (другой
-	// ApplyRequest) → `no such key` молча. После narrow-fix flow-control сам Passage
-	// НЕ расщепляет, но probe мог уехать в ранний Passage по ДРУГОЙ причине (иная
-	// задача с `where: register.X`). Fail-closed reject (офлайн soul-lint + runtime
-	// keeper-страховка), симметрия CodeWithinBlockRegisterDependency. Лечится
-	// where: (cross-task таргетинг) или register.self (same-task gating).
+	// CodeCrossPassageWhenGating — a task gates `when:`/`changed_when:`/
+	// `failed_when:` on a register emitted in an EARLIER Passage (ADR-056:85, FC-5).
+	// Flow-control is Soul-side per-task gating ([ADR-012(d)]) and sees only its own
+	// Passage's register; cross-passage register is unavailable to it (a different
+	// ApplyRequest) → `no such key` silently. After the narrow-fix flow-control does
+	// not split the Passage itself, but the probe may have moved to an earlier
+	// Passage for ANOTHER reason (another task with `where: register.X`). Fail-closed
+	// reject (offline soul-lint + runtime keeper safeguard), symmetric to
+	// CodeWithinBlockRegisterDependency. Fixed by where: (cross-task targeting) or
+	// register.self (same-task gating).
 	CodeCrossPassageWhenGating = "cross_passage_when_unsupported"
 )
 
-// Stratify вычисляет passage-индексы для плана задач прогона по графу cross-task
-// register-зависимости. Возвращает [Passage] либо *[StratifyError] (цикл / висячая
-// ссылка). tasks — плоский top-level список задач (после ExpandIncludes);
-// nil/пустой → Passage{Count: 1}.
+// Stratify computes passage indices for a run's task plan from the cross-task
+// register-dependency graph. Returns [Passage] or *[StratifyError] (cycle / dangling
+// reference). tasks is the flat top-level task list (after ExpandIncludes);
+// nil/empty → Passage{Count: 1}.
 //
-// Алгоритм (топологическая стратификация + program-order для эмиттеров):
+// Algorithm (topological stratification + program-order for emitters):
 //
-//  1. Эмиттеры: register-имя → индекс задачи, его эмитящей (`register: X`),
-//     last-wins при дубле.
-//  2. Читатели: для каждой задачи — набор cross-task register-имён из passage-
-//     определяющих источников (where/vars/params/apply.input/output/loop.items,
-//     рекурсивно через block; `register.self` исключён).
-//  3. passage(T) — мемоизированная рекурсия по двум видам рёбер:
-//     register-ребро (passage(T) >= 1 + passage(эмиттер X)) и program-order ребро
-//     для probe-эмиттера (passage(probe) >= passage любой предшествующей задачи —
-//     даёт re-probe в Passage ПОСЛЕ действия, restart-кейс).
-//  4. Цикл по register-рёбрам → StratifyCycle. Висячая ссылка → StratifyUnknownRegister.
+//  1. Emitters: register name → index of the task emitting it (`register: X`),
+//     last-wins on duplicates.
+//  2. Readers: for each task, the set of cross-task register names from passage-
+//     defining sources (where/vars/params/apply.input/output/loop.items, recursively
+//     through block; `register.self` excluded).
+//  3. passage(T) is a memoized recursion over two edge kinds: the register edge
+//     (passage(T) >= 1 + passage(emitter X)) and the program-order edge for a probe
+//     emitter (passage(probe) >= passage of any preceding task — yields a re-probe in
+//     the Passage AFTER the action, the restart case).
+//  4. A cycle over register edges → StratifyCycle. A dangling reference →
+//     StratifyUnknownRegister.
 func Stratify(tasks []Task) (Passage, error) {
 	n := len(tasks)
 	if n == 0 {
@@ -137,21 +143,22 @@ func Stratify(tasks []Task) (Passage, error) {
 	emitter := emitterIndex(tasks)
 	reads := make([][]string, n)
 	emits := make([]bool, n)
-	// roster-refresh граница (ADR-0061 §S2): refresh-эмиттеры (core.soul.registered
-	// с refresh_soulprint: true) и roster-потребители (on:[incarnation.name] /
-	// soulprint.hosts / soulprint.self.* / опущенный on:). Любой roster-потребитель
-	// ПОСЛЕ refresh-эмиттера (program-order) едет в следующий Passage — иначе
-	// отрендерился бы по СТАРОМУ roster (silent-wrong-target, ★ БЛОКЕР ADR-056).
-	// refreshEmitters пуст → граница не активна, Count БИТ-В-БИТ как до ADR-0061.
+	// roster-refresh boundary (ADR-0061 §S2): refresh emitters (core.soul.registered
+	// with refresh_soulprint: true) and roster consumers (on:[incarnation.name] /
+	// soulprint.hosts / soulprint.self.* / omitted on:). Any roster consumer AFTER a
+	// refresh emitter (program-order) moves to the next Passage — otherwise it would
+	// render on the OLD roster (silent-wrong-target, a BLOCKER for ADR-056). Empty
+	// refreshEmitters → boundary inactive, Count bit-for-bit as before ADR-0061.
 	var refreshEmitters []int
 	readsRoster := make([]bool, n)
-	// vault-secrets-generated граница (ADR-056 amendment, ОТДЕЛЬНАЯ ОСЬ): эмиттеры
-	// `core.vault.kv-present` (пишут секреты по targets) и vault-потребители (читают
-	// `${ vault(...) }` в passage-определяющем поле). Любой vault-потребитель ПОСЛЕ
-	// vault-эмиттера (program-order) едет в следующий Passage — иначе render деплоя
-	// (vault_resolve) прочитал бы секрет ДО его записи → render_failed (live-баг
-	// create_from_souls, где roster-оси нет). vaultEmitters пуст → граница не активна,
-	// Count БИТ-В-БИТ как до amendment. См. passage_vault.go.
+	// vault-secrets-generated boundary (ADR-056 amendment, a SEPARATE AXIS): emitters
+	// `core.vault.kv-present` (write secrets to targets) and vault consumers (read
+	// `${ vault(...) }` in a passage-defining field). Any vault consumer AFTER a vault
+	// emitter (program-order) moves to the next Passage — otherwise deploy render
+	// (vault_resolve) would read the secret BEFORE it is written → render_failed (the
+	// create_from_souls live bug, where the roster axis is absent). Empty vaultEmitters
+	// → boundary inactive, Count bit-for-bit as before the amendment. See
+	// passage_vault.go.
 	var vaultEmitters []int
 	readsVault := make([]bool, n)
 	for i := range tasks {
@@ -175,8 +182,8 @@ func Stratify(tasks []Task) (Passage, error) {
 		}
 	}
 
-	// Висячая ссылка: читатель register.X, которого никто не эмитит. Падаем ДО
-	// топосорта — иначе стратификация пошла бы по неполному графу.
+	// Dangling reference: a reader of register.X that nobody emits. Fail BEFORE the
+	// topo-sort — otherwise stratification would proceed on an incomplete graph.
 	for i := range reads {
 		for _, name := range reads[i] {
 			if _, ok := emitter[name]; !ok {
@@ -237,15 +244,15 @@ func Stratify(tasks []Task) (Passage, error) {
 			}
 		}
 
-		// roster-refresh ребро (ADR-0061 §S2): задача-roster-потребитель едет в
-		// Passage СТРОГО ПОСЛЕ любого ПРЕДШЕСТВУЮЩЕГО (program-order) refresh-
-		// эмиттера. Это roster-ось, симметричная register-ребру выше: refresh-эмиттер
-		// сигналит «roster вырос», потребитель обязан увидеть выросший набор. Цикла
-		// тут быть не может — ребро строго направлено по program-order (j < i).
+		// roster-refresh edge (ADR-0061 §S2): a roster-consumer task moves to a
+		// Passage STRICTLY AFTER any PRECEDING (program-order) refresh emitter. This
+		// is the roster axis, symmetric to the register edge above: the refresh
+		// emitter signals "roster grew", the consumer must see the grown set. No cycle
+		// is possible here — the edge is strictly directed by program-order (j < i).
 		if readsRoster[i] {
 			for _, j := range refreshEmitters {
 				if j >= i {
-					break // refreshEmitters отсортированы по возрастанию (append в порядке обхода).
+					break // refreshEmitters is ascending (appended in traversal order).
 				}
 				p, err := visit(j)
 				if err != nil {
@@ -257,17 +264,17 @@ func Stratify(tasks []Task) (Passage, error) {
 			}
 		}
 
-		// vault-secrets-generated ребро (ADR-056 amendment, ТРЕТЬЯ ось): задача-vault-
-		// потребитель (читает `${ vault(...) }`) едет в Passage СТРОГО ПОСЛЕ любого
-		// ПРЕДШЕСТВУЮЩЕГО (program-order) vault-эмиттера (`core.vault.kv-present`).
-		// Симметрично roster-ребру: эмиттер сигналит «секреты записаны», потребитель
-		// обязан рендериться (vault_resolve) уже после записи. Цикла быть не может —
-		// ребро строго направлено по program-order (j < i), и kv-present сам vault() не
-		// читает (он vault-эмиттер, не потребитель).
+		// vault-secrets-generated edge (ADR-056 amendment, the THIRD axis): a vault-
+		// consumer task (reads `${ vault(...) }`) moves to a Passage STRICTLY AFTER any
+		// PRECEDING (program-order) vault emitter (`core.vault.kv-present`). Symmetric
+		// to the roster edge: the emitter signals "secrets written", the consumer must
+		// render (vault_resolve) only after the write. No cycle is possible — the edge
+		// is strictly directed by program-order (j < i), and kv-present itself does not
+		// read vault() (it is a vault emitter, not a consumer).
 		if readsVault[i] {
 			for _, j := range vaultEmitters {
 				if j >= i {
-					break // vaultEmitters отсортированы по возрастанию (append в порядке обхода).
+					break // vaultEmitters is ascending (appended in traversal order).
 				}
 				p, err := visit(j)
 				if err != nil {
@@ -298,9 +305,10 @@ func Stratify(tasks []Task) (Passage, error) {
 	return Passage{TaskPassage: memo, Count: maxP + 1}, nil
 }
 
-// emitterIndex строит карту register-имя → индекс top-level задачи, эмитящей его.
-// register, объявленный внутри block:, адресуется плоско → приписывается индексу
-// КОНТЕЙНЕРА (block — атомарная единица Passage). last-wins при дубле имени.
+// emitterIndex builds the map register name → index of the top-level task emitting
+// it. A register declared inside a block: is addressed flatly → attributed to the
+// CONTAINER's index (a block is an atomic Passage unit). last-wins on a duplicate
+// name.
 func emitterIndex(tasks []Task) map[string]int {
 	idx := map[string]int{}
 	for i := range tasks {
@@ -311,7 +319,8 @@ func emitterIndex(tasks []Task) map[string]int {
 	return idx
 }
 
-// taskEmittedRegisters — все register-имена, эмитимые задачей и её block-потомками.
+// taskEmittedRegisters returns all register names emitted by a task and its block
+// children.
 func taskEmittedRegisters(t *Task) []string {
 	var out []string
 	if t.Register != "" {
@@ -325,14 +334,15 @@ func taskEmittedRegisters(t *Task) []string {
 	return out
 }
 
-// taskEmitsRegister — задача (или её block-потомок) эмитит хотя бы один register.
+// taskEmitsRegister reports whether a task (or a block child) emits at least one
+// register.
 func taskEmitsRegister(t *Task) bool {
 	return len(taskEmittedRegisters(t)) > 0
 }
 
-// taskRegisterReads — отсортированный уникальный набор cross-task register-имён,
-// которые задача ЧИТАЕТ. Имена собственного register: задачи (и block-потомков)
-// ИСКЛЮЧАЮТСЯ — это self-ссылка внутри одного среза, не cross-task ребро.
+// taskRegisterReads returns the sorted unique set of cross-task register names a
+// task READS. The task's own register: names (and those of its block children) are
+// EXCLUDED — a self-reference within one slice, not a cross-task edge.
 func taskRegisterReads(t *Task) []string {
 	own := map[string]bool{}
 	for _, name := range taskEmittedRegisters(t) {
@@ -351,30 +361,31 @@ func taskRegisterReads(t *Task) []string {
 	return out
 }
 
-// collectTaskReads наполняет seen register-именами, читаемыми задачей в passage-
-// ОПРЕДЕЛЯЮЩИХ источниках (ADR-056-реестр): where / vars / params / apply.input /
-// output / loop.items / loop.when, рекурсивно через block. Self-фильтрация — в
+// collectTaskReads fills seen with register names a task reads in passage-DEFINING
+// sources (the ADR-056 registry): where / vars / params / apply.input / output /
+// loop.items / loop.when, recursively through block. Self-filtering is done in
 // taskRegisterReads.
 //
-// Flow-control CEL `when` / `changed_when` / `failed_when` / `retry.until` СЮДА НЕ
-// ВХОДИТ (ADR-056:85 — flow-control НЕ определяет Passage). Это Soul-side per-task
-// gating ([ADR-012(d)](../../docs/adr/0012-keeper-soul-grpc.md)): исполняется в
-// срезе ОДНОГО ApplyRequest из register, накопленного его собственным Passage.
-// Включение этих полей в passage-граф РАСЩЕПЛЯЛО probe и его same-passage when-
-// потребителя по разным Passage (probe→Passage 0, when→Passage 1), где Soul cross-
-// passage register не видит → `no such key` (FC-5). Это нарушало gating-семантику
-// `when` вместо «conservative over-approx». `where` (таргетинг Keeper-side) cross-
-// passage умеет (Keeper пере-рендерит с накопленным register), `when` — нет:
-// асимметрия легитимна, поэтому where остаётся passage-определяющим, а when — нет.
+// Flow-control CEL `when` / `changed_when` / `failed_when` / `retry.until` is
+// EXCLUDED (ADR-056:85 — flow-control does not define Passage). It is Soul-side
+// per-task gating ([ADR-012(d)](../../docs/adr/0012-keeper-soul-grpc.md)): evaluated
+// within ONE ApplyRequest from the register accumulated by its own Passage.
+// Including these fields in the passage graph SPLIT a probe and its same-passage
+// when-consumer across Passages (probe→Passage 0, when→Passage 1), where the Soul
+// cannot see cross-passage register → `no such key` (FC-5). That broke `when` gating
+// semantics instead of being a "conservative over-approx". `where` (Keeper-side
+// targeting) handles cross-passage (Keeper re-renders with accumulated register),
+// `when` does not: the asymmetry is legitimate, so where stays passage-defining and
+// when does not.
 //
-// requisites (`onchanges`/`onfail`/`require`) сюда НЕ входят по той же причине
-// (адресные ссылки, не интерполяция). loop.when ОСТАЁТСЯ passage-определяющим:
-// fan-out цикла строится Keeper-side ДО dispatch (как loop.items), не Soul-side.
+// requisites (`onchanges`/`onfail`/`require`) are excluded for the same reason
+// (addressed references, not interpolation). loop.when STAYS passage-defining: the
+// loop fan-out is built Keeper-side BEFORE dispatch (like loop.items), not Soul-side.
 //
-// Cross-ref-валидатор (config.collectRefs) при этом ОБХОДИТ when/changed_when/
-// failed_when — они register-ЧИТАЮЩИЕ (проверка «register существует»), но НЕ
-// passage-ОПРЕДЕЛЯЮЩИЕ. Эта асимметрия (refs ⊋ passage-reads) — намеренная;
-// guard-инвариант её фиксирует (TestStratify_FlowControlInRefsNotPassageReads).
+// The cross-ref validator (config.collectRefs) does WALK when/changed_when/
+// failed_when — they are register-READING (an "register exists" check) but NOT
+// passage-DEFINING. This asymmetry (refs ⊋ passage-reads) is deliberate; a guard
+// invariant pins it (TestStratify_FlowControlInRefsNotPassageReads).
 func collectTaskReads(t *Task, seen map[string]bool) {
 	addCELRefs(t.Where, seen)
 	if t.Loop != nil {
@@ -399,24 +410,24 @@ func collectTaskReads(t *Task, seen map[string]bool) {
 	}
 }
 
-// addCELRefs извлекает cross-task register-имена из голой CEL-строки через
-// канонический парсер ExtractRegisterRefs.
+// addCELRefs extracts cross-task register names from a bare CEL string via the
+// canonical ExtractRegisterRefs parser.
 func addCELRefs(expr string, seen map[string]bool) {
 	for _, name := range ExtractRegisterRefs(expr) {
 		seen[name] = true
 	}
 }
 
-// addMapRefs обходит map значений (vars/params/apply.input) и извлекает register-
-// имена из строковых литералов (внутри `${ … }`-маркера). Рекурсивно в map/seq.
+// addMapRefs walks a value map (vars/params/apply.input) and extracts register names
+// from string literals (inside the `${ … }` marker). Recurses into map/seq.
 func addMapRefs(m map[string]any, seen map[string]bool) {
 	for _, v := range m {
 		addValueRefs(v, seen)
 	}
 }
 
-// addValueRefs рекурсивно обходит any-значение (string / map / seq) и собирает
-// register-имена из всех строк.
+// addValueRefs recursively walks an any value (string / map / seq) and collects
+// register names from every string.
 func addValueRefs(v any, seen map[string]bool) {
 	switch t := v.(type) {
 	case string:
@@ -432,20 +443,20 @@ func addValueRefs(v any, seen map[string]bool) {
 	}
 }
 
-// CrossPassageRequisite детектирует задачу, чей onchanges/onfail-источник лежит в
-// ДРУГОМ Passage (ADR-056 amend, R2 — explicit-reject до полной keeper-side gating-
-// поддержки R3). requisites (`onchanges:`/`onfail:`) — НЕ passage-определяющие
-// (в граф Stratify не входят), поэтому их источник может оказаться в любом Passage.
-// Если consumer и источник в РАЗНЫХ Passage, они едут РАЗНЫМИ ApplyRequest-ами:
-// Soul gating одного Passage не видит register источника другого Passage →
-// registerByIdx[remap=sentinel]=nil → onchanges-задача молча SKIPPED, onfail-rescue
-// молча НЕ запускается. Фикс до R3 — fail-closed reject (симметрия
-// serial_staged_unsupported), а не молчаливый мисфайр.
+// CrossPassageRequisite detects a task whose onchanges/onfail source lies in a
+// DIFFERENT Passage (ADR-056 amend, R2 — explicit reject until full keeper-side
+// gating support in R3). requisites (`onchanges:`/`onfail:`) are NOT passage-
+// defining (absent from the Stratify graph), so their source may land in any
+// Passage. If consumer and source are in DIFFERENT Passages they travel in DIFFERENT
+// ApplyRequests: one Passage's Soul gating cannot see another Passage's source
+// register → registerByIdx[remap=sentinel]=nil → the onchanges task is silently
+// SKIPPED, the onfail rescue silently does NOT run. The pre-R3 fix is a fail-closed
+// reject (symmetric to serial_staged_unsupported), not a silent misfire.
 //
-// passage — результат [Stratify] того же плана tasks. Возвращает координаты первой
-// найденной cross-passage-связи (task-имя consumer-а, requisite-имя, его kind,
-// passage обоих) и ok=true; ok=false — все requisites same-passage (R1-remap их
-// чинит). N=1 (passage.Count==1) → ok=false всегда (один Passage).
+// passage is [Stratify]'s result for the same tasks. Returns the coordinates of the
+// first cross-passage link found (consumer task name, requisite name, its kind, both
+// passages) and ok=true; ok=false — all requisites same-passage (R1-remap fixes
+// them). N=1 (passage.Count==1) → always ok=false (a single Passage).
 func CrossPassageRequisite(tasks []Task, passage Passage) (info CrossPassageInfo, ok bool) {
 	if passage.Count <= 1 || len(passage.TaskPassage) != len(tasks) {
 		return CrossPassageInfo{}, false
@@ -456,9 +467,10 @@ func CrossPassageRequisite(tasks []Task, passage Passage) (info CrossPassageInfo
 		for _, req := range taskRequisites(&tasks[i]) {
 			srcIdx, known := emitter[req.name]
 			if !known {
-				// Висячий requisite (нет задачи с таким register:) — НЕ наша забота:
-				// его ловит cross-ref-валидатор config-а (unknown_register_reference)
-				// офлайн. Здесь интересует только cross-passage СУЩЕСТВУЮЩЕГО источника.
+				// A dangling requisite (no task with that register:) is not our
+				// concern: the config cross-ref validator catches it
+				// (unknown_register_reference) offline. Here we care only about a
+				// cross-passage EXISTING source.
 				continue
 			}
 			if srcPassage := passage.TaskPassage[srcIdx]; srcPassage != consumerPassage {
@@ -475,40 +487,43 @@ func CrossPassageRequisite(tasks []Task, passage Passage) (info CrossPassageInfo
 	return CrossPassageInfo{}, false
 }
 
-// CrossPassageInfo — координаты cross-passage requisite-связи (для текста abort-а).
+// CrossPassageInfo holds the coordinates of a cross-passage requisite link (for the
+// abort message).
 type CrossPassageInfo struct {
-	ConsumerName    string // имя задачи-потребителя requisite
-	RequisiteName   string // register-имя источника
+	ConsumerName    string // name of the requisite-consumer task
+	RequisiteName   string // source register name
 	Kind            string // "onchanges" | "onfail"
 	ConsumerPassage int
 	SourcePassage   int
 }
 
-// CrossPassageWhenGating детектирует задачу, чей flow-control CEL (`when:`/
-// `changed_when:`/`failed_when:`) ссылается на cross-task register, эмитнутый в
-// БОЛЕЕ РАННЕМ Passage (ADR-056:85 amend, FC-5 — fail-closed reject genuinely
-// cross-passage when-gating). После narrow-fix flow-control САМ Passage НЕ
-// расщепляет (он ∉ collectTaskReads), поэтому register-зависимый `when` обычно
-// едет SAME-passage с probe → Soul видит register → gating работает (как задумано
-// [ADR-012(d)]). НО probe может оказаться в раннем Passage по ДРУГОЙ причине: иная
-// задача с `where: register.X` (passage-определяющий) загнала эмиттер X в Passage 0,
-// а when-потребитель уехал в Passage 1 по СВОЕЙ register-зависимости. Тогда
-// `when: register.X` — genuinely cross-passage: consumer едет отдельным ApplyRequest,
-// Soul его Passage не видит register X (он в registerByIdx другого Passage) →
-// when молча eval-падает `no such key` / задача FAILED.
+// CrossPassageWhenGating detects a task whose flow-control CEL (`when:`/
+// `changed_when:`/`failed_when:`) references a cross-task register emitted in an
+// EARLIER Passage (ADR-056:85 amend, FC-5 — fail-closed reject of genuinely cross-
+// passage when-gating). After the narrow-fix flow-control does not split the Passage
+// itself (it is ∉ collectTaskReads), so a register-dependent `when` usually travels
+// SAME-passage with the probe → the Soul sees the register → gating works (as
+// intended, [ADR-012(d)]). BUT the probe may land in an earlier Passage for ANOTHER
+// reason: another task with `where: register.X` (passage-defining) pushed emitter X
+// into Passage 0, while the when-consumer moved to Passage 1 by ITS OWN register
+// dependency. Then `when: register.X` is genuinely cross-passage: the consumer
+// travels in a separate ApplyRequest, its Soul's Passage cannot see register X (it is
+// in another Passage's registerByIdx) → when silently eval-fails `no such key` / the
+// task is FAILED.
 //
-// where это умеет (Keeper пере-рендерит where с накопленным register предыдущего
-// Passage ДО dispatch), when — нет (Soul-side, видит только свой Passage). Поэтому
-// genuinely cross-passage flow-control gating = UNSUPPORTED → fail-closed reject
-// (симметрия within_block_register_dependency и cross_passage_requisite), а не
-// молчаливый мисфайр. Лечится: where: для cross-task register-таргетинга ИЛИ
-// register.self для same-task gating.
+// where handles this (Keeper re-renders where with the previous Passage's accumulated
+// register BEFORE dispatch), when does not (Soul-side, sees only its own Passage). So
+// genuinely cross-passage flow-control gating is UNSUPPORTED → fail-closed reject
+// (symmetric to within_block_register_dependency and cross_passage_requisite), not a
+// silent misfire. Fixed by: where: for cross-task register targeting OR register.self
+// for same-task gating.
 //
-// register.self НЕ считается (ExtractRegisterRefs его режет — same-task). Собственный
-// register задачи тоже исключён (self-ссылка, не cross-task ребро). passage —
-// результат [Stratify] того же плана. Возвращает координаты первой найденной связи
-// и ok=true; ok=false — все flow-control register-ссылки same-passage. N=1
-// (passage.Count==1) → ok=false всегда (один Passage, cross-passage невозможен).
+// register.self does not count (ExtractRegisterRefs strips it — same-task). The
+// task's own register is also excluded (self-reference, not a cross-task edge).
+// passage is [Stratify]'s result for the same plan. Returns the coordinates of the
+// first link found and ok=true; ok=false — all flow-control register references
+// same-passage. N=1 (passage.Count==1) → always ok=false (a single Passage, cross-
+// passage impossible).
 func CrossPassageWhenGating(tasks []Task, passage Passage) (info CrossPassageWhenInfo, ok bool) {
 	if passage.Count <= 1 || len(passage.TaskPassage) != len(tasks) {
 		return CrossPassageWhenInfo{}, false
@@ -522,13 +537,13 @@ func CrossPassageWhenGating(tasks []Task, passage Passage) (info CrossPassageWhe
 		}
 		for _, ref := range taskFlowControlReads(&tasks[i]) {
 			if own[ref.name] {
-				continue // собственный register задачи — self-ссылка, не cross-task.
+				continue // the task's own register — self-reference, not cross-task.
 			}
 			srcIdx, known := emitter[ref.name]
 			if !known {
-				// Висячий register — НЕ наша забота: cross-ref-валидатор / Stratify
-				// ловят unknown_register_reference офлайн. Здесь — только cross-passage
-				// СУЩЕСТВУЮЩЕГО источника.
+				// A dangling register is not our concern: the cross-ref validator /
+				// Stratify catch unknown_register_reference offline. Here — only a
+				// cross-passage EXISTING source.
 				continue
 			}
 			if srcPassage := passage.TaskPassage[srcIdx]; srcPassage != consumerPassage {
@@ -545,32 +560,32 @@ func CrossPassageWhenGating(tasks []Task, passage Passage) (info CrossPassageWhe
 	return CrossPassageWhenInfo{}, false
 }
 
-// CrossPassageWhenInfo — координаты cross-passage flow-control gating-связи (для
-// текста abort-а / диагностики линтера).
+// CrossPassageWhenInfo holds the coordinates of a cross-passage flow-control gating
+// link (for the abort message / linter diagnostic).
 type CrossPassageWhenInfo struct {
-	ConsumerName    string // имя задачи с flow-control-предикатом
-	RegisterName    string // register-имя, прочитанное предикатом
+	ConsumerName    string // name of the task with the flow-control predicate
+	RegisterName    string // register name read by the predicate
 	Kind            string // "when" | "changed_when" | "failed_when"
 	ConsumerPassage int
 	SourcePassage   int
 }
 
-// flowControlRead — одна flow-control register-ссылка задачи (cross-task register-
-// имя + поле-источник). retry.until НЕ включается: он гейтит retry внутри одной
-// задачи по её СОБСТВЕННОМУ register.self (cross-task retry.until.register.X
-// бессмыслен — задача не видит чужой результат в своём retry-цикле), поэтому
-// register.self его покрывает, а cross-task ссылка в нём — отдельный класс ошибки
-// (unknown/мисюз), не gating.
+// flowControlRead is one flow-control register reference of a task (cross-task
+// register name + source field). retry.until is excluded: it gates retry within a
+// single task on its OWN register.self (cross-task retry.until.register.X is
+// meaningless — a task cannot see another's result in its retry loop), so
+// register.self covers it, and a cross-task reference there is a separate error class
+// (unknown/misuse), not gating.
 type flowControlRead struct {
 	name string
 	kind string
 }
 
-// taskFlowControlReads собирает cross-task register-имена из `when`/`changed_when`/
-// `failed_when` задачи И её block-потомков (block — атомарная единица Passage,
-// flow-control его потомков адресуется по тем же register-именам). register.self
-// уже отфильтрован ExtractRegisterRefs. Сортировка имён внутри одного поля делает
-// диагностику детерминированной.
+// taskFlowControlReads collects cross-task register names from a task's `when`/
+// `changed_when`/`failed_when` AND its block children (a block is an atomic Passage
+// unit; its children's flow-control is addressed by the same register names).
+// register.self is already filtered by ExtractRegisterRefs. Sorting names within one
+// field makes the diagnostic deterministic.
 func taskFlowControlReads(t *Task) []flowControlRead {
 	var out []flowControlRead
 	for _, kv := range []struct {
@@ -593,16 +608,16 @@ func taskFlowControlReads(t *Task) []flowControlRead {
 	return out
 }
 
-// taskRequisite — одна requisite-ссылка задачи (register-имя источника + kind).
+// taskRequisite is one requisite reference of a task (source register name + kind).
 type taskRequisite struct {
 	name string
 	kind string
 }
 
-// taskRequisites собирает onchanges/onfail-имена задачи И её block-потомков
-// (requisites адресуются плоско по register-имени, block — атомарная единица
-// Passage). require: НЕ включается: его семантика — порядок исполнения, не
-// changed/failed-gating по registerByIdx (R2 строго про onchanges/onfail).
+// taskRequisites collects a task's onchanges/onfail names AND those of its block
+// children (requisites are addressed flatly by register name; a block is an atomic
+// Passage unit). require: is excluded: its semantics are execution order, not
+// changed/failed gating by registerByIdx (R2 is strictly about onchanges/onfail).
 func taskRequisites(t *Task) []taskRequisite {
 	var out []taskRequisite
 	for _, name := range t.OnChanges {
@@ -619,7 +634,8 @@ func taskRequisites(t *Task) []taskRequisite {
 	return out
 }
 
-// taskDisplayName — имя задачи для диагностики (name: либо register: либо "<unnamed>").
+// taskDisplayName returns a task's name for diagnostics (name: or register: or
+// "<unnamed>").
 func taskDisplayName(t *Task) string {
 	switch {
 	case t.Name != "":
@@ -631,38 +647,41 @@ func taskDisplayName(t *Task) string {
 	}
 }
 
-// WithinBlockInfo — координаты within-block register-зависимости (для текста
-// abort-а / диагностики линтера).
+// WithinBlockInfo holds the coordinates of a within-block register dependency (for
+// the abort message / linter diagnostic).
 type WithinBlockInfo struct {
-	ReaderName   string // имя потомка-читателя register
-	RegisterName string // peer-register, прочитанный читателем
-	EmitterName  string // имя потомка-эмиттера того же блока (или его контейнера)
+	ReaderName   string // name of the register-reading child
+	RegisterName string // peer-register read by the reader
+	EmitterName  string // name of the emitting child of the same block (or its container)
 }
 
-// WithinBlockRegisterDependency детектирует потомка block:, читающего register,
-// эмитнутый СОСЕДНИМ потомком ТОГО ЖЕ блока (ADR-056, §«Риски — silent-wrong-target»).
-// block — атомарная единица Passage: весь его fan-out (probe-потомок + потребитель)
-// едет ОДНИМ ApplyRequest в одном Passage. peer-register становится доступен только
-// Soul-side ПОСЛЕ probe, тогда как KEEPER-SIDE-резолвимые поля потребителя (where/
-// params/vars/apply.input — те, что в collectTaskReads) резолвятся ДО dispatch блока —
-// по пустому/внешнему/устаревшему register МОЛЧА. Stratify это не ловит: внутри-блочное
-// ребро не пересекает границу top-level задач (emitterIndex клеймит весь register
-// block-а индексом КОНТЕЙНЕРА). Поэтому отдельный fail-closed детектор.
+// WithinBlockRegisterDependency detects a block: child reading a register emitted by
+// a SIBLING child of the SAME block (ADR-056, §"Risks — silent-wrong-target"). A
+// block is an atomic Passage unit: its whole fan-out (probe child + consumer) travels
+// in ONE ApplyRequest in one Passage. peer-register becomes available only Soul-side
+// AFTER the probe, whereas the consumer's KEEPER-SIDE-resolvable fields
+// (where/params/vars/apply.input — those in collectTaskReads) resolve BEFORE the
+// block's dispatch — on an empty/external/stale register SILENTLY. Stratify does not
+// catch this: the within-block edge does not cross the top-level task boundary
+// (emitterIndex stamps the whole block's register with the CONTAINER's index). Hence
+// a separate fail-closed detector.
 //
-// Flow-control `when`/`changed_when`/`failed_when` СЮДА НЕ входит (collectTaskReads его
-// больше не возвращает, FC-5 narrow-fix): within-block `when: register.peer` ВАЛИДЕН —
-// peer-probe исполняется тем же ApplyRequest ДО потребителя, Soul видит peer-register в
-// накопленном срезе блока на момент eval (в отличие от Keeper-side where, который пуст).
+// Flow-control `when`/`changed_when`/`failed_when` is EXCLUDED (collectTaskReads no
+// longer returns it, FC-5 narrow-fix): within-block `when: register.peer` is VALID —
+// the peer-probe runs in the same ApplyRequest BEFORE the consumer, and the Soul sees
+// peer-register in the block's accumulated slice at eval time (unlike Keeper-side
+// where, which is empty).
 //
-// blockEmits каждого блока строится из ЕГО СТРУКТУРЫ (taskEmittedRegisters минус
-// собственный register контейнера), рекурсивно вглубь — НЕ из глобального emitterIndex.
-// Это критично: внешний top-level probe, эмитящий тот же register-имя, читать из block
-// потомком ВАЛИДНО (probe — отдельный Passage до блока, restart-кейс) и обязан остаться
-// ok==false. Сверка идёт только против register-ов, рождённых ВНУТРИ этого блока.
+// Each block's blockEmits is built from ITS STRUCTURE (taskEmittedRegisters minus the
+// container's own register), recursively — NOT from the global emitterIndex. This is
+// critical: an outer top-level probe emitting the same register name may be read by a
+// block child VALIDLY (the probe is a separate Passage before the block, the restart
+// case) and must stay ok==false. The check runs only against registers born INSIDE
+// this block.
 //
-// Возвращает координаты первой найденной within-block-зависимости (имя читателя,
-// peer-register, имя эмиттера) и ok=true; ok=false — ни один block-потомок не читает
-// peer-register своего блока. План без block-задач → fast-path ok=false.
+// Returns the coordinates of the first within-block dependency found (reader name,
+// peer-register, emitter name) and ok=true; ok=false — no block child reads its
+// block's peer-register. A plan without block tasks → fast-path ok=false.
 func WithinBlockRegisterDependency(tasks []Task) (info WithinBlockInfo, ok bool) {
 	for i := range tasks {
 		if tasks[i].Block == nil {
@@ -675,30 +694,31 @@ func WithinBlockRegisterDependency(tasks []Task) (info WithinBlockInfo, ok bool)
 	return WithinBlockInfo{}, false
 }
 
-// blockPeerRegisterRead проверяет один block-контейнер: читает ли какой-либо его
-// потомок (рекурсивно, любая глубина) register, рождённый ВНУТРИ этого блока соседним
-// потомком. blockEmits — register-имена всего поддерева блока МИНУС собственный
-// register контейнера (это структура ЭТОГО блока, не глобальный emitterIndex). Затем
-// для каждого потомка: childReads (collectTaskReads — все 7 passage-источников;
-// register.self уже отфильтрован ExtractRegisterRefs) пересекается с blockEmits, но БЕЗ
-// собственного register потомка (peer, а не self) → reject. Вложенные блоки: их
-// потомки тоже сверяются против blockEmits внешнего блока (peer внутри = peer снаружи,
-// один Passage), плюс рекурсивный заход ловит peer-зависимость внутри вложенного блока.
+// blockPeerRegisterRead checks one block container: whether any of its children
+// (recursively, any depth) reads a register born INSIDE this block by a sibling
+// child. blockEmits is the register names of the whole block subtree MINUS the
+// container's own register (this block's structure, not the global emitterIndex).
+// Then for each child: childReads (collectTaskReads — all 7 passage sources;
+// register.self already filtered by ExtractRegisterRefs) is intersected with
+// blockEmits but WITHOUT the child's own register (peer, not self) → reject. Nested
+// blocks: their children are also checked against the outer block's blockEmits (peer
+// inside = peer outside, one Passage), plus the recursive descent catches a peer
+// dependency inside the nested block.
 func blockPeerRegisterRead(container *Task) (WithinBlockInfo, bool) {
-	blockEmits := map[string]string{} // register-имя → имя эмитящего потомка
+	blockEmits := map[string]string{} // register name → emitting child's name
 	for i := range container.Block.Block {
 		collectBlockEmits(&container.Block.Block[i], blockEmits)
 	}
 	if len(blockEmits) == 0 {
-		return WithinBlockInfo{}, false // блок ничего не эмитит — peer-зависимости быть не может.
+		return WithinBlockInfo{}, false // block emits nothing — no peer dependency possible.
 	}
 
 	for i := range container.Block.Block {
 		if bi, bad := childPeerRead(&container.Block.Block[i], blockEmits); bad {
 			return bi, true
 		}
-		// Вложенный блок: его внутренние peer-зависимости (полностью внутри него) —
-		// отдельная проверка с собственным blockEmits.
+		// Nested block: its internal peer dependencies (fully within it) are a
+		// separate check with its own blockEmits.
 		if container.Block.Block[i].Block != nil {
 			if bi, bad := blockPeerRegisterRead(&container.Block.Block[i]); bad {
 				return bi, true
@@ -708,9 +728,10 @@ func blockPeerRegisterRead(container *Task) (WithinBlockInfo, bool) {
 	return WithinBlockInfo{}, false
 }
 
-// collectBlockEmits наполняет emits register-именами, рождёнными внутри потомка блока
-// (его собственный register: + register block-потомков рекурсивно), сопоставляя их с
-// именем потомка-эмиттера для диагностики. last-wins при дубле (симметрия emitterIndex).
+// collectBlockEmits fills emits with register names born inside a block child (its
+// own register: + block children's registers recursively), mapping each to the
+// emitting child's name for diagnostics. last-wins on a duplicate (symmetric to
+// emitterIndex).
 func collectBlockEmits(child *Task, emits map[string]string) {
 	name := taskDisplayName(child)
 	for _, reg := range taskEmittedRegisters(child) {
@@ -718,11 +739,11 @@ func collectBlockEmits(child *Task, emits map[string]string) {
 	}
 }
 
-// childPeerRead проверяет одного потомка блока (рекурсивно вглубь его собственных
-// block-потомков): читает ли он register из blockEmits, который НЕ его собственный
-// (peer, не self). Собственные register потомка исключаются — внутри-задачная self-
-// ссылка не cross-task ребро (register.self уже отфильтрован, но потомок с собственным
-// register: X, читающий register.X в другом поле, тоже не peer-зависимость).
+// childPeerRead checks one block child (recursively into its own block children):
+// whether it reads a register from blockEmits that is NOT its own (peer, not self).
+// The child's own registers are excluded — an intra-task self-reference is not a
+// cross-task edge (register.self is already filtered, but a child with its own
+// register: X reading register.X in another field is also not a peer dependency).
 func childPeerRead(child *Task, blockEmits map[string]string) (WithinBlockInfo, bool) {
 	own := map[string]bool{}
 	for _, reg := range taskEmittedRegisters(child) {
@@ -734,7 +755,7 @@ func childPeerRead(child *Task, blockEmits map[string]string) (WithinBlockInfo, 
 	for reg := range seen {
 		reads = append(reads, reg)
 	}
-	sort.Strings(reads) // детерминизм диагностики при нескольких peer-ссылках.
+	sort.Strings(reads) // deterministic diagnostic when there are several peer refs.
 	for _, reg := range reads {
 		if own[reg] {
 			continue

@@ -1,32 +1,30 @@
-// Package obs — сквозная observability-инфраструктура Soul Stack: метрики
-// Prometheus, HTTP-инструментация и bootstrap OTel-провайдера. Используется
-// keeper-ом и soul-ом (keeper-side wired; Soul wire-up — Slice 1).
+// Package obs — the cross-cutting observability infrastructure of Soul Stack:
+// Prometheus metrics, HTTP instrumentation, and OTel provider bootstrap. Used by keeper
+// and soul (keeper-side wired; Soul wire-up — Slice 1).
 //
-// Под требование «публикация метрик / OpenTelemetry / Hot-reload / …
-// из коробки» (docs/requirements.md «Архитектурные требования»):
-// shared/obs живёт в shared/ модуле, чтобы оба бинаря собирались с
-// одним и тем же стеком метрик/трейсов без дублирования. По ADR-024
-// канал метрик — Prometheus-primary (pull `/metrics`), OTel — мост для
-// трейсов + опц. push метрик (см. docs/observability.md).
+// Under the "metrics publication / OpenTelemetry / Hot-reload / … out of the box"
+// requirement (docs/requirements.md "Architectural requirements"): shared/obs lives in
+// the shared/ module so both binaries build with the same metrics/traces stack without
+// duplication. Per ADR-024 the metrics channel is Prometheus-primary (pull `/metrics`),
+// OTel is a bridge for traces + optional metrics push (see docs/observability.md).
 //
-// Registry — dedicated [prometheus.Registry], не глобальный
-// [prometheus.DefaultRegisterer]. Без default-registry:
-//   - тесты не делят состояние через global (race / re-register panic);
-//   - core-collectors (go-runtime, process) подключаются явно — не
-//     навязываются библиотечному коду;
-//   - две независимых инстанции (например, для unit-теста в одном
-//     processe) сосуществуют без конфликта имён.
+// Registry is a dedicated [prometheus.Registry], not the global
+// [prometheus.DefaultRegisterer]. Without a default registry:
+//   - tests don't share state through a global (race / re-register panic);
+//   - core collectors (go-runtime, process) are wired explicitly — not forced on
+//     library code;
+//   - two independent instances (e.g. for a unit test in one process) coexist without
+//     name conflicts.
 //
-// Registry компонент-агностичен: и keeper_*, и soul_*-метрики
-// регистрируются в нём через component-specific helper-ы. Сквозные
-// (нужные обоим бинарям, нейтральные к их internal-типам) живут здесь —
-// например [RegisterHTTPMetrics]. Collector-ы подсистем живут РЯДОМ с
-// подсистемой и регистрируются поверх этого Registry извне — например
-// keeper-only RegisterReaperMetrics в keeper/internal/reaper (правило
-// размещения docs/observability.md §4.0). Сам registry-core не знает про
-// конкретные метрики — это держит границу между сквозным фундаментом и
-// инструментацией подсистем (ADR-024 §2: различение keeper_*/soul_*
-// префиксом метрики, не структурой registry).
+// Registry is component-agnostic: both keeper_* and soul_* metrics are registered in it
+// via component-specific helpers. Cross-cutting ones (needed by both binaries, neutral
+// to their internal types) live here — e.g. [RegisterHTTPMetrics]. Subsystem collectors
+// live NEXT TO the subsystem and are registered on top of this Registry from outside —
+// e.g. keeper-only RegisterReaperMetrics in keeper/internal/reaper (placement rule
+// docs/observability.md §4.0). The registry core itself knows nothing about concrete
+// metrics — this keeps the boundary between the cross-cutting foundation and subsystem
+// instrumentation (ADR-024 §2: distinguishing keeper_*/soul_* by metric prefix, not by
+// registry structure).
 package obs
 
 import (
@@ -37,26 +35,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Registry — компонент-агностичный дескриптор Prometheus-стека
-// (keeper или soul). Owns dedicated registry с базовыми go/process-
-// collectors; конкретные метрики подсистем регистрируются отдельными
-// helper-ами поверх [Registry.Registerer] — сквозные здесь (см. http.go),
-// subsystem-local рядом с подсистемой (см. docs/observability.md §4.0).
+// Registry — a component-agnostic descriptor of the Prometheus stack (keeper or soul).
+// Owns a dedicated registry with the base go/process collectors; concrete subsystem
+// metrics are registered by separate helpers on top of [Registry.Registerer] —
+// cross-cutting ones here (see http.go), subsystem-local next to the subsystem (see
+// docs/observability.md §4.0).
 //
-// Создаётся один раз в main, передаётся в подсистемы для регистрации их
-// метрик и в handler `/metrics` для exposition того же registry.
+// Created once in main, passed to subsystems to register their metrics and to the
+// `/metrics` handler to expose the same registry.
 type Registry struct {
 	reg *prometheus.Registry
 }
 
-// NewRegistry собирает компонент-агностичный observability-стек:
-// dedicated [prometheus.NewRegistry] + базовые collectors. Никаких
-// component-specific (keeper_*/soul_*) метрик здесь — они вешаются
-// отдельными helper-ами поверх готового Registry.
+// NewRegistry assembles the component-agnostic observability stack: a dedicated
+// [prometheus.NewRegistry] + base collectors. No component-specific (keeper_*/soul_*)
+// metrics here — they're attached by separate helpers on top of the ready Registry.
 //
-// Регистрирует go-runtime и process-collectors (memory, goroutines, fds,
-// gc) — без них Prometheus-scrape бесполезен в production: одни
-// application-метрики не дают ответа «кто течёт» (ADR-024 §1.1).
+// Registers go-runtime and process collectors (memory, goroutines, fds, gc) — without
+// them a Prometheus scrape is useless in production: application metrics alone don't
+// answer "who's leaking" (ADR-024 §1.1).
 func NewRegistry() *Registry {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -66,30 +63,27 @@ func NewRegistry() *Registry {
 	return &Registry{reg: reg}
 }
 
-// Gatherer возвращает [prometheus.Gatherer] для exposition-handler-а
-// `/metrics`. Используется meta/metrics.go через [promhttp.HandlerFor].
+// Gatherer returns [prometheus.Gatherer] for the `/metrics` exposition handler. Used by
+// meta/metrics.go via [promhttp.HandlerFor].
 func (r *Registry) Gatherer() prometheus.Gatherer { return r.reg }
 
-// Registerer возвращает [prometheus.Registerer] для подсистем, которые
-// регистрируют собственные метрики: сквозные ([RegisterHTTPMetrics]) и
-// subsystem-local рядом с подсистемой (Reaper / gRPC / scenario / RBAC /
-// apply-цикл, docs/observability.md §4.0).
+// Registerer returns [prometheus.Registerer] for subsystems that register their own
+// metrics: cross-cutting ([RegisterHTTPMetrics]) and subsystem-local next to the
+// subsystem (Reaper / gRPC / scenario / RBAC / apply cycle, docs/observability.md §4.0).
 func (r *Registry) Registerer() prometheus.Registerer { return r.reg }
 
-// MetricsHandler возвращает HTTP-handler для `/metrics` под этот
-// Registry. По умолчанию использует exposition-format `text/plain;
-// version=0.0.4` (Prometheus 2.x scrape-compatible).
+// MetricsHandler returns the HTTP handler for `/metrics` on this Registry. Defaults to
+// the exposition format `text/plain; version=0.0.4` (Prometheus 2.x scrape-compatible).
 //
-// `EnableOpenMetrics: false` — намеренно. OpenMetrics-format
-// нестандартизирован в Prometheus exporter spec (выбирается через
-// `Accept`-header), и стандартные scraper-ы (Prometheus, VictoriaMetrics,
-// Grafana Agent) понимают text-format одинаково. Включим, когда
-// появится понятный triple-test от пользователя.
+// `EnableOpenMetrics: false` is deliberate. The OpenMetrics format is not standardized
+// in the Prometheus exporter spec (selected via the `Accept` header), and standard
+// scrapers (Prometheus, VictoriaMetrics, Grafana Agent) understand the text format the
+// same way. We'll enable it when there's a clear triple-test from the user.
 func (r *Registry) MetricsHandler() http.Handler {
 	return promhttp.HandlerFor(r.reg, promhttp.HandlerOpts{
-		// Любые сбои сериализации (metrics-bug) — 500 без body. В /metrics
-		// body отдаём только при успехе, чтобы не сбивать scraper-а
-		// partial-payload-ом.
+		// Any serialization failure (metrics bug) — 500 with no body. On /metrics we
+		// return a body only on success, so as not to confuse a scraper with a partial
+		// payload.
 		ErrorHandling: promhttp.HTTPErrorOnError,
 	})
 }

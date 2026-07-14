@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestLoadScenarioManifest_ValidateBlock — валидная top-level секция `validate:`
-// (ADR-009 amendment, DSL wave 2): список правил {that, message} парсится в
+// TestLoadScenarioManifest_ValidateBlock — a valid top-level `validate:` section
+// (ADR-009 amendment, DSL wave 2): a list of {that, message} rules parses into
 // ScenarioManifest.Validate.
 func TestLoadScenarioManifest_ValidateBlock(t *testing.T) {
 	src := `name: x
@@ -38,8 +38,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateEmpty — пустой `validate: []` → empty_value
-// (правило-без-правил вводит автора в заблуждение, отвергаем явно).
+// TestLoadScenarioManifest_ValidateEmpty — an empty `validate: []` → empty_value
+// (a rule-block with no rules misleads the author, rejected explicitly).
 func TestLoadScenarioManifest_ValidateEmpty(t *testing.T) {
 	src := `name: x
 validate: []
@@ -52,7 +52,7 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateMissingThat — правило без that → required.
+// TestLoadScenarioManifest_ValidateMissingThat — a rule without that → required.
 func TestLoadScenarioManifest_ValidateMissingThat(t *testing.T) {
 	src := `name: x
 validate:
@@ -66,8 +66,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateMissingMessage — правило без message → required
-// (без message провал 422 анонимен; в отличие от assert.message здесь обязателен).
+// TestLoadScenarioManifest_ValidateMissingMessage — a rule without message → required
+// (without message a 422 failure is anonymous; unlike assert.message, here it's required).
 func TestLoadScenarioManifest_ValidateMissingMessage(t *testing.T) {
 	src := `name: x
 validate:
@@ -81,8 +81,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateBrokenCEL — синтаксически битый that →
-// validate_rule_invalid (CEL не компилируется).
+// TestLoadScenarioManifest_ValidateBrokenCEL — a syntactically broken that →
+// validate_rule_invalid (CEL doesn't compile).
 func TestLoadScenarioManifest_ValidateBrokenCEL(t *testing.T) {
 	src := `name: x
 validate:
@@ -97,10 +97,10 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateInputOnlyBarrier — ★ структурный input-only
-// барьер: ссылка на essence/soulprint/register в that → validate_rule_invalid
-// (undeclared reference), НЕ значение. Барьер обеспечивается необъявленностью
-// inputEnv, не текстовым guard-ом.
+// TestLoadScenarioManifest_ValidateInputOnlyBarrier — a structural input-only
+// barrier: an essence/soulprint/register reference in that → validate_rule_invalid
+// (undeclared reference), NOT a value. The barrier comes from inputEnv's
+// undeclaration, not a text guard.
 func TestLoadScenarioManifest_ValidateInputOnlyBarrier(t *testing.T) {
 	forbidden := []string{
 		`soulprint.self.os.family == 'debian'`,
@@ -118,7 +118,7 @@ func TestLoadScenarioManifest_ValidateInputOnlyBarrier(t *testing.T) {
 	}
 }
 
-// TestLoadScenarioManifest_ValidateUnknownKey — лишний ключ внутри правила → unknown_key.
+// TestLoadScenarioManifest_ValidateUnknownKey — an extra key inside a rule → unknown_key.
 func TestLoadScenarioManifest_ValidateUnknownKey(t *testing.T) {
 	src := `name: x
 validate:
@@ -134,8 +134,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_ValidateAndAssertCoexist — validate: и assert:
-// сосуществуют: оба парсятся, не конфликтуют (validate top-level, assert — задача).
+// TestLoadScenarioManifest_ValidateAndAssertCoexist — validate: and assert:
+// coexist: both parse, no conflict (validate is top-level, assert is per-task).
 func TestLoadScenarioManifest_ValidateAndAssertCoexist(t *testing.T) {
 	src := `name: x
 input:
@@ -163,7 +163,7 @@ tasks:
 	}
 }
 
-// TestEvalValidateRules_AllPass — все правила true → nil failure, nil err.
+// TestEvalValidateRules_AllPass — all rules true → nil failure, nil err.
 func TestEvalValidateRules_AllPass(t *testing.T) {
 	rules := []ValidateRule{
 		{That: "input.port > 0", Message: "port positive"},
@@ -178,14 +178,14 @@ func TestEvalValidateRules_AllPass(t *testing.T) {
 	}
 }
 
-// TestEvalValidateRules_FirstFalseWins — первый false выигрывает: возвращается
-// именно ПЕРВОЕ нарушенное правило с его message (короткое замыкание по порядку).
+// TestEvalValidateRules_FirstFalseWins — the first false wins: the FIRST violated
+// rule is returned with its message (short-circuit in order).
 func TestEvalValidateRules_FirstFalseWins(t *testing.T) {
 	rules := []ValidateRule{
 		{That: "input.port > 0", Message: "first rule"},
 		{That: "input.name != ''", Message: "second rule"},
 	}
-	// port=0 валит первое; name тоже пустой (валил бы второе) — но первый выигрывает.
+	// port=0 fails the first; name is also empty (would fail the second) — but the first wins.
 	fail, err := EvalValidateRules(rules, map[string]any{"port": 0, "name": ""})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
@@ -201,13 +201,13 @@ func TestEvalValidateRules_FirstFalseWins(t *testing.T) {
 	}
 }
 
-// TestEvalValidateRules_CrossField — кросс-полевой инвариант (то, ради чего
-// validate: вводится): «port обязателен, если tls выключен».
+// TestEvalValidateRules_CrossField — a cross-field invariant (the reason validate:
+// exists): "port is required if tls is off".
 func TestEvalValidateRules_CrossField(t *testing.T) {
 	rules := []ValidateRule{
 		{That: "input.tls || input.port > 0", Message: "set port or enable tls"},
 	}
-	// tls=false, port=0 → правило false.
+	// tls=false, port=0 → rule false.
 	fail, err := EvalValidateRules(rules, map[string]any{"tls": false, "port": 0})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
@@ -215,7 +215,7 @@ func TestEvalValidateRules_CrossField(t *testing.T) {
 	if fail == nil {
 		t.Fatalf("expected cross-field failure")
 	}
-	// tls=true покрывает отсутствие порта → проходит.
+	// tls=true covers the missing port → passes.
 	fail, err = EvalValidateRules(rules, map[string]any{"tls": true, "port": 0})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
@@ -225,8 +225,8 @@ func TestEvalValidateRules_CrossField(t *testing.T) {
 	}
 }
 
-// TestEvalValidateRules_NonBool — that вычислился в не-bool → внутренняя ошибка
-// (а не «прошло»/«не прошло»): caller маппит в 500, не 422.
+// TestEvalValidateRules_NonBool — that evaluated to non-bool → internal error (not
+// "passed"/"failed"): the caller maps it to 500, not 422.
 func TestEvalValidateRules_NonBool(t *testing.T) {
 	rules := []ValidateRule{{That: "input.port", Message: "m"}}
 	_, err := EvalValidateRules(rules, map[string]any{"port": 6379})
@@ -235,7 +235,7 @@ func TestEvalValidateRules_NonBool(t *testing.T) {
 	}
 }
 
-// TestEvalValidateRules_Empty — пустой список / nil merged → no-op.
+// TestEvalValidateRules_Empty — empty list / nil merged → no-op.
 func TestEvalValidateRules_Empty(t *testing.T) {
 	fail, err := EvalValidateRules(nil, nil)
 	if err != nil || fail != nil {

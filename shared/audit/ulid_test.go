@@ -35,12 +35,12 @@ func TestIsValidULID(t *testing.T) {
 		"01HABC",                      // too short
 		"01HABCDEFGHJKMNPQRSTVWXYZ",   // 25 chars (one short)
 		"01HABCDEFGHJKMNPQRSTVWXYZ00", // 27 chars
-		"01HABCDEFGHJKMNPQRSTVWXYZI",  // I запрещён в Crockford
-		"01HABCDEFGHJKMNPQRSTVWXYZL",  // L запрещён
-		"01HABCDEFGHJKMNPQRSTVWXYZO",  // O запрещён
-		"01HABCDEFGHJKMNPQRSTVWXYZU",  // U запрещён
+		"01HABCDEFGHJKMNPQRSTVWXYZI",  // I forbidden in Crockford
+		"01HABCDEFGHJKMNPQRSTVWXYZL",  // L forbidden
+		"01HABCDEFGHJKMNPQRSTVWXYZO",  // O forbidden
+		"01HABCDEFGHJKMNPQRSTVWXYZU",  // U forbidden
 		"01habcdefghjkmnpqrstvwxyz0",  // lower-case
-		"01HABCDEFGHJKMNPQRSTVWXYZ-",  // не-base32-символ
+		"01HABCDEFGHJKMNPQRSTVWXYZ-",  // non-base32 char
 	}
 	for _, s := range bad {
 		if IsValidULID(s) {

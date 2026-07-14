@@ -6,53 +6,52 @@ import (
 	"sync/atomic"
 )
 
-// Tap — пассивный наблюдатель audit-событий поверх primary-[Writer]-а
-// (точка расширения ADR-022(f)). Получает КОПИЮ уже записанного в primary
-// события ПОСЛЕ успешной primary-записи. Реализация tap-а обязана быть
-// неблокирующей и best-effort: её ошибки не влияют на исход [Writer.Write]
-// (см. [MultiWriter]). Конкретный notification-tap — keeper-side
-// (keeper/internal/herald, ADR-052(c)).
+// Tap is a passive observer of audit events on top of the primary [Writer]
+// (extension point ADR-022(f)). It receives a COPY of an event already written
+// to primary, AFTER a successful primary write. A tap implementation must be
+// non-blocking and best-effort: its errors do not affect the outcome of
+// [Writer.Write] (see [MultiWriter]). The concrete notification tap is
+// keeper-side (keeper/internal/herald, ADR-052(c)).
 //
-// Семантика «событие уже в primary store» гарантирует, что tap не увидит
-// и не просигналит наружу о незаписанном событии (порядок ADR-052(c):
-// сначала audit-факт в PG, потом уведомление).
+// The "event is already in the primary store" semantics guarantee a tap never
+// sees or signals outward an unwritten event (ADR-052(c) order: the audit fact
+// in PG first, then the notification).
 type Tap interface {
-	// Observe принимает событие, гарантированно записанное в primary.
-	// event — read-only для tap-а (общий указатель; tap не мутирует).
-	// Реализация не должна блокировать вызывающего: тяжёлую/сетевую
-	// работу — в собственную горутину/очередь. Ошибки tap проглатывает
-	// сам (лог/метрика), наружу их не отдаёт.
+	// Observe receives an event guaranteed to be written to primary. event is
+	// read-only for the tap (shared pointer; the tap does not mutate). The
+	// implementation must not block the caller: push heavy/network work into its
+	// own goroutine/queue. The tap swallows its own errors (log/metric) and does
+	// not surface them.
 	Observe(ctx context.Context, event *Event)
 }
 
-// MultiWriter оборачивает primary-[Writer] и набор [Tap]-ов. Контракт:
+// MultiWriter wraps the primary [Writer] and a set of [Tap]s. Contract:
 //
-//   - primary-запись (PG) выполняется ПЕРВОЙ и её результат —
-//     единственный, влияющий на исход [Write]. Ошибка primary возвращается
-//     как есть, tap-ы при этом НЕ вызываются (нельзя сигналить наружу о
-//     незаписанном событии).
-//   - tap-ы вызываются строго ПОСЛЕ успешной primary-записи, в порядке
-//     передачи. Любая ошибка/паника tap-а не фейлит [Write] (best-effort,
+//   - the primary write (PG) runs FIRST and its result is the only one affecting
+//     the outcome of [Write]. A primary error is returned as is, and the taps
+//     are NOT called (must not signal outward an unwritten event).
+//   - taps are called strictly AFTER a successful primary write, in the order
+//     passed. Any tap error/panic does not fail [Write] (best-effort,
 //     ADR-022(f)/ADR-052(c)).
 //
-// Неблокируемость и буферизация — ответственность конкретного [Tap]-а
-// (см. herald.notificationTap: bounded-канал + drop-счётчик). MultiWriter
-// лишь гарантирует порядок и изоляцию ошибок.
+// Non-blocking behavior and buffering are the concrete [Tap]'s responsibility
+// (see herald.notificationTap: a bounded channel + drop counter). MultiWriter
+// only guarantees ordering and error isolation.
 type MultiWriter struct {
 	primary Writer
 	taps    []Tap
 	logger  *slog.Logger
 
-	// tapPanics — счётчик паник, перехваченных при вызове Tap.Observe.
-	// Паника tap-а — programmer error, но не должна валить audit write-path;
-	// атомарный счётчик доступен тестам/диагностике.
+	// tapPanics counts panics recovered while calling Tap.Observe. A tap panic
+	// is a programmer error but must not bring down the audit write-path; the
+	// atomic counter is available to tests/diagnostics.
 	tapPanics atomic.Uint64
 }
 
-// NewMultiWriter оборачивает primary в декоратор с tap-ами. nil-tap-ы
-// отбрасываются. При пустом наборе tap-ов возвращается primary как есть —
-// декоратор без наблюдателей бессмыслен (нулевой оверхед на write-path).
-// logger — для лога паник tap-а; nil допустим (паники молча считаются).
+// NewMultiWriter wraps primary in a decorator with taps. nil taps are dropped.
+// With an empty tap set it returns primary as is — a decorator with no observers
+// is pointless (zero overhead on the write-path). logger is for logging tap
+// panics; nil is allowed (panics are counted silently).
 func NewMultiWriter(primary Writer, logger *slog.Logger, taps ...Tap) Writer {
 	live := make([]Tap, 0, len(taps))
 	for _, t := range taps {
@@ -66,7 +65,7 @@ func NewMultiWriter(primary Writer, logger *slog.Logger, taps ...Tap) Writer {
 	return &MultiWriter{primary: primary, taps: live, logger: logger}
 }
 
-// Write записывает событие в primary; при успехе раздаёт его tap-ам.
+// Write writes the event to primary; on success it hands it to the taps.
 func (m *MultiWriter) Write(ctx context.Context, event *Event) error {
 	if err := m.primary.Write(ctx, event); err != nil {
 		return err
@@ -77,8 +76,8 @@ func (m *MultiWriter) Write(ctx context.Context, event *Event) error {
 	return nil
 }
 
-// observe вызывает tap с recover-барьером: паника tap-а считается и
-// логируется, но не валит write-path.
+// observe calls a tap with a recover barrier: a tap panic is counted and logged
+// but does not bring down the write-path.
 func (m *MultiWriter) observe(ctx context.Context, t Tap, event *Event) {
 	defer func() {
 		if r := recover(); r != nil {

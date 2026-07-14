@@ -105,9 +105,9 @@ spec:
 	}
 }
 
-// TestLoadFromBytes_SoulBeaconHappyPath — kind=soul_beacon (ADR-030 V5-2):
-// валиден с произвольной JSON Schema в spec.params_schema, без states /
-// provider_kind / profile_schema (они не допускаются для этого kind-а).
+// TestLoadFromBytes_SoulBeaconHappyPath — kind=soul_beacon (ADR-030 V5-2): valid
+// with an arbitrary JSON Schema in spec.params_schema, without states /
+// provider_kind / profile_schema (they are not allowed for this kind).
 func TestLoadFromBytes_SoulBeaconHappyPath(t *testing.T) {
 	raw := []byte(`kind: soul_beacon
 protocol_version: 1
@@ -137,8 +137,8 @@ spec:
 	}
 }
 
-// TestLoadFromBytes_SoulBeaconRejectsStates — kind=soul_beacon с states-блоком
-// должен отдавать ошибку spec_states_not_allowed.
+// TestLoadFromBytes_SoulBeaconRejectsStates — kind=soul_beacon with a states block
+// must return a spec_states_not_allowed error.
 func TestLoadFromBytes_SoulBeaconRejectsStates(t *testing.T) {
 	raw := []byte(`kind: soul_beacon
 protocol_version: 1
@@ -156,9 +156,9 @@ spec:
 	}
 }
 
-// Table-driven negative cases: каждая фикстура — `expected codes` (множество).
-// Проверяем, что код входит в результат; полное равенство множества не
-// заявляем (decoder может добавлять связанные коды вроде type_mismatch).
+// Table-driven negative cases: each fixture has `expected codes` (a set). We check
+// that the code is in the result; we don't claim full set equality (the decoder may
+// add related codes like type_mismatch).
 func TestLoadFromBytes_FailureCases(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -503,8 +503,8 @@ func TestValidateSimple_ReturnsFirstError(t *testing.T) {
 	}
 }
 
-// diagCodes — отсортированный список кодов диагностик; для предсказуемого
-// сравнения в табличных тестах.
+// diagCodes — a sorted list of diagnostic codes; for predictable comparison in
+// table-driven tests.
 func diagCodes(ds []diag.Diagnostic) []string {
 	out := make([]string, 0, len(ds))
 	for _, d := range ds {
@@ -523,8 +523,8 @@ func containsStr(xs []string, s string) bool {
 	return false
 }
 
-// TestFormFieldsValid — манифест с form-полями (enum/format:sid/source)
-// валиден (ADR-045 S1).
+// TestFormFieldsValid — a manifest with form fields (enum/format:sid/source) is
+// valid (ADR-045 S1).
 func TestFormFieldsValid(t *testing.T) {
 	raw := []byte(`kind: soul_module
 protocol_version: 1
@@ -552,8 +552,8 @@ spec:
 	}
 }
 
-// TestFormFieldsForwardCompat — старый манифест без form-полей остаётся
-// валиден (новый код на старом манифесте; only-add, ADR-020).
+// TestFormFieldsForwardCompat — an old manifest without form fields stays valid
+// (new code on an old manifest; only-add, ADR-020).
 func TestFormFieldsForwardCompat(t *testing.T) {
 	raw := []byte(`kind: soul_module
 protocol_version: 1
@@ -574,7 +574,7 @@ spec:
 	}
 }
 
-// TestFormFieldsInvalid — структурные ошибки form-полей ловятся.
+// TestFormFieldsInvalid — structural errors in form fields are caught.
 func TestFormFieldsInvalid(t *testing.T) {
 	cases := []struct {
 		name string

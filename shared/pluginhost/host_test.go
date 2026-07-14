@@ -101,7 +101,7 @@ func TestCheckCapabilities(t *testing.T) {
 }
 
 func TestCheckCapabilitiesNoFilterAllowsAll(t *testing.T) {
-	h, _ := NewHost(nil, "/tmp") // AllowedCapabilities == nil = «всё разрешено».
+	h, _ := NewHost(nil, "/tmp") // AllowedCapabilities == nil = all allowed.
 	m := &sharedplugin.Manifest{
 		Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "wb", Name: "ok",
 		RequiredCapabilities: []string{"network_outbound", "vault_access", "exec_subprocess"},
@@ -111,10 +111,11 @@ func TestCheckCapabilitiesNoFilterAllowsAll(t *testing.T) {
 	}
 }
 
-// TestSpawnWithoutSigilRefused — без печати доверия Sigil (допуск не доехал и
-// trust-anchor не настроен) Spawn fail-closed ещё до exec и НЕ силит sidecar:
-// first-load больше НЕ доверяет «как есть» (ADR-026, S6b). Tamper-сценарий с
-// digest_mismatch и прочие fail-closed reasons покрыты в sigil_verify_test.go.
+// TestSpawnWithoutSigilRefused — without a Sigil trust seal (the grant didn't
+// arrive and no trust-anchor is configured) Spawn is fail-closed before exec and
+// does NOT seal the sidecar: first-load no longer trusts "as-is" (ADR-026, S6b).
+// The digest_mismatch tamper scenario and other fail-closed reasons are covered in
+// sigil_verify_test.go.
 func TestSpawnWithoutSigilRefused(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "soul-mod-x")
@@ -123,7 +124,7 @@ func TestSpawnWithoutSigilRefused(t *testing.T) {
 	}
 
 	h, _ := NewHost(nil, filepath.Join(t.TempDir(), "sock"))
-	// SigilAnchors и Sigils не заданы → нет trust-anchor-ов и нет допусков.
+	// SigilAnchors and Sigils are unset → no trust-anchors and no grants.
 	d := Discovered{
 		Manifest: &sharedplugin.Manifest{
 			Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "wb", Name: "x",

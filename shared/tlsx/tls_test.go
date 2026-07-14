@@ -85,7 +85,7 @@ func TestLoadServerOnlyTLS_MalformedCert(t *testing.T) {
 	}
 }
 
-// Cert на месте, key отсутствует — падает второй pre-flight stat (по KeyPath).
+// Cert present, key missing — the second pre-flight stat (on KeyPath) fails.
 func TestLoadServerOnlyTLS_MissingKeyOnly(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "test.local")
@@ -101,7 +101,7 @@ func TestLoadServerOnlyTLS_MissingKeyOnly(t *testing.T) {
 	}
 }
 
-// CAPath игнорируется в server-only режиме: даже непустой и битый CA не влияет.
+// CAPath is ignored in server-only mode: even a non-empty, broken CA has no effect.
 func TestLoadServerOnlyTLS_CAPathIgnored(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := mustWriteSelfSigned(t, dir, "test.local")
@@ -124,7 +124,7 @@ func TestLoadServerOnlyTLS_CAPathIgnored(t *testing.T) {
 func TestLoadMutualTLS_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := mustWriteSelfSigned(t, dir, "test.local")
-	// CA-bundle для теста — сам же серверный cert (self-signed = self-CA).
+	// CA bundle for the test is the server cert itself (self-signed = self-CA).
 	caPath := filepath.Join(dir, "ca.pem")
 	srcPEM, err := os.ReadFile(certPath)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestLoadMutualTLS_MalformedCA(t *testing.T) {
 	}
 }
 
-// Cert отсутствует, key и CA на месте — падает первый pre-flight stat (cert).
+// Cert missing, key and CA present — the first pre-flight stat (cert) fails.
 func TestLoadMutualTLS_MissingCertOnly(t *testing.T) {
 	dir := t.TempDir()
 	_, keyPath := mustWriteSelfSigned(t, dir, "test.local")
@@ -216,7 +216,7 @@ func TestLoadMutualTLS_MissingCertOnly(t *testing.T) {
 	}
 }
 
-// Key отсутствует, cert и CA на месте — падает второй pre-flight stat (key).
+// Key missing, cert and CA present — the second pre-flight stat (key) fails.
 func TestLoadMutualTLS_MissingKeyOnly(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "test.local")
@@ -234,12 +234,12 @@ func TestLoadMutualTLS_MissingKeyOnly(t *testing.T) {
 	}
 }
 
-// Все три файла существуют (stat проходит), но key не соответствует cert —
-// падает tls.LoadX509KeyPair. Закрывает ветку ошибки парсинга пары.
+// All three files exist (stat passes) but the key does not match the cert —
+// tls.LoadX509KeyPair fails. Covers the pair-parsing error branch.
 func TestLoadMutualTLS_CertKeyMismatch(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "cert.local")
-	// Чужой key от другой пары — stat пройдёт, но пара не сойдётся.
+	// A foreign key from another pair — stat passes, but the pair won't match.
 	otherDir := filepath.Join(dir, "other")
 	if err := os.Mkdir(otherDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -255,9 +255,9 @@ func TestLoadMutualTLS_CertKeyMismatch(t *testing.T) {
 	}
 }
 
-// CAPath указывает на каталог: os.Stat проходит, os.ReadFile падает (EISDIR).
-// Честный кейс «оператор указал каталог вместо файла CA», закрывает ветку
-// ошибки чтения CA после успешного stat без инъекции fs-ошибки.
+// CAPath points at a directory: os.Stat passes, os.ReadFile fails (EISDIR). A real case
+// of "the operator pointed at a directory instead of the CA file", covering the CA-read
+// error branch after a successful stat without injecting an fs error.
 func TestLoadMutualTLS_CAPathIsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := mustWriteSelfSigned(t, dir, "test.local")
@@ -293,7 +293,7 @@ func TestLoadClientTLS_BootstrapMode(t *testing.T) {
 	if cfg.ServerName != "keeper.local" {
 		t.Errorf("ServerName = %q, want keeper.local", cfg.ServerName)
 	}
-	// Bootstrap = server-only: клиентского cert быть не должно.
+	// Bootstrap = server-only: there must be no client cert.
 	if len(cfg.Certificates) != 0 {
 		t.Errorf("Certificates len = %d, want 0 in bootstrap mode", len(cfg.Certificates))
 	}
@@ -342,7 +342,7 @@ func TestLoadClientTLS_MissingCAFile(t *testing.T) {
 	}
 }
 
-// CAPath указывает на каталог: os.Stat проходит, os.ReadFile падает.
+// CAPath points at a directory: os.Stat passes, os.ReadFile fails.
 func TestLoadClientTLS_CAPathIsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	caDir := filepath.Join(dir, "cadir")
@@ -367,8 +367,8 @@ func TestLoadClientTLS_MalformedCA(t *testing.T) {
 	}
 }
 
-// CA валиден, key задан, но cert пустой → ErrServerCertEmpty
-// (асимметрия путей: один задан, другой нет).
+// CA valid, key set, but cert empty → ErrServerCertEmpty
+// (path asymmetry: one is set, the other is not).
 func TestLoadClientTLS_CertEmptyKeySet(t *testing.T) {
 	dir := t.TempDir()
 	caPath := writeCABundle(t, dir, "keeper.local")
@@ -381,7 +381,7 @@ func TestLoadClientTLS_CertEmptyKeySet(t *testing.T) {
 	}
 }
 
-// CA валиден, cert задан, но key пустой → ErrServerKeyEmpty.
+// CA valid, cert set, but key empty → ErrServerKeyEmpty.
 func TestLoadClientTLS_KeyEmptyCertSet(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "soul.local")
@@ -395,7 +395,7 @@ func TestLoadClientTLS_KeyEmptyCertSet(t *testing.T) {
 	}
 }
 
-// CA + key валидны, cert-путь отсутствует на диске → stat cert падает.
+// CA + key valid, cert path missing on disk → stat cert fails.
 func TestLoadClientTLS_MissingCertFile(t *testing.T) {
 	dir := t.TempDir()
 	_, keyPath := mustWriteSelfSigned(t, dir, "soul.local")
@@ -413,7 +413,7 @@ func TestLoadClientTLS_MissingCertFile(t *testing.T) {
 	}
 }
 
-// CA + cert валидны, key-путь отсутствует на диске → stat key падает.
+// CA + cert valid, key path missing on disk → stat key fails.
 func TestLoadClientTLS_MissingKeyFile(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "soul.local")
@@ -431,8 +431,8 @@ func TestLoadClientTLS_MissingKeyFile(t *testing.T) {
 	}
 }
 
-// CA + cert + key существуют (stat проходит), но key не соответствует cert —
-// падает tls.LoadX509KeyPair.
+// CA + cert + key exist (stat passes) but the key does not match the cert —
+// tls.LoadX509KeyPair fails.
 func TestLoadClientTLS_CertKeyMismatch(t *testing.T) {
 	dir := t.TempDir()
 	certPath, _ := mustWriteSelfSigned(t, dir, "soul.local")
@@ -453,8 +453,8 @@ func TestLoadClientTLS_CertKeyMismatch(t *testing.T) {
 	}
 }
 
-// writeCABundle пишет отдельный CA-сертификат (только CERTIFICATE-PEM, без
-// ключа) и возвращает путь. Пригоден для AppendCertsFromPEM (валидный PEM).
+// writeCABundle writes a standalone CA certificate (CERTIFICATE-PEM only, no key) and
+// returns its path. Usable with AppendCertsFromPEM (valid PEM).
 func writeCABundle(t *testing.T, dir, cn string) (caPath string) {
 	t.Helper()
 
@@ -488,9 +488,9 @@ func writeCABundle(t *testing.T, dir, cn string) (caPath string) {
 	return caPath
 }
 
-// mustWriteSelfSigned пишет self-signed ECDSA-cert + key в указанный
-// каталог и возвращает пути. Используется и в unit-тестах tlsx, и
-// (косвенно через test-helper) в gRPC integration-тестах.
+// mustWriteSelfSigned writes a self-signed ECDSA cert + key into the given directory and
+// returns the paths. Used both in tlsx unit tests and (indirectly via a test helper) in
+// gRPC integration tests.
 func mustWriteSelfSigned(t *testing.T, dir, cn string) (certPath, keyPath string) {
 	t.Helper()
 

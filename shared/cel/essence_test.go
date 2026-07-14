@@ -2,7 +2,7 @@ package cel
 
 import "testing"
 
-// TestEvalInterpolation_Essence — `${ essence.* }` резолвится из Vars.Essence.
+// TestEvalInterpolation_Essence — `${ essence.* }` resolves from Vars.Essence.
 func TestEvalInterpolation_Essence(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Essence: map[string]any{"db": map[string]any{"host": "pg-1"}}}
@@ -16,7 +16,7 @@ func TestEvalInterpolation_Essence(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_Essence — essence доступна в expression-key (where:/when:).
+// TestEvalExpression_Essence — essence is available in expression keys (where:/when:).
 func TestEvalExpression_Essence(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Essence: map[string]any{"feature": map[string]any{"enabled": true}}}
@@ -30,8 +30,8 @@ func TestEvalExpression_Essence(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_EssenceEmptyNoPanic — пустой Essence не даёт паники;
-// обращение к полю — штатный no-such-key (ErrEval), не leak в env.
+// TestEvalExpression_EssenceEmptyNoPanic — empty Essence does not panic; a field
+// access is a normal no-such-key (ErrEval), not an env leak.
 func TestEvalExpression_EssenceEmptyNoPanic(t *testing.T) {
 	e := newEngine(t)
 
@@ -40,8 +40,8 @@ func TestEvalExpression_EssenceEmptyNoPanic(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_EssenceCoexists — essence сосуществует с input/loop в одном
-// выражении (host-инвариантный слой рядом с прочим контекстом).
+// TestEvalExpression_EssenceCoexists — essence coexists with input/loop in a single
+// expression (host-invariant layer alongside the rest of the context).
 func TestEvalExpression_EssenceCoexists(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{

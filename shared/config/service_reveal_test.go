@@ -6,10 +6,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// revealBase — валидный service.yml + подставляемая секция revealable_secrets (NIM-74).
+// revealBase — a valid service.yml + an injectable revealable_secrets section (NIM-74).
 const revealBase = "name: redis\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
 
-// TestRevealableSecrets_Valid — корректная декларация: 0 ошибок, поля разобраны.
+// TestRevealableSecrets_Valid — a correct declaration: 0 errors, fields parsed.
 func TestRevealableSecrets_Valid(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
@@ -32,8 +32,8 @@ func TestRevealableSecrets_Valid(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_VaultRefMissingKey — enumerate задан, но vault_ref без {key} →
-// vault_ref_missing_key (per-элементный reveal без {key} невыразим).
+// TestRevealableSecrets_VaultRefMissingKey — enumerate set, but vault_ref without {key} →
+// vault_ref_missing_key (per-element reveal is inexpressible without {key}).
 func TestRevealableSecrets_VaultRefMissingKey(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
@@ -47,7 +47,7 @@ func TestRevealableSecrets_VaultRefMissingKey(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_UnknownPlaceholder — плейсхолдер вне {incarnation}/{key} →
+// TestRevealableSecrets_UnknownPlaceholder — a placeholder outside {incarnation}/{key} →
 // vault_ref_unknown_placeholder.
 func TestRevealableSecrets_UnknownPlaceholder(t *testing.T) {
 	src := revealBase + `revealable_secrets:
@@ -62,7 +62,7 @@ func TestRevealableSecrets_UnknownPlaceholder(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_DuplicateID — два одинаковых id → duplicate_id.
+// TestRevealableSecrets_DuplicateID — two identical ids → duplicate_id.
 func TestRevealableSecrets_DuplicateID(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
@@ -79,7 +79,7 @@ func TestRevealableSecrets_DuplicateID(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_MissingEnumerate — enumerate обязателен (MVP) →
+// TestRevealableSecrets_MissingEnumerate — enumerate is required (MVP) →
 // missing_required_field.
 func TestRevealableSecrets_MissingEnumerate(t *testing.T) {
 	src := revealBase + `revealable_secrets:
@@ -93,7 +93,7 @@ func TestRevealableSecrets_MissingEnumerate(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_BadEnumerateForm — enumerate вне формы state.<segment> →
+// TestRevealableSecrets_BadEnumerateForm — enumerate outside the state.<segment> form →
 // enumerate_invalid_format.
 func TestRevealableSecrets_BadEnumerateForm(t *testing.T) {
 	src := revealBase + `revealable_secrets:
@@ -108,9 +108,9 @@ func TestRevealableSecrets_BadEnumerateForm(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_VaultRefNotServiceScoped — ★ C1 defense-in-depth: vault_ref
-// без {service} (даже при наличии {incarnation}) → vault_ref_not_service_scoped
-// (путь обязан быть под неймспейсом секретов именно этого сервиса).
+// TestRevealableSecrets_VaultRefNotServiceScoped — ★ C1 defense-in-depth: a vault_ref
+// without {service} (even with {incarnation}) → vault_ref_not_service_scoped
+// (the path must live under this specific service's secret namespace).
 func TestRevealableSecrets_VaultRefNotServiceScoped(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
@@ -124,8 +124,8 @@ func TestRevealableSecrets_VaultRefNotServiceScoped(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_VaultRefMissingField — vault_ref без #<field> →
-// vault_ref_missing_field (reveal раскрывает ровно одно скалярное поле).
+// TestRevealableSecrets_VaultRefMissingField — a vault_ref without #<field> →
+// vault_ref_missing_field (reveal exposes exactly one scalar field).
 func TestRevealableSecrets_VaultRefMissingField(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - id: user_password
@@ -139,7 +139,7 @@ func TestRevealableSecrets_VaultRefMissingField(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_MissingID — id обязателен → missing_required_field.
+// TestRevealableSecrets_MissingID — id is required → missing_required_field.
 func TestRevealableSecrets_MissingID(t *testing.T) {
 	src := revealBase + `revealable_secrets:
   - enumerate: state.redis_users

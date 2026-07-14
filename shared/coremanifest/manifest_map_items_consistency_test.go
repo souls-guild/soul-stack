@@ -1,14 +1,14 @@
-// ADR-045 S7-amend — согласованность объявления `items` под `type: map`
-// (тип значения, map[string]<items>) между встроенным core-манифестом и тем,
-// что валидатор `params:` реально принимает.
+// ADR-045 S7-amend — consistency of the `items` declaration under `type: map`
+// (the value type, map[string]<items>) between the built-in core manifest and
+// what the `params:` validator actually accepts.
 //
-// Покрывает два кейса, симметрично list-полю:
-//   - map + items.type=string — плоская строковая map (env/headers/vars): items
-//     задан, тип значения скалярный → UI рисует KEY→VALUE-редактор;
-//   - map без items — произвольная структура (cloud profile) → UI рисует JSON.
+// Covers two cases, symmetric to the list field:
+//   - map + items.type=string — a flat string map (env/headers/vars): items is
+//     set, the value type is scalar → the UI renders a KEY→VALUE editor;
+//   - map without items — an arbitrary structure (cloud profile) → the UI renders JSON.
 //
-// Файл физически в shared/coremanifest/ (внешний тест-пакет), production-код не
-// трогает — та же мотивация, что у manifest_validator_consistency_test.go.
+// The file physically lives in shared/coremanifest/ (external test package), does
+// not touch production code — the same motivation as manifest_validator_consistency_test.go.
 package coremanifest_test
 
 import (
@@ -21,14 +21,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// mapFieldAddr — адрес одного map-параметра core-модуля для проверки items.
+// mapFieldAddr is the address of one map param of a core module for checking items.
 type mapFieldAddr struct {
 	module, state, param string
 }
 
-// TestS7Amend_MapValueItemsDeclared — плоские строковые map несут
-// items.type=string (KEY→VALUE-редактор в UI), а произвольная cloud-profile —
-// БЕЗ items (JSON-редактор). Источник правды — встроенный coremanifest.
+// TestS7Amend_MapValueItemsDeclared — flat string maps carry items.type=string
+// (KEY→VALUE editor in the UI), and an arbitrary cloud-profile has NO items (JSON
+// editor). The source of truth is the built-in coremanifest.
 func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 	reg := coremanifest.Default()
 
@@ -66,7 +66,7 @@ func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 		}
 	}
 
-	// cloud profile — намеренно без items (произвольная структура → JSON в UI).
+	// cloud profile — deliberately without items (arbitrary structure → JSON in the UI).
 	profile, ok := lookup(mapFieldAddr{"core.cloud", "created", "profile"})
 	if !ok {
 		t.Fatal("core.cloud.created.profile не найден в coremanifest")
@@ -79,9 +79,9 @@ func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 	}
 }
 
-// TestS7Amend_MapWithItemsValidatorAccepts — declared map+items не вызывает
-// items-ошибок у manifest-валидатора, а задача с map-параметром проходит
-// config-валидатор (публичный путь, как в TestP5_*).
+// TestS7Amend_MapWithItemsValidatorAccepts — a declared map+items does not raise
+// items errors in the manifest validator, and a task with a map param passes the
+// config validator (the public path, as in TestP5_*).
 func TestS7Amend_MapWithItemsValidatorAccepts(t *testing.T) {
 	const withItems = `kind: soul_module
 protocol_version: 1

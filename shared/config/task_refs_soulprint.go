@@ -10,69 +10,68 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Статпроверка ссылок `soulprint.<...>` внутри CEL-предикатов сценария
-// (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`/`loop.when:`).
-// Зеркальна validateTaskRefs для register.* — но schema-driven, не cross-task.
+// Static check of `soulprint.<...>` references inside scenario CEL predicates
+// (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`/`loop.when:`). Mirrors
+// validateTaskRefs for register.* — but schema-driven, not cross-task.
 //
-// Что проверяем:
+// What we check:
 //
-//  1. soulprint_naked — голый `soulprint.<x>` без `.self`/`.hosts`/`.where(`
-//     является ошибкой каноники ([docs/soul/soulprint.md]: «голая форма
-//     soulprint.<path> без .self — ошибка валидации soul-lint»).
-//  2. soulprint_unknown_path — `soulprint.self.<unknown>` (опечатка типа
-//     `soulprint.self.os.familly`). Сверка идёт по [soulprintSelfTopLevel] +
-//     [soulprintSelfSubPaths] (typed-схема ADR-018 + registry-проекции).
-//     Динамический хвост за массивным/скалярным сегментом не валидируется
-//     (interfaces[i].ipv4, .sid.startsWith(...) и т.п.) — линтер сознательно
-//     грубый, ловит только опечатки в известных префиксах.
+//  1. soulprint_naked — a bare `soulprint.<x>` without `.self`/`.hosts`/`.where(`
+//     is a canonical-form error ([docs/soul/soulprint.md]: "a bare soulprint.<path>
+//     without .self is a soul-lint validation error").
+//  2. soulprint_unknown_path — `soulprint.self.<unknown>` (a typo like
+//     `soulprint.self.os.familly`). Checked against [soulprintSelfTopLevel] +
+//     [soulprintSelfSubPaths] (typed schema ADR-018 + registry projections).
+//     A dynamic tail after an array/scalar segment is not validated
+//     (interfaces[i].ipv4, .sid.startsWith(...), etc.) — the linter is deliberately
+//     coarse, catching only typos in known prefixes.
 //
-// Извлечение токенов делает [extractSoulprintRefs] — текстовое: содержимое
-// строковых литералов CEL вырезается тем же celStringLiteral, что и для
-// register. Это критично для предикатов формы `soulprint.hosts.where("role ==
-// 'primary'")`: строковый CEL внутри `.where(...)` — это вложенный CEL,
-// который интерпретатор парсит отдельно (см. shared/cel/hosts.go), и для
-// поверхностной статпроверки мы НЕ хотим лезть в него (там `role`/`covens` —
-// поля __host, не soulprint.self.*).
+// Token extraction is done by [extractSoulprintRefs] — textual: CEL string literal
+// contents are stripped with the same celStringLiteral as for register. This is
+// critical for predicates of the form `soulprint.hosts.where("role == 'primary'")`:
+// the string CEL inside `.where(...)` is nested CEL that the interpreter parses
+// separately (see shared/cel/hosts.go), and for the shallow static check we do NOT
+// want to descend into it (there `role`/`covens` are __host fields, not soulprint.self.*).
 //
-// Динамический доступ `soulprint["self"]["x"]` формой не покрывается (нет
-// точечной записи) — безопасный пропуск, симметрично register-кейсу.
+// Dynamic access `soulprint["self"]["x"]` is not covered by the form (no dotted
+// notation) — a safe skip, symmetric to the register case.
 
-// reSoulprintCELRef извлекает первый/второй сегмент из `soulprint.<top>(.<sub>)?`.
-// Граница слева — начало строки или не-id/dot-символ; `soulprint` обязан быть
-// корневым идентификатором (`foo.soulprint.x` не матчит, `mysoulprint.x` тоже).
-// Группа 2 — top-сегмент (`self`/`hosts`/`os`/`familly`/…); группа 3 — sub
-// (опционально), используется при top == "self" для двухсегментной проверки.
-// Скобка `(` за third-сегментом сознательно не матчит (метод-вызов на скаляре
-// типа `.startsWith(...)` — это валидный паттерн).
+// reSoulprintCELRef extracts the first/second segment from `soulprint.<top>(.<sub>)?`.
+// Left boundary is start-of-string or a non-id/dot char; `soulprint` must be the root
+// identifier (`foo.soulprint.x` doesn't match, nor does `mysoulprint.x`). Group 2 is
+// the top segment (`self`/`hosts`/`os`/`familly`/…); group 3 is sub (optional), used
+// when top == "self" for the two-segment check. A `(` after the third segment
+// deliberately doesn't match (a method call on a scalar like `.startsWith(...)` is a
+// valid pattern).
 var reSoulprintCELRef = regexp.MustCompile(
 	`(^|[^A-Za-z0-9_.])soulprint\.([a-z][a-z0-9_]*)(?:\.([a-z][a-z0-9_]*))?`,
 )
 
-// soulprintRef — извлечённая ссылка `soulprint.<top>(.<sub>)?` для статпроверки.
+// soulprintRef — an extracted `soulprint.<top>(.<sub>)?` reference for the static check.
 type soulprintRef struct {
 	top string // "self" / "hosts" / "<typo>"
-	sub string // пустой если не было второго сегмента
+	sub string // empty if there was no second segment
 }
 
-// extractSoulprintRefs возвращает отсортированный набор уникальных пар (top,sub)
-// для `soulprint.<top>(.<sub>)?` в CEL-строке. Содержимое строковых литералов
-// вырезается перед извлечением: вложенный CEL-аргумент `.where("role == 'x'")`
-// валидируется внутри shared/cel.rewriteHostsWhere, а здесь это просто данные.
-// Сортировка делает диагностики детерминированными.
+// extractSoulprintRefs returns the sorted set of unique (top,sub) pairs for
+// `soulprint.<top>(.<sub>)?` in a CEL string. String-literal contents are stripped
+// before extraction: the nested CEL argument `.where("role == 'x'")` is validated
+// inside shared/cel.rewriteHostsWhere, and here it's just data. Sorting makes
+// diagnostics deterministic.
 func extractSoulprintRefs(expr string) []soulprintRef {
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	seen := map[soulprintRef]struct{}{}
 	for _, m := range reSoulprintCELRef.FindAllStringSubmatch(stripped, -1) {
 		ref := soulprintRef{top: m[2], sub: m[3]}
-		// Если top — scalar (sid/hostname/covens/role), сегмент после точки
-		// — метод/индекс/динамический доступ; игнорируем sub, чтобы
-		// `.sid.startsWith(...)` и `.covens.exists(...)` не флагались.
+		// If top is a scalar (sid/hostname/covens/role), the segment after the dot
+		// is a method/index/dynamic access; ignore sub so that `.sid.startsWith(...)`
+		// and `.covens.exists(...)` aren't flagged.
 		if soulprintScalarTopLevel[ref.top] {
 			ref.sub = ""
 		}
-		// Спец-аксессоры hosts/where (`soulprint.hosts.where(...)`,
-		// `soulprint.where(...)`): sub не проверяем, эту валидацию делает
-		// shared/cel.rewriteHostsWhere в render-фазе.
+		// Special hosts/where accessors (`soulprint.hosts.where(...)`,
+		// `soulprint.where(...)`): sub is not checked, that validation is done by
+		// shared/cel.rewriteHostsWhere in the render phase.
 		if ref.top == "hosts" || ref.top == "where" {
 			ref.sub = ""
 		}
@@ -91,12 +90,12 @@ func extractSoulprintRefs(expr string) []soulprintRef {
 	return out
 }
 
-// checkSoulprintRefs проверяет soulprint-ссылки в одном CEL-предикате (one of:
+// checkSoulprintRefs checks soulprint references in one CEL predicate (one of:
 // `when`/`changed_when`/`failed_when`/`where`/`retry.until`/`loop.when`).
 //
-// bool-литерал/null (force-shortcut changed_when:/failed_when:) — не CEL-строка,
-// пропускается. Диагностика — на позиции value-ноды (точное смещение внутри
-// строки не извлекается, симметрично checkPredicateRefs).
+// A bool literal/null (force-shortcut changed_when:/failed_when:) is not a CEL string
+// and is skipped. The diagnostic is at the value node's position (the exact offset
+// within the string is not extracted, symmetric to checkPredicateRefs).
 func checkSoulprintRefs(kind string, value ast.Node, taskPath string) []diag.Diagnostic {
 	sn, ok := value.(*ast.StringNode)
 	if !ok {
@@ -109,15 +108,15 @@ func checkSoulprintRefs(kind string, value ast.Node, taskPath string) []diag.Dia
 	}
 	var out []diag.Diagnostic
 	for _, ref := range extractSoulprintRefs(sn.Value) {
-		// 1. Каноника: голая форма `soulprint.<X>` запрещена, если X — не
-		// scenario-аксессор (`hosts`/`where`) и не `self`.
+		// 1. Canonical form: a bare `soulprint.<X>` is forbidden unless X is a
+		// scenario accessor (`hosts`/`where`) or `self`.
 		switch ref.top {
 		case "self":
-			// Допустимая форма, проверяем sub ниже.
+			// Allowed form, sub is checked below.
 		case "hosts", "where":
-			// scenario-only аксессоры (orchestration.md §4.1); семантическая
-			// проверка (изоляция destiny) делается в shared/cel,
-			// здесь только верифицируем что это известный top-сегмент.
+			// scenario-only accessors (orchestration.md §4.1); the semantic check
+			// (destiny isolation) is done in shared/cel, here we only verify this
+			// is a known top segment.
 			continue
 		default:
 			out = append(out, diagAt(line, col, diag.Diagnostic{
@@ -133,10 +132,9 @@ func checkSoulprintRefs(kind string, value ast.Node, taskPath string) []diag.Dia
 			continue
 		}
 
-		// 2. Второй сегмент `soulprint.self.<sub>`: должен быть в whitelist
-		// верхнеуровневых полей SoulprintFacts (ADR-018). Пустой sub — это
-		// форма `soulprint.self` без точечного спуска (например, `has(...)`),
-		// допустимая.
+		// 2. Second segment `soulprint.self.<sub>`: must be in the whitelist of
+		// top-level SoulprintFacts fields (ADR-018). Empty sub is the form
+		// `soulprint.self` without a dotted descent (e.g. `has(...)`), allowed.
 		if ref.sub == "" {
 			continue
 		}
@@ -156,9 +154,8 @@ func checkSoulprintRefs(kind string, value ast.Node, taskPath string) []diag.Dia
 	return out
 }
 
-// soulprintSelfTopHint — детерминированный hint со списком валидных
-// top-сегментов под soulprint.self.*. Собирается из soulprintSelfTopLevel один
-// раз lazy-инициализацией.
+// soulprintSelfTopHint — a deterministic hint listing the valid top segments under
+// soulprint.self.*. Built from soulprintSelfTopLevel once via lazy init.
 var soulprintSelfTopHintCache string
 
 func soulprintSelfTopHint() string {
@@ -174,18 +171,18 @@ func soulprintSelfTopHint() string {
 	return soulprintSelfTopHintCache
 }
 
-// checkSoulprintSubPath — расширенная проверка под `soulprint.self.<msg>.<field>`,
-// сейчас не вызывается (см. extractSoulprintRefs grouping). Зарезервирована для
-// слайса, который захочет ловить `os.familly` (вторая опечатка). Пока линтер
-// флагает только первый сегмент; второй (поле вложенного сообщения) — отложен:
-// требует обработки method-call/индекс-форм, а также позиций смешанных хвостов
-// `network.interfaces[i].ipv4`. Включается отдельным слайсом по запросу PM.
+// checkSoulprintSubPath — an extended check under `soulprint.self.<msg>.<field>`,
+// currently not called (see extractSoulprintRefs grouping). Reserved for a slice that
+// wants to catch `os.familly` (a second-level typo). For now the linter flags only the
+// first segment; the second (a nested-message field) is deferred: it requires handling
+// method-call/index forms and the positions of mixed tails `network.interfaces[i].ipv4`.
+// Enabled by a separate slice on PM request.
 //
-// Зачем этот placeholder: явно зафиксировать, где живёт расширение, чтобы
-// будущий developer не дублировал extraction-логику.
+// Why this placeholder: to explicitly record where the extension lives, so a future
+// developer doesn't duplicate the extraction logic.
 func checkSoulprintSubPath(_ string, _ string) bool { return true }
 
-// joinComma — детерминированная склейка ["a","b","c"] → "a, b, c" без зависимостей.
+// joinComma — deterministic join of ["a","b","c"] → "a, b, c" without dependencies.
 func joinComma(parts []string) string {
 	out := ""
 	for i, p := range parts {

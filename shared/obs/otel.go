@@ -13,60 +13,59 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
 )
 
-// OTelConfig — параметры bootstrap-а OTel-провайдера. Компонент-агностичен:
-// keeper и soul передают своё ServiceName ("keeper" / "soul") и доменную
-// идентичность инстанса через ResourceAttrs (keeper — soulstack.kid,
-// soul — soulstack.sid; ADR-024 §3). Сам провайдер про эти ключи не знает.
+// OTelConfig holds the OTel provider bootstrap parameters. Component-agnostic:
+// keeper and soul pass their own ServiceName ("keeper" / "soul") and per-instance
+// domain identity via ResourceAttrs (keeper — soulstack.kid, soul — soulstack.sid;
+// ADR-024 §3). The provider itself knows nothing about these keys.
 type OTelConfig struct {
-	// Enabled — включает экспорт. При false [SetupOTel] возвращает no-op
-	// провайдер (не nil): main не ветвится, defer-цепочка единообразна.
+	// Enabled turns on export. When false, [SetupOTel] returns a no-op provider
+	// (not nil): main does not branch, the defer chain stays uniform.
 	Enabled bool
 
-	// Endpoint — адрес OTLP-коллектора (host:port). Используется только
-	// при Enabled; при пустом Endpoint exporter не поднимается даже с
-	// Enabled (трейсы пишутся в no-op span-processor).
+	// Endpoint is the OTLP collector address (host:port). Used only when Enabled;
+	// an empty Endpoint skips the exporter even with Enabled (traces go to a no-op
+	// span processor).
 	Endpoint string
 
-	// ServiceName — стандартный OTel semconv-атрибут service.name
-	// ("keeper" | "soul" по словарю Soul Stack).
+	// ServiceName is the standard OTel semconv attribute service.name
+	// ("keeper" | "soul" per the Soul Stack vocabulary).
 	ServiceName string
 
-	// ResourceAttrs — кастомные resource-attributes источника
-	// (soulstack.kid / soulstack.sid и пр.). Накладываются поверх
-	// service.name; пустая map допустима.
+	// ResourceAttrs holds custom resource attributes of the source
+	// (soulstack.kid / soulstack.sid, etc.). Layered over service.name; an empty
+	// map is allowed.
 	ResourceAttrs map[string]string
 }
 
-// OTelProvider — дескриптор поднятого OTel-стека. Держит TracerProvider и
-// (опционально) OTLP-exporter для корректного flush+close на shutdown-е.
+// OTelProvider is a handle to the running OTel stack. Holds the TracerProvider and
+// (optionally) the OTLP exporter for a correct flush+close on shutdown.
 //
-// В Slice 0 — только TracerProvider; инструментаций (span-ов) ещё нет
-// (Slice 2). Provider регистрируется как глобальный [otel.SetTracerProvider]
-// + propagator, чтобы будущие инструментации брали его без явной передачи.
+// In Slice 0 there is only the TracerProvider; no instrumentation (spans) yet
+// (Slice 2). The provider is registered globally ([otel.SetTracerProvider] +
+// propagator) so future instrumentation picks it up without explicit passing.
 type OTelProvider struct {
 	tp *sdktrace.TracerProvider
 }
 
-// SetupOTel поднимает OTel-провайдер по конфигу. Всегда возвращает
-// не-nil [OTelProvider] (даже при Enabled=false) — main вешает Shutdown в
-// defer без проверки на nil.
+// SetupOTel brings up the OTel provider from config. Always returns a non-nil
+// [OTelProvider] (even with Enabled=false) so main can defer Shutdown without a
+// nil check.
 //
-// Вызывать ОДИН РАЗ за процесс. SetupOTel ставит глобальный
-// [otel.SetTracerProvider] + propagator — повторный вызов без [Shutdown]
-// предыдущего провайдера течёт (старый TracerProvider с его batch-export
-// pipeline остаётся жив, но недостижим). otel.*-блок конфига —
-// restart-required: hot-reload его НЕ перечитывает (менять endpoint/enabled
-// на лету = пересоздавать провайдер с risk-ом потери in-flight span-ов).
+// Call ONCE per process. SetupOTel sets the global [otel.SetTracerProvider] +
+// propagator — a second call without [Shutdown] of the previous provider leaks
+// (the old TracerProvider with its batch-export pipeline stays alive but
+// unreachable). The otel.* config block is restart-required: hot-reload does NOT
+// re-read it (changing endpoint/enabled live means recreating the provider with the
+// risk of losing in-flight spans).
 //
-// Resource собирается из semconv.ServiceName(cfg.ServiceName) +
-// кастомных ResourceAttrs, поверх [resource.Default] (host/sdk-атрибуты).
-// Сэмплер — ParentBased(AlwaysSample): корневые span-ы сэмплируются
-// всегда, дочерние наследуют решение родителя (config-поле sampler не
-// вводим — отложено).
+// Resource is built from semconv.ServiceName(cfg.ServiceName) + custom
+// ResourceAttrs, over [resource.Default] (host/sdk attributes). Sampler is
+// ParentBased(AlwaysSample): root spans are always sampled, children inherit the
+// parent's decision (a sampler config field is deferred).
 //
-// При Enabled+Endpoint поднимается OTLP-gRPC batch-exporter; иначе
-// TracerProvider работает без exporter-а (span-ы никуда не уходят, но
-// API не ломается — удобно для dev без коллектора).
+// With Enabled+Endpoint an OTLP-gRPC batch exporter is started; otherwise the
+// TracerProvider runs without an exporter (spans go nowhere but the API still
+// works — handy for dev without a collector).
 func SetupOTel(ctx context.Context, cfg OTelConfig) (*OTelProvider, error) {
 	res, err := buildResource(ctx, cfg)
 	if err != nil {
@@ -81,9 +80,9 @@ func SetupOTel(ctx context.Context, cfg OTelConfig) (*OTelProvider, error) {
 	if cfg.Enabled && cfg.Endpoint != "" {
 		exp, err := otlptracegrpc.New(ctx,
 			otlptracegrpc.WithEndpoint(cfg.Endpoint),
-			// Insecure: dev-коллектор поднимается локально через
-			// docker-compose без TLS (project_local_dev_docker). TLS к
-			// коллектору — отдельная задача при появлении prod-инсталляции.
+			// Insecure: the dev collector runs locally via docker-compose without
+			// TLS (project_local_dev_docker). TLS to the collector is a separate task
+			// once a prod install appears.
 			otlptracegrpc.WithInsecure(),
 		)
 		if err != nil {
@@ -99,10 +98,9 @@ func SetupOTel(ctx context.Context, cfg OTelConfig) (*OTelProvider, error) {
 	return &OTelProvider{tp: tp}, nil
 }
 
-// Shutdown флашит pending-span-ы и закрывает exporter. Безопасен на любом
-// возвращённом провайдере (включая Enabled=false — Shutdown no-op
-// TracerProvider просто завершается). Вешается в defer-цепочку main с
-// timeout (Slice 1).
+// Shutdown flushes pending spans and closes the exporter. Safe on any returned
+// provider (including Enabled=false — the no-op TracerProvider just completes).
+// Deferred into main's chain with a timeout (Slice 1).
 func (p *OTelProvider) Shutdown(ctx context.Context) error {
 	if p == nil || p.tp == nil {
 		return nil
@@ -113,14 +111,14 @@ func (p *OTelProvider) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// buildResource собирает OTel-resource из service.name + кастомных
-// ResourceAttrs (soulstack.kid / soulstack.sid), поверх resource.Default()
-// (host/process/sdk-атрибуты). Вынесено из SetupOTel для прямого теста
-// resource-слоя без подъёма TracerProvider-а.
+// buildResource assembles the OTel resource from service.name + custom
+// ResourceAttrs (soulstack.kid / soulstack.sid), over resource.Default()
+// (host/process/sdk attributes). Split out of SetupOTel to test the resource layer
+// directly without starting a TracerProvider.
 //
-// resource.New без WithSchemaURL: наш слой остаётся schema-less, чтобы
-// merge с resource.Default() (несёт schema-URL версии semconv из SDK) не
-// падал на conflicting Schema URL.
+// resource.New without WithSchemaURL: our layer stays schema-less so the merge with
+// resource.Default() (which carries the SDK's semconv schema URL) does not fail on a
+// conflicting Schema URL.
 func buildResource(ctx context.Context, cfg OTelConfig) (*resource.Resource, error) {
 	attrs := make([]attribute.KeyValue, 0, len(cfg.ResourceAttrs)+1)
 	attrs = append(attrs, semconv.ServiceName(cfg.ServiceName))
@@ -138,11 +136,11 @@ func buildResource(ctx context.Context, cfg OTelConfig) (*resource.Resource, err
 	return merged, nil
 }
 
-// propagator — W3C TraceContext + Baggage. TraceContext несёт trace-id /
-// span-id через gRPC-метаданные EventStream-а (сквозной трейс оператор →
-// Keeper → Soul, ADR-024 §1.2); Baggage — для domain-context-проброса.
-// Глобальный propagator ставится в [SetupOTel], чтобы инструментации
-// (Slice 2) inject/extract без явной передачи.
+// propagator — W3C TraceContext + Baggage. TraceContext carries trace-id / span-id
+// through the EventStream gRPC metadata (end-to-end trace operator → Keeper → Soul,
+// ADR-024 §1.2); Baggage carries domain context. The global propagator is set in
+// [SetupOTel] so instrumentation (Slice 2) can inject/extract without explicit
+// passing.
 func propagator() propagation.TextMapPropagator {
 	return propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-// (e) schema-объявленное secret-поле → MASKED на read-path (MaskSecretsWithSchema).
+// (e) schema-declared secret field → MASKED on read-path (MaskSecretsWithSchema).
 func TestMaskSecretsWithSchema_DeclaredSecretMasked(t *testing.T) {
 	in := map[string]any{
 		"password": "p4ss",
@@ -21,9 +21,9 @@ func TestMaskSecretsWithSchema_DeclaredSecretMasked(t *testing.T) {
 	}
 }
 
-// (f) обычное generic-поле (несекретный content с конфигом) → НЕ MASKED.
-// КРИТИЧНО: нет over-masking. Имя ключа `content`/`config` не sensitive-by-regex,
-// схема его не объявляет, vault-ref нет → значение проходит насквозь.
+// (f) plain generic field (non-secret content with config) → NOT MASKED.
+// CRITICAL: no over-masking. Key names `content`/`config` are not sensitive-by-regex,
+// the schema does not declare them, no vault-ref → the value passes through.
 func TestMaskSecretsWithSchema_GenericFieldNotMasked(t *testing.T) {
 	in := map[string]any{
 		"content": "maxmemory 256mb\nappendonly yes\n",
@@ -46,7 +46,7 @@ func TestMaskSecretsWithSchema_GenericFieldNotMasked(t *testing.T) {
 	}
 }
 
-// schema по вложенному пути + обобщённый индекс массива.
+// schema by nested path + generalized array index.
 func TestMaskSecretsWithSchema_NestedAndArrayIndex(t *testing.T) {
 	in := map[string]any{
 		"acl": []any{
@@ -58,7 +58,7 @@ func TestMaskSecretsWithSchema_NestedAndArrayIndex(t *testing.T) {
 			"port": 6379,
 		},
 	}
-	// Обобщённая idx-форма `acl[].password` ловит оба элемента; `tls.key` — точный.
+	// Generalized idx-form `acl[].password` catches both elements; `tls.key` is exact.
 	schema := SecretPathSet{"acl[].password": true, "tls.key": true}
 	out := MaskSecretsWithSchema(in, schema)
 
@@ -81,7 +81,7 @@ func TestMaskSecretsWithSchema_NestedAndArrayIndex(t *testing.T) {
 	}
 }
 
-// schema=nil → деградирует к MaskSecrets (vault+regex), schema-слой выключен.
+// schema=nil → degrades to MaskSecrets (vault+regex), schema layer off.
 func TestMaskSecretsWithSchema_NilSchemaDegradesToMaskSecrets(t *testing.T) {
 	in := map[string]any{
 		"password":  "p", // regex-last-resort
@@ -101,15 +101,15 @@ func TestMaskSecretsWithSchema_NilSchemaDegradesToMaskSecrets(t *testing.T) {
 	}
 }
 
-// (g) regex-fallback аларм инкрементится, когда regex ловит класс-(ii) секрет
-// (bootstrap_token без схемы), НЕ пойманный декларативом.
+// (g) regex-fallback alarm increments when regex catches a class-(ii) secret
+// (bootstrap_token with no schema) not caught by the declarative layer.
 func TestMaskSecretsSealed_RegexFallbackAlarm(t *testing.T) {
 	var fired []string
 	opts := SealOpts{
 		RegexFallback: func(path string) { fired = append(fired, path) },
 	}
 	in := map[string]any{
-		"bootstrap_token": "tok-abc", // класс ii: regex ловит, схемы нет
+		"bootstrap_token": "tok-abc", // class ii: regex catches, no schema
 		"plain":           "ok",
 	}
 	out := MaskSecretsSealed(in, opts)
@@ -122,8 +122,8 @@ func TestMaskSecretsSealed_RegexFallbackAlarm(t *testing.T) {
 	}
 }
 
-// Аларм НЕ срабатывает, когда secret поймал декларатив (schema) — regex не
-// «единственный сработавший слой».
+// Alarm does NOT fire when the declarative layer (schema) caught the secret — regex
+// was not the only layer that fired.
 func TestMaskSecretsSealed_NoAlarmWhenSchemaCatches(t *testing.T) {
 	var fired []string
 	opts := SealOpts{
@@ -140,8 +140,8 @@ func TestMaskSecretsSealed_NoAlarmWhenSchemaCatches(t *testing.T) {
 	}
 }
 
-// Аларм НЕ срабатывает на vault-ref под sensitive-ключом — vault-слой поймал бы
-// сам, regex не единственный.
+// Alarm does NOT fire on a vault-ref under a sensitive key — the vault layer would
+// catch it, regex is not the only one.
 func TestMaskSecretsSealed_NoAlarmOnVaultRefValue(t *testing.T) {
 	var fired []string
 	opts := SealOpts{RegexFallback: func(path string) { fired = append(fired, path) }}
@@ -155,19 +155,19 @@ func TestMaskSecretsSealed_NoAlarmOnVaultRefValue(t *testing.T) {
 	}
 }
 
-// (a)/(b)/(d) seal-слой: sealed-путь generic-поля → MASKED; vault-ref → MASKED;
-// смешанное значение по sealed-пути → MASKED.
+// (a)/(b)/(d) seal layer: sealed path of a generic field → MASKED; vault-ref → MASKED;
+// mixed value on a sealed path → MASKED.
 func TestMaskSecretsSealed_SealedPaths(t *testing.T) {
 	opts := SealOpts{
 		Sealed: map[string]bool{
-			"content":      true, // (a) generic-поле, помечено sealed на render-фазе
-			"requirepass":  true, // (d) смешанное literal+secret-значение
+			"content":      true, // (a) generic field, marked sealed at render phase
+			"requirepass":  true, // (d) mixed literal+secret value
 			"config.token": true,
 		},
 	}
 	in := map[string]any{
-		"content":     "tls private material", // generic ключ, но sealed-путь
-		"requirepass": "requirepass s3cr3t",   // склейка literal+secret
+		"content":     "tls private material", // generic key, but a sealed path
+		"requirepass": "requirepass s3cr3t",   // literal+secret concatenation
 		"config":      map[string]any{"token": "x", "port": 6379},
 		"public":      "not sealed",
 	}
@@ -191,7 +191,7 @@ func TestMaskSecretsSealed_SealedPaths(t *testing.T) {
 	}
 }
 
-// (b) vault-ref-значение в произвольном generic-ключе → MASKED (vault-слой 2).
+// (b) vault-ref value in an arbitrary generic key → MASKED (vault layer 2).
 func TestMaskSecretsSealed_VaultRefAnyKey(t *testing.T) {
 	in := map[string]any{"connection": "host=db pass=vault:kv/app/db#pw"}
 	out := MaskSecretsSealed(in, SealOpts{})

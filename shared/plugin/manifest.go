@@ -1,15 +1,16 @@
-// Package plugin — типизированный парсер `manifest.yaml` плагина и валидатор
-// под нормативную спеку [`docs/keeper/plugins.md`] и [ADR-020].
+// Package plugin is the typed parser and validator for a plugin's
+// `manifest.yaml`, per the normative spec [`docs/keeper/plugins.md`] and
+// [ADR-020].
 //
-// Источник правды для wire-формата — proto-message
-// `soulstack.plugin.v1.Manifest` (см. `proto/plugin/v1/manifest.proto`). На
-// host-е и в линтере манифест читается напрямую с диска как YAML, поэтому
-// нам важнее точные line/column-ошибки от goccy/go-yaml, чем wire-совместимость
-// через protojson (manifest никуда не сериализуется, только читается).
+// The wire-format source of truth is the proto message
+// `soulstack.plugin.v1.Manifest` (see `proto/plugin/v1/manifest.proto`). On the
+// host and in the linter the manifest is read straight from disk as YAML, so
+// precise line/column errors from goccy/go-yaml matter more than protojson
+// wire-compat (the manifest is never serialized, only read).
 //
-// Пакет используется и в `soul/internal/pluginhost`, и в `soul-lint`, чтобы
-// один и тот же парсер валидировал плагин и при discovery в Soul-демоне, и
-// при офлайн-проверке `soul-lint validate-manifest`.
+// The package is used by both `soul/internal/pluginhost` and `soul-lint`, so the
+// same parser validates a plugin during discovery in the Soul daemon and during
+// the offline `soul-lint validate-manifest` check.
 package plugin
 
 import (
@@ -26,17 +27,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Manifest — типизированное представление `manifest.yaml`.
+// Manifest is the typed representation of `manifest.yaml`.
 //
-// Поля повторяют proto-message `soulstack.plugin.v1.Manifest` с YAML-тегами.
-// `Spec` — kind-specific блок: для `soul_module` заполняется `States`, для
-// `cloud_driver`/`ssh_provider` — `ProfileSchema`/`ParamsSchema`/`ProviderKind`.
+// Fields mirror the proto message `soulstack.plugin.v1.Manifest` with YAML tags.
+// `Spec` is the kind-specific block: `soul_module` fills `States`,
+// `cloud_driver`/`ssh_provider` fill `ProfileSchema`/`ParamsSchema`/`ProviderKind`.
 //
-// Парсинг полной input-схемы внутри `Spec.States[*].Input` ограничен формальными
-// проверками: тип значения (`string`/`int`/`bool`/`list`/`map`), `required`-флаг,
-// `secret`-флаг + `pattern` (для secret — `^vault:.*`). Полную input-DSL
-// (`docs/input.md`) валидирует destiny/scenario-парсер при проверке `params:`
-// шага против manifest-схемы — это другая фаза.
+// Parsing the full input schema inside `Spec.States[*].Input` is limited to
+// formal checks: value type (`string`/`int`/`bool`/`list`/`map`), the `required`
+// flag, the `secret` flag + `pattern` (for secret — `^vault:.*`). The full input
+// DSL (`docs/input.md`) is validated by the destiny/scenario parser when checking
+// a step's `params:` against the manifest schema — a different phase.
 type Manifest struct {
 	Kind                 string          `yaml:"kind"`
 	ProtocolVersion      int32           `yaml:"protocol_version"`
@@ -47,41 +48,41 @@ type Manifest struct {
 	Spec                 ManifestSpec    `yaml:"spec"`
 }
 
-// ManifestSpec — kind-specific блок. Структурно объединяет поля всех четырёх
-// kind-ов: validate() проверяет, какие из них релевантны для текущего `kind`.
+// ManifestSpec is the kind-specific block. It structurally unions the fields of
+// all four kinds; validate() checks which are relevant for the current `kind`.
 type ManifestSpec struct {
 	// soul_module:
 	States map[string]StateDef `yaml:"states,omitempty"`
 
 	// cloud_driver / ssh_provider:
 	ProviderKind string `yaml:"provider_kind,omitempty"`
-	// ProfileSchema / ParamsSchema — JSON Schema (любой произвольный YAML-объект).
-	// Семантическая проверка JSON Schema выходит за рамки manifest-валидатора
-	// (это работа JSON Schema-валидатора post-MVP).
+	// ProfileSchema / ParamsSchema — JSON Schema (any arbitrary YAML object).
+	// Semantic JSON Schema validation is out of scope for the manifest validator
+	// (a post-MVP JSON Schema validator's job).
 	//
-	// ParamsSchema — общее поле для ssh_provider и soul_beacon (V5-2): оба
-	// несут схему params в один и тот же YAML-ключ `spec.params_schema`,
-	// различаются только семантикой (params SSH-провайдера vs Vigil).
+	// ParamsSchema is shared by ssh_provider and soul_beacon (V5-2): both carry a
+	// params schema in the same YAML key `spec.params_schema`, differing only in
+	// semantics (SSH-provider params vs Vigil).
 	ProfileSchema map[string]any `yaml:"profile_schema,omitempty"`
 	ParamsSchema  map[string]any `yaml:"params_schema,omitempty"`
 }
 
-// StateDef — описание одного state-а в `spec.states`.
+// StateDef describes one state in `spec.states`.
 type StateDef struct {
 	Description string                   `yaml:"description,omitempty"`
 	Input       map[string]InputParamDef `yaml:"input,omitempty"`
 }
 
-// InputParamDef — формальное описание одного параметра в manifest-input.
+// InputParamDef is the formal description of one parameter in a manifest input.
 //
-// Это **не** полная DSL `docs/input.md` — manifest-валидатор проверяет только
-// то, что выражается на уровне `manifest.yaml`: тип (∈ {string,int,bool,list,
-// map}), required/secret/default/pattern/description плюс form-DSL поля ADR-045,
-// из которых backend строит форму модуля: enum (closed-set допустимых значений),
-// pattern (regex-ограничение), format+source (cluster-aware picker, напр. sid),
-// items (тип элемента list / тип значения map), multiline+example (UI-подсказки
-// textarea). Остальное из полной схемы (object с properties, числовые границы)
-// допустимо — лишние ключи парсер сохраняет в `Extra`, не валидирует.
+// This is **not** the full `docs/input.md` DSL — the manifest validator checks
+// only what `manifest.yaml` expresses: type (∈ {string,int,bool,list,map}),
+// required/secret/default/pattern/description plus the ADR-045 form-DSL fields
+// from which the backend builds the module form: enum (closed set of allowed
+// values), pattern (regex constraint), format+source (cluster-aware picker, e.g.
+// sid), items (list element type / map value type), multiline+example (textarea
+// UI hints). The rest of the full schema (object with properties, numeric bounds)
+// is allowed — the parser keeps unknown keys in `Extra`, does not validate them.
 type InputParamDef struct {
 	Type        string `yaml:"type,omitempty"`
 	Required    bool   `yaml:"required,omitempty"`
@@ -90,70 +91,72 @@ type InputParamDef struct {
 	Description string `yaml:"description,omitempty"`
 	Default     any    `yaml:"default,omitempty"`
 
-	// Поля UI-формы (ADR-045 S1). Дублируют семантику `config.InputSchema`
-	// (Enum/Format/Source), но описывают параметр на уровне manifest.yaml —
-	// backend строит из них форму модуля. Семантику валидируем здесь
-	// structurally (см. validateInputParam); полный input-DSL валидирует
-	// destiny/scenario-парсер.
+	// UI-form fields (ADR-045 S1). They duplicate the semantics of
+	// `config.InputSchema` (Enum/Format/Source) but describe the parameter at the
+	// manifest.yaml level — the backend builds the module form from them. We
+	// validate the semantics here structurally (see validateInputParam); the full
+	// input DSL is validated by the destiny/scenario parser.
 	Enum   []any        `yaml:"enum,omitempty"`
 	Format string       `yaml:"format,omitempty"`
 	Source *InputSource `yaml:"source,omitempty"`
 
-	// Multiline и Example (ADR-045 B3) — чисто декларативные UI-подсказки
-	// (большое textarea + placeholder), валидатором не проверяются.
+	// Multiline and Example (ADR-045 B3) — purely declarative UI hints (a large
+	// textarea + placeholder), not checked by the validator.
 	Multiline bool   `yaml:"multiline,omitempty"`
 	Example   string `yaml:"example,omitempty"`
 
-	// Items — тип элемента списка или тип значения map (ADR-045 S7 + amend).
-	// Рекурсивный *InputParamDef, зеркало `config.InputSchema.Items`:
-	// `type: list, items: {type: int}` даёт list[int], из которого backend строит
-	// типизированный список в форме (а не свободный список строк). Для list/array —
-	// тип ЭЛЕМЕНТА; для map/object — тип ЗНАЧЕНИЯ (`map[string]<items>`).
-	// Валидируется structurally в validateInputParam (известный тип элемента).
+	// Items — list element type or map value type (ADR-045 S7 + amend). A recursive
+	// *InputParamDef, mirror of `config.InputSchema.Items`:
+	// `type: list, items: {type: int}` yields list[int], from which the backend
+	// builds a typed list in the form (not a free list of strings). For list/array
+	// — the ELEMENT type; for map/object — the VALUE type (`map[string]<items>`).
+	// Validated structurally in validateInputParam (known element type).
 	Items *InputParamDef `yaml:"items,omitempty"`
 }
 
-// InputSource — объект-дискриминатор каталога-источника значений поля формы
-// (ADR-044 S-T1, ADR-045 S1). Ровно один под-ключ задаёт множество:
-//   - IncarnationHosts (`incarnation_hosts: true`) — все SID текущей инкарнации;
-//   - Choir (`choir: <name>`) — SID-ы конкретной Choir-партии инкарнации.
+// InputSource is the discriminator object for the source catalog of a form
+// field's values (ADR-044 S-T1, ADR-045 S1). Exactly one sub-key defines the set:
+//   - IncarnationHosts (`incarnation_hosts: true`) — all SIDs of the current
+//     incarnation;
+//   - Choir (`choir: <name>`) — the SIDs of a specific Choir part of the
+//     incarnation.
 //
-// Дублирует `config.InputSource` намеренно: `shared/config` уже импортирует
-// `shared/plugin` (config/module_params.go), поэтому обратный импорт создал бы
-// цикл. Прецедент дублирования ради разрыва цикла — `SupportedProtocolVersions`.
-// Оба определения структурно идентичны и должны меняться синхронно.
+// Duplicates `config.InputSource` intentionally: `shared/config` already imports
+// `shared/plugin` (config/module_params.go), so a back-import would create a
+// cycle. Precedent for cycle-breaking duplication — `SupportedProtocolVersions`.
+// Both definitions are structurally identical and must change in lockstep.
 type InputSource struct {
 	IncarnationHosts bool   `yaml:"incarnation_hosts,omitempty" json:"incarnation_hosts,omitempty"`
 	Choir            string `yaml:"choir,omitempty" json:"choir,omitempty"`
 }
 
-// SideEffectRaw — одна запись `side_effects[]` (ровно одна пара
-// `<resource-type>: <value>`, см. docs/keeper/plugins.md → side_effects).
+// SideEffectRaw is one `side_effects[]` entry (exactly one
+// `<resource-type>: <value>` pair, see docs/keeper/plugins.md → side_effects).
 type SideEffectRaw map[string]any
 
-// Kind-константы manifest-а. Дублируют значения proto-enum-а `pluginv1.Kind`,
-// чтобы YAML-форма (lowercase snake_case) не зависела от proto-сериализации.
+// Manifest kind constants. They duplicate the `pluginv1.Kind` proto-enum values
+// so the YAML form (lowercase snake_case) does not depend on proto serialization.
 const (
 	KindSoulModule  = "soul_module"
 	KindCloudDriver = "cloud_driver"
 	KindSSHProvider = "ssh_provider"
 	KindSoulBeacon  = "soul_beacon"
 
-	// FileName — имя файла манифеста рядом с бинарём плагина (ADR-020(a)).
+	// FileName — the manifest file name next to the plugin binary (ADR-020(a)).
 	FileName = "manifest.yaml"
 )
 
-// SupportedProtocolVersions — версии plugin-протокола, которые понимают
-// host и линтер (ADR-020(c) → naming-rules.md). MVP — только v1. Forward-compat
-// only-add: при появлении v2 сюда добавится `2` с сохранением `1`.
+// SupportedProtocolVersions — plugin-protocol versions understood by the host and
+// the linter (ADR-020(c) → naming-rules.md). MVP is v1 only. Forward-compat
+// only-add: when v2 appears, `2` is added here while keeping `1`.
 //
-// Дублирует константу `pluginhost.SupportedProtocolVersions` (тот же
-// инвариант) — оба массива должны меняться синхронно. Дублирование осознанное:
-// soul-host не импортирует soul-lint, soul-lint не импортирует pluginhost;
-// shared/plugin — общий источник правды для статической проверки manifest-а.
+// Duplicates the `pluginhost.SupportedProtocolVersions` constant (same invariant)
+// — both arrays must change in lockstep. The duplication is deliberate: soul-host
+// does not import soul-lint, soul-lint does not import pluginhost; shared/plugin
+// is the shared source of truth for static manifest checking.
 var SupportedProtocolVersions = []int32{1}
 
-// Closed enum по docs/keeper/plugins.md → `required_capabilities`-таблица.
+// Closed enum per docs/keeper/plugins.md → `required_capabilities` table.
 var validCapabilities = map[string]pluginv1.Capability{
 	"run_as_root":      pluginv1.Capability_CAPABILITY_RUN_AS_ROOT,
 	"network_outbound": pluginv1.Capability_CAPABILITY_NETWORK_OUTBOUND,
@@ -163,8 +166,8 @@ var validCapabilities = map[string]pluginv1.Capability{
 	"exec_subprocess":  pluginv1.Capability_CAPABILITY_EXEC_SUBPROCESS,
 }
 
-// Closed enum по docs/keeper/plugins.md → `side_effects`-таблица.
-// Значение в map не используется — это просто множество.
+// Closed enum per docs/keeper/plugins.md → `side_effects` table.
+// The map value is unused — this is just a set.
 var validSideEffectTypes = map[string]struct{}{
 	"service":   {},
 	"file":      {},
@@ -177,13 +180,13 @@ var validSideEffectTypes = map[string]struct{}{
 	"mount":     {},
 }
 
-// Closed enum по delegation ТЗ (docs/keeper/plugins.md → manifest.spec.states.<state>.input).
+// Closed enum per the delegation spec (docs/keeper/plugins.md → manifest.spec.states.<state>.input).
 var validInputTypes = map[string]struct{}{
 	"string": {}, "int": {}, "bool": {}, "list": {}, "map": {},
-	// `docs/input.md` использует расширенный набор (`integer`/`number`/`boolean`/
-	// `array`/`object`); принимаем их как синонимы, чтобы существующие manifest-ы
-	// не ломались. Drift между двумя DSL зафиксирован, нормирование — отдельная
-	// задача (см. observations).
+	// `docs/input.md` uses an extended set (`integer`/`number`/`boolean`/`array`/
+	// `object`); we accept them as synonyms so existing manifests do not break. The
+	// drift between the two DSLs is noted; normalization is a separate task (see
+	// observations).
 	"integer": {}, "number": {}, "boolean": {}, "array": {}, "object": {},
 }
 
@@ -193,23 +196,24 @@ var (
 	reStateName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
 
-// validInputFormats — closed-set string-форматов поля формы (ADR-045 S1).
-// Зеркало `config.inputFormatEnum` (docs/input.md), включая `sid` (FQDN-форма
-// SID, ADR-044 S-T1). Дублирование вынужденное — см. InputSource.
+// validInputFormats — the closed set of string formats for a form field
+// (ADR-045 S1). Mirror of `config.inputFormatEnum` (docs/input.md), including
+// `sid` (the FQDN form of a SID, ADR-044 S-T1). The duplication is forced — see
+// InputSource.
 var validInputFormats = map[string]struct{}{
 	"hostname": {}, "fqdn": {}, "ipv4": {}, "ipv6": {}, "cidr": {},
 	"email": {}, "uri": {}, "uuid": {}, "semver": {}, "duration": {},
 	"sid": {},
 }
 
-// Load читает и валидирует `manifest.yaml` по пути `path` через diag-pipeline.
+// Load reads and validates `manifest.yaml` at `path` through the diag pipeline.
 //
-// Контракт возврата симметричен `shared/config.Load*`:
-//   - `error != nil` — только I/O fatal (open/read). Manifest = nil.
-//   - parse-fatal → `error == nil`, Manifest = nil, в diagnostics одна запись
-//     с `Phase=PhaseParse`.
-//   - schema/semantic errors → Manifest частично заполнен, diagnostics
-//     содержат все найденные validation-errors.
+// The return contract is symmetric with `shared/config.Load*`:
+//   - `error != nil` — only an I/O fatal (open/read). Manifest = nil.
+//   - parse-fatal → `error == nil`, Manifest = nil, one diagnostics entry with
+//     `Phase=PhaseParse`.
+//   - schema/semantic errors → Manifest partially filled, diagnostics hold all
+//     validation errors found.
 func Load(path string) (*Manifest, []diag.Diagnostic, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -225,9 +229,9 @@ func Load(path string) (*Manifest, []diag.Diagnostic, error) {
 	return m, diags, nil
 }
 
-// LoadFromBytes — основная точка входа без I/O. Полезна в тестах с in-memory
-// фикстурами и в soul-lint (читает байты сам). `filename` нужен только как
-// метка `Diagnostic.File`.
+// LoadFromBytes is the main I/O-free entry point. Useful in tests with in-memory
+// fixtures and in soul-lint (which reads the bytes itself). `filename` is only the
+// `Diagnostic.File` label.
 func LoadFromBytes(filename string, src []byte) (*Manifest, []diag.Diagnostic) {
 	src = stripBOM(src)
 	file, err := parser.ParseBytes(src, parser.ParseComments)
@@ -274,8 +278,8 @@ func LoadFromBytes(filename string, src []byte) (*Manifest, []diag.Diagnostic) {
 	var diags []diag.Diagnostic
 	if err := yaml.NodeToValue(root, m, yaml.Strict()); err != nil {
 		diags = append(diags, decodeErrorDiag(filename, err))
-		// При strict-ошибке частично заполненный Manifest остаётся, но дальше
-		// валидируем по-возможности (поля, успевшие декодироваться).
+		// On a strict error the partially filled Manifest is kept; we validate as
+		// far as possible (the fields that did decode).
 	}
 	diags = append(diags, validateManifest(filename, root, m)...)
 	for i := range diags {
@@ -286,22 +290,22 @@ func LoadFromBytes(filename string, src []byte) (*Manifest, []diag.Diagnostic) {
 	return m, diags
 }
 
-// Address — `<namespace>.<name>`; используется в логах и OTel-тегах.
+// Address — `<namespace>.<name>`; used in logs and OTel tags.
 func (m *Manifest) Address() string {
 	return m.Namespace + "." + m.Name
 }
 
-// BinaryName — конвенция именования бинаря по kind (docs/keeper/plugins.md →
-// таблица kind-host-binary):
+// BinaryName — binary naming convention by kind (docs/keeper/plugins.md →
+// kind-host-binary table):
 //
 //   - kind=soul_module   → `soul-mod-<name>`
 //   - kind=cloud_driver  → `soul-cloud-<name>`
 //   - kind=ssh_provider  → `soul-ssh-<name>`
 //   - kind=soul_beacon   → `soul-beacon-<name>` (ADR-030 V5-2)
 //
-// Используется host-discovery при поиске бинаря рядом с manifest.yaml.
-// Возвращает "" для неизвестного kind-а (defensive — manifest уже проходит
-// closed-enum-валидацию в validateManifest).
+// Used by host discovery when locating the binary next to manifest.yaml. Returns
+// "" for an unknown kind (defensive — the manifest already passes closed-enum
+// validation in validateManifest).
 func (m *Manifest) BinaryName() string {
 	switch m.Kind {
 	case KindSoulModule:
@@ -317,8 +321,8 @@ func (m *Manifest) BinaryName() string {
 	}
 }
 
-// ProtoKind переводит Manifest.Kind в pluginv1.Kind для cross-check с
-// handshake (handshake кладёт enum как строку через protojson).
+// ProtoKind maps Manifest.Kind to pluginv1.Kind for cross-check with the
+// handshake (which encodes the enum as a string via protojson).
 func (m *Manifest) ProtoKind() pluginv1.Kind {
 	switch m.Kind {
 	case KindSoulModule:
@@ -334,17 +338,16 @@ func (m *Manifest) ProtoKind() pluginv1.Kind {
 	}
 }
 
-// CapabilityFromString — словарь YAML-форм capabilities (lowercase snake_case)
-// → `pluginv1.Capability`. Возвращает (cap, true) при совпадении, (_, false)
-// для неизвестного значения. Используется host-ом для сравнения с
-// `allowed_capabilities`.
+// CapabilityFromString maps the YAML capability forms (lowercase snake_case) to
+// `pluginv1.Capability`. Returns (cap, true) on a match, (_, false) for an unknown
+// value. Used by the host to compare against `allowed_capabilities`.
 func CapabilityFromString(s string) (pluginv1.Capability, bool) {
 	c, ok := validCapabilities[s]
 	return c, ok
 }
 
-// validateManifest — основной валидатор. Проходит по AST-узлу root и по уже
-// декодированной структуре m, выдаёт diag-список.
+// validateManifest is the main validator. It walks the AST root node and the
+// already-decoded struct m, returning a diag list.
 func validateManifest(path string, root *ast.MappingNode, m *Manifest) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
@@ -423,7 +426,7 @@ func validateManifest(path string, root *ast.MappingNode, m *Manifest) []diag.Di
 		}
 	}
 
-	// (5) side_effects[] — closed enum keys, ровно одна пара на запись.
+	// (5) side_effects[] — closed enum keys, exactly one pair per entry.
 	for i, e := range m.SideEffects {
 		switch len(e) {
 		case 0:
@@ -522,10 +525,9 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 		}))
 	}
 	if p.Secret {
-		// secret-флаг означает, что значение приходит через `vault:`-ref;
-		// pattern должен это форсировать. Если оператор не задал явный
-		// pattern — поднимаем error: secret без vault-ref легко проносится
-		// мимо аудита.
+		// The secret flag means the value arrives via a `vault:` ref; the pattern
+		// must enforce that. If the operator set no explicit pattern we raise an
+		// error: a secret without a vault-ref slips past audit easily.
 		if p.Pattern == "" {
 			out = append(out, atPath(root, path, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
@@ -534,8 +536,8 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 				Hint:    `set pattern: "^vault:.*" for secrets`,
 			}))
 		} else if p.Pattern != "^vault:.*" {
-			// Жёсткая проверка: единственный допустимый pattern для secret.
-			// Если кто-то хочет расширить — это отдельный ADR на форму secret-ref.
+			// Hard check: the only pattern allowed for a secret. Extending it is a
+			// separate ADR on the secret-ref form.
 			out = append(out, atPath(root, path+".pattern", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 				Code:    "input_secret_pattern_invalid",
@@ -544,9 +546,9 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 		}
 	}
 
-	// enum — если задан, непустой и каждый элемент совместим с Type.
-	// (config.validateCommonInvariants проверяет то же; здесь — structurally,
-	//  без AST-позиций под-элементов: enum-литерал не имеет per-item YAML-path.)
+	// enum — if set, must be non-empty and each element compatible with Type.
+	// (config.validateCommonInvariants checks the same; here structurally, without
+	//  per-element AST positions: an enum literal has no per-item YAML-path.)
 	if p.Enum != nil {
 		if len(p.Enum) == 0 {
 			out = append(out, atPath(root, path+".enum", diag.Diagnostic{
@@ -567,7 +569,7 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 		}
 	}
 
-	// format — closed-set (string-форматы вкл. sid).
+	// format — closed set (string formats incl. sid).
 	if p.Format != "" {
 		if _, ok := validInputFormats[p.Format]; !ok {
 			out = append(out, atPath(root, path+".format", diag.Diagnostic{
@@ -579,11 +581,11 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 		}
 	}
 
-	// items — описатель типа для коллекций (ADR-045 S7 + amend). Для list/array —
-	// тип ЭЛЕМЕНТА; для map/object — тип ЗНАЧЕНИЯ (`map[string]<items>`). В обоих
-	// случаях задан — тип ∈ validInputTypes. Зеркало config: items осмыслен лишь
-	// для коллекций. Глубже одного уровня не валидируем — manifest-input не несёт
-	// вложенные коллекции.
+	// items — the type descriptor for collections (ADR-045 S7 + amend). For
+	// list/array — the ELEMENT type; for map/object — the VALUE type
+	// (`map[string]<items>`). When set, the type must be ∈ validInputTypes. Mirror
+	// of config: items is meaningful only for collections. We do not validate
+	// deeper than one level — a manifest input carries no nested collections.
 	if p.Items != nil {
 		switch p.Type {
 		case "list", "array", "map", "object":
@@ -611,9 +613,9 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 		}
 	}
 
-	// source — структурная валидность дискриминатора (ровно один активный
-	// источник: incarnation_hosts XOR choir). Зеркало config.validateSource —
-	// только инвариант «active==1»; резолв множества делает backend.
+	// source — structural validity of the discriminator (exactly one active source:
+	// incarnation_hosts XOR choir). Mirror of config.validateSource — only the
+	// "active==1" invariant; the backend resolves the set.
 	if p.Source != nil {
 		active := 0
 		if p.Source.IncarnationHosts {
@@ -634,11 +636,11 @@ func validateInputParam(root *ast.MappingNode, path, name string, p InputParamDe
 	return out
 }
 
-// enumValueMatchesType — совместимость literal-значения enum с manifest-input
-// type. Принимает синонимы (`int`/`integer`, `bool`/`boolean`, …) из
-// validInputTypes. list/map/array/object — прозрачны (composite-enum не
-// валидируем по элементам, симметрично config). Неизвестный type — прозрачен
-// (его уже отметил input_type_unknown).
+// enumValueMatchesType — compatibility of an enum literal value with a
+// manifest-input type. Accepts synonyms (`int`/`integer`, `bool`/`boolean`, …)
+// from validInputTypes. list/map/array/object are transparent (we do not validate
+// a composite enum per element, like config). An unknown type is transparent
+// (input_type_unknown already flagged it).
 func enumValueMatchesType(v any, t string) bool {
 	switch t {
 	case "string":
@@ -663,7 +665,7 @@ func enumValueMatchesType(v any, t string) bool {
 		}
 		return false
 	default:
-		// list/map/array/object и неизвестные — прозрачны.
+		// list/map/array/object and unknown — transparent.
 		return true
 	}
 }
@@ -708,11 +710,11 @@ func validateSSHProviderSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnost
 	return out
 }
 
-// validateSoulBeaconSpec — kind-specific валидатор для `kind: soul_beacon`
-// (ADR-030 V5-2). spec.params_schema опционален (beacon без params, например
-// systemd-monotonic-health-check, валиден); spec.states/provider_kind/
-// profile_schema не разрешены — soul_beacon имеет один тип операции (Check)
-// и не маппится в state-семантику SoulModule.
+// validateSoulBeaconSpec — kind-specific validator for `kind: soul_beacon`
+// (ADR-030 V5-2). spec.params_schema is optional (a beacon with no params, e.g. a
+// systemd-monotonic health check, is valid); spec.states/provider_kind/
+// profile_schema are not allowed — soul_beacon has a single operation type (Check)
+// and does not map to SoulModule state semantics.
 func validateSoulBeaconSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if len(m.Spec.States) > 0 {
@@ -739,9 +741,9 @@ func validateSoulBeaconSpec(root *ast.MappingNode, m *Manifest) []diag.Diagnosti
 	return out
 }
 
-// ValidateSimple — convenience-wrapper для legacy-кода (soul/internal/pluginhost),
-// который ожидает `error` вместо `[]diag.Diagnostic`. Возвращает первую
-// error-уровневую запись или nil.
+// ValidateSimple is a convenience wrapper for legacy code
+// (soul/internal/pluginhost) that expects `error` instead of `[]diag.Diagnostic`.
+// Returns the first error-level entry or nil.
 func (m *Manifest) ValidateSimple() error {
 	diags := validateManifest("", nil, m)
 	for _, d := range diags {
@@ -763,21 +765,22 @@ func atPath(root *ast.MappingNode, path string, d diag.Diagnostic) diag.Diagnost
 	return d
 }
 
-// lookupPathPosition — упрощённый walker по `$.a.b[N]`-форме path. Достаёт
-// line/col из AST. Не покрывает все случаи (escaping, .input.<key>), для
-// неподдерживаемой формы возвращает 0/0 — без позиции, но с YAMLPath.
+// lookupPathPosition is a simplified walker over the `$.a.b[N]` path form. It
+// pulls line/col from the AST. It does not cover every case (escaping,
+// .input.<key>); for an unsupported form it returns 0/0 — no position, but with
+// YAMLPath.
 func lookupPathPosition(root *ast.MappingNode, path string) (int, int) {
 	if !looksLikeSimplePath(path) {
 		return 0, 0
 	}
-	// Откусываем `$.` префикс.
+	// Strip the `$.` prefix.
 	rest := path
 	if len(rest) >= 2 && rest[0] == '$' && rest[1] == '.' {
 		rest = rest[2:]
 	}
 	var node ast.Node = root
 	for rest != "" {
-		// Берём следующий сегмент до `.` или `[`.
+		// Take the next segment up to `.` or `[`.
 		segEnd := len(rest)
 		for i, ch := range rest {
 			if ch == '.' || ch == '[' {
@@ -788,7 +791,7 @@ func lookupPathPosition(root *ast.MappingNode, path string) (int, int) {
 		seg := rest[:segEnd]
 		rest = rest[segEnd:]
 		if rest != "" && rest[0] == '[' {
-			// Индекс не разрешаем — позицию вернём для key seg.
+			// Index not resolved — we return the position of the key seg.
 			rest = ""
 		}
 		if rest != "" && rest[0] == '.' {
@@ -856,7 +859,7 @@ func decodeErrorDiag(path string, err error) diag.Diagnostic {
 		if msg := yErr.GetMessage(); msg != "" {
 			d.Message = msg
 		}
-		// goccy strict-mode сообщает «unknown field "foo"»; маппим в наш код.
+		// goccy strict-mode reports an "unknown field ..." message; map it to our code.
 		if isUnknownFieldError(err) {
 			d.Code = "unknown_key"
 		}
@@ -873,8 +876,8 @@ func isUnknownFieldError(err error) bool {
 }
 
 func containsCI(s, sub string) bool {
-	// Простейший case-insensitive contains: lowercase оба и ищем подстроку.
-	// Полноценный strings.EqualFold-по-окнам не нужен — голый ASCII.
+	// Simplest case-insensitive contains: lowercase both and search the substring.
+	// A full windowed strings.EqualFold is unnecessary — pure ASCII.
 	return indexCI(s, sub) >= 0
 }
 
@@ -908,10 +911,10 @@ func stripBOM(data []byte) []byte {
 	return StripBOM(data)
 }
 
-// StripBOM срезает ведущий UTF-8 BOM (EF BB BF), если он есть. Экспортирован
-// для переиспользования в канонизации manifest-байтов Sigil
-// (shared/pluginhost.NormalizeManifestBytes, ADR-026): один источник правды
-// для среза BOM, чтобы хеш manifest-а на Keeper и Soul совпадал.
+// StripBOM trims a leading UTF-8 BOM (EF BB BF) if present. Exported for reuse in
+// Sigil's manifest-byte canonicalization
+// (shared/pluginhost.NormalizeManifestBytes, ADR-026): a single source of truth
+// for BOM stripping, so the manifest hash matches on Keeper and Soul.
 func StripBOM(data []byte) []byte {
 	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
 		return data[3:]

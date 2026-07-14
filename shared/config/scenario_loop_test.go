@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestLoadScenarioManifest_LoopOK — корректный loop: на module-задаче проходит
-// валидацию и декодится в LoopSpec.
+// TestLoadScenarioManifest_LoopOK — a valid loop: on a module task it passes
+// validation and decodes into LoopSpec.
 func TestLoadScenarioManifest_LoopOK(t *testing.T) {
 	src := `name: x
 tasks:
@@ -33,7 +33,7 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopMissingItems — items обязателен.
+// TestLoadScenarioManifest_LoopMissingItems — items is required.
 func TestLoadScenarioManifest_LoopMissingItems(t *testing.T) {
 	src := `name: x
 tasks:
@@ -49,7 +49,7 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopBadAs — невалидный идентификатор as:.
+// TestLoadScenarioManifest_LoopBadAs — invalid as: identifier.
 func TestLoadScenarioManifest_LoopBadAs(t *testing.T) {
 	src := `name: x
 tasks:
@@ -66,7 +66,7 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopReservedAs — as: не должен затирать контекст.
+// TestLoadScenarioManifest_LoopReservedAs — as: must not shadow the context.
 func TestLoadScenarioManifest_LoopReservedAs(t *testing.T) {
 	src := `name: x
 tasks:
@@ -83,8 +83,8 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopAsEqualsIndexAs — as: и index_as: с одинаковым
-// именем отвергаются: в render-контексте индекс молча затёр бы элемент.
+// TestLoadScenarioManifest_LoopAsEqualsIndexAs — as: and index_as: with the same
+// name are rejected: in the render context the index would silently shadow the element.
 func TestLoadScenarioManifest_LoopAsEqualsIndexAs(t *testing.T) {
 	src := `name: x
 tasks:
@@ -102,7 +102,7 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopUnknownKey — неизвестный ключ внутри loop:.
+// TestLoadScenarioManifest_LoopUnknownKey — unknown key inside loop:.
 func TestLoadScenarioManifest_LoopUnknownKey(t *testing.T) {
 	src := `name: x
 tasks:
@@ -119,8 +119,8 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopOnInclude — loop на include-задаче отвергается
-// (slice E1: только module).
+// TestLoadScenarioManifest_LoopOnInclude — loop on an include task is rejected
+// (slice E1: module only).
 func TestLoadScenarioManifest_LoopOnInclude(t *testing.T) {
 	src := `name: x
 tasks:
@@ -136,7 +136,7 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_LoopOnApply — loop на apply-задаче отвергается.
+// TestLoadScenarioManifest_LoopOnApply — loop on an apply task is rejected.
 func TestLoadScenarioManifest_LoopOnApply(t *testing.T) {
 	src := `name: x
 tasks:

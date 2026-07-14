@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// keeperWithVault собирает минимально-валидный keeper.yml, подставляя заданный
-// vault-блок (с уже выставленным отступом в 2 пробела на каждую строку).
+// keeperWithVault assembles a minimally valid keeper.yml, injecting the given
+// vault block (already indented 2 spaces per line).
 func keeperWithVault(vaultBlock string) []byte {
 	return []byte(`kid: keeper-eu-west-01
 listen:
@@ -31,7 +31,7 @@ vault:
 }
 
 func TestVaultAuth_Default_IsToken(t *testing.T) {
-	// Блок без `auth.method` вовсе — forward-compat: трактуется как token.
+	// A block without `auth.method` at all — forward-compat: treated as token.
 	src := keeperWithVault(`  addr: "https://v:8200"
   token: "root"`)
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
@@ -163,7 +163,7 @@ func TestVaultAuth_InvalidMethod(t *testing.T) {
 }
 
 func TestVaultAuth_Token_UnusedAppRoleFields_Warn(t *testing.T) {
-	// approle-поля при token-методе → warning, не error.
+	// approle fields with the token method → warning, not error.
 	src := keeperWithVault(`  addr: "https://v:8200"
   token: "root"
   auth:
@@ -181,7 +181,7 @@ func TestVaultAuth_Token_UnusedAppRoleFields_Warn(t *testing.T) {
 }
 
 func TestVaultKVVersion_Empty_AutoDetect_OK(t *testing.T) {
-	// Без kv_version — auto (probe на runtime). Старые конфиги работают.
+	// Without kv_version — auto (probe at runtime). Old configs keep working.
 	src := keeperWithVault(`  addr: "https://v:8200"
   token: "root"`)
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
@@ -224,9 +224,9 @@ func TestVaultKVVersion_Invalid_Rejected(t *testing.T) {
 	}
 }
 
-// Секрет (значение secret_id) в принципе не задаётся в keeper.yml — только
-// путь/имя env. Проверяем, что схема не имеет поля для plaintext secret_id:
-// попытка задать его ловится как unknown_key, а не молча принимается.
+// The secret (secret_id value) is never set in keeper.yml — only the path/env
+// name. We check that the schema has no field for a plaintext secret_id: an
+// attempt to set it is caught as unknown_key, not silently accepted.
 func TestVaultAuth_NoPlaintextSecretIDField(t *testing.T) {
 	src := keeperWithVault(`  addr: "https://v:8200"
   auth:
@@ -238,8 +238,8 @@ func TestVaultAuth_NoPlaintextSecretIDField(t *testing.T) {
 		dump(t, diags)
 		t.Fatalf("plaintext secret_id-поле должно отвергаться как unknown_key")
 	}
-	// На всякий случай — значение секрета не должно фигурировать в сообщениях
-	// (unknown_key эхает имя ключа, не значение).
+	// Just in case — the secret value must not appear in messages
+	// (unknown_key echoes the key name, not the value).
 	for _, d := range diags {
 		if strings.Contains(d.Message, "PLAINTEXT-SECRET") {
 			t.Errorf("diagnostic leaked secret value: %q", d.Message)

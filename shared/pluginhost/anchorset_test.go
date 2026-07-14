@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestAnchorSetSnapshotEmpty — nil-набор и nil-holder отдают пустой snapshot
-// (verify трактует это как no_trust_anchor).
+// TestAnchorSetSnapshotEmpty — a nil set and a nil holder return an empty snapshot
+// (verify treats this as no_trust_anchor).
 func TestAnchorSetSnapshotEmpty(t *testing.T) {
 	if got := NewAnchorSet(nil).snapshot(); got != nil {
 		t.Errorf("NewAnchorSet(nil).snapshot() = %v, want nil", got)
@@ -22,8 +22,8 @@ func TestAnchorSetSnapshotEmpty(t *testing.T) {
 	}
 }
 
-// TestAnchorSetSetReplaceAll — SetAnchors атомарно заменяет весь набор
-// (ReplaceAll-семантика ADR-026(h)): старые якоря забываются, новые видны.
+// TestAnchorSetSetReplaceAll — SetAnchors atomically replaces the whole set
+// (ReplaceAll semantics, ADR-026(h)): old anchors are forgotten, new ones visible.
 func TestAnchorSetSetReplaceAll(t *testing.T) {
 	a := NewAnchorSet(genKeys(t, 2))
 	if got := len(a.snapshot()); got != 2 {
@@ -42,21 +42,21 @@ func TestAnchorSetSetReplaceAll(t *testing.T) {
 		}
 	}
 
-	a.SetAnchors(nil) // retire всех якорей → пустой набор
+	a.SetAnchors(nil) // retire all anchors → empty set
 	if got := a.snapshot(); got != nil {
 		t.Errorf("after SetAnchors(nil) snapshot = %v, want nil", got)
 	}
 }
 
-// TestAnchorSetSetCopiesInput — SetAnchors копирует заголовок входного слайса:
-// мутация буфера caller-ом после вызова не должна затронуть снимок.
+// TestAnchorSetSetCopiesInput — SetAnchors copies the header of the input slice:
+// the caller mutating its buffer after the call must not affect the snapshot.
 func TestAnchorSetSetCopiesInput(t *testing.T) {
 	keys := genKeys(t, 2)
 	a := NewAnchorSet(keys)
 
 	orig := make([]byte, len(keys[0]))
 	copy(orig, keys[0])
-	keys[0] = keys[1] // подмена элемента в буфере caller-а
+	keys[0] = keys[1] // swap an element in the caller's buffer
 
 	snap := a.snapshot()
 	if !bytes.Equal(snap[0], orig) {
@@ -64,16 +64,16 @@ func TestAnchorSetSetCopiesInput(t *testing.T) {
 	}
 }
 
-// TestAnchorSetRaceSnapshotDuringSet — конкурентный SetAnchors во время
-// snapshot/verify не дёргает -race и не отдаёт битый снимок. Под `go test -race`
-// этот тест ловит небезопасный доступ к holder-у.
+// TestAnchorSetRaceSnapshotDuringSet — a concurrent SetAnchors during
+// snapshot/verify doesn't trip -race and doesn't return a corrupt snapshot. Under
+// `go test -race` this test catches unsafe access to the holder.
 func TestAnchorSetRaceSnapshotDuringSet(t *testing.T) {
 	a := NewAnchorSet(genKeys(t, 1))
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Писатель: непрерывно заменяет набор (имитация S6 SigilTrustAnchors).
+	// Writer: continuously replaces the set (simulating S6 SigilTrustAnchors).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -87,7 +87,7 @@ func TestAnchorSetRaceSnapshotDuringSet(t *testing.T) {
 		}
 	}()
 
-	// Читатели: непрерывно берут snapshot и читают байты (имитация verify).
+	// Readers: continuously take a snapshot and read bytes (simulating verify).
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
@@ -98,7 +98,7 @@ func TestAnchorSetRaceSnapshotDuringSet(t *testing.T) {
 					return
 				default:
 					for _, k := range a.snapshot() {
-						_ = len(k) // touch — race-детектор увидит небезопасное чтение
+						_ = len(k) // touch — the race detector will see an unsafe read
 					}
 				}
 			}
@@ -112,8 +112,8 @@ func TestAnchorSetRaceSnapshotDuringSet(t *testing.T) {
 	wg.Wait()
 }
 
-// TestVerifyAnyAnchorOR — OR-helper: подпись валидна, если её подтвердил хотя бы
-// один якорь набора; ни один (или пустой набор) → false.
+// TestVerifyAnyAnchorOR — OR helper: a signature is valid if at least one anchor
+// in the set verifies it; none (or an empty set) → false.
 func TestVerifyAnyAnchorOR(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {

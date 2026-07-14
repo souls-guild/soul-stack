@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// keeperBaseWithPush — минимально-валидный keeper.yml с произвольным телом
-// блока `push:` для тестов validatePush.
+// keeperBaseWithPush — a minimally-valid keeper.yml with an arbitrary `push:` block body
+// for validatePush tests.
 func keeperBaseWithPush(pushBlock string) []byte {
 	return []byte(`kid: keeper-eu-west-01
 listen:
@@ -88,7 +88,7 @@ func TestPush_HostCARefPlaintextRejected(t *testing.T) {
 }
 
 func TestPush_EmptyBlockOK(t *testing.T) {
-	// push: пустой объект — допустимо, push-orchestrator просто не поднимется.
+	// push: empty object — allowed, the push orchestrator simply won't start.
 	src := keeperBaseWithPush(`push: {}
 `)
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
@@ -166,8 +166,8 @@ func TestPush_BadSSHPort(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_Valid — S7-3 multi-CA: непустой host_ca_refs[] без
-// singular host_ca_ref проходит валидацию.
+// TestPush_HostCARefs_Valid — S7-3 multi-CA: a non-empty host_ca_refs[] without the
+// singular host_ca_ref passes validation.
 func TestPush_HostCARefs_Valid(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -190,9 +190,9 @@ func TestPush_HostCARefs_Valid(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_MutuallyExclusiveWithSingular — S7-3: одновременное
-// присутствие singular `host_ca_ref` и `host_ca_refs[]` отвергается. Auto-adapt
-// singular в singleton делает daemon только когда `host_ca_refs[]` пуст.
+// TestPush_HostCARefs_MutuallyExclusiveWithSingular — S7-3: the simultaneous presence of
+// singular `host_ca_ref` and `host_ca_refs[]` is rejected. The daemon auto-adapts the
+// singular into a singleton only when `host_ca_refs[]` is empty.
 func TestPush_HostCARefs_MutuallyExclusiveWithSingular(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_ref: vault:secret/keeper/ssh-host-ca
@@ -206,8 +206,8 @@ func TestPush_HostCARefs_MutuallyExclusiveWithSingular(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_PlaintextRejected — S7-3: каждый элемент в `host_ca_refs[]`
-// должен быть vault-ref-ом; plaintext-PEM отвергается (симметрия с singular).
+// TestPush_HostCARefs_PlaintextRejected — S7-3: every element in `host_ca_refs[]` must be
+// a vault ref; a plaintext PEM is rejected (symmetric with the singular).
 func TestPush_HostCARefs_PlaintextRejected(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -220,8 +220,8 @@ func TestPush_HostCARefs_PlaintextRejected(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_DuplicateName — S7-3: имена в наборе должны быть уникальны
-// (lookup по имени в логах/метриках без двусмысленности).
+// TestPush_HostCARefs_DuplicateName — S7-3: names in the set must be unique (lookup by
+// name in logs/metrics without ambiguity).
 func TestPush_HostCARefs_DuplicateName(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -235,8 +235,8 @@ func TestPush_HostCARefs_DuplicateName(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_MissingName — S7-3: имя — обязательное поле
-// (используется как label-значение в keeper_push_host_ca_used_total{ca_name=...}).
+// TestPush_HostCARefs_MissingName — S7-3: name is a required field (used as the label
+// value in keeper_push_host_ca_used_total{ca_name=...}).
 func TestPush_HostCARefs_MissingName(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -249,8 +249,8 @@ func TestPush_HostCARefs_MissingName(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_NameInvalidFormat — S7-3: имя в snake_case или с большими
-// буквами не проходит kebab-case-валидацию.
+// TestPush_HostCARefs_NameInvalidFormat — S7-3: a name in snake_case or with uppercase
+// letters fails kebab-case validation.
 func TestPush_HostCARefs_NameInvalidFormat(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -263,7 +263,7 @@ func TestPush_HostCARefs_NameInvalidFormat(t *testing.T) {
 	}
 }
 
-// TestPush_HostCARefs_MissingRef — S7-3: ref обязателен, как и singular.
+// TestPush_HostCARefs_MissingRef — S7-3: ref is required, like the singular.
 func TestPush_HostCARefs_MissingRef(t *testing.T) {
 	src := keeperBaseWithPush(`push:
   host_ca_refs:
@@ -276,11 +276,11 @@ func TestPush_HostCARefs_MissingRef(t *testing.T) {
 	}
 }
 
-// TestPush_Transport — табличный guard для validatePushTransport (ADR-063
-// amendment «Teleport by-name transport»). Покрывает enum-валидацию `transport`
-// и обязательность непустых полей блока `teleport` при `transport: teleport`.
-// Каждый кейс задаёт лишь критерий приёмки (нет ошибок / конкретный diag по
-// коду+пути), остальной keeper.yml — минимально-валидная база.
+// TestPush_Transport — table-driven guard for validatePushTransport (ADR-063 amendment
+// "Teleport by-name transport"). Covers enum validation of `transport` and the
+// requirement that the `teleport` block's fields be non-empty when `transport: teleport`.
+// Each case states only the acceptance criterion (no errors / a specific diag by
+// code+path); the rest of keeper.yml is a minimally-valid base.
 func TestPush_Transport(t *testing.T) {
 	const validTeleport = `
   teleport:
@@ -291,7 +291,7 @@ func TestPush_Transport(t *testing.T) {
 	cases := []struct {
 		name      string
 		pushBlock string
-		// wantCode/wantPath — ожидаемый diag; пустой wantCode → ошибок быть не должно.
+		// wantCode/wantPath — the expected diag; empty wantCode → no errors expected.
 		wantCode string
 		wantPath string
 	}{

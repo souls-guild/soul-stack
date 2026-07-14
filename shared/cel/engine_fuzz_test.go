@@ -4,20 +4,20 @@ import (
 	"testing"
 )
 
-// FuzzFlowControlCompile фаззит компиляцию недоверенных CEL-предикатов в
-// Soul-side flow-control-песочнице ([NewFlowControl], [ADR-012(d)]). Это
-// граница разбора выражений из Destiny: автор пишет when:/changed_when:/
-// failed_when:, строка доходит до cel-go-парсера/компилятора.
+// FuzzFlowControlCompile fuzzes compilation of untrusted CEL predicates in the
+// Soul-side flow-control sandbox ([NewFlowControl], [ADR-012(d)]). This is the
+// parse boundary for Destiny expressions: the author writes when:/changed_when:/
+// failed_when:, and the string reaches the cel-go parser/compiler.
 //
-// EvalPredicate с пустыми Vars прогоняет весь путь compile (guard → rewrite →
-// env.Compile → env.Program) и затем eval. Нас интересует устойчивость: любая
-// строка обязана дать либо bool-результат, либо ошибку (ErrCompile/
-// ErrUnsupported/ErrEval) — но НИКОГДА панику и НИКОГДА зависание.
+// EvalPredicate with empty Vars runs the whole compile path (guard → rewrite →
+// env.Compile → env.Program) and then eval. We care about robustness: any string
+// must yield either a bool result or an error (ErrCompile/ErrUnsupported/ErrEval)
+// — but NEVER a panic and NEVER a hang.
 //
-// Зависание ловится самим фаззером: при гипотетическом не-завершении eval
-// одного входа Go-fuzz зафиксирует таймаут как краш и сохранит вход в
-// testdata. Отдельного таймаута в API нет (CEL — sandbox by design, без
-// sleep/I/O), поэтому здесь его не эмулируем.
+// A hang is caught by the fuzzer itself: on hypothetical non-termination of eval
+// for a single input, Go-fuzz records the timeout as a crash and saves the input
+// to testdata. There is no separate timeout in the API (CEL is a sandbox by
+// design, without sleep/I/O), so we do not emulate one here.
 func FuzzFlowControlCompile(f *testing.F) {
 	seeds := []string{
 		"has(input.x)",
@@ -29,9 +29,9 @@ func FuzzFlowControlCompile(f *testing.F) {
 		"1 + ",
 		"((((",
 		")(",
-		"vault('secret/x')",              // запрещён guard-ом → ErrUnsupported
-		"soulprint.hosts.where(h, h.up)", // изоляция flow-control → ошибка
-		"__internal",                     // зарезервированный префикс → guard
+		"vault('secret/x')",              // blocked by the guard → ErrUnsupported
+		"soulprint.hosts.where(h, h.up)", // flow-control isolation → error
+		"__internal",                     // reserved prefix → guard
 		"\"" + "x" + "\"",
 		"size([1,2,3]) > 0",
 		"a" + "\x00" + "b",
@@ -50,11 +50,11 @@ func FuzzFlowControlCompile(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, expr string) {
-		// Engine потокобезопасен и кеширует compile; общий e на все входы —
-		// штатный режим использования. Нам важно лишь отсутствие паники/
-		// зависания. Результат и класс ошибки не проверяем: для произвольной
-		// строки любой из исходов (bool / ErrCompile / ErrUnsupported /
-		// ErrEval) корректен.
+		// Engine is thread-safe and caches compilation; a shared e across all
+		// inputs is the intended usage. We only care about the absence of a
+		// panic/hang. We don't check the result or error class: for an arbitrary
+		// string any of the outcomes (bool / ErrCompile / ErrUnsupported /
+		// ErrEval) is correct.
 		_, _ = e.EvalPredicate(expr, Vars{})
 	})
 }

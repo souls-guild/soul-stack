@@ -1,24 +1,24 @@
-// Package tmpl — обёртка над Go text/template для рендера файлов `.tmpl`
-// модулем `core.file.rendered` ([ADR-010] §3, [templating.md §3]).
+// Package tmpl wraps Go text/template for rendering `.tmpl` files via the
+// `core.file.rendered` module ([ADR-010] §3, [templating.md §3]).
 //
-// Движок изолирован: в шаблоне доступны только переменные из переданного
-// `vars` плюс встроенные функции Go text/template и закрытый allowlist
-// sprig (см. [allowedSprig] в sprig.go). Прямого доступа к
-// essence/input/register/soulprint у шаблона нет — автор обязан явно
-// поднять нужные значения в `vars` на CEL-фазе ([templating.md §6]).
+// The engine is isolated: a template sees only variables from the passed `vars`
+// plus the built-in Go text/template functions and a closed sprig allowlist (see
+// [allowedSprig] in sprig.go). The template has no direct access to
+// essence/input/register/soulprint — the author must explicitly lift the needed
+// values into `vars` on the CEL phase ([templating.md §6]).
 //
-// Sandbox строится тремя барьерами ([templating.md §7.2]):
-//   - strict-mode `missingkey=error` — обращение к отсутствующему ключу
-//     даёт ошибку рендера, а не тихую пустую строку;
-//   - sprig через whitelist — функции вне allowlist недоступны (env,
-//     exec, crypto-gen, random, метапрограммирование исключены);
-//   - значения `vars` подставляются как литералы, рекурсивного
-//     template-eval (`tpl`) нет.
+// The sandbox is built from three barriers ([templating.md §7.2]):
+//   - strict-mode `missingkey=error` — accessing a missing key gives a render
+//     error, not a silent empty string;
+//   - sprig via whitelist — functions outside the allowlist are unavailable
+//     (env, exec, crypto-gen, random, metaprogramming are excluded);
+//   - `vars` values are substituted as literals, there is no recursive
+//     template-eval (`tpl`).
 //
-// Проверка расширения `.tmpl` — обязанность caller-а
-// (Soul-side `core.file.rendered`), не этого пакета ([templating.md §3.4]).
+// Checking the `.tmpl` extension is the caller's job (Soul-side
+// `core.file.rendered`), not this package's ([templating.md §3.4]).
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
+// [ADR-010]: docs/adr/0010-templating.md
 // [templating.md]: docs/templating.md
 package tmpl
 
@@ -28,17 +28,17 @@ import (
 	"text/template"
 )
 
-// Engine рендерит `.tmpl`-шаблоны с фиксированным набором функций.
-// Потокобезопасен и stateless: FuncMap собирается один раз в [New],
-// дальше только читается. Один Engine переиспользуется всеми прогонами.
+// Engine renders `.tmpl` templates with a fixed set of functions.
+// Thread-safe and stateless: the FuncMap is built once in [New] and only read
+// afterward. One Engine is reused by all runs.
 type Engine struct {
 	funcs template.FuncMap
 }
 
-// New создаёт Engine с встроенными функциями text/template и allowlist-ом
-// sprig. Ошибка возможна только при программном расхождении allowlist-а с
-// текущей версией sprig (имя из allowlist отсутствует в FuncMap) — это
-// баг сборки, не пользовательский ввод.
+// New creates an Engine with the built-in text/template functions and the sprig
+// allowlist. An error is possible only on a programmatic mismatch between the
+// allowlist and the current sprig version (an allowlist name missing from the
+// FuncMap) — a build bug, not user input.
 func New() (*Engine, error) {
 	funcs, err := buildFuncMap()
 	if err != nil {
@@ -47,14 +47,14 @@ func New() (*Engine, error) {
 	return &Engine{funcs: funcs}, nil
 }
 
-// Render компилирует и выполняет templateContent с контекстом vars.
+// Render compiles and executes templateContent with the vars context.
 //
-// vars подставляются как `.<key>` (например, `{{ .name }}`). Обращение к
-// отсутствующему ключу — ошибка ([missingkey=error]). Вызов функции вне
-// allowlist-а text/template+sprig — ошибка компиляции.
+// vars are referenced as `.<key>` (e.g. `{{ .name }}`). Accessing a missing key
+// is an error ([missingkey=error]). Calling a function outside the
+// text/template+sprig allowlist is a compile error.
 //
-// При nil-vars шаблон без обращений к данным отрендерится; любое `.<key>`
-// в нём упадёт по strict-mode, что и требуется.
+// With nil vars a template with no data references still renders; any `.<key>`
+// in it fails under strict-mode, which is intended.
 func (e *Engine) Render(templateContent string, vars map[string]any) (string, error) {
 	tmpl := template.New("rendered").
 		Funcs(e.funcs).
@@ -73,17 +73,17 @@ func (e *Engine) Render(templateContent string, vars map[string]any) (string, er
 	return buf.String(), nil
 }
 
-// ErrParse — ошибка компиляции шаблона: синтаксис или вызов функции вне
-// allowlist-а. По [templating.md §10] — ошибка фазы валидации/рендера,
-// шаг падает штатно.
+// ErrParse is a template compile error: syntax or a function call outside the
+// allowlist. Per [templating.md §10] it is a validation/render-phase error, the
+// step fails normally.
 type ErrParse struct{ Err error }
 
 func (e *ErrParse) Error() string { return fmt.Sprintf("tmpl parse: %v", e.Err) }
 func (e *ErrParse) Unwrap() error { return e.Err }
 
-// ErrExecute — ошибка выполнения шаблона: обращение к отсутствующему
-// ключу (strict-mode) или runtime-ошибка функции. По [templating.md §10]
-// — runtime-error шага.
+// ErrExecute is a template execution error: accessing a missing key
+// (strict-mode) or a function runtime error. Per [templating.md §10] it is a
+// step runtime-error.
 type ErrExecute struct{ Err error }
 
 func (e *ErrExecute) Error() string { return fmt.Sprintf("tmpl execute: %v", e.Err) }

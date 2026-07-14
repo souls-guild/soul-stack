@@ -2,30 +2,29 @@ package cel
 
 import "github.com/google/cel-go/common/types/ref"
 
-// CoverageSink — приёмник фактов eval-а CEL-выражений для DSL-coverage
-// («trial coverage», [ADR-023]). Каждый успешный eval top-level
-// expression-ключа или `${ … }`-блока сообщается sink-у вместе с
-// результатом — этого достаточно, чтобы учесть truthy/falsy-ветку
-// предиката (`where:`/`when:`/…) в покрытии.
+// CoverageSink is the receiver of CEL-expression eval facts for DSL coverage
+// ("trial coverage", [ADR-023]). Every successful eval of a top-level
+// expression-key or `${ … }` block is reported to the sink together with the
+// result — enough to record the truthy/falsy branch of a predicate
+// (`where:`/`when:`/…) in coverage.
 //
-// Реализация sink-а живёт в раннере Trial (`soul-trial`), не здесь:
-// shared/cel остаётся свободен от тест-инфраструктуры. В проде sink не
-// устанавливается (nil → no-op, нулевой оверхед).
+// The sink implementation lives in the Trial runner (`soul-trial`), not here:
+// shared/cel stays free of test infrastructure. In production the sink is not set
+// (nil → no-op, zero overhead).
 //
-// [ADR-023]: docs/adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage
+// [ADR-023]: docs/adr/0023-trial-test-runner.md
 type CoverageSink interface {
-	// Record фиксирует один успешный eval. expr — нормализованный текст
-	// выражения (без обёртки `${ }`); out — результат CEL. Вызывается
-	// только после успешного prg.Eval (ошибки eval до sink-а не доходят).
+	// Record captures one successful eval. expr is the normalized expression
+	// text (without the `${ }` wrapper); out is the CEL result. Called only
+	// after a successful prg.Eval (eval errors don't reach the sink).
 	Record(expr string, out ref.Val)
 }
 
-// SetCoverageSink устанавливает sink для учёта DSL-coverage. nil
-// отключает учёт (поведение по умолчанию). Предназначен для тест-режима
-// (`soul-trial`); в проде не вызывается.
+// SetCoverageSink sets the sink for DSL-coverage accounting. nil disables it (the
+// default). Intended for test mode (`soul-trial`); not called in production.
 //
-// Не потокобезопасен относительно конкурентных EvalExpression: sink
-// ставится один раз при сборке Engine в раннере, до старта прогона.
+// Not thread-safe with respect to concurrent EvalExpression: the sink is set once
+// when the Engine is built in the runner, before the run starts.
 func (e *Engine) SetCoverageSink(sink CoverageSink) {
 	e.sink = sink
 }

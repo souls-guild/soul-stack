@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// soulBaseWithMetrics собирает минимально-валидный soul.yml с произвольным
-// телом блока metrics: для тестов валидации basic_auth.
+// soulBaseWithMetrics assembles a minimally valid soul.yml with an arbitrary
+// metrics: block body for basic_auth validation tests.
 func soulBaseWithMetrics(metricsBlock string) []byte {
 	return []byte(`sid: redis-01.prod.example.com
 keeper:

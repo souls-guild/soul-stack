@@ -10,69 +10,69 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// validateTaskRefs — cross-task проверки списка задач плана (scenario/main.yml
-// `tasks[]` или destiny `tasks/main.yml`), которые нельзя поднять при валидации
-// одной задачи в отдельности (validateTaskNode):
+// validateTaskRefs runs cross-task checks over a plan's task list (scenario/main.yml
+// `tasks[]` or destiny `tasks/main.yml`) that a per-task validation
+// (validateTaskNode) cannot raise:
 //
-//  1. duplicate_task_address — два+ задачи делят одно имя в адресном
-//     пространстве подписки `register ∪ id` (два register, два id, либо
-//     register одной задачи == id другой).
-//  2. unknown_register_reference — ссылка на register-имя `register.<name>.*`,
-//     которого нет ни у одной задачи плана, в любом register-читающем поле:
-//     `onchanges:`/`onfail:`/`require:` (списочная форма) ИЛИ CEL-предикат
-//     (`when:`/`changed_when:`/`failed_when:`/`until:`/`where:`/`loop.when:`) ИЛИ
-//     интерполяция `${ register.<name>.* }` в source-поле (`vars:`/`output:`/
-//     `params:`/`apply.input:`/`loop.items:`). Последний класс закрыт ADR-056 S2 —
-//     до него unknown-register в интерполяции доживал до рантайм-стратификатора;
-//     набор полей здесь обязан совпадать с passage-определяющими источниками
-//     стратификатора (см. collectRefs).
+//  1. duplicate_task_address — two+ tasks share one name in the subscription
+//     address space `register ∪ id` (two registers, two ids, or one task's
+//     register == another's id).
+//  2. unknown_register_reference — a reference to a register name `register.<name>.*`
+//     that no task in the plan declares, in any register-reading field:
+//     `onchanges:`/`onfail:`/`require:` (list form) OR a CEL predicate
+//     (`when:`/`changed_when:`/`failed_when:`/`until:`/`where:`/`loop.when:`) OR
+//     interpolation `${ register.<name>.* }` in a source field (`vars:`/`output:`/
+//     `params:`/`apply.input:`/`loop.items:`). The last class is closed by ADR-056 S2 —
+//     before it, an unknown register in interpolation survived to the runtime
+//     stratifier; the field set here must match the stratifier's passage-defining
+//     sources (see collectRefs).
 //
-// Почему ОШИБКА, а не warning, для дубля адреса:
-// register-имена резолвятся в task-индексы через плоскую карту имя→index по
-// всему плану (keeper/internal/render registerIndex) — last-wins. При двух
-// задачах с `register: X` зависимость (`onchanges:[X]`/`onfail:[X]`/`when:
-// register.X.*`) тихо привязывается ТОЛЬКО к последней X; изменение/провал
-// первой X молча не активирует зависимость. Это немой источник «rescue не
-// сработал»/«onchanges пропущен» — линтер обязан ловить его статически, а не
-// отдавать на отладку в рантайме. Симметрично `id:` — это адрес задачи для
-// подписки на алерты «таска X изменила» (ADR-052 §h); register и id живут в
-// ОДНОМ адресном пространстве (destiny/tasks.md §8), поэтому дубль id или
-// пересечение register/id сматчили бы подписку «алерт на таску X» не с той
-// задачей (или с несколькими). Дубль почти всегда баг (копипаст без
-// переименования), легитимного кейса под одно имя у двух задач нет — поэтому
-// ошибка, не warning.
+// Why an ERROR, not a warning, for a duplicate address:
+// register names resolve to task indices via a flat name→index map over the whole
+// plan (keeper/internal/render registerIndex) — last-wins. With two tasks
+// `register: X`, a dependency (`onchanges:[X]`/`onfail:[X]`/`when: register.X.*`)
+// silently binds to the LAST X only; a change/failure of the first X silently does
+// not activate the dependency. This is a silent source of "rescue did not fire" /
+// "onchanges skipped" — the linter must catch it statically, not leave it to
+// runtime debugging. Symmetrically `id:` is a task address for alert subscriptions
+// "task X changed" (ADR-052 §h); register and id live in ONE address space
+// (destiny/tasks.md §8), so a duplicate id or a register/id overlap would match the
+// "alert on task X" subscription to the wrong task (or several). A duplicate is
+// almost always a bug (copy-paste without renaming), with no legitimate case for one
+// name on two tasks — hence an error, not a warning.
 //
-// Имена обходятся по плоскому пространству всего плана, включая вложенные
-// `block:` (рекурсивно), потому что keeper-side registerIndex тоже плоский:
-// register с block-задачи адресуется из любой точки плана. Порядок не важен:
-// для дубля — потому что дубль есть дубль; для cross-ref — потому что резолв
-// идёт по индексам, и unknown-имя = баг независимо от позиции (forward-ref на
-// существующее имя — отдельный, легитимный кейс, тут не караем).
+// Names are walked over the plan's flat space, including nested `block:`
+// (recursively), because the keeper-side registerIndex is flat too: a register on a
+// block task is addressable from anywhere in the plan. Order does not matter: for a
+// duplicate, because a duplicate is a duplicate; for cross-ref, because resolution
+// goes by index and an unknown name is a bug regardless of position (a forward-ref
+// to an existing name is a separate, legitimate case, not penalized here).
 //
-// Cross-file uniqueness через раскрытый include (дубль адреса между основным
-// файлом и подключённым) ловится отдельно — на плоском `[]Task` после
-// ExpandIncludes (validateFlatTaskAddresses). Здесь — per-file AST-уровень с
-// точными line/col.
+// Cross-file uniqueness through an expanded include (a duplicate address between the
+// main file and an included one) is caught separately — on the flat `[]Task` after
+// ExpandIncludes (validateFlatTaskAddresses). Here — per-file AST level with precise
+// line/col.
 //
-// Cross-ref для CEL-предикатов (`when:`/`changed_when:`/`failed_when:`/`until:`/
-// `where:`/`loop.when:`, где ссылка пишется как `register.<name>.*`) покрыт
-// текстовым извлечением: содержимое строковых литералов вырезается (как в
-// shared/cel guard-ах), затем regex `register.<name>` собирает имена (см.
-// ExtractRegisterRefs). Динамический доступ (`register["..."]`) и `register.self`
-// (текущая задача) сознательно не флагаются. Полный CEL-AST-парс не нужен —
-// форма ссылки фиксирована грамматикой (`register.<name>`).
+// Cross-ref for CEL predicates (`when:`/`changed_when:`/`failed_when:`/`until:`/
+// `where:`/`loop.when:`, where the reference is written as `register.<name>.*`) is
+// covered by textual extraction: string-literal contents are stripped (as in the
+// shared/cel guards), then the regex `register.<name>` collects names (see
+// ExtractRegisterRefs). Dynamic access (`register["..."]`) and `register.self` (the
+// current task) are deliberately not flagged. A full CEL-AST parse is unnecessary —
+// the reference form is fixed by the grammar (`register.<name>`).
 //
-// tasksSeq — AST-узел `tasks:` (scenario) либо корневой sequence (destiny).
-// nil-узел → nil (пустой/невалидный список уже отдиагностирован выше).
+// tasksSeq — the `tasks:` AST node (scenario) or the root sequence (destiny).
+// A nil node → nil (an empty/invalid list is already diagnosed above).
 func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string) []diag.Diagnostic {
 	if tasksSeq == nil {
 		return nil
 	}
 
-	// addrs — всё адресное пространство подписки (register ∪ id) для проверки
-	// уникальности. registers — только register-имена для cross-ref
-	// (unknown_register_reference): id адресует подписку на алерт, но НЕ создаёт
-	// `register.<name>` — ссылаться на id-задачу в onchanges/onfail/when нельзя.
+	// addrs — the full subscription address space (register ∪ id) for the
+	// uniqueness check. registers — only register names for cross-ref
+	// (unknown_register_reference): an id addresses an alert subscription but does
+	// NOT create `register.<name>` — an id task cannot be referenced in
+	// onchanges/onfail/when.
 	addrs := map[string]bool{}
 	registers := map[string]bool{}
 	var dupDiags []diag.Diagnostic
@@ -84,18 +84,17 @@ func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// collectAddresses обходит задачи (рекурсивно через block:) и наполняет два
-// набора: addrs — всё адресное пространство подписки `register ∪ id`
-// (destiny/tasks.md §8); registers — только register-имена (для cross-ref).
-// Повторное имя в addrs (дубль register, дубль id, либо пересечение register/id)
-// → duplicate_task_address на КАЖДОМ повторном объявлении (первое считаем
-// «основным», диагностику на нём не поднимаем — симметрично
-// task_discriminator_multiple).
+// collectAddresses walks tasks (recursively through block:) and fills two sets:
+// addrs — the full subscription address space `register ∪ id` (destiny/tasks.md §8);
+// registers — only register names (for cross-ref). A repeated name in addrs (a
+// duplicate register, a duplicate id, or a register/id overlap) →
+// duplicate_task_address on EVERY repeat declaration (the first is treated as the
+// "primary" and is not diagnosed — symmetric to task_discriminator_multiple).
 //
-// addrs несёт обе грани одного пространства, поэтому register «X» и id «X» на
-// разных задачах сталкиваются: подписка «алерт на таску X» не должна молча
-// сматчить две разные задачи. registers заполняется только из `register:` —
-// id-задача ссылок register.<name> на себя не создаёт.
+// addrs carries both facets of one space, so register "X" and id "X" on different
+// tasks collide: an "alert on task X" subscription must not silently match two
+// different tasks. registers is filled only from `register:` — an id task creates no
+// register.<name> reference to itself.
 func collectAddresses(seq *ast.SequenceNode, pathPrefix string, addrs, registers map[string]bool, dups *[]diag.Diagnostic) {
 	for i, item := range seq.Values {
 		taskPath := fmt.Sprintf("%s[%d]", pathPrefix, i)
@@ -112,7 +111,7 @@ func collectAddresses(seq *ast.SequenceNode, pathPrefix string, addrs, registers
 			case "register", "id":
 				sn, isStr := kv.Value.(*ast.StringNode)
 				if !isStr || sn.Value == "" {
-					continue // type/format уже отдиагностирован validateRegisterField/validateIDField.
+					continue // type/format already diagnosed by validateRegisterField/validateIDField.
 				}
 				if tok.Value == "register" {
 					registers[sn.Value] = true
@@ -138,24 +137,26 @@ func collectAddresses(seq *ast.SequenceNode, pathPrefix string, addrs, registers
 	}
 }
 
-// collectRefs обходит задачи (рекурсивно через block:) и проверяет КАЖДОЕ
-// register-читающее поле задачи против known; неизвестное имя →
-// unknown_register_reference. Поля бьются на три класса:
+// collectRefs walks tasks (recursively through block:) and checks EVERY
+// register-reading field of a task against known; an unknown name →
+// unknown_register_reference. Fields split into three classes:
 //
-//   - requisite-списки (onchanges/onfail/require) — имя task пишется как голый
-//     элемент списка (checkRefList);
-//   - CEL-предикаты (when/changed_when/failed_when/where + вложенные retry.until/
-//     loop.when) — ссылка как `register.<name>.*` в выражении (checkPredicateRefs);
-//   - интерполяционные поля (vars/output/params/apply.input/loop.items) — ссылка
-//     как `${ register.<name>.* }` в строковых литералах, рекурсивно по map/seq
+//   - requisite lists (onchanges/onfail/require) — the task name is a bare list
+//     element (checkRefList);
+//   - CEL predicates (when/changed_when/failed_when/where + nested retry.until/
+//     loop.when) — a reference as `register.<name>.*` in the expression
+//     (checkPredicateRefs);
+//   - interpolation fields (vars/output/params/apply.input/loop.items) — a reference
+//     as `${ register.<name>.* }` in string literals, recursively over map/seq
 //     (checkInterpRefs).
 //
-// Этот набор обязан 1:1 совпадать с passage-определяющими источниками
-// стратификатора (keeper/internal/render.collectTaskReads, ADR-056-реестр), чтобы
-// граф register-ссылок линтера и граф стратификатора не расходились: дыра в
-// валидаторе означала бы, что unknown-register в output/vars/params/apply.input
-// доживает до рантайма и падает StratifyUnknownRegister онлайн, а не ловится
-// офлайн линтером. Guard-инвариант — reads==refs consistency (passage_test.go).
+// This set must match the stratifier's passage-defining sources 1:1
+// (keeper/internal/render.collectTaskReads, the ADR-056 registry), so the linter's
+// register-reference graph and the stratifier's graph do not diverge: a hole in the
+// validator would mean an unknown register in output/vars/params/apply.input
+// survives to runtime and fails StratifyUnknownRegister online instead of being
+// caught offline by the linter. Guard invariant — reads==refs consistency
+// (passage_test.go).
 func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for i, item := range seq.Values {
@@ -177,11 +178,11 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 				out = append(out, checkSoulprintRefs(tok.Value, kv.Value, taskPath)...)
 				out = append(out, checkStateRefs(tok.Value, kv.Value, taskPath)...)
 			case "assert":
-				// assert.that[] — список CEL-bool-предикатов (render-time precondition,
-				// ADR-009 amendment). Каждый предикат проверяется как `where:`:
-				// register-ссылки против known + soulprint/state-каноны. assert вычисляется
-				// Keeper-side (как where:) — cross-passage register умеет (re-render с
-				// накопленным register), поэтому register-чтение в that легально.
+				// assert.that[] — a list of CEL bool predicates (render-time precondition,
+				// ADR-009 amendment). Each predicate is checked like `where:`:
+				// register references against known + soulprint/state canon. assert is
+				// evaluated Keeper-side (like where:) — it supports cross-passage register
+				// (re-render with accumulated register), so reading register in that is legal.
 				if amm, isMap := kv.Value.(*ast.MappingNode); isMap {
 					for _, sub := range amm.Values {
 						st := sub.Key.GetToken()
@@ -199,12 +200,12 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 					}
 				}
 			case "vars", "output", "params":
-				// Интерполяционные source-поля: ${ register.X } в строковых
-				// литералах, рекурсивно по вложенным map/seq.
+				// Interpolation source fields: ${ register.X } in string literals,
+				// recursively over nested map/seq.
 				out = append(out, checkInterpRefs(kv.Value, known, taskPath, tok.Value)...)
 				out = append(out, checkInterpStateRefs(kv.Value, taskPath, tok.Value)...)
 			case "apply":
-				// applier-задача: register читается в apply.input (вложенный map).
+				// applier task: register is read in apply.input (a nested map).
 				if amm, isMap := kv.Value.(*ast.MappingNode); isMap {
 					for _, sub := range amm.Values {
 						st := sub.Key.GetToken()
@@ -215,7 +216,7 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 					}
 				}
 			case "retry":
-				// `until:` — CEL-предикат внутри retry-mapping.
+				// `until:` — a CEL predicate inside the retry mapping.
 				if rmm, isMap := kv.Value.(*ast.MappingNode); isMap {
 					for _, sub := range rmm.Values {
 						st := sub.Key.GetToken()
@@ -227,8 +228,8 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 					}
 				}
 			case "loop":
-				// `when:` — CEL-предикат; `items:` — интерполяционный source
-				// (${ register.X } в скаляре/списке/map).
+				// `when:` — a CEL predicate; `items:` — an interpolation source
+				// (${ register.X } in a scalar/list/map).
 				if lmm, isMap := kv.Value.(*ast.MappingNode); isMap {
 					for _, sub := range lmm.Values {
 						st := sub.Key.GetToken()
@@ -256,17 +257,18 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 	return out
 }
 
-// checkInterpRefs рекурсивно обходит AST-узел интерполяционного поля (vars /
-// output / params / apply.input / loop.items) и проверяет register-имена,
-// встреченные внутри `${ register.<name>.* }` строковых литералов, против known.
-// Это закрывает дыру cross-ref-валидатора: до ADR-056 S2 unknown-register в
-// интерполяции (а не в предикате/requisite) не ловился офлайн и падал только
-// рантайм-стратификатором (StratifyUnknownRegister).
+// checkInterpRefs recursively walks the AST node of an interpolation field (vars /
+// output / params / apply.input / loop.items) and checks register names found inside
+// `${ register.<name>.* }` string literals against known. This closes a hole in the
+// cross-ref validator: before ADR-056 S2 an unknown register in interpolation
+// (rather than in a predicate/requisite) was not caught offline and failed only in
+// the runtime stratifier (StratifyUnknownRegister).
 //
-// Извлечение делает ExtractRegisterRefs — тот же канон-парсер `register.<name>`,
-// что и стратификатор и checkPredicateRefs (без дубля regex). Не-string узлы
-// (int/bool/null) ссылок не несут, рекурсия спускается только по map/seq.
-// Диагностика — на позиции строкового узла, где найдена ссылка.
+// Extraction is done by ExtractRegisterRefs — the same canonical `register.<name>`
+// parser as the stratifier and checkPredicateRefs (no duplicate regex). Non-string
+// nodes (int/bool/null) carry no references; recursion descends only through
+// map/seq. The diagnostic is at the position of the string node where the reference
+// was found.
 func checkInterpRefs(node ast.Node, known map[string]bool, taskPath, kind string) []diag.Diagnostic {
 	switch n := node.(type) {
 	case *ast.StringNode:
@@ -308,15 +310,15 @@ func checkInterpRefs(node ast.Node, known map[string]bool, taskPath, kind string
 	}
 }
 
-// checkRefList проверяет элементы списочного requisite-поля (onchanges/onfail/
-// require) против known. `require:` допускает скалярную форму `"all"` (не
-// register-список) — она пропускается. Не-string/CEL-обёрнутые элементы
-// пропускаются (имя статически неизвестно). Пустой/невалидный список —
-// type-проверки тут нет (зона отдельного validateTaskNode), молча skip.
+// checkRefList checks the elements of a list requisite field (onchanges/onfail/
+// require) against known. `require:` allows the scalar form `"all"` (not a register
+// list) — it is skipped. Non-string / CEL-wrapped elements are skipped (the name is
+// statically unknown). Empty/invalid list — no type check here (that is
+// validateTaskNode's job), silently skipped.
 func checkRefList(kind string, value ast.Node, known map[string]bool, taskPath string) []diag.Diagnostic {
 	seq, ok := value.(*ast.SequenceNode)
 	if !ok {
-		return nil // require: "all" (скаляр) или невалидная форма — не наша зона.
+		return nil // require: "all" (scalar) or an invalid form — not our concern.
 	}
 	var out []diag.Diagnostic
 	for j, item := range seq.Values {
@@ -339,37 +341,38 @@ func checkRefList(kind string, value ast.Node, known map[string]bool, taskPath s
 	return out
 }
 
-// reRegisterCELRef извлекает `register.<name>` из CEL-текста. Граница слева —
-// начало строки ИЛИ символ, не входящий в идентификатор и не `.` (чтобы
-// `myregister.x` и `foo.register.y` НЕ матчились: `register` обязан быть
-// корневым идентификатором, как в грамматике CEL-контекста). Имя — snake_case
-// register-id (совпадает с reRegisterID). Динамический доступ `register["x"]`
-// формой не покрывается — точки нет, regex не матчит (безопасный пропуск).
+// reRegisterCELRef extracts `register.<name>` from CEL text. The left boundary is
+// the start of the string OR a character that is not part of an identifier and not
+// `.` (so `myregister.x` and `foo.register.y` do NOT match: `register` must be a
+// root identifier, as in the CEL context grammar). The name is a snake_case register
+// id (matches reRegisterID). Dynamic access `register["x"]` is not covered by this
+// form — there is no dot, the regex does not match (a safe skip).
 var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.([a-z][a-z0-9_]*)`)
 
-// celStringLiteral — строковый литерал CEL (одинарные/двойные кавычки).
-// Зеркалит shared/cel.stringLiteralRe; вырезаем содержимое перед текстовым
-// поиском идентификаторов, чтобы `register.x` внутри литерала-данных не давал
-// ложное unknown_register_reference.
+// celStringLiteral — a CEL string literal (single/double quotes). Mirrors
+// shared/cel.stringLiteralRe; we strip the contents before the textual identifier
+// search so that `register.x` inside a data literal does not yield a false
+// unknown_register_reference.
 var celStringLiteral = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 
-// reSoulprintRef ловит ссылку на soulprint в CEL-тексте (host-вариативный слой
-// soulprint.self). Зеркало keeper/internal/render.reFlowControlSoulprint (`\bsoulprint\b`)
-// — один источник правды грамматики «host-вариативный предикат».
+// reSoulprintRef catches a soulprint reference in CEL text (the host-variant layer
+// soulprint.self). Mirrors keeper/internal/render.reFlowControlSoulprint (`\bsoulprint\b`)
+// — one source of truth for the "host-variant predicate" grammar.
 var reSoulprintRef = regexp.MustCompile(`\bsoulprint\b`)
 
-// IsStaticIncludeWhen сообщает, статичен ли `when:`-предикат условного include —
-// т.е. вычислим ли он ДО фазы Stratify/render (conditional-include group-drop,
-// ADR-009 amendment). include раскрывается в плоский список ДО стратификации, когда
-// register предыдущих задач ещё не собран, а per-host soulprint неизвестен; поэтому
-// допустим только статический предикат (input./essence./incarnation./vars.). Те же
-// два критерия, что keeper-side isStaticWhen (register-/soulprint-независимость):
-//   - нет cross-task register-ссылки (ExtractRegisterRefs — тот же канон-парсер);
-//   - нет ссылки на soulprint (host-вариативный слой).
+// IsStaticIncludeWhen reports whether a conditional include's `when:` predicate is
+// static — i.e. computable BEFORE the Stratify/render phase (conditional-include
+// group-drop, ADR-009 amendment). An include expands into the flat list BEFORE
+// stratification, when previous tasks' register is not yet collected and per-host
+// soulprint is unknown; so only a static predicate is allowed
+// (input./essence./incarnation./vars.). The same two criteria as keeper-side
+// isStaticWhen (register-/soulprint-independence):
+//   - no cross-task register reference (ExtractRegisterRefs — the same canonical parser);
+//   - no soulprint reference (the host-variant layer).
 //
-// Пустой when → true (безусловный include — группа всегда вклеивается; дроп не
-// активируется при IncludeGroupID==0). Динамический when → false: caller
-// (ExpandIncludes/soul-lint) поднимает include_when_dynamic_unsupported.
+// An empty when → true (an unconditional include — the group is always spliced in;
+// the drop is not activated when IncludeGroupID==0). A dynamic when → false: the
+// caller (ExpandIncludes/soul-lint) raises include_when_dynamic_unsupported.
 func IsStaticIncludeWhen(when string) bool {
 	if when == "" {
 		return true
@@ -380,18 +383,17 @@ func IsStaticIncludeWhen(when string) bool {
 	return !reSoulprintRef.MatchString(when)
 }
 
-// ExtractRegisterRefs возвращает отсортированный набор уникальных имён из
-// `register.<name>` в CEL-строке (после вырезания строковых литералов). `self`
-// исключается — это текущая задача (register.self.*), её известность не
-// проверяется cross-ref-ом. Сортировка делает диагностики детерминированными
-// при нескольких unknown-ссылках в одном предикате.
+// ExtractRegisterRefs returns a sorted set of unique names from `register.<name>` in
+// a CEL string (after stripping string literals). `self` is excluded — it is the
+// current task (register.self.*), whose existence cross-ref does not check. Sorting
+// makes diagnostics deterministic when a predicate has several unknown references.
 //
-// Экспортирована как канонический парсер cross-task register-ссылок: stage-render
-// стратификация ([ADR-056], keeper/internal/render) переиспользует её, чтобы
-// строить граф register-зависимостей по той же грамматике `register.<name>`, что
-// и cross-ref-валидатор, — без дубля regex. `register.self.*` (Soul-side
-// собственный результат той же задачи) ссылкой НЕ считается ни здесь, ни в
-// стратификации (это не cross-task ребро).
+// Exported as the canonical parser of cross-task register references: stage-render
+// stratification ([ADR-056], keeper/internal/render) reuses it to build the
+// register-dependency graph over the same `register.<name>` grammar as the cross-ref
+// validator — no duplicate regex. `register.self.*` (the Soul-side own result of the
+// same task) is NOT counted as a reference here or in stratification (it is not a
+// cross-task edge).
 func ExtractRegisterRefs(expr string) []string {
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	seen := map[string]struct{}{}
@@ -410,12 +412,13 @@ func ExtractRegisterRefs(expr string) []string {
 	return out
 }
 
-// checkPredicateRefs проверяет register-имена в CEL-предикате (when/changed_when/
-// failed_when/until/where/loop.when) против known. bool-литерал (force-shortcut
-// changed_when/failed_when) и null — не CEL-строка, пропускаются. Forward-ref на
-// существующее имя легитимен (known плоский по всему плану); караем только
-// отсутствующее. Диагностика — на позиции value-ноды предиката (точное смещение
-// внутри строки не извлекается — это текстовый, не AST-анализ).
+// checkPredicateRefs checks register names in a CEL predicate (when/changed_when/
+// failed_when/until/where/loop.when) against known. A bool literal (force-shortcut
+// changed_when/failed_when) and null are not a CEL string and are skipped. A
+// forward-ref to an existing name is legitimate (known is flat over the whole plan);
+// only a missing name is penalized. The diagnostic is at the position of the
+// predicate value node (the exact offset within the string is not extracted — this
+// is textual, not AST, analysis).
 func checkPredicateRefs(kind string, value ast.Node, known map[string]bool, taskPath string) []diag.Diagnostic {
 	sn, ok := value.(*ast.StringNode)
 	if !ok {

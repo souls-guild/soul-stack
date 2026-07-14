@@ -1,16 +1,16 @@
 package config
 
-// Covenant FS-резолв (Resolved-слой). `*FromBytes` остаются NO-I/O: covenant.yml
-// читается ТОЛЬКО здесь, по serviceRoot снапшота. Этот файл — единый источник
-// правды о слиянии covenant-фрагмента в манифест для ВСЕХ потребителей (keeper
-// runtime-load, trial-harness, soul-lint scenario-путь): раньше логика жила в
-// keeper/internal/artifact, теперь — здесь, остальные зовут [ResolveScenarioCovenant].
+// Covenant FS resolve (Resolved layer). `*FromBytes` stay NO-I/O: covenant.yml is
+// read ONLY here, by the snapshot's serviceRoot. This file is the single source of
+// truth for merging a covenant fragment into a manifest for ALL consumers (keeper
+// runtime-load, trial-harness, soul-lint scenario path): the logic used to live in
+// keeper/internal/artifact, now it's here, and the rest call [ResolveScenarioCovenant].
 //
-// Почему не в schema/semantic-фазе `*FromBytes`: form-валидация (`form` ⊆ эффективный
-// `input`) корректна лишь над СМЕРЖЕННЫМ input, а эффективный input существует только
-// пост-merge (нужен ФС). Поэтому form covenant-сценария проверяется ЗДЕСЬ, после
-// MergeCovenant, тем же ядром [validateFormAgainstInputKeys], что non-extends-путь
-// гоняет в semantic-фазе.
+// Why not in the schema/semantic phase of `*FromBytes`: form validation (`form` ⊆ the
+// effective `input`) is correct only over the MERGED input, and the effective input
+// exists only post-merge (needs the FS). So the covenant scenario's form is checked
+// HERE, after MergeCovenant, with the same core [validateFormAgainstInputKeys] the
+// non-extends path runs in the semantic phase.
 
 import (
 	"errors"
@@ -26,42 +26,43 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// covenantFileExt — расширение файла covenant-фрагмента в корне service-репо.
-// Имя файла = `<extends>.yml` (имя из `extends:` + это расширение), сиблинг
+// covenantFileExt — the covenant-fragment file extension in the service-repo root.
+// File name = `<extends>.yml` (the `extends:` name + this extension), sibling to
 // types.yml/service.yml/scenario/.
 const covenantFileExt = ".yml"
 
-// ResolveScenarioCovenant сливает covenant-фрагмент в манифест сценария ПО МЕСТУ
-// (MergeCovenant мутирует *m) и валидирует `form` против СМЕРЖЕННОГО input. Вызов —
-// строго на манифесте, рождённом из байтов в этом же ходе load (а не на расшаренном
-// кэш-объекте): MergeCovenant копирует input-схемы фрагмента по указателю, поэтому
-// fragment обязан остаться read-only — он локален этому вызову и нигде не reuse-ится.
+// ResolveScenarioCovenant merges the covenant fragment into the scenario manifest IN
+// PLACE (MergeCovenant mutates *m) and validates `form` against the MERGED input. Call
+// strictly on a manifest born from bytes in this same load pass (not a shared cache
+// object): MergeCovenant copies the fragment's input schemas by pointer, so the
+// fragment must stay read-only — it is local to this call and reused nowhere.
 //
-// No-op, когда `m.Extends` пуст (сценарий без наследования — forward-compat бит-в-бит,
-// без ФС-обращения). Иначе: путь covenant.yml в КОРНЕ снапшота (`<serviceRoot>/
-// <extends>.yml`) строится из имени extends, фрагмент читается securejoin-ридером
-// (traversal-кламп: имя — single-segment kebab по [ValidExtendsName], securejoin
-// клампит дополнительно), декодируется [LoadCovenantFragmentFromBytes] и сливается
-// add-only. После merge — пост-merge form-валидация на смерженном `m.Input`.
+// No-op when `m.Extends` is empty (a scenario without inheritance — forward-compat
+// bit-for-bit, no FS access). Otherwise: the covenant.yml path in the snapshot ROOT
+// (`<serviceRoot>/<extends>.yml`) is built from the extends name, the fragment is read
+// by a securejoin reader (traversal clamp: the name is a single-segment kebab per
+// [ValidExtendsName], securejoin clamps additionally), decoded by
+// [LoadCovenantFragmentFromBytes] and merged add-only. After merge — post-merge form
+// validation over the merged `m.Input`.
 //
-// serviceRoot — абсолютный путь к корню снапшота сервиса (keeper: art.LocalDir;
-// trial: корень тестового дерева; soul-lint: корень линтуемого репо). doc — Document,
-// рождённый тем же `*FromBytes`-вызовом: из его AST берётся узел `form:` для пост-merge
-// проверки (позиции диагностик указывают на реальные строки исходника). doc==nil
-// ИЛИ отсутствие `form:` → пост-merge form-проверка пропускается (нечего проверять).
+// serviceRoot — absolute path to the service snapshot root (keeper: art.LocalDir;
+// trial: the test tree root; soul-lint: the linted repo root). doc — the Document born
+// from the same `*FromBytes` call: its AST provides the `form:` node for the post-merge
+// check (diagnostic positions point at real source lines). doc==nil OR no `form:` →
+// the post-merge form check is skipped (nothing to check).
 //
-// Диагностики (все diag.LevelError, оператор чинит по одному):
-//   - covenant_extends_invalid          — имя extends не прошло [ValidExtendsName];
-//   - covenant_extends_target_not_found — covenant.yml по имени отсутствует;
-//   - io_error                          — covenant.yml есть, но не читается;
-//   - <fragment-diag>                   — сам covenant.yml невалиден (его decode/schema
-//     ошибки прокинуты как есть, помечены File covenant-а);
-//   - section_key_conflict              — один ключ секции в covenant И в сценарии
-//     (add-only merge запрещает override);
-//   - state_changes_form_mismatch       — covenant и сценарий объявили state_changes
-//     в разных формах (list vs deprecated map);
-//   - covenant_merge_failed             — прочие (не ожидаемые) ошибки merge;
-//   - form_field_unknown/duplicate/…    — пост-merge form-проверка (см. ядро).
+// Diagnostics (all diag.LevelError, the operator fixes one at a time):
+//   - covenant_extends_invalid          — the extends name failed [ValidExtendsName];
+//   - covenant_extends_target_not_found — no covenant.yml by that name;
+//   - io_error                          — covenant.yml exists but is unreadable;
+//   - <fragment-diag>                   — covenant.yml itself is invalid (its
+//     decode/schema errors passed through as-is, tagged with the covenant's File);
+//   - section_key_conflict              — a section key in both covenant AND scenario
+//     (add-only merge forbids override);
+//   - state_changes_form_mismatch       — covenant and scenario declared state_changes
+//     in different forms (list vs deprecated map);
+//   - covenant_merge_failed             — other (unexpected) merge errors;
+//   - form_field_unknown/duplicate/…    — the post-merge form check (see the core).
 func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot string) []diag.Diagnostic {
 	if m == nil || m.Extends == "" {
 		return nil
@@ -96,21 +97,20 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		}}
 	}
 
-	// СВЕЖИЙ fragment на каждый scenario-резолв (не кэшируется между сценариями):
-	// MergeCovenant копирует input-схемы фрагмента по УКАЗАТЕЛЮ, потому fragment
-	// обязан остаться READ-ONLY после merge — гарантировано тем, что он локален
-	// этому вызову.
+	// FRESH fragment per scenario resolve (not cached between scenarios):
+	// MergeCovenant copies the fragment's input schemas by POINTER, so the fragment
+	// must stay READ-ONLY after merge — guaranteed by it being local to this call.
 	fragment, _, fdiags := LoadCovenantFragmentFromBytes(covenantFile, data, ValidateOptions{})
 	if diag.HasErrors(fdiags) {
-		// covenant.yml невалиден: прокидываем его собственные ошибки как есть
-		// (File уже = covenantFile из decode), merge не делаем (фрагмент битый).
+		// covenant.yml is invalid: pass its own errors through as-is (File is already
+		// = covenantFile from decode), skip merge (fragment is broken).
 		return fdiags
 	}
 
-	// Cross-form state_changes: MergeCovenant при несовпадении IsList не детектит
-	// конфликты по `set <поле>` (берёт форму local). Смешение list↔map — разные
-	// грамматики; отвергаем явно ДО merge, иначе covenant-set-ы другой формы молча
-	// потерялись бы.
+	// Cross-form state_changes: on an IsList mismatch MergeCovenant doesn't detect
+	// `set <field>` conflicts (it takes the local form). Mixing list↔map is different
+	// grammars; reject explicitly BEFORE merge, else covenant sets of the other form
+	// would be silently lost.
 	if fragment.StateChanges != nil && m.StateChanges != nil &&
 		fragment.StateChanges.IsList != m.StateChanges.IsList {
 		return append(fdiags, diag.Diagnostic{
@@ -132,8 +132,8 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 				Hint: "уберите дубль ключа из одной из сторон — covenant задаёт общий контракт, сценарий добавляет дельту",
 			})
 		}
-		// Прочие ошибки merge (не ожидаются для уже провалидированных секций) —
-		// прокидываем generic-диагностикой, не теряя их.
+		// Other merge errors (not expected for already-validated sections) — pass
+		// through as a generic diagnostic, not losing them.
 		return append(fdiags, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			File: scenarioPath, Code: "covenant_merge_failed",
@@ -141,18 +141,19 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		})
 	}
 
-	// ПОСТ-MERGE form-валидация: `form` ⊆ ЭФФЕКТИВНЫЙ (смерженный) `input`. До merge
-	// этого нельзя — covenant-поля отсутствовали бы в m.Input (ложный form_field_unknown);
-	// потому form covenant-сценария гейтнут из semantic-фазы (scenario.go) и проверяется
-	// здесь. Тем же ядром, что non-extends-путь, на том же AST (узел form: из doc).
+	// POST-MERGE form validation: `form` ⊆ the EFFECTIVE (merged) `input`. Not possible
+	// before merge — covenant fields would be absent from m.Input (false
+	// form_field_unknown); so the covenant scenario's form is gated out of the semantic
+	// phase (scenario.go) and checked here. Same core as the non-extends path, on the
+	// same AST (the form: node from doc).
 	fdiags = append(fdiags, resolveCovenantFormDiags(m, doc, scenarioPath)...)
 	return fdiags
 }
 
-// resolveCovenantFormDiags гоняет пост-merge form-проверку covenant-сценария, если
-// в манифесте объявлен `form:`. Источник input-ключей — СМЕРЖЕННЫЙ m.Input; AST
-// узла form: — из doc. Нет doc / нет ключа form: → ноль диагностик (нечего проверять,
-// forward-compat бит-в-бит). Диагностикам без File проставляем путь сценария.
+// resolveCovenantFormDiags runs the covenant scenario's post-merge form check if the
+// manifest declares `form:`. Source of input keys is the MERGED m.Input; the form:
+// node's AST comes from doc. No doc / no form: key → zero diagnostics (nothing to
+// check, forward-compat bit-for-bit). Diagnostics without a File get the scenario path.
 func resolveCovenantFormDiags(m *ScenarioManifest, doc *Document, scenarioPath string) []diag.Diagnostic {
 	root := rootMapping(doc)
 	if root == nil || !topLevelKeys(root)["form"] {
@@ -171,15 +172,15 @@ func resolveCovenantFormDiags(m *ScenarioManifest, doc *Document, scenarioPath s
 	return out
 }
 
-// readCovenantFile читает covenant.yml из снапшота serviceRoot по имени файла
-// (`<extends>.yml`). securejoin клампит выход за пределы serviceRoot (defence-in-
-// depth поверх грамматики имени covenant). Возвращает fs.ErrNotExist прозрачно —
-// caller различает «covenant не найден» от прочих I/O-ошибок.
+// readCovenantFile reads covenant.yml from the serviceRoot snapshot by file name
+// (`<extends>.yml`). securejoin clamps any escape outside serviceRoot (defence-in-
+// depth on top of the covenant name grammar). Returns fs.ErrNotExist transparently —
+// the caller tells "covenant not found" from other I/O errors.
 func readCovenantFile(serviceRoot, name string) ([]byte, error) {
-	// securejoin требует корень без `..`-компонент: caller-ы (trial/soul-lint) могут
-	// передать относительный serviceRoot (`../examples/...`) — приводим к абсолютному.
-	// Кламп выхода за serviceRoot это НЕ ослабляет (имя covenant — single-segment
-	// kebab, securejoin клампит дополнительно).
+	// securejoin requires a root without `..` components: callers (trial/soul-lint) may
+	// pass a relative serviceRoot (`../examples/...`) — make it absolute. This does NOT
+	// weaken the clamp outside serviceRoot (the covenant name is a single-segment
+	// kebab, securejoin clamps additionally).
 	if abs, aerr := filepath.Abs(serviceRoot); aerr == nil {
 		serviceRoot = abs
 	}
@@ -187,14 +188,15 @@ func readCovenantFile(serviceRoot, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: небезопасный путь covenant %q: %w", name, err)
 	}
-	// os.ReadFile оборачивает отсутствие файла в *PathError с fs.ErrNotExist —
-	// errors.Is у caller ловит его, отличая «covenant нет» от прочих I/O-ошибок.
+	// os.ReadFile wraps a missing file in *PathError with fs.ErrNotExist — the
+	// caller's errors.Is catches it, telling "no covenant" from other I/O errors.
 	return os.ReadFile(full)
 }
 
-// rootMapping достаёт корневой mapping-узел AST из opaque Document (пакет-приватный
-// доступ к doc.file). nil-безопасен: nil doc / пустой/не-mapping корень → nil
-// (caller трактует как «AST недоступен», пост-merge form-проверка пропускается).
+// rootMapping extracts the root mapping AST node from the opaque Document
+// (package-private access to doc.file). nil-safe: nil doc / empty or non-mapping root
+// → nil (the caller treats it as "AST unavailable", the post-merge form check is
+// skipped).
 func rootMapping(doc *Document) *ast.MappingNode {
 	if doc == nil || doc.file == nil || len(doc.file.Docs) == 0 {
 		return nil
@@ -206,8 +208,8 @@ func rootMapping(doc *Document) *ast.MappingNode {
 	return nil
 }
 
-// docPath — путь файла, ассоциированный с Document (для метки File-диагностик).
-// nil-безопасен (nil doc → "").
+// docPath — the file path associated with a Document (for the File tag on
+// diagnostics). nil-safe (nil doc → "").
 func docPath(doc *Document) string {
 	if doc == nil {
 		return ""

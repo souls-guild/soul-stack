@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestKeeperAuth_LoginRateLimitDefaults — nil-блок auth.rate_limit резолвится к
-// дефолтам и enabled=true (default-ON, footgun-guard, HIGH-3).
+// TestKeeperAuth_LoginRateLimitDefaults — a nil auth.rate_limit block resolves to
+// defaults and enabled=true (default-ON, footgun-guard, HIGH-3).
 func TestKeeperAuth_LoginRateLimitDefaults(t *testing.T) {
 	var a *KeeperAuth
 	if !a.LoginRateLimitEnabled() {
@@ -26,8 +26,8 @@ func TestKeeperAuth_LoginRateLimitDefaults(t *testing.T) {
 	}
 }
 
-// TestKeeperAuth_LoginRateLimitExplicit — заданные поля переопределяют дефолты;
-// duration-поля парсятся.
+// TestKeeperAuth_LoginRateLimitExplicit — explicit fields override defaults;
+// duration fields are parsed.
 func TestKeeperAuth_LoginRateLimitExplicit(t *testing.T) {
 	disabled := false
 	a := &KeeperAuth{RateLimit: &KeeperAuthLoginRateLimit{
@@ -50,8 +50,8 @@ func TestKeeperAuth_LoginRateLimitExplicit(t *testing.T) {
 	}
 }
 
-// TestKeeperAuth_LoginRateLimitBadDuration — невалидный duration в lockout_window
-// → semantic-ERROR (duration_invalid, тот же checkDuration).
+// TestKeeperAuth_LoginRateLimitBadDuration — an invalid duration in lockout_window
+// → semantic ERROR (duration_invalid, the same checkDuration).
 func TestKeeperAuth_LoginRateLimitBadDuration(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   rate_limit:

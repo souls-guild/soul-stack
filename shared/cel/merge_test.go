@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestMerge_LastWins — правый аргумент перекрывает левый по совпавшему ключу
-// верхнего уровня; несовпавшие ключи объединяются.
+// TestMerge_LastWins — the right argument overrides the left on a matching
+// top-level key; non-matching keys are merged.
 func TestMerge_LastWins(t *testing.T) {
 	e := newEngine(t)
 
@@ -33,8 +33,8 @@ func TestMerge_LastWins(t *testing.T) {
 	}
 }
 
-// TestMerge_Shallow — вложенный map НЕ сливается глубоко: правый аргумент
-// целиком замещает значение совпавшего верхнего ключа (даже если оно — map).
+// TestMerge_Shallow — a nested map is NOT merged deeply: the right argument
+// wholly replaces the value of a matching top key (even if it is a map).
 func TestMerge_Shallow(t *testing.T) {
 	e := newEngine(t)
 
@@ -53,15 +53,15 @@ func TestMerge_Shallow(t *testing.T) {
 	if !ok {
 		t.Fatalf("nested типа %T, want map[string]any", got["nested"])
 	}
-	// SHALLOW: правый целиком заместил — ключа `drop` из левого больше нет.
+	// SHALLOW: the right wholly replaced — the `drop` key from the left is gone.
 	want := map[string]any{"keep": int64(99)}
 	if !reflect.DeepEqual(nested, want) {
 		t.Fatalf("nested = %v, want %v (shallow, правый целиком замещает)", nested, want)
 	}
 }
 
-// TestMerge_EmptyMaps — пустые map-ы: merge пустых даёт пустой; пустой не
-// затирает непустой.
+// TestMerge_EmptyMaps — empty maps: merging empties yields empty; an empty does
+// not overwrite a non-empty.
 func TestMerge_EmptyMaps(t *testing.T) {
 	e := newEngine(t)
 
@@ -82,7 +82,7 @@ func TestMerge_EmptyMaps(t *testing.T) {
 		t.Fatalf("merge с пустыми = %v, want %v", got, want)
 	}
 
-	// merge двух пустых → пустой map.
+	// merge of two empties → empty map.
 	out2, err := e.EvalInterpolation(`${ merge(input.empty, input.empty2) }`, Vars{Input: map[string]any{
 		"empty":  map[string]any{},
 		"empty2": map[string]any{},
@@ -95,8 +95,8 @@ func TestMerge_EmptyMaps(t *testing.T) {
 	}
 }
 
-// TestMerge_SingleArg — один аргумент: merge возвращает его копию (валидная
-// вариадик-форма с минимумом 1 аргумент).
+// TestMerge_SingleArg — single argument: merge returns a copy of it (a valid
+// variadic form with a minimum of 1 argument).
 func TestMerge_SingleArg(t *testing.T) {
 	e := newEngine(t)
 
@@ -113,7 +113,7 @@ func TestMerge_SingleArg(t *testing.T) {
 	}
 }
 
-// TestMerge_ManyArgs — >2 аргументов: слияние слева направо, последний бьёт всех.
+// TestMerge_ManyArgs — >2 arguments: merged left to right, the last wins over all.
 func TestMerge_ManyArgs(t *testing.T) {
 	e := newEngine(t)
 
@@ -138,8 +138,8 @@ func TestMerge_ManyArgs(t *testing.T) {
 	}
 }
 
-// TestMergeList_Flatten — форма merge(list(map)): один аргумент-список map-ов
-// flatten-ится слева направо, last-wins (правый элемент списка бьёт левый).
+// TestMergeList_Flatten — the merge(list(map)) form: a single list-of-maps
+// argument is flattened left to right, last-wins (a later list element beats an earlier).
 func TestMergeList_Flatten(t *testing.T) {
 	e := newEngine(t)
 
@@ -166,10 +166,10 @@ func TestMergeList_Flatten(t *testing.T) {
 	}
 }
 
-// TestMergeList_FromComprehension — основной use-case: коллекция приходит из
-// .map(...) над map (CEL-comprehension даёт СПИСОК map-ов), merge(list) сворачивает
-// её в map «имя→объект». Это паттерн детерминированного users.acl: список из
-// .map() → map, который шаблон range-ит по сортированным ключам.
+// TestMergeList_FromComprehension — the main use case: the collection comes from
+// .map(...) over a map (a CEL comprehension yields a LIST of maps), and merge(list)
+// folds it into a "name→object" map. This is the deterministic users.acl pattern:
+// a list from .map() → a map that the template ranges over by sorted keys.
 func TestMergeList_FromComprehension(t *testing.T) {
 	e := newEngine(t)
 
@@ -198,8 +198,8 @@ func TestMergeList_FromComprehension(t *testing.T) {
 	}
 }
 
-// TestMergeList_LastWinsWithinList — внутри списка last-wins: одинаковый ключ в
-// разных элементах списка → последний бьёт.
+// TestMergeList_LastWinsWithinList — last-wins within a list: the same key in
+// different list elements → the last wins.
 func TestMergeList_LastWinsWithinList(t *testing.T) {
 	e := newEngine(t)
 
@@ -223,8 +223,8 @@ func TestMergeList_LastWinsWithinList(t *testing.T) {
 	}
 }
 
-// TestMergeList_Empty — пустой список → пустой map (валидная вырожденная форма,
-// прецедент: users пуст → users.acl без юзеров).
+// TestMergeList_Empty — an empty list → an empty map (a valid degenerate form;
+// precedent: empty users → users.acl with no users).
 func TestMergeList_Empty(t *testing.T) {
 	e := newEngine(t)
 
@@ -243,8 +243,8 @@ func TestMergeList_Empty(t *testing.T) {
 	}
 }
 
-// TestMergeList_NonMapElement — элемент списка не-map → внятная ошибка (не
-// молчаливое проглатывание). Любой класс ошибки приемлем.
+// TestMergeList_NonMapElement — a non-map list element → a clear error (not
+// silent swallowing). Any error class is acceptable.
 func TestMergeList_NonMapElement(t *testing.T) {
 	e := newEngine(t)
 
@@ -264,8 +264,8 @@ func TestMergeList_NonMapElement(t *testing.T) {
 	}
 }
 
-// TestMergeList_AvailableInFlowControl — list-форма merge() так же доступна в
-// Soul-side flow-control sandbox (та же pure-функция, тот же env).
+// TestMergeList_AvailableInFlowControl — the list form of merge() is likewise
+// available in the Soul-side flow-control sandbox (same pure function, same env).
 func TestMergeList_AvailableInFlowControl(t *testing.T) {
 	e := newFlowControlEngine(t)
 
@@ -286,8 +286,8 @@ func TestMergeList_AvailableInFlowControl(t *testing.T) {
 	}
 }
 
-// TestMerge_VarargsBackCompat — additive-гарантия: varargs-форма merge(m, m...)
-// не сломана введением list-overload-а. Прямой регресс-guard back-compat.
+// TestMerge_VarargsBackCompat — additive guarantee: the varargs form merge(m, m...)
+// is not broken by introducing the list overload. A direct back-compat regression guard.
 func TestMerge_VarargsBackCompat(t *testing.T) {
 	e := newEngine(t)
 
@@ -308,16 +308,16 @@ func TestMerge_VarargsBackCompat(t *testing.T) {
 	}
 }
 
-// TestMerge_TooManyVarargs — КОНТРАКТ merge (помечен, QA-пробел 2026-06-22):
-// varargs-форма объявлена для 1..mergeMaxArity (=8) map-аргументов. >8 аргументов
-// → compile-ошибка no-such-overload (расширяемо без breaking change добавлением
-// overload-ов). Для коллекций произвольного размера предусмотрена форма
-// merge(list(map)) — она НЕ ограничена арностью. Тест фиксирует границу 8: если
-// нужно слить 9+ слоёв, оборачивай их в список и зови merge(list).
+// TestMerge_TooManyVarargs — merge CONTRACT (flagged, QA gap 2026-06-22): the
+// varargs form is declared for 1..mergeMaxArity (=8) map arguments. >8 arguments
+// → a no-such-overload compile error (extensible without a breaking change by
+// adding overloads). For arbitrarily large collections the merge(list(map)) form
+// exists — it is NOT arity-limited. This test pins the boundary at 8: to merge 9+
+// layers, wrap them in a list and call merge(list).
 func TestMerge_TooManyVarargs(t *testing.T) {
 	e := newEngine(t)
 
-	// 9 map-аргументов: mergeMaxArity=8 → нет overload-а на 9.
+	// 9 map arguments: mergeMaxArity=8 → no overload for 9.
 	expr := `merge(input.a, input.b, input.c, input.d, input.e, input.f, input.g, input.h, input.i)`
 	in := map[string]any{}
 	for _, k := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} {
@@ -333,9 +333,9 @@ func TestMerge_TooManyVarargs(t *testing.T) {
 	}
 }
 
-// TestMerge_NonMapArg — не-map аргумент → ошибка (compile-no-such-overload для
-// статически известного типа, либо eval-ошибка при dyn-склейке). Любой класс
-// ошибки приемлем — главное, что merge не молча проглатывает не-map.
+// TestMerge_NonMapArg — a non-map argument → an error (a no-such-overload compile
+// error for a statically known type, or an eval error on dyn concatenation). Any
+// error class is acceptable — the point is that merge does not silently swallow a non-map.
 func TestMerge_NonMapArg(t *testing.T) {
 	e := newEngine(t)
 
@@ -353,9 +353,9 @@ func TestMerge_NonMapArg(t *testing.T) {
 	}
 }
 
-// TestMerge_AvailableInFlowControl — Soul-side flow-control sandbox ([ADR-012(d)])
-// merge() получает: pure-функция без внешнего контекста, симметрия с
-// scenario-выражениями.
+// TestMerge_AvailableInFlowControl — the Soul-side flow-control sandbox
+// ([ADR-012(d)]) gets merge(): a pure function with no external context,
+// symmetric with scenario expressions.
 func TestMerge_AvailableInFlowControl(t *testing.T) {
 	e := newFlowControlEngine(t)
 
@@ -375,22 +375,22 @@ func TestMerge_AvailableInFlowControl(t *testing.T) {
 }
 
 // TestMerge_SecretMaskedSameAsDirectVault — BLOCKER guard ([ADR-010 Amendment
-// 2026-06-22], security/architect): секрет, попавший в merged-map через
-// vault(), маскируется выходным слоем (shared/audit.MaskSecrets) ИДЕНТИЧНО
-// прямому ${ vault(...) } — НЕ протекает в логи/OTel/RunResult.
+// 2026-06-22], security/architect): a secret that entered a merged map via
+// vault() is masked by the output layer (shared/audit.MaskSecrets) IDENTICALLY to
+// a direct ${ vault(...) } — it does NOT leak into logs/OTel/RunResult.
 //
-// Механизм маскинга: vault() резолвится в реальный plaintext keeper-side (Soul
-// получает настоящий секрет), а маскинг — на выходе по (а) sensitive-имени ключа
-// назначения и (б) vault-ref-маркеру. merge() сохраняет ключи верхнего уровня без
-// переименования, поэтому секрет под ключом `password` маскируется так же, как
-// при прямой подстановке. Тест доказывает обе ветви через MaskSecrets.
+// Masking mechanism: vault() resolves to real plaintext keeper-side (the Soul
+// gets the actual secret), and masking happens on output by (a) the destination
+// key's sensitive name and (b) the vault-ref marker. merge() keeps top-level keys
+// without renaming, so a secret under the `password` key is masked the same as by
+// direct substitution. The test proves both branches via MaskSecrets.
 func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t-plaintext"},
 	}}
 	e := newVaultEngine(t, kv)
 
-	// Прямой ${ vault(...) } под ключом `password` — эталон маскинга.
+	// Direct ${ vault(...) } under the `password` key — the masking baseline.
 	direct, err := e.EvalInterpolation("${ vault('secret/redis/admin#password') }", Vars{})
 	if err != nil {
 		t.Fatalf("eval direct vault: %v", err)
@@ -404,7 +404,7 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatal("эталон: прямой vault-секрет НЕ замаскирован MaskSecrets — слой маскинга сломан")
 	}
 
-	// Тот же секрет, но через merge(defaults, {password: vault(...)}).
+	// The same secret, but via merge(defaults, {password: vault(...)}).
 	merged, err := e.EvalInterpolation(
 		`${ merge(input.defaults, {'password': vault('secret/redis/admin#password')}) }`,
 		Vars{Input: map[string]any{
@@ -418,35 +418,35 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 	if !ok {
 		t.Fatalf("merge результат типа %T, want map[string]any", merged)
 	}
-	// Контроль: секрет реально попал в merged-map в plaintext (до маскинга).
+	// Control: the secret really landed in the merged map as plaintext (pre-masking).
 	if mergedMap["password"] != "s3cr3t-plaintext" {
 		t.Fatalf("merged.password = %v, want plaintext-секрет (vault резолвится в merge)", mergedMap["password"])
 	}
 
 	maskedMerged := audit.MaskSecrets(mergedMap)
-	// Главное утверждение: merged-секрет замаскирован ИДЕНТИЧНО прямому.
+	// Main assertion: the merged secret is masked IDENTICALLY to the direct one.
 	if maskedMerged["password"] != maskedDirect["password"] {
 		t.Fatalf("merged.password замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (секрет течёт через merge)",
 			maskedMerged["password"], maskedDirect["password"])
 	}
-	// И буквально: plaintext-секрета в замаскированном выводе нет.
+	// And literally: no plaintext secret remains in the masked output.
 	if maskedMerged["password"] == "s3cr3t-plaintext" {
 		t.Fatal("merged.password НЕ замаскирован — секрет протекает в выходной слой через merge()")
 	}
-	// Несекретные ключи merged-map проходят насквозь (over-masking нет).
+	// Non-secret keys of the merged map pass through (no over-masking).
 	if maskedMerged["maxmemory"] != "256mb" || maskedMerged["appendonly"] != "yes" {
 		t.Fatalf("несекретные ключи замаскированы: %v (over-masking)", maskedMerged)
 	}
 }
 
-// TestMerge_TLSKeyMaskedSameAsDirectVault — BLOCKER masking-guard (redis-
-// консолидация TLS): PEM client-key, попавший в merged-map через
-// merge(defaults, {tls_key: vault(...)}), маскируется выходным слоем
-// (shared/audit.MaskSecrets) ИДЕНТИЧНО прямому ${ vault(...) } под ключом
-// tls_key — НЕ протекает в логи/OTel/RunResult. Доказывает, что merge() границу
-// маскинга для TLS PEM не расширяет/не сужает: tls_key — sensitive-имя ключа
-// (sensitiveKeyRe расширен фрагментом tls[_-]?(key|cert|ca)), значит и под merge,
-// и при прямой подстановке маскинг одинаков. Класс merge-masking-guard.
+// TestMerge_TLSKeyMaskedSameAsDirectVault — BLOCKER masking-guard (redis TLS
+// consolidation): a PEM client-key that entered a merged map via
+// merge(defaults, {tls_key: vault(...)}) is masked by the output layer
+// (shared/audit.MaskSecrets) IDENTICALLY to a direct ${ vault(...) } under the
+// tls_key key — it does NOT leak into logs/OTel/RunResult. Proves that merge()
+// neither widens nor narrows the masking boundary for TLS PEM: tls_key is a
+// sensitive key name (sensitiveKeyRe extended by the fragment tls[_-]?(key|cert|ca)),
+// so masking is the same under merge and by direct substitution. merge-masking-guard class.
 func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 	const pem = "-----BEGIN PRIVATE KEY-----\nMIIE-plaintext\n-----END PRIVATE KEY-----"
 	kv := &stubKV{secrets: map[string]map[string]any{
@@ -454,7 +454,7 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 	}}
 	e := newVaultEngine(t, kv)
 
-	// Эталон: прямой ${ vault(...) } под ключом tls_key.
+	// Baseline: direct ${ vault(...) } under the tls_key key.
 	direct, err := e.EvalInterpolation("${ vault('secret/services/redis/tls#key') }", Vars{})
 	if err != nil {
 		t.Fatalf("eval direct vault: %v", err)
@@ -467,7 +467,7 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatal("эталон: прямой tls_key НЕ замаскирован — слой маскинга TLS сломан (sensitiveKeyRe не ловит tls_key)")
 	}
 
-	// Тот же PEM через merge(defaults, {tls_key/tls_cert/tls_ca: vault(...)}).
+	// The same PEM via merge(defaults, {tls_key/tls_cert/tls_ca: vault(...)}).
 	merged, err := e.EvalInterpolation(
 		`${ merge(input.defaults, {
 			'tls_key':  vault('secret/services/redis/tls#key'),
@@ -482,7 +482,7 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("eval merge+vault: %v", err)
 	}
 	mergedMap := merged.(map[string]any)
-	// Контроль: PEM реально попал в merged-map plaintext (до маскинга).
+	// Control: the PEM really landed in the merged map as plaintext (pre-masking).
 	if mergedMap["tls_key"] != pem {
 		t.Fatalf("merged.tls_key = %v, want PEM plaintext (vault резолвится в merge)", mergedMap["tls_key"])
 	}
@@ -495,7 +495,7 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 	if maskedMerged["tls_key"] == pem {
 		t.Fatal("merged.tls_key НЕ замаскирован — PEM client-key протекает через merge()")
 	}
-	// cert/ca тоже маскируются (secret-имена); несекретный tls-port — насквозь.
+	// cert/ca are masked too (secret names); the non-secret tls-port passes through.
 	if maskedMerged["tls_cert"] == "CERTPEM" || maskedMerged["tls_ca"] == "CAPEM" {
 		t.Fatalf("tls_cert/tls_ca НЕ замаскированы: cert=%v ca=%v", maskedMerged["tls_cert"], maskedMerged["tls_ca"])
 	}
@@ -504,22 +504,23 @@ func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
 	}
 }
 
-// TestMerge_SecretUnderNonSensitiveKeyNotMasked — НЕГАТИВНЫЙ guard инварианта
-// границы: секрет, попавший в merged-map под НЕ-sensitive ключом, выходным слоем
-// НЕ маскируется. vault() резолвится в plaintext keeper-side, в map ложится
-// значение секрета (без `vault:`-маркера) — vault-ref-ветвь MaskSecrets не
-// срабатывает, sensitive-ключевая ветвь не матчит несекретное имя. Это
-// ОТВЕТСТВЕННОСТЬ АВТОРА СЦЕНАРИЯ (класть секрет под secret-именованный ключ), а
-// не merge(). Тест фиксирует, что merge() границу маскинга НЕ расширяет и НЕ
-// сужает — поведение симметрично прямому ${ vault(...) } под тем же ключом.
+// TestMerge_SecretUnderNonSensitiveKeyNotMasked — a NEGATIVE boundary-invariant
+// guard: a secret that entered a merged map under a NON-sensitive key is NOT
+// masked by the output layer. vault() resolves to plaintext keeper-side, and the
+// secret value lands in the map (without a `vault:` marker) — the vault-ref branch
+// of MaskSecrets does not fire, and the sensitive-key branch does not match a
+// non-secret name. This is the SCENARIO AUTHOR's RESPONSIBILITY (to put a secret
+// under a secret-named key), not merge()'s. The test pins that merge() neither
+// widens nor narrows the masking boundary — behavior is symmetric with a direct
+// ${ vault(...) } under the same key.
 func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t-plaintext"},
 	}}
 	e := newVaultEngine(t, kv)
 
-	// Эталон: прямой vault под НЕ-sensitive ключом `maxmemory` тоже НЕ
-	// маскируется — merge() обязан вести себя так же.
+	// Baseline: a direct vault under the NON-sensitive `maxmemory` key is also
+	// NOT masked — merge() must behave the same.
 	direct, err := e.EvalInterpolation("${ vault('secret/redis/admin#password') }", Vars{})
 	if err != nil {
 		t.Fatalf("eval direct vault: %v", err)
@@ -529,7 +530,7 @@ func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
 		t.Fatal("эталон: прямой vault под НЕ-sensitive ключом замаскирован — модель маскинга изменилась")
 	}
 
-	// Тот же секрет через merge() под НЕ-sensitive ключом `maxmemory`.
+	// The same secret via merge() under the NON-sensitive `maxmemory` key.
 	merged, err := e.EvalInterpolation(
 		`${ merge(input.defaults, {'maxmemory': vault('secret/redis/admin#password')}) }`,
 		Vars{Input: map[string]any{
@@ -541,17 +542,17 @@ func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
 	}
 	mergedMap := merged.(map[string]any)
 	maskedMerged := audit.MaskSecrets(mergedMap)
-	// Инвариант: под НЕ-sensitive ключом секрет проходит насквозь (merge не
-	// добавляет маскинг, как и прямой vault). Корректность — на авторе сценария.
+	// Invariant: under a NON-sensitive key the secret passes through (merge adds
+	// no masking, just like a direct vault). Correctness is on the scenario author.
 	if maskedMerged["maxmemory"] != "s3cr3t-plaintext" {
 		t.Fatalf("merged.maxmemory = %v, want plaintext (несекретный ключ — merge не маскирует, симметрия с прямым vault)",
 			maskedMerged["maxmemory"])
 	}
 }
 
-// TestMerge_ZeroArgs — нижняя граница арности: merge() без аргументов →
-// compile-ошибка no-such-overload (overload-ы объявлены для 1..mergeMaxArity,
-// нулевой не объявлен). Симметрично верхней границе TestMerge_TooManyVarargs.
+// TestMerge_ZeroArgs — the lower arity bound: merge() with no arguments → a
+// no-such-overload compile error (overloads are declared for 1..mergeMaxArity;
+// zero is not). Symmetric with the upper bound TestMerge_TooManyVarargs.
 func TestMerge_ZeroArgs(t *testing.T) {
 	e := newEngine(t)
 
@@ -565,10 +566,10 @@ func TestMerge_ZeroArgs(t *testing.T) {
 	}
 }
 
-// TestMerge_UndeclaredInMigration — migration-CEL ([ADR-019]) hermetic:
-// merge() НЕ зарегистрирована (см. buildEngine). Вызов → compile-ошибка
-// no such overload, симметрично glob()/vault()-guard-у миграционного env
-// (минимум surface area, расширение требует отдельного ADR).
+// TestMerge_UndeclaredInMigration — migration-CEL ([ADR-019]) is hermetic:
+// merge() is NOT registered (see buildEngine). A call → a no-such-overload
+// compile error, symmetric with the glob()/vault() guard of the migration env
+// (minimal surface area; extending it requires a separate ADR).
 func TestMerge_UndeclaredInMigration(t *testing.T) {
 	e := newMigrationEngine(t)
 

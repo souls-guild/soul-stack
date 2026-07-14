@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// mapResolver — IncludeResolver поверх in-memory map имя→содержимое. display-путь
-// = имя файла (для тестов этого достаточно: разные имена = разные источники).
+// mapResolver is an IncludeResolver over an in-memory name→content map. The
+// display path = file name (enough for tests: different names = different sources).
 func mapResolver(files map[string]string) IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		data, ok := files[name]
@@ -39,9 +39,9 @@ func TestExpandIncludes_FlatSplice(t *testing.T) {
 		{Module: &ModuleTask{Module: "core.service.running", Params: map[string]any{"name": "x"}}},
 	}
 	files := map[string]string{
-		// Лист-модули несут валидные required-params: после тиража H2 все core
-		// в coremanifest-реестре, и ExpandIncludes прогоняет params-валидацию.
-		// Тест проверяет include-splice, params минимальны но валидны.
+		// Leaf modules carry valid required params: after the H2 rollout all core
+		// modules are in the coremanifest registry and ExpandIncludes runs param
+		// validation. This test checks the include splice; params are minimal but valid.
 		"sub.yml": `
 - name: a
   module: core.git.cloned
@@ -110,7 +110,7 @@ func TestExpandIncludes_ResolveError(t *testing.T) {
 func TestExpandIncludes_ParseErrorInSub(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "bad.yml"}}}
 	files := map[string]string{
-		// Задача без дискриминатора — schema-error парсера задач.
+		// A task without a discriminator — a schema error from the task parser.
 		"bad.yml": "- name: orphan\n  params: {}\n",
 	}
 	_, diags := ExpandIncludes(root, mapResolver(files))
@@ -140,10 +140,10 @@ func TestExpandIncludes_ModifierUnsupported(t *testing.T) {
 }
 
 func TestExpandIncludes_DepthExceeded(t *testing.T) {
-	// Линейная НЕциклическая цепочка include глубже потолка: каждый файл
-	// `level-<n>.yml` подключает `level-<n+1>.yml`, последний — лист-модуль.
-	// Резолвер генерирует содержимое на лету (без 33 фикстур); все display-пути
-	// различны, так что cycle-detection не сработает — упрётся именно в depth.
+	// A linear NON-cyclic include chain deeper than the ceiling: each file
+	// `level-<n>.yml` includes `level-<n+1>.yml`, the last a leaf module.
+	// The resolver generates content on the fly (no 33 fixtures); all display
+	// paths differ, so cycle detection won't fire — it hits the depth limit.
 	depth := maxIncludeDepth + 1
 	resolve := func(name string) ([]byte, string, error) {
 		var n int
@@ -163,11 +163,11 @@ func TestExpandIncludes_DepthExceeded(t *testing.T) {
 	}
 }
 
-// levelChainResolver генерирует линейную НЕциклическую цепочку include
-// `level-<n>.yml` → `level-<n+1>.yml` на лету (без N фикстур). Файл
-// `level-<leafLevel>.yml` — лист-модуль (конец цепочки), всё что глубже не
-// генерируется. Все display-пути различны — cycle-detection не сработает, в
-// потолок упирается только depth-проверка.
+// levelChainResolver generates a linear NON-cyclic include chain
+// `level-<n>.yml` → `level-<n+1>.yml` on the fly (no N fixtures). File
+// `level-<leafLevel>.yml` is the leaf module (end of the chain); nothing deeper
+// is generated. All display paths differ — cycle detection won't fire, only the
+// depth check hits the ceiling.
 func levelChainResolver(leafLevel int) IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		var n int
@@ -181,18 +181,18 @@ func levelChainResolver(leafLevel int) IncludeResolver {
 	}
 }
 
-// TestExpandIncludes_DepthBoundary стережёт off-by-one в `len(stack) >=
-// maxIncludeDepth`. Самая глубокая допустимая цепочка должна пройти, на единицу
-// глубже — упереться в include_depth_exceeded.
+// TestExpandIncludes_DepthBoundary guards the off-by-one in `len(stack) >=
+// maxIncludeDepth`. The deepest allowed chain must pass; one deeper must hit
+// include_depth_exceeded.
 //
-// expandOne для `level-<n>.yml` вызывается с stack длиной ровно n (root-include
-// идёт на nil-stack: level-0 при len 0, level-1 при len 1, …). Depth-проверка
-// `len(stack) >= maxIncludeDepth` стреляет на первом include, у которого stack
-// дорос до maxIncludeDepth, т.е. на `level-<maxIncludeDepth>.yml`. Значит самый
-// глубокий лист, который ещё резолвится, — `level-<maxIncludeDepth-1>.yml`
-// (раскрывается при len(stack) == maxIncludeDepth-1 < maxIncludeDepth), а
-// `level-<maxIncludeDepth>.yml` — первый отвергаемый. Сдвиг проверки на `>`
-// (off-by-one) пропустил бы maxIncludeDepth — этот тест поймает.
+// expandOne for `level-<n>.yml` is called with a stack of length exactly n (the
+// root include runs on a nil stack: level-0 at len 0, level-1 at len 1, …). The
+// depth check `len(stack) >= maxIncludeDepth` fires on the first include whose
+// stack has grown to maxIncludeDepth, i.e. `level-<maxIncludeDepth>.yml`. So the
+// deepest leaf still resolved is `level-<maxIncludeDepth-1>.yml` (expanded at
+// len(stack) == maxIncludeDepth-1 < maxIncludeDepth), and `level-<maxIncludeDepth>.yml`
+// is the first rejected. Shifting the check to `>` (off-by-one) would let
+// maxIncludeDepth through — this test catches that.
 func TestExpandIncludes_DepthBoundary(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -212,7 +212,7 @@ func TestExpandIncludes_DepthBoundary(t *testing.T) {
 					gotExc, tc.wantExc, tc.leafLevel, diags)
 			}
 			if !tc.wantExc {
-				// На границе цепочка раскрывается до единственного листа.
+				// At the boundary the chain expands to a single leaf.
 				if diag.HasErrors(diags) {
 					t.Fatalf("на границе depth=%d unexpected diagnostics: %v", tc.leafLevel, diags)
 				}
@@ -224,11 +224,11 @@ func TestExpandIncludes_DepthBoundary(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_Diamond фиксирует, что один и тот же файл, подключённый в
-// ДВУХ независимых ветках (a→b→leaf и a→c→leaf), — НЕ цикл: cycle-detection
-// смотрит активную цепочку (visited-stack), а не глобальный seen-set. leaf
-// раскрывается ДВАЖДЫ. Регресс-страховка на случай рефактора cycle-detection в
-// глобальный set, который молча схлопнул бы diamond.
+// TestExpandIncludes_Diamond pins that the same file included in TWO independent
+// branches (a→b→leaf and a→c→leaf) is NOT a cycle: cycle detection looks at the
+// active chain (visited stack), not a global seen-set. leaf expands TWICE. A
+// regression guard against refactoring cycle detection into a global set that
+// would silently collapse the diamond.
 func TestExpandIncludes_Diamond(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "a.yml"}}}
 	files := map[string]string{
@@ -253,11 +253,11 @@ func TestExpandIncludes_Diamond(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_NameAllowed — позитивный whitelist: include-задача с
-// заполненным `name:` (и больше ничем) НЕ должна давать
-// include_modifier_unsupported и должна нормально раскрыться. Стережёт регрессию
-// «случайно добавили Name в запрещённые поля» (Name намеренно вне
-// includeModifierReason: имя include-узла — легитимный label, не scope/контроль).
+// TestExpandIncludes_NameAllowed — positive whitelist: an include task with only
+// `name:` filled (and nothing else) must NOT yield include_modifier_unsupported
+// and must expand normally. Guards the "accidentally added Name to the forbidden
+// fields" regression (Name is deliberately outside includeModifierReason: an
+// include node's name is a legitimate label, not scope/control).
 func TestExpandIncludes_NameAllowed(t *testing.T) {
 	root := []Task{{Name: "подключаю install", Include: &IncludeTask{Include: "x.yml"}}}
 	files := map[string]string{"x.yml": "- name: a\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n"}
@@ -273,15 +273,15 @@ func TestExpandIncludes_NameAllowed(t *testing.T) {
 	}
 }
 
-// --- T2: уникальность адресного пространства register ∪ id через include ---
+// --- T2: uniqueness of the register ∪ id address space across include ---
 
-// TestExpandIncludes_DuplicateAddressAcrossInclude — register основного файла и
-// register/id подключённого совпали: per-file validateTaskRefs этот дубль НЕ
-// видит (разные scope), ловит только пост-flatten validateFlatTaskAddresses.
+// TestExpandIncludes_DuplicateAddressAcrossInclude — the main file's register and
+// the included file's register/id collide: per-file validateTaskRefs does NOT see
+// this duplicate (different scopes); only post-flatten validateFlatTaskAddresses catches it.
 func TestExpandIncludes_DuplicateAddressAcrossInclude(t *testing.T) {
 	cases := map[string]struct {
-		root string // адрес на root-задаче (register/id)
-		sub  string // адрес на задаче подключённого файла
+		root string // address on the root task (register/id)
+		sub  string // address on the included file's task
 	}{
 		"register-vs-register": {
 			root: "register: shared",
@@ -324,8 +324,8 @@ func TestExpandIncludes_DuplicateAddressAcrossInclude(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_UniqueAddressAcrossInclude — разные адреса в основном и
-// подключённом файлах раскрываются без дубля.
+// TestExpandIncludes_UniqueAddressAcrossInclude — different addresses in the main
+// and included files expand without a duplicate.
 func TestExpandIncludes_UniqueAddressAcrossInclude(t *testing.T) {
 	rootSrc := `
 - name: root task
@@ -354,10 +354,10 @@ func TestExpandIncludes_UniqueAddressAcrossInclude(t *testing.T) {
 
 // --- conditional-include: carry-through include-when + group-id ---
 
-// TestExpandIncludes_ConditionalWhenCarriesThrough — статический `when:` на include
-// раскрывается без ошибки и протаскивает include-when + один group-id в КАЖДУЮ
-// вклеенную задачу (Task.IncludeWhen/IncludeGroupID). Это сырьё для keeper-side
-// group-drop (render дропает всю группу одним вычислением include-when).
+// TestExpandIncludes_ConditionalWhenCarriesThrough — a static `when:` on an include
+// expands without error and threads the include-when + one group-id into EVERY
+// spliced task (Task.IncludeWhen/IncludeGroupID). This is the raw material for
+// keeper-side group-drop (render drops the whole group in one include-when evaluation).
 func TestExpandIncludes_ConditionalWhenCarriesThrough(t *testing.T) {
 	root := []Task{
 		{Module: &ModuleTask{Module: "core.cmd.shell", Params: map[string]any{"cmd": "true"}}},
@@ -380,11 +380,11 @@ func TestExpandIncludes_ConditionalWhenCarriesThrough(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3 (head + 2 вклеенных)", len(got))
 	}
-	// Head — вне условного include.
+	// Head — outside the conditional include.
 	if got[0].IncludeGroupID != 0 || got[0].IncludeWhen != "" {
 		t.Errorf("head: IncludeGroupID=%d IncludeWhen=%q, want 0/\"\" (безусловная задача)", got[0].IncludeGroupID, got[0].IncludeWhen)
 	}
-	// Обе вклеенные несут один и тот же group-id и include-when.
+	// Both spliced tasks carry the same group-id and include-when.
 	for _, gi := range []int{1, 2} {
 		if got[gi].IncludeGroupID == 0 {
 			t.Errorf("got[%d].IncludeGroupID = 0, want != 0 (условный include)", gi)
@@ -398,8 +398,8 @@ func TestExpandIncludes_ConditionalWhenCarriesThrough(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_ConditionalGroupsDistinct — два условных include дают РАЗНЫЕ
-// group-id (дроп каждого — независимое вычисление своего include-when).
+// TestExpandIncludes_ConditionalGroupsDistinct — two conditional includes yield
+// DIFFERENT group-ids (dropping each is an independent evaluation of its include-when).
 func TestExpandIncludes_ConditionalGroupsDistinct(t *testing.T) {
 	root := []Task{
 		{Include: &IncludeTask{Include: "a.yml"}, When: "input.x"},
@@ -424,12 +424,12 @@ func TestExpandIncludes_ConditionalGroupsDistinct(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_NestedConditionalConjoinsWhen — ★ вложенный условный include:
-// внешний `when: input.x` подключает файл, внутри которого ещё один `when: input.y`.
-// Внутренняя группа получает СВОЙ group-id, а её эффективный include-when —
-// КОНЪЮНКЦИЯ предков `(input.x) && (input.y)`, чтобы дроп внешней группы (input.x:false)
-// каскадил на вложенную, даже если её собственный input.y истинен. Это исправление
-// бага «вложенный conditional-include не каскадит дроп».
+// TestExpandIncludes_NestedConditionalConjoinsWhen — ★ nested conditional include:
+// an outer `when: input.x` includes a file that itself has another `when: input.y`.
+// The inner group gets its OWN group-id, and its effective include-when is the
+// CONJUNCTION of ancestors `(input.x) && (input.y)`, so dropping the outer group
+// (input.x:false) cascades to the nested one even if its own input.y is true. This
+// fixes the "nested conditional-include does not cascade the drop" bug.
 func TestExpandIncludes_NestedConditionalConjoinsWhen(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "outer.yml"}, When: "input.x"}}
 	files := map[string]string{
@@ -449,11 +449,11 @@ func TestExpandIncludes_NestedConditionalConjoinsWhen(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 (outer-direct + inner)", len(got))
 	}
-	// outer-direct → внешняя группа (when input.x — без конъюнкции, верхний уровень).
+	// outer-direct → outer group (when input.x — no conjunction, top level).
 	if got[0].IncludeWhen != "input.x" {
 		t.Errorf("outer-direct.IncludeWhen = %q, want input.x", got[0].IncludeWhen)
 	}
-	// inner → внутренняя группа: эффективный when = конъюнкция предка и собственного.
+	// inner → inner group: effective when = conjunction of ancestor and its own.
 	if got[1].IncludeWhen != "(input.x) && (input.y)" {
 		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\" (конъюнкция предка для каскадного дропа)", got[1].IncludeWhen)
 	}
@@ -462,12 +462,12 @@ func TestExpandIncludes_NestedConditionalConjoinsWhen(t *testing.T) {
 	}
 }
 
-// TestExpandIncludes_NestedConditionalThroughUnconditional — ancestor-when
-// протаскивается СКВОЗЬ безусловный промежуточный include: outer(when:input.x) →
-// mid.yml (без when) → inner(when:input.y). Эффективный include-when вложенной
-// условной группы — конъюнкция `(input.x) && (input.y)` (безусловный mid сам группу
-// не заводит, но накопленный ancestor сохраняется). Задачи самого mid (если бы были)
-// — внешняя группа input.x.
+// TestExpandIncludes_NestedConditionalThroughUnconditional — ancestor-when threads
+// THROUGH an unconditional intermediate include: outer(when:input.x) → mid.yml
+// (no when) → inner(when:input.y). The nested conditional group's effective
+// include-when is the conjunction `(input.x) && (input.y)` (the unconditional mid
+// starts no group of its own, but the accumulated ancestor is kept). mid's own
+// tasks (if any) belong to the outer group input.x.
 func TestExpandIncludes_NestedConditionalThroughUnconditional(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "outer.yml"}, When: "input.x"}}
 	files := map[string]string{
@@ -488,20 +488,20 @@ func TestExpandIncludes_NestedConditionalThroughUnconditional(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 (mid-direct + inner)", len(got))
 	}
-	// mid-direct → внешняя условная группа (input.x): безусловный mid не сбрасывает
-	// накопленный ancestor, и outer-stamp клеймит его задачи своим when.
+	// mid-direct → outer conditional group (input.x): the unconditional mid does
+	// not reset the accumulated ancestor, and the outer stamp brands its tasks with its when.
 	if got[0].IncludeWhen != "input.x" {
 		t.Errorf("mid-direct.IncludeWhen = %q, want input.x (ancestor сквозь безусловный include)", got[0].IncludeWhen)
 	}
-	// inner → конъюнкция предка (input.x) и собственного (input.y).
+	// inner → conjunction of ancestor (input.x) and its own (input.y).
 	if got[1].IncludeWhen != "(input.x) && (input.y)" {
 		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\"", got[1].IncludeWhen)
 	}
 }
 
-// TestExpandIncludes_ThreeLevelConjunction — три уровня условного include:
-// L1(input.a) → L2(input.b) → L3(input.c). Эффективный include-when каждого уровня —
-// нарастающая конъюнкция предков, чтобы ложь ЛЮБОГО предка дропала всех потомков.
+// TestExpandIncludes_ThreeLevelConjunction — three levels of conditional include:
+// L1(input.a) → L2(input.b) → L3(input.c). Each level's effective include-when is
+// the growing conjunction of ancestors, so a false value at ANY ancestor drops all descendants.
 func TestExpandIncludes_ThreeLevelConjunction(t *testing.T) {
 	root := []Task{{Include: &IncludeTask{Include: "l1.yml"}, When: "input.a"}}
 	files := map[string]string{
@@ -530,16 +530,16 @@ func TestExpandIncludes_ThreeLevelConjunction(t *testing.T) {
 			t.Errorf("%s.IncludeWhen = %q, want %q", name, byName[name].IncludeWhen, w)
 		}
 	}
-	// Три РАЗНЫХ group-id (дроп каждого уровня — своё вычисление своей конъюнкции).
+	// Three DIFFERENT group-ids (dropping each level is its own evaluation of its conjunction).
 	ids := map[int]bool{byName["t1"].IncludeGroupID: true, byName["t2"].IncludeGroupID: true, byName["t3"].IncludeGroupID: true}
 	if len(ids) != 3 {
 		t.Errorf("ожидались 3 различных group-id, got %v", ids)
 	}
 }
 
-// TestExpandIncludes_DynamicWhenRejected — динамический when на include
-// (register./soulprint.) → include_when_dynamic_unsupported. include раскрывается ДО
-// Stratify, register/soulprint недоступны.
+// TestExpandIncludes_DynamicWhenRejected — a dynamic when on an include
+// (register./soulprint.) → include_when_dynamic_unsupported. The include expands
+// BEFORE Stratify, so register/soulprint are unavailable.
 func TestExpandIncludes_DynamicWhenRejected(t *testing.T) {
 	cases := map[string]string{
 		"register":  "register.probe.changed",
@@ -558,14 +558,15 @@ func TestExpandIncludes_DynamicWhenRejected(t *testing.T) {
 	}
 }
 
-// TestConditionalInclude_CrossFileRegisterRejectedOffline — фундамент безопасности
-// group-drop: внешний `onchanges:` на register, эмитнутый в подключённом файле, уже
-// отвергается ОФЛАЙН per-file validateTaskRefs (unknown_register_reference) при
-// загрузке потребляющего файла — его register-scope не видит чужой файл. Значит к
-// фазе render такой scenario не доживает, и дроп условного include НЕ может оставить
-// dangling external onchanges → ErrOnChangesUnknownRegister на keeper-е не возникает.
+// TestConditionalInclude_CrossFileRegisterRejectedOffline — the safety foundation of
+// group-drop: an external `onchanges:` on a register emitted in an included file is
+// already rejected OFFLINE by per-file validateTaskRefs (unknown_register_reference)
+// when loading the consuming file — its register scope does not see another file.
+// So such a scenario never reaches the render phase, and dropping a conditional
+// include cannot leave a dangling external onchanges → ErrOnChangesUnknownRegister
+// never arises on the keeper.
 func TestConditionalInclude_CrossFileRegisterRejectedOffline(t *testing.T) {
-	// Главный файл: onchanges на register, который объявлен ТОЛЬКО в included-файле.
+	// Main file: onchanges on a register declared ONLY in the included file.
 	mainSrc := `
 - name: external consumer
   module: core.cmd.shell

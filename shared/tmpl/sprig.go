@@ -7,53 +7,50 @@ import (
 	"github.com/Masterminds/sprig/v3"
 )
 
-// allowedSprig — закрытый allowlist sprig-функций по [templating.md §3.3].
-// Подключение через whitelist, не denylist: всё, чего нет в этом наборе,
-// шаблону недоступно. При upgrade sprig allowlist пересматривается явно —
-// новые функции по умолчанию запрещены.
+// allowedSprig is the closed allowlist of sprig functions per [templating.md §3.3].
+// Whitelist, not denylist: anything not in this set is unavailable to templates. On a
+// sprig upgrade the allowlist is reviewed explicitly — new functions are denied by default.
 //
-// Сознательно исключены (вне набора, для справки — denylist в
-// [templating.md §3.3]):
-//   - окружение/исполнение/сеть: env, expandenv, exec, getHostByName;
-//   - криптогенерация: derivePassword, genCA, genPrivateKey,
+// Deliberately excluded (out of the set, for reference — denylist in [templating.md §3.3]):
+//   - environment/execution/network: env, expandenv, exec, getHostByName;
+//   - crypto generation: derivePassword, genCA, genPrivateKey,
 //     genSelfSignedCert, genSignedCert, buildCustomCert;
-//   - случайность (недетерминизм рендера): randAlphaNum, randAlpha,
+//   - randomness (non-deterministic render): randAlphaNum, randAlpha,
 //     randAscii, randNumeric, randBytes;
-//   - метапрограммирование (SSTI): tpl, include.
+//   - metaprogramming (SSTI): tpl, include.
 //
 // [templating.md §3.3]: docs/templating.md
 var allowedSprig = []string{
 	// Nil-handling.
 	"default", "coalesce", "empty",
 
-	// Строки.
+	// Strings.
 	"upper", "lower", "trim", "trimAll", "trimPrefix", "trimSuffix",
 	"quote", "squote", "replace", "repeat", "split", "splitList", "join",
 
-	// Конверсия.
-	// toYaml/fromYaml в этот список НЕ входят: их нет в upstream sprig
-	// (Helm-only). Реализованы как собственные функции Soul Stack в
-	// yaml_funcs.go ([customFuncs]) и подмешиваются в FuncMap отдельно
+	// Conversion.
+	// toYaml/fromYaml are NOT in this list: they are absent from upstream sprig
+	// (Helm-only). They are implemented as Soul Stack's own functions in
+	// yaml_funcs.go ([customFuncs]) and mixed into the FuncMap separately
 	// ([templating.md §3.3]).
 	"toString", "int", "int64", "float64",
 	"toJson", "fromJson",
 
-	// Арифметика.
+	// Arithmetic.
 	"add", "sub", "mul", "div", "mod",
 
-	// Base64 / хэш (без секретогенерации).
+	// Base64 / hash (no secret generation).
 	"b64enc", "b64dec", "sha256sum",
 }
 
-// buildFuncMap собирает FuncMap для Engine: функции из sprig-allowlist-а
-// (взятые из sprig.TxtFuncMap()) плюс собственные функции Soul Stack
-// ([customFuncs] — toYaml/fromYaml, которых в sprig нет). Встроенные
-// функции Go text/template (eq, index, len, printf, …) добавляются
-// движком автоматически и в этот набор не входят ([templating.md §3.3]).
+// buildFuncMap builds the FuncMap for Engine: functions from the sprig allowlist (taken
+// from sprig.TxtFuncMap()) plus Soul Stack's own functions ([customFuncs] —
+// toYaml/fromYaml, which sprig lacks). Go text/template built-ins (eq, index, len,
+// printf, …) are added by the engine automatically and are not in this set
+// ([templating.md §3.3]).
 //
-// Если имя из allowlist-а отсутствует в текущей версии sprig — это
-// расхождение allowlist-а со сборкой, возвращается ошибка (баг, не
-// пользовательский ввод).
+// If an allowlist name is absent from the current sprig version, that is an
+// allowlist/build mismatch and an error is returned (a bug, not user input).
 func buildFuncMap() (template.FuncMap, error) {
 	src := sprig.TxtFuncMap()
 	custom := customFuncs()

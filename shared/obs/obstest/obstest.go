@@ -1,12 +1,12 @@
-// Package obstest — test-helper для скрейпа Prometheus-метрик в unit-тестах.
+// Package obstest is a test helper for scraping Prometheus metrics in unit tests.
 //
-// Зависит только от [prometheus] + testing, НЕ от shared/obs ([ADR-011]):
-// сигнатура принимает [prometheus.Gatherer] (caller передаёт reg.Gatherer()),
-// поэтому helper используется и из white-box тестов `package obs`, и из
-// external-пакетов (keeper/internal/...) без import-cycle.
+// It depends only on [prometheus] + testing, NOT on shared/obs ([ADR-011]):
+// the signature takes a [prometheus.Gatherer] (the caller passes reg.Gatherer()),
+// so the helper is usable both from white-box tests in `package obs` and from
+// external packages (keeper/internal/...) without an import cycle.
 //
-// Технический suffix-пакет в духе stdlib `httptest`/`iotest`: не сущность
-// словаря Soul Stack, а тест-инструментарий рядом с инструментируемым кодом.
+// A technical suffix package in the spirit of stdlib `httptest`/`iotest`: not a
+// Soul Stack vocabulary entity, but test tooling next to the instrumented code.
 //
 // [ADR-011]: ../../../docs/architecture.md
 package obstest
@@ -21,12 +21,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Scrape рендерит текущий Prometheus-snapshot переданного Gatherer-а в
-// exposition-формате (text/plain; version=0.0.4) и возвращает тело как
-// строку. На любую ошибку рендера/скрейпа — t.Fatal.
+// Scrape renders the current Prometheus snapshot of the given Gatherer in
+// exposition format (text/plain; version=0.0.4) and returns the body as a
+// string. Any render/scrape error → t.Fatal.
 //
-// Caller передаёт g = reg.Gatherer() (obs.Registry.Gatherer); за счёт работы
-// через интерфейс [prometheus.Gatherer] пакет не тянет shared/obs.
+// The caller passes g = reg.Gatherer() (obs.Registry.Gatherer); by working
+// through the [prometheus.Gatherer] interface the package does not pull in shared/obs.
 func Scrape(t testing.TB, g prometheus.Gatherer) string {
 	t.Helper()
 	h := promhttp.HandlerFor(g, promhttp.HandlerOpts{ErrorHandling: promhttp.HTTPErrorOnError})
@@ -39,7 +39,7 @@ func Scrape(t testing.TB, g prometheus.Gatherer) string {
 	return rec.Body.String()
 }
 
-// Contains — удобная обёртка: true, если скрейп Gatherer-а содержит substr.
+// Contains is a convenience wrapper: true if the Gatherer's scrape contains substr.
 func Contains(t testing.TB, g prometheus.Gatherer, substr string) bool {
 	t.Helper()
 	return strings.Contains(Scrape(t, g), substr)

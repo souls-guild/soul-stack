@@ -1,9 +1,9 @@
 package audit
 
-// Defense-in-depth guard (ADR-064 митигация b, NIM-11): даже если plaintext-
-// секрет случайно попал бы в audit/OTel-payload под ключом secret/credentials/
-// *token, MaskSecrets маскирует его по имени ключа. Маркер plaintext_ingested
-// (без sensitive-фрагмента) НЕ маскируется — audit-сигнал сохраняется.
+// Defense-in-depth guard (ADR-064 mitigation b, NIM-11): even if a plaintext
+// secret accidentally reached an audit/OTel payload under a secret/credentials/
+// *token key, MaskSecrets masks it by key name. The plaintext_ingested marker
+// (no sensitive fragment) is NOT masked — the audit signal is preserved.
 
 import "testing"
 
@@ -22,7 +22,7 @@ func TestSecretWritepathKeysMasked(t *testing.T) {
 			t.Fatalf("ключ %q не замаскирован", k)
 		}
 	}
-	// credentials — вложенный map; MaskSecrets замаскировал сам ключ целиком.
+	// credentials — a nested map; MaskSecrets masked the whole key.
 	if masked["credentials"] != maskedValue {
 		t.Fatalf("credentials должен быть замаскирован целиком, got %v", masked["credentials"])
 	}

@@ -13,7 +13,7 @@ func TestTailBuffer(t *testing.T) {
 	if got := tb.String(); got != "456789AB" {
 		t.Errorf("tail = %q, want 456789AB", got)
 	}
-	// Большой write — должен обрезаться до последних max байт.
+	// Large write — must be truncated to the last max bytes.
 	tb2 := newTailBuffer(4)
 	_, _ = tb2.Write([]byte("0123456789"))
 	if got := tb2.String(); got != "6789" {

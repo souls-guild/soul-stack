@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// bytesTestEnv — байты артефакта в памяти + согласованный валидный SigilRecord
-// (install-flow core.module.installed, ADR-065: verify ДО материализации).
+// bytesTestEnv — in-memory artifact bytes + a consistent valid SigilRecord
+// (install-flow core.module.installed, ADR-065: verify BEFORE materialization).
 func setupBytesEnv(t *testing.T) ([]byte, *SigilRecord, *AnchorSet) {
 	t.Helper()
 	const (

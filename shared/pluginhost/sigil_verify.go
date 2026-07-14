@@ -5,30 +5,30 @@ import (
 	"fmt"
 )
 
-// Verify-замена TOFU на Sigil (ADR-026, slice S6b). До этого slice-а первая
-// загрузка бинаря плагина доверялась «как есть» (TOFU) — это закрытый gap
-// first-load: malicious-бинарь без подписи получал управление. Здесь TOFU-ветка
-// заменена на fail-closed verify против печати доверия Sigil, доехавшей до Soul-а
-// broadcast-ом от Keeper-а.
+// Verify replaces TOFU with Sigil (ADR-026, slice S6b). Before this slice, the first
+// load of a plugin binary was trusted "as is" (TOFU) — a closed first-load gap: an
+// unsigned malicious binary got control. Here the TOFU branch is replaced with a
+// fail-closed verify against the Sigil trust seal delivered to the Soul by broadcast
+// from the Keeper.
 //
-// Этот файл держит DI-контракт verify, по которому shared/pluginhost получает
-// допуски и trust-anchor БЕЗ зависимости от keeper-proto: узкий [SigilRecord] +
-// интерфейс [SigilLookup]. Soul-side адаптер (soul/) мапит keeperv1.PluginSigil
-// → SigilRecord, не протаскивая proto/gen/go/keeper/v1 в shared.
+// This file holds the verify DI contract by which shared/pluginhost gets grants and
+// the trust anchor WITHOUT depending on keeper-proto: the narrow [SigilRecord] + the
+// [SigilLookup] interface. The Soul-side adapter (soul/) maps keeperv1.PluginSigil →
+// SigilRecord without dragging proto/gen/go/keeper/v1 into shared.
 
-// SigilRecord — verify-DTO одной печати доверия Sigil в форме, нужной
-// shared/pluginhost для верификации. Узкая проекция keeperv1.PluginSigil:
-// shared НЕ импортирует keeper-proto, Soul-side адаптер заполняет эту структуру.
+// SigilRecord is the verify DTO of one Sigil trust seal in the form shared/pluginhost
+// needs for verification. A narrow projection of keeperv1.PluginSigil: shared does
+// NOT import keeper-proto, the Soul-side adapter fills this struct.
 //
-// Поля симметричны подписываемому блоку [BuildSigilBlock]:
-//   - Namespace / Name / Ref — идентичность допуска (Ref operator-asserted,
-//     с диском не сверяется, входит в блок подписи);
-//   - BinarySHA256hex — допущенный хеш бинаря (64 нижних hex-символа), сверяется
-//     с фактическим digest-ом бинаря на диске;
-//   - Signature — сырые байты ed25519-подписи блока (64 байта);
-//   - Manifest — СЫРЫЕ байты manifest.yaml из транспорта (M1), которые verify
-//     прогоняет через [NormalizeManifestBytes] перед хешем (S3↔S6-инвариант:
-//     НЕ файл с диска, иначе хеш разъедется с подписью Keeper-а).
+// Fields are symmetric to the signed block [BuildSigilBlock]:
+//   - Namespace / Name / Ref — grant identity (Ref is operator-asserted, not checked
+//     against disk, included in the signed block);
+//   - BinarySHA256hex — the allowed binary hash (64 lowercase hex chars), checked
+//     against the actual digest of the binary on disk;
+//   - Signature — raw bytes of the block's ed25519 signature (64 bytes);
+//   - Manifest — RAW manifest.yaml bytes from transport (M1), which verify runs
+//     through [NormalizeManifestBytes] before hashing (S3↔S6 invariant: NOT the file
+//     from disk, otherwise the hash diverges from the Keeper's signature).
 type SigilRecord struct {
 	Namespace       string
 	Name            string
@@ -38,52 +38,53 @@ type SigilRecord struct {
 	Manifest        []byte
 }
 
-// SigilLookup — поверхность чтения активного допуска по (namespace, name).
-// Single-slot: на пару допущен ровно один активный Sigil (ADR-026(g)), поэтому
-// ключ без ref. Реализуется Soul-side адаптером поверх runtime-кеша Sigil-ов
-// (soul/internal/sigilcache); nil-результат = допуска нет → verify fail-closed
-// (reason no_sigil).
+// SigilLookup is the read surface for the active grant by (namespace, name).
+// Single-slot: exactly one active Sigil is allowed per pair (ADR-026(g)), so the key
+// has no ref. Implemented by the Soul-side adapter over the runtime Sigil cache
+// (soul/internal/sigilcache); a nil result = no grant → verify fail-closed (reason
+// no_sigil).
 type SigilLookup interface {
 	Get(namespace, name string) *SigilRecord
 }
 
-// VerifyReason — машинно-различимая причина отказа Sigil-verify (ADR-026,
-// event plugin.verify_failed). Каждое значение → fail-closed: плагин НЕ
-// запускается (G-sigil-5, без allow-TOFU флага).
+// VerifyReason is a machine-distinguishable reason for a Sigil-verify failure
+// (ADR-026, event plugin.verify_failed). Every value → fail-closed: the plugin does
+// NOT run (G-sigil-5, without an allow-TOFU flag).
 type VerifyReason string
 
 const (
-	// VerifyReasonNoSigil — допуск для (namespace, name) не доехал до Soul-а
-	// (rec == nil). НЕ «ошибка → допустить»: не-допущенный плагин = «не
-	// допущен», запускать нельзя.
+	// VerifyReasonNoSigil — the grant for (namespace, name) did not reach the Soul
+	// (rec == nil). NOT "error → allow": an ungranted plugin = "not granted", must
+	// not run.
 	VerifyReasonNoSigil VerifyReason = "no_sigil"
-	// VerifyReasonNoTrustAnchor — на Soul-е нет trust-anchor-а Sigil (pubkey
-	// nil): Sigil не настроен на Keeper-е, проверять подпись нечем.
+	// VerifyReasonNoTrustAnchor — the Soul has no Sigil trust anchor (pubkey nil):
+	// Sigil is not configured on the Keeper, nothing to verify the signature with.
 	VerifyReasonNoTrustAnchor VerifyReason = "no_trust_anchor"
-	// VerifyReasonDigestMismatch — фактический digest бинаря на диске не
-	// совпал с допущенным хешем (binary_sha256 в Sigil).
+	// VerifyReasonDigestMismatch — the actual digest of the binary on disk did not
+	// match the allowed hash (binary_sha256 in the Sigil).
 	VerifyReasonDigestMismatch VerifyReason = "digest_mismatch"
-	// VerifyReasonBadSignature — подпись Sigil не прошла проверку trust-anchor-ом
-	// (подменён manifest/бинарь/ref или ротация ключа без пересоздания допуска).
+	// VerifyReasonBadSignature — the Sigil signature failed verification by the trust
+	// anchor (manifest/binary/ref tampered with, or key rotation without recreating
+	// the grant).
 	VerifyReasonBadSignature VerifyReason = "bad_signature"
 )
 
-// ErrSigilVerify — sentinel-обёртка любого fail-closed-отказа Sigil-verify.
-// Caller-ы отличают tamper/no-trust от прочих I/O-ошибок Spawn через
-// errors.Is(err, ErrSigilVerify); конкретную причину достают через
-// errors.As(err, &*VerifyError) и поле [VerifyError.Reason].
+// ErrSigilVerify is a sentinel wrapping any fail-closed Sigil-verify failure. Callers
+// distinguish tamper/no-trust from other Spawn I/O errors via
+// errors.Is(err, ErrSigilVerify); the specific reason comes via
+// errors.As(err, &*VerifyError) and the [VerifyError.Reason] field.
 var ErrSigilVerify = errors.New("pluginhost: sigil verification failed")
 
-// VerifyError — детализированный отказ Sigil-verify: причина + actionable-
-// сообщение для оператора (event plugin.verify_failed, ADR-026). Оборачивает
-// [ErrSigilVerify] для errors.Is.
+// VerifyError is a detailed Sigil-verify failure: reason + an actionable message for
+// the operator (event plugin.verify_failed, ADR-026). Wraps [ErrSigilVerify] for
+// errors.Is.
 type VerifyError struct {
-	// Reason — машинно-различимая причина (для метрик/логов/тестов).
+	// Reason — machine-distinguishable reason (for metrics/logs/tests).
 	Reason VerifyReason
-	// Namespace / Name — адрес плагина, который не прошёл verify.
+	// Namespace / Name — address of the plugin that failed verify.
 	Namespace string
 	Name      string
-	// Hint — человекочитаемая actionable-подсказка оператору.
+	// Hint — a human-readable actionable hint for the operator.
 	Hint string
 }
 
@@ -93,9 +94,9 @@ func (e *VerifyError) Error() string {
 
 func (e *VerifyError) Unwrap() error { return ErrSigilVerify }
 
-// verifyErrorFor собирает [VerifyError] с actionable-подсказкой под каждую
-// причину. ns/name/ref печатаются в подсказке, чтобы оператор мог скопировать
-// команду допуска без догадок.
+// verifyErrorFor builds a [VerifyError] with an actionable hint for each reason.
+// ns/name/ref are printed in the hint so the operator can copy the grant command
+// without guessing.
 func verifyErrorFor(reason VerifyReason, namespace, name, ref string) *VerifyError {
 	var hint string
 	switch reason {

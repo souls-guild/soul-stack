@@ -2,52 +2,52 @@ package config
 
 import "time"
 
-// Лимиты размера ApplyRequest (контракт Keeper↔Soul по EventStream, ADR-012).
+// ApplyRequest size limits (Keeper↔Soul EventStream contract, ADR-012).
 //
-// Поле задаётся в МиБ симметрично `logging.rotation.max_size_mb` (один стиль
-// size-полей в проекте, без отдельного human-readable парсера). Обе стороны
-// делят дефолт и минимум: Keeper-send-лимит обязан быть ≤ Soul-recv-лимиту,
-// дефолты совпадают (8 MiB), чтобы из коробки Keeper не отправлял того, что
-// Soul отвергнет.
+// The field is in MiB, symmetric with `logging.rotation.max_size_mb` (one style
+// of size fields in the project, no separate human-readable parser). Both sides
+// share default and minimum: the Keeper-send limit must be ≤ the Soul-recv
+// limit, and the defaults match (8 MiB) so out of the box Keeper never sends
+// what Soul would reject.
 const (
-	// DefaultMaxApplySizeMB — дефолт обоих лимитов (Keeper-send и Soul-recv)
-	// при опущении поля. 8 MiB > gRPC-дефолта recv (4 MiB), которого мало для
-	// крупного Destiny.
+	// DefaultMaxApplySizeMB is the default for both limits (Keeper-send and
+	// Soul-recv) when the field is omitted. 8 MiB > the gRPC recv default
+	// (4 MiB), which is too small for a large Destiny.
 	DefaultMaxApplySizeMB = 8
 
-	// MinMaxApplySizeMB — нижняя граница валидации. Меньше 1 MiB не пропускаем:
-	// даже скромная пачка RenderedTask с inline-content шаблонов укладывается в
-	// единицы МиБ, а сабмегабайтный лимит превратил бы любой реальный Destiny в
-	// fail-fast (Keeper) / отказ (Soul).
+	// MinMaxApplySizeMB is the validation floor. Below 1 MiB is rejected: even a
+	// modest batch of RenderedTask with inline template content fits in single
+	// MiB, whereas a sub-megabyte limit would turn any real Destiny into
+	// fail-fast (Keeper) / rejection (Soul).
 	MinMaxApplySizeMB = 1
 
-	// bytesPerMiB — множитель МиБ→байты для grpc-call-опций.
+	// bytesPerMiB converts MiB→bytes for grpc call options.
 	bytesPerMiB = 1024 * 1024
 )
 
-// KeeperConfig — типизированное представление `keeper.yml`.
+// KeeperConfig is the typed representation of `keeper.yml`.
 //
-// Нормативная спека блоков — [docs/keeper/config.md]. Каждый блок —
-// отдельная struct ниже. Все поля типа `duration` хранятся как строки и
-// валидируются в semantic-фазе (`time.ParseDuration`), enum — как строки
-// со списком допустимых значений в schema-фазе.
+// Normative block spec — [docs/keeper/config.md]. Each block is a separate
+// struct below. All `duration` fields are stored as strings and validated in
+// the semantic phase (`time.ParseDuration`); enums as strings with an
+// allowed-values list in the schema phase.
 //
-// `reactor:` сознательно отсутствует — на данный момент имя не зафиксировано
-// ([open Q №23](docs/architecture.md)), парсер обязан отвергать ключ через
-// `unknown_key` в strict-режиме.
+// `reactor:` is deliberately absent — the name is not yet fixed
+// ([open Q №23](docs/architecture.md)); the parser must reject the key via
+// `unknown_key` in strict mode.
 //
-// `rbac:` тоже отсутствует: RBAC-каталог перенесён в Postgres (ADR-028(g)
-// hard-cut), управление — через `role.*` API/MCP. Ключ `rbac:` в keeper.yml
-// отвергается тем же `unknown_key` (поля в структуре нет → reflect-walker
-// в `walk.go` поднимает диагностику).
+// `rbac:` is also absent: the RBAC catalog moved to Postgres (ADR-028(g)
+// hard-cut), managed via the `role.*` API/MCP. An `rbac:` key in keeper.yml is
+// rejected by the same `unknown_key` (no struct field → the reflect-walker in
+// `walk.go` raises a diagnostic).
 //
-// `services:` / `default_destiny_source:` / `default_module_source:` тоже
-// отсутствуют: реестр Service-ов и well-known скаляры перенесены в Postgres
-// (`service_registry` + `keeper_settings`, ADR-029 hard-cut), управление — через
-// `service.*` API/MCP. Источник правды — БД; потребители (scenario service-
-// registry / destiny-source) читают runtime-снимок `serviceregistry.Holder`.
-// `default_module_source:` упразднён без замены (потребителя не было). Все три
-// ключа отвергаются тем же `unknown_key`.
+// `services:` / `default_destiny_source:` / `default_module_source:` are also
+// absent: the Service registry and well-known scalars moved to Postgres
+// (`service_registry` + `keeper_settings`, ADR-029 hard-cut), managed via the
+// `service.*` API/MCP. Source of truth is the DB; consumers (scenario service-
+// registry / destiny-source) read the runtime snapshot `serviceregistry.Holder`.
+// `default_module_source:` was dropped without replacement (no consumer). All
+// three keys are rejected by the same `unknown_key`.
 type KeeperConfig struct {
 	KID string `yaml:"kid"`
 
@@ -66,211 +66,221 @@ type KeeperConfig struct {
 	Sigil         *KeeperSigil   `yaml:"sigil,omitempty"`
 	Audit         *KeeperAudit   `yaml:"audit,omitempty"`
 
-	// SecretIngest — dual-mode приём plaintext-секретов оператора (ADR-064,
-	// NIM-11). Опц.; отсутствие/nil == secure default (plaintext запрещён,
-	// принимаются только *_ref). См. [KeeperSecretIngest].
+	// SecretIngest is dual-mode ingest of operator plaintext secrets (ADR-064,
+	// NIM-11). Optional; absent/nil == secure default (plaintext forbidden, only
+	// *_ref accepted). See [KeeperSecretIngest].
 	SecretIngest *KeeperSecretIngest `yaml:"secret_ingest,omitempty"`
 
-	// Push — pilot wire-up SshDispatcher (S6, 2026-05-26). Pilot-path: inline
-	// `targets[]` + `providers[]` + single `host_ca_ref` в keeper.yml,
-	// single-provider routing. Long-term canon (S7): миграция в souls.ssh_target
-	// jsonb + PG-table push_providers + push.host_ca_refs[] — отдельный slice,
-	// этот блок будет deprecated сразу после миграции. Опц.: при отсутствии
-	// блока (или пустых targets/host_ca_ref) push-orchestrator не поднимается —
-	// `/v1/push/*` и `keeper.push.apply` возвращают «не сконфигурировано».
+	// Push is the pilot wire-up of SshDispatcher (S6, 2026-05-26). Pilot path:
+	// inline `targets[]` + `providers[]` + single `host_ca_ref` in keeper.yml,
+	// single-provider routing. Long-term canon (S7): migration to
+	// souls.ssh_target jsonb + push_providers PG table + push.host_ca_refs[] —
+	// a separate slice, after which this block is deprecated. Optional: without
+	// the block (or with empty targets/host_ca_ref) the push orchestrator does
+	// not start — `/v1/push/*` and `keeper.push.apply` return "not configured".
 	Push *KeeperPush `yaml:"push,omitempty"`
 
-	// SigilAnchorsReloadInterval — период TTL-fallback-перечита набора
-	// trust-anchor-ключей подписи Sigil (ADR-026(h), R3 known-gap). Канал
-	// `sigil:anchors-changed` (Redis pub/sub) — best-effort: пропущенный сигнал
-	// оставил бы отставшую ноду со старым набором якорей до рестарта (fail-open
-	// при Retire). Периодический re-read (`reloadAnchors` по тикеру, образец
-	// rbac.DefaultRefreshInterval / Summons poll-fallback) самоисцеляет
-	// пропущенный сигнал за интервал. Тип `duration`, пустое/0 → дефолт
-	// [DefaultSigilAnchorsReloadInterval] (30s). Валидация формата — semantic-фаза,
-	// диапазон (>0) — резолвом дефолта в daemon (стиль `acolyte_*`).
+	// SigilAnchorsReloadInterval is the TTL-fallback re-read period for the set
+	// of Sigil signing trust-anchor keys (ADR-026(h), R3 known-gap). The
+	// `sigil:anchors-changed` channel (Redis pub/sub) is best-effort: a missed
+	// signal would leave a lagging node with the old anchor set until restart
+	// (fail-open on Retire). A periodic re-read (`reloadAnchors` on a ticker,
+	// modeled on rbac.DefaultRefreshInterval / Summons poll-fallback) self-heals
+	// a missed signal within the interval. Type `duration`, empty/0 → default
+	// [DefaultSigilAnchorsReloadInterval] (30s). Format validation — semantic
+	// phase; range (>0) — via default resolution in the daemon (style `acolyte_*`).
 	SigilAnchorsReloadInterval string        `yaml:"sigil_anchors_reload_interval,omitempty"`
 	HotReload                  *HotReload    `yaml:"hot_reload,omitempty"`
 	Reaper                     *KeeperReaper `yaml:"reaper,omitempty"`
 
-	// CadenceScheduler — Conductor, leader-elected исполнитель Cadence-расписаний
-	// (ADR-048). Свой tick-interval, независимый от reaper.interval (scheduling-
-	// домен Cadence требует частого тика ~15–30s, cleanup-домен Reaper — редкого
-	// ~1h). Default-ON при наличии Redis (footgun-guard ADR-048 §5: Cadence без
-	// работающего планировщика молча не спавнит Voyage). Опц.: при отсутствии
-	// блока Conductor поднимается с дефолтами, если настроен Redis.
+	// CadenceScheduler is the Conductor, the leader-elected executor of Cadence
+	// schedules (ADR-048). Its own tick interval, independent of reaper.interval
+	// (Cadence's scheduling domain needs a frequent tick ~15–30s, Reaper's
+	// cleanup domain a rare ~1h). Default-ON when Redis is present (footgun-guard
+	// ADR-048 §5: Cadence without a working scheduler silently never spawns
+	// Voyage). Optional: without the block Conductor starts with defaults if
+	// Redis is configured.
 	CadenceScheduler *KeeperCadenceScheduler `yaml:"cadence_scheduler,omitempty"`
 
-	// Acolytes — число воркеров пула исполнения apply (ADR-027, Acolyte).
-	// Feature-flag: 0 (default) — пул не поднимается, исполнение идёт прежним
-	// run-goroutine-путём scenario-runner-а; >0 — пул активен. Cutover на пул
-	// — отдельный slice (Phase 1.4). Валидация (>= 0) — schema-фаза.
+	// Acolytes is the number of workers in the apply execution pool (ADR-027,
+	// Acolyte). Feature flag: 0 (default) — pool does not start, execution runs
+	// the old scenario-runner run-goroutine path; >0 — pool active. Cutover to
+	// the pool is a separate slice (Phase 1.4). Validation (>= 0) — schema phase.
 	Acolytes int `yaml:"acolytes,omitempty"`
 
-	// AcolyteLease — TTL Ward-захвата planned-задания (ADR-027(d):
-	// claim_expires_at = NOW()+lease). Просроченный Ward переклеймит
-	// recovery-скан (Phase 2). Тип `duration` (Go-`time.ParseDuration` либо
-	// `<N>d`), пустое → дефолт [DefaultAcolyteLease] (30s). Валидация формата —
-	// semantic-фаза, диапазон (>0) — после парсинга в daemon.
+	// AcolyteLease is the TTL of the Ward claim on a planned job (ADR-027(d):
+	// claim_expires_at = NOW()+lease). An expired Ward is re-claimed by the
+	// recovery scan (Phase 2). Type `duration` (Go `time.ParseDuration` or
+	// `<N>d`), empty → default [DefaultAcolyteLease] (30s). Format validation —
+	// semantic phase; range (>0) — after parsing in the daemon.
 	AcolyteLease string `yaml:"acolyte_lease,omitempty"`
 
-	// AcolyteBatch — максимум planned-заданий, захватываемых одним claim-тиком
-	// (LIMIT claim-запроса, ADR-027(d)). Воркеры разных инстансов делят очередь
-	// через FOR UPDATE SKIP LOCKED — батч лишь ограничивает аппетит одного тика.
-	// 0/опущено → дефолт [DefaultAcolyteBatch] (10). Валидация (>= 0) —
-	// schema-фаза.
+	// AcolyteBatch is the max number of planned jobs claimed in one claim tick
+	// (claim-query LIMIT, ADR-027(d)). Workers of different instances share the
+	// queue via FOR UPDATE SKIP LOCKED — the batch only caps one tick's appetite.
+	// 0/omitted → default [DefaultAcolyteBatch] (10). Validation (>= 0) — schema
+	// phase.
 	AcolyteBatch int `yaml:"acolyte_batch,omitempty"`
 
-	// AcolytePollInterval — период poll-tick-а воркера: fallback к Summons-сигналу
-	// (ADR-027(a)). Даже при потере pub/sub-сигнала задание подхватится на
-	// ближайшем тике. Тип `duration`, пустое → дефолт [DefaultAcolytePollInterval]
-	// (2s). Валидация формата — semantic-фаза, диапазон (>0) — после парсинга.
+	// AcolytePollInterval is the worker's poll-tick period: fallback to the
+	// Summons signal (ADR-027(a)). Even if the pub/sub signal is lost the job is
+	// picked up on the next tick. Type `duration`, empty → default
+	// [DefaultAcolytePollInterval] (2s). Format validation — semantic phase;
+	// range (>0) — after parsing.
 	AcolytePollInterval string `yaml:"acolyte_poll_interval,omitempty"`
 
-	// AcolyteDrainGrace — окно graceful-drain пула Acolyte при остановке Keeper
-	// (ADR-027 Phase 2): от сигнала «больше не claim-ить» до жёсткой отмены
-	// claim-ctx у не успевших in-flight-воркеров. Прерванный claim оставляет
-	// Ward в БД (claimed/running) — подберёт recovery-скан.
-	// Тип `duration`, пустое → дефолт [DefaultAcolyteDrainGrace] (5s). Валидация
-	// формата — semantic-фаза, диапазон (>0) — после парсинга в daemon.
+	// AcolyteDrainGrace is the graceful-drain window of the Acolyte pool on
+	// Keeper stop (ADR-027 Phase 2): from the "stop claiming" signal to hard
+	// cancellation of the claim ctx for in-flight workers that did not finish. An
+	// interrupted claim leaves a Ward in the DB (claimed/running) — picked up by
+	// the recovery scan. Type `duration`, empty → default
+	// [DefaultAcolyteDrainGrace] (5s). Format validation — semantic phase; range
+	// (>0) — after parsing in the daemon.
 	AcolyteDrainGrace string `yaml:"acolyte_drain_grace,omitempty"`
 
-	// OracleCircuitMaxFires — порог circuit-breaker-а Oracle (ADR-030(a),
-	// beacons S4): сколько срабатываний одного Decree за окно
-	// [OracleCircuitWindow] допустимо до авто-disable (enabled=false). Глобальный
-	// порог на все Decree; per-Decree override — отдельный заход.
+	// OracleCircuitMaxFires is the Oracle circuit-breaker threshold (ADR-030(a),
+	// beacons S4): how many fires of one Decree within the [OracleCircuitWindow]
+	// are allowed before auto-disable (enabled=false). Global threshold across
+	// all Decrees; per-Decree override is a separate pass.
 	//
-	// РАЗЛИЧЕНИЕ «пусто» vs «явный 0» требует указателя: семантика поля —
-	// `nil` (поле опущено) → дефолт [DefaultOracleCircuitMaxFires] (5),
-	// резолвится в daemon; явный `0` (escape-hatch) → breaker OFF (BumpCircuit
-	// не вызывается, Decree никогда не авто-disable). Плоский `int` эти два
-	// случая не различил бы (оба = 0), а ТЗ требует «пусто=дефолт, 0=off» —
-	// поэтому `*int` (паттерн overlay-`*int`, как было у MaxAgeDays до уплощения,
-	// но тут различение «0 vs не задано» сознательно СОХРАНЯЕТСЯ). Валидация
-	// (>= 0 при заданном) — schema-фаза (nil-safe).
+	// Distinguishing "empty" from "explicit 0" requires a pointer: `nil` (field
+	// omitted) → default [DefaultOracleCircuitMaxFires] (5), resolved in the
+	// daemon; explicit `0` (escape-hatch) → breaker OFF (BumpCircuit not called,
+	// Decree never auto-disabled). A flat `int` could not tell these two apart
+	// (both = 0), while the spec requires "empty=default, 0=off" — hence `*int`
+	// (the overlay-`*int` pattern, as MaxAgeDays had before flattening, but here
+	// the "0 vs unset" distinction is deliberately KEPT). Validation (>= 0 when
+	// set) — schema phase (nil-safe).
 	OracleCircuitMaxFires *int `yaml:"oracle_circuit_max_fires,omitempty"`
 
-	// OracleCircuitWindow — длина fixed-window circuit-breaker-а Oracle
-	// (ADR-030(a)): окно, в котором считаются срабатывания Decree до сравнения с
-	// [OracleCircuitMaxFires]. Тип `duration`, пустое → дефолт
-	// [DefaultOracleCircuitWindow] (10m). Валидация формата — semantic-фаза,
-	// диапазон (>0) — резолвом дефолта в daemon (стиль `acolyte_*`).
+	// OracleCircuitWindow is the fixed-window length of the Oracle circuit
+	// breaker (ADR-030(a)): the window in which Decree fires are counted before
+	// comparison with [OracleCircuitMaxFires]. Type `duration`, empty → default
+	// [DefaultOracleCircuitWindow] (10m). Format validation — semantic phase;
+	// range (>0) — via default resolution in the daemon (style `acolyte_*`).
 	OracleCircuitWindow string `yaml:"oracle_circuit_window,omitempty"`
 
-	// WatchmanInterval — период probe-тика Watchman (изоляция-детект +
-	// soul-shedding S2): как часто инстанс пингует PG+Redis (те же зависимости,
-	// что `/readyz`) на предмет изоляции. Тип `duration`, пустое → дефолт
-	// [DefaultWatchmanInterval] (5s). Валидация формата — semantic-фаза, диапазон
-	// (>0) резолвится дефолтом в daemon (стиль `acolyte_*` / `oracle_circuit_window`).
+	// WatchmanInterval is the Watchman probe-tick period (isolation detection +
+	// soul-shedding S2): how often the instance pings PG+Redis (the same
+	// dependencies as `/readyz`) to check for isolation. Type `duration`, empty →
+	// default [DefaultWatchmanInterval] (5s). Format validation — semantic phase;
+	// range (>0) resolved by default in the daemon (style `acolyte_*` /
+	// `oracle_circuit_window`).
 	WatchmanInterval string `yaml:"watchman_interval,omitempty"`
 
-	// WatchmanFailThreshold — число подряд идущих провалов probe Watchman до
-	// объявления изоляции и активного закрытия (shedding) всех локальных
-	// EventStream-стримов. Debounce/flap-guard: единичный сетевой spike не
-	// сбрасывает весь флот стримов (thundering-herd reconnect по кластеру).
-	// 0/опущено → дефолт [DefaultWatchmanFailThreshold] (3). Валидация (>= 0) —
-	// schema-фаза (симметрично `acolyte_batch`).
+	// WatchmanFailThreshold is the number of consecutive Watchman probe failures
+	// before declaring isolation and actively closing (shedding) all local
+	// EventStream streams. Debounce/flap-guard: a single network spike does not
+	// drop the whole fleet of streams (thundering-herd reconnect across the
+	// cluster). 0/omitted → default [DefaultWatchmanFailThreshold] (3).
+	// Validation (>= 0) — schema phase (symmetric with `acolyte_batch`).
 	WatchmanFailThreshold int `yaml:"watchman_fail_threshold,omitempty"`
 
-	// AllowUnsafeSinglePathMultiKeeper — явный opt-out из refuse-guard-а
-	// soul-shedding (Finding-A, ADR-027(h)): при `acolytes == 0` И присутствии
-	// ДРУГИХ живых Keeper-инстансов в Conclave (`CountLive > 1`) Keeper по
-	// дефолту ОТКАЗЫВАЕТСЯ стартовать — run-goroutine-путь (`acolytes: 0`)
-	// single-keeper-only, иначе apply на Keeper-A c Soul-ом на стриме Keeper-B
-	// навсегда зависает в `applying` (см. инвариант HA в docs/keeper/config.md).
+	// AllowUnsafeSinglePathMultiKeeper is the explicit opt-out from the
+	// soul-shedding refuse-guard (Finding-A, ADR-027(h)): when `acolytes == 0`
+	// AND OTHER live Keeper instances are present in the Conclave
+	// (`CountLive > 1`), Keeper REFUSES to start by default — the run-goroutine
+	// path (`acolytes: 0`) is single-keeper-only, otherwise an apply on Keeper-A
+	// for a Soul on Keeper-B's stream hangs forever in `applying` (see the HA
+	// invariant in docs/keeper/config.md).
 	//
-	// `true` — осознанный выбор оператора (напр. намеренный single-keeper-за-LB
-	// на время миграции / rolling-restart, где «другой» инстанс — уходящий):
-	// refuse заменяется громким WARN, старт продолжается. Дефолт `false`
-	// (безопасно: refuse). Дублируется env-флагом `KEEPER_ALLOW_UNSAFE_MULTI_KEEPER`
-	// (truthy-OR, для контейнер/CI-окружений), резолв — в daemon.
+	// `true` is a deliberate operator choice (e.g. an intentional
+	// single-keeper-behind-LB during migration / rolling restart, where the
+	// "other" instance is the one leaving): refuse becomes a loud WARN and start
+	// proceeds. Default `false` (safe: refuse). Mirrored by the env flag
+	// `KEEPER_ALLOW_UNSAFE_MULTI_KEEPER` (truthy-OR, for container/CI
+	// environments), resolved in the daemon.
 	//
-	// `bool` любого значения валиден — schema-проверки диапазона нет; поле лишь
-	// должно присутствовать в структуре, чтобы strict-walker не отверг ключ как
+	// Any `bool` value is valid — there is no schema range check; the field just
+	// has to exist in the struct so the strict-walker does not reject the key as
 	// `unknown_key`.
 	AllowUnsafeSinglePathMultiKeeper bool `yaml:"allow_unsafe_single_path_multi_keeper,omitempty"`
 
-	// Toll — cluster-wide detector массового оттока Soul-ов (ADR-038). При
-	// nil/пустом блоке — поднимается с дефолтами (включён): per-instance
-	// tollwatcher + Redis-leader агрегатор. Поле `enabled: false` — явный
-	// opt-out (dev-сборки без Redis / отладка); все остальные поля имеют
-	// дефолты из [DefaultToll*]-констант. Toll работает ТОЛЬКО при non-nil
-	// Redis — в single-instance/dev без Redis он сам деградирует в no-op
-	// (gate в daemon, не в config).
+	// Toll is the cluster-wide detector of mass Soul churn (ADR-038). With a
+	// nil/empty block it starts with defaults (enabled): per-instance tollwatcher
+	// + Redis-leader aggregator. `enabled: false` is an explicit opt-out (dev
+	// builds without Redis / debugging); all other fields default from the
+	// [DefaultToll*] constants. Toll works ONLY with a non-nil Redis — in
+	// single-instance/dev without Redis it degrades to a no-op (gated in the
+	// daemon, not in config).
 	Toll *KeeperToll `yaml:"toll,omitempty"`
 
-	// Voyage — параметры VoyageWorker-пула (ADR-043): claim+execute
-	// унифицированных батчевых прогонов (kind=scenario|command). Отдельный
-	// worker-pool (НЕ общий с Acolyte).
+	// Voyage holds the VoyageWorker pool parameters (ADR-043): claim+execute of
+	// unified batch runs (kind=scenario|command). A separate worker pool (NOT
+	// shared with Acolyte).
 	//
-	// Config-gated OFF ПО УМОЛЧАНИЮ: при nil/опущенном блоке pool НЕ
-	// поднимается; воркер стартует ТОЛЬКО при явном `voyage.workers: N > 0`.
-	// Дефолты остальных полей — [DefaultVoyage*]-константы.
+	// Config-gated OFF BY DEFAULT: with a nil/omitted block the pool does NOT
+	// start; the worker starts ONLY on an explicit `voyage.workers: N > 0`. Other
+	// fields default from the [DefaultVoyage*] constants.
 	Voyage *KeeperVoyage `yaml:"voyage,omitempty"`
 
-	// Tempo — per-AID rate-limiter resolver-тяжёлых write-эндпоинтов (ADR-050).
-	// При nil → дефолты + enabled=true (поднимается ПРИ наличии Redis; без Redis
-	// limiter=nil → middleware passthrough, gate в daemon). Явный `enabled: false`
-	// — opt-out (dev/отладка). Поля `voyage_create.{rate,burst}` имеют дефолты из
-	// [DefaultTempo*]-констант; hot-reloadable (atomic swap, новый лимит со
-	// следующего запроса, [ADR-021]).
+	// Tempo is the per-AID rate limiter for resolver-heavy write endpoints
+	// (ADR-050). With nil → defaults + enabled=true (starts WHEN Redis is
+	// present; without Redis limiter=nil → middleware passthrough, gated in the
+	// daemon). Explicit `enabled: false` — opt-out (dev/debugging). The
+	// `voyage_create.{rate,burst}` fields default from the [DefaultTempo*]
+	// constants; hot-reloadable (atomic swap, new limit from the next request,
+	// [ADR-021]).
 	Tempo *KeeperTempo `yaml:"tempo,omitempty"`
 
-	// Herald — параметры claim-queue worker-а доставки уведомлений (ADR-052(d),
-	// S3). При nil → дефолты + поднимается ПРИ наличии Redis (доставка живёт в
-	// Redis-очереди, hot→Redis); без Redis доставка деградирует (job-ы дропаются,
-	// keeper не падает — fail-open). Workers по умолчанию [DefaultHeraldWorkers].
+	// Herald holds the claim-queue notification-delivery worker parameters
+	// (ADR-052(d), S3). With nil → defaults + starts WHEN Redis is present
+	// (delivery lives in a Redis queue, hot→Redis); without Redis delivery
+	// degrades (jobs are dropped, keeper stays up — fail-open). Workers default
+	// to [DefaultHeraldWorkers].
 	Herald *KeeperHerald `yaml:"herald,omitempty"`
 
-	// WebUIEnabled — тоггл встроенного UI на маршруте `/ui` (ADR-055). `*bool`,
-	// чтобы различить «не задано» от явного `false`: nil/опущено → default-ON
-	// (true) — бета хочет single-binary UI из коробки; явный `false` → opt-out
-	// (статика `/ui` НЕ монтируется, API `/v1` не затрагивается). Симметрия
-	// footgun-guard-у соседних подсистем (`tempo.enabled`/Toll default-ON), но
-	// БЕЗ зависимости от инфраструктуры: UI вшит в бинарь (go:embed), внешнего
-	// бэкенда не требует. Hot-reloadable (ADR-021) — re-mount роутера. Резолв —
-	// [KeeperConfig.WebUIEnabled].
+	// WebUIEnabled toggles the built-in UI on the `/ui` route (ADR-055). `*bool`
+	// to distinguish "unset" from explicit `false`: nil/omitted → default-ON
+	// (true) — the beta wants a single-binary UI out of the box; explicit
+	// `false` → opt-out (the `/ui` static assets are NOT mounted, the `/v1` API
+	// is unaffected). Symmetric with the footgun-guard of neighboring subsystems
+	// (`tempo.enabled`/Toll default-ON), but WITHOUT an infrastructure
+	// dependency: the UI is embedded in the binary (go:embed) and needs no
+	// external backend. Hot-reloadable (ADR-021) — re-mount of the router.
+	// Resolved by [KeeperConfig.WebUIEnabled].
 	WebUIEnabled *bool `yaml:"web_ui_enabled,omitempty"`
 
-	// CloudInit — параметры рендера cloud-init userdata для VM, создаваемых
-	// `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat
-	// закреплён). При nil — userdata-генерация не доступна: сценарий с
-	// `generate_userdata: true` валится с явной ошибкой; явный `userdata` в
-	// params продолжает работать без изменений.
+	// CloudInit holds the cloud-init userdata render parameters for VMs created
+	// by `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat
+	// locked). With nil, userdata generation is unavailable: a scenario with
+	// `generate_userdata: true` fails with an explicit error; an explicit
+	// `userdata` in params keeps working unchanged.
 	//
-	// Все поля резолвятся в момент GenerateUserdata-вызова (не на старте
-	// daemon), поэтому hot-reload `keeper.yml` подхватывается следующим
-	// cloud-create-шагом без рестарта — через `config.Store.Get()`.
+	// All fields resolve at the GenerateUserdata call (not at daemon start), so a
+	// `keeper.yml` hot-reload is picked up by the next cloud-create step without
+	// restart — via `config.Store.Get()`.
 	//
-	// Userdata НЕ несёт bootstrap-токены: per-VM-токен генерируется после
-	// Create в `applyCreated` и попадает в register-output для доставки
-	// отдельным шагом scenario (типично `keeper.push` через SSH-провайдер).
-	// См. ADR-017(h) amendment и docs/keeper/cloud.md → «Cloud-init bootstrap (MVP)».
+	// Userdata does NOT carry bootstrap tokens: the per-VM token is generated
+	// after Create in `applyCreated` and lands in register-output for delivery by
+	// a separate scenario step (typically `keeper.push` via an SSH provider).
+	// See the ADR-017(h) amendment and docs/keeper/cloud.md → "Cloud-init
+	// bootstrap (MVP)".
 	CloudInit *KeeperCloudInit `yaml:"cloud_init,omitempty"`
 
-	// MaxAwaitTimeout — оператор-потолок верхней границы `await_timeout` барьера
-	// онбординга `core.soul.registered` (ADR-061). Шаг с `await_online: true`
-	// блокирующе ждёт presence (Redis SID-lease) до `await_min_count`/timeout;
-	// без потолка зловредный/ошибочный `await_timeout: 100h` держал бы
-	// run-goroutine/Acolyte-воркер занятым (DoS). Fail-closed: шаг с
-	// `await_timeout` > потолка завершается `failed` (явная ошибка, НЕ тихое
-	// обрезание). Тип `duration` (Go-`time.ParseDuration` либо `<N>d`), пустое →
-	// дефолт [DefaultMaxAwaitTimeout] (30m). Валидация формата — semantic-фаза,
-	// диапазон (>0) резолвится дефолтом в [KeeperConfig.ResolvedMaxAwaitTimeout]
-	// (стиль `acolyte_*`).
+	// MaxAwaitTimeout is the operator ceiling on `await_timeout` of the
+	// `core.soul.registered` onboarding barrier (ADR-061). A step with
+	// `await_online: true` blocks waiting for presence (Redis SID-lease) up to
+	// `await_min_count`/timeout; without a ceiling a malicious/mistaken
+	// `await_timeout: 100h` would keep a run-goroutine/Acolyte worker busy (DoS).
+	// Fail-closed: a step with `await_timeout` > ceiling ends `failed` (explicit
+	// error, NOT silent truncation). Type `duration` (Go `time.ParseDuration` or
+	// `<N>d`), empty → default [DefaultMaxAwaitTimeout] (30m). Format validation —
+	// semantic phase; range (>0) resolved by default in
+	// [KeeperConfig.ResolvedMaxAwaitTimeout] (style `acolyte_*`).
 	MaxAwaitTimeout string `yaml:"max_await_timeout,omitempty"`
 }
 
-// DefaultMaxAwaitTimeout — дефолтный потолок `await_timeout` барьера онбординга
-// `core.soul.registered` (ADR-061). 30m: облачный VM обычно онбордится за
-// единицы минут (boot + cloud-init + CSR-bootstrap); 30m — щедрый запас под
-// медленный провайдер/большой батч, но не «вечно».
+// DefaultMaxAwaitTimeout is the default ceiling on `await_timeout` of the
+// `core.soul.registered` onboarding barrier (ADR-061). 30m: a cloud VM usually
+// onboards in single minutes (boot + cloud-init + CSR-bootstrap); 30m is a
+// generous margin for a slow provider/large batch, but not "forever".
 const DefaultMaxAwaitTimeout = 30 * time.Minute
 
-// ResolvedMaxAwaitTimeout возвращает эффективный потолок `await_timeout`:
-// пустое/0/невалидное → [DefaultMaxAwaitTimeout] (30m); иначе распарсенное
-// значение. Формат уже проверен semantic-фазой; здесь резолвится диапазон
-// (>0), как у прочих duration-потолков (стиль `acolyte_*`).
+// ResolvedMaxAwaitTimeout returns the effective `await_timeout` ceiling:
+// empty/0/invalid → [DefaultMaxAwaitTimeout] (30m); otherwise the parsed value.
+// Format is already checked in the semantic phase; here the range (>0) is
+// resolved, like the other duration ceilings (style `acolyte_*`).
 func (c *KeeperConfig) ResolvedMaxAwaitTimeout() time.Duration {
 	if c == nil || c.MaxAwaitTimeout == "" {
 		return DefaultMaxAwaitTimeout
@@ -282,11 +292,12 @@ func (c *KeeperConfig) ResolvedMaxAwaitTimeout() time.Duration {
 	return d
 }
 
-// WebUIMounted возвращает эффективный тоггл встроенного UI (`/ui`, ADR-055):
-// nil/опущено → true (default-ON, footgun-guard как Tempo/Toll); явный `false`
-// → false (opt-out). Чистый резолв указателя; UI вшит в бинарь — внешнего
-// бэкенда не требует (в отличие от Tempo/Toll, которым нужен Redis). Имя
-// отлично от поля WebUIEnabled (Go не допускает метод и поле с одним именем).
+// WebUIMounted returns the effective built-in UI toggle (`/ui`, ADR-055):
+// nil/omitted → true (default-ON, footgun-guard like Tempo/Toll); explicit
+// `false` → false (opt-out). A pure pointer resolve; the UI is embedded in the
+// binary and needs no external backend (unlike Tempo/Toll, which need Redis).
+// The name differs from the WebUIEnabled field (Go forbids a method and a field
+// with the same name).
 func (c *KeeperConfig) WebUIMounted() bool {
 	if c == nil || c.WebUIEnabled == nil {
 		return true
@@ -294,90 +305,92 @@ func (c *KeeperConfig) WebUIMounted() bool {
 	return *c.WebUIEnabled
 }
 
-// Дефолты VoyageWorker-pool (ADR-043). Применяются в daemon при пустом полe
-// (после того как блок voyage уже присутствует и workers > 0). Источник истины
-// семантики — пакет voyageorch; здесь объявлены ради config-резолва без
-// import-цикла shared→keeper. ВАЖНО: дефолта `workers` НЕТ — отсутствие блока
-// означает «pool OFF», явный opt-in через `voyage.workers: N`.
+// VoyageWorker pool defaults (ADR-043). Applied in the daemon for an empty
+// field (once the voyage block is present and workers > 0). Semantics source of
+// truth is the voyageorch package; declared here for config resolution without
+// a shared→keeper import cycle. IMPORTANT: there is NO `workers` default —
+// absence of the block means "pool OFF", explicit opt-in via `voyage.workers: N`.
 const (
-	// DefaultVoyageLeaseTTL — дефолт TTL PG-claim-lease для строки в `voyages`
-	// (claim_expires_at = NOW() + lease_ttl). 60s parity ErrandRun.
+	// DefaultVoyageLeaseTTL is the default TTL of the PG claim-lease for a row in
+	// `voyages` (claim_expires_at = NOW() + lease_ttl). 60s parity with ErrandRun.
 	DefaultVoyageLeaseTTL = 60 * time.Second
 
-	// DefaultVoyageLeaseRenewInterval — дефолт периода renewal-CAS-UPDATE-а
-	// (~1/3 TTL). 20s parity ErrandRun.
+	// DefaultVoyageLeaseRenewInterval is the default renewal-CAS-UPDATE period
+	// (~1/3 TTL). 20s parity with ErrandRun.
 	DefaultVoyageLeaseRenewInterval = 20 * time.Second
 
-	// DefaultVoyagePollInterval — дефолт периода idle-poll claim-loop-а. 5s
-	// parity ErrandRun.
+	// DefaultVoyagePollInterval is the default idle-poll period of the claim
+	// loop. 5s parity with ErrandRun.
 	DefaultVoyagePollInterval = 5 * time.Second
 
-	// DefaultVoyageMaxScope — дефолтный верхний лимит размера резолвнутого scope
-	// одного Voyage (число единиц прогона: инкарнаций для kind=scenario, хостов
-	// для kind=command). DoS-guard S-med-3: без потолка один POST может
-	// резолвнуть весь флот (100k) → 100k per-row INSERT в одной транзакции +
-	// неконтролируемый blast-radius. 10000 — рекомендация architect, принята как
-	// дефолт; оператор переопределяет в keeper.yml::voyage.max_scope.
+	// DefaultVoyageMaxScope is the default upper limit on the resolved scope size
+	// of one Voyage (run units: incarnations for kind=scenario, hosts for
+	// kind=command). DoS-guard S-med-3: without a ceiling one POST could resolve
+	// the whole fleet (100k) → 100k per-row INSERT in one transaction +
+	// uncontrolled blast radius. 10000 is an architect recommendation adopted as
+	// the default; the operator overrides in keeper.yml::voyage.max_scope.
 	DefaultVoyageMaxScope = 10000
 
-	// DefaultVoyageMaxBatchSize — дефолтный верхний предел размера батча/окна
-	// одного Voyage (ADR-043 amendment 2026-06-01, S-W4): batch_size для barrier,
-	// concurrency для window. DoS-guard parity voyage.max_scope — без потолка
-	// оператор может задать гигантскую пачку/окно и снять смысл скользящей выкатки
-	// (весь scope одной волной). Совпадает с [DefaultVoyageMaxScope] (10000):
-	// батч не может быть больше всего scope-потолка; оператор переопределяет в
-	// keeper.yml::voyage.max_batch_size.
+	// DefaultVoyageMaxBatchSize is the default upper limit on the batch/window
+	// size of one Voyage (ADR-043 amendment 2026-06-01, S-W4): batch_size for a
+	// barrier, concurrency for a window. DoS-guard parity with voyage.max_scope —
+	// without a ceiling the operator could set a giant batch/window and defeat
+	// the point of a rolling rollout (whole scope in one wave). Equal to
+	// [DefaultVoyageMaxScope] (10000): a batch cannot exceed the whole scope
+	// ceiling; the operator overrides in keeper.yml::voyage.max_batch_size.
 	DefaultVoyageMaxBatchSize = 10000
 )
 
-// KeeperVoyage — параметры VoyageWorker-pool (ADR-043, S1).
+// KeeperVoyage holds the VoyageWorker pool parameters (ADR-043, S1).
 //
-// Опциональный блок. ОТЛИЧИЕ от ErrandRun: при nil/опущенном блоке pool НЕ
-// поднимается (config-gated OFF по умолчанию — S1-фундамент рядом со старыми
-// путями). Pool стартует ТОЛЬКО при явном `voyage.workers: N > 0`. Остальные
-// поля при наличии блока резолвятся к [DefaultVoyage*]-константам.
+// Optional block. UNLIKE ErrandRun: with a nil/omitted block the pool does NOT
+// start (config-gated OFF by default — the S1 foundation alongside the old
+// paths). The pool starts ONLY on an explicit `voyage.workers: N > 0`. When the
+// block is present, the other fields resolve to the [DefaultVoyage*] constants.
 type KeeperVoyage struct {
-	// Workers — число воркеров VoyageWorker-пула на инстанс. 0/опущено → pool
-	// НЕ поднимается (даже если блок voyage задан). Явный `N > 0` — поднимается
-	// N воркеров (config-gated OFF по умолчанию).
+	// Workers is the number of VoyageWorker pool workers per instance. 0/omitted
+	// → pool does NOT start (even if the voyage block is set). Explicit `N > 0`
+	// starts N workers (config-gated OFF by default).
 	Workers int `yaml:"workers,omitempty" json:"workers,omitempty"`
 
-	// LeaseTTL — TTL PG-claim-lease для строки в `voyages`. Тип `duration`,
-	// пустое → дефолт [DefaultVoyageLeaseTTL] (60s).
+	// LeaseTTL is the TTL of the PG claim-lease for a row in `voyages`. Type
+	// `duration`, empty → default [DefaultVoyageLeaseTTL] (60s).
 	LeaseTTL string `yaml:"lease_ttl,omitempty" json:"lease_ttl,omitempty"`
 
-	// LeaseRenewInterval — период renewal-CAS-UPDATE-а текущего lease-а. 0 rows
-	// affected → ErrLeaseLost, VoyageWorker бросает работу. Тип `duration`,
-	// пустое → дефолт [DefaultVoyageLeaseRenewInterval] (20s = ~1/3 LeaseTTL).
+	// LeaseRenewInterval is the renewal-CAS-UPDATE period for the current lease.
+	// 0 rows affected → ErrLeaseLost, the VoyageWorker drops the work. Type
+	// `duration`, empty → default [DefaultVoyageLeaseRenewInterval]
+	// (20s = ~1/3 LeaseTTL).
 	LeaseRenewInterval string `yaml:"lease_renew_interval,omitempty" json:"lease_renew_interval,omitempty"`
 
-	// PollInterval — период idle-poll claim-loop-а (когда pending-Voyage-ов
-	// нет). Тип `duration`, пустое → дефолт [DefaultVoyagePollInterval] (5s).
+	// PollInterval is the idle-poll period of the claim loop (when there are no
+	// pending Voyages). Type `duration`, empty → default
+	// [DefaultVoyagePollInterval] (5s).
 	PollInterval string `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
 
-	// MaxScope — верхний лимит размера резолвнутого scope одного Voyage
-	// (DoS-guard S-med-3). `*int`, чтобы различить «не задано» (→ дефолт
-	// [DefaultVoyageMaxScope] = 10000) от явного 0 («безлимит» — для тестов /
-	// обратной совместимости). Превышение лимита на резолве target-а →
-	// 422 voyage_scope_too_large (handler-инвариант, не CHECK). В отличие от
-	// прочих полей блока, MaxScope действует НЕЗАВИСИМО от Workers: cap живёт в
-	// API-handler-е (POST /v1/voyages), а не в pool-е, поэтому защищает даже при
-	// `workers: 0`.
+	// MaxScope is the upper limit on the resolved scope size of one Voyage
+	// (DoS-guard S-med-3). `*int` to distinguish "unset" (→ default
+	// [DefaultVoyageMaxScope] = 10000) from explicit 0 ("unlimited" — for tests /
+	// backward compatibility). Exceeding the limit at target resolution →
+	// 422 voyage_scope_too_large (handler invariant, not a CHECK). Unlike the
+	// other fields of the block, MaxScope acts INDEPENDENTLY of Workers: the cap
+	// lives in the API handler (POST /v1/voyages), not the pool, so it protects
+	// even with `workers: 0`.
 	MaxScope *int `yaml:"max_scope,omitempty" json:"max_scope,omitempty"`
 
-	// MaxBatchSize — верхний предел размера батча/окна одного Voyage (ADR-043
-	// amendment 2026-06-01, S-W4): эффективный batch_size для barrier, concurrency
-	// для window. `*int` — различить «не задано» (→ дефолт
-	// [DefaultVoyageMaxBatchSize] = 10000) от явного 0 («без предела»).
-	// Превышение → 422 voyage_batch_size_too_large (handler-инвариант, parity
-	// voyage_scope_too_large). Симметрично MaxScope, действует НЕЗАВИСИМО от
-	// Workers (cap живёт в API-handler-е).
+	// MaxBatchSize is the upper limit on the batch/window size of one Voyage
+	// (ADR-043 amendment 2026-06-01, S-W4): effective batch_size for a barrier,
+	// concurrency for a window. `*int` to distinguish "unset" (→ default
+	// [DefaultVoyageMaxBatchSize] = 10000) from explicit 0 ("no limit").
+	// Exceeding → 422 voyage_batch_size_too_large (handler invariant, parity with
+	// voyage_scope_too_large). Symmetric with MaxScope, acts INDEPENDENTLY of
+	// Workers (the cap lives in the API handler).
 	MaxBatchSize *int `yaml:"max_batch_size,omitempty" json:"max_batch_size,omitempty"`
 }
 
-// ResolvedMaxScope возвращает эффективный потолок размера scope: не задано
-// (nil блок / nil поле) → [DefaultVoyageMaxScope] (10000); явный 0 → 0
-// (безлимит, для тестов / обратной совместимости); явное значение → оно само.
+// ResolvedMaxScope returns the effective scope-size ceiling: unset (nil block /
+// nil field) → [DefaultVoyageMaxScope] (10000); explicit 0 → 0 (unlimited, for
+// tests / backward compatibility); an explicit value → itself.
 func (v *KeeperVoyage) ResolvedMaxScope() int {
 	if v == nil || v.MaxScope == nil {
 		return DefaultVoyageMaxScope
@@ -385,9 +398,9 @@ func (v *KeeperVoyage) ResolvedMaxScope() int {
 	return *v.MaxScope
 }
 
-// ResolvedMaxBatchSize возвращает эффективный потолок размера батча/окна: не
-// задано (nil блок / nil поле) → [DefaultVoyageMaxBatchSize] (10000); явный 0 →
-// 0 (без предела); явное значение → оно само. Parity [ResolvedMaxScope].
+// ResolvedMaxBatchSize returns the effective batch/window-size ceiling: unset
+// (nil block / nil field) → [DefaultVoyageMaxBatchSize] (10000); explicit 0 → 0
+// (no limit); an explicit value → itself. Parity with [ResolvedMaxScope].
 func (v *KeeperVoyage) ResolvedMaxBatchSize() int {
 	if v == nil || v.MaxBatchSize == nil {
 		return DefaultVoyageMaxBatchSize
@@ -395,36 +408,37 @@ func (v *KeeperVoyage) ResolvedMaxBatchSize() int {
 	return *v.MaxBatchSize
 }
 
-// Дефолты Herald claim-queue worker-а доставки (ADR-052(d), S3).
+// Herald claim-queue delivery worker defaults (ADR-052(d), S3).
 const (
-	// DefaultHeraldWorkers — число worker-горутин доставки на инстанс при наличии
-	// Redis. Конкурентные клеймы безопасны (at-least-once). 2 — умеренный
-	// параллелизм без шторма: уведомлений мало относительно прогонов.
+	// DefaultHeraldWorkers is the number of delivery worker goroutines per
+	// instance when Redis is present. Concurrent claims are safe (at-least-once).
+	// 2 is moderate parallelism without a storm: notifications are few relative
+	// to runs.
 	DefaultHeraldWorkers = 2
 
-	// DefaultHeraldDeliveryTimeout — дефолтный общий таймаут одного webhook-POST-а
-	// (dial+TLS+POST+чтение ответа). Зеркало [herald.DefaultDeliveryTimeout] (10s)
-	// — держим строкой здесь, чтобы daemon резолвил единообразно с прочими
-	// duration-полями (ParseDuration).
+	// DefaultHeraldDeliveryTimeout is the default overall timeout of one webhook
+	// POST (dial+TLS+POST+response read). Mirror of [herald.DefaultDeliveryTimeout]
+	// (10s) — kept as a string here so the daemon resolves it uniformly with the
+	// other duration fields (ParseDuration).
 	DefaultHeraldDeliveryTimeout = "10s"
 )
 
-// KeeperHerald — параметры claim-queue worker-а доставки уведомлений (ADR-052(d),
-// S3). Опциональный блок: при nil поля дефолтятся, worker поднимается ПРИ
-// наличии Redis. `workers: 0` явно выключает доставку (job-ы накапливаются в
-// Redis-очереди, но не доставляются).
+// KeeperHerald holds the claim-queue notification-delivery worker parameters
+// (ADR-052(d), S3). Optional block: with nil the fields default and the worker
+// starts WHEN Redis is present. `workers: 0` explicitly disables delivery (jobs
+// accumulate in the Redis queue but are not delivered).
 type KeeperHerald struct {
-	// Workers — число worker-горутин доставки на инстанс. nil/опущено →
-	// [DefaultHeraldWorkers] (2). Явный 0 → доставка выключена.
+	// Workers is the number of delivery worker goroutines per instance.
+	// nil/omitted → [DefaultHeraldWorkers] (2). Explicit 0 → delivery disabled.
 	Workers *int `yaml:"workers,omitempty" json:"workers,omitempty"`
 
-	// DeliveryTimeout — общий таймаут одного webhook-POST-а. Тип `duration`,
-	// пустое/некорректное → [DefaultHeraldDeliveryTimeout] (10s).
+	// DeliveryTimeout is the overall timeout of one webhook POST. Type
+	// `duration`, empty/invalid → [DefaultHeraldDeliveryTimeout] (10s).
 	DeliveryTimeout string `yaml:"delivery_timeout,omitempty" json:"delivery_timeout,omitempty"`
 }
 
-// ResolvedWorkers возвращает эффективное число worker-ов: nil блок / nil поле →
-// [DefaultHeraldWorkers]; явное значение (вкл. 0) → оно само.
+// ResolvedWorkers returns the effective worker count: nil block / nil field →
+// [DefaultHeraldWorkers]; an explicit value (incl. 0) → itself.
 func (h *KeeperHerald) ResolvedWorkers() int {
 	if h == nil || h.Workers == nil {
 		return DefaultHeraldWorkers
@@ -432,68 +446,71 @@ func (h *KeeperHerald) ResolvedWorkers() int {
 	return *h.Workers
 }
 
-// Дефолты Tempo per-AID rate-limiter-а (ADR-050(e)). Применяются при опущенном/
-// нулевом поле в момент чтения config-snapshot (middleware читает живой
-// config.Store, hot-reload). Подобраны как «человеку/нормальному автоматону
-// хватает с запасом, цикл-abuse режется».
+// Tempo per-AID rate-limiter defaults (ADR-050(e)). Applied for an
+// omitted/zero field when the config snapshot is read (middleware reads the live
+// config.Store, hot-reload). Chosen so "a human/normal automaton has ample
+// headroom, loop-abuse is cut off".
 const (
-	// DefaultTempoVoyageCreateRate — refill-скорость бакета voyage-create,
-	// токенов в секунду (rps).
+	// DefaultTempoVoyageCreateRate is the refill rate of the voyage-create
+	// bucket, tokens per second (rps).
 	DefaultTempoVoyageCreateRate = 10.0
 
-	// DefaultTempoVoyageCreateBurst — глубина бакета voyage-create.
+	// DefaultTempoVoyageCreateBurst is the depth of the voyage-create bucket.
 	DefaultTempoVoyageCreateBurst = 20
 
-	// DefaultTempoVoyagePreviewRate — refill-скорость бакета voyage-preview,
-	// токенов в секунду (rps). Мягче create (preview read-like по эффекту —
-	// без persist/audit), но НЕ безлимит: dry-resolve scope так же resolver-
-	// тяжёл (Purview-резолв + page-CEL по флоту), поэтому цикл-abuse режется
-	// отдельным, более широким бакетом (ADR-050 amendment 2026-06-17).
+	// DefaultTempoVoyagePreviewRate is the refill rate of the voyage-preview
+	// bucket, tokens per second (rps). Softer than create (preview is read-like
+	// in effect — no persist/audit) but NOT unlimited: dry-resolve of scope is
+	// just as resolver-heavy (Purview resolution + page-CEL over the fleet), so
+	// loop-abuse is cut off by a separate, wider bucket (ADR-050 amendment
+	// 2026-06-17).
 	DefaultTempoVoyagePreviewRate = 30.0
 
-	// DefaultTempoVoyagePreviewBurst — глубина бакета voyage-preview.
+	// DefaultTempoVoyagePreviewBurst is the depth of the voyage-preview bucket.
 	DefaultTempoVoyagePreviewBurst = 60
 )
 
-// KeeperTempo — Tempo per-AID rate-limiter (ADR-050).
+// KeeperTempo is the Tempo per-AID rate limiter (ADR-050).
 //
-// Опциональный блок. При nil → дефолты + enabled=true (default-ON, footgun-guard
-// как Conductor/Toll). Явный `enabled: false` — opt-out. Поднимается фактически
-// ТОЛЬКО при наличии Redis-клиента (limiter живёт в Redis); без Redis —
-// middleware passthrough (gate в daemon, не в config). Поля
-// `voyage_create.{rate,burst}` / `voyage_preview.{rate,burst}` при опущении
-// резолвятся к [DefaultTempo*].
+// Optional block. With nil → defaults + enabled=true (default-ON, footgun-guard
+// like Conductor/Toll). Explicit `enabled: false` — opt-out. Actually starts
+// ONLY with a Redis client (the limiter lives in Redis); without Redis —
+// middleware passthrough (gated in the daemon, not in config). The
+// `voyage_create.{rate,burst}` / `voyage_preview.{rate,burst}` fields resolve to
+// [DefaultTempo*] when omitted.
 type KeeperTempo struct {
-	// Enabled — флаг включения Tempo. nil/опущено → true (default-ON); явный
-	// `false` — оператор выключает (dev/отладка). `*bool`, чтобы различить «не
-	// задано» (→ default-on) от явного `false` (паттерн KeeperToll.Enabled).
+	// Enabled toggles Tempo. nil/omitted → true (default-ON); explicit `false` —
+	// operator disables (dev/debugging). `*bool` to distinguish "unset"
+	// (→ default-on) from explicit `false` (KeeperToll.Enabled pattern).
 	Enabled *bool `yaml:"enabled,omitempty"`
 
-	// VoyageCreate — rate/burst bucket-а `POST /v1/voyages` (create). Опущенные
-	// поля резолвятся к [DefaultTempoVoyageCreate*] в [ResolvedVoyageCreate].
+	// VoyageCreate is the rate/burst of the `POST /v1/voyages` (create) bucket.
+	// Omitted fields resolve to [DefaultTempoVoyageCreate*] in
+	// [ResolvedVoyageCreate].
 	VoyageCreate KeeperTempoBucket `yaml:"voyage_create,omitempty"`
 
-	// VoyagePreview — rate/burst bucket-а `POST /v1/voyages/preview` (dry-resolve
-	// scope). ОТДЕЛЬНЫЙ bucket от voyage_create (ADR-050 amendment 2026-06-17):
-	// preview read-like по эффекту, но resolver-heavy по стоимости → собственный,
-	// более мягкий лимит, чтобы preview и create не делили квоту. Опущенные поля
-	// резолвятся к [DefaultTempoVoyagePreview*] в [ResolvedVoyagePreview].
+	// VoyagePreview is the rate/burst of the `POST /v1/voyages/preview`
+	// (dry-resolve scope) bucket. A SEPARATE bucket from voyage_create (ADR-050
+	// amendment 2026-06-17): preview is read-like in effect but resolver-heavy in
+	// cost → its own, softer limit so preview and create do not share a quota.
+	// Omitted fields resolve to [DefaultTempoVoyagePreview*] in
+	// [ResolvedVoyagePreview].
 	VoyagePreview KeeperTempoBucket `yaml:"voyage_preview,omitempty"`
 }
 
-// KeeperTempoBucket — rate/burst одного логического Tempo-bucket-а.
+// KeeperTempoBucket is the rate/burst of one logical Tempo bucket.
 //
-// Rate — refill-скорость (токенов в секунду, rps). Burst — глубина бакета
-// (capacity). Оба должны быть > 0 при заданном блоке (валидация в schema-фазе);
-// 0/опущено резолвится к дефолту в [KeeperTempo.ResolvedVoyageCreate].
+// Rate — refill rate (tokens per second, rps). Burst — bucket depth (capacity).
+// Both must be > 0 when the block is set (validated in the schema phase);
+// 0/omitted resolves to the default in [KeeperTempo.ResolvedVoyageCreate].
 type KeeperTempoBucket struct {
 	Rate  float64 `yaml:"rate,omitempty"`
 	Burst int     `yaml:"burst,omitempty"`
 }
 
-// TempoEnabled возвращает эффективный флаг включения Tempo: nil-блок / nil-поле
-// → true (default-ON, footgun-guard). Фактический подъём дополнительно требует
-// Redis (gate в daemon).
+// TempoEnabled returns the effective Tempo toggle: nil block / nil field → true
+// (default-ON, footgun-guard). Actually starting additionally requires Redis
+// (gated in the daemon).
 func (t *KeeperTempo) TempoEnabled() bool {
 	if t == nil || t.Enabled == nil {
 		return true
@@ -501,10 +518,10 @@ func (t *KeeperTempo) TempoEnabled() bool {
 	return *t.Enabled
 }
 
-// ResolvedVoyageCreate возвращает эффективные rate/burst bucket-а voyage-create:
-// опущенные/нулевые поля → дефолты [DefaultTempoVoyageCreate*]. Читается
-// middleware на каждом запросе (hot-reload), поэтому дешёвый чистый резолв без
-// аллокаций.
+// ResolvedVoyageCreate returns the effective rate/burst of the voyage-create
+// bucket: omitted/zero fields → defaults [DefaultTempoVoyageCreate*]. Read by
+// the middleware on every request (hot-reload), hence a cheap allocation-free
+// pure resolve.
 func (t *KeeperTempo) ResolvedVoyageCreate() (rate float64, burst int) {
 	rate, burst = DefaultTempoVoyageCreateRate, DefaultTempoVoyageCreateBurst
 	if t == nil {
@@ -519,10 +536,11 @@ func (t *KeeperTempo) ResolvedVoyageCreate() (rate float64, burst int) {
 	return rate, burst
 }
 
-// ResolvedVoyagePreview возвращает эффективные rate/burst bucket-а voyage-preview:
-// опущенные/нулевые поля → дефолты [DefaultTempoVoyagePreview*]. Отдельный от
-// voyage-create bucket (ADR-050 amendment 2026-06-17). Читается middleware на
-// каждом запросе (hot-reload), поэтому дешёвый чистый резолв без аллокаций.
+// ResolvedVoyagePreview returns the effective rate/burst of the voyage-preview
+// bucket: omitted/zero fields → defaults [DefaultTempoVoyagePreview*]. A
+// separate bucket from voyage-create (ADR-050 amendment 2026-06-17). Read by the
+// middleware on every request (hot-reload), hence a cheap allocation-free pure
+// resolve.
 func (t *KeeperTempo) ResolvedVoyagePreview() (rate float64, burst int) {
 	rate, burst = DefaultTempoVoyagePreviewRate, DefaultTempoVoyagePreviewBurst
 	if t == nil {
@@ -537,208 +555,212 @@ func (t *KeeperTempo) ResolvedVoyagePreview() (rate float64, burst int) {
 	return rate, burst
 }
 
-// Дефолты параметров Acolyte-пула (ADR-027). Совпадают с прежними хардкод-
-// значениями (main-константы / acolyte.defaultPollInterval), чтобы пустой
-// конфиг не менял поведение. Применяются в daemon при пустом/нулевом поле.
+// Acolyte pool defaults (ADR-027). Equal to the former hardcoded values (main
+// constants / acolyte.defaultPollInterval) so an empty config does not change
+// behavior. Applied in the daemon for an empty/zero field.
 const (
-	// DefaultAcolyteLease — дефолт TTL Ward-захвата (claim_expires_at).
-	// Умеренное окно: достаточно для render→MarkDispatched→SendApply, и
-	// достаточно короткое, чтобы recovery-скан быстро вернул задание мёртвого
-	// владельца в очередь.
+	// DefaultAcolyteLease is the default TTL of the Ward claim (claim_expires_at).
+	// A moderate window: enough for render→MarkDispatched→SendApply, and short
+	// enough for the recovery scan to quickly return a dead owner's job to the
+	// queue.
 	DefaultAcolyteLease = 30 * time.Second
 
-	// DefaultAcolyteBatch — дефолт размера пачки одного claim-тика.
+	// DefaultAcolyteBatch is the default batch size of one claim tick.
 	DefaultAcolyteBatch = 10
 
-	// DefaultAcolytePollInterval — дефолт периода poll-fallback-а воркера.
-	// Достаточно частый для failover в единицы секунд, достаточно редкий, чтобы
-	// не флудить PG пустыми claim-запросами на простаивающем кластере.
+	// DefaultAcolytePollInterval is the default worker poll-fallback period.
+	// Frequent enough for failover in single seconds, rare enough not to flood
+	// PG with empty claim queries on an idle cluster.
 	DefaultAcolytePollInterval = 2 * time.Second
 
-	// DefaultAcolyteDrainGrace — дефолт окна graceful-drain пула Acolyte при
-	// остановке (ADR-027 Phase 2). Достаточно, чтобы уже начатый claim
-	// (render → MarkDispatched → SendApply) добежал на здоровом PG/Soul, и не
-	// настолько большое, чтобы тормозить SIGTERM-выход на зависшем in-flight
-	// (его Ward переживёт рестарт — lease истечёт, подберёт recovery-скан).
+	// DefaultAcolyteDrainGrace is the default graceful-drain window of the
+	// Acolyte pool on stop (ADR-027 Phase 2). Enough for an already-started claim
+	// (render → MarkDispatched → SendApply) to finish on a healthy PG/Soul, and
+	// not so large as to slow the SIGTERM exit on a stuck in-flight (whose Ward
+	// survives the restart — the lease expires and the recovery scan picks it up).
 	DefaultAcolyteDrainGrace = 5 * time.Second
 )
 
-// Дефолты circuit-breaker-а Oracle (ADR-030(a), beacons S4). Применяются в
-// daemon при пустом (опущенном) поле; явный 0 в max_fires — НЕ дефолт, а
-// escape-hatch «breaker OFF» (см. [KeeperConfig.OracleCircuitMaxFires]).
+// Oracle circuit-breaker defaults (ADR-030(a), beacons S4). Applied in the
+// daemon for an empty (omitted) field; an explicit 0 in max_fires is NOT a
+// default but the "breaker OFF" escape-hatch (see
+// [KeeperConfig.OracleCircuitMaxFires]).
 const (
-	// DefaultOracleCircuitMaxFires — дефолт порога авто-disable Decree-а.
-	// 5 срабатываний за окно: правило с idempotent-action + cooldown в норме не
-	// доходит до 5 повторов; устойчивый выход на порог = правило сорвалось в
-	// петлю и его пора глушить.
+	// DefaultOracleCircuitMaxFires is the default Decree auto-disable threshold.
+	// 5 fires per window: a rule with an idempotent action + cooldown normally
+	// does not reach 5 repeats; a steady climb to the threshold means the rule
+	// broke into a loop and should be silenced.
 	DefaultOracleCircuitMaxFires = 5
 
-	// DefaultOracleCircuitWindow — дефолт длины fixed-window. 10m достаточно
-	// широкое, чтобы серия повторов «правило в петле» уложилась в одно окно
-	// (cooldown между ними обычно минуты), и достаточно узкое, чтобы редкие
-	// легитимные срабатывания за день не накапливались до ложного trip-а.
+	// DefaultOracleCircuitWindow is the default fixed-window length. 10m is wide
+	// enough for a "rule in a loop" burst of repeats to fit one window (the
+	// cooldown between them is usually minutes), and narrow enough that rare
+	// legitimate fires across a day do not accumulate into a false trip.
 	DefaultOracleCircuitWindow = 10 * time.Minute
 )
 
-// Дефолты Watchman (изоляция-детект + soul-shedding S2). Применяются в daemon
-// при пустом/нулевом поле. Совпадают с пакетными watchman.Default*-константами
-// (источник истины дефолтов — пакет watchman, здесь дублируются для config-
-// резолва без import-цикла shared→keeper).
+// Watchman defaults (isolation detection + soul-shedding S2). Applied in the
+// daemon for an empty/zero field. Equal to the watchman.Default* package
+// constants (defaults' source of truth is the watchman package, duplicated here
+// for config resolution without a shared→keeper import cycle).
 const (
-	// DefaultWatchmanInterval — дефолт периода probe-тика Watchman. 5s: баланс
-	// между скоростью реакции на изоляцию (≈ interval × fail_threshold до
-	// shedding-а) и нагрузкой ping-ов на PG/Redis.
+	// DefaultWatchmanInterval is the default Watchman probe-tick period. 5s:
+	// a balance between reaction speed to isolation (≈ interval × fail_threshold
+	// until shedding) and the load of pings on PG/Redis.
 	DefaultWatchmanInterval = 5 * time.Second
 
-	// DefaultWatchmanFailThreshold — дефолт числа подряд идущих провалов probe до
-	// shedding-а. 3: debounce от единичных spike-ов (один-два тика переживаются),
-	// устойчивая потеря (>=3) триггерит.
+	// DefaultWatchmanFailThreshold is the default number of consecutive probe
+	// failures before shedding. 3: debounce against single spikes (one or two
+	// ticks are survived), a steady loss (>=3) triggers.
 	DefaultWatchmanFailThreshold = 3
 )
 
-// Дефолты Toll (cluster-wide detector массового оттока, ADR-038). Применяются
-// в daemon при пустом/нулевом поле. Источник истины — пакет toll, здесь
-// дублируются для config-резолва без import-цикла shared→keeper.
+// Toll defaults (cluster-wide mass-churn detector, ADR-038). Applied in the
+// daemon for an empty/zero field. Source of truth is the toll package,
+// duplicated here for config resolution without a shared→keeper import cycle.
 const (
-	// DefaultTollThreshold — доля от baseline `souls.status='connected'`, при
-	// превышении которой за окно Toll взводит cluster:degraded. 0.20 = 20%
-	// (умеренный порог: не реагирует на единичные отключения малого
-	// кластера, но ловит DC outage / massive split).
+	// DefaultTollThreshold is the fraction of the `souls.status='connected'`
+	// baseline above which, within a window, Toll raises cluster:degraded.
+	// 0.20 = 20% (a moderate threshold: unresponsive to single disconnects in a
+	// small cluster, but catches a DC outage / massive split).
 	DefaultTollThreshold = 0.20
 
-	// DefaultTollWindow — длина sliding-окна Toll. 60s — баланс между
-	// скоростью реакции на массовый отток и устойчивостью к burst-ам
-	// (rolling restart одной партии Souls укладывается в окно).
+	// DefaultTollWindow is the Toll sliding-window length. 60s balances reaction
+	// speed to mass churn against resilience to bursts (a rolling restart of one
+	// batch of Souls fits in the window).
 	DefaultTollWindow = 60 * time.Second
 
-	// DefaultTollDegradedTTL — TTL Redis-ключа `cluster:degraded`. Равен
-	// длине окна: если leader умер и не успел продлить, флаг гаснет сам,
-	// блокировка снимается.
+	// DefaultTollDegradedTTL is the TTL of the `cluster:degraded` Redis key.
+	// Equal to the window length: if the leader dies and fails to renew, the flag
+	// clears itself and the lock is released.
 	DefaultTollDegradedTTL = 60 * time.Second
 
-	// DefaultTollClearGrace — устойчивое окно низкого rate-а до clearing
-	// (asymmetric hysteresis по ADR-038): сработать на первом превышении,
-	// снять только после grace под threshold-ом — защита от флапов.
+	// DefaultTollClearGrace is the sustained low-rate window before clearing
+	// (asymmetric hysteresis per ADR-038): fire on the first excess, clear only
+	// after a grace below the threshold — flap protection.
 	DefaultTollClearGrace = 60 * time.Second
 
-	// DefaultTollLeaseTTL — TTL Redis-lease `cluster:toll:leader`. 30s
-	// (симметрично Reaper-овскому): leader продлевает каждые TTL/3, при
-	// crash-е следующий кандидат подхватит через ≤ TTL.
+	// DefaultTollLeaseTTL is the TTL of the `cluster:toll:leader` Redis lease.
+	// 30s (symmetric with Reaper's): the leader renews every TTL/3, and on crash
+	// the next candidate takes over within ≤ TTL.
 	DefaultTollLeaseTTL = 30 * time.Second
 
-	// DefaultTollWarmup — окно immunity после старта инстанса. Disconnect-ы
-	// первые 60s после старта tollwatcher-а считаются (метрика растёт), но
-	// в Redis sorted-set НЕ публикуются (cluster restart false-positive
-	// defense — все Souls reconnect-ят разом, это не отток).
+	// DefaultTollWarmup is the immunity window after instance start. Disconnects
+	// in the first 60s after tollwatcher start are counted (the metric grows) but
+	// NOT published to the Redis sorted-set (cluster-restart false-positive
+	// defense — all Souls reconnect at once, which is not churn).
 	DefaultTollWarmup = 60 * time.Second
 
-	// DefaultTollWebhookTimeout — потолок одного POST-вызова webhook-канала
-	// (ADR-038 amendment 2026-05-27, extensions). 10s достаточно для PagerDuty
-	// Events API / Slack incoming webhook (типичная latency — сотни мс),
-	// достаточно коротко, чтобы повисший remote не задержал leader-tick.
-	// Webhook — best-effort: тайм-аут в alert-канал не блокирует Set/Clear.
+	// DefaultTollWebhookTimeout is the ceiling on one webhook-channel POST call
+	// (ADR-038 amendment 2026-05-27, extensions). 10s is enough for the PagerDuty
+	// Events API / Slack incoming webhook (typical latency is hundreds of ms),
+	// short enough that a hung remote does not delay the leader tick. The webhook
+	// is best-effort: a timeout on the alert channel does not block Set/Clear.
 	DefaultTollWebhookTimeout = 10 * time.Second
 )
 
-// Допустимые форматы webhook-канала (ADR-038 amendment, extensions).
+// Allowed webhook-channel formats (ADR-038 amendment, extensions).
 const (
-	// TollWebhookFormatGeneric — generic JSON-POST с плоским payload-ом
+	// TollWebhookFormatGeneric is a generic JSON POST with a flat payload
 	// `{event_type, leader_kid, rate, baseline_connected, threshold,
-	// window_seconds, timestamp, coven_name?}`. Подходит под произвольный
-	// HTTP-receiver (включая self-hosted alertmanager-relays).
+	// window_seconds, timestamp, coven_name?}`. Fits an arbitrary HTTP receiver
+	// (including self-hosted alertmanager relays).
 	TollWebhookFormatGeneric = "generic"
 
-	// TollWebhookFormatPagerDutyV2 — PagerDuty Events API v2 schema:
+	// TollWebhookFormatPagerDutyV2 is the PagerDuty Events API v2 schema:
 	// `{routing_key, event_action, dedup_key, payload:{summary, source,
-	// severity, custom_details}}`. URL обязан быть
-	// `https://events.pagerduty.com/v2/enqueue` (или integration-equivalent),
-	// `routing_key` — integration-key из Vault KV (под полем `routing_key`).
+	// severity, custom_details}}`. The URL must be
+	// `https://events.pagerduty.com/v2/enqueue` (or an integration equivalent),
+	// `routing_key` is the integration key from Vault KV (under `routing_key`).
 	TollWebhookFormatPagerDutyV2 = "pagerduty_v2"
 
-	// TollWebhookFormatSlack — Slack incoming webhook schema:
-	// `{text, attachments:[{color, fields:[...]}]}`. URL — slack-issued
-	// webhook (`https://hooks.slack.com/services/...`). Auth — в самом URL,
-	// отдельных headers нет.
+	// TollWebhookFormatSlack is the Slack incoming-webhook schema:
+	// `{text, attachments:[{color, fields:[...]}]}`. The URL is a slack-issued
+	// webhook (`https://hooks.slack.com/services/...`). Auth is in the URL
+	// itself, no separate headers.
 	TollWebhookFormatSlack = "slack"
 )
 
-// KeeperToll — Toll cluster-wide detector (ADR-038).
+// KeeperToll is the Toll cluster-wide detector (ADR-038).
 //
-// Опциональный блок. При nil → дефолты + enabled=true (поднимается); явный
-// `enabled: false` → выключается полностью. Все остальные поля имеют дефолты
-// из [DefaultToll*]-констант; их можно тюнить без переписывания всего блока
-// (опущенные поля резолвятся к дефолтам в daemon).
+// Optional block. With nil → defaults + enabled=true (starts); explicit
+// `enabled: false` → fully disabled. All other fields default from the
+// [DefaultToll*] constants; they can be tuned without rewriting the whole block
+// (omitted fields resolve to defaults in the daemon).
 type KeeperToll struct {
-	// Enabled — флаг включения Toll. nil/опущено → true (включено по дефолту);
-	// явный `false` — оператор выключает (dev-режим / отладка). `*bool`,
-	// чтобы различить «не задано» (→ default-on) от явного `false`.
+	// Enabled toggles Toll. nil/omitted → true (enabled by default); explicit
+	// `false` — operator disables (dev mode / debugging). `*bool` to distinguish
+	// "unset" (→ default-on) from explicit `false`.
 	Enabled *bool `yaml:"enabled,omitempty"`
 
-	// Threshold — доля disconnect_rate / baseline_connected, при превышении
-	// которой Toll-leader взводит cluster:degraded. 0/опущено → дефолт
-	// [DefaultTollThreshold] (0.20). Допустимый диапазон (0, 1] — порог
-	// «больше 100% от baseline» бессмыслен. Schema-проверка диапазона.
+	// Threshold is the disconnect_rate / baseline_connected fraction above which
+	// the Toll leader raises cluster:degraded. 0/omitted → default
+	// [DefaultTollThreshold] (0.20). Allowed range (0, 1] — a "more than 100% of
+	// baseline" threshold is meaningless. Range checked in the schema phase.
 	Threshold float64 `yaml:"threshold,omitempty"`
 
-	// WindowSize — длина sliding-окна (per-second buckets в Redis sorted-set).
-	// Тип `duration`, пустое → [DefaultTollWindow] (60s). Формат — semantic-фаза.
+	// WindowSize is the sliding-window length (per-second buckets in a Redis
+	// sorted-set). Type `duration`, empty → [DefaultTollWindow] (60s). Format —
+	// semantic phase.
 	WindowSize string `yaml:"window_size,omitempty"`
 
-	// DegradedTTL — TTL Redis-ключа `cluster:degraded`. Тип `duration`, пустое
-	// → [DefaultTollDegradedTTL] (60s). Если leader умер и не продлил — флаг
-	// сам гаснет.
+	// DegradedTTL is the TTL of the `cluster:degraded` Redis key. Type
+	// `duration`, empty → [DefaultTollDegradedTTL] (60s). If the leader dies and
+	// does not renew, the flag clears itself.
 	DegradedTTL string `yaml:"degraded_ttl,omitempty"`
 
-	// ClearGrace — устойчивое окно низкого rate до clearing (asymmetric
-	// hysteresis). Тип `duration`, пустое → [DefaultTollClearGrace] (60s).
+	// ClearGrace is the sustained low-rate window before clearing (asymmetric
+	// hysteresis). Type `duration`, empty → [DefaultTollClearGrace] (60s).
 	ClearGrace string `yaml:"clear_grace,omitempty"`
 
-	// LeaseTTL — TTL Redis-lease `cluster:toll:leader`. Тип `duration`,
-	// пустое → [DefaultTollLeaseTTL] (30s). Renew каждые TTL/3.
+	// LeaseTTL is the TTL of the `cluster:toll:leader` Redis lease. Type
+	// `duration`, empty → [DefaultTollLeaseTTL] (30s). Renew every TTL/3.
 	LeaseTTL string `yaml:"lease_ttl,omitempty"`
 
-	// WarmupDelay — окно immunity после старта инстанса (cluster restart
-	// false-positive defense). Тип `duration`, пустое → [DefaultTollWarmup]
+	// WarmupDelay is the immunity window after instance start (cluster-restart
+	// false-positive defense). Type `duration`, empty → [DefaultTollWarmup]
 	// (60s).
 	WarmupDelay string `yaml:"warmup_delay,omitempty"`
 
-	// Webhook — опц. alert-канал на cluster.degraded_set / cluster.degraded_cleared
-	// (ADR-038 amendment 2026-05-27, extensions). Поддерживает generic JSON-POST
-	// + специфичные форматы PagerDuty Events API v2 / Slack incoming webhook.
-	// При nil или `enabled: false` notifier не поднимается; degraded set/clear
-	// идёт как было (audit + gauge + metrics) без alert-out-а. Webhook — best-
-	// effort: ошибка POST-а логируется, но не блокирует Set/Clear (cluster
-	// degraded — primary goal, webhook — secondary).
+	// Webhook is an optional alert channel for cluster.degraded_set /
+	// cluster.degraded_cleared (ADR-038 amendment 2026-05-27, extensions).
+	// Supports a generic JSON POST plus the specific PagerDuty Events API v2 /
+	// Slack incoming-webhook formats. With nil or `enabled: false` the notifier
+	// does not start; degraded set/clear proceeds as before (audit + gauge +
+	// metrics) without an alert-out. The webhook is best-effort: a POST error is
+	// logged but does not block Set/Clear (cluster-degraded is the primary goal,
+	// the webhook is secondary).
 	Webhook *KeeperTollWebhook `yaml:"webhook,omitempty" json:"webhook,omitempty"`
 
-	// PerCovenThresholds — опц. per-coven threshold-override (ADR-038 amendment
-	// 2026-05-27, extensions). Если задан и непустой, leader дополнительно
-	// считает disconnect_rate per-coven (ZRANGEBYSCORE → split member-value по
-	// `|`) и взводит cluster:degraded если ЛИБО global threshold превышен ЛИБО
-	// per-coven threshold по конкретной coven. В audit-payload trigger-а
-	// сохраняется `coven_name` (если триггер per-coven). Ключ map — имя coven,
-	// значение — порог (0, 1].
+	// PerCovenThresholds is an optional per-coven threshold override (ADR-038
+	// amendment 2026-05-27, extensions). If set and non-empty, the leader also
+	// counts disconnect_rate per-coven (ZRANGEBYSCORE → split the member value on
+	// `|`) and raises cluster:degraded if EITHER the global threshold is exceeded
+	// OR a per-coven threshold for a specific coven. The trigger's audit payload
+	// stores `coven_name` (if the trigger is per-coven). Map key — coven name,
+	// value — threshold (0, 1].
 	//
-	// Cardinality-риск ADR-038(п.5) митигирован тем, что подписка на per-coven
-	// thresholds — явное opt-in решение оператора: список ключей конечен и
-	// контролируется в keeper.yml. Per-coven counter в Prometheus
-	// (keeper_toll_disconnects_total{coven}) уже несёт ту же cardinality.
+	// The cardinality risk of ADR-038(§5) is mitigated by per-coven thresholds
+	// being an explicit operator opt-in: the key list is finite and controlled in
+	// keeper.yml. The Prometheus per-coven counter
+	// (keeper_toll_disconnects_total{coven}) already carries the same cardinality.
 	PerCovenThresholds map[string]float64 `yaml:"per_coven_thresholds,omitempty" json:"per_coven_thresholds,omitempty"`
 }
 
-// KeeperTollWebhook — webhook alert-канал Toll (ADR-038 amendment, extensions).
+// KeeperTollWebhook is the Toll webhook alert channel (ADR-038 amendment,
+// extensions).
 //
-// При `enabled: false` notifier не поднимается (default-off — добавление поля
-// не меняет поведение существующих конфигов). При `enabled: true` обязательны
-// `url_ref` (vault-ref на secret-URL ИЛИ inline plain URL — выбор оператора) +
-// `format` (валидируется schema-фазой по closed-enum
-// [TollWebhookFormatGeneric] / [TollWebhookFormatPagerDutyV2] /
-// [TollWebhookFormatSlack]).
+// With `enabled: false` the notifier does not start (default-off — adding the
+// field does not change existing configs' behavior). With `enabled: true`,
+// `url_ref` (a vault-ref to a secret URL OR an inline plain URL — operator's
+// choice) + `format` are required (`format` validated in the schema phase
+// against the closed enum [TollWebhookFormatGeneric] /
+// [TollWebhookFormatPagerDutyV2] / [TollWebhookFormatSlack]).
 //
-// БЕЗОПАСНОСТЬ: integration-keys / Slack-webhook-URL — секреты (раскрывают
-// pager). Рекомендуется `url_ref: vault:secret/keeper/toll-webhook-url` (поле
-// в Vault KV — `url`). Inline URL допустим для совместимости с локальными
-// receiver-ами без Vault, но для prod-формы — vault-ref.
+// SECURITY: integration keys / Slack webhook URLs are secrets (they expose the
+// pager). Prefer `url_ref: vault:secret/keeper/toll-webhook-url` (Vault KV field
+// `url`). An inline URL is allowed for compatibility with local receivers
+// without Vault, but for a prod form use a vault-ref.
 type KeeperTollWebhook struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	URLRef  string `yaml:"url_ref" json:"url_ref"`
@@ -746,7 +768,7 @@ type KeeperTollWebhook struct {
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
-// KeeperListen — четыре listener-а Keeper-а.
+// KeeperListen holds the four Keeper listeners.
 type KeeperListen struct {
 	GRPC    KeeperListenGRPC   `yaml:"grpc"`
 	OpenAPI KeeperListenSimple `yaml:"openapi"`
@@ -754,25 +776,24 @@ type KeeperListen struct {
 	Metrics KeeperListenSimple `yaml:"metrics"`
 }
 
-// KeeperListenGRPC — два sub-listener-а Keeper-а под ADR-012(b):
-// `bootstrap` (server-only TLS, отдельный listener для Bootstrap-RPC,
-// у Soul-а ещё нет SoulSeed-сертификата) и `event_stream` (mTLS,
-// долгоживущий bidi-стрим после онбординга).
+// KeeperListenGRPC holds Keeper's two sub-listeners under ADR-012(b):
+// `bootstrap` (server-only TLS, a separate listener for the Bootstrap RPC, since
+// a Soul has no SoulSeed cert yet) and `event_stream` (mTLS, the long-lived bidi
+// stream after onboarding).
 //
-// TLS-параметры независимы по архитектуре, но грамматика допускает
-// одинаковые пути для cert/key — один и тот же серверный сертификат
-// можно использовать на обоих listener-ах.
+// TLS parameters are architecturally independent, but the grammar allows the
+// same cert/key paths — the same server certificate may be used on both
+// listeners.
 type KeeperListenGRPC struct {
 	Bootstrap   KeeperListenGRPCBootstrap   `yaml:"bootstrap"`
 	EventStream KeeperListenGRPCEventStream `yaml:"event_stream"`
 }
 
-// KeeperListenGRPCBootstrap — Bootstrap-listener.
+// KeeperListenGRPCBootstrap is the Bootstrap listener.
 //
-// CA сюда НЕ кладётся: Bootstrap по ADR-012(b) — server-only TLS, у
-// Soul-а до онбординга нет клиентского сертификата. Появление ключа
-// `listen.grpc.bootstrap.tls.ca` в YAML отвергается schema-фазой через
-// `unknown_key`.
+// No CA goes here: Bootstrap per ADR-012(b) is server-only TLS, and a Soul has
+// no client certificate before onboarding. A `listen.grpc.bootstrap.tls.ca` key
+// in YAML is rejected in the schema phase via `unknown_key`.
 type KeeperListenGRPCBootstrap struct {
 	Addr string                       `yaml:"addr"`
 	TLS  KeeperListenGRPCBootstrapTLS `yaml:"tls"`
@@ -783,29 +804,29 @@ type KeeperListenGRPCBootstrapTLS struct {
 	Key  string `yaml:"key"`
 }
 
-// KeeperListenGRPCEventStream — EventStream-listener (mTLS).
+// KeeperListenGRPCEventStream is the EventStream listener (mTLS).
 //
-// MaxApplySizeMB — потолок размера одного исходящего FromKeeper-сообщения,
-// прежде всего `ApplyRequest` с пачкой отрендеренных `RenderedTask` (рендер
-// Destiny — Keeper-side, ADR-012). Применяется как `grpc.MaxSendMsgSize` на
-// EventStream-сервере: при попытке отправить больше Keeper падает fail-fast с
-// понятной ошибкой вместо глухого отказа на стороне Soul. 0/опущено → дефолт
-// [DefaultMaxApplySizeMB] (8 MiB). Это поле — НЕ recv-лимит входящих FromSoul
-// (тот — внутренний инвариант `eventStreamMaxRecvMsgSize`, 1 MiB, конфигом не
-// управляется).
+// MaxApplySizeMB is the size ceiling of one outgoing FromKeeper message,
+// primarily `ApplyRequest` with a batch of rendered `RenderedTask` (Destiny
+// render is Keeper-side, ADR-012). Applied as `grpc.MaxSendMsgSize` on the
+// EventStream server: on an attempt to send more, Keeper fails fast with a clear
+// error instead of an opaque rejection on the Soul side. 0/omitted → default
+// [DefaultMaxApplySizeMB] (8 MiB). This is NOT the recv limit for incoming
+// FromSoul (that is the internal invariant `eventStreamMaxRecvMsgSize`, 1 MiB,
+// not config-controlled).
 //
-// Инвариант контракта Keeper↔Soul: этот send-лимит должен быть ≤ Soul-recv-
-// лимиту (`keeper.max_apply_size_mb` в `soul.yml`), иначе Keeper отправит то,
-// что Soul отвергнет. Дефолты обеих сторон совпадают (8 MiB).
+// Keeper↔Soul contract invariant: this send limit must be ≤ the Soul recv limit
+// (`keeper.max_apply_size_mb` in `soul.yml`), otherwise Keeper sends what Soul
+// would reject. Both sides' defaults match (8 MiB).
 type KeeperListenGRPCEventStream struct {
 	Addr           string                         `yaml:"addr"`
 	TLS            KeeperListenGRPCEventStreamTLS `yaml:"tls"`
 	MaxApplySizeMB int                            `yaml:"max_apply_size_mb,omitempty"`
 }
 
-// ResolvedMaxApplySize возвращает эффективный send-лимит EventStream-сервера в
-// байтах: 0/опущено → [DefaultMaxApplySizeMB]. Валидация (>0, ≥ минимума) —
-// в schema-фазе; здесь только резолв дефолта.
+// ResolvedMaxApplySize returns the effective EventStream-server send limit in
+// bytes: 0/omitted → [DefaultMaxApplySizeMB]. Validation (>0, ≥ minimum) — in
+// the schema phase; here only default resolution.
 func (e KeeperListenGRPCEventStream) ResolvedMaxApplySize() int {
 	mb := e.MaxApplySizeMB
 	if mb <= 0 {
@@ -817,7 +838,7 @@ func (e KeeperListenGRPCEventStream) ResolvedMaxApplySize() int {
 type KeeperListenGRPCEventStreamTLS struct {
 	Cert string `yaml:"cert"`
 	Key  string `yaml:"key"`
-	// CA — корневой сертификат, которым валидируются SoulSeed входящих Souls.
+	// CA is the root certificate validating incoming Souls' SoulSeed.
 	CA string `yaml:"ca"`
 }
 
@@ -825,7 +846,7 @@ type KeeperListenSimple struct {
 	Addr string `yaml:"addr"`
 }
 
-// KeeperPostgres — холодное хранилище.
+// KeeperPostgres is the cold storage.
 type KeeperPostgres struct {
 	DSNRef string             `yaml:"dsn_ref"`
 	Pool   KeeperPostgresPool `yaml:"pool"`
@@ -836,22 +857,23 @@ type KeeperPostgresPool struct {
 	Max int `yaml:"max"`
 }
 
-// KeeperRedis — горячий слой и координация.
+// KeeperRedis is the hot layer and coordination.
 //
-// `mode` выбирает топологию Redis (ADR-006 amendment):
-//   - `standalone` (default, пусто/опущено = standalone — forward-compat для
-//     старых конфигов) — один узел, адрес в `addr`.
-//   - `sentinel` — Redis Sentinel HA: клиент находит master через sentinel-узлы.
-//     Требует `master_name` + `sentinels` (адреса sentinel-узлов host:port);
-//     `addr` в этом режиме не используется. Пароль самих sentinel-узлов —
-//     `sentinel_password_ref` (опц.), пароль Redis — `password_ref`.
-//   - `cluster` — Redis Cluster: шардирование по слотам. Требует `nodes`
-//     (адреса узлов кластера host:port для bootstrap-discovery); `addr` не
-//     используется. `sentinel_*` к cluster-режиму не относятся.
+// `mode` selects the Redis topology (ADR-006 amendment):
+//   - `standalone` (default, empty/omitted = standalone — forward-compat for old
+//     configs) — a single node, address in `addr`.
+//   - `sentinel` — Redis Sentinel HA: the client finds the master via sentinel
+//     nodes. Requires `master_name` + `sentinels` (sentinel node addresses
+//     host:port); `addr` is unused in this mode. The sentinel nodes' own
+//     password is `sentinel_password_ref` (optional), the Redis password is
+//     `password_ref`.
+//   - `cluster` — Redis Cluster: slot-based sharding. Requires `nodes` (cluster
+//     node addresses host:port for bootstrap discovery); `addr` is unused.
+//     `sentinel_*` do not apply to cluster mode.
 //
-// `password_ref` / `sentinel_password_ref` — vault-ref формы
-// `vault:<mount>/<path>[#field]` (или plaintext в тестах); резолв — на
-// `keeper/internal/redis.NewClient` через keeper-vault-клиент.
+// `password_ref` / `sentinel_password_ref` are vault-refs of the form
+// `vault:<mount>/<path>[#field]` (or plaintext in tests); resolved at
+// `keeper/internal/redis.NewClient` via the keeper-vault client.
 type KeeperRedis struct {
 	Mode                string   `yaml:"mode,omitempty"`
 	Addr                string   `yaml:"addr"`
@@ -862,30 +884,30 @@ type KeeperRedis struct {
 	SentinelPasswordRef string   `yaml:"sentinel_password_ref,omitempty"`
 }
 
-// KeeperVault — обязательная зависимость Keeper-а.
+// KeeperVault is a mandatory Keeper dependency.
 //
-// `auth.method` выбирает способ аутентификации Keeper-а в Vault:
-//   - `token` (default, dev-shortcut) — статический токен из поля `token`;
-//     `dev/docker-compose.yml` поднимает Vault в dev-режиме с root-токеном.
-//   - `approle` — прод-путь (ADR-014): Keeper делает `auth/approle/login`
-//     c `role_id` + `secret_id` и получает renewable client-token, который
-//     дальше продлевает TokenRenewer (renewer.go).
+// `auth.method` selects how Keeper authenticates to Vault:
+//   - `token` (default, dev-shortcut) — a static token from the `token` field;
+//     `dev/docker-compose.yml` runs Vault in dev mode with a root token.
+//   - `approle` — the prod path (ADR-014): Keeper does `auth/approle/login` with
+//     `role_id` + `secret_id` and gets a renewable client token, which
+//     TokenRenewer (renewer.go) then keeps alive.
 //
-// Forward-compat: keeper.yml без блока `auth` (или с пустым `auth.method`)
-// трактуется как `method=token` — старые конфиги работают без правок.
+// Forward-compat: keeper.yml without an `auth` block (or with an empty
+// `auth.method`) is treated as `method=token` — old configs work unchanged.
 //
-// `kv_mount` — mount point для Vault KV v1/v2 secrets engine, default "secret"
-// (версия определяется автоматически через `sys/internal/ui/mounts`; override —
+// `kv_mount` is the mount point for the Vault KV v1/v2 secrets engine, default
+// "secret" (version auto-detected via `sys/internal/ui/mounts`; override —
 // `vault.kv_version`).
 //
-// `kv_version` — опциональный escape-hatch: пусто/опущено → версия KV mount-а
-// резолвится probe-ом через `sys/internal/ui/mounts/<mount>`; заданное `"1"`/`"2"`
-// форсирует версию без probe (нужно, когда ACL закрывает probe-endpoint).
+// `kv_version` is an optional escape-hatch: empty/omitted → the KV mount version
+// is resolved by a probe via `sys/internal/ui/mounts/<mount>`; a set `"1"`/`"2"`
+// forces the version without a probe (needed when ACL blocks the probe endpoint).
 //
-// `pki_mount` / `pki_role` — mount + role PKI engine, через который Keeper
-// подписывает CSR Soul-ов при онбординге (`Bootstrap`-RPC, ADR-012(b)).
-// Default `pki_role` пустой; semantic-фаза не валидирует ROLE — Vault
-// сам отвергает запрос на несуществующий role.
+// `pki_mount` / `pki_role` are the mount + role of the PKI engine through which
+// Keeper signs Souls' CSRs at onboarding (`Bootstrap` RPC, ADR-012(b)). Default
+// `pki_role` is empty; the semantic phase does not validate the ROLE — Vault
+// itself rejects a request for a nonexistent role.
 type KeeperVault struct {
 	Addr      string          `yaml:"addr"`
 	Token     string          `yaml:"token,omitempty"`
@@ -895,47 +917,48 @@ type KeeperVault struct {
 	PKIMount  string          `yaml:"pki_mount"`
 	PKIRole   string          `yaml:"pki_role,omitempty"`
 
-	// InputDenyPaths — опц. расширение hard deny-list для scoped-резолва
-	// `vault:`-ref в operator-input (docs/input.md → «vault_scope», форк C).
-	// Logical-path-префиксы (`<mount>/<prefix>`), которые НИКОГДА не резолвятся
-	// через input-ref, даже если поле объявило покрывающий их `vault_scope`.
-	// Дополняет system-floor [config.VaultInputFloor] (`secret/keeper/*`,
-	// `secret/internal/*`); сам system-floor конфигом НЕ выключается, только
-	// расширяется. Авторских `vault:`-refs в task params это НЕ касается.
+	// InputDenyPaths is an optional extension of the hard deny-list for scoped
+	// resolution of `vault:`-refs in operator input (docs/input.md → "vault_scope",
+	// fork C). Logical-path prefixes (`<mount>/<prefix>`) that are NEVER resolved
+	// via an input-ref, even if a field declared a `vault_scope` covering them.
+	// Augments the system-floor [config.VaultInputFloor] (`secret/keeper/*`,
+	// `secret/internal/*`); the system-floor itself is NOT disabled by config,
+	// only extended. This does NOT affect authored `vault:`-refs in task params.
 	InputDenyPaths []string `yaml:"input_deny_paths,omitempty"`
 }
 
-// KeeperSecretIngest — dual-mode приём секрета оператора (ADR-064, NIM-11).
-// Оператор может передать секрет значением (plaintext `secret`/`credentials`)
-// вместо vault-ref; keeper сам пишет его в Vault по детерминированному пути и
-// хранит в PG только ref.
+// KeeperSecretIngest is dual-mode ingest of an operator secret (ADR-064,
+// NIM-11). The operator may pass a secret by value (plaintext
+// `secret`/`credentials`) instead of a vault-ref; keeper writes it to Vault at a
+// deterministic path and stores only the ref in PG.
 type KeeperSecretIngest struct {
-	// AcceptPlaintext — разрешить приём plaintext-секрета в Herald/Provider CRUD
-	// (Operator API + MCP). Default false (secure): при false plaintext
-	// отвергается 422, принимаются только `*_ref`. Включать ТОЛЬКО когда Operator
-	// API и MCP за TLS (ADR-064 митигация a): plaintext идёт по проводу
-	// оператор→keeper, cleartext-хоп недопустим. Keeper сам TLS Operator API не
-	// терминирует (за прокси), поэтому гарантия — операторская декларация.
+	// AcceptPlaintext allows ingesting a plaintext secret in Herald/Provider CRUD
+	// (Operator API + MCP). Default false (secure): when false, plaintext is
+	// rejected with 422 and only `*_ref` is accepted. Enable ONLY when the
+	// Operator API and MCP are behind TLS (ADR-064 mitigation a): plaintext
+	// travels operator→keeper over the wire, a cleartext hop is unacceptable.
+	// Keeper does not terminate the Operator API TLS itself (behind a proxy), so
+	// the guarantee is an operator declaration.
 	AcceptPlaintext bool `yaml:"accept_plaintext"`
 }
 
-// KeeperVaultAuth — выбор и параметры auth-метода Vault.
+// KeeperVaultAuth is the Vault auth-method selection and parameters.
 //
-// AppRole-credentials НЕ читаются из Vault (`vault:`-ref) — это chicken-egg:
-// именно этими credentials Keeper и логинится, чтобы потом резолвить любые
-// vault-ref-ы (postgres.dsn_ref, signing_key_ref, …). Поэтому источник —
-// локальный, до подъёма Vault-клиента:
+// AppRole credentials are NOT read from Vault (`vault:`-ref) — that is
+// chicken-and-egg: these are the very credentials Keeper logs in with in order
+// to resolve any vault-refs (postgres.dsn_ref, signing_key_ref, …). So the
+// source is local, before the Vault client comes up:
 //
-//   - `role_id` — НЕ секрет (идентификатор роли), допустимо в открытом виде
-//     прямо в keeper.yml.
-//   - `secret_id` — секрет, plaintext в основном конфиге НЕ хранится. Источник
-//     задаётся одним из (приоритет сверху вниз):
-//   - `secret_id_file` — путь к mode-ограниченному файлу (рекомендуется
-//     0400/0600), содержимое = secret_id (trailing newline снимается);
-//   - `secret_id_env` — имя env-переменной с secret_id (dev/CI/инжектор
-//     секретов вроде Vault Agent / k8s-secret-as-env).
+//   - `role_id` is NOT a secret (a role identifier), acceptable in the clear
+//     right in keeper.yml.
+//   - `secret_id` is a secret, its plaintext is NOT stored in the main config.
+//     The source is one of (priority top to bottom):
+//   - `secret_id_file` — a path to a mode-restricted file (recommended
+//     0400/0600), contents = secret_id (trailing newline stripped);
+//   - `secret_id_env` — the name of an env var with secret_id (dev/CI/secret
+//     injectors like Vault Agent / k8s-secret-as-env).
 //
-// При `method=token` все approle-поля игнорируются.
+// With `method=token` all approle fields are ignored.
 type KeeperVaultAuth struct {
 	Method       string `yaml:"method,omitempty"`
 	RoleID       string `yaml:"role_id,omitempty"`
@@ -943,14 +966,14 @@ type KeeperVaultAuth struct {
 	SecretIDEnv  string `yaml:"secret_id_env,omitempty"`
 }
 
-// AuthMethodToken / AuthMethodAppRole — допустимые значения `vault.auth.method`.
-// Пустой method эквивалентен token (forward-compat).
+// AuthMethodToken / AuthMethodAppRole are the allowed `vault.auth.method`
+// values. An empty method is equivalent to token (forward-compat).
 const (
 	AuthMethodToken   = "token"
 	AuthMethodAppRole = "approle"
 )
 
-// ResolvedAuthMethod возвращает эффективный auth-метод: пустой → token.
+// ResolvedAuthMethod returns the effective auth method: empty → token.
 func (a KeeperVaultAuth) ResolvedAuthMethod() string {
 	if a.Method == "" {
 		return AuthMethodToken
@@ -958,77 +981,81 @@ func (a KeeperVaultAuth) ResolvedAuthMethod() string {
 	return a.Method
 }
 
-// KeeperAuth — аутентификация операторов (Archon).
-// У Soul блока `auth:` нет — Soul аутентифицируется через mTLS / SoulSeed.
+// KeeperAuth is operator (Archon) authentication.
+// Soul has no `auth:` block — a Soul authenticates via mTLS / SoulSeed.
 //
-// `jwt` — внутренний JWT-issuer (ADR-014), действующая часть.
+// `jwt` is the internal JWT issuer (ADR-014), the active part.
 //
-// `ldap` — федеративная LDAP-аутентификация (ADR-058, стадия 1 реализована:
-// semantic-валидация + резолв в auth/ldap.Config + endpoint /auth/ldap/login).
-// `oidc` — федеративная OAuth2/OIDC-аутентификация (ADR-058 стадия 2 реализована:
-// semantic-валидация + discovery + резолв в auth/oidc.Config + эндпоинты
-// /auth/oidc/{login,callback}; PKCE always-on; требует Redis).
-// Оба блока опциональны: не заданы → способ логина недоступен, Keeper стартует
-// (ADR-053 OPTIONAL-tier). Secret-поля — через `*_ref`
-// (`vault:<mount>/<path>[#field]`, резолв load-time как `redis.password_ref`).
+// `ldap` is federated LDAP authentication (ADR-058, stage 1 implemented:
+// semantic validation + resolution into auth/ldap.Config + endpoint
+// /auth/ldap/login). `oidc` is federated OAuth2/OIDC authentication (ADR-058
+// stage 2 implemented: semantic validation + discovery + resolution into
+// auth/oidc.Config + endpoints /auth/oidc/{login,callback}; PKCE always-on;
+// requires Redis). Both blocks are optional: unset → the login method is
+// unavailable and Keeper still starts (ADR-053 OPTIONAL-tier). Secret fields —
+// via `*_ref` (`vault:<mount>/<path>[#field]`, resolved load-time like
+// `redis.password_ref`).
 type KeeperAuth struct {
 	JWT  *KeeperAuthJWT  `yaml:"jwt,omitempty"`
-	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 стадия 1
-	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 стадия 2
+	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 stage 1
+	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 stage 2
 
-	// RateLimit — anti-bruteforce публичных login-эндпоинтов (ADR-058(g),
-	// HIGH-3). Per-IP + per-username троттл частоты попыток + lockout после серии
-	// неудач. Опционально: nil/опущено → дефолты [DefaultAuthLoginRL*]
-	// (default-ON, footgun-guard как Tempo/Toll). Фактически поднимается только
-	// при наличии Redis (limiter cluster-shared, gate в daemon); без Redis —
-	// login-эндпоинты деградируют без throttle (как Tempo passthrough), что
-	// согласуется с тем, что OIDC и так требует Redis. Hot-reloadable.
+	// RateLimit is the anti-bruteforce guard for public login endpoints
+	// (ADR-058(g), HIGH-3). Per-IP + per-username attempt-rate throttle + lockout
+	// after a series of failures. Optional: nil/omitted → defaults
+	// [DefaultAuthLoginRL*] (default-ON, footgun-guard like Tempo/Toll). Actually
+	// starts only with Redis (the limiter is cluster-shared, gated in the
+	// daemon); without Redis the login endpoints degrade without throttle (like
+	// Tempo passthrough), consistent with OIDC already requiring Redis.
+	// Hot-reloadable.
 	RateLimit *KeeperAuthLoginRateLimit `yaml:"rate_limit,omitempty"`
 }
 
-// Дефолты anti-bruteforce login-лимита (ADR-058(g), HIGH-3). Подобраны под
-// «человек со сбитым паролем не упрётся, брутфорс/перебор username режется».
+// Anti-bruteforce login-limit defaults (ADR-058(g), HIGH-3). Chosen so "a
+// person with a mistyped password is not blocked, brute-force/username
+// enumeration is cut off".
 const (
-	// DefaultAuthLoginRLRate — refill-скорость троттла попыток (попыток/сек) на
-	// один принципал (IP или username). 0.5 rps = в среднем попытка раз в 2с.
+	// DefaultAuthLoginRLRate is the attempt-throttle refill rate (attempts/sec)
+	// per principal (IP or username). 0.5 rps = on average one attempt per 2s.
 	DefaultAuthLoginRLRate = 0.5
 
-	// DefaultAuthLoginRLBurst — глубина бакета попыток (одномоментная пачка).
+	// DefaultAuthLoginRLBurst is the attempt-bucket depth (a one-time burst).
 	DefaultAuthLoginRLBurst = 10
 
-	// DefaultAuthLoginLockoutThreshold — число подряд неудачных логинов в окне,
-	// после которого принципал блокируется.
+	// DefaultAuthLoginLockoutThreshold is the number of consecutive failed logins
+	// in the window after which the principal is locked out.
 	DefaultAuthLoginLockoutThreshold = 5
 
-	// DefaultAuthLoginLockoutWindow — окно подсчёта неудач (скользящее по TTL).
+	// DefaultAuthLoginLockoutWindow is the failure-counting window (sliding by
+	// TTL).
 	DefaultAuthLoginLockoutWindow = 15 * time.Minute
 
-	// DefaultAuthLoginLockoutBackoff — длительность блокировки после достижения
-	// порога неудач.
+	// DefaultAuthLoginLockoutBackoff is the lockout duration after the failure
+	// threshold is reached.
 	DefaultAuthLoginLockoutBackoff = 15 * time.Minute
 )
 
-// KeeperAuthLoginRateLimit — настройки anti-bruteforce login-эндпоинтов
-// (ADR-058(g), HIGH-3). Все поля опциональны, опущенные/нулевые → [Default*].
+// KeeperAuthLoginRateLimit is the anti-bruteforce login-endpoint configuration
+// (ADR-058(g), HIGH-3). All fields optional, omitted/zero → [Default*].
 type KeeperAuthLoginRateLimit struct {
-	// Enabled — флаг включения. nil/опущено → true (default-ON, footgun-guard).
-	// Явный `false` — opt-out (dev). Фактический подъём требует Redis (daemon).
+	// Enabled toggles the guard. nil/omitted → true (default-ON, footgun-guard).
+	// Explicit `false` — opt-out (dev). Actually starting requires Redis (daemon).
 	Enabled *bool `yaml:"enabled,omitempty"`
 
-	// Rate / Burst — троттл частоты ПОПЫТОК на принципал (token-bucket).
+	// Rate / Burst throttle the ATTEMPT rate per principal (token-bucket).
 	Rate  float64 `yaml:"rate,omitempty"`
 	Burst int     `yaml:"burst,omitempty"`
 
-	// LockoutThreshold — число неудач в окне до блокировки.
+	// LockoutThreshold is the number of failures in the window before lockout.
 	LockoutThreshold int `yaml:"lockout_threshold,omitempty"`
 
-	// LockoutWindow / LockoutBackoff — окно счёта неудач и длительность блока
-	// (duration-convention: Go-duration или `<N>d`).
+	// LockoutWindow / LockoutBackoff are the failure-counting window and lockout
+	// duration (duration-convention: Go duration or `<N>d`).
 	LockoutWindow  string `yaml:"lockout_window,omitempty"`
 	LockoutBackoff string `yaml:"lockout_backoff,omitempty"`
 }
 
-// LoginRateLimitEnabled — эффективный флаг (nil-блок/nil-поле → true).
+// LoginRateLimitEnabled is the effective toggle (nil block/nil field → true).
 func (a *KeeperAuth) LoginRateLimitEnabled() bool {
 	if a == nil || a.RateLimit == nil || a.RateLimit.Enabled == nil {
 		return true
@@ -1036,10 +1063,10 @@ func (a *KeeperAuth) LoginRateLimitEnabled() bool {
 	return *a.RateLimit.Enabled
 }
 
-// ResolvedLoginRateLimit возвращает эффективные параметры throttle+lockout:
-// опущенные/нулевые поля → [DefaultAuthLogin*]. Duration-поля парсятся; невалид
-// (не должен дойти — semantic-валидация) → дефолт. Чистый резолв для
-// daemon-wiring (читается один раз на сборке middleware, не hot-path).
+// ResolvedLoginRateLimit returns the effective throttle+lockout parameters:
+// omitted/zero fields → [DefaultAuthLogin*]. Duration fields are parsed; invalid
+// (should not get here — semantic validation) → default. A pure resolve for
+// daemon wiring (read once at middleware assembly, not hot-path).
 func (a *KeeperAuth) ResolvedLoginRateLimit() (rate float64, burst, threshold int, window, backoff time.Duration) {
 	rate, burst = DefaultAuthLoginRLRate, DefaultAuthLoginRLBurst
 	threshold = DefaultAuthLoginLockoutThreshold
@@ -1077,18 +1104,19 @@ type KeeperAuthJWT struct {
 	TTLBootstrap  string `yaml:"ttl_bootstrap,omitempty"`
 }
 
-// KeeperAuthLDAP — конфиг LDAP-аутентификации (ADR-058(c)/(e), стадия 1
-// реализована). TLS обязателен: `ldaps://` ЛИБО `ldap://` + `start_tls: true`.
-// Секреты — `bind_password_ref` (Vault). `tls.ca_ref` — опц. CA-bundle для LDAPS.
+// KeeperAuthLDAP is the LDAP-authentication config (ADR-058(c)/(e), stage 1
+// implemented). TLS is required: `ldaps://` OR `ldap://` + `start_tls: true`.
+// Secrets — `bind_password_ref` (Vault). `tls.ca_ref` — optional CA bundle for
+// LDAPS.
 //
-// Semantic-валидация (semantic.go::checkAuthLDAP): ldaps-vs-start_tls взаимоискл.,
-// bind_mode=search ⇒ bind_dn+bind_password_ref, TLS-required, insecure_skip_verify
-// → WARN. Резолв *_ref + ca_ref → auth/ldap.Config — load-time в daemon
-// (setupLDAPAuth). bind_mode=direct (поле user_dn_template) отложен (стадия 1 —
-// только search).
+// Semantic validation (semantic.go::checkAuthLDAP): ldaps-vs-start_tls mutually
+// exclusive, bind_mode=search ⇒ bind_dn+bind_password_ref, TLS-required,
+// insecure_skip_verify → WARN. Resolution of *_ref + ca_ref → auth/ldap.Config —
+// load-time in the daemon (setupLDAPAuth). bind_mode=direct (the
+// user_dn_template field) is deferred (stage 1 — search only).
 type KeeperAuthLDAP struct {
 	URL             string              `yaml:"url"`                         // ldaps://host:636 | ldap://host:389
-	StartTLS        bool                `yaml:"start_tls,omitempty"`         // StartTLS поверх ldap://
+	StartTLS        bool                `yaml:"start_tls,omitempty"`         // StartTLS over ldap://
 	TLS             KeeperAuthLDAPTLS   `yaml:"tls,omitempty"`               //
 	BindMode        string              `yaml:"bind_mode,omitempty"`         // search | direct
 	BindDN          string              `yaml:"bind_dn,omitempty"`           // service-account DN (search)
@@ -1100,7 +1128,7 @@ type KeeperAuthLDAP struct {
 	GroupAttr       string              `yaml:"group_attr,omitempty"`        // cn
 	AIDAttr         string              `yaml:"aid_attr,omitempty"`          // uid | mail → AID
 	Timeout         string              `yaml:"timeout,omitempty"`           // duration
-	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // внешняя группа → RBAC-роли
+	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // external group → RBAC roles
 }
 
 type KeeperAuthLDAPTLS struct {
@@ -1108,64 +1136,67 @@ type KeeperAuthLDAPTLS struct {
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"` // dev-only (WARN)
 }
 
-// KeeperAuthOIDC — конфиг OIDC-аутентификации (ADR-058(b)/(e), стадия 2
-// реализована). `issuer` — только HTTPS (discovery base). Секрет —
-// `client_secret_ref` (Vault, опц. для public-client). `tls.ca_ref` — опц.
-// кастомный CA IdP.
+// KeeperAuthOIDC is the OIDC-authentication config (ADR-058(b)/(e), stage 2
+// implemented). `issuer` — HTTPS only (discovery base). Secret —
+// `client_secret_ref` (Vault, optional for a public client). `tls.ca_ref` —
+// optional custom IdP CA.
 //
-// PKCE (S256) — всегда включён реализацией (auth/oidc), оператору НЕ оставлен на
-// выбор (ADR-058 развилка №6 разрешена в пользу «обязателен»); config-флага
-// use_pkce поэтому нет. OIDC требует живого Redis (cluster-shared flow-state
-// store nonce/PKCE) — без Redis эндпоинты не монтируются (ADR-053 OPTIONAL-tier).
+// PKCE (S256) is always enabled by the implementation (auth/oidc), not left to
+// the operator's choice (ADR-058 fork №6 resolved in favor of "mandatory"); so
+// there is no use_pkce config flag. OIDC requires a live Redis (cluster-shared
+// flow-state store for nonce/PKCE) — without Redis the endpoints are not mounted
+// (ADR-053 OPTIONAL-tier).
 //
-// Semantic-валидация (semantic.go::checkAuthOIDC): issuer https-only,
-// обязательность client_id/redirect_url, vault-ref форма client_secret_ref/ca_ref.
-// Резолв *_ref + discovery → auth/oidc.Config — load-time в daemon (setupOIDCAuth).
+// Semantic validation (semantic.go::checkAuthOIDC): issuer https-only,
+// client_id/redirect_url required, vault-ref form of client_secret_ref/ca_ref.
+// Resolution of *_ref + discovery → auth/oidc.Config — load-time in the daemon
+// (setupOIDCAuth).
 type KeeperAuthOIDC struct {
 	Issuer          string              `yaml:"issuer"`                      // https://idp/realms/...
 	ClientID        string              `yaml:"client_id"`                   //
-	ClientSecretRef string              `yaml:"client_secret_ref,omitempty"` // vault-ref (опц., public-client)
+	ClientSecretRef string              `yaml:"client_secret_ref,omitempty"` // vault-ref (optional, public-client)
 	RedirectURL     string              `yaml:"redirect_url"`                // https://keeper/auth/oidc/callback
 	Scopes          []string            `yaml:"scopes,omitempty"`            // openid, email, profile, groups
 	TLS             KeeperAuthOIDCTLS   `yaml:"tls,omitempty"`               //
-	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username (дефолт sub)
-	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // claim с группами (дефолт groups)
-	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // внешняя группа → RBAC-роли
+	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username (default sub)
+	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // claim with groups (default groups)
+	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // external group → RBAC roles
 }
 
 type KeeperAuthOIDCTLS struct {
-	CARef string `yaml:"ca_ref,omitempty"` // vault-ref кастомного CA IdP
+	CARef string `yaml:"ca_ref,omitempty"` // vault-ref of a custom IdP CA
 }
 
-// KeeperSigil — подпись допусков плагинов (ADR-026, печать доверия Sigil).
+// KeeperSigil is plugin-clearance signing (ADR-026, the Sigil seal of trust).
 //
-// Optional-блок: если не задан (или signing_key_ref пуст), подпись недоступна —
-// keeper стартует нормально, но allow-операция (slice S4) вернёт ошибку «sigil
-// key not configured». Загрузка ключа — nil-safe.
+// Optional block: if unset (or signing_key_ref empty), signing is unavailable —
+// keeper starts normally, but the allow operation (slice S4) returns "sigil key
+// not configured". Key loading is nil-safe.
 //
-// SigningKeyRef — config-путь к Vault KV с ed25519-приватником подписи
-// (`vault:<mount>/<path>`, поле `signing_key`). Симметрично
-// auth.jwt.signing_key_ref (ADR-014), но ключ АСИММЕТРИЧНЫЙ (ed25519): приватник
-// подписывает на Keeper, публичная часть едет Soul-у в bootstrap как trust-anchor.
+// SigningKeyRef is the config path to the Vault KV holding the ed25519 signing
+// private key (`vault:<mount>/<path>`, field `signing_key`). Symmetric with
+// auth.jwt.signing_key_ref (ADR-014), but the key is ASYMMETRIC (ed25519): the
+// private key signs on Keeper, the public part travels to a Soul at bootstrap as
+// a trust anchor.
 type KeeperSigil struct {
 	SigningKeyRef string `yaml:"signing_key_ref,omitempty"`
 }
 
-// DefaultSigilAnchorsReloadInterval — дефолт TTL-fallback-перечита набора
-// trust-anchor-ключей подписи Sigil (ADR-026(h), R3 known-gap). 30s — то же
-// окно, что у `rbac.DefaultRefreshInterval`-семейства (мутации ключей редки,
-// окно устаревания мало), достаточно короткое, чтобы пропущенный
-// `sigil:anchors-changed` самоисцелился до прод-ротации, и достаточно редкое,
-// чтобы не дёргать Vault/PG re-build-ом Signer-а на простаивающем кластере.
+// DefaultSigilAnchorsReloadInterval is the default TTL-fallback re-read of the
+// set of Sigil signing trust-anchor keys (ADR-026(h), R3 known-gap). 30s — the
+// same window as the `rbac.DefaultRefreshInterval` family (key mutations are
+// rare, the staleness window is small), short enough for a missed
+// `sigil:anchors-changed` to self-heal before a prod rotation, and rare enough
+// not to poke Vault/PG with a Signer re-build on an idle cluster.
 const DefaultSigilAnchorsReloadInterval = 30 * time.Second
 
-// KeeperMetrics — дополнительные настройки `/metrics`-эндпоинта Keeper-а.
-// Сам bind-адрес — `listen.metrics.addr` (выделенный listener, не openapi-
-// роутер); этот блок несёт только опц. защиту эндпоинта (ADR-024).
+// KeeperMetrics holds extra settings for Keeper's `/metrics` endpoint. The bind
+// address itself is `listen.metrics.addr` (a dedicated listener, not the openapi
+// router); this block only carries optional endpoint protection (ADR-024).
 //
-// У Soul симметричной auth нет: у Soul-агента нет vault-клиента (ADR-012),
-// которым можно зарезолвить password_ref; Soul-метрики защищены loopback-ом
-// (`metrics.listen` = 127.0.0.1). Auth для Soul — отдельная будущая задача.
+// Soul has no symmetric auth: the Soul agent has no vault client (ADR-012) to
+// resolve a password_ref; Soul metrics are protected by loopback
+// (`metrics.listen` = 127.0.0.1). Auth for Soul is a separate future task.
 type KeeperMetrics struct {
 	Auth *KeeperMetricsAuth `yaml:"auth,omitempty"`
 }
@@ -1174,34 +1205,34 @@ type KeeperMetricsAuth struct {
 	Basic *KeeperMetricsBasicAuth `yaml:"basic,omitempty"`
 }
 
-// KeeperMetricsBasicAuth — HTTP Basic-auth на `/metrics`.
+// KeeperMetricsBasicAuth is HTTP Basic auth on `/metrics`.
 //
-// PasswordRef — vault-ref (`vault:<mount>/<path>`), резолвится тем же
-// keeper-vault-клиентом, что читает JWT signing-key (поле `password` из KV).
-// Plaintext-пароль в конфиге не допускается («безопасность на первом месте»):
-// только vault-ref. При Enabled оба — Username и PasswordRef — обязательны
-// (валидация в schema-фазе).
+// PasswordRef is a vault-ref (`vault:<mount>/<path>`), resolved by the same
+// keeper-vault client that reads the JWT signing key (Vault KV field
+// `password`). A plaintext password in the config is not allowed ("security
+// first"): only a vault-ref. When Enabled, both Username and PasswordRef are
+// required (validated in the schema phase).
 type KeeperMetricsBasicAuth struct {
 	Enabled     bool   `yaml:"enabled"`
 	Username    string `yaml:"username,omitempty"`
 	PasswordRef string `yaml:"password_ref,omitempty"`
 }
 
-// KeeperOTel — общая для Keeper и Soul форма (отдельные структуры, чтобы
-// при будущем дрейфе enum-ов не пересекались).
+// KeeperOTel is the shared Keeper/Soul shape (separate structs so future enum
+// drift does not couple them).
 type KeeperOTel struct {
 	Enabled  bool   `yaml:"enabled"`
 	Exporter string `yaml:"exporter,omitempty"`
 	Endpoint string `yaml:"endpoint,omitempty"`
 
-	// ExportMetrics — опц. push метрик по OTLP в дополнение к
-	// Prometheus-scrape (ADR-024 §1.2 / observability.md §5). Заглушка
-	// под Slice 2: читается из конфига, но OTLP-метрик-pipeline ещё не
-	// поднимается (в Slice 0 экспортируются только трейсы).
+	// ExportMetrics optionally pushes metrics over OTLP in addition to the
+	// Prometheus scrape (ADR-024 §1.2 / observability.md §5). A stub for Slice 2:
+	// read from config, but the OTLP metrics pipeline does not start yet (in
+	// Slice 0 only traces are exported).
 	ExportMetrics bool `yaml:"export_metrics,omitempty"`
 }
 
-// KeeperLogging — логи с ротацией.
+// KeeperLogging is logs with rotation.
 type KeeperLogging struct {
 	Level    string           `yaml:"level,omitempty"`
 	Format   string           `yaml:"format,omitempty"`
@@ -1209,12 +1240,13 @@ type KeeperLogging struct {
 	Rotation *LoggingRotation `yaml:"rotation,omitempty"`
 }
 
-// LoggingRotation — общая для Keeper и Soul (разные дефолты, но идентичная схема).
+// LoggingRotation is shared by Keeper and Soul (different defaults, identical
+// schema).
 //
-// MaxAgeDays семантика: пусто/0 → дефолт билдера (7 дней), любое >0 — точное
-// число дней. «0 = без age-based удаления» в схеме НЕ выражается — для этого
-// MaxAgeDays перешёл с overlay-`*int` на плоский int, и различение «0 vs не
-// задано» сознательно снято (см. shared/log → defaultMaxAgeDays).
+// MaxAgeDays semantics: empty/0 → builder default (7 days), any >0 — the exact
+// number of days. "0 = no age-based deletion" is NOT expressible in the schema —
+// for that MaxAgeDays moved from overlay-`*int` to a flat int, and the "0 vs
+// unset" distinction was deliberately dropped (see shared/log → defaultMaxAgeDays).
 type LoggingRotation struct {
 	MaxSizeMB  int  `yaml:"max_size_mb,omitempty"`
 	MaxFiles   int  `yaml:"max_files,omitempty"`
@@ -1222,63 +1254,64 @@ type LoggingRotation struct {
 	Compress   bool `yaml:"compress,omitempty"`
 }
 
-// DefaultPluginFetchTimeout — дефолт `plugins.fetch_timeout`: потолок одной
-// цепочки git-команд резолва плагина (clone→checkout→rev-parse, ADR-026
-// F-fetch). git-egress — внешний вызов, поэтому таймуат обязателен; 120s
-// покрывает крупный repo на медленном линке, не превращая старт Keeper-а в
-// бесконечное ожидание на недоступном remote.
+// DefaultPluginFetchTimeout is the default for `plugins.fetch_timeout`: the
+// ceiling on one chain of plugin-resolve git commands (clone→checkout→rev-parse,
+// ADR-026 F-fetch). git-egress is an external call, so a timeout is mandatory;
+// 120s covers a large repo on a slow link without turning Keeper start into an
+// endless wait on an unreachable remote.
 const DefaultPluginFetchTimeout = 120 * time.Second
 
-// Лимиты размера резолва плагина (ADR-026(g) git-egress hardening). Защита
-// диска keeper-host-а от враждебного/огромного репозитория: timeout
-// ограничивает git-egress по времени, эти два поля — по объёму. Оба заданы в
-// МиБ симметрично `listen.grpc.event_stream.max_apply_size_mb` (один стиль
-// size-полей в проекте, без отдельного human-readable парсера). Превышение —
-// fail-closed: слот не создаётся, плагину нечего допускать (Sigil).
+// Plugin-resolve size limits (ADR-026(g) git-egress hardening). Protects the
+// keeper host's disk from a hostile/huge repository: the timeout bounds
+// git-egress by time, these two fields by size. Both are in MiB, symmetric with
+// `listen.grpc.event_stream.max_apply_size_mb` (one style of size fields in the
+// project, no separate human-readable parser). Exceeding is fail-closed: the
+// slot is not created, so there is nothing for the plugin to clear (Sigil).
 const (
-	// DefaultPluginMaxArtifactSizeMB — дефолт `plugins.max_artifact_size_mb`:
-	// потолок размера одного извлекаемого бинаря `dist/<binary-name>` (и
-	// manifest.yaml, который заведомо мельче). 256 MiB с запасом покрывает
-	// реальные Go-бинари плагинов (десятки МиБ), отсекая мусорный артефакт,
-	// которым враждебный репозиторий забил бы кеш.
+	// DefaultPluginMaxArtifactSizeMB is the default for
+	// `plugins.max_artifact_size_mb`: the size ceiling of one extracted binary
+	// `dist/<binary-name>` (and manifest.yaml, which is clearly smaller). 256 MiB
+	// amply covers real Go plugin binaries (tens of MiB) while cutting off a junk
+	// artifact a hostile repository would use to fill the cache.
 	DefaultPluginMaxArtifactSizeMB = 256
 
-	// DefaultPluginMaxCloneSizeMB — дефолт `plugins.max_clone_size_mb`: потолок
-	// суммарного размера рабочего дерева клона (checkout + `.git`) перед
-	// извлечением артефакта. Заведомо больше artifact-лимита: дерево несёт сам
-	// артефакт плюс остальные файлы репозитория и shallow-`.git`. 1024 MiB —
-	// крупный репозиторий с собранными бинарями, но не безразмерный.
+	// DefaultPluginMaxCloneSizeMB is the default for `plugins.max_clone_size_mb`:
+	// the ceiling on the total working-tree size of the clone (checkout + `.git`)
+	// before artifact extraction. Necessarily larger than the artifact limit: the
+	// tree carries the artifact itself plus the repository's other files and a
+	// shallow `.git`. 1024 MiB — a large repository with built binaries, but not
+	// unbounded.
 	DefaultPluginMaxCloneSizeMB = 1024
 
-	// MinPluginSizeMB — нижняя граница валидации обоих лимитов. Меньше 1 MiB не
-	// пропускаем: сабмегабайтный потолок отверг бы любой реальный Go-бинарь
-	// плагина (десятки МиБ), превратив hardening в постоянный fail-closed.
+	// MinPluginSizeMB is the validation floor for both limits. Below 1 MiB is
+	// rejected: a sub-megabyte ceiling would reject any real Go plugin binary
+	// (tens of MiB), turning the hardening into a permanent fail-closed.
 	MinPluginSizeMB = 1
 )
 
-// KeeperPlugins — каталоги Keeper-side плагинов.
+// KeeperPlugins holds the Keeper-side plugin catalogs.
 //
-// `CacheRoot` — путь к директории-кешу артефактов плагинов на keeper-host-е
-// (см. [docs/keeper/plugins.md](../../docs/keeper/plugins.md)). Пустое
-// значение — берётся `pluginhost.DefaultCacheRoot`. Должен быть абсолютным;
-// валидация в schema-фазе.
+// `CacheRoot` is the path to the plugin-artifact cache directory on the keeper
+// host (see [docs/keeper/plugins.md](../../docs/keeper/plugins.md)). Empty →
+// `pluginhost.DefaultCacheRoot`. Must be absolute; validated in the schema
+// phase.
 //
-// `WorkRoot` — корень рабочих git-клонов резолвера плагинов (ADR-026 F-fetch,
-// A1-S1). СТРОГО вне `CacheRoot`: .git и checkout не должны попадать в
-// кеш-каталог, который читают Discover/ReadSlot. Пустое → встроенный дефолт
-// `/var/lib/soul-stack-keeper/plugin-src`. Должен быть абсолютным; валидация в
-// schema-фазе.
+// `WorkRoot` is the root of the plugin resolver's working git clones (ADR-026
+// F-fetch, A1-S1). STRICTLY outside `CacheRoot`: .git and the checkout must not
+// land in the cache directory that Discover/ReadSlot read. Empty → the built-in
+// default `/var/lib/soul-stack-keeper/plugin-src`. Must be absolute; validated
+// in the schema phase.
 //
-// `FetchTimeout` — потолок одной цепочки git-команд резолва (тип `duration`,
-// пустое → [DefaultPluginFetchTimeout] (120s)). Формат валидируется в
-// semantic-фазе (стиль `acolyte_*`).
+// `FetchTimeout` is the ceiling on one chain of resolve git commands (type
+// `duration`, empty → [DefaultPluginFetchTimeout] (120s)). Format validated in
+// the semantic phase (style `acolyte_*`).
 //
-// `MaxArtifactSizeMB` / `MaxCloneSizeMB` — size-лимиты git-egress hardening
-// (ADR-026(g)): потолок одного извлекаемого бинаря и суммарного рабочего дерева
-// клона. Оба в МиБ (стиль `max_apply_size_mb`); 0/опущено → дефолты
-// [DefaultPluginMaxArtifactSizeMB] / [DefaultPluginMaxCloneSizeMB]; заданное
-// значение обязано быть ≥ [MinPluginSizeMB] (валидация в schema-фазе).
-// Превышение на резолве — fail-closed (слот не создаётся).
+// `MaxArtifactSizeMB` / `MaxCloneSizeMB` are git-egress hardening size limits
+// (ADR-026(g)): the ceiling on one extracted binary and on the total clone
+// working tree. Both in MiB (style `max_apply_size_mb`); 0/omitted → defaults
+// [DefaultPluginMaxArtifactSizeMB] / [DefaultPluginMaxCloneSizeMB]; a set value
+// must be ≥ [MinPluginSizeMB] (validated in the schema phase). Exceeding at
+// resolve time is fail-closed (the slot is not created).
 type KeeperPlugins struct {
 	CacheRoot         string               `yaml:"cache_root,omitempty"`
 	WorkRoot          string               `yaml:"work_root,omitempty"`
@@ -1290,10 +1323,10 @@ type KeeperPlugins struct {
 	SoulModules       []PluginCatalogEntry `yaml:"soul_modules,omitempty"`
 }
 
-// ResolvedFetchTimeout возвращает эффективный `plugins.fetch_timeout`: пусто /
-// некорректно → [DefaultPluginFetchTimeout]. Формат уже провалидирован
-// semantic-фазой (checkDuration); дефолтуем на любой не-положительный результат
-// на всякий случай (симметрия с резолверами acolyte_* в keeper/cmd/keeper).
+// ResolvedFetchTimeout returns the effective `plugins.fetch_timeout`:
+// empty/invalid → [DefaultPluginFetchTimeout]. Format is already validated in
+// the semantic phase (checkDuration); we default on any non-positive result just
+// in case (symmetric with the acolyte_* resolvers in keeper/cmd/keeper).
 func (p *KeeperPlugins) ResolvedFetchTimeout() time.Duration {
 	if p == nil || p.FetchTimeout == "" {
 		return DefaultPluginFetchTimeout
@@ -1305,9 +1338,9 @@ func (p *KeeperPlugins) ResolvedFetchTimeout() time.Duration {
 	return d
 }
 
-// ResolvedMaxArtifactSize возвращает эффективный лимит размера одного бинаря в
-// байтах: 0/опущено/некорректно → [DefaultPluginMaxArtifactSizeMB]. Диапазон
-// (≥ минимума) валидируется schema-фазой; здесь только резолв дефолта.
+// ResolvedMaxArtifactSize returns the effective single-binary size limit in
+// bytes: 0/omitted/invalid → [DefaultPluginMaxArtifactSizeMB]. The range
+// (≥ minimum) is validated in the schema phase; here only default resolution.
 func (p *KeeperPlugins) ResolvedMaxArtifactSize() int64 {
 	mb := DefaultPluginMaxArtifactSizeMB
 	if p != nil && p.MaxArtifactSizeMB > 0 {
@@ -1316,8 +1349,8 @@ func (p *KeeperPlugins) ResolvedMaxArtifactSize() int64 {
 	return int64(mb) * bytesPerMiB
 }
 
-// ResolvedMaxCloneSize возвращает эффективный лимит размера рабочего дерева
-// клона в байтах: 0/опущено/некорректно → [DefaultPluginMaxCloneSizeMB].
+// ResolvedMaxCloneSize returns the effective clone working-tree size limit in
+// bytes: 0/omitted/invalid → [DefaultPluginMaxCloneSizeMB].
 func (p *KeeperPlugins) ResolvedMaxCloneSize() int64 {
 	mb := DefaultPluginMaxCloneSizeMB
 	if p != nil && p.MaxCloneSizeMB > 0 {
@@ -1332,8 +1365,8 @@ type PluginCatalogEntry struct {
 	Ref    string `yaml:"ref"`
 }
 
-// PluginRuntime — общий для Keeper и Soul (ADR-020).
-// Симметричная схема, разные дефолты `socket_dir`.
+// PluginRuntime is shared by Keeper and Soul (ADR-020).
+// Symmetric schema, different `socket_dir` defaults.
 type PluginRuntime struct {
 	SocketDir           string   `yaml:"socket_dir,omitempty"`
 	StartupTimeout      string   `yaml:"startup_timeout,omitempty"`
@@ -1343,14 +1376,14 @@ type PluginRuntime struct {
 	EnableTLS           bool     `yaml:"enable_tls,omitempty"`
 }
 
-// KeeperAudit — блок аудита (ADR-022).
+// KeeperAudit is the audit block (ADR-022).
 type KeeperAudit struct {
 	Enabled       bool `yaml:"enabled"`
 	OTelExport    bool `yaml:"otel_export"`
 	RetentionDays int  `yaml:"retention_days"`
 }
 
-// HotReload — общий для Keeper и Soul блок управления триггерами reload-а
+// HotReload is the Keeper/Soul-shared block controlling reload triggers
 // (ADR-021).
 type HotReload struct {
 	EnableSignal       bool `yaml:"enable_signal"`
@@ -1358,74 +1391,79 @@ type HotReload struct {
 	AuditCorrelationID bool `yaml:"audit_correlation_id"`
 }
 
-// Дефолты Conductor (ADR-048). Применяются в daemon при пустом/нулевом поле.
+// Conductor defaults (ADR-048). Applied in the daemon for an empty/zero field.
 const (
-	// DefaultCadenceSchedulerLockTTL — дефолт TTL Redis-lease conductor:leader.
-	// 5m parity reaper lock_ttl: достаточно большой, чтобы пережить временный
-	// stall лидера без потери лидерства, и достаточно короткий для быстрого
-	// failover на другой инстанс при смерти лидера. renew идёт на lock_ttl/3
-	// внутри leaderloop.
+	// DefaultCadenceSchedulerLockTTL is the default TTL of the conductor:leader
+	// Redis lease. 5m parity with reaper lock_ttl: large enough to survive a
+	// temporary leader stall without losing leadership, and short enough for fast
+	// failover to another instance on leader death. Renew is at lock_ttl/3 inside
+	// leaderloop.
 	DefaultCadenceSchedulerLockTTL = 5 * time.Minute
 
-	// Профиль «Спокойный» адаптивного шага опроса Conductor (ADR-048 «Adaptive
-	// interval», 2026-06-07). Шаг = clamp(derivedMinPeriod, poll_floor,
-	// poll_ceiling); пустой реестр → poll_idle.
+	// The "Calm" profile of Conductor's adaptive poll step (ADR-048 "Adaptive
+	// interval", 2026-06-07). Step = clamp(derivedMinPeriod, poll_floor,
+	// poll_ceiling); empty registry → poll_idle.
 
-	// DefaultCadenceSchedulerPollFloor — нижняя граница шага опроса (30s). Это и
-	// абсолютный минимум (poll_floor < 30s — конфиг-ошибка; DB-CHECK floor
-	// interval_seconds ≥ 30 закрывает Pass B / ADR-046).
+	// DefaultCadenceSchedulerPollFloor is the poll-step floor (30s). This is also
+	// the absolute minimum (poll_floor < 30s is a config error; the DB-CHECK
+	// floor interval_seconds ≥ 30 closes Pass B / ADR-046).
 	DefaultCadenceSchedulerPollFloor = 30 * time.Second
 
-	// DefaultCadenceSchedulerPollCeiling — верхняя граница шага опроса (60s):
-	// редкие расписания (interval=1h) не растягивают опрос настолько, что
-	// NextRunAnchored missed-slot становится единственной страховкой.
+	// DefaultCadenceSchedulerPollCeiling is the poll-step ceiling (60s): rare
+	// schedules (interval=1h) do not stretch polling so far that a NextRunAnchored
+	// missed-slot becomes the only safety net.
 	DefaultCadenceSchedulerPollCeiling = 60 * time.Second
 
-	// DefaultCadenceSchedulerPollIdle — шаг опроса при пустом enabled-реестре
-	// (120s): спавнить нечего, опрашиваем реже обычного коридора.
+	// DefaultCadenceSchedulerPollIdle is the poll step when the enabled registry
+	// is empty (120s): nothing to spawn, so we poll less often than the normal
+	// corridor.
 	DefaultCadenceSchedulerPollIdle = 120 * time.Second
 )
 
-// KeeperCadenceScheduler — конфиг Conductor (ADR-048). Свой tick-interval и
-// Redis-lease (`conductor:leader`), независимые от Reaper-а.
+// KeeperCadenceScheduler is the Conductor config (ADR-048). Its own tick
+// interval and Redis lease (`conductor:leader`), independent of Reaper.
 //
-// Enabled — *bool ради различения «не задано» (→ default-ON при наличии Redis,
-// footgun-guard ADR-048 §5) от явного `false` (оператор сознательно гасит
-// планировщик целиком — выключение отдельной Cadence делается per-Cadence через
-// `enabled: false` самой строки, ADR-046 §3, не глобальным гашением Conductor).
+// Enabled is *bool to distinguish "unset" (→ default-ON when Redis is present,
+// footgun-guard ADR-048 §5) from explicit `false` (the operator deliberately
+// silences the whole scheduler — disabling a single Cadence is done per-Cadence
+// via `enabled: false` on the row itself, ADR-046 §3, not by globally silencing
+// Conductor).
 type KeeperCadenceScheduler struct {
-	// Enabled — nil (опущено) → default-ON при наличии Redis; явный false →
-	// Conductor не поднимается; явный true → поднимается (требует Redis для
-	// lease-лидерства, как и Reaper).
+	// Enabled — nil (omitted) → default-ON when Redis is present; explicit false →
+	// Conductor does not start; explicit true → starts (requires Redis for lease
+	// leadership, like Reaper).
 	Enabled *bool `yaml:"enabled,omitempty"`
 
-	// Interval — backcompat-alias верхней границы адаптивного опроса (ADR-048
-	// «Adaptive interval»). До амендмента 2026-06-07 это был фиксированный период
-	// тика. Теперь шаг адаптивный (clamp по poll_floor/poll_ceiling); `interval`
-	// сохранён как alias: если задан, а `poll_ceiling` не задан → ceiling =
-	// interval (старые keeper.yml не падают). Тип `duration`, hot-reload.
+	// Interval is a backcompat alias for the adaptive-poll ceiling (ADR-048
+	// "Adaptive interval"). Before the 2026-06-07 amendment this was a fixed tick
+	// period. Now the step is adaptive (clamped by poll_floor/poll_ceiling);
+	// `interval` is kept as an alias: if set while `poll_ceiling` is not →
+	// ceiling = interval (old keeper.yml do not break). Type `duration`,
+	// hot-reload.
 	Interval string `yaml:"interval,omitempty"`
 
-	// LockTTL — TTL Redis-lease conductor:leader (hot-reload между re-acquire).
-	// Тип `duration`, пустое → дефолт [DefaultCadenceSchedulerLockTTL] (5m).
+	// LockTTL is the TTL of the conductor:leader Redis lease (hot-reload between
+	// re-acquires). Type `duration`, empty → default
+	// [DefaultCadenceSchedulerLockTTL] (5m).
 	LockTTL string `yaml:"lock_ttl,omitempty"`
 
-	// PollFloor / PollCeiling / PollIdle — коридор адаптивного шага опроса
-	// (ADR-048 «Adaptive interval», профиль «Спокойный» 30s/60s/120s). Шаг =
-	// clamp(derivedMinPeriod, poll_floor, poll_ceiling); пустой реестр → poll_idle.
-	// Все три — тип `duration`, hot-reload (читаются из снимка config в IntervalFn,
-	// как Interval/LockTTL). Пустое/невалидное → дефолт. Инварианты (semantic-
-	// валидация): poll_floor ≥ 30s (абсолютный минимум), poll_floor ≤ poll_ceiling,
-	// poll_idle ≥ poll_ceiling (idle не чаще обычного опроса).
+	// PollFloor / PollCeiling / PollIdle are the adaptive poll-step corridor
+	// (ADR-048 "Adaptive interval", "Calm" profile 30s/60s/120s). Step =
+	// clamp(derivedMinPeriod, poll_floor, poll_ceiling); empty registry →
+	// poll_idle. All three type `duration`, hot-reload (read from the config
+	// snapshot in IntervalFn, like Interval/LockTTL). Empty/invalid → default.
+	// Invariants (semantic validation): poll_floor ≥ 30s (absolute minimum),
+	// poll_floor ≤ poll_ceiling, poll_idle ≥ poll_ceiling (idle no more frequent
+	// than the normal poll).
 	PollFloor   string `yaml:"poll_floor,omitempty"`
 	PollCeiling string `yaml:"poll_ceiling,omitempty"`
 	PollIdle    string `yaml:"poll_idle,omitempty"`
 }
 
-// CadenceSchedulerEnabled возвращает эффективный enabled Conductor с учётом
-// footgun-guard-а (ADR-048 §5): не задано (nil блок / nil поле) → ON; явный
-// `false` → OFF; явный `true` → ON. Фактический старт в daemon дополнительно
-// требует non-nil Redis (lease-лидерство), как и Reaper.
+// CadenceSchedulerEnabled returns the effective Conductor enabled flag with the
+// footgun-guard (ADR-048 §5): unset (nil block / nil field) → ON; explicit
+// `false` → OFF; explicit `true` → ON. Actually starting in the daemon
+// additionally requires a non-nil Redis (lease leadership), like Reaper.
 func (c *KeeperCadenceScheduler) CadenceSchedulerEnabled() bool {
 	if c == nil || c.Enabled == nil {
 		return true
@@ -1433,8 +1471,8 @@ func (c *KeeperCadenceScheduler) CadenceSchedulerEnabled() bool {
 	return *c.Enabled
 }
 
-// ResolvedLockTTL возвращает эффективный TTL lease-ключа Conductor: пустое/
-// невалидное → дефолт.
+// ResolvedLockTTL returns the effective TTL of the Conductor lease key:
+// empty/invalid → default.
 func (c *KeeperCadenceScheduler) ResolvedLockTTL() time.Duration {
 	if c == nil || c.LockTTL == "" {
 		return DefaultCadenceSchedulerLockTTL
@@ -1446,8 +1484,8 @@ func (c *KeeperCadenceScheduler) ResolvedLockTTL() time.Duration {
 	return d
 }
 
-// ResolvedPollFloor — нижняя граница адаптивного опроса (ADR-048): пустое/
-// невалидное → дефолт 30s.
+// ResolvedPollFloor is the adaptive-poll floor (ADR-048): empty/invalid →
+// default 30s.
 func (c *KeeperCadenceScheduler) ResolvedPollFloor() time.Duration {
 	if c == nil {
 		return DefaultCadenceSchedulerPollFloor
@@ -1455,13 +1493,13 @@ func (c *KeeperCadenceScheduler) ResolvedPollFloor() time.Duration {
 	return resolveDuration(c.PollFloor, DefaultCadenceSchedulerPollFloor)
 }
 
-// ResolvedPollCeiling — верхняя граница адаптивного опроса (ADR-048). Backcompat:
-// если `poll_ceiling` не задан, но задан `interval` (старый формат) → ceiling =
-// max(interval, poll_floor) — clamp ВВЕРХ до floor. Старый малый `interval`
-// (dev-конфиги ставили суб-30s) НЕ роняет конфиг через инвариант
-// `poll_floor ≤ poll_ceiling`: alias всегда ≥ floor. Эмиссию warning о подъёме
-// делает semantic-фаза ([cadenceIntervalBelowFloorWarn]). Иначе пустое/невалидное
-// → дефолт 60s.
+// ResolvedPollCeiling is the adaptive-poll ceiling (ADR-048). Backcompat: if
+// `poll_ceiling` is unset but `interval` is set (old format) → ceiling =
+// max(interval, poll_floor) — clamped UP to floor. An old small `interval`
+// (dev configs set sub-30s) does NOT break the config via the
+// `poll_floor ≤ poll_ceiling` invariant: the alias is always ≥ floor. The
+// warning about the bump is emitted by the semantic phase
+// ([cadenceIntervalBelowFloorWarn]). Otherwise empty/invalid → default 60s.
 func (c *KeeperCadenceScheduler) ResolvedPollCeiling() time.Duration {
 	if c == nil {
 		return DefaultCadenceSchedulerPollCeiling
@@ -1476,8 +1514,8 @@ func (c *KeeperCadenceScheduler) ResolvedPollCeiling() time.Duration {
 	return resolveDuration(c.PollCeiling, DefaultCadenceSchedulerPollCeiling)
 }
 
-// ResolvedPollIdle — шаг опроса при пустом enabled-реестре (ADR-048): пустое/
-// невалидное → дефолт 120s.
+// ResolvedPollIdle is the poll step when the enabled registry is empty
+// (ADR-048): empty/invalid → default 120s.
 func (c *KeeperCadenceScheduler) ResolvedPollIdle() time.Duration {
 	if c == nil {
 		return DefaultCadenceSchedulerPollIdle
@@ -1485,8 +1523,8 @@ func (c *KeeperCadenceScheduler) ResolvedPollIdle() time.Duration {
 	return resolveDuration(c.PollIdle, DefaultCadenceSchedulerPollIdle)
 }
 
-// resolveDuration — общий резолвер duration-поля: пустое/невалидное/non-positive
-// → fallback (стиль ResolvedInterval/ResolvedLockTTL).
+// resolveDuration is the shared duration-field resolver: empty/invalid/
+// non-positive → fallback (style ResolvedInterval/ResolvedLockTTL).
 func resolveDuration(val string, fallback time.Duration) time.Duration {
 	if val == "" {
 		return fallback
@@ -1498,7 +1536,7 @@ func resolveDuration(val string, fallback time.Duration) time.Duration {
 	return d
 }
 
-// KeeperReaper — фоновая чистка.
+// KeeperReaper is the background cleanup.
 type KeeperReaper struct {
 	Enabled   bool                  `yaml:"enabled"`
 	Interval  string                `yaml:"interval,omitempty"`
@@ -1508,18 +1546,17 @@ type KeeperReaper struct {
 	Rules     map[string]ReaperRule `yaml:"rules,omitempty"`
 }
 
-// ReaperRule — одно правило Жнеца. Схема правила слабо-типизирована,
-// потому что 5 предопределённых rules имеют разные обязательные поля
-// (`statuses`, `stale_after`, `target_status`); строгая per-rule типизация —
-// отложенная задача нормирования reaper.md.
+// ReaperRule is one Reaper rule. The rule schema is loosely typed because the 5
+// predefined rules have different required fields (`statuses`, `stale_after`,
+// `target_status`); strict per-rule typing is a deferred reaper.md normalization
+// task.
 //
-// KeepLastN / KeepVersionBumpSnapshots — поля правила
-// `archive_state_history` (ADR-Q19 retention). Остальные правила их
-// игнорируют. KeepLastN использует *int, чтобы отличить «не задано» (→ runner
-// подставит дефолт 50) от явного 0 (semantic-validate отвергнет: 0 = «всё
-// архивировать»). KeepVersionBumpSnapshots — *bool по той же причине:
-// отличаем «не задано» (→ дефолт true, защита миграций) от явного false
-// (оператор сознательно архивирует и version-bump-снимки).
+// KeepLastN / KeepVersionBumpSnapshots are fields of the `archive_state_history`
+// rule (ADR-Q19 retention). Other rules ignore them. KeepLastN uses *int to tell
+// "unset" (→ the runner supplies default 50) from explicit 0 (semantic-validate
+// rejects: 0 = "archive everything"). KeepVersionBumpSnapshots is *bool for the
+// same reason: tell "unset" (→ default true, migration protection) from explicit
+// false (the operator deliberately archives version-bump snapshots too).
 type ReaperRule struct {
 	Enabled                  bool     `yaml:"enabled"`
 	MaxAge                   string   `yaml:"max_age,omitempty"`
@@ -1530,240 +1567,248 @@ type ReaperRule struct {
 	KeepLastN                *int     `yaml:"keep_last_n,omitempty"`
 	KeepVersionBumpSnapshots *bool    `yaml:"keep_version_bump_snapshots,omitempty"`
 
-	// MaxConcurrentInFlight — поле правила `scry_background` (ADR-031 Slice C):
-	// верхняя граница одновременно идущих dry_run-сканов, инициированных Reaper-
-	// тиком. Прочие правила игнорируют. `*int`, чтобы различить «не задано» (→
-	// runner подставит дефолт 10) от явного 0 («заглушить правило без снятия
-	// enabled»). Counter активных сканов — по числу строк apply_runs с
-	// recipe->>'dry_run'='true' и finished_at IS NULL.
+	// MaxConcurrentInFlight is a field of the `scry_background` rule (ADR-031
+	// Slice C): the upper bound on concurrent dry_run scans initiated by a Reaper
+	// tick. Other rules ignore it. `*int` to distinguish "unset" (→ the runner
+	// supplies default 10) from explicit 0 ("mute the rule without clearing
+	// enabled"). The active-scan counter is the number of apply_runs rows with
+	// recipe->>'dry_run'='true' and finished_at IS NULL.
 	MaxConcurrentInFlight *int `yaml:"max_concurrent_in_flight,omitempty"`
 
-	// MinIntervalPerIncarnation — поле правила `scry_background` (ADR-031 Slice
-	// C): минимальный интервал между фоновыми скана­ми одного incarnation.
-	// Прочие правила игнорируют. Пустая строка / нулевая duration = «без
-	// нижней границы» (iterator-сортировка `last_drift_check_at NULLS FIRST`
-	// сама естественно даёт round-robin между incarnation-ами).
+	// MinIntervalPerIncarnation is a field of the `scry_background` rule (ADR-031
+	// Slice C): the minimum interval between background scans of one incarnation.
+	// Other rules ignore it. Empty string / zero duration = "no lower bound" (the
+	// iterator sort `last_drift_check_at NULLS FIRST` naturally gives round-robin
+	// across incarnations).
 	MinIntervalPerIncarnation string `yaml:"min_interval_per_incarnation,omitempty"`
 
-	// RotateThreshold — поле правила `rotate_due_certs` (cert-rotation Вар1): за
-	// сколько до not_after серт считается due (напр. "720h"). Прочие правила
-	// игнорируют. Пустая строка / нулевая duration → правило ничего не ротирует
-	// (защита: без порога сканировать нечего). Ось включения ротации — задать
-	// осмысленный порог + enabled:true.
+	// RotateThreshold is a field of the `rotate_due_certs` rule (cert-rotation
+	// Var1): how long before not_after a cert is considered due (e.g. "720h").
+	// Other rules ignore it. Empty string / zero duration → the rule rotates
+	// nothing (guard: without a threshold there is nothing to scan). The rotation
+	// on-switch is a meaningful threshold + enabled:true.
 	RotateThreshold string `yaml:"rotate_threshold,omitempty"`
 
-	// RotateJitter — поле правила `rotate_due_certs`: ширина разброса
-	// эффективного порога (напр. "168h"), чтобы серты с одинаковым not_after не
-	// ротировались в один тик (anti-thundering-herd). Пустая/нулевая → без
-	// разброса.
+	// RotateJitter is a field of the `rotate_due_certs` rule: the spread width of
+	// the effective threshold (e.g. "168h") so certs with the same not_after are
+	// not rotated in one tick (anti-thundering-herd). Empty/zero → no spread.
 	RotateJitter string `yaml:"rotate_jitter,omitempty"`
 
-	// MaxRotationsPerTick — поле правила `rotate_due_certs`: потолок числа
-	// ротаций за один тик (anti-lavina при массовом истечении). `*int`, чтобы
-	// различить «не задано» (→ дефолт в CertRotator) от явного значения.
+	// MaxRotationsPerTick is a field of the `rotate_due_certs` rule: the ceiling
+	// on the number of rotations per tick (anti-avalanche on mass expiry). `*int`
+	// to distinguish "unset" (→ default in CertRotator) from an explicit value.
 	MaxRotationsPerTick *int `yaml:"max_rotations_per_tick,omitempty"`
 
-	// DryRun — per-rule R1-барьер правила `rotate_due_certs` (cert-rotation
-	// Вар1): авто-подмена боевого TLS без оператора опасна, поэтому боевая
-	// ротация НЕ должна включаться заодно с глобальным reaper.dry_run:false (тот
-	// разрешает боевой purge). `*bool` с семантикой default true: «не задано» →
-	// dry_run (ротация не идёт, первый прогон после enable — сухой); боевая
-	// ротация только при ЯВНОМ `dry_run: false`, независимо от reaper.dry_run.
-	// Прочие правила это поле игнорируют (у них dry_run глобальный).
+	// DryRun is the per-rule R1 barrier of the `rotate_due_certs` rule
+	// (cert-rotation Var1): auto-swapping live TLS without an operator is
+	// dangerous, so live rotation must NOT be enabled together with the global
+	// reaper.dry_run:false (which permits a live purge). `*bool` with default-true
+	// semantics: "unset" → dry_run (no rotation; the first run after enable is
+	// dry); live rotation only on an EXPLICIT `dry_run: false`, independent of
+	// reaper.dry_run. Other rules ignore this field (their dry_run is global).
 	DryRun *bool `yaml:"dry_run,omitempty"`
 }
 
-// KeeperPush — pilot wire-up SshDispatcher (S6, 2026-05-26, [ADR-032 amendment]).
+// KeeperPush is the pilot wire-up of SshDispatcher (S6, 2026-05-26, [ADR-032
+// amendment]).
 //
-// Pilot-path сознательно вынесен в keeper.yml ради быстрого end-to-end-движения:
-// per-host SSH-реквизиты в `targets[]` (без миграции `souls.ssh_target jsonb` —
-// это S7), per-provider params в `providers[]` (без PG-table push_providers — S7).
-// S7-3 ввёл multi-CA `host_ca_refs[]`; устаревший single-CA `host_ca_ref` остаётся
-// под 1-release WARN deprecation window (auto-adapt в singleton, см. ниже).
-// Multi-provider routing отложен — pilot поднимает дискаверенного первого
-// ssh-плагина.
+// The pilot path is deliberately in keeper.yml for fast end-to-end progress:
+// per-host SSH credentials in `targets[]` (without migrating to
+// `souls.ssh_target jsonb` — that is S7), per-provider params in `providers[]`
+// (without the push_providers PG table — S7). S7-3 introduced multi-CA
+// `host_ca_refs[]`; the deprecated single-CA `host_ca_ref` stays under a
+// 1-release WARN deprecation window (auto-adapt into the singleton, see below).
+// Multi-provider routing is deferred — the pilot starts the first discovered
+// ssh plugin.
 //
-// Опц.: при отсутствии блока (или пустых полей) push-orchestrator не поднимается.
+// Optional: without the block (or with empty fields) the push orchestrator does
+// not start.
 type KeeperPush struct {
-	// Targets — per-SID SSH-реквизиты. Резолвер по SID lookup-ит запись и
-	// возвращает [push.SSHTarget]; SID без записи → fail с `target_not_configured`.
+	// Targets — per-SID SSH credentials. The resolver looks up the record by SID
+	// and returns [push.SSHTarget]; a SID with no record → fail with
+	// `target_not_configured`.
 	Targets []KeeperPushTarget `yaml:"targets,omitempty"`
-	// Providers — per-provider params для env-payload `SOUL_SSH_<NAME>_PARAMS`
-	// (ADR-020 amendment l). При spawn-е плагина `params` сериализуется в JSON
-	// и кладётся в env-переменную с именем `SOUL_SSH_<UPPER(name)>_PARAMS`.
-	// Записи без сопоставления в `plugins.ssh_providers[].name` игнорируются.
+	// Providers — per-provider params for the env-payload `SOUL_SSH_<NAME>_PARAMS`
+	// (ADR-020 amendment l). On plugin spawn `params` is serialized to JSON and
+	// placed in the env var named `SOUL_SSH_<UPPER(name)>_PARAMS`. Entries with no
+	// match in `plugins.ssh_providers[].name` are ignored.
 	Providers []KeeperPushProvider `yaml:"providers,omitempty"`
-	// HostCARef — deprecated singular vault-ref на public host-CA (PEM-encoded
-	// SSH public key, поле `public_key` в Vault KV). S7-3 ввёл multi-CA
-	// `host_ca_refs[]` (ADR-032 amendment 2026-05-26); singular остался под
-	// 1-release WARN deprecation window. На старте daemon auto-adapt-ит singular
-	// в `HostCARefs[0]` с auto-name `default` и одноразовым WARN. Mutually
-	// exclusive с `host_ca_refs[]` — одновременное присутствие отвергается
-	// schema-фазой (`mutually_exclusive_keys`).
+	// HostCARef — deprecated singular vault-ref to the public host CA (PEM-encoded
+	// SSH public key, Vault KV field `public_key`). S7-3 introduced multi-CA
+	// `host_ca_refs[]` (ADR-032 amendment 2026-05-26); the singular stays under a
+	// 1-release WARN deprecation window. At daemon start it auto-adapts the
+	// singular into `HostCARefs[0]` with auto-name `default` and a one-time WARN.
+	// Mutually exclusive with `host_ca_refs[]` — simultaneous presence is rejected
+	// in the schema phase (`mutually_exclusive_keys`).
 	//
 	// Deprecated: use [HostCARefs] (multi-CA).
 	HostCARef string `yaml:"host_ca_ref,omitempty" json:"host_ca_ref,omitempty"`
-	// HostCARefs — мульти-CA для verify host-keys через SSH (S7-3, ADR-032
-	// amendment 2026-05-26). Каждый элемент — vault-ref + operator-defined `name`
-	// (для логов / OTel attrs / metrics cardinality). На handshake-е
-	// `ssh.CertChecker.IsHostAuthority` делает OR-проверку по всем загруженным CA:
-	// host-cert, подписанный любым из них — доверенный.
+	// HostCARefs — multi-CA for verifying host keys over SSH (S7-3, ADR-032
+	// amendment 2026-05-26). Each element is a vault-ref + operator-defined `name`
+	// (for logs / OTel attrs / metrics cardinality). At handshake
+	// `ssh.CertChecker.IsHostAuthority` does an OR check over all loaded CAs: a
+	// host-cert signed by any of them is trusted.
 	//
-	// Plaintext-inline-PEM отвергнут как нарушение security policy (симметрия с
-	// `auth.jwt.signing_key_ref` / `sigil.signing_key_ref`); каждый `ref` обязан
-	// быть vault-ref-ом. Имена в наборе должны быть unique (lookup по имени в
-	// логах / метриках без двусмысленности).
+	// Plaintext inline PEM is rejected as a security-policy violation (symmetric
+	// with `auth.jwt.signing_key_ref` / `sigil.signing_key_ref`); every `ref`
+	// must be a vault-ref. Names in the set must be unique (lookup by name in logs
+	// / metrics without ambiguity).
 	HostCARefs []KeeperPushCARef `yaml:"host_ca_refs,omitempty" json:"host_ca_refs,omitempty"`
-	// AllowLegacyPushTargets — fallback-флаг S7-1 deprecation window (ADR-032
-	// amendment 2026-05-26): PG-источник (souls.ssh_target jsonb) — canonical,
-	// keeper.yml::push.targets[] — legacy. При false (default) запись отсутствует
-	// в PG → `ErrTargetNotConfigured`; при true → fallback на ConfigTargetResolver
-	// поверх Targets[] с одноразовым WARN на старте.
+	// AllowLegacyPushTargets — fallback flag for the S7-1 deprecation window
+	// (ADR-032 amendment 2026-05-26): the PG source (souls.ssh_target jsonb) is
+	// canonical, keeper.yml::push.targets[] is legacy. With false (default), a
+	// record absent from PG → `ErrTargetNotConfigured`; with true → fallback to
+	// ConfigTargetResolver over Targets[] with a one-time WARN at start.
 	AllowLegacyPushTargets bool `yaml:"allow_legacy_push_targets,omitempty" json:"allow_legacy_push_targets,omitempty"`
-	// AllowLegacyPushProviders — fallback-флаг S7-2 deprecation window (ADR-032
-	// amendment 2026-05-26): PG-источник (push_providers таблица) — canonical,
-	// keeper.yml::push.providers[] — legacy. При false (default) plugin без
-	// записи в PG → плагин стартует без env-payload (поведение зависит от
-	// самого плагина: soul-ssh-static работает с дефолтами, soul-ssh-vault
-	// требует params); при true → fallback на keeper.yml::push.providers[] с
-	// одноразовым WARN на старте. Симметрично [AllowLegacyPushTargets].
+	// AllowLegacyPushProviders — fallback flag for the S7-2 deprecation window
+	// (ADR-032 amendment 2026-05-26): the PG source (push_providers table) is
+	// canonical, keeper.yml::push.providers[] is legacy. With false (default), a
+	// plugin with no PG record → the plugin starts without an env-payload
+	// (behavior depends on the plugin itself: soul-ssh-static works with defaults,
+	// soul-ssh-vault requires params); with true → fallback to
+	// keeper.yml::push.providers[] with a one-time WARN at start. Symmetric with
+	// [AllowLegacyPushTargets].
 	AllowLegacyPushProviders bool `yaml:"allow_legacy_push_providers,omitempty" json:"allow_legacy_push_providers,omitempty"`
 
-	// AutoImportLegacyTargets — opt-in one-shot миграция inline
-	// `push.targets[]` → `souls.ssh_target` jsonb при старте Keeper-а
-	// (ADR-032 amendment 2026-05-26, S7-4). Default false (без явного
-	// согласия оператора молчаливая миграция данных запрещена). При true
-	// daemon на старте проходит по `Targets[]`: для каждого SID с
-	// `ssh_target IS NULL` в `souls` пишет SSH-реквизиты и эмитит
-	// audit-event `soul.ssh-target.imported_from_config` (source
-	// `config_bootstrap`). Идемпотентно: запись с непустым PG-target
-	// пропускается, повторный старт — no-op. Отсутствующая `souls`-row
-	// — WARN-skip (не fatal).
+	// AutoImportLegacyTargets — opt-in one-shot migration of inline
+	// `push.targets[]` → `souls.ssh_target` jsonb at Keeper start (ADR-032
+	// amendment 2026-05-26, S7-4). Default false (silent data migration is
+	// forbidden without explicit operator consent). With true, at start the
+	// daemon walks `Targets[]`: for each SID with `ssh_target IS NULL` in `souls`
+	// it writes the SSH credentials and emits audit-event
+	// `soul.ssh-target.imported_from_config` (source `config_bootstrap`).
+	// Idempotent: a record with a non-empty PG target is skipped, a repeated start
+	// is a no-op. A missing `souls` row is a WARN-skip (not fatal).
 	AutoImportLegacyTargets bool `yaml:"auto_import_legacy_targets,omitempty" json:"auto_import_legacy_targets,omitempty"`
 
-	// AutoImportLegacyProviders — opt-in one-shot миграция inline
-	// `push.providers[]` → PG-таблица `push_providers` при старте Keeper-а
-	// (ADR-032 amendment 2026-05-26, S7-4). Default false. Симметрично
-	// [AutoImportLegacyTargets]: записи, отсутствующие в PG, заводятся под
-	// `archon-system`-AID; уже существующие имена пропускаются (запись в
-	// PG canonical-источник, не перезаписываем). Audit-event —
+	// AutoImportLegacyProviders — opt-in one-shot migration of inline
+	// `push.providers[]` → the `push_providers` PG table at Keeper start (ADR-032
+	// amendment 2026-05-26, S7-4). Default false. Symmetric with
+	// [AutoImportLegacyTargets]: records absent from PG are created under the
+	// `archon-system` AID; already-existing names are skipped (the PG record is
+	// the canonical source, not overwritten). Audit-event —
 	// `push-provider.imported_from_config`.
 	AutoImportLegacyProviders bool `yaml:"auto_import_legacy_providers,omitempty" json:"auto_import_legacy_providers,omitempty"`
 
 	// CovenDefaultProviders — Level 2 multi-provider routing (P2 W-4, ADR-032
-	// amendment 2026-05-27). Карта coven-имя → имя SshProvider-плагина.
-	// Используется, когда у Soul-а нет per-SID `ssh_target.ssh_provider`
-	// (Level 1). Tiebreak при множественном coven-match — алфавитный порядок
-	// имён ковенов (детерминизм). Пустая карта → переход к Level 3.
+	// amendment 2026-05-27). A map coven-name → SshProvider-plugin name. Used when
+	// a Soul has no per-SID `ssh_target.ssh_provider` (Level 1). Tiebreak on
+	// multiple coven matches — alphabetical order of coven names (determinism). An
+	// empty map → fall through to Level 3.
 	//
-	// Hot-reload поддерживается: на каждый config.Store.OnReload router
-	// читает свежий снимок через RouterConfigSource.
+	// Hot-reload supported: on each config.Store.OnReload the router reads a fresh
+	// snapshot via RouterConfigSource.
 	CovenDefaultProviders map[string]string `yaml:"coven_default_providers,omitempty" json:"coven_default_providers,omitempty"`
 
-	// ClusterDefaultProvider — Level 3 multi-provider routing (P2 W-4). Имя
-	// SshProvider-плагина по умолчанию для всех Souls, у которых ни Level 1,
-	// ни Level 2 не дали match. Пусто → ErrProviderNotRouted (fail per-host).
+	// ClusterDefaultProvider — Level 3 multi-provider routing (P2 W-4). The
+	// default SshProvider-plugin name for all Souls for which neither Level 1 nor
+	// Level 2 matched. Empty → ErrProviderNotRouted (fail per-host).
 	//
-	// Hot-reload поддерживается (см. CovenDefaultProviders).
+	// Hot-reload supported (see CovenDefaultProviders).
 	ClusterDefaultProvider string `yaml:"cluster_default_provider,omitempty" json:"cluster_default_provider,omitempty"`
 
-	// Transport — режим bootstrap-доставки токена `core.bootstrap.delivered`
-	// (ADR-063 amendment «Teleport by-name transport»): `direct` (default) или
-	// `teleport`. Влияет ТОЛЬКО на keeper-side core-модуль доставки токена, не
-	// на push-прогон Destiny (тот всегда generic).
+	// Transport is the bootstrap-token delivery mode for
+	// `core.bootstrap.delivered` (ADR-063 amendment "Teleport by-name
+	// transport"): `direct` (default) or `teleport`. Affects ONLY the keeper-side
+	// token-delivery core module, not the Destiny push run (that is always
+	// generic).
 	//
-	//   - direct: generic push.Dial по primary_ip — Authorize/Sign плагина +
-	//     CA-signed host-cert verify (host-CA из `host_ca_refs[]`).
-	//   - teleport: by-name через Teleport Proxy (target = SID/FQDN, НЕ IP).
-	//     Транспорт+auth+host-verify целиком через Teleport identity-file
-	//     (`teleport.*` ниже); Authorize/Sign плагина и Vault host-CA НЕ
-	//     используются. Свежая VM появляется в Teleport через ~3-5мин →
-	//     модуль ретраит connect (scenario-param `join_wait_timeout`).
+	//   - direct: generic push.Dial by primary_ip — plugin Authorize/Sign +
+	//     CA-signed host-cert verify (host-CA from `host_ca_refs[]`).
+	//   - teleport: by-name via the Teleport Proxy (target = SID/FQDN, NOT IP).
+	//     Transport+auth+host-verify entirely through the Teleport identity-file
+	//     (`teleport.*` below); plugin Authorize/Sign and Vault host-CA are NOT
+	//     used. A fresh VM appears in Teleport in ~3-5 min → the module retries
+	//     connect (scenario param `join_wait_timeout`).
 	//
-	// Пусто трактуется как `direct` (backward-compat). При `teleport` блок
-	// `teleport.*` обязателен (валидация schema-фазы).
+	// Empty is treated as `direct` (backward-compat). With `teleport` the
+	// `teleport.*` block is required (schema-phase validation).
 	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
 
-	// Teleport — Teleport-creds для `transport: teleport` (ADR-063 amendment).
-	// Обязателен при `transport: teleport`, игнорируется при `direct`. Creds
-	// живут в keeper.yml push-блоке (НЕ в плагине): в teleport-режиме плагин
-	// soul-ssh-teleport в флоу доставки не участвует.
+	// Teleport holds Teleport creds for `transport: teleport` (ADR-063
+	// amendment). Required with `transport: teleport`, ignored with `direct`. The
+	// creds live in the keeper.yml push block (NOT in the plugin): in teleport
+	// mode the soul-ssh-teleport plugin does not take part in the delivery flow.
 	Teleport *KeeperPushTeleport `yaml:"teleport,omitempty" json:"teleport,omitempty"`
 }
 
-// Допустимые значения `push.transport` (ADR-063 amendment). Пустая строка =
+// Allowed `push.transport` values (ADR-063 amendment). Empty string =
 // PushTransportDirect (backward-compat).
 const (
 	PushTransportDirect   = "direct"
 	PushTransportTeleport = "teleport"
 )
 
-// KeeperPushTeleport — Teleport identity-creds для by-name bootstrap-транспорта
-// (`push.transport: teleport`, ADR-063 amendment). Все три поля обязательны при
-// teleport-режиме (валидация schema-фазы): identity-file несёт TLS-cert+key для
-// mTLS к Proxy И SSH user-cert + host-CA (known_hosts) для target-handshake —
-// transport+auth+host-verify целиком из него.
+// KeeperPushTeleport holds Teleport identity creds for by-name bootstrap
+// transport (`push.transport: teleport`, ADR-063 amendment). All three fields
+// are required in teleport mode (schema-phase validation): the identity-file
+// carries TLS cert+key for mTLS to the Proxy AND an SSH user-cert + host-CA
+// (known_hosts) for the target handshake — transport+auth+host-verify entirely
+// from it.
 type KeeperPushTeleport struct {
-	// ProxyAddr — `host:port` Teleport Proxy (gRPC sshgrpc-listener, обычно
-	// `<proxy>:443`).
+	// ProxyAddr is the `host:port` of the Teleport Proxy (gRPC sshgrpc listener,
+	// usually `<proxy>:443`).
 	ProxyAddr string `yaml:"proxy_addr" json:"proxy_addr"`
-	// IdentityFile — путь к Teleport identity-file (`tctl auth sign` для
-	// bot/role с доступом к целевым нодам). Файл-секрет на диске keeper-а.
+	// IdentityFile is the path to the Teleport identity-file (`tctl auth sign` for
+	// a bot/role with access to the target nodes). A file secret on the keeper's
+	// disk.
 	IdentityFile string `yaml:"identity_file" json:"identity_file"`
-	// Cluster — имя Teleport-кластера, в котором резолвятся node-name-ы.
+	// Cluster is the name of the Teleport cluster in which node names are
+	// resolved.
 	Cluster string `yaml:"cluster" json:"cluster"`
-	// UseSystemTrust — Teleport Proxy стоит ЗА публичным L7-TLS-балансировщиком
-	// (ADR-063 amendment). Опционально, default false (back-compat).
+	// UseSystemTrust — the Teleport Proxy sits BEHIND a public L7-TLS load
+	// balancer (ADR-063 amendment). Optional, default false (back-compat).
 	//
-	// false: proxy-server-cert верифицируется через identity-CA + sentinel-
-	// ServerName `teleport.cluster.local` (валидно для Teleport-issued proxy-cert).
+	// false: the proxy server-cert is verified via the identity-CA + sentinel
+	// ServerName `teleport.cluster.local` (valid for a Teleport-issued
+	// proxy-cert).
 	//
-	// true: балансировщик презентует собственный публичный cert (напр.
-	// `*.tp.rwb.ru`, без SAN `teleport.cluster.local`) — верификация смещается на
-	// системный trust store по host из `proxy_addr`. mTLS client-cert (auth на
-	// proxy) и SSH host-CA из identity сохраняются: server-cert proxy не граница
-	// доверия Soul Stack.
+	// true: the balancer presents its own public cert (e.g. `*.tp.rwb.ru`, with no
+	// SAN `teleport.cluster.local`) — verification shifts to the system trust
+	// store by host from `proxy_addr`. The mTLS client-cert (auth to the proxy)
+	// and the SSH host-CA from the identity are preserved: the proxy server-cert
+	// is not a Soul Stack trust boundary.
 	UseSystemTrust bool `yaml:"use_system_trust,omitempty" json:"use_system_trust,omitempty"`
-	// AlpnUpgrade — L7-TLS-балансировщик перед Proxy терминирует TLS и НЕ
-	// проксирует raw gRPC/SSH-stream (ADR-063 amendment). Опционально, default
-	// false (back-compat).
+	// AlpnUpgrade — the L7-TLS load balancer in front of the Proxy terminates TLS
+	// and does NOT proxy a raw gRPC/SSH stream (ADR-063 amendment). Optional,
+	// default false (back-compat).
 	//
-	// true: коннект к Proxy оборачивается в ALPN-conn-upgrade (WebSocket-туннель
-	// на `/webapi/connectionupgrade`), который L7-LB пропускает — без него
-	// DialHost падает на `403 / content-type "text/plain"`. Внутренний gRPC-mTLS
-	// alpn-ветка настраивает сама (объединённый trust: identity-CA ∪ системный),
-	// поэтому для proxy-за-L7-LB достаточно одного `alpn_upgrade: true`;
-	// `use_system_trust` при включённом alpn — no-op, он применяется только при
-	// выключенном alpn (LB проксирует raw gRPC как есть).
+	// true: the connection to the Proxy is wrapped in an ALPN conn-upgrade (a
+	// WebSocket tunnel on `/webapi/connectionupgrade`), which the L7-LB passes —
+	// without it DialHost fails with `403 / content-type "text/plain"`. The inner
+	// gRPC-mTLS is configured by the alpn branch itself (combined trust:
+	// identity-CA ∪ system), so for a proxy-behind-L7-LB a single
+	// `alpn_upgrade: true` suffices; `use_system_trust` is a no-op when alpn is
+	// on — it applies only with alpn off (the LB proxies raw gRPC as-is).
 	AlpnUpgrade bool `yaml:"alpn_upgrade,omitempty" json:"alpn_upgrade,omitempty"`
 }
 
-// KeeperPushCARef — один элемент multi-CA `push.host_ca_refs[]` (S7-3).
+// KeeperPushCARef is one element of the multi-CA `push.host_ca_refs[]` (S7-3).
 //
-// `Ref` — vault-ref (`vault:<mount>/<path>`) на public host-CA (поле в Vault KV
-// — `public_key`, симметрия с singular `host_ca_ref`).
+// `Ref` — a vault-ref (`vault:<mount>/<path>`) to the public host CA (Vault KV
+// field `public_key`, symmetric with the singular `host_ca_ref`).
 //
-// `Name` — operator-defined kebab-case-имя, используется как label-значение в
-// `keeper_push_host_ca_used_total{ca_name=...}` и в diag-сообщениях. Должно быть
-// уникально в наборе (валидация в schema-фазе).
+// `Name` — an operator-defined kebab-case name, used as a label value in
+// `keeper_push_host_ca_used_total{ca_name=...}` and in diag messages. Must be
+// unique in the set (schema-phase validation).
 type KeeperPushCARef struct {
 	Ref  string `yaml:"ref"  json:"ref"`
 	Name string `yaml:"name" json:"name"`
 }
 
-// DefaultHostCAName — auto-name при backward-compat auto-adapt singular
-// `push.host_ca_ref` в `host_ca_refs[0]` (S7-3 deprecation window, ADR-032
-// amendment 2026-05-26). Кебаб-case-имя, проходит ту же валидацию, что и
-// operator-defined имена в multi-CA-наборе.
+// DefaultHostCAName is the auto-name for the backward-compat auto-adapt of the
+// singular `push.host_ca_ref` into `host_ca_refs[0]` (S7-3 deprecation window,
+// ADR-032 amendment 2026-05-26). A kebab-case name that passes the same
+// validation as operator-defined names in the multi-CA set.
 const DefaultHostCAName = "default"
 
-// KeeperPushTarget — SSH-реквизиты одного push-хоста (`sid` = FQDN, тот же,
-// что в реестре `souls`). Pilot-форма: inline в keeper.yml; S7 заменит на
-// `souls.ssh_target jsonb`.
+// KeeperPushTarget holds the SSH credentials of one push host (`sid` = FQDN, the
+// same as in the `souls` registry). Pilot form: inline in keeper.yml; S7 will
+// replace it with `souls.ssh_target jsonb`.
 //
-// Дефолты SSHPort / SSHUser / SoulPath применяются на резолве (см.
-// keeper/internal/push.ConfigTargetResolver), а не в schema-фазе: оператор
-// может опустить любое поле, и тогда подставится стандартное значение
+// The SSHPort / SSHUser / SoulPath defaults are applied at resolve time (see
+// keeper/internal/push.ConfigTargetResolver), not in the schema phase: the
+// operator may omit any field, and the standard value is then substituted
 // (22 / root / /usr/local/bin/soul).
 type KeeperPushTarget struct {
 	SID      string `yaml:"sid"                json:"sid"`
@@ -1772,45 +1817,47 @@ type KeeperPushTarget struct {
 	SoulPath string `yaml:"soul_path,omitempty" json:"soul_path,omitempty"`
 }
 
-// KeeperCloudInit — параметры рендера cloud-init userdata (ADR-017(h)
-// amendment 2026-05-27, B-flat). Все поля обязательны на момент использования
-// (сценарий с `generate_userdata: true`); пустое значение → fail-fast с ясной
-// ошибкой при GenerateUserdata-вызове, а не молчаливый рендер «недо-userdata».
+// KeeperCloudInit holds the cloud-init userdata render parameters (ADR-017(h)
+// amendment 2026-05-27, B-flat). All fields are required at use time (a scenario
+// with `generate_userdata: true`); an empty value → fail-fast with a clear error
+// at the GenerateUserdata call, not a silent render of "under-userdata".
 //
-// `BootstrapEndpoint` — `host:port` LB, через который Soul-агент будет звонить
-// на Bootstrap-RPC (ADR-012(b), отдельный listener) ПОСЛЕ установки. В userdata
-// он рендерится в `keeper.endpoints[0]` (host + bootstrap_port).
+// `BootstrapEndpoint` — the `host:port` of the LB through which the Soul agent
+// will call the Bootstrap RPC (ADR-012(b), a separate listener) AFTER install.
+// It renders into userdata as `keeper.endpoints[0]` (host + bootstrap_port).
 //
-// `EventStreamPort` — TCP-порт EventStream-фазы (mTLS-listener) для того же
-// host-а; идёт в `keeper.endpoints[0].event_stream_port` soul.yml. 0/опущен →
-// используется порт из `bootstrap_endpoint` (back-compat: single-port LB).
-// Без него soul dial-ил EventStream на Bootstrap-порт («Unimplemented:
-// method EventStream») — 6-я стена ADR-063.
+// `EventStreamPort` — the TCP port of the EventStream phase (mTLS listener) for
+// the same host; goes into `keeper.endpoints[0].event_stream_port` in soul.yml.
+// 0/omitted → the port from `bootstrap_endpoint` is used (back-compat: single-
+// port LB). Without it, soul dialed EventStream on the Bootstrap port
+// ("Unimplemented: method EventStream") — the 6th wall of ADR-063.
 //
-// `TLSCARef` — vault-ref (`vault:<mount>/<path>`) на PEM-CA Keeper-а. На
-// GenerateUserdata-вызове резолвится через keeper-vault-клиент (поле в Vault KV —
-// `ca`), результат запекается в userdata как `write_files: /etc/soul/tls/keeper-ca.pem`.
-// CA — публичный материал (не секрет), но единый источник правды в Vault
-// нужен для ротации без правок keeper.yml.
+// `TLSCARef` — a vault-ref (`vault:<mount>/<path>`) to the Keeper PEM CA. At the
+// GenerateUserdata call it is resolved via the keeper-vault client (Vault KV
+// field `ca`), and the result is baked into userdata as
+// `write_files: /etc/soul/tls/keeper-ca.pem`. The CA is public material (not a
+// secret), but a single source of truth in Vault is needed for rotation without
+// editing keeper.yml.
 //
-// `SoulBinaryURL` — HTTPS URL, с которого VM скачивает `soul`-бинарь (curl
-// в runcmd). Plain http отвергается на этапе GenerateUserdata (только TLS).
+// `SoulBinaryURL` — the HTTPS URL from which the VM downloads the `soul` binary
+// (curl in runcmd). Plain http is rejected at GenerateUserdata (TLS only).
 //
-// `SoulBinaryCA` — какой trust-store использует curl при скачивании бинаря:
-//   - `keeper` (default, пустое значение — back-compat secure-default) — pin на
-//     PEM-CA Keeper-а (`--cacert /etc/soul/tls/keeper-ca.pem`); подходит для
-//     self-hosted artifact-хоста с тем же CA, что у Keeper-а.
-//   - `system` — OS-trust bundle (curl без `--cacert`); для artifact-хостов с
-//     публичным CA (например, бинарь на Nexus за GlobalSign-сертификатом).
+// `SoulBinaryCA` — which trust store curl uses when downloading the binary:
+//   - `keeper` (default, empty value — back-compat secure-default) — pin to the
+//     Keeper PEM CA (`--cacert /etc/soul/tls/keeper-ca.pem`); suits a self-hosted
+//     artifact host with the same CA as Keeper.
+//   - `system` — the OS trust bundle (curl without `--cacert`); for artifact
+//     hosts with a public CA (e.g. a binary on Nexus behind a GlobalSign cert).
 //
-// `soul_binary_ca: system` ослабляет ТОЛЬКО верификацию сертификата artifact-
-// хоста при curl-скачивании бинаря. Bootstrap-канал (souls↔keeper mTLS) пинится
-// на keeper-CA ВСЕГДА, независимо от этого поля, и SHA256-verify бинаря не
-// затрагивается. `system` — это всё ещё system-CA-over-TLS, не plain-http.
+// `soul_binary_ca: system` weakens ONLY the artifact-host certificate
+// verification during the curl binary download. The bootstrap channel
+// (souls↔keeper mTLS) is ALWAYS pinned to the keeper CA, independent of this
+// field, and the binary SHA256-verify is unaffected. `system` is still
+// system-CA-over-TLS, not plain-http.
 //
-// `SoulVersion` — опц. строка, попадающая в userdata как комментарий (для
-// диагностики); fingerprint-сверка отложена (см. ADR-017(h) amendment, soul-binary
-// signature verification — отдельный slice).
+// `SoulVersion` — an optional string that lands in userdata as a comment (for
+// diagnostics); the fingerprint check is deferred (see the ADR-017(h) amendment,
+// soul-binary signature verification — a separate slice).
 type KeeperCloudInit struct {
 	BootstrapEndpoint string `yaml:"bootstrap_endpoint"`
 	EventStreamPort   int    `yaml:"event_stream_port,omitempty"`
@@ -1820,14 +1867,16 @@ type KeeperCloudInit struct {
 	SoulVersion       string `yaml:"soul_version,omitempty"`
 }
 
-// KeeperPushProvider — per-provider params для env-payload плагина SSH-провайдера.
-// Pilot-форма: inline в keeper.yml; S7 заменит на PG-table `push_providers`.
+// KeeperPushProvider holds per-provider params for the SSH-provider plugin's
+// env-payload. Pilot form: inline in keeper.yml; S7 will replace it with the
+// `push_providers` PG table.
 //
-// `Name` — ссылка на `plugins.ssh_providers[].name` (kebab-case); ровно та же
-// строка, что использует git-резолвер каталога. `Params` сериализуется в JSON
-// и инжектится в env-переменную `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` плагина
-// (ADR-020 amendment l): `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`.
-// Содержимое `Params` — opaque-форма самого провайдера (vault_addr/role/proxy_addr/…).
+// `Name` — a reference to `plugins.ssh_providers[].name` (kebab-case); the exact
+// same string the git catalog resolver uses. `Params` is serialized to JSON and
+// injected into the plugin's `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` env var
+// (ADR-020 amendment l): `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. The
+// contents of `Params` are the provider's own opaque form
+// (vault_addr/role/proxy_addr/…).
 type KeeperPushProvider struct {
 	Name   string         `yaml:"name"   json:"name"`
 	Params map[string]any `yaml:"params" json:"params"`

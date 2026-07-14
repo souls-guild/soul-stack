@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-// ResolvedMaxScope: nil-блок / nil-поле → дефолт; явный 0 → 0 (безлимит);
-// явное значение → оно само. Это источник значения, которое daemon прокидывает
-// в api.Deps.VoyageMaxScope и mcp.HandlerDeps.VoyageMaxScope (DoS-guard S-med-3):
-// если бы метод возвращал 0 при «не задано», cap был бы мёртв на обоих путях.
+// ResolvedMaxScope: nil block / nil field → default; explicit 0 → 0 (unlimited);
+// an explicit value → itself. This is the source of the value the daemon feeds
+// into api.Deps.VoyageMaxScope and mcp.HandlerDeps.VoyageMaxScope (DoS-guard S-med-3):
+// if the method returned 0 when "unset", the cap would be dead on both paths.
 func TestResolvedMaxScope(t *testing.T) {
 	t.Run("nil receiver → default", func(t *testing.T) {
 		var v *KeeperVoyage
@@ -37,8 +37,8 @@ func TestResolvedMaxScope(t *testing.T) {
 	})
 }
 
-// ResolvedMaxBatchSize: nil-блок / nil-поле → дефолт; явный 0 → 0 (без предела);
-// явное значение → оно само (parity ResolvedMaxScope, DoS-guard S-W4).
+// ResolvedMaxBatchSize: nil block / nil field → default; explicit 0 → 0 (no limit);
+// an explicit value → itself (parity with ResolvedMaxScope, DoS-guard S-W4).
 func TestResolvedMaxBatchSize(t *testing.T) {
 	t.Run("nil receiver → default", func(t *testing.T) {
 		var v *KeeperVoyage

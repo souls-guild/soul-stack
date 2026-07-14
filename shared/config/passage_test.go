@@ -8,12 +8,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// loadTasks парсит inline scenario-YAML в []Task (после общей валидации
-// config-а), падая на любой error-диагностике. Фикстуры guard-тестов — inline, а
-// НЕ загрузка из examples/**: examples — WIP-зона пользователя (uncommitted
-// правки), guard-инвариант на silent-wrong-target обязан быть детерминирован и не
-// зависеть от состояния примеров. Фикстуры ниже — синтетические, воспроизводящие
-// 3-Passage re-probe-идиому (исторически redis-cluster restart).
+// loadTasks parses inline scenario YAML into []Task (after the common config
+// validation), failing on any error diagnostic. Guard-test fixtures are inline, NOT
+// loaded from examples/**: examples are the user's WIP zone (uncommitted edits), and
+// the silent-wrong-target guard invariant must be deterministic and independent of
+// the examples' state. The fixtures below are synthetic, reproducing the 3-Passage
+// re-probe idiom (historically redis-cluster restart).
 func loadTasks(t *testing.T, src string) []Task {
 	t.Helper()
 	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -37,7 +37,7 @@ func stratify(t *testing.T, src string) Passage {
 	return p
 }
 
-// --- синтетические фикстуры 3-Passage re-probe (исторически redis-cluster restart) ---
+// --- synthetic 3-Passage re-probe fixtures (historically redis-cluster restart) ---
 
 const redisUpdateACL = `
 name: update_acl
@@ -170,8 +170,8 @@ tasks:
         action: restart
 `
 
-// TestStratify_RedisUpdateACL — реальный 2-Passage сценарий: probe (p0) → задача с
-// where: register.redis_role (p1). Один probe-барьер.
+// TestStratify_RedisUpdateACL — a real 2-Passage scenario: probe (p0) → task with
+// where: register.redis_role (p1). One probe barrier.
 func TestStratify_RedisUpdateACL(t *testing.T) {
 	p := stratify(t, redisUpdateACL)
 	if p.Count != 2 {
@@ -185,10 +185,10 @@ func TestStratify_RedisUpdateACL(t *testing.T) {
 	}
 }
 
-// TestStratify_RedisAddUser — 2-Passage: probe (p0) → две задачи на p1 (создание
-// на master + health-gate на slave, обе читают register.redis_role). Health-gate
-// читает register.self в until/failed_when — это НЕ cross-task ребро, passage он
-// не повышает.
+// TestStratify_RedisAddUser — 2-Passage: probe (p0) → two tasks on p1 (create on
+// master + health-gate on slave, both read register.redis_role). The health-gate
+// reads register.self in until/failed_when — that is NOT a cross-task edge, it does
+// not raise the passage.
 func TestStratify_RedisAddUser(t *testing.T) {
 	p := stratify(t, redisAddUser)
 	if p.Count != 2 {
@@ -202,10 +202,10 @@ func TestStratify_RedisAddUser(t *testing.T) {
 	}
 }
 
-// TestStratify_RedisRestart — главный 3-Passage кейс (ADR-056 §«restart re-probe»):
-// probe(p0) → where-задачи(p1) → re-probe(p1, перезамер ПОСЛЕ failover) →
-// where: register.redis_role_after && register.redis_role (p2). Две probe-границы
-// → три Passage. Это и есть «probe → действие → re-probe → действие».
+// TestStratify_RedisRestart — the main 3-Passage case (ADR-056 §"restart re-probe"):
+// probe(p0) → where-tasks(p1) → re-probe(p1, re-measured AFTER failover) →
+// where: register.redis_role_after && register.redis_role (p2). Two probe boundaries
+// → three Passages. This is "probe → act → re-probe → act".
 func TestStratify_RedisRestart(t *testing.T) {
 	p := stratify(t, redisRestart)
 	if p.Count != 3 {
@@ -221,12 +221,12 @@ func TestStratify_RedisRestart(t *testing.T) {
 	}
 }
 
-// TestStratify_InvariantConsumerStrictlyAfterProbe — ГЛАВНЫЙ guard-инвариант
-// (security-критично, ADR-056 silent-wrong-target). Для КАЖДОЙ задачи, читающей
-// register.X, её passage ОБЯЗАН быть СТРОГО больше passage probe, эмитящего X.
-// Регресс, отправивший потребителя в <= passage probe, означает резолв where: по
-// пустому/устаревшему register → разрушительная операция на нерезолвнутом таргете
-// МОЛЧА. Проверяется на всех синтетических фикстурах через прямой обход графа.
+// TestStratify_InvariantConsumerStrictlyAfterProbe — the MAIN guard invariant
+// (security-critical, ADR-056 silent-wrong-target). For EVERY task that reads
+// register.X, its passage MUST be STRICTLY greater than the passage of the probe
+// that emits X. A regression sending the consumer to <= the probe's passage means
+// resolving where: over an empty/stale register → a destructive operation on an
+// unresolved target SILENTLY. Checked on all synthetic fixtures via a direct graph walk.
 func TestStratify_InvariantConsumerStrictlyAfterProbe(t *testing.T) {
 	fixtures := map[string]string{
 		"update_acl": redisUpdateACL,
@@ -257,9 +257,9 @@ func TestStratify_InvariantConsumerStrictlyAfterProbe(t *testing.T) {
 	}
 }
 
-// TestStratify_BackwardCompatNoRegister — сценарий БЕЗ cross-task register:
-// каждая задача читает только input/own register → все passage 0, Count==1
-// (fast-path, идентично текущему up-front render).
+// TestStratify_BackwardCompatNoRegister — a scenario WITHOUT cross-task register:
+// each task reads only input/own register → all passages 0, Count==1 (fast-path,
+// identical to the current up-front render).
 func TestStratify_BackwardCompatNoRegister(t *testing.T) {
 	const src = `
 name: create
@@ -293,8 +293,8 @@ tasks:
 	}
 }
 
-// TestStratify_Cycle — register-зависимость по кругу → явная ошибка StratifyCycle,
-// НЕ молчаливая стратификация. probe_a читает register.b, probe_b читает register.a.
+// TestStratify_Cycle — a circular register dependency → an explicit StratifyCycle
+// error, NOT silent stratification. probe_a reads register.b, probe_b reads register.a.
 func TestStratify_Cycle(t *testing.T) {
 	const src = `
 name: cyclic
@@ -322,14 +322,14 @@ tasks:
 	}
 }
 
-// TestStratify_UnknownRegister — задача читает register.X, но НИ ОДНА задача его
-// не эмитит. Двойной рубеж:
+// TestStratify_UnknownRegister — a task reads register.X but NO task emits it. A
+// double line of defense:
 //
-//  1. ПОДТВЕРЖДЕНИЕ существующего валидатора: config-парс УЖЕ поднимает
-//     unknown_register_reference (cross-ref-фаза task_refs.go) — первый рубеж.
-//  2. Страховка render-слоя: даже если задачи дойдут до Stratify (например,
-//     валидация отключена/пропущена), стратификация падает явно
-//     StratifyUnknownRegister, а не идёт по неполному графу → silent-wrong-target.
+//  1. CONFIRMS the existing validator: config parse ALREADY raises
+//     unknown_register_reference (cross-ref phase, task_refs.go) — the first line.
+//  2. Render-layer safety net: even if tasks reach Stratify (e.g. validation
+//     disabled/skipped), stratification fails explicitly with StratifyUnknownRegister
+//     instead of walking an incomplete graph → silent-wrong-target.
 func TestStratify_UnknownRegister(t *testing.T) {
 	const src = `
 name: dangling
@@ -346,7 +346,7 @@ tasks:
       destiny: redis
       input: { action: noop }
 `
-	// Рубеж 1: config-валидатор ловит висячую ссылку на парсе.
+	// Defense 1: the config validator catches the dangling reference at parse.
 	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
@@ -361,7 +361,7 @@ tasks:
 		t.Error("existing config-validator did NOT raise unknown_register_reference — render-side Stratify is now the only guard")
 	}
 
-	// Рубеж 2: Stratify падает явно, не молча.
+	// Defense 2: Stratify fails explicitly, not silently.
 	_, serr := Stratify(m.Tasks)
 	if serr == nil {
 		t.Fatal("Stratify: expected unknown-register error, got nil")
@@ -372,10 +372,10 @@ tasks:
 	}
 }
 
-// TestStratify_RegisterInParamsAndInput — cross-task register, протянутый через
-// ${ … } в params: и apply:input: (не только where:), тоже двигает passage. Ловит
-// регресс, где стратификация смотрит ТОЛЬКО where: и пропускает register в данных
-// следующей задачи (тот тоже требует probe-барьер до render-а).
+// TestStratify_RegisterInParamsAndInput — a cross-task register threaded through
+// ${ … } in params: and apply:input: (not only where:) also moves the passage.
+// Catches a regression where stratification looks ONLY at where: and misses a
+// register in the next task's data (which also needs a probe barrier before render).
 func TestStratify_RegisterInParamsAndInput(t *testing.T) {
 	const src = `
 name: chain
@@ -405,10 +405,11 @@ tasks:
 	}
 }
 
-// TestStratify_SelfRegisterNotCrossTask — задача с register: probe, читающая
-// register.self.* И собственное именованное register (redis_role в failed_when
-// своего probe), НЕ зависит сама от себя: остаётся passage 0. Ловит регресс, где
-// own/self-ссылка ошибочно считается cross-task ребром (дала бы цикл/смещение).
+// TestStratify_SelfRegisterNotCrossTask — a task with register: probe that reads
+// register.self.* AND its own named register (redis_role in its own probe's
+// failed_when) does NOT depend on itself: it stays passage 0. Catches a regression
+// where an own/self reference is wrongly treated as a cross-task edge (would give a
+// cycle/shift).
 func TestStratify_SelfRegisterNotCrossTask(t *testing.T) {
 	const src = `
 name: self
@@ -433,11 +434,11 @@ tasks:
 	}
 }
 
-// TestStratify_RegisterInOutput — cross-task register, протянутый через ${ … } в
-// `output:` (декларированный output destiny/scenario-задачи, читается потребителем
-// через register:), тоже двигает passage. output — passage-определяющий источник
-// (ADR-056-реестр); регресс, где collectTaskReads его не обходит, оставил бы
-// потребителя output-register в том же Passage, что probe → silent-wrong-target.
+// TestStratify_RegisterInOutput — a cross-task register threaded through ${ … } in
+// `output:` (a destiny/scenario task's declared output, read by the consumer via
+// register:) also moves the passage. output is a passage-defining source (ADR-056
+// registry); a regression where collectTaskReads skips it would leave the
+// output-register consumer in the same Passage as the probe → silent-wrong-target.
 func TestStratify_RegisterInOutput(t *testing.T) {
 	const src = `
 name: chain_output
@@ -463,21 +464,21 @@ tasks:
 	}
 }
 
-// registerSourceFields — канонический реестр passage-определяющих register-
-// источников Task (ADR-056), КАЖДЫЙ как минимальная scenario-фикстура, где
-// ghost-register встречается ТОЛЬКО в этом поле и НИКТО его не эмитит. Ключ —
-// человекочитаемое имя поля; значение — YAML целого сценария.
+// registerSourceFields — the canonical registry of passage-defining register
+// sources of a Task (ADR-056), EACH as a minimal scenario fixture where a
+// ghost-register appears ONLY in that field and NOBODY emits it. Key — the
+// human-readable field name; value — the whole scenario's YAML.
 //
-// Это механизм reads==refs consistency: оба графа register-ссылок —
-// стратификатора (render.collectTaskReads → Stratify) и config-валидатора
-// (config.collectRefs → unknown_register_reference) — ОБЯЗАНЫ ловить ghost в
-// каждом поле. Если кто-то добавит новый register-читающий source-field в один
-// обходчик, но забудет в другой (или удалит из одного), соответствующий под-тест
-// покраснеет: либо Stratify не вернёт StratifyUnknownRegister (стратификатор не
-// видит поле → молча неполный граф → silent-wrong-target), либо config-валидатор
-// не поднимет unknown_register_reference (дыра линтера → unknown доживает до
-// рантайма). requisites (onchanges/onfail/require) и flow-control (when/...) сюда
-// НЕ входят — они НЕ passage-определяющие (см. ADR-056 §реестр).
+// This is the reads==refs consistency mechanism: both register-reference graphs —
+// the stratifier's (render.collectTaskReads → Stratify) and the config validator's
+// (config.collectRefs → unknown_register_reference) — MUST catch the ghost in every
+// field. If someone adds a new register-reading source-field to one walker but
+// forgets the other (or removes it from one), the matching sub-test goes red: either
+// Stratify does not return StratifyUnknownRegister (the stratifier does not see the
+// field → a silently incomplete graph → silent-wrong-target), or the config
+// validator does not raise unknown_register_reference (a linter hole → unknown
+// survives to runtime). requisites (onchanges/onfail/require) and flow-control
+// (when/...) are NOT included here — they are NOT passage-defining (see ADR-056 §registry).
 var registerSourceFields = map[string]string{
 	"where": `
 name: f_where
@@ -552,29 +553,29 @@ tasks:
 `,
 }
 
-// TestStratify_ReadsEqRefsConsistency — ★ guard против молчаливого размывания
-// register-графа: множество PASSAGE-ОПРЕДЕЛЯЮЩИХ source-полей, покрытых
-// стратификатором (collectTaskReads), ОБЯЗАНО совпадать с покрытыми config-
-// валидатором (collectRefs) в этом классе. Для каждого источникового поля (where /
-// vars / params / apply.input / output / loop.items / block) ghost-register обязан
-// быть пойман ОБОИМИ: Stratify → StratifyUnknownRegister И config-валидатор →
+// TestStratify_ReadsEqRefsConsistency — ★ guard against silently blurring the
+// register graph: the set of PASSAGE-DEFINING source-fields covered by the
+// stratifier (collectTaskReads) MUST match those covered by the config validator
+// (collectRefs) in this class. For each source-field (where / vars / params /
+// apply.input / output / loop.items / block) the ghost-register must be caught by
+// BOTH: Stratify → StratifyUnknownRegister AND config validator →
 // unknown_register_reference.
 //
-// Flow-control (when/changed_when/failed_when) сюда НЕ входит — он ∈ collectRefs,
-// но ∉ collectTaskReads (намеренная асимметрия после FC-5 narrow-fix; см.
-// TestStratify_FlowControlInRefsNotPassageReads ниже). Поле passage-определяющего
-// класса, добавленное в один обходчик, но не в другой, краснит ровно тот под-тест,
-// который соответствует расхождению — это и есть инвариант сопровождения ADR-056.
+// Flow-control (when/changed_when/failed_when) is NOT included here — it ∈
+// collectRefs but ∉ collectTaskReads (deliberate asymmetry after the FC-5
+// narrow-fix; see TestStratify_FlowControlInRefsNotPassageReads below). A
+// passage-defining-class field added to one walker but not the other reddens exactly
+// the sub-test matching the divergence — this is the ADR-056 maintenance invariant.
 func TestStratify_ReadsEqRefsConsistency(t *testing.T) {
 	for field, src := range registerSourceFields {
 		t.Run(field, func(t *testing.T) {
-			// Сторона валидатора: unknown_register_reference на парсе.
+			// Validator side: unknown_register_reference at parse.
 			m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 			if err != nil {
 				t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
 			}
-			// Никаких ДРУГИХ error-диагностик (фикстура структурно валидна, кроме
-			// ожидаемого unknown_register) — иначе тест зелёный по ложной причине.
+			// No OTHER error diagnostics (the fixture is structurally valid except the
+			// expected unknown_register) — else the test is green for the wrong reason.
 			foundUnknown := false
 			for _, d := range diags {
 				if d.Level != diag.LevelError {
@@ -590,7 +591,7 @@ func TestStratify_ReadsEqRefsConsistency(t *testing.T) {
 				t.Errorf("config-validator (collectRefs) did NOT raise unknown_register_reference for ghost in %q — source-field coverage diverged from stratifier", field)
 			}
 
-			// Сторона стратификатора: StratifyUnknownRegister на том же ghost.
+			// Stratifier side: StratifyUnknownRegister on the same ghost.
 			_, serr := Stratify(m.Tasks)
 			if serr == nil {
 				t.Fatalf("Stratify did NOT fail for ghost in %q — collectTaskReads does not cover this source-field (silent-wrong-target risk)", field)
@@ -603,11 +604,11 @@ func TestStratify_ReadsEqRefsConsistency(t *testing.T) {
 	}
 }
 
-// flowControlFields — flow-control source-поля (when / changed_when / failed_when),
-// КАЖДОЕ как минимальная фикстура, где ghost-register встречается ТОЛЬКО в этом
-// поле и НИКТО его не эмитит. После FC-5 narrow-fix flow-control НЕ passage-
-// определяющий (ADR-056:85), но ОСТАЁТСЯ register-читающим (cross-ref-валидатор
-// проверяет существование register). Это фиксирует асимметрию: refs ⊋ passage-reads.
+// flowControlFields — flow-control source-fields (when / changed_when / failed_when),
+// EACH as a minimal fixture where a ghost-register appears ONLY in that field and
+// NOBODY emits it. After the FC-5 narrow-fix flow-control is NOT passage-defining
+// (ADR-056:85) but REMAINS register-reading (the cross-ref validator checks the
+// register exists). This pins the asymmetry: refs ⊋ passage-reads.
 var flowControlFields = map[string]string{
 	"when": `
 name: fc_when
@@ -637,16 +638,17 @@ tasks:
 `,
 }
 
-// TestStratify_FlowControlInRefsNotPassageReads — ★ guard фиксирующий FC-5-асимметрию
-// (ADR-056:85 amend): flow-control `when`/`changed_when`/`failed_when` — register-
-// ЧИТАЮЩИЙ (∈ collectRefs → cross-ref-валидатор ловит ghost), но НЕ passage-
-// ОПРЕДЕЛЯЮЩИЙ (∉ collectTaskReads → Stratify НЕ падает StratifyUnknownRegister и
-// НЕ строит passage-ребро по нему).
+// TestStratify_FlowControlInRefsNotPassageReads — ★ guard pinning the FC-5 asymmetry
+// (ADR-056:85 amend): flow-control `when`/`changed_when`/`failed_when` is
+// register-READING (∈ collectRefs → cross-ref validator catches the ghost) but NOT
+// passage-DEFINING (∉ collectTaskReads → Stratify does NOT fail
+// StratifyUnknownRegister and does NOT build a passage edge from it).
 //
-// До narrow-fix flow-control был в collectTaskReads (conservative over-approx) и
-// расщеплял probe↔same-passage-when-потребителя → Soul cross-passage register не
-// видел → `no such key` (FC-5). Регресс «вернуть flow-control в collectTaskReads»
-// этот тест краснит: Stratify начнёт падать на ghost-register в flow-control-поле.
+// Before the narrow-fix, flow-control was in collectTaskReads (conservative
+// over-approx) and split a probe↔same-passage-when-consumer → Soul did not see the
+// cross-passage register → `no such key` (FC-5). A regression "return flow-control to
+// collectTaskReads" reddens this test: Stratify would start failing on a
+// ghost-register in a flow-control field.
 func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
 	for field, src := range flowControlFields {
 		t.Run(field, func(t *testing.T) {
@@ -654,7 +656,7 @@ func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
 			}
-			// (а) ∈ refs: cross-ref-валидатор ОБЯЗАН поймать ghost (register-читающее поле).
+			// (a) ∈ refs: the cross-ref validator MUST catch the ghost (register-reading field).
 			foundUnknown := false
 			for _, d := range diags {
 				if d.Level != diag.LevelError {
@@ -670,8 +672,8 @@ func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
 				t.Errorf("config-validator (collectRefs) did NOT raise unknown_register_reference for ghost in flow-control %q — flow-control dropped out of refs (must stay: register-reading)", field)
 			}
 
-			// (б) ∉ passage-reads: Stratify НЕ падает StratifyUnknownRegister (flow-control
-			// не в collectTaskReads → не строит passage-граф по ghost-register).
+			// (b) ∉ passage-reads: Stratify does NOT fail StratifyUnknownRegister (flow-control
+			// is not in collectTaskReads → does not build a passage graph from ghost-register).
 			_, serr := Stratify(m.Tasks)
 			if serr != nil {
 				t.Fatalf("Stratify FAILED on ghost in flow-control %q (%v) — flow-control крадётся обратно в collectTaskReads (passage-определяющий), что вернуло бы FC-5 cross-passage-расщепление", field, serr)
@@ -680,14 +682,14 @@ func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
 	}
 }
 
-// TestStratify_RegisterDependentWhenDoesNotSplitPassage — ★ КЛЮЧЕВОЙ guard FC-5
-// narrow-fix (ADR-056:85). probe эмитит register: redis_role (Passage 0), задача БЕЗ
-// своего where:/vars/params-register-ребра, но с `when: register.redis_role...`,
-// ОБЯЗАНА остаться в ТОМ ЖЕ Passage 0 — flow-control сам Passage НЕ расщепляет.
-// Тогда Soul видит register same-passage → when работает (как задумано ADR-012(d)).
+// TestStratify_RegisterDependentWhenDoesNotSplitPassage — ★ the KEY FC-5 narrow-fix
+// guard (ADR-056:85). A probe emits register: redis_role (Passage 0); a task with NO
+// where:/vars/params register edge of its own but with `when: register.redis_role...`
+// MUST stay in the SAME Passage 0 — flow-control does not split the Passage itself.
+// Then Soul sees the register same-passage → when works (as ADR-012(d) intends).
 //
-// До narrow-fix when загонял потребителя в Passage 1 (Count=2, [0 1]) → cross-passage
-// no-such-key. После — Count=1, обе задачи Passage 0. Регресс краснит на Count!=1.
+// Before the narrow-fix, when pushed the consumer into Passage 1 (Count=2, [0 1]) →
+// cross-passage no-such-key. After — Count=1, both tasks Passage 0. A regression reddens on Count!=1.
 func TestStratify_RegisterDependentWhenDoesNotSplitPassage(t *testing.T) {
 	const src = `
 name: when_same_passage
@@ -714,13 +716,13 @@ tasks:
 	}
 }
 
-// TestCrossPassageWhenGating_Detect — ★ FC-5 fail-closed детект genuinely cross-
-// passage when (ADR-056:85). probe `role` уезжает в Passage 0, потому что ДРУГАЯ
-// задача таргетит `where: register.role` (passage-определяющий → role-эмиттер
-// program-order остаётся в Passage 0, where-потребитель в Passage 1). when-задача
-// тоже уехала в Passage 1 по СВОЕЙ register-зависимости (vars: register.other) — а
-// `when: register.role` теперь genuinely cross-passage (role в Passage 0, потребитель
-// в Passage 1). Детектор обязан reject с координатами.
+// TestCrossPassageWhenGating_Detect — ★ FC-5 fail-closed detection of a genuinely
+// cross-passage when (ADR-056:85). probe `role` goes to Passage 0 because ANOTHER
+// task targets `where: register.role` (passage-defining → the role emitter stays in
+// Passage 0 by program order, the where-consumer in Passage 1). The when-task also
+// went to Passage 1 by its OWN register dependency (vars: register.other) — so
+// `when: register.role` is now genuinely cross-passage (role in Passage 0, consumer
+// in Passage 1). The detector must reject with coordinates.
 func TestCrossPassageWhenGating_Detect(t *testing.T) {
 	const src = `
 name: cross_passage_when
@@ -762,9 +764,9 @@ tasks:
 	}
 }
 
-// TestCrossPassageWhenGating_SamePassageOK — when по register same-passage (probe и
-// when-потребитель в одном Passage после narrow-fix) → НЕ reject. Это валидный
-// FC-5-кейс: Soul видит register своего Passage.
+// TestCrossPassageWhenGating_SamePassageOK — when over a same-passage register (probe
+// and when-consumer in the same Passage after the narrow-fix) → NOT rejected. A valid
+// FC-5 case: Soul sees the register of its own Passage.
 func TestCrossPassageWhenGating_SamePassageOK(t *testing.T) {
 	const src = `
 name: when_same_passage_ok
@@ -787,10 +789,10 @@ tasks:
 	}
 }
 
-// TestCrossPassageWhenGating_SelfRegisterOK — failed_when по register.self (same-task
-// результат, идиома remove_replica) → НЕ reject. register.self отфильтрован
-// ExtractRegisterRefs → детектор его не видит. Регресс «ловить register.self» сломал
-// бы валидную защиту (например `failed_when: register.self.stdout == 'master'`).
+// TestCrossPassageWhenGating_SelfRegisterOK — failed_when over register.self (same-task
+// result, the remove_replica idiom) → NOT rejected. register.self is filtered out by
+// ExtractRegisterRefs → the detector does not see it. A regression "catch register.self"
+// would break a valid guard (e.g. `failed_when: register.self.stdout == 'master'`).
 func TestCrossPassageWhenGating_SelfRegisterOK(t *testing.T) {
 	const src = `
 name: failed_when_self
@@ -809,10 +811,10 @@ tasks:
 	}
 }
 
-// TestValidate_UnknownRegisterInOutput — закрытый ADR-056 S2 пробел: до S2
-// cross-ref-валидатор НЕ обходил интерполяционные source-поля, и unknown-register
-// в `output:` (как и в vars/params/apply.input/loop.items) доживал до рантайм-
-// стратификатора. Теперь config-валидатор ловит его ОФЛАЙН.
+// TestValidate_UnknownRegisterInOutput — a closed ADR-056 S2 gap: before S2 the
+// cross-ref validator did not walk interpolation source-fields, and an
+// unknown-register in `output:` (like in vars/params/apply.input/loop.items) survived
+// to the runtime stratifier. Now the config validator catches it OFFLINE.
 func TestValidate_UnknownRegisterInOutput(t *testing.T) {
 	const src = `
 name: out_unknown
@@ -839,7 +841,7 @@ tasks:
 	}
 }
 
-// TestStratify_Empty — пустой план задач → Count 1, без паники.
+// TestStratify_Empty — an empty task plan → Count 1, no panic.
 func TestStratify_Empty(t *testing.T) {
 	p, err := Stratify(nil)
 	if err != nil {
@@ -850,12 +852,12 @@ func TestStratify_Empty(t *testing.T) {
 	}
 }
 
-// TestCrossPassageRequisite_Detect — ★ R2 ДЕТЕКТ (ADR-056 amend). Restart с
-// onchanges:[cfg] вынужден в Passage 1 ОТДЕЛЬНОЙ register-зависимостью (where:
-// register.role.*); requisite-источник cfg остаётся в Passage 0. consumer passage
-// 1 ≠ источник passage 0 → CrossPassageRequisite ловит до dispatch. Без детекта
-// Soul gating Passage-1 не видит register cfg (другой ApplyRequest) → restart молча
-// SKIPPED.
+// TestCrossPassageRequisite_Detect — ★ R2 DETECTION (ADR-056 amend). A restart with
+// onchanges:[cfg] is forced into Passage 1 by a SEPARATE register dependency (where:
+// register.role.*); the requisite source cfg stays in Passage 0. consumer passage 1 ≠
+// source passage 0 → CrossPassageRequisite catches it before dispatch. Without
+// detection, Soul gating in Passage 1 does not see register cfg (a different
+// ApplyRequest) → restart silently SKIPPED.
 func TestCrossPassageRequisite_Detect(t *testing.T) {
 	const src = `
 name: cross_passage
@@ -893,9 +895,9 @@ tasks:
 	}
 }
 
-// TestCrossPassageRequisite_SamePassageOK — same-passage onchanges (источник и
-// потребитель в одном Passage, R1-remap их чинит) → НЕ reject. N=1 без where:
-// (всё в Passage 0) — onchanges работает штатно после remap.
+// TestCrossPassageRequisite_SamePassageOK — same-passage onchanges (source and
+// consumer in the same Passage, the R1-remap fixes them) → NOT rejected. N=1 without
+// where: (all in Passage 0) — onchanges works normally after remap.
 func TestCrossPassageRequisite_SamePassageOK(t *testing.T) {
 	const src = `
 name: same_passage
@@ -920,10 +922,11 @@ tasks:
 	}
 }
 
-// TestCrossPassageRequisite_OnFailDetect — onfail-зеркало детекта: onfail-источник
-// в Passage 0, rescue-задача вынуждена в Passage 1 where-зависимостью → cross-passage
-// reject (kind=onfail). Без детекта onfail-rescue молча не запустится на провал
-// источника (Soul Passage-1 не видит register источника Passage 0).
+// TestCrossPassageRequisite_OnFailDetect — the onfail mirror of detection: the onfail
+// source in Passage 0, the rescue task forced into Passage 1 by a where dependency →
+// cross-passage reject (kind=onfail). Without detection the onfail-rescue would
+// silently not run on the source's failure (Soul Passage 1 does not see the source's
+// Passage 0 register).
 func TestCrossPassageRequisite_OnFailDetect(t *testing.T) {
 	const src = `
 name: cross_passage_onfail
@@ -955,12 +958,12 @@ tasks:
 	}
 }
 
-// --- within-block register-зависимость (silent-wrong-target) ---
+// --- within-block register dependency (silent-wrong-target) ---
 
-// TestWithinBlock_PeerReject (guard #1) — ★ ОСНОВНОЙ КЕЙС. probe-потомок эмитит
-// register: role ВНУТРИ блока, соседний потомок ТОГО ЖЕ блока читает
-// where: register.role.* — peer-register недоступен на render (block атомарен,
-// probe ещё не отработал). Детектор обязан reject с точными координатами.
+// TestWithinBlock_PeerReject (guard #1) — ★ the MAIN CASE. A probe child emits
+// register: role INSIDE a block, a sibling child of the SAME block reads
+// where: register.role.* — the peer-register is unavailable at render (the block is
+// atomic, the probe has not run yet). The detector must reject with exact coordinates.
 func TestWithinBlock_PeerReject(t *testing.T) {
 	const src = `
 name: within_block_peer
@@ -995,14 +998,15 @@ tasks:
 	}
 }
 
-// TestWithinBlock_WhenPeerOK (guard #1b) — ★ FC-5 SIDE-EFFECT GUARD. probe-потомок
-// эмитит register: role ВНУТРИ блока, соседний потомок ТОГО ЖЕ блока гейтит
-// `when: register.role.stdout == 'master'` (flow-control, НЕ where). После FC-5
-// narrow-fix `when` выпал из collectTaskReads (Soul-side per-task gating) → within-
-// block `when: register.peer` ВАЛИДЕН: peer-probe исполняется тем же ApplyRequest
-// ДО потребителя, Soul видит peer-register в накопленном срезе блока на момент eval.
-// Детектор НЕ должен это отвергать → bad==false. Регресс «вернуть when в
-// collectTaskReads» молча сломал бы within-block when:peer — этот тест краснит.
+// TestWithinBlock_WhenPeerOK (guard #1b) — ★ FC-5 SIDE-EFFECT GUARD. A probe child
+// emits register: role INSIDE a block, a sibling child of the SAME block gates on
+// `when: register.role.stdout == 'master'` (flow-control, NOT where). After the FC-5
+// narrow-fix `when` dropped out of collectTaskReads (Soul-side per-task gating) →
+// within-block `when: register.peer` is VALID: the peer-probe runs in the same
+// ApplyRequest BEFORE the consumer, and Soul sees the peer-register in the block's
+// accumulated slice at eval time. The detector must NOT reject it → bad==false. A
+// regression "return when to collectTaskReads" would silently break within-block
+// when:peer — this test reddens.
 func TestWithinBlock_WhenPeerOK(t *testing.T) {
 	const src = `
 name: within_block_when_peer
@@ -1028,12 +1032,12 @@ tasks:
 	}
 }
 
-// TestWithinBlock_ExternalProbeOK (guard #2) — ★ ПРИЁМКА НЕ СЛОМАНА. probe эмитит
-// register: role на TOP-LEVEL (отдельная задача ДО блока), block-потомок читает
-// where: register.role.* — это ВАЛИДНО (probe — отдельный Passage, restart-кейс).
-// Детектор сверяет ТОЛЬКО против register-ов, рождённых ВНУТРИ блока (не глобальный
-// emitterIndex), поэтому внешний probe не ловится → ok==false. Регресс «сломать
-// restart» этим тестом фиксируется.
+// TestWithinBlock_ExternalProbeOK (guard #2) — ★ ACCEPTANCE NOT BROKEN. A probe emits
+// register: role at TOP-LEVEL (a separate task BEFORE the block), a block child reads
+// where: register.role.* — this is VALID (the probe is a separate Passage, the
+// restart case). The detector checks ONLY against registers born INSIDE the block (not
+// the global emitterIndex), so the external probe is not caught → ok==false. A
+// regression "break restart" is pinned by this test.
 func TestWithinBlock_ExternalProbeOK(t *testing.T) {
 	const src = `
 name: external_probe
@@ -1059,10 +1063,10 @@ tasks:
 	}
 }
 
-// TestWithinBlock_RegisterSelfOK (guard #3) — block-потомок читает register.self.*
-// (собственный результат шага, не peer) в retry.until: → ВАЛИДНО. register.self
-// уже отфильтрован ExtractRegisterRefs (collectTaskReads его не вернёт), поэтому
-// детектор не должен на него реагировать → ok==false.
+// TestWithinBlock_RegisterSelfOK (guard #3) — a block child reads register.self.* (its
+// own step's result, not a peer) in retry.until: → VALID. register.self is already
+// filtered by ExtractRegisterRefs (collectTaskReads won't return it), so the detector
+// must not react to it → ok==false.
 func TestWithinBlock_RegisterSelfOK(t *testing.T) {
 	const src = `
 name: register_self
@@ -1086,9 +1090,9 @@ tasks:
 	}
 }
 
-// TestWithinBlock_NestedPeerReject (guard #4) — вложенный block: внутренний
-// потомок читает register, эмитнутый ВНЕШНИМ потомком того же (внешнего) блока →
-// reject. peer внутри вложенного блока = peer снаружи (один Passage у всего блока).
+// TestWithinBlock_NestedPeerReject (guard #4) — a nested block: an inner child reads a
+// register emitted by an OUTER child of the same (outer) block → reject. A peer inside
+// a nested block = a peer outside (the whole block shares one Passage).
 func TestWithinBlock_NestedPeerReject(t *testing.T) {
 	const src = `
 name: nested_peer
@@ -1119,9 +1123,9 @@ tasks:
 	}
 }
 
-// TestWithinBlock_NoRegisterOK (guard #5) — block без единого register: внутри →
-// fast-path ok==false (нечего читать как peer). Ловит регресс, где пустой
-// blockEmits даёт ложное срабатывание.
+// TestWithinBlock_NoRegisterOK (guard #5) — a block without a single register: inside
+// → fast-path ok==false (nothing to read as a peer). Catches a regression where an
+// empty blockEmits gives a false positive.
 func TestWithinBlock_NoRegisterOK(t *testing.T) {
 	const src = `
 name: no_register
@@ -1144,11 +1148,11 @@ tasks:
 	}
 }
 
-// TestWithinBlock_AcceptanceRestart (guard #6) — ★ ПРИЁМКА: реальный
-// examples/service/redis/scenario/restart/main.yml (probe redis_role top-level,
-// block с where на внешний register) ВАЛИДЕН → ok==false. Плюс регресс-цикл по
-// ВСЕМ committed example-сценариям: ни один не должен ловиться детектором (иначе
-// валидный пример молча перестал бы прогоняться).
+// TestWithinBlock_AcceptanceRestart (guard #6) — ★ ACCEPTANCE: the real
+// examples/service/redis/scenario/restart/main.yml (probe redis_role top-level, block
+// with where on an external register) is VALID → ok==false. Plus a regression loop
+// over ALL committed example scenarios: none must be caught by the detector (else a
+// valid example would silently stop running).
 func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 	restartPath := filepath.FromSlash("../../examples/service/redis/scenario/restart/main.yml")
 	m, _, diags, err := LoadScenarioManifest(restartPath, ValidateOptions{})
@@ -1164,7 +1168,7 @@ func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 		t.Fatalf("ПРИЁМКА СЛОМАНА: restart/main.yml зарепортирован как within-block peer (%+v) — внешний probe redis_role валиден", info)
 	}
 
-	// Регресс приёмки: ни один committed example-сценарий не ловится детектором.
+	// Acceptance regression: no committed example scenario is caught by the detector.
 	all, gerr := filepath.Glob(filepath.FromSlash("../../examples/service/*/scenario/*/main.yml"))
 	if gerr != nil {
 		t.Fatalf("glob examples: %v", gerr)
@@ -1175,7 +1179,7 @@ func TestWithinBlock_AcceptanceRestart(t *testing.T) {
 	for _, p := range all {
 		em, _, ediags, eerr := LoadScenarioManifest(p, ValidateOptions{})
 		if eerr != nil || em == nil {
-			continue // невалидный/нерезолвимый офлайн пример — не зона этого детектора.
+			continue // invalid/unresolvable offline example — not this detector's scope.
 		}
 		hardErr := false
 		for _, d := range ediags {

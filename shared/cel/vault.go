@@ -16,112 +16,109 @@ import (
 	"github.com/google/cel-go/parser"
 )
 
-// CEL-функция vault() ([templating.md §2.3], [ADR-017]). Резолвит секрет Vault
-// KV на keeper-стороне в CEL-render-фазе:
+// The CEL vault() function ([templating.md §2.3], [ADR-017]). Resolves a Vault KV
+// secret keeper-side during the CEL render phase:
 //
-//	${ vault('secret/redis/admin').password }   → map → .field (CEL-доступ)
-//	${ vault('secret/redis/admin#password') }   → один field напрямую (#-суффикс)
+//	${ vault('secret/redis/admin').password }   → map → .field (CEL access)
+//	${ vault('secret/redis/admin#password') }   → one field directly (# suffix)
 //
-// Симметрия с `vault:`-ref в params (vault_resolve.go): без `#field` возвращается
-// весь map секрета, с `#field` — одно значение. Аргумент — путь: строковый литерал
-// ИЛИ CEL-выражение из ДОВЕРЕННОГО контекста (incarnation/vars), резолвится CEL-ом
-// ДО вызова ReadKV — это не строковая склейка в Vault-запрос, инъекции нет.
-// Operator-input в путь не попадает по контракту варианта (а): vault() явно
-// прописывается автором scenario/destiny, а не подставляется из input.
+// Symmetric with the `vault:` ref in params (vault_resolve.go): without `#field` the
+// whole secret map is returned, with `#field` a single value. The argument is a path:
+// a string literal OR a CEL expression from a TRUSTED context (incarnation/vars),
+// resolved by CEL BEFORE the ReadKV call — this is not string concatenation into a
+// Vault request, so there's no injection. Operator input never reaches the path per the
+// contract of variant (a): vault() is written explicitly by the scenario/destiny
+// author, not substituted from input.
 //
-// Резолв keeper-side: реальное значение секрета подставляется в Params и уходит
-// на Soul реальным; маскирование — на выходе (логи/OTel/UI), CEL обрабатывает
-// значения нормально ([ADR-010]).
+// Keeper-side resolution: the real secret value is substituted into Params and goes to
+// the Soul as-is; masking happens on output (logs/OTel/UI), CEL processes the values
+// normally ([ADR-010]).
 
-// ErrVaultUnavailable — vault() встречен в выражении, но Engine собран без
-// KVReader (vault-функция не зарегистрирована). Отдельный класс, чтобы caller
-// отличал «нет vault-клиента в этом контексте» от ошибки автора.
+// ErrVaultUnavailable — vault() appears in an expression, but the Engine was built
+// without a KVReader (the vault function isn't registered). A separate class so the
+// caller distinguishes "no vault client in this context" from an author error.
 var ErrVaultUnavailable = errors.New("CEL: vault() недоступен — Engine собран без KVReader")
 
-// KVReader — узкое подмножество Vault KV-клиента, нужное CEL-функции vault().
-// keeper/internal/vault.Client удовлетворяет интерфейсу как есть; сужение
-// позволяет герметичный прогон (soul-lint/L0, Trial) с fixture-backed reader-ом.
-// Симметрично keeper/internal/render.KVReader.
+// KVReader — the narrow subset of the Vault KV client needed by the CEL vault()
+// function. keeper/internal/vault.Client satisfies the interface as-is; narrowing
+// allows a hermetic run (soul-lint/L0, Trial) with a fixture-backed reader. Symmetric
+// with keeper/internal/render.KVReader.
 type KVReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// vaultFuncName — имя функции после macro-expansion (внутреннее, 2-арное:
-// path + resolver-носитель контекста). Пользователь пишет vault('path').
+// vaultFuncName — the function name after macro expansion (internal, 2-ary:
+// path + the resolver carrying the context). The user writes vault('path').
 const vaultFuncName = "__vault_read"
 
-// vaultResolverVar — зарезервированная activation-переменная, несущая
-// per-eval resolver {ctx, kv} в binding функции. Имя с префиксом '__'
-// зарезервировано за internal-механизмами: авторские выражения с любым
-// `__`-идентификатором отвергаются [internalIdentGuard] в guardUnsupported
-// (functions.go) ДО compile — иначе автор обходит macro vault(), вызывая
-// `__vault_read(...)` напрямую. Макрос подставляет эту переменную как
-// hidden-аргумент после прохождения guard-а.
+// vaultResolverVar — a reserved activation variable carrying the per-eval resolver
+// {ctx, kv} into the binding function. The '__' prefix is reserved for internal
+// mechanisms: author expressions with any `__` identifier are rejected by
+// [internalIdentGuard] in guardUnsupported (functions.go) BEFORE compile — otherwise an
+// author could bypass the vault() macro by calling `__vault_read(...)` directly. The
+// macro injects this variable as a hidden argument after passing the guard.
 const vaultResolverVar = "__vault_resolver"
 
-// vaultResolver несёт per-eval контекст и reader для binding функции vault().
-// Кладётся в activation под [vaultResolverVar]; Engine.kv (immutable) разделяется
-// всеми прогонами, ctx — request-scoped. Так vault() concurrency-safe при общем
-// Engine: состояние per-call живёт в активации, не на Engine.
+// vaultResolver carries the per-eval context and reader for the vault() binding
+// function. Placed in the activation under [vaultResolverVar]; Engine.kv (immutable) is
+// shared by all runs, ctx is request-scoped. This makes vault() concurrency-safe with a
+// shared Engine: per-call state lives in the activation, not on the Engine.
 //
-// Реализует ref.Val (opaque): cel-адаптер не умеет конвертировать произвольный
-// Go-указатель в ref.Val при ResolveName, поэтому resolver сам — ref.Val и
-// проходит насквозь до binding-а callVault, который читает его через .Value().
+// Implements ref.Val (opaque): the cel adapter can't convert an arbitrary Go pointer
+// into a ref.Val at ResolveName, so the resolver is itself a ref.Val and passes through
+// to the callVault binding, which reads it via .Value().
 type vaultResolver struct {
 	ctx context.Context
 	kv  KVReader
 }
 
-// vaultMemoKey — приватный тип ключа context-value для per-render-pass кеша
-// vault()-резолвов (см. [WithVaultMemo], [vaultMemo]). Неэкспортируемый тип —
-// чтобы значение нельзя было перезаписать снаружи пакета случайной коллизией
-// ключа.
+// vaultMemoKey — a private context-value key type for the per-render-pass cache of
+// vault() resolutions (see [WithVaultMemo], [vaultMemo]). Unexported so the value can't
+// be overwritten from outside the package by an accidental key collision.
 type vaultMemoKey struct{}
 
-// vaultMemo — кеш резолвов vault() в рамках ОДНОГО render-pass. Ключ — `body`
-// (путь Vault БЕЗ `#field`), то есть ровно аргумент ReadKV; значение — весь map
-// секрета. Дедуп привязан к backend-вызову: vault('secret/x#password') и
-// vault('secret/x#tls') бьют один ReadKV('secret/x'), поэтому кешируем map
-// целиком, а нужное поле выбирается per-call ПОСЛЕ кеша (корректность по
-// #field сохраняется — разные поля выбираются из одного кешированного map).
+// vaultMemo — a cache of vault() resolutions within ONE render-pass. The key is `body`
+// (the Vault path WITHOUT `#field`), i.e. exactly the ReadKV argument; the value is the
+// whole secret map. Dedup is tied to the backend call: vault('secret/x#password') and
+// vault('secret/x#tls') hit one ReadKV('secret/x'), so we cache the whole map and select
+// the needed field per-call AFTER the cache (#field correctness is preserved — different
+// fields are selected from one cached map).
 //
-// Scope — per-render-pass: кеш живёт в context.Context, который Keeper
-// заводит на один Pipeline.Render (одна инкарнация, один прогон) и прокидывает
-// в Vars.Ctx всех eval-вызовов этого pass-а. Не package-level и не на Engine
-// (Engine шарится между инкарнациями) — иначе была бы межзапросная утечка
-// секретов и stale-значения. Разные render-pass-ы несут разные context-ы → не
-// делят кеш.
+// Scope is per-render-pass: the cache lives in a context.Context that Keeper creates for
+// one Pipeline.Render (one incarnation, one run) and passes into Vars.Ctx of all eval
+// calls of that pass. Not package-level and not on the Engine (the Engine is shared
+// across incarnations) — otherwise there'd be cross-request secret leakage and stale
+// values. Different render passes carry different contexts → they don't share the cache.
 //
-// Concurrency: в пределах одного render-pass eval-вызовы последовательны
-// (Pipeline.Render — sequential per-task), но mu держим для безопасности на
-// случай конкурентного per-host fan-out над общим ctx. Промах кеша может
-// привести к параллельному двойному ReadKV одного пути (безвредно: значение
-// идемпотентно), но запись в map синхронизирована.
+// Concurrency: within one render-pass the eval calls are sequential (Pipeline.Render is
+// sequential per-task), but mu is held for safety in case of concurrent per-host fan-out
+// over a shared ctx. A cache miss may lead to a parallel double ReadKV of one path
+// (harmless: the value is idempotent), but the map write is synchronized.
 type vaultMemo struct {
 	mu sync.Mutex
 	m  map[string]map[string]any
 }
 
-// WithVaultMemo привязывает к ctx per-render-pass кеш vault()-резолвов. Зовётся
-// Keeper-ом ОДИН раз на старте render-pass (Pipeline.Render), полученный ctx
-// прокидывается в Vars.Ctx всех eval-вызовов pass-а. Повторный vault() с тем же
-// путём в этом pass-е берётся из кеша — Vault не бьётся снова. Без вызова (или с
-// ctx без memo — soul-lint/Trial, прямые unit-eval) vault() работает как раньше,
-// бьёт ReadKV каждый раз: кеш — оптимизация, не контракт результата.
+// WithVaultMemo binds a per-render-pass cache of vault() resolutions to ctx. Called by
+// Keeper ONCE at the start of a render-pass (Pipeline.Render); the returned ctx is
+// passed into Vars.Ctx of all eval calls of the pass. A repeated vault() with the same
+// path in that pass is served from the cache — Vault isn't hit again. Without a call (or
+// with a ctx lacking the memo — soul-lint/Trial, direct unit-eval) vault() works as
+// before, hitting ReadKV every time: the cache is an optimization, not a result contract.
 func WithVaultMemo(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if _, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo); ok {
-		return ctx // идемпотентно: повторная привязка не плодит вложенные кеши.
+		return ctx // idempotent: re-binding doesn't spawn nested caches.
 	}
 	return context.WithValue(ctx, vaultMemoKey{}, &vaultMemo{m: map[string]map[string]any{}})
 }
 
-// readKVMemoized читает секрет body через kv с дедупом в рамках render-pass.
-// Кеш берётся из ctx ([vaultMemoKey], заведён [WithVaultMemo]). Если кеша нет
-// (ctx без memo) — прямой ReadKV без кеширования. Ошибки ReadKV НЕ кешируются:
-// retry в том же pass-е (напр. транзиентный сбой Vault) повторит чтение.
+// readKVMemoized reads secret body via kv with dedup within a render-pass. The cache
+// is taken from ctx ([vaultMemoKey], created by [WithVaultMemo]). If there's no cache
+// (ctx without memo) — a direct ReadKV without caching. ReadKV errors are NOT cached: a
+// retry in the same pass (e.g. a transient Vault failure) repeats the read.
 func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]any, error) {
 	memo, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo)
 	if !ok {
@@ -146,8 +143,8 @@ func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]a
 	return data, nil
 }
 
-// vaultResolverType — opaque CEL-тип resolver-а (не часть пользовательской
-// type-model; resolver — hidden-аргумент макроса).
+// vaultResolverType — the opaque CEL type of the resolver (not part of the user
+// type-model; the resolver is a hidden macro argument).
 var vaultResolverType = types.NewOpaqueType("soulstack.vaultResolver")
 
 func (r *vaultResolver) ConvertToNative(reflect.Type) (any, error) {
@@ -160,9 +157,9 @@ func (r *vaultResolver) Equal(ref.Val) ref.Val { return types.False }
 func (r *vaultResolver) Type() ref.Type        { return vaultResolverType }
 func (r *vaultResolver) Value() any            { return r }
 
-// vaultEnvOptions возвращает EnvOption-ы регистрации vault(): декларация
-// resolver-переменной + макрос vault(p) → __vault_read(p, __vault_resolver) +
-// binding 2-арной функции. Вызывается из New только когда kv != nil.
+// vaultEnvOptions returns the EnvOptions that register vault(): declaration of the
+// resolver variable + macro vault(p) → __vault_read(p, __vault_resolver) + binding of
+// the 2-ary function. Called from New only when kv != nil.
 func vaultEnvOptions() []cel.EnvOption {
 	macro := parser.NewGlobalMacro("vault", 1, expandVaultMacro)
 	return []cel.EnvOption{
@@ -177,27 +174,26 @@ func vaultEnvOptions() []cel.EnvOption {
 	}
 }
 
-// expandVaultMacro раскрывает vault(<path>) в __vault_read(<path>,
-// __vault_resolver): hidden-второй аргумент несёт per-eval resolver из активации.
-// Так пользовательская 1-арная форма сохраняется, а binding получает и путь, и
-// (ctx, kv). nil-error при ok-раскрытии (контракт parser.MacroExpander).
+// expandVaultMacro expands vault(<path>) into __vault_read(<path>, __vault_resolver):
+// the hidden second argument carries the per-eval resolver from the activation. This
+// keeps the user's 1-ary form while the binding gets both the path and (ctx, kv).
+// nil error on successful expansion (parser.MacroExpander contract).
 func expandVaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast.Expr, *common.Error) {
 	resolver := mef.NewIdent(vaultResolverVar)
 	return mef.NewCall(vaultFuncName, args[0], resolver), nil
 }
 
-// callVault — binding функции __vault_read(path, resolver). path — уже
-// вычисленный CEL-ом строковый аргумент (литерал или выражение из доверенного
-// контекста), resolver — носитель {ctx, kv} из активации. Возвращает map
-// секрета (без #field) либо одно поле (с #field). Ошибки Vault/формата —
-// types.NewErr (штатная CEL eval-ошибка, не паника); plaintext-секрет в текст
-// ошибки НЕ подставляется. Путь отсутствующего/битого секрета даётся в ПЛОСКОЙ
-// форме (NIM-73): у не найденного секрета нет значения для утечки, а путь —
-// actionable-диагностика (оператор должен знать, ЧТО досеять в Vault). Плоская
-// форма переживает observability-маскинг (audit.vaultRefRe ловит только
-// `vault:<mount>/`), поэтому status_details/error_summary несут внятный текст, а
-// не `***MASKED***`. Реально резолвнутый секрет-ЗНАЧЕНИЕ по-прежнему маскируется
-// на выходе (маскинг-слой не тронут).
+// callVault — the binding of __vault_read(path, resolver). path is the already
+// CEL-evaluated string argument (a literal or an expression from a trusted context),
+// resolver carries {ctx, kv} from the activation. Returns the secret map (without
+// #field) or a single field (with #field). Vault/format errors → types.NewErr (a normal
+// CEL eval error, not a panic); a plaintext secret is NOT put into the error text. The
+// path of a missing/broken secret is given in FLAT form (NIM-73): a not-found secret has
+// no value to leak, and the path is actionable diagnostics (the operator needs to know
+// WHAT to seed into Vault). The flat form survives observability masking (audit.vaultRefRe
+// matches only `vault:<mount>/`), so status_details/error_summary carry clear text rather
+// than `***MASKED***`. An actually-resolved secret VALUE is still masked on output (the
+// masking layer is untouched).
 func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	path, ok := pathVal.Value().(string)
 	if !ok {
@@ -215,12 +211,12 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 
 	data, rerr := readKVMemoized(res.ctx, res.kv, body)
 	if rerr != nil {
-		// NIM-73: НЕ пробрасываем rerr.Error() (может нести транспортные детали),
-		// а формируем actionable-текст с путём в ПЛОСКОЙ форме. У ненайденного
-		// секрета значения нет → утечки нет; путь+поле говорят оператору, ЧТО
-		// досеять (secret/redis/<inc>/users/<name>#password). Плоская форма не
-		// содержит `vault:<mount>/`, поэтому переживает маскинг status_details/
-		// error_summary — оператор видит внятную причину, а не `***MASKED***`.
+		// NIM-73: do NOT forward rerr.Error() (it may carry transport details);
+		// instead build actionable text with the path in FLAT form. A not-found
+		// secret has no value → no leak; path+field tell the operator WHAT to seed
+		// (secret/redis/<inc>/users/<name>#password). The flat form doesn't contain
+		// `vault:<mount>/`, so it survives masking of status_details/error_summary —
+		// the operator sees a clear cause, not `***MASKED***`.
 		if field != "" {
 			return types.NewErr("vault(): секрет %s#%s не найден в Vault (KV path not found или нет доступа)", vaultPathHint(body), field)
 		}
@@ -232,31 +228,31 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	}
 	val, ok := data[field]
 	if !ok {
-		// Путь+имя поля — actionable-диагностика (какое поле досеять), не секрет-
-		// значение: значения других полей секрета в текст НЕ подставляются. Путь
-		// в плоской форме — переживает маскинг (NIM-73).
+		// Path+field name is actionable diagnostics (which field to seed), not a
+		// secret value: values of other secret fields are NOT put into the text. The
+		// path in flat form survives masking (NIM-73).
 		return types.NewErr("vault(): в секрете %s нет поля %q", vaultPathHint(body), field)
 	}
 	return types.DefaultTypeAdapter.NativeToValue(val)
 }
 
-// vaultPathHint нормализует путь Vault KV для actionable-текстов ошибок vault()
-// (NIM-73): плоская форма без `vault:`-префикса, ведущий '/' срезан. Плоский путь
-// НЕ содержит маркера `vault:<mount>/` (audit.vaultRefRe), поэтому переживает
-// observability-маскинг status_details/error_summary — оператор видит, ЧТО
-// досеять. Путь ненайденного/битого секрета — не секрет-значение (значения по
-// нему нет), а диагностика; сам резолвнутый секрет маскируется отдельно (маскинг-
-// слой не тронут).
+// vaultPathHint normalizes a Vault KV path for actionable vault() error texts (NIM-73):
+// a flat form without the `vault:` prefix, with the leading '/' stripped. The flat path
+// does NOT contain the `vault:<mount>/` marker (audit.vaultRefRe), so it survives
+// observability masking of status_details/error_summary — the operator sees WHAT to
+// seed. The path of a missing/broken secret is not a secret value (there's no value for
+// it), it's diagnostics; the resolved secret itself is masked separately (the masking
+// layer is untouched).
 func vaultPathHint(body string) string {
 	return strings.TrimPrefix(body, "/")
 }
 
-// splitVaultField разбивает аргумент vault() на путь и опциональное #field
-// (последний '#'). Без '#' field пуст. Пустой путь или пустое поле после '#'
-// — ошибка. Путь дополнительно валидируется на форму `<mount>/<path>`
-// (validateVaultPath) симметрично vault.ParseRef: `vault('foo')` без слеша →
-// понятная ошибка формата, а не relative-путь в ReadKV. Симметрично readVaultRef
-// в keeper/internal/render/vault_resolve.go.
+// splitVaultField splits the vault() argument into the path and an optional #field (the
+// last '#'). Without '#' the field is empty. An empty path or an empty field after '#'
+// is an error. The path is additionally validated for the `<mount>/<path>` form
+// (validateVaultPath) symmetric with vault.ParseRef: `vault('foo')` without a slash → a
+// clear format error rather than a relative path in ReadKV. Symmetric with readVaultRef
+// in keeper/internal/render/vault_resolve.go.
 func splitVaultField(arg string) (body, field string, err error) {
 	if i := strings.LastIndexByte(arg, '#'); i >= 0 {
 		body, field = arg[:i], arg[i+1:]
@@ -272,11 +268,11 @@ func splitVaultField(arg string) (body, field string, err error) {
 	return body, field, nil
 }
 
-// validateVaultPath проверяет, что путь vault() имеет форму `<mount>/<path>`
-// (с опциональным ведущим '/', как vault:-ref). Без `/`-разделителя между
-// mount-ом и rel-частью или с пустыми частями — ошибка формата. Зеркало
-// vault.ParseRef (keeper/internal/vault): единая нормализация для обеих форм
-// vault-секретов (CEL vault() и vault:-ref в params).
+// validateVaultPath checks that a vault() path has the form `<mount>/<path>` (with an
+// optional leading '/', like a vault: ref). Without a `/` separator between the mount
+// and the rel part, or with empty parts, it's a format error. A mirror of vault.ParseRef
+// (keeper/internal/vault): a single normalization for both forms of vault secrets (CEL
+// vault() and the vault: ref in params).
 func validateVaultPath(body string) error {
 	b := strings.TrimPrefix(body, "/")
 	if b == "" {

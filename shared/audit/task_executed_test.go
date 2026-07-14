@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestBuildTaskExecutedPayload_BaseFields — базовая форма: sid/apply_id/task_idx/
-// plan_index/status присутствуют; без error/register_data ключи не добавляются.
+// TestBuildTaskExecutedPayload_BaseFields — base form: sid/apply_id/task_idx/
+// plan_index/status present; without error/register_data those keys are not added.
 func TestBuildTaskExecutedPayload_BaseFields(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID:       "h.local",
@@ -28,10 +28,11 @@ func TestBuildTaskExecutedPayload_BaseFields(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_PlanIndexEmitted — T3: ГЛОБАЛЬНЫЙ plan_index едет
-// в payload аддитивно рядом с локальным task_idx (ключ корреляции CHANGED-задачи с
-// планом в auditpg.SelectChangedTaskKeys под staged/per-host-where). Под staged
-// plan_index ≠ task_idx — оба кладутся, свёртка ключуется на plan_index.
+// TestBuildTaskExecutedPayload_PlanIndexEmitted — T3: the GLOBAL plan_index rides
+// in the payload additively alongside the local task_idx (correlation key of a
+// CHANGED task with the plan in auditpg.SelectChangedTaskKeys under
+// staged/per-host-where). Under staged plan_index ≠ task_idx — both are set, the
+// rollup keys on plan_index.
 func TestBuildTaskExecutedPayload_PlanIndexEmitted(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 2, PlanIndex: 9, Status: "TASK_STATUS_CHANGED",
@@ -44,8 +45,8 @@ func TestBuildTaskExecutedPayload_PlanIndexEmitted(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog — error.message кладётся
-// для НЕ-no_log задачи (маскинг — на write-path), code/module присутствуют.
+// TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog — error.message is set for a
+// NON-no_log task (masking is on the write-path), code/module present.
 func TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_FAILED",
@@ -60,9 +61,9 @@ func TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_NoLogSuppression — no_log-задача: error.message и
-// register_data подавлены, маркер suppressed:"no_log" присутствует. Корень
-// подавления утечки произвольного секрета (MaskSecrets по vault-ref его не ловит).
+// TestBuildTaskExecutedPayload_NoLogSuppression — a no_log task: error.message and
+// register_data are suppressed, the suppressed:"no_log" marker is present. The root
+// of suppressing an arbitrary secret leak (MaskSecrets by vault-ref won't catch it).
 func TestBuildTaskExecutedPayload_NoLogSuppression(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_FAILED",
@@ -88,8 +89,8 @@ func TestBuildTaskExecutedPayload_NoLogSuppression(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_RegisterDataForNonNoLog — register_data кладётся
-// для НЕ-no_log при непустом значении (Soul-side protojson-строка).
+// TestBuildTaskExecutedPayload_RegisterDataForNonNoLog — register_data is set for a
+// NON-no_log task when the value is non-empty (a Soul-side protojson string).
 func TestBuildTaskExecutedPayload_RegisterDataForNonNoLog(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
@@ -100,16 +101,16 @@ func TestBuildTaskExecutedPayload_RegisterDataForNonNoLog(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_NoParamsKey — security guard-инвариант:
-// RenderedTask.Params (рендеренные параметры задачи, потенциально несущие
-// resolved-Vault-значения) НИКОГДА не попадают в audit-payload task.executed.
+// TestBuildTaskExecutedPayload_NoParamsKey — security guard invariant:
+// RenderedTask.Params (rendered task params, potentially carrying resolved Vault
+// values) NEVER reach the task.executed audit payload.
 //
-// Структурный barrier: TaskExecutedInput не имеет поля Params (params рендерятся
-// Keeper-side и едут Soul→в ApplyRequest, но обратно в TaskEvent НЕ возвращаются —
-// apply.proto message TaskEvent несёт только task_idx/status/register_data/error/
-// no_log). Тест фиксирует, что даже при максимально заполненном input ни один
-// ключ payload не равен и не содержит "param" — регрессия (кто-то добавит
-// Params в input и проложит его в payload) будет поймана здесь.
+// Structural barrier: TaskExecutedInput has no Params field (params are rendered
+// Keeper-side and go Soul→ApplyRequest, but are NOT returned back in TaskEvent —
+// the apply.proto TaskEvent message carries only task_idx/status/register_data/
+// error/no_log). The test asserts that even with a maximally filled input no
+// payload key equals or contains "param" — a regression (someone adds Params to
+// input and threads it into the payload) is caught here.
 func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 	inputs := []TaskExecutedInput{
 		{SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
@@ -127,10 +128,10 @@ func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 	}
 }
 
-// assertNoParamKey проверяет, что ни на одном уровне map-payload-а нет ключа,
-// содержащего "param" (case-insensitive). Рекурсивно обходит вложенные map-ы
-// (payload["error"] — вложенный map). Адрес инварианта — ключ, а не значение:
-// params не должны появляться как поле payload вообще.
+// assertNoParamKey checks that no level of the map payload has a key containing
+// "param" (case-insensitive). Recurses into nested maps (payload["error"] is a
+// nested map). The invariant is about the key, not the value: params must not
+// appear as a payload field at all.
 func assertNoParamKey(t *testing.T, m map[string]any) {
 	t.Helper()
 	for k, v := range m {

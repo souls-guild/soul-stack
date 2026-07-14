@@ -7,10 +7,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ADR-045 S7-amend: `items` под `type: map` декларирует тип ЗНАЧЕНИЯ
-// (`map[string]<items>`) — переиспользование того же ключа, что у list (тип
-// элемента). validateInputParam обязан принимать items под map/object так же,
-// как под list/array, и НЕ выдавать input_items_invalid_for_type.
+// ADR-045 S7-amend: `items` under `type: map` declares the VALUE type
+// (`map[string]<items>`) — reusing the same key as list (the element type).
+// validateInputParam must accept items under map/object just like under
+// list/array, and must NOT emit input_items_invalid_for_type.
 func TestValidateInputParam_ItemsUnderMap(t *testing.T) {
 	const tmpl = `kind: soul_module
 protocol_version: 1
@@ -25,8 +25,8 @@ __PARAM__
 `
 	cases := []struct {
 		name     string
-		paramDef string // строка с YAML inline-объектом параметра p (с отступом).
-		wantCode string // "" — diagnostics не должны содержать items-ошибок.
+		paramDef string // string with the YAML inline object of param p (indented).
+		wantCode string // "" — diagnostics must not contain items errors.
 	}{
 		{
 			name:     "map with value items type string is valid",
@@ -54,7 +54,7 @@ __PARAM__
 			wantCode: "input_items_type_missing",
 		},
 		{
-			// Регрессия: на скаляр items по-прежнему запрещён.
+			// Regression: items on a scalar is still forbidden.
 			name:     "items on scalar type still rejected",
 			paramDef: "          { type: string, items: { type: string } }\n",
 			wantCode: "input_items_invalid_for_type",
@@ -80,8 +80,8 @@ __PARAM__
 	}
 }
 
-// itemsRelatedCode возвращает первый items-связанный код ошибки в diagnostics
-// (input_items_*), либо "" — если таких нет.
+// itemsRelatedCode returns the first items-related error code in diagnostics
+// (input_items_*), or "" if there are none.
 func itemsRelatedCode(diags []diag.Diagnostic) string {
 	for _, d := range diags {
 		if strings.HasPrefix(d.Code, "input_items_") {

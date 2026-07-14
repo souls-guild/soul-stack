@@ -6,9 +6,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// keeperWithRedis собирает минимально-валидный keeper.yml, подставляя заданный
-// redis-блок (с уже выставленным отступом в 2 пробела на каждую строку). Все
-// прочие top-level блоки фиксированы и валидны — варьируется только redis.
+// keeperWithRedis assembles a minimally valid keeper.yml, injecting the given
+// redis block (already indented 2 spaces per line). All other top-level blocks
+// are fixed and valid — only redis varies.
 func keeperWithRedis(redisBlock string) []byte {
 	return []byte(`kid: keeper-eu-west-01
 listen:
@@ -33,7 +33,7 @@ vault:
 // --- standalone (default / explicit) ---
 
 func TestRedis_Standalone_Implicit_OK(t *testing.T) {
-	// Без mode вовсе — forward-compat: трактуется как standalone, addr обязателен.
+	// Without mode at all — forward-compat: treated as standalone, addr required.
 	src := keeperWithRedis(`  addr: "r:6379"
   password_ref: vault:secret/keeper/redis`)
 	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
@@ -69,7 +69,7 @@ func TestRedis_Standalone_MissingAddr_Rejected(t *testing.T) {
 }
 
 func TestRedis_ImplicitStandalone_MissingAddr_Rejected(t *testing.T) {
-	// mode опущен, addr тоже — должно ругаться (старая семантика «addr обязателен»).
+	// mode omitted, addr too — must complain (old "addr required" semantics).
 	src := keeperWithRedis(`  password_ref: vault:secret/keeper/redis`)
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	if !hasCodeAt(diags, "missing_required_field", "$.redis.addr") {
@@ -135,8 +135,8 @@ func TestRedis_Sentinel_BadSentinelAddr_Rejected(t *testing.T) {
 }
 
 func TestRedis_Sentinel_EmptySentinelEntry_Rejected(t *testing.T) {
-	// Пустой элемент в непустом списке (`["", "s2:26379"]`) — не «опущено», а
-	// ошибка: должен ловиться host_port_invalid, а не молча пропускаться.
+	// An empty entry in a non-empty list (`["", "s2:26379"]`) is not "omitted"
+	// but an error: it must be caught as host_port_invalid, not silently skipped.
 	src := keeperWithRedis(`  mode: sentinel
   master_name: mymaster
   sentinels:
@@ -238,7 +238,7 @@ func TestRedis_InvalidMode_Rejected(t *testing.T) {
 }
 
 func TestRedis_PasswordRef_Plaintext_Rejected(t *testing.T) {
-	// password_ref обязан быть vault-ref-ом (semantic-фаза).
+	// password_ref must be a vault ref (semantic phase).
 	src := keeperWithRedis(`  addr: "r:6379"
   password_ref: plaintextpw`)
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
@@ -249,7 +249,7 @@ func TestRedis_PasswordRef_Plaintext_Rejected(t *testing.T) {
 }
 
 func TestRedis_SentinelPasswordRef_FieldOverride_OK(t *testing.T) {
-	// vault-ref с `#field` должен приниматься semantic-фазой (reVaultRef).
+	// A vault ref with `#field` must be accepted by the semantic phase (reVaultRef).
 	src := keeperWithRedis(`  mode: sentinel
   master_name: mymaster
   sentinels:

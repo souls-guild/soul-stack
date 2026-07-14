@@ -5,9 +5,9 @@ import (
 )
 
 // TestMatches_StdlibAvailable — smoke-test: standard CEL `matches()` (regex,
-// parity SaltStack `-E`) включён в env через cel.StdLib() ([engine.go
-// buildEngine]). Подтверждает доступность regex-формы для target.where
-// ([ADR-040]) симметрично нашему custom glob().
+// parity with SaltStack `-E`) is enabled in the env via cel.StdLib() ([engine.go
+// buildEngine]). Confirms the regex form is available for target.where ([ADR-040]),
+// symmetric to our custom glob().
 func TestMatches_StdlibAvailable(t *testing.T) {
 	e := newEngine(t)
 
@@ -19,7 +19,7 @@ func TestMatches_StdlibAvailable(t *testing.T) {
 		{`input.sid.matches("^db-[0-9]+$")`, Vars{Input: map[string]any{"sid": "db-01"}}, true},
 		{`input.sid.matches("^db-[0-9]+$")`, Vars{Input: map[string]any{"sid": "db-xx"}}, false},
 		{`input.sid.matches("^db-[0-9]+$")`, Vars{Input: map[string]any{"sid": "web-01"}}, false},
-		// Регулярный wildcard-аналог `prod-*`.
+		// Regex wildcard analogue of `prod-*`.
 		{`input.sid.matches("^prod-.+$")`, Vars{Input: map[string]any{"sid": "prod-web-01"}}, true},
 	}
 
@@ -36,8 +36,8 @@ func TestMatches_StdlibAvailable(t *testing.T) {
 	}
 }
 
-// TestMatches_CombinedWithGlob — обе функции работают в одном выражении
-// (типичный target.where: regex + glob через AND).
+// TestMatches_CombinedWithGlob — both functions work in a single expression
+// (typical target.where: regex + glob via AND).
 func TestMatches_CombinedWithGlob(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"sid": "db-prod-01"}}

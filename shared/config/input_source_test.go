@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// Тесты типизированного input ADR-044 S-T1: format:sid + source:.
-// Schema-валидация (форма source / format) — через LoadDestinyManifestFromBytes;
-// value-валидация (FQDN-формат значения, min_items/max_items) — через
+// Tests of typed input ADR-044 S-T1: format:sid + source:.
+// Schema validation (source / format shape) — via LoadDestinyManifestFromBytes;
+// value validation (FQDN value format, min_items/max_items) — via
 // ResolveInputValues + schemaFromInput.
 
 // --- format: sid (schema) ---
@@ -23,7 +23,7 @@ input:
 	}
 }
 
-// --- source: applicability + структура (schema) ---
+// --- source: applicability + structure (schema) ---
 
 func TestInputSource_ValidOnString(t *testing.T) {
 	src := `name: x
@@ -87,9 +87,9 @@ input:
 }
 
 func TestInputSource_InvalidWhenScalar(t *testing.T) {
-	// source как скаляр (не mapping) — структурно невалиден. goccy ловит
-	// несоответствие типа на decode (type_mismatch) ещё до validateSource;
-	// принимаем любой из двух кодов как сигнал «source-форма отвергнута».
+	// source as a scalar (not a mapping) is structurally invalid. goccy catches the
+	// type mismatch on decode (type_mismatch) before validateSource; we accept
+	// either of the two codes as a signal "source shape rejected".
 	src := `name: x
 input:
   host:
@@ -147,10 +147,10 @@ input:
 	}
 }
 
-// --- инвариант «ровно один активный источник» (schema) ---
+// --- invariant "exactly one active source" (schema) ---
 
 func TestInputSource_EmptyObject(t *testing.T) {
-	// source: {} — 0 активных источников → ошибка.
+	// source: {} — 0 active sources → error.
 	src := `name: x
 input:
   host:
@@ -165,7 +165,7 @@ input:
 }
 
 func TestInputSource_TwoActive(t *testing.T) {
-	// Два заданных источника → ошибка (дискриминатор допускает ровно один).
+	// Two specified sources → error (the discriminator allows exactly one).
 	src := `name: x
 input:
   host:
@@ -180,7 +180,7 @@ input:
 }
 
 func TestInputSource_IncarnationHostsFalse(t *testing.T) {
-	// incarnation_hosts: false → источник выключен → 0 активных → ошибка.
+	// incarnation_hosts: false → source disabled → 0 active → error.
 	src := `name: x
 input:
   host:
@@ -195,7 +195,7 @@ input:
 }
 
 func TestInputSource_ChoirEmptyString(t *testing.T) {
-	// choir: "" — пустая строка невалидна (и не активна) → input_source_invalid.
+	// choir: "" — an empty string is invalid (and inactive) → input_source_invalid.
 	src := `name: x
 input:
   host:
@@ -210,7 +210,7 @@ input:
 }
 
 func TestInputSource_ExactlyOne_IncarnationHosts(t *testing.T) {
-	// Ровно один активный (incarnation_hosts: true) → ок.
+	// Exactly one active (incarnation_hosts: true) → ok.
 	src := `name: x
 input:
   host:
@@ -225,7 +225,7 @@ input:
 }
 
 func TestInputSource_ExactlyOne_Choir(t *testing.T) {
-	// Ровно один активный (choir: <name>) → ок.
+	// Exactly one active (choir: <name>) → ok.
 	src := `name: x
 input:
   host:
@@ -239,7 +239,7 @@ input:
 	}
 }
 
-// --- format: sid value-валидация ---
+// --- format: sid value validation ---
 
 func TestInputValue_FormatSID_OK(t *testing.T) {
 	schema := schemaFromInput(t, `host:
@@ -276,7 +276,7 @@ func TestInputValue_FormatSID_ArrayElements(t *testing.T) {
 	}
 }
 
-// --- min_items/max_items на sid-list ---
+// --- min_items/max_items on a sid-list ---
 
 func TestInputValue_SIDList_MinMaxItems(t *testing.T) {
 	schema := schemaFromInput(t, `hosts:

@@ -7,15 +7,14 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// NewULID возвращает свежий ULID (26 символов, lexically sortable
-// timestamp prefix + random). Используется для `audit_id`, а также
-// переиспользуется shared/config/store.go::newCorrelationID().
+// NewULID returns a fresh ULID (26 chars, lexically sortable timestamp prefix +
+// random). Used for `audit_id` and also reused by
+// shared/config/store.go::newCorrelationID().
 //
-// `ulid.Make()` использует `entropy.New(rand.Reader, ...)` внутри;
-// reader-фейл — машина в аварийном состоянии. Соблюдаем тот же контракт,
-// что и предыдущий `newCorrelationID()` под `crypto/rand`: panic на
-// I/O-fail, чтобы сохранить инвариант формата строки вместо тихого
-// разрушения.
+// `ulid.Make()` uses `entropy.New(rand.Reader, ...)` internally; a reader failure
+// means the machine is in a broken state. We keep the same contract as the
+// previous `newCorrelationID()` over `crypto/rand`: panic on I/O failure, to
+// preserve the string-format invariant instead of silent corruption.
 func NewULID() string {
 	id, err := ulid.New(ulid.Now(), ulid.Monotonic(rand.Reader, 0))
 	if err != nil {
@@ -24,16 +23,16 @@ func NewULID() string {
 	return id.String()
 }
 
-// ulidPattern — Crockford base32 (без I, L, O, U). 26 символов. Тот же
-// regex, что в shared/audit/ulid_test.go::ulidPattern и в M0.3
-// regression-тестах CorrelationID.
+// ulidPattern — Crockford base32 (without I, L, O, U). 26 chars. The same regex as
+// in shared/audit/ulid_test.go::ulidPattern and in the M0.3 CorrelationID
+// regression tests.
 var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 
-// IsValidULID — синтаксическая проверка ULID-строки по Crockford base32
-// (длина 26, символы из `0-9A-HJKMNP-TV-Z`). Используется validation-ом
-// query-параметров на API-границе (например, `apply_id`-фильтр в
-// `/v1/incarnations/{name}/history`), чтобы отсечь мусор до round-trip-а
-// в Postgres.
+// IsValidULID does a syntactic check of a ULID string against Crockford base32
+// (length 26, chars from `0-9A-HJKMNP-TV-Z`). Used by query-param validation at
+// the API boundary (e.g. the `apply_id` filter in
+// `/v1/incarnations/{name}/history`) to reject junk before a round-trip to
+// Postgres.
 func IsValidULID(s string) bool {
 	return ulidPattern.MatchString(s)
 }

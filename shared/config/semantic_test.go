@@ -7,9 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestParseDuration фиксирует convention `duration` из docs/keeper/config.md
-// и docs/naming-rules.md: Go-`time.ParseDuration` + суффикс `<N>d` без
-// композитной формы.
+// TestParseDuration pins the `duration` convention from docs/keeper/config.md
+// and docs/naming-rules.md: Go `time.ParseDuration` + a `<N>d` suffix without a
+// composite form.
 func TestParseDuration(t *testing.T) {
 	type tc struct {
 		in      string
@@ -21,18 +21,18 @@ func TestParseDuration(t *testing.T) {
 		{in: "0d", want: 0},
 		{in: "1h30m", want: 90 * time.Minute},
 		{in: "500ms", want: 500 * time.Millisecond},
-		{in: "1d2h", wantErr: true}, // композитная форма не обещана — explicit fail
+		{in: "1d2h", wantErr: true}, // composite form is not promised — explicit fail
 		{in: "abc", wantErr: true},
-		{in: "-1d", wantErr: true}, // знак перед `<N>d` отвергается (review.2)
+		{in: "-1d", wantErr: true}, // a sign before `<N>d` is rejected (review.2)
 		{in: "+5d", wantErr: true},
 		{in: "-5d", wantErr: true},
 		{in: "d", wantErr: true},
-		// Overflow guard (qa.1 Bug 2): любое `<N>d` свыше MaxDurationDays
-		// отвергается; равное границе принимается. `time.Duration(N) * 24h`
-		// без guard-а оборачивался в мусор/отрицательное значение.
-		// MaxDurationDays = MaxInt64 / int64(24h) ≈ 106 751 (≈292 года);
-		// фигурирующая в делегации цифра 106 751 991 содержала лишний
-		// фактор 10^3, правильный порядок — 10^5.
+		// Overflow guard (qa.1 Bug 2): any `<N>d` above MaxDurationDays is
+		// rejected; equal to the boundary is accepted. `time.Duration(N) * 24h`
+		// without the guard wrapped around into garbage/negative values.
+		// MaxDurationDays = MaxInt64 / int64(24h) ≈ 106 751 (≈292 years); the
+		// figure 106 751 991 quoted in the delegation had an extra factor of
+		// 10^3, the correct order of magnitude is 10^5.
 		{in: "999999999999d", wantErr: true},
 		{in: "200000000d", wantErr: true},
 		{in: "106751d", want: time.Duration(106751) * 24 * time.Hour},
@@ -58,9 +58,9 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
-// keeperBaseRequired — минимальный набор обязательных блоков `keeper.yml`,
-// без которых semantic-фаза не доходит до проверок: missing_required_field
-// перекрывает картину. Тесты ниже добавляют к этой базе свой проверяемый блок.
+// keeperBaseRequired is the minimal set of required `keeper.yml` blocks, without
+// which the semantic phase never reaches the checks: missing_required_field
+// masks the picture. The tests below add their own block under test to this base.
 const keeperBaseRequired = `kid: keeper-eu-west-01
 listen:
   grpc:
@@ -81,10 +81,10 @@ vault:
   pki_mount: pki/x
 `
 
-// TestKeeper_RBACKeyRejected — после hard-cut-а config-RBAC (ADR-028(g))
-// ключ `rbac:` в keeper.yml недопустим: каталог ролей живёт в Postgres,
-// управление — через `role.*` API/MCP. Парсер обязан отвергнуть его через
-// `unknown_key` (поля `rbac` в KeeperConfig нет → reflect-walker в walk.go).
+// TestKeeper_RBACKeyRejected — after the hard cut of config-RBAC (ADR-028(g)) the
+// `rbac:` key in keeper.yml is not allowed: the role catalog lives in Postgres,
+// managed via the `role.*` API/MCP. The parser must reject it via `unknown_key`
+// (there is no `rbac` field in KeeperConfig → reflect-walker in walk.go).
 func TestKeeper_RBACKeyRejected(t *testing.T) {
 	src := keeperBaseRequired + `rbac:
   default_policy: deny
@@ -100,8 +100,8 @@ func TestKeeper_RBACKeyRejected(t *testing.T) {
 	}
 }
 
-// TestKeeper_NoRBACLoadsClean — keeper.yml без блока `rbac:` грузится без
-// ошибок (RBAC больше не часть конфиг-контракта).
+// TestKeeper_NoRBACLoadsClean — keeper.yml without an `rbac:` block loads without
+// errors (RBAC is no longer part of the config contract).
 func TestKeeper_NoRBACLoadsClean(t *testing.T) {
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired), ValidateOptions{})
 	if diag.HasErrors(diags) {

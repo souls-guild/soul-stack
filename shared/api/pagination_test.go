@@ -21,8 +21,8 @@ func TestParsePage_Defaults(t *testing.T) {
 }
 
 func TestParsePage_EmptyStringsTreatedAsAbsent(t *testing.T) {
-	// Распространённый случай: клиент шлёт `?offset=&limit=` (например,
-	// из формы). Должны взять defaults, не отказывать.
+	// Common case: the client sends `?offset=&limit=` (e.g. from a form).
+	// We should take defaults, not reject.
 	q := url.Values{"offset": []string{""}, "limit": []string{""}}
 	p, err := ParsePage(q)
 	if err != nil {
@@ -83,7 +83,7 @@ func TestParsePage_RejectsInvalidLimit(t *testing.T) {
 }
 
 func TestParsePage_BoundaryLimit(t *testing.T) {
-	// Граница MaxPageLimit — допустима.
+	// The MaxPageLimit boundary is allowed.
 	q := url.Values{"limit": []string{strconv.Itoa(MaxPageLimit)}}
 	p, err := ParsePage(q)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestParsePage_BoundaryLimit(t *testing.T) {
 }
 
 func TestPagedResponse_Generic(t *testing.T) {
-	// Sanity-check, что generic-typing работает (compile-time + JSON-форма).
+	// Sanity-check that generic typing works (compile-time + JSON form).
 	type item struct{ Name string }
 	resp := PagedResponse[item]{
 		Items:  []item{{Name: "a"}, {Name: "b"}},

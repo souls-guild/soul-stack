@@ -15,8 +15,8 @@ func newVarRefsEngine(t *testing.T) *Engine {
 	return e
 }
 
-// TestVarRefs_SelectForm — `${vars.a}-${vars.b}` → [a b] (кейс #10): извлекает
-// имена через select-форму, в порядке появления при PostOrderVisit.
+// TestVarRefs_SelectForm — `${vars.a}-${vars.b}` → [a b] (case #10): extracts names via
+// the select form, in order of appearance during PostOrderVisit.
 func TestVarRefs_SelectForm(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("${vars.a}-${vars.b}")
@@ -28,8 +28,8 @@ func TestVarRefs_SelectForm(t *testing.T) {
 	}
 }
 
-// TestVarRefs_LiteralOutsideMarker — `text vars.x` ВНЕ `${ … }` ссылкой не
-// считается (кейс #10): это литеральный текст, а не CEL-блок → пустой срез.
+// TestVarRefs_LiteralOutsideMarker — `text vars.x` OUTSIDE `${ … }` is not counted as a
+// reference (case #10): it is literal text, not a CEL block → empty slice.
 func TestVarRefs_LiteralOutsideMarker(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("text vars.x")
@@ -41,8 +41,8 @@ func TestVarRefs_LiteralOutsideMarker(t *testing.T) {
 	}
 }
 
-// TestVarRefs_StringLiteralInsideExpr — `${ "vars.x" }` (строковый литерал CEL) —
-// не ссылка: это StringConstant, не Select-узел → пустой срез.
+// TestVarRefs_StringLiteralInsideExpr — `${ "vars.x" }` (a CEL string literal) is not a
+// reference: it is a StringConstant, not a Select node → empty slice.
 func TestVarRefs_StringLiteralInsideExpr(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs(`${ "vars.x" }`)
@@ -54,8 +54,8 @@ func TestVarRefs_StringLiteralInsideExpr(t *testing.T) {
 	}
 }
 
-// TestVarRefs_OtherBaseIgnored — ссылки на input/soulprint/register НЕ считаются
-// (только base=="vars"); смешанная строка отдаёт лишь vars-имена.
+// TestVarRefs_OtherBaseIgnored — references to input/soulprint/register are NOT counted
+// (only base=="vars"); a mixed string yields only vars names.
 func TestVarRefs_OtherBaseIgnored(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("${ input.x }/${ vars.a }/${ soulprint.self.sid }")
@@ -67,7 +67,7 @@ func TestVarRefs_OtherBaseIgnored(t *testing.T) {
 	}
 }
 
-// TestVarRefs_Dedup — повторная ссылка на тот же var дедуплицируется.
+// TestVarRefs_Dedup — a repeated reference to the same var is deduplicated.
 func TestVarRefs_Dedup(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("${ vars.a }-${ vars.a }")
@@ -79,8 +79,8 @@ func TestVarRefs_Dedup(t *testing.T) {
 	}
 }
 
-// TestVarRefs_IndexForm — index-форма `vars['k']` → детерминированная ошибка
-// ErrVarIndexForm (кейс #10, зафиксированное поведение index-формы).
+// TestVarRefs_IndexForm — the index form `vars['k']` → deterministic ErrVarIndexForm
+// (case #10, the fixed behavior of the index form).
 func TestVarRefs_IndexForm(t *testing.T) {
 	e := newVarRefsEngine(t)
 	_, err := e.VarRefs(`${ vars['k'] }`)
@@ -89,8 +89,8 @@ func TestVarRefs_IndexForm(t *testing.T) {
 	}
 }
 
-// TestVarRefs_NestedSelect — вложенный select `vars.a.b` извлекает корневой
-// var-ключ `a` (PostOrderVisit посещает Select `vars.a` отдельным уровнем).
+// TestVarRefs_NestedSelect — a nested select `vars.a.b` extracts the root var key `a`
+// (PostOrderVisit visits Select `vars.a` as its own level).
 func TestVarRefs_NestedSelect(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("${ vars.cfg.path }")
@@ -102,10 +102,10 @@ func TestVarRefs_NestedSelect(t *testing.T) {
 	}
 }
 
-// TestVarRefs_MacroBlockNoVars — блок с валидным макро-выражением БЕЗ vars-ссылок
-// (`[1,2].exists(x, x > 0)`) рядом с vars-блоком: VarRefs обходит его AST, не
-// находит base=="vars" и собирает ссылку только из второго блока, без ошибки.
-// Покрывает ветку, где parseNoMacro успешен, но PostOrderVisit не даёт vars-имён.
+// TestVarRefs_MacroBlockNoVars — a block with a valid macro expression WITHOUT vars refs
+// (`[1,2].exists(x, x > 0)`) next to a vars block: VarRefs walks its AST, finds no
+// base=="vars", and collects the reference only from the second block, without error.
+// Covers the branch where parseNoMacro succeeds but PostOrderVisit yields no vars names.
 func TestVarRefs_MacroBlockNoVars(t *testing.T) {
 	e := newVarRefsEngine(t)
 	got, err := e.VarRefs("${ [1,2].exists(x, x > 0) }-${ vars.a }")
@@ -117,13 +117,13 @@ func TestVarRefs_MacroBlockNoVars(t *testing.T) {
 	}
 }
 
-// TestVarRefs_BrokenBlockRejectedEarly фиксирует фактическую границу: блок с
-// синтаксически-битым CEL до per-block parseNoMacro НЕ доходит — scanInterpolation
-// (parseBlock) сам гейтит блок через env.Parse и не находит закрывающую `}` для
-// невалидного выражения, отдавая *ErrCompile. То есть `continue` на perr в
-// varrefs.go (зеркало DetectSealed) для входа через VarRefs недостижим: VarRefs не
-// «молча пропускает» битый блок, а возвращает ошибку парс-фазы. Тест защищает это
-// поведение от регресса (если parseBlock ослабят, маска изменится — тест упадёт).
+// TestVarRefs_BrokenBlockRejectedEarly pins the actual boundary: a block with
+// syntactically-broken CEL never reaches per-block parseNoMacro — scanInterpolation
+// (parseBlock) itself gates the block via env.Parse and fails to find the closing `}`
+// for the invalid expression, returning *ErrCompile. So the `continue` on perr in
+// varrefs.go (mirror of DetectSealed) is unreachable for entry via VarRefs: VarRefs does
+// not "silently skip" a broken block but returns a parse-phase error. This test guards
+// that behavior against regression (if parseBlock is relaxed, the mask changes — the test fails).
 func TestVarRefs_BrokenBlockRejectedEarly(t *testing.T) {
 	e := newVarRefsEngine(t)
 	_, err := e.VarRefs("${ vars.a }-${ vars.b + }")

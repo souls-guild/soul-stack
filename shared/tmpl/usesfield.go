@@ -5,41 +5,41 @@ import (
 	"text/template/parse"
 )
 
-// UsesRootField сообщает, ссылается ли шаблон на корневое поле dot-контекста
-// `.<field>` (например, `.input`) — реальным action-обращением, а НЕ упоминанием
-// в литеральном тексте/комментарии тела ([ADR-010] §3.2, условная инъекция
-// render_context.input, Вариант B).
+// UsesRootField reports whether the template references the root dot-context field
+// `.<field>` (e.g. `.input`) via a real action, NOT by a mention in literal body
+// text/comment ([ADR-010] §3.2, conditional injection of render_context.input,
+// Variant B).
 //
-// Используется Keeper-side рендером core.file.rendered: ключ `input` кладётся в
-// render_context ТОЛЬКО когда шаблон реально читает `.input.*` — иначе
-// render_context остаётся `{vars,self,role,essence}` как до Варианта B (шаблоны
-// на одних `.vars` не получают лишнего `input`, deep-equal-фикстуры стабильны).
+// Used by the Keeper-side core.file.rendered renderer: the `input` key is put into
+// render_context ONLY when the template actually reads `.input.*` — otherwise
+// render_context stays `{vars,self,role,essence}` as before Variant B (templates on
+// `.vars` alone get no extra `input`, deep-equal fixtures stay stable).
 //
-// Детекция — по AST, не по string-search: `text/template/parse` отделяет
-// action-узлы внутри `{{…}}` от литерального текста (TextNode). Поэтому
-// `# ... apply.input ...` в комментарии redis.conf.tmpl — TextNode → НЕ обращение;
-// `{{ .input.user }}` — FieldNode с Ident[0]=="input" → обращение. range/if/with/
-// pipeline-аргументы/вложенные define обходятся рекурсивно.
+// Detection is by AST, not string-search: `text/template/parse` separates action
+// nodes inside `{{…}}` from literal text (TextNode). So `# ... apply.input ...` in a
+// redis.conf.tmpl comment is a TextNode → NOT a reference; `{{ .input.user }}` is a
+// FieldNode with Ident[0]=="input" → a reference. range/if/with/pipeline-args/nested
+// define are walked recursively.
 //
-// Распознаётся прямая dot-форма (FieldNode `.field.sub`). Формы через переменную
-// (`{{ $.field }}` — VariableNode, `{{ $x := .field }}…{{ $x.sub }}`) и chain через
-// builtin (`index .field "sub"` даёт голый FieldNode `.field` без подключа) не
-// разворачиваются — fail-closed: input просто не инъектится, шаблон упадёт
-// strict-mode явно (не утечка). В пилот-шаблонах эти формы для корневого `.input`
-// не встречаются.
+// The direct dot form (FieldNode `.field.sub`) is recognized. Forms via a variable
+// (`{{ $.field }}` — VariableNode, `{{ $x := .field }}…{{ $x.sub }}`) and a chain via
+// a builtin (`index .field "sub"` yields a bare FieldNode `.field` without a subkey)
+// are not unrolled — fail-closed: input is simply not injected, the template fails
+// strict-mode explicitly (not a leak). These forms for the root `.input` do not occur
+// in the pilot templates.
 //
-// Парсинг идёт с тем же FuncMap, что и Render (e.funcs) — кастомные/sprig-функции
-// шаблона известны парсеру, парс не падает на легальном вызове. Ошибка парсинга
-// (битый шаблон) возвращается как ErrParse — caller падает так же, как упал бы на
-// Render (расхождения поведения нет).
+// Parsing uses the same FuncMap as Render (e.funcs) — the template's custom/sprig
+// functions are known to the parser, parsing does not fail on a legal call. A parse
+// error (broken template) is returned as ErrParse — the caller fails the same as it
+// would on Render (no behavior divergence).
 func (e *Engine) UsesRootField(templateContent, field string) (bool, error) {
 	t := template.New("usesfield").Funcs(e.funcs)
 	t, err := t.Parse(templateContent)
 	if err != nil {
 		return false, &ErrParse{Err: err}
 	}
-	// Parse регистрирует и корневой шаблон, и все `define`-вложенные —
-	// обходим каждый (define-тело может читать .input через `{{ template … . }}`).
+	// Parse registers both the root template and all `define`-nested ones — walk
+	// each (a define body may read .input via `{{ template … . }}`).
 	for _, tmpl := range t.Templates() {
 		if tmpl.Tree == nil || tmpl.Tree.Root == nil {
 			continue
@@ -51,25 +51,25 @@ func (e *Engine) UsesRootField(templateContent, field string) (bool, error) {
 	return false, nil
 }
 
-// RootFieldSubKeys возвращает множество вторых идентификаторов цепочек
-// `.<field>.<subkey>`, к которым шаблон реально обращается action-узлом (а не
-// упоминанием в литеральном тексте). Например, для field=="vars" и шаблона
+// RootFieldSubKeys returns the set of second identifiers of `.<field>.<subkey>`
+// chains that the template actually accesses via an action node (not by a mention in
+// literal text). E.g. for field=="vars" and the template
 // `ExecStart={{ .vars.bin_path }}` → {"bin_path"}.
 //
-// Используется Keeper-side рендером core.file.rendered для ТОЧЕЧНОЙ инъекции
-// destiny-локалов (vars.yml) в render_context.vars: в `.vars` подкладываются
-// ТОЛЬКО те file-vars, чей ключ шаблон реально читает как `.vars.<key>` — а не весь
-// набор vars.yml. Так file-var доезжает в шаблон напрямую (node-exporter:
-// `.vars.bin_path`), но шаблоны, читающие лишь task-var-ключи (redis:
-// `.vars.password`/`.vars.config` — это params.vars, не file-vars), НЕ получают
-// лишних file-var-ключей → их render_context.vars остаётся БИТ-В-БИТ как был
-// (deep-equal-фикстуры стабильны). Симметрия с UsesRootField (Вариант B для input):
-// инъектим ровно то, что шаблон читает, не больше.
+// Used by the Keeper-side core.file.rendered renderer for TARGETED injection of
+// destiny locals (vars.yml) into render_context.vars: `.vars` gets ONLY those
+// file-vars whose key the template actually reads as `.vars.<key>` — not the whole
+// vars.yml set. So a file-var reaches the template directly (node-exporter:
+// `.vars.bin_path`), but templates reading only task-var keys (redis:
+// `.vars.password`/`.vars.config` — those are params.vars, not file-vars) get no
+// extra file-var keys → their render_context.vars stays BIT-FOR-BIT as it was
+// (deep-equal fixtures stable). Symmetric to UsesRootField (Variant B for input):
+// inject exactly what the template reads, no more.
 //
-// Детекция — по AST (та же машинерия, что UsesRootField): FieldNode с
-// Ident=[field, subkey, …] → subkey попадает в множество. Голое `.<field>` без
-// подключа (Ident=[field]) подключей не даёт. Ошибка парсинга → ErrParse (caller
-// падает как на Render).
+// Detection is by AST (the same machinery as UsesRootField): a FieldNode with
+// Ident=[field, subkey, …] → subkey joins the set. A bare `.<field>` without a subkey
+// (Ident=[field]) contributes no subkeys. A parse error → ErrParse (the caller fails
+// as on Render).
 func (e *Engine) RootFieldSubKeys(templateContent, field string) (map[string]bool, error) {
 	t := template.New("subkeys").Funcs(e.funcs)
 	t, err := t.Parse(templateContent)
@@ -86,8 +86,8 @@ func (e *Engine) RootFieldSubKeys(templateContent, field string) (map[string]boo
 	return keys, nil
 }
 
-// collectSubKeys рекурсивно обходит parse-AST и собирает вторые идентификаторы
-// цепочек `.<field>.<subkey>` (та же структура обхода, что walkUsesRootField).
+// collectSubKeys recursively walks the parse AST and collects the second identifiers
+// of `.<field>.<subkey>` chains (same walk structure as walkUsesRootField).
 func collectSubKeys(node parse.Node, field string, keys map[string]bool) {
 	if node == nil {
 		return
@@ -128,7 +128,7 @@ func collectSubKeys(node parse.Node, field string, keys map[string]bool) {
 	}
 }
 
-// collectSubKeysBranch обходит общую часть if/range/with (BranchNode).
+// collectSubKeysBranch walks the common part of if/range/with (BranchNode).
 func collectSubKeysBranch(b *parse.BranchNode, field string, keys map[string]bool) {
 	collectSubKeys(b.Pipe, field, keys)
 	if b.List != nil {
@@ -139,9 +139,9 @@ func collectSubKeysBranch(b *parse.BranchNode, field string, keys map[string]boo
 	}
 }
 
-// walkUsesRootField рекурсивно обходит parse-AST в поисках обращения к корневому
-// полю `.<field>`. Признак — FieldNode, чей первый идентификатор == field
-// (FieldNode представляет цепочку `.a.b.c` от dot-контекста: Ident=["a","b","c"]).
+// walkUsesRootField recursively walks the parse AST looking for a reference to the
+// root field `.<field>`. The marker is a FieldNode whose first identifier == field
+// (a FieldNode represents the chain `.a.b.c` from the dot-context: Ident=["a","b","c"]).
 func walkUsesRootField(node parse.Node, field string) bool {
 	if node == nil {
 		return false
@@ -182,14 +182,14 @@ func walkUsesRootField(node parse.Node, field string) bool {
 	case *parse.WithNode:
 		return walkBranch(&n.BranchNode, field)
 	case *parse.TemplateNode:
-		// `{{ template "name" .input.x }}` — поле читается в аргументе шаблона.
+		// `{{ template "name" .input.x }}` — the field is read in the template argument.
 		return walkUsesRootField(n.Pipe, field)
 	}
 	return false
 }
 
-// walkBranch обходит общую часть if/range/with (BranchNode): управляющий pipe +
-// тело + else-ветка.
+// walkBranch walks the common part of if/range/with (BranchNode): the control pipe +
+// body + else branch.
 func walkBranch(b *parse.BranchNode, field string) bool {
 	if walkUsesRootField(b.Pipe, field) {
 		return true

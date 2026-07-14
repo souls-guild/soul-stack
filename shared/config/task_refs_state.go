@@ -8,45 +8,47 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Статпроверка ссылок `state.<...>` внутри scenario-CEL. В scenario-render-
-// контексте incarnation.state доступен как `incarnation.state.<path>` (read-only
-// снимок stateBefore, ADR-009/010 Вариант A), а голый корень `state` НЕ объявлен
-// (его объявляет только migration-CEL — [migrationVars], мутируемый). Поэтому
-// `state.<path>` в scenario — почти всегда забытый префикс `incarnation.`:
-// рантайм отдал бы cryptic compile-ошибку «undeclared reference to 'state'».
-// Линтер ловит это статически и подсказывает каноническую форму — симметрично
-// тому, как checkSoulprintRefs режет голую `soulprint.<path>` без `.self`.
+// Static check of `state.<...>` references inside scenario CEL. In the
+// scenario-render context incarnation.state is available as
+// `incarnation.state.<path>` (a read-only snapshot of stateBefore, ADR-009/010
+// Variant A), while the bare root `state` is NOT declared (only migration-CEL
+// declares it — [migrationVars], mutable). So `state.<path>` in a scenario is
+// almost always a forgotten `incarnation.` prefix: the runtime would give the
+// cryptic compile error "undeclared reference to 'state'". The linter catches
+// this statically and suggests the canonical form — symmetric to how
+// checkSoulprintRefs rejects a bare `soulprint.<path>` without `.self`.
 //
-// Зона — scenario-режим (этот файл вызывается только из collectRefs над
-// scenario/destiny-задачами). Migration-CEL (migrations/<N>_to_<M>) валидируется
-// отдельным путём, где bare `state.*` mutable легитимен (ADR-019) — туда эта
-// проверка НЕ дотягивается.
+// Scope is scenario mode (this file is called only from collectRefs over
+// scenario/destiny tasks). Migration-CEL (migrations/<N>_to_<M>) is validated by
+// a separate path where a bare mutable `state.*` is legitimate (ADR-019) — this
+// check does NOT reach there.
 //
-// Извлечение токенов текстовое (содержимое строковых литералов CEL вырезается,
-// как в register/soulprint-проверках): полный CEL-AST-парс не нужен, форма
-// фиксирована грамматикой контекста (`state.<path>`).
+// Token extraction is textual (the contents of CEL string literals are stripped,
+// as in the register/soulprint checks): a full CEL-AST parse is unnecessary, the
+// form is fixed by the context grammar (`state.<path>`).
 
-// reStateCELRef извлекает корневой идентификатор `state`, за которым идёт `.`
-// (точечный доступ к полю state). Граница слева — начало строки ИЛИ символ, не
-// входящий в идентификатор и не `.`: `incarnation.state.x` НЕ матчит (перед
-// `state` стоит `.` — это поле incarnation, легитимная форма), `mystate.x` и
-// `foo.state.y` тоже не матчат (`state` обязан быть корневым). Так срабатывает
-// ровно на голом `state.<path>`, который в scenario-CEL не объявлен.
+// reStateCELRef extracts the root identifier `state` followed by `.` (dotted
+// access to a state field). The left boundary is start-of-string OR a character
+// that is not part of an identifier and not `.`: `incarnation.state.x` does NOT
+// match (a `.` precedes `state` — it is a field of incarnation, the legitimate
+// form), and `mystate.x` and `foo.state.y` do not match either (`state` must be
+// the root). So it fires exactly on a bare `state.<path>`, which is undeclared
+// in scenario CEL.
 var reStateCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])state\.[a-z]`)
 
-// hasNakedStateRef сообщает, есть ли в CEL-строке голая ссылка `state.<path>`
-// (после вырезания строковых литералов — `state.x` внутри литерала-данных не
-// считается). celStringLiteral переиспользуется из task_refs.go.
+// hasNakedStateRef reports whether a CEL string contains a bare `state.<path>`
+// reference (after stripping string literals — `state.x` inside a data literal
+// does not count). celStringLiteral is reused from task_refs.go.
 func hasNakedStateRef(expr string) bool {
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	return reStateCELRef.MatchString(stripped)
 }
 
-// checkStateRefs ловит голую `state.<path>` в одном scenario-CEL-предикате
-// (where/when/changed_when/failed_when/retry.until/loop.when). bool-литерал/null
-// (force-shortcut) — не CEL-строка, пропускается. Диагностика — на позиции
-// value-ноды (точное смещение внутри строки не извлекается, как в
-// checkPredicateRefs/checkSoulprintRefs).
+// checkStateRefs catches a bare `state.<path>` in one scenario CEL predicate
+// (where/when/changed_when/failed_when/retry.until/loop.when). A bool literal /
+// null (force-shortcut) is not a CEL string and is skipped. The diagnostic is at
+// the value node's position (the exact offset within the string is not
+// extracted, as in checkPredicateRefs/checkSoulprintRefs).
 func checkStateRefs(kind string, value ast.Node, taskPath string) []diag.Diagnostic {
 	sn, ok := value.(*ast.StringNode)
 	if !ok || !hasNakedStateRef(sn.Value) {
@@ -55,12 +57,12 @@ func checkStateRefs(kind string, value ast.Node, taskPath string) []diag.Diagnos
 	return []diag.Diagnostic{stateNakedDiag(kind, sn, taskPath)}
 }
 
-// checkInterpStateRefs рекурсивно обходит интерполяционное source-поле
-// (vars/output/params/apply.input/loop.items) и ловит голую `state.<path>` в
-// `${ … }`-строках. Симметрично checkInterpRefs (register), но для state-корня.
-// Зона интерполяции критична: канонический кейс — `current: ${ state.redis_users }`
-// в apply.input (update_acl), где забытый префикс не предикат, а строковое
-// значение.
+// checkInterpStateRefs recursively walks an interpolation source field
+// (vars/output/params/apply.input/loop.items) and catches a bare `state.<path>`
+// in `${ … }` strings. Symmetric to checkInterpRefs (register), but for the
+// state root. The interpolation zone matters: the canonical case is
+// `current: ${ state.redis_users }` in apply.input (update_acl), where the
+// forgotten prefix is a string value, not a predicate.
 func checkInterpStateRefs(node ast.Node, taskPath, kind string) []diag.Diagnostic {
 	switch n := node.(type) {
 	case *ast.StringNode:
@@ -87,9 +89,9 @@ func checkInterpStateRefs(node ast.Node, taskPath, kind string) []diag.Diagnosti
 	}
 }
 
-// stateNakedDiag собирает единую диагностику «голый state.* в scenario» с
-// подсказкой канонической формы. kind — имя поля (для message и yaml_path);
-// позиция берётся из токена строкового узла sn.
+// stateNakedDiag builds a single "bare state.* in scenario" diagnostic with a
+// hint of the canonical form. kind is the field name (for message and
+// yaml_path); the position comes from the string node's token sn.
 func stateNakedDiag(kind string, sn *ast.StringNode, taskPath string) diag.Diagnostic {
 	line, col := 0, 0
 	if tok := sn.GetToken(); tok != nil {

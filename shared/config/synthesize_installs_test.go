@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// Guard-тесты синтеза install-шагов `core.module.installed` из
-// `service.yml::modules[]` (ADR-065, NIM-8): Keeper вставляет Soul-side
-// install-шаг НЕПОСРЕДСТВЕННО ПЕРЕД первым потребителем модуля; явный
-// литеральный шаг оператора (takeover) подавляет синтез.
+// Guard tests for synthesizing `core.module.installed` install steps from
+// `service.yml::modules[]` (ADR-065, NIM-8): Keeper inserts the Soul-side
+// install step IMMEDIATELY BEFORE the module's first consumer; an explicit
+// literal operator step (takeover) suppresses synthesis.
 
-// synthTasks парсит YAML-план тем же парсером, что прод (плоский top-level
-// список задач, как после ExpandIncludes).
+// synthTasks parses the YAML plan with the same parser as prod (a flat top-level
+// task list, as after ExpandIncludes).
 func synthTasks(t *testing.T, src string) []Task {
 	t.Helper()
 	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -26,8 +26,9 @@ func synthTasks(t *testing.T, src string) []Task {
 	return m.Tasks
 }
 
-// assertSynthTask сверяет форму синтез-задачи: имя, адрес модуля, params
-// {name, ref} и отсутствие оркестрационных полей (on/where/serial = весь roster).
+// assertSynthTask checks the shape of a synthesized task: name, module address,
+// params {name, ref}, and the absence of orchestration fields (on/where/serial =
+// the whole roster).
 func assertSynthTask(t *testing.T, task Task, module, ref string) {
 	t.Helper()
 	wantName := "install " + module + " (service manifest)"
@@ -50,8 +51,8 @@ func assertSynthTask(t *testing.T, task Task, module, ref string) {
 	}
 }
 
-// (а)+(ж) Синтез перед ПЕРВЫМ потребителем, позиция точная; ref из записи
-// манифеста попадает в params.
+// (a)+(g) Synthesis before the FIRST consumer, exact position; ref from the
+// manifest entry lands in params.
 func TestSynthesizeModuleInstalls_BeforeFirstConsumer(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -84,7 +85,7 @@ tasks:
 	}
 }
 
-// (б) Потребитель внутри block: → вставка перед block-ом ЦЕЛИКОМ.
+// (b) Consumer inside a block: → insertion before the WHOLE block.
 func TestSynthesizeModuleInstalls_ConsumerInsideBlock(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -116,7 +117,7 @@ tasks:
 	}
 }
 
-// (в) Модуль без потребителей в плане → НЕ синтезируется.
+// (c) A module with no consumers in the plan → NOT synthesized.
 func TestSynthesizeModuleInstalls_NoConsumerNoSynth(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -137,8 +138,9 @@ tasks:
 	}
 }
 
-// (г) Takeover: явный top-level core.module.installed с ЛИТЕРАЛЬНЫМ params.name
-// подавляет синтез этого имени (даже стоя ПОСЛЕ потребителя — оператор сам решил).
+// (d) Takeover: an explicit top-level core.module.installed with a LITERAL
+// params.name suppresses synthesis of that name (even standing AFTER the
+// consumer — the operator decided).
 func TestSynthesizeModuleInstalls_TakeoverTopLevel(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -162,7 +164,7 @@ tasks:
 	}
 }
 
-// (д) Takeover внутри block: тоже распознаётся.
+// (e) Takeover inside a block: also recognized.
 func TestSynthesizeModuleInstalls_TakeoverInsideBlock(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -185,8 +187,8 @@ tasks:
 	}
 }
 
-// (е) Явный шаг с CEL `${…}` в params.name — НЕ takeover (статически неизвестен),
-// синтез выполняется, дубль допустим.
+// (f) An explicit step with CEL `${…}` in params.name — NOT a takeover
+// (statically unknown), synthesis runs, a duplicate is acceptable.
 func TestSynthesizeModuleInstalls_CELNameNotTakeover(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -211,9 +213,10 @@ tasks:
 	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
 }
 
-// (е+) params.name НЕ строка — тоже не takeover, синтез не подавлен. Задачи
-// строятся напрямую: парсер такой шаг отверг бы по схеме core.module (name:
-// string), но рантайм-функция обязана быть fail-safe и на сыром плане.
+// (f+) params.name NOT a string — also not a takeover, synthesis is not
+// suppressed. Tasks are built directly: the parser would reject such a step by
+// the core.module schema (name: string), but the runtime function must be
+// fail-safe even on a raw plan.
 func TestSynthesizeModuleInstalls_NonStringNameNotTakeover(t *testing.T) {
 	tasks := []Task{
 		{Name: "Weird install", Module: &ModuleTask{Module: "core.module.installed", Params: map[string]any{"name": 42}}},
@@ -229,7 +232,7 @@ func TestSynthesizeModuleInstalls_NonStringNameNotTakeover(t *testing.T) {
 	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
 }
 
-// (з) Пустой/nil modules[] → вход бит-в-бит (тот же slice, без копий).
+// (h) Empty/nil modules[] → input byte-for-byte (the same slice, no copies).
 func TestSynthesizeModuleInstalls_EmptyModules(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -251,8 +254,8 @@ tasks:
 	}
 }
 
-// (и) core.*-запись в modules[] пропускается (defense-in-depth: валидация
-// service.yml её уже запрещает).
+// (i) A core.* entry in modules[] is skipped (defense-in-depth: service.yml
+// validation already forbids it).
 func TestSynthesizeModuleInstalls_CorePrefixSkipped(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -269,9 +272,9 @@ tasks:
 	}
 }
 
-// (к) Несколько модулей: у каждого своя позиция (перед СВОИМ первым
-// потребителем), порядок исходных задач не съезжает; при общем первом
-// потребителе — порядок манифеста.
+// (j) Several modules: each gets its own position (before ITS OWN first
+// consumer), the order of the source tasks does not shift; with a shared first
+// consumer — manifest order.
 func TestSynthesizeModuleInstalls_MultipleModules(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -308,8 +311,8 @@ tasks:
 		t.Errorf("out[4] = %q, want Use a", out[4].Name)
 	}
 
-	// Общий первый потребитель (оба модуля внутри одного block) → вставки в
-	// порядке манифеста перед block-ом.
+	// Shared first consumer (both modules inside one block) → insertions in
+	// manifest order before the block.
 	shared := synthTasks(t, `
 name: create
 state_changes: {}
@@ -340,10 +343,11 @@ tasks:
 	}
 }
 
-// Stratify-интеграция (roster-ось ADR-0061 §S2): план [refresh-эмиттер,
-// потребитель community.x] + синтез → синтез-шаг (roster-потребитель: on: опущен)
-// попадает в Passage СТРОГО ПОСЛЕ refresh-границы, вместе со своим потребителем —
-// НЕ в Passage 0 (иначе install поехал бы на до-онбординговый roster).
+// Stratify integration (roster axis ADR-0061 §S2): a plan [refresh-emitter,
+// community.x consumer] + synthesis → the synthesized step (roster consumer:
+// on: omitted) lands in a Passage STRICTLY AFTER the refresh boundary, together
+// with its consumer — NOT in Passage 0 (otherwise install would go to the
+// pre-onboarding roster).
 func TestSynthesizeModuleInstalls_StratifyAfterRefreshBoundary(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -373,7 +377,7 @@ tasks:
 	if p.Count != 2 {
 		t.Fatalf("Count = %d, want 2 (refresh-граница)", p.Count)
 	}
-	want := []int{0, 1, 1} // эмиттер / синтез-install / потребитель
+	want := []int{0, 1, 1} // emitter / synth-install / consumer
 	for i, w := range want {
 		if p.TaskPassage[i] != w {
 			t.Errorf("task #%d passage = %d, want %d (синтез-шаг — roster-потребитель ПОСЛЕ refresh-границы)", i, p.TaskPassage[i], w)

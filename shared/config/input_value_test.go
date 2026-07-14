@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// schemaFromInput парсит scenario с заданным input:-блоком и возвращает его
-// InputSchemaMap (с корректно проставленным requiredKind через UnmarshalYAML).
+// schemaFromInput parses a scenario with the given input: block and returns its
+// InputSchemaMap (with requiredKind set correctly via UnmarshalYAML).
 func schemaFromInput(t *testing.T, inputYAML string) InputSchemaMap {
 	t.Helper()
 	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
@@ -36,8 +36,8 @@ func indentBlock(s, prefix string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// TestResolveInputValues_MergesDefaults — непереданные параметры с default
-// подтягиваются; переданные сохраняются.
+// TestResolveInputValues_MergesDefaults — unpassed params with a default are pulled
+// in; passed ones are preserved.
 func TestResolveInputValues_MergesDefaults(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
@@ -51,16 +51,16 @@ redis_socket:
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
 	want := map[string]any{
-		"redis_version": "7.2.4",        // default смёржен
-		"redis_socket":  "/custom.sock", // переданное сохранено
+		"redis_version": "7.2.4",        // default merged
+		"redis_socket":  "/custom.sock", // passed value preserved
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 }
 
-// TestResolveInputValues_RequiredMissing — required без default и без значения →
-// ошибка.
+// TestResolveInputValues_RequiredMissing — required without a default and without a
+// value → error.
 func TestResolveInputValues_RequiredMissing(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -75,7 +75,7 @@ func TestResolveInputValues_RequiredMissing(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_RequiredPassed — required с переданным значением → ок.
+// TestResolveInputValues_RequiredPassed — required with a passed value → ok.
 func TestResolveInputValues_RequiredPassed(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -90,8 +90,8 @@ func TestResolveInputValues_RequiredPassed(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_EmptyStringIsAbsent — пустая строка для type=string без
-// allow_empty трактуется как отсутствие → default подставляется.
+// TestResolveInputValues_EmptyStringIsAbsent — an empty string for type=string without
+// allow_empty is treated as absent → the default is substituted.
 func TestResolveInputValues_EmptyStringIsAbsent(t *testing.T) {
 	schema := schemaFromInput(t, `name:
   type: string
@@ -106,8 +106,8 @@ func TestResolveInputValues_EmptyStringIsAbsent(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_EmptyStringAllowed — allow_empty: true → пустая строка
-// проходит как значение.
+// TestResolveInputValues_EmptyStringAllowed — allow_empty: true → an empty string
+// passes as a value.
 func TestResolveInputValues_EmptyStringAllowed(t *testing.T) {
 	schema := schemaFromInput(t, `note:
   type: string
@@ -123,7 +123,7 @@ func TestResolveInputValues_EmptyStringAllowed(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_PatternMismatch — переданное значение не матчит pattern.
+// TestResolveInputValues_PatternMismatch — the passed value doesn't match the pattern.
 func TestResolveInputValues_PatternMismatch(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
@@ -135,7 +135,7 @@ func TestResolveInputValues_PatternMismatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_PatternMatch — валидное значение проходит pattern.
+// TestResolveInputValues_PatternMatch — a valid value passes the pattern.
 func TestResolveInputValues_PatternMatch(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
@@ -150,8 +150,8 @@ func TestResolveInputValues_PatternMatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_ExprValueSkipsPattern — значение-выражение (${...}) не
-// валидируется против pattern: финальная форма появится после render-фазы.
+// TestResolveInputValues_ExprValueSkipsPattern — an expression value (${...}) is not
+// validated against the pattern: the final form appears after the render phase.
 func TestResolveInputValues_ExprValueSkipsPattern(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
@@ -166,7 +166,7 @@ func TestResolveInputValues_ExprValueSkipsPattern(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_TypeMismatch — переданное значение не соответствует type.
+// TestResolveInputValues_TypeMismatch — the passed value doesn't match the type.
 func TestResolveInputValues_TypeMismatch(t *testing.T) {
 	schema := schemaFromInput(t, `replicas:
   type: integer
@@ -177,7 +177,7 @@ func TestResolveInputValues_TypeMismatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_EnumValidated — значение вне enum → ошибка; внутри → ок.
+// TestResolveInputValues_EnumValidated — a value outside the enum → error; inside → ok.
 func TestResolveInputValues_EnumValidated(t *testing.T) {
 	schema := schemaFromInput(t, `level:
   type: string
@@ -191,34 +191,34 @@ func TestResolveInputValues_EnumValidated(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_EnumIntegerBoundary — enum для type=integer (runtime).
-// Существующий TestResolveInputValues_EnumValidated покрывает только string-enum;
-// integer-enum идёт через equalScalar с int↔float-послаблением (goccy типизирует
-// `42` как uint64). Граница: значение из набора проходит, значение вне — падает,
-// а int↔float-эквивалент (42 ≡ 42.0) совпадает.
+// TestResolveInputValues_EnumIntegerBoundary — enum for type=integer (runtime).
+// TestResolveInputValues_EnumValidated covers only a string-enum; an integer-enum goes
+// through equalScalar with int↔float leniency (goccy types `42` as uint64). Boundary: a
+// value from the set passes, a value outside fails, and an int↔float equivalent
+// (42 ≡ 42.0) matches.
 func TestResolveInputValues_EnumIntegerBoundary(t *testing.T) {
 	schema := schemaFromInput(t, `replicas:
   type: integer
   enum: [1, 3, 5]
 `)
-	// Значение из набора (как uint64 от goccy) — проходит.
+	// A value from the set (as uint64 from goccy) — passes.
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": uint64(3)}); err != nil {
 		t.Errorf("3 входит в enum, но отвергнуто: %v", err)
 	}
-	// int↔float-эквивалент: 5.0 ≡ 5 (equalScalar-послабление).
+	// int↔float equivalent: 5.0 ≡ 5 (equalScalar leniency).
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": float64(5)}); err != nil {
 		t.Errorf("5.0 эквивалентно 5 в enum, но отвергнуто: %v", err)
 	}
-	// Значение вне набора — падает.
+	// A value outside the set — fails.
 	if _, err := ResolveInputValues(schema, map[string]any{"replicas": uint64(4)}); err == nil {
 		t.Error("4 не входит в integer-enum, но ошибки нет")
 	}
 }
 
-// TestResolveInputValues_ArrayItemsEnum — enum на items массива валидируется
-// per-element (validateArrayItems рекурсивно вызывает validateValueAt для каждого
-// элемента). Тесты nested object с enum/pattern есть, array items с ограничением —
-// нет. Граница: все элементы в наборе → OK; один вне → падает с путём [i].
+// TestResolveInputValues_ArrayItemsEnum — an enum on array items is validated
+// per-element (validateArrayItems recursively calls validateValueAt for each element).
+// There are tests for a nested object with enum/pattern, but not for array items with a
+// constraint. Boundary: all elements in the set → OK; one outside → fails with path [i].
 func TestResolveInputValues_ArrayItemsEnum(t *testing.T) {
 	schema := schemaFromInput(t, `levels:
   type: array
@@ -238,9 +238,9 @@ func TestResolveInputValues_ArrayItemsEnum(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_ArrayItemsPattern — pattern на items массива
-// валидируется per-element. Симметрично enum-кейсу: pattern применяется к каждой
-// строке элемента; невалидный элемент → ошибка с индексом.
+// TestResolveInputValues_ArrayItemsPattern — a pattern on array items is validated
+// per-element. Symmetric with the enum case: the pattern applies to each element
+// string; an invalid element → an error with an index.
 func TestResolveInputValues_ArrayItemsPattern(t *testing.T) {
 	schema := schemaFromInput(t, `tags:
   type: array
@@ -260,7 +260,7 @@ func TestResolveInputValues_ArrayItemsPattern(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_DoesNotMutateProvided — provided не мутируется.
+// TestResolveInputValues_DoesNotMutateProvided — provided is not mutated.
 func TestResolveInputValues_DoesNotMutateProvided(t *testing.T) {
 	schema := schemaFromInput(t, `suffix:
   type: string
@@ -275,8 +275,8 @@ func TestResolveInputValues_DoesNotMutateProvided(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_UnknownKeyPassthrough — ключ без схемы пробрасывается
-// (MVP не запрещает unknown input key).
+// TestResolveInputValues_UnknownKeyPassthrough — a key without a schema is passed
+// through (MVP doesn't forbid an unknown input key).
 func TestResolveInputValues_UnknownKeyPassthrough(t *testing.T) {
 	schema := schemaFromInput(t, `known:
   type: string
@@ -291,7 +291,7 @@ func TestResolveInputValues_UnknownKeyPassthrough(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NilSchema — nil-схема: provided пробрасывается как есть.
+// TestResolveInputValues_NilSchema — nil schema: provided is passed through as-is.
 func TestResolveInputValues_NilSchema(t *testing.T) {
 	got, err := ResolveInputValues(nil, map[string]any{"x": "y"})
 	if err != nil {
@@ -302,9 +302,9 @@ func TestResolveInputValues_NilSchema(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_EnumExprValueSkipped — значение-выражение (${...}) в
-// enum-параметре не отвергается (симметрия с pattern: финальная форма появится
-// после render-фазы, ответственность оператора). До фикса enum отвергал expr.
+// TestResolveInputValues_EnumExprValueSkipped — an expression value (${...}) in an
+// enum param is not rejected (symmetric with pattern: the final form appears after the
+// render phase, the operator's responsibility). Before the fix enum rejected expr.
 func TestResolveInputValues_EnumExprValueSkipped(t *testing.T) {
 	schema := schemaFromInput(t, `level:
   type: string
@@ -319,10 +319,9 @@ func TestResolveInputValues_EnumExprValueSkipped(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_FalsyNotAbsent — false/0/[]/пустой object как
-// переданные значения НЕ подменяются дефолтом (isAbsentValue считает
-// отсутствием только пустую строку без allow_empty). Закрепляет поведение
-// против регрессии (qa coverage).
+// TestResolveInputValues_FalsyNotAbsent — false/0/[]/empty object as passed values are
+// NOT replaced by the default (isAbsentValue counts only an empty string without
+// allow_empty as absent). Locks the behavior against regression (qa coverage).
 func TestResolveInputValues_FalsyNotAbsent(t *testing.T) {
 	schema := schemaFromInput(t, `flag:
   type: boolean
@@ -366,9 +365,9 @@ opts:
 	}
 }
 
-// aclUsersSchema — input-схема, эквивалентная scenario/add_acl_user (array of
-// object с required-полями и pattern на вложенном поле). Граница доверия
-// оператор→рендер: до фикса вся вложенная валидация пропускалась до CEL/shell.
+// aclUsersSchema — an input schema equivalent to scenario/add_acl_user (array of object
+// with required fields and a pattern on a nested field). The operator→render trust
+// boundary: before the fix all nested validation was skipped up to CEL/shell.
 func aclUsersSchema(t *testing.T) InputSchemaMap {
 	t.Helper()
 	return schemaFromInput(t, `users:
@@ -386,8 +385,7 @@ func aclUsersSchema(t *testing.T) InputSchemaMap {
 `)
 }
 
-// TestResolveInputValues_NestedValid — корректный список вложенных объектов
-// проходит насквозь.
+// TestResolveInputValues_NestedValid — a valid list of nested objects passes through.
 func TestResolveInputValues_NestedValid(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -401,8 +399,8 @@ func TestResolveInputValues_NestedValid(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedElementTypeMismatch — элемент array неверного
-// типа (строка вместо object) → ошибка с путём элемента.
+// TestResolveInputValues_NestedElementTypeMismatch — an array element of the wrong type
+// (string instead of object) → an error with the element path.
 func TestResolveInputValues_NestedElementTypeMismatch(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -416,8 +414,8 @@ func TestResolveInputValues_NestedElementTypeMismatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedFieldTypeMismatch — поле object неверного типа
-// (name: 123 вместо string) → ошибка с путём поля.
+// TestResolveInputValues_NestedFieldTypeMismatch — an object field of the wrong type
+// (name: 123 instead of string) → an error with the field path.
 func TestResolveInputValues_NestedFieldTypeMismatch(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -431,14 +429,14 @@ func TestResolveInputValues_NestedFieldTypeMismatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedMissingRequired — элемент без обязательного
-// поля acl → ошибка с понятным путём.
+// TestResolveInputValues_NestedMissingRequired — an element without the required field
+// acl → an error with a clear path.
 func TestResolveInputValues_NestedMissingRequired(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
 		"users": []any{
 			map[string]any{"name": "app", "acl": "on"},
-			map[string]any{"name": "app2"}, // нет acl
+			map[string]any{"name": "app2"}, // no acl
 		},
 	})
 	if err == nil {
@@ -449,8 +447,8 @@ func TestResolveInputValues_NestedMissingRequired(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedPatternMismatch — нарушение
-// items.properties.name.pattern → ошибка с путём.
+// TestResolveInputValues_NestedPatternMismatch — a violation of
+// items.properties.name.pattern → an error with a path.
 func TestResolveInputValues_NestedPatternMismatch(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -464,8 +462,8 @@ func TestResolveInputValues_NestedPatternMismatch(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedExprFieldSkipped — строка-выражение во вложенном
-// pattern-поле освобождается от pattern на своём уровне.
+// TestResolveInputValues_NestedExprFieldSkipped — an expression string in a nested
+// pattern field is exempt from the pattern at its level.
 func TestResolveInputValues_NestedExprFieldSkipped(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -476,8 +474,8 @@ func TestResolveInputValues_NestedExprFieldSkipped(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedObjectMissingRequiredEmptyString — пустая строка
-// в обязательном строковом поле без allow_empty трактуется как отсутствие.
+// TestResolveInputValues_NestedObjectMissingRequiredEmptyString — an empty string in a
+// required string field without allow_empty is treated as absent.
 func TestResolveInputValues_NestedObjectMissingRequiredEmptyString(t *testing.T) {
 	schema := aclUsersSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{
@@ -491,18 +489,18 @@ func TestResolveInputValues_NestedObjectMissingRequiredEmptyString(t *testing.T)
 	}
 }
 
-// secretFieldRaw — заведомо «секретное» сырое значение, наличие которого в
-// тексте ошибки означает утечку.
+// secretFieldRaw — a deliberately "secret" raw value whose presence in the error text
+// means a leak.
 const secretFieldRaw = "s3cr3t-leak-canary"
 
-// TestResolveInputValues_SecretValueMaskedOnType — secret-поле с невалидным
-// типом: ошибка содержит <masked>, НЕ сырое значение.
+// TestResolveInputValues_SecretValueMaskedOnType — a secret field with an invalid type:
+// the error contains <masked>, NOT the raw value.
 func TestResolveInputValues_SecretValueMaskedOnType(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
   secret: true
 `)
-	// integer вместо string — провал type-проверки на secret-поле.
+	// integer instead of string — a type-check failure on a secret field.
 	_, err := ResolveInputValues(schema, map[string]any{"redis_password": 12345})
 	if err == nil {
 		t.Fatal("ожидалась ошибка: integer не соответствует type string")
@@ -515,9 +513,9 @@ func TestResolveInputValues_SecretValueMaskedOnType(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_SecretValueMaskedOnPattern — secret-поле, нарушающее
-// pattern: сырое значение замаскировано, pattern в ошибке остаётся (это схема,
-// не секрет).
+// TestResolveInputValues_SecretValueMaskedOnPattern — a secret field violating the
+// pattern: the raw value is masked, the pattern stays in the error (it's the schema, not
+// the secret).
 func TestResolveInputValues_SecretValueMaskedOnPattern(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -536,8 +534,8 @@ func TestResolveInputValues_SecretValueMaskedOnPattern(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_SecretValueMaskedOnEnum — secret-поле вне enum: ни
-// само значение, ни список допустимых (он тоже секрет) не утекают.
+// TestResolveInputValues_SecretValueMaskedOnEnum — a secret field outside the enum:
+// neither the value itself nor the list of allowed values (also secret) leaks.
 func TestResolveInputValues_SecretValueMaskedOnEnum(t *testing.T) {
 	schema := schemaFromInput(t, `tier_key:
   type: string
@@ -559,8 +557,8 @@ func TestResolveInputValues_SecretValueMaskedOnEnum(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NonSecretValueShown — не-secret поле: сырое значение
-// остаётся в ошибке (диагностика нужна).
+// TestResolveInputValues_NonSecretValueShown — a non-secret field: the raw value stays
+// in the error (diagnostics are needed).
 func TestResolveInputValues_NonSecretValueShown(t *testing.T) {
 	schema := schemaFromInput(t, `region:
   type: string
@@ -578,8 +576,8 @@ func TestResolveInputValues_NonSecretValueShown(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_NestedSecretFieldMasked — вложенное secret-поле
-// (users[].secret) с битым значением маскируется; не-secret соседнее поле — нет.
+// TestResolveInputValues_NestedSecretFieldMasked — a nested secret field
+// (users[].secret) with a broken value is masked; a non-secret neighbor field is not.
 func TestResolveInputValues_NestedSecretFieldMasked(t *testing.T) {
 	schema := schemaFromInput(t, `users:
   type: array
@@ -610,7 +608,7 @@ func TestResolveInputValues_NestedSecretFieldMasked(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_MinLengthTooShort — строка короче min_length → ошибка.
+// TestResolveInputValues_MinLengthTooShort — a string shorter than min_length → error.
 func TestResolveInputValues_MinLengthTooShort(t *testing.T) {
 	schema := schemaFromInput(t, `secret_key:
   type: string
@@ -625,7 +623,7 @@ func TestResolveInputValues_MinLengthTooShort(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_MaxLengthTooLong — строка длиннее max_length → ошибка.
+// TestResolveInputValues_MaxLengthTooLong — a string longer than max_length → error.
 func TestResolveInputValues_MaxLengthTooLong(t *testing.T) {
 	schema := schemaFromInput(t, `code:
   type: string
@@ -640,8 +638,7 @@ func TestResolveInputValues_MaxLengthTooLong(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_LengthInRange — значение внутри [min_length, max_length]
-// проходит.
+// TestResolveInputValues_LengthInRange — a value within [min_length, max_length] passes.
 func TestResolveInputValues_LengthInRange(t *testing.T) {
 	schema := schemaFromInput(t, `name:
   type: string
@@ -651,7 +648,7 @@ func TestResolveInputValues_LengthInRange(t *testing.T) {
 	if _, err := ResolveInputValues(schema, map[string]any{"name": "alice"}); err != nil {
 		t.Fatalf("значение в диапазоне отвергнуто: %v", err)
 	}
-	// Граничные значения — длина ровно на min и на max — валидны.
+	// Boundary values — length exactly at min and at max — are valid.
 	if _, err := ResolveInputValues(schema, map[string]any{"name": "abc"}); err != nil {
 		t.Fatalf("значение длиной = min_length отвергнуто: %v", err)
 	}
@@ -660,8 +657,8 @@ func TestResolveInputValues_LengthInRange(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_LengthInRunes — длина считается в Unicode-кодпоинтах,
-// не байтах: 4 кириллических символа (8 UTF-8 байт) укладываются в max_length 4.
+// TestResolveInputValues_LengthInRunes — length is counted in Unicode code points, not
+// bytes: 4 Cyrillic characters (8 UTF-8 bytes) fit within max_length 4.
 func TestResolveInputValues_LengthInRunes(t *testing.T) {
 	schema := schemaFromInput(t, `word:
   type: string
@@ -673,8 +670,8 @@ func TestResolveInputValues_LengthInRunes(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_LengthExprSkipped — значение-выражение освобождено от
-// length-проверки: финальная длина появится только после render-фазы.
+// TestResolveInputValues_LengthExprSkipped — an expression value is exempt from the
+// length check: the final length appears only after the render phase.
 func TestResolveInputValues_LengthExprSkipped(t *testing.T) {
 	schema := schemaFromInput(t, `token:
   type: string
@@ -685,8 +682,8 @@ func TestResolveInputValues_LengthExprSkipped(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_MinLengthSecretMasked — secret-поле, нарушающее
-// min_length: сырое значение замаскировано (граница доверия + ADR-010).
+// TestResolveInputValues_MinLengthSecretMasked — a secret field violating min_length:
+// the raw value is masked (trust boundary + ADR-010).
 func TestResolveInputValues_MinLengthSecretMasked(t *testing.T) {
 	schema := schemaFromInput(t, `pass:
   type: string
@@ -705,8 +702,8 @@ func TestResolveInputValues_MinLengthSecretMasked(t *testing.T) {
 	}
 }
 
-// requiredWhenSchema — общая фикстура required_when-тестов: режим + поле shards,
-// обязательное только при redis_type == 'cluster' (use-case redis-консолидации).
+// requiredWhenSchema — a shared fixture for required_when tests: a mode + a shards
+// field, required only when redis_type == 'cluster' (redis-consolidation use case).
 func requiredWhenSchema(t *testing.T) InputSchemaMap {
 	t.Helper()
 	return schemaFromInput(t, `redis_type:
@@ -720,8 +717,8 @@ shards:
 `)
 }
 
-// TestResolveInputValues_RequiredWhenTruePredicateMissing — предикат истинен
-// (redis_type=cluster) и поле отсутствует → required-ошибка (условная).
+// TestResolveInputValues_RequiredWhenTruePredicateMissing — the predicate is true
+// (redis_type=cluster) and the field is absent → a (conditional) required error.
 func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	_, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster"})
@@ -731,16 +728,16 @@ func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
 	if !strings.Contains(err.Error(), "shards") {
 		t.Errorf("ошибка не называет параметр: %v", err)
 	}
-	// Узнаваемая форма required-ошибки — downstream-детект (checkdrift) ловит
-	// безусловный и условный required единым матчингом подстроки.
+	// A recognizable required-error form — downstream detection (checkdrift) catches
+	// both unconditional and conditional required with a single substring match.
 	if !strings.Contains(err.Error(), "обязателен, но не передан и не имеет default") {
 		t.Errorf("ошибка не несёт узнаваемую required-форму: %v", err)
 	}
 }
 
-// TestResolveInputValues_RequiredWhenFalsePredicateMissing — предикат ложен
-// (redis_type=standalone) и поле отсутствует → OK (условная обязательность не
-// срабатывает).
+// TestResolveInputValues_RequiredWhenFalsePredicateMissing — the predicate is false
+// (redis_type=standalone) and the field is absent → OK (conditional requiredness
+// doesn't trigger).
 func TestResolveInputValues_RequiredWhenFalsePredicateMissing(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "standalone"})
@@ -752,8 +749,8 @@ func TestResolveInputValues_RequiredWhenFalsePredicateMissing(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_RequiredWhenTruePredicatePassed — предикат истинен и
-// поле передано → OK.
+// TestResolveInputValues_RequiredWhenTruePredicatePassed — the predicate is true and
+// the field is passed → OK.
 func TestResolveInputValues_RequiredWhenTruePredicatePassed(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster", "shards": 3})
@@ -765,9 +762,10 @@ func TestResolveInputValues_RequiredWhenTruePredicatePassed(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_RequiredWhenDefaultMaterialized — предикат читает поле с
-// default, материализованным merge-фазой (predicate eval ПОСЛЕ mergeInputDefaults).
-// redis_type не передан → default standalone → предикат ложен → shards опционален.
+// TestResolveInputValues_RequiredWhenDefaultMaterialized — the predicate reads a field
+// with a default materialized by the merge phase (predicate eval AFTER
+// mergeInputDefaults). redis_type not passed → default standalone → predicate false →
+// shards optional.
 func TestResolveInputValues_RequiredWhenDefaultMaterialized(t *testing.T) {
 	schema := requiredWhenSchema(t)
 	got, err := ResolveInputValues(schema, map[string]any{})
@@ -779,9 +777,9 @@ func TestResolveInputValues_RequiredWhenDefaultMaterialized(t *testing.T) {
 	}
 }
 
-// TestRequiredWhen_InvalidCELRejectedAtSchema — непарсимый/ссылающийся на имя вне
-// input предикат отвергается schema-валидацией (input_required_when_invalid), а
-// не на runtime.
+// TestRequiredWhen_InvalidCELRejectedAtSchema — an unparseable predicate or one
+// referencing a name outside input is rejected by schema validation
+// (input_required_when_invalid), not at runtime.
 func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 	cases := []struct{ name, expr string }{
 		{"syntax", "input.x =="},
@@ -809,8 +807,8 @@ func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 	}
 }
 
-// TestRequiredWhen_EmptyStringRejectedAtSchema — пустой required_when отвергается
-// (бессмысленный предикат → footgun «никогда не обязателен»).
+// TestRequiredWhen_EmptyStringRejectedAtSchema — an empty required_when is rejected (a
+// meaningless predicate → the "never required" footgun).
 func TestRequiredWhen_EmptyStringRejectedAtSchema(t *testing.T) {
 	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" +
 		indentBlock("f:\n  type: string\n  required_when: \"\"\n", "  ")

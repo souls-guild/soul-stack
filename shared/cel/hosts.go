@@ -11,59 +11,58 @@ import (
 
 // soulprint.hosts + .where(<predicate>) (slice E3a, [ADR-010]).
 //
-// Механизм — compile-time AST-rewrite статического литерал-предиката в нативный
-// CEL filter-comprehension (НЕ runtime-исполнение строки):
+// Mechanism: a compile-time AST rewrite of a static literal predicate into a
+// native CEL filter-comprehension (NOT runtime execution of the string):
 //
-//	soulprint.hosts.where("<predicate>")  →  soulprint.hosts.filter(__host, <predicate с полями __host.*>)
-//	soulprint.where("<predicate>")        ≡  soulprint.hosts.where("<predicate>")  (синоним)
+//	soulprint.hosts.where("<predicate>")  →  soulprint.hosts.filter(__host, <predicate with __host.* fields>)
+//	soulprint.where("<predicate>")        ≡  soulprint.hosts.where("<predicate>")  (synonym)
 //
-// Ключевой инвариант round-trip'а: rewrite-фаза парсит БЕЗ макросов
-// (Engine.noMacroParser), поэтому exists/all/map/filter/exists_one/.where
-// остаются plain CallKind и корректно сериализуются parser.Unparse. Если бы
-// здесь использовался env.Parse (макросы включены), макросы раскрывались бы в
-// ComprehensionKind, который Unparse этой версии cel-go НЕ сериализует
-// (opaque-ошибка «unsupported expression»). Финальный env.Compile (макросы
-// включены) раскрывает .filter/.exists обратно в comprehension нативно — это
-// делает covens.exists(c, c=='db') в предикате полностью рабочим.
+// Key round-trip invariant: the rewrite phase parses WITHOUT macros
+// (Engine.noMacroParser), so exists/all/map/filter/exists_one/.where stay plain
+// CallKind and serialize correctly via parser.Unparse. With env.Parse (macros on)
+// the macros would expand into ComprehensionKind, which this cel-go version's
+// Unparse does NOT serialize (opaque "unsupported expression"). The final
+// env.Compile (macros on) re-expands .filter/.exists back into a comprehension
+// natively — which makes covens.exists(c, c=='db') in a predicate fully work.
 //
-// Фазы rewriteHostsWhere:
-//   - parseNoMacro всего выражения в AST (макросы НЕ раскрываются: .where и
-//     exists/all/filter — plain member-call CallKind);
-//   - PostOrder-обход дерева: находим call-узлы `where`/1-арг, receiver которых
-//     сводится к soulprint.hosts / soulprint.where(...)-проекции;
-//   - валидация receiver (только soulprint.hosts/soulprint.where) и аргумента
-//     (только string-literal) — иначе понятная compile-ошибка;
-//   - строим filter-member-call: receiver.filter(__host, <pred>), где предикат
-//     парсится отдельно (тоже без макросов), а его «голые» поля элемента
-//     (role/covens/os.family/…) квалифицируются в __host.<поле>; внешний
-//     контекст (incarnation.*/input.*/…) и iter-переменные вложенных
-//     exists/all/map/filter в предикате не трогаются;
-//   - parser.Unparse всего переписанного дерева обратно в строку → env.Compile
-//     единожды (Unparse корректно экранирует литералы — инъекция исключена
-//     конструктивно, безопаснее ручного RenumberIDs).
+// rewriteHostsWhere phases:
+//   - parseNoMacro of the whole expression into an AST (macros NOT expanded: .where
+//     and exists/all/filter are plain member-call CallKind);
+//   - PostOrder walk: find `where`/1-arg call nodes whose receiver reduces to
+//     soulprint.hosts / a soulprint.where(...) projection;
+//   - validate the receiver (only soulprint.hosts/soulprint.where) and the argument
+//     (only a string literal) — else a clear compile error;
+//   - build the filter member-call: receiver.filter(__host, <pred>), where the
+//     predicate is parsed separately (also macro-free) and its "bare" element
+//     fields (role/covens/os.family/…) are qualified to __host.<field>; the outer
+//     context (incarnation.*/input.*/…) and iter-vars of nested
+//     exists/all/map/filter in the predicate are untouched;
+//   - parser.Unparse of the whole rewritten tree back into a string → env.Compile
+//     once (Unparse escapes literals correctly — injection is excluded by
+//     construction, safer than manual RenumberIDs).
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
+// [ADR-010]: docs/adr/0010-templating.md
 
-// hostIterPrefix — префикс iter-переменной filter-comprehension. Зарезервирован
-// в config-валидаторе (loopReservedPrefixes), чтобы loop-переменная `as:`/
-// `index_as:` не коллизила с встроенной iter-переменной.
+// hostIterPrefix is the iter-var prefix of the filter-comprehension. Reserved in
+// the config validator (loopReservedPrefixes) so a loop variable `as:`/`index_as:`
+// does not collide with the built-in iter-var.
 const hostIterPrefix = "__host"
 
-// usesHostsAccessor — грубое распознавание выражений, которые НАДО прогнать
-// через AST-проход rewriteHostsWhere: содержащие `soulprint` (hosts/where) или
-// любой `.where(` (чтобы generic .where на не-soulprint-receiver получил
-// понятную валидационную ошибку, а не невнятное «undeclared reference to where»).
-// Точная классификация делается уже по AST; этот тест лишь решает «трогать ли
-// выражение парсером» (горячий путь: большинство выражений идут мимо).
+// usesHostsAccessor is a coarse test for expressions that MUST go through the
+// rewriteHostsWhere AST pass: those containing `soulprint` (hosts/where) or any
+// `.where(` (so a generic .where on a non-soulprint receiver gets a clear
+// validation error, not a vague "undeclared reference to where"). Precise
+// classification happens on the AST; this test only decides "should the parser
+// touch the expression" (hot path: most expressions skip it).
 func usesHostsAccessor(expr string) bool {
 	return strings.Contains(expr, "soulprint") || strings.Contains(expr, ".where(")
 }
 
-// rewriteHostsWhere переписывает soulprint.hosts.where(...)/soulprint.where(...)
-// в нативный filter-comprehension и возвращает исходную строку CEL. Если
-// выражение не использует hosts-аксессор, возвращает expr без изменений
-// (горячий путь). allowHosts=false → обращение к soulprint.hosts/soulprint.where
-// — ошибка валидации (изоляция destiny-прохода, orchestration.md §4.1).
+// rewriteHostsWhere rewrites soulprint.hosts.where(...)/soulprint.where(...) into
+// a native filter-comprehension and returns the resulting CEL string. If the
+// expression does not use the hosts accessor, it returns expr unchanged (hot
+// path). allowHosts=false → touching soulprint.hosts/soulprint.where is a
+// validation error (destiny-pass isolation, orchestration.md §4.1).
 func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error) {
 	if !usesHostsAccessor(expr) {
 		return expr, nil
@@ -76,16 +75,16 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 	root := parsed.Expr()
 
 	if !containsWhereCall(root) {
-		// soulprint.hosts без .where (например, soulprint.hosts.size()).
+		// soulprint.hosts without .where (e.g. soulprint.hosts.size()).
 		if containsHostsAccessor(root) && !allowHosts {
 			return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; недоступен в destiny-проходе)"}
 		}
 		return expr, nil
 	}
 
-	// Есть .where(...). Изоляция: при allowHosts=false обращение к
-	// soulprint.hosts/soulprint.where — ошибка (destiny-проход). generic .where
-	// на не-soulprint-receiver отвергается ниже понятной ошибкой rewriteWhereCall.
+	// There is a .where(...). Isolation: with allowHosts=false, touching
+	// soulprint.hosts/soulprint.where is an error (destiny pass). A generic .where
+	// on a non-soulprint receiver is rejected below with a clear rewriteWhereCall error.
 	if !allowHosts && containsHostsAccessor(root) {
 		return "", &ErrUnsupported{Expr: expr, Feature: "soulprint.hosts (scenario-only; недоступен в destiny-проходе)"}
 	}
@@ -105,10 +104,10 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 	return out, nil
 }
 
-// parseNoMacro парсит выражение парсером БЕЗ макросов: exists/all/map/filter/
-// exists_one/.where остаются plain CallKind (round-trip'абельны Unparse'ом).
-// Используется только в rewrite-фазе; финальная компиляция идёт через env
-// (макросы включены). Ошибка — синтаксическая (понятная, не opaque).
+// parseNoMacro parses the expression WITHOUT macros: exists/all/map/filter/
+// exists_one/.where stay plain CallKind (round-trippable by Unparse). Used only in
+// the rewrite phase; final compilation goes through env (macros on). An error is
+// syntactic (clear, not opaque).
 func (e *Engine) parseNoMacro(expr string) (*ast.AST, error) {
 	parsed, iss := e.noMacroParser.Parse(common.NewTextSource(expr))
 	if iss != nil && len(iss.GetErrors()) > 0 {
@@ -117,9 +116,9 @@ func (e *Engine) parseNoMacro(expr string) (*ast.AST, error) {
 	return parsed, nil
 }
 
-// rewriteNode рекурсивно обходит дерево, переписывая where-вызовы над
-// soulprint.hosts/soulprint.where в filter-comprehension. Прочие узлы копируются
-// как есть (вложенные where внутри предиката отвергаются отдельно — см.
+// rewriteNode recursively walks the tree, rewriting where-calls over
+// soulprint.hosts/soulprint.where into a filter-comprehension. Other nodes are
+// copied as-is (nested where inside a predicate is rejected separately — see
 // buildFilter).
 func (e *Engine) rewriteNode(fac ast.ExprFactory, node ast.Expr, iter string) (ast.Expr, error) {
 	switch node.Kind() {
@@ -170,9 +169,9 @@ func (e *Engine) rewriteNode(fac ast.ExprFactory, node ast.Expr, iter string) (a
 	}
 }
 
-// rewriteWhereCall переписывает один `<receiver>.where(<arg>)` в
-// `<hosts-receiver>.filter(iter, <pred>)`. Валидирует receiver (только
-// soulprint.hosts/soulprint.where) и аргумент (только string-literal).
+// rewriteWhereCall rewrites one `<receiver>.where(<arg>)` into
+// `<hosts-receiver>.filter(iter, <pred>)`. Validates the receiver (only
+// soulprint.hosts/soulprint.where) and the argument (only a string literal).
 func (e *Engine) rewriteWhereCall(fac ast.ExprFactory, node ast.Expr, iter string) (ast.Expr, error) {
 	c := node.AsCall()
 	if len(c.Args()) != 1 {
@@ -206,45 +205,45 @@ func (e *Engine) rewriteWhereCall(fac ast.ExprFactory, node ast.Expr, iter strin
 	return fac.NewMemberCall(node.ID(), "filter", hostsReceiver, fac.NewIdent(0, iter), boundPred), nil
 }
 
-// hostsReceiver приводит receiver where-вызова к выражению-списку хостов:
-//   - soulprint.hosts → как есть;
-//   - soulprint (голый ident) → soulprint.where(...) ≡ soulprint.hosts.where(...):
-//     receiver сводится к soulprint.hosts;
-//   - soulprint.where("<p>") как receiver внешнего .where → раскрывается в filter.
+// hostsReceiver reduces a where-call receiver to a host-list expression:
+//   - soulprint.hosts → as-is;
+//   - soulprint (bare ident) → soulprint.where(...) ≡ soulprint.hosts.where(...):
+//     the receiver reduces to soulprint.hosts;
+//   - soulprint.where("<p>") as an outer .where receiver → expands into filter.
 //
-// прочие receiver-ы — ошибка (generic .where на произвольном list запрещён).
+// Other receivers are an error (a generic .where on an arbitrary list is forbidden).
 func (e *Engine) hostsReceiver(fac ast.ExprFactory, recv ast.Expr, iter string) (ast.Expr, error) {
 	if isSoulprintHosts(recv) {
 		return fac.CopyExpr(recv), nil
 	}
 	if isSoulprintIdent(recv) {
-		// soulprint.where(...) — синоним soulprint.hosts.where(...): receiver
-		// внутреннего where = soulprint, подставляем soulprint.hosts.
+		// soulprint.where(...) is a synonym for soulprint.hosts.where(...): the
+		// inner where's receiver = soulprint, so we substitute soulprint.hosts.
 		return fac.NewSelect(0, fac.NewIdent(0, "soulprint"), "hosts"), nil
 	}
 	if recv.Kind() == ast.CallKind {
 		c := recv.AsCall()
 		if c.IsMemberFunction() && c.FunctionName() == "where" {
-			// Вложенный where как receiver внешнего .where — раскрываем рекурсивно
-			// (он сам обязан сводиться к soulprint.hosts / soulprint).
+			// A nested where as the outer .where receiver — expand recursively
+			// (it must itself reduce to soulprint.hosts / soulprint).
 			return e.rewriteWhereCall(fac, recv, iter)
 		}
 	}
 	return nil, fmt.Errorf(".where(...) разрешён только на soulprint.hosts / soulprint.where(...); generic .where на произвольном списке запрещён")
 }
 
-// qualifyPredicate квалифицирует «голые» поля элемента в предикате (role,
-// covens, os.family, …) в iter.<поле>; идентификаторы известного внешнего
-// контекста (incarnation/input/register/soulprint/essence/vars + сама
-// iter-переменная) не трогаются. Так предикат внутри filter ссылается на поля
-// текущего элемента __host.*, а внешний контекст резолвится из активации.
+// qualifyPredicate qualifies "bare" element fields in the predicate (role,
+// covens, os.family, …) to iter.<field>; identifiers of the known outer context
+// (incarnation/input/register/soulprint/essence/vars + the iter-var itself) are
+// untouched. So the predicate inside filter references the current element's
+// fields __host.*, while the outer context resolves from the activation.
 //
-// bound — iter-переменные вложенных comprehension-макросов
-// (covens.exists(c, …)/role.all(…)/…), объявленные первым аргументом макроса.
-// Внутри тела такого макроса они НЕ квалифицируются (это локальные переменные
-// макроса, а не поля элемента). Поскольку rewrite-фаза парсит без макросов,
-// макрос здесь — обычный member-call: receiver квалифицируем как поле элемента
-// (covens → __host.covens), а тело — с дополнительно связанной переменной.
+// bound holds the iter-vars of nested comprehension macros
+// (covens.exists(c, …)/role.all(…)/…), declared by the macro's first argument.
+// Inside such a macro's body they are NOT qualified (they are the macro's local
+// variables, not element fields). Since the rewrite phase parses macro-free, a
+// macro here is an ordinary member-call: the receiver is qualified as an element
+// field (covens → __host.covens), and the body with the extra bound variable.
 func (e *Engine) qualifyPredicate(fac ast.ExprFactory, node ast.Expr, iter string, bound map[string]bool) ast.Expr {
 	switch node.Kind() {
 	case ast.IdentKind:
@@ -263,11 +262,11 @@ func (e *Engine) qualifyPredicate(fac ast.ExprFactory, node ast.Expr, iter strin
 	case ast.CallKind:
 		c := node.AsCall()
 		if macroVar, body, ok := comprehensionMacro(c); ok {
-			// Тело макроса видит свою iter-переменную как локальную: связываем
-			// её на время обхода body-аргументов.
+			// The macro body sees its iter-var as local: bind it for the duration
+			// of walking the body arguments.
 			inner := withBound(bound, macroVar)
 			args := make([]ast.Expr, len(c.Args()))
-			args[0] = fac.CopyExpr(c.Args()[0]) // iter-var ident — оставляем как есть
+			args[0] = fac.CopyExpr(c.Args()[0]) // iter-var ident — leave as-is
 			for _, i := range body {
 				args[i] = e.qualifyPredicate(fac, c.Args()[i], iter, inner)
 			}
@@ -293,12 +292,12 @@ func (e *Engine) qualifyPredicate(fac ast.ExprFactory, node ast.Expr, iter strin
 	}
 }
 
-// comprehensionMacro распознаёт receiver-style вызов comprehension-макроса
-// (exists/all/exists_one/existsOne/map/filter), первый аргумент которого —
-// ident, объявляющий iter-переменную макроса. Возвращает имя этой переменной и
-// индексы body-аргументов (всё кроме первого: предикат/трансформ). Эти макросы
-// при rewrite-парсе (без макросов) — обычные member-call'ы; финальный
-// env.Compile раскроет их нативно.
+// comprehensionMacro recognizes a receiver-style comprehension-macro call
+// (exists/all/exists_one/existsOne/map/filter) whose first argument is an ident
+// declaring the macro's iter-var. Returns that variable's name and the indices of
+// the body arguments (everything but the first: predicate/transform). Under the
+// macro-free rewrite parse these macros are ordinary member-calls; the final
+// env.Compile expands them natively.
 func comprehensionMacro(c ast.CallExpr) (string, []int, bool) {
 	if !c.IsMemberFunction() {
 		return "", nil, false
@@ -310,7 +309,7 @@ func comprehensionMacro(c ast.CallExpr) (string, []int, bool) {
 		}
 		return c.Args()[0].AsIdent(), []int{1}, true
 	case "map":
-		// map(v, transform) или map(v, filter, transform).
+		// map(v, transform) or map(v, filter, transform).
 		if (len(c.Args()) == 2 || len(c.Args()) == 3) && c.Args()[0].Kind() == ast.IdentKind {
 			body := make([]int, 0, len(c.Args())-1)
 			for i := 1; i < len(c.Args()); i++ {
@@ -322,8 +321,8 @@ func comprehensionMacro(c ast.CallExpr) (string, []int, bool) {
 	return "", nil, false
 }
 
-// withBound возвращает копию bound с добавленным name (немутирующая, чтобы
-// связывание не утекало в соседние ветви обхода).
+// withBound returns a copy of bound with name added (non-mutating, so the binding
+// does not leak into sibling branches of the walk).
 func withBound(bound map[string]bool, name string) map[string]bool {
 	out := make(map[string]bool, len(bound)+1)
 	for k := range bound {
@@ -333,9 +332,9 @@ func withBound(bound map[string]bool, name string) map[string]bool {
 	return out
 }
 
-// predicateContextRoots — корневые идентификаторы внешнего контекста, которые
-// внутри предиката .where(...) НЕ квалифицируются в iter.<…> (они резолвятся из
-// активации). Симметрично contextVars. iter-переменная добавляется отдельно.
+// predicateContextRoots are the outer-context root identifiers that inside a
+// .where(...) predicate are NOT qualified to iter.<…> (they resolve from the
+// activation). Symmetric with contextVars. The iter-var is added separately.
 var predicateContextRoots = map[string]bool{
 	"input":       true,
 	"register":    true,
@@ -345,8 +344,8 @@ var predicateContextRoots = map[string]bool{
 	"vars":        true,
 }
 
-// containsHostsAccessor сообщает, использует ли дерево soulprint.hosts или
-// soulprint.where(...) хоть где-то (для гейта изоляции destiny-прохода).
+// containsHostsAccessor reports whether the tree uses soulprint.hosts or
+// soulprint.where(...) anywhere (for the destiny-pass isolation gate).
 func containsHostsAccessor(root ast.Expr) bool {
 	found := false
 	ast.PostOrderVisit(root, ast.NewExprVisitor(func(e ast.Expr) {
@@ -364,7 +363,7 @@ func containsHostsAccessor(root ast.Expr) bool {
 	return found
 }
 
-// containsWhereCall сообщает, есть ли в дереве хоть один member-call `where`.
+// containsWhereCall reports whether the tree has any `where` member-call.
 func containsWhereCall(root ast.Expr) bool {
 	found := false
 	ast.PostOrderVisit(root, ast.NewExprVisitor(func(e ast.Expr) {
@@ -378,7 +377,7 @@ func containsWhereCall(root ast.Expr) bool {
 	return found
 }
 
-// nestedWhere — есть ли вложенный where-вызов где-либо в дереве предиката.
+// nestedWhere reports whether a nested where-call exists anywhere in the predicate tree.
 func nestedWhere(pred ast.Expr) bool {
 	found := false
 	ast.PostOrderVisit(pred, ast.NewExprVisitor(func(e ast.Expr) {
@@ -392,7 +391,7 @@ func nestedWhere(pred ast.Expr) bool {
 	return found
 }
 
-// isSoulprintHosts — узел вида soulprint.hosts (Select hosts на ident soulprint).
+// isSoulprintHosts — a node of the form soulprint.hosts (Select hosts on ident soulprint).
 func isSoulprintHosts(e ast.Expr) bool {
 	if e.Kind() != ast.SelectKind {
 		return false
@@ -401,17 +400,17 @@ func isSoulprintHosts(e ast.Expr) bool {
 	return !s.IsTestOnly() && s.FieldName() == "hosts" && isSoulprintIdent(s.Operand())
 }
 
-// isSoulprintIdent — узел-идентификатор `soulprint`.
+// isSoulprintIdent — the `soulprint` identifier node.
 func isSoulprintIdent(e ast.Expr) bool {
 	return e.Kind() == ast.IdentKind && e.AsIdent() == "soulprint"
 }
 
-// freeIterVar возвращает гарантированно-свободное имя iter-переменной для
-// filter-comprehension: hostIterPrefix, либо hostIterPrefix+счётчик, если
-// базовое имя встречается среди идентификаторов/полей выражения ИЛИ внутри
-// строковых литералов where-предикатов (коллизия — например автор использовал
-// `__host` как имя поля элемента или как идентификатор контекста). Литералы
-// предикатов парсятся отдельно: их идентификаторы невидимы во внешнем AST.
+// freeIterVar returns a guaranteed-free iter-var name for the
+// filter-comprehension: hostIterPrefix, or hostIterPrefix+counter if the base
+// name occurs among the expression's identifiers/fields OR inside where-predicate
+// string literals (a collision — e.g. the author used `__host` as an element
+// field name or a context identifier). Predicate literals are parsed separately:
+// their identifiers are invisible in the outer AST.
 func freeIterVar(e *Engine, root ast.Expr) string {
 	used := map[string]bool{}
 	collect := func(node ast.Expr) {
@@ -422,8 +421,8 @@ func freeIterVar(e *Engine, root ast.Expr) string {
 			case ast.SelectKind:
 				used[n.AsSelect().FieldName()] = true
 			case ast.CallKind:
-				// Содержимое where-предиката (string-литерал) парсим, чтобы учесть
-				// его идентификаторы при выборе свободной iter-переменной.
+				// Parse the where-predicate content (string literal) to account for
+				// its identifiers when choosing a free iter-var.
 				c := n.AsCall()
 				if c.IsMemberFunction() && c.FunctionName() == "where" && len(c.Args()) == 1 && c.Args()[0].Kind() == ast.LiteralKind {
 					if s, ok := c.Args()[0].AsLiteral().Value().(string); ok {

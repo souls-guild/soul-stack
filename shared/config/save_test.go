@@ -12,9 +12,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Round-trip: Load → SaveToBytes без мутаций → байт в байт совпадает с
-// исходником. Это базовая гарантия preserve comments/order/anchors:
-// для немутированного Document Save отдаёт `doc.source` напрямую.
+// Round-trip: Load → SaveToBytes without mutation → byte-for-byte identical to the
+// source. Base guarantee of preserving comments/order/anchors: for an unmutated
+// Document, Save returns `doc.source` directly.
 func TestSaveKeeper_GoldenRoundTrip(t *testing.T) {
 	path := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, err := os.ReadFile(path)
@@ -69,8 +69,8 @@ func TestSaveSoul_GoldenRoundTrip(t *testing.T) {
 	}
 }
 
-// SaveKeeper(path, doc) пишет в файл, файл существует и совпадает с in-memory
-// рендером. На немутированном документе — тоже byte-identical.
+// SaveKeeper(path, doc) writes to a file; the file exists and matches the in-memory
+// render. On an unmutated document — byte-identical too.
 func TestSaveKeeper_WritesToFile(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -95,8 +95,8 @@ func TestSaveKeeper_WritesToFile(t *testing.T) {
 	}
 }
 
-// Permission-preservation: исходный 0640 → результат 0640 (mode унаследован
-// через Chmod tmp до Write).
+// Permission preservation: source 0640 → result 0640 (mode inherited via Chmod on the
+// tmp before Write).
 func TestSaveKeeper_PreservesPermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission semantics differ on windows")
@@ -122,8 +122,8 @@ func TestSaveKeeper_PreservesPermissions(t *testing.T) {
 	}
 }
 
-// Symlink reject: keeper.yml — symlink, Save отвергает с error и diagnostic
-// `symlink_write_not_supported`. Файл-цель не модифицируется.
+// Symlink reject: keeper.yml is a symlink, Save rejects with an error and diagnostic
+// `symlink_write_not_supported`. The target file is not modified.
 func TestSaveKeeper_SymlinkRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
@@ -164,11 +164,11 @@ func TestSaveKeeper_SymlinkRejected(t *testing.T) {
 	}
 }
 
-// Atomic-rename fault injection: tmp успешно создан, но rename упасть не
-// можем эмулировать встроенными средствами без приватного API. Минимально
-// проверяем инвариант: если до Save исходник существовал, после ошибки
-// Save он сохранён (это покрывается symlink-case и любой ошибкой stage
-// после CreateTemp). Тут — case с непишущей директорией.
+// Atomic-rename fault injection: tmp is created successfully, but we can't emulate a
+// rename failure with built-in means without a private API. We check the minimal
+// invariant: if the source existed before Save, it is preserved after a Save error
+// (covered by the symlink case and any stage error after CreateTemp). Here — the
+// read-only-directory case.
 func TestSaveKeeper_FailedWriteDoesNotCorruptSource(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission semantics differ on windows")
@@ -185,7 +185,7 @@ func TestSaveKeeper_FailedWriteDoesNotCorruptSource(t *testing.T) {
 	if err := os.WriteFile(dst, src, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	// Делаем директорию read-only: CreateTemp упадёт.
+	// Make the directory read-only: CreateTemp will fail.
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestSaveKeeper_FailedWriteDoesNotCorruptSource(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected write error in read-only dir")
 	}
-	// Source должен быть на месте, нетронут.
+	// Source must still be there, untouched.
 	after, statErr := os.ReadFile(dst)
 	if statErr != nil {
 		t.Fatalf("source disappeared after failed save: %v", statErr)
@@ -205,8 +205,8 @@ func TestSaveKeeper_FailedWriteDoesNotCorruptSource(t *testing.T) {
 	}
 }
 
-// PatchKeeper меняет scalar и при последующем Save новый файл содержит новое
-// значение. Mutated-флаг переключает на AST-рендер.
+// PatchKeeper changes a scalar and on the subsequent Save the new file contains the
+// new value. The mutated flag switches to AST render.
 func TestPatchKeeper_ScalarReplace(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -227,8 +227,8 @@ func TestPatchKeeper_ScalarReplace(t *testing.T) {
 	}
 }
 
-// Inline-comment рядом со scalar-узлом, который стал target Patch-а,
-// сохраняется через snapshot+restore (см. PatchKeeper doc-comment).
+// An inline comment next to the scalar node that became the Patch target is preserved
+// via snapshot+restore (see the PatchKeeper doc comment).
 func TestPatchKeeper_PreservesInlineComment(t *testing.T) {
 	src := []byte(`kid: keeper-eu-west-01
 listen:
@@ -267,8 +267,8 @@ vault:
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	// Goccy normalises multi-space to single space before `#`, проверяем
-	// одиночный-пробел-вариант:
+	// Goccy normalises multi-space to single space before `#`, so check the
+	// single-space variant:
 	if !strings.Contains(string(out), "MVP listener") {
 		t.Fatalf("inline comment lost\n%s", out)
 	}
@@ -277,7 +277,7 @@ vault:
 	}
 }
 
-// Несуществующий path → ErrPathNotFound (без молчаливого create-on-write).
+// Non-existent path → ErrPathNotFound (no silent create-on-write).
 func TestPatchKeeper_PathNotFound(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -292,8 +292,8 @@ func TestPatchKeeper_PathNotFound(t *testing.T) {
 	}
 }
 
-// Patch + Save → round_trip_warning (флаг mutated, отличия от исходника
-// почти неизбежны).
+// Patch + Save → round_trip_warning (mutated flag; differences from the source are
+// nearly inevitable).
 func TestPatchKeeper_EmitsRoundTripWarning(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -318,15 +318,15 @@ func TestPatchKeeper_EmitsRoundTripWarning(t *testing.T) {
 	}
 }
 
-// Save-диагностики (round_trip_warning / symlink_write_not_supported /
-// atomic_rename_failed) генерируются на фазе записи, поэтому Phase должна
-// быть PhaseWriteBack, а не PhaseParse.
+// Save diagnostics (round_trip_warning / symlink_write_not_supported /
+// atomic_rename_failed) are generated in the write phase, so Phase must be
+// PhaseWriteBack, not PhaseParse.
 func TestSaveDiagnostics_PhaseWriteBack(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
 	_, doc, _, _ := LoadKeeperFromBytes(srcPath, src, ValidateOptions{})
 
-	// round_trip_warning — через Patch + SaveToBytes.
+	// round_trip_warning — via Patch + SaveToBytes.
 	if err := PatchKeeper(doc, "$.kid", "keeper-new"); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestSaveDiagnostics_PhaseWriteBack(t *testing.T) {
 		t.Fatalf("expected round_trip_warning diagnostic after mutation, got: %+v", warns)
 	}
 
-	// symlink_write_not_supported — через SaveKeeper на symlink.
+	// symlink_write_not_supported — via SaveKeeper on a symlink.
 	if runtime.GOOS != "windows" {
 		dir := t.TempDir()
 		target := filepath.Join(dir, "real.yml")
@@ -374,7 +374,7 @@ func TestSaveDiagnostics_PhaseWriteBack(t *testing.T) {
 	}
 }
 
-// PatchSoul-вариант: проверка симметрии API на soul.yml.
+// PatchSoul variant: checks API symmetry on soul.yml.
 func TestPatchSoul_ScalarReplace(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/soul/soul.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -392,7 +392,7 @@ func TestPatchSoul_ScalarReplace(t *testing.T) {
 	}
 }
 
-// Nil-Document → ошибка, не panic.
+// Nil Document → error, not panic.
 func TestSave_NilDocument(t *testing.T) {
 	if _, _, err := SaveKeeperToBytes(nil); err == nil {
 		t.Fatalf("expected error for nil doc")
@@ -402,10 +402,9 @@ func TestSave_NilDocument(t *testing.T) {
 	}
 }
 
-// CG1 — пустой / whitespace-only / без `$`-префикса yaml-path должен
-// отвергаться явным error-ом ДО вызова goccy `PathString`+`FilterFile`,
-// иначе goccy улетает в SIGSEGV (`path.go:491`). Regression-тест к bug,
-// найденному qa.1.
+// CG1 — an empty / whitespace-only / no-`$`-prefix yaml-path must be rejected with an
+// explicit error BEFORE calling goccy `PathString`+`FilterFile`, else goccy hits a
+// SIGSEGV (`path.go:491`). Regression test for a bug found by qa.1.
 func TestPatchKeeper_InvalidPathRejected(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -430,16 +429,16 @@ func TestPatchKeeper_InvalidPathRejected(t *testing.T) {
 	}
 }
 
-// CG2 — non-scalar target (целый mapping/sequence) reject-ается с error,
-// содержащим path и тип ноды. Regression-тест к bug, найденному qa.1.
-// Дополнительно: после неудачного Patch документ не помечен mutated,
-// SaveToBytes отдаёт byte-identical с source.
+// CG2 — a non-scalar target (a whole mapping/sequence) is rejected with an error
+// containing the path and node type. Regression test for a bug found by qa.1.
+// Additionally: after a failed Patch the document is not marked mutated, and
+// SaveToBytes returns byte-identical to source.
 func TestPatchKeeper_RejectNonScalarTarget(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
 	_, doc, _, _ := LoadKeeperFromBytes(srcPath, src, ValidateOptions{})
 
-	// $.listen — целый mapping (grpc/openapi/mcp/metrics), не scalar.
+	// $.listen — a whole mapping (grpc/openapi/mcp/metrics), not a scalar.
 	err := PatchKeeper(doc, "$.listen", map[string]any{"grpc": "x"})
 	if err == nil {
 		t.Fatalf("expected reject for non-scalar target, got nil")
@@ -454,12 +453,12 @@ func TestPatchKeeper_RejectNonScalarTarget(t *testing.T) {
 		t.Fatalf("expected error code 'non_scalar_patch_target' in error message, got: %v", err)
 	}
 
-	// Sequence-target — $.services тоже не scalar.
+	// Sequence target — $.services is not a scalar either.
 	err = PatchSoul_AsKeeper_sequenceCheck(t, doc)
 	_ = err
-	// (sanity: реальный sequence-кейс — на soul.yml через PatchSoul ниже)
+	// (sanity: the real sequence case — on soul.yml via PatchSoul below)
 
-	// После failed Patch — byte-identical Save.
+	// After a failed Patch — byte-identical Save.
 	out, warns, saveErr := SaveKeeperToBytes(doc)
 	if saveErr != nil {
 		t.Fatalf("save after failed patch: %v", saveErr)
@@ -473,8 +472,8 @@ func TestPatchKeeper_RejectNonScalarTarget(t *testing.T) {
 	}
 }
 
-// Хелпер: на soul.yml есть sequence `$.keeper.endpoints`. Проверяем reject
-// non-scalar для sequence-target отдельно.
+// Helper: soul.yml has a sequence `$.keeper.endpoints`. Check the non-scalar reject
+// for a sequence target separately.
 func PatchSoul_AsKeeper_sequenceCheck(t *testing.T, _ *Document) error {
 	t.Helper()
 	srcPath := filepath.FromSlash("../../examples/soul/soul.yml")
@@ -491,8 +490,8 @@ func PatchSoul_AsKeeper_sequenceCheck(t *testing.T, _ *Document) error {
 	return err
 }
 
-// CG3 — конкурентные Save на разные файлы из одного doc — race detector чист,
-// файлы байт-идентичны исходнику (немутированный doc → source).
+// CG3 — concurrent Saves to different files from one doc — race detector clean, files
+// byte-identical to the source (unmutated doc → source).
 func TestSave_ConcurrentDifferentFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file semantics differ on windows")
@@ -547,8 +546,8 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-// CG4 — после failed Patch (invalid path) документ не помечен mutated и
-// SaveToBytes отдаёт byte-identical с source.
+// CG4 — after a failed Patch (invalid path) the document is not marked mutated and
+// SaveToBytes returns byte-identical to source.
 func TestPatchKeeper_FailedPatchPreservesByteIdentity(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -577,9 +576,9 @@ func TestPatchKeeper_FailedPatchPreservesByteIdentity(t *testing.T) {
 	}
 }
 
-// CG5 — Load → Patch → SaveToBytes → LoadFromBytes повторно без parse errors.
-// Гарантирует, что AST-рендер после мутации остаётся валидным YAML
-// в смысле full Load-pipeline (parse + schema + semantic).
+// CG5 — Load → Patch → SaveToBytes → LoadFromBytes again without parse errors.
+// Guarantees the AST render after mutation stays valid YAML in the full Load pipeline
+// sense (parse + schema + semantic).
 func TestPatchKeeper_RoundTripReloadable(t *testing.T) {
 	srcPath := filepath.FromSlash("../../examples/keeper/keeper.yml")
 	src, _ := os.ReadFile(srcPath)
@@ -609,15 +608,15 @@ func TestPatchKeeper_RoundTripReloadable(t *testing.T) {
 	}
 }
 
-// CG6 — Patch на документ с anchor/alias. Фиксируем реальное поведение
-// goccy: anchor — это сам "mapping value" узел (block-anchor над mapping),
-// resolve через `$.listen.grpc.addr` упирается в anchor-узел и
-// возвращает ошибку «expected node type is map or map value. but got
-// Anchor». Это не наша регрессия, а свойство goccy/go-yaml v1.19 —
-// фиксируем явно, чтобы regression-тест поймал, если поведение изменится.
+// CG6 — Patch on a document with an anchor/alias. We pin goccy's real behaviour: the
+// anchor is the "mapping value" node itself (a block anchor over a mapping), so
+// resolving `$.listen.grpc.addr` hits the anchor node and returns the error "expected
+// node type is map or map value. but got Anchor". This is not our regression but a
+// property of goccy/go-yaml v1.19 — pinned explicitly so the regression test catches a
+// behaviour change.
 //
-// Что важно проверить с нашей стороны: ошибка обработана через
-// fmt.Errorf, без SIGSEGV и без mutated=true.
+// What matters to check on our side: the error is handled via fmt.Errorf, without
+// SIGSEGV and without mutated=true.
 func TestPatchKeeper_AnchorPathHandledCleanly(t *testing.T) {
 	src := []byte(`kid: keeper-anchor-fixture
 listen:
@@ -653,7 +652,7 @@ vault:
 	if err == nil {
 		t.Fatalf("expected resolve error for path under anchor (current goccy v1.19 behaviour)")
 	}
-	// После failed Patch документ не помечен mutated → byte-identical Save.
+	// After a failed Patch the document is not marked mutated → byte-identical Save.
 	out, warns, saveErr := SaveKeeperToBytes(doc)
 	if saveErr != nil {
 		t.Fatalf("save after failed anchor patch: %v", saveErr)
@@ -667,8 +666,8 @@ vault:
 	}
 }
 
-// CG7 — permissions 0o600 / 0o400 preserved. Расширение существующего
-// TestSaveKeeper_PreservesPermissions на более узкие mode.
+// CG7 — permissions 0o600 / 0o400 preserved. Extends the existing
+// TestSaveKeeper_PreservesPermissions to tighter modes.
 func TestSaveKeeper_PreservesPermissions_TighterModes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission semantics differ on windows")
@@ -686,8 +685,8 @@ func TestSaveKeeper_PreservesPermissions_TighterModes(t *testing.T) {
 			if err := os.WriteFile(dst, src, mode); err != nil {
 				t.Fatal(err)
 			}
-			// 0o400 read-only: writeFileAtomically делает Chmod tmp,
-			// потом Rename. Rename работает по правам директории, не файла.
+			// 0o400 read-only: writeFileAtomically does Chmod on the tmp, then
+			// Rename. Rename works by directory permissions, not the file's.
 			if _, err := SaveKeeper(dst, doc); err != nil {
 				t.Fatalf("save with mode %v: %v", mode, err)
 			}
@@ -702,9 +701,9 @@ func TestSaveKeeper_PreservesPermissions_TighterModes(t *testing.T) {
 	}
 }
 
-// CG8 — dangling symlink (target не существует): Save должен reject-ить
-// с error и diagnostic `symlink_write_not_supported`. Lstat обнаружит
-// симлинк, не следуя ему.
+// CG8 — dangling symlink (target doesn't exist): Save must reject with an error and
+// diagnostic `symlink_write_not_supported`. Lstat detects the symlink without
+// following it.
 func TestSaveKeeper_DanglingSymlinkRejected(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
@@ -715,7 +714,7 @@ func TestSaveKeeper_DanglingSymlinkRejected(t *testing.T) {
 
 	dir := t.TempDir()
 	link := filepath.Join(dir, "keeper.yml")
-	// Цель симлинка намеренно не существует.
+	// The symlink target intentionally doesn't exist.
 	if err := os.Symlink(filepath.Join(dir, "nonexistent.yml"), link); err != nil {
 		t.Fatal(err)
 	}

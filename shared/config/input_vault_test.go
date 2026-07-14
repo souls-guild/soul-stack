@@ -7,7 +7,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestMatchesVaultScope — prefix-glob и точное совпадение.
+// TestMatchesVaultScope — prefix-glob and exact match.
 func TestMatchesVaultScope(t *testing.T) {
 	cases := []struct {
 		scope, logical string
@@ -17,9 +17,9 @@ func TestMatchesVaultScope(t *testing.T) {
 		{"secret/services/redis/*", "secret/services/redis/", true},
 		{"secret/services/redis/*", "secret/services/postgres/prod", false},
 		{"secret/services/redis/*", "secret/keeper/jwt-signing-key", false},
-		{"secret/services/redis/prod", "secret/services/redis/prod", true}, // точное
+		{"secret/services/redis/prod", "secret/services/redis/prod", true}, // exact
 		{"secret/services/redis/prod", "secret/services/redis/prod2", false},
-		{"", "secret/anything", false}, // пустой scope не матчит ничего
+		{"", "secret/anything", false}, // empty scope matches nothing
 	}
 	for _, c := range cases {
 		if got := MatchesVaultScope(c.scope, c.logical); got != c.want {
@@ -28,14 +28,15 @@ func TestMatchesVaultScope(t *testing.T) {
 	}
 }
 
-// TestDeniedByVaultFloor — system-floor безусловен, extra дополняет.
+// TestDeniedByVaultFloor — the system floor is unconditional, extra adds to it.
 //
-// DeniedByVaultFloor — чистая prefix-проверка по УЖЕ нормализованному пути:
-// нормализация (схлоп `//`, reject `.`/`..`) — ответственность vault.ParseRef
-// выше по стеку (Soul-safe shared/config без vault-клиента). Здесь это и
-// фиксируется: нормализованные эквиваленты обходных путей floor-ом ловятся, а
-// сырой ненормализованный `secret//keeper/x` сам по себе НЕ матчит — поэтому
-// без нормализации в ParseRef был бы обход (см. parseref_test, security-regress).
+// DeniedByVaultFloor is a pure prefix check over an ALREADY-normalized path:
+// normalization (collapse `//`, reject `.`/`..`) is vault.ParseRef's job higher
+// up the stack (Soul-safe shared/config with no vault client). This pins that:
+// normalized equivalents of bypass paths are caught by the floor, while a raw
+// un-normalized `secret//keeper/x` does NOT match on its own — so without
+// normalization in ParseRef there would be a bypass (see parseref_test,
+// security-regress).
 func TestDeniedByVaultFloor(t *testing.T) {
 	cases := []struct {
 		logical string
@@ -44,12 +45,12 @@ func TestDeniedByVaultFloor(t *testing.T) {
 	}{
 		{"secret/keeper/jwt-signing-key", nil, true},      // system-floor
 		{"secret/internal/anything", nil, true},           // system-floor
-		{"secret/services/redis/prod", nil, false},        // вне floor
-		{"secret/team/x", []string{"secret/team/"}, true}, // config-расширение
-		{"secret/team/x", []string{""}, false},            // пустой extra игнор
-		// нормализованный эквивалент обхода → ловится floor-ом.
+		{"secret/services/redis/prod", nil, false},        // outside floor
+		{"secret/team/x", []string{"secret/team/"}, true}, // config extension
+		{"secret/team/x", []string{""}, false},            // empty extra ignored
+		// normalized bypass equivalent → caught by the floor.
 		{"secret/keeper/x", nil, true},
-		// сырой ненормализованный путь floor НЕ ловит (нормализация — в ParseRef).
+		// a raw un-normalized path is NOT caught by the floor (normalization is in ParseRef).
 		{"secret//keeper/x", nil, false},
 	}
 	for _, c := range cases {
@@ -59,7 +60,7 @@ func TestDeniedByVaultFloor(t *testing.T) {
 	}
 }
 
-// TestValidVaultScopeGlob — форма prefix-glob валидируется.
+// TestValidVaultScopeGlob — the prefix-glob form is validated.
 func TestValidVaultScopeGlob(t *testing.T) {
 	good := []string{"secret/services/redis/*", "secret/x", "kv/team/proj/*"}
 	bad := []string{"", "*", "secret*", "noslash", "/leadingslash"}
@@ -75,9 +76,9 @@ func TestValidVaultScopeGlob(t *testing.T) {
 	}
 }
 
-// fakeResolver — InputVaultResolver, отдающий фикс-значение для ref в scope и
-// эмулирующий правила (default-deny, scope/deny) через тот же чистый код, что
-// keeper-side. Здесь проверяется именно фазовая модель ResolveInputValuesVault.
+// fakeResolver is an InputVaultResolver returning a fixed value for a ref in
+// scope and emulating the rules (default-deny, scope/deny) via the same pure
+// code as keeper-side. This checks the ResolveInputValuesVault phase model.
 func fakeResolver(secret string, deny []string) InputVaultResolver {
 	return func(name string, s *InputSchema, raw string) (any, error) {
 		if s.VaultScope == "" {
@@ -106,7 +107,7 @@ func indexByte(s string, b byte) int {
 	return -1
 }
 
-// TestResolveInputValuesVault_RefInScope — ref в scope резолвится в значение.
+// TestResolveInputValuesVault_RefInScope — a ref in scope resolves to a value.
 func TestResolveInputValuesVault_RefInScope(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -125,8 +126,8 @@ func TestResolveInputValuesVault_RefInScope(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_NoScopeRejects — ref в поле без vault_scope →
-// ошибка (default-deny, форк B), не трактуется как литерал.
+// TestResolveInputValuesVault_NoScopeRejects — a ref in a field without
+// vault_scope → error (default-deny, fork B), not treated as a literal.
 func TestResolveInputValuesVault_NoScopeRejects(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -141,7 +142,7 @@ func TestResolveInputValuesVault_NoScopeRejects(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_OutOfScopeRejects — ref вне scope-prefix → ошибка.
+// TestResolveInputValuesVault_OutOfScopeRejects — a ref outside the scope prefix → error.
 func TestResolveInputValuesVault_OutOfScopeRejects(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -157,8 +158,8 @@ func TestResolveInputValuesVault_OutOfScopeRejects(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_DenyListRejects — ref в scope, но в deny-list →
-// ошибка (даже если scope ошибочно покрывает floor).
+// TestResolveInputValuesVault_DenyListRejects — a ref in scope but on the
+// deny-list → error (even if the scope mistakenly covers the floor).
 func TestResolveInputValuesVault_DenyListRejects(t *testing.T) {
 	schema := schemaFromInput(t, `bad_field:
   type: string
@@ -174,8 +175,8 @@ func TestResolveInputValuesVault_DenyListRejects(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_LiteralPasses — литеральное (не vault:) значение
-// проходит как раньше, резолвер не дёргается.
+// TestResolveInputValuesVault_LiteralPasses — a literal (non-vault:) value
+// passes as before, the resolver is not called.
 func TestResolveInputValuesVault_LiteralPasses(t *testing.T) {
 	schema := schemaFromInput(t, `redis_password:
   type: string
@@ -198,9 +199,9 @@ func TestResolveInputValuesVault_LiteralPasses(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_PatternOnResolved — pattern проверяется на УЖЕ
-// резолвнутом значении: резолвер отдаёт значение, не проходящее pattern → ошибка
-// валидации (а не молчаливый пропуск vault:-строки).
+// TestResolveInputValuesVault_PatternOnResolved — the pattern is checked on the
+// ALREADY-resolved value: the resolver returns a value failing the pattern →
+// validation error (not a silent pass-through of the vault: string).
 func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
@@ -209,7 +210,7 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
   vault_scope: "secret/services/redis/*"
   pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
 `)
-	// резолвер вернул мусор, не матчящий pattern.
+	// the resolver returned garbage not matching the pattern.
 	_, err := ResolveInputValuesVault(schema,
 		map[string]any{"redis_version": "vault:secret/services/redis/prod#version"},
 		fakeResolver("not-a-version", nil))
@@ -217,7 +218,7 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 		t.Fatal("ожидалась ошибка pattern на резолвнутом значении")
 	}
 
-	// резолвер вернул валидную версию → проходит.
+	// the resolver returned a valid version → passes.
 	got, err := ResolveInputValuesVault(schema,
 		map[string]any{"redis_version": "vault:secret/services/redis/prod#version"},
 		fakeResolver("7.2.4", nil))
@@ -229,8 +230,8 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 	}
 }
 
-// scenarioDiags парсит scenario с input:-блоком и возвращает диагностики
-// (для негативных schema-кейсов, где schemaFromInput упал бы на Fatalf).
+// scenarioDiags parses a scenario with an input: block and returns the
+// diagnostics (for negative schema cases where schemaFromInput would Fatalf).
 func scenarioDiags(t *testing.T, inputYAML string) []diag.Diagnostic {
 	t.Helper()
 	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
@@ -241,7 +242,7 @@ func scenarioDiags(t *testing.T, inputYAML string) []diag.Diagnostic {
 	return diags
 }
 
-// TestVaultScope_RequiresSecret — vault_scope на не-secret поле → ошибка.
+// TestVaultScope_RequiresSecret — vault_scope on a non-secret field → error.
 func TestVaultScope_RequiresSecret(t *testing.T) {
 	diags := scenarioDiags(t, `host:
   type: string
@@ -252,7 +253,7 @@ func TestVaultScope_RequiresSecret(t *testing.T) {
 	}
 }
 
-// TestVaultScope_OnNonString — vault_scope на не-string type → applicability-error.
+// TestVaultScope_OnNonString — vault_scope on a non-string type → applicability error.
 func TestVaultScope_OnNonString(t *testing.T) {
 	diags := scenarioDiags(t, `n:
   type: integer
@@ -264,7 +265,7 @@ func TestVaultScope_OnNonString(t *testing.T) {
 	}
 }
 
-// TestVaultScope_InvalidGlob — невалидная форма prefix-glob → ошибка.
+// TestVaultScope_InvalidGlob — an invalid prefix-glob form → error.
 func TestVaultScope_InvalidGlob(t *testing.T) {
 	diags := scenarioDiags(t, `p:
   type: string
@@ -276,7 +277,7 @@ func TestVaultScope_InvalidGlob(t *testing.T) {
 	}
 }
 
-// TestVaultScope_ValidNoErrors — корректное объявление не даёт ошибок.
+// TestVaultScope_ValidNoErrors — a correct declaration yields no errors.
 func TestVaultScope_ValidNoErrors(t *testing.T) {
 	diags := scenarioDiags(t, `redis_password:
   type: string
@@ -289,8 +290,8 @@ func TestVaultScope_ValidNoErrors(t *testing.T) {
 	}
 }
 
-// TestResolveInputValuesVault_NilResolver — nil-резолвер не трогает vault:-refs
-// (back-compat: путь без vault-клиента); значение проходит как строка.
+// TestResolveInputValuesVault_NilResolver — a nil resolver leaves vault: refs
+// untouched (back-compat: path without a vault client); the value passes as a string.
 func TestResolveInputValuesVault_NilResolver(t *testing.T) {
 	schema := schemaFromInput(t, `note:
   type: string

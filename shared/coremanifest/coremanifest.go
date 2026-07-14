@@ -1,30 +1,30 @@
-// Package coremanifest — статический реестр manifest-деклараций core-модулей.
+// Package coremanifest is the static registry of manifest declarations for core modules.
 //
-// Core-модули (ADR-015) статически встроены в `soul`-бинарь и не лежат на диске
-// рядом с manifest.yaml, как custom-плагины. Но их input-схема всё равно должна
-// быть доступна `soul-lint`-у для офлайн-валидации `params:` каждой задачи
-// destiny/scenario (docs/soul/modules.md → «Core-модули и manifest»).
+// Core modules (ADR-015) are statically compiled into the `soul` binary and do not live
+// on disk next to a manifest.yaml like custom plugins. Yet their input schema must still
+// be available to `soul-lint` for offline validation of each destiny/scenario task's
+// `params:` (docs/soul/modules.md → "Core modules and manifest").
 //
-// Решение (architect, Вариант б2): декларация core-модуля живёт в том же формате
-// `kind: soul_module`, что и custom-manifest (docs/keeper/plugins.md), и
-// эмбедится через go:embed рядом с реестром. Парсер — тот же `shared/plugin`,
-// поэтому в линтере один кодопуть для core и custom манифестов.
+// Decision (architect, variant b2): a core-module declaration uses the same
+// `kind: soul_module` format as a custom manifest (docs/keeper/plugins.md) and is
+// embedded via go:embed next to the registry. The parser is the same `shared/plugin`,
+// so the linter has one code path for both core and custom manifests.
 //
-// Размещение в `shared/` (а не в `soul/`) выбрано из-за изоляции: и `soul`, и
-// `soul-lint` импортируют `shared/`, но НЕ импортируют друг друга и НЕ тянут
-// `keeper`. Если бы реестр жил в экспортируемом soul-пакете, `soul-lint`
-// притянул бы весь soul-модуль (включая coremod-реализации с их рантайм-
-// зависимостями). `shared/coremanifest` зависит только от `shared/plugin` и
-// `shared/diag` — нейтральный слой, компилятор-гарантированная изоляция.
+// Placement in `shared/` (not `soul/`) is for isolation: both `soul` and `soul-lint`
+// import `shared/` but do NOT import each other and do NOT pull in `keeper`. If the
+// registry lived in an exported soul package, `soul-lint` would pull in the whole soul
+// module (including coremod implementations with their runtime dependencies).
+// `shared/coremanifest` depends only on `shared/plugin` and `shared/diag` — a neutral
+// layer with compiler-guaranteed isolation.
 //
-// Manifest-ы описывают **author-facing** input-контракт (то, что оператор пишет
-// в `params:` задачи), а НЕ wire-форму proto-params. Для `core.file.rendered`
-// это `template:`+`vars:` (а не runtime `template_content`+`render_context`,
-// которые Keeper подставляет после рендер-фаз, ADR-010/ADR-012). Иначе линтер
-// ругался бы на корректные destiny, написанные автором.
+// Manifests describe the **author-facing** input contract (what the operator writes in a
+// task's `params:`), NOT the wire form of proto-params. For `core.file.rendered` that is
+// `template:`+`vars:` (not the runtime `template_content`+`render_context` that Keeper
+// substitutes after the render phases, ADR-010/ADR-012). Otherwise the linter would
+// reject valid author-written destiny.
 //
-// Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, ADR-017) добавляются
-// сюда тем же механизмом (тираж H5): новый `<module>.yaml` + строка в All().
+// Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, ADR-017) are added here by the
+// same mechanism (batch H5): a new `<module>.yaml` + a line in All().
 package coremanifest
 
 import (
@@ -39,11 +39,11 @@ import (
 //go:embed *.yaml
 var manifestFS embed.FS
 
-// coreFiles — список embed-файлов core-манифестов. Явный список (а не walk по
-// FS) делает набач core-модулей видимым в коде и ловит «забыли добавить файл в
-// реестр» на этапе ревью, а не в рантайме.
+// coreFiles is the explicit list of embedded core-manifest files. An explicit list
+// (not an FS walk) keeps the set of core modules visible in code and catches a
+// "forgot to add the file to the registry" mistake at review time, not at runtime.
 var coreFiles = []string{
-	// Soul-side core (ADR-015) — статически встроены в `soul`-бинарь.
+	// Soul-side core (ADR-015) — statically compiled into the `soul` binary.
 	"exec.yaml",
 	"file.yaml",
 	"pkg.yaml",
@@ -64,8 +64,8 @@ var coreFiles = []string{
 	"noop.yaml",
 	"module.yaml",
 
-	// Keeper-side core (ADR-017/ADR-044, on: keeper). Имена state выровнены на
-	// фактический dispatch coremod-ов keeper-стороны: core.soul.registered,
+	// Keeper-side core (ADR-017/ADR-044, on: keeper). State names aligned with the
+	// actual dispatch of keeper-side coremods: core.soul.registered,
 	// core.cloud.created/destroyed, core.vault.kv-read, core.choir.present/absent.
 	"soul.yaml",
 	"cloud.yaml",
@@ -73,21 +73,21 @@ var coreFiles = []string{
 	"choir.yaml",
 }
 
-// Registry — иммутабельный набор «имя core-модуля → распарсенный Manifest».
+// Registry is an immutable set of "core-module name → parsed Manifest".
 //
-// Ключ — каноническое имя верхнего уровня без state-суффикса (`core.exec`,
-// `core.file`), симметрично soul/internal/coremod.Registry. State-лукап
-// делается через метод State поверх manifest.Spec.States.
+// The key is the canonical top-level name without a state suffix (`core.exec`,
+// `core.file`), symmetric with soul/internal/coremod.Registry. State lookup is done
+// via the State method over manifest.Spec.States.
 type Registry struct {
 	mods map[string]*plugin.Manifest
 }
 
-// defaultRegistry — синглтон, собранный при первом обращении из embed-файлов.
-// Сборка идемпотентна и без I/O (embed уже в бинаре); паника возможна только
-// при программном расхождении (битый embed-манифест) — это баг сборки, не ввод.
+// defaultRegistry is a singleton built from the embedded files on first access. The
+// build is idempotent and I/O-free (embed is already in the binary); a panic is possible
+// only on a programmer error (a broken embedded manifest) — a build bug, not input.
 var defaultRegistry = mustBuild()
 
-// Default возвращает общий реестр всех core-манифестов. Лукап — O(1).
+// Default returns the shared registry of all core manifests. Lookup is O(1).
 func Default() *Registry { return defaultRegistry }
 
 func mustBuild() *Registry {
@@ -110,15 +110,15 @@ func mustBuild() *Registry {
 	return &Registry{mods: mods}
 }
 
-// Lookup возвращает manifest core-модуля по каноническому имени (`core.exec`)
-// и флаг наличия. Имя — без state-суффикса.
+// Lookup returns a core module's manifest by canonical name (`core.exec`) and a
+// presence flag. The name has no state suffix.
 func (r *Registry) Lookup(module string) (*plugin.Manifest, bool) {
 	m, ok := r.mods[module]
 	return m, ok
 }
 
-// State возвращает декларацию состояния `module.state` (например, `core.exec` +
-// `run`) и флаг наличия. Удобный фасад над Lookup + Spec.States.
+// State returns the state declaration for `module.state` (e.g. `core.exec` + `run`) and
+// a presence flag. A convenience facade over Lookup + Spec.States.
 func (r *Registry) State(module, state string) (plugin.StateDef, bool) {
 	m, ok := r.mods[module]
 	if !ok {
@@ -128,9 +128,9 @@ func (r *Registry) State(module, state string) (plugin.StateDef, bool) {
 	return def, ok
 }
 
-// Names возвращает имена зарегистрированных core-модулей в детерминированном
-// (лексикографическом) порядке. Используется для diagnostic-вывода — стабильный
-// порядок делает сообщения воспроизводимыми между запусками.
+// Names returns the names of registered core modules in deterministic (lexicographic)
+// order. Used for diagnostic output — a stable order makes messages reproducible across
+// runs.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.mods))
 	for k := range r.mods {

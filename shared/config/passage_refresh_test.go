@@ -4,18 +4,18 @@ import (
 	"testing"
 )
 
-// Guard-тесты S2 (ADR-0061 §S2): `refresh_soulprint: true` на core.soul.registered
-// делает шаг PASSAGE-ОПРЕДЕЛЯЮЩИМ эмиттером «roster-refreshed». Любой последующий
-// roster-потребитель (soulprint.hosts / on:[incarnation.name] / soulprint.self.* /
-// опущенный on:) ОБЯЗАН уехать в Passage СТРОГО ПОСЛЕ refresh-шага — иначе он
-// отрендерится по СТАРОМУ (до-роста) roster = silent-wrong-target на разрушительной
-// операции (★ БЛОКЕР ADR-056 §риски: redis-apply на пустом/неполном наборе).
+// Guard tests S2 (ADR-0061 §S2): `refresh_soulprint: true` on core.soul.registered
+// makes the step a PASSAGE-DEFINING "roster-refreshed" emitter. Any subsequent
+// roster consumer (soulprint.hosts / on:[incarnation.name] / soulprint.self.* /
+// omitted on:) MUST move to a Passage STRICTLY AFTER the refresh step — otherwise it
+// renders against the OLD (pre-growth) roster = silent-wrong-target on a destructive
+// operation (★ BLOCKER ADR-056 §risks: redis-apply on an empty/incomplete set).
 
-// --- фикстуры provision→refresh→роль (целевой сценарий ADR-0061) ---
+// --- fixtures provision→refresh→role (target scenario ADR-0061) ---
 
-// refreshThenSoulprintHosts — Passage 0: cloud-provision (keeper) + refresh-шаг;
-// Passage 1: задача, читающая soulprint.hosts в assert. refresh-шаг загоняет
-// потребителя soulprint.hosts в следующий Passage.
+// refreshThenSoulprintHosts — Passage 0: cloud-provision (keeper) + refresh step;
+// Passage 1: a task reading soulprint.hosts in an assert. The refresh step pushes the
+// soulprint.hosts consumer into the next Passage.
 const refreshThenSoulprintHosts = `
 name: create
 state_changes: {}
@@ -38,9 +38,9 @@ tasks:
       cmd: "echo ${ members }"
 `
 
-// refreshThenOnIncarnation — refresh-шаг (keeper) + задача с on:[incarnation.name]
-// (роль на весь выросший roster). on:[incarnation.name] — roster-таргетинг,
-// разрешается из in.Hosts: после refresh обязан видеть новые SID → следующий Passage.
+// refreshThenOnIncarnation — refresh step (keeper) + a task with on:[incarnation.name]
+// (role over the whole grown roster). on:[incarnation.name] is roster targeting,
+// resolved from in.Hosts: after refresh it must see the new SIDs → next Passage.
 const refreshThenOnIncarnation = `
 name: create
 state_changes: {}
@@ -60,9 +60,9 @@ tasks:
       cmd: "redis-server --start"
 `
 
-// refreshThenSoulprintSelf — refresh-шаг + задача, читающая soulprint.self.* в
-// where:. soulprint.self host-вариативно (зависит от того, какие хосты в roster),
-// поэтому это тоже roster-чтение → следующий Passage.
+// refreshThenSoulprintSelf — refresh step + a task reading soulprint.self.* in
+// where:. soulprint.self is host-variant (depends on which hosts are in the roster),
+// so this is also a roster read → next Passage.
 const refreshThenSoulprintSelf = `
 name: create
 state_changes: {}
@@ -83,10 +83,10 @@ tasks:
       cmd: "apt-get update"
 `
 
-// refreshThenOmittedOn — refresh-шаг + задача с ОПУЩЕННЫМ on: (= весь incarnation,
-// весь roster). Опущенный on: — тоже roster-таргетинг (orchestration.md §3:
-// опущенный on: = весь incarnation), значит после refresh обязан уехать в следующий
-// Passage, иначе отработает на старом roster.
+// refreshThenOmittedOn — refresh step + a task with an OMITTED on: (= the whole
+// incarnation, the whole roster). An omitted on: is also roster targeting
+// (orchestration.md §3: omitted on: = the whole incarnation), so after refresh it
+// must move to the next Passage, else it runs on the old roster.
 const refreshThenOmittedOn = `
 name: create
 state_changes: {}
@@ -105,8 +105,8 @@ tasks:
       cmd: "baseline"
 `
 
-// TestStratify_RefreshThenSoulprintHosts — ★ ОСНОВНОЙ КЕЙС S2 (ADR-0061). refresh-шаг
-// (Passage 0) + потребитель soulprint.hosts → РАЗНЫЕ Passage (потребитель в Passage 1).
+// TestStratify_RefreshThenSoulprintHosts — ★ PRIMARY CASE S2 (ADR-0061). refresh step
+// (Passage 0) + soulprint.hosts consumer → DIFFERENT Passages (consumer in Passage 1).
 func TestStratify_RefreshThenSoulprintHosts(t *testing.T) {
 	p := stratify(t, refreshThenSoulprintHosts)
 	if p.Count != 2 {
@@ -120,9 +120,9 @@ func TestStratify_RefreshThenSoulprintHosts(t *testing.T) {
 	}
 }
 
-// TestStratify_RefreshThenOnIncarnation — refresh-шаг + on:[incarnation.name]
-// (roster-таргетинг) → разные Passage. Без этого redis-apply уехал бы в тот же
-// Passage со старым (пустым) roster = silent-wrong-target.
+// TestStratify_RefreshThenOnIncarnation — refresh step + on:[incarnation.name]
+// (roster targeting) → different Passages. Without this, redis-apply would land in
+// the same Passage with the old (empty) roster = silent-wrong-target.
 func TestStratify_RefreshThenOnIncarnation(t *testing.T) {
 	p := stratify(t, refreshThenOnIncarnation)
 	if p.Count != 2 {
@@ -133,8 +133,8 @@ func TestStratify_RefreshThenOnIncarnation(t *testing.T) {
 	}
 }
 
-// TestStratify_RefreshThenSoulprintSelf — refresh-шаг + soulprint.self.* в where:
-// (host-вариативное чтение) → разные Passage.
+// TestStratify_RefreshThenSoulprintSelf — refresh step + soulprint.self.* in where:
+// (host-variant read) → different Passages.
 func TestStratify_RefreshThenSoulprintSelf(t *testing.T) {
 	p := stratify(t, refreshThenSoulprintSelf)
 	if p.Count != 2 {
@@ -145,9 +145,10 @@ func TestStratify_RefreshThenSoulprintSelf(t *testing.T) {
 	}
 }
 
-// TestStratify_RefreshThenOmittedOn — refresh-шаг + задача с ОПУЩЕННЫМ on: (весь
-// incarnation = весь roster) → разные Passage. Опущенный on: — roster-таргетинг,
-// активируется как refresh-потребитель ТОЛЬКО при наличии refresh-эмиттера в плане.
+// TestStratify_RefreshThenOmittedOn — refresh step + a task with an OMITTED on: (the
+// whole incarnation = the whole roster) → different Passages. An omitted on: is
+// roster targeting, activated as a refresh consumer ONLY when a refresh emitter is in
+// the plan.
 func TestStratify_RefreshThenOmittedOn(t *testing.T) {
 	p := stratify(t, refreshThenOmittedOn)
 	if p.Count != 2 {
@@ -158,11 +159,11 @@ func TestStratify_RefreshThenOmittedOn(t *testing.T) {
 	}
 }
 
-// TestStratify_NoRefreshConsumerSamePassage — ★ КОНТРОЛЬ (опечатка/отсутствие
-// refresh). Тот же план, но БЕЗ refresh_soulprint: true на регистрирующем шаге.
-// roster-потребитель НЕ обязан расщепляться по roster-оси → оба в Passage 0
-// (refresh-границы нет). Регресс «refresh-граница активна без флага» краснит этот
-// тест: roster-потребитель ложно уехал бы в Passage 1.
+// TestStratify_NoRefreshConsumerSamePassage — ★ CONTROL (typo/missing refresh). The
+// same plan but WITHOUT refresh_soulprint: true on the registering step. The roster
+// consumer need not split along the roster axis → both in Passage 0 (no refresh
+// boundary). A "refresh boundary active without the flag" regression reddens this
+// test: the roster consumer would falsely move to Passage 1.
 func TestStratify_NoRefreshConsumerSamePassage(t *testing.T) {
 	const src = `
 name: create
@@ -194,9 +195,9 @@ tasks:
 	}
 }
 
-// TestStratify_RefreshFalseNotEmitter — refresh_soulprint: false (явный false) НЕ
-// делает шаг refresh-эмиттером → roster-потребитель в том же Passage. Ловит регресс
-// «любой refresh_soulprint-ключ = эмиттер» (надо именно true).
+// TestStratify_RefreshFalseNotEmitter — refresh_soulprint: false (explicit false)
+// does NOT make the step a refresh emitter → roster consumer in the same Passage.
+// Catches the "any refresh_soulprint key = emitter" regression (must be exactly true).
 func TestStratify_RefreshFalseNotEmitter(t *testing.T) {
 	const src = `
 name: create
@@ -222,10 +223,10 @@ tasks:
 	}
 }
 
-// TestStratify_RefreshBeforeAndAfterRoster — refresh-шаг МЕЖДУ двумя roster-
-// потребителями: первый (ДО refresh) в Passage 0, второй (ПОСЛЕ refresh) в Passage 1.
-// Доказывает, что refresh-граница работает по program-order: только ПОСЛЕДУЮЩИЕ
-// потребители расщепляются, предшествующие — нет.
+// TestStratify_RefreshBeforeAndAfterRoster — refresh step BETWEEN two roster
+// consumers: the first (BEFORE refresh) in Passage 0, the second (AFTER refresh) in
+// Passage 1. Proves the refresh boundary works by program order: only SUBSEQUENT
+// consumers split, preceding ones don't.
 func TestStratify_RefreshBeforeAndAfterRoster(t *testing.T) {
 	const src = `
 name: create
@@ -263,9 +264,9 @@ tasks:
 	}
 }
 
-// TestStratify_RefreshThenAssertTopology — assert: топологии (soulprint.hosts в
-// that[]) ПОСЛЕ refresh-шага → Passage 1. assert вычисляется Keeper-side на render
-// (как where:), поэтому обязан видеть выросший roster (ADR-0061 §детерминизм).
+// TestStratify_RefreshThenAssertTopology — a topology assert (soulprint.hosts in
+// that[]) AFTER the refresh step → Passage 1. An assert is evaluated Keeper-side at
+// render (like where:), so it must see the grown roster (ADR-0061 §determinism).
 func TestStratify_RefreshThenAssertTopology(t *testing.T) {
 	const src = `
 name: create
@@ -293,22 +294,23 @@ tasks:
 	}
 }
 
-// TestStratify_RefreshIsRosterAxisNotRegisterEdges — ★ ИНВАРИАНТ ОСИ (ADR-0061 §S2):
-// refresh-граница — ОТДЕЛЬНАЯ ось от register, она НЕ вводит cross-task register-
-// рёбер. Доказываем напрямую сравнением множеств: на refresh-фикстуре, где Passage-
-// расщепление вызвано ИСКЛЮЧИТЕЛЬНО roster-границей (soulprint.hosts-потребитель
-// после refresh-шага), множество passage-определяющих cross-task register-reads
-// (taskRegisterReads/collectTaskReads) у КАЖДОЙ задачи ПУСТО — то есть Count==2 даёт
-// именно roster-ось, а не register-граф. Регресс «refresh-логика протекла в
-// register-reads» (например, refresh-эмиттер ошибочно стал источником register-
-// ребра) краснит этот тест: появится непустой read-set / register-ребро.
+// TestStratify_RefreshIsRosterAxisNotRegisterEdges — ★ AXIS INVARIANT (ADR-0061 §S2):
+// the refresh boundary is a SEPARATE axis from register; it does NOT introduce
+// cross-task register edges. Proven directly by set comparison: on a refresh fixture
+// where the Passage split is caused SOLELY by the roster boundary (a soulprint.hosts
+// consumer after the refresh step), the set of passage-defining cross-task
+// register-reads (taskRegisterReads/collectTaskReads) is EMPTY for EVERY task — i.e.
+// Count==2 comes from the roster axis, not the register graph. A "refresh logic
+// leaked into register-reads" regression (e.g. the refresh emitter wrongly becoming a
+// register-edge source) reddens this test: a non-empty read-set / register edge
+// appears.
 //
-// reads⊆refs ADR-056 при этом тривиально держится (∅ ⊆ refs): refresh не добавляет
-// register-ссылок, поэтому существующий register-инвариант не затрагивается.
+// reads⊆refs (ADR-056) holds trivially here (∅ ⊆ refs): refresh adds no register
+// references, so the existing register invariant is untouched.
 func TestStratify_RefreshIsRosterAxisNotRegisterEdges(t *testing.T) {
-	// refresh-шаг (register: roster — собственный register, не cross-task) +
-	// roster-потребитель (soulprint.hosts). Никаких cross-task register-ссылок:
-	// расщепление обязано прийти ТОЛЬКО от roster-границы.
+	// refresh step (register: roster — its own register, not cross-task) +
+	// roster consumer (soulprint.hosts). No cross-task register references: the split
+	// must come ONLY from the roster boundary.
 	const src = `
 name: create
 state_changes: {}
@@ -340,17 +342,17 @@ tasks:
 		}
 	}
 
-	// ★ Прямое сравнение множеств: ни одна задача НЕ имеет cross-task register-reads.
-	// Множество passage-определяющих register-reads ПУСТО на обеих задачах — значит
-	// register-рёбер нет, и расщепление целиком на roster-оси.
+	// ★ Direct set comparison: no task has cross-task register-reads. The set of
+	// passage-defining register-reads is EMPTY on both tasks — so there are no
+	// register edges, and the split is entirely on the roster axis.
 	emitter := emitterIndex(m.Tasks)
 	for i := range m.Tasks {
 		reads := taskRegisterReads(&m.Tasks[i])
 		if len(reads) != 0 {
 			t.Errorf("task #%d имеет cross-task register-reads %v — refresh-фикстура должна расщепляться ТОЛЬКО roster-границей (register-рёбер быть не должно)", i, reads)
 		}
-		// reads⊆refs: каждый прочитанный register обязан иметь эмиттер (здесь reads
-		// пуст, проверка тривиальна, но фиксирует инвариант на случай регресса).
+		// reads⊆refs: every read register must have an emitter (here reads is empty,
+		// the check is trivial, but it pins the invariant against regression).
 		for _, name := range reads {
 			if _, ok := emitter[name]; !ok {
 				t.Errorf("task #%d читает register %q без эмиттера — reads⊄refs", i, name)
@@ -358,7 +360,7 @@ tasks:
 		}
 	}
 
-	// Stratify не падает (register-граф чист) и даёт ровно roster-расщепление.
+	// Stratify does not fail (register graph is clean) and yields exactly the roster split.
 	p, serr := Stratify(m.Tasks)
 	if serr != nil {
 		t.Fatalf("Stratify: %v (refresh-граница не должна валить чистый register-граф)", serr)
@@ -366,17 +368,17 @@ tasks:
 	if p.Count != 2 {
 		t.Fatalf("Count = %d, want 2 (расщепление на roster-оси)", p.Count)
 	}
-	// Без refresh-границы (refreshEmitters пуст) тот же план не расщепился бы:
-	// контрольно доказываем, что Count==2 — заслуга именно roster-оси.
+	// Without the refresh boundary (refreshEmitters empty) the same plan would not
+	// split: a control proof that Count==2 is owed to the roster axis.
 	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
 		t.Fatalf("passages = %v, want [0 1] (roster-потребитель строго после refresh)", p.TaskPassage)
 	}
 }
 
-// TestHasRefreshEmitter — детектор «план провиженит roster mid-run» (ADR-0061
-// amendment, no_hosts-bypass класс (б)). true ТОЛЬКО при core.soul.registered с
-// литеральным refresh_soulprint: true; смежные формы (без флага / false / другой
-// keeper-модуль / пустой план) → false. Чистая функция над плоским планом.
+// TestHasRefreshEmitter — detector for "the plan provisions the roster mid-run"
+// (ADR-0061 amendment, no_hosts-bypass class (b)). true ONLY for core.soul.registered
+// with a literal refresh_soulprint: true; adjacent forms (no flag / false / another
+// keeper module / empty plan) → false. A pure function over a flat plan.
 func TestHasRefreshEmitter(t *testing.T) {
 	tasks := func(t *testing.T, src string) []Task {
 		t.Helper()
@@ -387,7 +389,7 @@ func TestHasRefreshEmitter(t *testing.T) {
 		return m.Tasks
 	}
 
-	// Эталон: refresh-эмиттер + host-задача деплоя (целевой mixed-план bypass-а).
+	// Baseline: refresh emitter + a host deploy task (the target mixed bypass plan).
 	const mixedWithRefresh = `
 name: create
 state_changes: {}
@@ -429,8 +431,8 @@ tasks:
       sid: "host-a.example.com"
       coven: ["${ incarnation.name }"]
 `
-	// Другой keeper-модуль с одноимённым param — НЕ эмиттер (модуль-носитель только
-	// core.soul.registered).
+	// Another keeper module with a same-named param — NOT an emitter (the carrier
+	// module is only core.soul.registered).
 	const otherKeeperModule = `
 name: create
 state_changes: {}
@@ -453,7 +455,7 @@ tasks:
     params:
       cmd: "redis-server"
 `
-	// refresh-эмиттер, вложенный в block: — рекурсивно распознаётся.
+	// A refresh emitter nested in block: — recognized recursively.
 	const refreshInBlock = `
 name: create
 state_changes: {}
@@ -489,8 +491,8 @@ tasks:
 		})
 	}
 
-	// Пустой план — отдельно (LoadScenarioManifestFromBytes требует tasks непустым,
-	// поэтому строим срез напрямую).
+	// Empty plan — separately (LoadScenarioManifestFromBytes requires tasks non-empty,
+	// so build the slice directly).
 	if HasRefreshEmitter(nil) {
 		t.Error("HasRefreshEmitter(nil) = true, want false")
 	}

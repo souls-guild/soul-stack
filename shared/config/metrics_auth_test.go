@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// keeperBaseWithMetricsAuth собирает минимально-валидный keeper.yml с
-// произвольным телом блока metrics: для тестов валидации basic-auth.
+// keeperBaseWithMetricsAuth assembles a minimally valid keeper.yml with an
+// arbitrary metrics: block body for basic-auth validation tests.
 func keeperBaseWithMetricsAuth(metricsBlock string) []byte {
 	return []byte(`kid: keeper-eu-west-01
 listen:
@@ -84,7 +84,7 @@ func TestMetricsBasicAuth_EnabledMissingPasswordRef(t *testing.T) {
 }
 
 func TestMetricsBasicAuth_PasswordRefNotVaultRef(t *testing.T) {
-	// Plaintext-пароль вместо vault-ref запрещён.
+	// A plaintext password instead of a vault-ref is forbidden.
 	src := keeperBaseWithMetricsAuth(`metrics:
   auth:
     basic:

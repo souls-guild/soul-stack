@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// plugins.soul_modules[] — каталог SoulModule-плагинов (эпик core.module.installed,
-// S1): та же PluginCatalogEntry, что у cloud_drivers/ssh_providers; source/ref
-// валидируются на резолве (plugingit), конфиг-фаза — parse + unknown_key.
+// plugins.soul_modules[] — the SoulModule plugin catalog (core.module.installed epic,
+// S1): the same PluginCatalogEntry as cloud_drivers/ssh_providers; source/ref are
+// validated at resolve (plugingit), config phase — parse + unknown_key.
 func TestPluginsCatalog_SoulModulesParsed(t *testing.T) {
 	src := keeperBaseRequired + `plugins:
   soul_modules:

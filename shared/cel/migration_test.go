@@ -14,7 +14,7 @@ func newMigrationEngine(t *testing.T) *Engine {
 	return e
 }
 
-// TestMigration_StateAccessible — `state.<path>` доступен и резолвится из
+// TestMigration_StateAccessible — `state.<path>` is available and resolves from
 // Vars.State.
 func TestMigration_StateAccessible(t *testing.T) {
 	e := newMigrationEngine(t)
@@ -30,7 +30,7 @@ func TestMigration_StateAccessible(t *testing.T) {
 }
 
 // TestMigration_ContextVarsUndeclared — register/soulprint/essence/input/
-// incarnation/vars НЕ объявлены в migration-env: обращение → compile-ошибка
+// incarnation/vars are NOT declared in the migration env: access → compile-error
 // undeclared reference (sandbox by undeclaration, ADR-019).
 func TestMigration_ContextVarsUndeclared(t *testing.T) {
 	e := newMigrationEngine(t)
@@ -50,16 +50,16 @@ func TestMigration_ContextVarsUndeclared(t *testing.T) {
 	}
 }
 
-// TestMigration_VarsStillUndeclared_AfterVarLayer — фича var→var (VarRefs +
-// resolveVarLayer, scenario/destiny-фаза) НЕ задевает migration-CEL (кейс #11):
-// `vars` остаётся НЕобъявленной в migration-env, поэтому `${ vars.x }` в set.value
-// → compile-error undeclared reference, как и до фичи. VarRefs живёт в обычном
-// Engine (New), не в migration-Engine; var-слой существует только в scenario/
-// destiny-проходе. Guard-тест против регресса «var→var просочился в миграцию».
+// TestMigration_VarsStillUndeclared_AfterVarLayer — the var→var feature (VarRefs +
+// resolveVarLayer, scenario/destiny phase) does NOT touch migration-CEL (case #11):
+// `vars` stays undeclared in the migration env, so `${ vars.x }` in set.value →
+// compile-error undeclared reference, as before the feature. VarRefs lives in the
+// regular Engine (New), not the migration Engine; the var layer exists only in the
+// scenario/destiny pass. Guard test against a "var→var leaked into migration" regression.
 func TestMigration_VarsStillUndeclared_AfterVarLayer(t *testing.T) {
 	e := newMigrationEngine(t)
-	// Интерполяция `${ vars.x }` в set.value: блок `vars.x` компилируется в
-	// migration-env, где `vars` не объявлена → ErrCompile (undeclared).
+	// Interpolation `${ vars.x }` in set.value: the `vars.x` block compiles in the
+	// migration env, where `vars` is not declared → ErrCompile (undeclared).
 	_, err := e.EvalInterpolation("${ vars.x }", Vars{State: map[string]any{}})
 	var ce *ErrCompile
 	if !errors.As(err, &ce) {
@@ -67,8 +67,8 @@ func TestMigration_VarsStillUndeclared_AfterVarLayer(t *testing.T) {
 	}
 }
 
-// TestMigration_VaultGuarded — vault() без KVReader отсекается guard-ом как
-// ErrUnsupported (а не undeclared): миграция не тянет секреты.
+// TestMigration_VaultGuarded — vault() without a KVReader is cut by the guard as
+// ErrUnsupported (not undeclared): a migration doesn't pull secrets.
 func TestMigration_VaultGuarded(t *testing.T) {
 	e := newMigrationEngine(t)
 	_, err := e.EvalExpression("vault('secret/x').password", Vars{State: map[string]any{}})
@@ -78,8 +78,8 @@ func TestMigration_VaultGuarded(t *testing.T) {
 	}
 }
 
-// TestMigration_NowGuarded — now() отсекается guard-ом (воспроизводимость
-// тестов миграций).
+// TestMigration_NowGuarded — now() is cut by the guard (reproducibility of
+// migration tests).
 func TestMigration_NowGuarded(t *testing.T) {
 	e := newMigrationEngine(t)
 	_, err := e.EvalExpression("now()", Vars{State: map[string]any{}})
@@ -89,8 +89,8 @@ func TestMigration_NowGuarded(t *testing.T) {
 	}
 }
 
-// TestMigration_LoopVarInScope — foreach-переменная (`as:`) объявляется тем же
-// механизмом Vars.Loop/Extend, что и loop:-переменные: `<as>` виден в выражении.
+// TestMigration_LoopVarInScope — the foreach variable (`as:`) is declared by the
+// same Vars.Loop/Extend mechanism as loop: variables: `<as>` is visible in the expression.
 func TestMigration_LoopVarInScope(t *testing.T) {
 	e := newMigrationEngine(t)
 	out, err := e.EvalExpression("user_name + '-suffix'", Vars{
@@ -105,9 +105,9 @@ func TestMigration_LoopVarInScope(t *testing.T) {
 	}
 }
 
-// TestMigration_StateUndeclaredInRegularEngine — симметрично: обычный (не
-// migration) Engine НЕ объявляет `state`, чтобы Vars.State не протекал в
-// scenario/destiny-контекст.
+// TestMigration_StateUndeclaredInRegularEngine — symmetric: the regular (non-
+// migration) Engine does NOT declare `state`, so Vars.State doesn't leak into the
+// scenario/destiny context.
 func TestMigration_StateUndeclaredInRegularEngine(t *testing.T) {
 	e := newEngine(t)
 	_, err := e.EvalExpression("state.foo", Vars{State: map[string]any{"foo": 1}})
@@ -117,10 +117,10 @@ func TestMigration_StateUndeclaredInRegularEngine(t *testing.T) {
 	}
 }
 
-// TestMigration_WithVaultRejected — WithVault(kv) в migration-режиме отсекается
-// конструктором (ADR-019: migration-CEL sandbox запрещает vault()). Закрывает
-// latent foot-gun: NewMigration принимает ...Option, поэтому без guard-а
-// vault() протёк бы в migration-движок.
+// TestMigration_WithVaultRejected — WithVault(kv) in migration mode is rejected by
+// the constructor (ADR-019: the migration-CEL sandbox forbids vault()). Closes a
+// latent foot-gun: NewMigration takes ...Option, so without the guard vault() would
+// leak into the migration engine.
 func TestMigration_WithVaultRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	_, err := NewMigration(WithVault(kv))
@@ -129,16 +129,16 @@ func TestMigration_WithVaultRejected(t *testing.T) {
 	}
 }
 
-// TestMigration_NoOptionsOK — NewMigration() без опций строится без ошибки
-// (нормальный путь, как зовёт keeper/internal/statemigrate).
+// TestMigration_NoOptionsOK — NewMigration() with no options builds without error
+// (the normal path, as keeper/internal/statemigrate calls it).
 func TestMigration_NoOptionsOK(t *testing.T) {
 	if _, err := NewMigration(); err != nil {
 		t.Fatalf("NewMigration(): %v", err)
 	}
 }
 
-// TestMigration_RegularVaultEngineNotBroken — регресс: WithVault на ОБЫЧНОМ
-// (не migration) Engine продолжает работать (guard триггерит только при
+// TestMigration_RegularVaultEngineNotBroken — regression: WithVault on the REGULAR
+// (non-migration) Engine keeps working (the guard triggers only when
 // migration=true && kv!=nil).
 func TestMigration_RegularVaultEngineNotBroken(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{

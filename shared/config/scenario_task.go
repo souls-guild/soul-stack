@@ -12,20 +12,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Task — полиморфная задача scenario.
+// Task is a polymorphic scenario task.
 //
-// Дискриминатор — присутствие ровно одного из ключей `module:` / `apply:` /
-// `include:` / `block:`. Поле-discriminator non-nil после Unmarshal указывает
-// вид задачи; остальные три должны быть nil. Mutual exclusion проверяется
-// в validateTaskNode (через AST, не через struct-fields — это даёт line/col
-// для диагностики).
+// The discriminator is the presence of exactly one of the keys `module:` / `apply:`
+// / `include:` / `block:`. A non-nil discriminator field after Unmarshal indicates
+// the task kind; the other three must be nil. Mutual exclusion is checked in
+// validateTaskNode (via AST, not struct fields — that yields line/col for
+// diagnostics).
 //
-// Все «общие» поля DSL-ядра (destiny/tasks.md §3) тут — opaque (any/map[string]any),
-// потому что на уровне shared/config мы валидируем только структуру/типы/regex,
-// CEL-разбор и cross-ref-проверки откладываются на M1.3/M1.5. В рантайме их
-// заполнит/типизирует апплаер scenario-DSL.
+// All "common" DSL-core fields (destiny/tasks.md §3) are opaque here
+// (any/map[string]any) because at the shared/config level we validate only
+// structure/types/regex; CEL parsing and cross-ref checks are deferred to M1.3/M1.5.
+// At runtime the scenario-DSL applier fills/types them.
 type Task struct {
-	// Common (DSL-ядро задач).
+	// Common (task DSL core).
 	Name        string         `yaml:"name,omitempty"`
 	Vars        map[string]any `yaml:"vars,omitempty"`
 	When        string         `yaml:"when,omitempty"`
@@ -43,13 +43,13 @@ type Task struct {
 	Retry       *RetrySpec     `yaml:"retry,omitempty"`
 	Timeout     string         `yaml:"timeout,omitempty"`
 
-	// Scenario-дельта (orchestration.md §2).
+	// Scenario delta (orchestration.md §2).
 	On      any    `yaml:"on,omitempty"`     // "keeper" | []string
 	Where   string `yaml:"where,omitempty"`  // CEL string
 	Serial  any    `yaml:"serial,omitempty"` // int >= 1 | "<N>%"
 	RunOnce bool   `yaml:"run_once,omitempty"`
 
-	// Discriminator (ровно один non-nil).
+	// Discriminator (exactly one non-nil).
 	Module  *ModuleTask  `yaml:"module,omitempty"`
 	Apply   *ApplyTask   `yaml:"apply,omitempty"`
 	Include *IncludeTask `yaml:"include,omitempty"`
@@ -57,57 +57,58 @@ type Task struct {
 	Assert  *AssertSpec  `yaml:"assert,omitempty"`
 
 	// Carry-through conditional-include (ADR-009 amendment, conditional-include
-	// group-drop). НЕ-YAML поля (`yaml:"-"` → не парсятся из манифеста, не попадают
-	// в taskKnownKeys/yamlFieldIndex — forward-compat как RenderInput.destinyIsolated).
-	// Заполняются ТОЛЬКО [ExpandIncludes] при раскрытии include с `when:`: include-
-	// when и id группы протаскиваются в КАЖДУЮ вклеенную задачу. Keeper-side render
-	// дропает всю группу одним вычислением include-when (по IncludeGroupID), ДО
-	// emitStaticWhenSkip. IncludeGroupID==0 — задача вне условного include (обычный
-	// путь); IncludeWhen непустой ⇔ IncludeGroupID!=0.
+	// group-drop). NON-YAML fields (`yaml:"-"` → not parsed from the manifest, absent
+	// from taskKnownKeys/yamlFieldIndex — forward-compat like
+	// RenderInput.destinyIsolated). Filled ONLY by [ExpandIncludes] when expanding an
+	// include with `when:`: the include-when and the group id are propagated into
+	// EVERY spliced task. Keeper-side render drops the whole group with one include-
+	// when evaluation (by IncludeGroupID), BEFORE emitStaticWhenSkip. IncludeGroupID==0
+	// — task outside a conditional include (the normal path); non-empty IncludeWhen ⇔
+	// IncludeGroupID!=0.
 	IncludeWhen    string `yaml:"-"`
 	IncludeGroupID int    `yaml:"-"`
 }
 
-// AssertSpec — keeper-side render-time precondition прогона (ADR-009 amendment
-// 2026-06-23). `that` — список CEL-bool-предикатов (вся строка = CEL без обёртки,
-// как `where:`), все обязаны быть true на render-фазе Keeper (полный scenario-
-// контекст, soulprint.hosts доступен — AllowHosts=true). Первый false обрывает
-// render понятной ошибкой; assert НЕ emit RenderedTask (проверка, не задача).
-// Дискриминатор задачи — взаимоисключим с module/apply/include/block.
+// AssertSpec is a keeper-side render-time precondition of a run (ADR-009 amendment
+// 2026-06-23). `that` is a list of CEL-bool predicates (the whole string = CEL
+// unwrapped, like `where:`), all required to be true in Keeper's render phase (full
+// scenario context, soulprint.hosts available — AllowHosts=true). The first false
+// aborts render with a clear error; assert emits no RenderedTask (a check, not a
+// task). Task discriminator — mutually exclusive with module/apply/include/block.
 type AssertSpec struct {
 	That    []string `yaml:"that"`
 	Message string   `yaml:"message,omitempty"`
 }
 
-// ModuleTask — задача-вызов state-модуля. `params:` живёт здесь же
-// (на уровне DSL-ядра он привязан к module-задаче — destiny/tasks.md §4).
+// ModuleTask is a state-module invocation task. `params:` lives here (at the DSL-core
+// level it is bound to the module task — destiny/tasks.md §4).
 type ModuleTask struct {
-	// Module — строковый идентификатор модуля «<ns>.<module>.<state>».
+	// Module is the module's string identifier "<ns>.<module>.<state>".
 	Module string         `yaml:"-"`
 	Params map[string]any `yaml:"params,omitempty"`
 }
 
-// ApplyTask — applier-задача, делегирующая работу в destiny.
+// ApplyTask is an applier task delegating work to a destiny.
 type ApplyTask struct {
 	Destiny string         `yaml:"destiny"`
 	Input   map[string]any `yaml:"input,omitempty"`
 }
 
-// IncludeTask — подключение соседнего scenario-файла (или service-level
-// fallback по двухуровневому резолву, orchestration.md §6).
+// IncludeTask pulls in a sibling scenario file (or a service-level fallback via the
+// two-level resolve, orchestration.md §6).
 type IncludeTask struct {
-	// Include — относительное имя файла (например, `install.yml`).
+	// Include is the relative file name (e.g. `install.yml`).
 	Include string `yaml:"-"`
 }
 
-// BlockTask — inline-группа задач. Содержимое — top-level список Task,
-// то же DSL-ядро рекурсивно.
+// BlockTask is an inline group of tasks. Its content is a top-level Task list, the
+// same DSL core recursively.
 type BlockTask struct {
 	Block []Task `yaml:"-"`
 }
 
-// LoopSpec — DSL-ядро §7. На уровне shared/config валидируем только структуру;
-// type/значение `items` — CEL/template, разбор отложен.
+// LoopSpec — DSL core §7. At the shared/config level we validate only structure; the
+// type/value of `items` is CEL/template, parsing deferred.
 type LoopSpec struct {
 	Items   any    `yaml:"items"`
 	As      string `yaml:"as,omitempty"`
@@ -115,21 +116,21 @@ type LoopSpec struct {
 	When    string `yaml:"when,omitempty"`
 }
 
-// RetrySpec — DSL-ядро §9.
+// RetrySpec — DSL core §9.
 type RetrySpec struct {
 	Count int    `yaml:"count"`
 	Delay string `yaml:"delay,omitempty"`
 	Until string `yaml:"until,omitempty"`
 }
 
-// taskCommonStringFields — common string-поля задачи (DSL-ядро §3 + scenario-
-// дельта `where:`). Используется в validateTaskNode для проверки, что в YAML-
-// узле под ключом стоит строка, а не int/bool/seq/map. goccy при NodeToValue
-// в string-поле молча коэрсит integer/bool scalar в строку, поэтому без
-// AST-проверки `name: 42` проходит как валидный.
+// taskCommonStringFields — a task's common string fields (DSL core §3 + scenario-
+// delta `where:`). Used in validateTaskNode to check that the YAML node under the key
+// is a string, not int/bool/seq/map. On NodeToValue into a string field goccy
+// silently coerces an integer/bool scalar to a string, so without the AST check
+// `name: 42` would pass as valid.
 //
-// `changed_when:`/`failed_when:` сюда НЕ входят: они принимают и bool-литерал
-// (force-shortcut), и CEL-строку — отдельная проверка taskBoolOrCELFields.
+// `changed_when:`/`failed_when:` are EXCLUDED: they accept both a bool literal
+// (force-shortcut) and a CEL string — a separate check, taskBoolOrCELFields.
 var taskCommonStringFields = map[string]bool{
 	"name":     true,
 	"when":     true,
@@ -139,34 +140,34 @@ var taskCommonStringFields = map[string]bool{
 	"where":    true,
 }
 
-// taskBoolOrCELFields — поля-override результата задачи (`changed_when:` /
-// `failed_when:`, destiny/tasks.md §«changed_when»/§«failed_when»). Допустимы
-// две формы: bool-литерал (`false`/`true` — константный force-shortcut,
-// «никогда не изменяет state» / «никогда не падает») ИЛИ CEL-строка
-// (выражение-предикат). int/float/seq/map — ошибка типа.
+// taskBoolOrCELFields — task-result override fields (`changed_when:` /
+// `failed_when:`, destiny/tasks.md §"changed_when"/§"failed_when"). Two forms are
+// allowed: a bool literal (`false`/`true` — a constant force-shortcut, "never changes
+// state" / "never fails") OR a CEL string (predicate expression). int/float/seq/map —
+// a type error.
 var taskBoolOrCELFields = map[string]bool{
 	"changed_when": true,
 	"failed_when":  true,
 }
 
-// taskKnownKeys — union из всех легальных task-level ключей. Включает:
-//   - common DSL-ядра (yaml-теги Task struct, кроме discriminator-полей
-//     с тегом `yaml:"-"`);
-//   - discriminator-ключи (`module`, `apply`, `include`, `block`) — у них
-//     yaml:"-", потому что их декодит сам UnmarshalYAML;
-//   - `params:` — сосед `module:`, технически живёт в ModuleTask;
-//   - scenario-delta (`on`, `where`, `serial`, `run_once`);
-//   - deprecated (`wait`, `filter`) — для них диагностика поднимается отдельно
-//     с hint-ом в шаге 1 validateTaskNode, но в whitelist они нужны, чтобы
-//     не подняться дубль-`unknown_key`.
+// taskKnownKeys — the union of all legal task-level keys. Includes:
+//   - DSL-core common keys (Task struct yaml tags, except discriminator fields
+//     tagged `yaml:"-"`);
+//   - discriminator keys (`module`, `apply`, `include`, `block`) — they are yaml:"-"
+//     because UnmarshalYAML decodes them itself;
+//   - `params:` — a neighbour of `module:`, technically living in ModuleTask;
+//   - scenario delta (`on`, `where`, `serial`, `run_once`);
+//   - deprecated (`wait`, `filter`) — their diagnostic is raised separately with a
+//     hint in step 1 of validateTaskNode, but they must be in the whitelist to avoid
+//     a duplicate `unknown_key`.
 var taskKnownKeys = func() map[string]bool {
 	out := map[string]bool{
-		// discriminator-ключи (yaml:"-" в struct → не попадают в yamlFieldIndex).
+		// discriminator keys (yaml:"-" in the struct → absent from yamlFieldIndex).
 		"module":  true,
 		"apply":   true,
 		"include": true,
 		"block":   true,
-		// `params:` — сосед `module:`, валидируется через ModuleTask.
+		// `params:` — a neighbour of `module:`, validated via ModuleTask.
 		"params": true,
 	}
 	for k := range yamlFieldIndex(reflect.TypeOf(Task{})) {
@@ -178,63 +179,60 @@ var taskKnownKeys = func() map[string]bool {
 	return out
 }()
 
-// Регэксы валидации.
+// Validation regexes.
 var (
-	// reModuleAddress — 3-level kebab-case `<ns>.<module>.<state>` для
-	// scenario-module-задачи. Симметрично reRequiredModule (destiny.go),
-	// но добавляет третий сегмент `<state>` — destiny/tasks.md §4.
+	// reModuleAddress — 3-level kebab-case `<ns>.<module>.<state>` for a scenario
+	// module task. Symmetric to reRequiredModule (destiny.go) but adds the third
+	// segment `<state>` — destiny/tasks.md §4.
 	reModuleAddress = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-	// reIncludeFile — имя include-файла. Только `.yml`-расширение, без `/`
-	// и без `..` (двухуровневый резолв делает движок, autor никогда не пишет
-	// `../`, orchestration.md §6).
+	// reIncludeFile — include file name. Only a `.yml` extension, no `/` and no `..`
+	// (the engine does the two-level resolve, an author never writes `../`,
+	// orchestration.md §6).
 	reIncludeFile = regexp.MustCompile(`^[a-z][a-z0-9_-]*\.yml$`)
 
-	// reRegisterID — identifier для `register:` и для `id:` (стабильный адрес
-	// задачи для алертов «таска X изменила», ADR-009-amend). Один формат —
-	// потому что register и id живут в ОДНОМ адресном пространстве подписки на
-	// per-task-changed-события (ADR-052 §h). Совпадает с reInputParamName, но
-	// переопределён отдельно — это разные пространства имён (register/id vs
-	// input-параметры), хоть форма и одинаковая.
+	// reRegisterID — identifier for `register:` and `id:` (a stable task address for
+	// "task X changed" alerts, ADR-009-amend). One format because register and id
+	// share ONE address space for per-task-changed subscriptions (ADR-052 §h).
+	// Matches reInputParamName but is defined separately — different namespaces
+	// (register/id vs input params) despite the identical form.
 	reRegisterID = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-	// reLoopVar — identifier для `loop.as:`/`loop.index_as:`: snake_case,
-	// потому что имя становится голой CEL-переменной (`${ <as>.* }` /
-	// `<as>.*` в expression-keys, destiny/tasks.md §7). Форма та же, что у
-	// register-id.
+	// reLoopVar — identifier for `loop.as:`/`loop.index_as:`: snake_case, because the
+	// name becomes a bare CEL variable (`${ <as>.* }` / `<as>.*` in expression keys,
+	// destiny/tasks.md §7). Same form as the register id.
 	reLoopVar = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
-// SplitModuleAddr разбирает module-адрес `<namespace>.<module>.<state>` на
-// (`<namespace>.<module>`, `state`). Последняя точка отделяет state-суффикс;
-// при его отсутствии возвращает (addr, "", true) — модуль без конкретного
-// state (legacy-плагины). Бракованные строки (пустая, `.state`, `core.`)
-// возвращают ok=false.
+// SplitModuleAddr splits a module address `<namespace>.<module>.<state>` into
+// (`<namespace>.<module>`, `state`). The last dot separates the state suffix; when
+// absent it returns (addr, "", true) — a module without a concrete state (legacy
+// plugins). Malformed strings (empty, `.state`, `core.`) return ok=false.
 //
-// Единый источник правды разбора module-адреса для всех бинарей: Soul-side
-// runtime (plantask/applyrunner) и Keeper-side scenario-dispatch вызывают эту
-// функцию вместо локальных копий. Симметрично reModuleAddress, который
-// валидирует ту же трёхсегментную форму статически.
+// The single source of truth for module-address parsing across all binaries: the
+// Soul-side runtime (plantask/applyrunner) and Keeper-side scenario-dispatch call
+// this instead of local copies. Symmetric to reModuleAddress, which validates the
+// same three-segment form statically.
 func SplitModuleAddr(addr string) (name, state string, ok bool) {
 	if addr == "" {
 		return "", "", false
 	}
 	idx := strings.LastIndexByte(addr, '.')
 	if idx < 0 {
-		// Точки нет — модуль без state (`core`).
+		// No dot — a module without a state (`core`).
 		return addr, "", true
 	}
 	if idx == 0 || idx == len(addr)-1 {
-		// `.state` / `core.` — бракованные.
+		// `.state` / `core.` — malformed.
 		return "", "", false
 	}
 	return addr[:idx], addr[idx+1:], true
 }
 
-// loopReservedNames — имена контекста CEL, которые `loop.as:`/`loop.index_as:`
-// перекрывать нельзя: голая loop-переменная объявляется на верхнем уровне
-// активации (shared/cel) и затёрла бы фиксированный контекст. Симметрично
-// contextVars в shared/cel/engine.go.
+// loopReservedNames — CEL context names that `loop.as:`/`loop.index_as:` must not
+// shadow: a bare loop variable is declared at the top level of the activation
+// (shared/cel) and would overwrite the fixed context. Symmetric to contextVars in
+// shared/cel/engine.go.
 var loopReservedNames = map[string]bool{
 	"input":       true,
 	"register":    true,
@@ -244,30 +242,29 @@ var loopReservedNames = map[string]bool{
 	"vars":        true,
 }
 
-// loopReservedPrefixes — префиксы имён, зарезервированные за служебными iter-
-// переменными движка. `__host` — iter-переменная filter-comprehension, в которую
-// раскрывается `soulprint.hosts.where(...)` (shared/cel/hosts.go, hostIterPrefix).
-// loop-переменная с таким префиксом коллизила бы с встроенной iter-переменной,
-// если бы попала в одно выражение → запрещаем на уровне config-валидатора.
+// loopReservedPrefixes — name prefixes reserved for the engine's internal iter
+// variables. `__host` is the filter-comprehension iter variable that
+// `soulprint.hosts.where(...)` expands to (shared/cel/hosts.go, hostIterPrefix). A
+// loop variable with this prefix would collide with the built-in iter variable if it
+// landed in the same expression → forbidden at the config-validator level.
 var loopReservedPrefixes = []string{"__host"}
 
-// UnmarshalYAML — кастомный декод Task. Стандартный reflect-decode goccy не
-// может справиться с дискриминатором (`module:` — скаляр в YAML, *ModuleTask
-// в Go), поэтому переопределяем: общие поля декодируем через alias-тип,
-// специальные (`module:`/`include:`/`block:`/`params:`) — вручную.
+// UnmarshalYAML is a custom Task decode. goccy's standard reflect decode cannot
+// handle the discriminator (`module:` is a YAML scalar, *ModuleTask in Go), so we
+// override it: decode common fields via an alias type, and the special ones
+// (`module:`/`include:`/`block:`/`params:`) by hand.
 func (t *Task) UnmarshalYAML(node ast.Node) error {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
-		// Сценарий-задача — scalar/sequence: декод не делает ничего, оставляя
-		// зеro-value Task. Диагностику `type_mismatch` с координатами поднимет
-		// validateTaskNode. Если возвращать error — поверх него встаёт ещё
-		// `decode_fault` от parseAndValidate, и на ту же координату приходит
-		// двойная диагностика.
+		// Scenario task as scalar/sequence: decode does nothing, leaving a zero-value
+		// Task. validateTaskNode raises the `type_mismatch` diagnostic with
+		// coordinates. Returning an error would stack a `decode_fault` from
+		// parseAndValidate on top, giving a double diagnostic at the same coordinate.
 		return nil
 	}
 
-	// Снимаем «специальные» ключи в отдельные ноды и формируем filtered-map
-	// без них для прохода через alias-тип.
+	// Peel the "special" keys into separate nodes and build a filtered map without
+	// them to pass through the alias type.
 	var (
 		moduleNode  ast.Node
 		paramsNode  ast.Node
@@ -302,7 +299,7 @@ func (t *Task) UnmarshalYAML(node ast.Node) error {
 		filtered.Values = append(filtered.Values, kv)
 	}
 
-	// Декод «всего остального» через alias-тип (избегает рекурсии).
+	// Decode "everything else" via the alias type (avoids recursion).
 	type rawTask Task
 	var raw rawTask
 	if err := yaml.NodeToValue(filtered, &raw); err != nil {
@@ -310,7 +307,7 @@ func (t *Task) UnmarshalYAML(node ast.Node) error {
 	}
 	*t = Task(raw)
 
-	// module: <string> → ModuleTask с возможным params:.
+	// module: <string> → ModuleTask with an optional params:.
 	if moduleNode != nil {
 		mt := &ModuleTask{}
 		if sn, ok := moduleNode.(*ast.StringNode); ok {
@@ -326,9 +323,9 @@ func (t *Task) UnmarshalYAML(node ast.Node) error {
 		}
 		t.Module = mt
 	} else if paramsNode != nil {
-		// `params:` без `module:` — нелегально (params привязан к module-задаче),
-		// но валидацию делает validateTaskNode по AST. Здесь ничего не делаем,
-		// чтобы не потерять диагностику.
+		// `params:` without `module:` is illegal (params is bound to the module
+		// task), but validateTaskNode validates that via the AST. Do nothing here so
+		// as not to lose the diagnostic.
 		_ = paramsNode
 	}
 
@@ -358,12 +355,12 @@ func (t *Task) UnmarshalYAML(node ast.Node) error {
 	return nil
 }
 
-// validateTaskNode — валидация одного элемента `tasks[]` (или элемента внутри
-// `block:`). Принимает AST-узел (нужны line/col), а не уже декодированный
-// Task — discriminator-проверка и unknown_key читаются прямо по AST.
+// validateTaskNode validates one element of `tasks[]` (or an element inside
+// `block:`). It takes an AST node (line/col are needed), not an already-decoded Task
+// — the discriminator check and unknown_key are read straight from the AST.
 //
-// Возвращает накопленные диагностики. Никогда не возвращает ошибку: всё, что
-// не получилось разобрать, фиксируется как diag.Diagnostic уровня error.
+// Returns the accumulated diagnostics. Never returns an error: anything that fails to
+// parse is recorded as an error-level diag.Diagnostic.
 func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	mm, ok := item.(*ast.MappingNode)
 	if !ok {
@@ -382,7 +379,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 
 	var out []diag.Diagnostic
 
-	// Соберём присутствующие ключи и их value-ноды (для диагностики позиций).
+	// Collect the present keys and their value nodes (for position diagnostics).
 	present := map[string]*ast.MappingValueNode{}
 	for _, kv := range mm.Values {
 		tok := kv.Key.GetToken()
@@ -392,9 +389,9 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		present[tok.Value] = kv
 	}
 
-	// 1) Deprecated task-level ключи (`wait:` / `filter:`) и unknown_key для
-	// всего, что не в whitelist. Симметрично top-level destiny/service/scenario:
-	// без этой проверки опечатки `wheree`/`reigster` проходили exit 0.
+	// 1) Deprecated task-level keys (`wait:` / `filter:`) and unknown_key for anything
+	// not in the whitelist. Symmetric to top-level destiny/service/scenario: without
+	// this check typos like `wheree`/`reigster` passed with exit 0.
 	for k, kv := range present {
 		if hint, dep := deprecatedTaskKeys[k]; dep {
 			tok := kv.Key.GetToken()
@@ -419,10 +416,10 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}
 	}
 
-	// 1a) Common string-поля: name/when/register/timeout/where должны быть
-	// строками (changed_when/failed_when вынесены в 1b — bool-литерал ИЛИ CEL).
-	// goccy при NodeToValue коэрсит
-	// scalar int/bool/float в строковое поле молча, поэтому проверяем по AST.
+	// 1a) Common string fields: name/when/register/timeout/where must be strings
+	// (changed_when/failed_when moved to 1b — bool literal OR CEL). On NodeToValue
+	// goccy silently coerces a scalar int/bool/float into a string field, so we check
+	// via the AST.
 	for k, kv := range present {
 		if !taskCommonStringFields[k] {
 			continue
@@ -430,7 +427,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		if _, isStr := kv.Value.(*ast.StringNode); isStr {
 			continue
 		}
-		// null допустим — это «поле не задано», такой же эффект как отсутствие.
+		// null is allowed — it means "field unset", same effect as absent.
 		if _, isNull := kv.Value.(*ast.NullNode); isNull {
 			continue
 		}
@@ -447,16 +444,16 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}))
 	}
 
-	// 1b) changed_when/failed_when: bool-литерал (force-shortcut) ИЛИ CEL-строка.
-	// `changed_when: false`/`failed_when: false` — идиоматичный шорткат (read-only
-	// шаг / ignore-errors, destiny/tasks.md). int/float/seq/map — type_mismatch.
+	// 1b) changed_when/failed_when: bool literal (force-shortcut) OR CEL string.
+	// `changed_when: false`/`failed_when: false` is an idiomatic shortcut (read-only
+	// step / ignore-errors, destiny/tasks.md). int/float/seq/map — type_mismatch.
 	for k, kv := range present {
 		if !taskBoolOrCELFields[k] {
 			continue
 		}
 		switch kv.Value.(type) {
 		case *ast.StringNode, *ast.BoolNode, *ast.NullNode:
-			// string = CEL-выражение; bool = константный force; null = «не задано».
+			// string = CEL expression; bool = constant force; null = "unset".
 			continue
 		}
 		vt := kv.Value.GetToken()
@@ -473,10 +470,10 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}))
 	}
 
-	// 2) Discriminator: ровно один из {module, apply, include, block, assert}.
-	// `assert:` — render-time precondition (ADR-009 amendment): проверка, а НЕ
-	// исполняемая задача, поэтому делит дискриминатор-слот с остальными видами
-	// (взаимоисключим с module/apply/include/block).
+	// 2) Discriminator: exactly one of {module, apply, include, block, assert}.
+	// `assert:` is a render-time precondition (ADR-009 amendment): a check, NOT an
+	// executable task, so it shares the discriminator slot with the other kinds
+	// (mutually exclusive with module/apply/include/block).
 	discrKeys := []string{"module", "apply", "include", "block", "assert"}
 	var found []string
 	for _, k := range discrKeys {
@@ -499,7 +496,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 			YAMLPath: pathPrefix,
 		}))
 	case len(found) > 1:
-		// Диагностика на ключе второго+ дискриминатора; первый считаем «основным».
+		// Diagnostic on the second+ discriminator key; the first is the "primary".
 		for i := 1; i < len(found); i++ {
 			kv := present[found[i]]
 			tok := kv.Key.GetToken()
@@ -513,12 +510,12 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}
 	}
 
-	// 3) Discriminator-specific валидация.
+	// 3) Discriminator-specific validation.
 	if kv, ok := present["module"]; ok {
 		out = append(out, validateModuleField(kv, pathPrefix)...)
-		// `params:` — обязателен у module-задачи (хоть и `{}`). Без него
-		// апплаер не отличит «забыли передать» от «передали `{}`». См.
-		// docs/destiny/tasks.md §4. Тип `params:` валидируется через
+		// `params:` is required on a module task (even if `{}`). Without it the
+		// applier cannot tell "forgot to pass" from "passed `{}`". See
+		// docs/destiny/tasks.md §4. The type of `params:` is validated via
 		// ModuleTask.Params (map[string]any).
 		if _, hasParams := present["params"]; !hasParams {
 			tok := kv.Key.GetToken()
@@ -530,7 +527,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 				YAMLPath: pathPrefix + ".params",
 			}))
 		}
-		// Фаза проверки params против manifest-схемы модуля (core-модули).
+		// Phase that checks params against the module's manifest schema (core modules).
 		out = append(out, validateModuleParams(kv, present["params"], pathPrefix)...)
 	}
 	if kv, ok := present["apply"]; ok {
@@ -544,8 +541,8 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	}
 	if kv, ok := present["block"]; ok {
 		out = append(out, validateBlockField(kv, pathPrefix)...)
-		// `register:` на block-задаче семантически бессмыслен (block не
-		// вызывает модуль), destiny/tasks.md §6.5. Поднимаем отдельный код.
+		// `register:` on a block task is semantically meaningless (a block invokes no
+		// module), destiny/tasks.md §6.5. Raise a separate code.
 		if rkv, hasReg := present["register"]; hasReg {
 			tok := rkv.Key.GetToken()
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -559,19 +556,19 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		out = append(out, validateBlockForbiddenKeys(present, pathPrefix)...)
 	}
 
-	// 4) Scenario-дельта: on / serial / run_once. `where:` уже проверен в
-	// блоке 1a (общая проверка строковых полей); CEL-разбор отложен на M1.3.
+	// 4) Scenario delta: on / serial / run_once. `where:` is already checked in block
+	// 1a (the common string-field check); CEL parsing deferred to M1.3.
 	if kv, ok := present["on"]; ok {
 		out = append(out, validateOnField(kv, pathPrefix)...)
 	}
 	if kv, ok := present["serial"]; ok {
 		out = append(out, validateSerialField(kv, pathPrefix)...)
 	}
-	// serial: и run_once: взаимоисключающи (orchestration.md §2.2.2 «`run_once`»).
+	// serial: and run_once: are mutually exclusive (orchestration.md §2.2.2 "`run_once`").
 	_, hasSerial := present["serial"]
 	_, hasRunOnce := present["run_once"]
 	if hasSerial && hasRunOnce {
-		// Диагностика на run_once (позиция второго ключа), как для discriminator.
+		// Diagnostic on run_once (the second key's position), as for the discriminator.
 		kv := present["run_once"]
 		tok := kv.Key.GetToken()
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -583,11 +580,11 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}))
 	}
 
-	// 4a) Requisite-поля onchanges/onfail/require — тип. onchanges/onfail —
-	// строго list-of-string; require — list-of-string ИЛИ скаляр "all". Без
-	// этой проверки скаляр вместо списка (`onchanges: redis_conf`) проходил
-	// молча: cross-ref в validateTaskRefs смотрит только sequence-форму и
-	// skip-ает скаляр, поэтому опечатка-в-форме не ловилась нигде.
+	// 4a) Requisite fields onchanges/onfail/require — type. onchanges/onfail are
+	// strictly list-of-string; require is list-of-string OR the scalar "all". Without
+	// this check a scalar instead of a list (`onchanges: redis_conf`) passed silently:
+	// the cross-ref in validateTaskRefs looks only at the sequence form and skips a
+	// scalar, so a form typo was caught nowhere.
 	for _, k := range []string{"onchanges", "onfail"} {
 		if kv, ok := present[k]; ok {
 			out = append(out, validateRequisiteListField(kv, k, pathPrefix)...)
@@ -597,7 +594,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		out = append(out, validateRequireField(kv, pathPrefix)...)
 	}
 
-	// 5) Универсальные поля: loop, register, retry, timeout.
+	// 5) Universal fields: loop, register, retry, timeout.
 	if kv, ok := present["loop"]; ok {
 		out = append(out, validateLoopField(kv, present, pathPrefix)...)
 	}
@@ -611,8 +608,8 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		out = append(out, validateRetryField(kv, pathPrefix)...)
 	}
 	if kv, ok := present["timeout"]; ok {
-		// Тип-проверка (string) уже сделана в блоке 1a; повторно type_mismatch
-		// не эмитим, только формат.
+		// The type check (string) is already done in block 1a; don't re-emit
+		// type_mismatch, only the format.
 		if _, isStr := kv.Value.(*ast.StringNode); isStr {
 			out = append(out, validateDurationField(kv, pathPrefix+".timeout")...)
 		}
@@ -621,9 +618,9 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	return out
 }
 
-// validateModuleField — `module: <ns>.<module>.<state>` строка + опциональный
-// `params:`-сосед (params валидируется по схеме модуля на M1.5, сейчас только
-// тип map проверяем неявно через UnmarshalYAML).
+// validateModuleField — `module: <ns>.<module>.<state>` string + an optional
+// `params:` neighbour (params is validated against the module schema at M1.5; for now
+// only the map type is checked implicitly via UnmarshalYAML).
 func validateModuleField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	sn, ok := kv.Value.(*ast.StringNode)
 	if !ok {
@@ -648,7 +645,7 @@ func validateModuleField(kv *ast.MappingValueNode, pathPrefix string) []diag.Dia
 	return nil
 }
 
-// validateApplyField — apply:-задача: `destiny:` + `input:`-сосед.
+// validateApplyField — apply: task: `destiny:` + an `input:` neighbour.
 func validateApplyField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	mm, ok := kv.Value.(*ast.MappingNode)
 	if !ok {
@@ -693,8 +690,8 @@ func validateApplyField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 			}
 		case "input":
 			if _, isMap := sub.Value.(*ast.MappingNode); !isMap {
-				// `input: null` — допустимо (нет входа). `input: <scalar>` —
-				// type_mismatch. Для null goccy создаст nil-узел; пропускаем.
+				// `input: null` is allowed (no input). `input: <scalar>` —
+				// type_mismatch. For null goccy creates a nil node; skip it.
 				if _, isNull := sub.Value.(*ast.NullNode); !isNull {
 					vt := sub.Value.GetToken()
 					out = append(out, diagAt(vt.Position.Line, vt.Position.Column, diag.Diagnostic{
@@ -728,13 +725,13 @@ func validateApplyField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// validateAssertField — assert-задача (render-time precondition, ADR-009
-// amendment 2026-06-23): `assert: { that: [<CEL-bool>…], message?: <str> }`.
+// validateAssertField — assert task (render-time precondition, ADR-009 amendment
+// 2026-06-23): `assert: { that: [<CEL-bool>…], message?: <str> }`.
 //
-// `that` — обязателен, непустой список строк (каждая строка целиком = CEL-bool,
-// разбор CEL отложен на render-фазу — как `where:`). `message` — опционален,
-// строка (дефолт-сообщение, если опущен). Прочие ключи внутри assert: —
-// unknown_key (fail-closed).
+// `that` is required, a non-empty list of strings (each whole string = CEL-bool, CEL
+// parsing deferred to the render phase — like `where:`). `message` is optional, a
+// string (default message if omitted). Other keys inside assert: — unknown_key
+// (fail-closed).
 func validateAssertField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	mm, ok := kv.Value.(*ast.MappingNode)
 	if !ok {
@@ -854,7 +851,7 @@ func validateIncludeField(kv *ast.MappingValueNode, pathPrefix string) []diag.Di
 	return nil
 }
 
-// validateBlockField — `block:` — массив вложенных задач, рекурсивная валидация.
+// validateBlockField — `block:` — an array of nested tasks, validated recursively.
 func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	seq, ok := kv.Value.(*ast.SequenceNode)
 	if !ok {
@@ -873,19 +870,19 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// blockForbiddenKeys — module-специфичные ключи, недопустимые на BLOCK-уровне
-// (fail-closed, destiny/tasks.md §6.5 их на block не упоминает). block не
-// вызывает модуль, поэтому override результата модуля (`changed_when`/
-// `failed_when`), retry/timeout/output/no_log одного вызова и `params:` (аргументы
-// модуля) на нём бессмысленны. Каждый ключ режется кодом `<key>_on_block_invalid`
-// (симметрично register_on_block_invalid). `register:` уже режется отдельно выше.
+// blockForbiddenKeys — module-specific keys not allowed at the BLOCK level (fail-
+// closed; destiny/tasks.md §6.5 does not mention them on a block). A block invokes no
+// module, so a module-result override (`changed_when`/`failed_when`), one call's
+// retry/timeout/output/no_log, and `params:` (module arguments) are meaningless on
+// it. Each key is rejected with code `<key>_on_block_invalid` (symmetric to
+// register_on_block_invalid). `register:` is already rejected separately above.
 //
-// `parallel:` тоже вне pilot block-а (parallel на block — слайс позже) — режется
-// тем же механизмом, кодом parallel_on_block_invalid.
+// `parallel:` is also outside the pilot block (parallel on a block is a later slice)
+// — rejected by the same mechanism, code parallel_on_block_invalid.
 //
-// Унаследованные block-ом ключи (`when`/`where`/`vars`/`onchanges`/`onfail`/
-// `require`/`on`/`serial`/`run_once`/`name`/`loop`) в список НЕ входят: §6.5
-// явно допускает их на block.
+// Keys inherited by a block (`when`/`where`/`vars`/`onchanges`/`onfail`/`require`/
+// `on`/`serial`/`run_once`/`name`/`loop`) are NOT in the list: §6.5 explicitly allows
+// them on a block.
 var blockForbiddenKeys = []string{
 	"changed_when",
 	"failed_when",
@@ -897,9 +894,9 @@ var blockForbiddenKeys = []string{
 	"parallel",
 }
 
-// validateBlockForbiddenKeys поднимает ошибку `<key>_on_block_invalid` для каждого
-// присутствующего module-специфичного ключа на block-задаче (fail-closed, §6.5).
-// Вызывается только когда дискриминатор — block.
+// validateBlockForbiddenKeys raises `<key>_on_block_invalid` for each present module-
+// specific key on a block task (fail-closed, §6.5). Called only when the
+// discriminator is block.
 func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for _, key := range blockForbiddenKeys {
@@ -919,11 +916,11 @@ func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 	return out
 }
 
-// validateOnField — `on:` literal `keeper` или sequence строк (coven-id-ы).
+// validateOnField — `on:` literal `keeper` or a sequence of strings (coven-ids).
 func validateOnField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	switch v := kv.Value.(type) {
 	case *ast.StringNode:
-		// `on: keeper` — единственная допустимая строковая форма (orchestration.md §3).
+		// `on: keeper` — the only allowed string form (orchestration.md §3).
 		if v.Value != "keeper" {
 			tok := v.GetToken()
 			return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -950,9 +947,9 @@ func validateOnField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnos
 				}))
 				continue
 			}
-			// CEL-обёртку `${ ... }` пропускаем — это валидный coven-резолвер
-			// (например, `${ incarnation.name }`). Regex-форму применяем только
-			// к голым именам.
+			// Skip a CEL wrapper `${ ... }` — it is a valid coven resolver
+			// (e.g. `${ incarnation.name }`). Apply the regex form only to bare
+			// names.
 			if !isCELWrapped(sn.Value) {
 				if !reCovenName.MatchString(sn.Value) {
 					tok := sn.GetToken()
@@ -964,10 +961,10 @@ func validateOnField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnos
 						YAMLPath: itemPath,
 					}))
 				} else if err := covenLabelValidator().Validate(sn.Value); err != nil {
-					// Опциональный хук поверх формата: подменяемый
-					// CovenLabelValidator (Q1b справочник, ADR-008-amend). В
-					// пилоте — no-op; реальная подмена приходит через
-					// SetCovenLabelValidator на старте clienta.
+					// Optional hook on top of the format: a pluggable
+					// CovenLabelValidator (Q1b registry, ADR-008-amend). In the
+					// pilot — a no-op; the real implementation is injected via
+					// SetCovenLabelValidator at client startup.
 					tok := sn.GetToken()
 					out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 						Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
@@ -991,15 +988,15 @@ func validateOnField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnos
 	}
 }
 
-// validateSerialField — int >= 1 или percent-string `"<N>%"`.
+// validateSerialField — int >= 1 or a percent string `"<N>%"`.
 func validateSerialField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	switch v := kv.Value.(type) {
 	case *ast.IntegerNode:
-		// goccy типизирует целые как int64/uint64 через GetValue. Используем
-		// строковое представление токена для портативности.
+		// goccy types integers as int64/uint64 via GetValue. Use the token's
+		// string representation for portability.
 		tok := v.GetToken()
-		// Грубая, но достаточная проверка: токен не должен быть "0" или
-		// отрицательным. Для отрицательных goccy парсит знак как часть токена.
+		// A coarse but sufficient check: the token must not be "0" or
+		// negative. For negatives goccy parses the sign as part of the token.
 		if tok.Value == "0" || (len(tok.Value) > 0 && tok.Value[0] == '-') {
 			return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -1032,8 +1029,8 @@ func validateSerialField(kv *ast.MappingValueNode, pathPrefix string) []diag.Dia
 	}
 }
 
-// validateRegisterField — identifier. Тип-проверка (string) сделана в общем
-// блоке 1a validateTaskNode; здесь — только формат.
+// validateRegisterField — identifier. The type check (string) is done in the
+// common block 1a of validateTaskNode; here — only the format.
 func validateRegisterField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	sn, ok := kv.Value.(*ast.StringNode)
 	if !ok {
@@ -1052,20 +1049,20 @@ func validateRegisterField(kv *ast.MappingValueNode, pathPrefix string) []diag.D
 	return nil
 }
 
-// validateIDField — `id:` — стабильный адрес задачи для подписки на алерты
-// «таска X изменила» (ADR-009-amend, ADR-052 §h). Опционален. Тип-проверка
-// (string) сделана в общем блоке 1a validateTaskNode; здесь — формат +
-// взаимоисключения.
+// validateIDField — `id:` — a stable task address for subscribing to "task X
+// changed" alerts (ADR-009-amend, ADR-052 §h). Optional. The type check
+// (string) is done in common block 1a of validateTaskNode; here — format +
+// mutual exclusions.
 //
-// Формат — register-формат (тот же reRegisterID): id и register живут в ОДНОМ
-// адресном пространстве подписки.
+// Format — the register format (same reRegisterID): id and register share ONE
+// subscription address space.
 //
-// Взаимоисключения:
-//   - `id` ⊕ `register`: задача с register уже адресуема по нему → id избыточен
-//     и создаёт двусмысленность адреса. Ошибка id_register_conflict.
-//   - `id` только на module-задаче (pilot): block/include своего changed-сигнала
-//     не имеют. На них id пока запрещён (ошибка id_unsupported_target); снятие
-//     ограничения — отдельный заход при запросе.
+// Mutual exclusions:
+//   - `id` ⊕ `register`: a task with register is already addressable by it → id
+//     is redundant and makes the address ambiguous. Error id_register_conflict.
+//   - `id` only on a module task (pilot): block/include have no changed signal of
+//     their own. id is forbidden on them for now (error id_unsupported_target);
+//     lifting the restriction is a separate change on request.
 func validateIDField(kv *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	sn, ok := kv.Value.(*ast.StringNode)
 	if !ok {
@@ -1085,7 +1082,7 @@ func validateIDField(kv *ast.MappingValueNode, present map[string]*ast.MappingVa
 		}))
 	}
 
-	// id ⊕ register: у задачи с register адрес уже есть.
+	// id ⊕ register: a task with register already has an address.
 	if _, hasReg := present["register"]; hasReg {
 		tok := kv.Key.GetToken()
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -1097,7 +1094,7 @@ func validateIDField(kv *ast.MappingValueNode, present map[string]*ast.MappingVa
 		}))
 	}
 
-	// pilot: id только на module-задаче.
+	// pilot: id only on a module task.
 	if _, isModule := present["module"]; !isModule {
 		tok := kv.Key.GetToken()
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -1115,15 +1112,15 @@ func validateIDField(kv *ast.MappingValueNode, present map[string]*ast.MappingVa
 // validateLoopField — `loop: { items: <required>, as?, index_as?, when? }`
 // (destiny/tasks.md §7).
 //
-// Слайс E1: `loop:` поддержан только на module-задаче (render-time fan-out,
-// см. orchestration.md §2.2). На include:/apply:/block: — отвергается с
-// кодом loop_unsupported_target (раскрытие loop для этих видов отложено).
+// Slice E1: `loop:` is supported only on a module task (render-time fan-out,
+// see orchestration.md §2.2). On include:/apply:/block: — rejected with
+// code loop_unsupported_target (loop expansion for those kinds is deferred).
 //
-// items: обязателен; тип/значение (CEL/template-expr) не проверяем — разбор
-// в render-фазе. as/index_as — валидные snake_case-идентификаторы (если
-// заданы) и не из зарезервированного контекста. when: — строка (CEL-предикат).
+// items: is required; the type/value (CEL/template-expr) is not checked — parsing
+// happens in the render phase. as/index_as — valid snake_case identifiers (if
+// set) and not from the reserved context. when: — a string (CEL predicate).
 func validateLoopField(kv *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
-	// Слайс E1: loop легитимен только на module-задаче.
+	// Slice E1: loop is legitimate only on a module task.
 	if _, isModule := present["module"]; !isModule {
 		tok := kv.Key.GetToken()
 		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -1169,8 +1166,8 @@ func validateLoopField(kv *ast.MappingValueNode, present map[string]*ast.Mapping
 		switch k {
 		case "items":
 			hasItems = true
-			// Тип не проверяем: items — CEL/template-expr (строка `${ … }`)
-			// либо inline-литерал (seq/map), разбор в render-фазе.
+			// Type not checked: items is a CEL/template-expr (a `${ … }` string)
+			// or an inline literal (seq/map), parsed in the render phase.
 		case "as":
 			asNode = sub
 			out = append(out, validateLoopVar(sub, k, pathPrefix)...)
@@ -1201,9 +1198,9 @@ func validateLoopField(kv *ast.MappingValueNode, present map[string]*ast.Mapping
 			YAMLPath: pathPrefix + ".loop.items",
 		}))
 	}
-	// as: и index_as: должны различаться: в render-контексте они кладутся в
-	// общий map loop-переменных, и одинаковое имя молча затёрло бы элемент
-	// индексом (`as=x, index_as=x` → на хост уходит индекс вместо элемента).
+	// as: and index_as: must differ: in the render context they go into a
+	// shared loop-variable map, and an identical name would silently overwrite the
+	// element with the index (`as=x, index_as=x` → the host gets the index, not the element).
 	if asNode != nil && indexAsNode != nil {
 		asStr, asOK := asNode.Value.(*ast.StringNode)
 		ixStr, ixOK := indexAsNode.Value.(*ast.StringNode)
@@ -1221,8 +1218,8 @@ func validateLoopField(kv *ast.MappingValueNode, present map[string]*ast.Mapping
 	return out
 }
 
-// validateLoopVar — `loop.as:`/`loop.index_as:` — snake_case-идентификатор,
-// не из зарезервированного CEL-контекста (он становится голой переменной).
+// validateLoopVar — `loop.as:`/`loop.index_as:` — a snake_case identifier,
+// not from the reserved CEL context (it becomes a bare variable).
 func validateLoopVar(sub *ast.MappingValueNode, key, pathPrefix string) []diag.Diagnostic {
 	sn, isStr := sub.Value.(*ast.StringNode)
 	if !isStr {
@@ -1269,11 +1266,11 @@ func validateLoopVar(sub *ast.MappingValueNode, key, pathPrefix string) []diag.D
 	return nil
 }
 
-// validateRequisiteListField — `onchanges:`/`onfail:` строго list-of-string
-// (destiny/tasks.md §«onchanges»/§«onfail»). Скаляр/map/int → type_mismatch;
-// non-string элемент списка → type_mismatch на элементе. null = «не задано».
-// Имена register-ов проверяет cross-ref-фаза (validateTaskRefs) — здесь только
-// форма.
+// validateRequisiteListField — `onchanges:`/`onfail:` strictly list-of-string
+// (destiny/tasks.md §"onchanges"/§"onfail"). scalar/map/int → type_mismatch;
+// a non-string list element → type_mismatch on the element. null = "unset".
+// Register names are checked by the cross-ref phase (validateTaskRefs) — here only
+// the form.
 func validateRequisiteListField(kv *ast.MappingValueNode, key, pathPrefix string) []diag.Diagnostic {
 	if _, isNull := kv.Value.(*ast.NullNode); isNull {
 		return nil
@@ -1292,9 +1289,9 @@ func validateRequisiteListField(kv *ast.MappingValueNode, key, pathPrefix string
 	return requisiteListElems(seq, key, pathPrefix)
 }
 
-// validateRequireField — `require:` допускает две формы: список register-имён
-// ИЛИ скаляр "all" (orchestration/destiny tasks). Скаляр != "all" → ошибка;
-// non-string элемент списка → type_mismatch. null = «не задано».
+// validateRequireField — `require:` allows two forms: a list of register names
+// OR the scalar "all" (orchestration/destiny tasks). A scalar != "all" → error;
+// a non-string list element → type_mismatch. null = "unset".
 func validateRequireField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	switch v := kv.Value.(type) {
 	case *ast.NullNode:
@@ -1325,8 +1322,8 @@ func validateRequireField(kv *ast.MappingValueNode, pathPrefix string) []diag.Di
 	}
 }
 
-// requisiteListElems — каждый элемент requisite-списка обязан быть строкой
-// (register-имя либо CEL-обёртка). int/bool/seq/map в элементе → type_mismatch.
+// requisiteListElems — each requisite-list element must be a string
+// (a register name or a CEL wrapper). int/bool/seq/map in an element → type_mismatch.
 func requisiteListElems(seq *ast.SequenceNode, key, pathPrefix string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for j, item := range seq.Values {
@@ -1429,11 +1426,11 @@ func validateRetryField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// validateDurationField валидирует строку по convention `duration` Soul Stack
-// (config.ParseDuration): Go-time.ParseDuration (`30s`/`5m`/`1h30m`) плюс
-// суффикс `<N>d` для дней (`30d`). Единая convention с keeper.yml-валидацией,
-// Reaper и core.url — см. docs/keeper/config.md → «Конвенции типов».
-// Применяется ко всем destiny duration-полям (task.timeout, retry.delay и т.п.).
+// validateDurationField validates a string against Soul Stack's `duration` convention
+// (config.ParseDuration): Go time.ParseDuration (`30s`/`5m`/`1h30m`) plus
+// the `<N>d` suffix for days (`30d`). One convention with keeper.yml validation,
+// Reaper and core.url — see docs/keeper/config.md → "Type conventions".
+// Applies to all destiny duration fields (task.timeout, retry.delay, etc.).
 func validateDurationField(kv *ast.MappingValueNode, yamlPath string) []diag.Diagnostic {
 	sn, ok := kv.Value.(*ast.StringNode)
 	if !ok {
@@ -1458,9 +1455,9 @@ func validateDurationField(kv *ast.MappingValueNode, yamlPath string) []diag.Dia
 	return nil
 }
 
-// isCELWrapped — true, если строка целиком — одна обёртка `${ … }`. На M1.2.c
-// не разбираем CEL, но грубое распознавание нужно: `${ incarnation.name }` в
-// `on:`-литералах не должен ловиться на kebab-case regex.
+// isCELWrapped — true if the whole string is a single `${ … }` wrapper. At M1.2.c
+// we do not parse CEL, but a coarse recognition is needed: `${ incarnation.name }` in
+// `on:` literals must not be caught by the kebab-case regex.
 func isCELWrapped(s string) bool {
 	if len(s) < 4 {
 		return false

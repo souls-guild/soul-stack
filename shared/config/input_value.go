@@ -1,13 +1,13 @@
 package config
 
-// Runtime-резолв значений input: применение `input:`-схемы к фактически
-// переданным оператором значениям ([`docs/input.md`] → «Резолв значений»).
-// Симметрично schema-валидатору (input_schema.go валидирует САМУ схему): здесь
-// схема уже валидна, проверяются переданные значения.
+// Runtime resolution of input values: applying the `input:` schema to the values
+// actually passed by the operator ([`docs/input.md`] → "Value resolution").
+// Symmetric with the schema validator (input_schema.go validates the schema
+// ITSELF): here the schema is already valid, and the passed values are checked.
 //
-// Используется и прод-путём (keeper scenario-runner перед render), и L0
-// (soul-trial) — один источник правды эффективного input, чтобы L0 не
-// маскировал отсутствие merge-фазы.
+// Used both by the prod path (keeper scenario-runner before render) and by L0
+// (soul-trial) — a single source of truth for the effective input, so L0 does not
+// mask a missing merge phase.
 
 import (
 	"fmt"
@@ -20,29 +20,31 @@ import (
 	"unicode/utf8"
 )
 
-// ResolveInputValues строит эффективный input из схемы и переданных значений:
+// ResolveInputValues builds the effective input from the schema and passed
+// values:
 //
-//  1. merge дефолтов: для каждого параметра со `default:`, отсутствующего в
-//     provided (или пустая строка для type=string без allow_empty — трактуется
-//     как отсутствие, docs/input.md §«Пустые строки»), подставляется default;
-//  2. required: параметр с `required: true` без значения и без default → ошибка;
-//  3. value-валидация переданных значений против схемы: type-match, enum,
-//     pattern (type=string) — рекурсивно вглубь array (items) и object
-//     (properties + required-поля). Дефолты-выражения (`${ … }`/`{{ … }}`) и
-//     значения-выражения не валидируются против enum/pattern на любом уровне
-//     (финальное значение появляется только после CEL/template-фазы).
+//  1. default merge: for each param with a `default:` missing from provided (or
+//     an empty string for type=string without allow_empty — treated as absent,
+//     docs/input.md §"Empty strings"), the default is substituted;
+//  2. required: a param with `required: true`, no value and no default → error;
+//  3. value validation of passed values against the schema: type-match, enum,
+//     pattern (type=string) — recursively into array (items) and object
+//     (properties + required fields). Default-expressions (`${ … }`/`{{ … }}`)
+//     and value-expressions are not validated against enum/pattern at any level
+//     (the final value appears only after the CEL/template phase).
 //
-// provided — оператор-переданный input (incarnation.spec.input или L0
-// fixtures.input); nil безопасен. Возвращает НОВУЮ map (provided не мутируется);
-// неизвестные ключи provided (без схемы) пробрасываются как есть — грамматику
-// «unknown input key» MVP не запрещает.
+// provided — the operator-passed input (incarnation.spec.input or L0
+// fixtures.input); nil is safe. Returns a NEW map (provided is not mutated);
+// unknown provided keys (with no schema) are passed through as is — the MVP
+// grammar does not forbid an "unknown input key".
 //
-// Первая же ошибка прерывает резолв: понятное сообщение оператору важнее списка.
+// The first error aborts resolution: a clear message to the operator beats a list.
 //
-// vault-резолв input-ref (`vault:`-значение secret-поля с `vault_scope`) ЗДЕСЬ
-// НЕ выполняется — это keeper-side scoped-фаза (см. [ResolveInputValuesVault]).
-// Этот путь используют L0-trial (vault-refs не резолвятся) и контексты без
-// vault-клиента; `vault:`-значение пройдёт обычную value-валидацию как строка.
+// vault resolution of an input-ref (a `vault:` value of a secret field with
+// `vault_scope`) is NOT done here — that's the keeper-side scoped phase (see
+// [ResolveInputValuesVault]). This path is used by L0-trial (vault-refs are not
+// resolved) and by contexts without a vault client; a `vault:` value goes through
+// ordinary value validation as a string.
 func ResolveInputValues(schema InputSchemaMap, provided map[string]any) (map[string]any, error) {
 	merged := mergeInputDefaults(schema, provided)
 	if err := requireInputValues(schema, merged); err != nil {
@@ -54,28 +56,29 @@ func ResolveInputValues(schema InputSchemaMap, provided map[string]any) (map[str
 	return merged, nil
 }
 
-// InputVaultResolver резолвит ОДИН input-vault-ref в значение секрета.
+// InputVaultResolver resolves ONE input vault-ref into the secret value.
 //
-// name — имя input-поля (для аудита/диагностики), s — его схема (несёт
-// VaultScope + Secret), raw — переданное оператором значение (строка с
-// `vault:`-префиксом). Реализация (keeper-side) проверяет scope+deny, читает
-// Vault KV и пишет audit. Возвращает зарезолвленное значение, которое заменит
-// `vault:`-строку ДО value-валидации (pattern/enum проверяются на нём).
+// name — the input field name (for audit/diagnostics), s — its schema (carries
+// VaultScope + Secret), raw — the operator-passed value (a string with a `vault:`
+// prefix). The (keeper-side) implementation checks scope+deny, reads Vault KV and
+// writes audit. Returns the resolved value that replaces the `vault:` string
+// BEFORE value validation (pattern/enum are checked on it).
 type InputVaultResolver func(name string, s *InputSchema, raw string) (any, error)
 
-// ResolveInputValuesVault — keeper-side резолв эффективного input с врезанной
-// scoped vault-фазой (docs/input.md → «vault_scope»). Порядок строго:
+// ResolveInputValuesVault is the keeper-side resolution of the effective input
+// with the scoped vault phase spliced in (docs/input.md → "vault_scope"). Strict
+// order:
 //
-//	merge дефолтов + required → vault-resolve input-ref → value-валидация.
+//	default merge + required → vault-resolve input-ref → value validation.
 //
-// vault-resolve идёт ДО value-валидации намеренно: pattern/enum/type
-// проверяются на УЖЕ зарезолвленном значении, не на строке `vault:...`.
-// resolve вызывается ровно один раз на каждый input-ref (значение читается из
-// Vault один раз, дальше попадает в render N раз уже резолвнутым).
+// vault-resolve deliberately runs BEFORE value validation: pattern/enum/type are
+// checked on the ALREADY-resolved value, not on the `vault:...` string. resolve
+// is called exactly once per input-ref (the value is read from Vault once, then
+// enters render N times already resolved).
 //
-// resolve может быть nil — тогда поведение совпадает с [ResolveInputValues]
-// (vault-refs не трогаются). При nil-resolve `vault:`-значение поля проходит
-// как строка (back-compat для путей без vault-клиента).
+// resolve may be nil — behavior then matches [ResolveInputValues] (vault-refs are
+// untouched). With a nil resolve a field's `vault:` value passes as a string
+// (back-compat for paths without a vault client).
 func ResolveInputValuesVault(schema InputSchemaMap, provided map[string]any, resolve InputVaultResolver) (map[string]any, error) {
 	merged := mergeInputDefaults(schema, provided)
 	if err := requireInputValues(schema, merged); err != nil {
@@ -92,35 +95,36 @@ func ResolveInputValuesVault(schema InputSchemaMap, provided map[string]any, res
 	return merged, nil
 }
 
-// reSID — FQDN-форма SID (ADR-044 S-T1): начинается с буквы/цифры, далее
-// [a-z0-9.-], до 254 символов. Совпадает с формой идентичности Soul (SID = FQDN).
-// Проверяет только синтаксис значения; принадлежность каталогу — backend.
+// reSID — the FQDN form of a SID (ADR-044 S-T1): starts with a letter/digit, then
+// [a-z0-9.-], up to 254 chars. Matches the Soul identity form (SID = FQDN). Checks
+// only value syntax; catalog membership is the backend's job.
 var reSID = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,253}$`)
 
-// Регэкспы для format-значений, у которых нет точного парсера в stdlib
-// (docs/input.md → «Допустимые значения format»). IP/CIDR/email/uri/duration
-// валидируются парсерами net/net-mail/net-url/time — точнее и без ручного regex.
+// Regexps for format values that have no exact parser in the stdlib
+// (docs/input.md → "Allowed format values"). IP/CIDR/email/uri/duration are
+// validated by the net/net-mail/net-url/time parsers — more precise and without a
+// hand-written regex.
 var (
-	// reHostnameLabel — одна метка hostname (RFC 1123): буква/цифра по краям,
-	// внутри допустим дефис, 1..63 символа.
+	// reHostnameLabel — one hostname label (RFC 1123): letter/digit at the edges,
+	// a dash allowed inside, 1..63 chars.
 	reHostnameLabel = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
-	// reUUID — UUID любой версии (8-4-4-4-12 hex), case-insensitive.
+	// reUUID — a UUID of any version (8-4-4-4-12 hex), case-insensitive.
 	reUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 	// reSemver — Semantic Versioning 2.0.0 (semver.org BNF): MAJOR.MINOR.PATCH
-	// + опц. pre-release (`-rc1`, `-alpha.1`) + опц. build-metadata (`+build`).
+	// + opt. pre-release (`-rc1`, `-alpha.1`) + opt. build-metadata (`+build`).
 	reSemver = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$`)
 )
 
-// validateFormat проверяет строковое значение против предопределённого format
-// (docs/input.md). Возвращает true, если значение валидно. Неизвестный format
-// (schema-validate его не пропустит) трактуется как «нечего проверять» → true.
+// validateFormat checks a string value against a predefined format
+// (docs/input.md). Returns true if the value is valid. An unknown format
+// (schema-validate won't let it through) is treated as "nothing to check" → true.
 //
-// Семантика hostname vs fqdn (docs/input.md примеры): hostname = одиночная
-// RFC1123-метка без точек (`redis-01`); fqdn = ≥2 меток через точку
-// (`redis-01.prod.wb.local`). sid — отдельная FQDN-форма (reSID), enforce которой
-// существовал до этой доработки.
+// hostname vs fqdn semantics (docs/input.md examples): hostname = a single
+// RFC1123 label with no dots (`redis-01`); fqdn = ≥2 dot-separated labels
+// (`redis-01.prod.wb.local`). sid is a separate FQDN form (reSID), whose
+// enforcement predates this change.
 func validateFormat(format, v string) bool {
 	switch format {
 	case "sid":
@@ -140,13 +144,13 @@ func validateFormat(format, v string) bool {
 		return err == nil
 	case "email":
 		addr, err := mail.ParseAddress(v)
-		// mail.ParseAddress принимает форму "Name <a@b>"; для format:email нужен
-		// голый адрес — сверяем, что распарсенный адрес совпал со входом.
+		// mail.ParseAddress accepts the "Name <a@b>" form; format:email needs the
+		// bare address — verify the parsed address equals the input.
 		return err == nil && addr.Address == v
 	case "uri":
 		u, err := url.Parse(v)
-		// URI обязан нести схему (docs пример https://…); относительный путь без
-		// схемы — не URI в смысле format.
+		// A URI must carry a scheme (docs example https://…); a relative path with
+		// no scheme is not a URI in the format sense.
 		return err == nil && u.Scheme != "" && (u.Host != "" || u.Opaque != "")
 	case "uuid":
 		return reUUID.MatchString(v)
@@ -159,10 +163,11 @@ func validateFormat(format, v string) bool {
 	return true
 }
 
-// isFQDNValue — format:fqdn (docs/input.md): ≥2 RFC1123-меток через точку, каждая
-// метка валидна, общая длина ≤253. Отличие от hostname — обязательная ≥1 точка.
-// Отдельна от semantic.isFQDN (тот валидирует SID coven-config: lowercase-only,
-// принимает одиночную метку) — у format:fqdn своя семантика «полное имя».
+// isFQDNValue — format:fqdn (docs/input.md): ≥2 dot-separated RFC1123 labels, each
+// label valid, total length ≤253. Differs from hostname by requiring ≥1 dot.
+// Separate from semantic.isFQDN (which validates SID coven-config: lowercase-only,
+// accepts a single label) — format:fqdn has its own "fully-qualified name"
+// semantics.
 func isFQDNValue(v string) bool {
 	if len(v) == 0 || len(v) > 253 {
 		return false
@@ -179,17 +184,17 @@ func isFQDNValue(v string) bool {
 	return true
 }
 
-// vaultRefMarker — префикс input-значения-ссылки на Vault KV. Совпадает с
-// формой авторских ref-ов (render.vaultRefPrefix / vault.ParseRef); здесь
-// используется только для детекта «значение поля — vault-ref».
+// vaultRefMarker is the prefix of an input value referencing Vault KV. Matches
+// the authored ref form (render.vaultRefPrefix / vault.ParseRef); used here only
+// to detect "field value is a vault-ref".
 const vaultRefMarker = "vault:"
 
-// resolveInputVaultRefs обходит schema и для каждого присутствующего
-// string-значения, начинающегося на `vault:`, вызывает resolve, заменяя
-// значение результатом. Поле без `vault_scope`, несущее `vault:`-значение, —
-// ошибка (default-deny): сам resolve обязан её поднять, но детект ref-а нужен
-// здесь, чтобы вызвать resolve вообще. Только top-level secret-поля (vault_scope
-// применим лишь к ним) — вглубь array/object не спускаемся.
+// resolveInputVaultRefs walks the schema and, for each present string value
+// starting with `vault:`, calls resolve and replaces the value with the result. A
+// field without `vault_scope` carrying a `vault:` value is an error (default-deny):
+// resolve itself must raise it, but ref detection is needed here to call resolve
+// at all. Only top-level secret fields (vault_scope applies only to them) — we
+// don't descend into array/object.
 func resolveInputVaultRefs(schema InputSchemaMap, merged map[string]any, resolve InputVaultResolver) error {
 	for name, s := range schema {
 		if s == nil || s.Type != "string" {
@@ -212,10 +217,10 @@ func resolveInputVaultRefs(schema InputSchemaMap, merged map[string]any, resolve
 	return nil
 }
 
-// mergeInputDefaults строит новую map: provided + подстановка default для
-// отсутствующих/пустых параметров (шаг 1 docs/input.md «Резолв значений»).
-// required не проверяется здесь — это отдельная фаза requireInputValues,
-// чтобы vault-резолв (если он есть) встал между merge и валидацией.
+// mergeInputDefaults builds a new map: provided + default substitution for
+// missing/empty params (step 1 of docs/input.md "Value resolution"). required is
+// not checked here — that's the separate requireInputValues phase, so
+// vault-resolve (if any) can sit between merge and validation.
 func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[string]any {
 	out := make(map[string]any, len(provided)+len(schema))
 	for k, v := range provided {
@@ -240,17 +245,17 @@ func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[stri
 	return out
 }
 
-// requireInputValues — шаг 2: параметр с required:true (безусловно) или с
-// required_when, чей предикат над смерженным input истинен (условно), без
-// значения и без default → ошибка (после merge — значит ни provided, ни default
-// не дали его).
+// requireInputValues — step 2: a param with required:true (unconditional) or with
+// a required_when whose predicate over the merged input is true (conditional),
+// with no value and no default → error (after merge — meaning neither provided nor
+// default supplied it).
 //
-// required_when вычисляется ПОСЛЕ mergeInputDefaults (дефолты материализованы) —
-// предикат видит эффективный input. Контекст предиката — только input.* (узкий
-// CEL-env, input_required_when.go); это input-валидация, не render. Сообщение
-// несёт ту же узнаваемую форму «обязателен, но не передан и не имеет default»,
-// что и безусловный required — downstream-детект (checkdrift.isInputRequiredErr)
-// ловит оба единым матчингом.
+// required_when is evaluated AFTER mergeInputDefaults (defaults materialized) —
+// the predicate sees the effective input. The predicate context is only input.*
+// (a narrow CEL env, input_required_when.go); this is input validation, not
+// render. The message carries the same recognizable "required, but not passed and
+// has no default" form as the unconditional required — downstream detection
+// (checkdrift.isInputRequiredErr) catches both with one match.
 func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 	for name, s := range schema {
 		if s == nil {
@@ -259,12 +264,13 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 		if _, present := merged[name]; present {
 			continue
 		}
-		// Required (field-level, bool) читается напрямую — не через requiredKind:
-		// пострезолвный $type-узел несёт object-level RequiredProps (requiredKind==
-		// requiredList от типа) И перенесённый overlay-ссылкой field-mandatory
-		// Required=true одновременно (ADR-062, applyRefOverlay). Симметрия с
-		// validateObjectFields, читающим RequiredProps напрямую. Для НЕрезолвных
-		// схем инвариант прежний: Required=true ⟺ requiredKind==requiredBool.
+		// Required (field-level, bool) is read directly — not via requiredKind:
+		// a post-resolve $type node carries object-level RequiredProps
+		// (requiredKind==requiredList from the type) AND the overlay-carried
+		// field-mandatory Required=true at the same time (ADR-062,
+		// applyRefOverlay). Symmetric with validateObjectFields, which reads
+		// RequiredProps directly. For non-resolved schemas the invariant is
+		// unchanged: Required=true ⟺ requiredKind==requiredBool.
 		if s.Required {
 			return fmt.Errorf("input %q обязателен, но не передан и не имеет default", name)
 		}
@@ -281,12 +287,12 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 	return nil
 }
 
-// validateInputValues — шаг 3: value-валидация присутствующих значений против
-// схемы (type/enum/pattern, рекурсивно). Дефолты-значения тоже валидируются:
-// прежняя ResolveInputValues пропускала default без проверки, но дефолт уже
-// прошёл schema-time validateDefaultContent — повторная проверка эквивалентна и
-// упрощает фазовую модель. Значения-выражения (`${…}`/`{{…}}`) освобождены от
-// enum/pattern на своём уровне (см. validateValueAt).
+// validateInputValues — step 3: value validation of present values against the
+// schema (type/enum/pattern, recursively). Default values are validated too: the
+// old ResolveInputValues skipped a default unchecked, but the default already
+// passed schema-time validateDefaultContent — re-checking is equivalent and
+// simplifies the phase model. Value-expressions (`${…}`/`{{…}}`) are exempt from
+// enum/pattern at their level (see validateValueAt).
 func validateInputValues(schema InputSchemaMap, merged map[string]any) error {
 	for name, s := range schema {
 		if s == nil {
@@ -303,9 +309,9 @@ func validateInputValues(schema InputSchemaMap, merged map[string]any) error {
 	return nil
 }
 
-// isAbsentValue — true, если переданное значение трактуется как «не передано»:
-// пустая строка для type=string без allow_empty (docs/input.md §«Пустые
-// строки»). Прочие значения (включая 0, false, пустой список) — переданы.
+// isAbsentValue reports whether a passed value is treated as "not passed": an
+// empty string for type=string without allow_empty (docs/input.md §"Empty
+// strings"). Other values (including 0, false, an empty list) are passed.
 func isAbsentValue(v any, s *InputSchema) bool {
 	if s.Type != "string" || s.AllowEmpty {
 		return false
@@ -314,28 +320,30 @@ func isAbsentValue(v any, s *InputSchema) bool {
 	return ok && str == ""
 }
 
-// hasDefault — у параметра объявлен default (не nil-значение). nil-default
-// неотличим от отсутствия default — это не дефолт-значение, а его отсутствие.
+// hasDefault reports whether the param declares a default (a non-nil value). A nil
+// default is indistinguishable from no default — it's the absence of a default,
+// not a default value.
 func hasDefault(s *InputSchema) bool {
 	return s.Default != nil
 }
 
-// validateInputValue проверяет одно переданное значение против схемы параметра
-// (граница доверия оператор→рендер). Тонкая обёртка над рекурсивным
-// validateValueAt: задаёт корневой путь `$.<name>` для понятных сообщений.
+// validateInputValue checks one passed value against the param schema (the
+// operator→render trust boundary). A thin wrapper over the recursive
+// validateValueAt: sets the root path `$.<name>` for clear messages.
 func validateInputValue(name string, s *InputSchema, v any) error {
 	return validateValueAt("$."+name, s, v)
 }
 
-// maskedSecretLiteral — плейсхолдер вместо сырого значения secret-поля в
-// сообщении об ошибке валидации. Архитектура (ADR-010, secret-маскинг) требует
-// не показывать секреты ни в одном выходном канале; ошибка валидации оседает в
-// incarnation.StatusDetails / audit, поэтому маскинг нужен здесь, на источнике.
+// maskedSecretLiteral is the placeholder for a secret field's raw value in a
+// validation error message. The architecture (ADR-010, secret masking) requires
+// never showing secrets in any output channel; a validation error lands in
+// incarnation.StatusDetails / audit, so masking is needed here, at the source.
 const maskedSecretLiteral = "<masked>"
 
-// literalFor возвращает строку значения для диагностики ошибки: сырой литерал
-// для обычного поля (диагностика важна), плейсхолдер для secret-поля. Тип не
-// раскрывается отдельно — формат поля известен из самой схемы/пути.
+// literalFor returns the value string for an error diagnostic: the raw literal for
+// a normal field (the diagnostic matters), the placeholder for a secret field. The
+// type isn't disclosed separately — the field format is known from the schema/path
+// itself.
 func literalFor(s *InputSchema, v any) string {
 	if s != nil && s.Secret {
 		return maskedSecretLiteral
@@ -343,30 +351,29 @@ func literalFor(s *InputSchema, v any) string {
 	return formatLiteral(v)
 }
 
-// validateValueAt рекурсивно валидирует переданное значение против схемы на
-// произвольной глубине вложенности (qa.1: top-level-only пропускал мусор внутри
-// array/object вплоть до CEL/shell — дыра границы доверия). Симметрична
-// schema-time validateDefaultValue (input_schema.go), но в runtime-форме:
-// возвращает error с путём (`$.users[1].acl`) вместо diag, и применяет полный
-// набор проверок переданного значения (type → enum → pattern → required-props),
-// а не только type-match (default-литерал автору доверяем больше, чем
-// оператор-вводу).
+// validateValueAt recursively validates a passed value against the schema at any
+// nesting depth (qa.1: top-level-only let garbage through inside array/object all
+// the way to CEL/shell — a trust-boundary hole). Symmetric with schema-time
+// validateDefaultValue (input_schema.go), but in runtime form: returns an error
+// with a path (`$.users[1].acl`) instead of a diag, and applies the full set of
+// checks to a passed value (type → enum → pattern → required-props), not just a
+// type-match (we trust an author's default literal more than operator input).
 //
-// Проверяется то, что выражено в схеме (type/enum/pattern); полный
-// format-валидатор (ipv4/fqdn/…) — post-MVP, формы пока не используются в
-// прод-сервисах (redis: только pattern).
+// What's expressed in the schema is checked (type/enum/pattern); a full format
+// validator (ipv4/fqdn/…) is post-MVP, the forms aren't used yet in prod services
+// (redis: pattern only).
 //
-// На каждом уровне строковое значение-выражение (`${ … }` / `{{ … }}`)
-// освобождается от enum И pattern: финальная форма появится только после
-// render-фазы (docs/input.md §«Резолв значений»).
+// At every level a string value-expression (`${ … }` / `{{ … }}`) is exempt from
+// enum AND pattern: the final form appears only after the render phase
+// (docs/input.md §"Value resolution").
 func validateValueAt(path string, s *InputSchema, v any) error {
 	if s == nil || s.Type == "" {
 		return nil
 	}
 
-	// Строка-выражение освобождается от value-проверок данного уровня (enum +
-	// pattern) — её финальная форма здесь неизвестна. Тип "string" при этом
-	// формально соблюдён, поэтому type-проверку ниже она проходит штатно.
+	// A string-expression is exempt from this level's value checks (enum +
+	// pattern) — its final form is unknown here. The "string" type is still
+	// formally satisfied, so it passes the type check below normally.
 	exprString := s.Type == "string" && isStringExpr(v)
 
 	if !valueMatchesType(v, s.Type) {
@@ -376,8 +383,9 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	if !exprString && len(s.Enum) > 0 &&
 		(s.Type == "string" || s.Type == "integer" || s.Type == "number" || s.Type == "boolean") {
 		if !enumContains(s.Enum, v) {
-			// enum-литералы поля тоже маскируются: для secret-поля сам список
-			// допустимых значений — секрет (например, фикс-набор паролей).
+			// The field's enum literals are masked too: for a secret field the
+			// list of allowed values is itself a secret (e.g. a fixed password
+			// set).
 			if s.Secret {
 				return fmt.Errorf("input %s = %s не входит в enum", path, maskedSecretLiteral)
 			}
@@ -385,13 +393,13 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 		}
 	}
 
-	// format — каждое значение проверяется против предопределённого формата
-	// (docs/input.md → «Допустимые значения format»: hostname/fqdn/ipv4/ipv6/
-	// cidr/email/uri/uuid/semver/duration + sid). Проверяется только СТРУКТУРА
-	// значения; принадлежность каталогу/доступность ресурса здесь НЕ проверяется
-	// (для sid каталог hosts/Choir-партию резолвит backend). Для type=array
-	// проверка применяется поэлементно через items (рекурсия validateValueAt).
-	// Освобождена для значения-выражения по той же причине, что enum/pattern.
+	// format — each value is checked against a predefined format (docs/input.md →
+	// "Allowed format values": hostname/fqdn/ipv4/ipv6/cidr/email/uri/uuid/
+	// semver/duration + sid). Only the STRUCTURE of the value is checked; catalog
+	// membership / resource availability is NOT checked here (for sid the backend
+	// resolves the hosts catalog / Choir party). For type=array the check applies
+	// per element via items (validateValueAt recursion). Exempt for a
+	// value-expression for the same reason as enum/pattern.
 	if !exprString && s.Type == "string" && s.Format != "" {
 		if !validateFormat(s.Format, v.(string)) {
 			return fmt.Errorf("input %s = %s не соответствует формату %q", path, literalFor(s, v), s.Format)
@@ -401,8 +409,8 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	if !exprString && s.Type == "string" && s.Pattern != "" {
 		re, err := regexp.Compile(s.Pattern)
 		if err != nil {
-			// Схема уже провалидирована (input_pattern_invalid) — сюда невалидный
-			// pattern долететь не должен; defensive.
+			// The schema is already validated (input_pattern_invalid) — an
+			// invalid pattern shouldn't reach here; defensive.
 			return fmt.Errorf("input %s: pattern %q не компилируется: %w", path, s.Pattern, err)
 		}
 		if !re.MatchString(v.(string)) {
@@ -410,12 +418,12 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 		}
 	}
 
-	// min_length / max_length — длина в Unicode-кодпоинтах (docs/input.md), не в
-	// байтах: utf8.RuneCountInString. Освобождаются для значения-выражения по той
-	// же причине, что enum/pattern — финальная длина появится только после render.
-	// Schema-time уже гарантировала min_length >= 0, max_length >= min_length;
-	// здесь проверяется ФАКТИЧЕСКОЕ значение оператора (раньше не enforced — drift
-	// lint↔runtime).
+	// min_length / max_length — length in Unicode code points (docs/input.md), not
+	// bytes: utf8.RuneCountInString. Exempt for a value-expression for the same
+	// reason as enum/pattern — the final length appears only after render.
+	// Schema-time already guaranteed min_length >= 0, max_length >= min_length;
+	// here the operator's ACTUAL value is checked (previously not enforced —
+	// lint↔runtime drift).
 	if !exprString && s.Type == "string" && (s.MinLength != nil || s.MaxLength != nil) {
 		n := utf8.RuneCountInString(v.(string))
 		if s.MinLength != nil && n < *s.MinLength {
@@ -435,12 +443,12 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 	return nil
 }
 
-// validateArrayItems валидирует каждый элемент массива против items-схемы и
-// проверяет лимиты длины (min_items/max_items). type-match массива уже проверен
-// validateValueAt выше. Schema-time уже гарантировал min_items >= 0 и
-// max_items >= min_items; здесь проверяется ФАКТИЧЕСКАЯ длина значения оператора
-// (раньше не enforced — drift lint↔runtime; для sid-list ADR-044 S-T1 лимиты
-// несут смысл «не меньше/не больше N выбранных хостов»).
+// validateArrayItems validates each array element against the items schema and
+// checks length limits (min_items/max_items). The array type-match was already
+// checked by validateValueAt above. Schema-time already guaranteed min_items >= 0
+// and max_items >= min_items; here the operator's ACTUAL length is checked
+// (previously not enforced — lint↔runtime drift; for a sid-list, ADR-044 S-T1, the
+// limits mean "no fewer/no more than N selected hosts").
 func validateArrayItems(path string, s *InputSchema, v any) error {
 	arr := v.([]any)
 	n := len(arr)
@@ -451,8 +459,8 @@ func validateArrayItems(path string, s *InputSchema, v any) error {
 		return fmt.Errorf("input %s содержит %d элементов, больше max_items %d", path, n, *s.MaxItems)
 	}
 	if s.Items == nil {
-		// items обязателен для array (schema-validate ловит его отсутствие); без
-		// схемы элементов вглубь идти не по чему.
+		// items is required for an array (schema-validate catches its absence);
+		// without an element schema there's nothing to descend into.
 		return nil
 	}
 	for i, el := range arr {
@@ -463,11 +471,13 @@ func validateArrayItems(path string, s *InputSchema, v any) error {
 	return nil
 }
 
-// validateObjectFields валидирует поля объекта против properties-схем и
-// проверяет наличие required-полей. type-match объекта уже проверен выше.
+// validateObjectFields validates object fields against the properties schemas and
+// checks presence of required fields. The object type-match was already checked
+// above.
 //
-// Поля без схемы в properties не валидируются (additional_properties — MVP не
-// проверяет вглубь runtime-значения, симметрично validateDefaultValue).
+// Fields with no schema in properties are not validated (additional_properties —
+// the MVP doesn't check runtime values in depth, symmetric with
+// validateDefaultValue).
 func validateObjectFields(path string, s *InputSchema, v any) error {
 	obj := v.(map[string]any)
 
@@ -490,11 +500,11 @@ func validateObjectFields(path string, s *InputSchema, v any) error {
 	return nil
 }
 
-// isMissingField — поле object трактуется как непереданное по той же семантике
-// пустой строки, что и top-level isAbsentValue: пустая строка для type=string
-// без allow_empty = «не передано» (docs/input.md §«Пустые строки»). prop может
-// быть nil (required ссылается на поле вне properties — schema-validate такое
-// ловит, defensive здесь: считаем переданным).
+// isMissingField — an object field is treated as not-passed by the same
+// empty-string semantics as top-level isAbsentValue: an empty string for
+// type=string without allow_empty = "not passed" (docs/input.md §"Empty strings").
+// prop may be nil (required references a field outside properties — schema-validate
+// catches that, defensive here: treat as passed).
 func isMissingField(prop *InputSchema, v any) bool {
 	if prop == nil {
 		return false
@@ -502,17 +512,18 @@ func isMissingField(prop *InputSchema, v any) bool {
 	return isAbsentValue(v, prop)
 }
 
-// isStringExpr — значение является строкой-выражением (`${ … }` / `{{ … }}`).
-// Удобная обёртка над isExprLiteral для any-значений: non-string → false.
+// isStringExpr reports whether the value is a string-expression (`${ … }` /
+// `{{ … }}`). A convenience wrapper over isExprLiteral for any values: non-string
+// → false.
 func isStringExpr(v any) bool {
 	str, ok := v.(string)
 	return ok && isExprLiteral(str)
 }
 
-// isExprLiteral — строка является CEL-/template-выражением (`${ … }` / `{{ … }}`),
-// финальное значение которого появится только после render-фазы. Такие значения
-// нельзя проверять против pattern на этапе резолва. Та же эвристика, что в
-// defaultMatchesType для default-выражений.
+// isExprLiteral reports whether the string is a CEL/template expression
+// (`${ … }` / `{{ … }}`) whose final value appears only after the render phase.
+// Such values can't be checked against pattern at resolve time. Same heuristic as
+// defaultMatchesType for default-expressions.
 func isExprLiteral(s string) bool {
 	t := strings.TrimSpace(s)
 	return (strings.HasPrefix(t, "${") && strings.HasSuffix(t, "}")) ||

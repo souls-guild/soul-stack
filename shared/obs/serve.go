@@ -10,38 +10,39 @@ import (
 	"time"
 )
 
-// BasicAuth — уже зарезолвленные креды для HTTP Basic-auth на `/metrics`.
+// BasicAuth holds already-resolved credentials for HTTP Basic-auth on `/metrics`.
 //
-// Источник-агностично: helper не знает, откуда взялись Username/Password
-// (Vault KV, env, статика конфига) — caller передаёт готовые значения.
-// Это держит границу ADR-011: shared/obs не тянет vault-client (на Soul
-// его и нет по ADR-012). nil *BasicAuth → listener без auth.
+// Source-agnostic: the helper does not know where Username/Password came from
+// (Vault KV, env, static config) — the caller passes ready values. This keeps
+// the ADR-011 boundary: shared/obs does not pull the vault client (Soul has none
+// per ADR-012). A nil *BasicAuth → a listener without auth.
 type BasicAuth struct {
 	Username string
 	Password string
 }
 
-// MetricsServer — дескриптор поднятого metrics-listener-а. Owns http.Server
-// + net.Listener; closed через [MetricsServer.Shutdown] в defer-цепочке main.
+// MetricsServer is the descriptor of a running metrics listener. Owns the
+// http.Server + net.Listener; closed via [MetricsServer.Shutdown] in main's
+// defer chain.
 //
-// Listener создаётся синхронно в [ServeMetrics] (fail-fast при занятом порту),
-// Serve уходит в фоновую goroutine. Addr() отдаёт фактический адрес — важно
-// для тестов с `:0` (ephemeral-port).
+// The listener is created synchronously in [ServeMetrics] (fail-fast on a busy
+// port), Serve goes into a background goroutine. Addr() returns the actual
+// address — important for tests with `:0` (ephemeral port).
 type MetricsServer struct {
 	srv *http.Server
 	ln  net.Listener
 }
 
-// ServeMetrics поднимает выделенный HTTP-listener для `GET /metrics` под
-// переданный Registry. Используется обоими server-бинарями (keeper — на
-// listen.metrics.addr с опц. basic-auth; soul — на loopback без auth).
+// ServeMetrics starts a dedicated HTTP listener for `GET /metrics` over the
+// given Registry. Used by both server binaries (keeper — on listen.metrics.addr
+// with optional basic-auth; soul — on loopback without auth).
 //
-// reg обязателен (без него нечего экспонировать). auth == nil → endpoint
-// открыт; non-nil → каждый запрос проходит Basic-auth (constant-time
-// сравнение, см. [basicAuthMiddleware]).
+// reg is required (nothing to expose without it). auth == nil → the endpoint is
+// open; non-nil → every request goes through Basic-auth (constant-time
+// comparison, see [basicAuthMiddleware]).
 //
-// Listener биндится синхронно — занятый порт даёт ошибку немедленно, до
-// старта Serve-goroutine (fail-fast при конфликте портов).
+// The listener binds synchronously — a busy port errors immediately, before the
+// Serve goroutine starts (fail-fast on a port conflict).
 func ServeMetrics(addr string, reg *Registry, auth *BasicAuth) (*MetricsServer, error) {
 	if reg == nil {
 		return nil, errors.New("obs: ServeMetrics requires non-nil Registry")
@@ -67,25 +68,25 @@ func ServeMetrics(addr string, reg *Registry, auth *BasicAuth) (*MetricsServer, 
 
 	srv := &http.Server{
 		Handler: mux,
-		// ReadHeaderTimeout — anti-Slowloris; scrape-запрос крошечный,
-		// 5s с запасом. WriteTimeout не ставим: exposition больших registry
-		// может занять время, обрезать по таймауту = битый scrape.
+		// ReadHeaderTimeout — anti-Slowloris; a scrape request is tiny, 5s with
+		// margin. No WriteTimeout: exposition of a large registry may take time,
+		// and cutting it off by timeout = a broken scrape.
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	ms := &MetricsServer{srv: srv, ln: ln}
 	go func() {
-		// Serve возвращает ErrServerClosed на штатном Shutdown — не ошибка.
-		// Прочие ошибки (accept-loop crash) ниоткуда не наблюдаются, но и
-		// крэшить процесс из-за упавшего metrics-порта не стоит — метрики
-		// вторичны к основному трафику.
+		// Serve returns ErrServerClosed on a normal Shutdown — not an error.
+		// Other errors (accept-loop crash) are observed nowhere, but crashing the
+		// process over a failed metrics port is not worth it — metrics are
+		// secondary to the main traffic.
 		_ = srv.Serve(ln)
 	}()
 	return ms, nil
 }
 
-// Addr возвращает фактический адрес listener-а (`host:port`). При `:0` в
-// конфиге отдаёт ephemeral-port, выданный ядром, — нужно для тестов.
+// Addr returns the listener's actual address (`host:port`). With `:0` in the
+// config it returns the kernel-assigned ephemeral port — needed for tests.
 func (m *MetricsServer) Addr() string {
 	if m == nil || m.ln == nil {
 		return ""
@@ -93,8 +94,8 @@ func (m *MetricsServer) Addr() string {
 	return m.ln.Addr().String()
 }
 
-// Shutdown gracefully останавливает metrics-listener. Безопасен на nil-е.
-// Вешается в defer-цепочку main с timeout-context (паттерн reaper/renewer).
+// Shutdown gracefully stops the metrics listener. Safe on nil. Hooked into
+// main's defer chain with a timeout context (the reaper/renewer pattern).
 func (m *MetricsServer) Shutdown(ctx context.Context) error {
 	if m == nil || m.srv == nil {
 		return nil
@@ -105,14 +106,14 @@ func (m *MetricsServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// basicAuthMiddleware закрывает next за HTTP Basic-auth. Сравнение и
-// username, и password — constant-time ([subtle.ConstantTimeCompare]),
-// чтобы таймингом не утекала длина/совпадение credential-а.
+// basicAuthMiddleware guards next behind HTTP Basic-auth. Both username and
+// password are compared constant-time ([subtle.ConstantTimeCompare]) so timing
+// does not leak the length or match of a credential.
 //
-// ConstantTimeCompare на разной длине возвращает 0 быстро (без сравнения
-// байт), что само по себе timing-leak длины. Чтобы оба сравнения всегда
-// исполнялись и комбинировались в один результат, флаги объединяются
-// через `&`, а не short-circuit `&&`.
+// ConstantTimeCompare on differing lengths returns 0 quickly (without comparing
+// bytes), which is itself a length timing-leak. So that both comparisons always
+// run and combine into one result, the flags are joined with `&`, not the
+// short-circuit `&&`.
 func basicAuthMiddleware(want BasicAuth, next http.Handler) http.Handler {
 	wantUser := []byte(want.Username)
 	wantPass := []byte(want.Password)

@@ -13,7 +13,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Closed enum-ы, нормированные docs/keeper/config.md и docs/soul/config.md.
+// Closed enums, normalized per docs/keeper/config.md and docs/soul/config.md.
 var (
 	enumLogLevel       = []string{"debug", "info", "warn", "error"}
 	enumLogFormat      = []string{"json", "text"}
@@ -31,8 +31,8 @@ var (
 	}
 )
 
-// schemaValidate — диспетчер по типу. Принимает заполненный *KeeperConfig,
-// *SoulConfig или *DestinyManifest.
+// schemaValidate dispatches by type. Accepts a populated *KeeperConfig,
+// *SoulConfig, or *DestinyManifest.
 func schemaValidate(path string, root *ast.MappingNode, cfg any) []diag.Diagnostic {
 	switch c := cfg.(type) {
 	case *KeeperConfig:
@@ -54,10 +54,9 @@ func schemaValidate(path string, root *ast.MappingNode, cfg any) []diag.Diagnost
 func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
-	// Top-level required-блоки (docs/keeper/config.md — `default: —` без
-	// пометки `optional`). KID — скаляр, остальные — mapping-блоки;
-	// проверка идёт по присутствию ключа в AST, чтобы отличить «отсутствует»
-	// от «zero-value».
+	// Top-level required blocks (docs/keeper/config.md — `default: —` without an
+	// `optional` marker). KID is a scalar, the rest are mapping blocks; the check
+	// is by key presence in the AST, to tell "absent" from "zero-value".
 	topKeys := topLevelKeys(root)
 	for _, req := range []struct{ key, hint string }{
 		{"kid", "set kid: <keeper-instance-id>, see docs/keeper/config.md → kid"},
@@ -78,9 +77,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}
 	}
 
-	// listen: должен быть присутствующим и непустым по содержимому. Если
-	// сам ключ есть, но все listener-ы пусты — это та же ошибка, что
-	// «listen отсутствует» по контракту docs/keeper/config.md.
+	// listen: must be present and non-empty in content. If the key exists but
+	// all listeners are empty, that's the same error as "listen absent" per the
+	// docs/keeper/config.md contract.
 	if topKeys["listen"] {
 		if c.Listen.GRPC.Bootstrap.Addr == "" && c.Listen.GRPC.EventStream.Addr == "" &&
 			c.Listen.OpenAPI.Addr == "" &&
@@ -92,10 +91,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 				Hint:    "all listeners are required per docs/keeper/config.md → listen",
 			}))
 		}
-		// MCP listener — обязательный по сквозному требованию «встроенный
-		// MCP» (requirements.md → Архитектурные требования). Отключение
-		// запрещено грамматикой (docs/keeper/config.md → listen.mcp.addr,
-		// без `optional`).
+		// MCP listener is mandatory per the cross-cutting "built-in MCP"
+		// requirement (requirements.md → Architectural requirements). Disabling
+		// is forbidden by the grammar (docs/keeper/config.md → listen.mcp.addr,
+		// no `optional`).
 		if c.Listen.MCP.Addr == "" {
 			out = append(out, atPath(root, "$.listen.mcp.addr", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -104,9 +103,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 				Hint:    "MCP listener is mandatory per requirements.md → «встроенный MCP»; see docs/keeper/config.md → listen.mcp",
 			}))
 		}
-		// gRPC sub-listener-ы оба обязательны по ADR-002 / ADR-012: Soul
-		// gRPC = mandatory transport, без обоих listener-ов keeper не
-		// может ни принять онбординг, ни поднять EventStream.
+		// Both gRPC sub-listeners are mandatory per ADR-002 / ADR-012: Soul gRPC =
+		// mandatory transport; without both listeners the keeper can neither
+		// accept onboarding nor bring up EventStream.
 		if c.Listen.GRPC.Bootstrap.Addr == "" {
 			out = append(out, atPath(root, "$.listen.grpc.bootstrap.addr", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -123,8 +122,8 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 				Hint:    "EventStream listener is mandatory per ADR-012(a); see docs/keeper/config.md → listen.grpc.event_stream",
 			}))
 		}
-		// Port-conflict: Bootstrap и EventStream обязаны слушать на
-		// разных адресах (разные TLS-режимы — server-only vs mTLS).
+		// Port conflict: Bootstrap and EventStream must listen on different
+		// addresses (different TLS modes — server-only vs mTLS).
 		if c.Listen.GRPC.Bootstrap.Addr != "" &&
 			c.Listen.GRPC.EventStream.Addr != "" &&
 			c.Listen.GRPC.Bootstrap.Addr == c.Listen.GRPC.EventStream.Addr {
@@ -162,8 +161,8 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}
 	}
 
-	// event_stream send-лимит ApplyRequest. 0 = «не задан» (дефолт
-	// DefaultMaxApplySizeMB); заданное значение обязано быть ≥ MinMaxApplySizeMB.
+	// event_stream ApplyRequest send-limit. 0 = "unset" (default
+	// DefaultMaxApplySizeMB); a set value must be ≥ MinMaxApplySizeMB.
 	out = append(out, validateMaxApplySize(root,
 		"$.listen.grpc.event_stream.max_apply_size_mb", c.Listen.GRPC.EventStream.MaxApplySizeMB)...)
 
@@ -214,10 +213,11 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}
 	}
 
-	// plugins.work_root — корень рабочих git-клонов резолвера (ADR-026 F-fetch).
-	// Абсолютный путь по тому же образцу, что cache_root. СТРОГО вне cache_root:
-	// если оба заданы и work_root лежит внутри cache_root — .git/checkout попали
-	// бы в кеш, читаемый Discover/ReadSlot (нарушение инварианта раскладки).
+	// plugins.work_root — root of the resolver's working git clones (ADR-026
+	// F-fetch). Absolute path, same pattern as cache_root. STRICTLY outside
+	// cache_root: if both are set and work_root is inside cache_root, .git/
+	// checkout would land in the cache read by Discover/ReadSlot (breaks the
+	// layout invariant).
 	if c.Plugins != nil && c.Plugins.WorkRoot != "" {
 		if !filepath.IsAbs(c.Plugins.WorkRoot) {
 			out = append(out, atPath(root, "$.plugins.work_root", diag.Diagnostic{
@@ -236,11 +236,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}
 	}
 
-	// plugins.max_artifact_size_mb / max_clone_size_mb — size-лимиты git-egress
-	// hardening (ADR-026(g)). 0 = «не задан» (дефолт в Resolved*); заданное
-	// значение обязано быть ≥ MinPluginSizeMB — сабмегабайтный потолок отверг бы
-	// любой реальный Go-бинарь плагина, превратив hardening в постоянный
-	// fail-closed.
+	// plugins.max_artifact_size_mb / max_clone_size_mb — git-egress hardening
+	// size limits (ADR-026(g)). 0 = "unset" (default in Resolved*); a set value
+	// must be ≥ MinPluginSizeMB — a sub-megabyte ceiling would reject any real
+	// plugin Go binary, turning hardening into a permanent fail-closed.
 	if c.Plugins != nil {
 		out = append(out, validatePluginSizeMB(root,
 			"$.plugins.max_artifact_size_mb", c.Plugins.MaxArtifactSizeMB)...)
@@ -256,10 +255,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// reaper.batch_size: 0 = «не задан» (берётся дефолт runner-а). Любое
-	// заданное значение обязано быть >= 1: 0-через-явный-ноль или отрицательное
-	// — это бессмысленный размер чанка, который runner молча трактовал бы как
-	// дефолт или зациклил бы выборку.
+	// reaper.batch_size: 0 = "unset" (runner default applies). Any set value must
+	// be >= 1: an explicit zero or a negative is a meaningless chunk size that
+	// the runner would silently treat as the default or loop the query on.
 	if c.Reaper != nil && c.Reaper.BatchSize < 0 {
 		out = append(out, atPath(root, "$.reaper.batch_size", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -268,9 +266,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// keeper.acolytes (ADR-027): feature-flag числа воркеров пула исполнения.
-	// 0 = «не задан» → пул не поднимается (прежний run-goroutine-путь).
-	// Отрицательное — бессмысленный размер пула.
+	// keeper.acolytes (ADR-027): feature-flag for the execution pool's worker
+	// count. 0 = "unset" → the pool is not started (the prior run-goroutine
+	// path). Negative is a meaningless pool size.
 	if c.Acolytes < 0 {
 		out = append(out, atPath(root, "$.acolytes", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -279,9 +277,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// keeper.acolyte_batch (ADR-027(d)): размер пачки одного claim-тика.
-	// 0 = «не задан» → дефолт DefaultAcolyteBatch. Отрицательное — бессмысленный
-	// LIMIT (симметрично reaper.batch_size).
+	// keeper.acolyte_batch (ADR-027(d)): batch size of one claim tick. 0 = "unset"
+	// → default DefaultAcolyteBatch. Negative is a meaningless LIMIT (symmetric
+	// with reaper.batch_size).
 	if c.AcolyteBatch < 0 {
 		out = append(out, atPath(root, "$.acolyte_batch", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -290,9 +288,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// keeper.oracle_circuit_max_fires (ADR-030(a), beacons S4): порог авто-disable
-	// Decree-а. nil (опущено) → дефолт DefaultOracleCircuitMaxFires в daemon;
-	// явный 0 = breaker OFF (escape-hatch); отрицательное — бессмысленный порог.
+	// keeper.oracle_circuit_max_fires (ADR-030(a), beacons S4): auto-disable
+	// threshold for the Decree. nil (omitted) → default
+	// DefaultOracleCircuitMaxFires in the daemon; explicit 0 = breaker OFF
+	// (escape-hatch); negative is a meaningless threshold.
 	if c.OracleCircuitMaxFires != nil && *c.OracleCircuitMaxFires < 0 {
 		out = append(out, atPath(root, "$.oracle_circuit_max_fires", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -301,9 +300,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// keeper.watchman_fail_threshold (soul-shedding S2): число подряд провалов
-	// probe до shedding-а. 0 = «не задан» → дефолт DefaultWatchmanFailThreshold.
-	// Отрицательное — бессмысленный порог (симметрично acolyte_batch).
+	// keeper.watchman_fail_threshold (soul-shedding S2): number of consecutive
+	// probe failures before shedding. 0 = "unset" → default
+	// DefaultWatchmanFailThreshold. Negative is a meaningless threshold
+	// (symmetric with acolyte_batch).
 	if c.WatchmanFailThreshold < 0 {
 		out = append(out, atPath(root, "$.watchman_fail_threshold", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -312,10 +312,11 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		}))
 	}
 
-	// keeper.toll.threshold (Toll cluster detector, ADR-038): доля от baseline
-	// `souls.status='connected'`. 0 (не задано) → дефолт DefaultTollThreshold;
-	// явно указанный 0 трактуем как «не задан» (ноль-порог бессмыслен — будет
-	// срабатывать на первом disconnect). Отрицательное и > 1 — out of range.
+	// keeper.toll.threshold (Toll cluster detector, ADR-038): fraction of the
+	// `souls.status='connected'` baseline. 0 (unset) → default
+	// DefaultTollThreshold; an explicit 0 is treated as "unset" (a zero threshold
+	// is meaningless — it would fire on the first disconnect). Negative and > 1
+	// are out of range.
 	if c.Toll != nil {
 		if c.Toll.Threshold < 0 || c.Toll.Threshold > 1 {
 			out = append(out, atPath(root, "$.toll.threshold", diag.Diagnostic{
@@ -325,10 +326,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 			}))
 		}
 
-		// keeper.toll.per_coven_thresholds[*]: симметрично top-level threshold —
-		// диапазон (0, 1]; пустая coven-метка ключа отвергается (member-value в
-		// sorted-set несёт coven=" "; пустой ключ === global, для этого есть
-		// top-level threshold).
+		// keeper.toll.per_coven_thresholds[*]: symmetric with the top-level
+		// threshold — range (0, 1]; an empty coven key is rejected (the
+		// sorted-set member value carries coven=" "; an empty key === global,
+		// which the top-level threshold already covers).
 		for coven, thr := range c.Toll.PerCovenThresholds {
 			if coven == "" {
 				out = append(out, atPath(root, "$.toll.per_coven_thresholds", diag.Diagnostic{
@@ -347,9 +348,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 			}
 		}
 
-		// keeper.toll.webhook (ADR-038 amendment, extensions): enabled → обязательны
-		// url_ref + валидный format (closed enum). При enabled=false (или nil) —
-		// валидаций нет (notifier не поднимется, в daemon-gate).
+		// keeper.toll.webhook (ADR-038 amendment, extensions): enabled → url_ref +
+		// a valid format (closed enum) are required. When enabled=false (or nil)
+		// there are no validations (the notifier won't start, at the daemon gate).
 		if w := c.Toll.Webhook; w != nil && w.Enabled {
 			if strings.TrimSpace(w.URLRef) == "" {
 				out = append(out, atPath(root, "$.toll.webhook.url_ref", diag.Diagnostic{
@@ -374,12 +375,12 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 	}
 
 	// keeper.tempo.voyage_create.{rate,burst} / voyage_preview.{rate,burst}
-	// (Tempo rate-limiter, ADR-050 + amendment 2026-06-17 — отдельный bucket
-	// preview): rate (rps, refill-скорость) и burst (глубина бакета, capacity)
-	// при ЯВНОМ задании не могут быть отрицательными (refill-скорость / capacity
-	// ≥ 0); 0 либо опущенное поле резолвится к дефолту в Resolved*, поэтому
-	// валидатор режет только < 0 (0 проходит и подменяется дефолтом). enabled
-	// (любой bool) валиден; нулевой блок → дефолты.
+	// (Tempo rate-limiter, ADR-050 + amendment 2026-06-17 — a separate preview
+	// bucket): rate (rps, refill rate) and burst (bucket depth, capacity), when
+	// set EXPLICITLY, cannot be negative (refill rate / capacity ≥ 0); 0 or an
+	// omitted field resolves to the default in Resolved*, so the validator only
+	// rejects < 0 (0 passes and is replaced by the default). enabled (any bool)
+	// is valid; a zero block → defaults.
 	if c.Tempo != nil {
 		if c.Tempo.VoyageCreate.Rate < 0 {
 			out = append(out, atPath(root, "$.tempo.voyage_create.rate", diag.Diagnostic{
@@ -417,8 +418,8 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
-	// Top-level required: блок `keeper:` с непустым `endpoints[]`.
-	// docs/soul/config.md → keeper.endpoints — обязательное.
+	// Top-level required: a `keeper:` block with a non-empty `endpoints[]`.
+	// docs/soul/config.md → keeper.endpoints is mandatory.
 	topKeys := topLevelKeys(root)
 	if !topKeys["keeper"] {
 		out = append(out, diag.Diagnostic{
@@ -439,7 +440,7 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 	}
 
 	for i, ep := range c.Keeper.Endpoints {
-		// host — обязателен (общий для обеих фаз; docs/soul/config.md →
+		// host is required (shared by both phases; docs/soul/config.md →
 		// keeper.endpoints[].host).
 		if ep.Host == "" {
 			out = append(out, atPath(root, fmt.Sprintf("$.keeper.endpoints[%d].host", i), diag.Diagnostic{
@@ -449,9 +450,9 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 				Hint:    "Keeper-cluster host shared by both bootstrap and event-stream phases; see docs/soul/config.md → keeper.endpoints",
 			}))
 		}
-		// Оба порта обязательны по решению architect (ADR-012 — два
-		// listener-а; «безопасность на первом месте»: явность > краткости,
-		// никакого молчаливого ухода bootstrap на event_stream-порт).
+		// Both ports are mandatory by architect decision (ADR-012 — two
+		// listeners; "security first": explicitness > brevity, no silent fallback
+		// of bootstrap onto the event_stream port).
 		if ep.EventStreamPort == 0 {
 			out = append(out, atPath(root, fmt.Sprintf("$.keeper.endpoints[%d].event_stream_port", i), diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -472,8 +473,8 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 		} else {
 			out = append(out, checkPort(root, fmt.Sprintf("$.keeper.endpoints[%d].bootstrap_port", i), ep.BootstrapPort)...)
 		}
-		// priority: 0 = «не задано» (normalizedPriority маппит 0→1, default).
-		// Отвергаем только отрицательное; см. docs/soul/connection.md.
+		// priority: 0 = "unset" (normalizedPriority maps 0→1, default). Only a
+		// negative is rejected; see docs/soul/connection.md.
 		if ep.Priority < 0 {
 			out = append(out, atPath(root, fmt.Sprintf("$.keeper.endpoints[%d].priority", i), diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -482,9 +483,9 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 			}))
 		}
 	}
-	// keeper.retry.max_attempts: 0 = «не задано» (резолв в дефолт connection-runner-а).
-	// Отвергаем только отрицательное — невозможное число попыток; молча
-	// трактовалось бы как дефолт либо как «никогда не подключаться».
+	// keeper.retry.max_attempts: 0 = "unset" (resolves to the connection runner's
+	// default). Only a negative is rejected — an impossible attempt count; it
+	// would silently read as the default or as "never connect".
 	if c.Keeper.Retry != nil && c.Keeper.Retry.MaxAttempts < 0 {
 		out = append(out, atPath(root, "$.keeper.retry.max_attempts", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -510,9 +511,9 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 	if c.Metrics != nil && c.Metrics.BasicAuth != nil {
 		out = append(out, validateSoulMetricsBasicAuth(root, c.Metrics.BasicAuth)...)
 	}
-	// keeper.max_apply_size_mb — recv-лимит входящего ApplyRequest. 0 = «не
-	// задан» (дефолт DefaultMaxApplySizeMB); заданное значение обязано быть
-	// ≥ MinMaxApplySizeMB.
+	// keeper.max_apply_size_mb — recv-limit for an incoming ApplyRequest. 0 =
+	// "unset" (default DefaultMaxApplySizeMB); a set value must be ≥
+	// MinMaxApplySizeMB.
 	out = append(out, validateMaxApplySize(root,
 		"$.keeper.max_apply_size_mb", c.Keeper.MaxApplySizeMB)...)
 
@@ -523,11 +524,11 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 	return out
 }
 
-// validateMaxApplySize — общая range-проверка лимита ApplyRequest для обеих
-// сторон (Keeper-send / Soul-recv). 0 трактуется как «не задан» (дефолт
-// DefaultMaxApplySizeMB применяется в Resolved*); любое заданное значение
-// обязано быть ≥ MinMaxApplySizeMB — иначе реальный Destiny упёрся бы в
-// fail-fast (Keeper) / отказ (Soul) на сабмегабайтном потолке.
+// validateMaxApplySize is the shared range check for the ApplyRequest limit on
+// both sides (Keeper-send / Soul-recv). 0 = "unset" (default
+// DefaultMaxApplySizeMB applies in Resolved*); any set value must be ≥
+// MinMaxApplySizeMB — otherwise a real Destiny would hit fail-fast (Keeper) /
+// rejection (Soul) at a sub-megabyte ceiling.
 func validateMaxApplySize(root *ast.MappingNode, yamlPath string, mb int) []diag.Diagnostic {
 	if mb == 0 {
 		return nil
@@ -543,10 +544,10 @@ func validateMaxApplySize(root *ast.MappingNode, yamlPath string, mb int) []diag
 	return nil
 }
 
-// validatePluginSizeMB — range-проверка size-лимитов резолва плагина
-// (`plugins.max_artifact_size_mb` / `max_clone_size_mb`, ADR-026(g)). 0 = «не
-// задан» (дефолт применяется в Resolved*-методах); любое заданное значение
-// обязано быть ≥ MinPluginSizeMB.
+// validatePluginSizeMB is the range check for plugin-resolve size limits
+// (`plugins.max_artifact_size_mb` / `max_clone_size_mb`, ADR-026(g)). 0 = "unset"
+// (default applies in the Resolved* methods); any set value must be ≥
+// MinPluginSizeMB.
 func validatePluginSizeMB(root *ast.MappingNode, yamlPath string, mb int) []diag.Diagnostic {
 	if mb == 0 {
 		return nil
@@ -570,8 +571,8 @@ func validateLogging(root *ast.MappingNode, prefix, level, format, file string, 
 	if format != "" {
 		out = append(out, checkEnum(root, prefix+".format", format, enumLogFormat)...)
 	}
-	// `file` — путь к лог-файлу; пустой = stderr. Если задан, обязан быть
-	// абсолютным (по образцу plugins.cache_root → path_not_absolute).
+	// `file` — path to the log file; empty = stderr. If set, must be absolute
+	// (following plugins.cache_root → path_not_absolute).
 	if file != "" && !filepath.IsAbs(file) {
 		out = append(out, atPath(root, prefix+".file", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -581,9 +582,9 @@ func validateLogging(root *ast.MappingNode, prefix, level, format, file string, 
 		}))
 	}
 	if rotation != nil {
-		// 0 = «не задано» (берётся дефолт билдера, shared/log) для всех трёх
-		// числовых полей ротации; отрицательное — невозможный размер/счётчик,
-		// который иначе ушёл бы в lumberjack как мусор.
+		// 0 = "unset" (the builder default in shared/log applies) for all three
+		// numeric rotation fields; a negative is an impossible size/count that
+		// would otherwise go to lumberjack as garbage.
 		if rotation.MaxAgeDays < 0 {
 			out = append(out, atPath(root, prefix+".rotation.max_age_days", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -636,14 +637,14 @@ func validatePluginRuntime(root *ast.MappingNode, prefix string, p *PluginRuntim
 	return out
 }
 
-// validateMetricsBasicAuth проверяет блок `metrics.auth.basic` (ADR-024):
-// при `enabled: true` обязательны `username` и `password_ref`, причём
-// password_ref обязан быть vault-ref-ом (`vault:<mount>/<path>`) — plaintext-
-// пароль в конфиге запрещён («безопасность на первом месте»).
+// validateMetricsBasicAuth checks the `metrics.auth.basic` block (ADR-024): with
+// `enabled: true`, `username` and `password_ref` are required, and password_ref
+// must be a vault-ref (`vault:<mount>/<path>`) — a plaintext password in the
+// config is forbidden ("security first").
 //
-// При `enabled: false` поля не требуются (можно держать заготовку с пустыми
-// значениями), но если password_ref задан — он всё равно валидируется как
-// vault-ref, чтобы опечатку поймать до включения.
+// With `enabled: false` the fields aren't required (a stub with empty values is
+// fine), but if password_ref is set it is still validated as a vault-ref, to
+// catch a typo before it's enabled.
 func validateMetricsBasicAuth(root *ast.MappingNode, b *KeeperMetricsBasicAuth) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if b.Enabled {
@@ -675,14 +676,14 @@ func validateMetricsBasicAuth(root *ast.MappingNode, b *KeeperMetricsBasicAuth) 
 	return out
 }
 
-// validateSoulMetricsBasicAuth проверяет блок soul-`metrics.basic_auth`
-// (ADR-024): при `enabled: true` обязательны `username` и `password_file`.
+// validateSoulMetricsBasicAuth checks the soul `metrics.basic_auth` block
+// (ADR-024): with `enabled: true`, `username` and `password_file` are required.
 //
-// Зеркало keeper-`metrics.auth.basic`, но источник пароля — путь к файлу, не
-// vault-ref (у Soul нет vault-клиента, ADR-012). Существование/читаемость
-// файла здесь НЕ проверяется (это runtime-граница: файл может появиться
-// между валидацией и стартом, проверять в схеме = ложные срабатывания на
-// `soul-lint` офлайн); fail-fast на отсутствие — в main при резолве кред.
+// Mirror of keeper `metrics.auth.basic`, but the password source is a file path,
+// not a vault-ref (Soul has no vault client, ADR-012). File existence/readability
+// is NOT checked here (a runtime boundary: the file may appear between validation
+// and start, and checking in the schema = false positives in offline
+// `soul-lint`); fail-fast on absence is in main when resolving credentials.
 func validateSoulMetricsBasicAuth(root *ast.MappingNode, b *SoulMetricsBasicAuth) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if !b.Enabled {
@@ -707,32 +708,32 @@ func validateSoulMetricsBasicAuth(root *ast.MappingNode, b *SoulMetricsBasicAuth
 	return out
 }
 
-// validatePush проверяет блок `push` (pilot wire-up SshDispatcher, ADR-032
-// amendment 2026-05-26). Блок целиком optional: пустой/отсутствующий →
-// push-orchestrator не поднимается (см. setupPushDispatchers).
+// validatePush checks the `push` block (pilot wire-up of SshDispatcher, ADR-032
+// amendment 2026-05-26). The whole block is optional: empty/absent → the push
+// orchestrator is not started (see setupPushDispatchers).
 //
-// Правила pilot-схемы:
-//   - `host_ca_ref` (singular, deprecated S7-3) И `host_ca_refs[]` (multi-CA)
-//     mutually exclusive — одновременное присутствие отвергается
-//     `mutually_exclusive_keys`. Singular остаётся под 1-release WARN
-//     deprecation window (auto-adapt в singleton делает daemon).
-//   - `host_ca_ref` (если задан один singular) обязан быть vault-ref-ом
-//     (`vault:<mount>/<path>`). Plaintext-inline-PEM отвергнут как нарушение
-//     security policy (симметрия с `sigil.signing_key_ref` /
+// Pilot-schema rules:
+//   - `host_ca_ref` (singular, deprecated S7-3) AND `host_ca_refs[]` (multi-CA)
+//     are mutually exclusive — both present is rejected with
+//     `mutually_exclusive_keys`. The singular stays under a 1-release WARN
+//     deprecation window (the daemon auto-adapts it into the singleton).
+//   - `host_ca_ref` (if the single singular is set) must be a vault-ref
+//     (`vault:<mount>/<path>`). Plaintext inline PEM is rejected as a security
+//     policy violation (symmetric with `sigil.signing_key_ref` /
 //     `auth.jwt.signing_key_ref`).
-//   - `host_ca_refs[]` — каждый элемент должен иметь vault-ref `ref` и
-//     уникальный kebab-case `name` (используется как label-значение в
-//     `keeper_push_host_ca_used_total{ca_name=...}` и в логах).
-//   - `targets[]` — кажный элемент должен иметь непустой `sid`; дубликаты sid
-//     запрещены (ConfigTargetResolver индексирует по SID).
-//   - `ssh_port` (если задан) — в диапазоне 1..65535. 0/опущено → дефолт 22
-//     резолвится в push.ConfigTargetResolver.
-//   - `providers[]` — каждый элемент должен иметь непустой `name`;
-//     дубликаты `name` запрещены (env-payload-injection lookup по имени).
+//   - `host_ca_refs[]` — each element must have a vault-ref `ref` and a unique
+//     kebab-case `name` (used as a label value in
+//     `keeper_push_host_ca_used_total{ca_name=...}` and in logs).
+//   - `targets[]` — each element must have a non-empty `sid`; duplicate sids are
+//     forbidden (ConfigTargetResolver indexes by SID).
+//   - `ssh_port` (if set) — in range 1..65535. 0/omitted → default 22 resolved
+//     in push.ConfigTargetResolver.
+//   - `providers[]` — each element must have a non-empty `name`; duplicate
+//     `name`s are forbidden (env-payload-injection lookup by name).
 func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 	var out []diag.Diagnostic
-	// Mutually exclusive singular + plural. Auto-adapt singular в singleton
-	// делает daemon, schema-фаза только отвергает двусмысленность.
+	// Mutually exclusive singular + plural. The daemon auto-adapts the singular
+	// into the singleton; the schema phase only rejects the ambiguity.
 	if p.HostCARef != "" && len(p.HostCARefs) > 0 {
 		out = append(out, atPath(root, "$.push.host_ca_refs", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -797,18 +798,20 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 	return out
 }
 
-// validatePushTransport проверяет `push.transport` + блок `push.teleport`
-// (ADR-063 amendment «Teleport by-name transport»):
+// validatePushTransport checks `push.transport` + the `push.teleport` block
+// (ADR-063 amendment "Teleport by-name transport"):
 //
-//   - `transport` (если задан) — один из `direct` / `teleport`; пусто = `direct`.
-//   - при `transport: teleport` блок `teleport` обязателен, и все три поля
-//     (`proxy_addr` / `identity_file` / `cluster`) непусты — transport+auth+
-//     host-verify целиком идут через identity-file, без них коннект невозможен.
-//   - `teleport.*` при `transport != teleport` — не ошибка (можно держать creds
-//     заранее), но не используется.
+//   - `transport` (if set) — one of `direct` / `teleport`; empty = `direct`.
+//   - with `transport: teleport` the `teleport` block is required and all three
+//     fields (`proxy_addr` / `identity_file` / `cluster`) are non-empty —
+//     transport+auth+host-verify all go through the identity file, without which
+//     no connection is possible.
+//   - `teleport.*` with `transport != teleport` is not an error (creds can be
+//     kept ahead of time) but is unused.
 //
-// `teleport.use_system_trust` / `teleport.alpn_upgrade` — опциональные bool
-// (default false), валидации не требуют (proxy-за-L7-LB, ADR-063 amendment).
+// `teleport.use_system_trust` / `teleport.alpn_upgrade` — optional bools
+// (default false), no validation needed (proxy behind an L7 LB, ADR-063
+// amendment).
 func validatePushTransport(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	switch p.Transport {
@@ -861,21 +864,21 @@ func validatePushTransport(root *ast.MappingNode, p *KeeperPush) []diag.Diagnost
 	return out
 }
 
-// rePushCAName — kebab-case имя CA в `push.host_ca_refs[].name` (S7-3).
-// Dash только между алфанумериков, без trailing/leading/double-dash. Используется
-// как label-значение в `keeper_push_host_ca_used_total{ca_name=...}` —
-// cardinality-safe форма (короткий closed-set имён, заданных оператором).
+// rePushCAName — kebab-case CA name in `push.host_ca_refs[].name` (S7-3). Dash
+// only between alphanumerics, no trailing/leading/double dash. Used as a label
+// value in `keeper_push_host_ca_used_total{ca_name=...}` — a cardinality-safe
+// form (a short closed set of operator-defined names).
 var rePushCAName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// validatePushHostCARefs проверяет multi-CA-список `push.host_ca_refs[]` (S7-3,
+// validatePushHostCARefs checks the multi-CA list `push.host_ca_refs[]` (S7-3,
 // ADR-032 amendment 2026-05-26):
 //
-//   - каждый `ref` — непустой vault-ref (`vault:<mount>/<path>`); plaintext-PEM
-//     запрещён, симметрия с singular `host_ca_ref`;
-//   - каждый `name` — непустой kebab-case (используется как label-значение в
-//     метриках, поэтому форма закрепляется в схеме);
-//   - имена в наборе уникальны (lookup по имени в логах/метриках без
-//     двусмысленности).
+//   - each `ref` is a non-empty vault-ref (`vault:<mount>/<path>`); plaintext PEM
+//     is forbidden, symmetric with the singular `host_ca_ref`;
+//   - each `name` is a non-empty kebab-case (used as a label value in metrics, so
+//     the form is enforced in the schema);
+//   - names in the set are unique (lookup by name in logs/metrics without
+//     ambiguity).
 func validatePushHostCARefs(root *ast.MappingNode, refs []KeeperPushCARef) []diag.Diagnostic {
 	if len(refs) == 0 {
 		return nil
@@ -929,13 +932,13 @@ func validatePushHostCARefs(root *ast.MappingNode, refs []KeeperPushCARef) []dia
 	return out
 }
 
-// validateSigil проверяет блок `sigil` (ADR-026, печать доверия Sigil).
+// validateSigil checks the `sigil` block (ADR-026, the Sigil seal of trust).
 //
-// Блок optional: при отсутствии подпись плагинов недоступна (allow-операция S4
-// вернёт ошибку), keeper стартует нормально. Если signing_key_ref задан — он
-// обязан быть vault-ref-ом (`vault:<mount>/<path>`): приватник подписи живёт в
-// Vault, plaintext-ключ в конфиге запрещён («безопасность на первом месте»),
-// симметрично auth.jwt.signing_key_ref / metrics.auth.basic.password_ref.
+// The block is optional: without it plugin signing is unavailable (the S4 allow
+// operation returns an error), the keeper starts normally. If signing_key_ref is
+// set it must be a vault-ref (`vault:<mount>/<path>`): the signing private key
+// lives in Vault, a plaintext key in the config is forbidden ("security first"),
+// symmetric with auth.jwt.signing_key_ref / metrics.auth.basic.password_ref.
 func validateSigil(root *ast.MappingNode, s *KeeperSigil) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if s.SigningKeyRef != "" && !isVaultRef(s.SigningKeyRef) {
@@ -949,30 +952,30 @@ func validateSigil(root *ast.MappingNode, s *KeeperSigil) []diag.Diagnostic {
 	return out
 }
 
-// validateRedis проверяет блок `redis` (ADR-006 amendment, режимы
-// standalone/sentinel/cluster). Симметрично [validateVaultAuth]: enum `mode`
-// + per-mode required-поля + диагностика лишних полей чужого режима.
+// validateRedis checks the `redis` block (ADR-006 amendment, modes
+// standalone/sentinel/cluster). Symmetric with [validateVaultAuth]: enum `mode`
+// + per-mode required fields + a diagnostic for stray fields of another mode.
 //
-// Правила:
-//   - `mode` (если задан) — из [enumRedisMode]; пусто = standalone (forward-
-//     compat для конфигов без `mode`).
-//   - standalone: требует `addr` (host:port); `sentinels`/`nodes`/`master_name`
-//     для этого режима лишние (диагностика, не fatal-для-других-полей).
-//   - sentinel: требует непустой `master_name` И непустой `sentinels` (каждый
-//     элемент — host:port); `addr`/`nodes` лишние.
-//   - cluster: требует непустой `nodes` (каждый элемент — host:port);
-//     `addr`/`master_name`/`sentinels` лишние.
-//   - `password_ref`/`sentinel_password_ref` — vault-ref-формат (стиль
-//     metrics.auth.basic.password_ref); plaintext тут невалиден.
+// Rules:
+//   - `mode` (if set) — from [enumRedisMode]; empty = standalone (forward-compat
+//     for configs without `mode`).
+//   - standalone: requires `addr` (host:port); `sentinels`/`nodes`/`master_name`
+//     are stray for this mode (diagnostic, not fatal for other fields).
+//   - sentinel: requires a non-empty `master_name` AND a non-empty `sentinels`
+//     (each element host:port); `addr`/`nodes` are stray.
+//   - cluster: requires a non-empty `nodes` (each element host:port);
+//     `addr`/`master_name`/`sentinels` are stray.
+//   - `password_ref`/`sentinel_password_ref` — vault-ref format (like
+//     metrics.auth.basic.password_ref); plaintext is invalid here.
 //
-// host:port-валидность addr/элементов резолвится через [checkHostPort]
-// (пустой пропускается — required-проверка ловит отсутствие отдельным диагом).
+// host:port validity of addr/elements is resolved via [checkHostPort] (empty is
+// skipped — the required check catches absence with its own diagnostic).
 func validateRedis(root *ast.MappingNode, r *KeeperRedis) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
 	if r.Mode != "" {
 		out = append(out, checkEnum(root, "$.redis.mode", r.Mode, enumRedisMode)...)
-		// Невалидный mode → per-mode-проверки бессмысленны (как vault.auth.method).
+		// Invalid mode → per-mode checks are meaningless (like vault.auth.method).
 		if !contains(enumRedisMode, r.Mode) {
 			return out
 		}
@@ -983,9 +986,9 @@ func validateRedis(root *ast.MappingNode, r *KeeperRedis) []diag.Diagnostic {
 		mode = "standalone"
 	}
 
-	// vault-ref-формат password_ref/sentinel_password_ref проверяет semantic-фаза
-	// (`$.redis.password_ref` / `$.redis.sentinel_password_ref`, `#field`-aware
-	// reVaultRef) — здесь только структура топологии.
+	// The vault-ref format of password_ref/sentinel_password_ref is checked by the
+	// semantic phase (`$.redis.password_ref` / `$.redis.sentinel_password_ref`,
+	// `#field`-aware reVaultRef) — here only the topology structure.
 
 	switch mode {
 	case "standalone":
@@ -1059,9 +1062,9 @@ func validateRedis(root *ast.MappingNode, r *KeeperRedis) []diag.Diagnostic {
 	return out
 }
 
-// redisUnusedFieldsDiag эмитит warn-диагностику на поля чужого режима. Каждый
-// флаг = «поле задано, но к текущему mode не относится». Не fatal: помогает
-// поймать опечатку в `mode` / забытое поле прошлой топологии.
+// redisUnusedFieldsDiag emits a warn diagnostic for fields of another mode. Each
+// flag = "field set but not relevant to the current mode". Not fatal: helps catch
+// a typo in `mode` / a leftover field from a prior topology.
 func redisUnusedFieldsDiag(root *ast.MappingNode, mode string, masterName, sentinels, nodes bool) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	warn := func(yamlPath, field string) {
@@ -1083,32 +1086,32 @@ func redisUnusedFieldsDiag(root *ast.MappingNode, mode string, masterName, senti
 	return out
 }
 
-// validateVaultAuth проверяет блок `vault.auth` (ADR-014, AppRole).
+// validateVaultAuth checks the `vault.auth` block (ADR-014, AppRole).
 //
-// vaultPresent — присутствует ли top-level `vault`-ключ в YAML; при его
-// отсутствии блок не валидируется (top-level required-проверка уже выдала
-// missing_required_field на сам `vault`, дублировать не нужно).
+// vaultPresent — whether the top-level `vault` key is present in the YAML; if
+// absent the block is not validated (the top-level required check already emitted
+// missing_required_field for `vault` itself, no need to duplicate).
 //
-// Правила:
-//   - `method` (если задан) — из enumVaultAuth (token | approle); пусто = token.
-//   - method=token: approle-поля игнорируются (если заданы — warn про
-//     неиспользуемые поля, не error: чтобы поймать опечатку в method).
-//   - method=approle: `role_id` обязателен; ровно один источник secret_id —
-//     `secret_id_file` ИЛИ `secret_id_env` (ни ноль, ни оба); `secret_id_file`
-//     обязан быть абсолютным путём; `token` при approle задавать нельзя
-//     (взаимоисключение источников аутентификации).
+// Rules:
+//   - `method` (if set) — from enumVaultAuth (token | approle); empty = token.
+//   - method=token: approle fields are ignored (if set — a warn about unused
+//     fields, not an error: to catch a typo in method).
+//   - method=approle: `role_id` is required; exactly one secret_id source —
+//     `secret_id_file` OR `secret_id_env` (neither zero nor both); `secret_id_file`
+//     must be an absolute path; `token` must not be set with approle (mutually
+//     exclusive authentication sources).
 //
-// role_id — не секрет, plaintext в конфиге допустим. secret_id plaintext в
-// конфиге не предусмотрен схемой (нет такого поля) — только file/env.
+// role_id is not a secret, plaintext in the config is fine. A plaintext secret_id
+// is not allowed by the schema (no such field) — only file/env.
 func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool) []diag.Diagnostic {
 	if !vaultPresent {
 		return nil
 	}
 	var out []diag.Diagnostic
 
-	// `kv_version` — escape-hatch для probe версии KV mount-а: пусто → auto,
-	// иначе строго "1"/"2". Невалидное значение ловим здесь, чтобы не упасть
-	// на runtime при первом ReadKV (override побеждает probe).
+	// `kv_version` — escape-hatch for the KV mount version probe: empty → auto,
+	// otherwise strictly "1"/"2". An invalid value is caught here to avoid a
+	// runtime failure on the first ReadKV (the override beats the probe).
 	if v.KVVersion != "" && v.KVVersion != "1" && v.KVVersion != "2" {
 		out = append(out, atPath(root, "$.vault.kv_version", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -1122,7 +1125,7 @@ func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool)
 
 	if a.Method != "" {
 		out = append(out, checkEnum(root, "$.vault.auth.method", a.Method, enumVaultAuth)...)
-		// Невалидный method → дальнейшие per-method проверки бессмысленны.
+		// Invalid method → further per-method checks are meaningless.
 		if !contains(enumVaultAuth, a.Method) {
 			return out
 		}
@@ -1130,7 +1133,7 @@ func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool)
 
 	switch a.ResolvedAuthMethod() {
 	case AuthMethodToken:
-		// approle-поля при token-методе не используются — мягкий сигнал.
+		// approle fields are unused with the token method — a soft signal.
 		if a.RoleID != "" || a.SecretIDFile != "" || a.SecretIDEnv != "" {
 			out = append(out, atPath(root, "$.vault.auth", diag.Diagnostic{
 				Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
@@ -1186,10 +1189,10 @@ func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool)
 	return out
 }
 
-// isVaultRef — форма `vault:<mount>/<path>` (минимально: префикс `vault:`,
-// непустое тело, разделитель `/` между mount и path не на краях). Зеркалит
-// keeper/internal/vault.ParseRef, но без import-а keeper-пакета в shared/
-// (ADR-011). Полный резолв ref-а делает keeper-vault на runtime.
+// isVaultRef checks the `vault:<mount>/<path>` form (minimally: `vault:` prefix,
+// non-empty body, a `/` separator between mount and path, not at the edges).
+// Mirrors keeper/internal/vault.ParseRef but without importing the keeper package
+// into shared/ (ADR-011). Full ref resolution is done by keeper-vault at runtime.
 func isVaultRef(ref string) bool {
 	const prefix = "vault:"
 	if len(ref) <= len(prefix) || ref[:len(prefix)] != prefix {
@@ -1220,11 +1223,11 @@ func checkEnum(root *ast.MappingNode, yamlPath, val string, allowed []string) []
 	})}
 }
 
-// checkListEntryHostPort — вариант [checkHostPort] для элементов списка
-// (`sentinels[]`/`nodes[]`), где пустой элемент — не «опущено», а ошибочно
-// пустая запись (`["", "s:26379"]`): required-проверка ловит лишь полностью
-// пустой список, поэтому одиночный пустой элемент нужно отвергнуть явно тем же
-// кодом host_port_invalid.
+// checkListEntryHostPort is the [checkHostPort] variant for list elements
+// (`sentinels[]`/`nodes[]`), where an empty element is not "omitted" but an
+// erroneously empty entry (`["", "s:26379"]`): the required check catches only a
+// fully empty list, so a single empty element must be rejected explicitly with
+// the same host_port_invalid code.
 func checkListEntryHostPort(root *ast.MappingNode, yamlPath, val string) []diag.Diagnostic {
 	if val == "" {
 		return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
@@ -1267,9 +1270,9 @@ func checkHostPort(root *ast.MappingNode, yamlPath, val string) []diag.Diagnosti
 	return nil
 }
 
-// checkPort валидирует целочисленный порт в диапазоне 1..65535. Порт 0
-// трактуется как «не задан» вызывающим (отдельный *_required diag), сюда
-// доходят только ненулевые значения.
+// checkPort validates an integer port in range 1..65535. Port 0 is treated as
+// "unset" by the caller (a separate *_required diag); only non-zero values reach
+// here.
 func checkPort(root *ast.MappingNode, yamlPath string, port int) []diag.Diagnostic {
 	if port >= 1 && port <= 65535 {
 		return nil
@@ -1281,9 +1284,10 @@ func checkPort(root *ast.MappingNode, yamlPath string, port int) []diag.Diagnost
 	})}
 }
 
-// atPath обогащает диагностику line/column через резолв yaml-пути в AST.
+// atPath enriches a diagnostic with line/column by resolving the yaml path in the
+// AST.
 //
-// Если путь не находится — возвращается diag как есть (без позиции).
+// If the path isn't found, the diag is returned as is (without a position).
 func atPath(root *ast.MappingNode, yamlPath string, d diag.Diagnostic) diag.Diagnostic {
 	d.YAMLPath = yamlPath
 	if line, col, ok := lookupPath(root, yamlPath); ok {
@@ -1293,10 +1297,10 @@ func atPath(root *ast.MappingNode, yamlPath string, d diag.Diagnostic) diag.Diag
 	return d
 }
 
-// topLevelKeys возвращает множество имён ключей верхнего уровня в mapping.
-// Используется для проверки присутствия обязательных блоков: zero-value
-// в Go-структуре не отличает «ключ отсутствует» от «ключ есть с пустым
-// телом», а для `missing_required_field` нам важен именно факт присутствия.
+// topLevelKeys returns the set of top-level key names in the mapping. Used to
+// check presence of required blocks: a zero-value Go struct can't tell "key
+// absent" from "key present with an empty body", and for `missing_required_field`
+// we care about presence itself.
 func topLevelKeys(m *ast.MappingNode) map[string]bool {
 	out := make(map[string]bool, len(m.Values))
 	for _, kv := range m.Values {
@@ -1316,10 +1320,9 @@ func contains(list []string, v string) bool {
 	return false
 }
 
-// pathWithin — true, если sub лежит внутри (или равен) base. Оба ожидаются
-// абсолютными (вызывается после filepath.IsAbs-проверки). Сравнение по
-// очищенным путям с граничным разделителем, чтобы `/a/bc` не считался внутри
-// `/a/b`.
+// pathWithin reports whether sub is inside (or equal to) base. Both are expected
+// absolute (called after a filepath.IsAbs check). Compares cleaned paths with a
+// boundary separator so `/a/bc` isn't considered inside `/a/b`.
 func pathWithin(sub, base string) bool {
 	b := filepath.Clean(base)
 	s := filepath.Clean(sub)

@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// Toll-extensions (ADR-038 amendment 2026-05-27): per_coven_thresholds +
-// webhook. Тесты только на НОВЫЕ поля; общая validate-инфраструктура
-// keeperBaseRequired / hasCode* — из semantic_test.go.
+// Toll extensions (ADR-038 amendment 2026-05-27): per_coven_thresholds +
+// webhook. Tests only for the NEW fields; the shared validate infrastructure
+// keeperBaseRequired / hasCode* is from semantic_test.go.
 
 func TestKeeperToll_PerCovenThreshold_Valid(t *testing.T) {
 	src := keeperBaseRequired + `toll:
@@ -38,8 +38,8 @@ func TestKeeperToll_PerCovenThreshold_OutOfRange(t *testing.T) {
 }
 
 func TestKeeperToll_PerCovenThreshold_ZeroRejected(t *testing.T) {
-	// Threshold = 0 — bizdev-бессмыслен (срабатывает на первом disconnect),
-	// schema-фаза должна отвергнуть (диапазон (0, 1]).
+	// Threshold = 0 is bizdev-meaningless (fires on the first disconnect),
+	// the schema phase must reject it (range (0, 1]).
 	src := keeperBaseRequired + `toll:
   per_coven_thresholds:
     production-eu: 0
@@ -97,7 +97,7 @@ func TestKeeperToll_Webhook_ValidFormats(t *testing.T) {
 }
 
 func TestKeeperToll_Webhook_DisabledNoValidation(t *testing.T) {
-	// При enabled: false url_ref необязателен (notifier не поднимется).
+	// With enabled: false the url_ref is optional (the notifier won't start).
 	src := keeperBaseRequired + `toll:
   webhook:
     enabled: false
@@ -118,8 +118,8 @@ func TestKeeperToll_Webhook_TimeoutFormat(t *testing.T) {
     timeout: "not-a-duration"
 `
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
-	// checkDuration выдаёт invalid_duration или value_out_of_range — оба
-	// допустимы как сигнал «timeout invalid». Главное — не зелёный.
+	// checkDuration emits invalid_duration or value_out_of_range — both are
+	// acceptable as a "timeout invalid" signal. The point is: not green.
 	if !hasCode(diags, "duration_invalid") {
 		dump(t, diags)
 		t.Fatalf("expected duration-error for invalid webhook.timeout")

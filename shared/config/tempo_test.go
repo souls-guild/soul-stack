@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-// TestTempo_EnabledFootgunGuard — ADR-050 default-ON (footgun-guard как
-// Conductor/Toll): не задано (nil блок / nil поле) → ON; явный true → ON;
-// явный false → OFF (opt-out).
+// TestTempo_EnabledFootgunGuard — ADR-050 default-ON (footgun-guard like
+// Conductor/Toll): unset (nil block / nil field) → ON; explicit true → ON;
+// explicit false → OFF (opt-out).
 func TestTempo_EnabledFootgunGuard(t *testing.T) {
 	tru, fal := true, false
 	cases := []struct {
@@ -28,10 +28,9 @@ func TestTempo_EnabledFootgunGuard(t *testing.T) {
 	}
 }
 
-// TestTempo_ResolvedVoyageCreate — nil-блок / нулевые / опущенные rate|burst →
-// дефолты [DefaultTempoVoyageCreate*]; явно заданные → override. Резолв
-// per-field: можно переопределить только rate, оставив burst дефолтным (и
-// наоборот).
+// TestTempo_ResolvedVoyageCreate — nil block / zero / omitted rate|burst →
+// defaults [DefaultTempoVoyageCreate*]; explicit → override. Per-field resolve:
+// only rate can be overridden while burst stays default (and vice versa).
 func TestTempo_ResolvedVoyageCreate(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -70,10 +69,10 @@ func TestTempo_ResolvedVoyageCreate(t *testing.T) {
 	}
 }
 
-// TestTempo_ResolvedVoyagePreview — nil-блок / нулевые / опущенные rate|burst →
-// дефолты [DefaultTempoVoyagePreview*] (30/60, мягче create); явно заданные →
-// override. Резолв per-field, симметрично ResolvedVoyageCreate. Гарантирует
-// инвариант «дефолт preview = 30/60» (ADR-050 amendment 2026-06-17).
+// TestTempo_ResolvedVoyagePreview — nil block / zero / omitted rate|burst →
+// defaults [DefaultTempoVoyagePreview*] (30/60, softer than create); explicit →
+// override. Per-field resolve, symmetric with ResolvedVoyageCreate. Guards the
+// "preview default = 30/60" invariant (ADR-050 amendment 2026-06-17).
 func TestTempo_ResolvedVoyagePreview(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -112,9 +111,9 @@ func TestTempo_ResolvedVoyagePreview(t *testing.T) {
 	}
 }
 
-// TestTempo_PreviewDefaultsAre30_60 — точечный guard числовых дефолтов
-// preview-бакета (ADR-050 amendment 2026-06-17: rate=30, burst=60). Защищает от
-// случайной правки констант, которая разъехалась бы с ADR.
+// TestTempo_PreviewDefaultsAre30_60 — targeted guard on the preview bucket's
+// numeric defaults (ADR-050 amendment 2026-06-17: rate=30, burst=60). Protects
+// against accidental constant edits that would drift from the ADR.
 func TestTempo_PreviewDefaultsAre30_60(t *testing.T) {
 	if DefaultTempoVoyagePreviewRate != 30.0 {
 		t.Errorf("DefaultTempoVoyagePreviewRate = %v, want 30", DefaultTempoVoyagePreviewRate)
@@ -128,9 +127,9 @@ func TestTempo_PreviewDefaultsAre30_60(t *testing.T) {
 	}
 }
 
-// TestTempo_PreviewSofterThanCreate — preview-лимит мягче create-лимита (ADR-050
-// amendment: preview read-like, но resolver-heavy → шире, не безлимит). Guard на
-// «дефолты не перепутаны местами / preview не строже create».
+// TestTempo_PreviewSofterThanCreate — preview limit softer than create (ADR-050
+// amendment: preview is read-like but resolver-heavy → wider, not unlimited).
+// Guards "defaults not swapped / preview no stricter than create".
 func TestTempo_PreviewSofterThanCreate(t *testing.T) {
 	if DefaultTempoVoyagePreviewRate <= DefaultTempoVoyageCreateRate {
 		t.Errorf("preview rate (%v) должен быть строго мягче create rate (%v)",
@@ -142,9 +141,9 @@ func TestTempo_PreviewSofterThanCreate(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_PreviewIndependentOfCreate — config-уровень: voyage_preview
-// и voyage_create резолвятся НЕЗАВИСИМО. Задан только preview-override — create
-// остаётся на своём дефолте, и наоборот. Гарантирует, что блоки не делят значения.
+// TestLoadKeeper_Tempo_PreviewIndependentOfCreate — config level: voyage_preview
+// and voyage_create resolve INDEPENDENTLY. Only preview overridden → create stays
+// at its default, and vice versa. Guarantees the blocks don't share values.
 func TestLoadKeeper_Tempo_PreviewIndependentOfCreate(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_preview:
@@ -166,7 +165,7 @@ func TestLoadKeeper_Tempo_PreviewIndependentOfCreate(t *testing.T) {
 	if pr != 33 || pb != 66 {
 		t.Errorf("ResolvedVoyagePreview() = (%v, %v), want (33, 66)", pr, pb)
 	}
-	// create НЕ затронут override-ом preview — остаётся на дефолте.
+	// create is untouched by the preview override — stays at default.
 	cr, cb := cfg.Tempo.ResolvedVoyageCreate()
 	if cr != DefaultTempoVoyageCreateRate || cb != DefaultTempoVoyageCreateBurst {
 		t.Errorf("ResolvedVoyageCreate() = (%v, %v) — override preview не должен трогать create-дефолты (%v, %v)",
@@ -174,8 +173,8 @@ func TestLoadKeeper_Tempo_PreviewIndependentOfCreate(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_PreviewNegativeRate — отрицательный preview.rate
-// отвергается schema-фазой (value_out_of_range на $.tempo.voyage_preview.rate).
+// TestLoadKeeper_Tempo_PreviewNegativeRate — negative preview.rate is rejected
+// by the schema phase (value_out_of_range at $.tempo.voyage_preview.rate).
 func TestLoadKeeper_Tempo_PreviewNegativeRate(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_preview:
@@ -188,8 +187,8 @@ func TestLoadKeeper_Tempo_PreviewNegativeRate(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_PreviewNegativeBurst — отрицательный preview.burst
-// отвергается schema-фазой (value_out_of_range на $.tempo.voyage_preview.burst).
+// TestLoadKeeper_Tempo_PreviewNegativeBurst — negative preview.burst is rejected
+// by the schema phase (value_out_of_range at $.tempo.voyage_preview.burst).
 func TestLoadKeeper_Tempo_PreviewNegativeBurst(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_preview:
@@ -202,8 +201,8 @@ func TestLoadKeeper_Tempo_PreviewNegativeBurst(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_NegativeRate — явно заданный отрицательный rate
-// отвергается schema-фазой (value_out_of_range на $.tempo.voyage_create.rate).
+// TestLoadKeeper_Tempo_NegativeRate — explicit negative rate is rejected by the
+// schema phase (value_out_of_range at $.tempo.voyage_create.rate).
 func TestLoadKeeper_Tempo_NegativeRate(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_create:
@@ -216,8 +215,8 @@ func TestLoadKeeper_Tempo_NegativeRate(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_NegativeBurst — явно заданный отрицательный burst
-// отвергается schema-фазой (value_out_of_range на $.tempo.voyage_create.burst).
+// TestLoadKeeper_Tempo_NegativeBurst — explicit negative burst is rejected by the
+// schema phase (value_out_of_range at $.tempo.voyage_create.burst).
 func TestLoadKeeper_Tempo_NegativeBurst(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_create:
@@ -230,8 +229,9 @@ func TestLoadKeeper_Tempo_NegativeBurst(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_ZeroResolvesToDefault — явный 0 в rate/burst НЕ ошибка:
-// валидатор режет только < 0, а 0 резолвится к дефолту в ResolvedVoyageCreate.
+// TestLoadKeeper_Tempo_ZeroResolvesToDefault — explicit 0 in rate/burst is NOT an
+// error: the validator only rejects < 0, and 0 resolves to the default in
+// ResolvedVoyageCreate.
 func TestLoadKeeper_Tempo_ZeroResolvesToDefault(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   voyage_create:
@@ -256,8 +256,8 @@ func TestLoadKeeper_Tempo_ZeroResolvesToDefault(t *testing.T) {
 	}
 }
 
-// TestLoadKeeper_Tempo_ValidBlock — валидный блок (rate=10, burst=20) парсится и
-// не даёт error-диагностик; резолв возвращает заданные значения.
+// TestLoadKeeper_Tempo_ValidBlock — a valid block (rate=10, burst=20) parses and
+// yields no error diagnostics; resolve returns the given values.
 func TestLoadKeeper_Tempo_ValidBlock(t *testing.T) {
 	src := keeperBaseRequired + `tempo:
   enabled: true

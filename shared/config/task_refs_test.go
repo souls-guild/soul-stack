@@ -6,7 +6,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// countCode — сколько диагностик с данным кодом в наборе.
+// countCode returns how many diagnostics in the set carry the given code.
 func countCode(diags []diag.Diagnostic, code string) int {
 	n := 0
 	for i := range diags {
@@ -17,7 +17,7 @@ func countCode(diags []diag.Diagnostic, code string) int {
 	return n
 }
 
-// --- destiny tasks (плоский top-level список) ---
+// --- destiny tasks (flat top-level list) ---
 
 func TestTaskRefs_DuplicateRegister_Destiny(t *testing.T) {
 	src := `
@@ -41,7 +41,7 @@ func TestTaskRefs_DuplicateRegister_Destiny(t *testing.T) {
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		t.Fatalf("duplicate_task_address count = %d, want 1 (на втором объявлении); diags=%v", got, diags)
 	}
-	// Диагностика — на ВТОРОМ объявлении (первое «основное»).
+	// Diagnostic points at the SECOND declaration (the first is primary).
 	for _, d := range diags {
 		if d.Code == "duplicate_task_address" && d.YAMLPath != "$[1].register" {
 			t.Errorf("duplicate_task_address YAMLPath = %q, want $[1].register", d.YAMLPath)
@@ -113,7 +113,7 @@ func TestTaskRefs_UnknownRequire_Destiny(t *testing.T) {
 }
 
 func TestTaskRefs_RequireAll_NotFlagged(t *testing.T) {
-	// require: "all" — скаляр, не register-список; не должен ловиться cross-ref.
+	// require: "all" is a scalar, not a register list; must not be caught by cross-ref.
 	src := `
 - name: prepare
   module: core.exec.run
@@ -133,7 +133,7 @@ func TestTaskRefs_RequireAll_NotFlagged(t *testing.T) {
 }
 
 func TestTaskRefs_Valid_Destiny(t *testing.T) {
-	// Уникальные register + существующие ссылки + CEL-обёртка в onchanges → OK.
+	// Unique register + existing references + CEL-wrapped onchanges → OK.
 	src := `
 - name: write conf
   module: core.file.rendered
@@ -160,8 +160,8 @@ func TestTaskRefs_Valid_Destiny(t *testing.T) {
 }
 
 func TestTaskRefs_CELRef_NotFlagged(t *testing.T) {
-	// CEL-обёрнутый элемент в onchanges (динамический резолв) — статически
-	// пропускается, не ловится как unknown.
+	// CEL-wrapped element in onchanges (dynamic resolve) is skipped statically,
+	// not flagged as unknown.
 	src := `
 - name: write conf
   module: core.file.present
@@ -182,8 +182,8 @@ func TestTaskRefs_CELRef_NotFlagged(t *testing.T) {
 }
 
 func TestTaskRefs_BlockNested_Destiny(t *testing.T) {
-	// register внутри block виден из onchanges верхнего уровня (плоское
-	// пространство имён плана), а дубль register между block и top-level — ошибка.
+	// A register inside a block is visible from top-level onchanges (flat plan
+	// namespace); a duplicate register between block and top-level is an error.
 	src := `
 - name: group
   block:
@@ -206,20 +206,20 @@ func TestTaskRefs_BlockNested_Destiny(t *testing.T) {
     content: y
 `
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
-	// onchanges:[inner_conf] резолвится (block register виден) → no unknown ref.
+	// onchanges:[inner_conf] resolves (block register visible) → no unknown ref.
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		t.Errorf("block register должен быть виден из top-level onchanges; got unknown=%d, diags=%v", got, diags)
 	}
-	// top-level register inner_conf дублирует block-register → ошибка.
+	// top-level register inner_conf duplicates the block register → error.
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		t.Errorf("дубль register между block и top-level должен ловиться; got=%d, diags=%v", got, diags)
 	}
 }
 
-// --- T2: уникальность адресного пространства register ∪ id (per-file) ---
+// --- T2: uniqueness of the register ∪ id address space (per-file) ---
 
 func TestTaskAddress_DuplicateID_Destiny(t *testing.T) {
-	// Два id с одним значением → дубль адреса подписки.
+	// Two ids with the same value → duplicate subscription address.
 	src := `
 - name: reload sysctl
   id: tuned
@@ -247,7 +247,7 @@ func TestTaskAddress_DuplicateID_Destiny(t *testing.T) {
 }
 
 func TestTaskAddress_IDCollidesRegister_Destiny(t *testing.T) {
-	// id одной задачи == register другой → пересечение в едином пространстве.
+	// One task's id == another's register → collision in the shared space.
 	src := `
 - name: write conf
   module: core.file.present
@@ -275,8 +275,8 @@ func TestTaskAddress_IDCollidesRegister_Destiny(t *testing.T) {
 }
 
 func TestTaskAddress_RegisterCollidesID_Destiny(t *testing.T) {
-	// Обратный порядок: id раньше register с тем же именем. Диагностика — на
-	// втором объявлении (register).
+	// Reverse order: id before register with the same name. Diagnostic points at
+	// the second declaration (register).
 	src := `
 - name: reload sysctl
   id: shared_name
@@ -304,7 +304,7 @@ func TestTaskAddress_RegisterCollidesID_Destiny(t *testing.T) {
 }
 
 func TestTaskAddress_UniqueIDAndRegister_Destiny(t *testing.T) {
-	// Уникальные register + id → OK.
+	// Unique register + id → OK.
 	src := `
 - name: write conf
   module: core.file.present
@@ -327,9 +327,9 @@ func TestTaskAddress_UniqueIDAndRegister_Destiny(t *testing.T) {
 }
 
 func TestTaskAddress_IDNotResolvableInRequisites_Destiny(t *testing.T) {
-	// id адресует подписку, но НЕ создаёт register.<name>: ссылка onchanges на
-	// id-задачу — unknown_register_reference (id не равноправен register в
-	// cross-ref, хоть и делит пространство уникальности).
+	// id addresses a subscription but does NOT create register.<name>: an onchanges
+	// reference to an id-task is unknown_register_reference (id is not equal to
+	// register in cross-ref, though it shares the uniqueness space).
 	src := `
 - name: reload sysctl
   id: sysctl_reloaded
@@ -348,13 +348,13 @@ func TestTaskAddress_IDNotResolvableInRequisites_Destiny(t *testing.T) {
 		dump(t, diags)
 		t.Fatalf("ссылка onchanges на id-задачу должна быть unknown_register_reference; count = %d, want 1", got)
 	}
-	// При этом дубля адреса тут нет (id и register-ссылка — разные имена).
+	// No address duplicate here (id and register reference are different names).
 	if got := countCode(diags, "duplicate_task_address"); got != 0 {
 		t.Errorf("неожиданный duplicate_task_address; count = %d, want 0", got)
 	}
 }
 
-// --- scenario (main.yml с обёрткой) ---
+// --- scenario (main.yml with wrapper) ---
 
 func TestTaskRefs_DuplicateRegister_Scenario(t *testing.T) {
 	src := `
@@ -403,11 +403,11 @@ tasks:
 	}
 }
 
-// --- O6: type-валидация onchanges/onfail/require ---
+// --- O6: type validation of onchanges/onfail/require ---
 
 func TestTaskTypes_OnChangesScalar_Rejected(t *testing.T) {
-	// Скаляр вместо списка — до O6 проходил молча (cross-ref смотрит только
-	// sequence). Теперь type_mismatch.
+	// Scalar instead of a list passed silently before O6 (cross-ref only looks at
+	// sequences). Now type_mismatch.
 	src := `
 - name: write conf
   module: core.file.present
@@ -449,7 +449,7 @@ func TestTaskTypes_OnFailScalar_Rejected(t *testing.T) {
 }
 
 func TestTaskTypes_RequireAll_Accepted(t *testing.T) {
-	// require: all — единственная легитимная скалярная форма.
+	// require: all is the only legitimate scalar form.
 	src := `
 - name: act
   module: core.exec.run
@@ -465,7 +465,7 @@ func TestTaskTypes_RequireAll_Accepted(t *testing.T) {
 }
 
 func TestTaskTypes_RequireScalarOther_Rejected(t *testing.T) {
-	// require: <не-all скаляр> — ошибка (должен быть список или "all").
+	// require: <non-all scalar> is an error (must be a list or "all").
 	src := `
 - name: prep
   module: core.exec.run
@@ -506,7 +506,7 @@ func TestTaskTypes_RequireList_Accepted(t *testing.T) {
 }
 
 func TestTaskTypes_OnChangesNonStringElem_Rejected(t *testing.T) {
-	// Элемент-int в списке onchanges — type_mismatch на элементе.
+	// An int element in the onchanges list → type_mismatch on the element.
 	src := `
 - name: restart
   module: core.service.restarted
@@ -521,7 +521,7 @@ func TestTaskTypes_OnChangesNonStringElem_Rejected(t *testing.T) {
 	}
 }
 
-// --- O3: CEL cross-ref register в предикатах ---
+// --- O3: CEL cross-ref register in predicates ---
 
 func TestTaskRefs_CELWhenUnknown_Destiny(t *testing.T) {
 	src := `
@@ -564,7 +564,7 @@ func TestTaskRefs_CELWhenKnown_Destiny(t *testing.T) {
 }
 
 func TestTaskRefs_CELSelf_NotFlagged(t *testing.T) {
-	// register.self — текущая задача, не флагается (форвард — она же).
+	// register.self is the current task, not flagged (forward-ref to itself).
 	src := `
 - name: probe
   module: core.cmd.shell
@@ -585,8 +585,8 @@ func TestTaskRefs_CELSelf_NotFlagged(t *testing.T) {
 }
 
 func TestTaskRefs_CELStringLiteral_NotFalsePositive(t *testing.T) {
-	// register.foo внутри строкового литерала CEL — данные, не идентификатор;
-	// не должен давать ложное unknown_register_reference.
+	// register.foo inside a CEL string literal is data, not an identifier;
+	// must not produce a false unknown_register_reference.
 	src := `
 - name: log
   module: core.exec.run
@@ -602,7 +602,7 @@ func TestTaskRefs_CELStringLiteral_NotFalsePositive(t *testing.T) {
 }
 
 func TestTaskRefs_CELRetryUntilLoopWhere_Unknown(t *testing.T) {
-	// retry.until, loop.when, where — все предикатные позиции покрыты.
+	// retry.until, loop.when, where — all predicate positions are covered.
 	src := `
 - name: act
   module: core.exec.run
@@ -626,7 +626,7 @@ func TestTaskRefs_CELRetryUntilLoopWhere_Unknown(t *testing.T) {
 }
 
 func TestTaskRefs_CELDynamicAccess_NotFlagged(t *testing.T) {
-	// register["..."] — динамический доступ, формой не покрывается, не ловится.
+	// register["..."] is dynamic access, not matched by the form, not flagged.
 	src := `
 - name: probe
   module: core.exec.run
@@ -667,11 +667,11 @@ tasks:
 	}
 }
 
-// TestTaskRefs_UnknownInterpField_Destiny — закрытый ADR-056 S2 пробел: cross-ref-
-// валидатор раньше НЕ обходил интерполяционные source-поля (vars/output/params/
-// loop.items), и unknown-register в них доживал до рантайм-стратификатора. Теперь
-// каждое поле ловится офлайн. Набор полей здесь обязан совпадать с passage-
-// определяющими источниками стратификатора (reads==refs, render/passage_test.go).
+// TestTaskRefs_UnknownInterpField_Destiny covers the closed ADR-056 S2 gap: the
+// cross-ref validator did not previously walk interpolation source fields
+// (vars/output/params/loop.items), so an unknown register in them survived to the
+// runtime stratifier. Now each field is caught offline. The field set here must
+// match the passage-defining sources of the stratifier (reads==refs, render/passage_test.go).
 func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
 	cases := map[string]string{
 		"output": `
@@ -719,9 +719,9 @@ func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
 	}
 }
 
-// TestTaskRefs_UnknownApplyInput_Scenario — applier-задача: register, который
-// никто не эмитит, в apply.input → unknown_register_reference (apply живёт только
-// в scenario).
+// TestTaskRefs_UnknownApplyInput_Scenario — applier task: a register that nobody
+// emits, used in apply.input → unknown_register_reference (apply lives only in
+// scenario).
 func TestTaskRefs_UnknownApplyInput_Scenario(t *testing.T) {
 	src := `
 name: act
@@ -739,9 +739,9 @@ tasks:
 	}
 }
 
-// TestTaskRefs_KnownInterpField_NotFlagged — register, который эмитит probe-
-// задача, прочитанный через ${ … } в output/params/apply.input, валиден и НЕ даёт
-// ложного unknown_register_reference (forward-ref по плоскому пространству плана).
+// TestTaskRefs_KnownInterpField_NotFlagged — a register emitted by a probe task,
+// read via ${ … } in output/params/apply.input, is valid and does NOT produce a
+// false unknown_register_reference (forward-ref across the flat plan namespace).
 func TestTaskRefs_KnownInterpField_NotFlagged(t *testing.T) {
 	src := `
 name: chain
@@ -772,13 +772,13 @@ tasks:
 	}
 }
 
-// TestTaskRefs_OnChangesApplierRegister_Valid — ★ guard (e), материализация
-// applier-register (orchestration.md §2.1.1, Вариант B). register: НА applier-
-// задаче (`apply:`+`register:`) — это ВАЛИДНЫЙ адрес подписки: collectAddresses
-// регистрирует register: любой задачи (apply/module/block одинаково на AST-уровне),
-// поэтому внешний onchanges:[<applier-register>] НЕ должен ловиться как
-// unknown_register_reference. Инвариант: applier-register адресуем извне (его
-// материализует терминальная core.noop.run, register.<applier> резолвится).
+// TestTaskRefs_OnChangesApplierRegister_Valid — ★ guard (e), applier-register
+// materialization (orchestration.md §2.1.1, Variant B). A register: ON an applier
+// task (`apply:`+`register:`) is a VALID subscription address: collectAddresses
+// registers register: of any task (apply/module/block alike at the AST level), so
+// an external onchanges:[<applier-register>] must NOT be flagged as
+// unknown_register_reference. Invariant: an applier-register is addressable from
+// outside (the terminal core.noop.run materializes it, register.<applier> resolves).
 func TestTaskRefs_OnChangesApplierRegister_Valid(t *testing.T) {
 	src := `
 name: act
@@ -802,9 +802,9 @@ tasks:
 	}
 }
 
-// TestTaskRefs_OnChangesApplierRegister_Typo — ★ guard (e) обратная сторона:
-// ОПЕЧАТКА в onchanges на applier-register всё ещё ловится unknown_register_reference
-// (collectAddresses знает только реальное имя redis_destiny, не redis_destinyy).
+// TestTaskRefs_OnChangesApplierRegister_Typo — ★ guard (e) reverse side: a TYPO in
+// onchanges on an applier-register is still caught as unknown_register_reference
+// (collectAddresses knows only the real name redis_destiny, not redis_destinyy).
 func TestTaskRefs_OnChangesApplierRegister_Typo(t *testing.T) {
 	src := `
 name: act

@@ -5,49 +5,52 @@ import (
 	"reflect"
 )
 
-// Декларативный secret-маскинг ([ADR-010] §7.4, три слоя AUGMENT/OR):
+// Declarative secret masking ([ADR-010] §7.4, four AUGMENT/OR layers):
 //
-//  1. schema — поле маскируется, если его путь объявлен secret:true в активной
-//     схеме источника (input_schema/state_schema/manifest InputParamDef.Secret).
-//     Декларатив primary: оператор/автор явно помечает поле секретом, маскинг не
-//     зависит от угадывания по имени ключа.
-//  2. vault-происхождение — string-значение содержит `vault:<mount>/` ([vaultRefRe],
-//     mask.go). Это маскинг по СОДЕРЖИМОМУ (vault-ref в значении), не по имени.
-//  3. seal (render-time provenance) — путь ячейки помечен sealed на render-фазе
-//     (CEL-выражение читало secret-источник: secret-input/vault()/транзитивно
-//     vars/compute). seal-набор приходит из render-прохода (keeper/internal/render),
-//     передаётся сюда как набор dot-путей [SealOpts.Sealed].
-//  4. regex-LAST-RESORT — [sensitiveKeyRe]/[isSensitiveKey] (mask.go). Ловит
-//     класс sensitive-by-name, не покрытый декларативом (внутренние bootstrap_token/
-//     jwt/creds без схемы). Срабатывание ИСКЛЮЧИТЕЛЬНО этого слоя (schema/vault/seal
-//     молчали) → аларм [SealOpts.RegexFallback] + warn-лог: сигнал пробела
-//     декларатива, чтобы класс закрывать структурно, а не полагаться на имя ключа.
+//  1. schema — a field is masked if its path is declared secret:true in the
+//     active source schema (input_schema/state_schema/manifest InputParamDef.Secret).
+//     Declarative-primary: the operator/author explicitly marks a field secret;
+//     masking does not depend on guessing by key name.
+//  2. vault origin — a string value contains `vault:<mount>/` ([vaultRefRe],
+//     mask.go). Masking by CONTENT (vault ref in the value), not by name.
+//  3. seal (render-time provenance) — the cell path is marked sealed during the
+//     render phase (a CEL expression read a secret source: secret-input/vault()/
+//     transitively vars/compute). The seal set comes from the render pass
+//     (keeper/internal/render), passed here as the dot-path set [SealOpts.Sealed].
+//  4. regex-LAST-RESORT — [sensitiveKeyRe]/[isSensitiveKey] (mask.go). Catches
+//     the sensitive-by-name class not covered by the declarative layers (internal
+//     bootstrap_token/jwt/creds without a schema). Firing of THIS layer alone
+//     (schema/vault/seal all silent) → the [SealOpts.RegexFallback] alarm + warn
+//     log: a signal of a declarative gap, so the class is closed structurally
+//     rather than relying on the key name.
 //
-// Слои OR-объединены: любой сработавший → ячейка маскируется. Старая
-// [MaskSecrets] (mask.go) — слои vault+regex без schema/seal — сохранена
-// (additive, её зовут ~46 точек); [MaskSecretsWithSchema] добавляет schema-слой
-// для read-path, [MaskSecretsSealed] — seal-слой для render write-точек.
+// The layers are OR-combined: any hit → the cell is masked. The old [MaskSecrets]
+// (mask.go) — vault+regex layers without schema/seal — is retained (additive,
+// called from ~46 sites); [MaskSecretsWithSchema] adds the schema layer for the
+// read path, [MaskSecretsSealed] the seal layer for render write points.
 
-// SecretSchema — узкая поверхность «является ли путь secret»: декларативный слой
-// (1). Реализуется keeper-side над config.InputSchemaMap (input/scenario-схема) и
-// над flat state_schema (`properties.<field>.secret: true`). dot-путь — как
-// человекочитаемый path ячейки render (`acl[0].password`, `config.tls_key`).
+// SecretSchema is the narrow "is this path secret" surface: declarative layer
+// (1). Implemented keeper-side over config.InputSchemaMap (input/scenario schema)
+// and over a flat state_schema (`properties.<field>.secret: true`). The dot-path
+// is the human-readable render cell path (`acl[0].password`, `config.tls_key`).
 //
-// shared/audit не импортирует shared/config (слоистость): caller строит
-// SecretSchema из своей схемы. Простейшая реализация — [SecretPathSet].
+// shared/audit does not import shared/config (layering): the caller builds a
+// SecretSchema from its own schema. The simplest implementation is [SecretPathSet].
 type SecretSchema interface {
-	// IsSecret — путь поля (dot/idx-форма, как ключи payload) объявлен secret.
+	// IsSecret reports whether the field path (dot/idx form, like payload keys)
+	// is declared secret.
 	IsSecret(path string) bool
 }
 
-// SecretPathSet — множество dot-путей, объявленных secret. Простейшая
-// [SecretSchema]: keeper строит его обходом своей схемы один раз. Индексы среза
-// нормализуются — путь `acl[0].password` сверяется по обоим: точному `acl[0].
-// password` И обобщённому `acl[].password` (схема описывает элемент массива без
-// конкретного индекса), см. [normalizeIdx].
+// SecretPathSet is the set of dot-paths declared secret. The simplest
+// [SecretSchema]: keeper builds it once by walking its schema. Slice indices are
+// normalized — `acl[0].password` is checked against both the exact
+// `acl[0].password` AND the generalized `acl[].password` (the schema describes an
+// array element without a concrete index), see [normalizeIdx].
 type SecretPathSet map[string]bool
 
-// IsSecret — путь в наборе (точная форма или с обобщёнными индексами `[]`).
+// IsSecret reports whether the path is in the set (exact form or with
+// generalized `[]` indices).
 func (s SecretPathSet) IsSecret(path string) bool {
 	if s[path] {
 		return true
@@ -55,34 +58,34 @@ func (s SecretPathSet) IsSecret(path string) bool {
 	return s[normalizeIdx(path)]
 }
 
-// SealOpts — параметры layered-маскинга поверх [MaskSecrets].
+// SealOpts holds the layered-masking parameters on top of [MaskSecrets].
 type SealOpts struct {
-	// Schema — декларативный слой (1); nil → слой выключен.
+	// Schema is the declarative layer (1); nil → layer off.
 	Schema SecretSchema
 
-	// Sealed — слой seal (3): набор dot-путей ячеек, помеченных sealed на
-	// render-фазе. nil/пуст → слой выключен. Сверка — точная по пути ячейки И по
-	// обобщённой idx-форме (симметрично SecretPathSet).
+	// Sealed is the seal layer (3): the set of cell dot-paths marked sealed at
+	// the render phase. nil/empty → layer off. Checked exactly by cell path AND
+	// by the generalized idx form (symmetric with SecretPathSet).
 	Sealed map[string]bool
 
-	// RegexFallback — аларм (4): вызывается, когда ячейку поймал ТОЛЬКО
-	// regex-last-resort (schema/vault/seal по этому пути молчали). nil → аларм не
-	// зовётся (метрику/лог подключает keeper через DefaultSealHooks). Идемпотентно
-	// не требуется: вызывается один раз на каждую такую ячейку.
+	// RegexFallback is the alarm (4): called when a cell was caught by the
+	// regex-last-resort ALONE (schema/vault/seal silent for this path). nil → not
+	// called (keeper wires the metric/log via DefaultSealHooks). Need not be
+	// idempotent: called once per such cell.
 	RegexFallback func(path string)
 
-	// Logger — канал warn-лога regex-fallback. nil → лог подавлен (аларм-метрика
-	// всё равно зовётся через RegexFallback).
+	// Logger is the warn-log channel for the regex fallback. nil → log suppressed
+	// (the alarm metric still fires via RegexFallback).
 	Logger *slog.Logger
 }
 
-// MaskSecretsWithSchema — read-path вариант ([ADR-010] §7.4): layered-маскинг
-// payload по схеме источника (slice 1) поверх vault+regex слоёв [MaskSecrets].
-// schema nil → деградирует к [MaskSecrets] байт-в-байт (schema-слой выключен).
-// regex-fallback аларм берётся из [DefaultSealHooks] (keeper подключает метрику/
-// лог; в тестах/офлайне nil → no-op).
+// MaskSecretsWithSchema is the read-path variant ([ADR-010] §7.4): layered
+// masking of the payload by the source schema (layer 1) on top of the vault+regex
+// layers of [MaskSecrets]. nil schema → degrades to [MaskSecrets] byte-for-byte
+// (schema layer off). The regex-fallback alarm comes from [DefaultSealHooks]
+// (keeper wires the metric/log; nil → no-op in tests/offline).
 //
-// payload не мутируется; форма результата — как у [MaskSecrets].
+// payload is not mutated; the result shape is as for [MaskSecrets].
 func MaskSecretsWithSchema(payload map[string]any, schema SecretSchema) map[string]any {
 	return MaskSecretsSealed(payload, SealOpts{
 		Schema:        schema,
@@ -91,13 +94,13 @@ func MaskSecretsWithSchema(payload map[string]any, schema SecretSchema) map[stri
 	})
 }
 
-// MaskSecretsSealed — полный layered-маскинг: schema (opts.Schema) + vault +
-// seal (opts.Sealed) + regex-last-resort с алармом. Все слои OR. Используется
-// render write-точками (error_summary/status_details/dispatch), которым доступен
-// seal-набор прохода. opts zero-value → эквивалент [MaskSecrets] + аларм
-// отключён.
+// MaskSecretsSealed is the full layered masking: schema (opts.Schema) + vault +
+// seal (opts.Sealed) + regex-last-resort with an alarm. All layers OR. Used by
+// render write points (error_summary/status_details/dispatch) that have the
+// pass's seal set. Zero-value opts → equivalent to [MaskSecrets] with the alarm
+// off.
 //
-// payload не мутируется; nil-вход → nil-выход.
+// payload is not mutated; nil input → nil output.
 func MaskSecretsSealed(payload map[string]any, opts SealOpts) map[string]any {
 	if payload == nil {
 		return nil
@@ -105,29 +108,29 @@ func MaskSecretsSealed(payload map[string]any, opts SealOpts) map[string]any {
 	return maskMapLayered(payload, "", opts)
 }
 
-// maskMapLayered — layered walk одного map-уровня. path — dot-путь до этого map
-// (пустой на корне). Порядок слоёв на КЛЮЧЕ:
+// maskMapLayered is the layered walk of one map level. path is the dot-path to
+// this map (empty at the root). Layer order on the KEY:
 //
-//	schema(1) ∨ seal(3)  — по ПУТИ ячейки (декларатив/taint, не имя ключа);
-//	regex-last-resort(4) — по ИМЕНИ ключа (isSensitiveKey).
+//	schema(1) ∨ seal(3)  — by cell PATH (declarative/taint, not key name);
+//	regex-last-resort(4) — by key NAME (isSensitiveKey).
 //
-// Если ключ поймал ТОЛЬКО regex (schema/seal по пути молчали), значение строковое
-// и оно НЕ vault-ref (слой 2 тоже молчал бы) — это чистый regex-fallback: аларм
-// (метрика+warn-лог), сигнал пробела декларатива. vault-слой(2) — по содержимому
-// строкового значения внутри maskValueLayered.
+// If a key was caught by regex ALONE (schema/seal silent for the path), the value
+// is a string and NOT a vault ref (layer 2 would also be silent) — this is a pure
+// regex fallback: alarm (metric+warn-log), a declarative-gap signal. Layer 2
+// (vault) works by the string value's content inside maskValueLayered.
 func maskMapLayered(m map[string]any, path string, opts SealOpts) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		cell := joinPath(path, k)
 
-		declarative := pathIsSecret(cell, opts) // слои 1 (schema) + 3 (seal)
+		declarative := pathIsSecret(cell, opts) // layers 1 (schema) + 3 (seal)
 		if declarative {
 			out[k] = maskedValue
 			continue
 		}
 
-		// Слой 4: regex-last-resort по имени ключа. Срабатывает ТОЛЬКО когда
-		// декларатив молчал — иначе это не «единственный сработавший слой».
+		// Layer 4: regex-last-resort by key name. Fires ONLY when the
+		// declarative layers were silent — otherwise it is not the "sole hit".
 		if isSensitiveKey(k) {
 			alarmRegexFallback(cell, v, opts)
 			out[k] = maskedValue
@@ -139,29 +142,31 @@ func maskMapLayered(m map[string]any, path string, opts SealOpts) map[string]any
 	return out
 }
 
-// alarmRegexFallback зовёт аларм (метрика+warn-лог), когда ключ поймал ТОЛЬКО
-// regex-last-resort и значение НЕ vault-ref (vault-слой(2) поймал бы его сам —
-// тогда regex не «единственный»). vault-ref-значение под sensitive-ключом
-// маскируется обоими слоями, аларм не нужен (декларативного пробела нет:
-// vault-происхождение — структурный сигнал). Аларм фиксирует именно класс
-// sensitive-by-name без схемы/seal/vault (ожидаемый класс ii — внутренние
-// bootstrap_token/jwt/creds), чтобы видеть, что декларатив его пока не покрывает.
+// alarmRegexFallback fires the alarm (metric+warn-log) when a key was caught by
+// the regex-last-resort ALONE and the value is NOT a vault ref (layer 2 would
+// catch it itself — then regex is not the "sole" hit). A vault-ref value under a
+// sensitive key is masked by both layers, so no alarm is needed (no declarative
+// gap: vault origin is a structural signal). The alarm records exactly the
+// sensitive-by-name class without schema/seal/vault (the expected class ii —
+// internal bootstrap_token/jwt/creds), to surface what the declarative layers do
+// not yet cover.
 func alarmRegexFallback(cell string, v any, opts SealOpts) {
 	if s, ok := v.(string); ok && vaultRefRe.MatchString(s) {
-		return // vault-слой поймал бы сам — regex не единственный
+		return // vault layer would catch it — regex is not the sole hit
 	}
 	if opts.RegexFallback != nil {
 		opts.RegexFallback(cell)
 	}
 	if opts.Logger != nil {
-		// Путь ячейки — НЕ секрет (имя поля), значение НЕ логируем.
+		// The cell path is NOT a secret (a field name); the value is NOT logged.
 		opts.Logger.Warn("audit: secret пойман regex-last-resort, декларатив (schema/seal/vault) молчал — пробел декларатива",
 			slog.String("path", cell))
 	}
 }
 
-// maskValueLayered — layered walk значения ячейки cell. string → vault-слой (2) и
-// regex-last-resort (4, с алармом); контейнеры → рекурсивный layered walk.
+// maskValueLayered is the layered walk of a value at cell path cell. string →
+// layer 2 (vault) and regex-last-resort (4, with alarm); containers → recursive
+// layered walk.
 func maskValueLayered(v any, cell string, opts SealOpts) any {
 	switch x := v.(type) {
 	case nil:
@@ -199,21 +204,21 @@ func maskValueLayered(v any, cell string, opts SealOpts) any {
 		}
 		return out
 	default:
-		// Типизированные контейнеры (struct, прочие map/slice/ptr) — reflect-walk
-		// БЕЗ schema/seal-слоёв (их пути не выражаются reflect-именами полей
-		// структур в терминах render-path). vault+regex по значению/ключу — как
-		// MaskSecrets. Холодный путь (payload в этих точках — map[string]any).
+		// Typed containers (struct, other map/slice/ptr) — reflect walk WITHOUT
+		// the schema/seal layers (their paths are not expressible as reflect
+		// struct-field names in render-path terms). vault+regex by value/key as in
+		// MaskSecrets. Cold path (payload here is map[string]any).
 		return maskReflect(reflect.ValueOf(v))
 	}
 }
 
-// maskStringLayered маскирует string по слоям 2 (vault) и 4 (regex-last-resort).
-// schema/seal уже проверены по пути выше (pathIsSecret). vault-слой — по
-// содержимому. Чистый regex-fallback по СОДЕРЖИМОМУ строки не применяется
-// (sensitiveKeyRe — по имени КЛЮЧА, не значению); значение-уровневый
-// regex-fallback решается на уровне ключа в key-match (см. отдельную ветку
-// maskKeyLayered не нужна — key-match идёт в maskMapLayered, но там приоритет у
-// schema/seal). Здесь только vault-by-content.
+// maskStringLayered masks a string by layers 2 (vault) and 4 (regex-last-resort).
+// schema/seal were already checked by path above (pathIsSecret). The vault layer
+// works by content. A pure regex fallback by string CONTENT does not apply
+// (sensitiveKeyRe is by key NAME, not value); the value-level regex fallback is
+// decided at the key level in the key match (no separate maskKeyLayered branch is
+// needed — the key match runs in maskMapLayered, where schema/seal take priority).
+// Only vault-by-content here.
 func maskStringLayered(s, _ string, _ SealOpts) any {
 	if vaultRefRe.MatchString(s) {
 		return maskedValue
@@ -221,7 +226,7 @@ func maskStringLayered(s, _ string, _ SealOpts) any {
 	return s
 }
 
-// pathIsSecret — слой 1 (schema) ИЛИ слой 3 (seal) пометили путь секретом.
+// pathIsSecret reports whether layer 1 (schema) OR layer 3 (seal) marked the path secret.
 func pathIsSecret(path string, opts SealOpts) bool {
 	if opts.Schema != nil && opts.Schema.IsSecret(path) {
 		return true

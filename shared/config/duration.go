@@ -8,33 +8,33 @@ import (
 	"time"
 )
 
-// MaxDurationDays — верхняя граница для convention `<N>d`, исключающая
-// int64-overflow при `days * 24h`. Эквивалент `math.MaxInt64 / int64(24h)`
-// ≈ 106 751 (≈ 292 года). Любой Go-`time.ParseDuration` уже сам отвергает
-// значения, не помещающиеся в int64-наносекунды, поэтому отдельная проверка
-// нужна только в нашей надстройке для `d`.
+// MaxDurationDays is the upper bound for the `<N>d` convention, ruling out
+// int64 overflow in `days * 24h`. Equivalent to `math.MaxInt64 / int64(24h)`
+// ≈ 106 751 (≈ 292 years). Go `time.ParseDuration` itself already rejects values
+// that don't fit into int64 nanoseconds, so a separate check is needed only in
+// our `d` extension.
 var MaxDurationDays = int(math.MaxInt64 / int64(24*time.Hour))
 
-// ParseDuration реализует convention `duration` Soul Stack:
-// Go-`time.ParseDuration` (`1s`/`500ms`/`1h30m`) **или** суффикс `<N>d` для
-// дней (`30d` = 720h). Композитная форма `1d2h` не поддерживается — explicit
-// fail, потому что convention этого не обещает (docs/keeper/config.md →
-// «Конвенции типов»). Знак `+`/`-` перед `<N>d` также отвергается, чтобы
-// convention оставалась симметричной с Go-duration (отрицательные duration
-// в конфиге смысла не имеют, а явный `+` — лишний шум). Верхняя граница для
-// `<N>d` — [MaxDurationDays] (защита от int64-overflow).
+// ParseDuration implements the Soul Stack `duration` convention: Go
+// `time.ParseDuration` (`1s`/`500ms`/`1h30m`) **or** a `<N>d` suffix for days
+// (`30d` = 720h). The composite form `1d2h` is not supported — explicit fail,
+// because the convention does not promise it (docs/keeper/config.md → "Type
+// conventions"). A `+`/`-` sign before `<N>d` is also rejected, to keep the
+// convention symmetric with Go duration (negative durations make no sense in a
+// config, and an explicit `+` is just noise). The upper bound for `<N>d` is
+// [MaxDurationDays] (int64-overflow guard).
 //
-// Единая точка входа для всех потребителей convention (semantic-валидация
-// keeper.yml, Reaper-runner и т.п.). Не дублировать локальными копиями.
+// The single entry point for all consumers of the convention (keeper.yml semantic
+// validation, the Reaper runner, etc.). Do not duplicate with local copies.
 func ParseDuration(s string) (time.Duration, error) {
 	if strings.HasSuffix(s, "d") {
 		body := s[:len(s)-1]
 		if strings.HasPrefix(body, "+") || strings.HasPrefix(body, "-") {
 			return 0, fmt.Errorf("invalid <N>d duration %q: sign prefix not allowed", s)
 		}
-		// Принимаем только беззнаковое целое перед `d`; защищает от
-		// композитной формы вроде `1h2d` (которая не заканчивается на `d`,
-		// но на всякий случай) и от примесей внутри.
+		// Accept only an unsigned integer before `d`; guards against a composite
+		// form like `1h2d` (which doesn't end in `d`, but just in case) and
+		// against junk inside.
 		days, err := strconv.Atoi(body)
 		if err != nil || days < 0 {
 			return 0, fmt.Errorf("invalid <N>d duration %q", s)

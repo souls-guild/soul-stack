@@ -2,12 +2,12 @@ package config
 
 import "testing"
 
-// TestResolveInputValues_FormatEnforce — runtime-enforce значения против каждого
-// канонного format (docs/input.md → «Допустимые значения format»). Guard на
-// формат: для каждого — валидное значение проходит, невалидное отвергается.
-// Граничные случаи (hostname с точкой = fqdn; fqdn без точки; ipv4 out-of-range;
-// duration с неизвестным суффиксом; semver без patch; uri без схемы) — отдельными
-// строками таблицы.
+// TestResolveInputValues_FormatEnforce — runtime-enforces a value against each
+// canonical format (docs/input.md → "Allowed format values"). Format guard: for
+// each, a valid value passes and an invalid one is rejected. Edge cases (hostname
+// with a dot = fqdn; fqdn without a dot; ipv4 out-of-range; duration with an
+// unknown suffix; semver without patch; uri without a scheme) — as separate table
+// rows.
 func TestResolveInputValues_FormatEnforce(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -15,7 +15,7 @@ func TestResolveInputValues_FormatEnforce(t *testing.T) {
 		value  string
 		ok     bool
 	}{
-		// hostname — RFC1123-метка БЕЗ точек.
+		// hostname — RFC1123 label WITHOUT dots.
 		{"hostname_ok", "hostname", "redis-01", true},
 		{"hostname_single_label", "hostname", "redis", true},
 		{"hostname_with_dot_is_fqdn", "hostname", "redis-01.prod.local", false},
@@ -23,7 +23,7 @@ func TestResolveInputValues_FormatEnforce(t *testing.T) {
 		{"hostname_trailing_dash", "hostname", "redis-", false},
 		{"hostname_empty_label_chars", "hostname", "redis_01", false},
 
-		// fqdn — ≥2 RFC1123-меток через точку.
+		// fqdn — ≥2 RFC1123 labels separated by dots.
 		{"fqdn_ok", "fqdn", "redis-01.prod.wb.local", true},
 		{"fqdn_two_labels", "fqdn", "redis.local", true},
 		{"fqdn_no_dot_fails", "fqdn", "redis-01", false},
@@ -82,7 +82,7 @@ func TestResolveInputValues_FormatEnforce(t *testing.T) {
 		{"duration_bad_suffix", "duration", "5x", false},
 		{"duration_no_unit", "duration", "5", false},
 
-		// sid — регресс: ранее уже enforce-ился, не сломан.
+		// sid — regression: was already enforced before, not broken.
 		{"sid_ok", "sid", "redis-01.prod.wb.local", true},
 		{"sid_uppercase_rejected", "sid", "Redis-01", false},
 		{"sid_underscore_rejected", "sid", "redis_01", false},
@@ -102,9 +102,9 @@ func TestResolveInputValues_FormatEnforce(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_FormatExprSkipped — значение-выражение (${...}) не
-// валидируется против format на своём уровне: финальная форма появится после
-// render-фазы (docs/input.md → «Значения-выражения»). Симметрично pattern/enum.
+// TestResolveInputValues_FormatExprSkipped — an expression value (${...}) is not
+// validated against format at its own level: the final form appears after the
+// render phase (docs/input.md → "Expression values"). Symmetric to pattern/enum.
 func TestResolveInputValues_FormatExprSkipped(t *testing.T) {
 	schema := schemaFromInput(t, "host:\n  type: string\n  format: ipv4\n")
 	got, err := ResolveInputValues(schema, map[string]any{"host": "${ soulprint.self.primary_ip }"})
@@ -116,8 +116,8 @@ func TestResolveInputValues_FormatExprSkipped(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_FormatArrayItems — format enforce применяется
-// поэлементно через items (рекурсия validateValueAt). Пример из docs:
+// TestResolveInputValues_FormatArrayItems — format enforce is applied per-element
+// via items (validateValueAt recursion). Example from docs:
 // array[items.format=email].
 func TestResolveInputValues_FormatArrayItems(t *testing.T) {
 	schema := schemaFromInput(t, "users:\n  type: array\n  items:\n    type: string\n    format: email\n")

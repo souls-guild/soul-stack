@@ -1,26 +1,28 @@
 package config
 
-// Soul-capabilities — канонические строковые имена фичей протокола Keeper↔Soul,
-// которые Soul-бинарь анонсирует в Hello.capabilities (ADR-056 §S5 forward-compat).
-// Keeper персистит анонс рядом с presence и сверяет ДО dispatch-а фич-зависимых
-// прогонов. Реестр — naming-rules.md → «Soul-capabilities».
+// Soul-capabilities are the canonical string names of Keeper↔Soul protocol
+// features that the Soul binary announces in Hello.capabilities (ADR-056 §S5
+// forward-compat). Keeper persists the announcement next to presence and checks it
+// BEFORE dispatching feature-dependent runs. Registry — naming-rules.md →
+// "Soul-capabilities".
 //
-// Константы живут в shared/config (а не в keeper- или soul-internal): и keeper
-// (staged-гейт run.go), и Soul (анонс grpc-клиента) обязаны ссылаться на ОДНУ
-// строку — рассинхрон литералов = молчаливый fail-closed на каждом staged-прогоне.
+// The constants live in shared/config (not keeper- or soul-internal): both keeper
+// (the staged gate in run.go) and Soul (the grpc-client announcement) must
+// reference the SAME string — a literal desync = a silent fail-closed on every
+// staged run.
 const (
-	// CapabilityPassage — Soul эхает ApplyRequest.passage в TaskEvent/RunResult,
-	// то есть умеет участвовать в staged-render (N>1 Passage, ADR-056). Soul без
-	// этой capability под staged-сценарием отвергается keeper-ом ДО dispatch
-	// (soul_passage_unsupported, fail-closed): иначе barrier следующего Passage
-	// ждал бы терминал, которого старый бинарь не пришлёт.
+	// CapabilityPassage — Soul echoes ApplyRequest.passage in TaskEvent/RunResult,
+	// i.e. it can participate in staged render (N>1 Passage, ADR-056). A Soul
+	// without this capability under a staged scenario is rejected by keeper BEFORE
+	// dispatch (soul_passage_unsupported, fail-closed): otherwise the next Passage's
+	// barrier would wait for a terminal the old binary never sends.
 	CapabilityPassage = "passage"
 )
 
-// SoulCapabilities — набор capabilities, которые ЭТА сборка soul-бинаря
-// поддерживает (анонсируется в Hello.capabilities). Все souls беты собираются
-// вместе с keeper-ом, поэтому набор статичен; форвард-safety — для будущих
-// mixed-version флотов, где старый бинарь пришлёт пустой/урезанный набор.
+// SoulCapabilities is the set of capabilities THIS soul-binary build supports
+// (announced in Hello.capabilities). All beta souls are built together with
+// keeper, so the set is static; forward-safety is for future mixed-version fleets
+// where an old binary sends an empty/reduced set.
 func SoulCapabilities() []string {
 	return []string{CapabilityPassage}
 }

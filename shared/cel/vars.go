@@ -5,46 +5,44 @@ import (
 	"sort"
 )
 
-// Vars — переменные контекста, передаваемые в CEL-вычисление. Типизированная
-// форма activation: caller заполняет осмысленные поля, а не сырой
-// map[string]any. Все поля опциональны; nil превращается в пустой map,
-// чтобы обращение к отсутствующему контексту давало штатный CEL-результат
-// (no such key), а не панику.
+// Vars — context variables passed into a CEL evaluation. A typed form of activation:
+// the caller fills meaningful fields rather than a raw map[string]any. All fields are
+// optional; nil becomes an empty map, so accessing a missing context gives the normal
+// CEL result (no such key), not a panic.
 //
-// Значения внутри полей — обычные Go-данные (map[string]any, срезы,
-// скаляры), полученные из YAML/Postgres. CEL читает их через адаптер
-// cel-go.
+// Field values are plain Go data (map[string]any, slices, scalars) obtained from
+// YAML/Postgres. CEL reads them through the cel-go adapter.
 //
-// Pilot-scope ([ADR-010]):
-//   - Input        — блок input: сценария/destiny (input.<path>).
-//   - Register     — результаты register: предыдущих шагов
+// Pilot scope ([ADR-010]):
+//   - Input        — the input: block of the scenario/destiny (input.<path>).
+//   - Register     — results of register: from previous steps
 //     (register.<name>.<path>, register.self.*).
-//   - Incarnation  — поля incarnation (name, service_version, spec.*).
-//   - SoulprintSelf — стабильные факты текущего хоста; в CEL доступны как
-//     soulprint.self.<path> ([soulprint.md], каноническая форма).
-//   - SoulprintHosts — список хостов прогона со стабильными фактами; в CEL
-//     доступен как soulprint.hosts (+ .where(<predicate>)). Scenario-only:
-//     заполняется только в scenario-проходе render-а. nil/пустой ⇒
-//     soulprint.hosts даёт пустой список (а в destiny-проходе обращение к нему
-//     — ошибка изоляции, см. [Vars.allowHosts]). [orchestration.md §4.1].
-//   - Essence       — effective-слой essence (essence.<path>); host-инвариантен
-//     (значения души incarnation, не per-host данные).
-//   - Vars         — task-level `vars:` (destiny/tasks.md §9): локальные
-//     переменные задачи, уже вычисленные render-ом (CEL-выражения над прочим
-//     контекстом, резолвятся ДО params/where). В CEL доступны как `vars.<key>`
-//     (expression-keys) и `${ vars.<key> }` (строки). Scope — одна задача (и её
-//     loop-итерации); пробрасывается только в per-task контекст. nil/пустой ⇒
-//     обращение к `vars.<key>` даёт штатный no-such-key.
+//   - Incarnation  — incarnation fields (name, service_version, spec.*).
+//   - SoulprintSelf — stable facts of the current host; in CEL available as
+//     soulprint.self.<path> ([soulprint.md], canonical form).
+//   - SoulprintHosts — the list of run hosts with stable facts; in CEL available
+//     as soulprint.hosts (+ .where(<predicate>)). Scenario-only: filled only in the
+//     render's scenario pass. nil/empty ⇒ soulprint.hosts is an empty list (and in
+//     the destiny pass accessing it is an isolation error, see [Vars.allowHosts]).
+//     [orchestration.md §4.1].
+//   - Essence       — the effective essence layer (essence.<path>); host-invariant
+//     (incarnation soul values, not per-host data).
+//   - Vars         — task-level `vars:` (destiny/tasks.md §9): local task
+//     variables already computed by render (CEL expressions over the rest of the
+//     context, resolved BEFORE params/where). In CEL available as `vars.<key>`
+//     (expression keys) and `${ vars.<key> }` (strings). Scope — one task (and its
+//     loop iterations); passed only into the per-task context. nil/empty ⇒
+//     accessing `vars.<key>` gives the normal no-such-key.
 //
-// Loop — переменные итерации `loop:` (destiny/tasks.md §7): имя из `as:`
-// (default `item`) → текущий элемент, опционально имя из `index_as:` →
-// индекс/ключ. Имена произвольны (заданы автором), поэтому при непустом Loop
-// [Engine.EvalExpression]/[Engine.EvalInterpolation] компилируют выражение
-// против дочернего env с этими именами (см. [Engine.loopEnv]); резолвятся
-// голой формой `<as>.*` в expression-keys / `${ <as>.* }` в строках
-// ([ADR-010]). nil/пустой Loop → обычное вычисление без loop-переменных.
+// Loop — `loop:` iteration variables (destiny/tasks.md §7): the name from `as:`
+// (default `item`) → the current element, optionally the name from `index_as:` →
+// index/key. Names are arbitrary (author-chosen), so with a non-empty Loop
+// [Engine.EvalExpression]/[Engine.EvalInterpolation] compile the expression against a
+// child env with those names (see [Engine.loopEnv]); they resolve as the bare form
+// `<as>.*` in expression keys / `${ <as>.* }` in strings ([ADR-010]). nil/empty Loop
+// → ordinary evaluation without loop variables.
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
+// [ADR-010]: docs/adr/0010-templating.md
 // [soulprint.md]: docs/soul/soulprint.md
 type Vars struct {
 	Input          map[string]any
@@ -56,58 +54,58 @@ type Vars struct {
 	Vars           map[string]any
 	Loop           map[string]any
 
-	// Compute — scenario-level вычисляемые переменные (`compute:`, ADR-009
-	// amendment 2026-06-23): резолвленные Keeper-ом ОДИН раз на прогон в
-	// рун-уровневом контексте (без soulprint), доступны в CEL как
-	// `compute.<name>`. Scope — apply.input И state_changes (host-инвариантны по
-	// построению). nil/пустой ⇒ `compute.<name>` даёт штатный no-such-key. В
-	// destiny-проходе НЕ пробрасывается (изоляция: destiny видит результат только
-	// через apply.input).
+	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
+	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
+	// soulprint), available in CEL as `compute.<name>`. Scope — apply.input AND
+	// state_changes (host-invariant by construction). nil/empty ⇒ `compute.<name>`
+	// gives the normal no-such-key. NOT passed into the destiny pass (isolation:
+	// destiny sees the result only via apply.input).
 	Compute map[string]any
 
-	// State — корень incarnation.state в migration-режиме ([NewMigration],
-	// [ADR-019]): в CEL доступен как `state.<path>` (мутируемый по ходу
-	// операций миграции). Используется ТОЛЬКО Engine-ом, собранным через
-	// [NewMigration]; в обычном (scenario/destiny) Engine это поле
-	// игнорируется (активация его не читает). nil ⇒ пустой map (обращение к
-	// `state.<key>` даёт штатный no-such-key).
+	// State — the root of incarnation.state in migration mode ([NewMigration],
+	// [ADR-019]): in CEL available as `state.<path>` (mutated over the course of
+	// migration operations). Used ONLY by an Engine built via [NewMigration]; in an
+	// ordinary (scenario/destiny) Engine this field is ignored (the activation does
+	// not read it). nil ⇒ empty map (accessing `state.<key>` gives the normal
+	// no-such-key).
 	State map[string]any
 
-	// Ctx — request-scoped контекст для CEL-функции vault() (отмена/таймаут
-	// ReadKV). Используется только когда Engine собран с KVReader (New + WithVault)
-	// и выражение зовёт vault(); иначе игнорируется. nil ⇒ context.Background()
-	// (vault() без отмены — допустимо для офлайн-режимов soul-lint/Trial).
+	// Ctx — request-scoped context for the CEL vault() function (ReadKV
+	// cancel/timeout). Used only when the Engine is built with a KVReader (New +
+	// WithVault) and the expression calls vault(); otherwise ignored. nil ⇒
+	// context.Background() (vault() without cancellation — acceptable for offline
+	// soul-lint/Trial modes).
 	Ctx context.Context
 
-	// AllowHosts разрешает soulprint.hosts/soulprint.where(...) в выражении.
-	// true — scenario-проход (host-аксессор виден); false (zero-value) —
-	// destiny-проход и прочие контексты без хостов прогона: обращение к
-	// soulprint.hosts → ошибка изоляции ([orchestration.md §4.1]). Часть ключа
-	// compile-cache (исход компиляции зависит от флага).
+	// AllowHosts permits soulprint.hosts/soulprint.where(...) in the expression. true
+	// — the scenario pass (host accessor is visible); false (zero-value) — the
+	// destiny pass and other contexts without run hosts: accessing soulprint.hosts →
+	// isolation error ([orchestration.md §4.1]). Part of the compile-cache key (the
+	// compile outcome depends on the flag).
 	AllowHosts bool
 }
 
-// activation строит map для cel.NewActivation. soulprint обёрнут в
-// {"self": …, "hosts": […]}, чтобы каноничная форма soulprint.self.<path> и
-// scenario-аксессор soulprint.hosts резолвились, а голая soulprint.<path>
-// давала отсутствие ключа (валидатором это ловится отдельно — [soulprint.md]).
-// vars — task-level `vars:` ([Vars.Vars]): nil ⇒ пустой map (обращение к
-// `vars.<key>` даёт штатный no-such-key). Значения уже вычислены render-ом ДО
-// сборки активации (vars: резолвятся перед params/where).
+// activation builds the map for cel.NewActivation. soulprint is wrapped in
+// {"self": …, "hosts": […]} so the canonical form soulprint.self.<path> and the
+// scenario accessor soulprint.hosts resolve, while a bare soulprint.<path> yields a
+// missing key (caught separately by the validator — [soulprint.md]). vars —
+// task-level `vars:` ([Vars.Vars]): nil ⇒ empty map (accessing `vars.<key>` gives
+// the normal no-such-key). Values are already computed by render BEFORE the
+// activation is built (vars: resolve before params/where).
 //
-// soulprint.hosts — list(map(string,dyn)); nil SoulprintHosts ⇒ пустой список
-// (обращение в destiny-проходе отсекается ещё на compile, [Vars.AllowHosts]).
+// soulprint.hosts — list(map(string,dyn)); nil SoulprintHosts ⇒ empty list (access
+// in the destiny pass is cut off at compile, [Vars.AllowHosts]).
 //
-// Loop-переменные кладутся на верхний уровень активации под своими именами
-// (голая форма `<as>.*`). Имена итерации не конфликтуют с фиксированным
-// контекстом: config-валидатор запрещает `as:`/`index_as:`, совпадающие с
-// зарезервированными именами ([scenario_task.go]).
+// Loop variables are placed at the top level of the activation under their own names
+// (the bare form `<as>.*`). Iteration names do not conflict with the fixed context:
+// the config validator forbids `as:`/`index_as:` matching reserved names
+// ([scenario_task.go]).
 func (v Vars) activation(migration bool) map[string]any {
 	var act map[string]any
 	if migration {
-		// migration-режим ([NewMigration]): объявлена только `state`. Прочие
-		// контекст-имена в активацию НЕ кладутся — они и не объявлены в env
-		// ([migrationVars]), обращение к ним отсекается на compile.
+		// migration mode ([NewMigration]): only `state` is declared. Other context
+		// names are NOT placed in the activation — they aren't declared in the env
+		// ([migrationVars]) either, so access to them is cut off at compile.
 		act = map[string]any{"state": orEmpty(v.State)}
 	} else {
 		act = map[string]any{
@@ -126,8 +124,8 @@ func (v Vars) activation(migration bool) map[string]any {
 	return act
 }
 
-// loopNames возвращает отсортированный список имён loop-переменных (ключ
-// дочернего env и его кеша). Пустой Loop → nil.
+// loopNames returns the sorted list of loop-variable names (the key of the child env
+// and its cache). Empty Loop → nil.
 func (v Vars) loopNames() []string {
 	if len(v.Loop) == 0 {
 		return nil
@@ -147,8 +145,8 @@ func orEmpty(m map[string]any) map[string]any {
 	return m
 }
 
-// orEmptyHosts конвертирует []map[string]any в []any для cel-адаптера
-// (list-элементы — dyn). nil ⇒ пустой list (soulprint.hosts без хостов).
+// orEmptyHosts converts []map[string]any to []any for the cel adapter (list elements
+// are dyn). nil ⇒ empty list (soulprint.hosts with no hosts).
 func orEmptyHosts(hosts []map[string]any) []any {
 	out := make([]any, len(hosts))
 	for i, h := range hosts {

@@ -2,10 +2,9 @@ package pluginhost
 
 import "sync"
 
-// tailBuffer — конкурентно-безопасный кольцевой буфер последних N байт.
-// Используется для сбора stderr-tail плагина: при сбое handshake/RPC
-// последние ~4KB stderr попадают в диагностику (ADR-020 → plugins.md →
-// Поведение host-а после handshake).
+// tailBuffer is a concurrency-safe ring buffer of the last N bytes. It collects
+// a plugin's stderr tail: on handshake/RPC failure the last ~4KB of stderr reach
+// diagnostics (ADR-020 → plugins.md).
 type tailBuffer struct {
 	mu   sync.Mutex
 	buf  []byte
@@ -23,7 +22,7 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 	defer t.mu.Unlock()
 	n := len(p)
 	if n >= t.max {
-		// Перетираем буфер: запоминаем последние t.max байт входа.
+		// Overwrite the buffer: keep the last t.max bytes of input.
 		t.buf = append(t.buf[:0], p[n-t.max:]...)
 		t.full = true
 		t.head = 0
@@ -33,9 +32,9 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 		t.buf = append(t.buf, p...)
 		return n, nil
 	}
-	// Кольцо: пишем по mod max, фиксируем full=true.
+	// Ring: write mod max, mark full=true.
 	if !t.full {
-		// «Доращиваем» до max, остальное идёт в кольцо.
+		// Grow up to max; the rest goes into the ring.
 		need := t.max - len(t.buf)
 		t.buf = append(t.buf, p[:need]...)
 		p = p[need:]

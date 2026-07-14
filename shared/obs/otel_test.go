@@ -7,7 +7,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// resourceValue достаёт строковое значение attr-ключа из OTel-resource.
+// resourceValue extracts the string value of an attr key from the OTel resource.
 func resourceValue(t *testing.T, cfg OTelConfig, key attribute.Key) (string, bool) {
 	t.Helper()
 	res, err := buildResource(context.Background(), cfg)
@@ -18,7 +18,7 @@ func resourceValue(t *testing.T, cfg OTelConfig, key attribute.Key) (string, boo
 	return v.AsString(), ok
 }
 
-// keeper-resource несёт service.name="keeper" + кастомный soulstack.kid.
+// The keeper resource carries service.name="keeper" + a custom soulstack.kid.
 func TestBuildResource_KeeperCarriesKID(t *testing.T) {
 	cfg := OTelConfig{
 		ServiceName:   "keeper",
@@ -32,7 +32,7 @@ func TestBuildResource_KeeperCarriesKID(t *testing.T) {
 	}
 }
 
-// soul-resource несёт service.name="soul" + кастомный soulstack.sid.
+// The soul resource carries service.name="soul" + a custom soulstack.sid.
 func TestBuildResource_SoulCarriesSID(t *testing.T) {
 	cfg := OTelConfig{
 		ServiceName:   "soul",
@@ -46,8 +46,8 @@ func TestBuildResource_SoulCarriesSID(t *testing.T) {
 	}
 }
 
-// SetupOTel при Enabled=false должен вернуть не-nil провайдер (main не
-// ветвится), а Shutdown — отработать без ошибки.
+// SetupOTel with Enabled=false must return a non-nil provider (main does not
+// branch), and Shutdown must run without error.
 func TestSetupOTel_DisabledNoOp(t *testing.T) {
 	p, err := SetupOTel(context.Background(), OTelConfig{
 		Enabled:     false,
@@ -64,8 +64,7 @@ func TestSetupOTel_DisabledNoOp(t *testing.T) {
 	}
 }
 
-// Shutdown на nil-провайдере безопасен (defer-цепочка main не должна
-// проверять nil).
+// Shutdown on a nil provider is safe (main's defer chain must not check nil).
 func TestOTelProvider_ShutdownNil(t *testing.T) {
 	var p *OTelProvider
 	if err := p.Shutdown(context.Background()); err != nil {
@@ -73,9 +72,9 @@ func TestOTelProvider_ShutdownNil(t *testing.T) {
 	}
 }
 
-// Enabled без Endpoint поднимает TracerProvider без OTLP-exporter
-// (span-ы никуда не уходят, но API не ломается). Кастомные ResourceAttrs
-// (soulstack.kid) принимаются без ошибки.
+// Enabled without Endpoint brings up a TracerProvider without an OTLP exporter
+// (spans go nowhere, but the API does not break). Custom ResourceAttrs
+// (soulstack.kid) are accepted without error.
 func TestSetupOTel_EnabledNoEndpoint(t *testing.T) {
 	p, err := SetupOTel(context.Background(), OTelConfig{
 		Enabled:       true,

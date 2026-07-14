@@ -14,9 +14,9 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// readHandshake читает stdout плагина, игнорируя строки до первой с
-// `soul_stack:"plugin-v1"` маркером (docs/keeper/plugins.md → Поведение
-// host-а при handshake). Превышение startupTimeout — hard fail.
+// readHandshake reads the plugin's stdout, ignoring lines until the first one with
+// the `soul_stack:"plugin-v1"` marker (docs/keeper/plugins.md → Host behavior on
+// handshake). Exceeding startupTimeout is a hard fail.
 func readHandshake(stdout io.ReadCloser, startupTimeout time.Duration) (*pluginv1.Handshake, error) {
 	type result struct {
 		hs  *pluginv1.Handshake
@@ -25,23 +25,23 @@ func readHandshake(stdout io.ReadCloser, startupTimeout time.Duration) (*pluginv
 	resCh := make(chan result, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
-		// Увеличиваем буфер: handshake-строка может содержать длинный
-		// server_cert в post-MVP. 64KB — с запасом.
+		// Grow the buffer: a handshake line may contain a long server_cert in
+		// post-MVP. 64KB — with headroom.
 		scanner.Buffer(make([]byte, 0, 4096), 64*1024)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
 				continue
 			}
-			// Поверхностная проверка через strings: parse JSON каждой
-			// рандомной диагностической строки — лишняя работа.
+			// Shallow check via strings: parsing JSON of every random diagnostic
+			// line would be wasted work.
 			if !strings.Contains(line, `"soul_stack"`) {
 				continue
 			}
 			hs := &pluginv1.Handshake{}
 			if err := protojson.Unmarshal([]byte(line), hs); err != nil {
-				// Строка с soul_stack-маркером, но невалидная — это уже
-				// явная ошибка, не дренируем дальше.
+				// A line with the soul_stack marker but invalid — this is already
+				// a clear error, we don't drain further.
 				resCh <- result{nil, fmt.Errorf("handshake: parse json: %w", err)}
 				return
 			}
@@ -65,14 +65,13 @@ func readHandshake(stdout io.ReadCloser, startupTimeout time.Duration) (*pluginv
 	}
 }
 
-// validateHandshake — cross-check матрица из docs/keeper/plugins.md.
+// validateHandshake — the cross-check matrix from docs/keeper/plugins.md.
 //
-// Проверяет, что (1) protocol_version плагина среди поддерживаемых host-ом,
-// (2) protocol_version совпадает с тем, что объявлен в manifest-е,
-// (3) kind в handshake совпадает с manifest.kind, (4) network=unix
-// (единственное значение MVP), (5) address совпадает с тем сокетом, который
-// host передал плагину через env (защита от случайного listen-а плагином не
-// на нашем сокете).
+// Checks that (1) the plugin's protocol_version is among those supported by the
+// host, (2) protocol_version matches the one declared in the manifest, (3) kind in
+// the handshake matches manifest.kind, (4) network=unix (the only MVP value),
+// (5) address matches the socket the host passed to the plugin via env (guards
+// against the plugin accidentally listening on a socket other than ours).
 func validateHandshake(m *sharedplugin.Manifest, hs *pluginv1.Handshake, expectedAddr string) error {
 	if !containsInt32(sharedplugin.SupportedProtocolVersions, hs.GetProtocolVersion()) {
 		return fmt.Errorf("handshake: protocol_version=%d, host supports %v",

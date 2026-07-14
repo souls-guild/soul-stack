@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// writePluginBin кладёт фейковый бинарь плагина в dir и возвращает его путь.
+// writePluginBin writes a fake plugin binary into dir and returns its path.
 func writePluginBin(t *testing.T, dir, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, "soul-mod-x")
@@ -32,7 +32,7 @@ func TestComputeFileDigestStable(t *testing.T) {
 	if d1 != d2 {
 		t.Errorf("digest not stable: %q != %q", d1, d2)
 	}
-	// SHA-256("payload") — фиксированный известный вектор.
+	// SHA-256("payload") — a fixed known vector.
 	const want = "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5"
 	if d1 != want {
 		t.Errorf("digest = %q, want %q", d1, want)
@@ -46,10 +46,10 @@ func TestComputeFileDigestMissing(t *testing.T) {
 	}
 }
 
-// Re-exec sidecar (defense-in-depth, ADR-026 S6b): sidecar пишется после
-// Sigil-verify и сверяется на повторных exec из кеша. Тесты ниже целят
-// именно sidecar-уровень (sealDigest/verifyDigest); fail-closed Sigil-verify
-// первой загрузки покрыт в sigil_verify_test.go.
+// Re-exec sidecar (defense-in-depth, ADR-026 S6b): the sidecar is written after
+// Sigil verify and checked on repeated exec from the cache. The tests below
+// target the sidecar level specifically (sealDigest/verifyDigest); the
+// fail-closed Sigil verify of the first load is covered in sigil_verify_test.go.
 
 func TestSealDigestWritesReadOnlySidecar(t *testing.T) {
 	dir := t.TempDir()
@@ -93,7 +93,7 @@ func TestVerifyDigestTamperedBinaryMismatch(t *testing.T) {
 	bin := writePluginBin(t, dir, "original")
 	sealed, _ := computeFileDigest(bin)
 
-	// Подмена бинаря после seal.
+	// Tamper with the binary after seal.
 	if err := os.WriteFile(bin, []byte("malicious"), 0o755); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
@@ -109,8 +109,8 @@ func TestVerifyDigestWhitespaceTolerant(t *testing.T) {
 	bin := writePluginBin(t, dir, "payload")
 	digest, _ := computeFileDigest(bin)
 
-	// Sidecar с окружающими пробелами/trailing-newline (как мог бы записать
-	// оператор вручную) — verify должен их игнорировать.
+	// A sidecar with surrounding whitespace/trailing newline (as an operator
+	// might write by hand) — verify must ignore it.
 	if err := verifyDigest(bin, "  "+digest+"\n"); err != nil {
 		t.Errorf("verify with whitespace sidecar: %v", err)
 	}

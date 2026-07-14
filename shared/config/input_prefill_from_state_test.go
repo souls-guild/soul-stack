@@ -7,19 +7,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// TestResolveInputValues_PrefillFromStateNotLeaked — GUARD (инвариант a):
-// `prefill_from_state` НЕ участвует в резолве эффективного input. Поле с этим
-// ключом БЕЗ default и БЕЗ переданного значения отсутствует в эффективном input
-// (prefill — day-2 UI-hint, НЕ create-дефолт; incarnation.state не должен
-// протечь в input-резолв). Ловит регресс «prefill_from_state незаметно стал
-// дефолтом».
+// TestResolveInputValues_PrefillFromStateNotLeaked — GUARD (invariant a):
+// `prefill_from_state` does NOT take part in resolving the effective input. A field
+// with this key but WITHOUT a default and WITHOUT a passed value is absent from the
+// effective input (prefill is an operational UI hint, NOT a create default;
+// incarnation.state must not leak into input resolution). Catches the regression
+// where "prefill_from_state silently became a default".
 func TestResolveInputValues_PrefillFromStateNotLeaked(t *testing.T) {
 	schema := schemaFromInput(t, `redis_version:
   type: string
   prefill_from_state: state.redis_version
 `)
-	// Ничего не передано: prefill_from_state не подставляет значение (в отличие
-	// от default), и required не поднимается (ключ не делает поле обязательным).
+	// Nothing passed: prefill_from_state doesn't supply a value (unlike default),
+	// and required is not raised (the key doesn't make the field required).
 	got, err := ResolveInputValues(schema, map[string]any{})
 	if err != nil {
 		t.Fatalf("ResolveInputValues: %v", err)
@@ -32,9 +32,9 @@ func TestResolveInputValues_PrefillFromStateNotLeaked(t *testing.T) {
 	}
 }
 
-// TestResolveInputValues_PrefillFromStateCoexistsWithDefault — `default` и
-// `prefill_from_state` сосуществуют: default остаётся create-дефолтом (в merge),
-// prefill_from_state в резолве не участвует (виден только form-prefill-эндпоинту).
+// TestResolveInputValues_PrefillFromStateCoexistsWithDefault — `default` and
+// `prefill_from_state` coexist: default stays the create default (in merge),
+// prefill_from_state takes no part in resolution (visible only to the form-prefill endpoint).
 func TestResolveInputValues_PrefillFromStateCoexistsWithDefault(t *testing.T) {
 	schema := schemaFromInput(t, `tls_enabled:
   type: boolean
@@ -45,14 +45,14 @@ func TestResolveInputValues_PrefillFromStateCoexistsWithDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveInputValues: %v", err)
 	}
-	want := map[string]any{"tls_enabled": false} // default смёржен; prefill не влияет
+	want := map[string]any{"tls_enabled": false} // default merged; prefill has no effect
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 }
 
-// TestValidatePrefillFromState_Accepts — валидные пути `state.<path>` проходят
-// schema-валидацию без диагностик. Применим к любому type.
+// TestValidatePrefillFromState_Accepts — valid `state.<path>` paths pass schema
+// validation with no diagnostics. Applies to any type.
 func TestValidatePrefillFromState_Accepts(t *testing.T) {
 	cases := []string{
 		`f:
@@ -81,30 +81,30 @@ func TestValidatePrefillFromState_Accepts(t *testing.T) {
 	}
 }
 
-// TestValidatePrefillFromState_Rejects — невалидные формы пути поднимают
-// input_prefill_from_state_invalid (нет корня state / пустой / битый сегмент).
+// TestValidatePrefillFromState_Rejects — invalid path forms raise
+// input_prefill_from_state_invalid (no state root / empty / broken segment).
 func TestValidatePrefillFromState_Rejects(t *testing.T) {
 	cases := []string{
 		`f:
   type: string
   prefill_from_state: redis_version
-`, // нет корня state.
+`, // no state root.
 		`f:
   type: string
   prefill_from_state: state
-`, // только корень, нет сегмента
+`, // root only, no segment
 		`f:
   type: string
   prefill_from_state: state.
-`, // пустой сегмент
+`, // empty segment
 		`f:
   type: string
   prefill_from_state: incarnation.state.redis_version
-`, // чужой корень (не state)
+`, // foreign root (not state)
 		`f:
   type: string
   prefill_from_state: state.Bad-Segment
-`, // не snake_case сегмент
+`, // not a snake_case segment
 	}
 	for _, c := range cases {
 		if !hasDiagCode(diagsForInput(t, c), "input_prefill_from_state_invalid") {
@@ -113,8 +113,8 @@ func TestValidatePrefillFromState_Rejects(t *testing.T) {
 	}
 }
 
-// TestPrefillFromState_KnownKey — `prefill_from_state` не поднимает unknown_key
-// (зарегистрирован в inputSchemaKnownKeys).
+// TestPrefillFromState_KnownKey — `prefill_from_state` doesn't raise unknown_key
+// (registered in inputSchemaKnownKeys).
 func TestPrefillFromState_KnownKey(t *testing.T) {
 	c := `f:
   type: string
@@ -127,9 +127,9 @@ func TestPrefillFromState_KnownKey(t *testing.T) {
 	}
 }
 
-// diagsForInput парсит scenario с input-блоком и возвращает ВСЕ диагностики
-// (включая ошибки — тест сам решает, что ожидать). Отличие от schemaFromInput:
-// тот падает на любой error-диагностике.
+// diagsForInput parses a scenario with an input block and returns ALL diagnostics
+// (including errors — the test decides what to expect). Unlike schemaFromInput,
+// which fails on any error diagnostic.
 func diagsForInput(t *testing.T, inputYAML string) []diag.Diagnostic {
 	t.Helper()
 	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")

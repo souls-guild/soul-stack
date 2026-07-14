@@ -1,79 +1,79 @@
 package config
 
-// roster-refresh passage-граница (ADR-0061 §S2, amends ADR-056).
+// roster-refresh passage boundary (ADR-0061 §S2, amends ADR-056).
 //
-// Зачем. Целевой сценарий ADR-0061 — единый create-прогон provision→онбординг→роль:
-// шаг `core.cloud.provisioned` (keeper) создаёт N VM, шаг `core.soul.registered`
-// (keeper) с `refresh_soulprint: true` регистрирует и дожидается их онбординга, а
-// последующие задачи применяют роль к УЖЕ онбордившимся хостам через roster
-// (`soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*`). Roster прогона
-// резолвится up-front перед первым Passage и стабилен В ПРЕДЕЛАХ Passage, но на
-// refresh-границе пере-резолвится в свежий live-снимок online-набора (ADR-009 §7 в
-// действующей редакции, ослаблено ADR-0061). Чтобы re-resolve (S3) проявился,
-// потребители обновлённого roster ОБЯЗАНЫ оказаться в Passage СТРОГО ПОСЛЕ
-// `refresh_soulprint`-шага — иначе их render (таргетинг + soulprint.hosts) увидел бы
-// СТАРЫЙ (до-онбординга) roster.
+// Why. The target ADR-0061 scenario is a single create run provision→onboarding→role:
+// step `core.cloud.provisioned` (keeper) creates N VMs, step `core.soul.registered`
+// (keeper) with `refresh_soulprint: true` registers and waits for their onboarding,
+// and subsequent tasks apply the role to the ALREADY-onboarded hosts via the roster
+// (`soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*`). The run roster is
+// resolved up-front before the first Passage and is stable WITHIN a Passage, but at a
+// refresh boundary it is re-resolved into a fresh live snapshot of the online set
+// (ADR-009 §7 in the current edition, relaxed by ADR-0061). For the re-resolve (S3) to
+// take effect, consumers of the updated roster MUST land in a Passage STRICTLY AFTER
+// the `refresh_soulprint` step — otherwise their render (targeting + soulprint.hosts)
+// would see the OLD (pre-onboarding) roster.
 //
-// ★ БЛОКЕР (ADR-056 §риски, silent-wrong-target): без passage-границы redis-apply-
-// шаг уехал бы в тот же Passage со старым (пустым) roster → разрушительная операция
-// на неверном наборе хостов МОЛЧА. Поэтому `refresh_soulprint: true` — новый класс
-// PASSAGE-ОПРЕДЕЛЯЮЩЕГО сигнала «roster-refreshed», симметрично probe-эмиттеру
-// `register: X` (только сигнал — roster-ось, не register-ось).
+// ★ BLOCKER (ADR-056 §risks, silent-wrong-target): without a passage boundary the
+// redis-apply step would ride in the same Passage with the old (empty) roster → a
+// destructive operation on the wrong host set, SILENTLY. So `refresh_soulprint: true`
+// is a new class of PASSAGE-DEFINING "roster-refreshed" signal, symmetric with the
+// probe emitter `register: X` (a signal only — a roster axis, not a register axis).
 //
-// Механизм. Refresh-эмиттер — задача `core.soul.registered` с `refresh_soulprint:
-// true` (литерал) в params. Refresh-потребитель — задача, статически читающая
-// roster прогона:
+// Mechanism. The refresh emitter is a `core.soul.registered` task with
+// `refresh_soulprint: true` (literal) in params. A refresh consumer is a task that
+// statically reads the run roster:
 //
-//   - `on: [incarnation.name]` (литерал или `${ incarnation.name }`) — таргетинг по
-//     корневой Coven-метке = весь incarnation; резолвится Keeper-side из roster (Hosts);
-//   - опущенный `on:` (= весь incarnation, orchestration.md §3) — тоже roster-таргетинг;
-//   - `soulprint.hosts` / `soulprint.where(...)` — список хостов прогона;
-//   - `soulprint.self.*` — host-вариативный факт (зависит от того, какие хосты в roster).
+//   - `on: [incarnation.name]` (literal or `${ incarnation.name }`) — targeting by the
+//     root Coven label = the whole incarnation; resolved Keeper-side from the roster (Hosts);
+//   - an omitted `on:` (= the whole incarnation, orchestration.md §3) — also roster targeting;
+//   - `soulprint.hosts` / `soulprint.where(...)` — the list of run hosts;
+//   - `soulprint.self.*` — a host-varying fact (depends on which hosts are in the roster).
 //
-// Любой refresh-потребитель после refresh-эмиттера (program-order) едет в Passage
-// ≥ 1 + passage эмиттера. Граница активна ТОЛЬКО при наличии refresh-эмиттера в
-// плане; без него — zero-cost, граф register-зависимости и Count БИТ-В-БИТ как до
-// ADR-0061 (N=1 fast-path сохранён).
+// Any refresh consumer after the refresh emitter (program-order) rides in a Passage
+// ≥ 1 + the emitter's passage. The boundary is active ONLY when a refresh emitter is
+// present in the plan; without one it is zero-cost, and the register-dependency graph
+// and Count are BIT-FOR-BIT as before ADR-0061 (the N=1 fast-path is preserved).
 //
-// Over-approximation в безопасную сторону: roster-чтение распознаётся консервативно
-// (опущенный `on:` тоже считается). Лишний Passage безопасен; пропущенный =
-// silent-wrong-target — поэтому при сомнении расщепляем. Не register-граф: refresh-
-// граница НЕ добавляет register-ссылок, поэтому инвариант reads⊆refs ADR-056 не
-// затрагивается (refresh — отдельная ось).
+// Over-approximation on the safe side: roster reads are recognized conservatively (an
+// omitted `on:` also counts). An extra Passage is safe; a missed one =
+// silent-wrong-target — so when in doubt we split. Not a register graph: the refresh
+// boundary does NOT add register references, so the reads⊆refs invariant of ADR-056 is
+// untouched (refresh is a separate axis).
 
-// RefreshBoundaries возвращает на КАЖДЫЙ Passage P (0..passage.Count-1) признак
-// «перед render-ом Passage P scenario-runner обязан ПЕРЕ-резолвить roster» (S3,
-// ADR-0061). Граница стоит перед Passage P, если в Passage P-1 завершился хотя бы
-// один успешный refresh-эмиттер (`core.soul.registered` с `refresh_soulprint:
-// true`) — его барьер сошёлся → онбордившиеся хосты записаны в souls+coven → live-
-// снимок roster изменился → потребители Passage P (стратифицированные S2 строго
-// ПОСЛЕ refresh-шага) обязаны увидеть актуальный набор.
+// RefreshBoundaries returns, for EACH Passage P (0..passage.Count-1), a flag "before
+// rendering Passage P the scenario-runner must RE-resolve the roster" (S3, ADR-0061).
+// A boundary stands before Passage P if in Passage P-1 at least one successful refresh
+// emitter (`core.soul.registered` with `refresh_soulprint: true`) completed — its
+// barrier converged → onboarded hosts are written into souls+coven → the live roster
+// snapshot changed → consumers of Passage P (stratified by S2 strictly AFTER the
+// refresh step) must see the current set.
 //
-// Семантика re-resolve — СВЕЖИЙ LIVE-СНИМОК roster incarnation на границе (run.go:
-// resolveRoster → LoadIncarnationHosts → filterAlive): отражает ТЕКУЩИЙ online-
-// набор. Он растёт по мере онбординга провиженных хостов, но это НЕ монотонная
-// операция — хост, ушедший offline к границе, из снимка исключается (таргетинг идёт
-// на реально-online набор).
+// Re-resolve semantics — a FRESH LIVE SNAPSHOT of the incarnation roster at the
+// boundary (run.go: resolveRoster → LoadIncarnationHosts → filterAlive): reflects the
+// CURRENT online set. It grows as provisioned hosts onboard, but this is NOT a
+// monotonic operation — a host that went offline by the boundary is excluded from the
+// snapshot (targeting hits the actually-online set).
 //
-// out[0] всегда false (перед первым Passage roster уже резолвнут up-front).
-// Длина out == passage.Count. Если refresh-эмиттеров нет — все false (re-resolve
-// не нужен, поведение БИТ-В-БИТ как до ADR-0061). N=1 → []bool{false}.
+// out[0] is always false (before the first Passage the roster is already resolved
+// up-front). len(out) == passage.Count. If there are no refresh emitters — all false
+// (no re-resolve needed, behavior BIT-FOR-BIT as before ADR-0061). N=1 → []bool{false}.
 //
-// Привязка к P-1 (а не «к любому Passage < P»): барьер Passage P-1 — ближайшая
-// точка, где refresh-эмиттер этого Passage гарантированно завершился, поэтому ОДИН
-// re-resolve на границе достаточен; несколько refresh-эмиттеров в разных Passage
-// дают несколько границ (по одной на Passage-после-каждого). passage — результат
-// [Stratify] того же tasks.
+// Binding to P-1 (not "to any Passage < P"): the Passage P-1 barrier is the nearest
+// point where this Passage's refresh emitter is guaranteed to have completed, so ONE
+// re-resolve at the boundary suffices; several refresh emitters in different Passages
+// give several boundaries (one per Passage-after-each). passage is the result of
+// [Stratify] of the same tasks.
 func RefreshBoundaries(tasks []Task, passage Passage) []bool {
 	out := make([]bool, passage.Count)
 	if passage.Count <= 1 || len(passage.TaskPassage) != len(tasks) {
-		return out // один Passage / рассинхрон — границ нет.
+		return out // single Passage / desync — no boundaries.
 	}
 	for i := range tasks {
 		if !taskIsRefreshEmitter(&tasks[i]) {
 			continue
 		}
-		// refresh-эмиттер в Passage E → re-resolve перед Passage E+1.
+		// refresh emitter in Passage E → re-resolve before Passage E+1.
 		if next := passage.TaskPassage[i] + 1; next < passage.Count {
 			out[next] = true
 		}
@@ -81,23 +81,24 @@ func RefreshBoundaries(tasks []Task, passage Passage) []bool {
 	return out
 }
 
-// refreshModuleAddr — единственный модуль-носитель `refresh_soulprint` (ADR-0061:
-// способность 2 живёт на keeper-side core `core.soul.registered`, не отдельная
-// сущность). Author-форма адреса задачи — base+state.
+// refreshModuleAddr — the only module carrying `refresh_soulprint` (ADR-0061:
+// capability 2 lives on the keeper-side core `core.soul.registered`, not a separate
+// entity). The author-form task address is base+state.
 const refreshModuleAddr = "core.soul.registered"
 
-// HasRefreshEmitter — план содержит хотя бы один refresh-эмиттер (задача
-// `core.soul.registered` с `refresh_soulprint: true`, рекурсивно через block:).
+// HasRefreshEmitter — the plan contains at least one refresh emitter (a
+// `core.soul.registered` task with `refresh_soulprint: true`, recursively via block:).
 //
-// Зачем отдельно от [RefreshBoundaries]: предикат «план провиженит roster mid-run»
-// нужен ДО стратификации — для no_hosts-гейта run.go (ADR-0061 amendment): прогон
-// со refresh-эмиттером законно стартует на ПУСТОМ roster, даже если несёт host-
-// задачи деплоя (они стратифицируются в Passage ПОСЛЕ refresh-границы и видят
-// пере-резолвленный live-снимок). RefreshBoundaries отвечает на другой вопрос —
-// «перед каким Passage пере-резолвить» — и требует уже посчитанный [Passage];
-// здесь же — чистая проверка наличия эмиттера в плоском плане задач.
+// Why separate from [RefreshBoundaries]: the predicate "the plan provisions the roster
+// mid-run" is needed BEFORE stratification — for the no_hosts gate in run.go (ADR-0061
+// amendment): a run with a refresh emitter legitimately starts on an EMPTY roster even
+// if it carries host deploy tasks (they are stratified into a Passage AFTER the refresh
+// boundary and see the re-resolved live snapshot). RefreshBoundaries answers a
+// different question — "before which Passage to re-resolve" — and requires an
+// already-computed [Passage]; here it's a pure check for an emitter's presence in the
+// flat task plan.
 //
-// Чистая функция, no-I/O. Без эмиттера — false, поведение no_hosts БИТ-В-БИТ.
+// Pure function, no I/O. Without an emitter — false, no_hosts behavior BIT-FOR-BIT.
 func HasRefreshEmitter(tasks []Task) bool {
 	for i := range tasks {
 		if taskHasRefreshEmitter(&tasks[i]) {
@@ -107,9 +108,9 @@ func HasRefreshEmitter(tasks []Task) bool {
 	return false
 }
 
-// taskHasRefreshEmitter — задача (или любой её потомок block:) — refresh-эмиттер.
-// Block рекурсивно: block — атомарная единица Passage, эмиттер внутри него тоже
-// провиженит roster прогона (over-approximation в безопасную сторону, симметрично
+// taskHasRefreshEmitter — the task (or any of its block: children) is a refresh
+// emitter. Block recursively: block is an atomic Passage unit, an emitter inside it
+// also provisions the run roster (over-approximation on the safe side, symmetric with
 // taskReadsRoster).
 func taskHasRefreshEmitter(t *Task) bool {
 	if taskIsRefreshEmitter(t) {
@@ -125,13 +126,13 @@ func taskHasRefreshEmitter(t *Task) bool {
 	return false
 }
 
-// taskIsRefreshEmitter — задача эмитит сигнал «roster-refreshed»: это
-// `core.soul.registered` с params.refresh_soulprint == true (литерал bool).
+// taskIsRefreshEmitter — the task emits the "roster-refreshed" signal: it's a
+// `core.soul.registered` with params.refresh_soulprint == true (literal bool).
 //
-// Только литеральный true. `${ … }`-выражение в refresh_soulprint статически
-// неопределимо (ADR-010: ${…}-значение не типизируется), поэтому НЕ считается
-// эмиттером — приемлемо: refresh_soulprint всегда пишется литералом true (это
-// статический флаг поведения, не данные). false / отсутствие → не эмиттер.
+// Only a literal true. A `${ … }` expression in refresh_soulprint is statically
+// undeterminable (ADR-010: a ${…} value isn't typed), so it does NOT count as an
+// emitter — acceptable: refresh_soulprint is always written as a literal true (a
+// static behavior flag, not data). false / absence → not an emitter.
 func taskIsRefreshEmitter(t *Task) bool {
 	if t.Module == nil || t.Module.Module != refreshModuleAddr {
 		return false
@@ -144,19 +145,19 @@ func taskIsRefreshEmitter(t *Task) bool {
 	return isBool && b
 }
 
-// taskReadsRoster — задача статически читает roster прогона (см. doc выше):
-// on:[incarnation.name] / опущенный on: / soulprint.hosts / soulprint.self.*.
-// Рекурсивно через block: (block — атомарная единица Passage; roster-чтение
-// любого потомка делает контейнер refresh-потребителем).
+// taskReadsRoster — the task statically reads the run roster (see doc above):
+// on:[incarnation.name] / omitted on: / soulprint.hosts / soulprint.self.*.
+// Recursively via block: (block is an atomic Passage unit; a roster read by any child
+// makes the container a refresh consumer).
 //
-// Keeper-side задачи (`on: keeper`) НЕ читают roster (у них нет хостов прогона —
-// keeperVars без soulprint, render_host.go), поэтому исключаются: refresh-эмиттер
-// сам `on: keeper` и НЕ должен зависеть от refresh-границы рекурсивно.
+// Keeper-side tasks (`on: keeper`) do NOT read the roster (they have no run hosts —
+// keeperVars without soulprint, render_host.go), so they are excluded: the refresh
+// emitter is itself `on: keeper` and must NOT depend on the refresh boundary recursively.
 func taskReadsRoster(t *Task) bool {
 	if onTargetsRoster(t.On) {
 		return true
 	}
-	// soulprint.* (hosts/where/self) в любом keeper-рендеримом CEL-поле задачи.
+	// soulprint.* (hosts/where/self) in any keeper-rendered CEL field of the task.
 	if exprReadsSoulprint(t.Where) {
 		return true
 	}
@@ -189,24 +190,24 @@ func taskReadsRoster(t *Task) bool {
 	return false
 }
 
-// onTargetsRoster — `on:` таргетит весь roster incarnation:
-//   - nil (опущенный on:) → весь incarnation (orchestration.md §3);
-//   - `on: keeper` (строка) → НЕ roster (keeper-side, нет хостов);
-//   - список, содержащий корневую Coven-метку `incarnation.name` (литерал или
-//     `${ incarnation.name }`) → весь incarnation (rosterSQL `$1 = ANY(coven)`).
+// onTargetsRoster — `on:` targets the whole incarnation roster:
+//   - nil (omitted on:) → the whole incarnation (orchestration.md §3);
+//   - `on: keeper` (string) → NOT the roster (keeper-side, no hosts);
+//   - a list containing the root Coven label `incarnation.name` (literal or
+//     `${ incarnation.name }`) → the whole incarnation (rosterSQL `$1 = ANY(coven)`).
 //
-// Прочие coven-метки (sub-coven вроде `redis`/`prod`) НЕ считаются roster-чтением:
-// они таргетят ПОДмножество, и хотя выросший roster мог бы добавить в него хосты,
-// эмиттер refresh всегда вешает на новые SID именно `incarnation.name` (ADR-0061:
-// `coven: ["${ incarnation.name }"]`). Для целевого сценария корневая метка —
-// канонический способ адресовать выросший roster. (Sub-coven-таргетинг новых
-// хостов в одном прогоне — вне S2/S3; при нужде расширяется отдельно.)
+// Other coven labels (a sub-coven like `redis`/`prod`) do NOT count as a roster read:
+// they target a SUBset, and although a grown roster could add hosts to it, the refresh
+// emitter always tags new SIDs with exactly `incarnation.name` (ADR-0061:
+// `coven: ["${ incarnation.name }"]`). For the target scenario the root label is the
+// canonical way to address a grown roster. (Sub-coven targeting of new hosts within one
+// run is outside S2/S3; extended separately if needed.)
 func onTargetsRoster(on any) bool {
 	switch v := on.(type) {
 	case nil:
-		return true // опущенный on: = весь incarnation.
+		return true // omitted on: = the whole incarnation.
 	case string:
-		return false // `on: keeper` — единственная валидная строковая форма, не roster.
+		return false // `on: keeper` — the only valid string form, not the roster.
 	case []any:
 		for _, raw := range v {
 			s, ok := raw.(string)
@@ -223,23 +224,24 @@ func onTargetsRoster(on any) bool {
 	}
 }
 
-// labelIsIncarnationName — coven-метка ссылается на корневую `incarnation.name`:
-// либо литерал `incarnation.name` (редко, но допустимо), либо CEL-обёртка
-// `${ incarnation.name }` / `${incarnation.name}`. Распознаётся текстово: точный
-// CEL-парс не нужен — форма корневой метки фиксирована грамматикой.
+// labelIsIncarnationName — the coven label refers to the root `incarnation.name`:
+// either the literal `incarnation.name` (rare, but allowed) or the CEL wrapper
+// `${ incarnation.name }` / `${incarnation.name}`. Recognized textually: exact CEL
+// parsing isn't needed — the root label form is fixed by the grammar.
 func labelIsIncarnationName(s string) bool {
 	if !isCELWrapped(s) {
 		return false
 	}
-	// Внутренность ${ … } — должна целиком быть `incarnation.name` (с возможными
-	// пробелами). Содержимое более сложное (например `${ incarnation.name + "-x" }`)
-	// сюда не относим: это уже sub-coven, не корневая метка.
+	// The inside of ${ … } must be exactly `incarnation.name` (with possible
+	// whitespace). More complex content (e.g. `${ incarnation.name + "-x" }`) does not
+	// count here: that's already a sub-coven, not the root label.
 	inner := s[2 : len(s)-1]
 	return trimSpace(inner) == "incarnation.name"
 }
 
-// trimSpace — узкий trim ASCII-пробелов/табов по краям (без unicode-зависимостей,
-// CEL-токены — ASCII). Локальная утилита, чтобы не тянуть strings ради одного места.
+// trimSpace — a narrow trim of ASCII spaces/tabs at the edges (no unicode
+// dependencies, CEL tokens are ASCII). A local helper, to avoid pulling in strings for
+// one spot.
 func trimSpace(s string) string {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
@@ -252,24 +254,24 @@ func trimSpace(s string) string {
 	return s[i:j]
 }
 
-// exprReadsSoulprint — CEL-строка ссылается на soulprint.* (hosts/where/self/...).
-// Переиспользует существующий канон-парсер reSoulprintRef (`\bsoulprint\b`),
-// зеркало keeper render.reFlowControlSoulprint — один источник правды грамматики
-// «host-вариативный/roster предикат». Любой soulprint-доступ = roster-чтение:
-// soulprint.hosts/where — список хостов прогона, soulprint.self — host-вариативный
-// факт (оба зависят от состава roster).
+// exprReadsSoulprint — the CEL string references soulprint.* (hosts/where/self/...).
+// Reuses the existing canonical parser reSoulprintRef (`\bsoulprint\b`), a mirror of
+// keeper render.reFlowControlSoulprint — a single source of truth for the
+// "host-varying/roster predicate" grammar. Any soulprint access = a roster read:
+// soulprint.hosts/where is the list of run hosts, soulprint.self is a host-varying fact
+// (both depend on the roster composition).
 func exprReadsSoulprint(expr string) bool {
 	if expr == "" {
 		return false
 	}
-	// Вырезаем строковые литералы CEL, чтобы `'soulprint'` внутри данных не давал
-	// ложного срабатывания (как extractSoulprintRefs/ExtractRegisterRefs).
+	// Strip CEL string literals so that `'soulprint'` inside data doesn't cause a false
+	// positive (like extractSoulprintRefs/ExtractRegisterRefs).
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	return reSoulprintRef.MatchString(stripped)
 }
 
-// mapReadsSoulprint — любое строковое значение map (vars/params/apply.input/output),
-// рекурсивно по вложенным map/seq, читает soulprint.* в `${ … }`-интерполяции.
+// mapReadsSoulprint — any string value of a map (vars/params/apply.input/output),
+// recursively over nested map/seq, reads soulprint.* in `${ … }` interpolation.
 func mapReadsSoulprint(m map[string]any) bool {
 	for _, v := range m {
 		if valueReadsSoulprint(v) {
@@ -279,7 +281,7 @@ func mapReadsSoulprint(m map[string]any) bool {
 	return false
 }
 
-// valueReadsSoulprint рекурсивно обходит any-значение (string / map / seq).
+// valueReadsSoulprint recursively traverses an any value (string / map / seq).
 func valueReadsSoulprint(v any) bool {
 	switch t := v.(type) {
 	case string:

@@ -1,28 +1,28 @@
-// Package beaconaddr — единый источник канонических адресов встроенных
-// core-beacon ([ADR-030], срез S1).
+// Package beaconaddr is the single source of canonical addresses for built-in
+// core beacons ([ADR-030], slice S1).
 //
-// Адрес beacon-а (`core.beacon.<name>`, VigilDef.check) нужен ОБЕИМ сторонам:
-//   - Keeper (`keeper/internal/oracle`) — closed enum валидации VigilDef.check
-//     (неизвестный check → ошибка валидации, а не молча неисполнимый Vigil);
-//   - Soul (`soul/internal/beacon`) — статический реестр тел проверок, по этим
-//     же адресам адресуемых.
+// A beacon address (`core.beacon.<name>`, VigilDef.check) is needed by BOTH sides:
+//   - Keeper (`keeper/internal/oracle`) — closed enum validating VigilDef.check
+//     (unknown check → validation error, not a silently non-executable Vigil);
+//   - Soul (`soul/internal/beacon`) — static registry of check bodies addressed
+//     by these same addresses.
 //
-// ADR-011 запрещает keeper→soul import, поэтому раньше списки дублировались и
-// разъезжались (S3-баг: keeper-enum отстал на 4 адреса → ложный 422 на валидном
-// Vigil). Канонический список здесь, в нейтральном `shared/` (его импортируют и
-// keeper, и soul, но НЕ друг друга), убирает этот дубль источника истины.
+// ADR-011 forbids a keeper→soul import, so the lists used to be duplicated and
+// drifted apart (S3 bug: keeper enum lagged by 4 addresses → false 422 on a valid
+// Vigil). The canonical list lives here in neutral `shared/` (imported by both
+// keeper and soul, but not by each other), removing the duplicated source of truth.
 //
-// Beacon — Vigil-check (read-only наблюдатель), а НЕ apply-модуль, поэтому
-// адреса живут отдельным пакетом, а не в shared/coremanifest (реестр
-// input-манифестов apply-модулей).
+// A beacon is a Vigil check (read-only observer), not an apply module, so the
+// addresses live in their own package rather than in shared/coremanifest (the
+// registry of apply-module input manifests).
 //
-// Plugin-kind `soul_beacon` (community-проверки, S5) ещё не введён — до того
-// набор закрыт этим списком.
+// Plugin kind `soul_beacon` (community checks, S5) is not introduced yet — until
+// then the set is closed to this list.
 package beaconaddr
 
-// Адреса встроенных core-beacon MVP (`core.beacon.<name>`, VigilDef.check).
-// При добавлении нового core-beacon — добавить константу сюда и в [All];
-// инвариант-тест keeper-enum == soul-registry == этот список ловит рассинхрон.
+// Addresses of built-in core beacons MVP (`core.beacon.<name>`, VigilDef.check).
+// When adding a new core beacon, add a constant here and to [All]; the invariant
+// test keeper-enum == soul-registry == this list catches drift.
 const (
 	ServiceDown   = "core.beacon.service_down"
 	FileChanged   = "core.beacon.file_changed"
@@ -30,15 +30,15 @@ const (
 	DiskFull      = "core.beacon.disk_full"
 	ProcessAbsent = "core.beacon.process_absent"
 	HTTPUnhealthy = "core.beacon.http_unhealthy"
-	// Inotify — Linux-only kernel inotify syscall (V5-3, ADR-030 amendment
-	// 2026-05-26). На non-Linux платформах beacon отдаёт явную ошибку
-	// "platform not supported"; адрес-константа доступна везде ради единого
-	// source-of-truth keeper-enum / soul-registry.
+	// Inotify is a Linux-only kernel inotify syscall (V5-3, ADR-030 amendment
+	// 2026-05-26). On non-Linux platforms the beacon returns an explicit
+	// "platform not supported" error; the address constant is available everywhere
+	// for a single source of truth across keeper-enum / soul-registry.
 	Inotify = "core.beacon.inotify"
 )
 
-// All возвращает все канонические адреса core-beacon MVP. Свежий срез на каждый
-// вызов — caller не может молча мутировать общий список.
+// All returns all canonical core-beacon MVP addresses. A fresh slice on each
+// call — the caller cannot silently mutate the shared list.
 func All() []string {
 	return []string{
 		ServiceDown,

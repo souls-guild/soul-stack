@@ -8,53 +8,55 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 )
 
-// stringType — целевой тип для канонической стрингификации CEL-значений
-// при склейке в интерполяции ([templating.md §5]).
+// stringType — the target type for canonical stringification of CEL values when
+// concatenating in interpolation ([templating.md §5]).
 var stringType ref.Type = types.StringType
 
-// Базовые CEL-функции — из стандартной библиотеки google/cel-go, подключаемой
-// через cel.StdLib() в [New]. Из неё реально используются выражениями Soul Stack
+// Base CEL functions — from the google/cel-go standard library wired in via
+// cel.StdLib() in [New]. The ones actually used by Soul Stack expressions
 // ([templating.md §2.3]):
 //
-//   - size(x)            — размер строки/списка/map.
-//   - contains(s, sub)   — подстрока/членство (метод receiver-формы).
-//   - timestamp/duration — арифметика времени.
+//   - size(x)            — size of a string/list/map.
+//   - contains(s, sub)   — substring/membership (receiver-form method).
+//   - timestamp/duration — time arithmetic.
 //
-// Все они pure: без I/O, сети, sleep.
+// All are pure: no I/O, network, sleep.
 //
-// Кастомные функции Soul Stack живут каждая в своём файле и регистрируются
-// дополнительными EnvOption-ами:
+// Soul Stack custom functions each live in their own file and are registered via
+// additional EnvOptions:
 //
-//   - glob(pattern)      — [glob.go], сопоставление по шаблону.
-//   - vault(path)        — [vault.go], keeper-side чтение Vault KV (macro,
-//                          регистрируется только при Engine с KVReader).
-//   - merge(m, m...)     — [merge.go], SHALLOW last-wins слияние map-ов
+//   - glob(pattern)      — [glob.go], pattern matching.
+//   - vault(path)        — [vault.go], keeper-side Vault KV read (macro, registered
+//                          only when the Engine has a KVReader).
+//   - merge(m, m...)     — [merge.go], SHALLOW last-wins merge of maps
 //                          ([ADR-010 Amendment 2026-06-22]).
 //
-// Расширение списка кастомных функций — через ADR, не молча ([templating.md §2.3]).
+// Extending the custom-function list goes through an ADR, not silently
+// ([templating.md §2.3]).
 //
-// now() из стартового минимума [templating.md §2.3] cel-go как глобальной
-// функции не предоставляет (eval-time время дают через timestamp-литералы
-// и переменные контекста). Введение now() как кастомной функции — за
-// рамками pilot и требует решения о eval-time семантике; до тех пор
-// обращение к now(...) отсекается guard-ом как unsupported.
+// now() from the starter minimum [templating.md §2.3] is not provided by cel-go as a
+// global function (eval-time time comes via timestamp literals and context
+// variables). Introducing now() as a custom function is outside pilot scope and needs
+// a decision on eval-time semantics; until then now(...) is rejected by the guard as
+// unsupported.
 
-// unsupportedPatterns — конструкции, заявленные спекой, но НЕ входящие в
-// pilot-scope. Отсекаются до compile, чтобы вернуть осмысленный
-// [ErrUnsupported] вместо невнятного CEL-«no such field/overload».
+// unsupportedPatterns — constructs declared by the spec but NOT in pilot scope.
+// Rejected before compile to return a meaningful [ErrUnsupported] instead of an
+// opaque CEL "no such field/overload".
 //
-// soulprint.hosts / .where(...) больше НЕ здесь: они реализованы compile-time
-// AST-rewrite-ом статического литерал-предиката в нативный filter-comprehension
-// (см. hosts.go); изоляция destiny-прохода и валидация receiver/литерала
-// делаются там же, не текстовым guard-ом.
+// soulprint.hosts / .where(...) are no longer here: they are implemented by a
+// compile-time AST rewrite of a static literal predicate into a native
+// filter-comprehension (see hosts.go); destiny-pass isolation and receiver/literal
+// validation are done there too, not by a text guard.
 //
-// vault( больше НЕ здесь безусловно: при Engine с KVReader ([WithVault]) функция
-// vault() зарегистрирована и работает ([vault.go]); guard на неё остаётся только
-// когда KVReader не задан (см. vaultGuard в [guardUnsupported]) — чтобы дать
-// осмысленный ErrUnsupported вместо «no such function» в контекстах без Vault.
+// vault( is no longer here unconditionally: with an Engine that has a KVReader
+// ([WithVault]) the vault() function is registered and works ([vault.go]); its guard
+// remains only when no KVReader is set (see vaultGuard in [guardUnsupported]) — to
+// give a meaningful ErrUnsupported instead of "no such function" in Vault-less
+// contexts.
 //
-// Каждый паттерн ловит характерный токен конструкции:
-//   - now(                   — eval-time время (см. выше).
+// Each pattern catches the construct's characteristic token:
+//   - now(                   — eval-time time (see above).
 var unsupportedPatterns = []struct {
 	feature string
 	re      *regexp.Regexp
@@ -62,39 +64,38 @@ var unsupportedPatterns = []struct {
 	{"now()", regexp.MustCompile(`\bnow\s*\(`)},
 }
 
-// vaultGuard ловит обращение к vault() — отсекается только когда Engine собран
-// без KVReader (vault() не зарегистрирован, см. [guardUnsupported]).
+// vaultGuard catches a vault() call — rejected only when the Engine is built without a
+// KVReader (vault() is not registered, see [guardUnsupported]).
 var vaultGuard = regexp.MustCompile(`\bvault\s*\(`)
 
-// internalIdentGuard ловит идентификаторы с префиксом `__` в АВТОРСКОМ
-// выражении. Префикс `__` зарезервирован за internal-механизмами CEL-слоя:
-// macro vault() разворачивается в `__vault_read(path, __vault_resolver)`, где
-// `__vault_read`/`__vault_resolver` — hidden-аргументы, недоступные автору.
+// internalIdentGuard catches identifiers prefixed with `__` in the AUTHOR's
+// expression. The `__` prefix is reserved for internal mechanisms of the CEL layer:
+// the vault() macro expands to `__vault_read(path, __vault_resolver)`, where
+// `__vault_read`/`__vault_resolver` are hidden arguments unavailable to the author.
 //
-// БЕЗ этого guard-а автор пишет напрямую `${ __vault_read('secret/любой',
-// __vault_resolver).password }` и читает ЛЮБОЙ путь, минуя macro vault() и
-// завязанные на токен `vault(` guard/lint/mask (security-blocker). Guard
-// действует ВСЕГДА (и с KVReader, и без): `__`-идентификатор в авторском
-// тексте — всегда ошибка, не зависящая от наличия vault-клиента.
+// WITHOUT this guard the author could write `${ __vault_read('secret/anything',
+// __vault_resolver).password }` directly and read ANY path, bypassing the vault()
+// macro and the `vault(`-token guard/lint/mask (security blocker). The guard applies
+// ALWAYS (with or without a KVReader): a `__` identifier in author text is always an
+// error, independent of a vault client.
 //
-// guardUnsupported вызывается на АВТОРСКОМ тексте ДО macro-expansion
-// (`__vault_read`/`__vault_resolver` появляются только внутри env.Compile),
-// поэтому легальный `vault('secret/x')` под guard не попадает. `\w` слева НЕ
-// допускается (иначе `a__b` ложно-срабатывал бы), `.`/начало токена допустимы:
-// в словаре Soul Stack нет легальных голых идентификаторов с `__`.
+// guardUnsupported runs on the AUTHOR text BEFORE macro expansion
+// (`__vault_read`/`__vault_resolver` appear only inside env.Compile), so a legal
+// `vault('secret/x')` doesn't hit the guard. A `\w` to the left is NOT allowed (else
+// `a__b` would false-fire), `.`/token start are allowed: the Soul Stack vocabulary has
+// no legal bare identifiers with `__`.
 //
-// Матч ведётся по тексту С ВЫРЕЗАННЫМИ строковыми литералами (см.
-// stripStringLiterals): `__`-последовательность ВНУТРИ литерала — это данные,
-// а не CEL-идентификатор (например, поле `__host` в предикате-строке
-// soulprint.hosts.where("__host == 'x'"), которое cel-вызвать ничего не может),
-// и под запрет не попадает.
+// Matching runs over text WITH STRING LITERALS STRIPPED (see stripStringLiterals): a
+// `__` sequence INSIDE a literal is data, not a CEL identifier (e.g. the field
+// `__host` in the predicate string soulprint.hosts.where("__host == 'x'"), which can
+// call nothing), and is not caught.
 var internalIdentGuard = regexp.MustCompile(`(^|\W)__\w`)
 
-// guardUnsupported возвращает [ErrUnsupported], если выражение содержит
-// конструкцию вне pilot-scope. vaultEnabled=true (Engine с KVReader) снимает
-// guard на vault() — функция зарегистрирована и работает. essence guard-ом НЕ
-// отсекается: она объявлена переменной и резолвится из Vars.Essence
-// (effective-слой); пустой Essence даёт штатный no-such-key, а не панику.
+// guardUnsupported returns [ErrUnsupported] if the expression contains a construct
+// outside pilot scope. vaultEnabled=true (Engine with a KVReader) lifts the vault()
+// guard — the function is registered and works. essence is NOT rejected by the guard:
+// it's declared as a variable and resolved from Vars.Essence (the effective layer); an
+// empty Essence gives the normal no-such-key, not a panic.
 func guardUnsupported(expr string, vaultEnabled bool) error {
 	for _, p := range unsupportedPatterns {
 		if p.re.MatchString(expr) {
@@ -110,28 +111,26 @@ func guardUnsupported(expr string, vaultEnabled bool) error {
 	return nil
 }
 
-// normalize приводит выражение к каноничной форме для ключа compile-cache:
-// схлопывает внутренние пробельные последовательности и обрезает края.
-// Семантику CEL не меняет (пробелы вне строковых литералов незначимы);
-// строковые литералы в выражениях Soul Stack используют одинарные кавычки
-// ([templating.md §2.2]), пробелы внутри них сохраняются как есть — поэтому
-// нормализация затрагивает только пробелы, не трогая содержимое литералов.
+// normalize brings an expression to a canonical form for the compile-cache key:
+// collapses internal whitespace runs and trims the edges. Doesn't change CEL semantics
+// (whitespace outside string literals is insignificant); string literals in Soul Stack
+// expressions use single quotes ([templating.md §2.2]), and whitespace inside them is
+// preserved as-is — so normalization touches only whitespace, not literal contents.
 func normalize(expr string) string {
 	return spaceRun.ReplaceAllStringFunc(strings.TrimSpace(expr), normalizeWhitespace)
 }
 
 var spaceRun = regexp.MustCompile(`'[^']*'|"[^"]*"|\s+`)
 
-// stringLiteralRe матчит строковый литерал CEL (одинарные/двойные кавычки).
-// Используется stripStringLiterals для вырезания содержимого литералов перед
-// текстовым guard-ом по идентификаторам — содержимое литерала это данные, не
-// CEL-токены.
+// stringLiteralRe matches a CEL string literal (single/double quotes). Used by
+// stripStringLiterals to cut out literal contents before the text guard over
+// identifiers — literal contents are data, not CEL tokens.
 var stringLiteralRe = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 
-// stripStringLiterals заменяет содержимое строковых литералов на пустые кавычки,
-// сохраняя структуру выражения вне литералов. Нужно guard-ам, которые ищут
-// CEL-идентификаторы/вызовы по тексту: токен внутри литерала (`"__host"`) — не
-// идентификатор, а данные. Не для семантики CEL — только для текстового анализа.
+// stripStringLiterals replaces string-literal contents with empty quotes, preserving
+// the expression structure outside literals. Needed by guards that scan text for CEL
+// identifiers/calls: a token inside a literal (`"__host"`) is data, not an identifier.
+// Not for CEL semantics — only for text analysis.
 func stripStringLiterals(expr string) string {
 	return stringLiteralRe.ReplaceAllStringFunc(expr, func(lit string) string {
 		return lit[:1] + lit[len(lit)-1:]
@@ -144,7 +143,7 @@ func normalizeWhitespace(s string) string {
 	}
 	switch s[0] {
 	case '\'', '"':
-		return s // строковый литерал — не трогаем
+		return s // string literal — leave untouched
 	default:
 		return " "
 	}

@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestDefault_PresentSelect — default(x, fb) при присутствующем select-поле →
-// само значение x (fallback недостижим).
+// TestDefault_PresentSelect — default(x, fb) with a present select field →
+// the value x itself (fallback unreachable).
 func TestDefault_PresentSelect(t *testing.T) {
 	e := newEngine(t)
 
@@ -24,11 +24,11 @@ func TestDefault_PresentSelect(t *testing.T) {
 	}
 }
 
-// TestDefault_AbsentSelect — ★ КЛЮЧЕВОЙ тест: жадность CEL обойдена.
-// default(essence.tls_enable, false) при ОТСУТСТВУЮЩЕМ ключе НЕ бросает
-// «no such key» (как упала бы обычная функция при eager-eval аргумента), а
-// возвращает fallback. Это и есть смысл macro-механизма (compile-time rewrite в
-// has(x)?x:y до eval).
+// TestDefault_AbsentSelect — ★ KEY test: CEL eagerness is bypassed.
+// default(essence.tls_enable, false) with an ABSENT key does not throw
+// "no such key" (as a plain function would under eager arg eval), but returns
+// the fallback. This is the whole point of the macro mechanism (compile-time
+// rewrite to has(x)?x:y before eval).
 func TestDefault_AbsentSelect(t *testing.T) {
 	e := newEngine(t)
 
@@ -41,9 +41,9 @@ func TestDefault_AbsentSelect(t *testing.T) {
 	}
 }
 
-// TestDefault_NestedAbsentFinalKey — вложенный select default(a.b.c, fb): при
-// отсутствии ФИНАЛЬНОГО ключа c (родители a.b присутствуют) → fb. Полная parity
-// с прямым has(a.b.c)?a.b.c:fb (CEL has() проверяет присутствие финального поля).
+// TestDefault_NestedAbsentFinalKey — nested select default(a.b.c, fb): when the
+// FINAL key c is absent (parents a.b present) → fb. Full parity with direct
+// has(a.b.c)?a.b.c:fb (CEL has() checks presence of the final field).
 func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 	e := newEngine(t)
 
@@ -57,7 +57,7 @@ func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 		t.Fatalf("default(nested absent final) = %v, want \"fb\"", got)
 	}
 
-	// Финальный ключ присутствует → его значение.
+	// Final key present → its value.
 	out, err = e.EvalExpression(`default(essence.a.b.c, "fb")`, Vars{Essence: map[string]any{
 		"a": map[string]any{"b": map[string]any{"c": "real"}},
 	}})
@@ -69,9 +69,9 @@ func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 	}
 }
 
-// TestDefault_IntWrap — int(default(essence.tls_port, 7379)): обёртка int()
-// снаружи default() работает (use-site cluster.yml: tls_port). Отсутствие →
-// дефолт 7379; присутствие → значение.
+// TestDefault_IntWrap — int(default(essence.tls_port, 7379)): the int() wrapper
+// around default() works (use-site cluster.yml: tls_port). Absent → default
+// 7379; present → the value.
 func TestDefault_IntWrap(t *testing.T) {
 	e := newEngine(t)
 
@@ -94,8 +94,8 @@ func TestDefault_IntWrap(t *testing.T) {
 	}
 }
 
-// TestDefault_EmptyMapFallback — default(input.redis_settings, {}) → отсутствие
-// даёт пустой map (use-site cluster.yml: redis_settings).
+// TestDefault_EmptyMapFallback — default(input.redis_settings, {}) → absence
+// yields an empty map (use-site cluster.yml: redis_settings).
 func TestDefault_EmptyMapFallback(t *testing.T) {
 	e := newEngine(t)
 
@@ -111,7 +111,7 @@ func TestDefault_EmptyMapFallback(t *testing.T) {
 		t.Fatalf("default(absent, {}) = %v, want пустой map", got)
 	}
 
-	// Присутствующий map проходит насквозь.
+	// A present map passes through.
 	out, err = e.EvalInterpolation(`${ default(input.redis_settings, {}) }`, Vars{Input: map[string]any{
 		"redis_settings": map[string]any{"maxmemory": "256mb"},
 	}})
@@ -124,10 +124,10 @@ func TestDefault_EmptyMapFallback(t *testing.T) {
 	}
 }
 
-// TestDefault_IdentRoot — голый идентификатор-корень: default(input, {}). Корень
-// всегда присутствует в активации ([Vars.activation] биндит его как пустой map),
-// has(ident) в CEL не компилируется → макрос разворачивает в сам x. Fallback
-// недостижим, возвращается значение корня.
+// TestDefault_IdentRoot — bare root identifier: default(input, {}). The root is
+// always present in the activation ([Vars.activation] binds it as an empty map);
+// has(ident) does not compile in CEL → the macro expands to x itself. The
+// fallback is unreachable; the root value is returned.
 func TestDefault_IdentRoot(t *testing.T) {
 	e := newEngine(t)
 
@@ -141,16 +141,16 @@ func TestDefault_IdentRoot(t *testing.T) {
 	}
 }
 
-// TestDefault_NonSelectArgCompileError — negative: не-select/не-ident первый
-// аргумент → compile-ошибка (default над выражением не имеет семантики
-// «значения-или-дефолта»). Покрывает size()/арифметику/индекс-доступ.
+// TestDefault_NonSelectArgCompileError — negative: a non-select/non-ident first
+// argument → compile error (default over an expression has no
+// value-or-default semantics). Covers size()/arithmetic/index-access.
 func TestDefault_NonSelectArgCompileError(t *testing.T) {
 	e := newEngine(t)
 
 	for _, expr := range []string{
-		`default(size(input.x), 0)`,     // вызов функции
-		`default(input.a + input.b, 0)`, // арифметика
-		`default(input['k'], 0)`,        // индекс-доступ (CallKind _[_], не select)
+		`default(size(input.x), 0)`,     // function call
+		`default(input.a + input.b, 0)`, // arithmetic
+		`default(input['k'], 0)`,        // index access (CallKind _[_], not select)
 	} {
 		_, err := e.EvalExpression(expr, Vars{Input: map[string]any{"x": []any{int64(1)}}})
 		if err == nil {
@@ -163,13 +163,13 @@ func TestDefault_NonSelectArgCompileError(t *testing.T) {
 	}
 }
 
-// TestDefault_AvailableInFlowControl — default() доступна в Soul-side
-// flow-control sandbox ([ADR-012(d)]): pure macro, тот же env, что merge()/glob().
+// TestDefault_AvailableInFlowControl — default() is available in the Soul-side
+// flow-control sandbox ([ADR-012(d)]): a pure macro, same env as merge()/glob().
 func TestDefault_AvailableInFlowControl(t *testing.T) {
 	e := newFlowControlEngine(t)
 
-	// Отсутствующий register-ключ через default → fallback (жадность обойдена и
-	// в flow-control env).
+	// Absent register key via default → fallback (eagerness bypassed in the
+	// flow-control env too).
 	out, err := e.EvalExpression(`default(register.maybe, "fb") == "fb"`, Vars{Register: map[string]any{}})
 	if err != nil {
 		t.Fatalf("eval: %v", err)
@@ -179,10 +179,10 @@ func TestDefault_AvailableInFlowControl(t *testing.T) {
 	}
 }
 
-// TestDefault_UndeclaredInMigration — negative: migration-CEL ([ADR-019])
-// hermetic — default() НЕ зарегистрирована (см. buildEngine). Вызов →
-// compile-ошибка, симметрично merge()/glob()-guard-у миграционного env (минимум
-// surface area, расширение требует отдельного ADR).
+// TestDefault_UndeclaredInMigration — negative: migration-CEL ([ADR-019]) is
+// hermetic — default() is NOT registered (see buildEngine). A call →
+// compile error, symmetric to the merge()/glob() guard of the migration env
+// (minimal surface area; extending it requires a separate ADR).
 func TestDefault_UndeclaredInMigration(t *testing.T) {
 	e := newMigrationEngine(t)
 
@@ -196,21 +196,21 @@ func TestDefault_UndeclaredInMigration(t *testing.T) {
 	}
 }
 
-// TestDefault_SecretMaskedSameAsDirectVault — ★ masking-guard (как merge
-// TestMerge_SecretMaskedSameAsDirectVault): секрет, подставленный через
-// default(essence.x, vault('…#password')) под sensitive-именованным ключом,
-// маскируется выходным слоем (shared/audit.MaskSecrets) ИДЕНТИЧНО прямому
-// ${ vault(...) }. default() — сахар над has()?:, ключ назначения не
-// переименовывает, поэтому границу маскинга не расширяет/не сужает. Доказывает
-// обе стороны: fallback-ветвь (essence.x отсутствует → vault) и идентичность
-// прямому vault; несекретные значения проходят без over-masking.
+// TestDefault_SecretMaskedSameAsDirectVault — ★ masking guard (like merge's
+// TestMerge_SecretMaskedSameAsDirectVault): a secret injected via
+// default(essence.x, vault('…#password')) under a sensitively-named key is
+// masked by the output layer (shared/audit.MaskSecrets) IDENTICALLY to a direct
+// ${ vault(...) }. default() is sugar over has()?:, and does not rename the
+// destination key, so it neither widens nor narrows the masking boundary. Proves
+// both sides: the fallback branch (essence.x absent → vault) and identity with
+// direct vault; non-secret values pass without over-masking.
 func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t-plaintext"},
 	}}
 	e := newVaultEngine(t, kv)
 
-	// Эталон: прямой ${ vault(...) } под ключом `password`.
+	// Baseline: direct ${ vault(...) } under the `password` key.
 	direct, err := e.EvalInterpolation("${ vault('secret/redis/admin#password') }", Vars{})
 	if err != nil {
 		t.Fatalf("eval direct vault: %v", err)
@@ -223,8 +223,8 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatal("эталон: прямой vault-секрет НЕ замаскирован — слой маскинга сломан")
 	}
 
-	// Тот же секрет через default(essence.admin_password, vault(...)): essence-
-	// ключ отсутствует → берётся vault-ветвь, результат под ключом `password`.
+	// Same secret via default(essence.admin_password, vault(...)): the essence
+	// key is absent → the vault branch is taken, result under the `password` key.
 	resolved, err := e.EvalInterpolation(
 		"${ default(essence.admin_password, vault('secret/redis/admin#password')) }",
 		Vars{Essence: map[string]any{}},
@@ -236,7 +236,7 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatalf("default(absent, vault) = %v, want plaintext (vault-ветвь резолвится keeper-side)", resolved)
 	}
 	maskedResolved := audit.MaskSecrets(map[string]any{"password": resolved})
-	// Главное утверждение: замаскирован ИДЕНТИЧНО прямому vault.
+	// Key assertion: masked IDENTICALLY to direct vault.
 	if maskedResolved["password"] != maskedDirect["password"] {
 		t.Fatalf("default-секрет замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (секрет течёт через default)",
 			maskedResolved["password"], maskedDirect["password"])
@@ -245,7 +245,7 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatal("default-секрет НЕ замаскирован — секрет протекает в выходной слой через default()")
 	}
 
-	// Несекретное значение через default НЕ over-маскируется.
+	// A non-secret value via default is NOT over-masked.
 	nonSecret, err := e.EvalInterpolation(`${ default(essence.maxmemory, "256mb") }`, Vars{Essence: map[string]any{}})
 	if err != nil {
 		t.Fatalf("eval non-secret default: %v", err)

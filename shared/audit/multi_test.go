@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// recordingWriter — primary-writer-заглушка: считает записи и опц. возвращает
-// заданную ошибку.
+// recordingWriter is a primary-writer stub: counts writes and optionally returns a
+// preset error.
 type recordingWriter struct {
 	mu     sync.Mutex
 	events []*Event
@@ -33,7 +33,7 @@ func (w *recordingWriter) count() int {
 	return len(w.events)
 }
 
-// recordingTap — tap-заглушка: считает Observe-вызовы.
+// recordingTap is a tap stub: counts Observe calls.
 type recordingTap struct {
 	observed atomic.Int64
 }
@@ -48,7 +48,7 @@ func TestMultiWriter_NoTaps_ReturnsPrimary(t *testing.T) {
 	if w != Writer(primary) {
 		t.Fatalf("без tap-ов NewMultiWriter должен вернуть primary как есть, получил %T", w)
 	}
-	// nil-tap-ы тоже отбрасываются.
+	// nil taps are dropped too.
 	w = NewMultiWriter(primary, nil, nil, nil)
 	if w != Writer(primary) {
 		t.Fatalf("nil-tap-ы должны отбрасываться, получил %T", w)
@@ -86,7 +86,7 @@ func TestMultiWriter_PrimaryFail_TapNotCalled(t *testing.T) {
 	}
 }
 
-// failingTap паникует в Observe — проверяем, что Write не падает.
+// panicTap panics in Observe — we verify that Write does not fail.
 type panicTap struct{}
 
 func (panicTap) Observe(_ context.Context, _ *Event) { panic("boom") }
@@ -102,7 +102,7 @@ func TestMultiWriter_TapPanic_DoesNotFailWrite(t *testing.T) {
 	if primary.count() != 1 {
 		t.Fatalf("primary-запись должна состояться несмотря на панику tap-а")
 	}
-	// tap после паникующего тоже должен быть вызван (паника изолирована).
+	// the tap after the panicking one must still be called (the panic is isolated).
 	if after.observed.Load() != 1 {
 		t.Fatalf("tap после паникующего должен быть вызван, вызван %d раз", after.observed.Load())
 	}
@@ -115,17 +115,17 @@ func TestMultiWriter_TapPanic_DoesNotFailWrite(t *testing.T) {
 	}
 }
 
-// slowTap блокируется в Observe на сигнале release — проверяем, что MultiWriter
-// сам не вводит блокировку (slow-tap — ответственность реализации tap-а; здесь
-// убеждаемся, что Write завершается после возврата Observe и порядок tap→Write
-// корректен). Реальная неблокируемость buffered-tap-а — в herald/tap_test.go.
+// slowTap blocks in Observe on a release signal — we verify that MultiWriter itself
+// introduces no blocking (a slow tap is the tap implementation's responsibility; here
+// we confirm Write completes after Observe returns and the tap→Write order is
+// correct). The actual non-blocking of a buffered tap is in herald/tap_test.go.
 func TestMultiWriter_TapInvokedAfterPrimary(t *testing.T) {
 	primary := &recordingWriter{}
 	order := make(chan string, 2)
 	primaryOrderTap := tapFunc(func(_ context.Context, _ *Event) {
 		order <- "tap"
 	})
-	// Оборачиваем primary, чтобы зафиксировать порядок.
+	// Wrap primary to record ordering.
 	wrapped := writerFunc(func(ctx context.Context, ev *Event) error {
 		order <- "primary"
 		return primary.Write(ctx, ev)
@@ -150,7 +150,7 @@ func TestMultiWriter_TapInvokedAfterPrimary(t *testing.T) {
 	}
 }
 
-// tapFunc / writerFunc — функциональные адаптеры для тестов.
+// tapFunc / writerFunc — functional adapters for tests.
 type tapFunc func(context.Context, *Event)
 
 func (f tapFunc) Observe(ctx context.Context, ev *Event) { f(ctx, ev) }

@@ -2,8 +2,8 @@ package cel
 
 import "testing"
 
-// TestEvalExpression_LoopVarBare — голая loop-переменная резолвится в
-// expression-key (when:-форма, destiny/tasks.md §7).
+// TestEvalExpression_LoopVarBare — a bare loop variable resolves in an
+// expression-key (when: form, destiny/tasks.md §7).
 func TestEvalExpression_LoopVarBare(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Loop: map[string]any{"user": map[string]any{"active": true}}}
@@ -17,7 +17,7 @@ func TestEvalExpression_LoopVarBare(t *testing.T) {
 	}
 }
 
-// TestEvalInterpolation_LoopVar — `${ <as>.* }` интерполируется из loop-vars.
+// TestEvalInterpolation_LoopVar — `${ <as>.* }` is interpolated from loop-vars.
 func TestEvalInterpolation_LoopVar(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Loop: map[string]any{"user": map[string]any{"name": "alice"}}}
@@ -31,7 +31,7 @@ func TestEvalInterpolation_LoopVar(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_LoopVarIndex — index_as доступен наравне с as.
+// TestEvalExpression_LoopVarIndex — index_as is available on par with as.
 func TestEvalExpression_LoopVarIndex(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Loop: map[string]any{"item": "x", "i": 2}}
@@ -45,27 +45,28 @@ func TestEvalExpression_LoopVarIndex(t *testing.T) {
 	}
 }
 
-// TestEvalExpression_LoopVarIsolated — loop-переменная видна только при наличии
-// Loop в Vars; без него env её не знает (compile-ошибка), кеш базового env
-// не загрязнён дочерним. Гарантирует изоляцию env по набору loop-имён.
+// TestEvalExpression_LoopVarIsolated — a loop variable is visible only when Loop
+// is present in Vars; without it the env doesn't know it (compile error), and the
+// base env cache is not polluted by the child. Guarantees env isolation by the
+// set of loop names.
 func TestEvalExpression_LoopVarIsolated(t *testing.T) {
 	e := newEngine(t)
 
-	// С loop-переменной — ок.
+	// With a loop variable — ok.
 	if _, err := e.EvalExpression("user.name == 'x'", Vars{Loop: map[string]any{"user": map[string]any{"name": "x"}}}); err != nil {
 		t.Fatalf("loop eval: %v", err)
 	}
-	// Без неё — undeclared (базовый env её не знает).
+	// Without it — undeclared (the base env doesn't know it).
 	if _, err := e.EvalExpression("user.name == 'x'", Vars{}); err == nil {
 		t.Fatalf("ожидали ошибку компиляции для необъявленной user без Loop")
 	}
 }
 
-// TestEvalExpression_CacheNoCrossContextCollision — одно и то же выражение
-// (`input.x`) в loop-контексте и в базовом не коллизит в compile-cache: ключ
-// кеша дискриминирован по набору loop-имён (loopKey). Проверяем оба порядка
-// (loop-then-base и base-then-loop) — компиляция против дочернего env не
-// должна «протечь» в базовый и наоборот.
+// TestEvalExpression_CacheNoCrossContextCollision — the same expression
+// (`input.x`) in a loop context and in the base context does not collide in the
+// compile cache: the cache key is discriminated by the set of loop names
+// (loopKey). We check both orders (loop-then-base and base-then-loop) —
+// compilation against the child env must not "leak" into the base and vice versa.
 func TestEvalExpression_CacheNoCrossContextCollision(t *testing.T) {
 	const expr = "input.x"
 
@@ -94,7 +95,7 @@ func TestEvalExpression_CacheNoCrossContextCollision(t *testing.T) {
 	})
 	t.Run("base-then-loop", func(t *testing.T) {
 		e := newEngine(t)
-		// Прогреваем кеш сначала базовым контекстом.
+		// Warm the cache with the base context first.
 		if _, err := e.EvalExpression(expr, Vars{Input: map[string]any{"x": "B"}}); err != nil {
 			t.Fatalf("warm base: %v", err)
 		}
@@ -102,8 +103,8 @@ func TestEvalExpression_CacheNoCrossContextCollision(t *testing.T) {
 	})
 }
 
-// TestEvalExpression_LoopVarCoexists — loop-переменная сосуществует с базовым
-// контекстом (input) в одном выражении.
+// TestEvalExpression_LoopVarCoexists — a loop variable coexists with the base
+// context (input) in one expression.
 func TestEvalExpression_LoopVarCoexists(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{

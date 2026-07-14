@@ -10,64 +10,65 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ServiceManifest — типизированное представление корневого `service.yml` по
-// нормативной спеке [`docs/service/manifest.md`].
+// ServiceManifest is the typed representation of the root `service.yml`
+// (spec: [`docs/service/manifest.md`]).
 //
-// Манифест содержит только метаданные сервиса (имя/описание), контракт
-// `state_schema` для `incarnation.state` в Postgres и плоский список git-
-// зависимостей. Сценарии auto-discover-ятся по `scenario/<name>/main.yml`,
-// поэтому отдельной секции `scenarios:` здесь нет.
+// Holds only service metadata (name/description), the `state_schema` contract
+// for `incarnation.state` in Postgres, and a flat list of git dependencies.
+// Scenarios are auto-discovered from `scenario/<name>/main.yml`, so there is no
+// `scenarios:` section here.
 type ServiceManifest struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 
-	// StateSchemaVersion — версия структуры `incarnation.state`. Инкрементируется
-	// явно при breaking-изменениях схемы; цепочка миграций живёт в `migrations/`
-	// (валидация цепочки — out of scope MVP, M1.5).
+	// StateSchemaVersion — version of the `incarnation.state` structure. Bumped
+	// explicitly on breaking schema changes; the migration chain lives in
+	// `migrations/` (chain validation is out of scope for MVP, M1.5).
 	StateSchemaVersion int `yaml:"state_schema_version"`
 
-	// StateSchema хранится плоским `map[string]any` (PM-decision): JSON Schema
-	// draft-07 — большой стандарт, полная типизация в Go — отдельная работа.
-	// MVP-validate (см. validateStateSchema) проверяет минимум: `type: object`
-	// на корне, `required` — []string, `properties` — map<string, recursive>.
-	// Расширенная JSON-Schema-валидация (`enum`/`pattern`/`min`/`max`/`items`) —
-	// отдельный backlog-айтем.
+	// StateSchema is kept as a flat `map[string]any` (PM decision): JSON Schema
+	// draft-07 is a large standard, full Go typing is separate work. MVP validate
+	// (see validateStateSchema) checks the minimum: `type: object` on root,
+	// `required` as []string, `properties` as map<string, recursive>. Extended
+	// JSON-Schema validation (`enum`/`pattern`/`min`/`max`/`items`) is a separate
+	// backlog item.
 	StateSchema map[string]any `yaml:"state_schema"`
 
 	Destiny []DependencyRef `yaml:"destiny,omitempty"`
 	Modules []DependencyRef `yaml:"modules,omitempty"`
 
-	// RevealableSecrets — секреты инкарнации, раскрываемые оператором через
-	// reveal-эндпоинт под правом incarnation.view-secrets (NIM-74). Generic:
-	// сервис декларирует, что можно раскрыть, механизм не redis-специфичен.
+	// RevealableSecrets — incarnation secrets revealable by the operator via the
+	// reveal endpoint under the incarnation.view-secrets right (NIM-74). Generic:
+	// the service declares what may be revealed; the mechanism is not redis-specific.
 	RevealableSecrets []RevealableSecret `yaml:"revealable_secrets,omitempty"`
 
-	// Lifecycle — опциональная политика жизненного цикла инкарнаций сервиса
-	// (architecture.md → «Service — структура и manifest» § lifecycle:).
-	// Отсутствие блока (nil) = оба флага дефолтно true (backcompat): create
-	// автоматически запускает scenario `create`, destroy запускает teardown по
-	// обычной логике allow_destroy. Разыменование флагов — через
-	// [LifecycleConfig.AutoCreateEnabled] / [LifecycleConfig.AutoDestroyEnabled]
-	// (nil-safe: и nil-блок, и nil-флаг трактуются как true).
+	// Lifecycle — optional lifecycle policy for the service's incarnations
+	// (architecture.md → "Service — structure and manifest" § lifecycle:).
+	// A missing block (nil) means both flags default to true (backcompat): create
+	// auto-runs scenario `create`, destroy runs teardown per the usual
+	// allow_destroy logic. Read the flags via [LifecycleConfig.AutoCreateEnabled] /
+	// [LifecycleConfig.AutoDestroyEnabled] (nil-safe: both a nil block and a nil
+	// flag are treated as true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
 }
 
-// LifecycleConfig — блок `lifecycle:` манифеста сервиса. Оба флага —
-// `*bool` (nil → дефолт true): отличает «оператор не задал» от «явно false».
+// LifecycleConfig — the `lifecycle:` block of the service manifest. Both flags
+// are `*bool` (nil → default true): distinguishes "operator didn't set it" from
+// "explicitly false".
 type LifecycleConfig struct {
-	// AutoCreate — `POST /v1/incarnations` автоматически запускает scenario
-	// `create` (nil/true). false — инкарнация создаётся в `ready` без прогона,
-	// оператор запускает `create` вручную из Run-формы.
+	// AutoCreate — `POST /v1/incarnations` auto-runs scenario `create` (nil/true).
+	// false — the incarnation is created in `ready` without a run; the operator
+	// runs `create` manually from the Run form.
 	AutoCreate *bool `yaml:"auto_create,omitempty"`
 
-	// AutoDestroy — удаление инкарнации запускает teardown-сценарий `destroy`
-	// по обычной логике `allow_destroy` (nil/true). false — удаление всегда
-	// прямое, без teardown, приоритет над `allow_destroy`.
+	// AutoDestroy — deleting an incarnation runs the `destroy` teardown scenario
+	// per the usual `allow_destroy` logic (nil/true). false — deletion is always
+	// direct, without teardown, taking priority over `allow_destroy`.
 	AutoDestroy *bool `yaml:"auto_destroy,omitempty"`
 }
 
-// AutoCreateEnabled — nil-safe чтение политики auto_create: nil-блок ИЛИ
-// nil-флаг → true (backcompat по architecture.md).
+// AutoCreateEnabled — nil-safe read of the auto_create policy: a nil block OR a
+// nil flag → true (backcompat per architecture.md).
 func (l *LifecycleConfig) AutoCreateEnabled() bool {
 	if l == nil || l.AutoCreate == nil {
 		return true
@@ -75,8 +76,8 @@ func (l *LifecycleConfig) AutoCreateEnabled() bool {
 	return *l.AutoCreate
 }
 
-// AutoDestroyEnabled — nil-safe чтение политики auto_destroy: nil-блок ИЛИ
-// nil-флаг → true (backcompat по architecture.md).
+// AutoDestroyEnabled — nil-safe read of the auto_destroy policy: a nil block OR
+// a nil flag → true (backcompat per architecture.md).
 func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 	if l == nil || l.AutoDestroy == nil {
 		return true
@@ -84,34 +85,35 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 	return *l.AutoDestroy
 }
 
-// DependencyRef — запись в `destiny[]` / `modules[]`: `{name, ref}` + опц. `git`.
+// DependencyRef — an entry in `destiny[]` / `modules[]`: `{name, ref}` + optional `git`.
 //
-// `name` — имя destiny (kebab-case, одноуровневое) или модуля (двухуровневое
-// `<namespace>.<module>`); разный regex применяется в зависимости от
-// контекста (см. schemaValidateService → проход по слайсам).
-// `ref` — git tag или branch (ADR-007). MVP допускает любую непустую строку;
-// детальная проверка ref-формы (semver-tag / branch-naming) — backlog.
-// `git` — опциональный per-entry override полного git-URL зависимости.
-// Поддержан только для `destiny[]` (гибрид резолва: name → подстановка в
-// `default_destiny_source`, git → прямой URL без шаблона). Для `modules[]`
-// запрещён (см. validateDependencyRef) — drift до отдельного решения.
+// `name` — a destiny name (kebab-case, single-level) or a module name (two-level
+// `<namespace>.<module>`); a different regex applies per context (see
+// schemaValidateService → pass over the slices).
+// `ref` — a git tag or branch (ADR-007). MVP accepts any non-empty string;
+// detailed ref-form checks (semver-tag / branch-naming) are backlog.
+// `git` — optional per-entry override of the dependency's full git URL. Supported
+// only for `destiny[]` (hybrid resolution: name → substitution into
+// `default_destiny_source`, git → direct URL without a template). Forbidden for
+// `modules[]` (see validateDependencyRef) — deferred to a separate decision.
 type DependencyRef struct {
 	Name string `yaml:"name"`
 	Ref  string `yaml:"ref"`
 	Git  string `yaml:"git,omitempty"`
 }
 
-// RevealableSecret — запись секции `revealable_secrets[]` манифеста (NIM-74):
-// декларация раскрываемого оператором секрета инкарнации.
+// RevealableSecret — an entry of the manifest's `revealable_secrets[]` section
+// (NIM-74): declaration of an operator-revealable incarnation secret.
 //
-//   - ID — стабильный идентификатор (kebab/snake, уникален); клиент шлёт его в
-//     `secret_id` при reveal;
-//   - Label — подпись для UI;
-//   - Enumerate — state-путь массива объектов (`state.<segment>`); ключ = поле
-//     `name` элемента (конвенция redis AclUser.name) — множество допустимых `key`;
-//   - VaultRef — шаблон Vault-пути с плейсхолдерами `{incarnation}`/`{key}`
-//     (литеральная подстановка strings.ReplaceAll, обе величины провалидированы +
-//     vault.ParseRef режет traversal). Опц. `#field` — выбор поля секрета.
+//   - ID — stable identifier (kebab/snake, unique); the client sends it as
+//     `secret_id` on reveal;
+//   - Label — UI caption;
+//   - Enumerate — state path of an object array (`state.<segment>`); the key is
+//     the element's `name` field (redis AclUser.name convention) — the set of
+//     valid `key`s;
+//   - VaultRef — Vault-path template with `{incarnation}`/`{key}` placeholders
+//     (literal strings.ReplaceAll substitution; both values are validated and
+//     vault.ParseRef strips traversal). Optional `#field` selects a secret field.
 type RevealableSecret struct {
 	ID        string `yaml:"id"`
 	Label     string `yaml:"label"`
@@ -120,38 +122,38 @@ type RevealableSecret struct {
 }
 
 var (
-	// reServiceName — canonical kebab-case: dash только между алфанумериков,
-	// без trailing/leading/double-dash. Симметрично с `reDestinyName`.
+	// reServiceName — canonical kebab-case: dash only between alphanumerics, no
+	// trailing/leading/double dash. Symmetric with `reDestinyName`.
 	reServiceName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-	// reRevealID — id секрета revealable_secrets[]: lowercase-идентификатор с
-	// `-`/`_`-разделителями (без trailing/leading/double). Допускает snake_case
-	// (`user_password`) — контракт reveal фиксирует secret_id этой формы.
+	// reRevealID — revealable_secrets[] secret id: lowercase identifier with
+	// `-`/`_` separators (no trailing/leading/double). Allows snake_case
+	// (`user_password`) — the reveal contract fixes secret_id in this form.
 	reRevealID = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
 
-	// reRevealEnumerate — форма enumerate: `state.<segment>[.<segment>…]`
-	// (симметрично rePrefillFromStatePath).
+	// reRevealEnumerate — enumerate form: `state.<segment>[.<segment>…]`
+	// (symmetric with rePrefillFromStatePath).
 	reRevealEnumerate = regexp.MustCompile(`^state(\.[a-z][a-z0-9_]*)+$`)
 
-	// reRevealPlaceholder — плейсхолдер `{…}` в vault_ref (для проверки набора).
+	// reRevealPlaceholder — a `{…}` placeholder in vault_ref (for validating the set).
 	reRevealPlaceholder = regexp.MustCompile(`\{[^}]*\}`)
 
-	// reDependencyDestinyName — kebab-case одноуровневое имя destiny в
-	// `destiny[]`. Совпадает с `reDestinyName` (destiny.go), переиспользуем
-	// напрямую — отдельная копия regex была drift-источником.
+	// reDependencyDestinyName — kebab-case single-level destiny name in
+	// `destiny[]`. Same as `reDestinyName` (destiny.go), reused directly — a
+	// separate regex copy was a source of drift.
 	reDependencyDestinyName = reDestinyName
 
-	// reDependencyModuleName — strict двухуровневая форма `<namespace>.<module>`
-	// для custom-модулей в `service.yml → modules[]`. Симметрично с
-	// `reRequiredModule` (destiny.go); canonical kebab-case в каждой половине
-	// (без trailing/leading/double-dash), без underscore, naming-rules.md §57/§186.
+	// reDependencyModuleName — strict two-level form `<namespace>.<module>` for
+	// custom modules in `service.yml → modules[]`. Symmetric with `reRequiredModule`
+	// (destiny.go); canonical kebab-case in each half (no trailing/leading/double
+	// dash), no underscore, naming-rules.md §57/§186.
 	reDependencyModuleName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 )
 
-// deprecatedServiceKeys — устаревшие top-level ключи в `service.yml`. Для
-// каждого даём специфический hint, объясняющий «где это лежит на самом деле»
-// (см. docs/service/manifest.md → «Что в service.yml НЕ лежит»). Симметрично
-// `deprecatedDestinyKeys` в destiny.go.
+// deprecatedServiceKeys — deprecated top-level keys in `service.yml`. Each gets
+// a specific hint explaining "where it actually lives" (see
+// docs/service/manifest.md → "What service.yml does NOT hold"). Symmetric with
+// `deprecatedDestinyKeys` in destiny.go.
 var deprecatedServiceKeys = map[string]string{
 	"version":   "version is a git ref under which service is committed, not a manifest field; see ADR-007",
 	"tasks":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
@@ -160,14 +162,14 @@ var deprecatedServiceKeys = map[string]string{
 	"scenarios": "scenarios are auto-discovered from scenario/<name>/ directory; do not enumerate them in service.yml",
 }
 
-// schemaValidateService — пост-decode проверки ServiceManifest.
+// schemaValidateService — post-decode checks of ServiceManifest.
 func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifest) []diag.Diagnostic {
 	_ = path
 	var out []diag.Diagnostic
 
 	topKeys := topLevelKeys(root)
 
-	// 1) deprecated top-level ключи (по AST для line/col).
+	// 1) deprecated top-level keys (via AST for line/col).
 	for _, kv := range root.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -186,8 +188,8 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		}))
 	}
 
-	// 2) name — required + format. Ветка `topKeys["name"]` отличает «ключа нет»
-	// от «ключ есть с пустой/null строкой» (симметрично destiny.go).
+	// 2) name — required + format. The `topKeys["name"]` branch distinguishes
+	// "key absent" from "key present with empty/null string" (symmetric with destiny.go).
 	if !topKeys["name"] {
 		out = append(out, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -210,9 +212,9 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	}
 
 	// 3) state_schema_version — required + integer ≥ 1.
-	// Дополнительно отлавливаем float (`1.5`): goccy при декоде в `int`
-	// усекает значение без ошибки, поэтому проверяем AST явно — иначе оператор
-	// думает, что записал «1.5», а Keeper хранит «1» (silent truncation).
+	// Also catch a float (`1.5`): goccy silently truncates when decoding into
+	// `int`, so we check the AST explicitly — otherwise the operator thinks they
+	// wrote "1.5" while Keeper stores "1" (silent truncation).
 	if !topKeys["state_schema_version"] {
 		out = append(out, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -232,9 +234,9 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 				YAMLPath: "$.state_schema_version",
 			}))
 		} else if _, isInt := vn.(*ast.IntegerNode); !isInt {
-			// Non-integer non-float (string/bool/sequence/mapping/null): decode уже
-			// поднял `type_mismatch`, дополнительный `value_out_of_range "got 0"`
-			// от zero-value `m.StateSchemaVersion` ввёл бы в заблуждение.
+			// Non-integer non-float (string/bool/sequence/mapping/null): decode
+			// already raised `type_mismatch`; an extra `value_out_of_range "got 0"`
+			// from the zero-value `m.StateSchemaVersion` would be misleading.
 		} else if m.StateSchemaVersion < 1 {
 			out = append(out, atPath(root, "$.state_schema_version", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -244,7 +246,7 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		}
 	}
 
-	// 4) state_schema — required + структурная валидация.
+	// 4) state_schema — required + structural validation.
 	if !topKeys["state_schema"] {
 		out = append(out, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -257,7 +259,7 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		out = append(out, validateStateSchema(root, findInputMapping(root, "state_schema"), "$.state_schema")...)
 	}
 
-	// 5) destiny[] / modules[] — каждая запись валидна как `{name, ref}`.
+	// 5) destiny[] / modules[] — each entry is valid as `{name, ref}`.
 	for i, dep := range m.Destiny {
 		out = append(out, validateDependencyRef(root, "destiny", i, dep, reDependencyDestinyName)...)
 	}
@@ -265,7 +267,7 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		out = append(out, validateDependencyRef(root, "modules", i, dep, reDependencyModuleName)...)
 	}
 
-	// 6) revealable_secrets[] — reveal-декларации (NIM-74).
+	// 6) revealable_secrets[] — reveal declarations (NIM-74).
 	seenRevealIDs := make(map[string]int, len(m.RevealableSecrets))
 	for i, rs := range m.RevealableSecrets {
 		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
@@ -274,10 +276,10 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	return out
 }
 
-// validateRevealableSecret — проверка одной записи `revealable_secrets[]` (NIM-74):
-// id (required + reRevealID + уникален); enumerate (MVP required + форма
-// `state.<segment>`); vault_ref (required + содержит `{key}` при заданном enumerate +
-// плейсхолдеры только `{incarnation}`/`{key}`).
+// validateRevealableSecret — checks one `revealable_secrets[]` entry (NIM-74):
+// id (required + reRevealID + unique); enumerate (MVP required + form
+// `state.<segment>`); vault_ref (required + contains `{key}` when enumerate is
+// set + placeholders only `{incarnation}`/`{key}`).
 func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecret, seen map[string]int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	base := fmt.Sprintf("$.revealable_secrets[%d]", idx)
@@ -342,7 +344,7 @@ func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecre
 			}))
 		}
 	}
-	// enumerate задан (в MVP всегда) ⇒ reveal per-элементный ⇒ путь ОБЯЗАН нести {key}.
+	// enumerate is set (always in MVP) ⇒ reveal is per-element ⇒ the path MUST carry {key}.
 	if rs.Enumerate != "" && !strings.Contains(rs.VaultRef, "{key}") {
 		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -351,10 +353,11 @@ func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecre
 			Hint:    "per-element reveal requires {key}, e.g. .../users/{key}#password",
 		}))
 	}
-	// {service} И {incarnation} ОБЯЗАТЕЛЬНЫ (NIM-74 C1 defense-in-depth): путь
-	// привязан к неймспейсу секретов ИМЕННО этого сервиса этой инкарнации
-	// (secret/<service>/<incarnation>/…). Статический `secret/keeper/jwt-signing-key`
-	// без плейсхолдеров отвергается на load; рантайм-allowlist prefix + floor — 2-й слой.
+	// {service} AND {incarnation} are REQUIRED (NIM-74 C1 defense-in-depth): the
+	// path is bound to the secret namespace of exactly this service and this
+	// incarnation (secret/<service>/<incarnation>/…). A static
+	// `secret/keeper/jwt-signing-key` without placeholders is rejected at load;
+	// the runtime allowlist prefix + floor is the 2nd layer.
 	if !strings.Contains(rs.VaultRef, "{service}") || !strings.Contains(rs.VaultRef, "{incarnation}") {
 		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -363,8 +366,8 @@ func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecre
 			Hint:    "scope the path, e.g. secret/{service}/{incarnation}/users/{key}#password",
 		}))
 	}
-	// #<field> ОБЯЗАТЕЛЕН: reveal раскрывает ровно одно скалярное поле секрета
-	// (рантайм selectRevealField без поля → вечный 404). Ловим на load.
+	// #<field> is REQUIRED: reveal exposes exactly one scalar secret field
+	// (runtime selectRevealField without a field → permanent 404). Caught at load.
 	if i := strings.LastIndexByte(rs.VaultRef, '#'); i < 0 || i == len(rs.VaultRef)-1 {
 		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -377,8 +380,8 @@ func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecre
 	return out
 }
 
-// validateDependencyRef — проверка одной записи `{name, ref}` в destiny[]/modules[].
-// `nameRegex` различает одно- и двухуровневую форму имени.
+// validateDependencyRef — checks one `{name, ref}` entry in destiny[]/modules[].
+// `nameRegex` distinguishes the single- and two-level name form.
 func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep DependencyRef, nameRegex *regexp.Regexp) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	base := fmt.Sprintf("$.%s[%d]", listKey, idx)
@@ -391,9 +394,10 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 			Hint:    "dependency entry must declare {name, ref} — both non-empty",
 		}))
 	} else if listKey == "modules" && strings.HasPrefix(dep.Name, "core.") {
-		// ADR-009 / ADR-015: core-модули доступны автоматически и в `modules:`
-		// НЕ перечисляются. Отдельный код, чтобы оператор не путал с обычным
-		// `name_invalid_format` (имя regex-валидно, но семантика запрещена).
+		// ADR-009 / ADR-015: core modules are available automatically and are NOT
+		// listed in `modules:`. A separate code so the operator doesn't confuse it
+		// with plain `name_invalid_format` (the name is regex-valid, but the
+		// semantics are forbidden).
 		out = append(out, atPath(root, base+".name", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "core_module_in_modules_list",
@@ -418,8 +422,8 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 		}))
 	}
 
-	// git — per-entry override полного URL, поддержан только для destiny[].
-	// Для modules[] запрещаем явно, чтобы оператор не считал его поддержанным.
+	// git — per-entry override of the full URL, supported only for destiny[].
+	// For modules[] we forbid it explicitly so the operator doesn't assume support.
 	if listKey == "modules" && dep.Git != "" {
 		out = append(out, atPath(root, base+".git", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -439,28 +443,28 @@ func nameHint(listKey string) string {
 	return "kebab-case: lowercase letters, digits, dashes; must start with letter"
 }
 
-// validateStateSchema — MVP-валидация JSON Schema на корне `state_schema:`.
+// validateStateSchema — MVP JSON Schema validation at the `state_schema:` root.
 //
-// Проверяется минимум, гарантирующий корректность runtime-валидации
-// `incarnation.state` Keeper-ом:
-//   - корень должен быть mapping с `type: object` (объект — единственная
-//     допустимая форма для top-level состояния);
-//   - `required` (если есть) — массив строк;
-//   - `properties` (если есть) — map<string, mapping>, рекурсивно проверяем
-//     каждую вложенную схему по тем же правилам, но без обязательного
-//     `type: object` (вложенные могут быть любого типа).
+// Checks the minimum that guarantees correct runtime validation of
+// `incarnation.state` by Keeper:
+//   - the root must be a mapping with `type: object` (an object is the only
+//     valid form for top-level state);
+//   - `required` (if present) — an array of strings;
+//   - `properties` (if present) — map<string, mapping>; recurse into each nested
+//     schema by the same rules, but without a mandatory `type: object` (nested
+//     schemas may be of any type).
 //
-// Расширенная JSON Schema (`enum`/`pattern`/`min`/`max`/`items`/
-// `additionalProperties` и т.п.) намеренно НЕ типизируется в MVP — это
-// большой draft-07 стандарт. Малформированную схему ловим, но семантику
-// каждого ключа не валидируем (PM-decision).
+// Extended JSON Schema (`enum`/`pattern`/`min`/`max`/`items`/
+// `additionalProperties`, etc.) is deliberately NOT typed in MVP — it's a large
+// draft-07 standard. We catch a malformed schema but don't validate the
+// semantics of each key (PM decision).
 func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	if node == nil {
-		// Ключ присутствует в YAML, но значение не mapping (null/scalar/sequence).
-		// goccy НЕ поднимет decode-ошибку для null → map[string]any (просто nil
-		// получится), поэтому диагностика нужна здесь. Для scalar/sequence
-		// generic `type_mismatch` уже выпущен decode-фазой; но и здесь явная
-		// диагностика читается лучше.
+		// The key is present in YAML, but the value is not a mapping
+		// (null/scalar/sequence). goccy won't raise a decode error for null →
+		// map[string]any (just yields nil), so a diagnostic is needed here. For
+		// scalar/sequence the generic `type_mismatch` was already emitted by the
+		// decode phase; but an explicit diagnostic reads better here too.
 		return []diag.Diagnostic{atPath(root, pathPrefix, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "state_schema_root_not_object",
@@ -470,8 +474,8 @@ func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefi
 	}
 	var out []diag.Diagnostic
 
-	// На root-уровне `type: object` обязателен (incarnation.state — всегда
-	// объект). На вложенных уровнях type — любой допустимый JSON Schema тип.
+	// At the root level `type: object` is mandatory (incarnation.state is always
+	// an object). At nested levels type may be any valid JSON Schema type.
 	tn := findScalarValue(node, "type")
 	if tn == nil {
 		out = append(out, diagAt(node.GetToken().Position.Line, node.GetToken().Position.Column, diag.Diagnostic{
@@ -499,18 +503,17 @@ func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefi
 	return out
 }
 
-// validateJSONSchemaNode — рекурсивная структурная проверка одной JSON Schema-
-// ноды. Корневой уровень `state_schema` отдельной обработки не требует:
-// `type: object` уже проверен validateStateSchema-ом, а валидация
-// `required`/`properties`/`items`/`additionalProperties` симметрична на всех
-// уровнях.
+// validateJSONSchemaNode — recursive structural check of one JSON Schema node.
+// The `state_schema` root needs no special handling: `type: object` is already
+// checked by validateStateSchema, and validation of
+// `required`/`properties`/`items`/`additionalProperties` is symmetric at all levels.
 func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnostic {
 	if node == nil {
 		return nil
 	}
 	var out []diag.Diagnostic
 
-	// required: должен быть sequence строк (если ключ присутствует).
+	// required: must be a sequence of strings (if the key is present).
 	reqKV := findKV(node, "required")
 	if reqKV != nil {
 		seq, ok := reqKV.Value.(*ast.SequenceNode)
@@ -537,7 +540,7 @@ func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnosti
 		}
 	}
 
-	// properties: map<string, mapping>, рекурсия в каждую вложенную схему.
+	// properties: map<string, mapping>; recurse into each nested schema.
 	propsKV := findKV(node, "properties")
 	if propsKV != nil {
 		propsNode, ok := propsKV.Value.(*ast.MappingNode)
@@ -572,8 +575,8 @@ func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnosti
 		}
 	}
 
-	// items: рекурсия — встречается во вложенных схемах с type=array.
-	// Допустим только mapping (вложенная схема); scalar / sequence — invalid.
+	// items: recursion — appears in nested schemas with type=array. Only a
+	// mapping (nested schema) is allowed; scalar / sequence is invalid.
 	itemsKV := findKV(node, "items")
 	if itemsKV != nil {
 		if subMap, ok := itemsKV.Value.(*ast.MappingNode); ok {
@@ -589,15 +592,15 @@ func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnosti
 		}
 	}
 
-	// additionalProperties: schema-ветка → рекурсия; bool-ветка валидна сама
-	// по себе (true/false по JSON Schema draft-07); прочие значения — invalid.
+	// additionalProperties: schema branch → recursion; a bool branch is valid on
+	// its own (true/false per JSON Schema draft-07); other values are invalid.
 	apKV := findKV(node, "additionalProperties")
 	if apKV != nil {
 		switch v := apKV.Value.(type) {
 		case *ast.MappingNode:
 			out = append(out, validateJSONSchemaNode(v, path+".additionalProperties")...)
 		case *ast.BoolNode:
-			// валидно, рекурсии не требует
+			// valid, needs no recursion
 		default:
 			tok := apKV.Value.GetToken()
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -612,7 +615,7 @@ func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnosti
 	return out
 }
 
-// findKV возвращает MappingValueNode по имени ключа или nil.
+// findKV returns the MappingValueNode for the key name, or nil.
 func findKV(m *ast.MappingNode, name string) *ast.MappingValueNode {
 	if m == nil {
 		return nil
@@ -626,7 +629,7 @@ func findKV(m *ast.MappingNode, name string) *ast.MappingValueNode {
 	return nil
 }
 
-// findScalarValue — value-узел под ключом `name` на одном уровне (без рекурсии).
+// findScalarValue — the value node under key `name` at one level (no recursion).
 func findScalarValue(m *ast.MappingNode, name string) ast.Node {
 	kv := findKV(m, name)
 	if kv == nil {
@@ -635,9 +638,9 @@ func findScalarValue(m *ast.MappingNode, name string) ast.Node {
 	return kv.Value
 }
 
-// semanticValidateService — на M1.2.b отдельных semantic-инвариантов нет
-// (cross-file refs и migration chain — out of scope, M1.5). Сохраняем
-// сигнатуру для симметрии с destiny.go.
+// semanticValidateService — at M1.2.b there are no separate semantic invariants
+// (cross-file refs and migration chain are out of scope, M1.5). Kept for
+// signature symmetry with destiny.go.
 func semanticValidateService(_ *ServiceManifest, _ *ast.MappingNode) []diag.Diagnostic {
 	return nil
 }

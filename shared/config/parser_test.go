@@ -35,9 +35,9 @@ func TestLoadKeeper_GoldenExample(t *testing.T) {
 	}
 }
 
-// plugins.cache_root: пустое значение допустимо (default подставляется
-// в keeper/cmd/keeper/main.go::pluginCacheRoot). Не-абсолютный путь
-// schema-фаза отвергает с `path_not_absolute`.
+// plugins.cache_root: an empty value is allowed (the default is filled in
+// keeper/cmd/keeper/main.go::pluginCacheRoot). A non-absolute path is rejected
+// by the schema phase with `path_not_absolute`.
 func TestLoadKeeperFromBytes_PluginsCacheRootRelative(t *testing.T) {
 	src := []byte(`kid: keeper-eu-west-01
 listen:
@@ -121,10 +121,10 @@ reactor:
 	}
 }
 
-// TestLoadKeeper_UnknownKeyServiceRegistry — реестр Service-ов и скаляры
-// перенесены в Postgres (ADR-029): ключи services: / default_destiny_source: /
-// default_module_source: больше не часть схемы конфига → reflect-walker поднимает
-// unknown_key на каждый (как rbac: / reactor:).
+// TestLoadKeeper_UnknownKeyServiceRegistry — the Service registry and scalars
+// moved to Postgres (ADR-029): keys services: / default_destiny_source: /
+// default_module_source: are no longer part of the config schema → the
+// reflect-walker raises unknown_key for each (like rbac: / reactor:).
 func TestLoadKeeper_UnknownKeyServiceRegistry(t *testing.T) {
 	base := `
 kid: keeper-eu-west-01
@@ -192,10 +192,10 @@ vault:
 	}
 }
 
-// TestLoadKeeper_DaysDurationNonReaper фиксирует, что convention `duration`
-// (`<N>d`) применяется ко всем duration-полям, не только к reaper.rules.*.
-// Регрессия: до слияния helpers `auth.jwt.ttl_default: 30d` падал с
-// `duration_invalid: unknown unit "d"` (time.ParseDuration напрямую).
+// TestLoadKeeper_DaysDurationNonReaper pins that the `duration` convention
+// (`<N>d`) applies to all duration fields, not only reaper.rules.*.
+// Regression: before the helpers merge `auth.jwt.ttl_default: 30d` failed with
+// `duration_invalid: unknown unit "d"` (time.ParseDuration directly).
 func TestLoadKeeper_DaysDurationNonReaper(t *testing.T) {
 	src := `
 kid: keeper-eu-west-01
@@ -250,10 +250,10 @@ keeper:
 	}
 }
 
-// EventStreamAddr/BootstrapAddr должны корректно склеивать IPv6-литерал:
-// net.JoinHostPort оборачивает host в скобки (`[::1]:9443`). Ручная склейка
-// `host + ":" + port` дала бы невалидный target `::1:9443`. docs объявляют
-// host как «FQDN или IP» → IPv6 обещан и обязан работать.
+// EventStreamAddr/BootstrapAddr must join an IPv6 literal correctly:
+// net.JoinHostPort wraps the host in brackets (`[::1]:9443`). Manual
+// `host + ":" + port` would give the invalid target `::1:9443`. The docs
+// declare host as "FQDN or IP" → IPv6 is promised and must work.
 func TestSoulKeeperEndpoint_AddrIPv6(t *testing.T) {
 	cases := []struct {
 		host          string
@@ -357,7 +357,7 @@ func TestSplitYAMLPath(t *testing.T) {
 	}
 }
 
-// «Контракт ошибок»: на отсутствующем файле возвращается ошибка + diag io_error.
+// Error contract: a missing file returns an error plus an io_error diag.
 func TestLoadKeeper_IOError(t *testing.T) {
 	_, _, diags, err := LoadKeeper("/no/such/file.yml", ValidateOptions{})
 	if err == nil {
@@ -381,10 +381,11 @@ func TestLoadKeeper_YAMLParseError(t *testing.T) {
 	}
 }
 
-// Empty/whitespace-only документ — `parser.ParseBytes` возвращает `file.Docs`
-// длины 1 с `doc.Body == nil`. До фикса type-assert ниже вылетал в защитную
-// ветку, вызывавшую `GetToken()` на nil-interface → segfault (qa.1 blocker
-// bug 1: typical truncate-then-write окно у редакторов и `sed -i`).
+// Empty/whitespace-only document — `parser.ParseBytes` returns `file.Docs` of
+// length 1 with `doc.Body == nil`. Before the fix the type-assert below fell
+// into a guard branch that called `GetToken()` on a nil interface → segfault
+// (qa.1 blocker bug 1: the typical truncate-then-write window of editors and
+// `sed -i`).
 func TestLoadKeeperFromBytes_EmptyDocumentNoPanic(t *testing.T) {
 	for _, content := range []string{"", "   ", "   \n\t  \n", "\n\n"} {
 		_, _, diags, err := LoadKeeperFromBytes("k.yml", []byte(content), ValidateOptions{})
@@ -398,8 +399,8 @@ func TestLoadKeeperFromBytes_EmptyDocumentNoPanic(t *testing.T) {
 	}
 }
 
-// Multi-document YAML отвергается явным diagnostic-ом `multi_document_not_allowed`
-// (см. delegation-qa-fixes Bug 1). Один config-файл = один документ.
+// Multi-document YAML is rejected by an explicit `multi_document_not_allowed`
+// diagnostic (see delegation-qa-fixes Bug 1). One config file = one document.
 func TestLoadKeeperFromBytes_MultiDocumentRejected(t *testing.T) {
 	src := []byte(`kid: keeper-01
 listen:
@@ -429,9 +430,9 @@ kid: keeper-02
 	}
 }
 
-// UTF-8 BOM (EF BB BF) — strip на входе, конфиг должен валидироваться как
-// обычный. До фикса: BOM попадал в первый ключ и вылетал unknown_key с
-// невидимым префиксом перед `kid`.
+// UTF-8 BOM (EF BB BF) is stripped on input; the config must validate as
+// normal. Before the fix the BOM ended up in the first key and raised
+// unknown_key with an invisible prefix before `kid`.
 func TestLoadKeeperFromBytes_BOMStripped(t *testing.T) {
 	body := `kid: keeper-eu-west-01
 listen:
@@ -460,11 +461,11 @@ vault:
 	}
 }
 
-// Required top-level блоки (kid/listen/postgres/redis/vault) обязаны
-// присутствовать (docs/keeper/config.md). Пустой keeper.yml → набор
-// `missing_required_field` diagnostic-ов.
+// Required top-level blocks (kid/listen/postgres/redis/vault) must be present
+// (docs/keeper/config.md). An empty keeper.yml → a set of
+// `missing_required_field` diagnostics.
 func TestLoadKeeperFromBytes_EmptyMissingAllRequired(t *testing.T) {
-	src := []byte("postgres: {}\n") // один голос для возможного auto-detect, но почти пустой
+	src := []byte("postgres: {}\n") // one vote for possible auto-detect, but almost empty
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
 	want := []string{"kid", "listen", "redis", "vault"}
 	for _, k := range want {
@@ -482,7 +483,7 @@ func TestLoadKeeperFromBytes_EmptyMissingAllRequired(t *testing.T) {
 	}
 }
 
-// Каждый required-блок keeper-а проверяется индивидуально.
+// Each required keeper block is checked individually.
 func TestLoadKeeperFromBytes_MissingPerField(t *testing.T) {
 	full := map[string]string{
 		"kid":      `kid: keeper-eu-west-01`,
@@ -518,7 +519,7 @@ func TestLoadKeeperFromBytes_MissingPerField(t *testing.T) {
 	}
 }
 
-// listen: присутствует, но все четыре addr пусты — тоже missing_required_field.
+// listen: present but all four addrs empty — also missing_required_field.
 func TestLoadKeeperFromBytes_ListenAllAddrsEmpty(t *testing.T) {
 	src := []byte(`kid: keeper-01
 listen: {}
@@ -547,8 +548,8 @@ vault:
 	}
 }
 
-// listen: только mcp.addr пуст (остальные три заданы) — требование
-// «встроенный MCP» (requirements.md) даёт error `mcp_listener_required`.
+// listen: only mcp.addr is empty (the other three are set) — the "built-in MCP"
+// requirement (requirements.md) yields error `mcp_listener_required`.
 func TestLoadKeeperFromBytes_MCPListenerRequired(t *testing.T) {
 	src := []byte(`kid: keeper-01
 listen:
@@ -582,7 +583,7 @@ vault:
 	}
 }
 
-// soul: блок keeper отсутствует → missing_required_field для $.keeper.
+// soul: the keeper block is absent → missing_required_field for $.keeper.
 func TestLoadSoulFromBytes_MissingKeeper(t *testing.T) {
 	src := []byte("sid: redis-01.prod.example.com\n")
 	_, _, diags, _ := LoadSoulFromBytes("soul.yml", src, ValidateOptions{})
@@ -599,8 +600,8 @@ func TestLoadSoulFromBytes_MissingKeeper(t *testing.T) {
 	}
 }
 
-// soul: блок keeper есть, но endpoints отсутствует/пуст → missing_required_field
-// для $.keeper.endpoints.
+// soul: keeper block present but endpoints absent/empty → missing_required_field
+// for $.keeper.endpoints.
 func TestLoadSoulFromBytes_EmptyKeeperEndpoints(t *testing.T) {
 	src := []byte(`sid: redis-01.prod.example.com
 keeper:
@@ -621,7 +622,7 @@ keeper:
 	}
 }
 
-// soul: endpoint без host → missing_required_field на $.keeper.endpoints[0].host.
+// soul: endpoint without host → missing_required_field on $.keeper.endpoints[0].host.
 func TestLoadSoulFromBytes_EndpointMissingHost(t *testing.T) {
 	src := []byte(`sid: redis-01.prod.example.com
 keeper:
@@ -637,8 +638,8 @@ keeper:
 	}
 }
 
-// soul: оба порта обязательны (architect: «безопасность на первом месте»).
-// Отсутствие event_stream_port / bootstrap_port → дедицированные diag-коды.
+// soul: both ports are required (architect: "security first"). A missing
+// event_stream_port / bootstrap_port → dedicated diag codes.
 func TestLoadSoulFromBytes_EndpointPortsRequired(t *testing.T) {
 	src := []byte(`sid: redis-01.prod.example.com
 keeper:
@@ -657,7 +658,7 @@ keeper:
 	}
 }
 
-// soul: порт вне диапазона 1..65535 → port_out_of_range.
+// soul: a port outside the range 1..65535 → port_out_of_range.
 func TestLoadSoulFromBytes_EndpointPortOutOfRange(t *testing.T) {
 	src := []byte(`sid: redis-01.prod.example.com
 keeper:
@@ -674,7 +675,7 @@ keeper:
 	}
 }
 
-// soul: валидный Form-A endpoint — никаких ошибок по endpoints.
+// soul: a valid Form-A endpoint — no errors on endpoints.
 func TestLoadSoulFromBytes_EndpointFormAClean(t *testing.T) {
 	src := []byte(`sid: redis-01.prod.example.com
 keeper:
@@ -693,10 +694,10 @@ keeper:
 	}
 }
 
-// Контракт «schema-error не блокирует частичный decode»:
-// type_mismatch на одном поле — остальные поля cfg остаются заполненными.
-// Заодно проверяет, что type_mismatch diag несёт Line/Column > 0
-// (Major #2 в review.1: goccy yaml.Error.GetToken() → Position.Line/Column).
+// Contract "a schema error does not block partial decode":
+// type_mismatch on one field — the other cfg fields stay populated.
+// Also checks that the type_mismatch diag carries Line/Column > 0
+// (Major #2 in review.1: goccy yaml.Error.GetToken() → Position.Line/Column).
 func TestLoadKeeperFromBytes_PartialDecode(t *testing.T) {
 	path := filepath.FromSlash("../../soul-lint/testdata/broken/keeper-partial-decode.yml")
 	src, err := os.ReadFile(path)

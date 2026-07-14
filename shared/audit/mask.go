@@ -7,46 +7,46 @@ import (
 	"strings"
 )
 
-// maskedValue — placeholder, которым заменяются sensitive значения в
-// payload перед INSERT. Совпадает с маскировкой OTel-exporter Operator
-// API (docs/keeper/operator-api.md → Secret masking).
+// maskedValue is the placeholder that replaces sensitive values in a payload
+// before INSERT. Matches the masking of the OTel-exporter Operator API
+// (docs/keeper/operator-api.md → Secret masking).
 const maskedValue = "***MASKED***"
 
-// sensitiveKeyRe — регистронезависимый substring-матч по имени ключа.
-// Маскирует любой ключ, СОДЕРЖАЩИЙ один из секрет-фрагментов, а не только
-// точное совпадение: `bootstrap_token`, `aws_secret_access_key`,
-// `db_password`, `tls_private_key`, `credentials_ref`, `jwt_signing_key`
-// — все попадают под фильтр (security-review H1: exact-match на `"token"`
-// пропускал `"bootstrap_token"` → plaintext leak).
+// sensitiveKeyRe is a case-insensitive substring match on the key name. It masks
+// any key CONTAINING one of the secret fragments, not only exact matches:
+// `bootstrap_token`, `aws_secret_access_key`, `db_password`, `tls_private_key`,
+// `credentials_ref`, `jwt_signing_key` all match (security-review H1: an exact
+// match on `"token"` let `"bootstrap_token"` through → plaintext leak).
 //
-// TLS PEM-материал (`tls_key` / `tls_cert` / `tls_ca`, а также дефисная и
-// `*-data` формы — `tls-key`, `tls_ca_data`) маскируется по фрагменту
-// `tls[_-]?(key|cert|ca)`: модель маскинга — ИМЯ ключа, а голый фрагмент `key`/
-// `cert`/`ca` в каталог не входит (over-masking безобидных `cache`/`scary`).
-// Приватный ключ (`tls_key`) — секрет в строгом смысле; cert/ca маскируем тоже
-// (они помечены `secret: true` в схеме и могут нести закрытый материал в
-// combined-PEM). Граница точная: `certificate`/`cacheable` фрагмент НЕ ловит
-// (нужен префикс `tls` + разделитель). Источник — redis-консолидация TLS
-// (community.redis: PEM в params коннекта; BLOCKER masking-guard).
+// TLS PEM material (`tls_key` / `tls_cert` / `tls_ca`, plus the hyphen and
+// `*-data` forms — `tls-key`, `tls_ca_data`) is masked by the fragment
+// `tls[_-]?(key|cert|ca)`: the masking model is the key NAME, and a bare
+// `key`/`cert`/`ca` fragment is not in the catalog (to avoid over-masking
+// harmless `cache`/`scary`). The private key (`tls_key`) is a secret in the
+// strict sense; cert/ca are masked too (marked `secret: true` in the schema and
+// may carry private material in a combined PEM). The boundary is exact:
+// `certificate`/`cacheable` does NOT match (needs the `tls` prefix + separator).
+// Source: redis TLS consolidation (community.redis: PEM in connect params;
+// BLOCKER masking-guard).
 //
-// Расширение каталога — обычным PR в этот regex при появлении новой
-// sensitive области; инвариант словаря не требует propose-and-wait
-// (формализация наблюдаемого pattern-а, см. docs/architecture.md → Error
-// codes / расширение каталога).
+// Extend the catalog with an ordinary PR to this regex when a new sensitive area
+// appears; the dictionary invariant does not require propose-and-wait (it
+// formalizes an observed pattern, see docs/architecture.md → Error codes /
+// catalog extension).
 var sensitiveKeyRe = regexp.MustCompile(
 	`(?i)(token|secret|password|passwd|private[_-]?key|privatekey|credential|signing[_-]?key|api[_-]?key|access[_-]?key|tls[_-]?(key|cert|ca))`,
 )
 
-// extraExactKeys — короткие ключи без секрет-фрагмента в имени, которые
-// всё равно несут секрет. Substring-regex их не поймал бы (`jwt` не
-// содержит ни token, ни secret), поэтому держим отдельным exact-set
-// (регистронезависимое сравнение по lower-case ключу).
+// extraExactKeys are short keys with no secret fragment in the name that still
+// carry a secret. The substring regex would miss them (`jwt` contains neither
+// token nor secret), so they are kept as a separate exact set (case-insensitive
+// comparison on the lower-cased key).
 var extraExactKeys = map[string]struct{}{
 	"jwt": {},
 }
 
-// isSensitiveKey — true, если ключ нужно маскировать целиком (по substring-
-// regex или по extra-exact-set). Регистронезависимо.
+// isSensitiveKey reports whether the key must be masked whole (by the substring
+// regex or the extra-exact set). Case-insensitive.
 func isSensitiveKey(key string) bool {
 	if sensitiveKeyRe.MatchString(key) {
 		return true
@@ -55,63 +55,62 @@ func isSensitiveKey(key string) bool {
 	return ok
 }
 
-// CredentialsRefPrefix — каноническая форма vault-reference на секрет KV
-// ([ADR-017]: `vault:<mount>/<path>`, дефолтный mount `secret`). Любое
-// string-значение, СОДЕРЖАЩЕЕ этот маркер, маскируется целиком (vault-путь
-// может leak в логи/observability через payload). Применяется к string-значениям
-// независимо от ключа (отдельный второй фильтр поверх key-match).
+// CredentialsRefPrefix is the canonical form of a vault reference to a KV secret
+// ([ADR-017]: `vault:<mount>/<path>`, default mount `secret`). Any string value
+// CONTAINING this marker is masked whole (a vault path can leak into
+// logs/observability via the payload). Applied to string values regardless of
+// key (a second filter on top of the key match).
 //
-// Substring-, не prefix-match (security-review: vault-ref утекает не только
-// «голым» значением `vault:secret/x`, но и склеенным в строку — error-
-// сообщения вида `render: ... vault:secret/db ...`, которые попадают в
-// status_details (GET incarnation) и error_summary. Префиксный фильтр их
-// пропускал → plaintext leak vault-пути в наблюдаемый канал).
+// Substring, not prefix, match (security-review: a vault ref leaks not only as
+// the bare value `vault:secret/x` but also glued into a string — error messages
+// like `render: ... vault:secret/db ...` that reach status_details
+// (GET incarnation) and error_summary. A prefix filter let them through →
+// plaintext leak of the vault path into an observable channel).
 //
-// Маскинг делает [vaultRefRe] — регэксп по форме `vault:<mount>/` (любой mount,
-// не только дефолтный `secret`): security-аудит K5 показал, что оператор вправе
-// настроить кастомный KV-mount в `keeper.yml` (config.Vault.KVMount), и тогда
-// ref-ы вида `vault:kv/…` / `vault:db-creds/…` утекали в audit/OTel/SSE/error в
-// plaintext — маркер `vault:secret/` их не ловил. Регэксп требует mount-токен +
-// `/`, поэтому легитимные строки без vault-ref не over-маскируются:
-// `https://vault:8200` (нет `/` после токена-порта), `hashicorp/vault:1.18`
-// (`1.18` без `/`), `vault: KV error` (пробел не в классе токена) — passthrough.
+// Masking is done by [vaultRefRe] — a regexp on the form `vault:<mount>/` (any
+// mount, not just the default `secret`): security audit K5 showed the operator
+// may configure a custom KV mount in `keeper.yml` (config.Vault.KVMount), after
+// which refs like `vault:kv/…` / `vault:db-creds/…` leaked into
+// audit/OTel/SSE/error in plaintext — the `vault:secret/` marker missed them.
+// The regexp requires a mount token + `/`, so legitimate strings without a vault
+// ref are not over-masked: `https://vault:8200` (no `/` after the port token),
+// `hashicorp/vault:1.18` (`1.18` has no `/`), `vault: KV error` (space is not in
+// the token class) — passthrough.
 //
-// CredentialsRefPrefix оставлен как дефолт-mount-константа для прочих
-// потребителей (provider-ref-валидация); сам маскинг идёт через [vaultRefRe].
+// CredentialsRefPrefix stays as a default-mount constant for other consumers
+// (provider-ref validation); masking itself goes through [vaultRefRe].
 const CredentialsRefPrefix = "vault:secret/"
 
-// vaultRefRe матчит каноничную форму vault-reference `vault:<mount>/<path>` с
-// произвольным mount-токеном (`secret`, `kv`, `db-creds`, …). Mount-токен —
-// `[A-Za-z0-9._-]+` (символы, допустимые в Vault-mount-path), за ним
-// обязательный `/` (разделитель mount↔rel из vault.ParseRef). Это и закрывает
-// K5-пробел (кастомный mount), и не over-маскирует строки без ref-формы.
+// vaultRefRe matches the canonical vault-reference form `vault:<mount>/<path>`
+// with an arbitrary mount token (`secret`, `kv`, `db-creds`, …). The mount token
+// is `[A-Za-z0-9._-]+` (characters valid in a Vault mount path) followed by a
+// mandatory `/` (the mount↔rel separator from vault.ParseRef). This closes the
+// K5 gap (custom mount) without over-masking strings that have no ref form.
 var vaultRefRe = regexp.MustCompile(`vault:[A-Za-z0-9._-]+/`)
 
-// MaskSecrets возвращает копию payload с маскированными sensitive
-// значениями. Walk рекурсивный — обходит вложенные maps и slices, включая
-// типизированные контейнеры (`map[string]string`, `[]string`, struct-ы,
-// указатели) через reflect.
+// MaskSecrets returns a copy of payload with sensitive values masked. The walk
+// is recursive — it descends into nested maps and slices, including typed
+// containers (`map[string]string`, `[]string`, structs, pointers) via reflect.
 //
-// Правила маскировки:
+// Masking rules:
 //
-//   - Ключ (case-insensitive) матчит [isSensitiveKey] → значение
-//     заменяется на `"***MASKED***"` (тип теряется, это compliance-
-//     требование).
-//   - Строковое значение содержит `vault:secret/` (в любой позиции) → также
-//     `"***MASKED***"` (защита от leak vault-ref-ов в логи/observability через
-//     любой ключ, включая склеенные в error-строки; маркер сужен — см.
+//   - Key (case-insensitive) matches [isSensitiveKey] → the value becomes
+//     `"***MASKED***"` (type is lost, a compliance requirement).
+//   - String value contains `vault:secret/` (anywhere) → also `"***MASKED***"`
+//     (guards against leaking vault refs into logs/observability via any key,
+//     including those glued into error strings; the marker is narrowed — see
 //     [CredentialsRefPrefix]).
-//   - Map (любого key/value-типа) → рекурсивный walk; ключ нормализуется
-//     стрингификацией для key-match.
-//   - Slice / array → рекурсивный walk элементов.
-//   - Struct → walk полей (имя поля = ключ); unexported-поля пропускаются.
-//   - Pointer / interface → разыменование и walk.
-//   - Остальные scalar-значения — копируются как есть.
+//   - Map (any key/value type) → recursive walk; the key is stringified for the
+//     key match.
+//   - Slice / array → recursive walk of elements.
+//   - Struct → walk of fields (field name = key); unexported fields are skipped.
+//   - Pointer / interface → dereference and walk.
+//   - Other scalar values are copied as-is.
 //
-// payload не мутируется; возвращается новая map того же shape (top-level
-// всегда `map[string]any`, вложенность нормализуется к `map[string]any`/
-// `[]any`/scalar при walk-е typed-контейнеров).
-// nil-вход → nil-выход (caller обработает как пустой payload).
+// payload is not mutated; a new map of the same shape is returned (top-level is
+// always `map[string]any`, nesting normalized to `map[string]any`/`[]any`/scalar
+// when walking typed containers).
+// nil input → nil output (the caller treats it as an empty payload).
 func MaskSecrets(payload map[string]any) map[string]any {
 	if payload == nil {
 		return nil
@@ -127,13 +126,13 @@ func MaskSecrets(payload map[string]any) map[string]any {
 	return out
 }
 
-// maskValue — walk-helper. Не экспортирован: формат и shape result-а
-// совместимы только в рамках MaskSecrets.
+// maskValue is the walk helper. Unexported: its result format and shape are only
+// meaningful within MaskSecrets.
 //
-// Fast-path для частых типов (`string`/`map[string]any`/`[]any`/
-// `map[string]string`/`[]string`) — без reflect. Остальные контейнеры
-// (struct, прочие map/slice/ptr) проходят через reflect-walk — это
-// холодный путь (audit/SSE-payload), читаемость важнее аллокаций.
+// Fast path for common types (`string`/`map[string]any`/`[]any`/
+// `map[string]string`/`[]string`) — no reflect. Other containers (struct, other
+// map/slice/ptr) go through the reflect walk — a cold path (audit/SSE payload)
+// where readability beats allocations.
 func maskValue(v any) any {
 	switch x := v.(type) {
 	case nil:
@@ -169,8 +168,8 @@ func maskValue(v any) any {
 	}
 }
 
-// maskString маскирует string-значение, если оно содержит vault-ref-маркер
-// (в любой позиции, не только префиксом — см. [CredentialsRefPrefix]).
+// maskString masks a string value if it contains a vault-ref marker (anywhere,
+// not only as a prefix — see [CredentialsRefPrefix]).
 func maskString(s string) any {
 	if vaultRefRe.MatchString(s) {
 		return maskedValue
@@ -178,10 +177,9 @@ func maskString(s string) any {
 	return s
 }
 
-// maskReflect — reflect-fallback для типизированных контейнеров, которые
-// не покрыты fast-path-ом maskValue (struct, map/slice произвольных типов,
-// указатели). Возвращает нормализованную к `map[string]any`/`[]any`/scalar
-// структуру.
+// maskReflect is the reflect fallback for typed containers not covered by the
+// maskValue fast path (struct, arbitrary map/slice types, pointers). Returns a
+// structure normalized to `map[string]any`/`[]any`/scalar.
 func maskReflect(rv reflect.Value) any {
 	if !rv.IsValid() {
 		return nil
@@ -219,9 +217,8 @@ func maskReflect(rv reflect.Value) any {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if f.PkgPath != "" {
-				// Unexported поле — reflect не даёт прочитать значение
-				// безопасно; пропускаем (в payload секреты живут в
-				// exported-полях).
+				// Unexported field — reflect cannot read the value safely;
+				// skip it (secrets in the payload live in exported fields).
 				continue
 			}
 			name := structFieldName(f)
@@ -237,9 +234,9 @@ func maskReflect(rv reflect.Value) any {
 	}
 }
 
-// stringifyKey приводит reflect-ключ map-ы к строке для key-match.
-// Не-string ключи (int, и т.п.) стрингифицируются через %v — секрет в
-// таком ключе маловероятен, но key-match всё равно отрабатывает по имени.
+// stringifyKey converts a reflect map key to a string for the key match.
+// Non-string keys (int, etc.) are stringified via %v — a secret in such a key is
+// unlikely, but the key match still works by name.
 func stringifyKey(k reflect.Value) string {
 	if k.Kind() == reflect.String {
 		return k.String()
@@ -247,10 +244,10 @@ func stringifyKey(k reflect.Value) string {
 	return fmt.Sprintf("%v", k.Interface())
 }
 
-// structFieldName — имя поля для key-match: json-tag (без опций), если
-// задан, иначе имя поля. json-tag важен, потому что payload-структуры
-// сериализуются по тегам — секрет с тегом `json:"bootstrap_token"` должен
-// матчиться так же, как map-ключ `bootstrap_token`.
+// structFieldName is the field name for the key match: the json tag (without
+// options) if set, otherwise the field name. The json tag matters because
+// payload structs serialize by tags — a secret tagged `json:"bootstrap_token"`
+// must match the same as the map key `bootstrap_token`.
 func structFieldName(f reflect.StructField) string {
 	tag := f.Tag.Get("json")
 	if tag == "" || tag == "-" {

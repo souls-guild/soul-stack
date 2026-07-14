@@ -2,9 +2,9 @@ package beaconaddr
 
 import "testing"
 
-// TestAllCoversConsts — All() содержит ровно объявленные константы адресов, без
-// дублей и пропусков. Ядро инварианта «keeper-enum == soul-registry == shared»:
-// обе стороны сверяются с этим списком, поэтому он сам обязан быть согласован.
+// TestAllCoversConsts — All() contains exactly the declared address constants, with
+// no duplicates or omissions. Core of the "keeper-enum == soul-registry == shared"
+// invariant: both sides check against this list, so it must itself be consistent.
 func TestAllCoversConsts(t *testing.T) {
 	consts := []string{
 		ServiceDown, FileChanged, PortClosed,
@@ -32,8 +32,8 @@ func TestAllCoversConsts(t *testing.T) {
 	}
 }
 
-// TestAllReturnsCopy — caller не может молча мутировать общий список (свежий
-// срез на каждый вызов).
+// TestAllReturnsCopy — the caller cannot silently mutate the shared list (a fresh
+// slice on each call).
 func TestAllReturnsCopy(t *testing.T) {
 	a := All()
 	if len(a) == 0 {

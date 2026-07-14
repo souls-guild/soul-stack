@@ -1,33 +1,34 @@
-// Package cel — обёртка над google/cel-go для всех YAML-выражений Soul Stack
-// (top-level expression-ключи и `${ … }`-интерполяция по [ADR-010]).
+// Package cel wraps google/cel-go for all Soul Stack YAML expressions (top-level
+// expression keys and `${ … }` interpolation per [ADR-010]).
 //
-// Pilot-scope (M2.x scenario-runner, slice .c):
-//   - Expression-key form: вся строка = CEL ([EvalExpression]).
-//   - `${ … }`-интерполяция в строковых контекстах ([EvalInterpolation]).
-//   - Переменные контекста: input, register, incarnation, soulprint.self,
-//     essence, vars (task-level `vars:`, заполняется render-ом per-task).
-//   - Compile-cache по нормализованному выражению.
+// Pilot scope (M2.x scenario-runner, slice .c):
+//   - Expression-key form: the whole string is CEL ([EvalExpression]).
+//   - `${ … }` interpolation in string contexts ([EvalInterpolation]).
+//   - Context variables: input, register, incarnation, soulprint.self,
+//     essence, vars (task-level `vars:`, filled by render per-task).
+//   - Compile-cache keyed by the normalized expression.
 //
-// Реализованы:
-//   - soulprint.hosts и .where(...) — compile-time AST-rewrite (hosts.go).
-//   - vault(...) — keeper-side чтение Vault KV в CEL-render-фазе ([vault.go],
-//     [ADR-017]); регистрируется только при сборке Engine с KVReader ([WithVault]).
-//     Без KVReader vault() остаётся [ErrUnsupported] (guard в functions.go).
-//   - Soul-side flow-control sandbox ([NewFlowControl], [ADR-012(d)]): урезанный
-//     env для предикатов when:/changed_when:/failed_when:, зависящих от register.*
-//     (результатов предыдущих задач, известных только Soul-у во время прогона).
-//     Без внешнего доступа: vault()/now() запрещены guard-ами, soulprint.hosts/
-//     soulprint.where — изоляцией ([Engine.compile] форсит allowHosts=false).
+// Implemented:
+//   - soulprint.hosts and .where(...) — compile-time AST rewrite (hosts.go).
+//   - vault(...) — keeper-side Vault KV read in the CEL-render phase ([vault.go],
+//     [ADR-017]); registered only when the Engine is built with a KVReader
+//     ([WithVault]). Without a KVReader vault() stays [ErrUnsupported] (guard in
+//     functions.go).
+//   - Soul-side flow-control sandbox ([NewFlowControl], [ADR-012(d)]): a trimmed
+//     env for when:/changed_when:/failed_when: predicates that depend on register.*
+//     (prior-task results known only to the Soul during a run). No external
+//     access: vault()/now() are guard-blocked, soulprint.hosts/soulprint.where by
+//     isolation ([Engine.compile] forces allowHosts=false).
 //
-// Сознательно НЕ в pilot (возвращают [ErrUnsupported]):
-//   - now(...) — eval-time время (нужно решение о eval-time семантике).
+// Deliberately NOT in pilot (return [ErrUnsupported]):
+//   - now(...) — eval-time clock (needs a decision on eval-time semantics).
 //
-// CEL — sandbox by design ([templating.md §7.1]): нет произвольного I/O, сети,
-// sleep. Единственная I/O-функция — vault() (контролируемое чтение Vault KV
-// через инъектированный KVReader, не произвольный syscall). Прочее —
-// стандартная библиотека cel-go (size, contains, timestamp-арифметика — pure).
+// CEL is a sandbox by design ([templating.md §7.1]): no arbitrary I/O, network,
+// or sleep. The only I/O function is vault() (a controlled Vault KV read via an
+// injected KVReader, not an arbitrary syscall). The rest is the cel-go standard
+// library (size, contains, timestamp arithmetic — pure).
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
+// [ADR-010]: docs/adr/0010-templating.md
 // [templating.md §7.1]: docs/templating.md
 package cel
 
@@ -40,12 +41,12 @@ import (
 	"github.com/google/cel-go/parser"
 )
 
-// contextVars — переменные контекста, известные CEL-окружению. Все —
-// DynType: типизация по YAML-схемам (input/essence/state_schema) — backlog
-// ([templating.md §2.4], open Q типов), до её закрытия узлы получают dyn.
+// contextVars — context variables known to the CEL env. All DynType: typing from
+// YAML schemas (input/essence/state_schema) is backlog ([templating.md §2.4],
+// open type Q); until it lands, nodes get dyn.
 //
-// soulprint объявлена как переменная (доступ `soulprint.self.<path>`);
-// soulprint.hosts/.where отсекаются на этапе guard (см. unsupported.go).
+// soulprint is declared as a variable (access `soulprint.self.<path>`);
+// soulprint.hosts/.where are rejected at the guard stage (see unsupported.go).
 var contextVars = []string{
 	"input",
 	"register",
@@ -56,27 +57,28 @@ var contextVars = []string{
 	"compute",
 }
 
-// migrationVars — переменные контекста migration-режима ([NewMigration],
-// [ADR-019]). Объявлена ТОЛЬКО `state` (мутируемый по ходу операций корень
-// incarnation.state). Прочие имена (`register`/`soulprint`/`essence`/`input`/
-// `incarnation`/`vars`) НЕ объявлены — обращение к ним → compile-ошибка
-// undeclared reference, то есть migration-CEL sandbox обеспечивается
-// необъявленностью, а не текстовым guard-ом ([docs/migrations.md §«Запрещено в
-// migration-CEL»]). `vault()`/`now()` дополнительно ловятся существующими
-// guard-ами (vaultGuard/unsupportedPatterns/internalIdentGuard в functions.go).
+// migrationVars — context variables of migration mode ([NewMigration],
+// [ADR-019]). ONLY `state` is declared (the incarnation.state root, mutated as
+// operations proceed). Other names (`register`/`soulprint`/`essence`/`input`/
+// `incarnation`/`vars`) are NOT declared — referencing them is a compile-time
+// undeclared-reference error, so the migration-CEL sandbox is enforced by
+// non-declaration, not a textual guard ([docs/migrations.md § "Forbidden in
+// migration-CEL"]). `vault()`/`now()` are additionally caught by existing guards
+// (vaultGuard/unsupportedPatterns/internalIdentGuard in functions.go).
 var migrationVars = []string{
 	"state",
 }
 
-// flowControlVars — переменные Soul-side flow-control-песочницы ([NewFlowControl],
-// [ADR-012(d)]). Тот же набор имён, что в обычном scenario/destiny-проходе
-// ([contextVars]): register/input/incarnation/soulprint/essence/vars. Объявлен
-// отдельной переменной для самодокументируемости: контекст flow-control-предикатов
-// (when:/changed_when:/failed_when:) — register.* (Soul строит из результатов
-// предыдущих задач) + flow_context-снапшот (Keeper доставляет). `state` НЕ
-// объявлена (migration-only). soulprint.hosts/soulprint.where отсекаются
-// конструктивно: flow-control форсит allowHosts=false (см. [Engine.compile]) —
-// host-аксессор → compile-error изоляции. vault()/now() — существующими guard-ами.
+// flowControlVars — variables of the Soul-side flow-control sandbox
+// ([NewFlowControl], [ADR-012(d)]). Same name set as the ordinary
+// scenario/destiny pass ([contextVars]): register/input/incarnation/soulprint/
+// essence/vars. Kept as a separate variable for self-documentation: the context
+// of flow-control predicates (when:/changed_when:/failed_when:) is register.*
+// (the Soul builds it from prior-task results) plus a flow_context snapshot
+// (delivered by the Keeper). `state` is NOT declared (migration-only).
+// soulprint.hosts/soulprint.where are rejected by construction: flow-control
+// forces allowHosts=false (see [Engine.compile]) — a host accessor becomes an
+// isolation compile-error. vault()/now() by the existing guards.
 var flowControlVars = []string{
 	"input",
 	"register",
@@ -86,137 +88,140 @@ var flowControlVars = []string{
 	"vars",
 }
 
-// Engine компилирует и вычисляет CEL-выражения. Потокобезопасен: один
-// Engine переиспользуется всеми прогонами; compile-cache защищён RWMutex.
+// Engine compiles and evaluates CEL expressions. Thread-safe: one Engine is
+// reused by all runs; the compile-cache is guarded by an RWMutex.
 //
-// Кеш хранит скомпилированные программы по нормализованному тексту
-// выражения. Один Engine на процесс достаточно — env неизменен после
-// [New]; естественная инвалидация по git ref происходит уровнем выше
-// (ключ кеша scenario включает git-ref, [templating.md §2.5]).
+// The cache stores compiled programs keyed by normalized expression text. One
+// Engine per process suffices — env is immutable after [New]; natural
+// invalidation by git ref happens a level up (the scenario cache key includes the
+// git-ref, [templating.md §2.5]).
 type Engine struct {
 	env *cel.Env
 
-	// noMacroParser — парсер БЕЗ зарегистрированных макросов. Используется
-	// только в фазе rewrite (rewriteHostsWhere): exists/all/map/filter/
-	// exists_one/.where остаются plain CallKind и потому round-trip'абельны
-	// parser.Unparse. Финальный env.Compile (макросы включены) раскрывает
-	// .filter/.exists нативно в comprehension. См. [hosts.go].
+	// noMacroParser — parser WITHOUT registered macros. Used only in the rewrite
+	// phase (rewriteHostsWhere): exists/all/map/filter/exists_one/.where stay plain
+	// CallKind and are therefore round-trippable by parser.Unparse. The final
+	// env.Compile (macros enabled) expands .filter/.exists natively into a
+	// comprehension. See [hosts.go].
 	noMacroParser *parser.Parser
 
 	mu    sync.RWMutex
 	cache map[string]cel.Program
 
-	// loopEnvs — дочерние env-ы для `loop:`-выражений, ключ — отсортированный
-	// набор loop-имён (`<as>`/`<index_as>`), соединённый через '\x00'. Имена
-	// итерации произвольны (заданы автором), поэтому объявляются не в базовом
-	// env (он неизменен после New), а в дочернем через env.Extend. Кешируются:
-	// уникальных наборов loop-имён в загруженных scenario немного. Защищён тем
-	// же mu, что и cache.
+	// loopEnvs — child envs for `loop:` expressions, keyed by the sorted set of
+	// loop names (`<as>`/`<index_as>`) joined by '\x00'. Iteration names are
+	// arbitrary (author-defined), so they are declared not in the base env
+	// (immutable after New) but in a child via env.Extend. Cached: loaded
+	// scenarios have few unique loop-name sets. Guarded by the same mu as cache.
 	loopEnvs map[string]*cel.Env
 
-	// sink — приёмник DSL-coverage ([ADR-023]). nil в проде (no-op,
-	// нулевой оверхед); ненулевой только в раннере Trial. Ставится один
-	// раз при сборке Engine (SetCoverageSink), до старта прогона.
+	// sink — DSL-coverage receiver ([ADR-023]). nil in prod (no-op, zero
+	// overhead); non-nil only in the Trial runner. Set once at Engine build
+	// (SetCoverageSink), before the run starts.
 	sink CoverageSink
 
-	// kv — Vault KV-reader для CEL-функции vault() ([ADR-017]). nil ⇒ vault()
-	// не зарегистрирован (обращение к нему → ErrUnsupported guard-ом). Ставится
-	// один раз через [WithVault] при сборке Engine; immutable после New (per-eval
-	// ctx прокидывается через Vars.Ctx, см. [Engine.EvalExpression]).
+	// kv — Vault KV reader for the CEL vault() function ([ADR-017]). nil ⇒ vault()
+	// is not registered (a call to it → ErrUnsupported by guard). Set once via
+	// [WithVault] at Engine build; immutable after New (per-eval ctx is passed
+	// through Vars.Ctx, see [Engine.EvalExpression]).
 	kv KVReader
 
-	// migration — Engine собран в migration-режиме ([NewMigration], [ADR-019]):
-	// объявлена только переменная `state`, активация строится из Vars.State (см.
-	// [Vars.activation]). Immutable после конструктора; влияет лишь на набор
-	// объявленных имён env и форму активации.
+	// migration — Engine built in migration mode ([NewMigration], [ADR-019]): only
+	// the `state` variable is declared, activation is built from Vars.State (see
+	// [Vars.activation]). Immutable after the constructor; affects only the set of
+	// declared env names and the activation shape.
 	migration bool
 
-	// flowControl — Engine собран в Soul-side flow-control-режиме ([NewFlowControl],
-	// [ADR-012(d)]): sandboxed env для предикатов when:/changed_when:/failed_when:.
-	// Immutable после конструктора. Форсит allowHosts=false на компиляции (см.
-	// [Engine.compile]): soulprint.hosts/soulprint.where недоступны (cross-host,
-	// scenario-only) независимо от Vars.AllowHosts. Активация — обычная (не
-	// migration): register/input/… + soulprint.{self,hosts} (hosts всегда пуст —
-	// аксессор отсечён на compile).
+	// flowControl — Engine built in Soul-side flow-control mode ([NewFlowControl],
+	// [ADR-012(d)]): a sandboxed env for when:/changed_when:/failed_when:
+	// predicates. Immutable after the constructor. Forces allowHosts=false at
+	// compile (see [Engine.compile]): soulprint.hosts/soulprint.where are
+	// unavailable (cross-host, scenario-only) regardless of Vars.AllowHosts.
+	// Activation is ordinary (not migration): register/input/… +
+	// soulprint.{self,hosts} (hosts is always empty — the accessor is cut at
+	// compile).
 	flowControl bool
 }
 
-// Option настраивает Engine при сборке ([New]). Применяется до создания
-// CEL-окружения — опции, влияющие на env (например, регистрация vault()),
-// учитываются при NewEnv.
+// Option configures the Engine at build ([New]). Applied before the CEL env is
+// created, so env-affecting options (e.g. registering vault()) are honored at
+// NewEnv.
 type Option func(*engineConfig)
 
-// engineConfig — собранная из опций конфигурация Engine. Промежуточная: после
-// применения опций New строит env и переносит поля в Engine.
+// engineConfig — Engine configuration assembled from options. Intermediate:
+// after applying options, New builds the env and moves the fields into the
+// Engine.
 type engineConfig struct {
 	kv KVReader
 }
 
-// WithVault включает CEL-функцию vault() ([templating.md §2.3], [ADR-017]),
-// читающую секреты через kv в CEL-render-фазе. nil kv ⇒ опция no-op (vault()
-// остаётся незарегистрированным). Передаётся в [New] keeper-side render-ом
-// (реальный *vault.Client) либо офлайн-режимами (fixture-backed reader).
+// WithVault enables the CEL vault() function ([templating.md §2.3], [ADR-017]),
+// reading secrets through kv in the CEL-render phase. A nil kv ⇒ the option is a
+// no-op (vault() stays unregistered). Passed to [New] by the keeper-side render
+// (a real *vault.Client) or by offline modes (a fixture-backed reader).
 func WithVault(kv KVReader) Option {
 	return func(c *engineConfig) { c.kv = kv }
 }
 
-// New создаёт Engine с CEL-окружением Soul Stack: stdlib cel-go +
-// переменные контекста [contextVars]. С [WithVault] дополнительно регистрируется
-// функция vault() (см. [vaultEnvOptions]). Ошибка возможна только при
-// несовместимой конфигурации cel-go (программная, не пользовательская).
+// New builds an Engine with the Soul Stack CEL env: cel-go stdlib + the
+// [contextVars] context variables. With [WithVault] the vault() function is also
+// registered (see [vaultEnvOptions]). An error is possible only on an
+// incompatible cel-go config (programmatic, not user error).
 func New(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{}, contextVars, opts...)
 }
 
-// NewFlowControl создаёт Engine в Soul-side flow-control-режиме ([ADR-012(d)]):
-// sandboxed CEL-песочница для предикатов when:/changed_when:/failed_when:, которые
-// зависят от register.* (результатов предыдущих задач, известных только Soul-у во
-// время прогона). Объявлены [flowControlVars]; vault()/now() запрещены (guard-ами),
-// soulprint.hosts/soulprint.where — изоляцией (allowHosts форсится false), `state`
-// — необъявлена. Soul тянет cel-go, но НЕ vault-client: внешний доступ keeper-only.
+// NewFlowControl builds an Engine in Soul-side flow-control mode ([ADR-012(d)]):
+// a sandboxed CEL env for when:/changed_when:/failed_when: predicates that depend
+// on register.* (prior-task results known only to the Soul during a run).
+// [flowControlVars] are declared; vault()/now() are blocked (by guards),
+// soulprint.hosts/soulprint.where by isolation (allowHosts is forced false),
+// `state` is undeclared. The Soul pulls cel-go but NOT the vault client: external
+// access is keeper-only.
 //
-// [WithVault] здесь применять нельзя (Vault-токенов на хосте нет, внешний доступ
-// keeper-only); если KVReader всё же передан — конструктор возвращает ошибку
-// (симметрично [NewMigration]).
+// [WithVault] must not be used here (no Vault tokens on the host, external access
+// keeper-only); if a KVReader is passed anyway the constructor returns an error
+// (symmetric to [NewMigration]).
 func NewFlowControl(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{flowControl: true}, flowControlVars, opts...)
 }
 
-// NewMigration создаёт Engine в migration-режиме ([ADR-019], [docs/migrations.md]):
-// объявлена ТОЛЬКО переменная `state` ([migrationVars]). Sandbox обеспечивается
-// необъявленностью прочих контекст-имён (register/soulprint/essence/input/
-// incarnation/vars → compile-ошибка undeclared reference); `vault()`/`now()` —
-// существующими guard-ами (functions.go). Активация строится из Vars.State.
+// NewMigration builds an Engine in migration mode ([ADR-019],
+// [docs/migrations.md]): ONLY the `state` variable is declared ([migrationVars]).
+// The sandbox is enforced by non-declaration of the other context names
+// (register/soulprint/essence/input/incarnation/vars → undeclared-reference
+// compile error); `vault()`/`now()` by the existing guards (functions.go).
+// Activation is built from Vars.State.
 //
-// [WithVault] здесь применять не следует (миграция не должна тянуть секреты);
-// если KVReader всё же передан — vault() зарегистрируется, но это
-// противоречит спеке и должно отсекаться выше по стеку.
+// [WithVault] should not be used here (a migration must not pull secrets); if a
+// KVReader is passed anyway, vault() is registered, but that contradicts the spec
+// and should be rejected higher up the stack.
 func NewMigration(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{migration: true}, migrationVars, opts...)
 }
 
-// engineMode — взаимоисключающие специальные режимы Engine (zero-value =
-// обычный scenario/destiny-режим). Оба запрещают WithVault: песочницы без
-// внешнего доступа.
+// engineMode — mutually exclusive special Engine modes (zero-value = ordinary
+// scenario/destiny mode). Both forbid WithVault: sandboxes with no external
+// access.
 type engineMode struct {
-	migration   bool // [NewMigration], [ADR-019]: объявлена только `state`.
+	migration   bool // [NewMigration], [ADR-019]: only `state` is declared.
 	flowControl bool // [NewFlowControl], [ADR-012(d)]: Soul-side flow-control sandbox.
 }
 
-// buildEngine — общий конструктор: env над cel.StdLib() с объявленными vars и
-// (при KVReader) vault(). mode переключает форму активации (см. [Vars.activation])
-// и изоляцию host-аксессора (см. [Engine.compile]).
+// buildEngine — shared constructor: an env over cel.StdLib() with the declared
+// vars and (if a KVReader) vault(). mode switches the activation shape (see
+// [Vars.activation]) and host-accessor isolation (see [Engine.compile]).
 func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error) {
 	var cfg engineConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	// migration-CEL ([ADR-019]) и flow-control-CEL ([ADR-012(d)]) — песочницы без
-	// внешнего доступа: vault() запрещён (миграция — чистая функция от state; на
-	// Soul-хосте Vault-токенов нет, внешний доступ keeper-only). WithVault(kv) в
-	// этих режимах — мисюз API (latent foot-gun), отсекаем здесь, а не молча
-	// регистрируем vault().
+	// migration-CEL ([ADR-019]) and flow-control-CEL ([ADR-012(d)]) are sandboxes
+	// with no external access: vault() is forbidden (a migration is a pure function
+	// of state; a Soul host has no Vault tokens, external access is keeper-only).
+	// WithVault(kv) in these modes is API misuse (a latent foot-gun); we reject it
+	// here instead of silently registering vault().
 	if (mode.migration || mode.flowControl) && cfg.kv != nil {
 		switch {
 		case mode.migration:
@@ -234,14 +239,14 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	if cfg.kv != nil {
 		envOpts = append(envOpts, vaultEnvOptions()...)
 	}
-	// glob() — pure-функция shell-glob matching ([ADR-040], target.where).
-	// merge() — pure SHALLOW last-wins слияние map-ов ([ADR-010 Amendment
-	// 2026-06-22], трансляция простого input → детальный конфиг). default() —
-	// pure macro «значение-или-дефолт» ([ADR-010 Amendment 2026-06-23], parity
-	// Ansible `| default()`; compile-time rewrite в has(x)?x:y). Все pure (без
-	// внешнего контекста), регистрируются в Keeper-full и flow-control env, но
-	// НЕ в migration-CEL ([ADR-019]): миграция — sandbox с минимумом surface area
-	// (только `state` + stdlib-операции), расширение требует отдельного ADR.
+	// glob() — pure shell-glob matching ([ADR-040], target.where). merge() — pure
+	// SHALLOW last-wins map merge ([ADR-010 Amendment 2026-06-22], translating a
+	// simple input → a detailed config). default() — pure "value-or-default" macro
+	// ([ADR-010 Amendment 2026-06-23], parity with Ansible `| default()`;
+	// compile-time rewrite to has(x)?x:y). All pure (no external context),
+	// registered in the Keeper-full and flow-control env but NOT in migration-CEL
+	// ([ADR-019]): a migration is a minimal-surface sandbox (`state` + stdlib ops
+	// only); extending it needs a separate ADR.
 	if !mode.migration {
 		envOpts = append(envOpts, globEnvOptions()...)
 		envOpts = append(envOpts, mergeEnvOptions()...)
@@ -253,8 +258,8 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		return nil, fmt.Errorf("создание CEL-окружения: %w", err)
 	}
 
-	// Парсер без макросов (опции Macros(...) не передаём). Нужен только для
-	// rewrite-фазы: см. поле Engine.noMacroParser.
+	// Parser without macros (no Macros(...) options). Needed only for the rewrite
+	// phase: see the Engine.noMacroParser field.
 	noMacroParser, err := parser.NewParser()
 	if err != nil {
 		return nil, fmt.Errorf("создание CEL-парсера без макросов: %w", err)
@@ -271,10 +276,10 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	}, nil
 }
 
-// loopEnv возвращает дочерний env, в котором поверх базовых contextVars
-// объявлены имена loop-переменных names (как DynType, симметрично базовым).
-// names должны быть отсортированы (см. Vars.loopNames) — это ключ кеша.
-// Пустой names → базовый env (без loop-переменных).
+// loopEnv returns a child env that, on top of the base contextVars, declares the
+// loop-variable names (as DynType, like the base ones). names must be sorted (see
+// Vars.loopNames) — it is the cache key. Empty names → the base env (no loop
+// variables).
 func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 	if len(names) == 0 {
 		return e.env, nil
@@ -303,25 +308,25 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 	return env, nil
 }
 
-// compile возвращает скомпилированную программу для выражения expr,
-// скомпилированную против env. Текст уже должен быть нормализован (см.
-// normalize). При синтаксической/типовой ошибке — [ErrCompile].
+// compile returns the compiled program for expression expr, compiled against env.
+// The text must already be normalized (see normalize). On a syntax/type error —
+// [ErrCompile].
 //
-// allowHosts разрешает soulprint.hosts/soulprint.where(...) (true в scenario-
-// проходе, false в destiny-проходе — изоляция, orchestration.md §4.1).
-// soulprint.hosts.where(...)/soulprint.where(...) переписывается AST-проходом
-// (rewriteHostsWhere) в нативный filter-comprehension ДО compile — кешируется
-// уже переписанный результат.
+// allowHosts permits soulprint.hosts/soulprint.where(...) (true in the scenario
+// pass, false in the destiny pass — isolation, orchestration.md §4.1).
+// soulprint.hosts.where(...)/soulprint.where(...) is rewritten by an AST pass
+// (rewriteHostsWhere) into a native filter-comprehension BEFORE compile — the
+// rewritten result is cached.
 //
-// Ключ кеша включает дискриминатор env (loopKey) и allowHosts: программа,
-// скомпилированная против дочернего loop-env, несовместима с базовым (разный
-// набор объявленных переменных); allowHosts меняет исход для одного и того же
-// текста (rewrite vs ошибка изоляции). loopKey == "" — базовый env.
+// The cache key includes the env discriminator (loopKey) and allowHosts: a
+// program compiled against a child loop-env is incompatible with the base
+// (different declared-variable set); allowHosts changes the outcome for the same
+// text (rewrite vs isolation error). loopKey == "" — the base env.
 func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (cel.Program, error) {
-	// flow-control-режим ([NewFlowControl]) форсит изоляцию host-аксессора:
-	// soulprint.hosts/soulprint.where недоступны независимо от Vars.AllowHosts
-	// (cross-host, scenario-only — Soul их не имеет). Защита от caller-а, случайно
-	// выставившего Vars.AllowHosts=true.
+	// flow-control mode ([NewFlowControl]) forces host-accessor isolation:
+	// soulprint.hosts/soulprint.where are unavailable regardless of Vars.AllowHosts
+	// (cross-host, scenario-only — the Soul has none). Guards against a caller that
+	// accidentally set Vars.AllowHosts=true.
 	if e.flowControl {
 		allowHosts = false
 	}
@@ -367,9 +372,9 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 	return prg, nil
 }
 
-// Reset очищает compile-cache и кеш loop-env. Предназначен для тестов; в
-// проде кеши растут ограниченно (число уникальных выражений и наборов
-// loop-имён в загруженных scenario).
+// Reset clears the compile-cache and the loop-env cache. Intended for tests; in
+// prod the caches grow boundedly (the number of unique expressions and loop-name
+// sets in loaded scenarios).
 func (e *Engine) Reset() {
 	e.mu.Lock()
 	clear(e.cache)

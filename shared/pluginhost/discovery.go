@@ -11,46 +11,46 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// Discovered — один плагин, найденный в кеше host-а. Бинарь и manifest
-// лежат в одной директории (ADR-020(a): «manifest.yaml … рядом с бинарём
-// в кеше host-а»).
+// Discovered is one plugin found in the host cache. The binary and manifest
+// live in the same directory (ADR-020(a): "manifest.yaml … next to the binary
+// in the host cache").
 type Discovered struct {
-	// Manifest — распарсенный и провалидированный manifest.yaml.
+	// Manifest is the parsed and validated manifest.yaml.
 	Manifest *sharedplugin.Manifest
-	// BinaryPath — абсолютный путь к исполняемому файлу плагина.
+	// BinaryPath is the absolute path to the plugin executable.
 	BinaryPath string
-	// Dir — директория, в которой лежат manifest.yaml и бинарь (для логов).
+	// Dir is the directory holding manifest.yaml and the binary (for logs).
 	Dir string
-	// Digest — SHA-256 бинаря (hex), вычисленный при Discover. Используется
-	// для логов/OTel-атрибутов; авторитетная integrity-сверка делается в
-	// [Host.Spawn] против sidecar (security fix H2). Пустая строка — бинарь
-	// не удалось прочитать для digest (попадает в warnings, плагин
-	// пропускается).
+	// Digest is the binary's SHA-256 (hex), computed during Discover. Used for
+	// logs/OTel attributes; the authoritative integrity check is done in
+	// [Host.Spawn] against the sidecar (security fix H2). An empty string means
+	// the binary could not be read for the digest (goes into warnings, the
+	// plugin is skipped).
 	Digest string
 }
 
-// Discover ищет плагины в корневой директории cacheRoot.
+// Discover looks for plugins in the root directory cacheRoot.
 //
-// Раскладка кеша на хосте (docs/soul/modules.md, docs/keeper/plugins.md):
+// Host cache layout (docs/soul/modules.md, docs/keeper/plugins.md):
 //
 //	<cacheRoot>/
 //	  <namespace>-<name>/
 //	    manifest.yaml
-//	    soul-mod-<name>         # для kind=soul_module
-//	    soul-cloud-<name>       # для kind=cloud_driver
-//	    soul-ssh-<name>         # для kind=ssh_provider
+//	    soul-mod-<name>         # for kind=soul_module
+//	    soul-cloud-<name>       # for kind=cloud_driver
+//	    soul-ssh-<name>         # for kind=ssh_provider
 //
-// Discover **не фильтрует по kind** — это задача caller-а (soul-host
-// принимает только soul_module, keeper-host — только cloud_driver и
-// ssh_provider). См. [FilterByKinds].
+// Discover **does not filter by kind** — that is the caller's job (soul-host
+// accepts only soul_module, keeper-host only cloud_driver and ssh_provider).
+// See [FilterByKinds].
 //
-// Имя бинаря определяется по конвенции [sharedplugin.Manifest.BinaryName];
-// директории, в которых бинарь не найден или не имеет +x, попадают в
-// warnings, но не прерывают обход.
+// The binary name follows the [sharedplugin.Manifest.BinaryName] convention;
+// directories where the binary is missing or lacks +x go into warnings but do
+// not stop the walk.
 //
-// Ошибки чтения отдельных директорий не прерывают обход — собираются в
-// warnings, и Discover возвращает то, что удалось найти. Только fatal —
-// ошибка чтения самого cacheRoot (например, ENOENT).
+// Read errors on individual directories do not stop the walk — they are
+// collected into warnings, and Discover returns whatever it found. The only
+// fatal error is failing to read cacheRoot itself (e.g. ENOENT).
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -71,14 +71,14 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	return out, warnings, nil
 }
 
-// DiscoverSlot читает плагин из ОДНОГО каталога слота `dir` (manifest.yaml +
-// бинарь по конвенции BinaryName рядом). Возвращает (0..1 Discovered, warnings):
-// невалидный manifest / отсутствующий или не-исполняемый бинарь → пустой
-// результат + warning.
+// DiscoverSlot reads a plugin from a SINGLE slot directory `dir` (manifest.yaml
+// plus the binary by BinaryName convention next to it). Returns (0..1
+// Discovered, warnings): an invalid manifest / a missing or non-executable
+// binary → empty result + warning.
 //
-// Выделена из [Discover] для R-nested-раскладки Keeper-host-а (A1-S1): keeper
-// дискаверит через current-symlink (`<ns>-<name>/current`), указывая именно на
-// каталог активного слота, а не на корень кеша.
+// Split out of [Discover] for the Keeper-host nested layout (A1-S1): keeper
+// discovers via a current-symlink (`<ns>-<name>/current`) pointing at the
+// active slot directory rather than the cache root.
 func DiscoverSlot(dir string) ([]Discovered, []string) {
 	manifestPath := filepath.Join(dir, sharedplugin.FileName)
 	m, diags, ioErr := sharedplugin.Load(manifestPath)
@@ -115,11 +115,11 @@ func DiscoverSlot(dir string) ([]Discovered, []string) {
 	}}, nil
 }
 
-// FilterByKinds оставляет в discovered только плагины, чей manifest.kind
-// входит в allowedKinds. Не-проходящие записи попадают в warnings с
-// человекочитаемым сообщением. Возвращает (отфильтрованный список, warnings).
+// FilterByKinds keeps in discovered only plugins whose manifest.kind is in
+// allowedKinds. Rejected entries go into warnings with a human-readable
+// message. Returns (filtered list, warnings).
 //
-// Удобно использовать сразу после [Discover]:
+// Convenient right after [Discover]:
 //
 //	found, w1, err := pluginhost.Discover(root)
 //	found, w2 := pluginhost.FilterByKinds(found, []string{sharedplugin.KindSoulModule})
@@ -147,11 +147,11 @@ func FilterByKinds(discovered []Discovered, allowedKinds []string) ([]Discovered
 	return out, warnings
 }
 
-// firstDiagError собирает все error-уровневые diag-записи в одну ошибку с
-// делителем `; `. Возвращает nil, если диагностики пусты или содержат только
-// warning/hint. Дубликат [sharedplugin.Manifest.ValidateSimple]-логики ровно
-// потому, что [sharedplugin.Load] отдаёт ошибки структурно через diag, а
-// callsite-у discovery нужен `error` для warning-сообщения.
+// firstDiagError joins all error-level diag records into one error with the
+// separator `; `. Returns nil if the diagnostics are empty or contain only
+// warning/hint. Duplicates [sharedplugin.Manifest.ValidateSimple] logic exactly
+// because [sharedplugin.Load] returns errors structurally via diag, while the
+// discovery callsite needs an `error` for its warning message.
 func firstDiagError(ds []diag.Diagnostic) error {
 	var msgs []string
 	for _, d := range ds {

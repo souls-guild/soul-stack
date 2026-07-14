@@ -9,31 +9,30 @@ import (
 	"time"
 )
 
-// KeysetCursor — composite keyset-курсор `(registered_at, sid)` для
-// keyset-пагинации list-эндпоинтов (ADR-047 S3b-2). Голый `sid` дал бы дыры
-// на равных `registered_at` (одинаковый таймстемп у пачки хостов), поэтому
-// курсор несёт ОБА поля — пара уникальна и устойчива.
+// KeysetCursor is a composite keyset cursor `(registered_at, sid)` for keyset pagination
+// of list endpoints (ADR-047 S3b-2). A bare `sid` would leave gaps on equal
+// `registered_at` (a batch of hosts with the same timestamp), so the cursor carries BOTH
+// fields — the pair is unique and stable.
 //
-// Курсор указывает на ПОСЛЕДНИЙ отданный клиенту элемент (после постфильтра),
-// а не на последний просмотренный из БД: keyset-окно следующей страницы
-// стартует строго за ним.
+// The cursor points at the LAST element handed to the client (after post-filtering), not
+// the last one read from the DB: the next page's keyset window starts strictly after it.
 type KeysetCursor struct {
 	RegisteredAt time.Time `json:"registered_at"`
 	SID          string    `json:"sid"`
 }
 
-// EncodeKeysetCursor сериализует курсор в opaque base64url(JSON). RegisteredAt
-// приводится к UTC (стабильная wire-форма, независимая от локали процесса).
+// EncodeKeysetCursor serializes the cursor to opaque base64url(JSON). RegisteredAt is
+// normalized to UTC (a stable wire form, independent of the process locale).
 func EncodeKeysetCursor(c KeysetCursor) string {
 	c.RegisteredAt = c.RegisteredAt.UTC()
-	raw, _ := json.Marshal(c) // marshal KeysetCursor не может вернуть ошибку.
+	raw, _ := json.Marshal(c) // marshal of KeysetCursor cannot return an error.
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// DecodeKeysetCursor разбирает opaque-курсор. Валидирует структуру: битый
-// base64 / битый JSON / пустой sid / невалидный timestamp → ошибка (caller
-// маппит в 400). Не возвращает молчаливый zero-value на повреждённом входе —
-// keyset-окно по zero-курсору вернуло бы клиенту неверную страницу.
+// DecodeKeysetCursor parses an opaque cursor. Validates the structure: broken base64 /
+// broken JSON / empty sid / invalid timestamp → error (the caller maps it to 400). Does
+// not silently return a zero-value on corrupted input — a zero cursor's keyset window
+// would hand the client the wrong page.
 func DecodeKeysetCursor(s string) (KeysetCursor, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
@@ -54,8 +53,8 @@ func DecodeKeysetCursor(s string) (KeysetCursor, error) {
 	return c, nil
 }
 
-// ParseCursor извлекает opaque-курсор из query (`cursor=`). Отсутствие
-// параметра → (nil, nil); битый курсор → *PaginationError (handler → 400).
+// ParseCursor extracts the opaque cursor from the query (`cursor=`). An absent parameter
+// → (nil, nil); a broken cursor → *PaginationError (handler → 400).
 func ParseCursor(q url.Values) (*KeysetCursor, error) {
 	raw := q.Get("cursor")
 	if raw == "" {
@@ -68,14 +67,13 @@ func ParseCursor(q url.Values) (*KeysetCursor, error) {
 	return &c, nil
 }
 
-// ParsePageWithCursor парсит offset/limit ([ParsePage]) и opaque-курсор
-// ([ParseCursor]) вместе, отвергая их одновременное задание.
+// ParsePageWithCursor parses offset/limit ([ParsePage]) and the opaque cursor
+// ([ParseCursor]) together, rejecting them being set at the same time.
 //
-// Гибрид-контракт (ADR-047 S3b-2): offset/limit-режим и keyset-cursor-режим
-// взаимоисключающи на уровне ОДНОГО запроса. `offset > 0` И `cursor`
-// одновременно → *PaginationError (422 у handler-а): это клиентский баг
-// (смешение двух пагинаций), маскировать его молча нельзя. `limit` валиден в
-// обоих режимах.
+// Hybrid contract (ADR-047 S3b-2): offset/limit mode and keyset-cursor mode are mutually
+// exclusive within ONE request. `offset > 0` AND `cursor` together → *PaginationError
+// (422 at the handler): a client bug (mixing two paginations) that must not be masked
+// silently. `limit` is valid in both modes.
 func ParsePageWithCursor(q url.Values) (Page, *KeysetCursor, error) {
 	page, err := ParsePage(q)
 	if err != nil {

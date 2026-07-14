@@ -39,7 +39,7 @@ func TestRenderAllowedFunc(t *testing.T) {
 }
 
 func TestRenderBuiltinFunc(t *testing.T) {
-	// Встроенные функции text/template (printf) доступны помимо sprig.
+	// Built-in text/template functions (printf) are available besides sprig.
 	e := newEngine(t)
 	got, err := e.Render(`{{ printf "%d-%s" .n .s }}`,
 		map[string]any{"n": 3, "s": "x"})
@@ -72,7 +72,7 @@ func TestRenderMissingKeyOnNilVars(t *testing.T) {
 }
 
 func TestRenderNoVarsNoAccess(t *testing.T) {
-	// Шаблон без обращений к данным рендерится и при nil-vars.
+	// A template with no data access renders even with nil vars.
 	e := newEngine(t)
 	got, err := e.Render("static text", nil)
 	if err != nil {
@@ -95,8 +95,8 @@ func TestRenderParseError(t *testing.T) {
 	}
 }
 
-// excludedFuncs — функции, явно запрещённые [templating.md §3.3]. Вызов
-// любой из них = ошибка парсинга (функция не зарегистрирована).
+// excludedFuncs are functions explicitly forbidden by [templating.md §3.3].
+// Calling any of them = a parse error (the function is not registered).
 var excludedFuncs = []string{
 	"env", "expandenv", "exec", "getHostByName",
 	"derivePassword", "genCA", "genPrivateKey",
@@ -122,7 +122,7 @@ func TestRenderExcludedFuncsFail(t *testing.T) {
 }
 
 func TestRenderEnvExcluded(t *testing.T) {
-	// Явный кейс из verification: {{ env "PATH" }} → error.
+	// Explicit case from verification: {{ env "PATH" }} → error.
 	e := newEngine(t)
 	_, err := e.Render(`{{ env "PATH" }}`, nil)
 	if err == nil {
@@ -133,8 +133,8 @@ func TestRenderEnvExcluded(t *testing.T) {
 	}
 }
 
-// TestFuncMapAllowlistEnforced проверяет, что собранный FuncMap содержит
-// ровно allowlist и ни одной запрещённой функции.
+// TestFuncMapAllowlistEnforced verifies the assembled FuncMap contains
+// exactly the allowlist and no forbidden function.
 func TestFuncMapAllowlistEnforced(t *testing.T) {
 	funcs, err := buildFuncMap()
 	if err != nil {
@@ -146,7 +146,7 @@ func TestFuncMapAllowlistEnforced(t *testing.T) {
 			t.Errorf("разрешённая функция %q отсутствует в FuncMap", name)
 		}
 	}
-	// Собственные функции Soul Stack (не из sprig) — toYaml/fromYaml.
+	// Soul Stack's own functions (not from sprig) — toYaml/fromYaml.
 	for _, name := range customFuncNames {
 		if _, ok := funcs[name]; !ok {
 			t.Errorf("собственная функция %q отсутствует в FuncMap", name)
@@ -163,8 +163,8 @@ func TestFuncMapAllowlistEnforced(t *testing.T) {
 	}
 }
 
-// customFuncNames — собственные функции Soul Stack поверх sprig-allowlist-а
-// ([yaml_funcs.go]). Отдельны от allowedSprig: их нет в upstream sprig.
+// customFuncNames are Soul Stack's own functions on top of the sprig allowlist
+// ([yaml_funcs.go]). Separate from allowedSprig: they are not in upstream sprig.
 var customFuncNames = []string{"toYaml", "fromYaml"}
 
 func TestToYaml(t *testing.T) {
@@ -207,7 +207,7 @@ func TestFromYaml(t *testing.T) {
 }
 
 func TestYamlRoundTrip(t *testing.T) {
-	// toYaml → fromYaml восстанавливает исходную структуру (доступ к полю).
+	// toYaml → fromYaml restores the original structure (field access).
 	e := newEngine(t)
 	got, err := e.Render(
 		`{{ (fromYaml (toYaml .x)).name }}`,
@@ -221,7 +221,7 @@ func TestYamlRoundTrip(t *testing.T) {
 }
 
 func TestFromYamlParseError(t *testing.T) {
-	// Невалидный YAML проваливает рендер штатно (ErrExecute), а не молча.
+	// Invalid YAML fails the render cleanly (ErrExecute), not silently.
 	e := newEngine(t)
 	_, err := e.Render(`{{ fromYaml .x }}`,
 		map[string]any{"x": "key: : : broken"})
@@ -235,7 +235,7 @@ func TestFromYamlParseError(t *testing.T) {
 }
 
 func TestRenderAllowedSprigCoverage(t *testing.T) {
-	// Каждая разрешённая функция должна быть вызываема (smoke).
+	// Every allowed function must be callable (smoke).
 	e := newEngine(t)
 	cases := map[string]struct {
 		tmpl string

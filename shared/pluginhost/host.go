@@ -1,14 +1,14 @@
-// Package pluginhost — общий runtime для host-ов плагинов Soul Stack
+// Package pluginhost is the shared runtime for Soul Stack plugin hosts
 // (ADR-020, docs/keeper/plugins.md).
 //
-// Пакет реализует kind-agnostic часть жизненного цикла субпроцесса плагина:
-// fork → handshake → dial gRPC → graceful shutdown. Kind-specific обёртки
-// (SoulModule / CloudDriver / SshProvider) живут в host-side пакетах
-// (`soul/internal/pluginhost`, `keeper/internal/pluginhost`) и строятся
-// поверх [BasePlugin].
+// It implements the kind-agnostic part of a plugin subprocess lifecycle:
+// fork → handshake → dial gRPC → graceful shutdown. Kind-specific wrappers
+// (SoulModule / CloudDriver / SshProvider) live in host-side packages
+// (`soul/internal/pluginhost`, `keeper/internal/pluginhost`) and build on top
+// of [BasePlugin].
 //
-// Парсинг manifest.yaml — в [shared/plugin]; этот пакет принимает уже
-// провалидированный manifest через [Discovered].
+// manifest.yaml parsing lives in [shared/plugin]; this package receives an
+// already-validated manifest via [Discovered].
 package pluginhost
 
 import (
@@ -31,63 +31,63 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Host — общий runtime для запуска любого kind-а плагина. Безопасен для
-// конкурентных вызовов [Host.Spawn].
+// Host is the shared runtime for spawning any plugin kind. Safe for concurrent
+// [Host.Spawn] calls.
 //
-// Конфиг приходит из `<binary>.yml::plugin_runtime` (shared/config.PluginRuntime).
-// При nil-конфиге применяются defaults ADR-020(d), за исключением SocketDir —
-// он kind-host-specific и должен задаваться через [NewHost] параметром
-// defaultSocketDir.
+// Config comes from `<binary>.yml::plugin_runtime` (shared/config.PluginRuntime).
+// A nil config applies ADR-020(d) defaults, except SocketDir — it is
+// kind-host-specific and must be set via the [NewHost] defaultSocketDir
+// parameter.
 type Host struct {
-	// SocketDir — где host создаёт Unix-сокеты для плагинов. Mode 0700,
-	// owned by service user. Создаётся mkdir-ом при первом Spawn (idempotent).
+	// SocketDir is where the host creates Unix sockets for plugins. Mode 0700,
+	// owned by the service user. Created via mkdir on first Spawn (idempotent).
 	SocketDir string
-	// StartupTimeout — окно от exec до появления handshake-строки.
+	// StartupTimeout is the window from exec to the handshake line.
 	StartupTimeout time.Duration
-	// ShutdownGrace — окно от SIGTERM до SIGKILL.
+	// ShutdownGrace is the window from SIGTERM to SIGKILL.
 	ShutdownGrace time.Duration
-	// AllowedCapabilities — closed-set capabilities, разрешённых на этом
-	// host-е. Содержит pluginv1.Capability-значения для быстрого сравнения.
-	// nil/empty = «все capabilities разрешены» (default ADR-020(d)).
+	// AllowedCapabilities is the closed set of capabilities allowed on this
+	// host, holding pluginv1.Capability values for fast comparison.
+	// nil/empty = all capabilities allowed (ADR-020(d) default).
 	AllowedCapabilities map[pluginv1.Capability]struct{}
-	// SigilAnchors — НАБОР trust-anchor-ов verify Sigil (ADR-026(h), R3
-	// multi-anchor): атомарно-сменяемый holder публичных ed25519-ключей подписи
-	// допусков плагинов, доехавших в bootstrap. verify проходит, если подпись
-	// подтвердил ЛЮБОЙ якорь из набора (OR — безразрывная ротация ключа). Пустой
-	// набор (или nil-holder) = Sigil не настроен на Keeper → verify любого
-	// custom-плагина fail-closed (reason no_trust_anchor). Holder читается
-	// snapshot-ом в [Host.Spawn]; S6 заменит набор в рантайме через
-	// [AnchorSet.SetAnchors] без перезапуска. Core-модули статические,
-	// Spawn-verify не проходят — этим полем не затронуты.
+	// SigilAnchors is the SET of Sigil verify trust anchors (ADR-026(h), R3
+	// multi-anchor): an atomically swappable holder of the public ed25519 keys
+	// that sign plugin grants delivered at bootstrap. Verify passes if ANY
+	// anchor in the set confirms the signature (OR — seamless key rotation). An
+	// empty set (or nil holder) = Sigil not configured on the Keeper → verify of
+	// any custom plugin is fail-closed (reason no_trust_anchor). The holder is
+	// read as a snapshot in [Host.Spawn]; S6 will swap the set at runtime via
+	// [AnchorSet.SetAnchors] without a restart. Core modules are static and do
+	// not undergo Spawn-verify — this field does not affect them.
 	SigilAnchors *AnchorSet
-	// Sigils — поверхность чтения активных допусков Sigil по (ns, name) для
-	// fail-closed verify в [Host.Spawn]. nil = допусков нет → verify
-	// fail-closed (reason no_sigil). DI: Soul-side адаптер оборачивает
-	// runtime-кеш Sigil-ов, shared НЕ тянет keeper-proto.
+	// Sigils is the read surface for active Sigil grants by (ns, name), for
+	// fail-closed verify in [Host.Spawn]. nil = no grants → verify fail-closed
+	// (reason no_sigil). DI: the Soul-side adapter wraps the Sigil runtime cache
+	// so shared does NOT pull in keeper-proto.
 	Sigils SigilLookup
 }
 
-// Defaults ADR-020(d). DefaultSocketDir намеренно НЕ экспортируется: каждый
-// host (soul / keeper) задаёт свой через [NewHost], чтобы под разными
-// service-user-ами не было коллизий путей.
+// ADR-020(d) defaults. DefaultSocketDir is deliberately NOT exported: each host
+// (soul / keeper) sets its own via [NewHost] to avoid path collisions under
+// different service users.
 const (
 	DefaultStartupTimeout = 10 * time.Second
 	DefaultShutdownGrace  = 10 * time.Second
 )
 
-// sockCounter — монотонный счётчик для уникальности имени Unix-сокета при
-// конкурентных Spawn (UnixNano на одной machine может совпасть для горутин
-// внутри одной ms, особенно под race-детектором).
+// sockCounter is a monotonic counter for Unix-socket name uniqueness across
+// concurrent Spawns (UnixNano on one machine can collide for goroutines within
+// the same ms, especially under the race detector).
 var sockCounter atomic.Uint64
 
-// NewHost конструирует Host из shared-config-блока. Применяет defaults
-// ADR-020(d) при отсутствующих полях. duration-строки уже провалидированы в
-// semantic-фазе shared/config; здесь повторный ParseDuration используется
-// как defense-in-depth (host инициируется только с валидным конфигом).
+// NewHost builds a Host from the shared config block, applying ADR-020(d)
+// defaults for missing fields. Duration strings are already validated in the
+// shared/config semantic phase; the repeat ParseDuration here is
+// defense-in-depth (the host is only built with a valid config).
 //
-// defaultSocketDir — kind-host-specific дефолт (например,
-// `/var/run/soul-stack/plugins` для soul и `/var/run/soul-stack-keeper/plugins`
-// для keeper); используется, если cfg.SocketDir пуст.
+// defaultSocketDir is the kind-host-specific default (e.g.
+// `/var/run/soul-stack/plugins` for soul, `/var/run/soul-stack-keeper/plugins`
+// for keeper); used when cfg.SocketDir is empty.
 func NewHost(cfg *config.PluginRuntime, defaultSocketDir string) (*Host, error) {
 	h := &Host{
 		SocketDir:      defaultSocketDir,
@@ -127,9 +127,9 @@ func NewHost(cfg *config.PluginRuntime, defaultSocketDir string) (*Host, error) 
 	return h, nil
 }
 
-// CheckCapabilities сверяет required_capabilities плагина с allowed-списком
-// host-а. Возвращает error при первой не-разрешённой capability. nil
-// AllowedCapabilities = всё разрешено (default).
+// CheckCapabilities checks a plugin's required_capabilities against the host's
+// allowed list. Returns an error on the first disallowed capability. nil
+// AllowedCapabilities = everything allowed (default).
 func (h *Host) CheckCapabilities(m *sharedplugin.Manifest) error {
 	if h.AllowedCapabilities == nil {
 		return nil
@@ -137,8 +137,8 @@ func (h *Host) CheckCapabilities(m *sharedplugin.Manifest) error {
 	for _, s := range m.RequiredCapabilities {
 		c, ok := sharedplugin.CapabilityFromString(s)
 		if !ok {
-			// Не должно случиться — manifest уже валидировался; но host
-			// проверяет на всякий случай, чтобы не молча игнорировать.
+			// Should not happen — the manifest was already validated; the host
+			// checks anyway rather than silently ignoring it.
 			return fmt.Errorf("pluginhost: unknown capability %q in %s", s, m.Address())
 		}
 		if _, allowed := h.AllowedCapabilities[c]; !allowed {
@@ -148,45 +148,44 @@ func (h *Host) CheckCapabilities(m *sharedplugin.Manifest) error {
 	return nil
 }
 
-// SpawnOption — functional-опция [Host.Spawn]: caller прокидывает
-// дополнительные настройки spawn-цикла, не расширяя сигнатуру метода и не
-// мутируя [Discovered] (тот — результат discovery, общий для всех spawn-ов).
+// SpawnOption is a functional option for [Host.Spawn]: the caller passes extra
+// spawn-cycle settings without widening the method signature or mutating
+// [Discovered] (which is the discovery result, shared across all spawns).
 //
-// Пилотный пример (ADR-020 amendment l, 2026-05-26) — env-payload provider-
-// специфичных params для SshProvider-плагинов через [WithEnv]: caller
-// сериализует params в JSON и кладёт в env-переменную с зафиксированным
-// именем `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, плагин читает её на старте.
+// Pilot example (ADR-020 amendment l, 2026-05-26) — env-payload of
+// provider-specific params for SshProvider plugins via [WithEnv]: the caller
+// serializes params to JSON into an env variable with the fixed name
+// `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, which the plugin reads at startup.
 type SpawnOption func(*spawnOpts)
 
 type spawnOpts struct {
 	extraEnv []string
 }
 
-// WithEnv добавляет к окружению spawned-плагина дополнительные пары
-// `KEY=VALUE`. Применяется поверх [os.Environ] и [handshake.SocketEnv]; при
-// коллизии имени выигрывает запись из extraEnv (последняя в `cmd.Env` имеет
-// приоритет по семантике exec). Используется в env-convention-режиме
-// доставки params плагина (ADR-020 amendment l).
+// WithEnv adds extra `KEY=VALUE` pairs to the spawned plugin's environment.
+// Applied on top of [os.Environ] and [handshake.SocketEnv]; on a name collision
+// the extraEnv entry wins (the last entry in `cmd.Env` takes precedence per exec
+// semantics). Used by the env-convention mode of plugin param delivery
+// (ADR-020 amendment l).
 func WithEnv(env []string) SpawnOption {
 	return func(o *spawnOpts) { o.extraEnv = append(o.extraEnv, env...) }
 }
 
-// Spawn — fork plugin binary, чтение handshake, dial gRPC. Возвращает
-// [BasePlugin], готовый принимать RPC через [BasePlugin.Conn]. При любой
-// ошибке (timeout, handshake-drift, dial-fail) процесс плагина останавливается
-// и удаляется сокет — BasePlugin не возвращается.
+// Spawn forks the plugin binary, reads the handshake, and dials gRPC. Returns a
+// [BasePlugin] ready to accept RPC via [BasePlugin.Conn]. On any error (timeout,
+// handshake drift, dial fail) the plugin process is stopped and the socket
+// removed — no BasePlugin is returned.
 //
-// Контракт one-shot per Spawn (ADR-020(d)): caller вызывает Spawn перед
-// каждой серией RPC и [BasePlugin.Close] после. Connection-pooling не
-// предусмотрен — это упрощает изоляцию между задачами и устраняет proxy
-// состояние между RPC.
+// One-shot per Spawn contract (ADR-020(d)): the caller invokes Spawn before each
+// RPC series and [BasePlugin.Close] after. Connection pooling is not provided —
+// this simplifies task isolation and removes proxied state between RPCs.
 //
-// Kind-specific gRPC-client-stubs (SoulModuleClient / CloudDriverClient /
-// SshProviderClient) создаются caller-ом из [BasePlugin.Conn] — этот
-// пакет kind-agnostic.
+// Kind-specific gRPC client stubs (SoulModuleClient / CloudDriverClient /
+// SshProviderClient) are built by the caller from [BasePlugin.Conn] — this
+// package is kind-agnostic.
 //
-// opts — опц. functional-настройки spawn-цикла (например, [WithEnv] для
-// env-payload params плагина).
+// opts are optional functional spawn-cycle settings (e.g. [WithEnv] for the
+// env-payload of plugin params).
 func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*BasePlugin, error) {
 	var so spawnOpts
 	for _, opt := range opts {
@@ -195,33 +194,32 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	if err := h.CheckCapabilities(d.Manifest); err != nil {
 		return nil, err
 	}
-	// Integrity-gate (ADR-026, S6b): fail-closed verify бинаря против печати
-	// доверия Sigil ДО любого exec. Заменяет TOFU-ветку first-load: бинарь без
-	// валидного допуска (no_sigil), без trust-anchor (no_trust_anchor), с
-	// несовпадающим digest-ом (digest_mismatch) или битой подписью
-	// (bad_signature) → *VerifyError, плагин НЕ запускается. re-exec-сверка по
-	// sidecar остаётся внутри как defense-in-depth. См.
-	// docs/keeper/plugins.md → Integrity-model.
+	// Integrity gate (ADR-026, S6b): fail-closed verify of the binary against the
+	// Sigil trust seal BEFORE any exec. Replaces the first-load TOFU branch: a
+	// binary with no valid grant (no_sigil), no trust anchor (no_trust_anchor), a
+	// mismatched digest (digest_mismatch), or a broken signature (bad_signature) →
+	// *VerifyError, plugin NOT started. The re-exec sidecar recheck stays inside
+	// as defense-in-depth. See docs/keeper/plugins.md → Integrity-model.
 	if err := verifySigilAndSeal(d.Dir, d.BinaryPath, d.Manifest.Namespace, d.Manifest.Name, h.SigilAnchors.snapshot(), h.Sigils); err != nil {
 		return nil, fmt.Errorf("pluginhost: %s: %w", d.Manifest.Address(), err)
 	}
 	if err := os.MkdirAll(h.SocketDir, 0o700); err != nil {
 		return nil, fmt.Errorf("pluginhost: mkdir socket dir %q: %w", h.SocketDir, err)
 	}
-	// Имя сокета пока без pid плагина — pid известен только после exec.
-	// Используем pid host-процесса + atomic-counter для уникальности; формат
-	// имени для логов важен, для протокола — нет (плагин читает путь из env).
+	// The socket name omits the plugin pid — that is only known after exec. We
+	// use the host process pid + an atomic counter for uniqueness; the name
+	// format matters for logs, not the protocol (the plugin reads the path from env).
 	sockName := fmt.Sprintf("%s-%s-%d-%d.sock",
 		d.Manifest.Namespace, d.Manifest.Name, os.Getpid(), sockCounter.Add(1))
 	sockPath := filepath.Join(h.SocketDir, sockName)
 
 	cmd := exec.CommandContext(ctx, d.BinaryPath)
 	cmd.Env = append(os.Environ(), handshake.SocketEnv+"="+sockPath)
-	// Доп. env от caller-а (ADR-020 amendment l, env-convention для SshProvider).
-	// Дописываем ПОСЛЕ handshake-сокета: последняя запись в `cmd.Env` имеет
-	// приоритет по семантике exec, поэтому caller теоретически может перебить
-	// что угодно — это сознательная зона ответственности caller-а
-	// (host не интроспектирует payload, только прокидывает).
+	// Extra env from the caller (ADR-020 amendment l, env-convention for
+	// SshProvider). Appended AFTER the handshake socket: the last entry in
+	// `cmd.Env` wins per exec semantics, so the caller can in theory override
+	// anything — a deliberate caller responsibility (the host does not
+	// introspect the payload, only passes it).
 	if len(so.extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, so.extraEnv...)
 	}
@@ -239,8 +237,8 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 		return nil, fmt.Errorf("pluginhost: start plugin %s: %w", d.BinaryPath, err)
 	}
 
-	// stderr плагина — diagnostics-канал (ADR-020 → plugins.md → Handshake).
-	// Тейлим последние 4KB в кольцевой буфер для отчёта при сбое.
+	// Plugin stderr is the diagnostics channel (ADR-020 → plugins.md → Handshake).
+	// Tail the last 4KB into a ring buffer for failure reporting.
 	errTail := newTailBuffer(4 * 1024)
 	go func() { _, _ = io.Copy(errTail, stderr) }()
 
@@ -274,9 +272,9 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	}, nil
 }
 
-// parseDuration — wrap time.ParseDuration с расширением `<N>d` для дней
-// (соглашение docs/keeper/config.md → Конвенции типов). semantic-фаза
-// shared/config делает то же; здесь дублирование для defence-in-depth.
+// parseDuration wraps time.ParseDuration with a `<N>d` extension for days
+// (docs/keeper/config.md → type conventions). The shared/config semantic phase
+// does the same; duplicated here for defense-in-depth.
 func parseDuration(s string) (time.Duration, error) {
 	if strings.HasSuffix(s, "d") {
 		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
@@ -288,9 +286,9 @@ func parseDuration(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
-// killAndWait — best-effort остановка плагина: SIGTERM, ждём grace, SIGKILL.
-// Возвращает ошибку cmd.Wait для логирования (но не для control-flow:
-// в hard-fail-пути ошибка handshake важнее).
+// killAndWait is a best-effort plugin stop: SIGTERM, wait grace, SIGKILL.
+// Returns the cmd.Wait error for logging (not for control flow: on the
+// hard-fail path the handshake error matters more).
 func killAndWait(cmd *exec.Cmd, grace time.Duration) error {
 	if cmd.Process == nil {
 		return nil

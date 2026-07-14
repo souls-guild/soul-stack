@@ -50,8 +50,8 @@ func TestBuildSigilBlock_HasDST(t *testing.T) {
 	}
 }
 
-// LP-граница: ("ab","c") и ("a","bc") дают РАЗНЫЕ блоки. Без length-prefix они
-// были бы идентичны — это основной инвариант защиты границ полей.
+// LP boundary: ("ab","c") and ("a","bc") yield DIFFERENT blocks. Without a
+// length-prefix they would be identical — the core field-boundary invariant.
 func TestBuildSigilBlock_LengthPrefixBoundary(t *testing.T) {
 	h := bytes.Repeat([]byte{0x00}, 32)
 	x := BuildSigilBlock("ab", "c", "ref", h, h)
@@ -60,7 +60,7 @@ func TestBuildSigilBlock_LengthPrefixBoundary(t *testing.T) {
 		t.Fatal("LP boundary broken: (\"ab\",\"c\") == (\"a\",\"bc\")")
 	}
 
-	// То же для соседства ref / binary-hash: подвинуть байт через границу.
+	// Same for adjacent ref / binary-hash fields: move a byte across the boundary.
 	p := BuildSigilBlock("ns", "name", "r", []byte("ab"), h)
 	q := BuildSigilBlock("ns", "name", "ra", []byte("b"), h)
 	if bytes.Equal(p, q) {
@@ -68,8 +68,8 @@ func TestBuildSigilBlock_LengthPrefixBoundary(t *testing.T) {
 	}
 }
 
-// Проверка точной формы блока: DST || LP(ns) || LP(name) || LP(ref) ||
-// LP(binary) || LP(manifest), порядок полей и сырые (не hex) хеши.
+// Exact block layout: DST || LP(ns) || LP(name) || LP(ref) || LP(binary) ||
+// LP(manifest), with field order and raw (not hex) hashes.
 func TestBuildSigilBlock_ExactLayoutAndFieldOrder(t *testing.T) {
 	ns, name, ref := "cloud", "hetzner", "v1"
 	bin := []byte{0xAA, 0xBB}
@@ -89,13 +89,13 @@ func TestBuildSigilBlock_ExactLayoutAndFieldOrder(t *testing.T) {
 		t.Fatalf("block layout mismatch:\n got=%x\nwant=%x", got, want.Bytes())
 	}
 
-	// Сырые хеши, не hex: байт 0xAA лежит в блоке как 0xAA, а не как "aa".
+	// Raw hashes, not hex: byte 0xAA sits in the block as 0xAA, not as "aa".
 	if !bytes.Contains(got, bin) {
 		t.Error("binary hash bytes not present raw in block")
 	}
 }
 
-// Перестановка полей даёт другой блок (порядок зафиксирован).
+// Swapping fields yields a different block (field order is fixed).
 func TestBuildSigilBlock_FieldOrderMatters(t *testing.T) {
 	h := bytes.Repeat([]byte{0x00}, 32)
 	a := BuildSigilBlock("x", "y", "ref", h, h)

@@ -14,8 +14,8 @@ func newFlowControlEngine(t *testing.T) *Engine {
 	return e
 }
 
-// TestFlowControl_RegisterAccessible — register.<name>.* резолвится из
-// Vars.Register (результаты предыдущих задач, ключевой контекст flow-control).
+// TestFlowControl_RegisterAccessible — register.<name>.* resolves from
+// Vars.Register (results of previous tasks, key flow-control context).
 func TestFlowControl_RegisterAccessible(t *testing.T) {
 	e := newFlowControlEngine(t)
 	ok, err := e.EvalPredicate("register.probe.exit_code == 0", Vars{
@@ -30,7 +30,7 @@ func TestFlowControl_RegisterAccessible(t *testing.T) {
 }
 
 // TestFlowControl_ContextVarsAccessible — input/vars/essence/incarnation +
-// soulprint.self доступны (flow_context-снапшот, доставляемый Keeper-ом).
+// soulprint.self are available (the flow_context snapshot delivered by Keeper).
 func TestFlowControl_ContextVarsAccessible(t *testing.T) {
 	e := newFlowControlEngine(t)
 	vars := Vars{
@@ -58,8 +58,8 @@ func TestFlowControl_ContextVarsAccessible(t *testing.T) {
 	}
 }
 
-// TestFlowControl_VaultGuarded — vault() конструктивно недоступен (внешний доступ
-// keeper-only): guard возвращает ErrUnsupported, а не молча резолвит.
+// TestFlowControl_VaultGuarded — vault() is structurally unavailable (external
+// access is keeper-only): the guard returns ErrUnsupported rather than silently resolving.
 func TestFlowControl_VaultGuarded(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("vault('secret/x').enabled", Vars{})
@@ -69,8 +69,8 @@ func TestFlowControl_VaultGuarded(t *testing.T) {
 	}
 }
 
-// TestFlowControl_NowGuarded — now() недоступен (недетерминизм; симметрия с
-// migration-CEL sandbox).
+// TestFlowControl_NowGuarded — now() is unavailable (nondeterminism; symmetric with
+// the migration-CEL sandbox).
 func TestFlowControl_NowGuarded(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("now() > now()", Vars{})
@@ -80,9 +80,9 @@ func TestFlowControl_NowGuarded(t *testing.T) {
 	}
 }
 
-// TestFlowControl_HostsAccessorIsolated — soulprint.hosts/soulprint.where —
-// cross-host scenario-only аксессор, недоступен Soul-у: compile-error изоляции
-// даже при Vars.AllowHosts=true (flow-control форсит allowHosts=false).
+// TestFlowControl_HostsAccessorIsolated — soulprint.hosts/soulprint.where is a
+// cross-host scenario-only accessor, unavailable to the Soul: an isolation
+// compile-error even with Vars.AllowHosts=true (flow-control forces allowHosts=false).
 func TestFlowControl_HostsAccessorIsolated(t *testing.T) {
 	e := newFlowControlEngine(t)
 	for _, expr := range []string{
@@ -97,8 +97,8 @@ func TestFlowControl_HostsAccessorIsolated(t *testing.T) {
 	}
 }
 
-// TestFlowControl_InternalIdentGuarded — `__`-идентификатор зарезервирован за
-// internal-механизмами (нельзя обойти vault()-macro прямым __vault_read).
+// TestFlowControl_InternalIdentGuarded — the `__` identifier is reserved for
+// internal mechanisms (you can't bypass the vault() macro with a direct __vault_read).
 func TestFlowControl_InternalIdentGuarded(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("__vault_read('secret/x', __vault_resolver).enabled", Vars{})
@@ -108,8 +108,8 @@ func TestFlowControl_InternalIdentGuarded(t *testing.T) {
 	}
 }
 
-// TestFlowControl_StateUndeclared — `state` — migration-only, в flow-control НЕ
-// объявлена: обращение → compile-ошибка undeclared reference.
+// TestFlowControl_StateUndeclared — `state` is migration-only, NOT declared in
+// flow-control: accessing it → compile-error undeclared reference.
 func TestFlowControl_StateUndeclared(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("state.foo == 1", Vars{State: map[string]any{"foo": 1}})
@@ -119,8 +119,8 @@ func TestFlowControl_StateUndeclared(t *testing.T) {
 	}
 }
 
-// TestFlowControl_FunctionsWithoutIO — функции без I/O (size/contains/has/keys/
-// comprehensions/конверсии/duration) доступны.
+// TestFlowControl_FunctionsWithoutIO — functions without I/O (size/contains/has/keys/
+// comprehensions/conversions/duration) are available.
 func TestFlowControl_FunctionsWithoutIO(t *testing.T) {
 	e := newFlowControlEngine(t)
 	vars := Vars{
@@ -155,10 +155,10 @@ func TestFlowControl_FunctionsWithoutIO(t *testing.T) {
 	}
 }
 
-// TestFlowControl_NonBoolPredicate — не-bool результат предиката → ErrEval,
-// несущий типизированный признак [ErrPredicateNotBool] (предикат обязан
-// возвращать булево). Признак — sentinel, чтобы caller (statepredicate)
-// отличал «не bool» от runtime-no-such-key без матчинга текста сообщения.
+// TestFlowControl_NonBoolPredicate — a non-bool predicate result → ErrEval carrying
+// the typed marker [ErrPredicateNotBool] (a predicate must return a boolean). The
+// marker is a sentinel so the caller (statepredicate) can tell "not bool" from
+// runtime-no-such-key without matching message text.
 func TestFlowControl_NonBoolPredicate(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("register.probe.exit_code", Vars{
@@ -173,8 +173,8 @@ func TestFlowControl_NonBoolPredicate(t *testing.T) {
 	}
 }
 
-// TestFlowControl_RuntimeErrorNotPredicateNotBool — runtime no-such-key — это
-// ErrEval, но НЕ ErrPredicateNotBool: sentinel помечает только «вернул не bool».
+// TestFlowControl_RuntimeErrorNotPredicateNotBool — a runtime no-such-key is
+// ErrEval but NOT ErrPredicateNotBool: the sentinel marks only "returned non-bool".
 func TestFlowControl_RuntimeErrorNotPredicateNotBool(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("register.nonexistent.changed", Vars{Register: map[string]any{}})
@@ -187,8 +187,8 @@ func TestFlowControl_RuntimeErrorNotPredicateNotBool(t *testing.T) {
 	}
 }
 
-// TestFlowControl_EmptyPredicateTrue — пустой предикат → true (безусловный
-// запуск): `when:` опущен ⇒ задача исполняется.
+// TestFlowControl_EmptyPredicateTrue — an empty predicate → true (unconditional
+// run): `when:` omitted ⇒ the task executes.
 func TestFlowControl_EmptyPredicateTrue(t *testing.T) {
 	e := newFlowControlEngine(t)
 	ok, err := e.EvalPredicate("", Vars{})
@@ -200,9 +200,9 @@ func TestFlowControl_EmptyPredicateTrue(t *testing.T) {
 	}
 }
 
-// TestFlowControl_RuntimeErrorOnMissingRegister — обращение к несуществующему
-// register.* → runtime-error (ErrEval), а не паника: задача упадёт FAILED по
-// таблице ошибок (templating.md §10).
+// TestFlowControl_RuntimeErrorOnMissingRegister — accessing a nonexistent
+// register.* → runtime error (ErrEval), not a panic: the task fails FAILED per the
+// error table (templating.md §10).
 func TestFlowControl_RuntimeErrorOnMissingRegister(t *testing.T) {
 	e := newFlowControlEngine(t)
 	_, err := e.EvalPredicate("register.nonexistent.changed", Vars{Register: map[string]any{}})
@@ -212,8 +212,8 @@ func TestFlowControl_RuntimeErrorOnMissingRegister(t *testing.T) {
 	}
 }
 
-// TestFlowControl_WithVaultRejected — WithVault в flow-control-режиме отсекается
-// конструктором (внешний доступ keeper-only, симметрия с NewMigration).
+// TestFlowControl_WithVaultRejected — WithVault in flow-control mode is rejected by
+// the constructor (external access is keeper-only, symmetric with NewMigration).
 func TestFlowControl_WithVaultRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	if _, err := NewFlowControl(WithVault(kv)); err == nil {

@@ -6,19 +6,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// H2 follow-up — block-scalar в module-params. goccy парсит folded (`>`) и literal
-// (`|`) block-scalar как *ast.LiteralNode, а не *ast.StringNode. astMatchesType
-// (module_params.go) для type=string признаёт обе формы строкой; для НЕ-string
-// типов LiteralNode по-прежнему не совпадает. Эти два теста закрепляют обе стороны:
-// (1) ослабление НЕ сломало валидный многострочный string-param;
-// (2) ослабление НЕ протекло на int — type-check там ВСЁ ЕЩЁ срабатывает.
+// H2 follow-up — block-scalar in module-params. goccy parses folded (`>`) and
+// literal (`|`) block-scalars as *ast.LiteralNode, not *ast.StringNode.
+// astMatchesType (module_params.go) accepts both forms as a string for
+// type=string; for non-string types LiteralNode still does not match. These two
+// tests lock down both sides:
+// (1) the relaxation did NOT break a valid multi-line string param;
+// (2) the relaxation did NOT leak into int — the type-check STILL fires there.
 
-// TestModuleParams_BlockScalarStringParam_NoMismatch — core.cmd.shell с cmd: |
-// многострочным literal block-scalar. cmd объявлен type:string,required — без
-// LiteralNode-ветки в astMatchesType такая форма ложно реджектилась бы как
-// param_type_mismatch. Проверяем, что НЕ реджектится (и ни одной ошибки вообще).
+// TestModuleParams_BlockScalarStringParam_NoMismatch — core.cmd.shell with a
+// multi-line literal block-scalar cmd: |. cmd is declared type:string,required —
+// without the LiteralNode branch in astMatchesType this form would be falsely
+// rejected as param_type_mismatch. We check it is NOT rejected (and no error at all).
 func TestModuleParams_BlockScalarStringParam_NoMismatch(t *testing.T) {
-	// cmd: |  — literal block-scalar; тело с отступом 6 пробелов под ключом.
+	// cmd: |  — literal block-scalar; body indented 6 spaces under the key.
 	src := "- name: t\n" +
 		"  module: core.cmd.shell\n" +
 		"  params:\n" +
@@ -35,8 +36,8 @@ func TestModuleParams_BlockScalarStringParam_NoMismatch(t *testing.T) {
 	}
 }
 
-// TestModuleParams_BlockScalarFoldedStringParam_NoMismatch — та же проверка для
-// folded (`>`) формы block-scalar, которую goccy тоже отдаёт как LiteralNode.
+// TestModuleParams_BlockScalarFoldedStringParam_NoMismatch — the same check for
+// the folded (`>`) block-scalar form, which goccy also returns as LiteralNode.
 func TestModuleParams_BlockScalarFoldedStringParam_NoMismatch(t *testing.T) {
 	src := "- name: t\n" +
 		"  module: core.cmd.shell\n" +
@@ -53,14 +54,14 @@ func TestModuleParams_BlockScalarFoldedStringParam_NoMismatch(t *testing.T) {
 	}
 }
 
-// TestModuleParams_BlockScalarIntParam_StillMismatches — block-scalar в int-поле
-// (core.firewall.present.port, type:int,required) ВСЁ ЕЩЁ ловится как
-// param_type_mismatch. Это защита от регрессии: LiteralNode-ветка в astMatchesType
-// добавлена ТОЛЬКО для type=string; int-ветка ждёт *ast.IntegerNode, а block-scalar
-// (LiteralNode) — строка, не число. Если кто-то ослабит astMatchesType, признав
-// LiteralNode универсально валидным, этот тест упадёт.
+// TestModuleParams_BlockScalarIntParam_StillMismatches — a block-scalar in an int
+// field (core.firewall.present.port, type:int,required) is STILL caught as
+// param_type_mismatch. This guards against regression: the LiteralNode branch in
+// astMatchesType was added ONLY for type=string; the int branch expects
+// *ast.IntegerNode, and a block-scalar (LiteralNode) is a string, not a number. If
+// someone relaxes astMatchesType to accept LiteralNode universally, this test fails.
 func TestModuleParams_BlockScalarIntParam_StillMismatches(t *testing.T) {
-	// port: |  — literal block-scalar в int-поле: должно остаться mismatch.
+	// port: |  — literal block-scalar in an int field: must remain a mismatch.
 	src := "- name: t\n" +
 		"  module: core.firewall.present\n" +
 		"  params:\n" +

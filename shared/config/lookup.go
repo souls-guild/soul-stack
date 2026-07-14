@@ -7,13 +7,13 @@ import (
 	"github.com/goccy/go-yaml/ast"
 )
 
-// lookupPath резолвит yaml-путь вида `$.foo.bar[2].baz` к позиции
-// (line, column) ключа в исходном AST. Используется, чтобы привязать
-// semantic-диагностики (на распарсенной Go-структуре) к месту в файле.
+// lookupPath resolves a yaml path like `$.foo.bar[2].baz` to the (line, column)
+// position of the key in the source AST. Used to tie semantic diagnostics (on
+// the parsed Go struct) to a location in the file.
 //
-// Возвращает позицию **ключа** для mapping-кадра (`baz` в `$.foo.bar[2].baz`)
-// и позицию value-узла для последнего терминального шага в массиве (`[2]`).
-// `ok == false` — путь не найден / синтаксически невалиден.
+// Returns the position of the **key** for a mapping frame (`baz` in
+// `$.foo.bar[2].baz`) and the value node's position for the final terminal
+// array step (`[2]`). `ok == false` — path not found / syntactically invalid.
 func lookupPath(root *ast.MappingNode, path string) (line, column int, ok bool) {
 	if root == nil || path == "" {
 		return 0, 0, false
@@ -70,9 +70,9 @@ type pathSeg struct {
 	index   int
 }
 
-// splitYAMLPath разбирает строку формата `$.foo.bar[2].baz` в сегменты.
-// Поддерживает только подмножество, нужное конфиг-валидаторам (никаких
-// квот, escape-ов, wildcards — это не yaml.PathString во всей полноте).
+// splitYAMLPath parses a string of the form `$.foo.bar[2].baz` into segments.
+// Supports only the subset the config validators need (no quotes, escapes,
+// wildcards — this is not the full yaml.PathString).
 func splitYAMLPath(p string) ([]pathSeg, error) {
 	if !strings.HasPrefix(p, "$") {
 		return nil, errBadPath

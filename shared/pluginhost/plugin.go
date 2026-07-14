@@ -12,15 +12,14 @@ import (
 	"google.golang.org/grpc"
 )
 
-// BasePlugin — handle одной spawn-сессии плагина, kind-agnostic.
+// BasePlugin — a handle to one plugin spawn session, kind-agnostic.
 //
-// Не reusable между сериями RPC: connection-pool отсутствует (one-shot per
-// Spawn по ADR-020(d)). Caller обязан вызвать [BasePlugin.Close] после
-// завершения работы — иначе остаются zombie-процесс и socket-файл.
+// Not reusable across RPC series: there is no connection pool (one-shot per Spawn,
+// ADR-020(d)). The caller must call [BasePlugin.Close] when done — otherwise a
+// zombie process and socket file are left behind.
 //
-// Kind-specific обёртки (SoulModulePlugin / CloudDriverPlugin /
-// SshProviderPlugin) embed-ят *BasePlugin и добавляют kind-specific
-// gRPC-client поверх [BasePlugin.Conn].
+// Kind-specific wrappers (SoulModulePlugin / CloudDriverPlugin / SshProviderPlugin)
+// embed *BasePlugin and add a kind-specific gRPC client over [BasePlugin.Conn].
 type BasePlugin struct {
 	manifest   *sharedplugin.Manifest
 	cmd        *exec.Cmd
@@ -31,38 +30,36 @@ type BasePlugin struct {
 	closed     bool
 }
 
-// Manifest — read-only доступ к manifest-у плагина. Используется в callsite-ах,
-// которым нужен namespace/name для логов или OTel-атрибутов.
+// Manifest — read-only access to the plugin manifest. Used by callsites that need
+// namespace/name for logs or OTel attributes.
 func (p *BasePlugin) Manifest() *sharedplugin.Manifest { return p.manifest }
 
-// NewBasePluginForTest — конструктор «manifest-only» BasePlugin для use-case-ов,
-// где нужен kind-cross-check без реального fork-а: например, тесты
-// kind-specific wrap-ов ([keeper/internal/pluginhost.NewCloudDriverPlugin]
-// rejecting на чужой kind).
+// NewBasePluginForTest — a "manifest-only" BasePlugin constructor for use cases
+// that need a kind cross-check without a real fork: e.g. tests of kind-specific
+// wrappers ([keeper/internal/pluginhost.NewCloudDriverPlugin] rejecting a foreign
+// kind).
 //
-// Использование вне тестов — баг: возвращённый BasePlugin не имеет ни Conn-а,
-// ни Cmd-а, любой RPC по нему упадёт nil-pointer-ом.
+// Use outside tests is a bug: the returned BasePlugin has neither Conn nor Cmd, any
+// RPC over it will nil-pointer.
 func NewBasePluginForTest(m *sharedplugin.Manifest) *BasePlugin {
 	return &BasePlugin{manifest: m, closed: true}
 }
 
-// Conn — gRPC-conn к плагину. Используется kind-specific обёртками для
-// создания клиента (NewSoulModuleClient / NewCloudDriverClient /
-// NewSshProviderClient).
+// Conn — the gRPC conn to the plugin. Used by kind-specific wrappers to create a
+// client (NewSoulModuleClient / NewCloudDriverClient / NewSshProviderClient).
 func (p *BasePlugin) Conn() *grpc.ClientConn { return p.conn }
 
-// StderrTail — последние ~4KB stderr плагина к моменту вызова. Используется
-// при формировании TaskError / диагностики crash-ей плагина.
+// StderrTail — the last ~4KB of the plugin's stderr at call time. Used when
+// building TaskError / diagnosing plugin crashes.
 func (p *BasePlugin) StderrTail() string { return p.stderrTail.String() }
 
-// Close завершает сессию плагина: закрывает gRPC-conn, шлёт SIGTERM, ждёт
-// shutdown_grace, при необходимости — SIGKILL. Идемпотентен. Возвращает
-// первую ненулевую ошибку из conn.Close / cmd.Wait, если все остальные
-// шаги прошли успешно — nil.
+// Close ends the plugin session: closes the gRPC conn, sends SIGTERM, waits
+// shutdown_grace, and SIGKILL if needed. Idempotent. Returns the first non-nil
+// error from conn.Close / cmd.Wait, or nil if all steps succeeded.
 //
-// Удаление сокет-файла — best-effort; плагин обычно unlink-ает сам в
-// signal-handler-е (sdk/handshake → Lifecycle), но host подчищает на
-// случай non-graceful exit.
+// Socket-file removal is best-effort; the plugin usually unlinks it itself in its
+// signal handler (sdk/handshake → Lifecycle), but the host cleans up in case of a
+// non-graceful exit.
 func (p *BasePlugin) Close() error {
 	if p.closed {
 		return nil
@@ -93,9 +90,8 @@ func isExpectedExitErr(err error) bool {
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		// Не-zero exit — это «плагин завершился, но с ошибкой»; для
-		// нашего контекста Close это не fatal (диагностика идёт через
-		// StderrTail).
+		// A non-zero exit means "the plugin exited, but with an error"; for our
+		// Close context that's not fatal (diagnostics go through StderrTail).
 		return true
 	}
 	return false

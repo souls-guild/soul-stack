@@ -38,7 +38,7 @@ func TestLoadDestinyTasks_Flat(t *testing.T) {
 }
 
 func TestLoadDestinyTasks_NotSequence(t *testing.T) {
-	// Манифест-обёртка (mapping) на месте плоского списка → type_mismatch.
+	// A manifest wrapper (mapping) where a flat list is expected → type_mismatch.
 	src := "name: pilot-flat\ntasks: []\n"
 	_, diags, err := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if err != nil {
@@ -60,7 +60,7 @@ func TestLoadDestinyTasks_Empty(t *testing.T) {
 }
 
 func TestLoadDestinyTasks_BadTask(t *testing.T) {
-	// Задача без дискриминатора module/apply/include/block.
+	// A task with no module/apply/include/block discriminator.
 	src := "- name: orphan\n  params: {}\n"
 	_, diags, err := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if err != nil {

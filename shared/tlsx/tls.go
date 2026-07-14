@@ -1,20 +1,19 @@
-// Package tlsx — общие TLS-helpers для Keeper-/Soul-/lint-бинарей.
+// Package tlsx provides shared TLS helpers for the Keeper/Soul/lint binaries.
 //
-// MVP-scope:
-//   - [LoadServerOnlyTLS] (M2.1.b.1) — server-only TLS для Bootstrap-RPC
-//     Keeper-а ([ADR-012(b)]). У Soul-а до онбординга ещё нет SoulSeed-cert.
-//   - [LoadMutualTLS] (M2.2) — mTLS для EventStream-listener: серверный
-//     cert + key + CA-bundle для валидации входящих SoulSeed клиентских
-//     сертификатов (`RequireAndVerifyClientCert`).
+// MVP scope:
+//   - [LoadServerOnlyTLS] (M2.1.b.1) — server-only TLS for the Keeper Bootstrap-RPC
+//     ([ADR-012(b)]). Before onboarding a Soul has no SoulSeed cert.
+//   - [LoadMutualTLS] (M2.2) — mTLS for the EventStream listener: server cert, key
+//     and CA bundle to validate incoming SoulSeed client certificates
+//     (`RequireAndVerifyClientCert`).
 //
 // Post-MVP:
-//   - LoadClientTLS для Soul-стороны (клиентский cert+key+server CA) —
-//     M2.3.
+//   - LoadClientTLS for the Soul side (client cert+key + server CA) — M2.3.
 //
-// Package называется tlsx, чтобы не конфликтовать со stdlib `crypto/tls`
-// в импортах caller-ов.
+// The package is named tlsx to avoid clashing with stdlib `crypto/tls` in callers'
+// imports.
 //
-// [ADR-012(b)]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
+// [ADR-012(b)]: docs/adr/0012-keeper-soul-grpc.md
 package tlsx
 
 import (
@@ -25,32 +24,30 @@ import (
 	"os"
 )
 
-// ServerConfig — параметры загрузки серверного TLS-конфига из файлов.
+// ServerConfig — parameters for loading a server TLS config from files.
 //
-// Поле `CAPath` оставлено для будущего расширения (M2.2 mTLS); в
-// [LoadServerOnlyTLS] оно игнорируется — наличие поля не превращает
-// конфиг в mTLS-режим.
+// The `CAPath` field is reserved for a future extension (M2.2 mTLS); it is ignored
+// in [LoadServerOnlyTLS] — its presence does not turn the config into mTLS mode.
 type ServerConfig struct {
-	// CertPath — PEM-encoded x509-сертификат сервера (полная цепочка
-	// допустима — `tls.LoadX509KeyPair` читает все PEM-блоки).
+	// CertPath — PEM-encoded x509 server certificate (a full chain is allowed —
+	// `tls.LoadX509KeyPair` reads all PEM blocks).
 	CertPath string
-	// KeyPath — приватный ключ к CertPath (PEM).
+	// KeyPath — private key for CertPath (PEM).
 	KeyPath string
-	// CAPath — резерв под mTLS (M2.2). В LoadServerOnlyTLS игнорируется.
+	// CAPath — reserved for mTLS (M2.2). Ignored in LoadServerOnlyTLS.
 	CAPath string
 }
 
-// LoadServerOnlyTLS читает cert + key из файлов и возвращает
-// `*tls.Config` с `ClientAuth = NoClientCert` (server-only TLS).
+// LoadServerOnlyTLS reads cert + key from files and returns a `*tls.Config` with
+// `ClientAuth = NoClientCert` (server-only TLS).
 //
-// Минимальная версия TLS — 1.3 (cf. requirements.md «безопасность на
-// первом месте» + ADR-012). Cipher suites не задаются: TLS 1.3 в Go
-// сам выбирает AEAD-only suites.
+// Minimum TLS version is 1.3 (cf. requirements.md "security first" + ADR-012).
+// Cipher suites are not set: Go's TLS 1.3 picks AEAD-only suites itself.
 //
-// Ошибки:
-//   - ErrServerCertEmpty / ErrServerKeyEmpty — пустые пути.
-//   - wrapped fmt.Errorf при чтении файлов (например, отсутствующий
-//     путь) — caller обязан показать с контекстом конфига.
+// Errors:
+//   - ErrServerCertEmpty / ErrServerKeyEmpty — empty paths.
+//   - wrapped fmt.Errorf on file reads (e.g. a missing path) — the caller must
+//     surface it with config context.
 func LoadServerOnlyTLS(cfg ServerConfig) (*tls.Config, error) {
 	if cfg.CertPath == "" {
 		return nil, ErrServerCertEmpty
@@ -59,8 +56,7 @@ func LoadServerOnlyTLS(cfg ServerConfig) (*tls.Config, error) {
 		return nil, ErrServerKeyEmpty
 	}
 
-	// Pre-flight — даём более понятную ошибку, чем
-	// `tls.LoadX509KeyPair` на отсутствующем файле.
+	// Pre-flight — gives a clearer error than `tls.LoadX509KeyPair` on a missing file.
 	if _, err := os.Stat(cfg.CertPath); err != nil {
 		return nil, fmt.Errorf("tlsx: stat cert %q: %w", cfg.CertPath, err)
 	}
@@ -80,32 +76,31 @@ func LoadServerOnlyTLS(cfg ServerConfig) (*tls.Config, error) {
 	}, nil
 }
 
-// MutualConfig — параметры загрузки mTLS-конфига для серверного listener-а
-// с обязательной валидацией клиентского сертификата (`ClientAuth =
-// RequireAndVerifyClientCert`).
+// MutualConfig — parameters for loading an mTLS config for a server listener with
+// mandatory client-certificate validation (`ClientAuth = RequireAndVerifyClientCert`).
 type MutualConfig struct {
-	// CertPath — серверный cert.
+	// CertPath — server cert.
 	CertPath string
-	// KeyPath — приватный ключ к CertPath.
+	// KeyPath — private key for CertPath.
 	KeyPath string
-	// CAPath — PEM-bundle CA, по которой валидируются клиентские
-	// сертификаты (для Keeper EventStream — корень SoulSeed PKI).
+	// CAPath — PEM CA bundle used to validate client certificates (for the Keeper
+	// EventStream — the SoulSeed PKI root).
 	CAPath string
 }
 
-// LoadMutualTLS читает cert + key + CA-bundle и возвращает `*tls.Config`
-// с `ClientAuth = RequireAndVerifyClientCert` и заполненным `ClientCAs`.
+// LoadMutualTLS reads cert + key + CA bundle and returns a `*tls.Config` with
+// `ClientAuth = RequireAndVerifyClientCert` and a populated `ClientCAs`.
 //
-// Поведение симметрично [LoadServerOnlyTLS]:
+// Behavior is symmetric to [LoadServerOnlyTLS]:
 //   - MinVersion = TLS 1.3;
-//   - cipher suites не задаются (TLS 1.3 — AEAD-only by spec);
-//   - pre-flight stat по всем трём путям даёт человеко-читаемые ошибки до
+//   - cipher suites are not set (TLS 1.3 — AEAD-only by spec);
+//   - pre-flight stat on all three paths gives human-readable errors before
 //     `tls.LoadX509KeyPair`.
 //
-// Дополнительная аутентификация по fingerprint (lookup в `soul_seeds`)
-// делается **application-side**, в gRPC-interceptor-е caller-а: TLS-уровня
-// достаточно проверить, что сертификат подписан нашим CA — это гарантирует,
-// что cert выпускал Vault PKI Keeper-а, но не отличает active от revoked.
+// Additional fingerprint authentication (lookup in `soul_seeds`) is done
+// **application-side**, in the caller's gRPC interceptor: at the TLS layer it's
+// enough to check the certificate is signed by our CA — that guarantees the cert
+// was issued by the Keeper's Vault PKI, but does not distinguish active from revoked.
 func LoadMutualTLS(cfg MutualConfig) (*tls.Config, error) {
 	if cfg.CertPath == "" {
 		return nil, ErrServerCertEmpty
@@ -149,38 +144,37 @@ func LoadMutualTLS(cfg MutualConfig) (*tls.Config, error) {
 	}, nil
 }
 
-// ClientConfig — параметры клиентского TLS-конфига для Soul → Keeper.
+// ClientConfig — parameters for a client TLS config for Soul → Keeper.
 //
-// Используется на Soul-стороне в двух режимах:
-//   - Bootstrap-фаза (`soul init`): только CAPath, mode=ServerOnly — у Soul-а
-//     ещё нет SoulSeed-сертификата;
-//   - EventStream-фаза (`soul run`): полный mTLS, все три пути обязательны.
+// Used on the Soul side in two modes:
+//   - Bootstrap phase (`soul init`): only CAPath, mode=ServerOnly — the Soul has no
+//     SoulSeed certificate yet;
+//   - EventStream phase (`soul run`): full mTLS, all three paths required.
 type ClientConfig struct {
-	// CertPath — клиентский SoulSeed-cert (PEM). Пустой для ServerOnly-режима.
+	// CertPath — client SoulSeed cert (PEM). Empty for ServerOnly mode.
 	CertPath string
-	// KeyPath — приватный ключ к CertPath (PEM). Пустой для ServerOnly-режима.
+	// KeyPath — private key for CertPath (PEM). Empty for ServerOnly mode.
 	KeyPath string
-	// CAPath — PEM-bundle CA, по которой клиент валидирует серверный
-	// сертификат Keeper-а. Обязателен в обоих режимах.
+	// CAPath — PEM CA bundle the client uses to validate the Keeper's server
+	// certificate. Required in both modes.
 	CAPath string
-	// ServerName — ожидаемый CN/SAN серверного сертификата. Пустая
-	// строка = автоматически из адреса соединения (host:port → host).
+	// ServerName — expected CN/SAN of the server certificate. Empty string =
+	// derived automatically from the connection address (host:port → host).
 	ServerName string
 }
 
-// LoadClientTLS возвращает `*tls.Config` для клиентского dial-а в Keeper.
+// LoadClientTLS returns a `*tls.Config` for a client dial to Keeper.
 //
-// Семантика:
-//   - CertPath/KeyPath пустые → server-only TLS (для Bootstrap RPC);
-//   - все три пути заданы → mTLS (для EventStream).
+// Semantics:
+//   - CertPath/KeyPath empty → server-only TLS (for the Bootstrap RPC);
+//   - all three paths set → mTLS (for EventStream).
 //
-// Минимальная TLS-версия — 1.3 (cf. requirements.md «безопасность на первом
-// месте»). cipher suites не задаются (TLS 1.3 — AEAD-only by spec).
+// Minimum TLS version is 1.3 (cf. requirements.md "security first"). Cipher suites
+// are not set (TLS 1.3 — AEAD-only by spec).
 //
-// ServerName применяется через `tls.Config.ServerName` для верификации
-// hostname-а; для cluster-конфигов с несколькими endpoint-ами по разным
-// host:port caller передаёт его явно (иначе gRPC автоматически выставит
-// `authority`-host-а из target-а).
+// ServerName is applied via `tls.Config.ServerName` for hostname verification; for
+// cluster configs with several endpoints across different host:port the caller passes
+// it explicitly (otherwise gRPC sets the `authority` host from the target automatically).
 func LoadClientTLS(cfg ClientConfig) (*tls.Config, error) {
 	if cfg.CAPath == "" {
 		return nil, ErrServerCAEmpty
@@ -203,7 +197,7 @@ func LoadClientTLS(cfg ClientConfig) (*tls.Config, error) {
 		ServerName: cfg.ServerName,
 	}
 
-	// Bootstrap-режим: cert+key не нужны, у Soul-а их пока нет.
+	// Bootstrap mode: cert+key not needed, the Soul doesn't have them yet.
 	if cfg.CertPath == "" && cfg.KeyPath == "" {
 		return out, nil
 	}
@@ -227,9 +221,8 @@ func LoadClientTLS(cfg ClientConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-// Sentinel-ошибки для caller-ов, желающих маппить в конкретные diag-ы /
-// HTTP-status-ы. `errors.Is(err, ErrServerCertEmpty)` устойчив, не
-// зависит от текста сообщения.
+// Sentinel errors for callers that want to map to specific diags / HTTP statuses.
+// `errors.Is(err, ErrServerCertEmpty)` is stable, independent of the message text.
 var (
 	ErrServerCertEmpty = errors.New("tlsx: cert path is empty")
 	ErrServerKeyEmpty  = errors.New("tlsx: key path is empty")

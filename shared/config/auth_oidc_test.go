@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// oidcValidBlock — корректный блок auth.oidc (https issuer + client_id +
-// redirect_url + vault-ref secret), к которому тесты меняют отдельные поля.
+// oidcValidBlock — a valid auth.oidc block (https issuer + client_id +
+// redirect_url + vault-ref secret) whose individual fields the tests change.
 const oidcValidBlock = `auth:
   oidc:
     issuer: "https://idp.example.com/realms/soul"
@@ -21,7 +21,7 @@ const oidcValidBlock = `auth:
       ops: ["cluster-admin"]
 `
 
-// TestKeeperAuthOIDC_Valid — корректный блок грузится без ошибок.
+// TestKeeperAuthOIDC_Valid — a valid block loads without errors.
 func TestKeeperAuthOIDC_Valid(t *testing.T) {
 	src := keeperBaseRequired + oidcValidBlock
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
@@ -31,8 +31,8 @@ func TestKeeperAuthOIDC_Valid(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_IssuerNotHTTPS — http:// issuer запрещён (TLS-required,
-// ADR-058(g)): discovery/JWKS/token-exchange к IdP не должны идти открыто.
+// TestKeeperAuthOIDC_IssuerNotHTTPS — http:// issuer is forbidden (TLS-required,
+// ADR-058(g)): discovery/JWKS/token-exchange to the IdP must not go in the clear.
 func TestKeeperAuthOIDC_IssuerNotHTTPS(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   oidc:
@@ -47,7 +47,7 @@ func TestKeeperAuthOIDC_IssuerNotHTTPS(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_ClientIDRequired — отсутствие client_id → ошибка.
+// TestKeeperAuthOIDC_ClientIDRequired — a missing client_id → error.
 func TestKeeperAuthOIDC_ClientIDRequired(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   oidc:
@@ -61,7 +61,7 @@ func TestKeeperAuthOIDC_ClientIDRequired(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_RedirectURLRequired — отсутствие redirect_url → ошибка.
+// TestKeeperAuthOIDC_RedirectURLRequired — a missing redirect_url → error.
 func TestKeeperAuthOIDC_RedirectURLRequired(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   oidc:
@@ -75,8 +75,8 @@ func TestKeeperAuthOIDC_RedirectURLRequired(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_ClientSecretRefFormat — client_secret_ref не vault-ref →
-// ошибка формата (тот же checkVaultRef, что у redis.password_ref).
+// TestKeeperAuthOIDC_ClientSecretRefFormat — client_secret_ref that is not a
+// vault-ref → format error (the same checkVaultRef as for redis.password_ref).
 func TestKeeperAuthOIDC_ClientSecretRefFormat(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   oidc:
@@ -92,8 +92,8 @@ func TestKeeperAuthOIDC_ClientSecretRefFormat(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_PublicClientNoSecret — client_secret_ref опционален
-// (public-client): без него блок валиден.
+// TestKeeperAuthOIDC_PublicClientNoSecret — client_secret_ref is optional
+// (public-client): without it the block is valid.
 func TestKeeperAuthOIDC_PublicClientNoSecret(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   oidc:
@@ -108,9 +108,9 @@ func TestKeeperAuthOIDC_PublicClientNoSecret(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthOIDC_MutableAIDClaimWarns — aid_claim из user-mutable claim
-// (email / preferred_username) → WARN (identity-spoofing-риск, MED-фикс), НЕ
-// ERROR (оператор может осознанно выбрать). `sub` (дефолт) — без WARN.
+// TestKeeperAuthOIDC_MutableAIDClaimWarns — aid_claim from a user-mutable claim
+// (email / preferred_username) → WARN (identity-spoofing risk, MED fix), NOT ERROR
+// (the operator may deliberately choose it). `sub` (the default) — no WARN.
 func TestKeeperAuthOIDC_MutableAIDClaimWarns(t *testing.T) {
 	for _, claim := range []string{"email", "preferred_username"} {
 		src := keeperBaseRequired + `auth:

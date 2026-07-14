@@ -1,42 +1,41 @@
 package config
 
-// Write-back YAML под [ADR-021](docs/architecture.md). Сохранение
-// `keeper.yml`/`soul.yml` с preserve comments/order/anchors через AST
-// goccy/go-yaml + атомарный rename (tmp + chmod до write + rename + fsync).
+// Write-back YAML per [ADR-021](docs/architecture.md). Saves
+// `keeper.yml`/`soul.yml` preserving comments/order/anchors via the
+// goccy/go-yaml AST + an atomic rename (tmp + chmod before write + rename + fsync).
 //
-// Known limitations (документируются `round_trip_warning`-диагностиками при
-// мутации; для немутированного Document `Save*ToBytes` возвращает исходные
-// байты как есть, чтобы round-trip был byte-identical):
+// Known limitations (reported as `round_trip_warning` diagnostics on mutation;
+// for an unmutated Document, `Save*ToBytes` returns the original bytes as-is so
+// the round-trip is byte-identical):
 //
-//   - Flow-style mappings («`{ a: b, c: d }`») после AST-рендера goccy
-//     теряют выравнивание ключей и внутренние пробелы (`{a: b, c: d}`).
-//     В немутированном документе это нивелируется отдачей `doc.source`;
-//     после Patch — известный косметический drift, поднимается warning.
-//   - Inline-comment scalar-узла, который сам стал target Patch-а,
-//     сохраняется (snapshot+restore через `path.FilterFile`+`SetComment`),
-//     но multi-space между значением и `#` сжимается до одного пробела
-//     (`"value"  # cmt` → `"value" # cmt`) — особенность стрингера goccy.
-//   - Anchors-mutation (`&anchor` / `*alias`) при Patch-е якорного узла
-//     может расщепить alias-references (best-effort, без явной валидации).
-//   - Multi-line scalar style best-effort: block-литерал `|` или `>` может
-//     быть переписан в flow при Patch коротких значений.
-//   - Numeric literals (`0755`, `0xFF`, `0o755`) не сохраняются в literal-
-//     форме после Patch — записываются decimal-ом.
-//   - BOM (`EF BB BF`) не восстанавливается на запись: strip-нут при Load
-//     по правилам YAML 1.2.
+//   - Flow-style mappings (`{ a: b, c: d }`) lose key alignment and inner spaces
+//     after the goccy AST render (`{a: b, c: d}`). In an unmutated document this
+//     is avoided by returning `doc.source`; after Patch it is a known cosmetic
+//     drift and raises a warning.
+//   - An inline comment on a scalar node that is itself a Patch target is
+//     preserved (snapshot+restore via `path.FilterFile`+`SetComment`), but
+//     multi-space between the value and `#` collapses to one space
+//     (`"value"  # cmt` → `"value" # cmt`) — a goccy stringer quirk.
+//   - Anchor mutation (`&anchor` / `*alias`) when patching an anchored node may
+//     split alias references (best-effort, no explicit validation).
+//   - Multi-line scalar style is best-effort: a `|` or `>` block literal may be
+//     rewritten to flow when patching short values.
+//   - Numeric literals (`0755`, `0xFF`, `0o755`) are not preserved in literal
+//     form after Patch — written as decimal.
+//   - A BOM (`EF BB BF`) is not restored on write: stripped at Load per YAML 1.2.
 //
-// I/O pipeline atomic-rename (9 шагов, см. `writeFileAtomically`):
-//   1. Stat dst → mode/uid/gid; reject symlink на Lstat этапе.
-//   2. CreateTemp в той же директории.
-//   3. Chmod tmp до Write (избежать окна 0600 default при чтении).
-//   4. Chown tmp на uid/gid исходника (best-effort на permission denied).
+// Atomic-rename I/O pipeline (9 steps, see `writeFileAtomically`):
+//   1. Stat dst → mode/uid/gid; reject symlink at the Lstat step.
+//   2. CreateTemp in the same directory.
+//   3. Chmod tmp before Write (avoid the 0600-default window on read).
+//   4. Chown tmp to the source uid/gid (best-effort on permission denied).
 //   5. Write rendered bytes.
-//   6. tmp.Sync() — fsync содержимого.
+//   6. tmp.Sync() — fsync contents.
 //   7. tmp.Close().
 //   8. Rename(tmp, dst).
-//   9. fsync директории-родителя (best-effort).
+//   9. fsync the parent directory (best-effort).
 //
-// На любой ошибке после CreateTemp — `os.Remove(tmp.Name())` cleanup.
+// On any error after CreateTemp — `os.Remove(tmp.Name())` cleanup.
 
 import (
 	"bytes"
@@ -48,55 +47,55 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// SaveKeeper — round-trip write-back KeeperConfig в файл `path`.
+// SaveKeeper is a round-trip write-back of KeeperConfig to file `path`.
 //
 // Contract:
-//   - Возвращаемые `[]diag.Diagnostic` уровня warning сигнализируют о
-//     round-trip degradation (см. known limitations выше).
-//   - error возвращается при I/O fatal (write/rename/stat/chmod/symlink-target)
-//     или programming error (nil Document, пустой `path`). Validation-error-ы
-//     при `Load*` приходят как `[]diag.Diagnostic` (см. ADR-021 d).
-//   - Permissions и uid/gid исходного файла переносятся на новый (best-effort
-//     для chown — если у процесса нет CAP_CHOWN, не считается fatal).
-//   - Если файл по пути dst не существует, он будет создан с mode 0o644.
-//     Permissions/uid/gid существующего файла сохраняются. Если `os.Stat(dst)`
-//     упал по причине, отличной от `IsNotExist` (permission denied и т.п.) —
-//     Save отвергает запись (а не молча перезатирает mode по 0o644).
-//   - Если по `path` уже лежит symlink — отвергается с `error` и diagnostic
-//     `symlink_write_not_supported`, файл не модифицируется.
-//   - Document мьютируется только в чтение; mutated-флаг учитывается в
-//     рендере (см. SaveKeeperToBytes).
-//   - Метод thread-safe: конкурентные `Save*` / `Patch*` для одного и того
-//     же `*Document` сериализуются через `doc.mu`.
+//   - Returned `[]diag.Diagnostic` at warning level signal round-trip
+//     degradation (see known limitations above).
+//   - An error is returned on fatal I/O (write/rename/stat/chmod/symlink-target)
+//     or a programming error (nil Document, empty `path`). Validation errors on
+//     `Load*` arrive as `[]diag.Diagnostic` (see ADR-021 d).
+//   - The source file's permissions and uid/gid carry over to the new file
+//     (best-effort for chown — not fatal if the process lacks CAP_CHOWN).
+//   - If dst does not exist, it is created with mode 0o644. An existing file's
+//     permissions/uid/gid are preserved. If `os.Stat(dst)` fails for a reason
+//     other than `IsNotExist` (permission denied, etc.), Save refuses the write
+//     rather than silently overwriting the mode with 0o644.
+//   - If `path` is a symlink, it is rejected with an `error` and the
+//     `symlink_write_not_supported` diagnostic; the file is not modified.
+//   - The Document is mutated read-only; the mutated flag is honored in the
+//     render (see SaveKeeperToBytes).
+//   - Thread-safe: concurrent `Save*` / `Patch*` on the same `*Document` are
+//     serialized via `doc.mu`.
 func SaveKeeper(path string, doc *Document) ([]diag.Diagnostic, error) {
 	return saveTo(path, doc)
 }
 
-// SaveSoul — round-trip write-back SoulConfig. См. `SaveKeeper` для контракта,
-// включая семантику thread-safety и набор возвращаемых error-ов.
+// SaveSoul is a round-trip write-back of SoulConfig. See `SaveKeeper` for the
+// contract, including thread-safety semantics and the set of returned errors.
 func SaveSoul(path string, doc *Document) ([]diag.Diagnostic, error) {
 	return saveTo(path, doc)
 }
 
-// SaveKeeperToBytes — рендер без записи на диск (для тестов и in-memory
-// pipelines, где caller сам организует I/O).
+// SaveKeeperToBytes renders without writing to disk (for tests and in-memory
+// pipelines where the caller handles I/O).
 //
-// Для немутированного документа возвращает `doc.source` как есть —
-// гарантия byte-identical round-trip с Load (golden tests).
-// Для мутированного — рендерит `doc.file.String()` и поднимает
-// `round_trip_warning`, если рендер отличается от исходника.
+// For an unmutated document it returns `doc.source` as-is — guaranteeing a
+// byte-identical round-trip with Load (golden tests). For a mutated one it
+// renders `doc.file.String()` and raises `round_trip_warning` if the render
+// differs from the source.
 func SaveKeeperToBytes(doc *Document) ([]byte, []diag.Diagnostic, error) {
 	return renderBytes(doc)
 }
 
-// SaveSoulToBytes — то же для SoulConfig.
+// SaveSoulToBytes is the same for SoulConfig.
 func SaveSoulToBytes(doc *Document) ([]byte, []diag.Diagnostic, error) {
 	return renderBytes(doc)
 }
 
-// renderBytes — общая часть для обоих *ToBytes: тип SoulConfig vs KeeperConfig
-// на рендер AST никак не влияет (YAML — один формат), функции типизированы
-// раздельно для симметрии API и будущей дивергенции.
+// renderBytes is the common part of both *ToBytes: SoulConfig vs KeeperConfig
+// makes no difference to the AST render (YAML is one format); the functions are
+// typed separately for API symmetry and future divergence.
 func renderBytes(doc *Document) ([]byte, []diag.Diagnostic, error) {
 	if doc == nil {
 		return nil, nil, errors.New("config: Document is nil")
@@ -105,10 +104,10 @@ func renderBytes(doc *Document) ([]byte, []diag.Diagnostic, error) {
 	defer doc.mu.Unlock()
 
 	if !doc.mutated {
-		// Не было ни одного Patch — отдаём исходник как есть, без рендера
-		// AST. Это единственный путь, на котором round-trip гарантированно
-		// byte-identical (goccy stringer нормализует flow-style, тримит
-		// тривиальные пробелы).
+		// No Patch happened — return the source as-is, without rendering the
+		// AST. This is the only path where the round-trip is guaranteed
+		// byte-identical (the goccy stringer normalizes flow-style and trims
+		// trivial spaces).
 		out := make([]byte, len(doc.source))
 		copy(out, doc.source)
 		return out, nil, nil
@@ -138,8 +137,8 @@ func renderBytes(doc *Document) ([]byte, []diag.Diagnostic, error) {
 	return out, diags, nil
 }
 
-// saveTo — общая часть SaveKeeper/SaveSoul. Renders bytes, проверяет symlink,
-// атомарно пишет.
+// saveTo is the common part of SaveKeeper/SaveSoul. Renders bytes, checks for a
+// symlink, writes atomically.
 func saveTo(path string, doc *Document) ([]diag.Diagnostic, error) {
 	if path == "" {
 		return nil, errors.New("config: empty save path")
@@ -154,14 +153,14 @@ func saveTo(path string, doc *Document) ([]diag.Diagnostic, error) {
 	return diags, writeErr
 }
 
-// writeFileAtomically реализует 9-шаговый pipeline (см. doc-comment файла).
+// writeFileAtomically implements the 9-step pipeline (see the file doc-comment).
 func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
-	// (1+8) Symlink-check: Lstat обнаруживает symlink, не следуя ему.
-	// Отвергаем до создания tmp — пользователь должен явно решить, что
-	// делать с симлинком (create-on-write / follow — отложено в M0.2.5).
+	// (1+8) Symlink check: Lstat detects a symlink without following it. Reject
+	// before creating tmp — the user must explicitly decide what to do with a
+	// symlink (create-on-write / follow — deferred to M0.2.5).
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return []diag.Diagnostic{{
@@ -175,11 +174,10 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		}
 	}
 
-	// (1) Stat dst → mode/uid/gid (если файл существует). При отсутствии
-	// файла используем mode 0644 (типичный POSIX default для конфигов).
-	// Любой stat-error, отличный от `IsNotExist` (например, EACCES на parent
-	// directory) — fatal: молча падать на 0o644 нельзя, это потенциальное
-	// расширение прав.
+	// (1) Stat dst → mode/uid/gid (if the file exists). If absent, use mode 0644
+	// (a typical POSIX default for configs). Any stat error other than
+	// `IsNotExist` (e.g. EACCES on the parent directory) is fatal: silently
+	// falling back to 0o644 is not allowed — a potential privilege widening.
 	var (
 		dstMode os.FileMode = 0o644
 		dstStat os.FileInfo
@@ -190,13 +188,13 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		dstStat = s
 		dstMode = s.Mode().Perm()
 	case os.IsNotExist(statErr):
-		// файл создаём заново — оставляем default 0o644
+		// creating the file anew — keep the default 0o644
 	default:
 		return []diag.Diagnostic{atomicRenameDiag(path, statErr, "stat dst")}, fmt.Errorf("config: cannot stat dst %q: %w", path, statErr)
 	}
 
-	// (2) CreateTemp в той же директории — иначе rename мог бы пересечь
-	// файловые системы (EXDEV) и потерять атомарность.
+	// (2) CreateTemp in the same directory — otherwise rename could cross
+	// filesystems (EXDEV) and lose atomicity.
 	tmp, err := os.CreateTemp(dir, base+".*.tmp")
 	if err != nil {
 		return []diag.Diagnostic{atomicRenameDiag(path, err, "create temp")}, err
@@ -206,21 +204,21 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		_ = os.Remove(tmpName)
 	}
 
-	// (3) Chmod tmp ДО Write. CreateTemp создаёт файл с mode 0600 — если
-	// читатель откроет tmp между Write и Rename, он получит более узкие
-	// права, чем у исходника. Меняем mode сразу.
+	// (3) Chmod tmp BEFORE Write. CreateTemp makes the file mode 0600 — if a
+	// reader opens tmp between Write and Rename it would get narrower permissions
+	// than the source. Change the mode immediately.
 	if err := os.Chmod(tmpName, dstMode); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return []diag.Diagnostic{atomicRenameDiag(path, err, "chmod temp")}, err
 	}
 
-	// (4) Chown tmp на uid/gid исходника, если процесс может (best-effort).
+	// (4) Chown tmp to the source uid/gid if the process can (best-effort).
 	if dstStat != nil {
 		if uid, gid, ok := statOwner(dstStat); ok {
 			if err := os.Chown(tmpName, uid, gid); err != nil {
-				// EPERM при отсутствии CAP_CHOWN — не fatal: tmp получит
-				// effective uid процесса. Прочее — поднимаем warning.
+				// EPERM without CAP_CHOWN is not fatal: tmp gets the process's
+				// effective uid. Otherwise raise a warning.
 				if !errors.Is(err, os.ErrPermission) {
 					_ = tmp.Close()
 					cleanup()
@@ -237,7 +235,7 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		return []diag.Diagnostic{atomicRenameDiag(path, err, "write temp")}, err
 	}
 
-	// (6) Sync содержимого.
+	// (6) Sync contents.
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		cleanup()
@@ -250,8 +248,8 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		return []diag.Diagnostic{atomicRenameDiag(path, err, "close temp")}, err
 	}
 
-	// (8) Symlink-recheck перед Rename — TOCTOU защита: между первой
-	// Lstat-проверкой и Rename злоумышленник мог подложить симлинк.
+	// (8) Symlink recheck before Rename — TOCTOU protection: between the first
+	// Lstat check and Rename an attacker could have planted a symlink.
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			cleanup()
@@ -271,8 +269,8 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 		return []diag.Diagnostic{atomicRenameDiag(path, err, "rename")}, err
 	}
 
-	// (9) fsync директории-родителя (best-effort: на некоторых файловых
-	// системах / ОС directory fsync не поддерживается).
+	// (9) fsync the parent directory (best-effort: some filesystems/OSes do not
+	// support directory fsync).
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()
 		_ = d.Close()
@@ -281,8 +279,8 @@ func writeFileAtomically(path string, data []byte) ([]diag.Diagnostic, error) {
 	return nil, nil
 }
 
-// atomicRenameDiag — единый помощник для нумерованного error-кода
-// `atomic_rename_failed` с указанием конкретной фазы pipeline-а в Hint.
+// atomicRenameDiag is the single helper for the `atomic_rename_failed` error
+// code, recording the specific pipeline stage in Hint.
 func atomicRenameDiag(path string, err error, stage string) diag.Diagnostic {
 	return diag.Diagnostic{
 		Level:   diag.LevelError,

@@ -11,19 +11,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// LoadDestinyTasksFromBytes парсит `tasks/main.yml` destiny — плоский
-// top-level YAML-sequence задач DSL-ядра (docs/destiny/tasks.md). В отличие от
-// scenario, у destiny-tasks нет манифест-обёртки (`name:`/`input:`/`tasks:`):
-// корень файла — сразу список задач.
+// LoadDestinyTasksFromBytes parses destiny `tasks/main.yml` — the flat top-level
+// YAML sequence of DSL-core tasks (docs/destiny/tasks.md). Unlike scenario,
+// destiny-tasks has no manifest wrapper (`name:`/`input:`/`tasks:`): the file root
+// is the task list directly.
 //
-// Контракт возврата симметричен прочим Load*FromBytes:
-//   - parse-fatal (`yaml_parse_error`/`empty_document`/`type_mismatch` на корне)
-//     → tasks=nil, в diagnostics одна запись.
-//   - schema-errors задач → tasks частично заполнен, diagnostics несут все
-//     найденные ошибки (caller отбраковывает через diag.HasErrors).
-//   - error != nil — никогда (зарезервировано под I/O fatal в файловой обёртке).
+// The return contract is symmetric to the other Load*FromBytes:
+//   - parse-fatal (`yaml_parse_error`/`empty_document`/`type_mismatch` at the root)
+//     → tasks=nil, one entry in diagnostics.
+//   - task schema-errors → tasks is partially filled, diagnostics carry all found
+//     errors (the caller rejects via diag.HasErrors).
+//   - error != nil — never (reserved for I/O fatal in the file wrapper).
 func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOptions) ([]Task, []diag.Diagnostic, error) {
-	_ = opts // зарезервировано
+	_ = opts // reserved
 
 	file, err := parser.ParseBytes(stripBOM(data), parser.ParseComments)
 	if err != nil {
@@ -75,9 +75,9 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 	var diags []diag.Diagnostic
 	for i, item := range seq.Values {
 		if err := tasks[i].UnmarshalYAML(item); err != nil && !errors.Is(err, yaml.ErrInvalidQuery) {
-			// UnmarshalYAML почти всегда возвращает nil (ошибки формы ловит
-			// validateTaskNode по AST с line/col). Ненулевую ошибку фиксируем
-			// отдельно, чтобы не потерять её молча.
+			// UnmarshalYAML almost always returns nil (shape errors are caught by
+			// validateTaskNode over the AST with line/col). We record a non-nil
+			// error separately so it isn't lost silently.
 			diags = append(diags, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate, File: filename,
 				Code:     "type_mismatch",
@@ -87,8 +87,8 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 		}
 		diags = append(diags, validateTaskNode(item, fmt.Sprintf("$[%d]", i))...)
 	}
-	// Cross-task инварианты по всему списку (дубли register, неизвестные
-	// register-ссылки в onchanges/onfail/require). См. validateTaskRefs.
+	// Cross-task invariants over the whole list (duplicate register, unknown
+	// register references in onchanges/onfail/require). See validateTaskRefs.
 	diags = append(diags, validateTaskRefs(seq, "$")...)
 	for j := range diags {
 		if diags[j].File == "" {

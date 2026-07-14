@@ -11,45 +11,45 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// validateModuleParams — фаза статической проверки `params:` задачи против
-// manifest-схемы модуля (docs/soul/modules.md → «Core-модули и manifest»).
+// validateModuleParams — the static-check phase of a task's `params:` against the
+// module's manifest schema (docs/soul/modules.md → "Core modules and manifest").
 //
-// Сейчас покрыты только core-модули (namespace `core`): их manifest эмбедится в
-// `shared/coremanifest`. Custom-модули (любой другой namespace) тут пропускаются
-// — их manifest лежит на диске рядом с бинарём и валидируется отдельным путём
-// (`validate-manifest` + резолв на полном чекауте сервиса, не пилот).
+// Currently only core modules (namespace `core`) are covered: their manifest is
+// embedded in `shared/coremanifest`. Custom modules (any other namespace) are skipped
+// here — their manifest lives on disk next to the binary and is validated by a
+// separate path (`validate-manifest` + resolve on a full service checkout, not pilot).
 //
-// Что ловит структурная проверка по plugin.InputParamDef:
-//   - неизвестный param (`command` вместо `cmd` у core.exec) → unknown_param;
-//   - отсутствие required-параметра (`cmd`/`path`) → missing_required_param;
-//   - неверный тип литерала (string там, где ждали list) → param_type_mismatch;
-//   - неизвестный state модуля (`core.exec.runn`) → module_state_unknown.
+// What the structural check over plugin.InputParamDef catches:
+//   - unknown param (`command` instead of `cmd` for core.exec) → unknown_param;
+//   - missing required param (`cmd`/`path`) → missing_required_param;
+//   - wrong literal type (string where a list was expected) → param_type_mismatch;
+//   - unknown module state (`core.exec.runn`) → module_state_unknown.
 //
-// Чего НЕ ловит (known-limitation, см. observations): enum, числовые границы,
-// вложенные object/array-схемы — этого нет в plugin.InputParamDef DSL. Полная
-// унификация config.InputSchema↔plugin.InputParamDef отложена.
+// What it does NOT catch (known limitation, see observations): enum, numeric bounds,
+// nested object/array schemas — absent from the plugin.InputParamDef DSL. Full
+// unification of config.InputSchema↔plugin.InputParamDef is deferred.
 //
-// moduleKV/paramsKV — AST-узлы ключей `module:`/`params:` (для line/col и
-// проверки значений). paramsKV может быть nil (валидатор `params:`-required уже
-// поднял свою диагностику выше).
+// moduleKV/paramsKV — AST nodes of the `module:`/`params:` keys (for line/col and
+// value checks). paramsKV may be nil (the `params:`-required validator already raised
+// its diagnostic above).
 func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	sn, ok := moduleKV.Value.(*ast.StringNode)
 	if !ok {
-		return nil // формат module: уже отвалидирован validateModuleField.
+		return nil // module: format already validated by validateModuleField.
 	}
 	ns, mod, state, ok := splitModuleAddress(sn.Value)
 	if !ok || ns != "core" {
-		// reModuleAddress-несоответствие уже даёт module_format_invalid; для
-		// custom-namespace схемы тут нет.
+		// A reModuleAddress mismatch already yields module_format_invalid; there is no
+		// schema here for a custom namespace.
 		return nil
 	}
 
 	reg := coremanifest.Default()
 	def, ok := reg.State("core."+mod, state)
 	if !ok {
-		// Либо модуль core.<mod> отсутствует в реестре, либо state неизвестен.
-		// Если самого модуля нет (новый core, ещё не заведён manifest) — не
-		// шумим (это не ошибка автора). Если модуль есть, а state нет — ошибка.
+		// Either module core.<mod> is absent from the registry, or the state is
+		// unknown. If the module itself is missing (new core, no manifest yet) — stay
+		// quiet (not an author error). If the module exists but the state doesn't — error.
 		if _, hasMod := reg.Lookup("core." + mod); !hasMod {
 			return nil
 		}
@@ -63,8 +63,8 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 		})}
 	}
 
-	// params: отсутствует — required-проверку всё равно надо отработать (нет
-	// params значит ни один required не передан). Позицию берём от module:.
+	// params: absent — the required check must still run (no params means no required
+	// was passed). Position is taken from module:.
 	var paramsNode *ast.MappingNode
 	if paramsKV != nil {
 		if mm, isMap := paramsKV.Value.(*ast.MappingNode); isMap {
@@ -78,7 +78,7 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 	return out
 }
 
-// checkUnknownAndType — для каждого присутствующего param-ключа: known? + тип.
+// checkUnknownAndType — for each present param key: known? + type.
 func checkUnknownAndType(def plugin.StateDef, paramsNode *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	if paramsNode == nil {
 		return nil
@@ -106,9 +106,9 @@ func checkUnknownAndType(def plugin.StateDef, paramsNode *ast.MappingNode, pathP
 	return out
 }
 
-// checkParamType — структурная проверка типа литерала против схемы. Значение,
-// обёрнутое целиком в `${ … }` (CEL-выражение), пропускается: его рантайм-тип
-// статически неизвестен (ADR-010, non-string CEL-результат).
+// checkParamType — structural check of a literal's type against the schema. A value
+// wrapped entirely in `${ … }` (a CEL expression) is skipped: its runtime type is
+// statically unknown (ADR-010, non-string CEL result).
 func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPrefix string) []diag.Diagnostic {
 	if p.Type == "" {
 		return nil
@@ -117,7 +117,7 @@ func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPre
 		return nil
 	}
 	if _, isNull := value.(*ast.NullNode); isNull {
-		return nil // null = «не задано», эквивалент отсутствия ключа.
+		return nil // null = "not set", equivalent to a missing key.
 	}
 	if astMatchesType(p.Type, value) {
 		return nil
@@ -135,7 +135,7 @@ func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPre
 	})}
 }
 
-// checkRequired — каждый required-param из схемы должен присутствовать в params.
+// checkRequired — every required param from the schema must be present in params.
 func checkRequired(def plugin.StateDef, paramsNode *ast.MappingNode, moduleKV *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	present := map[string]bool{}
 	if paramsNode != nil {
@@ -146,7 +146,7 @@ func checkRequired(def plugin.StateDef, paramsNode *ast.MappingNode, moduleKV *a
 		}
 	}
 	var out []diag.Diagnostic
-	// Детерминированный порядок диагностик: по имени параметра.
+	// Deterministic diagnostic order: by param name.
 	for _, name := range sortedRequired(def) {
 		if present[name] {
 			continue
@@ -173,7 +173,7 @@ func sortedRequired(def plugin.StateDef) []string {
 			req = append(req, name)
 		}
 	}
-	// Малый размер (единицы) — простая вставочная сортировка без import sort.
+	// Small size (a few) — simple insertion sort, no import sort.
 	for i := 1; i < len(req); i++ {
 		for j := i; j > 0 && req[j-1] > req[j]; j-- {
 			req[j-1], req[j] = req[j], req[j-1]
@@ -182,15 +182,15 @@ func sortedRequired(def plugin.StateDef) []string {
 	return req
 }
 
-// astMatchesType — соответствует ли AST-узел задекларированному типу. Числовые
-// синонимы (int/integer/number) и list/array, map/object нормализуются.
+// astMatchesType — whether the AST node matches the declared type. Numeric synonyms
+// (int/integer/number) and list/array, map/object are normalized.
 func astMatchesType(declared string, value ast.Node) bool {
 	switch canonicalType(declared) {
 	case "string":
-		// Block-scalar (folded `>` / literal `|`) парсится goccy как LiteralNode,
-		// а не StringNode — но это та же строка. Без этой ветки многострочные
-		// string-params (типичный core.cmd.shell с `cmd: >`) ложно реджектились
-		// как param_type_mismatch.
+		// A block scalar (folded `>` / literal `|`) is parsed by goccy as a
+		// LiteralNode, not a StringNode — but it's the same string. Without this
+		// branch, multi-line string params (typical core.cmd.shell with `cmd: >`)
+		// were falsely rejected as param_type_mismatch.
 		switch value.(type) {
 		case *ast.StringNode, *ast.LiteralNode:
 			return true
@@ -200,7 +200,7 @@ func astMatchesType(declared string, value ast.Node) bool {
 		_, ok := value.(*ast.IntegerNode)
 		return ok
 	case "number":
-		// number принимает и int, и float.
+		// number accepts both int and float.
 		if _, ok := value.(*ast.IntegerNode); ok {
 			return true
 		}
@@ -216,13 +216,13 @@ func astMatchesType(declared string, value ast.Node) bool {
 		_, ok := value.(*ast.MappingNode)
 		return ok
 	default:
-		// Неизвестный тип в схеме — не наша ответственность (manifest-валидатор
-		// ловит input_type_unknown); type-check пропускаем.
+		// Unknown type in the schema is not our concern (the manifest validator
+		// catches input_type_unknown); skip the type check.
 		return true
 	}
 }
 
-// canonicalType сводит синонимы docs/input.md к каноническим именам plugin-DSL.
+// canonicalType maps docs/input.md synonyms to the canonical plugin-DSL names.
 func canonicalType(t string) string {
 	switch t {
 	case "integer":
@@ -238,8 +238,8 @@ func canonicalType(t string) string {
 	}
 }
 
-// splitModuleAddress разбирает `<ns>.<module>.<state>` на части. Возвращает
-// ok=false, если сегментов не ровно три.
+// splitModuleAddress splits `<ns>.<module>.<state>` into parts. Returns ok=false if
+// there are not exactly three segments.
 func splitModuleAddress(addr string) (ns, mod, state string, ok bool) {
 	parts := strings.Split(addr, ".")
 	if len(parts) != 3 {

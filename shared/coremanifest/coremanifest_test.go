@@ -2,13 +2,13 @@ package coremanifest
 
 import "testing"
 
-// expectedModules — полный набор core-манифестов после тиража H2. Ключ — имя
-// верхнего уровня (Namespace+"."+Name), значение — ожидаемые states. Стережёт
-// «забыли добавить файл в coreFiles» и регресс набора states.
+// expectedModules is the full set of core manifests after the H2 rollout. Key is
+// the top-level name (Namespace+"."+Name), value is the expected states. Guards
+// against "forgot to add a file to coreFiles" and against state-set regressions.
 //
-// Keeper-side core (`core.soul`/`core.cloud`/`core.vault`/`core.choir`) заведены
-// тем же механизмом; имена state выровнены на фактический dispatch coremod-ов
-// keeper-стороны (StateCreated/StateDestroyed, StateRead, present/absent).
+// Keeper-side core (`core.soul`/`core.cloud`/`core.vault`/`core.choir`) are declared
+// via the same mechanism; state names are aligned with the actual dispatch of the
+// keeper-side coremods (StateCreated/StateDestroyed, StateRead, present/absent).
 var expectedModules = map[string][]string{
 	"core.exec":     {"run"},
 	"core.file":     {"present", "absent", "rendered", "directory"},
@@ -27,17 +27,17 @@ var expectedModules = map[string][]string{
 	"core.repo":     {"present", "absent"},
 	"core.firewall": {"present", "absent"},
 	"core.http":     {"probe"},
-	"core.noop":     {"run"},                             // no-op/barrier-якорь (ADR-015)
-	"core.module":   {"installed"},                       // доставка SoulModule-плагина (ADR-065)
+	"core.noop":     {"run"},                             // no-op/barrier anchor (ADR-015)
+	"core.module":   {"installed"},                       // SoulModule plugin delivery (ADR-065)
 	"core.soul":     {"registered"},                      // keeper-side (on: keeper)
-	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — авто-расширение VM)
-	"core.vault":    {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (явное чтение) + kv-present (generate-if-absent)
+	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — VM auto-expansion)
+	"core.vault":    {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
 	"core.choir":    {"present", "absent"},               // keeper-side (ADR-044)
 }
 
-// TestDefault_EmbedManifestsParse — все embed-манифесты парсятся и валидны
-// (mustBuild не паникует), реестр содержит ровно ожидаемый набор core-модулей с
-// их states.
+// TestDefault_EmbedManifestsParse — all embed manifests parse and are valid
+// (mustBuild does not panic); the registry contains exactly the expected set of
+// core modules with their states.
 func TestDefault_EmbedManifestsParse(t *testing.T) {
 	reg := Default()
 	if got, want := len(reg.Names()), len(expectedModules); got != want {
@@ -63,9 +63,9 @@ func TestDefault_EmbedManifestsParse(t *testing.T) {
 	}
 }
 
-// TestDefault_RequiredParamsPresent — каждое required-поле каждого state имеет
-// непустой type (manifest-валидатор это проверяет, но дублируем как
-// дрейф-стража: required без type — баг манифеста).
+// TestDefault_RequiredParamsPresent — every required field of every state has a
+// non-empty type (the manifest validator checks this, but we duplicate it as a
+// drift guard: required without type is a manifest bug).
 func TestDefault_RequiredParamsPresent(t *testing.T) {
 	reg := Default()
 	for name := range expectedModules {
@@ -80,7 +80,7 @@ func TestDefault_RequiredParamsPresent(t *testing.T) {
 	}
 }
 
-// TestNames_Deterministic — R2: Names() возвращает отсортированный порядок.
+// TestNames_Deterministic — R2: Names() returns a sorted order.
 func TestNames_Deterministic(t *testing.T) {
 	names := Default().Names()
 	for i := 1; i < len(names); i++ {
@@ -90,7 +90,7 @@ func TestNames_Deterministic(t *testing.T) {
 	}
 }
 
-// TestState_ExecRun — exec.run несёт required cmd и опциональные args/creates/…
+// TestState_ExecRun — exec.run carries required cmd and optional args/creates/…
 func TestState_ExecRun(t *testing.T) {
 	def, ok := Default().State("core.exec", "run")
 	if !ok {
@@ -106,13 +106,13 @@ func TestState_ExecRun(t *testing.T) {
 	if args, ok := def.Input["args"]; !ok || args.Required {
 		t.Errorf("args должен быть опциональным list: %+v", args)
 	}
-	// `command` — частая опечатка вместо cmd; в схеме его быть не должно.
+	// `command` is a common typo for cmd; it must not be in the schema.
 	if _, ok := def.Input["command"]; ok {
 		t.Error("в схеме core.exec.run не должно быть param 'command'")
 	}
 }
 
-// TestState_FileStates — present/absent/rendered с правильными required-полями.
+// TestState_FileStates — present/absent/rendered with the correct required fields.
 func TestState_FileStates(t *testing.T) {
 	cases := []struct {
 		state    string
@@ -136,7 +136,7 @@ func TestState_FileStates(t *testing.T) {
 	}
 }
 
-// TestState_UnknownState — отсутствующий state даёт ok=false.
+// TestState_UnknownState — a missing state yields ok=false.
 func TestState_UnknownState(t *testing.T) {
 	if _, ok := Default().State("core.exec", "runn"); ok {
 		t.Error("несуществующий state вернул ok=true")

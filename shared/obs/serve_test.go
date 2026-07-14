@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// getMetrics — GET <base>/metrics с опц. basic-auth. Возвращает status + body.
+// getMetrics — GET <base>/metrics with optional basic-auth. Returns status + body.
 func getMetrics(t *testing.T, base, user, pass string, withAuth bool) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, base+"/metrics", nil)

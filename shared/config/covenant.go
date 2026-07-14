@@ -1,16 +1,17 @@
 package config
 
-// Covenant — переиспользуемый фрагмент общего контракта секций сценария
-// (`covenant.yml` в корне service-репо). Сценарий подключает его через
-// `extends: <covenant-name>` (ScenarioManifest.Extends) и наследует МИНИМУМ
-// секций input/compute/state_changes/validate; собственные секции сценария
-// ДОБАВЛЯЮТСЯ поверх (add-only merge, mergeSections).
+// Covenant is a reusable fragment of the shared contract for scenario sections
+// (`covenant.yml` at the service-repo root). A scenario pulls it in via
+// `extends: <covenant-name>` (ScenarioManifest.Extends) and inherits the MINIMUM
+// input/compute/state_changes/validate sections; the scenario's own sections are
+// ADDED on top (add-only merge, mergeSections).
 //
-// Граница слоёв (S1 — этот файл): config-уровень даёт типы (ScenarioFragment),
-// merge-операцию (mergeSections) и валидацию ФОРМЫ фрагмента/extends. Сам резолв
-// фрагмента по файловой системе снапшота (чтение covenant.yml по имени из
-// extends) — keeper-side (S2, LoadScenarioManifestResolved): он декодирует
-// фрагмент через [LoadCovenantFragmentFromBytes] и сольёт его в манифест через
+// Layer boundary (S1 — this file): the config level provides the types
+// (ScenarioFragment), the merge operation (mergeSections) and FORM validation of
+// the fragment/extends. Resolving the fragment against the snapshot file system
+// (reading covenant.yml by the name from extends) is keeper-side
+// (S2, LoadScenarioManifestResolved): it decodes the fragment via
+// [LoadCovenantFragmentFromBytes] and merges it into the manifest via
 // [MergeCovenant].
 
 import (
@@ -23,20 +24,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ScenarioFragment — типизированный covenant.yml. Несёт ТОЛЬКО общий контракт
-// четырёх секций; идентичность/задачи/форма/наследование сценария фрагменту НЕ
-// принадлежат (covenant — это контракт, а не самостоятельный сценарий):
+// ScenarioFragment is a typed covenant.yml. It carries ONLY the shared contract
+// of four sections; a scenario's identity/tasks/form/inheritance do NOT belong to
+// the fragment (a covenant is a contract, not a standalone scenario):
 //
-//   - name/tasks/create — у фрагмента нет (он не исполняемый сценарий);
-//   - form — презентационный слой остаётся сугубо локальным (mergeSections его
-//     не трогает): один covenant обслуживает много сценариев с разной формой;
-//   - extends — рекурсия covenant→covenant запрещена (covenant без extends),
-//     иначе пришлось бы резолвить цепочку и закрывать циклы.
+//   - name/tasks/create — the fragment has none (it is not an executable scenario);
+//   - form — the presentation layer stays strictly local (mergeSections does not
+//     touch it): one covenant serves many scenarios with different forms;
+//   - extends — covenant→covenant recursion is forbidden (a covenant has no
+//     extends), else the chain would need resolving and cycle-breaking.
 //
-// Любой из перечисленных ключей в covenant.yml → covenant_unexpected_key
-// (validateCovenantFragment). Декод — те же UnmarshalYAML, что у одноимённых
-// секций ScenarioManifest (Input/Compute/StateChanges переиспользуют свои
-// декодеры).
+// Any of the listed keys in covenant.yml → covenant_unexpected_key
+// (validateCovenantFragment). Decode uses the same UnmarshalYAML as the
+// like-named ScenarioManifest sections (Input/Compute/StateChanges reuse their
+// decoders).
 type ScenarioFragment struct {
 	Input        InputSchemaMap `yaml:"input,omitempty"`
 	Compute      ComputeBlock   `yaml:"compute,omitempty"`
@@ -44,27 +45,27 @@ type ScenarioFragment struct {
 	Validate     []ValidateRule `yaml:"validate,omitempty"`
 }
 
-// reCovenantName — имя covenant-фрагмента в `extends:` (оно же базовое имя файла
-// `covenant.yml`-семейства). Строго одноуровневое kebab-имя: начинается с буквы,
-// далее буквы/цифры/дефис. По построению исключает `/`, `.`, `..` и абсолютный
-// путь — traversal-кламп обеспечивается грамматикой имени, а не пост-проверкой
-// filepath (имя НЕ может выразить выход за каталог).
+// reCovenantName — the covenant-fragment name in `extends:` (also the base name
+// of the `covenant.yml` family). A strictly single-level kebab name: starts with
+// a letter, then letters/digits/dash. By construction it excludes `/`, `.`, `..`
+// and absolute paths — the traversal clamp comes from the name grammar, not a
+// post-hoc filepath check (the name CANNOT express escaping the directory).
 var reCovenantName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// ValidExtendsName сообщает, годно ли имя в `extends:` как ссылка на covenant
-// (форма + traversal-кламп). Пустая строка → false (это «нет наследования», не
-// валидное имя — вызывающая сторона различает пустоту до проверки). Единый
-// источник правды о форме covenant-имени для config-валидатора (semantic-слой) и
-// keeper-side резолвера (S2): резолвер строит путь к covenant.yml ТОЛЬКО для
-// имени, прошедшего эту проверку.
+// ValidExtendsName reports whether a name in `extends:` is valid as a covenant
+// reference (form + traversal clamp). Empty string → false (that is "no
+// inheritance", not a valid name — the caller distinguishes emptiness before the
+// check). The single source of truth for covenant-name form, for the config
+// validator (semantic layer) and the keeper-side resolver (S2): the resolver
+// builds the path to covenant.yml ONLY for a name that passed this check.
 func ValidExtendsName(name string) bool {
 	return reCovenantName.MatchString(name)
 }
 
-// covenantFragmentKnownKeys — закрытый набор top-level ключей covenant.yml.
-// Ключи, принадлежащие сценарию, но НЕ фрагменту (name/tasks/create/form/
-// extends/description/vars), сюда не входят — их присутствие даёт
-// covenant_unexpected_key (фрагмент несёт только контракт четырёх секций).
+// covenantFragmentKnownKeys is the closed set of top-level covenant.yml keys.
+// Keys that belong to a scenario but NOT to the fragment (name/tasks/create/form/
+// extends/description/vars) are absent here — their presence yields
+// covenant_unexpected_key (the fragment carries only the four-section contract).
 var covenantFragmentKnownKeys = map[string]bool{
 	"input":         true,
 	"compute":       true,
@@ -72,13 +73,13 @@ var covenantFragmentKnownKeys = map[string]bool{
 	"validate":      true,
 }
 
-// validateCovenantFragment — schema-time проверка ФОРМЫ covenant.yml поверх уже
-// провалидированных секций (структура input/compute/state_changes/validate
-// валидируется их собственными валидаторами в schemaValidateCovenant). Здесь —
-// covenant-специфичный инвариант: лишний ключ, принадлежащий сценарию, а не
-// фрагменту → covenant_unexpected_key (fail-closed). В частности `extends:`
-// внутри covenant → covenant_unexpected_key: рекурсия covenant→covenant вне
-// грамматики.
+// validateCovenantFragment is the schema-time FORM check for covenant.yml on top
+// of already-validated sections (input/compute/state_changes/validate structure
+// is validated by their own validators in schemaValidateCovenant). Here — the
+// covenant-specific invariant: an extra key that belongs to a scenario, not the
+// fragment → covenant_unexpected_key (fail-closed). In particular `extends:`
+// inside a covenant → covenant_unexpected_key: covenant→covenant recursion is
+// outside the grammar.
 func validateCovenantFragment(root *ast.MappingNode) []diag.Diagnostic {
 	if root == nil {
 		return nil
@@ -104,22 +105,22 @@ func validateCovenantFragment(root *ast.MappingNode) []diag.Diagnostic {
 	return out
 }
 
-// MergeCovenant сливает covenant-фрагмент в манифест сценария ADD-ONLY: фрагмент
-// — БАЗА (минимум), сценарий ДОБАВЛЯЕТ дельту. Shallow по верхнему ключу секции;
-// дубль ключа в обоих (одно имя input-поля, одно имя compute, один `set <поле>`)
-// → ошибка (fail-closed, НЕ last-wins/override — это защита от незаметного
-// переопределения общего контракта). Порядок append — covenant-ПЕРВЫМ
-// (compute/state_changes/validate): общий контракт логически предшествует
-// дельте сценария.
+// MergeCovenant merges a covenant fragment into a scenario manifest ADD-ONLY: the
+// fragment is the BASE (minimum), the scenario ADDS the delta. Shallow by the
+// section's top key; a key present in both (one input-field name, one compute
+// name, one `set <field>`) → error (fail-closed, NOT last-wins/override — this
+// guards against silently overriding the shared contract). Append order is
+// covenant-FIRST (compute/state_changes/validate): the shared contract logically
+// precedes the scenario delta.
 //
-// `form` НЕ трогается (остаётся локальным — fragment его не несёт). Вызов делает
-// keeper-side резолвер (S2) ПОСЛЕ того, как обе стороны раздельно прошли
-// schema-валидацию: ошибки здесь — только конфликты ключей, не структурные.
+// `form` is NOT touched (stays local — the fragment does not carry it). The
+// keeper-side resolver (S2) calls this AFTER both sides have separately passed
+// schema validation: errors here are only key conflicts, not structural.
 //
-// local обязан быть не-nil (резолвер вызывает на уже декодированном манифесте).
-// Возвращает первую найденную ошибку конфликта (детерминированно по порядку
-// секций input → compute → state_changes → validate, внутри секции — по порядку
-// ключей фрагмента), чтобы оператор чинил конфликты по одному.
+// local must be non-nil (the resolver calls it on an already-decoded manifest).
+// Returns the first conflict error found (deterministically by section order
+// input → compute → state_changes → validate, within a section by the fragment's
+// key order), so the operator fixes conflicts one at a time.
 func MergeCovenant(fragment ScenarioFragment, local *ScenarioManifest) error {
 	if err := mergeInputSections(fragment.Input, local); err != nil {
 		return err
@@ -134,10 +135,10 @@ func MergeCovenant(fragment ScenarioFragment, local *ScenarioManifest) error {
 	return nil
 }
 
-// mergeInputSections — shallow union input по имени поля. Дубль имени в обоих →
-// section_key_conflict (НЕ last-wins: covenant задаёт общее поле, сценарий не
-// вправе молча переопределить его схему). Поля фрагмента, которых нет у
-// сценария, добавляются как есть (covenant — минимум).
+// mergeInputSections is a shallow input union by field name. A name present in
+// both → section_key_conflict (NOT last-wins: the covenant sets a shared field,
+// the scenario may not silently override its schema). Fragment fields absent from
+// the scenario are added as-is (covenant is the minimum).
 func mergeInputSections(fragment InputSchemaMap, local *ScenarioManifest) error {
 	if len(fragment) == 0 {
 		return nil
@@ -154,10 +155,10 @@ func mergeInputSections(fragment InputSchemaMap, local *ScenarioManifest) error 
 	return nil
 }
 
-// mergeComputeSections — append covenant-ПЕРВЫМ: результат = fragment ++ local,
-// порядок внутри каждой стороны сохранён (compute[i] ссылается на ранее
-// объявленный compute[j], j<i — covenant-объявления становятся доступны
-// дельте сценария). Дубль имени compute → section_key_conflict.
+// mergeComputeSections appends covenant-FIRST: result = fragment ++ local, order
+// within each side preserved (compute[i] references an earlier-declared
+// compute[j], j<i — covenant declarations become available to the scenario
+// delta). A duplicate compute name → section_key_conflict.
 func mergeComputeSections(fragment ComputeBlock, local *ScenarioManifest) error {
 	if len(fragment) == 0 {
 		return nil
@@ -178,19 +179,19 @@ func mergeComputeSections(fragment ComputeBlock, local *ScenarioManifest) error 
 	return nil
 }
 
-// mergeStateChangeSections — append covenant-ПЕРВЫМ для list-формы (Ops):
-// результат = fragment.Ops ++ local.Ops. Конфликт — только по `set <поле>`
-// (перезапись одного поля дважды: covenant и сценарий борются за финальное
-// значение — section_key_conflict). Прочие глаголы (add/modify/remove/foreach)
-// у одного поля множественны легитимно (несколько add в коллекцию, патчи по
-// разным match) — НЕ конфликт.
+// mergeStateChangeSections appends covenant-FIRST for the list form (Ops):
+// result = fragment.Ops ++ local.Ops. A conflict arises only on `set <field>`
+// (writing one field twice: covenant and scenario fight for the final value —
+// section_key_conflict). Other verbs (add/modify/remove/foreach) on one field are
+// legitimately multiple (several adds into a collection, patches on different
+// match) — NOT a conflict.
 //
-// Map-форма (DEPRECATED, Sets): union по ключу `Sets`, дубль → section_key_
-// conflict. Смешение форм (covenant list + scenario map или наоборот) не
-// поддержано — это разные грамматики state_changes; резолвер (S2) обязан был
-// отвергнуть такой манифест раньше. Здесь: при несовпадении IsList берём более
-// строгий путь — конфликт не детектируется кросс-форменно, append идёт по
-// форме local (covenant другой формы оставляем валидатору S2).
+// Map form (DEPRECATED, Sets): union by the `Sets` key, a duplicate →
+// section_key_conflict. Mixing forms (covenant list + scenario map or vice versa)
+// is unsupported — those are different state_changes grammars; the resolver (S2)
+// should have rejected such a manifest earlier. Here, on an IsList mismatch we
+// take the stricter path — a conflict is not detected cross-form, and append
+// follows the local form (a differently-formed covenant is left to the S2 validator).
 func mergeStateChangeSections(fragment *StateChanges, local *ScenarioManifest) error {
 	if fragment == nil {
 		return nil
@@ -200,7 +201,7 @@ func mergeStateChangeSections(fragment *StateChanges, local *ScenarioManifest) e
 	}
 	sc := local.StateChanges
 
-	// list-форма: append Ops covenant-первым, конфликт по set <поле>.
+	// list form: append Ops covenant-first, conflict on set <field>.
 	if fragment.IsList || sc.IsList {
 		localSets := make(map[string]bool)
 		for _, op := range sc.Ops {
@@ -218,7 +219,7 @@ func mergeStateChangeSections(fragment *StateChanges, local *ScenarioManifest) e
 		return nil
 	}
 
-	// map-форма (DEPRECATED): union Sets, дубль ключа → конфликт.
+	// map form (DEPRECATED): union Sets, a duplicate key → conflict.
 	for field := range fragment.Sets {
 		if _, dup := sc.Sets[field]; dup {
 			return &SectionKeyConflict{Section: "state_changes", Key: "set " + field}
@@ -233,10 +234,10 @@ func mergeStateChangeSections(fragment *StateChanges, local *ScenarioManifest) e
 	return nil
 }
 
-// mergeValidateSections — append covenant-ПЕРВЫМ. Правила НАКАПЛИВАЮТСЯ (без
-// дубль-детекта): два правила могут совпадать текстуально и это не ошибка —
-// validate — это конъюнкция инвариантов, лишнее правило лишь повторно
-// проверяет то же предусловие. covenant-инварианты вычисляются первыми.
+// mergeValidateSections appends covenant-FIRST. Rules ACCUMULATE (no
+// duplicate-detection): two rules may match textually and that is not an error —
+// validate is a conjunction of invariants, a redundant rule just rechecks the
+// same precondition. covenant invariants are evaluated first.
 func mergeValidateSections(fragment []ValidateRule, local *ScenarioManifest) {
 	if len(fragment) == 0 {
 		return
@@ -247,11 +248,11 @@ func mergeValidateSections(fragment []ValidateRule, local *ScenarioManifest) {
 	local.Validate = merged
 }
 
-// schemaValidateCovenant — пост-decode проверки covenant.yml (ScenarioFragment).
-// Сначала covenant-специфичный инвариант формы (validateCovenantFragment: только
-// 4 секции, чужой ключ → covenant_unexpected_key), затем СТРУКТУРА каждой
-// присутствующей секции теми же валидаторами, что у одноимённых секций сценария
-// (covenant несёт тот же DSL — переиспользуем, не дублируем).
+// schemaValidateCovenant runs post-decode checks on covenant.yml (ScenarioFragment).
+// First the covenant-specific form invariant (validateCovenantFragment: only the
+// 4 sections, a foreign key → covenant_unexpected_key), then the STRUCTURE of each
+// present section via the same validators as the like-named scenario sections
+// (the covenant carries the same DSL — reused, not duplicated).
 func schemaValidateCovenant(_ string, root *ast.MappingNode, m *ScenarioFragment) []diag.Diagnostic {
 	out := validateCovenantFragment(root)
 
@@ -271,10 +272,10 @@ func schemaValidateCovenant(_ string, root *ast.MappingNode, m *ScenarioFragment
 	return out
 }
 
-// LoadCovenantFragment — точка входа с I/O: читает `covenant.yml` по пути и
-// декодирует+валидирует фрагмент. Контракт идентичен LoadScenarioManifest.
-// keeper-side резолвер (S2) строит путь к covenant.yml по имени из extends
-// (через ValidExtendsName) и зовёт это.
+// LoadCovenantFragment is the entry point with I/O: reads `covenant.yml` at the
+// path and decodes+validates the fragment. Contract identical to
+// LoadScenarioManifest. The keeper-side resolver (S2) builds the path to
+// covenant.yml from the extends name (via ValidExtendsName) and calls this.
 func LoadCovenantFragment(path string, opts ValidateOptions) (*ScenarioFragment, *Document, []diag.Diagnostic, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -287,32 +288,35 @@ func LoadCovenantFragment(path string, opts ValidateOptions) (*ScenarioFragment,
 	return frag, doc, diags, nil
 }
 
-// LoadCovenantFragmentFromBytes — основная точка входа без I/O (для тестов и
-// keeper-side резолва из снапшота в памяти). Декод + валидация формы covenant.
-// semantic-фаза covenant пуста (форма проверяется в schema-фазе через
-// schemaValidateCovenant); covenantNoSemantic держит сигнатуру parseAndValidate.
+// LoadCovenantFragmentFromBytes is the main entry point without I/O (for tests
+// and keeper-side resolution from an in-memory snapshot). Decode + covenant form
+// validation. The covenant semantic phase is empty (form is checked in the schema
+// phase via schemaValidateCovenant); covenantNoSemantic keeps the
+// parseAndValidate signature.
 func LoadCovenantFragmentFromBytes(filename string, data []byte, opts ValidateOptions) (*ScenarioFragment, *Document, []diag.Diagnostic) {
 	cfg := &ScenarioFragment{}
 	doc, diags := parseAndValidate(filename, stripBOM(data), cfg, opts, covenantNoSemantic)
 	return cfg, doc, diags
 }
 
-// covenantNoSemantic — пустая semantic-фаза covenant (вся валидация covenant —
-// schema-time). Параллель semanticValidateScenario, но фрагменту нечего
-// проверять кросс-полево (нет tasks/register-графа; форма — в schema-фазе).
+// covenantNoSemantic is the empty covenant semantic phase (all covenant
+// validation is schema-time). Parallels semanticValidateScenario, but the
+// fragment has nothing to check cross-field (no tasks/register graph; form is in
+// the schema phase).
 func covenantNoSemantic(_ *ScenarioFragment, _ *ast.MappingNode) []diag.Diagnostic {
 	return nil
 }
 
-// SectionKeyConflict — конфликт add-only merge: ключ секции объявлен и в
-// covenant, и в сценарии. Несёт секцию (input/compute/state_changes) и ключ
-// (имя поля / имя compute / `set <поле>`) для адресной диагностики.
+// SectionKeyConflict is an add-only merge conflict: a section key is declared in
+// both the covenant and the scenario. Carries the section
+// (input/compute/state_changes) and key (field name / compute name / `set
+// <field>`) for targeted diagnostics.
 type SectionKeyConflict struct {
 	Section string
 	Key     string
 }
 
-// Code — машинный код диагностики (для маппинга в diag/HTTP-слой S2).
+// Code is the machine diagnostic code (for mapping into the S2 diag/HTTP layer).
 func (e *SectionKeyConflict) Code() string { return "section_key_conflict" }
 
 func (e *SectionKeyConflict) Error() string {

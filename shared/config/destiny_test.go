@@ -26,10 +26,10 @@ func TestLoadDestinyManifest_Golden(t *testing.T) {
 		t.Errorf("name: got %q want redis", cfg.Name)
 	}
 
-	// Smoke-check глубокого рекурсивного декода: input.users —
-	// type=object с additional_properties→object (typed-контракт нового
-	// destiny/redis, без устаревшего action-DSL). Проверяем самый глубокий
-	// enum: users → additional_properties → properties["state"].enum.
+	// Smoke-check of deep recursive decode: input.users is type=object with
+	// additional_properties→object (typed contract of the new destiny/redis, no legacy
+	// action-DSL). Check the deepest enum: users → additional_properties →
+	// properties["state"].enum.
 	users := cfg.Input["users"]
 	if users == nil {
 		t.Fatal("input.users missing")
@@ -55,22 +55,22 @@ func TestLoadDestinyManifest_Golden(t *testing.T) {
 		t.Errorf("input.users.…state.enum must be non-empty")
 	}
 
-	// Golden стережёт ключевые ограничения typed-контракта.
+	// Golden guards the key constraints of the typed contract.
 	version := cfg.Input["version"]
 	if version == nil || version.Pattern == "" {
 		t.Errorf("input.version.pattern must be present")
 	}
 
-	// РЕДИЗАЙН default_admin (2026-06-30): top-level input.password УДАЛЁН
-	// (requirepass убран из redis.conf, главного пароля больше нет). Стережём,
-	// что он не вернулся: пароль теперь живёт per-user в map users (поле password
-	// каждого ACL-юзера, secret:true), а не отдельным top-level secret-параметром.
+	// default_admin redesign (2026-06-30): top-level input.password REMOVED
+	// (requirepass dropped from redis.conf, no more master password). Guard that it did
+	// not come back: the password now lives per-user in the users map (each ACL user's
+	// password field, secret:true), not as a separate top-level secret param.
 	if cfg.Input["password"] != nil {
 		t.Errorf("input.password must be absent after default_admin redesign (per-user password lives in input.users.*.password), got %#v", cfg.Input["password"])
 	}
-	// Носитель пароля — users → additional_properties → properties["password"]
-	// (secret:true). Это новый контракт: default_admin/replica/monitoring приходят
-	// в map users как все, каждый со своим зарезолвленным секретом.
+	// The password carrier is users → additional_properties → properties["password"]
+	// (secret:true). New contract: default_admin/replica/monitoring arrive in the users
+	// map like everyone else, each with its own resolved secret.
 	userPassword := ap.Properties["password"]
 	if userPassword == nil {
 		t.Fatal("input.users.additional_properties.properties.password missing")
@@ -149,7 +149,7 @@ required_modules: [wb.haproxy, wb.myapp, "bad-no-dot", "ns.UPPER"]
 }
 
 func TestLoadDestinyManifest_InputRequiredAmbiguity(t *testing.T) {
-	// Параметр верхнего уровня — required: true (bool).
+	// Top-level param — required: true (bool).
 	src1 := `name: x
 input:
   foo:
@@ -204,7 +204,7 @@ input:
 }
 
 func TestLoadDestinyManifest_InputDeepNesting(t *testing.T) {
-	// Рекурсия в items → object → properties → array → items.
+	// Recursion into items → object → properties → array → items.
 	src := `name: x
 input:
   outer:
@@ -285,7 +285,7 @@ input:
 }
 
 func TestLoadDestinyManifest_OutputSymmetric(t *testing.T) {
-	// `output:` использует тот же стандарт input.md.
+	// `output:` uses the same input.md standard.
 	src := `name: x
 output:
   result:
@@ -338,8 +338,8 @@ func TestLoadDestinyManifest_NullName(t *testing.T) {
 }
 
 func TestLoadDestinyManifest_DeprecatedKeyNoDuplicate(t *testing.T) {
-	// Bug 3: deprecated top-level ключ должен дать ровно одну диагностику
-	// (с hint от schemaValidateDestiny), а не дубль из reflect-walker-а.
+	// Bug 3: a deprecated top-level key must yield exactly one diagnostic
+	// (with a hint from schemaValidateDestiny), not a duplicate from the reflect-walker.
 	src := `name: x
 tasks: foo
 `
@@ -357,8 +357,8 @@ tasks: foo
 }
 
 func TestLoadDestinyManifest_AdditionalPropertiesNestedSchema(t *testing.T) {
-	// Bug 2: `additional_properties: <schema>` должен рекурсивно валидироваться.
-	// pattern на integer внутри AP-схемы — ошибка input_key_invalid_for_type.
+	// Bug 2: `additional_properties: <schema>` must be validated recursively.
+	// pattern on an integer inside the AP schema is an input_key_invalid_for_type error.
 	src := `name: x
 input:
   m:
@@ -376,7 +376,7 @@ input:
 }
 
 func TestLoadDestinyManifest_RequiredBadValue(t *testing.T) {
-	// Bug 4: `required:` с не-bool / не-sequence значением должно поднять
+	// Bug 4: `required:` with a non-bool / non-sequence value must raise
 	// input_required_value_invalid.
 	src := `name: x
 input:
@@ -441,9 +441,9 @@ input:
 }
 
 func TestLoadDestinyManifest_EnumUnsupportedForArray(t *testing.T) {
-	// Bug 1 (qa.2 BLOCKER): enum для type=array раньше паниковал в equalScalar
-	// при сравнении []any через `==`. Должен теперь выдавать
-	// input_enum_unsupported_for_type, без panic.
+	// Bug 1 (qa.2 BLOCKER): enum for type=array used to panic in equalScalar when
+	// comparing []any via `==`. It must now emit input_enum_unsupported_for_type,
+	// without a panic.
 	src := `name: ok
 input:
   pairs:
@@ -459,9 +459,9 @@ input:
 		dump(t, diags)
 		t.Fatalf("expected input_enum_unsupported_for_type for enum on type=array")
 	}
-	// Strictly: no panic — это уже гарантируется тем, что мы досюда добрались.
-	// Параллельно убедимся, что input_default_not_in_enum НЕ дублируется
-	// (поскольку enum-чек пропускается для composite).
+	// Strictly: no panic — already guaranteed by the fact we got this far.
+	// Also confirm input_default_not_in_enum is NOT duplicated (the enum check is
+	// skipped for composite types).
 	if hasCode(diags, "input_default_not_in_enum") {
 		dump(t, diags)
 		t.Fatalf("input_default_not_in_enum must not fire when enum is unsupported for composite type")
@@ -469,7 +469,7 @@ input:
 }
 
 func TestLoadDestinyManifest_EnumUnsupportedForObject(t *testing.T) {
-	// Симметричная проверка для type=object.
+	// Symmetric check for type=object.
 	src := `name: ok
 input:
   cfg:
@@ -488,8 +488,8 @@ input:
 }
 
 func TestLoadDestinyManifest_DefaultDeepNestedMismatch(t *testing.T) {
-	// Bug 2 (qa.2 minor): default content recursion должен ловить mismatching
-	// leaf-значения на 3+ уровнях вложенности (array[object[array[integer]]]).
+	// Bug 2 (qa.2 minor): default content recursion must catch mismatching leaf values
+	// at 3+ nesting levels (array[object[array[integer]]]).
 	src := `name: ok
 input:
   matrix:
@@ -508,7 +508,7 @@ input:
 		dump(t, diags)
 		t.Fatalf("expected input_default_type_mismatch at leaf depth=3")
 	}
-	// YAML-path должен указывать на конкретный leaf.
+	// The YAML path must point at the specific leaf.
 	want := "$.input.matrix.default[0].rows[2]"
 	found := false
 	for _, d := range diags {

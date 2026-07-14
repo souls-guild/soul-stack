@@ -1,24 +1,24 @@
-// Package netguard — общий SSRF egress-guard для исходящего HTTP к НЕдоверенным
-// endpoint-ам. Единая точка для обеих сторон Soul Stack: Augur-брокеры Keeper-а
-// (prom/elk, keeper/internal/augur) и core-HTTP-модули Soul-а (core.url /
-// core.http, soul/internal/coremod). Два независимо эволюционирующих SSRF-guard-а
-// в security-критичном коде — риск расхождения; этот пакет его устраняет.
+// Package netguard is a shared SSRF egress guard for outbound HTTP to UNtrusted
+// endpoints. A single point for both sides of Soul Stack: Keeper's Augur brokers
+// (prom/elk, keeper/internal/augur) and Soul's core HTTP modules (core.url /
+// core.http, soul/internal/coremod). Two independently evolving SSRF guards in
+// security-critical code risk divergence; this package removes it.
 //
-// Защитная модель (одна для всех потребителей):
-//   - только https:// (downgrade-защита; SSRF к metadata через
-//     http://169.254.169.254 — частый вектор);
-//   - resolve-then-check-then-dial по фактически резолвнутому IP (rebind-safe):
-//     ВСЕ резолвнутые IP проверяются на [IsBlockedIP], dial идёт по уже
-//     проверенному конкретному IP, а не по имени — между проверкой и
-//     соединением нет второго резолва;
-//   - блок редиректов на не-https и цепочек длиннее лимита ([NewCheckRedirect]).
+// Protection model (one for all consumers):
+//   - https:// only (downgrade protection; SSRF to metadata via
+//     http://169.254.169.254 is a common vector);
+//   - resolve-then-check-then-dial on the actually resolved IP (rebind-safe):
+//     ALL resolved IPs are checked against [IsBlockedIP], and dial goes to the
+//     already-checked concrete IP, not the name — there is no second resolve
+//     between check and connection;
+//   - block redirects to non-https and chains longer than the limit
+//     ([NewCheckRedirect]).
 //
-// Soul-safe ([ADR-011]): только net/http stdlib, без server-only зависимостей и
-// без импорта keeper-/soul-internal. Назван netguard по образцу shared/tlsx —
-// инфра-утилита, суффикс описывает домен (сетевой guard), не конфликтует со
-// stdlib net.
+// Soul-safe ([ADR-011]): net/http stdlib only, no server-only dependencies and no
+// keeper-/soul-internal import. Named netguard after shared/tlsx — an infra utility
+// whose suffix describes the domain (network guard); no conflict with stdlib net.
 //
-// [ADR-011]: docs/adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам
+// [ADR-011]: docs/adr/0011-go-layout.md
 package netguard
 
 import (
@@ -30,20 +30,20 @@ import (
 	"strings"
 )
 
-// extraBlockedNets — CIDR-диапазоны вне классификаторов stdlib
-// (net.IP.IsPrivate/IsLoopback/…), блокируемые симметрично как
-// «маршрутизируемые во внутренние сети»:
+// extraBlockedNets — CIDR ranges outside the stdlib classifiers
+// (net.IP.IsPrivate/IsLoopback/…), blocked symmetrically as "routable into internal
+// networks":
 //
 //   - 100.64.0.0/10 — CGNAT / Shared Address Space (RFC 6598): carrier-grade NAT,
-//     часто видимо во внутренних сетях и не отлавливается IsPrivate.
-//   - fec0::/10 — устаревший IPv6 site-local (RFC 3879): deprecated, но всё ещё
-//     может резолвиться/маршрутизироваться в legacy-сетях; не входит в
-//     IsLinkLocalUnicast (fe80::/10).
+//     often visible in internal networks and not caught by IsPrivate.
+//   - fec0::/10 — deprecated IPv6 site-local (RFC 3879): deprecated, but may still
+//     resolve/route in legacy networks; not covered by IsLinkLocalUnicast
+//     (fe80::/10).
 //
-// net.IPNet.Contains нормализует IPv4-mapped IPv6 (::ffff:100.64.0.1) к v4-форме,
-// поэтому CGNAT-проверка автоматически закрывает и v6-mapped обход. Остальные
-// уже заблокированные классы (loopback/RFC1918/ULA/link-local) тоже отрабатывают
-// в v4-mapped-форме, так как stdlib-классификаторы используют To4().
+// net.IPNet.Contains normalizes IPv4-mapped IPv6 (::ffff:100.64.0.1) to v4 form, so
+// the CGNAT check automatically closes the v6-mapped bypass too. The other
+// already-blocked classes (loopback/RFC1918/ULA/link-local) also work in v4-mapped
+// form, since the stdlib classifiers use To4().
 var extraBlockedNets = []*net.IPNet{
 	mustCIDR("100.64.0.0/10"),
 	mustCIDR("fec0::/10"),
@@ -57,19 +57,19 @@ func mustCIDR(s string) *net.IPNet {
 	return n
 }
 
-// IsBlockedIP классифицирует IP как недопустимый для исходящего HTTP к
-// НЕдоверенному endpoint-у: loopback (127.0.0.0/8, ::1), приватные RFC1918/ULA
-// (10/172.16/192.168, fc00::/7), link-local (169.254.0.0/16 — включает
-// cloud-metadata 169.254.169.254 — и fe80::/10), CGNAT (100.64.0.0/10, RFC 6598),
-// устаревший IPv6 site-local (fec0::/10, RFC 3879) и unspecified (0.0.0.0, ::).
-// Возврат true означает «соединение запрещено».
+// IsBlockedIP classifies an IP as disallowed for outbound HTTP to an UNtrusted
+// endpoint: loopback (127.0.0.0/8, ::1), private RFC1918/ULA (10/172.16/192.168,
+// fc00::/7), link-local (169.254.0.0/16 — includes cloud-metadata 169.254.169.254 —
+// and fe80::/10), CGNAT (100.64.0.0/10, RFC 6598), deprecated IPv6 site-local
+// (fec0::/10, RFC 3879) and unspecified (0.0.0.0, ::). Returning true means
+// "connection forbidden".
 //
-// IPv4-mapped IPv6 (::ffff:0:0/96) обхода не даёт: stdlib-классификаторы и
-// net.IPNet.Contains нормализуют такие адреса к v4-форме, поэтому заблокированный
-// IPv4 остаётся заблокированным и в v6-форме.
+// IPv4-mapped IPv6 (::ffff:0:0/96) gives no bypass: the stdlib classifiers and
+// net.IPNet.Contains normalize such addresses to v4 form, so a blocked IPv4 stays
+// blocked in v6 form too.
 //
-// Экспортирована для unit-тестирования классификатора в изоляции (без выхода в
-// сеть и без сборки клиента).
+// Exported for unit-testing the classifier in isolation (no network egress, no
+// client build).
 func IsBlockedIP(ip net.IP) bool {
 	if ip.IsLoopback() ||
 		ip.IsPrivate() ||
@@ -86,15 +86,15 @@ func IsBlockedIP(ip net.IP) bool {
 	return false
 }
 
-// ValidateHTTPSURL принимает только https://. http:// — downgrade-риск, file:// —
-// чтение локальной ФС в обход модели доступа; всё, кроме https, отвергается.
+// ValidateHTTPSURL accepts https:// only. http:// is a downgrade risk, file:// reads
+// the local FS bypassing the access model; everything but https is rejected.
 //
-// Разбор через url.Parse (не строковый префикс): схема сверяется
-// регистронезависимо (валидный `HTTPS://` проходит) и по-настоящему
-// (`https://\nhttp://evil` не пролезает через наивный HasPrefix).
+// Parsed via url.Parse (not a string prefix): the scheme is compared
+// case-insensitively (a valid `HTTPS://` passes) and properly (`https://\nhttp://evil`
+// does not slip through a naive HasPrefix).
 //
-// Литеральный IP в host НЕ проверяется здесь — это делает [ValidateEndpoint]
-// (быстрый отказ до сборки клиента) и в любом случае dial-фаза по резолвнутому
+// A literal IP in host is NOT checked here — that is done by [ValidateEndpoint] (fast
+// reject before the client build) and in any case by the dial phase on the resolved
 // IP ([GuardedDialContext]).
 func ValidateHTTPSURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
@@ -107,10 +107,10 @@ func ValidateHTTPSURL(rawURL string) error {
 	return nil
 }
 
-// ValidateEndpoint — строгая форма проверки endpoint-а перед HTTP-запросом:
-// [ValidateHTTPSURL] (только https) + непустой host + литеральный IP в host
-// проверяется на [IsBlockedIP] здесь (быстрый отказ до сборки клиента).
-// DNS-имена проверяются на dial-фазе по резолвнутому IP ([GuardedDialContext]).
+// ValidateEndpoint — strict endpoint check before an HTTP request:
+// [ValidateHTTPSURL] (https only) + non-empty host + a literal IP in host is checked
+// against [IsBlockedIP] here (fast reject before the client build). DNS names are
+// checked in the dial phase on the resolved IP ([GuardedDialContext]).
 func ValidateEndpoint(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -129,16 +129,15 @@ func ValidateEndpoint(rawURL string) error {
 	return nil
 }
 
-// NewCheckRedirect возвращает http.Client.CheckRedirect: отвергает любой редирект
-// на не-https и цепочку длиннее maxRedirects. Возврат ошибки прерывает запрос
-// (downgrade/MITM-защита неотключаема): 302 https→http не должен скачать payload
-// по незащищённому каналу и утечь sensitive-заголовки.
+// NewCheckRedirect returns an http.Client.CheckRedirect: it rejects any redirect to
+// non-https and a chain longer than maxRedirects. Returning an error aborts the
+// request (downgrade/MITM protection is non-disableable): a 302 https→http must not
+// download a payload over an unprotected channel and leak sensitive headers.
 //
-// SSRF-защита редиректов делается НЕ здесь, а в DialContext клиента
-// ([GuardedDialContext]): hop на хост, резолвящийся в metadata/loopback/RFC1918,
-// будет отвергнут на dial-фазе по фактически резолвнутому IP — это закрывает и
-// прямой доступ, и DNS-rebind, чего CheckRedirect (видит только URL hop-а) дать
-// не может.
+// SSRF protection of redirects is done NOT here but in the client's DialContext
+// ([GuardedDialContext]): a hop to a host resolving to metadata/loopback/RFC1918 is
+// rejected in the dial phase on the actually resolved IP — this closes both direct
+// access and DNS-rebind, which CheckRedirect (seeing only the hop URL) cannot.
 func NewCheckRedirect(maxRedirects int) func(req *http.Request, via []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if !strings.EqualFold(req.URL.Scheme, "https") {
@@ -151,29 +150,28 @@ func NewCheckRedirect(maxRedirects int) func(req *http.Request, via []*http.Requ
 	}
 }
 
-// Resolver — минимум net.Resolver, нужный SSRF-guard. Интерфейс (не конкретный
-// *net.Resolver) — чтобы unit-тест guard-а инжектил фейковый резолвер
-// (DNS-rebind / multi-IP кейсы) без поднятия настоящего DNS. В проде —
-// [DefaultResolver].
+// Resolver — the minimum net.Resolver the SSRF guard needs. An interface (not a
+// concrete *net.Resolver) so a guard unit test can inject a fake resolver
+// (DNS-rebind / multi-IP cases) without a real DNS. In production — [DefaultResolver].
 type Resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
-// DefaultResolver — системный DNS-резолвер для production-клиентов.
+// DefaultResolver — the system DNS resolver for production clients.
 var DefaultResolver Resolver = net.DefaultResolver
 
-// DialFunc — сигнатура net.Dialer.DialContext; параметр guard-а, чтобы тест
-// проверял, по какому именно адресу (IP) пошёл dial (rebind-safety), без
-// реального TCP-соединения.
+// DialFunc — the net.Dialer.DialContext signature; a guard parameter so a test can
+// verify which address (IP) the dial went to (rebind-safety), without a real TCP
+// connection.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// GuardedDialContext строит DialContext с resolve-then-check-then-dial: адрес
-// резолвится через resolver, ВСЕ полученные IP проверяются на [IsBlockedIP] (если
-// хоть один заблокирован — отказ целиком, чтобы хост с парой «один публичный +
-// один metadata» A-записей не обходил guard), и dial идёт по первому проверенному
-// IP, а не по имени. Dial именно по IP (а не повторный resolve внутри dialer) —
-// ключ к защите от DNS-rebind: между проверкой и соединением нет второго резолва,
-// который мог бы вернуть другой адрес.
+// GuardedDialContext builds a DialContext with resolve-then-check-then-dial: the
+// address is resolved via resolver, ALL returned IPs are checked against
+// [IsBlockedIP] (if any one is blocked — reject entirely, so a host with a "one
+// public + one metadata" pair of A-records can't bypass the guard), and dial goes to
+// the first checked IP, not the name. Dialing the IP itself (not a repeat resolve
+// inside the dialer) is the key to DNS-rebind protection: there is no second resolve
+// between check and connection that could return a different address.
 func GuardedDialContext(resolver Resolver, dial DialFunc) DialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -181,7 +179,7 @@ func GuardedDialContext(resolver Resolver, dial DialFunc) DialFunc {
 			return nil, fmt.Errorf("netguard: ssrf-guard bad address %q: %w", addr, err)
 		}
 
-		// Литеральный IP в URL — проверяем без резолва.
+		// Literal IP in the URL — check without resolving.
 		if ip := net.ParseIP(host); ip != nil {
 			if IsBlockedIP(ip) {
 				return nil, blockedErr(host, ip)
@@ -202,14 +200,14 @@ func GuardedDialContext(resolver Resolver, dial DialFunc) DialFunc {
 			}
 		}
 
-		// Dial по уже проверенному конкретному IP (rebind-safe): берём первый,
-		// network/port сохраняем. Повторного резолва имени нет.
+		// Dial the already-checked concrete IP (rebind-safe): take the first,
+		// keep network/port. No repeat name resolve.
 		return dial(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
 }
 
-// blockedErr — единая формулировка отказа SSRF-guard (host для диагностики,
-// класс адреса — через сам IP; ничего лишнего наружу).
+// blockedErr — the single SSRF-guard rejection wording (host for diagnostics,
+// address class via the IP itself; nothing extra leaked out).
 func blockedErr(host string, ip net.IP) error {
 	return fmt.Errorf("netguard: ssrf-guard blocked address for %q: %s (loopback/private/link-local/cgnat/site-local)", host, ip)
 }

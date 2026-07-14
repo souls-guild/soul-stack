@@ -1,16 +1,18 @@
 package config
 
-// Top-level scenario-секция `validate:` (ADR-009 amendment 2026-06-23, DSL wave 2):
-// декларативная input-валидация списком правил `[{that, message}]`. См. doc-comment
-// на [ValidateRule] (scenario.go) о назначении и границе с assert/required_when.
+// The top-level scenario section `validate:` (ADR-009 amendment 2026-06-23, DSL
+// wave 2): declarative input validation as a list of rules `[{that, message}]`.
+// See the doc-comment on [ValidateRule] (scenario.go) for its purpose and the
+// boundary with assert/required_when.
 //
-// Реализация СОЗНАТЕЛЬНО переиспользует узкий cel-go-sandbox `required_when`
-// (input_required_when.go): `that`-предикат компилируется тем же [compileRequiredWhen]
-// против inputEnv с единственной переменной `input`. Никакого второго CEL-движка —
-// один источник input-only-eval на required_when и validate. Ссылка на любое имя
-// вне `input` (essence/soulprint/register/vault/now) → compile-ошибка undeclared
-// reference: структурный input-only-барьер обеспечивается необъявленностью env,
-// не текстовым guard-ом (симметрично required_when и migration-CEL ADR-019).
+// The implementation DELIBERATELY reuses the narrow `required_when` cel-go
+// sandbox (input_required_when.go): the `that` predicate is compiled by the same
+// [compileRequiredWhen] against inputEnv with the single variable `input`. No
+// second CEL engine — one source of input-only eval for both required_when and
+// validate. A reference to any name outside `input`
+// (essence/soulprint/register/vault/now) → an undeclared-reference compile
+// error: the structural input-only barrier comes from the env being undeclared,
+// not from a text guard (symmetric to required_when and migration-CEL ADR-019).
 
 import (
 	"fmt"
@@ -20,30 +22,32 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ValidateRuleFailure — провал одного `validate:`-правила на runtime-eval: индекс
-// правила в списке + его message (для 422 validation_failed) + сам предикат (для
-// диагностики/логов). Возвращается [EvalValidateRules] на первом `that == false`.
+// ValidateRuleFailure is a single `validate:` rule failing at runtime eval: the
+// rule's index in the list + its message (for 422 validation_failed) + the
+// predicate itself (for diagnostics/logs). Returned by [EvalValidateRules] on
+// the first `that == false`.
 type ValidateRuleFailure struct {
 	Index   int
 	Message string
 	That    string
 }
 
-// Error — человекочитаемая форма провала: message правила + индекс/текст предиката.
-// Симметрично формату render.ErrAssertFailed («message (предикат that[i] ... )»).
+// Error is the human-readable failure form: the rule's message + the predicate
+// index/text. Symmetric to the render.ErrAssertFailed format.
 func (f ValidateRuleFailure) Error() string {
 	return fmt.Sprintf("%s (validate[%d] %q вычислился в false)", f.Message, f.Index, f.That)
 }
 
-// EvalValidateRules вычисляет правила `validate:` над смерженным input (после
-// mergeInputDefaults) в input-only CEL-контексте. Возвращает:
-//   - (nil, nil) — все правила прошли (или список пуст);
-//   - (*ValidateRuleFailure, nil) — первое `that == false`: правило-нарушитель;
-//   - (nil, err) — внутренний сбой eval (предикат не bool / CEL runtime-error /
-//     сбой компиляции — невозможен после schema-валидации, но не глотаем).
+// EvalValidateRules evaluates the `validate:` rules over the merged input (after
+// mergeInputDefaults) in an input-only CEL context. Returns:
+//   - (nil, nil) — all rules passed (or the list is empty);
+//   - (*ValidateRuleFailure, nil) — the first `that == false`: the offending rule;
+//   - (nil, err) — an internal eval failure (predicate not bool / CEL runtime
+//     error / a compile failure — impossible after schema validation, but not
+//     swallowed).
 //
-// merged nil-безопасен (пустой контекст). Первый false выигрывает (короткое
-// замыкание по порядку объявления — как required_when по полям и assert по that[]).
+// merged is nil-safe (empty context). The first false wins (short-circuit in
+// declaration order — like required_when over fields and assert over that[]).
 func EvalValidateRules(rules []ValidateRule, merged map[string]any) (*ValidateRuleFailure, error) {
 	if merged == nil {
 		merged = map[string]any{}
@@ -68,19 +72,20 @@ func EvalValidateRules(rules []ValidateRule, merged map[string]any) (*ValidateRu
 	return nil, nil
 }
 
-// validateValidateBlock — schema-time проверка top-level `validate:`-блока:
-// sequence правил, каждое — mapping `{ that: <CEL-bool>, message: <str> }`.
+// validateValidateBlock — schema-time check of the top-level `validate:` block:
+// a sequence of rules, each a mapping `{ that: <CEL-bool>, message: <str> }`.
 //
-//   - блок обязан быть непустым sequence (пустой `validate: []` бессмыслен —
-//     отвергаем как empty_value: правило-без-правил вводит автора в заблуждение);
-//   - `that` — обязателен, непустая строка, парсимая/компилируемая против inputEnv
-//     (input-only). Парс-ошибка ИЛИ ссылка на имя вне `input` →
+//   - the block must be a non-empty sequence (an empty `validate: []` is
+//     meaningless — rejected as empty_value: a rule-set with no rules misleads
+//     the author);
+//   - `that` — required, a non-empty string parsable/compilable against inputEnv
+//     (input-only). A parse error OR a reference to a name outside `input` →
 //     validate_rule_invalid;
-//   - `message` — обязателен, непустая строка (без message провал правила
-//     анонимен — оператор не поймёт причину 422; ассиметрия с assert.message,
-//     который опционален, оправдана: assert несёт имя задачи как fallback,
-//     у validate-правила имени нет);
-//   - прочие ключи внутри правила — unknown_key (fail-closed).
+//   - `message` — required, a non-empty string (without message a rule failure
+//     is anonymous — the operator cannot tell the cause of the 422; the
+//     asymmetry with the optional assert.message is justified: assert carries
+//     the task name as a fallback, a validate rule has no name);
+//   - any other key inside a rule — unknown_key (fail-closed).
 func validateValidateBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	node := findValueNode(root, "validate")
 	seq, ok := node.(*ast.SequenceNode)
@@ -117,9 +122,9 @@ func validateValidateBlock(root *ast.MappingNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// validateValidateRule — валидация одного правила `validate[i]` (см.
-// validateValidateBlock). that/message обязательны и непусты; that компилируется
-// input-only; неизвестные ключи отбраковываются.
+// validateValidateRule — validation of one `validate[i]` rule (see
+// validateValidateBlock). that/message are required and non-empty; that is
+// compiled input-only; unknown keys are rejected.
 func validateValidateRule(node ast.Node, path string) []diag.Diagnostic {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -179,7 +184,7 @@ func validateValidateRule(node ast.Node, path string) []diag.Diagnostic {
 	return out
 }
 
-// validateRuleThat — `that` непустая строка, парсимая/компилируемая input-only.
+// validateRuleThat — `that` is a non-empty string, parsable/compilable input-only.
 func validateRuleThat(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	sn, isStr := kv.Value.(*ast.StringNode)
 	if !isStr {
@@ -211,7 +216,7 @@ func validateRuleThat(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	return nil
 }
 
-// validateRuleMessage — `message` непустая строка.
+// validateRuleMessage — `message` is a non-empty string.
 func validateRuleMessage(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 	sn, isStr := kv.Value.(*ast.StringNode)
 	if !isStr {

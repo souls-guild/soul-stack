@@ -2,26 +2,26 @@ package audit
 
 import "github.com/souls-guild/soul-stack/shared/diag"
 
-// FormatDiagnostics конвертирует список диагностик валидатора в
-// audit-friendly slice для поля `payload.validation_errors[]` события
-// `config.reload_failed` (см. [ADR-022(j)](docs/architecture.md)).
+// FormatDiagnostics converts a list of validator diagnostics into an
+// audit-friendly slice for the `payload.validation_errors[]` field of the
+// `config.reload_failed` event (see [ADR-022(j)](docs/architecture.md)).
 //
-// Каждая запись содержит набор ключей по convention ADR-022(j):
+// Each entry holds a set of keys per the ADR-022(j) convention:
 //
-//   - "code"      — стабильный snake_case-код ([diag.Diagnostic.Code]).
-//   - "message"   — человеко-читаемое описание.
-//   - "phase"     — фаза validation pipeline ([diag.Phase]).
-//   - "level"     — уровень диагностики ([diag.Level]).
-//   - "yaml_path" — путь goccy/go-yaml; опускается, если пустой.
-//   - "line"      — позиция в файле; опускается, если 0.
-//   - "column"    — позиция в файле; опускается, если 0.
+//   - "code"      — stable snake_case code ([diag.Diagnostic.Code]).
+//   - "message"   — human-readable description.
+//   - "phase"     — validation-pipeline phase ([diag.Phase]).
+//   - "level"     — diagnostic level ([diag.Level]).
+//   - "yaml_path" — goccy/go-yaml path; omitted if empty.
+//   - "line"      — position in the file; omitted if 0.
+//   - "column"    — position in the file; omitted if 0.
 //
-// Helper переиспользуется любыми write-path-инициаторами audit-pipeline-а,
-// у которых payload включает diagnostic-список (hot-reload по SIGHUP,
-// API/MCP reload-endpoints, lint-runs).
+// The helper is reused by any audit-pipeline write-path initiators whose payload
+// includes a diagnostic list (hot-reload on SIGHUP, API/MCP reload endpoints,
+// lint-runs).
 //
-// nil/пустой вход → nil. Это сознательно: caller, не получивший ни одной
-// диагностики, может опустить ключ `validation_errors` в payload вообще.
+// nil/empty input → nil. Deliberate: a caller that got no diagnostics may omit the
+// `validation_errors` key from the payload entirely.
 func FormatDiagnostics(diags []diag.Diagnostic) []map[string]any {
 	if len(diags) == 0 {
 		return nil

@@ -6,8 +6,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ldapValidBlock — корректный блок auth.ldap (ldaps:// + search-bind), к которому
-// тесты добавляют/меняют отдельные поля. Дописывается к keeperBaseRequired.
+// ldapValidBlock — a valid auth.ldap block (ldaps:// + search-bind) to which tests
+// add/change individual fields. Appended to keeperBaseRequired.
 const ldapValidBlock = `auth:
   ldap:
     url: "ldaps://ldap.example.com:636"
@@ -23,8 +23,8 @@ const ldapValidBlock = `auth:
       ops: ["cluster-admin"]
 `
 
-// TestKeeperAuthLDAP_Valid — корректный ldaps:// + search-bind грузится без
-// ошибок (semantic-фаза auth.ldap).
+// TestKeeperAuthLDAP_Valid — a valid ldaps:// + search-bind loads without errors
+// (auth.ldap semantic phase).
 func TestKeeperAuthLDAP_Valid(t *testing.T) {
 	src := keeperBaseRequired + ldapValidBlock
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
@@ -34,8 +34,8 @@ func TestKeeperAuthLDAP_Valid(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_PlaintextForbidden — ldap:// без start_tls запрещён
-// (TLS-required, безопасность на первом месте, ADR-058(g)).
+// TestKeeperAuthLDAP_PlaintextForbidden — ldap:// without start_tls is forbidden
+// (TLS-required, security first, ADR-058(g)).
 func TestKeeperAuthLDAP_PlaintextForbidden(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -50,8 +50,8 @@ func TestKeeperAuthLDAP_PlaintextForbidden(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_StartTLSAllowed — ldap:// + start_tls: true допустим
-// (StartTLS поднимает TLS поверх plaintext-порта).
+// TestKeeperAuthLDAP_StartTLSAllowed — ldap:// + start_tls: true is allowed
+// (StartTLS raises TLS over the plaintext port).
 func TestKeeperAuthLDAP_StartTLSAllowed(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -67,7 +67,7 @@ func TestKeeperAuthLDAP_StartTLSAllowed(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_TLSConflict — ldaps:// и start_tls взаимоисключимы.
+// TestKeeperAuthLDAP_TLSConflict — ldaps:// and start_tls are mutually exclusive.
 func TestKeeperAuthLDAP_TLSConflict(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -83,8 +83,8 @@ func TestKeeperAuthLDAP_TLSConflict(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_SearchRequiresBindCreds — bind_mode=search (или пустой
-// дефолт) без bind_dn/bind_password_ref → ошибки.
+// TestKeeperAuthLDAP_SearchRequiresBindCreds — bind_mode=search (or the empty
+// default) without bind_dn/bind_password_ref → errors.
 func TestKeeperAuthLDAP_SearchRequiresBindCreds(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -101,9 +101,9 @@ func TestKeeperAuthLDAP_SearchRequiresBindCreds(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_UnsupportedBindMode — bind_mode вне {"", "search"} → ERROR
-// на load (раньше ловилось только runtime в ldap.New): стадия 1 поддерживает
-// только search-bind, direct отложен (code-nit, point 5).
+// TestKeeperAuthLDAP_UnsupportedBindMode — bind_mode outside {"", "search"} →
+// ERROR on load (previously caught only at runtime in ldap.New): stage 1 supports
+// only search-bind, direct is deferred (code-nit, point 5).
 func TestKeeperAuthLDAP_UnsupportedBindMode(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -121,8 +121,8 @@ func TestKeeperAuthLDAP_UnsupportedBindMode(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_BindPasswordRefFormat — bind_password_ref не vault-ref →
-// ошибка формата (тот же checkVaultRef, что у redis.password_ref).
+// TestKeeperAuthLDAP_BindPasswordRefFormat — bind_password_ref that is not a
+// vault-ref → format error (the same checkVaultRef as for redis.password_ref).
 func TestKeeperAuthLDAP_BindPasswordRefFormat(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:
@@ -137,8 +137,8 @@ func TestKeeperAuthLDAP_BindPasswordRefFormat(t *testing.T) {
 	}
 }
 
-// TestKeeperAuthLDAP_InsecureSkipVerifyWarns — insecure_skip_verify: true даёт
-// WARN, но не блокирует загрузку (dev-only opt-out).
+// TestKeeperAuthLDAP_InsecureSkipVerifyWarns — insecure_skip_verify: true gives a
+// WARN but does not block loading (dev-only opt-out).
 func TestKeeperAuthLDAP_InsecureSkipVerifyWarns(t *testing.T) {
 	src := keeperBaseRequired + `auth:
   ldap:

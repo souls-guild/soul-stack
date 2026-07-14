@@ -101,7 +101,7 @@ func TestEvalExpression_CompileError(t *testing.T) {
 func TestEvalExpression_EvalError(t *testing.T) {
 	e := newEngine(t)
 
-	// Деление на ноль — runtime-ошибка CEL.
+	// Division by zero — a CEL runtime error.
 	_, err := e.EvalExpression("input.x / 0", Vars{Input: map[string]any{"x": 1}})
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
@@ -152,7 +152,7 @@ func TestEvalInterpolation_StringResultNoText(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"greeting": "world"}}
 
-	// Один блок, результат — строка: возвращается строка (не int).
+	// Single block, string result: a string is returned (not an int).
 	out, err := e.EvalInterpolation("${ input.greeting }", vars)
 	if err != nil {
 		t.Fatalf("EvalInterpolation: %v", err)
@@ -166,8 +166,8 @@ func TestEvalInterpolation_BalancedBraces(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"m": map[string]any{"k": "v"}}}
 
-	// Внутри ${ } есть map-литерал со своими {}: закрывающая } блока —
-	// последняя, не первая. Балансировку определяет CEL-парсер.
+	// Inside ${ } there is a map literal with its own {}: the block's closing }
+	// is the last one, not the first. The CEL parser determines the balancing.
 	out, err := e.EvalInterpolation("${ {'a': 1}['a'] }", vars)
 	if err != nil {
 		t.Fatalf("EvalInterpolation balanced: %v", err)
@@ -217,7 +217,7 @@ func TestEvalInterpolation_Escape(t *testing.T) {
 func TestEvalInterpolation_DollarLiteral(t *testing.T) {
 	e := newEngine(t)
 
-	// Одиночный $ маркером не является ([templating.md §2.2]).
+	// A lone $ is not a marker ([templating.md §2.2]).
 	out, err := e.EvalInterpolation("price: $100", Vars{})
 	if err != nil {
 		t.Fatalf("EvalInterpolation: %v", err)
@@ -253,7 +253,7 @@ func TestEvalInterpolation_ListConcatError(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"xs": []any{1, 2}}}
 
-	// list рядом с текстом — склейка структуры запрещена ([templating.md §5]).
+	// A list next to text — concatenating a structure is forbidden ([templating.md §5]).
 	_, err := e.EvalInterpolation("xs: ${ input.xs }!", vars)
 	var ee *ErrEval
 	if !errors.As(err, &ee) {
@@ -265,8 +265,8 @@ func TestEvalInterpolation_ListNativeSingleBlock(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"xs": []any{"a", "b"}}}
 
-	// Один блок без текста — list возвращается как нативное значение
-	// (не стрингифицируется).
+	// Single block without text — the list is returned as a native value
+	// (not stringified).
 	out, err := e.EvalInterpolation("${ input.xs }", vars)
 	if err != nil {
 		t.Fatalf("EvalInterpolation: %v", err)
@@ -313,7 +313,7 @@ func TestCache_HitAndReset(t *testing.T) {
 	if _, err := e.EvalExpression("input.foo == 'bar'", vars); err != nil {
 		t.Fatalf("первый eval: %v", err)
 	}
-	// Нормализованная форма того же выражения должна попасть в тот же ключ.
+	// The normalized form of the same expression must map to the same key.
 	if _, err := e.EvalExpression("input.foo   ==   'bar'", vars); err != nil {
 		t.Fatalf("второй eval: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestNormalizePreservesStringLiterals(t *testing.T) {
 	e := newEngine(t)
 	vars := Vars{Input: map[string]any{"s": "a  b"}}
 
-	// Пробелы внутри строкового литерала значимы, нормализация их не трогает.
+	// Spaces inside a string literal are significant; normalization leaves them alone.
 	val, err := e.EvalExpression("input.s == 'a  b'", vars)
 	if err != nil {
 		t.Fatalf("EvalExpression: %v", err)

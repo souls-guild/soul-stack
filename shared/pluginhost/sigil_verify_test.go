@@ -13,16 +13,16 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// lookupStub — минимальный SigilLookup для тестов. nil-результат на отсутствие
-// ключа моделирует «допуск не доехал».
+// lookupStub — a minimal SigilLookup for tests. A nil result on a missing key models
+// "the sigil didn't arrive".
 type lookupStub map[string]*SigilRecord
 
 func (l lookupStub) Get(ns, name string) *SigilRecord { return l[ns+"."+name] }
 
-// signFixture симметрично keeper/internal/sigil.Signer.Sign собирает подпись
-// над тем же блоком теми же helper-ами (BuildSigilBlock + NormalizeManifestBytes).
-// Если verify и эта функция разойдутся — компилятор/тест это поймает: helper-ы
-// общие, второй имплементации хеширования нет (S3↔S6-симметрия).
+// signFixture, symmetric with keeper/internal/sigil.Signer.Sign, builds the signature
+// over the same block with the same helpers (BuildSigilBlock + NormalizeManifestBytes).
+// If verify and this function diverge, the compiler/test catches it: the helpers are
+// shared, there's no second hashing implementation (S3↔S6 symmetry).
 func signFixture(t *testing.T, priv ed25519.PrivateKey, ns, name, ref string, binDigestHex string, manifest []byte) []byte {
 	t.Helper()
 	binRaw, err := hex.DecodeString(binDigestHex)
@@ -34,7 +34,7 @@ func signFixture(t *testing.T, priv ed25519.PrivateKey, ns, name, ref string, bi
 	return ed25519.Sign(priv, block)
 }
 
-// sigilTestEnv — собранный плагин на диске + согласованный валидный SigilRecord.
+// sigilTestEnv — a built plugin on disk + a matching valid SigilRecord.
 type sigilTestEnv struct {
 	dir      string
 	binPath  string
@@ -102,7 +102,7 @@ func (e sigilTestEnv) discovered() Discovered {
 	return Discovered{Manifest: e.manifest, BinaryPath: e.binPath, Dir: e.dir}
 }
 
-// asVerifyError извлекает *VerifyError из обёрнутой ошибки Spawn.
+// asVerifyError extracts *VerifyError from a wrapped Spawn error.
 func asVerifyError(t *testing.T, err error) *VerifyError {
 	t.Helper()
 	if err == nil {
@@ -118,15 +118,15 @@ func asVerifyError(t *testing.T, err error) *VerifyError {
 	return ve
 }
 
-// TestSigilVerifySuccess — валидный sigil + бинарь + manifest из транспорта:
-// verify проходит, sidecar засилен. Spawn потом падает на handshake (бинарь —
-// заглушка без handshake), но integrity-gate отработал ДО exec.
+// TestSigilVerifySuccess — a valid sigil + binary + manifest from transport: verify
+// passes, the sidecar is sealed. Spawn then fails at handshake (the binary is a stub
+// without handshake), but the integrity gate ran BEFORE exec.
 func TestSigilVerifySuccess(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
 
-	// Spawn упадёт после verify (нет handshake), но verify-этап не должен дать
-	// VerifyError — проверяем именно отсутствие ErrSigilVerify.
+	// Spawn will fail after verify (no handshake), but the verify stage must not
+	// produce a VerifyError — we check specifically for the absence of ErrSigilVerify.
 	_, err := h.Spawn(context.Background(), e.discovered())
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("verify must pass for valid sigil, got %v", err)
@@ -138,7 +138,7 @@ func TestSigilVerifySuccess(t *testing.T) {
 
 func TestSigilVerifyNoSigil(t *testing.T) {
 	e := setupSigilEnv(t)
-	h := e.host(t, false) // допуск не доехал
+	h := e.host(t, false) // sigil didn't arrive
 
 	_, err := h.Spawn(context.Background(), e.discovered())
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoSigil {
@@ -152,7 +152,7 @@ func TestSigilVerifyNoSigil(t *testing.T) {
 func TestSigilVerifyNoTrustAnchor(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	h.SigilAnchors = NewAnchorSet(nil) // пустой набор якорей: Sigil выключен на Keeper
+	h.SigilAnchors = NewAnchorSet(nil) // empty anchor set: Sigil is off on the Keeper
 
 	_, err := h.Spawn(context.Background(), e.discovered())
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoTrustAnchor {
@@ -160,9 +160,9 @@ func TestSigilVerifyNoTrustAnchor(t *testing.T) {
 	}
 }
 
-// TestSigilVerifyNilAnchorHolder — nil-holder SigilAnchors (вообще не задан)
-// эквивалентен пустому набору: verify fail-closed по no_trust_anchor (nil-safe
-// snapshot). Покрывает обратную совместимость старого «nil pubkey».
+// TestSigilVerifyNilAnchorHolder — a nil SigilAnchors holder (not set at all) is
+// equivalent to an empty set: verify fails closed with no_trust_anchor (nil-safe
+// snapshot). Covers backward compatibility of the old "nil pubkey".
 func TestSigilVerifyNilAnchorHolder(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
@@ -174,17 +174,17 @@ func TestSigilVerifyNilAnchorHolder(t *testing.T) {
 	}
 }
 
-// TestSigilVerifyMultiAnchorOR — OR-цикл по набору якорей (ADR-026(h)): подпись
-// выписана ОДНИМ ключом, но в наборе ещё посторонние якоря. verify проходит,
-// если ключ-подписант присутствует в наборе среди прочих (безразрывная ротация).
+// TestSigilVerifyMultiAnchorOR — an OR loop over the anchor set (ADR-026(h)): the
+// signature is issued by ONE key, but the set also contains foreign anchors. verify
+// passes if the signing key is present in the set among the others (seamless rotation).
 func TestSigilVerifyMultiAnchorOR(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
 
 	otherPub1, _, _ := ed25519.GenerateKey(nil)
 	otherPub2, _, _ := ed25519.GenerateKey(nil)
-	// Набор: посторонний, ключ-подписант (e.pub), ещё посторонний. Ни порядок,
-	// ни наличие чужих якорей не должны мешать — OR находит подписанта.
+	// Set: foreign, the signing key (e.pub), another foreign. Neither the order nor
+	// the presence of foreign anchors should interfere — OR finds the signer.
 	h.SigilAnchors = NewAnchorSet([]ed25519.PublicKey{otherPub1, e.pub, otherPub2})
 
 	_, err := h.Spawn(context.Background(), e.discovered())
@@ -193,10 +193,9 @@ func TestSigilVerifyMultiAnchorOR(t *testing.T) {
 	}
 }
 
-// TestSigilVerifyMultiAnchorAllForeign — непустой набор, но ключа-подписанта в
-// нём НЕТ: ни один якорь не верифицирует → bad_signature (fail-closed). Это
-// разделяет «пустой набор» (no_trust_anchor) и «есть якоря, но не тот»
-// (bad_signature).
+// TestSigilVerifyMultiAnchorAllForeign — a non-empty set, but the signing key is NOT in
+// it: no anchor verifies → bad_signature (fail-closed). This separates "empty set"
+// (no_trust_anchor) from "anchors present, but not the right one" (bad_signature).
 func TestSigilVerifyMultiAnchorAllForeign(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
@@ -214,7 +213,7 @@ func TestSigilVerifyMultiAnchorAllForeign(t *testing.T) {
 func TestSigilVerifyDigestMismatch(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	// Подмена бинаря после того, как допуск выписан под старый хеш.
+	// Tamper with the binary after the sigil was issued for the old hash.
 	if err := os.WriteFile(e.binPath, []byte("#!/bin/sh\necho pwned\n"), 0o755); err != nil {
 		t.Fatalf("tamper bin: %v", err)
 	}
@@ -228,8 +227,8 @@ func TestSigilVerifyDigestMismatch(t *testing.T) {
 func TestSigilVerifyBadSignatureManifestTampered(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	// Manifest в записи подменён после подписи — хеш manifest разойдётся с тем,
-	// что в блоке подписи; digest бинаря при этом совпадает.
+	// The manifest in the record is tampered after signing — the manifest hash diverges
+	// from the one in the signed block; the binary digest still matches.
 	e.rec.Manifest = []byte("kind: soul_module\nnamespace: wb\nname: x\nprotocol_version: 1\nside_effects: true\n")
 
 	_, err := h.Spawn(context.Background(), e.discovered())
@@ -241,7 +240,7 @@ func TestSigilVerifyBadSignatureManifestTampered(t *testing.T) {
 func TestSigilVerifyBadSignatureCorrupted(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	e.rec.Signature = make([]byte, ed25519.SignatureSize) // нулевая подпись
+	e.rec.Signature = make([]byte, ed25519.SignatureSize) // zero signature
 
 	_, err := h.Spawn(context.Background(), e.discovered())
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
@@ -252,7 +251,7 @@ func TestSigilVerifyBadSignatureCorrupted(t *testing.T) {
 func TestSigilVerifyRefTampered(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	// ref входит в подписываемый блок — его подмена ломает подпись.
+	// ref is part of the signed block — tampering with it breaks the signature.
 	e.rec.Ref = "v9.9.9"
 
 	_, err := h.Spawn(context.Background(), e.discovered())
@@ -261,22 +260,22 @@ func TestSigilVerifyRefTampered(t *testing.T) {
 	}
 }
 
-// TestSigilSymmetryBlockMatchesSign — блок, который собирает verify, байт-в-байт
-// совпадает с блоком, который подписывает Keeper Sign-flow: оба зовут
-// BuildSigilBlock + NormalizeManifestBytes (общий код, не вторая имплементация).
+// TestSigilSymmetryBlockMatchesSign — the block that verify builds matches byte-for-byte
+// the block that the Keeper Sign flow signs: both call BuildSigilBlock +
+// NormalizeManifestBytes (shared code, not a second implementation).
 func TestSigilSymmetryBlockMatchesSign(t *testing.T) {
 	const (
 		ns, name, ref = "core", "git", "v2.0.0"
-		manifest      = "kind: soul_module\r\nnamespace: core\r\nname: git\r\n" // CRLF → нормализуется
+		manifest      = "kind: soul_module\r\nnamespace: core\r\nname: git\r\n" // CRLF → normalized
 	)
 	binRaw := sha256.Sum256([]byte("binary-bytes"))
 	binHex := hex.EncodeToString(binRaw[:])
 
-	// Verify-сторона.
+	// Verify side.
 	manDigest := sha256.Sum256(NormalizeManifestBytes([]byte(manifest)))
 	verifyBlock := BuildSigilBlock(ns, name, ref, binRaw[:], manDigest[:])
 
-	// Sign-сторона воспроизводит ровно те же шаги (как keeper Sign).
+	// Sign side reproduces exactly the same steps (like keeper Sign).
 	signBinRaw, _ := hex.DecodeString(binHex)
 	signManDigest := sha256.Sum256(NormalizeManifestBytes([]byte(manifest)))
 	signBlock := BuildSigilBlock(ns, name, ref, signBinRaw, signManDigest[:])
@@ -286,14 +285,14 @@ func TestSigilSymmetryBlockMatchesSign(t *testing.T) {
 	}
 }
 
-// TestSigilReExecBySidecar — после verify-pass последующий Spawn из кеша проходит
-// integrity-gate по sidecar (re-exec defense-in-depth), даже когда допуск ещё в
-// силе. Verify повторно сверяет sidecar, не пересоздавая его.
+// TestSigilReExecBySidecar — after a verify-pass, a subsequent Spawn from cache passes
+// the integrity gate via the sidecar (re-exec defense-in-depth), even while the sigil is
+// still valid. Verify re-checks the sidecar without recreating it.
 func TestSigilReExecBySidecar(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
 
-	// Первый Spawn: verify-pass → seal.
+	// First Spawn: verify-pass → seal.
 	_, _ = h.Spawn(context.Background(), e.discovered())
 	sidecar := filepath.Join(e.dir, DigestSidecarName)
 	st1, err := os.Stat(sidecar)
@@ -301,7 +300,7 @@ func TestSigilReExecBySidecar(t *testing.T) {
 		t.Fatalf("sidecar after first spawn: %v", err)
 	}
 
-	// Второй Spawn: sidecar уже есть, verify сверяет его, не падает на verify.
+	// Second Spawn: the sidecar already exists, verify checks it, doesn't fail at verify.
 	_, err = h.Spawn(context.Background(), e.discovered())
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("re-exec must pass integrity, got %v", err)

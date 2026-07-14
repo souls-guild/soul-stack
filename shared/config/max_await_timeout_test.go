@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// TestResolvedMaxAwaitTimeout — резолв потолка await_timeout (ADR-061):
-// пусто/невалид → дефолт; валидное значение → распарсенное.
+// TestResolvedMaxAwaitTimeout — resolves the await_timeout cap (ADR-061):
+// empty/invalid → default; a valid value → parsed.
 func TestResolvedMaxAwaitTimeout(t *testing.T) {
 	cases := []struct {
 		name string
@@ -27,15 +27,15 @@ func TestResolvedMaxAwaitTimeout(t *testing.T) {
 			}
 		})
 	}
-	// nil-receiver — дефолт (паника недопустима).
+	// nil receiver — default (must not panic).
 	var nilCfg *KeeperConfig
 	if got := nilCfg.ResolvedMaxAwaitTimeout(); got != DefaultMaxAwaitTimeout {
 		t.Fatalf("nil receiver = %v, want default", got)
 	}
 }
 
-// TestKeeperSemantic_MaxAwaitTimeoutInvalid — невалидный duration в
-// keeper.yml::max_await_timeout ловится semantic-фазой (ADR-061).
+// TestKeeperSemantic_MaxAwaitTimeoutInvalid — an invalid duration in
+// keeper.yml::max_await_timeout is caught by the semantic phase (ADR-061).
 func TestKeeperSemantic_MaxAwaitTimeoutInvalid(t *testing.T) {
 	src := keeperBaseRequired + "max_await_timeout: not-a-duration\n"
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
@@ -45,7 +45,7 @@ func TestKeeperSemantic_MaxAwaitTimeoutInvalid(t *testing.T) {
 	}
 }
 
-// TestKeeperSemantic_MaxAwaitTimeoutValid_OK — валидный duration проходит.
+// TestKeeperSemantic_MaxAwaitTimeoutValid_OK — a valid duration passes.
 func TestKeeperSemantic_MaxAwaitTimeoutValid_OK(t *testing.T) {
 	src := keeperBaseRequired + "max_await_timeout: 1h\n"
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})

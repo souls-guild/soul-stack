@@ -12,17 +12,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ScenarioManifest — типизированное представление `scenario/<name>/main.yml` по
-// нормативной спеке [`docs/scenario/orchestration.md`].
+// ScenarioManifest is the typed representation of `scenario/<name>/main.yml` per
+// the normative spec [`docs/scenario/orchestration.md`].
 //
-// Манифест содержит имя/описание сценария, входной контракт `input:` (общий
-// стандарт docs/input.md), декларацию `state_changes` (что сценарий пишет в
-// `incarnation.state` после успешного apply, §2) и список задач `tasks[]`.
+// It holds the scenario name/description, the `input:` contract (docs/input.md),
+// the `state_changes` declaration (what the scenario writes to `incarnation.state`
+// after a successful apply, §2), and the `tasks[]` list.
 //
-// DSL-ядро задач унаследовано от destiny (ADR-009): scenario поддерживает
-// все 22 ключа из docs/destiny/tasks.md плюс scenario-дельту (on/where/serial/
-// run_once). Полиморфный декод задачи (module / apply / include / block) —
-// в scenario_task.go.
+// The task DSL core is inherited from destiny (ADR-009): scenario supports all 22
+// keys from docs/destiny/tasks.md plus the scenario delta (on/where/serial/
+// run_once). Polymorphic task decode (module / apply / include / block) lives in
+// scenario_task.go.
 type ScenarioManifest struct {
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description,omitempty"`
@@ -33,140 +33,137 @@ type ScenarioManifest struct {
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
 
-	// Extends — имя covenant-фрагмента в корне service-репо (`covenant.yml` —
-	// без расширения, только базовое имя `^[a-z][a-z0-9-]*$`), общий контракт
-	// секций input/compute/state_changes/validate которого сценарий наследует
-	// (covenant.go). Пустая строка / отсутствие ключа = нет наследования
-	// (forward-compat: существующие сценарии без extends не затронуты). Сам
-	// резолв фрагмента по ФС снапшота — keeper-side (S2 LoadScenarioManifest
-	// Resolved): config-слой даёт типы, mergeSections и валидацию формы.
+	// Extends names a covenant fragment at the service-repo root (`covenant.yml`
+	// without extension, base name `^[a-z][a-z0-9-]*$`) whose input/compute/
+	// state_changes/validate sections the scenario inherits (covenant.go). Empty /
+	// absent = no inheritance (forward-compat: existing scenarios without extends
+	// are unaffected). Resolving the fragment against the snapshot FS is keeper-side
+	// (S2 LoadScenarioManifest Resolved); the config layer gives types, mergeSections
+	// and form validation.
 	Extends string `yaml:"extends,omitempty"`
 
-	// Create — опциональный флаг «сценарий годен как стартовый (bootstrap новой
-	// incarnation)». `*bool` ради различения «не задано» (nil → НЕ стартовый,
-	// обычный operational-сценарий) от явного `create: true|false`. Сервис может
-	// объявить НЕСКОЛЬКО create-сценариев (`create_standalone`, `create_cluster`),
-	// из которых оператор выбирает один при `POST /v1/incarnations`; default —
-	// сценарий с именем `create` (back-compat). Совместимо с auto-discover
-	// (ADR-029): набор create-сценариев — это подмножество auto-discover-енных
-	// `scenario/<name>/`, помеченных этим флагом. Чтение — напрямую через `Create`
-	// (nil-safe: nil ИЛИ `false` → НЕ create-стартовый). `destroy` НЕ помечается
-	// этим флагом (teardown — отдельный спец-флоу DELETE).
+	// Create optionally marks a scenario as a bootstrap starter for a new
+	// incarnation. `*bool` distinguishes "unset" (nil → not a starter, an ordinary
+	// operational scenario) from an explicit `create: true|false`. A service may
+	// declare SEVERAL create scenarios (`create_standalone`, `create_cluster`) from
+	// which the operator picks one at `POST /v1/incarnations`; the default is the
+	// scenario named `create` (back-compat). Compatible with auto-discover (ADR-029):
+	// the create set is the subset of auto-discovered `scenario/<name>/` flagged here.
+	// Read directly via `Create` (nil-safe: nil OR `false` → not a create starter).
+	// `destroy` is NOT flagged here (teardown is a separate DELETE flow).
 	Create *bool `yaml:"create,omitempty"`
 
-	// FromVersions — self-describing список версий-источников upgrade-сценария
-	// (`upgrade/<slug>/main.yml`): из каких пинов этот сценарий умеет апгрейдить.
-	// Симметрия с `create: true` (self-describing дискриминатор в самом файле);
-	// пусто/нет ключа = не upgrade-сценарий. YAML-ключ `from` (Go-имя иное во
-	// избежание коллизии с artifact.StateSchemaMigration.From). ADR-0068.
+	// FromVersions is the self-describing list of source versions an upgrade
+	// scenario (`upgrade/<slug>/main.yml`) can upgrade from. Symmetric with
+	// `create: true` (a self-describing discriminator inside the file); empty/absent
+	// = not an upgrade scenario. YAML key `from` (Go name differs to avoid colliding
+	// with artifact.StateSchemaMigration.From). ADR-0068.
 	FromVersions []string `yaml:"from,omitempty"`
 
-	// Form — опциональный презентационный слой `input:`-формы (form_layout.go):
-	// как UI группирует/подписывает поля input в секции. nil = ключа нет (UI
-	// рисует input плоско, forward-compat). Не влияет на контракт ввода/валидацию.
+	// Form is the optional presentation layer for the `input:` form (form_layout.go):
+	// how the UI groups/labels input fields into sections. nil = absent (UI renders
+	// input flat, forward-compat). Does not affect the input contract or validation.
 	Form *FormLayout `yaml:"form,omitempty"`
 }
 
-// ValidateRule — одно правило top-level scenario-секции `validate:` (ADR-009
-// amendment 2026-06-23, DSL wave 2). Декларативная input-валидация «должно быть
-// X, не Y» вместо россыпи assert-задач: список правил `[{that, message}]`, каждое
-// `that` — CEL-bool-предикат (вся строка = CEL без обёртки, как `where:`/`assert.
-// that`), `message` — человекочитаемая причина отказа при `that == false`.
+// ValidateRule is one rule of the top-level scenario `validate:` section (ADR-009
+// amendment 2026-06-23, DSL wave 2). Declarative input validation ("must be X, not
+// Y") instead of scattered assert tasks: a list `[{that, message}]` where each
+// `that` is a CEL bool predicate (whole string = CEL, like `where:`/`assert.that`)
+// and `message` is the human-readable reason for `that == false`.
 //
-// КОНТЕКСТ ПРАВИЛА — INPUT-ONLY: env несёт ЕДИНСТВЕННУЮ переменную `input`
-// (тот же узкий cel-go-sandbox, что `required_when` — input_required_when.go).
-// validate: покрывает ИНВАРИАНТЫ ВВОДА (кросс-полевые предусловия, не выразимые
-// одиночным schema-ключом — например, «`port` обязателен, если `tls` выключен»).
-// Ссылка на essence/soulprint/register/vault в `that` → compile-ошибка undeclared
-// reference (структурный барьер необъявленностью, не текстовый guard). Топология/
-// roster-проверки остаются за `assert:` (у него полный scenario-CEL-контекст с
-// soulprint.hosts) — validate: ДОПОЛНЯЕТ, не заменяет ни assert, ни required_when.
+// RULE CONTEXT IS INPUT-ONLY: the env carries the single variable `input` (the same
+// narrow cel-go sandbox as `required_when` — input_required_when.go). validate:
+// covers INPUT INVARIANTS (cross-field preconditions not expressible by a single
+// schema key — e.g. "`port` is required when `tls` is off"). Referencing
+// essence/soulprint/register/vault in `that` → compile-time undeclared-reference
+// error (a structural barrier, not a textual guard). Topology/roster checks stay
+// with `assert:` (which has the full scenario CEL context with soulprint.hosts);
+// validate: COMPLEMENTS, it does not replace assert or required_when.
 //
-// КОГДА: pre-flight на CreateTyped/RunTyped (request-путь) — первый провалившийся
-// rule даёт HTTP 422 validation_failed ДО коммита incarnation и ДО applying (как
-// required_when и pre-flight assert, БЕЗ error_locked). Вычисление детерминировано
-// от input (config.EvalValidateRules) — двухточечная render-fail-safe не нужна
-// (input не меняется между request-путём и стартом goroutine, в отличие от roster
-// у assert).
+// WHEN: pre-flight on CreateTyped/RunTyped (request path) — the first failing rule
+// yields HTTP 422 validation_failed BEFORE the incarnation commit and BEFORE
+// applying (like required_when and pre-flight assert, WITHOUT error_locked).
+// Evaluation is deterministic from input (config.EvalValidateRules), so the
+// two-point render-fail-safe is unneeded (input does not change between the request
+// path and goroutine start, unlike assert's roster).
 type ValidateRule struct {
 	That    string `yaml:"that"`
 	Message string `yaml:"message"`
 }
 
-// ComputeBlock — scenario-level вычисляемые переменные (`compute:`, ADR-009
-// amendment 2026-06-23). Каждая запись — `<имя>: <CEL-выражение>`: Keeper резолвит
-// её ОДИН раз на прогон в РУН-УРОВНЕВОМ scenario-контексте (input/essence/
-// incarnation/register), затем результат доступен как `compute.<имя>` в
-// `apply.input` И в `state_changes` (cel_render.resolveCompute).
+// ComputeBlock holds scenario-level computed variables (`compute:`, ADR-009
+// amendment 2026-06-23). Each entry is `<name>: <CEL-expression>`: Keeper resolves
+// it ONCE per run in the RUN-LEVEL scenario context (input/essence/incarnation/
+// register), then the result is available as `compute.<name>` in both `apply.input`
+// and `state_changes` (cel_render.resolveCompute).
 //
-// Назначение — снять дублирование общего выражения, которое иначе пишут дважды
-// (apply.input и state_changes не видят task-level `vars:`): объявить большой
-// merge() один раз и сослаться `${ compute.<имя> }`.
+// Purpose: remove duplication of a shared expression otherwise written twice
+// (apply.input and state_changes do not see task-level `vars:`) — declare a big
+// merge() once and reference `${ compute.<name> }`.
 //
-// Барьер изоляции (architect aebb2d39 §5):
-//   - compute НЕ протекает в изолированный destiny-проход (destiny видит только
-//     результат через apply.input — RenderInput.Compute там не пробрасывается,
-//     ADR-009 V2);
-//   - резолв-контекст compute РУН-УРОВНЕВЫЙ (БЕЗ soulprint.self/soulprint.hosts):
-//     compute host-инвариантна по построению, поэтому одно и то же значение
-//     корректно уходит и в apply.input (резолв на targeted[0]), и в state_changes
-//     (per-run, не per-host). Ссылка на soulprint.* в compute → CEL no-such-key
-//     (структурный барьер, не текстовый guard).
+// Isolation barrier (architect aebb2d39 §5):
+//   - compute does NOT leak into the isolated destiny pass (destiny sees only the
+//     result via apply.input — RenderInput.Compute is not forwarded there, ADR-009 V2);
+//   - compute's resolve context is RUN-LEVEL (WITHOUT soulprint.self/soulprint.hosts):
+//     compute is host-invariant by construction, so the same value correctly flows
+//     to apply.input (resolved on targeted[0]) and to state_changes (per-run, not
+//     per-host). Referencing soulprint.* in compute → CEL no-such-key (a structural
+//     barrier, not a textual guard).
 //
-// Порядок объявления значим: compute[i] может ссылаться на ранее объявленный
-// compute[j] (j < i) как `${ compute.<имя_j> }`. Поэтому хранится упорядоченным
-// списком (не map: декод сохраняет порядок ключей YAML).
+// Declaration order matters: compute[i] may reference an earlier compute[j] (j < i)
+// as `${ compute.<name_j> }`. Hence it is stored as an ordered list (not a map:
+// decode preserves YAML key order).
 type ComputeBlock []ComputeVar
 
-// ComputeVar — одна запись `compute:`-блока (имя + CEL-выражение). Value —
-// строка-CEL (`${ … }`-интерполяция ИЛИ нативное выражение), резолвится
-// cel_render.resolveCompute. Литерал-значение (число/bool/коллекция) тоже
-// допустимо — non-string проходит насквозь как в `vars:`.
+// ComputeVar is one entry of the `compute:` block (name + CEL expression). Value is
+// a CEL string (`${ … }` interpolation OR a native expression), resolved by
+// cel_render.resolveCompute. A literal (number/bool/collection) is also allowed —
+// non-string passes through as in `vars:`.
 type ComputeVar struct {
 	Name  string
 	Value any
 }
 
-// StateChanges — декларация мутаций `incarnation.state`, которые сценарий
-// зафиксирует после успешного cross-host барьера (orchestration.md §7).
+// StateChanges declares the `incarnation.state` mutations a scenario commits after
+// a successful cross-host barrier (orchestration.md §7).
 //
-// Две формы декода (UnmarshalYAML различает по виду YAML-узла):
+// Two decode forms (UnmarshalYAML discriminates by YAML node kind):
 //
-//   - НОВАЯ list-форма (sequence): `state_changes:` — упорядоченный список
-//     операций-глаголов (`- set:` / `- add:` / `- modify:` / `- remove:` /
-//     `- foreach:`), применяемых по порядку объявления к промежуточному state.
-//     Декодируется в `Ops` (см. StateChange); `IsList` = true. Целевая грамматика
-//     ADR-057 (все глаголы реализованы).
-//   - СТАРАЯ map-форма (mapping, DEPRECATED): `state_changes: { sets: {...},
-//     appends: [...], modifies: [...] }`. Сохраняется ради backward-compat
-//     существующих сценариев — декодируется в `Sets`/`Appends`/`Modifies`,
-//     `IsList` = false. Семантика прежняя (orchestration.md §7.1): `Sets` — map
-//     `<поле> → <CEL-выражение>`; cross-host свёртка — last-wins по SID.
-//     `Appends`/`Modifies` движком не применяются (исторический плейсхолдер).
+//   - NEW list form (sequence): `state_changes:` is an ordered list of verb
+//     operations (`- set:` / `- add:` / `- modify:` / `- remove:` / `- foreach:`)
+//     applied in declaration order to the intermediate state. Decoded into `Ops`
+//     (see StateChange); `IsList` = true. The target grammar of ADR-057 (all verbs
+//     implemented).
+//   - OLD map form (mapping, DEPRECATED): `state_changes: { sets: {...},
+//     appends: [...], modifies: [...] }`. Kept for backward-compat of existing
+//     scenarios — decoded into `Sets`/`Appends`/`Modifies`, `IsList` = false. Same
+//     semantics as before (orchestration.md §7.1): `Sets` is a map
+//     `<field> → <CEL-expression>`; cross-host fold is last-wins by SID.
+//     `Appends`/`Modifies` are not applied by the engine (a historical placeholder).
 //
-// Пустой блок валиден в обеих формах (state не меняется): `state_changes: {}`
-// (старая) или `state_changes: []` (новая).
+// An empty block is valid in either form (state unchanged): `state_changes: {}`
+// (old) or `state_changes: []` (new).
 type StateChanges struct {
-	// IsList — дискриминатор формы (true для новой list-формы). Render/merge
-	// ветвятся по нему: list → ordered Ops; map → legacy Sets-overwrite.
+	// IsList discriminates the form (true for the new list form). Render/merge branch
+	// on it: list → ordered Ops; map → legacy Sets-overwrite.
 	IsList bool `yaml:"-"`
 
-	// Ops — упорядоченный список операций новой list-формы. nil/пусто в map-форме.
+	// Ops is the ordered operation list of the new list form. nil/empty in map form.
 	Ops []StateChange `yaml:"-"`
 
-	// Sets/Appends/Modifies — старая map-форма (DEPRECATED). nil в list-форме.
+	// Sets/Appends/Modifies are the old map form (DEPRECATED). nil in list form.
 	Sets     map[string]string `yaml:"sets,omitempty"`
 	Appends  []string          `yaml:"appends,omitempty"`
 	Modifies []string          `yaml:"modifies,omitempty"`
 }
 
-// UnmarshalYAML декодирует `compute:` как mapping `<имя>: <выражение>` в
-// УПОРЯДОЧЕННЫЙ список ComputeVar (порядок ключей YAML сохраняется — compute[i]
-// может ссылаться на ранее объявленный compute[j], j<i). Значение — строка-CEL
-// либо литерал (non-string проходит насквозь как в `vars:`). Не-mapping узел
-// (scalar/sequence) → пустой блок: validateComputeBlock поднимет type_mismatch по
-// yaml_path. Ключ без значения / пустой ключ пропускается (валидатор поднимет
-// диагностику).
+// UnmarshalYAML decodes `compute:` as a mapping `<name>: <expression>` into an
+// ORDERED ComputeVar list (YAML key order preserved — compute[i] may reference an
+// earlier compute[j], j<i). Value is a CEL string or a literal (non-string passes
+// through as in `vars:`). A non-mapping node (scalar/sequence) → empty block:
+// validateComputeBlock raises type_mismatch by yaml_path. A key without a value /
+// an empty key is skipped (the validator raises the diagnostic).
 func (c *ComputeBlock) UnmarshalYAML(node ast.Node) error {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -184,66 +181,66 @@ func (c *ComputeBlock) UnmarshalYAML(node ast.Node) error {
 	return nil
 }
 
-// StateVerb — глагол одной операции state_changes (новая list-форма).
+// StateVerb is the verb of one state_changes operation (new list form).
 type StateVerb string
 
 const (
-	// VerbSet — перезапись поля целиком (семантика прежнего `sets`).
+	// VerbSet overwrites a field wholesale (semantics of the old `sets`).
 	VerbSet StateVerb = "set"
-	// VerbAdd — добавить элемент в коллекцию (map/list) идемпотентно.
+	// VerbAdd adds an element to a collection (map/list) idempotently.
 	VerbAdd StateVerb = "add"
-	// VerbModify — патч ВСЕХ элементов коллекции, подходящих под Match (all-by-
-	// default; orchestration.md §7.1).
+	// VerbModify patches ALL collection elements matching Match (all-by-default;
+	// orchestration.md §7.1).
 	VerbModify StateVerb = "modify"
-	// VerbRemove — удалить ВСЕ элементы коллекции, подходящие под Match.
+	// VerbRemove removes ALL collection elements matching Match.
 	VerbRemove StateVerb = "remove"
-	// VerbForeach — bulk fan-out N операций из CEL-списка/map (render-time, форма
-	// из migration-DSL ADR-019). Раскрывается в N RenderedOp до merge.
+	// VerbForeach fans out N operations from a CEL list/map (render-time, the form
+	// from migration-DSL ADR-019). Expands into N RenderedOp before merge.
 	VerbForeach StateVerb = "foreach"
 )
 
-// Expect — опц. runtime-ассерт кратности match в modify/remove (ADR-057 §c).
-// DEFAULT (пустое значение) = ExpectAny (любое число зацепленных, в т.ч. ноль).
+// Expect is an optional runtime assert on match cardinality in modify/remove
+// (ADR-057 §c). DEFAULT (empty) = ExpectAny (any count matched, including zero).
 type Expect string
 
 const (
-	// ExpectAny — любое число зацепленных элементов (DEFAULT). Пустая строка в
-	// op.Expect трактуется как ExpectAny.
+	// ExpectAny is any number of matched elements (DEFAULT). An empty op.Expect is
+	// treated as ExpectAny.
 	ExpectAny Expect = "any"
-	// ExpectOne — ровно один зацепленный элемент (иначе error_locked до коммита).
+	// ExpectOne is exactly one matched element (else error_locked before commit).
 	ExpectOne Expect = "one"
-	// ExpectAtMostOne — ноль или один зацепленный элемент.
+	// ExpectAtMostOne is zero or one matched element.
 	ExpectAtMostOne Expect = "at_most_one"
 )
 
-// OnConflict — политика идемпотентности `add` при совпадении идентичности.
+// OnConflict is the idempotency policy for `add` on an identity match.
 type OnConflict string
 
 const (
-	// OnConflictSkip — элемент с такой идентичностью уже есть → no-op (DEFAULT).
+	// OnConflictSkip — an element with this identity already exists → no-op (DEFAULT).
 	OnConflictSkip OnConflict = "skip"
-	// OnConflictReplace — перезаписать существующий элемент новым значением.
+	// OnConflictReplace overwrites the existing element with the new value.
 	OnConflictReplace OnConflict = "replace"
-	// OnConflictError — провалить прогон (error_locked, state не коммитнут).
+	// OnConflictError fails the run (error_locked, state not committed).
 	OnConflictError OnConflict = "error"
 )
 
-// StateChange — одна операция упорядоченного списка `state_changes` (новая
-// list-форма). Глагол определяет, какие поля значимы:
+// StateChange is one operation of the ordered `state_changes` list (new list form).
+// The verb determines which fields are significant:
 //
-//   - set:     Field + Value (перезапись поля целиком);
-//   - add:     Field + Value (+ Key для map-коллекции / Match|Key для list-дедупа,
+//   - set:     Field + Value (overwrite the field wholesale);
+//   - add:     Field + Value (+ Key for a map collection / Match|Key for list dedup,
 //   - OnConflict skip|replace|error, default skip);
-//   - modify:  Field + Match + Patch (+ опц. Expect) — патч всех подходящих;
-//   - remove:  Field + Match (+ опц. Expect) — удалить всех подходящих;
-//   - foreach: In (CEL-список/map) + As (имя биндинга) + Do (вложенные глаголы) —
-//     render-time fan-out N операций (форма из migration-DSL ADR-019). Foreach
-//     несёт целевое поле в Field=="" (глагол `foreach:` указывает не коллекцию, а
-//     CEL-выражение коллекции для итерации, оно лежит в In).
+//   - modify:  Field + Match + Patch (+ optional Expect) — patch all matching;
+//   - remove:  Field + Match (+ optional Expect) — remove all matching;
+//   - foreach: In (CEL list/map) + As (binding name) + Do (nested verbs) —
+//     render-time fan-out of N operations (the form from migration-DSL ADR-019).
+//     Foreach carries its target field with Field=="" (the `foreach:` verb points
+//     not at a collection but at the CEL collection expression to iterate, held in In).
 //
-// Value/Patch — произвольное YAML-значение: строка-CEL (`${ … }`), литерал,
-// либо вложенный объект/список с CEL-строками в ячейках (рендерится рекурсивно
-// Keeper-side). Key/Match — строки-CEL (идентичность/предикат элемента).
+// Value/Patch is an arbitrary YAML value: a CEL string (`${ … }`), a literal, or a
+// nested object/list with CEL strings in cells (rendered recursively Keeper-side).
+// Key/Match are CEL strings (element identity/predicate).
 type StateChange struct {
 	Verb  StateVerb
 	Field string
@@ -253,24 +250,24 @@ type StateChange struct {
 	Match      string
 	OnConflict OnConflict
 
-	// Patch — map путь-в-элементе → CEL/литерал (только modify). Merge-time:
-	// каждое значение вычисляется поверх per-host scenario-контекста + биндингов
-	// текущего элемента (elem/key/value). Точечный путь (`config.maxmemory`) —
-	// вложенный merge, не перезапись записи целиком (ADR-057 §a).
+	// Patch — map of path-in-element → CEL/literal (modify only). Merge-time: each
+	// value is evaluated over the per-host scenario context + the current element's
+	// bindings (elem/key/value). A dotted path (`config.maxmemory`) is a nested merge,
+	// not a wholesale record overwrite (ADR-057 §a).
 	Patch any
-	// Expect — опц. ассерт кратности match (modify/remove). "" → ExpectAny.
+	// Expect — optional match-cardinality assert (modify/remove). "" → ExpectAny.
 	Expect Expect
 
-	// foreach: In — CEL-выражение коллекции для итерации (`${ … }`); As — имя
-	// биндинга текущего элемента; Do — вложенные операции, применяемые на каждой
-	// итерации с активным биндингом As.
+	// foreach: In is the CEL collection expression to iterate (`${ … }`); As is the
+	// current-element binding name; Do are the nested operations applied each
+	// iteration with the As binding active.
 	In string
 	As string
 	Do []StateChange
 }
 
-// stateOpVerbs — известные глаголы операции (для дискриминатора в декоде/валидации).
-// `expect` НЕ глагол — это параметр modify/remove (ADR-057 §c).
+// stateOpVerbs are the known operation verbs (discriminator in decode/validation).
+// `expect` is NOT a verb — it is a modify/remove parameter (ADR-057 §c).
 var stateOpVerbs = map[string]StateVerb{
 	"set":     VerbSet,
 	"add":     VerbAdd,
@@ -279,18 +276,18 @@ var stateOpVerbs = map[string]StateVerb{
 	"foreach": VerbForeach,
 }
 
-// UnmarshalYAML — DUAL-PARSE StateChanges по виду YAML-узла:
+// UnmarshalYAML DUAL-PARSEs StateChanges by YAML node kind:
 //
-//   - SequenceNode → новая list-форма: декодируем каждый элемент-mapping в
-//     StateChange (по глаголу-ключу), ставим IsList=true. Структурную валидацию
-//     (обязательные/неприменимые ключи по каждому глаголу) поднимает
-//     validateStateChanges по AST — здесь только декод значений.
-//   - MappingNode → старая map-форма (DEPRECATED): прежний путь декода
-//     sets/appends/modifies (переиспользуем setsFromNode/stringSeqFromNode).
-//   - прочее (scalar/null) → zero-value (диагностику поднимет walker/валидатор).
+//   - SequenceNode → new list form: decode each mapping element into a StateChange
+//     (by verb key), set IsList=true. Structural validation (required/inapplicable
+//     keys per verb) is raised by validateStateChanges over the AST — here only
+//     value decode.
+//   - MappingNode → old map form (DEPRECATED): the former sets/appends/modifies
+//     decode path (reusing setsFromNode/stringSeqFromNode).
+//   - other (scalar/null) → zero-value (walker/validator raises the diagnostic).
 //
-// Узел неподходящей формы внутри элемента пропускается без паники —
-// validateStateChanges поднимет осмысленную диагностику по yaml_path.
+// A wrongly-shaped node inside an element is skipped without panic —
+// validateStateChanges raises a meaningful diagnostic by yaml_path.
 func (s *StateChanges) UnmarshalYAML(node ast.Node) error {
 	switch n := node.(type) {
 	case *ast.SequenceNode:
@@ -319,16 +316,16 @@ func (s *StateChanges) UnmarshalYAML(node ast.Node) error {
 		}
 		return nil
 	default:
-		// state_changes: <scalar/null> — zero-value (валидатор поднимет type_mismatch).
+		// state_changes: <scalar/null> — zero-value (validator raises type_mismatch).
 		return nil
 	}
 }
 
-// stateOpFromNode декодирует один элемент list-формы (mapping с глаголом-ключом)
-// в StateChange. Глагол-ключ (`set`/`add`/…) несёт целевой Field; прочие ключи
-// (`value`/`key`/`match`/`on_conflict`/`patch`/`in`/`as`/`do`) — параметры op.
-// Не-mapping элемент / отсутствие глагола → (zero, false): валидатор поднимет
-// диагностику по yaml_path.
+// stateOpFromNode decodes one list-form element (a mapping with a verb key) into a
+// StateChange. The verb key (`set`/`add`/…) carries the target Field; the other keys
+// (`value`/`key`/`match`/`on_conflict`/`patch`/`in`/`as`/`do`) are op parameters. A
+// non-mapping element / a missing verb → (zero, false): the validator raises the
+// diagnostic by yaml_path.
 func stateOpFromNode(node ast.Node) (StateChange, bool) {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -344,8 +341,8 @@ func stateOpFromNode(node ast.Node) (StateChange, bool) {
 		key := tok.Value
 		if verb, isVerb := stateOpVerbs[key]; isVerb {
 			op.Verb = verb
-			// `foreach:` несёт CEL-выражение коллекции (→ In), прочие глаголы —
-			// имя целевого поля (→ Field). orchestration.md §7.1.
+			// `foreach:` carries the CEL collection expression (→ In); the other
+			// verbs carry the target field name (→ Field). orchestration.md §7.1.
 			if verb == VerbForeach {
 				op.In = stringFromNode(kv.Value)
 			} else {
@@ -382,8 +379,8 @@ func stateOpFromNode(node ast.Node) (StateChange, bool) {
 	return op, hasVerb
 }
 
-// stringFromNode извлекает строковое значение узла (для глагол-Field, key, match,
-// on_conflict). Не-строка → "" (валидатор поднимет type_mismatch).
+// stringFromNode extracts a node's string value (for verb-Field, key, match,
+// on_conflict). Non-string → "" (the validator raises type_mismatch).
 func stringFromNode(node ast.Node) string {
 	if sn, ok := node.(*ast.StringNode); ok {
 		return sn.Value
@@ -391,10 +388,10 @@ func stringFromNode(node ast.Node) string {
 	return ""
 }
 
-// nodeToAny декодирует произвольный YAML-узел (value/patch) в Go-значение через
-// goccy NodeToValue: строка-CEL, литерал, либо вложенный объект/список (CEL-
-// строки в ячейках рендерятся рекурсивно Keeper-side). Сбой декода → nil
-// (валидатор поднимет диагностику по yaml_path).
+// nodeToAny decodes an arbitrary YAML node (value/patch) into a Go value via goccy
+// NodeToValue: a CEL string, a literal, or a nested object/list (CEL strings in
+// cells are rendered recursively Keeper-side). Decode failure → nil (the validator
+// raises the diagnostic by yaml_path).
 func nodeToAny(node ast.Node) any {
 	var v any
 	if err := yaml.NodeToValue(node, &v); err != nil {
@@ -403,10 +400,10 @@ func nodeToAny(node ast.Node) any {
 	return v
 }
 
-// setsFromNode декодирует mapping `<поле>: <выражение>` в map[string]string.
-// Не-mapping узел (старая seq-форма, скаляр) → nil (validateStateChanges
-// поднимет type_mismatch). Значения не-строкового типа пропускаются —
-// валидатор поднимет диагностику по yaml_path.
+// setsFromNode decodes a mapping `<field>: <expression>` into map[string]string. A
+// non-mapping node (old seq form, scalar) → nil (validateStateChanges raises
+// type_mismatch). Non-string values are skipped — the validator raises the
+// diagnostic by yaml_path.
 func setsFromNode(node ast.Node) map[string]string {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -425,7 +422,7 @@ func setsFromNode(node ast.Node) map[string]string {
 	return out
 }
 
-// stringSeqFromNode декодирует sequence строк в []string. Не-sequence → nil.
+// stringSeqFromNode decodes a sequence of strings into []string. Non-sequence → nil.
 func stringSeqFromNode(node ast.Node) []string {
 	seq, ok := node.(*ast.SequenceNode)
 	if !ok {
@@ -440,69 +437,67 @@ func stringSeqFromNode(node ast.Node) []string {
 	return vals
 }
 
-// reScenarioName — имя сценария: snake_case или kebab-case (имена операций над
-// кластером: `create`, `add_user`, `update_acl`, `add_replica`, `restart`).
-// В отличие от имён destiny/service (строго kebab) сценарий — verb-имя
-// операции; snake_case в спеке и примерах ([scenario/concept.md],
-// [architecture.md → раскладка service-репо]) — канон. Дефис тоже допустим
-// (например, `add-user`).
+// reScenarioName — scenario name: snake_case or kebab-case (cluster operation names:
+// `create`, `add_user`, `update_acl`, `add_replica`, `restart`). Unlike
+// destiny/service names (strictly kebab), a scenario is a verb name for an operation;
+// snake_case is canonical in the spec and examples ([scenario/concept.md],
+// [architecture.md → service-repo layout]). A dash is also allowed (e.g. `add-user`).
 var reScenarioName = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
 
-// reCovenName — kebab-case coven-метка в `on: [coven, ...]`. Совпадает с
-// именем сервиса/сценария по форме (одноуровневое kebab). Допускается также
-// CEL-обёртка `${ ... }` (например, `${ incarnation.name }`) — для неё
-// regex-валидация пропускается.
+// reCovenName — kebab-case coven label in `on: [coven, ...]`. Same form as a
+// service/scenario name (single-segment kebab). A CEL wrapper `${ ... }` (e.g.
+// `${ incarnation.name }`) is also allowed — regex validation is skipped for it.
 var reCovenName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// reSerialPercent — процентная форма `serial: "<N>%"` (§2.4).
-// Целая часть — положительное число без leading zeros (1..99 включительно;
-// 100% эквивалентно дефолту «вся ширина» и не имеет смысла как явная форма,
-// но grammar-wise валидно).
+// reSerialPercent — percent form `serial: "<N>%"` (§2.4). The integer part is a
+// positive number without leading zeros (1..99 inclusive; 100% equals the default
+// "full width" and is meaningless as an explicit form, but grammar-wise valid).
 var reSerialPercent = regexp.MustCompile(`^[1-9][0-9]*%$`)
 
-// ParseSerialPercent разбирает процентную форму `serial: "<N>%"` (§2.4) —
-// единый источник правды о форме percent-string serial для обеих сторон:
-// config-валидатора (validateSerialField, проверяет форму) и рантайм-диспатчера
-// (render: percent → ширина волны). Возвращает целую часть N и ok=true только
-// для строк, точно совпадающих с reSerialPercent (1..99 без leading zeros);
-// иначе (0, false) — невалидная/не-percent форма.
+// ParseSerialPercent parses the percent form `serial: "<N>%"` (§2.4) — the single
+// source of truth about the percent-string serial form for both sides: the config
+// validator (validateSerialField, checks the form) and the runtime dispatcher
+// (render: percent → wave width). Returns the integer part N and ok=true only for
+// strings exactly matching reSerialPercent (1..99, no leading zeros); otherwise
+// (0, false) for an invalid/non-percent form.
 func ParseSerialPercent(s string) (pct int, ok bool) {
 	if !reSerialPercent.MatchString(s) {
 		return 0, false
 	}
-	// Регекс гарантировал `[1-9][0-9]*` перед `%` — Atoi не может упасть.
+	// The regex guaranteed `[1-9][0-9]*` before `%` — Atoi cannot fail.
 	n, _ := strconv.Atoi(s[:len(s)-1])
 	return n, true
 }
 
-// deprecatedScenarioKeys — устаревшие top-level ключи `main.yml` сценария.
-// `wait:` и `filter:` явно изъяты orchestration.md §2/§4 — поднимаем
-// `unknown_key` с hint-ом о замене. Симметрично `deprecatedDestinyKeys`.
+// deprecatedScenarioKeys — deprecated top-level keys of a scenario `main.yml`.
+// `wait:` and `filter:` were explicitly removed by orchestration.md §2/§4 — we raise
+// `unknown_key` with a replacement hint. Symmetric with `deprecatedDestinyKeys`.
 var deprecatedScenarioKeys = map[string]string{
 	"wait":   "wait: removed (orchestration.md §2); express the same with retry:+until: on a probe step",
 	"filter": "filter: removed (orchestration.md §4); use where: with register.<probe>.* predicate or stable soulprint.self.* facts",
-	// `version:` — git ref, не поле манифеста (ADR-007).
+	// `version:` is a git ref, not a manifest field (ADR-007).
 	"version": "version is a git ref under which the scenario is committed, not a manifest field; see ADR-007",
 }
 
-// deprecatedTaskKeys — устаревшие task-level ключи (внутри элемента `tasks[]`
-// или внутри `block:`). Симметрично deprecatedScenarioKeys.
+// deprecatedTaskKeys — deprecated task-level keys (inside a `tasks[]` element or
+// inside `block:`). Symmetric with deprecatedScenarioKeys.
 var deprecatedTaskKeys = map[string]string{
 	"wait":   "wait: removed (orchestration.md §2); express with retry:+until: on a probe step",
 	"filter": "filter: removed (orchestration.md §4); use where: predicate instead",
 }
 
-// stateChangesKnownKeys — закрытый набор ключей старой map-формы `state_changes:`.
+// stateChangesKnownKeys — the closed key set of the old map form of `state_changes:`.
 var stateChangesKnownKeys = map[string]bool{
 	"sets":     true,
 	"appends":  true,
 	"modifies": true,
 }
 
-// stateOpKnownKeys — закрытый набор ключей одной операции list-формы (глагол +
-// параметры). Глаголы — из stateOpVerbs; остальные — общие параметры op. Ключ
-// вне набора → unknown_key. `expect` — параметр (modify/remove), не глагол; `as`/
-// `do` — параметры foreach; `in` ключом не является (foreach: несёт выражение).
+// stateOpKnownKeys — the closed key set of one list-form operation (verb +
+// parameters). Verbs come from stateOpVerbs; the rest are common op parameters. A
+// key outside the set → unknown_key. `expect` is a parameter (modify/remove), not a
+// verb; `as`/`do` are foreach parameters; `in` is not a key (foreach: carries the
+// expression).
 var stateOpKnownKeys = map[string]bool{
 	"set": true, "add": true, "modify": true, "remove": true,
 	"foreach": true,
@@ -510,38 +505,38 @@ var stateOpKnownKeys = map[string]bool{
 	"patch": true, "expect": true, "as": true, "do": true,
 }
 
-// stateOpConflictValues — допустимые значения `on_conflict`.
+// stateOpConflictValues — the allowed `on_conflict` values.
 var stateOpConflictValues = map[string]bool{
 	"skip": true, "replace": true, "error": true,
 }
 
-// stateOpExpectValues — допустимые значения `expect` (modify/remove).
+// stateOpExpectValues — the allowed `expect` values (modify/remove).
 var stateOpExpectValues = map[string]bool{
 	"one": true, "at_most_one": true, "any": true,
 }
 
-// foreachReservedBindings — имена, которые `foreach.as:` перекрывать нельзя:
-// голый as-биндинг объявляется в merge-time CEL-контексте (render.renderForeach)
-// и затёр бы фиксированный scenario-контекст ИЛИ локальные биндинги элемента
-// коллекции. Сверх loopReservedNames (input/register/incarnation/soulprint/
-// essence/vars) добавлены elem/key/value — локальные биндинги текущего элемента
-// в add-match/modify-patch (ADR-057 §b): `as: elem` затенило бы elem-биндинг
-// вложенной add-операции (reserved_binding_name).
+// foreachReservedBindings — names `foreach.as:` must not shadow: the bare as-binding
+// is declared in the merge-time CEL context (render.renderForeach) and would clobber
+// the fixed scenario context OR the collection element's local bindings. Beyond
+// loopReservedNames (input/register/incarnation/soulprint/essence/vars) it adds
+// elem/key/value — the current element's local bindings in add-match/modify-patch
+// (ADR-057 §b): `as: elem` would shadow the elem binding of a nested add operation
+// (reserved_binding_name).
 var foreachReservedBindings = map[string]bool{
 	"input": true, "register": true, "incarnation": true,
 	"soulprint": true, "essence": true, "vars": true,
 	"elem": true, "key": true, "value": true,
 }
 
-// schemaValidateScenario — пост-decode проверки ScenarioManifest.
+// schemaValidateScenario runs post-decode checks on a ScenarioManifest.
 func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManifest) []diag.Diagnostic {
 	_ = path
 	var out []diag.Diagnostic
 
 	topKeys := topLevelKeys(root)
 
-	// 1) Deprecated top-level keys → `unknown_key` с осмысленным hint-ом.
-	// Подавление дубля из reflect-walker — через `scenarioManifestType` в walk.go.
+	// 1) Deprecated top-level keys → `unknown_key` with a meaningful hint.
+	// Duplicate from the reflect-walker is suppressed via `scenarioManifestType` in walk.go.
 	for _, kv := range root.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -582,9 +577,9 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		}))
 	}
 
-	// 3) `tasks:` — required (ключ должен присутствовать). Пустой список
-	// валиден (no-op сценарий — например, `restart` мог бы не иметь задач, хотя
-	// на практике их хотя бы одна). Отсутствие ключа — ошибка.
+	// 3) `tasks:` — required (the key must be present). An empty list is valid (a
+	// no-op scenario — e.g. `restart` could have no tasks, though in practice it has
+	// at least one). A missing key is an error.
 	if !topKeys["tasks"] {
 		out = append(out, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -595,44 +590,45 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		})
 	}
 
-	// 4) `state_changes:` — структурная валидация (только если ключ есть).
+	// 4) `state_changes:` — structural validation (only if the key is present).
 	if topKeys["state_changes"] {
 		out = append(out, validateStateChanges(root, "$.state_changes")...)
 	}
 
-	// 4a) `compute:` — структурная валидация (только если ключ есть).
+	// 4a) `compute:` — structural validation (only if the key is present).
 	if topKeys["compute"] {
 		out = append(out, validateComputeBlock(root, "$.compute")...)
 	}
 
-	// 5) `input:` — общий валидатор схемы.
+	// 5) `input:` — shared schema validator.
 	if topKeys["input"] {
 		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
 	}
 
-	// 5a) `validate:` — top-level список input-инвариантов (только если ключ есть).
+	// 5a) `validate:` — top-level list of input invariants (only if the key is present).
 	if topKeys["validate"] {
 		out = append(out, validateValidateBlock(root, "$.validate")...)
 	}
 
-	// 5b) `form:` — презентационный слой формы + cross-инварианты против input:
-	// (form_field_unknown/duplicate/uncovered, section.key уникальность). Активен
-	// только при наличии ключа.
+	// 5b) `form:` — the form presentation layer + cross-invariants against input:
+	// (form_field_unknown/duplicate/uncovered, section.key uniqueness). Active only
+	// when the key is present.
 	//
-	// COVENANT-ГЕЙТ: form-проверка cross-полей (`form` ⊆ эффективный `input`) корректна
-	// лишь когда `m.Input` уже содержит эффективный набор полей. У non-extends-сценария
-	// это так уже в semantic-фазе — валидируем здесь как раньше (бит-в-бит). У covenant-
-	// сценария (extends != "") эффективный input существует ТОЛЬКО ПОСЛЕ merge фрагмента
-	// (keeper-side, нужен ФС снапшота): здесь `m.Input` несёт лишь локальную дельту, и
-	// form-поле, объявленное в covenant, дало бы ЛОЖНЫЙ form_field_unknown. Поэтому при
-	// extends form пропускается тут и проверяется пост-merge тем же ядром на смерженном
-	// input (config.ResolveScenarioCovenant). Структуру блока (sections/key/show_when)
-	// пост-merge проверяет то же ядро — отдельной structure-only ветки не нужно.
+	// COVENANT GATE: the cross-field form check (`form` ⊆ effective `input`) is
+	// correct only when `m.Input` already holds the effective field set. For a
+	// non-extends scenario that is already so in the semantic phase — we validate here
+	// as before (bit-for-bit). For a covenant scenario (extends != "") the effective
+	// input exists ONLY AFTER the fragment merge (keeper-side, needs the snapshot FS):
+	// here `m.Input` carries only the local delta, and a form field declared in the
+	// covenant would yield a FALSE form_field_unknown. So under extends, form is
+	// skipped here and checked post-merge by the same core on the merged input
+	// (config.ResolveScenarioCovenant). The block structure (sections/key/show_when)
+	// is checked post-merge by the same core — no separate structure-only branch needed.
 	if topKeys["form"] && m.Extends == "" {
 		out = append(out, validateFormLayout(root, m, "$.form")...)
 	}
 
-	// 6) `tasks[]` — полиморфная валидация каждой задачи.
+	// 6) `tasks[]` — polymorphic validation of each task.
 	tasksNode := findSequenceValue(root, "tasks")
 	if tasksNode != nil {
 		for i, item := range tasksNode.Values {
@@ -643,26 +639,27 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	return out
 }
 
-// reComputeName — имя compute-переменной: должно быть CEL-полем-доступным
-// (`compute.<name>`), то есть идентификатор snake/camel, начинающийся с буквы или
-// `_`. Цифры/буквы/подчёркивание внутри. Дефис/точка/пробел запрещены (сломали бы
-// `compute.<name>`-доступ в CEL).
+// reComputeName — compute variable name: must be CEL-field-accessible
+// (`compute.<name>`), i.e. a snake/camel identifier starting with a letter or `_`,
+// with letters/digits/underscore inside. Dash/dot/space are forbidden (they would
+// break `compute.<name>` access in CEL).
 var reComputeName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// computeReservedNames — имена, которые compute-переменная перекрывать нельзя:
-// корневые контекст-имена CEL (input/register/incarnation/soulprint/essence/vars)
-// + сам корень `compute`. Compute-переменные кладутся под `compute.<name>`, но имя
-// `compute` как переменная затёрло бы весь блок — запрещаем для самодокументируемости.
+// computeReservedNames — names a compute variable must not shadow: the root CEL
+// context names (input/register/incarnation/soulprint/essence/vars) + the `compute`
+// root itself. Compute variables live under `compute.<name>`, but the name `compute`
+// as a variable would clobber the whole block — forbidden for self-documentation.
 var computeReservedNames = map[string]bool{
 	"input": true, "register": true, "incarnation": true,
 	"soulprint": true, "essence": true, "vars": true, "compute": true,
 }
 
-// validateComputeBlock — проверка структуры `compute:`-блока (ADR-009 amendment
-// 2026-06-23): mapping `<имя>: <CEL-выражение|литерал>`. Имя — CEL-field-доступный
-// идентификатор (reComputeName), не из computeReservedNames; дубликат имени —
-// ошибка (затёр бы ранний compute). Значение-строка — непустое; non-string литерал
-// валиден (проходит насквозь как vars). Не-mapping блок → type_mismatch.
+// validateComputeBlock checks the structure of the `compute:` block (ADR-009
+// amendment 2026-06-23): a mapping `<name>: <CEL-expression|literal>`. The name is a
+// CEL-field-accessible identifier (reComputeName), not in computeReservedNames; a
+// duplicate name is an error (would clobber the earlier compute). A string value must
+// be non-empty; a non-string literal is valid (passes through like vars). A
+// non-mapping block → type_mismatch.
 func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	node := findValueNode(root, "compute")
 	mm, ok := node.(*ast.MappingNode)
@@ -715,7 +712,7 @@ func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 		}
 		seen[name] = true
 
-		// Значение: строка-CEL должна быть непустой; non-string литерал валиден.
+		// Value: a CEL string must be non-empty; a non-string literal is valid.
 		if sn, isStr := kv.Value.(*ast.StringNode); isStr && sn.Value == "" {
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -728,14 +725,14 @@ func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 	return out
 }
 
-// validateStateChanges — проверка структуры `state_changes:`-блока. DUAL-FORM:
+// validateStateChanges checks the structure of the `state_changes:` block. DUAL-FORM:
 //
-//   - sequence на месте блока → новая list-форма: каждый элемент — операция-
-//     глагол (validateStateOp); все глаголы (set/add/modify/remove/foreach)
-//     валидируются по полной грамматике ADR-057.
-//   - mapping → старая map-форма (DEPRECATED): прежний путь (sets/appends/
-//     modifies). Пустой `state_changes: {}` валиден.
-//   - прочее (scalar/null) — decode уже поднял type_mismatch; здесь молча.
+//   - a sequence in place of the block → new list form: each element is a verb
+//     operation (validateStateOp); all verbs (set/add/modify/remove/foreach) are
+//     validated against the full ADR-057 grammar.
+//   - a mapping → old map form (DEPRECATED): the former path (sets/appends/modifies).
+//     An empty `state_changes: {}` is valid.
+//   - other (scalar/null) — decode already raised type_mismatch; silent here.
 func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	node := findValueNode(root, "state_changes")
 	switch n := node.(type) {
@@ -752,18 +749,18 @@ func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 	}
 }
 
-// validateStateChangesMap — старая map-форма (sets/appends/modifies, DEPRECATED).
+// validateStateChangesMap — old map form (sets/appends/modifies, DEPRECATED).
 //
-// Предохранитель (b) ADR-057 transit: валидная map-форма НЕ ошибка (dual-parse
-// один релиз), но обязана дать DEPRECATION-WARN — иначе сценарий молча едет на
-// форме, которую следующий релиз удалит. Для appends/modifies — отдельный, более
-// строгий warn: они были no-op-плейсхолдерами (state НЕ растёт), их надо
-// переписать на add/modify, иначе латентный баг (ADR-057 §контекст).
+// ADR-057 transit safeguard (b): a valid map form is NOT an error (dual-parse for one
+// release) but must emit a DEPRECATION WARN — otherwise a scenario silently rides a
+// form the next release will remove. For appends/modifies a separate, stricter warn:
+// they were no-op placeholders (state does NOT grow) and must be rewritten as
+// add/modify, else a latent bug (ADR-057 §context).
 func validateStateChangesMap(node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
-	// Один deprecation-warn на весь блок (на сам ключ state_changes — позиция
-	// первого known-ключа), чтобы не дублировать на каждом sets/appends/modifies.
+	// One deprecation warn for the whole block (anchored on the state_changes key —
+	// the position of the first known key), to avoid duplicating per sets/appends/modifies.
 	if pos := firstKnownStateChangeKeyPos(node); pos != nil {
 		out = append(out, diagAt(pos.Line, pos.Column, diag.Diagnostic{
 			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
@@ -794,8 +791,8 @@ func validateStateChangesMap(node *ast.MappingNode, pathPrefix string) []diag.Di
 			out = append(out, validateSetsMap(tok.Position.Line, tok.Position.Column, kv.Value, pathPrefix)...)
 			continue
 		}
-		// appends/modifies — no-op-плейсхолдеры: state НЕ растёт. Отдельный warn,
-		// чтобы автор не думал, что декларация работает (ADR-057 transit).
+		// appends/modifies are no-op placeholders: state does NOT grow. A separate warn
+		// so the author does not think the declaration works (ADR-057 transit).
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
 			Code:     "noop_placeholder",
@@ -808,10 +805,10 @@ func validateStateChangesMap(node *ast.MappingNode, pathPrefix string) []diag.Di
 	return out
 }
 
-// firstKnownStateChangeKeyPos возвращает позицию первого известного ключа
-// map-формы (sets/appends/modifies) для якоря deprecation-warn-а на блоке.
-// nil — пустой `state_changes: {}` (deprecated-warn не нужен: пустой блок никого
-// не вводит в заблуждение, валиден в обеих формах).
+// firstKnownStateChangeKeyPos returns the position of the first known map-form key
+// (sets/appends/modifies) to anchor the block's deprecation warn. nil for an empty
+// `state_changes: {}` (no deprecation warn needed: an empty block misleads no one and
+// is valid in both forms).
 func firstKnownStateChangeKeyPos(node *ast.MappingNode) *struct{ Line, Column int } {
 	for _, kv := range node.Values {
 		tok := kv.Key.GetToken()
@@ -825,18 +822,18 @@ func firstKnownStateChangeKeyPos(node *ast.MappingNode) *struct{ Line, Column in
 	return nil
 }
 
-// validateStateOp — валидация одной операции list-формы (элемент `state_changes[i]`).
+// validateStateOp validates one list-form operation (element `state_changes[i]`).
 //
-// Элемент обязан быть mapping с РОВНО одним глаголом-ключом (`set`/`add`/…), чьё
-// значение — непустое имя целевого поля. Параметры (`value`/`key`/`match`/
-// `on_conflict`/`patch`/`expect`/`as`/`do`) проверяются по применимости к глаголу:
+// The element must be a mapping with EXACTLY one verb key (`set`/`add`/…) whose value
+// is a non-empty target field name. Parameters (`value`/`key`/`match`/`on_conflict`/
+// `patch`/`expect`/`as`/`do`) are checked for applicability to the verb:
 //
-//   - set:    нужен value; match/key/on_conflict/patch/expect — неприменимы;
-//   - add:    нужен value; on_conflict ∈ {skip,replace,error}; key (map) / match
-//     (list-дедуп) опц.; patch/expect — неприменимы;
-//   - modify: нужен match + patch; опц. expect; value/key/on_conflict/as/do неприм.;
-//   - remove: нужен match; опц. expect; value/key/on_conflict/patch/as/do неприм.;
-//   - foreach: нужен as + do (непустой); вложенный foreach в do отвергается.
+//   - set:    needs value; match/key/on_conflict/patch/expect inapplicable;
+//   - add:    needs value; on_conflict ∈ {skip,replace,error}; key (map) / match
+//     (list dedup) optional; patch/expect inapplicable;
+//   - modify: needs match + patch; optional expect; value/key/on_conflict/as/do n/a;
+//   - remove: needs match; optional expect; value/key/on_conflict/patch/as/do n/a;
+//   - foreach: needs as + do (non-empty); a nested foreach in do is rejected.
 func validateStateOp(node ast.Node, path string) []diag.Diagnostic {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -890,9 +887,9 @@ func validateStateOp(node ast.Node, path string) []diag.Diagnostic {
 				continue
 			}
 			verbTok.name, verbTok.line, verbTok.col, verbTok.set = key, tok.Position.Line, tok.Position.Column, true
-			// `foreach:` несёт CEL-выражение коллекции; прочие глаголы — имя
-			// целевого поля. В обоих случаях значение обязано быть непустой
-			// строкой (foreach без выражения / verb без поля — ошибка).
+			// `foreach:` carries the CEL collection expression; the other verbs carry
+			// the target field name. In both cases the value must be a non-empty string
+			// (foreach without an expression / a verb without a field is an error).
 			if stringFromNode(kv.Value) == "" {
 				msg := fmt.Sprintf("%s: target field must be a non-empty string", key)
 				if key == "foreach" {
@@ -932,10 +929,10 @@ func validateStateOp(node ast.Node, path string) []diag.Diagnostic {
 	return out
 }
 
-// validateModifyOp — `modify` требует match + patch (map путь→CEL); опц. expect;
-// value/key/on_conflict/in/as/do неприменимы. patch обязан быть mapping.
-// Предохранитель широкого match: константно-истинный (`match: true`) или
-// отсутствующий match — WARN «широкий предикат патчит всю коллекцию» (§7.1 (d)).
+// validateModifyOp — `modify` needs match + patch (map path→CEL); optional expect;
+// value/key/on_conflict/in/as/do inapplicable. patch must be a mapping. Wide-match
+// safeguard: a constant-true (`match: true`) or missing match → WARN "a wide
+// predicate patches the whole collection" (§7.1 (d)).
 func validateModifyOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	out = append(out, warnWideMatch(seen, path, vline, vcol, "modify")...)
@@ -954,8 +951,8 @@ func validateModifyOp(seen map[string]*ast.MappingValueNode, path string, vline,
 	return out
 }
 
-// validateRemoveOp — `remove` требует match; опц. expect; value/key/on_conflict/
-// patch/in/as/do неприменимы. Тот же предохранитель широкого match.
+// validateRemoveOp — `remove` needs match; optional expect; value/key/on_conflict/
+// patch/in/as/do inapplicable. Same wide-match safeguard.
 func validateRemoveOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	out = append(out, warnWideMatch(seen, path, vline, vcol, "remove")...)
@@ -964,19 +961,19 @@ func validateRemoveOp(seen map[string]*ast.MappingValueNode, path string, vline,
 	return out
 }
 
-// validateForeachOp — `foreach` требует as: (имя биндинга) + do: (непустой список
-// вложенных операций); value/key/match/on_conflict/patch/expect неприменимы.
-// Каждая вложенная do-операция валидируется рекурсивно (validateStateOp).
+// validateForeachOp — `foreach` needs as: (binding name) + do: (non-empty list of
+// nested operations); value/key/match/on_conflict/patch/expect inapplicable. Each
+// nested do operation is validated recursively (validateStateOp).
 //
-// `as:` не должен затенять зарезервированное имя CEL-контекста или локальный
-// биндинг элемента (foreachReservedBindings) → reserved_binding_name.
+// `as:` must not shadow a reserved CEL-context name or an element-local binding
+// (foreachReservedBindings) → reserved_binding_name.
 //
-// Вложенный foreach в do — вне грамматики (ADR-057: do несёт CRUD-глаголы, не
-// повторный цикл). validateStateOp его НЕ отвергает (foreach — валидный верхний
-// глагол), поэтому каждый do-элемент явно проверяется здесь: do-foreach прошёл бы
-// lint, а render.renderForeach раскрыл бы его через renderOneStateOp с Verb=foreach
-// → merge упал бы в рантайме (`verb foreach не поддержан` → state_changes_apply_
-// failed → error_locked ПОСЛЕ apply на хостах). Ловим на этапе валидации (BUG-2).
+// A nested foreach in do is out of grammar (ADR-057: do carries CRUD verbs, not a
+// re-loop). validateStateOp does NOT reject it (foreach is a valid top-level verb),
+// so each do element is checked explicitly here: a do-foreach would pass lint, and
+// render.renderForeach would expand it via renderOneStateOp with Verb=foreach → merge
+// would fail at runtime (`verb foreach not supported` → state_changes_apply_failed →
+// error_locked AFTER apply on the hosts). Caught at validation time (BUG-2).
 func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if as := seen["as"]; as == nil || stringFromNode(as.Value) == "" {
@@ -1034,9 +1031,9 @@ func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline
 	return out
 }
 
-// rejectNestedForeach отбраковывает foreach-глагол внутри do: вложенный цикл вне
-// грамматики ADR-057 (do несёт только CRUD-глаголы). Проверка по AST — ищет ключ
-// `foreach` среди ключей do-элемента.
+// rejectNestedForeach rejects a foreach verb inside do: a nested loop is out of the
+// ADR-057 grammar (do carries CRUD verbs only). Checked over the AST — it looks for a
+// `foreach` key among the do element's keys.
 func rejectNestedForeach(node ast.Node, path string) []diag.Diagnostic {
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -1058,9 +1055,9 @@ func rejectNestedForeach(node ast.Node, path string) []diag.Diagnostic {
 	return nil
 }
 
-// validatePatchMap проверяет, что `patch:` — mapping (путь-в-элементе → значение).
-// Пустой patch валиден грамматически (no-op merge), но бессмыслен — допускаем без
-// ошибки (симметрично пустому state_changes).
+// validatePatchMap checks that `patch:` is a mapping (path-in-element → value). An
+// empty patch is grammatically valid (no-op merge) but meaningless — allowed without
+// an error (symmetric with an empty state_changes).
 func validatePatchMap(patchKV *ast.MappingValueNode, path string) []diag.Diagnostic {
 	if _, ok := patchKV.Value.(*ast.MappingNode); ok {
 		return nil
@@ -1078,7 +1075,7 @@ func validatePatchMap(patchKV *ast.MappingValueNode, path string) []diag.Diagnos
 	})}
 }
 
-// validateExpectValue проверяет значение `expect` ∈ {one, at_most_one, any}.
+// validateExpectValue checks that `expect` ∈ {one, at_most_one, any}.
 func validateExpectValue(seen map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	exp := seen["expect"]
 	if exp == nil {
@@ -1101,10 +1098,10 @@ func validateExpectValue(seen map[string]*ast.MappingValueNode, path string) []d
 	})}
 }
 
-// warnWideMatch — предохранитель (a) ADR-057 §d: modify/remove без match: ИЛИ с
-// константно-истинным предикатом (`match: true`) перепатчат/снесут ВСЮ коллекцию.
-// Не ошибка (автор мог хотеть именно «всех»), но WARN — намерение должно быть
-// явным. soul-lint выводит warn, exit-code остаётся 0.
+// warnWideMatch — safeguard (a) ADR-057 §d: modify/remove without match: OR with a
+// constant-true predicate (`match: true`) will re-patch/remove the WHOLE collection.
+// Not an error (the author may have meant "all"), but WARN — intent must be explicit.
+// soul-lint prints the warn, exit code stays 0.
 func warnWideMatch(seen map[string]*ast.MappingValueNode, path string, vline, vcol int, verb string) []diag.Diagnostic {
 	m := seen["match"]
 	if m == nil {
@@ -1133,15 +1130,15 @@ func warnWideMatch(seen map[string]*ast.MappingValueNode, path string, vline, vc
 	return nil
 }
 
-// isConstTrueMatch распознаёт константно-истинный предикат (`true`, `1 == 1`),
-// сносящий/патчащий всю коллекцию. Полноценный CEL-анализ не нужен — ловим
-// очевидную литеральную форму `true` (с возможными пробелами/обёрткой `${ }`).
+// isConstTrueMatch recognizes a constant-true predicate (`true`, `1 == 1`) that
+// removes/patches the whole collection. A full CEL analysis is unnecessary — we catch
+// the obvious literal form `true` (allowing surrounding spaces / `${ }` wrapper).
 //
-// TODO(wide-match): расширить до «предикат не ссылается на elem/key/value» (любой
-// match, игнорирующий элемент, зацепляет всю коллекцию — подозрителен). Корректно
-// это требует CEL-AST-обхода (shared/cel): regex по идентификаторам даёт ложные
-// срабатывания на `register.value`/`input.key`/поле `x.elem`. Пока ловим только
-// литерал `true`; полное покрытие — отдельным слайсом с разбором AST.
+// TODO(wide-match): extend to "the predicate does not reference elem/key/value" (any
+// match ignoring the element hits the whole collection — suspicious). Doing it
+// correctly needs a CEL-AST walk (shared/cel): a regex over identifiers false-positives
+// on `register.value`/`input.key`/a field `x.elem`. For now we catch only the literal
+// `true`; full coverage is a separate slice with AST parsing.
 func isConstTrueMatch(expr string) bool {
 	s := strings.TrimSpace(expr)
 	s = strings.TrimPrefix(s, "${")
@@ -1149,9 +1146,9 @@ func isConstTrueMatch(expr string) bool {
 	return strings.TrimSpace(s) == "true"
 }
 
-// validateSetOp — `set` требует value; match/key/on_conflict/patch/expect
-// неприменимы. `expect` — ассерт кратности ТОЛЬКО для modify/remove (ADR-057 §c);
-// на set он молча игнорировался бы движком (ловушка для оператора, BUG-1).
+// validateSetOp — `set` needs value; match/key/on_conflict/patch/expect inapplicable.
+// `expect` is a cardinality assert ONLY for modify/remove (ADR-057 §c); on set the
+// engine would silently ignore it (an operator trap, BUG-1).
 func validateSetOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if seen["value"] == nil {
@@ -1166,11 +1163,11 @@ func validateSetOp(seen map[string]*ast.MappingValueNode, path string, vline, vc
 	return out
 }
 
-// validateAddOp — `add` требует value; on_conflict ∈ {skip,replace,error};
-// key (map) / match (list-дедуп) опц.; patch/expect/in/as/do неприменимы.
-// `expect` — ассерт кратности ТОЛЬКО для modify/remove (ADR-057 §c); на add он
-// молча игнорировался бы движком (ловушка: оператор ждёт страховку от дубля на
-// add, её там нет — дедуп делает on_conflict, BUG-1).
+// validateAddOp — `add` needs value; on_conflict ∈ {skip,replace,error}; key (map) /
+// match (list dedup) optional; patch/expect/in/as/do inapplicable. `expect` is a
+// cardinality assert ONLY for modify/remove (ADR-057 §c); on add the engine would
+// silently ignore it (a trap: the operator expects dup protection on add but there is
+// none — dedup is done by on_conflict, BUG-1).
 func validateAddOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if seen["value"] == nil {
@@ -1201,8 +1198,8 @@ func validateAddOp(seen map[string]*ast.MappingValueNode, path string, vline, vc
 	return out
 }
 
-// rejectKeys поднимает unknown_key для каждого присутствующего, но неприменимого
-// к глаголу ключа (например, patch: на add, match: на set).
+// rejectKeys raises unknown_key for each present but verb-inapplicable key (e.g.
+// patch: on add, match: on set).
 func rejectKeys(seen map[string]*ast.MappingValueNode, path string, keys []string, verb string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for _, k := range keys {
@@ -1225,7 +1222,7 @@ func rejectKeys(seen map[string]*ast.MappingValueNode, path string, keys []strin
 	return out
 }
 
-// lineOf/colOf — позиция узла (fallback 0 при отсутствии токена).
+// lineOf/colOf — node position (fallback 0 when the token is absent).
 func lineOf(node ast.Node) int {
 	if tok := node.GetToken(); tok != nil {
 		return tok.Position.Line
@@ -1240,9 +1237,9 @@ func colOf(node ast.Node) int {
 	return 0
 }
 
-// findValueNode — raw value-узел под top-level ключом name (любой формы:
-// mapping/sequence/scalar). Параллель findInputMapping/findSequenceValue, но без
-// фильтра по виду — нужен для dual-form-диспетчеризации (validateStateChanges).
+// findValueNode — the raw value node under the top-level key name (any form:
+// mapping/sequence/scalar). Parallel to findInputMapping/findSequenceValue but with
+// no kind filter — needed for dual-form dispatch (validateStateChanges).
 func findValueNode(root *ast.MappingNode, name string) ast.Node {
 	if root == nil {
 		return nil
@@ -1257,9 +1254,9 @@ func findValueNode(root *ast.MappingNode, name string) ast.Node {
 	return nil
 }
 
-// validateSetsMap проверяет `sets` как mapping `<поле>: <выражение>`: значение
-// блока — mapping, каждое значение — непустая строка-выражение (CEL/литерал).
-// keyLine/keyCol — позиция ключа `sets` (fallback, если у value нет токена).
+// validateSetsMap checks `sets` as a mapping `<field>: <expression>`: the block value
+// is a mapping and each value is a non-empty string expression (CEL/literal).
+// keyLine/keyCol — the `sets` key position (fallback when the value has no token).
 func validateSetsMap(keyLine, keyCol int, value ast.Node, pathPrefix string) []diag.Diagnostic {
 	mm, ok := value.(*ast.MappingNode)
 	if !ok {
@@ -1309,8 +1306,8 @@ func validateSetsMap(keyLine, keyCol int, value ast.Node, pathPrefix string) []d
 	return out
 }
 
-// validateStringSeq проверяет `appends`/`modifies` как sequence строк (future).
-// keyLine/keyCol — позиция ключа (fallback, если у элемента нет токена).
+// validateStringSeq checks `appends`/`modifies` as a sequence of strings (future).
+// keyLine/keyCol — the key position (fallback when an element has no token).
 func validateStringSeq(keyLine, keyCol int, value ast.Node, keyName, pathPrefix string) []diag.Diagnostic {
 	seq, ok := value.(*ast.SequenceNode)
 	if !ok {
@@ -1345,8 +1342,8 @@ func validateStringSeq(keyLine, keyCol int, value ast.Node, keyName, pathPrefix 
 	return out
 }
 
-// findSequenceValue — value-узел под ключом `name`, если value — SequenceNode.
-// Симметрично findInputMapping для sequence-кейса.
+// findSequenceValue — the value node under key `name` if the value is a SequenceNode.
+// Symmetric with findInputMapping for the sequence case.
 func findSequenceValue(m *ast.MappingNode, name string) *ast.SequenceNode {
 	if m == nil {
 		return nil
@@ -1364,24 +1361,23 @@ func findSequenceValue(m *ast.MappingNode, name string) *ast.SequenceNode {
 	return nil
 }
 
-// semanticValidateScenario — cross-field/cross-task инварианты ScenarioManifest.
+// semanticValidateScenario — cross-field/cross-task invariants of a ScenarioManifest.
 //
-// Покрыто: duplicate_task_address (register ∪ id) + unknown_register_reference
-// по списку `tasks[]` (включая вложенные block:), см. validateTaskRefs.
-// CEL-syntax и cross-ref внутри CEL-предикатов (`when:`/`changed_when:`/
-// `until:`) — отложены (M1.3/M1.5).
+// Covered: duplicate_task_address (register ∪ id) + unknown_register_reference over
+// the `tasks[]` list (including nested block:), see validateTaskRefs. CEL syntax and
+// cross-ref inside CEL predicates (`when:`/`changed_when:`/`until:`) are deferred
+// (M1.3/M1.5).
 func semanticValidateScenario(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
 	out := validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks")
 	out = append(out, validateExtendsField(m, root)...)
 	return out
 }
 
-// validateExtendsField — semantic-проверка формы `extends:` (covenant.go).
-// Пустой/отсутствующий extends = нет наследования (валидно, ничего не проверяем
-// — forward-compat). Непустое имя обязано быть валидной covenant-ссылкой
-// (ValidExtendsName: одноуровневый kebab, traversal-кламп грамматикой имени):
-// иначе covenant_extends_invalid. Сам резолв фрагмента по ФС — S2 (keeper-side);
-// здесь только форма имени.
+// validateExtendsField — semantic check of the `extends:` form (covenant.go). Empty/
+// absent extends = no inheritance (valid, nothing checked — forward-compat). A
+// non-empty name must be a valid covenant reference (ValidExtendsName: single-segment
+// kebab, traversal-clamped by the name grammar): else covenant_extends_invalid.
+// Resolving the fragment against the FS is S2 (keeper-side); only the name form here.
 func validateExtendsField(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
 	if m.Extends == "" {
 		return nil

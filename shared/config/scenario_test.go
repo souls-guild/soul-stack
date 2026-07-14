@@ -9,11 +9,11 @@ import (
 )
 
 func TestLoadScenarioManifest_Golden(t *testing.T) {
-	// Локальная patched-копия golden (soul-lint/testdata/scenario-golden/):
-	// самодостаточный фикстур redis-create, исторически снятый с redis-cluster
-	// create-сценария. Деривация от исходника намеренная — оригинал имел
-	// deviation от input.md (`type: object` без `properties:`), здесь форма
-	// исправлена под нормативную схему.
+	// Local patched copy of the golden (soul-lint/testdata/scenario-golden/): a
+	// self-contained redis-create fixture, historically derived from the
+	// redis-cluster create scenario. The derivation is intentional — the original
+	// had a deviation from input.md (`type: object` without `properties:`); here
+	// the form is fixed to the normative schema.
 	path := filepath.FromSlash("../../soul-lint/testdata/scenario-golden/redis-create.yml")
 	cfg, doc, diags, err := LoadScenarioManifest(path, ValidateOptions{})
 	if err != nil {
@@ -37,7 +37,7 @@ func TestLoadScenarioManifest_Golden(t *testing.T) {
 	if len(cfg.Tasks) == 0 {
 		t.Errorf("tasks must be parsed")
 	}
-	// Discriminator round-trip smoke: первая задача — module:.
+	// Discriminator round-trip smoke: the first task is module:.
 	if cfg.Tasks[0].Module == nil {
 		t.Errorf("tasks[0].Module must be set (provision uses core.cloud.created)")
 	}
@@ -85,7 +85,7 @@ func TestLoadScenarioManifest_MissingTasks(t *testing.T) {
 }
 
 func TestLoadScenarioManifest_EmptyTasksOK(t *testing.T) {
-	// Пустой tasks: [] валиден (no-op scenario).
+	// Empty tasks: [] is valid (no-op scenario).
 	src := `name: noop
 tasks: []
 `
@@ -112,7 +112,7 @@ func TestLoadScenarioManifest_DeprecatedKeys(t *testing.T) {
 				dump(t, diags)
 				t.Fatalf("expected unknown_key with hint for deprecated %q", key)
 			}
-			// Не должно быть дубля unknown_key на тот же путь.
+			// There must be no duplicate unknown_key on the same path.
 			count := 0
 			for _, d := range diags {
 				if d.Code == "unknown_key" && d.YAMLPath == "$."+key {
@@ -158,7 +158,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_AllFourDiscriminators(t *testing.T) {
-	// Edge-case: одна валидная задача каждого вида.
+	// Edge case: one valid task of each kind.
 	src := `name: x
 tasks:
   - module: core.exec.run
@@ -188,8 +188,8 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_AssertTask — assert-задача (ADR-009 amendment
-// 2026-06-23): валидная форма парсится в AssertSpec (дискриминатор assert).
+// TestLoadScenarioManifest_AssertTask — an assert task (ADR-009 amendment
+// 2026-06-23): a valid form parses into AssertSpec (assert discriminator).
 func TestLoadScenarioManifest_AssertTask(t *testing.T) {
 	src := `name: x
 tasks:
@@ -216,8 +216,8 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_AssertEmptyThat — пустой that[] → ошибка
-// (assert требует хотя бы один предикат).
+// TestLoadScenarioManifest_AssertEmptyThat — empty that[] → error
+// (assert requires at least one predicate).
 func TestLoadScenarioManifest_AssertEmptyThat(t *testing.T) {
 	src := `name: x
 tasks:
@@ -232,7 +232,7 @@ tasks:
 }
 
 // TestLoadScenarioManifest_AssertWithModuleConflict — assert ⊕ module:
-// (assert — дискриминатор, взаимоисключим с module/apply/include/block).
+// (assert is a discriminator, mutually exclusive with module/apply/include/block).
 func TestLoadScenarioManifest_AssertWithModuleConflict(t *testing.T) {
 	src := `name: x
 tasks:
@@ -291,9 +291,9 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-специфичные
-// ключи на block-задаче режутся fail-closed кодом <key>_on_block_invalid
-// (destiny/tasks.md §6.5 их на block не упоминает). parallel: тоже отвергается.
+// TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-specific keys
+// on a block task are cut fail-closed with code <key>_on_block_invalid
+// (destiny/tasks.md §6.5 does not mention them on block). parallel: is also rejected.
 func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 	cases := map[string]string{
 		"changed_when_on_block_invalid": "changed_when: \"true\"",
@@ -317,9 +317,9 @@ func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 	}
 }
 
-// TestLoadScenarioManifest_BlockInheritedKeysOK — унаследованные ключи (when/
-// where/vars/onchanges/onfail/serial/run_once/name) на block-задаче ВАЛИДНЫ (§6.5
-// явно их допускает) — не должны давать <key>_on_block_invalid.
+// TestLoadScenarioManifest_BlockInheritedKeysOK — inherited keys (when/
+// where/vars/onchanges/onfail/serial/run_once/name) on a block task are VALID (§6.5
+// explicitly allows them) — must not yield <key>_on_block_invalid.
 func TestLoadScenarioManifest_BlockInheritedKeysOK(t *testing.T) {
 	src := `name: x
 tasks:
@@ -360,8 +360,8 @@ tasks:
 }
 
 func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
-	// changed_when:/failed_when: принимают bool-литерал (force-shortcut) и
-	// CEL-строку; невалидные типы (число/список) → type_mismatch.
+	// changed_when:/failed_when: accept a bool literal (force-shortcut) and a
+	// CEL string; invalid types (number/list) → type_mismatch.
 	ok := []string{"false", "true", `"register.self.exit_code != 0"`}
 	for _, v := range ok {
 		src := "name: x\ntasks:\n  - module: core.exec.run\n    params: { cmd: \"true\" }\n    changed_when: " + v + "\n    failed_when: " + v + "\n"
@@ -405,8 +405,8 @@ state_changes:
 }
 
 func TestLoadScenarioManifest_StateChangesSetsScalar(t *testing.T) {
-	// sets — теперь mapping поле→выражение (orchestration.md §7.1); скаляр на
-	// его месте → type_mismatch.
+	// sets is now a mapping field→expression (orchestration.md §7.1); a scalar in
+	// its place → type_mismatch.
 	src := `name: x
 tasks: []
 state_changes:
@@ -420,7 +420,7 @@ state_changes:
 }
 
 func TestLoadScenarioManifest_StateChangesSetsSeqRejected(t *testing.T) {
-	// Старая []string-форма (sets: [a, b]) больше не валидна: sets — mapping.
+	// The old []string form (sets: [a, b]) is no longer valid: sets is a mapping.
 	src := `name: x
 tasks: []
 state_changes:
@@ -472,7 +472,7 @@ state_changes:
 }
 
 func TestLoadScenarioManifest_EmptyStateChangesOK(t *testing.T) {
-	// state_changes: {} — валидно (restart-like, см. examples).
+	// state_changes: {} — valid (restart-like, see examples).
 	src := `name: noop
 state_changes: {}
 tasks: []
@@ -484,11 +484,11 @@ tasks: []
 	}
 }
 
-// --- Новая list-форма state_changes (пилот: set + add). ---
+// --- New list form of state_changes (pilot: set + add). ---
 
-// TestLoadScenarioManifest_StateChangesTransitMapForm — ★ TRANSIT: старая
-// map-форма `state_changes: { sets: {...} }` ВСЁ ЕЩЁ парсится (deprecated) —
-// существующие сценарии на ней остаются зелёными. IsList=false, Sets заполнен.
+// TestLoadScenarioManifest_StateChangesTransitMapForm — ★ TRANSIT: the old
+// map form `state_changes: { sets: {...} }` STILL parses (deprecated) — existing
+// scenarios on it stay green. IsList=false, Sets populated.
 func TestLoadScenarioManifest_StateChangesTransitMapForm(t *testing.T) {
 	src := `name: x
 tasks: []
@@ -509,8 +509,8 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesListForm — новая list-форма set+add
-// парсится: IsList=true, Ops по порядку, value-объект сохранён, on_conflict/match.
+// TestLoadScenarioManifest_StateChangesListForm — the new list form set+add
+// parses: IsList=true, Ops in order, value object preserved, on_conflict/match.
 func TestLoadScenarioManifest_StateChangesListForm(t *testing.T) {
 	src := `name: add_replica
 tasks: []
@@ -548,8 +548,8 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesEmptyListOK — пустой `state_changes: []`
-// валиден (state не меняется), IsList=true.
+// TestLoadScenarioManifest_StateChangesEmptyListOK — an empty `state_changes: []`
+// is valid (state does not change), IsList=true.
 func TestLoadScenarioManifest_StateChangesEmptyListOK(t *testing.T) {
 	src := `name: noop
 state_changes: []
@@ -609,7 +609,7 @@ state_changes:
 }
 
 func TestLoadScenarioManifest_StateChangesSetRejectsMatch(t *testing.T) {
-	// match: неприменим к set → unknown_key.
+	// match: does not apply to set → unknown_key.
 	src := `name: x
 tasks: []
 state_changes:
@@ -639,8 +639,8 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesModifyValid — modify с match+patch
-// валидируется без ошибок (узкий match → без wide_match-warn).
+// TestLoadScenarioManifest_StateChangesModifyValid — modify with match+patch
+// validates without errors (a narrow match → no wide_match warning).
 func TestLoadScenarioManifest_StateChangesModifyValid(t *testing.T) {
 	src := `name: update_acl
 tasks: []
@@ -666,7 +666,7 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesModifyMissingPatch — modify без patch →
+// TestLoadScenarioManifest_StateChangesModifyMissingPatch — modify without patch →
 // missing_required_field.
 func TestLoadScenarioManifest_StateChangesModifyMissingPatch(t *testing.T) {
 	src := `name: x
@@ -682,7 +682,7 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesRemoveValid — remove с match (+expect) ок.
+// TestLoadScenarioManifest_StateChangesRemoveValid — remove with match (+expect) ok.
 func TestLoadScenarioManifest_StateChangesRemoveValid(t *testing.T) {
 	src := `name: remove_replica
 tasks: []
@@ -702,8 +702,8 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesForeachValid — foreach с as+do парсится:
-// In несёт CEL-выражение коллекции, Do — вложенный add.
+// TestLoadScenarioManifest_StateChangesForeachValid — foreach with as+do parses:
+// In carries the collection CEL expression, Do — a nested add.
 func TestLoadScenarioManifest_StateChangesForeachValid(t *testing.T) {
 	src := `name: add_replicas
 tasks: []
@@ -730,7 +730,7 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesForeachMissingAsDo — foreach без as/do.
+// TestLoadScenarioManifest_StateChangesForeachMissingAsDo — foreach without as/do.
 func TestLoadScenarioManifest_StateChangesForeachMissingAsDo(t *testing.T) {
 	src := `name: x
 tasks: []
@@ -744,7 +744,7 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesBadExpect — expect вне {one,at_most_one,
+// TestLoadScenarioManifest_StateChangesBadExpect — expect outside {one,at_most_one,
 // any} → invalid_value.
 func TestLoadScenarioManifest_StateChangesBadExpect(t *testing.T) {
 	src := `name: x
@@ -761,9 +761,9 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesWideMatchWarn — ★ предохранитель (a):
-// modify/remove без match: ИЛИ с константно-истинным match → wide_match WARN
-// (не ошибка, exit-code 0).
+// TestLoadScenarioManifest_StateChangesWideMatchWarn — ★ safeguard (a):
+// modify/remove without match: OR with a constant-true match → wide_match WARN
+// (not an error, exit-code 0).
 func TestLoadScenarioManifest_StateChangesWideMatchWarn(t *testing.T) {
 	cases := map[string]string{
 		"remove-no-match": `name: x
@@ -794,9 +794,9 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesDeprecatedMapWarn — ★ предохранитель (b):
-// валидная старая map-форма даёт deprecated_form WARN; appends/modifies — ещё и
-// noop_placeholder WARN. Не ошибка (dual-parse транзит).
+// TestLoadScenarioManifest_StateChangesDeprecatedMapWarn — ★ safeguard (b):
+// a valid old map form gives a deprecated_form WARN; appends/modifies also give a
+// noop_placeholder WARN. Not an error (dual-parse transit).
 func TestLoadScenarioManifest_StateChangesDeprecatedMapWarn(t *testing.T) {
 	src := `name: x
 tasks: []
@@ -850,7 +850,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_OnAsBadScalar(t *testing.T) {
-	// on: arbitrary-scalar (не keeper) — должно быть enum_invalid.
+	// on: arbitrary-scalar (not keeper) — must be enum_invalid.
 	src := `name: x
 tasks:
   - on: random
@@ -949,7 +949,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_IDValidOnModule(t *testing.T) {
-	// id: на module-задаче без register — валидно.
+	// id: on a module task without register — valid.
 	src := `name: x
 tasks:
   - id: redis_config
@@ -967,9 +967,9 @@ tasks:
 }
 
 func TestLoadScenarioManifest_IDInvalidFormat(t *testing.T) {
-	// Невалидный формат id: kebab / CamelCase / цифра-первой / пустая строка.
-	// `redis-config` — явный кейс «дефис в середине = invalid» (id — snake_case,
-	// не kebab), отдельно от BAD-ID, где невалидность ещё и из-за заглавных.
+	// Invalid id format: kebab / CamelCase / digit-first / empty string.
+	// `redis-config` is the explicit "dash in the middle = invalid" case (id is
+	// snake_case, not kebab), separate from BAD-ID where invalidity is also from caps.
 	for _, v := range []string{"BAD-ID", "redis-config", "RedisConfig", "9config", `""`} {
 		v := v
 		t.Run(v, func(t *testing.T) {
@@ -984,8 +984,8 @@ func TestLoadScenarioManifest_IDInvalidFormat(t *testing.T) {
 }
 
 func TestLoadScenarioManifest_IDWithRegisterConflict(t *testing.T) {
-	// Guard-инвариант: id вместе с register — всегда ошибка (у задачи с register
-	// адрес уже есть, id избыточен и двусмысленен).
+	// Guard invariant: id together with register is always an error (a task with
+	// register already has an address; id is redundant and ambiguous).
 	src := `name: x
 tasks:
   - id: redis_config
@@ -1001,7 +1001,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_IDOnBlockRejected(t *testing.T) {
-	// pilot: id на block-задаче не поддерживается.
+	// pilot: id on a block task is not supported.
 	src := `name: x
 tasks:
   - id: grp
@@ -1017,7 +1017,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_IDOnIncludeRejected(t *testing.T) {
-	// pilot: id на include-задаче не поддерживается.
+	// pilot: id on an include task is not supported.
 	src := `name: x
 tasks:
   - id: inc
@@ -1031,7 +1031,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_NoIDOK(t *testing.T) {
-	// Регресс: задача без id (как и всё существующее) валидна — id опционален.
+	// Regression: a task without id (like everything existing) is valid — id is optional.
 	src := `name: x
 tasks:
   - module: core.exec.run
@@ -1106,9 +1106,9 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_DurationDaysSuffix — destiny duration-поля принимают
-// суффикс `<N>d` per convention `duration` (config.ParseDuration), единой с
-// keeper.yml-валидацией. Раньше голый time.ParseDuration отвергал `30d`.
+// TestLoadScenarioManifest_DurationDaysSuffix — destiny duration fields accept the
+// `<N>d` suffix per the `duration` convention (config.ParseDuration), unified with
+// keeper.yml validation. Previously bare time.ParseDuration rejected `30d`.
 func TestLoadScenarioManifest_DurationDaysSuffix(t *testing.T) {
 	src := `name: x
 tasks:
@@ -1126,8 +1126,8 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_DurationGoSyntaxStillValid — backward-compat: формы,
-// принимаемые time.ParseDuration (`30s`/`5m`), остаются валидными.
+// TestLoadScenarioManifest_DurationGoSyntaxStillValid — backward-compat: forms
+// accepted by time.ParseDuration (`30s`/`5m`) remain valid.
 func TestLoadScenarioManifest_DurationGoSyntaxStillValid(t *testing.T) {
 	src := `name: x
 tasks:
@@ -1198,8 +1198,7 @@ tasks:
 }
 
 func TestLoadScenarioManifest_BlockRecursive(t *testing.T) {
-	// Recursive block: block внутри block — ошибка во вложенной задаче должна
-	// всплывать.
+	// Recursive block: block inside block — an error in the nested task must bubble up.
 	src := `name: x
 tasks:
   - block:
@@ -1234,9 +1233,9 @@ tasks:
 	}
 }
 
-// --- BUG-1: expect неприменим к set/add (ассерт кратности ТОЛЬКО для
-// modify/remove, ADR-057 §c). Принимался молча → игнорировался в рантайме
-// (оператор ждал страховку от дубля на add, её там нет). ---
+// --- BUG-1: expect does not apply to set/add (the cardinality assert is ONLY for
+// modify/remove, ADR-057 §c). It was accepted silently → ignored at runtime
+// (the operator expected a duplicate safeguard on add, but there is none). ---
 
 func TestLoadScenarioManifest_StateChangesSetRejectsExpect(t *testing.T) {
 	src := `name: x
@@ -1268,10 +1267,10 @@ state_changes:
 	}
 }
 
-// --- BUG-2: вложенный foreach в do: вне грамматики ADR-057 (do несёт CRUD-
-// глаголы, не повторный цикл). Должен ловиться на этапе валидации (lint-error),
-// НЕ в рантайме (где упал бы в state_changes_apply_failed → error_locked ПОСЛЕ
-// apply на хостах). ---
+// --- BUG-2: a nested foreach in do: is outside the ADR-057 grammar (do carries
+// CRUD verbs, not another loop). It must be caught at validation (lint-error),
+// NOT at runtime (where it would fall into state_changes_apply_failed →
+// error_locked AFTER apply on hosts). ---
 
 func TestLoadScenarioManifest_StateChangesNestedForeachRejected(t *testing.T) {
 	src := `name: x
@@ -1293,9 +1292,9 @@ state_changes:
 	}
 }
 
-// --- foreach.as reserved-binding collision: as: не должен затенять имя
-// CEL-контекста (input/register/...) или локальный биндинг элемента
-// (elem/key/value) → reserved_binding_name. ---
+// --- foreach.as reserved-binding collision: as: must not shadow a CEL-context
+// name (input/register/...) or a local element binding (elem/key/value) →
+// reserved_binding_name. ---
 
 func TestLoadScenarioManifest_StateChangesForeachReservedAs(t *testing.T) {
 	for _, name := range []string{"input", "register", "vars", "essence", "incarnation", "soulprint", "elem", "key", "value"} {
@@ -1316,8 +1315,8 @@ state_changes:
 	}
 }
 
-// TestLoadScenarioManifest_StateChangesForeachNonReservedAsOK — обычное as-имя не
-// триггерит reserved_binding_name (guard против over-rejection).
+// TestLoadScenarioManifest_StateChangesForeachNonReservedAsOK — an ordinary as-name
+// does not trigger reserved_binding_name (guard against over-rejection).
 func TestLoadScenarioManifest_StateChangesForeachNonReservedAsOK(t *testing.T) {
 	src := `name: add_replicas
 tasks: []
@@ -1341,11 +1340,11 @@ state_changes:
 	}
 }
 
-// --- create: top-level флаг стартового сценария (механизм нескольких create) ---
+// --- create: top-level flag of a starter scenario (multiple-create mechanism) ---
 
-// TestLoadScenarioManifest_CreateFlagTrue — `create: true` парсится в *bool
-// (сценарий объявлен как стартовый/bootstrap-годный; чтение флага — слоем выше,
-// keeper-резолв create-набора по artifact.Scenario.Create).
+// TestLoadScenarioManifest_CreateFlagTrue — `create: true` parses into *bool
+// (the scenario is declared as a starter/bootstrap-capable one; reading the flag
+// is a layer above, keeper resolution of the create-set by artifact.Scenario.Create).
 func TestLoadScenarioManifest_CreateFlagTrue(t *testing.T) {
 	src := `name: create_cluster
 create: true
@@ -1361,8 +1360,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_CreateFlagFalse — `create: false` отличимо от «не задано»
-// (явный opt-out из create-набора).
+// TestLoadScenarioManifest_CreateFlagFalse — `create: false` is distinguishable from
+// "unset" (an explicit opt-out from the create-set).
 func TestLoadScenarioManifest_CreateFlagFalse(t *testing.T) {
 	src := `name: add_user
 create: false
@@ -1378,8 +1377,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_CreateFlagAbsent — отсутствие ключа: Create==nil
-// (back-compat: обычный operational-сценарий не становится create-стартовым молча).
+// TestLoadScenarioManifest_CreateFlagAbsent — a missing key: Create==nil
+// (back-compat: an ordinary operational scenario does not silently become a create-starter).
 func TestLoadScenarioManifest_CreateFlagAbsent(t *testing.T) {
 	src := `name: restart
 tasks: []
@@ -1394,8 +1393,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_CreateFlagBadType — не-bool значение `create:` → type_mismatch
-// (ключ известен struct-полю, decode-фаза ловит несовпадение типа).
+// TestLoadScenarioManifest_CreateFlagBadType — a non-bool `create:` value → type_mismatch
+// (the key is known to a struct field, the decode phase catches the type mismatch).
 func TestLoadScenarioManifest_CreateFlagBadType(t *testing.T) {
 	src := `name: x
 create: "yes"
@@ -1406,19 +1405,20 @@ tasks: []
 		dump(t, diags)
 		t.Fatalf("create: \"yes\" должен дать type_mismatch (ожидается boolean)")
 	}
-	// `create:` НЕ должен ловиться как unknown_key (он известен struct-полю).
+	// `create:` must NOT be caught as unknown_key (it is known to a struct field).
 	if hasCodeAt(diags, "unknown_key", "$.create") {
 		dump(t, diags)
 		t.Fatalf("create: не должен быть unknown_key (известное поле)")
 	}
 }
 
-// --- from: список версий-источников upgrade-сценария (ADR-0068) ---
+// --- from: list of source versions of an upgrade scenario (ADR-0068) ---
 
-// TestLoadScenarioManifest_FromVersions — top-level `from:` (self-describing список
-// версий-источников upgrade-сценария) парсится строгим walker-ом БЕЗ unknown_key и
-// заполняет ScenarioManifest.FromVersions (ADR-0068 §3). Без поля FromVersions walker
-// отбраковал бы `from` как unknown_key — это и есть red без правки.
+// TestLoadScenarioManifest_FromVersions — the top-level `from:` (a self-describing
+// list of an upgrade scenario's source versions) parses with the strict walker
+// WITHOUT unknown_key and fills ScenarioManifest.FromVersions (ADR-0068 §3). Without
+// the FromVersions field the walker would reject `from` as unknown_key — that is the
+// red without the fix.
 func TestLoadScenarioManifest_FromVersions(t *testing.T) {
 	src := `name: v2
 from: ["v1.0.0", "v1.2.0"]
@@ -1444,8 +1444,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_FromVersionsAbsent — отсутствие ключа: FromVersions==nil
-// (обычный сценарий без upgrade-роли не становится upgrade-сценарием молча).
+// TestLoadScenarioManifest_FromVersionsAbsent — a missing key: FromVersions==nil
+// (an ordinary scenario without an upgrade role does not silently become one).
 func TestLoadScenarioManifest_FromVersionsAbsent(t *testing.T) {
 	src := `name: restart
 tasks: []
@@ -1460,8 +1460,8 @@ tasks: []
 	}
 }
 
-// TestLoadScenarioManifest_FromVersionsBadType — скалярное значение `from:` вместо
-// списка → type_mismatch (ключ известен struct-полю, decode-фаза ловит тип).
+// TestLoadScenarioManifest_FromVersionsBadType — a scalar `from:` value instead of
+// a list → type_mismatch (the key is known to a struct field, the decode phase catches the type).
 func TestLoadScenarioManifest_FromVersionsBadType(t *testing.T) {
 	src := `name: x
 from: "v1.0.0"

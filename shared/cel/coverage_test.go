@@ -6,7 +6,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 )
 
-// recordingSink — тестовый CoverageSink: копит факты eval-а.
+// recordingSink is a test CoverageSink that accumulates eval facts.
 type recordingSink struct {
 	records []record
 }
@@ -20,8 +20,8 @@ func (s *recordingSink) Record(expr string, out ref.Val) {
 	s.records = append(s.records, record{expr: expr, out: out.Value()})
 }
 
-// TestCoverageSink_BothBranches — обе ветки (truthy/falsy) одного
-// where:-выражения фиксируются sink-ом ([ADR-023]).
+// TestCoverageSink_BothBranches — both branches (truthy/falsy) of one
+// where: expression are recorded by the sink ([ADR-023]).
 func TestCoverageSink_BothBranches(t *testing.T) {
 	e := newEngine(t)
 	sink := &recordingSink{}
@@ -57,9 +57,9 @@ func TestCoverageSink_BothBranches(t *testing.T) {
 	}
 }
 
-// TestCoverageSink_Interpolation — EvalInterpolation проходит через
-// EvalExpression, поэтому `${ … }`-блоки тоже попадают в sink (хук не
-// дублируется в интерполяции).
+// TestCoverageSink_Interpolation — EvalInterpolation goes through
+// EvalExpression, so `${ … }` blocks also reach the sink (the hook is not
+// duplicated in interpolation).
 func TestCoverageSink_Interpolation(t *testing.T) {
 	e := newEngine(t)
 	sink := &recordingSink{}
@@ -77,10 +77,10 @@ func TestCoverageSink_Interpolation(t *testing.T) {
 	}
 }
 
-// TestCoverageSink_Nil — nil-sink (прод-режим) не падает и не учитывает.
+// TestCoverageSink_Nil — a nil sink (prod mode) does not panic and records nothing.
 func TestCoverageSink_Nil(t *testing.T) {
 	e := newEngine(t)
-	// sink не установлен — поведение по умолчанию.
+	// sink not set — default behavior.
 	if _, err := e.EvalExpression("1 + 1 == 2", Vars{}); err != nil {
 		t.Fatalf("EvalExpression с nil-sink: %v", err)
 	}

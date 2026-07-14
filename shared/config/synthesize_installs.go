@@ -2,29 +2,30 @@ package config
 
 import "strings"
 
-// moduleInstalledAddr — Soul-side модуль доставки SoulModule-плагина (ADR-065).
+// moduleInstalledAddr — Soul-side module for SoulModule plugin delivery (ADR-065).
 const moduleInstalledAddr = "core.module.installed"
 
-// SynthesizeModuleInstalls синтезирует Soul-side шаги core.module.installed из
-// `service.yml::modules[]` перед первым потребителем каждого модуля (ADR-065);
-// takeover (явный литеральный шаг), core.* и модули без потребителей — skip.
-// Вызывать ПОСЛЕ [ExpandIncludes], ДО Stratify; без синтеза вход возвращается
-// бит-в-бит. Второй результат — имена синтезированных модулей (для лога).
+// SynthesizeModuleInstalls synthesizes Soul-side core.module.installed steps from
+// `service.yml::modules[]` before the first consumer of each module (ADR-065);
+// takeover (an explicit literal step), core.* and modules with no consumers are
+// skipped. Call AFTER [ExpandIncludes], BEFORE Stratify; with no synthesis the
+// input is returned bit-for-bit. The second result is the names of synthesized
+// modules (for the log).
 func SynthesizeModuleInstalls(tasks []Task, modules []DependencyRef) ([]Task, []string) {
 	if len(modules) == 0 {
 		return tasks, nil
 	}
 
-	firstConsumer := map[string]int{} // "<ns>.<module>" → индекс top-level задачи первого потребителя
-	takeover := map[string]bool{}     // литеральные params.name явных install-шагов
+	firstConsumer := map[string]int{} // "<ns>.<module>" → top-level index of the first consumer's task
+	takeover := map[string]bool{}     // literal params.name of explicit install steps
 	for i := range tasks {
 		collectModuleUsage(&tasks[i], i, firstConsumer, takeover)
 	}
 
-	inserts := map[int][]Task{} // top-level индекс → синтез-шаги (порядок манифеста)
+	inserts := map[int][]Task{} // top-level index → synthesized steps (manifest order)
 	var names []string
 	for _, dep := range modules {
-		if strings.HasPrefix(dep.Name, "core.") { // defense-in-depth: валидация service.yml уже запрещает
+		if strings.HasPrefix(dep.Name, "core.") { // defense-in-depth: service.yml validation already forbids this
 			continue
 		}
 		idx, used := firstConsumer[dep.Name]
@@ -52,8 +53,8 @@ func SynthesizeModuleInstalls(tasks []Task, modules []DependencyRef) ([]Task, []
 	return out, names
 }
 
-// collectModuleUsage наполняет firstConsumer/takeover по одной top-level задаче
-// top (рекурсивно через block: — потребитель внутри block адресует весь block).
+// collectModuleUsage fills firstConsumer/takeover from one top-level task top
+// (recursively via block: — a consumer inside a block addresses the whole block).
 func collectModuleUsage(t *Task, top int, firstConsumer map[string]int, takeover map[string]bool) {
 	if t.Module != nil {
 		if t.Module.Module == moduleInstalledAddr {
@@ -73,8 +74,8 @@ func collectModuleUsage(t *Task, top int, firstConsumer map[string]int, takeover
 	}
 }
 
-// literalInstallName — литеральное params.name явного install-шага; `${…}`-имя
-// статически неизвестно → не takeover (ADR-010: CEL-значение не типизируется).
+// literalInstallName — the literal params.name of an explicit install step; a
+// `${…}` name is statically unknown → not a takeover (ADR-010: a CEL value is not typed).
 func literalInstallName(params map[string]any) (string, bool) {
 	v, ok := params["name"]
 	if !ok {

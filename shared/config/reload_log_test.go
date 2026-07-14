@@ -20,8 +20,8 @@ func TestHotReload_SignalEnabled(t *testing.T) {
 	}
 }
 
-// TestLogReloads_FormatsSuccessAndFailure — LogReloads различает
-// succeeded/failed по ReloadResult.Swapped и завершается на close(ch).
+// TestLogReloads_FormatsSuccessAndFailure — LogReloads distinguishes
+// succeeded/failed by ReloadResult.Swapped and finishes on close(ch).
 func TestLogReloads_FormatsSuccessAndFailure(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// O5: числовые поля без диапазон-валидации до усиления (reaper.batch_size,
-// keeper.retry.max_attempts, logging.rotation.max_size_mb/max_files)
-// принимали отрицательные значения молча. Все они теперь дают
-// value_out_of_range. База — keeperBaseRequired (semantic_test.go).
+// O5: numeric fields without range validation used to accept negative values
+// silently before the hardening (reaper.batch_size, keeper.retry.max_attempts,
+// logging.rotation.max_size_mb/max_files). They all now yield value_out_of_range.
+// Base — keeperBaseRequired (semantic_test.go).
 
 func TestKeeperRange_ReaperBatchSizeNegative(t *testing.T) {
 	src := keeperBaseRequired + `reaper:
@@ -45,7 +45,7 @@ func TestKeeperRange_AcolytesNegative(t *testing.T) {
 }
 
 func TestKeeperRange_AcolytesDefaultZero_OK(t *testing.T) {
-	// Опущенный ключ → дефолт 0 (feature-flag off), без диагностик диапазона.
+	// Omitted key → default 0 (feature-flag off), no range diagnostics.
 	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired), ValidateOptions{})
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
@@ -144,7 +144,7 @@ func TestKeeperRange_SigilAnchorsReloadIntervalValid_OK(t *testing.T) {
 }
 
 func TestKeeperConfig_AcolyteParamsDefaultsOmitted(t *testing.T) {
-	// При пустом конфиге поля zero-value; daemon применит DefaultAcolyte*.
+	// With an empty config the fields are zero-value; the daemon applies DefaultAcolyte*.
 	cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -198,8 +198,8 @@ func TestKeeperRange_OracleCircuitMaxFiresNegative(t *testing.T) {
 	}
 }
 
-// Различение «опущено» (nil → дефолт в daemon) vs «явный 0» (breaker OFF):
-// поле — *int. Опущенное → nil; явный 0 → non-nil 0.
+// Distinguishing "omitted" (nil → default in the daemon) vs "explicit 0" (breaker
+// OFF): the field is *int. Omitted → nil; explicit 0 → non-nil 0.
 func TestKeeperConfig_OracleCircuitMaxFiresOmittedVsZero(t *testing.T) {
 	cfgOmitted, _, _, err := LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired), ValidateOptions{})
 	if err != nil {
@@ -250,7 +250,7 @@ func TestKeeperRange_LoggingMaxFilesNegative(t *testing.T) {
 	}
 }
 
-// soulRangeBase — минимальный валидный soul.yml без проверяемого поля.
+// soulRangeBase — a minimal valid soul.yml without the field under test.
 const soulRangeBase = `sid: redis-01.prod.example.com
 keeper:
   endpoints:
@@ -282,10 +282,10 @@ func TestSoulRange_RetryMaxAttemptsPositive_OK(t *testing.T) {
 	}
 }
 
-// soulEndpointWithPriority — минимальный валидный soul.yml, где у первого
-// endpoint задан priority. priority — поле endpoint (6-пробельный отступ),
-// поэтому его нельзя дописать в конец soulRangeBase (там завершающий
-// keeper.tls на 2-пробельном уровне); строим endpoint-блок целиком.
+// soulEndpointWithPriority — a minimal valid soul.yml where the first endpoint has
+// a priority set. priority is an endpoint field (6-space indent), so it can't be
+// appended to soulRangeBase (which ends with keeper.tls at the 2-space level); we
+// build the whole endpoint block.
 func soulEndpointWithPriority(priorityLine string) string {
 	return `sid: redis-01.prod.example.com
 keeper:
@@ -307,8 +307,8 @@ func TestSoulRange_EndpointPriorityNegative(t *testing.T) {
 }
 
 func TestSoulRange_EndpointPriorityDefaultZero_OK(t *testing.T) {
-	// priority: 0 (явный) = «не задано» → normalizedPriority маппит в 1.
-	// КЛЮЧЕВОЙ кейс: 0 допускается, диагностики диапазона быть не должно.
+	// priority: 0 (explicit) = "unset" → normalizedPriority maps it to 1.
+	// KEY case: 0 is allowed, there must be no range diagnostic.
 	src := soulEndpointWithPriority("      priority: 0\n")
 	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "value_out_of_range") {
@@ -318,7 +318,7 @@ func TestSoulRange_EndpointPriorityDefaultZero_OK(t *testing.T) {
 }
 
 func TestSoulRange_EndpointPriorityOmitted_OK(t *testing.T) {
-	// Опущенный ключ → zero-value 0 → default 1, без диагностик диапазона.
+	// Omitted key → zero-value 0 → default 1, no range diagnostics.
 	src := soulEndpointWithPriority("")
 	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "value_out_of_range") {

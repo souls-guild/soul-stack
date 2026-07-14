@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// Size-лимиты git-egress hardening резолвера плагинов (ADR-026(g)):
-// `plugins.max_artifact_size_mb` / `plugins.max_clone_size_mb`. Оба — int в МиБ,
-// дефолты 256 / 1024, валидация ≥ 1 MiB (0 = «не задан» → дефолт). База —
+// Size limits for the plugin resolver's git-egress hardening (ADR-026(g)):
+// `plugins.max_artifact_size_mb` / `plugins.max_clone_size_mb`. Both int MiB,
+// defaults 256 / 1024, validation ≥ 1 MiB (0 = "unset" → default). Base —
 // keeperBaseRequired (semantic_test.go).
 
 func TestPluginSize_DefaultsWhenOmitted(t *testing.T) {
@@ -13,7 +13,7 @@ func TestPluginSize_DefaultsWhenOmitted(t *testing.T) {
 		dump(t, diags)
 		t.Fatalf("omitted plugin size limits must not trigger value_out_of_range")
 	}
-	// Опущены → поля 0; Resolved* отдают дефолты в байтах.
+	// Omitted → fields 0; Resolved* return defaults in bytes.
 	wantArtifact := int64(DefaultPluginMaxArtifactSizeMB) * 1024 * 1024
 	if got := cfg.Plugins.ResolvedMaxArtifactSize(); got != wantArtifact {
 		t.Fatalf("ResolvedMaxArtifactSize default: want %d, got %d", wantArtifact, got)
@@ -24,7 +24,7 @@ func TestPluginSize_DefaultsWhenOmitted(t *testing.T) {
 	}
 }
 
-// nil-Plugins тоже должен резолвиться в дефолты (Resolved*-методы nil-safe).
+// A nil Plugins must also resolve to defaults (Resolved* methods are nil-safe).
 func TestPluginSize_NilPluginsResolvesDefaults(t *testing.T) {
 	var p *KeeperPlugins
 	if got := p.ResolvedMaxArtifactSize(); got != int64(DefaultPluginMaxArtifactSizeMB)*1024*1024 {
@@ -57,7 +57,7 @@ func TestPluginSize_ParsedAndResolved(t *testing.T) {
 }
 
 func TestPluginSize_ZeroIsDefault(t *testing.T) {
-	// Явный 0 = «не задан» — НЕ ошибка, резолвится в дефолт.
+	// Explicit 0 = "unset" — NOT an error, resolves to the default.
 	src := keeperBaseRequired + `plugins:
   max_artifact_size_mb: 0
   max_clone_size_mb: 0

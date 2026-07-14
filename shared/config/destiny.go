@@ -9,13 +9,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// DestinyManifest — типизированное представление `destiny.yml` по нормативной
-// спеке [`docs/destiny/manifest.md`].
+// DestinyManifest is the typed representation of `destiny.yml` per the normative
+// spec [`docs/destiny/manifest.md`].
 //
-// Манифест содержит только декларацию (имя, описание, входной/выходной
-// контракт, список custom-модулей). Список задач лежит в `tasks/main.yml`,
-// `vars:` — в `vars.yml`; в манифесте этих секций нет (см. deprecated keys
-// ниже).
+// The manifest holds only the declaration (name, description, input/output
+// contract, custom-module list). The task list lives in `tasks/main.yml`,
+// `vars:` in `vars.yml`; the manifest has neither section (see deprecated keys
+// below).
 type DestinyManifest struct {
 	Name            string         `yaml:"name"`
 	Description     string         `yaml:"description,omitempty"`
@@ -24,20 +24,20 @@ type DestinyManifest struct {
 	RequiredModules []string       `yaml:"required_modules,omitempty"`
 }
 
-// reDestinyName — canonical kebab-case имя destiny (`redis`, `cert-rotation`).
-// Dash только между алфанумериков, без trailing/leading/double-dash.
-// Совпадает с именем папки `destiny-<name>/` без префикса.
+// reDestinyName — canonical kebab-case destiny name (`redis`, `cert-rotation`).
+// Dash only between alphanumerics; no leading/trailing/double-dash. Matches the
+// `destiny-<name>/` folder name without the prefix.
 var reDestinyName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// reRequiredModule — двухуровневая форма `<namespace>.<module>` для custom-
-// модулей в `required_modules:`. core-модули не перечисляются. Kebab-case
-// без underscore (naming-rules.md §57/§186). Один источник истины с
-// `reDependencyModuleName` (service.go) — дубль regex был drift-источником.
+// reRequiredModule — two-level `<namespace>.<module>` form for custom modules in
+// `required_modules:`. Core modules are not listed. Kebab-case, no underscore
+// (naming-rules.md §57/§186). Single source of truth with
+// `reDependencyModuleName` (service.go) — a duplicate regex was a drift source.
 var reRequiredModule = reDependencyModuleName
 
-// deprecatedDestinyKeys — устаревшие top-level ключи, для которых даём
-// явный hint вместо общего "unknown_key". См. docs/destiny/manifest.md →
-// «Что в destiny.yml НЕ лежит».
+// deprecatedDestinyKeys — obsolete top-level keys for which we emit an explicit
+// hint instead of a generic "unknown_key". See docs/destiny/manifest.md →
+// "What destiny.yml does NOT hold".
 var deprecatedDestinyKeys = map[string]string{
 	"tasks":     "task list moved to tasks/main.yml per ADR-009; destiny.yml is manifest-only",
 	"steps":     "task list moved to tasks/main.yml per ADR-009; destiny.yml is manifest-only",
@@ -47,14 +47,14 @@ var deprecatedDestinyKeys = map[string]string{
 	"tests":     "tests/ is a folder, not a manifest field; molecule-style tests are picked up by convention",
 }
 
-// schemaValidateDestiny — пост-decode проверки DestinyManifest.
+// schemaValidateDestiny runs post-decode checks on a DestinyManifest.
 func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifest) []diag.Diagnostic {
 	_ = path
 	var out []diag.Diagnostic
 
 	topKeys := topLevelKeys(root)
 
-	// 1) deprecated keys — особый hint, поднимаем по AST (чтобы получить line/col).
+	// 1) deprecated keys — special hint, raised via the AST to get line/col.
 	for _, kv := range root.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -74,11 +74,11 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 	}
 
 	// 2) `name:` required + format.
-	// Ветка `topKeys["name"]` различает «ключ отсутствует» от «ключ есть с
-	// пустой/null/невалидной строкой». Пустая строка и `null`-значение
-	// типологически валидны для type=string, но как имя destiny нарушают
-	// формат — поднимаем `name_invalid_format`, а не `missing_required_field`,
-	// чтобы оператор не искал отсутствующий ключ глазами.
+	// The `topKeys["name"]` branch distinguishes "key absent" from "key present
+	// but empty/null/invalid". An empty string and a `null` value are type-valid
+	// for type=string but violate the destiny-name format — we raise
+	// `name_invalid_format`, not `missing_required_field`, so the operator does
+	// not hunt for a missing key.
 	if !topKeys["name"] {
 		out = append(out, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -100,7 +100,7 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 		}))
 	}
 
-	// 3) required_modules — двухуровневая форма `<namespace>.<module>`.
+	// 3) required_modules — two-level `<namespace>.<module>` form.
 	for i, mod := range m.RequiredModules {
 		if !reRequiredModule.MatchString(mod) {
 			out = append(out, atPath(root, fmt.Sprintf("$.required_modules[%d]", i), diag.Diagnostic{
@@ -112,7 +112,7 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 		}
 	}
 
-	// 4) input: / output: — рекурсивная валидация через общий валидатор.
+	// 4) input: / output: — recursive validation via the shared validator.
 	if topKeys["input"] {
 		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
 	}
@@ -123,10 +123,10 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 	return out
 }
 
-// semanticValidateDestiny — на M1.2.a отдельных semantic-инвариантов нет.
-// Сохраняем сигнатуру для симметрии с Keeper/Soul на случай добавления
-// cross-field-проверок (например, default-значение CEL/template-выражение
-// против input-type будет проверяться на M1.3+).
+// semanticValidateDestiny has no dedicated semantic invariants at M1.2.a. The
+// signature is kept for symmetry with Keeper/Soul in case cross-field checks are
+// added (e.g. a default CEL/template expression checked against input-type at
+// M1.3+).
 func semanticValidateDestiny(_ *DestinyManifest, _ *ast.MappingNode) []diag.Diagnostic {
 	return nil
 }

@@ -1,1060 +1,1131 @@
 package audit
 
-// EventType — typed alias для колонки `audit_log.event_type`.
-// Convention имени — `<area>.<action>` (lowercase, dots; см.
+// EventType is the typed alias for the `audit_log.event_type` column.
+// Name convention is `<area>.<action>` (lowercase, dots; see
 // docs/naming-rules.md → Audit-events).
 //
-// Каталог открытый: новые имена добавляются обычным PR в
-// docs/naming-rules.md при нормировании write-path-подсистемы. Здесь
-// типизированно объявлены только те имена, которые уже зафиксированы
-// ADR (ADR-021 → config.*). Остальные области (`operator.*`,
-// `incarnation.*`, `push.*`, `cloud.*`, `reaper.*`, `task.*`,
-// `soulprint.*`) добавляются в M0.4.2+ по факту имплементации
-// инициатора.
+// The catalog is open: new names are added by an ordinary PR to
+// docs/naming-rules.md as each write-path subsystem is normalized. Only
+// names already fixed by an ADR (ADR-021 → config.*) are declared typed
+// here. Other areas (`operator.*`, `incarnation.*`, `push.*`, `cloud.*`,
+// `reaper.*`, `task.*`, `soulprint.*`) are added in M0.4.2+ once their
+// initiator is implemented.
 type EventType string
 
 const (
-	// EventConfigReloadSucceeded — после успешного atomic swap нового
-	// конфига (ADR-021(g)). payload: `changed_paths`, `correlation_id`.
+	// EventConfigReloadSucceeded — after a successful atomic swap of the
+	// new config (ADR-021(g)). payload: `changed_paths`, `correlation_id`.
 	EventConfigReloadSucceeded EventType = "config.reload_succeeded"
 
-	// EventConfigReloadFailed — после провалившейся валидации
-	// (in-memory state неизменен, файл не модифицирован) (ADR-021(g)).
-	// payload: `validation_errors[]`, `phase`.
+	// EventConfigReloadFailed — after failed validation (in-memory state
+	// unchanged, file not modified) (ADR-021(g)). payload:
+	// `validation_errors[]`, `phase`.
 	EventConfigReloadFailed EventType = "config.reload_failed"
 
-	// EventOperatorCreated — создан новый Архонт. Bootstrap первого
-	// Архонта (`keeper init`, ADR-013) пишет это событие с
-	// `source: keeper_internal`, `archon_aid: NULL` и
-	// `payload.bootstrap_initial: true`; последующие `operator.create`
-	// через Operator API (M0.6+) — с `source: api` / `archon_aid`
-	// создателя и `bootstrap_initial: false` (omitted).
+	// EventOperatorCreated — a new Archon was created. Bootstrap of the
+	// first Archon (`keeper init`, ADR-013) writes this with `source:
+	// keeper_internal`, `archon_aid: NULL` and `payload.bootstrap_initial:
+	// true`; later `operator.create` via the Operator API (M0.6+) carry
+	// `source: api` / the creator's `archon_aid` and `bootstrap_initial:
+	// false` (omitted).
 	EventOperatorCreated EventType = "operator.created"
 
-	// EventOperatorRevoked — Архонт ревокнут через Operator API
-	// (`POST /v1/operators/{aid}/revoke`). `source: api`, `archon_aid` —
-	// инициатор; payload: `{aid, reason}`. Активные JWT ревокнутого
-	// Архонта продолжают работать до `exp` (ADR-014(d)).
+	// EventOperatorRevoked — an Archon was revoked via the Operator API
+	// (`POST /v1/operators/{aid}/revoke`). `source: api`, `archon_aid` is
+	// the initiator; payload: `{aid, reason}`. Active JWTs of the revoked
+	// Archon keep working until `exp` (ADR-014(d)).
 	EventOperatorRevoked EventType = "operator.revoked"
 
-	// EventOperatorTokenIssued — выпущен новый JWT для существующего
-	// Архонта через Operator API (`POST /v1/operators/{aid}/issue-token`).
-	// `source: api`, `archon_aid` — инициатор; payload: `{aid, expires_at}`.
-	// JWT в payload НЕ кладётся (sensitive, masked даже если попадёт).
+	// EventOperatorTokenIssued — a new JWT was issued for an existing Archon
+	// via the Operator API (`POST /v1/operators/{aid}/issue-token`).
+	// `source: api`, `archon_aid` is the initiator; payload:
+	// `{aid, expires_at}`. The JWT is NOT put in the payload (sensitive,
+	// masked even if it leaks in).
 	EventOperatorTokenIssued EventType = "operator.token-issued"
 
-	// EventIncarnationCreated — создан новый runtime-инстанс через Operator
-	// API (`POST /v1/incarnations`). `source: api`, `archon_aid` —
-	// инициатор; payload: `{name, service, apply_id}`. M0.6c-1 — stub:
-	// audit пишется при insert-е row-а incarnation, реальный запуск
-	// scenario `create` блокирован M2.x (Soul gRPC infrastructure).
+	// EventIncarnationCreated — a new runtime instance was created via the
+	// Operator API (`POST /v1/incarnations`). `source: api`, `archon_aid`
+	// is the initiator; payload: `{name, service, apply_id}`. M0.6c-1 is a
+	// stub: audit is written when the incarnation row is inserted; the real
+	// `create` scenario run is blocked on M2.x (Soul gRPC infrastructure).
 	EventIncarnationCreated EventType = "incarnation.created"
 
-	// EventIncarnationScenarioStarted — оператор запустил именованный
-	// scenario против существующей incarnation через Operator API
+	// EventIncarnationScenarioStarted — an operator started a named scenario
+	// against an existing incarnation via the Operator API
 	// (`POST /v1/incarnations/{name}/scenarios/{scenario}`, ADR-009).
-	// `source: api`, `archon_aid` — инициатор; payload: `{name, scenario,
-	// apply_id}`. Async: audit пишется при приёме запроса (202); терминал
-	// прогона фиксируется отдельным `run.completed` (M2.4).
+	// `source: api`, `archon_aid` is the initiator; payload: `{name,
+	// scenario, apply_id}`. Async: audit is written on request acceptance
+	// (202); the run terminal is recorded by a separate `run.completed`
+	// (M2.4).
 	EventIncarnationScenarioStarted EventType = "incarnation.scenario_started"
 
-	// EventIncarnationUnlocked — оператор снял статус error_locked через
-	// Operator API (`POST /v1/incarnations/{name}/unlock`, ADR-009).
-	// `source: api`, `archon_aid` — инициатор; payload: `{name,
-	// previous_status, reason}`. Unlock НЕ откатывает и НЕ доделывает
-	// хосты — только снимает блок, оператор берёт ответственность за
-	// консистентность (architecture.md → «Атомарность и error_locked»).
+	// EventIncarnationUnlocked — an operator cleared the error_locked status
+	// via the Operator API (`POST /v1/incarnations/{name}/unlock`, ADR-009).
+	// `source: api`, `archon_aid` is the initiator; payload: `{name,
+	// previous_status, reason}`. Unlock neither rolls back nor finishes the
+	// hosts — it only clears the lock; the operator takes responsibility for
+	// consistency (architecture.md → "Atomicity and error_locked").
 	EventIncarnationUnlocked EventType = "incarnation.unlocked"
 
-	// EventIncarnationRerunLast — оператор перезапустил ПОСЛЕДНИЙ упавший сценарий
-	// из error_locked через Operator API / MCP (`POST /v1/incarnations/{name}/
-	// rerun-last`, architecture.md → «Атомарность и error_locked»). `source: api` /
-	// `mcp`, `archon_aid` — инициатор; payload: `{name, reason, scenario,
-	// previous_status, apply_id}` (scenario — имя перезапущенного: bootstrap
-	// `create`/… ИЛИ day-2 add_user/…). Атомарно снимает error_locked (state НЕ
-	// трогается — last known-good, snapshot в state_history) и тем же действием
-	// запускает последний упавший сценарий (переход error_locked → applying минуя
-	// ready под одним FOR UPDATE). Отдельное событие от `incarnation.unlocked`
-	// (ручной unlock не перезапускает прогон) — путь восстановления различен.
+	// EventIncarnationRerunLast — an operator re-ran the LAST failed scenario
+	// out of error_locked via the Operator API / MCP
+	// (`POST /v1/incarnations/{name}/rerun-last`, architecture.md →
+	// "Atomicity and error_locked"). `source: api` / `mcp`, `archon_aid` is
+	// the initiator; payload: `{name, reason, scenario, previous_status,
+	// apply_id}` (`scenario` = name of the re-run one: bootstrap `create`/…
+	// OR operational add_user/…). Atomically clears error_locked (state is
+	// NOT touched — last known-good, snapshot in state_history) and by the
+	// same action starts the last failed scenario (error_locked → applying,
+	// bypassing ready, under a single FOR UPDATE). A distinct event from
+	// `incarnation.unlocked` (manual unlock does not re-run) — the recovery
+	// path differs.
 	EventIncarnationRerunLast EventType = "incarnation.rerun_last"
 
-	// EventIncarnationUpgradeStarted — оператор инициировал перевод
-	// incarnation на новую state_schema_version через Operator API
+	// EventIncarnationUpgradeStarted — an operator initiated moving an
+	// incarnation to a new state_schema_version via the Operator API
 	// (`POST /v1/incarnations/{name}/upgrade`, ADR-019). `source: api`,
-	// `archon_aid` — инициатор; payload: `{name, to_version, apply_id}`.
-	// sync-под-202: миграция выполняется синхронно в рамках запроса (одна
-	// PG-транзакция, docs/migrations.md §Атомарность), audit пишется при
-	// приёме запроса; per-step state_history-snapshot-ы фиксируются внутри
-	// той же tx с общим apply_id.
+	// `archon_aid` is the initiator; payload: `{name, to_version, apply_id}`.
+	// sync-under-202: the migration runs synchronously within the request
+	// (one PG transaction, docs/migrations.md §Atomicity), audit is written
+	// on request acceptance; per-step state_history snapshots are recorded
+	// in the same tx under a shared apply_id.
 	EventIncarnationUpgradeStarted EventType = "incarnation.upgrade_started"
 
-	// EventIncarnationDestroyStarted — оператор инициировал destroy
-	// incarnation через Operator API / MCP (S-D1). `source: api` / `mcp`,
-	// `archon_aid` — инициатор; payload: `{name, previous_status, force}`.
-	// Пишется при переводе incarnation в `destroying` (до запуска teardown
-	// scenario `destroy` — S-D2, и DELETE строки — S-D3). `force: true`
-	// означает destroy без teardown (DELETE напрямую, S-D3). Терминал самого
-	// destroy фиксируется `incarnation.destroy_completed` / `.destroy_failed`.
+	// EventIncarnationDestroyStarted — an operator initiated destroy of an
+	// incarnation via the Operator API / MCP (S-D1). `source: api` / `mcp`,
+	// `archon_aid` is the initiator; payload: `{name, previous_status,
+	// force}`. Written when the incarnation moves to `destroying` (before
+	// running the `destroy` teardown scenario — S-D2, and the row DELETE —
+	// S-D3). `force: true` means destroy without teardown (direct DELETE,
+	// S-D3). The destroy terminal itself is recorded by
+	// `incarnation.destroy_completed` / `.destroy_failed`.
 	EventIncarnationDestroyStarted EventType = "incarnation.destroy_started"
 
-	// EventIncarnationDestroyCompleted — destroy доведён до конца: teardown
-	// прошёл на всех хостах, строка incarnation физически снесена с архивом
-	// в incarnation_archive / state_history_archive (S-D3, каскад V3).
-	// `source: keeper_internal` (write-path — scenario-runner после барьера,
-	// не HTTP-middleware; AID инициатора недоступен в этой точке, archon_aid
-	// колонка NULL). `correlation_id` — пусто. Payload: `{name, force}` —
-	// факт сноса; секретов не несёт (state/spec в audit НЕ дублируются, лежат
-	// в архиве). Пишется ПОСЛЕ commit-а archive+DELETE-транзакции;
-	// single-winner — только владелец destroying-перехода пишет это событие
-	// (RowsAffected==0 → no-op, событие не пишется).
+	// EventIncarnationDestroyCompleted — destroy ran to completion: teardown
+	// succeeded on all hosts, the incarnation row is physically removed and
+	// archived into incarnation_archive / state_history_archive (S-D3,
+	// cascade V3). `source: keeper_internal` (write-path — the scenario
+	// runner after the barrier, not HTTP middleware; the initiator's AID is
+	// unavailable here, archon_aid column NULL). `correlation_id` is empty.
+	// Payload: `{name, force}` — the fact of removal; carries no secrets
+	// (state/spec are NOT duplicated in audit, they live in the archive).
+	// Written AFTER the archive+DELETE transaction commits; single-winner —
+	// only the owner of the destroying transition writes this event
+	// (RowsAffected==0 → no-op, event not written).
 	EventIncarnationDestroyCompleted EventType = "incarnation.destroy_completed"
 
-	// EventIncarnationHostsUpdated — Архонт отредактировал declared `spec.hosts[]`
-	// incarnation через Operator API (`PATCH /v1/incarnations/{name}/hosts`) —
-	// поддерживает три mode: replace (полная замена списка), append (добавить /
-	// обновить role по SID) и remove (убрать переданные SID-ы). `source: api` /
-	// `mcp`, `archon_aid` — инициатор. Payload: `{name, mode, old_hosts,
-	// new_hosts}` — `old_hosts`/`new_hosts` — снимок `spec.hosts[]` до и после
-	// (SID + role, не секрет); mode фиксирует тип операции для диагностики.
-	// declared `hosts` — источник probe-spec на bootstrap (ADR-008), правка
-	// меняет namespacing topology resolver-а для следующего прогона.
+	// EventIncarnationHostsUpdated — an Archon edited the declared
+	// `spec.hosts[]` of an incarnation via the Operator API
+	// (`PATCH /v1/incarnations/{name}/hosts`) — supports three modes:
+	// replace (full list replacement), append (add / update role by SID) and
+	// remove (drop the given SIDs). `source: api` / `mcp`, `archon_aid` is
+	// the initiator. Payload: `{name, mode, old_hosts, new_hosts}` —
+	// `old_hosts`/`new_hosts` are the `spec.hosts[]` snapshot before and
+	// after (SID + role, not a secret); mode records the operation kind for
+	// diagnostics. declared `hosts` is the probe-spec source at bootstrap
+	// (ADR-008); an edit changes the resolver's namespacing topology for the
+	// next run.
 	EventIncarnationHostsUpdated EventType = "incarnation.hosts_updated"
 
-	// EventIncarnationTraitsChanged — Архонт целиком заменил operator-set
-	// trait-метки инкарнации (`incarnation.traits`, ADR-060 amend R1) через
-	// Operator API (`PUT /v1/incarnations/{name}/traits`) или MCP-зеркало
-	// (`keeper.incarnation.traits-set`). incarnation.traits — источник истины,
-	// который sync-hook материализованно проецирует в `souls.traits` хостов-
-	// членов; per-soul bulk-API (`POST /v1/souls/traits`) — deprecated в пользу
-	// этого пути. `source: api` / `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name, old_keys, new_keys}` — отсортированные списки trait-КЛЮЧЕЙ до и
-	// после замены; сами trait-ЗНАЧЕНИЯ в payload НЕ кладутся (могут нести
-	// инфраструктурные данные хоста — audit-trail фиксирует факт мутации и набор
-	// ключей, не содержимое, симметрично `soul.traits-changed`).
+	// EventIncarnationTraitsChanged — an Archon fully replaced the
+	// operator-set trait labels of an incarnation (`incarnation.traits`,
+	// ADR-060 amend R1) via the Operator API
+	// (`PUT /v1/incarnations/{name}/traits`) or the MCP mirror
+	// (`keeper.incarnation.traits-set`). incarnation.traits is the source of
+	// truth that a sync-hook materializes into `souls.traits` of member
+	// hosts; the per-soul bulk API (`POST /v1/souls/traits`) is deprecated in
+	// favor of this path. `source: api` / `mcp`, `archon_aid` is the
+	// initiator. Payload: `{name, old_keys, new_keys}` — sorted lists of
+	// trait KEYS before and after; the trait VALUES themselves are NOT put in
+	// the payload (they may carry host infrastructure data — the audit trail
+	// records the fact of mutation and the key set, not the content,
+	// symmetric to `soul.traits-changed`).
 	EventIncarnationTraitsChanged EventType = "incarnation.traits_changed"
 
-	// EventIncarnationDestroyFailed — teardown (scenario `destroy`) упал на
-	// хостах: инстанс НЕ удалён, incarnation переведена в `destroy_failed`
-	// (state остался last known-good). `source: keeper_internal` (write-path —
-	// scenario-runner на провале teardown-а, archon_aid колонка NULL).
-	// `correlation_id = apply_id`. Payload: `{name, apply_id, reason}` —
-	// `reason` маскируется (cause может транзитом нести vault-ref). Симметрично
-	// `incarnation.destroy_completed`: оба фиксируют терминал destroy,
-	// отличаются исходом teardown-а.
+	// EventIncarnationDestroyFailed — teardown (the `destroy` scenario)
+	// failed on the hosts: the instance is NOT removed, the incarnation moves
+	// to `destroy_failed` (state stays last known-good). `source:
+	// keeper_internal` (write-path — the scenario runner on teardown failure,
+	// archon_aid column NULL). `correlation_id = apply_id`. Payload: `{name,
+	// apply_id, reason}` — `reason` is masked (the cause may transit a
+	// vault-ref). Symmetric to `incarnation.destroy_completed`: both record
+	// the destroy terminal, differing by teardown outcome.
 	EventIncarnationDestroyFailed EventType = "incarnation.destroy_failed"
 
-	// EventIncarnationSecretRevealed — оператор раскрыл секрет инкарнации через
-	// Operator API (POST /v1/incarnations/{name}/secrets/reveal). archon_aid — инициатор;
-	// payload {name, secret_id, key, path} — ЗНАЧЕНИЕ секрета НЕ кладём (факт, не содержимое).
+	// EventIncarnationSecretRevealed — an operator revealed an incarnation
+	// secret via the Operator API
+	// (POST /v1/incarnations/{name}/secrets/reveal). `archon_aid` is the
+	// initiator; payload `{name, secret_id, key, path}` — the secret VALUE is
+	// NOT included (the fact, not the content).
 	EventIncarnationSecretRevealed EventType = "incarnation.secret_revealed"
 
-	// EventSoulCreated — Soul зарегистрирован в реестре `souls` через
-	// Operator API (`POST /v1/souls`): создана строка (status: pending) и
-	// для transport=agent выписан первый bootstrap-токен. `source: api`,
-	// `archon_aid` — инициатор. Payload: `{sid, transport, covens,
-	// created_by_aid, token_issued}` — plain-токен в payload НЕ кладётся
-	// (sensitive; даже под ключом `bootstrap_token` был бы masked).
+	// EventSoulCreated — a Soul was registered in the `souls` registry via
+	// the Operator API (`POST /v1/souls`): a row was created (status:
+	// pending) and, for transport=agent, the first bootstrap token was
+	// issued. `source: api`, `archon_aid` is the initiator. Payload: `{sid,
+	// transport, covens, created_by_aid, token_issued}` — the plain token is
+	// NOT put in the payload (sensitive; even under a `bootstrap_token` key
+	// it would be masked).
 	EventSoulCreated EventType = "soul.created"
 
-	// EventSoulTokenIssued — выпущен новый bootstrap-токен для существующей
-	// Soul через Operator API (`POST /v1/souls/{sid}/issue-token`). `source:
-	// api`, `archon_aid` — инициатор. Payload: `{sid, force, expired_previous,
-	// expires_at}` — `expired_previous` = true, если force-reissue
-	// инвалидировал ранее активный токен. Идентификаторы токенов в payload
-	// НЕ кладутся: secret-mask (H1) редактирует любой ключ с `token`-substring,
-	// корреляция идёт по sid + времени. Plain-токен тем более не кладётся.
+	// EventSoulTokenIssued — a new bootstrap token was issued for an existing
+	// Soul via the Operator API (`POST /v1/souls/{sid}/issue-token`).
+	// `source: api`, `archon_aid` is the initiator. Payload: `{sid, force,
+	// expired_previous, expires_at}` — `expired_previous` = true if a
+	// force-reissue invalidated a previously active token. Token identifiers
+	// are NOT put in the payload: secret-mask (H1) redacts any key with a
+	// `token` substring, correlation goes by sid + time. The plain token is
+	// of course not included.
 	EventSoulTokenIssued EventType = "soul.token-issued"
 
-	// EventSoulBootstrapped — Soul успешно прошёл онбординг через
-	// `Bootstrap` gRPC RPC (docs/soul/onboarding.md): bootstrap-токен
-	// сожжён, CSR подписан, SoulSeed выпущен и записан, статус Soul-а
-	// переведён `pending → connected`. `source: soul_grpc`,
-	// `archon_aid: NULL`, `correlation_id` = token_id. Payload: `{sid,
-	// token_id, seed_id, fingerprint, not_after}`.
+	// EventSoulBootstrapped — a Soul completed onboarding via the `Bootstrap`
+	// gRPC RPC (docs/soul/onboarding.md): the bootstrap token was burned, the
+	// CSR signed, a SoulSeed issued and stored, and the Soul status moved
+	// `pending → connected`. `source: soul_grpc`, `archon_aid: NULL`,
+	// `correlation_id` = token_id. Payload: `{sid, token_id, seed_id,
+	// fingerprint, not_after}`.
 	EventSoulBootstrapped EventType = "soul.bootstrapped"
 
-	// EventSoulSeedIssued — выпущен новый SoulSeed-сертификат (как часть
-	// `Bootstrap` или через будущий `SeedRotation`-RPC M2.6). `source:
+	// EventSoulSeedIssued — a new SoulSeed certificate was issued (as part of
+	// `Bootstrap` or via the future `SeedRotation` RPC, M2.6). `source:
 	// soul_grpc`, `archon_aid: NULL`. Payload: `{sid, seed_id, fingerprint,
-	// serial_number, issued_at, not_after, kid}`. При bootstrap-е пишется
-	// вместе с `soul.bootstrapped` (один correlation_id); при ротации —
-	// самостоятельно.
+	// serial_number, issued_at, not_after, kid}`. At bootstrap it is written
+	// together with `soul.bootstrapped` (one correlation_id); on rotation —
+	// standalone.
 	EventSoulSeedIssued EventType = "soul.seed-issued"
 
-	// EventTaskExecuted — завершилась задача apply-прогона. Единое имя для всех
-	// terminal-статусов (`ok`/`changed`/`failed`/`timed_out`/`skipped`) — status
-	// выносится в `payload.status`, чтобы фильтрация в `GET /v1/audit` шла по нему,
-	// а не по разбегу event_type. `correlation_id = apply_id`. Payload (общая форма
+	// EventTaskExecuted — an apply-run task finished. A single name for all
+	// terminal statuses (`ok`/`changed`/`failed`/`timed_out`/`skipped`) —
+	// status is carried in `payload.status` so that filtering in
+	// `GET /v1/audit` goes by it rather than by a spread of event_type.
+	// `correlation_id = apply_id`. Payload (common shape,
 	// [BuildTaskExecutedPayload]): `{sid, apply_id, task_idx, status, error?,
-	// register_data?}` — `error` только при FAILED/TIMED_OUT; `register_data`
-	// маскируется по общим правилам секретов.
+	// register_data?}` — `error` only on FAILED/TIMED_OUT; `register_data` is
+	// masked by the common secret rules.
 	//
-	// Эмитируется ОБЕИМИ сторонами (ADR-052 amend §k/§l): Soul-side задачи — M2.4
-	// event handler `TaskEvent`, `source: soul_grpc`, `sid` хоста; keeper-side
-	// задачи `on: keeper` (`scenario.dispatchKeeperTasks`) — `source:
-	// keeper_internal`, `sid = keeper`. Без keeper-side эмиссии changed-keeper-
-	// задача выпадала бы из свёртки changed_tasks и task-подписки Tiding.
-	// keeper-side payload register_data НЕ несёт (секрет-гигиена).
+	// Emitted by BOTH sides (ADR-052 amend §k/§l): Soul-side tasks — M2.4
+	// event handler `TaskEvent`, `source: soul_grpc`, host `sid`; keeper-side
+	// `on: keeper` tasks (`scenario.dispatchKeeperTasks`) — `source:
+	// keeper_internal`, `sid = keeper`. Without keeper-side emission a changed
+	// keeper task would drop out of the changed_tasks rollup and the Tiding
+	// task subscription. The keeper-side payload carries no register_data
+	// (secret hygiene).
 	EventTaskExecuted EventType = "task.executed"
 
-	// EventRunCompleted — финальный отчёт прогона apply (M2.4 event handler
-	// `RunResult`). Единое имя для всех RunStatus-ов
-	// (`success`/`failed`/`cancelled`/`error_locked`) — статус в
+	// EventRunCompleted — the final apply-run report (M2.4 event handler
+	// `RunResult`). A single name for all RunStatus values
+	// (`success`/`failed`/`cancelled`/`error_locked`) — status in
 	// `payload.status`. `source: soul_grpc`, `correlation_id = apply_id`.
 	// Payload: `{sid, apply_id, status, incarnation?, scenario?, history_id?}`.
 	EventRunCompleted EventType = "run.completed"
 
-	// EventIncarnationRunCompleted — терминал scenario-run одной инкарнации
-	// (T3/T4-фундамент, ADR-052 §k): per-incarnation итог прогона, эмитится
-	// scenario.Runner на терминале обычного прогона. Одно событие на
-	// инкарнацию-прогон, НЕ per-host (развести с `run.completed` — тот per-host
-	// RunResult от Soul-а). `source: keeper_internal` (write-path — scenario-
-	// runner, archon_aid колонка NULL), `correlation_id = apply_id`.
+	// EventIncarnationRunCompleted — the terminal of a scenario-run for one
+	// incarnation (T3/T4 foundation, ADR-052 §k): the per-incarnation run
+	// result, emitted by scenario.Runner at the terminal of an ordinary run.
+	// One event per incarnation-run, NOT per-host (distinct from
+	// `run.completed`, which is the per-host RunResult from the Soul).
+	// `source: keeper_internal` (write-path — the scenario runner, archon_aid
+	// column NULL), `correlation_id = apply_id`.
 	//
-	// Эмитится ДВУМЯ путями: на УСПЕШНОМ финале (после барьера, рядом с
-	// commitSuccess) со `status: success` И на ТЕРМИНАЛЬНОМ ПРОВАЛЕ обычного
-	// прогона (после lockIncarnation, only single-winner) со `status: failed`.
-	// TerminalDestroy в обе точки НЕ приходит — у destroy свой терминал
-	// (`incarnation.destroy_completed` / `.destroy_failed`).
+	// Emitted via TWO paths: on a SUCCESSFUL finish (after the barrier, next
+	// to commitSuccess) with `status: success`, AND on a TERMINAL FAILURE of
+	// an ordinary run (after lockIncarnation, single-winner only) with
+	// `status: failed`. TerminalDestroy reaches neither point — destroy has
+	// its own terminal (`incarnation.destroy_completed` / `.destroy_failed`).
 	//
 	// Payload: `{incarnation, scenario, apply_id, status, changed_tasks,
-	// cadence_id?, voyage_id?}`. `status` ∈ {`success`, `failed`} (error_locked
-	// сворачивается в `failed` — под-статусы не плодим). `changed_tasks` = массив
-	// `{idx, name, register, id, module, changed_hosts, total_hosts}` задач,
-	// изменившихся хотя бы на одном хосте (source = агрегат audit_log по
-	// `task.executed`+CHANGED, loop-свёртка по адресу register∪id, ADR-052 §j); на
-	// провале — частичный (поздний abort, что успело CHANGED) либо пустой (ранний
-	// abort до render). `cadence_id` присутствует ТОЛЬКО когда прогон спавнен
-	// Cadence-расписанием (дочерний Voyage, ADR-046) — ручной прогон ключ не несёт
-	// (консервативно, как drift-payload). `voyage_id` присутствует ТОЛЬКО когда
-	// прогон спавнен Voyage-orchestrator-ом (ADR-052 amend §k, visibility) —
-	// прямые пути create/rerun/destroy минуют Voyage и ключ не несут (симметрия с
-	// cadence_id); фильтруется в GET /v1/audit через `payload_voyage` для Voyage
-	// detail. Секрет-гигиена: payload changed_tasks несёт ТОЛЬКО метаданные задачи
-	// и counts, register/params-значения в нём отсутствуют.
+	// cadence_id?, voyage_id?}`. `status` ∈ {`success`, `failed`}
+	// (error_locked folds into `failed` — no sub-statuses). `changed_tasks` =
+	// array of `{idx, name, register, id, module, changed_hosts, total_hosts}`
+	// for tasks that changed on at least one host (source = aggregate of
+	// audit_log over `task.executed`+CHANGED, loop-folded by register∪id
+	// address, ADR-052 §j); on failure it is partial (late abort, whatever
+	// reached CHANGED) or empty (early abort before render). `cadence_id` is
+	// present ONLY when the run was spawned by a Cadence schedule (child
+	// Voyage, ADR-046) — a manual run carries no key (conservative, like the
+	// drift payload). `voyage_id` is present ONLY when the run was spawned by
+	// the Voyage orchestrator (ADR-052 amend §k, visibility) — the direct
+	// create/rerun/destroy paths bypass Voyage and carry no key (symmetric
+	// with cadence_id); filtered in GET /v1/audit via `payload_voyage` for the
+	// Voyage detail. Secret hygiene: changed_tasks carries ONLY task metadata
+	// and counts, register/params values are absent from it.
 	EventIncarnationRunCompleted EventType = "incarnation.run_completed"
 
-	// EventSoulprintReceived — получен `SoulprintReport` от Soul-а (ADR-018,
-	// M2.4 event handler `SoulprintReport`). `source: soul_grpc`,
-	// `correlation_id` — пусто (это не часть apply-цепочки). Payload:
-	// `{sid, collected_at, received_at, has_typed_facts}` — сами факты НЕ
-	// дублируются в audit, лежат в `souls.soulprint_facts`.
+	// EventSoulprintReceived — a `SoulprintReport` was received from a Soul
+	// (ADR-018, M2.4 event handler `SoulprintReport`). `source: soul_grpc`,
+	// `correlation_id` is empty (not part of the apply chain). Payload:
+	// `{sid, collected_at, received_at, has_typed_facts}` — the facts
+	// themselves are NOT duplicated in audit, they live in
+	// `souls.soulprint_facts`.
 	EventSoulprintReceived EventType = "soulprint.received"
 
-	// EventInputVaultResolved — scenario-runner резолвил (или отверг)
-	// `vault:`-ref в operator-input через scoped-канал (docs/input.md →
-	// «vault_scope»). `source: keeper_internal`, `archon_aid: NULL` (write-path
-	// — async scenario-runner, не HTTP-middleware; aid инициатора — в payload).
-	// Единое имя для ok и denied — результат в `payload.result`
-	// (`ok`/`denied`), чтобы фильтрация шла по нему, а не по разбегу
-	// event_type. denied-резолв — security-сигнал, аудируется наравне с ok.
-	// Payload: `{field, incarnation, scenario, result, aid?, path?, reason?}` —
-	// `path` (логический путь Vault) НЕ секрет, логируется; значение секрета НЕ
-	// кладётся; `reason` (`no_scope`/`out_of_scope`/`deny_list`/…) только при
-	// denied.
+	// EventInputVaultResolved — the scenario runner resolved (or rejected) a
+	// `vault:` ref in operator input through the scoped channel (docs/input.md
+	// → "vault_scope"). `source: keeper_internal`, `archon_aid: NULL`
+	// (write-path — the async scenario runner, not HTTP middleware; the
+	// initiator's aid is in the payload). A single name for ok and denied —
+	// the result is in `payload.result` (`ok`/`denied`) so filtering goes by
+	// it rather than by a spread of event_type. A denied resolve is a security
+	// signal, audited on par with ok. Payload: `{field, incarnation, scenario,
+	// result, aid?, path?, reason?}` — `path` (the logical Vault path) is not
+	// a secret and is logged; the secret value is NOT included; `reason`
+	// (`no_scope`/`out_of_scope`/`deny_list`/…) only on denied.
 	EventInputVaultResolved EventType = "input.vault_resolved"
 
-	// EventVaultKVRead — keeper-side core-модуль `core.vault.kv-read`
-	// (ADR-017) прочитал секрет из Vault KV. `source: keeper_internal`,
-	// `archon_aid: NULL`. Payload: `{path, fields}` — путь и список
-	// запрошенных ключей; сами значения секретов в payload **не** кладутся
-	// (sensitive, audit-trail фиксирует факт чтения, не содержимое).
+	// EventVaultKVRead — the keeper-side core module `core.vault.kv-read`
+	// (ADR-017) read a secret from Vault KV. `source: keeper_internal`,
+	// `archon_aid: NULL`. Payload: `{path, fields}` — the path and the list of
+	// requested keys; the secret values themselves are **not** put in the
+	// payload (sensitive; the audit trail records the fact of reading, not the
+	// content).
 	EventVaultKVRead EventType = "vault.kv-read"
 
-	// EventVaultKVPresent — keeper-side core-модуль `core.vault.kv-present`
-	// (ADR-017) сгенерировал недостающие секреты в Vault KV (generate-if-absent).
-	// `source: keeper_internal`, `archon_aid: NULL`. Пишется ТОЛЬКО когда что-то
-	// реально сгенерировано (changed=true); no-op (все секреты уже были) audit-
-	// event не порождает. Payload: `{paths}` — `paths` = map `<vault-path>` →
-	// список сгенерированных ПОЛЕЙ; сами сгенерированные ЗНАЧЕНИЯ в payload
-	// **никогда** не кладутся (security-инвариант ADR-010: новый секрет не
-	// светится в audit-trail/логах/OTel, фиксируется только факт генерации).
+	// EventVaultKVPresent — the keeper-side core module `core.vault.kv-present`
+	// (ADR-017) generated missing secrets in Vault KV (generate-if-absent).
+	// `source: keeper_internal`, `archon_aid: NULL`. Written ONLY when
+	// something was actually generated (changed=true); a no-op (all secrets
+	// already present) produces no audit event. Payload: `{paths}` — `paths` =
+	// map `<vault-path>` → list of generated FIELDS; the generated VALUES
+	// themselves are **never** put in the payload (security invariant ADR-010:
+	// a new secret must not surface in the audit trail / logs / OTel, only the
+	// fact of generation is recorded).
 	EventVaultKVPresent EventType = "vault.kv-present"
 
-	// EventCertRegistered — keeper-side core-модуль `core.cert.registered`
-	// (cert-rotation Вар1, E1) вписал СЕРВИСНЫЙ TLS-серт инкарнации в реестр
-	// Warrant (чтобы Reaper видел его срок и мог ротировать). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = incarnation`.
-	// Пишется ТОЛЬКО когда что-то реально вписано (changed=true; тот же
-	// fingerprint уже зарегистрирован → no-op без события). Payload:
-	// `{incarnation, certs}` — `certs` = список `{kind, fingerprint,
-	// serial_number, not_after}` (НЕ-секретные метаданные; сам PEM/приватник в
-	// payload не кладутся, модуль читает лишь публичный серт).
+	// EventCertRegistered — the keeper-side core module `core.cert.registered`
+	// (cert-rotation Variant 1, E1) recorded a SERVICE TLS cert of an
+	// incarnation into the Warrant registry (so Reaper can see its expiry and
+	// rotate it). `source: keeper_internal`, `archon_aid: NULL`,
+	// `correlation_id = incarnation`. Written ONLY when something was actually
+	// recorded (changed=true; the same fingerprint already registered → no-op,
+	// no event). Payload: `{incarnation, certs}` — `certs` = list of `{kind,
+	// fingerprint, serial_number, not_after}` (non-secret metadata; the
+	// PEM/private key itself is not put in the payload, the module reads only
+	// the public cert).
 	EventCertRegistered EventType = "cert.registered"
 
-	// EventCertRotated — Reaper-правило `rotate_due_certs` (cert-rotation Вар1)
-	// ротировало истекающий сервисный серт инкарнации: Keeper сгенерил новый
-	// keypair+CSR (R2), подписал через Vault PKI, положил материал в Vault,
-	// вписал новую active-строку Warrant (старую → superseded) и заспавнил Voyage
-	// day-2-сценария rotate_tls для доставки нового PEM на хосты. Область
-	// `cert.*` (keeper-side lifecycle, parity `voyage.reclaimed`). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
-	// `{incarnation, kind, voyage_id, fingerprint, serial_number, not_after,
-	// superseded_cert_id, superseded_serial}` — метаданные НОВОГО серта плюс
-	// cert_id/serial сменённого (superseded_cert_id всегда присутствует); только
-	// НЕ-секретные поля (приватник/PEM никогда не кладутся).
+	// EventCertRotated — the Reaper rule `rotate_due_certs` (cert-rotation
+	// Variant 1) rotated an expiring service cert of an incarnation: Keeper
+	// generated a new keypair+CSR (R2), signed it via Vault PKI, stored the
+	// material in Vault, wrote a new active Warrant row (old → superseded) and
+	// spawned a Voyage of the rotate_tls operational scenario to deliver the
+	// new PEM to the hosts. Area `cert.*` (keeper-side lifecycle, parity with
+	// `voyage.reclaimed`). `source: keeper_internal`, `archon_aid: NULL`,
+	// `correlation_id = voyage_id`. Payload: `{incarnation, kind, voyage_id,
+	// fingerprint, serial_number, not_after, superseded_cert_id,
+	// superseded_serial}` — metadata of the NEW cert plus the cert_id/serial of
+	// the superseded one (superseded_cert_id is always present); non-secret
+	// fields only (the private key/PEM is never included).
 	EventCertRotated EventType = "cert.rotated"
 
-	// EventSoulCovenChanged — изменён набор Coven-меток Soul-а. Два write-path-а
-	// различаются полем `source`:
-	//   - scenario-путь: keeper-side core-модуль `core.soul.registered`
+	// EventSoulCovenChanged — the set of Coven labels of a Soul changed. Two
+	// write paths differ by the `source` field:
+	//   - scenario path: the keeper-side core module `core.soul.registered`
 	//     (docs/keeper/modules.md), per-host. `source: keeper_internal`,
 	//     `archon_aid: NULL`. Payload: `{sid, mode, before, after, created}`.
-	//     Пишется только если набор фактически изменился.
-	//   - bulk-API: `POST /v1/souls/coven` (массовое append/remove одной метки
-	//     по селектору). `source: api`, `archon_aid` — инициатор (из claims,
-	//     кладёт audit-middleware). Один event на всю операцию (не per-chunk).
-	//     Payload: `{mode, label, selector, matched, changed, status,
-	//     scope_applied, dry_run, source}`.
+	//     Written only if the set actually changed.
+	//   - bulk API: `POST /v1/souls/coven` (bulk append/remove of a single
+	//     label by selector). `source: api`, `archon_aid` is the initiator
+	//     (from claims, set by the audit middleware). One event for the whole
+	//     operation (not per-chunk). Payload: `{mode, label, selector,
+	//     matched, changed, status, scope_applied, dry_run, source}`.
 	EventSoulCovenChanged EventType = "soul.coven-changed"
 
-	// EventSoulTraitsChanged — изменён набор operator-set trait-меток Soul-а
-	// (jsonb-колонка `souls.traits`, ADR-060) через bulk-API
-	// `POST /v1/souls/traits` (массовое merge/replace/remove по селектору).
-	// `source: api`, `archon_aid` — инициатор (из claims, кладёт audit-middleware).
-	// Один event на всю операцию (не per-chunk). Payload: `{mode, selector,
-	// matched, changed, status, scope_applied, dry_run, source, keys}` — `keys`
-	// = список затронутых trait-КЛЮЧЕЙ (для merge/replace — ключи переданного
-	// набора; для remove — удаляемые ключи); сами trait-ЗНАЧЕНИЯ в payload НЕ
-	// кладутся (могут нести инфраструктурные данные хоста — audit-trail фиксирует
-	// факт мутации и набор ключей, не содержимое). Симметрично
-	// `soul.coven-changed`, отдельная ось меток.
+	// EventSoulTraitsChanged — the set of operator-set trait labels of a Soul
+	// changed (jsonb column `souls.traits`, ADR-060) via the bulk API
+	// `POST /v1/souls/traits` (bulk merge/replace/remove by selector).
+	// `source: api`, `archon_aid` is the initiator (from claims, set by the
+	// audit middleware). One event for the whole operation (not per-chunk).
+	// Payload: `{mode, selector, matched, changed, status, scope_applied,
+	// dry_run, source, keys}` — `keys` = list of affected trait KEYS (for
+	// merge/replace, the keys of the supplied set; for remove, the deleted
+	// keys); the trait VALUES themselves are NOT put in the payload (they may
+	// carry host infrastructure data — the audit trail records the fact of
+	// mutation and the key set, not the content). Symmetric to
+	// `soul.coven-changed`, a separate label axis.
 	EventSoulTraitsChanged EventType = "soul.traits-changed"
 
-	// EventCloudProvisioned — keeper-side core-модуль `core.cloud.provisioned`
-	// (ADR-017) создал или удалил VM через CloudDriver-плагин. `source:
-	// keeper_internal`, `archon_aid: NULL`. Payload:
-	// `{action, provider, profile, count, vm_ids}` — `action` ∈
-	// `created`/`destroyed`. Cloud-credentials не кладутся.
+	// EventCloudProvisioned — the keeper-side core module
+	// `core.cloud.provisioned` (ADR-017) created or destroyed a VM via a
+	// CloudDriver plugin. `source: keeper_internal`, `archon_aid: NULL`.
+	// Payload: `{action, provider, profile, count, vm_ids}` — `action` ∈
+	// `created`/`destroyed`. Cloud credentials are not included.
 	EventCloudProvisioned EventType = "cloud.provisioned"
 
-	// EventBootstrapDelivered — keeper-side core-модуль `core.bootstrap.delivered`
-	// (ADR-063) доставил per-VM bootstrap-токен по SSH на свежесозданные
-	// cloud-init-VM. `source: keeper_internal`, `archon_aid: NULL`. Payload:
-	// `{action: "delivered", ssh_provider, count, sids}` — БЕЗ токенов (сам
-	// plain-токен виден только в register предыдущего шага `core.cloud.created`
-	// и маскируется на всех его выходах; сюда не попадает).
+	// EventBootstrapDelivered — the keeper-side core module
+	// `core.bootstrap.delivered` (ADR-063) delivered a per-VM bootstrap token
+	// over SSH to freshly created cloud-init VMs. `source: keeper_internal`,
+	// `archon_aid: NULL`. Payload: `{action: "delivered", ssh_provider, count,
+	// sids}` — WITHOUT tokens (the plain token itself is visible only in the
+	// register of the previous step `core.cloud.created` and is masked on all
+	// of its outputs; it does not reach here).
 	EventBootstrapDelivered EventType = "bootstrap.delivered"
 
-	// EventApplyDispatched — Keeper отправил `ApplyRequest` Soul-у через
+	// EventApplyDispatched — Keeper sent an `ApplyRequest` to a Soul over the
 	// EventStream (M2.5, outbound direction). `source: soul_grpc`,
 	// `archon_aid: NULL`, `correlation_id = apply_id`. Payload:
-	// `{sid, apply_id, tasks_count}` — список задач не дублируем, он
-	// материализуется через `task.executed` событиями по мере прогона.
+	// `{sid, apply_id, tasks_count}` — the task list is not duplicated, it
+	// materializes through `task.executed` events as the run proceeds.
 	EventApplyDispatched EventType = "apply.dispatched"
 
-	// EventApplyCancelled — Keeper отправил `CancelApply` Soul-у (M2.5).
+	// EventApplyCancelled — Keeper sent a `CancelApply` to a Soul (M2.5).
 	// `source: soul_grpc`, `archon_aid: NULL`, `correlation_id = apply_id`.
-	// Payload: `{sid, apply_id, reason}`. Soul-side обработка (фактическая
-	// отмена в-flight ApplyRunner-а) фиксируется отдельным `run.completed`
-	// со `status: CANCELLED`.
+	// Payload: `{sid, apply_id, reason}`. Soul-side handling (the actual
+	// cancellation of the in-flight ApplyRunner) is recorded by a separate
+	// `run.completed` with `status: CANCELLED`.
 	EventApplyCancelled EventType = "apply.cancelled"
 
-	// EventLeaseForceReleased — Keeper-инстанс presence-gated перехватил
-	// SID-lease у ДОКАЗАННО-МЁРТВОГО prev-holder-а на reconnect-е Soul-а
-	// (ADR-027 amend (n), recovery-backstop S2). Security-чувствительная
-	// операция смены владения lease: prev-holder подтверждён мёртвым через
-	// Conclave-presence ([redis.InstanceAlive]), затем CAS-by-prev-holder
-	// перезахватил ключ. `source: soul_grpc`, `archon_aid: NULL`,
-	// `correlation_id = sid`. Payload: `{sid, prev_kid, new_kid}`. Пишется
-	// ТОЛЬКО при успешном force-release (split-brain-отказ / fail-safe не
-	// аудируются — это штатное «отдать Soul-у ретраить»).
+	// EventLeaseForceReleased — a presence-gated Keeper instance seized a SID
+	// lease from a PROVABLY DEAD prev-holder on a Soul reconnect (ADR-027
+	// amend (n), recovery backstop S2). A security-sensitive lease-ownership
+	// change: the prev-holder is confirmed dead via Conclave presence
+	// ([redis.InstanceAlive]), then a CAS-by-prev-holder re-seized the key.
+	// `source: soul_grpc`, `archon_aid: NULL`, `correlation_id = sid`.
+	// Payload: `{sid, prev_kid, new_kid}`. Written ONLY on a successful
+	// force-release (a split-brain rejection / fail-safe is not audited — that
+	// is the normal "let the Soul retry").
 	EventLeaseForceReleased EventType = "eventstream.lease_force_released"
 
-	// EventSoulSeedRotated — Soul инициировал ротацию seed-а через
-	// `SeedRotationRequest` в EventStream, Keeper выпустил новый cert и
-	// supersede-нул предыдущий active (M2.5, ADR-012). `source: soul_grpc`,
-	// `archon_aid: NULL`. Payload: `{sid, seed_id, fingerprint,
-	// serial_number, not_after, kid, superseded_seed_id?}`. Симметрично
-	// `soul.seed-issued` (ADR-014), отличается только триггером — здесь
-	// инициатор Soul, при bootstrap — Keeper-side flow.
+	// EventSoulSeedRotated — a Soul initiated seed rotation via a
+	// `SeedRotationRequest` on the EventStream, Keeper issued a new cert and
+	// superseded the previous active one (M2.5, ADR-012). `source: soul_grpc`,
+	// `archon_aid: NULL`. Payload: `{sid, seed_id, fingerprint, serial_number,
+	// not_after, kid, superseded_seed_id?}`. Symmetric to `soul.seed-issued`
+	// (ADR-014), differing only by trigger — here the initiator is the Soul,
+	// at bootstrap it is the Keeper-side flow.
 	EventSoulSeedRotated EventType = "soul.seed-rotated"
 
-	// EventRoleCreated — создана RBAC-роль через Operator API
-	// (`POST /v1/roles`) или MCP-tool `keeper.role.create` (RBAC Slice 2).
-	// Изменение авторизации обязательно аудируется (ADR-022). `source: api`
-	// или `mcp`, `archon_aid` — инициатор. Payload: `{name, permissions,
-	// created_by_aid}` — permission-строки не секрет, логируются.
+	// EventRoleCreated — an RBAC role was created via the Operator API
+	// (`POST /v1/roles`) or the MCP tool `keeper.role.create` (RBAC Slice 2).
+	// Authorization changes must be audited (ADR-022). `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name, permissions,
+	// created_by_aid}` — permission strings are not a secret and are logged.
 	EventRoleCreated EventType = "role.created"
 
-	// EventRoleDeleted — удалена RBAC-роль через Operator API
-	// (`DELETE /v1/roles/{name}`) или MCP-tool `keeper.role.delete` (RBAC
-	// Slice 2). `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name}`. Каскадом снесены permissions + membership роли.
+	// EventRoleDeleted — an RBAC role was deleted via the Operator API
+	// (`DELETE /v1/roles/{name}`) or the MCP tool `keeper.role.delete` (RBAC
+	// Slice 2). `source: api` or `mcp`, `archon_aid` is the initiator. Payload:
+	// `{name}`. The role's permissions + membership are cascade-deleted.
 	EventRoleDeleted EventType = "role.deleted"
 
-	// EventRolePermissionsUpdated — заменён набор permission-ов RBAC-роли
-	// через Operator API (`PATCH /v1/roles/{name}/permissions`) или MCP-tool
-	// `keeper.role.update` (RBAC Slice 2, replace-семантика). `source: api`
-	// или `mcp`, `archon_aid` — инициатор. Payload: `{name, permissions}` —
-	// permission-строки не секрет, логируются.
+	// EventRolePermissionsUpdated — the permission set of an RBAC role was
+	// replaced via the Operator API (`PATCH /v1/roles/{name}/permissions`) or
+	// the MCP tool `keeper.role.update` (RBAC Slice 2, replace semantics).
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{name,
+	// permissions}` — permission strings are not a secret and are logged.
 	EventRolePermissionsUpdated EventType = "role.permissions-updated"
 
-	// EventRoleOperatorGranted — Архонт привязан к RBAC-роли через Operator
-	// API (`POST /v1/roles/{name}/operators`) или MCP-tool
-	// `keeper.role.grant-operator` (RBAC Slice 2). `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{name, aid, granted_by_aid}` — AID-ы
-	// не секрет, логируются.
+	// EventRoleOperatorGranted — an Archon was bound to an RBAC role via the
+	// Operator API (`POST /v1/roles/{name}/operators`) or the MCP tool
+	// `keeper.role.grant-operator` (RBAC Slice 2). `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name, aid, granted_by_aid}` —
+	// AIDs are not a secret and are logged.
 	EventRoleOperatorGranted EventType = "role.operator-granted"
 
-	// EventRoleOperatorRevoked — Архонт отвязан от RBAC-роли через Operator
-	// API (`DELETE /v1/roles/{name}/operators/{aid}`) или MCP-tool
-	// `keeper.role.revoke-operator` (RBAC Slice 2). `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{name, aid}` — AID-ы не секрет,
-	// логируются.
+	// EventRoleOperatorRevoked — an Archon was unbound from an RBAC role via
+	// the Operator API (`DELETE /v1/roles/{name}/operators/{aid}`) or the MCP
+	// tool `keeper.role.revoke-operator` (RBAC Slice 2). `source: api` or
+	// `mcp`, `archon_aid` is the initiator. Payload: `{name, aid}` — AIDs are
+	// not a secret and are logged.
 	EventRoleOperatorRevoked EventType = "role.operator-revoked"
 
-	// EventSynodCreated — создана Synod-группа (ADR-049) через Operator API
-	// (`POST /v1/synods`) или MCP-tool `keeper.synod.create`. Изменение
-	// RBAC-топологии обязательно аудируется (ADR-022). `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{name, created_by_aid}`.
+	// EventSynodCreated — a Synod group was created (ADR-049) via the Operator
+	// API (`POST /v1/synods`) or the MCP tool `keeper.synod.create`. RBAC
+	// topology changes must be audited (ADR-022). `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name, created_by_aid}`.
 	EventSynodCreated EventType = "synod.created"
 
-	// EventSynodUpdated — изменено описание Synod-группы (ADR-049 amend) через
-	// Operator API (`PATCH /v1/synods/{name}`) или MCP-tool `keeper.synod.update`.
-	// Меняется ТОЛЬКО description (name (PK) immutable); прав не выдаёт/не отнимает,
-	// но мутация RBAC-топологии аудируется (ADR-022) симметрично synod.created.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name, description}` — описание не секрет, логируется.
+	// EventSynodUpdated — the description of a Synod group was changed (ADR-049
+	// amend) via the Operator API (`PATCH /v1/synods/{name}`) or the MCP tool
+	// `keeper.synod.update`. Only the description changes (name (PK) is
+	// immutable); it grants/revokes no rights, but the RBAC-topology mutation
+	// is audited (ADR-022) symmetric to synod.created. `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name, description}` — the
+	// description is not a secret and is logged.
 	EventSynodUpdated EventType = "synod.updated"
 
-	// EventSynodDeleted — удалена Synod-группа (ADR-049) через Operator API
-	// (`DELETE /v1/synods/{name}`) или MCP-tool `keeper.synod.delete`. `source:
-	// api` или `mcp`, `archon_aid` — инициатор. Payload: `{name}`. Каскадом
-	// снесены membership + bundle группы.
+	// EventSynodDeleted — a Synod group was deleted (ADR-049) via the Operator
+	// API (`DELETE /v1/synods/{name}`) or the MCP tool `keeper.synod.delete`.
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload:
+	// `{name}`. The group's membership + bundle are cascade-deleted.
 	EventSynodDeleted EventType = "synod.deleted"
 
-	// EventSynodOperatorAdded — Архонт добавлен в Synod-группу (ADR-049) через
-	// Operator API (`POST /v1/synods/{name}/operators`) или MCP-tool
-	// `keeper.synod.add-operator`. Член получает весь bundle ролей группы.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name, aid, added_by_aid}` — AID-ы не секрет.
+	// EventSynodOperatorAdded — an Archon was added to a Synod group (ADR-049)
+	// via the Operator API (`POST /v1/synods/{name}/operators`) or the MCP
+	// tool `keeper.synod.add-operator`. The member receives the group's whole
+	// role bundle. `source: api` or `mcp`, `archon_aid` is the initiator.
+	// Payload: `{name, aid, added_by_aid}` — AIDs are not a secret.
 	EventSynodOperatorAdded EventType = "synod.operator-added"
 
-	// EventSynodOperatorRemoved — Архонт убран из Synod-группы (ADR-049) через
-	// Operator API (`DELETE /v1/synods/{name}/operators/{aid}`) или MCP-tool
-	// `keeper.synod.remove-operator`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{name, aid}`.
+	// EventSynodOperatorRemoved — an Archon was removed from a Synod group
+	// (ADR-049) via the Operator API
+	// (`DELETE /v1/synods/{name}/operators/{aid}`) or the MCP tool
+	// `keeper.synod.remove-operator`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{name, aid}`.
 	EventSynodOperatorRemoved EventType = "synod.operator-removed"
 
-	// EventSynodRoleGranted — роль добавлена в bundle Synod-группы (ADR-049)
-	// через Operator API (`POST /v1/synods/{name}/roles`) или MCP-tool
-	// `keeper.synod.grant-role`. Все члены группы получают эффективные права
-	// роли. `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name, role, granted_by_aid}`.
+	// EventSynodRoleGranted — a role was added to a Synod group's bundle
+	// (ADR-049) via the Operator API (`POST /v1/synods/{name}/roles`) or the
+	// MCP tool `keeper.synod.grant-role`. All group members receive the role's
+	// effective rights. `source: api` or `mcp`, `archon_aid` is the initiator.
+	// Payload: `{name, role, granted_by_aid}`.
 	EventSynodRoleGranted EventType = "synod.role-granted"
 
-	// EventSynodRoleRevoked — роль снята из bundle Synod-группы (ADR-049) через
-	// Operator API (`DELETE /v1/synods/{name}/roles/{role_name}`) или MCP-tool
-	// `keeper.synod.revoke-role`. Права роли снимаются у всех членов группы.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
+	// EventSynodRoleRevoked — a role was removed from a Synod group's bundle
+	// (ADR-049) via the Operator API
+	// (`DELETE /v1/synods/{name}/roles/{role_name}`) or the MCP tool
+	// `keeper.synod.revoke-role`. The role's rights are removed from all group
+	// members. `source: api` or `mcp`, `archon_aid` is the initiator. Payload:
 	// `{name, role}`.
 	EventSynodRoleRevoked EventType = "synod.role-revoked"
 
-	// EventPluginAllowed — Архонт допустил плагин в allow-list `plugin_sigils`
-	// (Sigil, ADR-026) через Operator API (`POST /v1/plugins/sigils`) или
-	// MCP-tool (S4b). `source: api` или `mcp`, `archon_aid` — инициатор.
-	// Payload: `{namespace, name, ref, sha256, allowed_by_aid}` — supply-chain-
-	// событие, обязательно аудируется; signature/manifest в payload НЕ кладутся
-	// (крипто-материал / крупный JSONB). `ref` — operator-asserted метка
-	// (вариант C: НЕ git-verified), authority целостности — sha256+подпись.
+	// EventPluginAllowed — an Archon admitted a plugin into the `plugin_sigils`
+	// allow-list (Sigil, ADR-026) via the Operator API
+	// (`POST /v1/plugins/sigils`) or the MCP tool (S4b). `source: api` or
+	// `mcp`, `archon_aid` is the initiator. Payload: `{namespace, name, ref,
+	// sha256, allowed_by_aid}` — a supply-chain event, must be audited;
+	// signature/manifest are NOT put in the payload (crypto material / large
+	// JSONB). `ref` is an operator-asserted label (variant C: NOT git-verified),
+	// the integrity authority is sha256+signature.
 	EventPluginAllowed EventType = "plugin.allowed"
 
-	// EventPluginRevoked — Архонт отозвал ранее допущенный плагин из
-	// `plugin_sigils` (бинарь перестаёт проходить Sigil-верификацию) через
-	// Operator API (`DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}`) или
-	// MCP-tool (S4b). `source: api` или `mcp`, `archon_aid` — инициатор.
-	// Payload: `{namespace, name, ref}`. (`plugin.verify_failed` — host-side
-	// событие верификации, вводится отдельно в S6.)
+	// EventPluginRevoked — an Archon revoked a previously admitted plugin from
+	// `plugin_sigils` (the binary stops passing Sigil verification) via the
+	// Operator API (`DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}`) or
+	// the MCP tool (S4b). `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{namespace, name, ref}`. (`plugin.verify_failed` is
+	// the host-side verification event, introduced separately in S6.)
 	EventPluginRevoked EventType = "plugin.revoked"
 
-	// EventAugurFetchBrokered — Augur-брокер (delegate=false, MVP-1, ADR-025 /
-	// augur.md §8) прочитал значение из внешней системы и вернул его Soul-у
-	// inline. `source: soul_grpc`, `archon_aid: NULL`, `correlation_id =
-	// apply_id`. Payload: `{sid, omen, query, request_id}` — фиксируется ФАКТ
-	// чтения + Omen + query (логический путь, не секрет); само значение /
-	// токен в payload НЕ кладётся (augur.md §8, secret-masking ADR-010).
+	// EventAugurFetchBrokered — the Augur broker (delegate=false, MVP-1,
+	// ADR-025 / augur.md §8) read a value from an external system and returned
+	// it to the Soul inline. `source: soul_grpc`, `archon_aid: NULL`,
+	// `correlation_id = apply_id`. Payload: `{sid, omen, query, request_id}` —
+	// records the FACT of reading + the Omen + query (the logical path, not a
+	// secret); the value / token itself is NOT put in the payload (augur.md §8,
+	// secret-masking ADR-010).
 	EventAugurFetchBrokered EventType = "augur.fetch_brokered"
 
-	// EventAugurAccessDenied — любая проверка авторизации Augur-запроса
-	// (augur.md §6) провалена: Omen не найден / Soul вне Rite / query вне
-	// allow-list / нормализация vault-path отвергла запрос. denied-резолв —
-	// security-сигнал, аудируется наравне с успехом. `source: soul_grpc`,
-	// `archon_aid: NULL`, `correlation_id = apply_id`. Payload: `{sid, omen,
-	// query, request_id, reason}` — `reason` человекочитаемая причина отказа;
-	// значения секретов отсутствуют (доступ не состоялся).
+	// EventAugurAccessDenied — any authorization check of an Augur request
+	// (augur.md §6) failed: Omen not found / Soul outside the Rite / query
+	// outside the allow-list / vault-path normalization rejected the request.
+	// A denied resolve is a security signal, audited on par with success.
+	// `source: soul_grpc`, `archon_aid: NULL`, `correlation_id = apply_id`.
+	// Payload: `{sid, omen, query, request_id, reason}` — `reason` is a
+	// human-readable rejection cause; secret values are absent (access did not
+	// happen).
 	EventAugurAccessDenied EventType = "augur.access_denied"
 
-	// EventServiceRegistered — Архонт зарегистрировал Service в реестре
-	// `service_registry` через Operator API (`POST /v1/services`) или MCP-tool
-	// `keeper.service.register` (ADR-028-паттерн RBAC-storage). `source: api`
-	// или `mcp`, `archon_aid` — инициатор. Payload: `{name, git, ref,
-	// created_by_aid}` — git-URL не секрет, логируется.
+	// EventServiceRegistered — an Archon registered a Service in the
+	// `service_registry` via the Operator API (`POST /v1/services`) or the MCP
+	// tool `keeper.service.register` (ADR-028 RBAC-storage pattern). `source:
+	// api` or `mcp`, `archon_aid` is the initiator. Payload: `{name, git, ref,
+	// created_by_aid}` — the git URL is not a secret and is logged.
 	EventServiceRegistered EventType = "service.registered"
 
-	// EventServiceUpdated — Архонт заменил mutable-поля записи Service-а
-	// (git/ref/refresh, replace-семантика) через Operator API
-	// (`PATCH /v1/services/{name}`) или MCP-tool `keeper.service.update`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload: `{name, git,
-	// ref}` — git-URL не секрет, логируется.
+	// EventServiceUpdated — an Archon replaced the mutable fields of a Service
+	// record (git/ref/refresh, replace semantics) via the Operator API
+	// (`PATCH /v1/services/{name}`) or the MCP tool `keeper.service.update`.
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{name,
+	// git, ref}` — the git URL is not a secret and is logged.
 	EventServiceUpdated EventType = "service.updated"
 
-	// EventServiceDeregistered — Архонт удалил запись Service-а из
-	// `service_registry` через Operator API (`DELETE /v1/services/{name}`) или
-	// MCP-tool `keeper.service.deregister`. `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{name}`.
+	// EventServiceDeregistered — an Archon removed a Service record from
+	// `service_registry` via the Operator API (`DELETE /v1/services/{name}`) or
+	// the MCP tool `keeper.service.deregister`. `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name}`.
 	EventServiceDeregistered EventType = "service.deregistered"
 
-	// EventSigilKeyIntroduced — Архонт ввёл новый trust-anchor-ключ подписи Sigil
-	// в реестр `sigil_signing_keys` (ADR-026(h), R3-S7) через Operator API
-	// (`POST /v1/sigil/keys`) или MCP-tool `keeper.sigil.key.introduce`. `source:
-	// api` или `mcp`, `archon_aid` — инициатор. Payload: `{key_id, is_primary,
-	// introduced_by_aid}` — приватник (в Vault) в payload НЕ кладётся (security-
-	// инвариант ADR-026(d)). key_id — стабильный SHA-256(SPKI), не секрет.
+	// EventSigilKeyIntroduced — an Archon introduced a new Sigil signing
+	// trust-anchor key into the `sigil_signing_keys` registry (ADR-026(h),
+	// R3-S7) via the Operator API (`POST /v1/sigil/keys`) or the MCP tool
+	// `keeper.sigil.key.introduce`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{key_id, is_primary, introduced_by_aid}` — the
+	// private key (in Vault) is NOT put in the payload (security invariant
+	// ADR-026(d)). key_id is a stable SHA-256(SPKI), not a secret.
 	EventSigilKeyIntroduced EventType = "sigil.key-introduced"
 
-	// EventSigilKeyRetired — Архонт вывел trust-anchor-ключ подписи из
-	// `sigil_signing_keys` (Soul забывает его при следующем SigilTrustAnchors)
-	// через Operator API (`DELETE /v1/sigil/keys/{key_id}`) или MCP-tool
-	// `keeper.sigil.key.retire`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{key_id, retired_by_aid}`.
+	// EventSigilKeyRetired — an Archon retired a signing trust-anchor key from
+	// `sigil_signing_keys` (a Soul forgets it on the next SigilTrustAnchors)
+	// via the Operator API (`DELETE /v1/sigil/keys/{key_id}`) or the MCP tool
+	// `keeper.sigil.key.retire`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{key_id, retired_by_aid}`.
 	EventSigilKeyRetired EventType = "sigil.key-retired"
 
-	// EventSigilKeyPrimarySet — Архонт сделал active-ключ primary (новые Sigil-ы
-	// подписываются им после R3-S6 reload) через Operator API
-	// (`POST /v1/sigil/keys/{key_id}/primary`) или MCP-tool
-	// `keeper.sigil.key.set-primary`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{key_id, set_by_aid}`.
+	// EventSigilKeyPrimarySet — an Archon made an active key primary (new
+	// Sigils are signed with it after the R3-S6 reload) via the Operator API
+	// (`POST /v1/sigil/keys/{key_id}/primary`) or the MCP tool
+	// `keeper.sigil.key.set-primary`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{key_id, set_by_aid}`.
 	EventSigilKeyPrimarySet EventType = "sigil.key-primary-set"
 
-	// EventOmenCreated — Архонт создал Omen-запись в реестре `omens` (внешняя
-	// система Augur, ADR-025 / augur.md §4.1) через Operator API
-	// (`POST /v1/augur/omens`) или MCP-tool `keeper.augur.omen.create`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{name, source_type, endpoint, auth_ref, created_by_aid}` — endpoint
-	// (URL внешней системы) и auth_ref (vault-ref, не сам секрет) не секрет,
-	// логируются; master-credential в payload НЕ кладётся (его нет в записи —
-	// только ссылка, augur.md §4.1).
+	// EventOmenCreated — an Archon created an Omen record in the `omens`
+	// registry (the external Augur system, ADR-025 / augur.md §4.1) via the
+	// Operator API (`POST /v1/augur/omens`) or the MCP tool
+	// `keeper.augur.omen.create`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{name, source_type, endpoint, auth_ref,
+	// created_by_aid}` — endpoint (the external system URL) and auth_ref (a
+	// vault-ref, not the secret itself) are not a secret and are logged; the
+	// master credential is NOT put in the payload (it is not in the record —
+	// only a reference, augur.md §4.1).
 	EventOmenCreated EventType = "omen.created"
 
-	// EventOmenRevoked — Архонт удалил Omen-запись из `omens` через Operator API
-	// (`DELETE /v1/augur/omens/{name}`) или MCP-tool `keeper.augur.omen.delete`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload: `{name}`.
-	// Каскадом (ON DELETE CASCADE) убираются все связанные Rite-ы (augur.md §9).
+	// EventOmenRevoked — an Archon deleted an Omen record from `omens` via the
+	// Operator API (`DELETE /v1/augur/omens/{name}`) or the MCP tool
+	// `keeper.augur.omen.delete`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{name}`. All related Rites are removed by cascade
+	// (ON DELETE CASCADE) (augur.md §9).
 	EventOmenRevoked EventType = "omen.revoked"
 
-	// EventRiteCreated — Архонт создал Rite-запись (grant) в реестре `rites`
-	// (ADR-025 / augur.md §4.2) через Operator API (`POST /v1/augur/rites`) или
-	// MCP-tool `keeper.augur.rite.create`. `source: api` или `mcp`, `archon_aid`
-	// — инициатор. Payload: `{id, omen, subject, delegate, created_by_aid}` —
-	// `subject` человекочитаемая форма субъекта (`coven=<v>` / `sid=<v>`);
-	// `allow`-list в payload НЕ кладётся (его форма зависит от source_type и не
-	// несёт секретов, но фиксируем минимальный набор полей grant-а).
+	// EventRiteCreated — an Archon created a Rite record (grant) in the `rites`
+	// registry (ADR-025 / augur.md §4.2) via the Operator API
+	// (`POST /v1/augur/rites`) or the MCP tool `keeper.augur.rite.create`.
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{id,
+	// omen, subject, delegate, created_by_aid}` — `subject` is the
+	// human-readable subject form (`coven=<v>` / `sid=<v>`); the `allow` list
+	// is NOT put in the payload (its shape depends on source_type and carries
+	// no secrets, but we record the minimal grant field set).
 	EventRiteCreated EventType = "rite.created"
 
-	// EventRiteRevoked — Архонт удалил Rite-запись из `rites` через Operator API
-	// (`DELETE /v1/augur/rites/{id}`) или MCP-tool `keeper.augur.rite.delete`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload: `{id}`.
+	// EventRiteRevoked — an Archon deleted a Rite record from `rites` via the
+	// Operator API (`DELETE /v1/augur/rites/{id}`) or the MCP tool
+	// `keeper.augur.rite.delete`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{id}`.
 	EventRiteRevoked EventType = "rite.revoked"
 
-	// EventVigilCreated — Архонт создал Vigil-запись в реестре `vigils`
-	// (Soul-side проверка beacons-контура, ADR-030) через Operator API
-	// (`POST /v1/vigils`) или MCP-tool `keeper.oracle.vigil.create`. `source:
-	// api` или `mcp`, `archon_aid` — инициатор. Payload: `{name, check,
-	// interval, subject, created_by_aid}` — `subject` человекочитаемая форма
-	// (`coven=<v>` / `sid=<v>`); params (конфигурация проверки) в payload НЕ
-	// кладётся (минимальный набор полей).
+	// EventVigilCreated — an Archon created a Vigil record in the `vigils`
+	// registry (a Soul-side check of the beacons loop, ADR-030) via the
+	// Operator API (`POST /v1/vigils`) or the MCP tool
+	// `keeper.oracle.vigil.create`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{name, check, interval, subject,
+	// created_by_aid}` — `subject` is the human-readable form (`coven=<v>` /
+	// `sid=<v>`); params (the check configuration) are NOT put in the payload
+	// (minimal field set).
 	EventVigilCreated EventType = "vigil.created"
 
-	// EventVigilDeleted — Архонт удалил Vigil-запись из `vigils` через Operator
-	// API (`DELETE /v1/vigils/{name}`) или MCP-tool `keeper.oracle.vigil.delete`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload: `{name}`.
-	// Vigil перестаёт раздаваться хостам в VigilSnapshot; Decree-ы на него НЕ
-	// каскадятся (decrees.on_beacon — text-ссылка без FK, ADR-030).
+	// EventVigilDeleted — an Archon deleted a Vigil record from `vigils` via
+	// the Operator API (`DELETE /v1/vigils/{name}`) or the MCP tool
+	// `keeper.oracle.vigil.delete`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{name}`. The Vigil stops being handed to hosts
+	// in the VigilSnapshot; Decrees are NOT cascaded to it (decrees.on_beacon
+	// is a text reference without an FK, ADR-030).
 	EventVigilDeleted EventType = "vigil.deleted"
 
-	// EventDecreeCreated — Архонт создал Decree-запись (правило reactor) в
-	// реестре `decrees` (ADR-030) через Operator API (`POST /v1/decrees`) или
-	// MCP-tool `keeper.oracle.decree.create`. `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{name, on_beacon, incarnation,
-	// action_scenario, subject, created_by_aid}` — не секрет; where-CEL и
-	// action_input в payload НЕ кладутся (action_input может транзитом нести
-	// vault-ref, инвариант A ADR-027).
+	// EventDecreeCreated — an Archon created a Decree record (a reactor rule)
+	// in the `decrees` registry (ADR-030) via the Operator API
+	// (`POST /v1/decrees`) or the MCP tool `keeper.oracle.decree.create`.
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{name,
+	// on_beacon, incarnation, action_scenario, subject, created_by_aid}` — not
+	// a secret; the where-CEL and action_input are NOT put in the payload
+	// (action_input may transit a vault-ref, invariant A ADR-027).
 	EventDecreeCreated EventType = "decree.created"
 
-	// EventDecreeDeleted — Архонт удалил Decree-запись из `decrees` через
-	// Operator API (`DELETE /v1/decrees/{name}`) или MCP-tool
-	// `keeper.oracle.decree.delete`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{name}`. Каскадом (ON DELETE CASCADE) чистится
-	// cooldown-state в `oracle_fires` (ADR-030(a)).
+	// EventDecreeDeleted — an Archon deleted a Decree record from `decrees` via
+	// the Operator API (`DELETE /v1/decrees/{name}`) or the MCP tool
+	// `keeper.oracle.decree.delete`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{name}`. The cooldown state in `oracle_fires`
+	// is cleaned by cascade (ON DELETE CASCADE) (ADR-030(a)).
 	EventDecreeDeleted EventType = "decree.deleted"
 
-	// EventOracleFired — Oracle сматчил Portent с Decree и поставил
-	// named-scenario в work-queue (ADR-030(b), beacons reactor). Срабатывание
-	// reactor-а — security-сигнал (недоверенный вход Soul-а вызвал действие),
-	// аудируется на каждое срабатывание. `source: soul_grpc`,
-	// `archon_aid: NULL` (Soul-инициированный, не оператор),
-	// `correlation_id = apply_id` поставленного прогона. Payload:
-	// `{decree, subject, scenario, beacon, apply_id}` — subject = авторитетный
-	// SID хоста-отправителя (из mTLS peer cert); значения event.data в payload
-	// НЕ кладём (могут нести произвольные данные недоверенного источника).
+	// EventOracleFired — Oracle matched a Portent against a Decree and queued
+	// the named scenario into the work-queue (ADR-030(b), beacons reactor). A
+	// reactor firing is a security signal (untrusted Soul input triggered an
+	// action) and is audited on each firing. `source: soul_grpc`,
+	// `archon_aid: NULL` (Soul-initiated, not an operator),
+	// `correlation_id = apply_id` of the queued run. Payload:
+	// `{decree, subject, scenario, beacon, apply_id}` — subject = the
+	// authoritative SID of the sending host (from the mTLS peer cert);
+	// event.data values are NOT put in the payload (they may carry arbitrary
+	// data from an untrusted source).
 	EventOracleFired EventType = "oracle.fired"
 
-	// EventIncarnationDriftChecked — оператор запустил Scry-проверку drift через
-	// REST/MCP (ADR-031, on-demand-пилот). `source: api` / `mcp`, `archon_aid` —
-	// инициатор; payload: `{name, scenario, apply_id, drift_summary}` —
+	// EventIncarnationDriftChecked — an operator ran a Scry drift check via
+	// REST/MCP (ADR-031, on-demand pilot). `source: api` / `mcp`, `archon_aid`
+	// is the initiator; payload: `{name, scenario, apply_id, drift_summary}` —
 	// `drift_summary` = `{hosts_drifted, hosts_clean, hosts_unsupported,
-	// hosts_failed}` (агрегаты per-host-терминалов из DriftReport). incarnation-
-	// статус `drift` после события — отдельный сигнал; здесь фиксируется именно
-	// факт запуска проверки и её агрегаты. sync-под-200: audit пишется после
-	// сборки DriftReport, не на приёме запроса (паритет destroy_completed —
-	// событие пишется по факту, не на инициации). drift — НЕ блокирующий статус
-	// (ADR-031(d)).
+	// hosts_failed}` (aggregates of per-host terminals from the DriftReport).
+	// The incarnation `drift` status after the event is a separate signal; here
+	// it is exactly the fact of running the check and its aggregates that is
+	// recorded. sync-under-200: audit is written after assembling the
+	// DriftReport, not on request acceptance (parity with destroy_completed —
+	// the event is written on the fact, not the initiation). drift is NOT a
+	// blocking status (ADR-031(d)).
 	EventIncarnationDriftChecked EventType = "incarnation.drift_checked"
 
-	// EventPushApplied — оператор инициировал push-прогон Destiny по SSH через
-	// Operator API (`POST /v1/push/apply`) или MCP-tool `keeper.push.apply`
-	// (Variant C orchestrator, docs/keeper/push.md). `source: api` или `mcp`,
-	// `archon_aid` — инициатор. Payload: `{apply_id, destiny, inventory_size,
-	// ssh_provider, cleanup_stale}` — `destiny` (форма `<name>@<ref>`) и
-	// `ssh_provider` (имя из keeper.yml::plugins.ssh_providers[].name) не секрет,
-	// `inventory_size` — число SID-ов (сами SID-ы НЕ дублируются, лежат в
-	// push_runs.inventory_sids). Пишется при приёме запроса (status: pending), до
-	// старта executeAsync. Терминал — `push.completed` / `push.failed` /
-	// `push.partial_failed`.
+	// EventPushApplied — an operator initiated a Destiny push run over SSH via
+	// the Operator API (`POST /v1/push/apply`) or the MCP tool
+	// `keeper.push.apply` (Variant C orchestrator, docs/keeper/push.md).
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload:
+	// `{apply_id, destiny, inventory_size, ssh_provider, cleanup_stale}` —
+	// `destiny` (form `<name>@<ref>`) and `ssh_provider` (the name from
+	// keeper.yml::plugins.ssh_providers[].name) are not a secret,
+	// `inventory_size` is the SID count (the SIDs themselves are NOT
+	// duplicated, they live in push_runs.inventory_sids). Written on request
+	// acceptance (status: pending), before executeAsync starts. Terminal —
+	// `push.completed` / `push.failed` / `push.partial_failed`.
 	EventPushApplied EventType = "push.applied"
 
-	// EventPushCompleted — терминал push-прогона: все per-host SshDispatcher.SendApply
-	// вернули RunResult со статусом SUCCESS. `source: api` или `mcp` (тот же, что в
-	// `push.applied`), `archon_aid` — инициатор. Payload: `{apply_id, destiny,
-	// inventory_size, status: "success", total, success_count, fail_count}`. Сами
-	// per-host детали (sid, error) НЕ дублируются — лежат в push_runs.summary
-	// (GET /v1/push/{apply_id}). status — для фильтрации в `GET /v1/audit`
-	// без разбегов event_type (паттерн `task.executed`/`run.completed`).
+	// EventPushCompleted — the terminal of a push run: every per-host
+	// SshDispatcher.SendApply returned a RunResult with status SUCCESS.
+	// `source: api` or `mcp` (the same as in `push.applied`), `archon_aid` is
+	// the initiator. Payload: `{apply_id, destiny, inventory_size, status:
+	// "success", total, success_count, fail_count}`. The per-host details
+	// (sid, error) themselves are NOT duplicated — they live in
+	// push_runs.summary (GET /v1/push/{apply_id}). status is for filtering in
+	// `GET /v1/audit` without event_type spread (the
+	// `task.executed`/`run.completed` pattern).
 	EventPushCompleted EventType = "push.completed"
 
-	// EventPushFailed — терминал push-прогона: ни один хост не достиг SUCCESS
-	// (все per-host SendApply провалены либо вернули RunResult не-SUCCESS), либо
-	// prepare-фаза упала (inventory_load_failed / render_failed / no_live_hosts /
-	// empty_plan). `source: api` или `mcp`, `archon_aid` — инициатор. Payload:
-	// `{apply_id, destiny, inventory_size, status: "failed", total, success_count,
-	// fail_count}` (success_count=0 для prepare-fail-а с пустыми результатами).
-	// Подробности — push_runs.summary.
+	// EventPushFailed — the terminal of a push run: no host reached SUCCESS
+	// (all per-host SendApply failed or returned a non-SUCCESS RunResult), or
+	// the prepare phase failed (inventory_load_failed / render_failed /
+	// no_live_hosts / empty_plan). `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{apply_id, destiny, inventory_size, status:
+	// "failed", total, success_count, fail_count}` (success_count=0 for a
+	// prepare-fail with empty results). Details — push_runs.summary.
 	EventPushFailed EventType = "push.failed"
 
-	// EventPushPartialFailed — терминал push-прогона: смешанный исход (часть
-	// хостов SUCCESS, часть failed/error_locked/error-доставки). `source: api`
-	// или `mcp`, `archon_aid` — инициатор. Payload: `{apply_id, destiny,
-	// inventory_size, status: "partial_failed", total, success_count, fail_count}`.
-	// Подробности per-host — push_runs.summary.
+	// EventPushPartialFailed — the terminal of a push run: a mixed outcome
+	// (some hosts SUCCESS, some failed/error_locked/delivery-error). `source:
+	// api` or `mcp`, `archon_aid` is the initiator. Payload: `{apply_id,
+	// destiny, inventory_size, status: "partial_failed", total, success_count,
+	// fail_count}`. Per-host details — push_runs.summary.
 	EventPushPartialFailed EventType = "push.partial_failed"
 
-	// EventDecreeCircuitTripped — circuit-breaker Oracle авто-disable-ил Decree
-	// (ADR-030(a), beacons S4): N срабатываний за окно → enabled=false. Мутация
-	// Decree (симметрично `decree.created`/`decree.deleted`), поэтому имя в
-	// области `decree.*`. Пишется ТОЛЬКО single-winner-ом (тот инстанс, чей
-	// TripDecree выиграл, RowsAffected==1) — на каждый trip ровно одно событие.
-	// `source: soul_grpc` (write-path — Soul-инициированный Portent-флоу в
-	// evaluateDecree, не оператор), `archon_aid: NULL`. Payload: `{decree,
-	// fire_count, window, trigger}` — `trigger` всегда `"circuit_breaker"`. БЕЗ
-	// subject/beacon/event.data: trip — свойство правила (превышен порог
-	// суммарно), а не отдельного хоста; недоверенный payload события не кладём.
+	// EventDecreeCircuitTripped — Oracle's circuit breaker auto-disabled a
+	// Decree (ADR-030(a), beacons S4): N firings within the window →
+	// enabled=false. A Decree mutation (symmetric to
+	// `decree.created`/`decree.deleted`), hence the name is in the `decree.*`
+	// area. Written ONLY by the single-winner (the instance whose TripDecree
+	// won, RowsAffected==1) — exactly one event per trip. `source: soul_grpc`
+	// (write-path — the Soul-initiated Portent flow in evaluateDecree, not an
+	// operator), `archon_aid: NULL`. Payload: `{decree, fire_count, window,
+	// trigger}` — `trigger` is always `"circuit_breaker"`. WITHOUT
+	// subject/beacon/event.data: a trip is a property of the rule (the
+	// aggregate threshold was exceeded), not of a single host; the untrusted
+	// event payload is not included.
 	EventDecreeCircuitTripped EventType = "decree.circuit_tripped"
 
-	// EventTypeErrandInvoked — оператор инициировал Errand pull-ad-hoc exec
-	// через `POST /v1/souls/{sid}/exec` (ADR-033). `source: api` / `mcp`,
-	// `archon_aid` — инициатор; payload: `{sid, module, errand_id,
-	// timeout_seconds, dry_run}` — `input` в payload НЕ кладётся (может
-	// нести vault-резолвленные секреты после CEL-render-фазы).
+	// EventTypeErrandInvoked — an operator initiated an Errand pull-ad-hoc exec
+	// via `POST /v1/souls/{sid}/exec` (ADR-033). `source: api` / `mcp`,
+	// `archon_aid` is the initiator; payload: `{sid, module, errand_id,
+	// timeout_seconds, dry_run}` — `input` is NOT put in the payload (it may
+	// carry vault-resolved secrets after the CEL-render phase).
 	EventTypeErrandInvoked EventType = "errand.invoked"
 
-	// EventTypeErrandCompleted — Errand терминал-ил со статусом SUCCESS
+	// EventTypeErrandCompleted — an Errand terminated with status SUCCESS
 	// (ADR-033). `source: soul_grpc`, `archon_aid: NULL`. Payload: `{sid,
 	// module, errand_id, exit_code, duration_ms, stdout_truncated,
-	// stderr_truncated}` — stdout/stderr в payload НЕ кладутся (могут быть
-	// большими + маскинг идёт на выходе по общим правилам).
+	// stderr_truncated}` — stdout/stderr are NOT put in the payload (they may
+	// be large + masking happens on output by the common rules).
 	EventTypeErrandCompleted EventType = "errand.completed"
 
-	// EventTypeErrandFailed — Errand терминал-ил со статусом FAILED либо
-	// MODULE_NOT_ALLOWED (ADR-033, whitelist-reject Soul-side). `source:
+	// EventTypeErrandFailed — an Errand terminated with status FAILED or
+	// MODULE_NOT_ALLOWED (ADR-033, Soul-side whitelist reject). `source:
 	// soul_grpc`, `archon_aid: NULL`. Payload: `{sid, module, errand_id,
-	// exit_code, duration_ms, error_message}` — `error_message` маскированный.
+	// exit_code, duration_ms, error_message}` — `error_message` is masked.
 	EventTypeErrandFailed EventType = "errand.failed"
 
-	// EventTypeErrandTimedOut — Errand терминал-ил со статусом TIMED_OUT
-	// (ADR-033, превышен `timeout_seconds`). `source: soul_grpc`,
+	// EventTypeErrandTimedOut — an Errand terminated with status TIMED_OUT
+	// (ADR-033, `timeout_seconds` exceeded). `source: soul_grpc`,
 	// `archon_aid: NULL`. Payload: `{sid, module, errand_id, duration_ms}`.
 	EventTypeErrandTimedOut EventType = "errand.timed_out"
 
-	// EventTypeErrandCancelled — Архонт отменил in-flight Errand через
+	// EventTypeErrandCancelled — an Archon cancelled an in-flight Errand via
 	// `DELETE /v1/errands/{errand_id}` (ADR-033, slice E5 / post-MVP).
-	// `source: api` / `mcp`, `archon_aid` — инициатор. Payload: `{errand_id,
-	// sid}`.
+	// `source: api` / `mcp`, `archon_aid` is the initiator. Payload:
+	// `{errand_id, sid}`.
 	EventTypeErrandCancelled EventType = "errand.cancelled"
 
-	// EventClusterDegradedSet — Toll-leader взвёл cluster:degraded флаг
-	// (ADR-038): rate disconnect > threshold в sliding 60s окне. Single-winner
-	// (только leader Redis-lease `cluster:toll:leader` пишет это событие).
-	// `source: keeper_internal` (cluster-инициированный, не оператор),
-	// `archon_aid: NULL`. Payload: `{leader_kid, rate, baseline_connected,
-	// threshold, window_seconds}` — численные параметры, секретов нет.
+	// EventClusterDegradedSet — the Toll leader raised the cluster:degraded
+	// flag (ADR-038): disconnect rate > threshold within a sliding 60s window.
+	// Single-winner (only the leader holding the Redis lease
+	// `cluster:toll:leader` writes this event). `source: keeper_internal`
+	// (cluster-initiated, not an operator), `archon_aid: NULL`. Payload:
+	// `{leader_kid, rate, baseline_connected, threshold, window_seconds}` —
+	// numeric parameters, no secrets.
 	EventClusterDegradedSet EventType = "cluster.degraded_set"
 
-	// EventClusterDegradedCleared — Toll-leader снял cluster:degraded флаг
-	// (ADR-038): после устойчивого rate ≤ threshold в течение grace-окна
-	// (asymmetric hysteresis). `source: keeper_internal`, `archon_aid: NULL`.
-	// Payload: `{leader_kid, rate, baseline_connected, grace_seconds}`.
+	// EventClusterDegradedCleared — the Toll leader cleared the
+	// cluster:degraded flag (ADR-038): after a sustained rate ≤ threshold over
+	// the grace window (asymmetric hysteresis). `source: keeper_internal`,
+	// `archon_aid: NULL`. Payload: `{leader_kid, rate, baseline_connected,
+	// grace_seconds}`.
 	EventClusterDegradedCleared EventType = "cluster.degraded_cleared"
 
-	// EventSoulSshTargetUpdated — Архонт обновил per-host SSH-реквизиты push-flow
-	// (ADR-032 amendment 2026-05-26, S7-1) через Operator API
-	// (`PUT /v1/souls/{sid}/ssh-target`) или MCP-tool `keeper.soul.ssh-target.update`.
-	// `source: api` или `mcp`, `archon_aid` — инициатор. Payload: `{sid, ssh_port,
-	// ssh_user, soul_path}` — все поля cleartext (port/user/path не секрет;
-	// инфраструктурные реквизиты, требуют аудита изменений симметрично coven-changes).
+	// EventSoulSshTargetUpdated — an Archon updated the per-host SSH
+	// credentials of the push flow (ADR-032 amendment 2026-05-26, S7-1) via
+	// the Operator API (`PUT /v1/souls/{sid}/ssh-target`) or the MCP tool
+	// `keeper.soul.ssh-target.update`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{sid, ssh_port, ssh_user, soul_path}` — all
+	// fields cleartext (port/user/path are not a secret; infrastructure
+	// credentials, whose changes need auditing symmetric to coven-changes).
 	EventSoulSshTargetUpdated EventType = "soul.ssh-target.updated"
 
-	// EventPushProviderCreated — Архонт создал Push-Provider (per-provider env-payload
-	// params SSH-плагина push-flow, ADR-032 amendment 2026-05-26, S7-2) через
-	// Operator API (`POST /v1/push-providers`) или MCP-tool
-	// `keeper.push-provider.create`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{name, params_keys}` — `params_keys` (список ключей,
-	// БЕЗ значений) фиксирует факт мутации без раскрытия секретов:
-	// sensitive-значения (secret_id/token/password/private_key) обязаны быть
-	// vault-refs (Service.validateSensitive), non-sensitive (vault_addr/role) —
-	// не секрет, но политика «values не пишем в audit» единая для симметрии и
-	// устойчивости к будущему расширению allow-list.
+	// EventPushProviderCreated — an Archon created a Push-Provider (per-provider
+	// env-payload params of the push-flow SSH plugin, ADR-032 amendment
+	// 2026-05-26, S7-2) via the Operator API (`POST /v1/push-providers`) or the
+	// MCP tool `keeper.push-provider.create`. `source: api` or `mcp`,
+	// `archon_aid` is the initiator. Payload: `{name, params_keys}` —
+	// `params_keys` (the list of keys, WITHOUT values) records the fact of
+	// mutation without exposing secrets: sensitive values
+	// (secret_id/token/password/private_key) must be vault-refs
+	// (Service.validateSensitive), non-sensitive ones (vault_addr/role) are
+	// not a secret, but the "we don't write values into audit" policy is
+	// uniform for symmetry and resilience to a future allow-list expansion.
 	EventPushProviderCreated EventType = "push-provider.created"
 
-	// EventPushProviderUpdated — Архонт заменил params Push-Provider-а (replace-
-	// семантика) через `PUT /v1/push-providers/{name}` или MCP-tool
-	// `keeper.push-provider.update`. `source: api`/`mcp`, `archon_aid` — инициатор.
-	// Payload: `{name, params_keys}`.
+	// EventPushProviderUpdated — an Archon replaced a Push-Provider's params
+	// (replace semantics) via `PUT /v1/push-providers/{name}` or the MCP tool
+	// `keeper.push-provider.update`. `source: api`/`mcp`, `archon_aid` is the
+	// initiator. Payload: `{name, params_keys}`.
 	EventPushProviderUpdated EventType = "push-provider.updated"
 
-	// EventPushProviderDeleted — Архонт удалил запись Push-Provider-а через
-	// `DELETE /v1/push-providers/{name}` или MCP-tool `keeper.push-provider.delete`.
-	// `source: api`/`mcp`, `archon_aid` — инициатор. Payload: `{name}`. SshDispatcher
-	// при следующем pub/sub-сигнале `push-providers:changed` re-spawn-ит плагин без
-	// env-payload (либо с legacy-fallback при allow_legacy_push_providers=true).
+	// EventPushProviderDeleted — an Archon deleted a Push-Provider record via
+	// `DELETE /v1/push-providers/{name}` or the MCP tool
+	// `keeper.push-provider.delete`. `source: api`/`mcp`, `archon_aid` is the
+	// initiator. Payload: `{name}`. On the next `push-providers:changed`
+	// pub/sub signal SshDispatcher re-spawns the plugin without an env-payload
+	// (or with a legacy fallback when allow_legacy_push_providers=true).
 	EventPushProviderDeleted EventType = "push-provider.deleted"
 
-	// EventSoulSshTargetImportedFromConfig — one-shot auto-import per-host
-	// SSH-реквизита push-flow из `keeper.yml::push.targets[]` в `souls.ssh_target`
-	// при старте Keeper-а (ADR-032 amendment 2026-05-26, S7-4). `source:
-	// config_bootstrap`, `archon_aid: NULL` (system-action). Payload: `{sid,
-	// ssh_port, ssh_user, soul_path}` — все поля cleartext (инфраструктурные
-	// реквизиты, не секрет; зеркало `soul.ssh-target.updated`). Идемпотентно:
-	// событие пишется per-row один раз — повторный старт с уже импортированным
-	// SID-ом skip-ает без события.
+	// EventSoulSshTargetImportedFromConfig — one-shot auto-import of a per-host
+	// SSH credential of the push flow from `keeper.yml::push.targets[]` into
+	// `souls.ssh_target` at Keeper start (ADR-032 amendment 2026-05-26, S7-4).
+	// `source: config_bootstrap`, `archon_aid: NULL` (system action). Payload:
+	// `{sid, ssh_port, ssh_user, soul_path}` — all fields cleartext
+	// (infrastructure credentials, not a secret; mirror of
+	// `soul.ssh-target.updated`). Idempotent: the event is written per-row
+	// once — a restart with an already-imported SID skips it without an event.
 	EventSoulSshTargetImportedFromConfig EventType = "soul.ssh-target.imported_from_config"
 
-	// EventPushProviderImportedFromConfig — one-shot auto-import Push-Provider
-	// env-payload params из `keeper.yml::push.providers[]` в PG-таблицу
-	// `push_providers` при старте Keeper-а (ADR-032 amendment 2026-05-26, S7-4).
-	// `source: config_bootstrap`, `archon_aid: NULL`. Payload: `{name, params_keys}`
-	// — `params_keys` (список ключей, БЕЗ значений) фиксирует факт мутации без
-	// раскрытия секретов: симметрия с `push-provider.created` (Service.Create
-	// audit-payload).
+	// EventPushProviderImportedFromConfig — one-shot auto-import of Push-Provider
+	// env-payload params from `keeper.yml::push.providers[]` into the PG table
+	// `push_providers` at Keeper start (ADR-032 amendment 2026-05-26, S7-4).
+	// `source: config_bootstrap`, `archon_aid: NULL`. Payload: `{name,
+	// params_keys}` — `params_keys` (the list of keys, WITHOUT values) records
+	// the fact of mutation without exposing secrets: symmetric with
+	// `push-provider.created` (Service.Create audit payload).
 	EventPushProviderImportedFromConfig EventType = "push-provider.imported_from_config"
 
-	// EventChoirCreated — Архонт создал Choir-запись (declared-топология хостов
-	// внутри инкарнации, ADR-044, S-T3) через Operator API
-	// (`POST /v1/incarnations/{name}/choirs`) или MCP-tool `keeper.choir.create`.
-	// `source: api` или `mcp`, `archon_aid` — JWT.sub инициатора (created_by_aid
-	// берётся из контекста, НЕ из тела). Payload: `{incarnation_name, choir_name,
-	// min_size?, max_size?, created_by_aid}` — описание/лимиты не секрет,
-	// логируются.
+	// EventChoirCreated — an Archon created a Choir record (declared host
+	// topology within an incarnation, ADR-044, S-T3) via the Operator API
+	// (`POST /v1/incarnations/{name}/choirs`) or the MCP tool
+	// `keeper.choir.create`. `source: api` or `mcp`, `archon_aid` = the
+	// initiator's JWT.sub (created_by_aid is taken from the context, NOT from
+	// the body). Payload: `{incarnation_name, choir_name, min_size?, max_size?,
+	// created_by_aid}` — the description/limits are not a secret and are
+	// logged.
 	EventChoirCreated EventType = "choir.created"
 
-	// EventChoirDeleted — Архонт удалил Choir-запись через Operator API
-	// (`DELETE /v1/incarnations/{name}/choirs/{choir}`) или MCP-tool
-	// `keeper.choir.delete`. `source: api` или `mcp`, `archon_aid` — инициатор.
-	// Payload: `{incarnation_name, choir_name}`. Каскадом (ON DELETE CASCADE)
-	// сносятся все Voice-ы Choir-а.
+	// EventChoirDeleted — an Archon deleted a Choir record via the Operator API
+	// (`DELETE /v1/incarnations/{name}/choirs/{choir}`) or the MCP tool
+	// `keeper.choir.delete`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{incarnation_name, choir_name}`. All of the Choir's
+	// Voices are removed by cascade (ON DELETE CASCADE).
 	EventChoirDeleted EventType = "choir.deleted"
 
-	// EventChoirVoiceAdded — Архонт добавил Voice (членство SID в Choir-е,
-	// ADR-044) через Operator API
-	// (`POST /v1/incarnations/{name}/choirs/{choir}/voices`) или MCP-tool
-	// `keeper.choir.add-voice`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор (added_by_aid берётся из контекста, НЕ из тела). Payload:
-	// `{incarnation_name, choir_name, sid, role?, position?, added_by_aid}` —
-	// role/position omitempty (nullable declared-атрибуты).
+	// EventChoirVoiceAdded — an Archon added a Voice (SID membership in a Choir,
+	// ADR-044) via the Operator API
+	// (`POST /v1/incarnations/{name}/choirs/{choir}/voices`) or the MCP tool
+	// `keeper.choir.add-voice`. `source: api` or `mcp`, `archon_aid` is the
+	// initiator (added_by_aid is taken from the context, NOT from the body).
+	// Payload: `{incarnation_name, choir_name, sid, role?, position?,
+	// added_by_aid}` — role/position omitempty (nullable declared attributes).
 	EventChoirVoiceAdded EventType = "choir.voice_added"
 
-	// EventChoirVoiceRemoved — Архонт убрал Voice из Choir-а через Operator API
-	// (`DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid}`) или MCP-tool
-	// `keeper.choir.remove-voice`. `source: api` или `mcp`, `archon_aid` —
-	// инициатор. Payload: `{incarnation_name, choir_name, sid}`.
+	// EventChoirVoiceRemoved — an Archon removed a Voice from a Choir via the
+	// Operator API
+	// (`DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid}`) or the MCP
+	// tool `keeper.choir.remove-voice`. `source: api` or `mcp`, `archon_aid` is
+	// the initiator. Payload: `{incarnation_name, choir_name, sid}`.
 	EventChoirVoiceRemoved EventType = "choir.voice_removed"
 
-	// EventScenarioRunStarted — Voyage `kind=scenario` создан/стартовал (ADR-043, S5).
-	// Семантически ЗАМЕНЯЕТ `tide.started`. Пишется HTTP/MCP-handler-ом
-	// `POST /v1/voyages` сразу после успешного INSERT-а pending/scheduled-row
-	// (parity `errand_run.invoked` / `tide.started`: RBAC-mutating-событие).
-	// `source: api` или `mcp`, `archon_aid` — JWT.sub инициатора. Payload:
-	// `{voyage_id, kind, scenario_name, target (declared incarnations[]/service/
-	// coven), scope_size (число резолвнутых инкарнаций), batch_size, concurrency,
-	// dry_run, on_failure}` — `input` НЕ кладётся (может нести vault-резолвленные
-	// секреты после CEL-render-фазы, инвариант A ADR-027). Finalize-семейство
-	// (`scenario_run.completed`/`partial_failed`/`failed`/`cancelled`,
-	// keeper_internal) — follow-up при подключении finalize-audit в VoyageWorker.
-	// См. `scenario_run.*` блок `docs/naming-rules.md → Audit-events`.
+	// EventScenarioRunStarted — a Voyage `kind=scenario` was created/started
+	// (ADR-043, S5). Semantically REPLACES `tide.started`. Written by the
+	// HTTP/MCP handler `POST /v1/voyages` right after a successful INSERT of
+	// the pending/scheduled row (parity with `errand_run.invoked` /
+	// `tide.started`: an RBAC-mutating event). `source: api` or `mcp`,
+	// `archon_aid` = the initiator's JWT.sub. Payload: `{voyage_id, kind,
+	// scenario_name, target (declared incarnations[]/service/coven), scope_size
+	// (count of resolved incarnations), batch_size, concurrency, dry_run,
+	// on_failure}` — `input` is NOT put in the payload (it may carry
+	// vault-resolved secrets after the CEL-render phase, invariant A ADR-027).
+	// The finalize family (`scenario_run.completed`/`partial_failed`/`failed`/
+	// `cancelled`, keeper_internal) is a follow-up once finalize-audit is wired
+	// into the VoyageWorker. See the `scenario_run.*` block in
+	// `docs/naming-rules.md → Audit-events`.
 	EventScenarioRunStarted EventType = "scenario_run.started"
 
-	// EventCommandRunInvoked — Voyage `kind=command` создан (ADR-043, S5).
-	// Семантически ЗАМЕНЯЕТ `errand_run.invoked`. Пишется HTTP/MCP-handler-ом
-	// `POST /v1/voyages` сразу после успешного INSERT-а pending/scheduled-row.
-	// `source: api` или `mcp`, `archon_aid` — JWT.sub инициатора. Payload:
-	// `{voyage_id, kind, module, target (declared sids[]/coven/where), scope_size
-	// (число резолвнутых хостов после AND-merge), batch_size, concurrency,
-	// dry_run, on_failure}` — `input` НЕ кладётся (инвариант A ADR-027). Finalize-
-	// семейство (`command_run.completed`/`partial_failed`/`failed`/`cancelled`,
-	// keeper_internal) — follow-up при подключении finalize-audit в VoyageWorker.
-	// См. `command_run.*` блок `docs/naming-rules.md → Audit-events`.
+	// EventCommandRunInvoked — a Voyage `kind=command` was created (ADR-043,
+	// S5). Semantically REPLACES `errand_run.invoked`. Written by the HTTP/MCP
+	// handler `POST /v1/voyages` right after a successful INSERT of the
+	// pending/scheduled row. `source: api` or `mcp`, `archon_aid` = the
+	// initiator's JWT.sub. Payload: `{voyage_id, kind, module, target (declared
+	// sids[]/coven/where), scope_size (count of resolved hosts after AND-merge),
+	// batch_size, concurrency, dry_run, on_failure}` — `input` is NOT put in
+	// the payload (invariant A ADR-027). The finalize family
+	// (`command_run.completed`/`partial_failed`/`failed`/`cancelled`,
+	// keeper_internal) is a follow-up once finalize-audit is wired into the
+	// VoyageWorker. See the `command_run.*` block in `docs/naming-rules.md →
+	// Audit-events`.
 	EventCommandRunInvoked EventType = "command_run.invoked"
 
-	// EventScenarioRunCancelled — Voyage `kind=scenario` отменён оператором
-	// (ADR-043, S5): `DELETE /v1/voyages/{id}` для pending/scheduled-прогона.
-	// `source: api` или `mcp`, `archon_aid` — JWT.sub инициатора. Payload:
-	// `{voyage_id, kind, previous_status}` — previous_status фиксирует, из какого
-	// не-running статуса прогон переведён в cancelled (running-cancel — post-MVP).
+	// EventScenarioRunCancelled — a Voyage `kind=scenario` was cancelled by an
+	// operator (ADR-043, S5): `DELETE /v1/voyages/{id}` for a pending/scheduled
+	// run. `source: api` or `mcp`, `archon_aid` = the initiator's JWT.sub.
+	// Payload: `{voyage_id, kind, previous_status}` — previous_status records
+	// which non-running status the run was moved to cancelled from
+	// (running-cancel is post-MVP).
 	EventScenarioRunCancelled EventType = "scenario_run.cancelled"
 
-	// EventCommandRunCancelled — Voyage `kind=command` отменён оператором
-	// (ADR-043, S5): `DELETE /v1/voyages/{id}` для pending/scheduled-прогона.
-	// Семантика payload — parity [EventScenarioRunCancelled].
+	// EventCommandRunCancelled — a Voyage `kind=command` was cancelled by an
+	// operator (ADR-043, S5): `DELETE /v1/voyages/{id}` for a pending/scheduled
+	// run. Payload semantics — parity with [EventScenarioRunCancelled].
 	EventCommandRunCancelled EventType = "command_run.cancelled"
 
-	// EventScenarioRunLegStarted — VoyageWorker начал исполнение Leg-а
-	// kind=scenario (ADR-043, finalize-audit). `source: keeper_internal`,
-	// `archon_aid: NULL`, `correlation_id = voyage_id`. Эмитится ПЕРЕД fan-out-ом
-	// инкарнаций Leg-а (parity `tide.surge_started`). Payload: `{voyage_id, kind,
-	// leg_index, incarnations_in_leg}`. command-семейство leg-событий НЕ имеет
-	// (parity `errand_run.*` — плоский fan-out без per-Leg барьера).
+	// EventScenarioRunLegStarted — the VoyageWorker began executing a
+	// kind=scenario Leg (ADR-043, finalize-audit). `source: keeper_internal`,
+	// `archon_aid: NULL`, `correlation_id = voyage_id`. Emitted BEFORE the
+	// Leg's incarnation fan-out (parity with `tide.surge_started`). Payload:
+	// `{voyage_id, kind, leg_index, incarnations_in_leg}`. The command family
+	// has no leg events (parity with `errand_run.*` — a flat fan-out without a
+	// per-Leg barrier).
 	EventScenarioRunLegStarted EventType = "scenario_run.leg_started"
 
-	// EventScenarioRunLegCompleted — VoyageWorker завершил Leg kind=scenario:
-	// все инкарнации Leg-а достигли терминала + агрегирован Summary-дельта
-	// (parity `tide.surge_completed`). `source: keeper_internal`,
-	// `archon_aid: NULL`, `correlation_id = voyage_id`. Payload: `{voyage_id, kind,
-	// leg_index, terminal, total, succeeded, failed, cancelled}`.
+	// EventScenarioRunLegCompleted — the VoyageWorker finished a kind=scenario
+	// Leg: all of the Leg's incarnations reached a terminal + the Summary delta
+	// was aggregated (parity with `tide.surge_completed`). `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`.
+	// Payload: `{voyage_id, kind, leg_index, terminal, total, succeeded,
+	// failed, cancelled}`.
 	EventScenarioRunLegCompleted EventType = "scenario_run.leg_completed"
 
-	// EventScenarioRunCompleted — Voyage `kind=scenario` финализирован succeeded
-	// (все инкарнации success/no_match). `source: keeper_internal`,
-	// `archon_aid: NULL`, `correlation_id = voyage_id`. Payload: `{voyage_id, kind,
-	// total_batches, summary}` (parity `tide.completed`).
+	// EventScenarioRunCompleted — a Voyage `kind=scenario` was finalized as
+	// succeeded (all incarnations success/no_match). `source: keeper_internal`,
+	// `archon_aid: NULL`, `correlation_id = voyage_id`. Payload: `{voyage_id,
+	// kind, total_batches, summary}` (parity with `tide.completed`).
 	EventScenarioRunCompleted EventType = "scenario_run.completed"
 
-	// EventScenarioRunPartialFailed — Voyage `kind=scenario` финализирован
-	// partial_failed (часть инкарнаций failed, есть хоть один успех). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
-	// `{voyage_id, kind, total_batches, summary, on_failure}` (parity
-	// `tide.partial_failed`).
+	// EventScenarioRunPartialFailed — a Voyage `kind=scenario` was finalized as
+	// partial_failed (some incarnations failed, at least one succeeded).
+	// `source: keeper_internal`, `archon_aid: NULL`, `correlation_id =
+	// voyage_id`. Payload: `{voyage_id, kind, total_batches, summary,
+	// on_failure}` (parity with `tide.partial_failed`).
 	EventScenarioRunPartialFailed EventType = "scenario_run.partial_failed"
 
-	// EventScenarioRunFailed — Voyage `kind=scenario` финализирован failed
-	// (никто не success либо fail-closed до старта инкарнаций: spawner не
-	// сконфигурирован / пустой scenario_name / резолв target-а упал). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
-	// `{voyage_id, kind, total_batches, summary, error_code?}` — `error_code`
-	// (∈ `spawner_not_configured`/`empty_scenario_name`/`target_resolve_failed`)
-	// только для fail-closed-путей, при «все инкарнации failed» отсутствует.
+	// EventScenarioRunFailed — a Voyage `kind=scenario` was finalized as failed
+	// (nobody succeeded, or fail-closed before the incarnations started:
+	// spawner not configured / empty scenario_name / target resolve failed).
+	// `source: keeper_internal`, `archon_aid: NULL`, `correlation_id =
+	// voyage_id`. Payload: `{voyage_id, kind, total_batches, summary,
+	// error_code?}` — `error_code` (∈ `spawner_not_configured`/
+	// `empty_scenario_name`/`target_resolve_failed`) only on fail-closed paths,
+	// absent when "all incarnations failed".
 	EventScenarioRunFailed EventType = "scenario_run.failed"
 
-	// EventScenarioRunLeaseLost — VoyageWorker потерял lease посреди прогона
-	// kind=scenario (renewal CAS вернул 0 rows — другой Keeper подобрал Voyage
-	// через reclaim+claim). Orchestrator бросает работу, finalize НЕ делает
-	// (parity `tide.lease_lost`). `source: keeper_internal`, `archon_aid: NULL`,
-	// `correlation_id = voyage_id`. Payload: `{voyage_id, kind, kid_who_lost,
-	// phase}` — `phase` ∈ `leg`/`finalize`. command-прогон при потере lease
-	// отдельного события НЕ пишет (parity `errand_run.*` без lease_lost) —
-	// прогон молча подберёт другой Keeper.
+	// EventScenarioRunLeaseLost — the VoyageWorker lost the lease mid-run for
+	// kind=scenario (renewal CAS returned 0 rows — another Keeper picked up the
+	// Voyage via reclaim+claim). The orchestrator drops the work, does NOT
+	// finalize (parity with `tide.lease_lost`). `source: keeper_internal`,
+	// `archon_aid: NULL`, `correlation_id = voyage_id`. Payload: `{voyage_id,
+	// kind, kid_who_lost, phase}` — `phase` ∈ `leg`/`finalize`. A command run
+	// writes no separate event on lease loss (parity with `errand_run.*`
+	// without lease_lost) — the run is silently picked up by another Keeper.
 	EventScenarioRunLeaseLost EventType = "scenario_run.lease_lost"
 
-	// EventCommandRunCompleted — Voyage `kind=command` финализирован succeeded
-	// (все хосты success). `source: keeper_internal`, `archon_aid: NULL`,
-	// `correlation_id = voyage_id`. Payload: `{voyage_id, kind, total, succeeded}`
-	// (parity `errand_run.completed`).
+	// EventCommandRunCompleted — a Voyage `kind=command` was finalized as
+	// succeeded (all hosts success). `source: keeper_internal`, `archon_aid:
+	// NULL`, `correlation_id = voyage_id`. Payload: `{voyage_id, kind, total,
+	// succeeded}` (parity with `errand_run.completed`).
 	EventCommandRunCompleted EventType = "command_run.completed"
 
-	// EventCommandRunPartialFailed — Voyage `kind=command` финализирован
-	// partial_failed (часть хостов failed, есть хоть один успех). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
-	// `{voyage_id, kind, total, succeeded, failed, cancelled, on_failure}` (parity
-	// `errand_run.partial_failed`).
+	// EventCommandRunPartialFailed — a Voyage `kind=command` was finalized as
+	// partial_failed (some hosts failed, at least one succeeded). `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`.
+	// Payload: `{voyage_id, kind, total, succeeded, failed, cancelled,
+	// on_failure}` (parity with `errand_run.partial_failed`).
 	EventCommandRunPartialFailed EventType = "command_run.partial_failed"
 
-	// EventCommandRunFailed — Voyage `kind=command` финализирован failed (никто
-	// не success либо fail-closed до старта хостов: CommandSpawner не
-	// сконфигурирован / пустой module / резолв target-а упал). `source:
-	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
-	// `{voyage_id, kind, total, succeeded, error_code?}` — `error_code`
-	// (∈ `spawner_not_configured`/`empty_module`/`target_resolve_failed`) только
-	// для fail-closed-путей. command-семейство leg-событий НЕ имеет (parity
-	// `errand_run.*` — плоский fan-out).
+	// EventCommandRunFailed — a Voyage `kind=command` was finalized as failed
+	// (nobody succeeded, or fail-closed before the hosts started: CommandSpawner
+	// not configured / empty module / target resolve failed). `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`.
+	// Payload: `{voyage_id, kind, total, succeeded, error_code?}` — `error_code`
+	// (∈ `spawner_not_configured`/`empty_module`/`target_resolve_failed`) only
+	// on fail-closed paths. The command family has no leg events (parity with
+	// `errand_run.*` — a flat fan-out).
 	EventCommandRunFailed EventType = "command_run.failed"
 
-	// EventVoyageReclaimed — Reaper-правило `reclaim_voyages` вернуло протухший
-	// running-Voyage обратно в `pending` (claiming Keeper-инстанс мёртв либо ушёл
-	// на graceful drain): row переведена `running → pending`, `claimed_by_kid →
-	// NULL`, `attempt++`. Область `voyage.*` (НЕ `scenario_run.*`/`command_run.*`)
-	// — kind-agnostic: SQL-реклейм не разбирает kind, событие единое для обоих
-	// семейств. `source: keeper_internal`, `archon_aid: NULL`. Payload:
-	// `{voyage_id, last_renewed_at, attempt_after}` (parity `tide.reclaimed`).
+	// EventVoyageReclaimed — the Reaper rule `reclaim_voyages` returned a stale
+	// running Voyage back to `pending` (the claiming Keeper instance is dead or
+	// went into graceful drain): the row moved `running → pending`,
+	// `claimed_by_kid → NULL`, `attempt++`. Area `voyage.*` (NOT
+	// `scenario_run.*`/`command_run.*`) — kind-agnostic: the SQL reclaim does
+	// not inspect kind, the event is shared by both families. `source:
+	// keeper_internal`, `archon_aid: NULL`. Payload: `{voyage_id,
+	// last_renewed_at, attempt_after}` (parity with `tide.reclaimed`).
 	EventVoyageReclaimed EventType = "voyage.reclaimed"
 
-	// EventReconcileOrphanApplyingExecuted — Reaper-правило `reconcile_orphan_applying`
-	// сняло осиротевший applying-lock инкарнации (ADR-027 amend (m)): прямой
-	// (standalone, не под Voyage) scenario-run крашнувшегося Keeper-владельца
-	// оставил `incarnation.status='applying'` навсегда; правило по epoch-колонкам
-	// (`applying_by_kid`/`applying_since`) детектит stale-кандидата, presence-чеком
-	// в Conclave подтверждает смерть владельца и снимает lock (`applying → ready`
-	// через идемпотентный `ReleaseApplyingOrphan`). Область `reaper.*` (recovery-
-	// действие лидера, parity `voyage.reclaimed`). `source: keeper_internal`,
-	// `archon_aid: NULL`. Payload: `{incarnation, prev_kid, apply_id}` —
-	// `prev_kid` = мёртвый `applying_by_kid`, `apply_id` = `applying_apply_id`.
+	// EventReconcileOrphanApplyingExecuted — the Reaper rule
+	// `reconcile_orphan_applying` cleared an orphaned applying-lock of an
+	// incarnation (ADR-027 amend (m)): a direct (standalone, not under a
+	// Voyage) scenario-run of a crashed Keeper owner left
+	// `incarnation.status='applying'` forever; the rule detects a stale
+	// candidate by the epoch columns (`applying_by_kid`/`applying_since`),
+	// confirms the owner's death with a Conclave presence check and clears the
+	// lock (`applying → ready` via the idempotent `ReleaseApplyingOrphan`).
+	// Area `reaper.*` (a leader recovery action, parity with
+	// `voyage.reclaimed`). `source: keeper_internal`, `archon_aid: NULL`.
+	// Payload: `{incarnation, prev_kid, apply_id}` — `prev_kid` = the dead
+	// `applying_by_kid`, `apply_id` = `applying_apply_id`.
 	EventReconcileOrphanApplyingExecuted EventType = "reaper.reconcile_orphan_applying.executed"
 
-	// EventCadenceCreated — Архонт создал Cadence-расписание (ADR-046 §8) через
-	// Operator API (`POST /v1/cadences`) или MCP-tool. `source: api` или `mcp`,
-	// `archon_aid` — JWT.sub инициатора (created_by_aid берётся из контекста, НЕ
-	// из тела). Payload: `{cadence_id, name, schedule_kind, kind, scenario_name?,
-	// module?, overlap_policy, enabled}` — `input` рецепта НЕ кладётся (инвариант A
-	// ADR-027).
+	// EventCadenceCreated — an Archon created a Cadence schedule (ADR-046 §8)
+	// via the Operator API (`POST /v1/cadences`) or an MCP tool. `source: api`
+	// or `mcp`, `archon_aid` = the initiator's JWT.sub (created_by_aid is taken
+	// from the context, NOT from the body). Payload: `{cadence_id, name,
+	// schedule_kind, kind, scenario_name?, module?, overlap_policy, enabled}` —
+	// the recipe's `input` is NOT put in the payload (invariant A ADR-027).
 	EventCadenceCreated EventType = "cadence.created"
 
-	// EventCadenceUpdated — Архонт изменил Cadence (рецепт / расписание / enabled-
-	// toggle) через `PATCH /v1/cadences/{id}` или MCP-tool. `source: api`/`mcp`,
-	// `archon_aid` — инициатор. Payload: `{cadence_id, name, schedule_kind, kind,
-	// overlap_policy, enabled}` (поля после правки; `input` не кладётся).
+	// EventCadenceUpdated — an Archon changed a Cadence (recipe / schedule /
+	// enabled toggle) via `PATCH /v1/cadences/{id}` or an MCP tool. `source:
+	// api`/`mcp`, `archon_aid` is the initiator. Payload: `{cadence_id, name,
+	// schedule_kind, kind, overlap_policy, enabled}` (fields after the edit;
+	// `input` is not included).
 	EventCadenceUpdated EventType = "cadence.updated"
 
-	// EventCadenceDeleted — Архонт удалил Cadence через `DELETE /v1/cadences/{id}`
-	// или MCP-tool. `source: api`/`mcp`, `archon_aid` — инициатор. Порождённые
-	// Voyage остаются (FK `voyages.cadence_id` ON DELETE SET NULL, ADR-046 §9).
-	// Payload: `{cadence_id}`.
+	// EventCadenceDeleted — an Archon deleted a Cadence via
+	// `DELETE /v1/cadences/{id}` or an MCP tool. `source: api`/`mcp`,
+	// `archon_aid` is the initiator. Spawned Voyages remain (FK
+	// `voyages.cadence_id` ON DELETE SET NULL, ADR-046 §9). Payload:
+	// `{cadence_id}`.
 	EventCadenceDeleted EventType = "cadence.deleted"
 
-	// EventCadenceSpawned — Reaper-лидер на тике `spawn_due_cadence` заспавнил
-	// дочерний Voyage из рецепта Cadence (ADR-046 §8): due-расписание (enabled И
-	// next_run_at <= NOW()) с разрешающей overlap_policy → Insert voyages/
-	// voyage_targets с back-link cadence_id, в одной spawn-tx с advance
-	// next_run_at/last_run_at. Область `cadence.*` (управляющая сущность —
-	// keeper-side). `source: background` (фоновое периодическое Reaper-правило,
-	// parity `scry_background`; NB: ADR-046 §8 / naming-rules.md упоминают
-	// `scheduler` — это значение НЕ в закрытом enum audit.Source, см.
-	// observations), `archon_aid` = `created_by_aid` Cadence (спавн от имени
-	// создателя, ADR-046 §7), `correlation_id` = voyage_id. Payload:
-	// `{cadence_id, voyage_id, scheduled_for, scope_size}` — `scheduled_for` —
-	// плановый момент (next_run_at до пересчёта); `input` рецепта НЕ кладётся
-	// (инвариант A ADR-027).
+	// EventCadenceSpawned — the Reaper leader, on a `spawn_due_cadence` tick,
+	// spawned a child Voyage from a Cadence recipe (ADR-046 §8): a due schedule
+	// (enabled AND next_run_at <= NOW()) with a permitting overlap_policy →
+	// Insert voyages/voyage_targets with a cadence_id back-link, in one spawn tx
+	// with advancing next_run_at/last_run_at. Area `cadence.*` (a control entity
+	// — keeper-side). `source: background` (a background periodic Reaper rule,
+	// parity with `scry_background`; NB: ADR-046 §8 / naming-rules.md mention
+	// `scheduler` — that value is NOT in the closed audit.Source enum, see
+	// observations), `archon_aid` = the Cadence's `created_by_aid` (spawn on
+	// behalf of the creator, ADR-046 §7), `correlation_id` = voyage_id. Payload:
+	// `{cadence_id, voyage_id, scheduled_for, scope_size}` — `scheduled_for` is
+	// the planned moment (next_run_at before recompute); the recipe's `input`
+	// is NOT put in the payload (invariant A ADR-027).
 	EventCadenceSpawned EventType = "cadence.spawned"
 
-	// EventCadenceSkippedOverlap — `overlap_policy: skip` пропустила спавн из-за
-	// живого предыдущего ребёнка (ADR-046 §5/§8): next_run_at наступил, но у
-	// Cadence есть нетерминальный (pending/scheduled/running) порождённый Voyage →
-	// спавн НЕ происходит, next_run_at всё равно пересчитывается (серия не
-	// «залипает»). `source: background`, `archon_aid` = `created_by_aid`,
-	// `correlation_id` = cadence_id (нет voyage_id — спавна не было). Payload:
-	// `{cadence_id, scheduled_for, reason: "overlap"}`.
+	// EventCadenceSkippedOverlap — `overlap_policy: skip` skipped a spawn due to
+	// a live previous child (ADR-046 §5/§8): next_run_at arrived, but the
+	// Cadence has a non-terminal (pending/scheduled/running) child Voyage → the
+	// spawn does NOT happen, next_run_at is recomputed anyway (the series does
+	// not "stick"). `source: background`, `archon_aid` = `created_by_aid`,
+	// `correlation_id` = cadence_id (no voyage_id — there was no spawn).
+	// Payload: `{cadence_id, scheduled_for, reason: "overlap"}`.
 	EventCadenceSkippedOverlap EventType = "cadence.skipped_overlap"
 
-	// EventHeraldDelivered — терминал УСПЕШНОЙ доставки уведомления Herald-каналу
-	// (ADR-052(d), S3): claim-queue worker сделал webhook-POST, endpoint вернул
-	// 2xx. at-least-once — статусы in-flight попыток живут в Redis (hot→Redis,
-	// ADR-006); в audit пишется ТОЛЬКО терминал (постоянный аудируемый след).
-	// `source: keeper_internal` (worker-инициированный, не оператор),
-	// `archon_aid: NULL`, `correlation_id` = correlation_id события прогона
-	// (voyage_id/apply_id). Payload: `{herald, tiding, event_type, attempt,
-	// status_code}` — значения payload-уведомления в audit НЕ дублируются
-	// (инвариант A ADR-027 — могут нести vault-резолвленные данные).
+	// EventHeraldDelivered — the terminal of a SUCCESSFUL notification delivery
+	// to a Herald channel (ADR-052(d), S3): the claim-queue worker did a webhook
+	// POST, the endpoint returned 2xx. at-least-once — the statuses of
+	// in-flight attempts live in Redis (hot→Redis, ADR-006); only the terminal
+	// is written to audit (a permanent auditable trail). `source:
+	// keeper_internal` (worker-initiated, not an operator), `archon_aid: NULL`,
+	// `correlation_id` = the run event's correlation_id (voyage_id/apply_id).
+	// Payload: `{herald, tiding, event_type, attempt, status_code}` — the
+	// notification payload values are NOT duplicated in audit (invariant A
+	// ADR-027 — they may carry vault-resolved data).
 	EventHeraldDelivered EventType = "herald.delivered"
 
-	// EventHeraldFailed — терминал ПРОВАЛА доставки уведомления (ADR-052(d), S3):
-	// исчерпан retry-backoff / SSRF-guard отверг URL / endpoint недоступен /
-	// non-2xx после всех попыток. `source: keeper_internal`, `archon_aid: NULL`,
-	// `correlation_id` = correlation_id события прогона. Payload: `{herald,
-	// tiding, event_type, attempt, error_message}` — `error_message` маскируется
-	// (MaskSecrets: cause может транзитом нести vault-ref). Значения payload-
-	// уведомления в audit НЕ дублируются (инвариант A ADR-027).
+	// EventHeraldFailed — the terminal of a FAILED notification delivery
+	// (ADR-052(d), S3): retry-backoff exhausted / SSRF guard rejected the URL /
+	// endpoint unreachable / non-2xx after all attempts. `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id` = the run event's
+	// correlation_id. Payload: `{herald, tiding, event_type, attempt,
+	// error_message}` — `error_message` is masked (MaskSecrets: the cause may
+	// transit a vault-ref). The notification payload values are NOT duplicated
+	// in audit (invariant A ADR-027).
 	EventHeraldFailed EventType = "herald.failed"
 
-	// EventHeraldCreated / EventHeraldUpdated / EventHeraldDeleted — CRUD-семейство
-	// реестра Herald-каналов (ADR-052(f), S4): оператор-инициированный CRUD через
-	// POST/PUT/DELETE /v1/heralds* (и зеркальные MCP keeper.herald.*). `source`
-	// = api/mcp, `archon_aid` = JWT.sub. Payload: `{name, type, url, secret_ref,
-	// created_by_aid}` — `url` (для webhook не секрет) и `secret_ref` (vault-ref,
-	// не сам секрет) пишутся; секрет канала в записи нет. Delete каскадом сносит
-	// связанные Tiding-ы (ON DELETE CASCADE).
+	// EventHeraldCreated / EventHeraldUpdated / EventHeraldDeleted — the CRUD
+	// family of the Herald-channel registry (ADR-052(f), S4): operator-initiated
+	// CRUD via POST/PUT/DELETE /v1/heralds* (and the mirror MCP
+	// keeper.herald.*). `source` = api/mcp, `archon_aid` = JWT.sub. Payload:
+	// `{name, type, url, secret_ref, created_by_aid}` — `url` (not a secret for
+	// a webhook) and `secret_ref` (a vault-ref, not the secret itself) are
+	// written; the channel's secret is not in the record. Delete cascade-removes
+	// the related Tidings (ON DELETE CASCADE).
 	EventHeraldCreated EventType = "herald.created"
 	EventHeraldUpdated EventType = "herald.updated"
 	EventHeraldDeleted EventType = "herald.deleted"
 
-	// EventTidingCreated / EventTidingUpdated / EventTidingDeleted — CRUD-семейство
-	// реестра Tiding-правил подписки (ADR-052(f), S4): оператор-инициированный CRUD
-	// через POST/PUT/DELETE /v1/tidings* (и зеркальные MCP keeper.tiding.*).
-	// `source` = api/mcp, `archon_aid` = JWT.sub. Payload: `{name, herald,
-	// event_types, only_failures, only_changes, incarnation, cadence,
-	// created_by_aid}` — все значения публичны (area-glob-списки / имена,
-	// не секреты).
+	// EventTidingCreated / EventTidingUpdated / EventTidingDeleted — the CRUD
+	// family of the Tiding subscription-rule registry (ADR-052(f), S4):
+	// operator-initiated CRUD via POST/PUT/DELETE /v1/tidings* (and the mirror
+	// MCP keeper.tiding.*). `source` = api/mcp, `archon_aid` = JWT.sub. Payload:
+	// `{name, herald, event_types, only_failures, only_changes, incarnation,
+	// cadence, created_by_aid}` — all values are public (area-glob lists /
+	// names, not secrets).
 	EventTidingCreated EventType = "tiding.created"
 	EventTidingUpdated EventType = "tiding.updated"
 	EventTidingDeleted EventType = "tiding.deleted"
 
-	// EventProvisioningPolicyChanged — Архонт сменил политику способов СОЗДАНИЯ
-	// операторов (`provisioning_allowed_methods` в keeper_settings, ADR-058 Часть B)
-	// через `PUT /v1/provisioning-policy`. `source: api`, `archon_aid` — инициатор.
-	// Payload: `{allowed_methods, previous?}` — `allowed_methods` (новый список из
-	// {user,ldap,oidc}) и `previous` (прежний список, если политика была задана) не
-	// секрет, логируются. Мутация security-чувствительная (управляет доступом к
-	// заведению операторов) — обязательно аудируется.
+	// EventProvisioningPolicyChanged — an Archon changed the policy of operator
+	// CREATION methods (`provisioning_allowed_methods` in keeper_settings,
+	// ADR-058 Part B) via `PUT /v1/provisioning-policy`. `source: api`,
+	// `archon_aid` is the initiator. Payload: `{allowed_methods, previous?}` —
+	// `allowed_methods` (the new list from {user,ldap,oidc}) and `previous` (the
+	// prior list, if the policy was set) are not a secret and are logged. A
+	// security-sensitive mutation (it governs access to operator provisioning) —
+	// must be audited.
 	EventProvisioningPolicyChanged EventType = "provisioning.policy_changed"
 
-	// EventOperatorLogin — оператор успешно прошёл федеративную аутентификацию
-	// (LDAP search-bind, ADR-058) и получил внутренний JWT через
-	// `POST /auth/ldap/login`. Пишется endpoint-ом ПОСЛЕ выпуска JWT (одно
-	// событие на успешный логин). `source: api`, `archon_aid` = аутентифицированный
-	// AID. Payload: `{method, aid, provisioned}` — `method` ∈ `ldap` (OIDC стадия 2);
-	// `provisioned` = true, если этот логин auto-провизионил нового оператора.
-	// Пароль / bind-creds / группы-секреты в payload НЕ кладутся (security-гигиена).
+	// EventOperatorLogin — an operator successfully passed federated
+	// authentication (LDAP search-bind, ADR-058) and obtained an internal JWT
+	// via `POST /auth/ldap/login`. Written by the endpoint AFTER the JWT is
+	// issued (one event per successful login). `source: api`, `archon_aid` = the
+	// authenticated AID. Payload: `{method, aid, provisioned}` — `method` ∈
+	// `ldap` (OIDC is stage 2); `provisioned` = true if this login
+	// auto-provisioned a new operator. The password / bind-creds / group secrets
+	// are NOT put in the payload (security hygiene).
 	EventOperatorLogin EventType = "operator.login"
 
-	// EventOperatorProvisioned — auto-provision нового Архонта при первом
-	// федеративном логине (ADR-058): внешняя identity в группе из group_role_map
-	// → вставка строки `operators` с `auth_method=ldap` и ролями из групп. Пишется
-	// Mapper-ом при создании строки (одно событие на provision; login фиксируется
-	// отдельным `operator.login`). `source: api`, `archon_aid` = новый AID. Payload:
-	// `{aid, auth_method, display_name, roles, groups}` — роли/группы не секрет;
-	// пароль / bind-creds в payload НЕ кладутся.
+	// EventOperatorProvisioned — auto-provision of a new Archon on the first
+	// federated login (ADR-058): an external identity in a group from
+	// group_role_map → insert of an `operators` row with `auth_method=ldap` and
+	// roles from the groups. Written by the Mapper when the row is created (one
+	// event per provision; the login is recorded by a separate
+	// `operator.login`). `source: api`, `archon_aid` = the new AID. Payload:
+	// `{aid, auth_method, display_name, roles, groups}` — roles/groups are not a
+	// secret; the password / bind-creds are NOT put in the payload.
 	EventOperatorProvisioned EventType = "operator.provisioned"
 
-	// EventProviderCreated — Архонт создал Cloud Provider (реестр `providers`,
-	// ADR-017, docs/keeper/cloud.md) через Operator API (`POST /v1/providers`)
-	// или MCP-tool `keeper.provider.create`. `source: api`/`mcp`, `archon_aid` —
-	// инициатор. Payload: `{name, type, region, credentials_ref}` — все поля
-	// cleartext-инфраструктура: `credentials_ref` это ПУТЬ (`vault:<path>`), не
-	// сам секрет (security-гигиена как у jwt-signing-key-ref); реальные creds в
-	// audit НЕ резолвятся и НЕ пишутся.
+	// EventProviderCreated — an Archon created a Cloud Provider (the `providers`
+	// registry, ADR-017, docs/keeper/cloud.md) via the Operator API
+	// (`POST /v1/providers`) or the MCP tool `keeper.provider.create`. `source:
+	// api`/`mcp`, `archon_aid` is the initiator. Payload: `{name, type, region,
+	// credentials_ref}` — all fields cleartext infrastructure:
+	// `credentials_ref` is a PATH (`vault:<path>`), not the secret itself
+	// (security hygiene like the jwt-signing-key-ref); the real creds are NOT
+	// resolved and NOT written into audit.
 	EventProviderCreated EventType = "provider.created"
 
-	// EventProviderDeleted — Архонт удалил Cloud Provider через
-	// `DELETE /v1/providers/{name}` или MCP-tool `keeper.provider.delete`.
-	// `source: api`/`mcp`, `archon_aid` — инициатор. Payload: `{name}`.
+	// EventProviderDeleted — an Archon deleted a Cloud Provider via
+	// `DELETE /v1/providers/{name}` or the MCP tool `keeper.provider.delete`.
+	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProviderDeleted EventType = "provider.deleted"
 
-	// EventProfileCreated — Архонт создал Cloud Profile (VM-spec поверх
-	// Provider-а, реестр `profiles`, ADR-017) через `POST /v1/profiles` или
-	// MCP-tool `keeper.profile.create`. `source: api`/`mcp`, `archon_aid` —
-	// инициатор. Payload: `{name, provider, params_keys}` — VALUE params в audit
-	// НЕ кладутся (только ключи, симметрия с push-provider): freeform VM-spec
-	// может нести чувствительные значения.
+	// EventProfileCreated — an Archon created a Cloud Profile (a VM-spec on top
+	// of a Provider, the `profiles` registry, ADR-017) via `POST /v1/profiles`
+	// or the MCP tool `keeper.profile.create`. `source: api`/`mcp`, `archon_aid`
+	// is the initiator. Payload: `{name, provider, params_keys}` — the VALUE
+	// params are NOT put in audit (keys only, symmetric with push-provider): a
+	// freeform VM-spec may carry sensitive values.
 	EventProfileCreated EventType = "profile.created"
 
-	// EventProfileDeleted — Архонт удалил Cloud Profile через
-	// `DELETE /v1/profiles/{name}` или MCP-tool `keeper.profile.delete`.
-	// `source: api`/`mcp`, `archon_aid` — инициатор. Payload: `{name}`.
+	// EventProfileDeleted — an Archon deleted a Cloud Profile via
+	// `DELETE /v1/profiles/{name}` or the MCP tool `keeper.profile.delete`.
+	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProfileDeleted EventType = "profile.deleted"
 )
