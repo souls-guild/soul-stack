@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// destinyRepoFiles — минимальная плоская destiny: destiny.yml + tasks/main.yml.
+// destinyRepoFiles — a minimal flat destiny: destiny.yml + tasks/main.yml.
 const (
 	destinyManifestYML = `name: pilot-flat
 description: flat pilot destiny for loader test
@@ -55,7 +55,7 @@ func TestDestinyLoad_InvalidTasksRejected(t *testing.T) {
 	tr := &testRepo{t: t, dir: t.TempDir()}
 	tr.initRepo()
 	tr.writeFile("destiny.yml", destinyManifestYML)
-	// tasks/main.yml — mapping вместо sequence → ошибка загрузки.
+	// tasks/main.yml — a mapping instead of a sequence → load error.
 	tr.writeFile("tasks/main.yml", "name: not-a-list\n")
 	tr.commit("break tasks")
 
@@ -78,7 +78,7 @@ func TestDestinyLoad_MissingTasksFile(t *testing.T) {
 }
 
 // TestDestinyLoad_WithinInclude — within-destiny include (tasks/<sub>.yml)
-// раскрывается в плоский список при загрузке (destiny/tasks.md §4).
+// expands into a flat list at load time (destiny/tasks.md §4).
 func TestDestinyLoad_WithinInclude(t *testing.T) {
 	tr := &testRepo{t: t, dir: t.TempDir()}
 	tr.initRepo()
@@ -104,8 +104,8 @@ func TestDestinyLoad_WithinInclude(t *testing.T) {
 	}
 }
 
-// TestDestinyLoad_IncludeCycle — within-destiny include-цикл (a→b→a)
-// детектируется, не вешает загрузку.
+// TestDestinyLoad_IncludeCycle — a within-destiny include cycle (a→b→a)
+// is detected, it does not hang the load.
 func TestDestinyLoad_IncludeCycle(t *testing.T) {
 	tr := &testRepo{t: t, dir: t.TempDir()}
 	tr.initRepo()

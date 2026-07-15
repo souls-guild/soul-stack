@@ -1,16 +1,16 @@
 package api
 
-// Регистрация и spec-dump SOUL-домена на huma full-typed (ТИРАЖ-БАТЧ-2e по эталонам
-// role/operator + audit-endpoint, ADR-054 §Pattern). create/coven-assign/issue-token/
-// ssh-target — WRITE+AUDIT (вариант B, huma-audit-middleware; события soul.created/.coven-
-// changed/.token-issued/.ssh-target.updated); list/get/soulprint/history — read (БЕЗ audit).
-// Доменные *Typed-функции (handlers/soul.go) извлечены из (w,r); старый (w,r) — тонкая
-// strict-оболочка (MCP soul-tools зовут soul.Service/bootstraptoken напрямую, мимо handler —
-// извлечение не затрагивает; см. keeper/internal/mcp/soul_*.go).
+// Registration and spec-dump of the SOUL domain on huma full-typed (ROLLOUT BATCH 2e following
+// the role/operator + audit-endpoint reference implementations, ADR-054 §Pattern). create/coven-assign/
+// issue-token/ssh-target — WRITE+AUDIT (variant B, huma-audit-middleware; events soul.created/.coven-
+// changed/.token-issued/.ssh-target.updated); list/get/soulprint/history — read (NO audit).
+// Domain *Typed functions (handlers/soul.go) are extracted from (w,r); the old (w,r) is a thin
+// strict wrapper (MCP soul-tools call soul.Service/bootstraptoken directly, bypassing the handler —
+// the extraction does not affect them; see keeper/internal/mcp/soul_*.go).
 //
-// POST /v1/souls/{sid}/exec (ErrandExec) — WRITE+AUDIT (errand.invoked) с dual-status
-// 200/202 + Location-header. Handler — *handlers.ErrandHandler (ExecTyped), монтируется
-// на ту же /souls-группу с RBAC errand.run + ErrandSIDSelector.
+// POST /v1/souls/{sid}/exec (ErrandExec) — WRITE+AUDIT (errand.invoked) with dual-status
+// 200/202 + Location header. Handler — *handlers.ErrandHandler (ExecTyped), mounted
+// on the same /souls group with RBAC errand.run + ErrandSIDSelector.
 
 import (
 	"context"
@@ -30,9 +30,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaSoulCreate монтирует POST /v1/souls через huma (WRITE+AUDIT вариант B —
-// event soul.created). soulH nil → no-op. Handler: claims → конверт typed-body → CreateTyped →
-// audit-payload на huma-ctx → 201 С ТЕЛОМ.
+// registerHumaSoulCreate mounts POST /v1/souls via huma (WRITE+AUDIT variant B —
+// event soul.created). soulH nil → no-op. Handler: claims → convert typed-body → CreateTyped →
+// audit-payload on huma-ctx → 201 WITH BODY.
 func registerHumaSoulCreate(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -51,9 +51,9 @@ func registerHumaSoulCreate(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulCovenAssign монтирует POST /v1/souls/coven через huma (WRITE+AUDIT вариант B —
-// event soul.coven-changed). soulH nil → no-op. Handler: claims → конверт typed-body →
-// AssignCovenTyped → audit-payload → 200 С ТЕЛОМ (custom MarshalJSON XOR label↔labels).
+// registerHumaSoulCovenAssign mounts POST /v1/souls/coven via huma (WRITE+AUDIT variant B —
+// event soul.coven-changed). soulH nil → no-op. Handler: claims → convert typed-body →
+// AssignCovenTyped → audit-payload → 200 WITH BODY (custom MarshalJSON XOR label↔labels).
 func registerHumaSoulCovenAssign(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -72,9 +72,9 @@ func registerHumaSoulCovenAssign(humaAPI huma.API, soulH *handlers.SoulHandler) 
 	})
 }
 
-// registerHumaSoulTraitsAssign монтирует POST /v1/souls/traits через huma (WRITE+AUDIT вариант B —
-// event soul.traits-changed). soulH nil → no-op. Handler: claims → конверт typed-body →
-// AssignTraitsTyped → audit-payload → 200 С ТЕЛОМ.
+// registerHumaSoulTraitsAssign mounts POST /v1/souls/traits via huma (WRITE+AUDIT variant B —
+// event soul.traits-changed). soulH nil → no-op. Handler: claims → convert typed-body →
+// AssignTraitsTyped → audit-payload → 200 WITH BODY.
 func registerHumaSoulTraitsAssign(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -93,9 +93,9 @@ func registerHumaSoulTraitsAssign(humaAPI huma.API, soulH *handlers.SoulHandler)
 	})
 }
 
-// registerHumaSoulIssueToken монтирует POST /v1/souls/{sid}/issue-token через huma (WRITE+AUDIT
-// вариант B — event soul.token-issued). soulH nil → no-op. Handler: claims → IssueTokenTyped →
-// audit-payload → 200 С ТЕЛОМ (jwt; parity operator issue-token).
+// registerHumaSoulIssueToken mounts POST /v1/souls/{sid}/issue-token via huma (WRITE+AUDIT
+// variant B — event soul.token-issued). soulH nil → no-op. Handler: claims → IssueTokenTyped →
+// audit-payload → 200 WITH BODY (jwt; parity with operator issue-token).
 func registerHumaSoulIssueToken(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -114,9 +114,9 @@ func registerHumaSoulIssueToken(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulSshTarget монтирует PUT /v1/souls/{sid}/ssh-target через huma (WRITE+AUDIT
-// вариант B — event soul.ssh-target.updated). soulH nil → no-op. Handler: конверт typed-body →
-// UpdateSshTargetTyped → audit-payload → 200 С ТЕЛОМ (snapshot).
+// registerHumaSoulSshTarget mounts PUT /v1/souls/{sid}/ssh-target via huma (WRITE+AUDIT
+// variant B — event soul.ssh-target.updated). soulH nil → no-op. Handler: convert typed-body →
+// UpdateSshTargetTyped → audit-payload → 200 WITH BODY (snapshot).
 func registerHumaSoulSshTarget(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -131,13 +131,13 @@ func registerHumaSoulSshTarget(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulExec монтирует POST /v1/souls/{sid}/exec через huma (WRITE+AUDIT вариант B —
-// event errand.invoked). errandH nil → no-op (parity router-навеска под `if errandH != nil`).
-// Handler: claims → конверт typed-body → ExecTyped → audit-payload на huma-ctx (на ОБЕИХ
-// ветках 200/202) → 202 С ТЕЛОМ Accepted + Location (async) либо 200 С ТЕЛОМ Result (sync).
-// Body пред-маршалится в json.RawMessage (форма errand GET). dispatcher также пишет свой
-// audit-event source=api внутри Dispatch (single source of truth); middleware-event здесь —
-// security navigation-trail (паритет cancel / push.apply — дубль намеренный).
+// registerHumaSoulExec mounts POST /v1/souls/{sid}/exec via huma (WRITE+AUDIT variant B —
+// event errand.invoked). errandH nil → no-op (parity with the router mount under `if errandH != nil`).
+// Handler: claims → convert typed-body → ExecTyped → audit-payload on huma-ctx (on BOTH
+// the 200/202 branches) → 202 WITH BODY Accepted + Location (async) or 200 WITH BODY Result (sync).
+// Body is pre-marshaled into json.RawMessage (the errand GET shape). The dispatcher also writes its own
+// audit-event source=api inside Dispatch (single source of truth); the middleware-event here is a
+// security navigation-trail (parity with cancel / push.apply — the duplication is intentional).
 func registerHumaSoulExec(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	if errandH == nil {
 		return
@@ -153,17 +153,17 @@ func registerHumaSoulExec(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 		}
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		if reply.Async {
-			// 202-тело — native ErrandAccepted (errand-домен): handler-view БЕЗ json-тегов
-			// нельзя маршалить напрямую (дал бы UpperCamel-ключи). Проекция byte-exact
-			// с прежним ErrandAccepted (errand_id/status).
+			// 202 body — native ErrandAccepted (errand domain): the handler-view WITHOUT json tags
+			// cannot be marshaled directly (it would produce UpperCamel keys). The projection is byte-exact
+			// with the previous ErrandAccepted (errand_id/status).
 			body, merr := json.Marshal(newErrandAccepted(reply.Accepted))
 			if merr != nil {
 				return nil, soulProblem(merr)
 			}
 			return &errandExecOutput{Status: 202, Location: "/v1/errands/" + reply.ErrandID, Body: body}, nil
 		}
-		// 200-тело — native ErrandResult (errand-домен): см. выше (проекция view → native
-		// wire-DTO даёт byte-exact json-теги/omitempty/порядок полей).
+		// 200 body — native ErrandResult (errand domain): see above (the view → native
+		// wire-DTO projection gives byte-exact json tags/omitempty/field order).
 		body, merr := json.Marshal(newErrandResult(reply.Result))
 		if merr != nil {
 			return nil, soulProblem(merr)
@@ -172,10 +172,10 @@ func registerHumaSoulExec(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	})
 }
 
-// registerHumaSoulList монтирует GET /v1/souls через huma (READ-with-typed-query, БЕЗ audit).
-// soulH nil → no-op. Пагинацию разбирает ParsePageWithCursor над теми же query-значениями,
-// что huma-биндит (offset+cursor конфликт → 422, битый cursor → 400, out-of-range → 400) —
-// единый source-of-truth с (w,r). RBAC soul.list — на группе.
+// registerHumaSoulList mounts GET /v1/souls via huma (READ-with-typed-query, NO audit).
+// soulH nil → no-op. Pagination is parsed by ParsePageWithCursor over the same query values
+// that huma binds (offset+cursor conflict → 422, malformed cursor → 400, out-of-range → 400) —
+// a single source-of-truth with (w,r). RBAC soul.list — on the group.
 func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -206,9 +206,9 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 			Total:      int32(reply.Total),
 			NextCursor: reply.NextCursor,
 		}
-		// total_approximate — omitempty в обоих формах: keyset-режим даёт true →
-		// *bool(&true) (ключ present), offset-режим false → nil (ключ опущен,
-		// byte-exact с PagedResponse.TotalApproximate `bool omitempty`).
+		// total_approximate — omitempty in both forms: keyset mode yields true →
+		// *bool(&true) (key present), offset mode yields false → nil (key omitted,
+		// byte-exact with PagedResponse.TotalApproximate `bool omitempty`).
 		if reply.TotalApproximate {
 			ta := true
 			out.TotalApproximate = &ta
@@ -217,11 +217,11 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulStats монтирует GET /v1/souls/stats через huma (READ-агрегат, БЕЗ audit).
-// soulH nil → no-op. staleFn возвращает актуальный порог disconnect-а
-// (reaper.ResolveMarkDisconnectedStale над свежим конфигом — hot-reload) для
-// stale_count; nil → дефолт [defaultSoulStatsStale] (spec-dump / тесты без wire-up).
-// RBAC soul.list — на группе (та же, что list/get).
+// registerHumaSoulStats mounts GET /v1/souls/stats via huma (READ aggregate, NO audit).
+// soulH nil → no-op. staleFn returns the current disconnect threshold
+// (reaper.ResolveMarkDisconnectedStale over the live config — hot-reload) for
+// stale_count; nil → default [defaultSoulStatsStale] (spec-dump / tests without wire-up).
+// RBAC soul.list — on the group (the same as list/get).
 func registerHumaSoulStats(humaAPI huma.API, soulH *handlers.SoulHandler, staleFn func() time.Duration) {
 	if soulH == nil {
 		return
@@ -241,12 +241,12 @@ func registerHumaSoulStats(humaAPI huma.API, soulH *handlers.SoulHandler, staleF
 	})
 }
 
-// defaultSoulStatsStale — fallback-порог stale_count, когда staleFn не задан
-// (spec-dump / unit-тесты). 90s — parity reaper.defaultMarkDisconnectedStale;
-// production-wire-up передаёт провайдер над свежим конфигом (hot-reload).
+// defaultSoulStatsStale — fallback threshold for stale_count when staleFn is not set
+// (spec-dump / unit tests). 90s — parity with reaper.defaultMarkDisconnectedStale;
+// production wire-up passes a provider over the live config (hot-reload).
 const defaultSoulStatsStale = 90 * time.Second
 
-// registerHumaSoulGet монтирует GET /v1/souls/{sid} через huma (READ-with-path, БЕЗ audit).
+// registerHumaSoulGet mounts GET /v1/souls/{sid} via huma (READ-with-path, NO audit).
 func registerHumaSoulGet(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -260,8 +260,8 @@ func registerHumaSoulGet(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulSoulprint монтирует GET /v1/souls/{sid}/soulprint через huma (READ-with-path,
-// БЕЗ audit).
+// registerHumaSoulSoulprint mounts GET /v1/souls/{sid}/soulprint via huma (READ-with-path,
+// NO audit).
 func registerHumaSoulSoulprint(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -275,8 +275,8 @@ func registerHumaSoulSoulprint(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// registerHumaSoulHistory монтирует GET /v1/souls/{sid}/history через huma (READ-with-typed-
-// query, БЕЗ audit). CheckPageBounds → 400 (диапазон enforce-ит ДОМЕН).
+// registerHumaSoulHistory mounts GET /v1/souls/{sid}/history via huma (READ-with-typed-
+// query, NO audit). CheckPageBounds → 400 (the range is enforced by the DOMAIN).
 func registerHumaSoulHistory(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
 		return
@@ -296,9 +296,9 @@ func registerHumaSoulHistory(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
-// soulParsePage воспроизводит ParsePageWithCursor над уже-huma-биндингованными offset/limit/
-// cursor: out-of-range диапазон → 400 (CheckPageBounds), битый cursor → 400, cursor+offset>0 →
-// 422 (конфликт двух пагинаций). Единый контракт с (w,r)-обёрткой SoulHandler.List.
+// soulParsePage replicates ParsePageWithCursor over the already huma-bound offset/limit/
+// cursor: out-of-range → 400 (CheckPageBounds), malformed cursor → 400, cursor+offset>0 →
+// 422 (conflict between the two pagination modes). A single contract with the (w,r) wrapper SoulHandler.List.
 func soulParsePage(offset, limit int, cursorRaw string) (sharedapi.Page, *sharedapi.KeysetCursor, huma.StatusError) {
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return sharedapi.Page{}, nil, humaProblemError{Details: problem.New(problem.TypeMalformedRequest, "", err.Error())}
@@ -318,8 +318,8 @@ func soulParsePage(offset, limit int, cursorRaw string) (sharedapi.Page, *shared
 	return sharedapi.Page{Offset: offset, Limit: limit}, cursor, nil
 }
 
-// claimsOrNil извлекает claims из ctx (RequireJWT положил до huma); нет → nil (read-handler-ы
-// fail-closed на nil claims через readScopeForClaims → 404/пустой список).
+// claimsOrNil extracts claims from ctx (RequireJWT placed them there before huma); none → nil (read handlers
+// fail-closed on nil claims via readScopeForClaims → 404/empty list).
 func claimsOrNil(ctx context.Context) *keeperjwt.Claims {
 	claims, ok := apimiddleware.ClaimsFromContext(ctx)
 	if !ok {
@@ -328,9 +328,9 @@ func claimsOrNil(ctx context.Context) *keeperjwt.Claims {
 	return claims
 }
 
-// toSoulCovenAssignInput — конверт typed huma-body → NATIVE доменная модель
-// handlers.SoulCovenAssignInput (handler-native §Pattern шаг 3). huma-форма value/slice
-// пробрасывается напрямую (handler.derefCovenAssign трактует пустые поля как «не задано»).
+// toSoulCovenAssignInput — converts the typed huma body → the NATIVE domain model
+// handlers.SoulCovenAssignInput (handler-native §Pattern step 3). The huma value/slice
+// form is passed through directly (handler.derefCovenAssign treats empty fields as "not set").
 func toSoulCovenAssignInput(b SoulCovenAssignRequest) handlers.SoulCovenAssignInput {
 	return handlers.SoulCovenAssignInput{
 		Mode:   b.Mode,
@@ -347,9 +347,9 @@ func toSoulCovenAssignInput(b SoulCovenAssignRequest) handlers.SoulCovenAssignIn
 	}
 }
 
-// toSoulTraitsAssignInput — конверт typed huma-body → NATIVE доменная модель
-// handlers.SoulTraitsAssignInput (handler-native §Pattern шаг 3). huma-форма map/slice
-// пробрасывается напрямую (handler трактует пустые поля как «не задано», mode "" → merge).
+// toSoulTraitsAssignInput — converts the typed huma body → the NATIVE domain model
+// handlers.SoulTraitsAssignInput (handler-native §Pattern step 3). The huma map/slice
+// form is passed through directly (the handler treats empty fields as "not set", mode "" → merge).
 func toSoulTraitsAssignInput(b SoulTraitsAssignRequest) handlers.SoulTraitsAssignInput {
 	return handlers.SoulTraitsAssignInput{
 		Mode:   b.Mode,
@@ -366,8 +366,8 @@ func toSoulTraitsAssignInput(b SoulTraitsAssignRequest) handlers.SoulTraitsAssig
 	}
 }
 
-// toSoulSshTargetInput — конверт typed huma-body → NATIVE доменная модель
-// handlers.SoulSshTargetInput. ssh_provider пусто → routing на coven/cluster default.
+// toSoulSshTargetInput — converts the typed huma body → the NATIVE domain model
+// handlers.SoulSshTargetInput. ssh_provider empty → routing falls back to the coven/cluster default.
 func toSoulSshTargetInput(b SoulSshTarget) handlers.SoulSshTargetInput {
 	return handlers.SoulSshTargetInput{
 		SSHPort:     b.SSHPort,
@@ -377,9 +377,9 @@ func toSoulSshTargetInput(b SoulSshTarget) handlers.SoulSshTargetInput {
 	}
 }
 
-// toErrandExecRequest — конверт typed huma-body → NATIVE request errand-домена
-// (handlers.ErrandRunInput). Поля input/timeout_seconds/dry_run уже pointer-optional в
-// huma-форме (handler разыменовывает); module — value. Прямой проброс без перепаковки.
+// toErrandExecRequest — converts the typed huma body → the NATIVE errand-domain request
+// (handlers.ErrandRunInput). The fields input/timeout_seconds/dry_run are already pointer-optional in
+// the huma form (the handler dereferences them); module is a value. A direct pass-through without repacking.
 func toErrandExecRequest(b ErrandRunRequest) handlers.ErrandRunInput {
 	return handlers.ErrandRunInput{
 		Module:         b.Module,
@@ -389,14 +389,14 @@ func toErrandExecRequest(b ErrandRunRequest) handlers.ErrandRunInput {
 	}
 }
 
-// soulMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим: RequireJWT
-// кладёт claims до huma). problem+json (parity roleMissingClaims).
+// soulMissingClaims — a defensive response for missing claims in ctx (unreachable: RequireJWT
+// places claims there before huma). problem+json (parity with roleMissingClaims).
 func soulMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// soulProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity roleProblem).
+// soulProblem delivers a *Typed-function error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; a non-problem error → 500 (parity with roleProblem).
 func soulProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -404,18 +404,18 @@ func soulProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaSoulAPI собирает huma.API поверх chi-группы с huma-audit-middleware (вариант B) под
-// переданный event-тип (parity newHumaRoleAPI). Каждый write-роут soul (create/coven-assign/
-// issue-token/ssh-target) монтируется на СВОЕЙ chi-группе с собственным event-типом.
+// newHumaSoulAPI assembles a huma.API on top of a chi group with huma-audit-middleware (variant B) for
+// the given event type (parity with newHumaRoleAPI). Each write route of soul (create/coven-assign/
+// issue-token/ssh-target) is mounted on ITS OWN chi group with its own event type.
 func newHumaSoulAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaSoulSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma soul-роутов (create/
-// coven-assign/issue-token/ssh-target/exec/list/get/soulprint/history) как YAML-строку, БЕЗ
-// монтирования на реальный router. Хук для спека-мерж-таргета тиража и guard-теста.
-// Делегирует generic [humaDumpSpec] через те же register-функции. exec монтируется через
-// ErrandSpecStub (handler — *handlers.ErrandHandler). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaSoulSpecYAML assembles the OpenAPI fragment of ALL huma-migrated soul routes (create/
+// coven-assign/issue-token/ssh-target/exec/list/get/soulprint/history) as a YAML string, WITHOUT
+// mounting on a real router. A hook for the spec-merge target of the rollout and the guard test.
+// Delegates to the generic [humaDumpSpec] through the same register functions. exec is mounted via
+// ErrandSpecStub (handler — *handlers.ErrandHandler). Returns a 3.1.0 spec (huma default).
 func HumaSoulSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.SoulSpecStub()
@@ -434,6 +434,6 @@ func HumaSoulSpecYAML() (string, error) {
 	})
 }
 
-// soulSentinel — линковка soul-пакета (используется в op-файле enum-наборах через домен;
-// явный ref гарантирует, что рассинхрон enum↔домен ловится компилятором при правке).
+// soulSentinel — links the soul package (used in the op-file enum sets through the domain;
+// the explicit ref guarantees that an enum↔domain desync is caught by the compiler on edits).
 var _ = soul.StatusPending

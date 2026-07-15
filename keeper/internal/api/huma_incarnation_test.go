@@ -1,16 +1,19 @@
 package api
 
-// Guard-тесты INCARNATION-домена на huma (батч-2g, ADR-054). MIXED audit-класс —
-// проверяем КАЖДЫЙ write правильным S6-guard-ом (перепутать класс = регрессия):
+// Guard tests for the INCARNATION domain on huma (batch-2g, ADR-054). MIXED audit
+// class — we check EVERY write with the right S6 guard (mixing up the class = a
+// regression):
 //
-//   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): event пишет huma-audit-middleware
-//     (вариант B) — guard через assertMiddlewareAudit (audit на 2xx с непустым
-//     payload; на 4xx/403 — пусто).
-//   - SELF-AUDIT (rerun-last/check-drift/destroy/update-hosts): event пишет САМ
-//     handler ВНУТРИ *Typed — guard через assertSelfAudit (event с requiredKey).
+//   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): the event is written by the
+//     huma-audit-middleware (variant B) — guarded via assertMiddlewareAudit (audit
+//     on 2xx with a non-empty payload; empty on 4xx/403).
+//   - SELF-AUDIT (rerun-last/check-drift/destroy/update-hosts): the event is
+//     written by the handler ITSELF INSIDE *Typed — guarded via assertSelfAudit
+//     (event with requiredKey).
 //
-// Плюс: golden byte-exact wire каждого роута; ChiCoexistence на РЕАЛЬНОМ buildRouter
-// (incarnation+choir, chi.Walk); 400 на out-of-range list; RBAC-deny→403; read→NoAudit.
+// Plus: golden byte-exact wire for every route; ChiCoexistence on the REAL
+// buildRouter (incarnation+choir, chi.Walk); 400 on out-of-range list;
+// RBAC-deny→403; read→NoAudit.
 
 import (
 	"context"
@@ -38,14 +41,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// === ChiCoexistence guard (РЕАЛЬНЫЙ buildRouter, incarnation+choir, chi.Walk) ===
+// === ChiCoexistence guard (REAL buildRouter, incarnation+choir, chi.Walk) ===
 
-// TestHumaIncarnation_ChiCoexistence — guard на ДОСТИЖИМОСТЬ ВСЕХ incarnation-huma-
-// роутов + сосуществование с choir-mount на ОДНОЙ группе /v1/incarnations. После сноса
-// chi.Route("/{name}") incarnation-op несут ПОЛНЫЙ путь /{name}[/...]; choir (батч-2f)
-// смонтирован там же. Если хоть один incarnation- или choir-роут затенён (sibling
-// chi.Route на узле /{name}) — chi.Walk не перечислит его (в проде 405). Тест требует
-// каждый роут ровно по разу (НЕ chi.Match — даёт false-true на затенённом узле).
+// TestHumaIncarnation_ChiCoexistence — guard on the REACHABILITY of ALL incarnation
+// huma routes + coexistence with the choir mount on the SAME /v1/incarnations group.
+// After chi.Route("/{name}") was removed, incarnation ops carry the FULL path
+// /{name}[/...]; choir (batch-2f) is mounted at the same place. If even one
+// incarnation or choir route is shadowed (a sibling chi.Route at the /{name} node) —
+// chi.Walk won't list it (405 in prod). The test requires each route to be hit
+// exactly once (NOT chi.Match — it gives a false-true on a shadowed node).
 func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 	incH := handlers.NewIncarnationHandler(&incTestDB{}, &incTestStarter{}, &incTestStarter{}, &incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
 	h := buildRouter(
@@ -64,7 +68,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		nil,                                     // voyageH
 		nil,                                     // cadenceH
 		nil,                                     // auditH
-		handlers.NewChoirHandler(nil, nil, nil), // choirH non-nil → choir-mount сосуществует
+		handlers.NewChoirHandler(nil, nil, nil), // choirH non-nil → choir-mount coexists
 		nil,                                     // heraldH
 		handlers.NewModuleCatalogHandler(nil, nil),
 		handlers.NewModuleFormPrepHandler(nil, nil),
@@ -80,14 +84,14 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui вне интереса incarnation-роутинг-теста
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		false,                                // webUIEnabled — /ui is out of scope for the incarnation routing test
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
-		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
-		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
+		nil,                                  // soulStatsStaleFn (defaults to 90s in the test)
+		nil,                                  // clusterH (cluster-view not mounted in the test)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
 		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)
@@ -95,9 +99,9 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		t.Fatalf("buildRouter вернул %T, не chi.Routes", h)
 	}
 
-	// Полный набор incarnation + choir роутов на группе /v1/incarnations: каждый
-	// обязан встретиться РОВНО раз. Отсутствие = затенение (405 в проде); дубль =
-	// коллизия mount-а.
+	// The full set of incarnation + choir routes on the /v1/incarnations group: each
+	// one MUST be hit EXACTLY once. Missing = shadowing (405 in prod); duplicate =
+	// a mount collision.
 	want := map[route]int{
 		{http.MethodPost, "/v1/incarnations"}:                                      0,
 		{http.MethodGet, "/v1/incarnations"}:                                       0,
@@ -134,10 +138,10 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 	}
 }
 
-// === isolated huma-router (продакшен-навеска буквально из router.go) ===
+// === isolated huma-router (production wiring, verbatim from router.go) ===
 
-// incEnforcer — combined RBAC-стаб: PermissionChecker (RequirePermissionMulti на
-// write) + ActionHolder (RequireAction на read). allow параметризует обе грани.
+// incEnforcer — a combined RBAC stub: PermissionChecker (RequirePermissionMulti on
+// write) + ActionHolder (RequireAction on read). allow parameterizes both facets.
 type incEnforcer struct{ allow bool }
 
 func (e incEnforcer) Check(string, string, string, map[string]string) error {
@@ -148,11 +152,12 @@ func (e incEnforcer) Check(string, string, string, map[string]string) error {
 }
 func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 
-// humaIncarnationRouter монтирует ВСЕ incarnation-роуты через huma ровно по навеске
-// router.go: per-route RBAC + правильный audit-класс (MIDDLEWARE для create/run/unlock/
-// upgrade; SELF для rerun-last/check-drift/destroy/update-hosts; read без audit) +
-// huma-op с полным путём /{name}[/...] на группе /v1/incarnations. enforcer/auditW/incH
-// параметризованы. injectClaims заменяет RequireJWT.
+// humaIncarnationRouter mounts ALL incarnation routes via huma exactly per the
+// router.go wiring: per-route RBAC + the correct audit class (MIDDLEWARE for
+// create/run/unlock/upgrade; SELF for rerun-last/check-drift/destroy/update-hosts;
+// read without audit) + a huma op with the full path /{name}[/...] on the
+// /v1/incarnations group. enforcer/auditW/incH are parameterized. injectClaims
+// replaces RequireJWT.
 func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writer, incH *handlers.IncarnationHandler) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -194,7 +199,7 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 			r.With(injectClaims, multi("update-hosts")).Group(func(r chi.Router) {
 				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
 			})
-			// reveal-секретов (NIM-74): POST self-audit + GET read, оба под view-secrets.
+			// secret reveal (NIM-74): POST self-audit + GET read, both under view-secrets.
 			r.With(injectClaims, multi("view-secrets")).Group(func(r chi.Router) {
 				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
 			})
@@ -216,13 +221,13 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 	return r
 }
 
-// incNoCtxSelector — MultiSelectorExtractor без БД-контекста (тест): пустой набор →
-// RequirePermissionMulti пускает только bare/`*`-роли. Для allow-all-теста этого
-// достаточно (strictAllowAll отвечает true на bare).
+// incNoCtxSelector — a MultiSelectorExtractor without a DB context (test): an empty
+// set → RequirePermissionMulti only lets through bare/`*` roles. That's enough for
+// the allow-all test (strictAllowAll returns true on bare).
 func incNoCtxSelector(_ *http.Request) []map[string]string { return nil }
 
 func incScopeAllow() *handlers.IncarnationHandler {
-	// scoper=incTestScoper{unrestricted:true} → get/list/history видят всё.
+	// scoper=incTestScoper{unrestricted:true} → get/list/history see everything.
 	db := &incTestDB{
 		selectByName:  func(name string) pgx.Row { return incRow(name, "ready", "{}") },
 		soulsExisting: map[string]struct{}{"web1.example.com": {}},
@@ -235,7 +240,7 @@ func incScopeAllow() *handlers.IncarnationHandler {
 func TestHumaIncarnation_Create_WireAndMiddlewareAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil) // runner=nil → stub-режим
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil) // runner=nil → stub mode
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -282,9 +287,10 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 	}
 }
 
-// TestHumaIncarnation_RevealSecret_RBACDeny_403 — reveal-эндпоинт без права
-// incarnation.view-secrets отбивается 403 middleware-ом ДО handler-а (NIM-74). audit
-// на 403 не пишется (RBAC-deny не доходит до self-audit RevealSecretTyped).
+// TestHumaIncarnation_RevealSecret_RBACDeny_403 — the reveal endpoint without the
+// incarnation.view-secrets right is rejected with 403 by the middleware BEFORE the
+// handler (NIM-74). No audit is written on 403 (RBAC-deny never reaches the
+// self-audit in RevealSecretTyped).
 func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incScopeAllow())
@@ -300,8 +306,8 @@ func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// TestHumaIncarnation_RevealableSecrets_RBACDeny_403 — discovery без права
-// view-secrets → 403 через existence-gate RequireAction.
+// TestHumaIncarnation_RevealableSecrets_RBACDeny_403 — discovery without the
+// view-secrets right → 403 via the existence-gate RequireAction.
 func TestHumaIncarnation_RevealableSecrets_RBACDeny_403(t *testing.T) {
 	r := humaIncarnationRouter(t, incEnforcer{allow: false}, nil, incScopeAllow())
 	rec := httptest.NewRecorder()
@@ -312,22 +318,23 @@ func TestHumaIncarnation_RevealableSecrets_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === MIDDLEWARE-AUDIT: create — pre-flight assert-гейт (ADR-009/027 amend, форма A) ===
+// === MIDDLEWARE-AUDIT: create — pre-flight assert gate (ADR-009/027 amend, form A) ===
 
-// _ — compile-time guard: реальный *scenario.Runner ОБЯЗАН удовлетворять
-// handlers.AssertPreflighter (handler берёт pre-flighter type-assertion-ом из
-// runner-а, type-set которого статически не сверяется при присваивании в
-// ScenarioStarter). Drift сигнатуры Runner.PreflightAssert ↔ интерфейса
-// ловится здесь при сборке, а не молчаливым no-op pre-flight в проде.
+// _ — a compile-time guard: the real *scenario.Runner MUST satisfy
+// handlers.AssertPreflighter (the handler gets the pre-flighter via a type
+// assertion on the runner, whose type set isn't statically checked when it's
+// assigned to a ScenarioStarter). A drift between the Runner.PreflightAssert
+// signature and the interface is caught here at build time, instead of a silent
+// no-op pre-flight in production.
 var _ handlers.AssertPreflighter = (*scenario.Runner)(nil)
 
-// incCreateSnapshot пишет temp-снапшот сервиса с единственным сценарием
-// `scenario/create/main.yml` (тело — body), помеченным `create: true`, и
-// возвращает корень. Нужен механизму нескольких create-сценариев (Фаза 2):
-// ResolveCreateScenarios сканирует art.LocalDir, поэтому create-сценарий обязан
-// лежать на диске с флагом, иначе набор пуст → bare-инкарнация (прогон не
-// стартует). body должен сам нести `create: true` (caller контролирует input/
-// validate). t.TempDir авто-чистится.
+// incCreateSnapshot writes a temp service snapshot with a single scenario
+// `scenario/create/main.yml` (body is its contents), marked `create: true`, and
+// returns the root. Needed by the multiple-create-scenarios mechanism (Phase 2):
+// ResolveCreateScenarios scans art.LocalDir, so the create scenario must live on
+// disk with the flag, otherwise the set is empty → a bare incarnation (the run
+// won't start). body must itself carry `create: true` (the caller controls
+// input/validate). t.TempDir cleans up automatically.
 func incCreateSnapshot(t *testing.T, body string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -341,10 +348,11 @@ func incCreateSnapshot(t *testing.T, body string) string {
 	return root
 }
 
-// incPreflightLoader — disk-aware ServiceSnapshotLoader-стаб: Load возвращает
-// LocalDir (для ResolveCreateScenarios), ReadFile читает scenario с диска (для
-// ValidateInput). localDir — снапшот из incCreateSnapshot с create:true. pre-flight
-// — стаб incPreflightStarter, scenario через этот loader не читает.
+// incPreflightLoader — a disk-aware ServiceSnapshotLoader stub: Load returns
+// LocalDir (for ResolveCreateScenarios), ReadFile reads the scenario from disk (for
+// ValidateInput). localDir is the snapshot from incCreateSnapshot with create:true.
+// pre-flight is the incPreflightStarter stub, the scenario itself is not read
+// through this loader.
 type incPreflightLoader struct{ localDir string }
 
 func (l incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -360,8 +368,8 @@ func (l incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, file string) (
 	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
 }
 
-// incPreflightStarter — ScenarioStarter + AssertPreflighter-стаб: pre-flight
-// возвращает preflightErr (nil → проходит), Start учитывает факт вызова в started.
+// incPreflightStarter — a ScenarioStarter + AssertPreflighter stub: pre-flight
+// returns preflightErr (nil → passes), Start records that it was called in started.
 type incPreflightStarter struct {
 	preflightErr error
 	started      *bool
@@ -378,10 +386,11 @@ func (s *incPreflightStarter) PreflightAssert(_ context.Context, _ scenario.RunS
 	return s.preflightErr
 }
 
-// TestHumaIncarnation_Create_PreflightAssertFail_422 — pre-flight assert false на
-// СОЗДАНИИ → 422 assert_failed, incarnation НЕ создана (insertRow НЕ вызван),
-// Start НЕ запущен, audit на 4xx НЕ пишется. ГЛАВНЫЙ инвариант формы A: отказ на
-// этапе модели ДО коммита, без fail-статуса error_locked.
+// TestHumaIncarnation_Create_PreflightAssertFail_422 — pre-flight assert false ON
+// CREATE → 422 assert_failed, the incarnation is NOT created (insertRow is NOT
+// called), Start is NOT run, no audit is written on 4xx. The KEY invariant of
+// form A: rejection at the model stage BEFORE the commit, without the
+// error_locked fail status.
 func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	inserted := false
@@ -391,7 +400,7 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 		return staticRow2(time.Now(), time.Now())
 	}}
 	starter := &incPreflightStarter{
-		preflightErr: scenario.ErrAssertFailed, // топология не сходится
+		preflightErr: scenario.ErrAssertFailed, // topology doesn't converge
 		started:      &started,
 	}
 	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
@@ -419,11 +428,11 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 	}
 }
 
-// incValidateLoader — disk-aware ServiceSnapshotLoader-стаб с scenario create/
-// main.yml, несущим top-level validate:-правило (кросс-полевой инвариант «port
-// обязателен, если tls выключен») + `create: true`. Load возвращает LocalDir (для
-// ResolveCreateScenarios), ReadFile читает с диска (для ValidateInput). localDir —
-// снапшот из incCreateSnapshot.
+// incValidateLoader — a disk-aware ServiceSnapshotLoader stub with a scenario
+// create/main.yml carrying a top-level validate: rule (the cross-field invariant
+// "port is required if tls is disabled") + `create: true`. Load returns LocalDir
+// (for ResolveCreateScenarios), ReadFile reads from disk (for ValidateInput).
+// localDir is the snapshot from incCreateSnapshot.
 type incValidateLoader struct{ localDir string }
 
 func (l incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -439,7 +448,7 @@ func (l incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([
 	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
 }
 
-// incValidateScenarioBody — тело scenario/create/main.yml для incValidateLoader.
+// incValidateScenarioBody — the contents of scenario/create/main.yml for incValidateLoader.
 const incValidateScenarioBody = `name: create
 create: true
 input:
@@ -454,14 +463,15 @@ tasks:
     params: { cmd: "true" }
 `
 
-// incPreflightScenarioBody — минимальный create-сценарий с create:true (без
-// input-схемы → ValidateInput проходит) для incPreflightLoader.
+// incPreflightScenarioBody — a minimal create scenario with create:true (no
+// input schema → ValidateInput passes) for incPreflightLoader.
 const incPreflightScenarioBody = "name: create\ncreate: true\ntasks:\n  - name: noop\n    module: core.exec.run\n    params: { cmd: \"true\" }\n"
 
-// TestHumaIncarnation_Create_ValidateRuleFail_422 — top-level validate:-правило
-// не прошло на request-пути → 422 validation-failed ДО коммита, incarnation НЕ
-// создана, Start НЕ запущен, audit на 4xx НЕ пишется. validate: симметрично
-// pre-flight assert (форма A), но input-only и через ValidateInput (DSL wave 2).
+// TestHumaIncarnation_Create_ValidateRuleFail_422 — the top-level validate: rule
+// fails on the request path → 422 validation-failed BEFORE the commit, the
+// incarnation is NOT created, Start is NOT run, no audit is written on 4xx.
+// validate: is symmetric with the pre-flight assert (form A), but input-only and
+// via ValidateInput (DSL wave 2).
 func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	inserted := false
@@ -476,7 +486,7 @@ func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
-	// input БЕЗ port и БЕЗ tls → defaults (tls=false, port=0) → правило false.
+	// input WITHOUT port and WITHOUT tls → defaults (tls=false, port=0) → rule is false.
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`))
 	r.ServeHTTP(rec, req)
 
@@ -500,8 +510,8 @@ func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 	}
 }
 
-// TestHumaIncarnation_Create_ValidateRulePass_202 — validate:-правило проходит
-// (port>0) → create работает как раньше: 202, incarnation создана, Start запущен.
+// TestHumaIncarnation_Create_ValidateRulePass_202 — the validate: rule passes
+// (port>0) → create behaves as before: 202, the incarnation is created, Start runs.
 func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	inserted := false
@@ -530,9 +540,10 @@ func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
 	}
 }
 
-// TestHumaIncarnation_Create_PreflightAssertPass_202 — pre-flight проходит
-// (топология сходится) → create работает как раньше: 202 + apply_id, incarnation
-// создана, Start запущен. Контроль, что pre-flight не ломает happy-path.
+// TestHumaIncarnation_Create_PreflightAssertPass_202 — pre-flight passes
+// (topology converges) → create behaves as before: 202 + apply_id, the
+// incarnation is created, Start runs. Verifies pre-flight doesn't break the
+// happy path.
 func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	started := false
@@ -617,8 +628,9 @@ func TestHumaIncarnation_Unlock_NotFound_NoAudit(t *testing.T) {
 // === MIDDLEWARE-AUDIT: upgrade ===
 
 func TestHumaIncarnation_Upgrade_MiddlewareAuditClass(t *testing.T) {
-	// 500-путь (loader=nil → endpoint не сконфигурирован): доказывает, что upgrade
-	// на НЕ-2xx НЕ пишет audit (middleware-skip), и что роут смонтирован/достижим.
+	// The 500 path (loader=nil → endpoint not configured): proves that upgrade
+	// does NOT write audit on NON-2xx (middleware-skip), and that the route is
+	// mounted/reachable.
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
 	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil) // loader=nil
@@ -706,7 +718,7 @@ func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
-		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "ready") }, // не error_locked → ErrNotErrorLocked
+		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "ready") }, // not error_locked → ErrNotErrorLocked
 	}
 	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
@@ -740,7 +752,7 @@ func TestHumaIncarnation_CheckDrift_WireAndSelfAudit(t *testing.T) {
 // === SELF-AUDIT: destroy ===
 
 func TestHumaIncarnation_Destroy_MissingAllowDestroy_400(t *testing.T) {
-	// allow_destroy required boolean query — отсутствует → 400 (huma required-param).
+	// allow_destroy required boolean query — missing → 400 (huma required-param).
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod", http.NoBody)
@@ -783,8 +795,8 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 	if reply.ApplyID == "" {
 		t.Errorf("reply.apply_id пуст")
 	}
-	// destroy_started + destroy_completed пишет service-слой ВНУТРИ Destroy/
-	// DeleteAfterTeardown (SELF-AUDIT) — хотя бы destroy_started обязан быть.
+	// destroy_started + destroy_completed are written by the service layer INSIDE
+	// Destroy/DeleteAfterTeardown (SELF-AUDIT) — at least destroy_started must be there.
 	if !hasAuditEvent(auditCap, audit.EventIncarnationDestroyStarted) {
 		t.Errorf("incarnation.destroy_started НЕ записан (SELF-AUDIT сломан); events=%v", auditEventTypes(auditCap))
 	}
@@ -879,12 +891,12 @@ func TestHumaIncarnation_Get_NoAudit(t *testing.T) {
 	}
 }
 
-// TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario — GUARD Фаза 2
-// (handler-level, реальная NULL-проекция scanIncarnation через huma-reply): GET
-// bare-инкарнации (created_scenario IS NULL) → 200, без паники, ключ
-// created_scenario в JSON-теле ОПУЩЕН (omitempty при пустом значении). Регресс =
-// NULL ломает scanIncarnation (паника на **string) ИЛИ created_scenario
-// материализуется как "" в wire (а не опускается).
+// TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario — GUARD for Phase 2
+// (handler-level, the real NULL projection of scanIncarnation through the huma
+// reply): GET on a bare incarnation (created_scenario IS NULL) → 200, no panic,
+// the created_scenario key is OMITTED from the JSON body (omitempty on an empty
+// value). Regression = NULL breaks scanIncarnation (panic on **string) OR
+// created_scenario materializes as "" on the wire (instead of being omitted).
 func TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario(t *testing.T) {
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRowBare(name, "ready", "{}") },
@@ -954,10 +966,10 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 
 // === assert helpers ===
 
-// assertMiddlewareAudit — S6-MIDDLEWARE-GUARD: huma-audit-middleware (вариант B)
-// записал ровно одно событие want с непустым payload, содержащим requiredKey.
-// Мутация (снять SetHumaAuditPayload в register-func / снять middleware-навеску)
-// краснит этот тест.
+// assertMiddlewareAudit — S6-MIDDLEWARE-GUARD: the huma-audit-middleware (variant B)
+// wrote exactly one want event with a non-empty payload containing requiredKey.
+// A mutation (removing SetHumaAuditPayload in the register func / removing the
+// middleware wiring) turns this test red.
 func assertMiddlewareAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType, requiredKey string) {
 	t.Helper()
 	evs := cap.Events()
@@ -999,9 +1011,9 @@ func auditEventTypes(cap *auditCaptureWriter) []audit.EventType {
 	return out
 }
 
-// === minimal fakes (api-пакет) ===
+// === minimal fakes (api package) ===
 
-// incTestDB — минимальный [handlers.IncarnationDB] для huma-wire-тестов: покрывает
+// incTestDB — a minimal [handlers.IncarnationDB] for huma wire tests: covers
 // insert (create), SelectByName (get/run/unlock/upgrade/destroy/history probe),
 // unlock/rerun SELECT FOR UPDATE, souls-existence (update-hosts), list COUNT/SELECT.
 type incTestDB struct {
@@ -1070,8 +1082,8 @@ func (f *incTestDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) 
 	return &incTestTx{db: f}, nil
 }
 
-// incTestTx — pgx.Tx-обёртка над incTestDB (Unlock/Upgrade/Destroy/UpdateHosts
-// идут под tx). Commit/Rollback no-op; неиспользуемые методы panic-ают.
+// incTestTx — a pgx.Tx wrapper around incTestDB (Unlock/Upgrade/Destroy/UpdateHosts
+// run under a tx). Commit/Rollback are no-ops; unused methods panic.
 type incTestTx struct{ db *incTestDB }
 
 func (t *incTestTx) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -1100,7 +1112,7 @@ func (t *incTestTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.R
 }
 func (t *incTestTx) Conn() *pgx.Conn { return nil }
 
-// incRow — SelectByName-row (порядок колонок scanIncarnation). status/state параметризованы.
+// incRow — a SelectByName row (column order matches scanIncarnation). status/state are parameterized.
 func incRow(name, status, state string) pgx.Row {
 	now := time.Now()
 	return incStaticRow{values: []any{
@@ -1110,14 +1122,14 @@ func incRow(name, status, state string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
-// incRowBare — как incRow, но created_scenario = NULL (bare-инкарнация, миграция
-// 090: создана без bootstrap-сценария). scanIncarnation читает 16-ю колонку в
-// **string → nil.
+// incRowBare — like incRow, but created_scenario = NULL (a bare incarnation,
+// migration 090: created without a bootstrap scenario). scanIncarnation reads the
+// 16th column into **string → nil.
 func incRowBare(name, status, state string) pgx.Row {
 	now := time.Now()
 	return incStaticRow{values: []any{
@@ -1127,12 +1139,12 @@ func incRowBare(name, status, state string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // created_scenario = NULL (bare, migration 090)
 		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
-// incStaticRow / helpers — локальные row-стабы api-пакета (parity handlers-test staticRow).
+// incStaticRow / helpers — local row stubs for the api package (parity with the handlers-test staticRow).
 type incStaticRow struct{ values []any }
 
 func (r incStaticRow) Scan(dest ...any) error {
@@ -1179,10 +1191,10 @@ func staticRow1Time(t time.Time) pgx.Row         { return incStaticRow{values: [
 func staticRow2(a, b time.Time) pgx.Row          { return incStaticRow{values: []any{a, b}} }
 func staticRow2Bytes(b []byte, s string) pgx.Row { return incStaticRow{values: []any{b, s}} }
 
-// rerunSelectRow — FOR UPDATE-select под UnlockForRerun (state, status,
-// created_scenario, spec; миграция 089 + B1). Отдельно от staticRow2Bytes:
-// rerun-путь сканирует ЧЕТЫРЕ колонки (4-я spec для проброса spec.input), plain
-// Unlock/Destroy — две.
+// rerunSelectRow — the FOR UPDATE select for UnlockForRerun (state, status,
+// created_scenario, spec; migration 089 + B1). Distinct from staticRow2Bytes:
+// the rerun path scans FOUR columns (the 4th is spec, to pass spec.input through),
+// plain Unlock/Destroy scan two.
 func rerunSelectRow(state []byte, status string) pgx.Row {
 	return incStaticRow{values: []any{state, status, "create", []byte("{}")}}
 }
@@ -1227,21 +1239,21 @@ func (r *incStringRows) Values() ([]any, error)                       { return n
 func (r *incStringRows) RawValues() [][]byte                          { return nil }
 func (r *incStringRows) Conn() *pgx.Conn                              { return nil }
 
-// incTestStarter — [handlers.ScenarioStarter] + [handlers.DestroyStarter]-стаб (no-op).
+// incTestStarter — a [handlers.ScenarioStarter] + [handlers.DestroyStarter] stub (no-op).
 type incTestStarter struct{}
 
 func (incTestStarter) Start(_ context.Context, _ scenario.RunSpec) error        { return nil }
 func (incTestStarter) StartDestroy(_ context.Context, _ scenario.RunSpec) error { return nil }
 
-// incTestResolver — [handlers.ServiceResolver]-стаб. ok→резолвит фиктивный ref.
+// incTestResolver — a [handlers.ServiceResolver] stub. ok→resolves a fake ref.
 type incTestResolver struct{ ok bool }
 
 func (r incTestResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 	return artifact.ServiceRef{Name: service, Ref: "v1"}, r.ok
 }
 
-// incTestLoader — [handlers.ServiceSnapshotLoader]-стаб. PrepareDestroy/HasDestroyScenario
-// идут через него; Load возвращает art с nil-Manifest (autoCreate/autoDestroy default true).
+// incTestLoader — a [handlers.ServiceSnapshotLoader] stub. PrepareDestroy/HasDestroyScenario
+// go through it; Load returns art with a nil Manifest (autoCreate/autoDestroy default true).
 type incTestLoader struct{}
 
 func (incTestLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -1257,7 +1269,7 @@ func (incTestLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, er
 	return nil, nil
 }
 
-// incTestDrift — [handlers.DriftChecker]-стаб: CheckDrift отдаёт пустой clean-report.
+// incTestDrift — a [handlers.DriftChecker] stub: CheckDrift returns an empty clean report.
 type incTestDrift struct{}
 
 func (incTestDrift) CheckDrift(_ context.Context, _ scenario.CheckDriftSpec) (*scenario.DriftReport, error) {
@@ -1265,7 +1277,7 @@ func (incTestDrift) CheckDrift(_ context.Context, _ scenario.CheckDriftSpec) (*s
 }
 func (incTestDrift) MarkDriftStatus(_ context.Context, _ string, _ bool) error { return nil }
 
-// incTestScoper — [handlers.PurviewResolver]-стаб: unrestricted → get/list/history видят всё.
+// incTestScoper — a [handlers.PurviewResolver] stub: unrestricted → get/list/history see everything.
 type incTestScoper struct{ unrestricted bool }
 
 func (s incTestScoper) ResolvePurview(_, _, _ string) rbac.Purview {

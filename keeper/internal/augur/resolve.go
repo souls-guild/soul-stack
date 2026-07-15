@@ -1,12 +1,13 @@
 package augur
 
-// Авторизационный резолв AugurRequest (augur.md §6) — enforcement-точка
-// брокера. Чистая функция от (sid, omen_name, query) + reader-ов реестра:
-// решает, разрешён ли запрос, и какой Rite его разрешил. Сам fetch значения
-// (vault-broker) и отправка reply — отдельные слои (broker.go / grpc-handler).
+// AugurRequest authorization resolve (augur.md §6) — the broker's enforcement
+// point. A pure function of (sid, omen_name, query) + registry readers:
+// decides whether the request is allowed, and which Rite allowed it. The
+// actual value fetch (vault-broker) and sending the reply are separate layers
+// (broker.go / grpc-handler).
 //
 // Slice C (MVP-1) — source_type vault / prometheus / elk, delegate=false.
-// Делегация (delegate=true, MVP-2) даёт Denied (см. [Resolve]).
+// Delegation (delegate=true, MVP-2) yields Denied (see [Resolve]).
 
 import (
 	"context"
@@ -17,18 +18,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// Decision — исход [Resolve]. Allowed=false → доступ запрещён, Reason несёт
-// человекочитаемую причину (для AugurReply.error и audit-payload). При
-// Allowed=true заполнены Omen и Query — нормализованный (через ParseRef)
-// logical-путь, по которому брокер читает Vault.
+// Decision — the outcome of [Resolve]. Allowed=false → access denied, Reason
+// carries a human-readable cause (for AugurReply.error and the audit
+// payload). When Allowed=true, Omen and Query are filled in — Query is the
+// normalized (via ParseRef) logical path the broker reads from Vault.
 //
-// Query при Allowed=true — каноническое значение, по которому брокер делает
-// fetch:
-//   - vault: НОРМАЛИЗОВАННЫЙ logical-path (mount/rel), а не исходный raw-query —
-//     enforcement и fetch обязаны работать по одному каноническому значению
-//     (иначе secret//x обошёл бы allow-list);
-//   - prometheus: promQL «как есть» (exact-match по Rite.allow.queries);
-//   - elk: index «как есть» (exact-match по Rite.allow.indices).
+// Query when Allowed=true is the canonical value the broker fetches by:
+//   - vault: the NORMALIZED logical-path (mount/rel), not the original
+//     raw query — enforcement and fetch must work off the same canonical
+//     value (otherwise secret//x would bypass the allow-list);
+//   - prometheus: the promQL as-is (exact-match against Rite.allow.queries);
+//   - elk: the index as-is (exact-match against Rite.allow.indices).
 type Decision struct {
 	Allowed bool
 	Reason  string
@@ -36,15 +36,16 @@ type Decision struct {
 	Query   string
 }
 
-// denied — конструктор отказного решения (default-deny). Reason пробрасывается
-// в AugurReply.error и audit `augur.access_denied`; секрет-значений в нём нет.
+// denied — constructor for a deny decision (default-deny). Reason is passed
+// through to AugurReply.error and the `augur.access_denied` audit event; it
+// carries no secret values.
 func denied(reason string) *Decision { return &Decision{Allowed: false, Reason: reason} }
 
-// OmenReader / RiteReader / CovenReader — узкие поверхности реестров, нужные
-// резолву. Сужение (вместо передачи *pgxpool.Pool) изолирует enforcement от
-// CRUD-а и даёт fake в unit-тестах без подъёма PG. Реальные реализации —
-// замыкания над [SelectOmenByName] / [SelectRitesBySubject] / soul-registry
-// (см. grpc-handler wire-up).
+// OmenReader / RiteReader / CovenReader — narrow registry surfaces needed by
+// resolve. Narrowing (instead of passing a *pgxpool.Pool) isolates
+// enforcement from CRUD and allows a fake in unit tests without spinning up
+// PG. The real implementations are closures over [SelectOmenByName] /
+// [SelectRitesBySubject] / the soul registry (see the grpc-handler wire-up).
 type OmenReader interface {
 	OmenByName(ctx context.Context, name string) (*Omen, error)
 }
@@ -53,41 +54,45 @@ type RiteReader interface {
 	RitesBySubject(ctx context.Context, sid string, covens []string) ([]*Rite, error)
 }
 
-// CovenReader резолвит covens по SID из АВТОРИТЕТНОГО registry (souls.coven[]),
-// НЕ из payload запроса (augur.md §6.2: covens берутся из реестра, не из
-// AugurRequest). Возврат [ErrSubjectUnknown] при отсутствии Soul-а в реестре.
+// CovenReader resolves covens by SID from the AUTHORITATIVE registry
+// (souls.coven[]), NOT from the request payload (augur.md §6.2: covens are
+// taken from the registry, not from the AugurRequest). Returns
+// [ErrSubjectUnknown] when the Soul isn't in the registry.
 type CovenReader interface {
 	CovensBySID(ctx context.Context, sid string) ([]string, error)
 }
 
-// ErrSubjectUnknown — SID не найден в souls-реестре. Резолв трактует как
-// Denied (нет авторитетного субъекта → нет grant-а), не как ERROR: для брокера
-// это нормальный отказ, а не сбой Keeper-а.
+// ErrSubjectUnknown — the SID wasn't found in the souls registry. Resolve
+// treats it as Denied (no authoritative subject → no grant), not as ERROR:
+// for the broker this is a normal denial, not a Keeper failure.
 var ErrSubjectUnknown = errors.New("augur: sid not found in souls registry")
 
-// Resolve — авторизационный резолв (augur.md §6). default-deny: любая
-// непройденная проверка → Decision{Allowed:false} + Reason, без чтения секрета.
+// Resolve — the authorization resolve (augur.md §6). default-deny: any
+// failed check → Decision{Allowed:false} + Reason, without reading the
+// secret.
 //
-// Шаги:
-//  1. Omen существует (OmenByName). Нет → denied.
+// Steps:
+//  1. The Omen exists (OmenByName). No → denied.
 //  2. source_type ∈ {vault, prometheus, elk}. unknown → denied.
-//  3. delegate-ветвь Slice C — только delegate=false (брокер). delegate=true
-//     (MVP-2) → denied (минтинг/выдача cred — отдельный слайс).
-//  4. covens по SID из registry (CovensBySID) — авторитетный источник.
-//  5. Rite найден (RitesBySubject) на этот Omen. Нет → denied.
-//  6. query ∈ Rite.allow, EXACT-match по форме source_type:
-//     vault      — paths, ПОСЛЕ нормализации vault-path (иначе secret//x
-//     обойдёт allow-list);
-//     prometheus — queries, exact-match сырого promQL;
-//     elk        — indices, exact-match сырого index.
-//     Нет → denied.
+//  3. The delegate branch of Slice C — only delegate=false (broker).
+//     delegate=true (MVP-2) → denied (minting/issuing a cred is a separate
+//     slice).
+//  4. covens by SID from the registry (CovensBySID) — the authoritative
+//     source.
+//  5. A Rite is found (RitesBySubject) for this Omen. No → denied.
+//  6. query ∈ Rite.allow, an EXACT match by source_type shape:
+//     vault      — paths, AFTER normalizing the vault path (otherwise
+//     secret//x would bypass the allow-list);
+//     prometheus — queries, exact-match of the raw promQL;
+//     elk        — indices, exact-match of the raw index.
+//     No → denied.
 //
-// Возврат error (не Decision) — только на инфраструктурный сбой reader-а
-// (PG недоступен и т.п.): caller отдаёт AugurReply{status:ERROR}. Семантический
-// отказ авторизации — это Decision{Allowed:false}, error=nil.
+// Returns an error (not a Decision) only on a reader infrastructure failure
+// (PG unavailable, etc.): the caller then returns AugurReply{status:ERROR}.
+// A semantic authorization denial is Decision{Allowed:false}, error=nil.
 //
-// sid берётся из mTLS peer cert на стороне caller-а (grpc-handler), не из
-// AugurRequest — сюда приходит уже авторитетный.
+// sid comes from the mTLS peer cert on the caller's side (grpc-handler), not
+// from the AugurRequest — what arrives here is already authoritative.
 func Resolve(
 	ctx context.Context,
 	omens OmenReader,
@@ -105,7 +110,7 @@ func Resolve(
 
 	switch omen.SourceType {
 	case SourceVault, SourcePrometheus, SourceELK:
-		// поддержано в этом слайсе.
+		// supported in this slice.
 	default:
 		return denied(fmt.Sprintf("unknown source_type %q", omen.SourceType)), nil
 	}
@@ -123,10 +128,10 @@ func Resolve(
 		return nil, fmt.Errorf("augur: resolve rites for sid %q: %w", sid, err)
 	}
 
-	// Каноническое значение query, по которому идёт и enforcement, и fetch.
-	// Для vault — нормализованный logical-path (иначе secret//x обходит
-	// allow-list, см. vault.normalizeLogical); для prom/elk — query «как есть»
-	// (exact-match сырого promQL/index).
+	// The canonical query value that both enforcement and fetch use. For
+	// vault — the normalized logical-path (otherwise secret//x bypasses the
+	// allow-list, see vault.normalizeLogical); for prom/elk — the query as-is
+	// (exact-match of the raw promQL/index).
 	wantQuery, perr := canonicalQuery(omen.SourceType, query)
 	if perr != nil {
 		return denied(fmt.Sprintf("invalid query for source_type %q", omen.SourceType)), nil
@@ -137,15 +142,15 @@ func Resolve(
 			continue
 		}
 		if r.Delegate {
-			// MVP-2 — здесь не выдаём cred/токен.
+			// MVP-2 — no cred/token issuance here.
 			continue
 		}
 		allowed, aerr := riteAllows(omen.SourceType, r, wantQuery)
 		if aerr != nil {
-			// Битый allow-JSONB у этого Rite — пропускаем его (не валит весь
-			// резолв: другой Rite на тот же Omen может быть валиден). Insert-time
-			// валидация (ValidateAllow) делает это редким, но БД могла прийти из
-			// миграции/ручной правки.
+			// A broken allow-JSONB on this Rite — skip it (doesn't fail the whole
+			// resolve: another Rite on the same Omen may be valid). Insert-time
+			// validation (ValidateAllow) makes this rare, but the DB could have come
+			// from a migration/manual edit.
 			continue
 		}
 		if allowed {
@@ -156,10 +161,10 @@ func Resolve(
 	return denied("no rite grants this query"), nil
 }
 
-// canonicalQuery приводит сырой query к каноническому виду по форме source_type:
-// vault — нормализованный logical-path (normalizeQueryPath); prom/elk — query
-// без изменений (exact-match сырого значения). Пустой prom/elk-query отвергается
-// (нечего матчить).
+// canonicalQuery brings a raw query to its canonical form by source_type
+// shape: vault — the normalized logical-path (normalizeQueryPath); prom/elk
+// — the query unchanged (exact-match of the raw value). An empty prom/elk
+// query is rejected (nothing to match).
 func canonicalQuery(src SourceType, query string) (string, error) {
 	switch src {
 	case SourceVault:
@@ -174,7 +179,7 @@ func canonicalQuery(src SourceType, query string) (string, error) {
 	}
 }
 
-// riteAllows — EXACT-match wantQuery против Rite.allow по форме source_type.
+// riteAllows — EXACT-matches wantQuery against Rite.allow by source_type shape.
 func riteAllows(src SourceType, r *Rite, wantQuery string) (bool, error) {
 	switch src {
 	case SourceVault:
@@ -188,11 +193,12 @@ func riteAllows(src SourceType, r *Rite, wantQuery string) (bool, error) {
 	}
 }
 
-// riteAllowsExact — EXACT-match want против списка allow-значений, извлечённого
-// из Rite.allow дженерик-распаковкой по форме source_type (prom: queries; elk:
-// indices). Сравнение строгое строковое — никакой нормализации promQL/index не
-// делаем (нормализация promQL семантически нетривиальна и сама может стать
-// вектором обхода allow-list; exact-match — security-консервативный дефолт).
+// riteAllowsExact — EXACT-matches want against the list of allow values
+// extracted from Rite.allow via generic unmarshaling by source_type shape
+// (prom: queries; elk: indices). The comparison is a strict string
+// comparison — we do no promQL/index normalization (promQL normalization is
+// semantically nontrivial and could itself become an allow-list bypass
+// vector; exact-match is the security-conservative default).
 func riteAllowsExact[T any](r *Rite, want string, pick func(T) []string) (bool, error) {
 	var a T
 	if err := json.Unmarshal(r.Allow, &a); err != nil {
@@ -206,11 +212,11 @@ func riteAllowsExact[T any](r *Rite, want string, pick func(T) []string) (bool, 
 	return false, nil
 }
 
-// normalizeQueryPath приводит сырой vault-query к каноническому logical-path-у
-// тем же механизмом, что и allow-пути: query может прийти как logical
-// (`secret/keeper/x`), и его надо нормализовать через ParseRef. ParseRef ждёт
-// `vault:`-префикс, поэтому добавляем его, если query без него (Soul шлёт
-// logical-путь, не vault-ref).
+// normalizeQueryPath brings a raw vault query to its canonical logical-path
+// through the same mechanism as allow paths: the query may arrive as a
+// logical path (`secret/keeper/x`) and needs normalizing via ParseRef.
+// ParseRef expects a `vault:` prefix, so we add it when the query doesn't
+// have one (Soul sends a logical path, not a vault-ref).
 func normalizeQueryPath(query string) (string, error) {
 	ref := query
 	if !hasVaultPrefix(query) {
@@ -219,11 +225,11 @@ func normalizeQueryPath(query string) (string, error) {
 	return vault.ParseRef(ref)
 }
 
-// riteAllowsVaultPath — EXACT-match нормализованного wantPath против Rite.allow.
-// allow.paths нормализуются тем же normalizeQueryPath: оператор мог записать
-// путь как `vault:secret/x`, `secret/x` или с лишним слэшем — сравнение идёт
-// по каноническому значению с обеих сторон (иначе тайпо в allow = silent
-// обход/мисс).
+// riteAllowsVaultPath — EXACT-matches the normalized wantPath against
+// Rite.allow. allow.paths are normalized through the same normalizeQueryPath:
+// the operator could have written the path as `vault:secret/x`, `secret/x`,
+// or with an extra slash — the comparison uses the canonical value on both
+// sides (otherwise a typo in allow means a silent bypass/miss).
 func riteAllowsVaultPath(r *Rite, wantPath string) (bool, error) {
 	var a allowVault
 	if err := json.Unmarshal(r.Allow, &a); err != nil {
@@ -232,7 +238,7 @@ func riteAllowsVaultPath(r *Rite, wantPath string) (bool, error) {
 	for _, p := range a.Paths {
 		got, err := normalizeQueryPath(p)
 		if err != nil {
-			// Битый путь в allow — игнорируем именно его, остальные проверяем.
+			// A broken path in allow — skip just this one, check the rest.
 			continue
 		}
 		if got == wantPath {

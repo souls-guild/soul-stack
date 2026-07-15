@@ -11,10 +11,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// newSynodHandler собирает SynodHandler поверх fake-pool (делит rbacFakePool с
-// role-тестами). Покрывает ДОМЕННЫЙ слой (*Typed: валидация / маппинг sentinel→
-// problem); консистентность SQL-логики — в rbac/synod_crud_integration_test.go.
-// bind/decode/400-кейсы покрывает huma-integration (handler-native T5d).
+// newSynodHandler assembles a SynodHandler over a fake pool (shares rbacFakePool with
+// the role tests). Covers the DOMAIN layer (*Typed: validation / sentinel→problem
+// mapping); SQL-logic consistency is covered in rbac/synod_crud_integration_test.go.
+// bind/decode/400 cases are covered by huma-integration (handler-native T5d).
 func newSynodHandler(t *testing.T, pool *rbacFakePool) *SynodHandler {
 	t.Helper()
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: pool})
@@ -50,15 +50,15 @@ func TestSynodHandler_Create_Duplicate_409(t *testing.T) {
 }
 
 func TestSynodHandler_Create_InvalidName_422(t *testing.T) {
-	// Невалидное имя отвергается Service-ом ДО tx (ErrInvalidSynodName).
+	// An invalid name is rejected by the Service BEFORE tx (ErrInvalidSynodName).
 	h := newSynodHandler(t, &rbacFakePool{})
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"), SynodCreateInput{Name: "Bad_Name"})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
-// Guard-тесты cap description на СОЗДАНИИ (паритет с Update). Граничная пара:
-//   - ровно MaxLen → 201 (НЕ 422): ловит `>=` вместо `>` и off-by-one;
-//   - MaxLen+1 → 422 validation-failed: ловит снятие cap-а целиком.
+// Guard tests for the description cap on CREATE (parity with Update). Boundary pair:
+//   - exactly MaxLen → 201 (NOT 422): catches `>=` instead of `>` and off-by-one;
+//   - MaxLen+1 → 422 validation-failed: catches the cap being dropped altogether.
 func TestSynodHandler_Create_DescriptionAtLimit_201(t *testing.T) {
 	long := strings.Repeat("a", rbac.SynodDescriptionMaxLen)
 	h := newSynodHandler(t, &rbacFakePool{})
@@ -79,7 +79,7 @@ func TestSynodHandler_Create_TooLongDescription_422(t *testing.T) {
 // --- Delete ---
 
 func TestSynodHandler_Delete_204(t *testing.T) {
-	// Группа существует, не builtin, `*` не бандлит → удаление проходит.
+	// The group exists, isn't builtin, `*` doesn't bundle it → deletion goes through.
 	pool := &rbacFakePool{lockSynodFound: true, lockSynodValue: false}
 	h := newSynodHandler(t, pool)
 	if _, err := h.DeleteTyped(context.Background(), "team"); err != nil {
@@ -104,7 +104,7 @@ func TestSynodHandler_Delete_Builtin_409(t *testing.T) {
 // --- Update (description) --- ADR-049 amend
 
 func TestSynodHandler_Update_204(t *testing.T) {
-	// Группа существует → UPDATE 1 row → 204. Меняется только description.
+	// The group exists → UPDATE 1 row → 204. Only description changes.
 	pool := &rbacFakePool{updateSynodFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.UpdateTyped(context.Background(), claimsFor("archon-alice"),
@@ -114,7 +114,7 @@ func TestSynodHandler_Update_204(t *testing.T) {
 }
 
 func TestSynodHandler_Update_NotFound_404(t *testing.T) {
-	// Группы нет → UPDATE 0 rows → ErrSynodNotFound → 404.
+	// The group doesn't exist → UPDATE 0 rows → ErrSynodNotFound → 404.
 	pool := &rbacFakePool{updateSynodFound: false}
 	h := newSynodHandler(t, pool)
 	_, err := h.UpdateTyped(context.Background(), claimsFor("archon-alice"),
@@ -123,8 +123,8 @@ func TestSynodHandler_Update_NotFound_404(t *testing.T) {
 }
 
 func TestSynodHandler_Update_Builtin_204(t *testing.T) {
-	// builtin РАЗРЕШЁН к правке description (косметика, не поведение —
-	// ADR-049 amend). Service builtin не проверяет: UPDATE 1 row → 204.
+	// builtin IS ALLOWED to have its description edited (cosmetic, not behavior —
+	// ADR-049 amend). The Service doesn't check builtin: UPDATE 1 row → 204.
 	pool := &rbacFakePool{updateSynodFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.UpdateTyped(context.Background(), claimsFor("archon-alice"),
@@ -151,7 +151,7 @@ func TestSynodHandler_Update_TooLongDescription_422(t *testing.T) {
 // --- AddOperator ---
 
 func TestSynodHandler_AddOperator_204(t *testing.T) {
-	// Группа есть, bundle пуст (synodRolesValue nil) → subset no-op → ok.
+	// The group exists, the bundle is empty (synodRolesValue nil) → subset no-op → ok.
 	pool := &rbacFakePool{lockSynodFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.AddOperatorTyped(context.Background(), claimsFor("archon-alice"),
@@ -176,7 +176,7 @@ func TestSynodHandler_AddOperator_SynodNotFound_404(t *testing.T) {
 // --- RemoveOperator ---
 
 func TestSynodHandler_RemoveOperator_204(t *testing.T) {
-	// Membership есть (lockRoleOperatorFound), группа есть, `*` не бандлит.
+	// Membership exists (lockRoleOperatorFound), the group exists, `*` doesn't bundle it.
 	pool := &rbacFakePool{lockSynodFound: true, lockRoleOperatorFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.RemoveOperatorTyped(context.Background(), "team", "archon-bob"); err != nil {
@@ -200,7 +200,7 @@ func TestSynodHandler_RemoveOperator_InvalidAID_422(t *testing.T) {
 // --- GrantRole ---
 
 func TestSynodHandler_GrantRole_204(t *testing.T) {
-	// Группа есть; роль права не несёт (rolePerms nil) → subset no-op.
+	// The group exists; the role carries no permissions (rolePerms nil) → subset no-op.
 	pool := &rbacFakePool{lockSynodFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.GrantRoleTyped(context.Background(), claimsFor("archon-alice"), "team", "viewer"); err != nil {
@@ -215,7 +215,7 @@ func TestSynodHandler_GrantRole_EmptyRole_422(t *testing.T) {
 }
 
 func TestSynodHandler_GrantRole_RoleNotFound_404(t *testing.T) {
-	// FK-violation на role_name (synod_roles_role_fk) → ErrRoleNotFound → 404.
+	// FK violation on role_name (synod_roles_role_fk) → ErrRoleNotFound → 404.
 	pool := &rbacFakePool{
 		lockSynodFound:      true,
 		insertMembershipErr: &pgconn.PgError{Code: "23503", ConstraintName: "synod_roles_role_fk"},
@@ -228,7 +228,7 @@ func TestSynodHandler_GrantRole_RoleNotFound_404(t *testing.T) {
 // --- RevokeRole ---
 
 func TestSynodHandler_RevokeRole_204(t *testing.T) {
-	// Bundle-пара есть (lockRoleOperatorFound), роль `*` не даёт (rolePerms nil).
+	// The bundle pair exists (lockRoleOperatorFound), the role doesn't grant `*` (rolePerms nil).
 	pool := &rbacFakePool{lockRoleOperatorFound: true}
 	h := newSynodHandler(t, pool)
 	if _, err := h.RevokeRoleTyped(context.Background(), "team", "viewer"); err != nil {

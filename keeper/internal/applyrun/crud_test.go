@@ -888,9 +888,9 @@ func TestMarkDispatched_ZeroRows_NotClaimed(t *testing.T) {
 
 // --- OrphanDispatched (Soul-reconcile, ADR-027(g), S6) ---
 
-// TestOrphanDispatched_SweepSQL — SQL терминалит из dispatched в orphaned по SID
-// с epoch-fenced фильтром (`status='dispatched'` + `apply_id != ALL($2)`), несёт
-// finished_at=NOW() и фиксированную error_summary.
+// TestOrphanDispatched_SweepSQL — the SQL terminates dispatched rows into orphaned by SID
+// with an epoch-fenced filter (`status='dispatched'` + `apply_id != ALL($2)`), and carries
+// finished_at=NOW() and a fixed error_summary.
 func TestOrphanDispatched_SweepSQL(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 2"), execTagSet: true}
 	n, err := OrphanDispatched(context.Background(), f, "host-1", []*ActiveApply{
@@ -930,9 +930,9 @@ func TestOrphanDispatched_SweepSQL(t *testing.T) {
 	}
 }
 
-// TestOrphanDispatched_EmptyKnown_OrphansAll — пустой WardRoster (рестарт Soul):
-// known=nil → `apply_id != ALL('{}')` истинно для всех → терминалятся все
-// dispatched-строки SID-а (передан пустой массив, не пропуск sweep-а).
+// TestOrphanDispatched_EmptyKnown_OrphansAll — an empty WardRoster (Soul restart):
+// known=nil → `apply_id != ALL('{}')` is true for all → all dispatched rows of the
+// SID are terminated (an empty slice is passed, not a skip of the sweep).
 func TestOrphanDispatched_EmptyKnown_OrphansAll(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 5"), execTagSet: true}
 	n, err := OrphanDispatched(context.Background(), f, "host-1", nil)
@@ -948,8 +948,8 @@ func TestOrphanDispatched_EmptyKnown_OrphansAll(t *testing.T) {
 	}
 }
 
-// TestOrphanDispatched_KnownFiltersEmptyIDs — nil-записи и пустые apply_id в
-// наборе игнорируются (defensive), не попадают в known-массив.
+// TestOrphanDispatched_KnownFiltersEmptyIDs — nil entries and empty apply_id in
+// the set are ignored (defensive), they don't land in the known slice.
 func TestOrphanDispatched_KnownFiltersEmptyIDs(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 0"), execTagSet: true}
 	_, err := OrphanDispatched(context.Background(), f, "host-1", []*ActiveApply{
@@ -966,8 +966,8 @@ func TestOrphanDispatched_KnownFiltersEmptyIDs(t *testing.T) {
 	}
 }
 
-// TestOrphanDispatched_NoRows_NotError — 0 затронутых строк (всё уже терминально
-// либо всё объявлено живым) — не ошибка.
+// TestOrphanDispatched_NoRows_NotError — 0 rows affected (everything is already
+// terminal, or everything was declared alive) — not an error.
 func TestOrphanDispatched_NoRows_NotError(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 0"), execTagSet: true}
 	n, err := OrphanDispatched(context.Background(), f, "host-1", []*ActiveApply{{ApplyID: "x"}})
@@ -979,7 +979,7 @@ func TestOrphanDispatched_NoRows_NotError(t *testing.T) {
 	}
 }
 
-// TestOrphanDispatched_RejectsEmptySID — пустой SID отвергается до Exec.
+// TestOrphanDispatched_RejectsEmptySID — an empty SID is rejected before Exec.
 func TestOrphanDispatched_RejectsEmptySID(t *testing.T) {
 	f := &fakeDB{}
 	if _, err := OrphanDispatched(context.Background(), f, "", nil); err == nil {
@@ -990,7 +990,7 @@ func TestOrphanDispatched_RejectsEmptySID(t *testing.T) {
 	}
 }
 
-// TestOrphanDispatched_PGError — ошибка Exec оборачивается, RowsAffected=0.
+// TestOrphanDispatched_PGError — an Exec error is wrapped, RowsAffected=0.
 func TestOrphanDispatched_PGError(t *testing.T) {
 	f := &fakeDB{execErr: errors.New("boom")}
 	n, err := OrphanDispatched(context.Background(), f, "host-1", nil)

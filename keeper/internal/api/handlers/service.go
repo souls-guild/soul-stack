@@ -1,15 +1,15 @@
-// Service-handler-ы Operator API (реестр Service-ов, ADR-028-паттерн RBAC-
-// storage) — доменный слой над [serviceregistry.Service]. *Typed-функции несут
-// бизнес-логику без http.ResponseWriter/*http.Request; HTTP обслуживает huma
-// full-typed (api/huma_service.go), MCP зовёт serviceregistry.Service напрямую.
+// Service handlers for the Operator API (Service registry, ADR-028 RBAC-storage
+// pattern) — a domain layer over [serviceregistry.Service]. *Typed functions carry
+// business logic without http.ResponseWriter/*http.Request; HTTP is served by huma
+// full-typed (api/huma_service.go), MCP calls serviceregistry.Service directly.
 //
-// T5d (handler-native): домен service отвязан от legacy-генерата. *Typed принимают NATIVE
-// request-типы (огранизованы huma-input-ом в пакете api) и возвращают доменные
-// result-ы с ПЛОСКИМИ wire-полями. (w,r)-оболочки сняты.
+// T5d (handler-native): the service domain is decoupled from the legacy codegen. *Typed
+// functions accept NATIVE request types (organized via huma-input in the api package) and
+// return domain result types with FLAT wire fields. The (w,r) wrappers are gone.
 //
-// Бизнес-логика (валидация name/git/ref/refresh, invalidate-хук после commit-а)
-// — в [serviceregistry.Service]; handler маппит sentinel-ошибки в RFC 7807.
-// RBAC-проверка — в middleware (см. api/router.go), здесь её нет.
+// Business logic (name/git/ref/refresh validation, invalidate hook after commit)
+// lives in [serviceregistry.Service]; the handler maps sentinel errors to RFC 7807.
+// RBAC check is in middleware (see api/router.go), not here.
 package handlers
 
 import (
@@ -27,64 +27,64 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// ServiceRefsLister — поверхность listing-а git-ref-ов для одного Service-а.
-// name резолвится в gitURL ВНЕ handler-а (кешер серверной стороны принимает
-// решение, нужен ли реальный ls-remote или хватит кешированной записи). При
-// nil соответствующий /refs-эндпоинт отвечает 500 «not configured» (паттерн
-// ServiceLoader/PushRun: фича опциональна, до wire-up отдаёт 5xx).
+// ServiceRefsLister — the listing surface for git refs of a single Service.
+// name is resolved to gitURL OUTSIDE the handler (the server-side cacher decides
+// whether a real ls-remote is needed or the cached entry is enough). When
+// nil, the corresponding /refs endpoint responds 500 "not configured" (the
+// ServiceLoader/PushRun pattern: the feature is optional, returns 5xx until wired up).
 type ServiceRefsLister interface {
 	ListRefs(ctx context.Context, name, gitURL string) ([]artifact.GitRef, error)
 }
 
-// ServiceScenarioLister — поверхность listing-а scenario из материализованного
-// снапшота Service-репо для одного `(name, ref)`. Симметрично [ServiceRefsLister]:
-// handler принимает минимальную зависимость, реальный git-clone + парсинг
-// scenario/*/main.yml — внутри реализации (TTL-кеш + ServiceLoader). При nil
-// `GET /v1/services/{name}/scenarios` отвечает 500 «not configured».
+// ServiceScenarioLister — the listing surface for scenarios from a materialized
+// snapshot of the Service repo for a single `(name, ref)`. Symmetric to [ServiceRefsLister]:
+// the handler takes a minimal dependency, the real git-clone + parsing of
+// scenario/*/main.yml lives inside the implementation (TTL cache + ServiceLoader). When nil,
+// `GET /v1/services/{name}/scenarios` responds 500 "not configured".
 type ServiceScenarioLister interface {
 	ListScenarios(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error)
 }
 
-// ServiceStateSchemaLister — поверхность listing-а state-schema-метаданных
-// (`state_schema_version` + опц. декларация структуры state + цепочка
-// миграций) из материализованного снапшота Service-репо для `(name, ref)`.
-// Симметрично [ServiceScenarioLister]: handler принимает минимальную
-// зависимость, реальный git-clone + парсинг service.yml + scan migrations/ —
-// внутри реализации (TTL-кеш + ServiceLoader). При nil
-// `GET /v1/services/{name}/state-schema` отвечает 500 «not configured».
+// ServiceStateSchemaLister — the listing surface for state-schema metadata
+// (`state_schema_version` + an optional state structure declaration + the migration
+// chain) from a materialized snapshot of the Service repo for `(name, ref)`.
+// Symmetric to [ServiceScenarioLister]: the handler takes a minimal
+// dependency, the real git-clone + parsing of service.yml + scanning migrations/
+// lives inside the implementation (TTL cache + ServiceLoader). When nil,
+// `GET /v1/services/{name}/state-schema` responds 500 "not configured".
 type ServiceStateSchemaLister interface {
 	ListStateSchema(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error)
 }
 
-// ServiceDependenciesLister — поверхность listing-а git-зависимостей
-// (`destiny:`/`modules:` из `service.yml`) одного снапшота Service-репо для
-// `(name, ref)`. Симметрично [ServiceStateSchemaLister]: handler принимает
-// минимальную зависимость, реальный git-clone + парсинг service.yml — внутри
-// реализации (TTL-кеш + ServiceLoader). При nil
-// `GET /v1/services/{name}/dependencies` отвечает 500 «not configured».
+// ServiceDependenciesLister — the listing surface for git dependencies
+// (`destiny:`/`modules:` from `service.yml`) of a single Service repo snapshot for
+// `(name, ref)`. Symmetric to [ServiceStateSchemaLister]: the handler takes a
+// minimal dependency, the real git-clone + parsing of service.yml lives inside
+// the implementation (TTL cache + ServiceLoader). When nil,
+// `GET /v1/services/{name}/dependencies` responds 500 "not configured".
 type ServiceDependenciesLister interface {
 	ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error)
 }
 
-// ServiceDirectivesLister — поверхность чтения ПОЛНОГО каталога директив (все
-// серии) сервиса + SHA1 снапшота из материализованного снапшота Service-репо для
-// `(name, ref)`. Симметрично [ServiceScenarioLister]: handler принимает
-// минимальную зависимость, реальный git-clone + чтение essence/_default.yaml —
-// внутри реализации (TTL-кеш + ServiceLoader). Version-сужение делает handler над
-// результатом (кеш version-agnostic). При nil
-// `GET /v1/services/{name}/directives` отвечает 500 «not configured».
+// ServiceDirectivesLister — the surface for reading the FULL directive catalog (all
+// series) of a service + snapshot SHA1 from a materialized snapshot of the Service repo for
+// `(name, ref)`. Symmetric to [ServiceScenarioLister]: the handler takes a
+// minimal dependency, the real git-clone + reading essence/_default.yaml lives
+// inside the implementation (TTL cache + ServiceLoader). Version narrowing is done by the handler
+// over the result (the cache is version-agnostic). When nil,
+// `GET /v1/services/{name}/directives` responds 500 "not configured".
 type ServiceDirectivesLister interface {
 	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
 }
 
-// ServiceHandler — endpoint-ы реестра Service-ов (register / list / get /
+// ServiceHandler — the Service registry endpoints (register / list / get /
 // update / deregister / list-refs / list-scenarios / list-state-schema).
-// Делегирует бизнес-логику в [serviceregistry.Service]; для /refs / /scenarios /
-// /state-schema — отдельные lister-ы с TTL-кешами на стороне serviceregistry
-// (не CRUD-логика реестра).
+// Delegates business logic to [serviceregistry.Service]; /refs / /scenarios /
+// /state-schema each get a separate lister with TTL caches on the serviceregistry
+// side (not registry CRUD logic).
 //
-// Все зависимости immutable; safe for concurrent use — состояние между
-// запросами не держит.
+// All dependencies are immutable; safe for concurrent use — holds no state between
+// requests.
 type ServiceHandler struct {
 	svc          *serviceregistry.Service
 	refs         ServiceRefsLister
@@ -95,10 +95,10 @@ type ServiceHandler struct {
 	logger       *slog.Logger
 }
 
-// NewServiceHandler создаёт handler. svc обязателен (паника при nil —
-// единственная точка misconfiguration, caller обязан передать non-nil). refs /
-// scenarios / stateSchema / dependencies / directives опциональны: при nil
-// соответствующий эндпоинт отвечает 500 (фича не сконфигурирована).
+// NewServiceHandler creates the handler. svc is required (panics on nil —
+// the single misconfiguration point, the caller must pass non-nil). refs /
+// scenarios / stateSchema / dependencies / directives are optional: when nil,
+// the corresponding endpoint responds 500 (feature not configured).
 func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, logger *slog.Logger) *ServiceHandler {
 	if svc == nil {
 		panic("handlers.NewServiceHandler: serviceregistry.Service is nil")
@@ -109,16 +109,16 @@ func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, sce
 	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, logger: logger}
 }
 
-// ServiceSpecStub — непустой *ServiceHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaServiceSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc/lister-ы nil —
-// handler никогда не исполняется в spec-режиме (parity [RoleSpecStub]).
+// ServiceSpecStub — a non-empty *ServiceHandler stub for generating the huma OpenAPI
+// fragment (HumaServiceSpecYAML): the domain handler is not invoked during dump, but
+// huma.Register requires non-nil for its no-op nil-check. svc/listers are nil —
+// the handler never executes in spec mode (parity with [RoleSpecStub]).
 func ServiceSpecStub() *ServiceHandler {
 	return &ServiceHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ServiceRegisterInput — NATIVE request-форма POST /v1/services (handler-native
-// T5d). name+git+ref обязательны, refresh опц. (`*string`). Заменяет
+// ServiceRegisterInput — the NATIVE request shape for POST /v1/services (handler-native
+// T5d). name+git+ref are required, refresh is optional (`*string`). Replaces
 // ServiceRegisterRequest.
 type ServiceRegisterInput struct {
 	Name    string
@@ -127,19 +127,19 @@ type ServiceRegisterInput struct {
 	Refresh *string
 }
 
-// ServiceUpdateInput — NATIVE request-форма PATCH /v1/services/{name} (handler-
-// native T5d). name — path-параметр (ключ, не в теле); git+ref обязательны
-// (replace-семантика mutable-полей), refresh опц.
+// ServiceUpdateInput — the NATIVE request shape for PATCH /v1/services/{name} (handler-
+// native T5d). name is a path parameter (a key, not in the body); git+ref are required
+// (replace semantics for mutable fields), refresh is optional.
 type ServiceUpdateInput struct {
 	Git     string
 	Ref     string
 	Refresh *string
 }
 
-// ServiceView — ПЛОСКАЯ доменная проекция записи реестра Service-а (POST 201 /
+// ServiceView — a FLAT domain projection of a Service registry entry (POST 201 /
 // GET / PATCH 200 / list-element), handler-native T5d. created_by_aid/refresh/
-// updated_by_aid — `*string` (nil → ключ опущен в native-проекции); даты усечены
-// до секунд (UTC). Пакет api проецирует в native-схему ServiceView.
+// updated_by_aid are `*string` (nil → key omitted in the native projection); dates are
+// truncated to seconds (UTC). Package api projects this into the native ServiceView schema.
 type ServiceView struct {
 	Name         string
 	Git          string
@@ -151,14 +151,14 @@ type ServiceView struct {
 	UpdatedAt    time.Time
 }
 
-// ServiceListPage — доменный список Service-ов GET /v1/services (handler-native T5d).
+// ServiceListPage — the domain list of Services for GET /v1/services (handler-native T5d).
 type ServiceListPage struct {
 	Items []ServiceView
 }
 
-// ServiceRegisterReply — результат [ServiceHandler.RegisterTyped] (handler-native
-// T5d). Несёт 201-тело (плоская ServiceView) + audit-поля (имя/git/ref + caller AID;
-// git-URL не секрет).
+// ServiceRegisterReply — the result of [ServiceHandler.RegisterTyped] (handler-native
+// T5d). Carries the 201 body (flat ServiceView) + audit fields (name/git/ref + caller AID;
+// the git URL is not a secret).
 type ServiceRegisterReply struct {
 	Body         ServiceView
 	Name         string
@@ -167,8 +167,8 @@ type ServiceRegisterReply struct {
 	CreatedByAID string
 }
 
-// AuditPayload собирает audit-payload register-роута (parity легаси SetAuditPayload).
-// ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B.
+// AuditPayload assembles the audit payload for the register route (parity with the legacy SetAuditPayload).
+// The SINGLE source for both the (w,r) wrapper AND the huma variant B.
 func (r ServiceRegisterReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
@@ -178,10 +178,10 @@ func (r ServiceRegisterReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// RegisterTyped — извлечённая доменная функция POST /v1/services (FULL-TYPED
-// разворот ADR-054 §Pattern (б)): бизнес-логика без http.ResponseWriter/*http.
-// Request. claims/req приходят аргументами; ошибки — *problemError (через
-// mapServiceError), успех — [ServiceRegisterReply] (201-тело + audit-поля).
+// RegisterTyped — the extracted domain function for POST /v1/services (the FULL-TYPED
+// unfolding of ADR-054 §Pattern (b)): business logic without http.ResponseWriter/*http.
+// Request. claims/req come in as arguments; errors are *problemError (via
+// mapServiceError), success is [ServiceRegisterReply] (201 body + audit fields).
 func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, req ServiceRegisterInput) (ServiceRegisterReply, error) {
 	var zero ServiceRegisterReply
 	callerAID := claims.Subject
@@ -205,10 +205,10 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 	}, nil
 }
 
-// ListTyped — доменная функция GET /v1/services (handler-native T5d, READ без audit):
-// читает реестр (sort name ASC) и собирает [ServiceListPage] (плоские ServiceView)
-// без http.ResponseWriter/*http.Request. Ошибка чтения → *problemError (500).
-// Wire-форму items строит native-проекция в api.
+// ListTyped — the domain function for GET /v1/services (handler-native T5d, READ without audit):
+// reads the registry (sort name ASC) and assembles [ServiceListPage] (flat ServiceView)
+// without http.ResponseWriter/*http.Request. A read error → *problemError (500).
+// The wire form of items is built by the native projection in api.
 func (h *ServiceHandler) ListTyped(ctx context.Context) (ServiceListPage, error) {
 	entries, err := h.svc.ListServices(ctx)
 	if err != nil {
@@ -223,9 +223,9 @@ func (h *ServiceHandler) ListTyped(ctx context.Context) (ServiceListPage, error)
 	return ServiceListPage{Items: items}, nil
 }
 
-// GetTyped — доменная функция GET /v1/services/{name} (handler-native T5d, READ без
-// audit): читает одну запись по имени без http.ResponseWriter/*http.Request. name
-// приходит аргументом; ошибки — *problemError (404 not-found / 500), успех — плоская
+// GetTyped — the domain function for GET /v1/services/{name} (handler-native T5d, READ
+// without audit): reads a single entry by name without http.ResponseWriter/*http.Request. name
+// comes in as an argument; errors are *problemError (404 not-found / 500), success is the flat
 // [ServiceView].
 func (h *ServiceHandler) GetTyped(ctx context.Context, name string) (ServiceView, error) {
 	entry, err := h.svc.GetService(ctx, name)
@@ -243,8 +243,8 @@ func (h *ServiceHandler) GetTyped(ctx context.Context, name string) (ServiceView
 	}
 }
 
-// ServiceUpdateReply — результат [ServiceHandler.UpdateTyped] (handler-native T5d).
-// Несёт 200-тело (плоская ServiceView) + audit-поля (имя/git/ref).
+// ServiceUpdateReply — the result of [ServiceHandler.UpdateTyped] (handler-native T5d).
+// Carries the 200 body (flat ServiceView) + audit fields (name/git/ref).
 type ServiceUpdateReply struct {
 	Body ServiceView
 	Name string
@@ -252,7 +252,7 @@ type ServiceUpdateReply struct {
 	Ref  string
 }
 
-// AuditPayload собирает audit-payload update-роута (parity легаси SetAuditPayload).
+// AuditPayload assembles the audit payload for the update route (parity with the legacy SetAuditPayload).
 func (r ServiceUpdateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name": r.Name,
@@ -261,11 +261,11 @@ func (r ServiceUpdateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// UpdateTyped — извлечённая доменная функция PATCH /v1/services/{name} (FULL-TYPED
-// разворот ADR-054 §Pattern (б)): replace mutable-полей git/ref/refresh +
-// invalidate-хуки кешей, без http.ResponseWriter/*http.Request. claims/name/req
-// приходят аргументами; ошибки — *problemError (через mapServiceError), успех —
-// [ServiceUpdateReply] (200-тело + audit-поля).
+// UpdateTyped — the extracted domain function for PATCH /v1/services/{name} (the FULL-TYPED
+// unfolding of ADR-054 §Pattern (b)): replaces mutable fields git/ref/refresh +
+// cache invalidate hooks, without http.ResponseWriter/*http.Request. claims/name/req
+// come in as arguments; errors are *problemError (via mapServiceError), success is
+// [ServiceUpdateReply] (200 body + audit fields).
 func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, name string, req ServiceUpdateInput) (ServiceUpdateReply, error) {
 	var zero ServiceUpdateReply
 	callerAID := claims.Subject
@@ -293,17 +293,17 @@ func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, na
 	}, nil
 }
 
-// ServiceNameReply — результат write-операций, чей audit-payload несёт лишь имя
-// Service-а (deregister). 204-тело пустое; reply — МЕТАДАННЫЕ для audit.
+// ServiceNameReply — the result of write operations whose audit payload carries only the
+// Service name (deregister). The 204 body is empty; reply is METADATA for audit.
 type ServiceNameReply struct {
 	Name string
 }
 
-// DeregisterTyped — извлечённая доменная функция DELETE /v1/services/{name}
-// (FULL-TYPED разворот ADR-054 §Pattern (б)): удаление по PK + invalidate-хуки
-// кешей, без http.ResponseWriter/*http.Request. name приходит аргументом; ошибки —
-// *problemError (404 not-found / 500), успех — [ServiceNameReply] (audit-payload).
-// 204-тело пустое.
+// DeregisterTyped — the extracted domain function for DELETE /v1/services/{name}
+// (the FULL-TYPED unfolding of ADR-054 §Pattern (b)): deletion by PK + cache invalidate
+// hooks, without http.ResponseWriter/*http.Request. name comes in as an argument; errors are
+// *problemError (404 not-found / 500), success is [ServiceNameReply] (audit payload).
+// The 204 body is empty.
 func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (ServiceNameReply, error) {
 	var zero ServiceNameReply
 	err := h.svc.DeleteService(ctx, name)
@@ -328,13 +328,13 @@ func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (Serv
 	return ServiceNameReply{Name: name}, nil
 }
 
-// invalidateRefs — best-effort выкидывание записи кеша refs для name после
-// Update/Deregister. Если lister не поддерживает Invalidate (минимальный
-// ServiceRefsLister — это интерфейс с одним методом) или сам lister=nil — no-op.
+// invalidateRefs — best-effort eviction of the refs cache entry for name after
+// Update/Deregister. If the lister doesn't support Invalidate (the minimal
+// ServiceRefsLister is a single-method interface) or the lister itself is nil — no-op.
 //
-// Семантика «refs нового git-источника подтянутся при следующем запросе» важна
-// для UX: после смены git-URL Service-а первое открытие Upgrade-modal должно
-// показывать tags нового репо, а не закешированные старого.
+// The "refs of the new git source will be picked up on the next request" semantics matters
+// for UX: after a Service's git URL changes, the first time the Upgrade modal opens it should
+// show tags from the new repo, not cached ones from the old one.
 func (h *ServiceHandler) invalidateRefs(name string) {
 	if h.refs == nil {
 		return
@@ -344,10 +344,10 @@ func (h *ServiceHandler) invalidateRefs(name string) {
 	}
 }
 
-// invalidateScenarios — best-effort инвалидация scenarios-кеша по name после
-// Update/Deregister Service-а (парная семантика с [invalidateRefs]). После
-// смены git-URL или удаления записи закешированные scenario должны исчезнуть,
-// чтобы UI dropdown «Choose scenario» подтянул listing нового источника.
+// invalidateScenarios — best-effort invalidation of the scenarios cache by name after
+// Update/Deregister of a Service (paired semantics with [invalidateRefs]). After
+// a git URL change or entry deletion, cached scenarios must disappear
+// so the UI "Choose scenario" dropdown picks up the listing from the new source.
 func (h *ServiceHandler) invalidateScenarios(name string) {
 	if h.scenarios == nil {
 		return
@@ -357,10 +357,10 @@ func (h *ServiceHandler) invalidateScenarios(name string) {
 	}
 }
 
-// invalidateStateSchema — best-effort инвалидация state-schema-кеша по name
-// (парная семантика с [invalidateScenarios]). После смены git-URL или
-// удаления записи закешированная state-schema должна исчезнуть, чтобы UI
-// Schema explorer подтянул listing нового источника.
+// invalidateStateSchema — best-effort invalidation of the state-schema cache by name
+// (paired semantics with [invalidateScenarios]). After a git URL change or
+// entry deletion, the cached state-schema must disappear so the UI
+// Schema explorer picks up the listing from the new source.
 func (h *ServiceHandler) invalidateStateSchema(name string) {
 	if h.stateSchema == nil {
 		return
@@ -370,10 +370,10 @@ func (h *ServiceHandler) invalidateStateSchema(name string) {
 	}
 }
 
-// invalidateDependencies — best-effort инвалидация dependencies-кеша по name
-// (парная семантика с [invalidateStateSchema]). После смены git-URL или
-// удаления записи закешированные зависимости должны исчезнуть, чтобы UI
-// Service Detail подтянул listing нового источника.
+// invalidateDependencies — best-effort invalidation of the dependencies cache by name
+// (paired semantics with [invalidateStateSchema]). After a git URL change or
+// entry deletion, cached dependencies must disappear so the UI
+// Service Detail picks up the listing from the new source.
 func (h *ServiceHandler) invalidateDependencies(name string) {
 	if h.dependencies == nil {
 		return
@@ -383,10 +383,10 @@ func (h *ServiceHandler) invalidateDependencies(name string) {
 	}
 }
 
-// invalidateDirectives — best-effort инвалидация directives-кеши по name (парная
-// семантика с [invalidateDependencies]). После смены git-URL или удаления записи
-// закешированный каталог должен исчезнуть, чтобы UI redis_settings-редактор
-// подтянул каталог нового источника.
+// invalidateDirectives — best-effort invalidation of the directives cache by name (paired
+// semantics with [invalidateDependencies]). After a git URL change or entry deletion,
+// the cached catalog must disappear so the UI redis_settings editor
+// picks up the catalog from the new source.
 func (h *ServiceHandler) invalidateDirectives(name string) {
 	if h.directives == nil {
 		return
@@ -396,19 +396,19 @@ func (h *ServiceHandler) invalidateDirectives(name string) {
 	}
 }
 
-// mapServiceError маппит sentinel-ошибки [serviceregistry.Service]
-// (register/update — единый набор валидации + UNIQUE/FK-границы) в *problemError
-// (FULL-TYPED разворот ADR-054 §Pattern: доставляется huma-обёрткой через
-// [AsProblemDetails] либо (w,r)-оболочкой через [writeProblemError]).
-// Соответствие sentinel ↔ problem-type:
+// mapServiceError maps [serviceregistry.Service] sentinel errors
+// (register/update share a single validation set + UNIQUE/FK boundaries) to *problemError
+// (the FULL-TYPED unfolding of ADR-054 §Pattern: delivered by the huma wrapper via
+// [AsProblemDetails] or by the (w,r) wrapper via [writeProblemError]).
+// sentinel ↔ problem-type mapping:
 //   - ErrAlreadyExists      → service-already-exists (409).
-//   - ErrNotFound           → not-found (404; update несуществующей записи).
-//   - ErrOperatorNotFound   → not-found (404; CallerAID отсутствует в operators).
+//   - ErrNotFound           → not-found (404; update of a nonexistent entry).
+//   - ErrOperatorNotFound   → not-found (404; CallerAID missing from operators).
 //   - ErrInvalidName / ErrInvalidGit / ErrInvalidRef / ErrInvalidRefresh →
 //     validation-failed (422).
 //
-// Для unknown-ошибок — internal-error (500) + generic-detail (raw err.Error()
-// не пробрасывается клиенту; диагностика — в логах).
+// For unknown errors — internal-error (500) + a generic detail (the raw err.Error()
+// is not surfaced to the client; diagnostics go to the logs).
 func (h *ServiceHandler) mapServiceError(op, name, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, serviceregistry.ErrAlreadyExists):
@@ -432,9 +432,9 @@ func (h *ServiceHandler) mapServiceError(op, name, callerAID string, err error) 
 	}
 }
 
-// GitRefView — ПЛОСКАЯ доменная запись git-ref (element ServiceRefsList.Refs),
-// handler-native T5d. IsDefault — bool (native-проекция в api опускает false как
-// nil-указатель). Форма из [artifact.GitRef].
+// GitRefView — a FLAT domain git-ref entry (element of ServiceRefsList.Refs),
+// handler-native T5d. IsDefault is bool (the native projection in api omits false as
+// a nil pointer). Shaped after [artifact.GitRef].
 type GitRefView struct {
 	Name      string
 	Type      string
@@ -442,17 +442,17 @@ type GitRefView struct {
 	IsDefault bool
 }
 
-// ServiceRefsList — ПЛОСКОЕ доменное тело GET /v1/services/{name}/refs (handler-
-// native T5d): service + refs[]. Пакет api проецирует в native ServiceRefsListReply.
+// ServiceRefsList — the FLAT domain body for GET /v1/services/{name}/refs (handler-
+// native T5d): service + refs[]. Package api projects this into the native ServiceRefsListReply.
 type ServiceRefsList struct {
 	Service string
 	Refs    []GitRefView
 }
 
-// ListRefsTyped — доменная функция GET /v1/services/{name}/refs (handler-native T5d,
-// READ без audit): резолв записи + ls-remote git-tag-ов/branch-ей, без http.
-// ResponseWriter/*http.Request. name приходит аргументом; ошибки — *problemError
-// (500 нет lister-а/сбой чтения, 404 not-found, 502 ls-remote упал), успех —
+// ListRefsTyped — the domain function for GET /v1/services/{name}/refs (handler-native T5d,
+// READ without audit): resolves the entry + ls-remote of git tags/branches, without http.
+// ResponseWriter/*http.Request. name comes in as an argument; errors are *problemError
+// (500 no lister/read failure, 404 not-found, 502 ls-remote failed), success is
 // [ServiceRefsList].
 func (h *ServiceHandler) ListRefsTyped(ctx context.Context, name string) (ServiceRefsList, error) {
 	var zero ServiceRefsList
@@ -488,44 +488,44 @@ func (h *ServiceHandler) ListRefsTyped(ctx context.Context, name string) (Servic
 	}, nil
 }
 
-// ServiceScenariosReply — GET /v1/services/{name}/scenarios body. service +
-// ref-поля дублируют path-параметр / выбранный ref для удобства клиента (один
-// объект — самодостаточный JSON; UI ставит ref-метку рядом с dropdown).
+// ServiceScenariosReply — the GET /v1/services/{name}/scenarios body. The service +
+// ref fields duplicate the path parameter / selected ref for client convenience (one
+// object is self-contained JSON; the UI puts the ref label next to the dropdown).
 //
-// НЕ алиас на ServiceScenariosListReply: его элемент [Scenario] несёт
-// типизированное enum-поле Kind (ScenarioKind), а домен [artifact.Scenario].Kind —
-// plain string. Тесты сравнивают s.Kind с string-литералом — типизированный enum
-// сломал бы это сравнение на компиляции. Wire-форма идентична (json-теги те же).
-// См. отчёт S0: «typed enum в response-элементах» — частый случай тиража.
-// Экспортирован (а не package-private), чтобы huma-обёртка [registerHumaServiceScenarios]
-// в пакете api могла назвать его типом Body (FULL-TYPED ADR-054).
+// NOT an alias for ServiceScenariosListReply: its element [Scenario] carries a
+// typed enum field Kind (ScenarioKind), while the domain [artifact.Scenario].Kind is a
+// plain string. Tests compare s.Kind against a string literal — a typed enum
+// would break that comparison at compile time. The wire form is identical (same json tags).
+// See the S0 report: "typed enum in response elements" — a recurring pattern.
+// Exported (rather than package-private) so the huma wrapper [registerHumaServiceScenarios]
+// in package api can name it as the Body type (FULL-TYPED ADR-054).
 type ServiceScenariosReply struct {
 	Service   string              `json:"service"`
 	Ref       string              `json:"ref"`
 	Scenarios []artifact.Scenario `json:"scenarios"`
 }
 
-// ListScenarios — GET /v1/services/{name}/scenarios. Возвращает список
-// scenario-метаданных из материализованного снапшота git-репо Service-а (для
-// UI dropdown «Choose scenario» в Run-modal — парный /refs для Upgrade-modal).
-// Permission — service.list (та же проекция Service-записи, что и /refs).
+// ListScenarios — GET /v1/services/{name}/scenarios. Returns the list of
+// scenario metadata from a materialized snapshot of the Service's git repo (for
+// the "Choose scenario" UI dropdown in the Run modal — paired with /refs for the Upgrade modal).
+// Permission — service.list (the same Service-entry projection as /refs).
 //
-// Query-параметр `ref` опционален: если не задан, берётся [ServiceEntry.Ref]
-// (текущая версия из реестра). Сортировка scenarios — alphabetical по имени;
-// невалидные/пустые scenario пропускаются (warning лог, partial-success).
-// Read-only, без audit.
+// The `ref` query parameter is optional: if not set, [ServiceEntry.Ref] is used
+// (the current version from the registry). Scenarios are sorted alphabetically by name;
+// invalid/empty scenarios are skipped (warning log, partial success).
+// Read-only, no audit.
 //
-// Контракт:
+// Contract:
 //   - 200 + {service, ref, scenarios:[…]}.
-//   - 404 (not-found) — записи с таким name нет в реестре.
-//   - 500 — внутренний сбой (нет lister-а / неожиданная ошибка чтения реестра).
-//   - 502 (bad-gateway) — git-clone / parse manifest упал на стороне loader-а.
+//   - 404 (not-found) — no entry with that name in the registry.
+//   - 500 — internal failure (no lister / unexpected registry read error).
+//   - 502 (bad-gateway) — git-clone / manifest parse failed on the loader side.
 //
-// ListScenariosTyped — извлечённая доменная функция GET /v1/services/{name}/
-// scenarios (FULL-TYPED разворот ADR-054 §Pattern, READ-вариант без audit): резолв
-// записи + listing scenario из снапшота git-репо + разметка kind/runnable, без
-// http.ResponseWriter/*http.Request. name/ref приходят аргументами (ref="" →
-// дефолт из реестра); ошибки — *problemError (500/404/502), успех —
+// ListScenariosTyped — the extracted domain function for GET /v1/services/{name}/
+// scenarios (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit): resolves
+// the entry + lists scenarios from the git repo snapshot + tags kind/runnable, without
+// http.ResponseWriter/*http.Request. name/ref come in as arguments (ref="" →
+// default from the registry); errors are *problemError (500/404/502), success is
 // [ServiceScenariosReply].
 func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref string) (ServiceScenariosReply, error) {
 	var zero ServiceScenariosReply
@@ -546,7 +546,7 @@ func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref strin
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
 	}
 
-	// `?ref=<git-ref>` — опциональный override; по умолчанию — ref из реестра.
+	// `?ref=<git-ref>` — an optional override; defaults to the ref from the registry.
 	if ref == "" {
 		ref = entry.Ref
 	}
@@ -564,9 +564,9 @@ func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref strin
 	if scenarios == nil {
 		scenarios = []artifact.Scenario{}
 	}
-	// Разметка kind + runnable по канону scenario-пакета (единственный источник
-	// правды): artifact-loader поля не заполняет — направление импорта
-	// artifact←scenario, а не наоборот.
+	// kind + runnable tagging follows the canonical scenario package (the single source
+	// of truth): the artifact loader doesn't fill these fields — the import direction is
+	// artifact←scenario, not the other way around.
 	for i := range scenarios {
 		if scenario.IsLifecycleScenario(scenarios[i].Name) {
 			scenarios[i].Kind = artifact.ScenarioKindLifecycle
@@ -582,17 +582,17 @@ func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref strin
 	}, nil
 }
 
-// StateSchemaMigration — ПЛОСКИЙ доменный шаг цепочки миграций (handler-native T5d).
-// Форма из [artifact.Migration] (from/to int + path).
+// StateSchemaMigration — a FLAT domain step of the migration chain (handler-native T5d).
+// Shaped after [artifact.Migration] (from/to int + path).
 type StateSchemaMigration struct {
 	From int
 	To   int
 	Path string
 }
 
-// ServiceStateSchema — ПЛОСКОЕ доменное тело GET /v1/services/{name}/state-schema
-// (handler-native T5d). Schema — `map[string]any` (native-проекция опускает пустую
-// карту); Migrations — []StateSchemaMigration. Пакет api проецирует в native схему.
+// ServiceStateSchema — the FLAT domain body for GET /v1/services/{name}/state-schema
+// (handler-native T5d). Schema is `map[string]any` (the native projection omits an empty
+// map); Migrations is []StateSchemaMigration. Package api projects this into the native schema.
 type ServiceStateSchema struct {
 	Service            string
 	Ref                string
@@ -601,30 +601,30 @@ type ServiceStateSchema struct {
 	Migrations         []StateSchemaMigration
 }
 
-// ListStateSchema — GET /v1/services/{name}/state-schema. Возвращает
-// state_schema-метаданные сервиса для UI Schema explorer-а: текущая версия
-// (`state_schema_version`), опциональная декларация структуры state (если
-// сервис её задекларировал в `service.yml::state_schema`) и плоский список
-// миграций `<NNN>_to_<MMM>.yml` (metadata-only, без content).
-// Permission — service.list (та же проекция Service-записи, что и /refs /
+// ListStateSchema — GET /v1/services/{name}/state-schema. Returns the
+// service's state_schema metadata for the UI Schema explorer: the current version
+// (`state_schema_version`), an optional state structure declaration (if
+// the service declared one in `service.yml::state_schema`), and a flat list of
+// migrations `<NNN>_to_<MMM>.yml` (metadata-only, no content).
+// Permission — service.list (the same Service-entry projection as /refs /
 // /scenarios).
 //
-// Query-параметр `ref` опционален: если не задан, берётся [ServiceEntry.Ref]
-// (текущая версия из реестра). Read-only, без audit. Кеш TTL 60s на стороне
-// [ServiceStateSchemaLister].
+// The `ref` query parameter is optional: if not set, [ServiceEntry.Ref] is used
+// (the current version from the registry). Read-only, no audit. TTL cache 60s on the
+// [ServiceStateSchemaLister] side.
 //
-// Контракт:
+// Contract:
 //   - 200 + {service, ref, state_schema_version, schema?, migrations:[…]}.
-//   - 404 (not-found) — записи с таким name нет в реестре.
-//   - 500 — внутренний сбой (нет lister-а / неожиданная ошибка чтения реестра).
-//   - 502 (bad-gateway) — git-clone / parse manifest / scan migrations упал
-//     на стороне loader-а.
+//   - 404 (not-found) — no entry with that name in the registry.
+//   - 500 — internal failure (no lister / unexpected registry read error).
+//   - 502 (bad-gateway) — git-clone / manifest parse / migration scan failed
+//     on the loader side.
 //
-// ListStateSchemaTyped — извлечённая доменная функция GET /v1/services/{name}/
-// state-schema (FULL-TYPED разворот ADR-054 §Pattern, READ-вариант без audit):
-// резолв записи + listing state-schema-метаданных, без http.ResponseWriter/*http.
-// Request. name/ref приходят аргументами (ref="" → дефолт из реестра); ошибки —
-// *problemError (500/404/502), успех — [ServiceStateSchema].
+// ListStateSchemaTyped — the extracted domain function for GET /v1/services/{name}/
+// state-schema (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit):
+// resolves the entry + lists state-schema metadata, without http.ResponseWriter/*http.
+// Request. name/ref come in as arguments (ref="" → default from the registry); errors are
+// *problemError (500/404/502), success is [ServiceStateSchema].
 func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, name, ref string) (ServiceStateSchema, error) {
 	var zero ServiceStateSchema
 	if h.stateSchema == nil {
@@ -659,8 +659,8 @@ func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, name, ref str
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "state-schema loader failed for service "+name+": "+err.Error())}
 	}
 	if info == nil {
-		// Defensive: lister обязан вернуть non-nil при err=nil; иначе отдаём
-		// 502 — расхождение реализации с контрактом.
+		// Defensive: the lister must return non-nil when err=nil; otherwise we return
+		// 502 — the implementation diverges from the contract.
 		h.logger.Error("service.state-schema: loader returned nil info without error",
 			slog.String("name", name))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "state-schema loader returned empty result")}
@@ -675,8 +675,8 @@ func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, name, ref str
 	}, nil
 }
 
-// ServiceDependency — ПЛОСКАЯ доменная запись destiny[]/modules[] (handler-native
-// T5d). Git — string (native-проекция опускает пустую как nil-указатель). Форма из
+// ServiceDependency — a FLAT domain entry for destiny[]/modules[] (handler-native
+// T5d). Git is a string (the native projection omits an empty one as a nil pointer). Shaped after
 // [artifact.Dependency].
 type ServiceDependency struct {
 	Name string
@@ -684,9 +684,9 @@ type ServiceDependency struct {
 	Git  string
 }
 
-// ServiceDependenciesList — ПЛОСКОЕ доменное тело GET /v1/services/{name}/dependencies
-// (handler-native T5d): service/ref + destiny[]/modules[]. Пакет api проецирует в
-// native ServiceDependenciesReply.
+// ServiceDependenciesList — the FLAT domain body for GET /v1/services/{name}/dependencies
+// (handler-native T5d): service/ref + destiny[]/modules[]. Package api projects this into
+// the native ServiceDependenciesReply.
 type ServiceDependenciesList struct {
 	Service string
 	Ref     string
@@ -694,27 +694,27 @@ type ServiceDependenciesList struct {
 	Modules []ServiceDependency
 }
 
-// ListDependencies — GET /v1/services/{name}/dependencies. Возвращает
-// git-зависимости сервиса для UI Service Detail: задекларированные в
-// `service.yml` destiny-кирпичики и custom-модули, каждый со своим git-ref-ом
-// (ADR-007: версия = git tag/branch). Permission — service.list (та же
-// проекция Service-записи, что и /refs / /scenarios / /state-schema).
+// ListDependencies — GET /v1/services/{name}/dependencies. Returns the
+// service's git dependencies for the UI Service Detail: destiny bricks and custom
+// modules declared in `service.yml`, each with its own git ref
+// (ADR-007: version = git tag/branch). Permission — service.list (the same
+// Service-entry projection as /refs / /scenarios / /state-schema).
 //
-// Query-параметр `ref` опционален: если не задан, берётся [ServiceEntry.Ref]
-// (текущая версия из реестра). Read-only, без audit. Кеш TTL 60s на стороне
-// [ServiceDependenciesLister].
+// The `ref` query parameter is optional: if not set, [ServiceEntry.Ref] is used
+// (the current version from the registry). Read-only, no audit. TTL cache 60s on the
+// [ServiceDependenciesLister] side.
 //
-// Контракт:
+// Contract:
 //   - 200 + {service, ref, destiny:[…], modules:[…]}.
-//   - 404 (not-found) — записи с таким name нет в реестре.
-//   - 500 — внутренний сбой (нет lister-а / неожиданная ошибка чтения реестра).
-//   - 502 (bad-gateway) — git-clone / parse manifest упал на стороне loader-а.
+//   - 404 (not-found) — no entry with that name in the registry.
+//   - 500 — internal failure (no lister / unexpected registry read error).
+//   - 502 (bad-gateway) — git-clone / manifest parse failed on the loader side.
 //
-// ListDependenciesTyped — извлечённая доменная функция GET /v1/services/{name}/
-// dependencies (FULL-TYPED разворот ADR-054 §Pattern, READ-вариант без audit):
-// резолв записи + listing git-зависимостей, без http.ResponseWriter/*http.Request.
-// name/ref приходят аргументами (ref="" → дефолт из реестра); ошибки —
-// *problemError (500/404/502), успех — [ServiceDependenciesList].
+// ListDependenciesTyped — the extracted domain function for GET /v1/services/{name}/
+// dependencies (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit):
+// resolves the entry + lists git dependencies, without http.ResponseWriter/*http.Request.
+// name/ref come in as arguments (ref="" → default from the registry); errors are
+// *problemError (500/404/502), success is [ServiceDependenciesList].
 func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref string) (ServiceDependenciesList, error) {
 	var zero ServiceDependenciesList
 	if h.dependencies == nil {
@@ -749,8 +749,8 @@ func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref st
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "dependencies loader failed for service "+name+": "+err.Error())}
 	}
 	if deps == nil {
-		// Defensive: lister обязан вернуть non-nil при err=nil; иначе отдаём
-		// 502 — расхождение реализации с контрактом (паттерн ListStateSchema).
+		// Defensive: the lister must return non-nil when err=nil; otherwise we return
+		// 502 — the implementation diverges from the contract (same pattern as ListStateSchema).
 		h.logger.Error("service.dependencies: loader returned nil without error",
 			slog.String("name", name))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "dependencies loader returned empty result")}
@@ -764,12 +764,12 @@ func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref st
 	}, nil
 }
 
-// ServiceDirectivesReply — GET /v1/services/{name}/directives body. Самодостаточный
-// JSON (как ServiceScenariosReply): service + ref эхо-дубли, sha1 снапшота (== ETag),
-// directives = карта `серия(major.minor) → отсортированные имена`. Сервис без каталога
-// → directives:{} (не null). Body напрямую (не native-DTO): элементы — примитивные
-// строки, huma-схема тривиальна. json-теги фиксируют wire; huma-регистратор читает
-// SHA1 для ETag/If-None-Match (см. huma_service.go).
+// ServiceDirectivesReply — the GET /v1/services/{name}/directives body. Self-contained
+// JSON (like ServiceScenariosReply): service + ref are echoed duplicates, sha1 is the snapshot hash (== ETag),
+// directives is a map of `series(major.minor) → sorted names`. A service without a catalog
+// → directives:{} (not null). Body directly (not a native DTO): elements are primitive
+// strings, the huma schema is trivial. json tags fix the wire form; the huma registrar reads
+// SHA1 for ETag/If-None-Match (see huma_service.go).
 type ServiceDirectivesReply struct {
 	Service    string              `json:"service"`
 	Ref        string              `json:"ref"`
@@ -777,12 +777,12 @@ type ServiceDirectivesReply struct {
 	Directives map[string][]string `json:"directives"`
 }
 
-// ListDirectivesTyped — GET /v1/services/{name}/directives (READ без audit): резолв
-// записи + чтение ПОЛНОГО каталога директив из снапшота + version-сужение (опц.).
-// name/ref/version приходят аргументами (ref="" → дефолт из реестра; version="" →
-// весь каталог). Ошибки — *problemError (500 нет lister-а/сбой реестра, 404 not-found,
-// 502 loader упал), успех — [ServiceDirectivesReply] с непустой (возможно пустой)
-// картой directives.
+// ListDirectivesTyped — GET /v1/services/{name}/directives (READ without audit): resolves
+// the entry + reads the FULL directive catalog from the snapshot + version narrowing (optional).
+// name/ref/version come in as arguments (ref="" → default from the registry; version="" →
+// the entire catalog). Errors are *problemError (500 no lister/registry failure, 404 not-found,
+// 502 loader failed), success is [ServiceDirectivesReply] with a non-nil (possibly empty)
+// directives map.
 func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, version string) (ServiceDirectivesReply, error) {
 	var zero ServiceDirectivesReply
 	if h.directives == nil {
@@ -817,14 +817,14 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader failed for service "+name+": "+err.Error())}
 	}
 	if catalog == nil {
-		// Defensive: lister обязан вернуть non-nil при err=nil (паттерн ListStateSchema).
+		// Defensive: the lister must return non-nil when err=nil (same pattern as ListStateSchema).
 		h.logger.Error("service.directives: loader returned nil without error",
 			slog.String("name", name))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader returned empty result")}
 	}
 
-	// Version-сужение — над полным (кешированным) каталогом; пустой каталог →
-	// непустой {} (не null) для мягкой деградации фронта.
+	// Version narrowing happens over the full (cached) catalog; an empty catalog →
+	// a non-nil {} (not null) for graceful frontend degradation.
 	dirs := artifact.FilterDirectivesByVersion(catalog.Directives, version)
 	if dirs == nil {
 		dirs = map[string][]string{}
@@ -837,11 +837,11 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 	}, nil
 }
 
-// --- domain → ПЛОСКАЯ-доменная проекция списочных тел (handler-native T5d) ---
+// --- domain → FLAT-domain projection of list bodies (handler-native T5d) ---
 //
-// Сервис-слой отдаёт доменные [artifact.*]; handler собирает плоские доменные
-// view-типы, native wire-форму (omitempty/[]-vs-null/enum) строит native-проекция
-// в api. Все возвращают non-nil срез (пустой → `[]`, не null — прежний контракт).
+// The service layer returns domain [artifact.*] types; the handler assembles flat domain
+// view types, the native projection in api builds the native wire form (omitempty/[]-vs-null/enum).
+// All return a non-nil slice (empty → `[]`, not null — same contract as before).
 
 func toGitRefViews(in []artifact.GitRef) []GitRefView {
 	out := make([]GitRefView, 0, len(in))
@@ -867,10 +867,10 @@ func toDependencyViews(in []artifact.Dependency) []ServiceDependency {
 	return out
 }
 
-// toServiceResponse проецирует [serviceregistry.ServiceEntry] в ПЛОСКУЮ доменную
-// [ServiceView] (handler-native T5d). Даты — UTC, обрезаны до секунд: native
-// ServiceView несёт time.Time (date-time wire); Truncate(Second) сохраняет прежнюю
-// wire-форму (без наносекунд).
+// toServiceResponse projects [serviceregistry.ServiceEntry] into the FLAT domain
+// [ServiceView] (handler-native T5d). Dates are UTC, truncated to seconds: the native
+// ServiceView carries time.Time (date-time wire); Truncate(Second) preserves the previous
+// wire form (no nanoseconds).
 func toServiceResponse(e *serviceregistry.ServiceEntry) ServiceView {
 	return ServiceView{
 		Name:         e.Name,

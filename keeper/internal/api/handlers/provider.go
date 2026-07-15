@@ -136,8 +136,8 @@ func (r ProviderDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// CreateTyped — доменная функция POST /v1/providers (handler-native): валидация
-// полей + svc.Create + sentinel→problem. 409 на дубль name; 422 на битый
+// CreateTyped — domain function for POST /v1/providers (handler-native): validates
+// the fields + svc.Create + sentinel→problem. 409 on a duplicate name; 422 on a malformed
 // name/type/region/credentials_ref.
 func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req ProviderCreateInput) (ProviderWriteReply, error) {
 	var zero ProviderWriteReply
@@ -155,11 +155,11 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 	if req.Region == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'region' is required")}
 	}
-	// credentials_ref / credentials — dual-mode XOR (ADR-064); формат/XOR/plaintext-
-	// disabled валидирует сервис (provider.IsValidationError → 422 ниже).
+	// credentials_ref / credentials — dual-mode XOR (ADR-064); format/XOR/plaintext-
+	// disabled is validated by the service (provider.IsValidationError → 422 below).
 	//
-	// fqdn_suffix опционален (self-onboard Вариант T); если задан — валидируем
-	// формат до round-trip-а (пустая строка не допускается — используй отсутствие).
+	// fqdn_suffix is optional (self-onboard Variant T); if set, validate the
+	// format before the round-trip (an empty string is not allowed — omit the field instead).
 	if req.FQDNSuffix != nil {
 		if *req.FQDNSuffix == "" || !provider.ValidFQDNSuffix(*req.FQDNSuffix) {
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -201,7 +201,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 	}
 }
 
-// GetTyped — доменная функция GET /v1/providers/{name} (read, БЕЗ audit).
+// GetTyped — domain function for GET /v1/providers/{name} (read, no audit).
 func (h *ProviderHandler) GetTyped(ctx context.Context, name string) (ProviderView, error) {
 	var zero ProviderView
 	if !provider.ValidName(name) {
@@ -220,8 +220,8 @@ func (h *ProviderHandler) GetTyped(ctx context.Context, name string) (ProviderVi
 	}
 }
 
-// DeleteTyped — доменная функция DELETE /v1/providers/{name}: 404 на отсутствие,
-// 409 при зависимых Profile-ях (FK RESTRICT).
+// DeleteTyped — domain function for DELETE /v1/providers/{name}: 404 if absent,
+// 409 on dependent Profiles (FK RESTRICT).
 func (h *ProviderHandler) DeleteTyped(ctx context.Context, name string) (ProviderDeleteReply, error) {
 	var zero ProviderDeleteReply
 	if !provider.ValidName(name) {
@@ -243,7 +243,7 @@ func (h *ProviderHandler) DeleteTyped(ctx context.Context, name string) (Provide
 	}
 }
 
-// ListTyped — доменная функция GET /v1/providers (read-with-typed-query, БЕЗ audit).
+// ListTyped — domain function for GET /v1/providers (read-with-typed-query, no audit).
 func (h *ProviderHandler) ListTyped(ctx context.Context, offset, limit int) (ProviderListPage, error) {
 	var zero ProviderListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {

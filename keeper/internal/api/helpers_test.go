@@ -1,10 +1,11 @@
 package api
 
-// Общие тест-фикстуры пакета api_test: fake-pool/row/rows-стабы, allow-all
-// PermissionChecker, audit.Writer-захватчик. Используются huma-guard-ами всех
-// доменов (валидация контракта 400/422, wire-форма, audit-on-write). Раньше жили
-// в strict-тест-файлах; после сноса strict-агрегата (teardown T2) вынесены сюда
-// как нейтральная инфраструктура — strict-обвязки (bridge/wrapper/server) НЕ несут.
+// Shared test fixtures for the api_test package: fake-pool/row/rows stubs, an
+// allow-all PermissionChecker, an audit.Writer capturer. Used by the huma
+// guards of all domains (400/422 contract validation, wire shape,
+// audit-on-write). They used to live in the strict test files; after the
+// strict aggregate was torn down (teardown T2) they were moved here as
+// neutral infrastructure — carries NO strict wiring (bridge/wrapper/server).
 
 import (
 	"context"
@@ -17,19 +18,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// --- минимальный fake CadenceStore (cadence huma-guard-ы) ---
+// --- minimal fake CadenceStore (cadence huma guards) ---
 
-// strictFakeCadenceStore обслуживает INSERT (success → timestamps) и
-// SELECT COUNT (list). Cadence huma-guard-ам дополнительно нужны selectByID (Get
-// для PATCH/Runs), UPDATE...RETURNING (PatchTyped), UPDATE...enabled
-// (SetEnabledTyped) и DELETE (DeleteTyped) — опциональные поля, по умолчанию
-// not-found (404). Остальной SQL — ошибка.
+// strictFakeCadenceStore serves INSERT (success → timestamps) and
+// SELECT COUNT (list). Cadence huma guards additionally need selectByID (Get
+// for PATCH/Runs), UPDATE...RETURNING (PatchTyped), UPDATE...enabled
+// (SetEnabledTyped), and DELETE (DeleteTyped) — optional fields, defaulting to
+// not-found (404). Any other SQL is an error.
 type strictFakeCadenceStore struct {
 	insertCalls int
 
-	// selectByID — настраиваемая строка cadence для Get (PATCH/Runs); nil → 404.
+	// selectByID — a configurable cadence row for Get (PATCH/Runs); nil → 404.
 	selectByID func(id string) pgx.Row
-	// флаги not-found для write-операций cadence.
+	// not-found flags for cadence write operations.
 	updateNoRows    bool
 	setEnabledNoRow bool
 	deleteNoRow     bool
@@ -69,14 +70,14 @@ func (f *strictFakeCadenceStore) QueryRow(_ context.Context, sql string, args ..
 	case strings.Contains(sql, "SELECT COUNT(*) FROM cadences"):
 		return strictScalarRow{vals: []any{0}}
 	case strings.Contains(sql, "SELECT COUNT(*) FROM voyages"):
-		// GET /v1/cadences/{id}/runs — voyage.List COUNT (пустой набор прогонов).
+		// GET /v1/cadences/{id}/runs — voyage.List COUNT (empty set of runs).
 		return strictScalarRow{vals: []any{0}}
 	}
 	return strictErrRow{err: errStrictUnexpectedSQL}
 }
 
 func (f *strictFakeCadenceStore) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	// list select rows — пустой набор (тест list проверяет лишь успешный код).
+	// list select rows — an empty set (the list test only checks the success code).
 	return &strictEmptyRows{}, nil
 }
 
@@ -84,8 +85,8 @@ func (f *strictFakeCadenceStore) CopyFrom(context.Context, pgx.Identifier, []str
 	return 0, errStrictUnexpectedSQL
 }
 
-// BeginTx — Create-tx (ADR-052 §m): INSERT INTO cadences идёт через tx-обёртку,
-// маршрутизирующую обратно в store.
+// BeginTx — the Create tx (ADR-052 §m): INSERT INTO cadences goes through a tx
+// wrapper that routes back to the store.
 func (f *strictFakeCadenceStore) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return &strictCadenceTx{store: f}, nil
 }
@@ -123,10 +124,10 @@ type errStrict string
 
 func (e errStrict) Error() string { return string(e) }
 
-// strictCadenceBody — валидное тело cadence.create (happy-path huma-guard).
+// strictCadenceBody — a valid cadence.create body (happy-path huma guard).
 const strictCadenceBody = `{"name":"hourly","schedule_kind":"cron","cron_expr":"0 * * * *","overlap_policy":"queue","kind":"command","module":"core.cmd.shell","target":{"coven":["prod"]}}`
 
-// --- общие pgx.Row / pgx.Rows стабы ---
+// --- shared pgx.Row / pgx.Rows stubs ---
 
 type strictScalarRow struct{ vals []any }
 
@@ -146,7 +147,7 @@ type strictErrRow struct{ err error }
 
 func (r strictErrRow) Scan(...any) error { return r.err }
 
-// strictEmptyRows — пустой pgx.Rows (list без строк).
+// strictEmptyRows — an empty pgx.Rows (list with no rows).
 type strictEmptyRows struct{}
 
 func (*strictEmptyRows) Close()                        {}
@@ -161,15 +162,15 @@ func (*strictEmptyRows) Values() ([]any, error) { return nil, nil }
 func (*strictEmptyRows) RawValues() [][]byte    { return nil }
 func (*strictEmptyRows) Conn() *pgx.Conn        { return nil }
 
-// strictAllowAll — allow-all PermissionChecker (RBAC не предмет guard-ов, где он
-// должен пропустить запрос к handler-у).
+// strictAllowAll — an allow-all PermissionChecker (RBAC is not the subject of
+// the guards where it must let the request through to the handler).
 type strictAllowAll struct{}
 
 func (strictAllowAll) Check(string, string, string, map[string]string) error { return nil }
 
-// --- assignScan: узкое присваивание для scanHerald/scanTiding-типов ---
+// --- assignScan: a narrow assignment for scanHerald/scanTiding types ---
 
-// assignScan покрывает типы, которые scanHerald/scanTiding читают
+// assignScan covers the types that scanHerald/scanTiding read
 // (time.Time / string / *string / bool / []byte / []string).
 func assignScan(dest, val any) {
 	switch d := dest.(type) {
@@ -200,10 +201,10 @@ func assignScan(dest, val any) {
 	}
 }
 
-// --- audit.Writer-захватчик и role.create stub-pool ---
+// --- audit.Writer capturer and the role.create stub pool ---
 
-// auditCaptureWriter — audit.Writer-stub: захватывает записанные события (без
-// mutex — guard-прогон однопоточный).
+// auditCaptureWriter — an audit.Writer stub: captures the events written (no
+// mutex — the guard run is single-threaded).
 type auditCaptureWriter struct {
 	events []*audit.Event
 }
@@ -216,9 +217,10 @@ func (c *auditCaptureWriter) Write(_ context.Context, ev *audit.Event) error {
 
 func (c *auditCaptureWriter) Events() []*audit.Event { return c.events }
 
-// auditRolePool — stub-PG для role.create success-path: CreateRole с ПУСТЫМ
-// набором permissions делает один tx.Exec(insertRoleSQL) → success → Commit, без
-// чтения БД (subset-check при пустом required не читает).
+// auditRolePool — a stub-PG for the role.create success path: CreateRole with an
+// EMPTY set of permissions does one tx.Exec(insertRoleSQL) → success → Commit,
+// without reading the DB (the subset check doesn't read anything when required
+// is empty).
 type auditRolePool struct{}
 
 func (auditRolePool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -238,8 +240,9 @@ type auditErrRow struct{ err error }
 
 func (r auditErrRow) Scan(...any) error { return r.err }
 
-// auditOKTx — pgx.Tx с success Exec/Commit/Rollback (встраивание nil-pgx.Tx даёт
-// остальные методы — на role.create success-пути не вызываются).
+// auditOKTx — a pgx.Tx with a success Exec/Commit/Rollback (embedding a nil
+// pgx.Tx supplies the remaining methods — not called on the role.create
+// success path).
 type auditOKTx struct{ pgx.Tx }
 
 func (auditOKTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -248,10 +251,10 @@ func (auditOKTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error
 func (auditOKTx) Commit(context.Context) error   { return nil }
 func (auditOKTx) Rollback(context.Context) error { return nil }
 
-// q400ListPool — fake pool для list-домена: COUNT → 0, SELECT → пустой набор.
-// Реализует handlers.OperatorPool (ExecQueryRower+BeginTx), auditpg-queryRower и
-// errand.ExecQueryRower одновременно (структурно). На покрываемых list-путях
-// BeginTx не достигается.
+// q400ListPool — a fake pool for the list domain: COUNT → 0, SELECT → empty set.
+// Implements handlers.OperatorPool (ExecQueryRower+BeginTx), auditpg-queryRower,
+// and errand.ExecQueryRower simultaneously (structurally). BeginTx is never
+// reached on the list paths this covers.
 type q400ListPool struct{}
 
 func (q400ListPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {

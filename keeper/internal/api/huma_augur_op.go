@@ -1,12 +1,12 @@
 package api
 
-// FULL-TYPED форма AUGUR-домена (omens + rites; code-first источник OpenAPI,
-// ADR-054 §Pattern). ТИРАЖ-БАТЧ-2b (augur целиком на huma по эталонам role/operator):
-// omen create (WRITE+AUDIT omen.created), omen list (read-with-typed-query),
+// FULL-TYPED shape of the AUGUR domain (omens + rites; code-first OpenAPI source,
+// ADR-054 §Pattern). ROLLOUT-BATCH-2b (augur fully on huma following the role/operator
+// pattern): omen create (WRITE+AUDIT omen.created), omen list (read-with-typed-query),
 // omen get (read-with-path), omen delete (WRITE+AUDIT omen.revoked); rite create
-// (WRITE+AUDIT rite.created), rite list (read-with-typed-query, обязательный omen=),
-// rite delete (WRITE+AUDIT rite.revoked). Go-типы — единственный источник правды
-// (JSON Schema + валидация + typed-output).
+// (WRITE+AUDIT rite.created), rite list (read-with-typed-query, omen= required),
+// rite delete (WRITE+AUDIT rite.revoked). Go types are the single source of truth
+// (JSON Schema + validation + typed output).
 
 import (
 	"encoding/json"
@@ -17,23 +17,24 @@ import (
 
 // === POST /v1/augur/omens (create) — WRITE+AUDIT omen.created ===
 
-// omenCreateInput — huma-input POST /v1/augur/omens (FULL-TYPED). Body —
-// типизированное тело: huma декодит и валидирует по схеме из huma-тегов.
+// omenCreateInput — huma-input for POST /v1/augur/omens (FULL-TYPED). Body is
+// the typed body: huma decodes and validates it against the schema from the huma tags.
 type omenCreateInput struct {
 	Body OmenCreateRequest
 }
 
-// OmenCreateRequest — Go-форма тела POST /v1/augur/omens (code-first источник
-// схемы И валидации, handler-native). Имя Omen-а + source_type (enum
+// OmenCreateRequest — Go shape of the POST /v1/augur/omens body (code-first source
+// of both the schema AND validation, handler-native). Omen name + source_type (enum
 // vault/prometheus/elk) + endpoint + auth_ref (vault-ref).
 //
-// huma-теги: required:"true" — обязательное (missing→422); enum source_type —
-// значение вне набора → 422 (schema-validate, не доменная проверка дубль).
-// additionalProperties:false (huma-дефолт) → unknown-поле → 400. Формат name/
-// endpoint/auth_ref — доменная валидация в CreateOmenTyped (422). source_type
-// inline-enum (рукопись НЕ выносит его в standalone components/schemas — мех-2
-// пропущен). Имя структуры = контрактное имя схемы в OpenAPI (DefaultSchemaNamer
-// берёт reflect.Type.Name()) — выровнено под committed-рукопись (OmenCreateRequest).
+// huma tags: required:"true" — mandatory (missing→422); enum source_type —
+// a value outside the set → 422 (schema-validate, not a duplicate domain check).
+// additionalProperties:false (huma default) → unknown field → 400. The format of
+// name/endpoint/auth_ref is domain-validated in CreateOmenTyped (422). source_type
+// is an inline enum (the handwritten spec does NOT hoist it into standalone
+// components/schemas — mechanism-2 is skipped). The struct name is the contract
+// schema name in OpenAPI (DefaultSchemaNamer takes reflect.Type.Name()) — aligned
+// with the committed handwritten spec (OmenCreateRequest).
 type OmenCreateRequest struct {
 	Name       string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Omen-а (kebab-case, 1..63)"`
 	SourceType string `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"тип внешней системы; значение вне enum → 422"`
@@ -41,20 +42,20 @@ type OmenCreateRequest struct {
 	AuthRef    string `json:"auth_ref" required:"true" doc:"vault-ref на master-credential (vault:<mount>/<path>); сам секрет не хранится"`
 }
 
-// omenCreateOutput — huma-output POST /v1/augur/omens (FULL-TYPED). Status=201;
-// Body — huma-native 201-тело (OmenView). Wire-форма
-// (created_by_aid nullable, created_at секундной точности) зафиксирована golden-JSON
-// byte-exact-тестом (huma_augur_reply_test.go).
+// omenCreateOutput — huma-output for POST /v1/augur/omens (FULL-TYPED). Status=201;
+// Body is the huma-native 201 body (OmenView). The wire shape
+// (created_by_aid nullable, created_at second precision) is pinned by a golden-JSON
+// byte-exact test (huma_augur_reply_test.go).
 type omenCreateOutput struct {
 	Status int `json:"-"`
 	Body   OmenView
 }
 
-// omenCreateOperation — метаданные POST /v1/augur/omens. Path = "/omens"
-// относительно chi-группы /v1/augur (полный под-/augur путь — distinct-path для
-// spec-dump, иначе коллизия с rite-POST). DefaultStatus=201. Permission omen.create
-// + audit omen.created. Errors: 400 unknown/malformed, 403 RBAC, 409 omen-exists,
-// 422 валидация name/source_type/endpoint/auth_ref, 500.
+// omenCreateOperation — metadata for POST /v1/augur/omens. Path = "/omens"
+// relative to the chi group /v1/augur (the full /augur sub-path — a distinct path
+// for the spec dump, otherwise a collision with rite-POST). DefaultStatus=201.
+// Permission omen.create + audit omen.created. Errors: 400 unknown/malformed,
+// 403 RBAC, 409 omen-exists, 422 name/source_type/endpoint/auth_ref validation, 500.
 func omenCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createOmen",
@@ -68,28 +69,28 @@ func omenCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/augur/omens (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/augur/omens (list) — READ-with-typed-query (no audit) ===
 
-// omenListInput — huma-input GET /v1/augur/omens (FULL-TYPED typed-query).
-// offset/limit — int32 (НЕ Go-int: huma на int эмитит int64, committed-спека несёт
-// int32) с default (offset 0, limit 50, совпадает с shared/api.ParsePage). bad-int →
-// 400 (parseInto). ГРАНИЦЫ диапазона enforce-ит ДОМЕННАЯ ListOmensTyped через
-// CheckPageBounds → 400 (НЕ huma minimum/maximum, иначе 422 — wire-change против
-// легаси ParsePage 400).
+// omenListInput — huma-input for GET /v1/augur/omens (FULL-TYPED typed-query).
+// offset/limit are int32 (NOT Go int: huma emits int64 for int, the committed spec
+// carries int32) with a default (offset 0, limit 50, matching shared/api.ParsePage).
+// A bad int → 400 (parseInto). The range BOUNDS are enforced by the DOMAIN
+// ListOmensTyped via CheckPageBounds → 400 (NOT huma minimum/maximum, which would
+// give 422 — a wire change against the legacy ParsePage 400).
 type omenListInput struct {
 	Offset int32 `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 	Limit  int32 `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
 
-// omenListOutput — huma-output GET /v1/augur/omens (FULL-TYPED). Body — huma-native
-// 200-envelope (OmenListReply: items/offset/limit/total). Wire-форма items зафиксирована
-// golden-JSON byte-exact-тестом.
+// omenListOutput — huma-output for GET /v1/augur/omens (FULL-TYPED). Body is the
+// huma-native 200 envelope (OmenListReply: items/offset/limit/total). The wire
+// shape of items is pinned by a golden-JSON byte-exact test.
 type omenListOutput struct {
 	Body OmenListReply
 }
 
-// omenListOperation — метаданные GET /v1/augur/omens. Path = "/omens" относительно
-// chi-группы /v1/augur. DefaultStatus=200. READ-роут: audit НЕ навешан.
+// omenListOperation — metadata for GET /v1/augur/omens. Path = "/omens" relative
+// to the chi group /v1/augur. DefaultStatus=200. READ route: no audit attached.
 // Errors: 400 (out-of-range pagination), 403 RBAC, 500.
 func omenListOperation() huma.Operation {
 	return huma.Operation{
@@ -104,23 +105,23 @@ func omenListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/augur/omens/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/augur/omens/{name} (get) — READ-with-path (no audit) ===
 
-// omenGetInput — huma-input GET /v1/augur/omens/{name}. Name — path-параметр.
-// Формат name (reOmenName) — доменная валидация в GetOmenTyped (422).
+// omenGetInput — huma-input for GET /v1/augur/omens/{name}. Name is a path
+// parameter. The name format (reOmenName) is domain-validated in GetOmenTyped (422).
 type omenGetInput struct {
 	Name string `path:"name" doc:"имя Omen-а"`
 }
 
-// omenGetOutput — huma-output GET /v1/augur/omens/{name} (FULL-TYPED). Body —
-// huma-native 200-тело (OmenView). Wire-форма зафиксирована golden-тестом.
+// omenGetOutput — huma-output for GET /v1/augur/omens/{name} (FULL-TYPED). Body
+// is the huma-native 200 body (OmenView). The wire shape is pinned by a golden test.
 type omenGetOutput struct {
 	Body OmenView
 }
 
-// omenGetOperation — метаданные GET /v1/augur/omens/{name}. DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Permission omen.list (read покрыт list-правом).
-// Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
+// omenGetOperation — metadata for GET /v1/augur/omens/{name}. DefaultStatus=200.
+// READ route: no audit attached. Permission omen.list (read is covered by the
+// list permission). Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
 func omenGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getOmen",
@@ -136,20 +137,21 @@ func omenGetOperation() huma.Operation {
 
 // === DELETE /v1/augur/omens/{name} (delete) — WRITE+AUDIT omen.revoked ===
 
-// omenDeleteInput — huma-input DELETE /v1/augur/omens/{name}. Name — path. Body нет.
+// omenDeleteInput — huma-input for DELETE /v1/augur/omens/{name}. Name is a path param. No Body.
 type omenDeleteInput struct {
 	Name string `path:"name" doc:"имя Omen-а"`
 }
 
-// augurNoContentOutput — общий huma-output 204-write-роутов augur (omen.delete /
-// rite.delete). БЕЗ Body (легаси-контракт: 204 No Content). huma на output без Body
-// делает SetStatus(204) → пустое тело (wire-идентично прежнему WriteHeader(204)).
+// augurNoContentOutput — the shared huma-output for augur's 204 write routes
+// (omen.delete / rite.delete). No Body (legacy contract: 204 No Content). huma on
+// an output without Body does SetStatus(204) → empty body (wire-identical to the
+// previous WriteHeader(204)).
 type augurNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// omenDeleteOperation — метаданные DELETE /v1/augur/omens/{name}. DefaultStatus=204.
-// Permission omen.delete + audit omen.revoked (каскад чистит связанные Rite-ы).
+// omenDeleteOperation — metadata for DELETE /v1/augur/omens/{name}. DefaultStatus=204.
+// Permission omen.delete + audit omen.revoked (the cascade cleans up related Rites).
 // Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
 func omenDeleteOperation() huma.Operation {
 	return huma.Operation{
@@ -166,19 +168,20 @@ func omenDeleteOperation() huma.Operation {
 
 // === POST /v1/augur/rites (create) — WRITE+AUDIT rite.created ===
 
-// riteCreateInput — huma-input POST /v1/augur/rites (FULL-TYPED). Body —
-// типизированное тело: huma декодит и валидирует по схеме.
+// riteCreateInput — huma-input for POST /v1/augur/rites (FULL-TYPED). Body is
+// the typed body: huma decodes and validates it against the schema.
 type riteCreateInput struct {
 	Body RiteCreateRequest
 }
 
-// RiteCreateRequest — Go-форма тела POST /v1/augur/rites (code-first источник
-// схемы И валидации, handler-native). omen + XOR-субъект (coven/sid) + allow
-// (byte-passthrough JSONB, ADR-051 категория D) + delegate +
-// token-поля. allow — json.RawMessage (required:"true"): сырые байты тела едут в
-// service-валидатор напрямую. XOR-субъект и форма allow/token — доменная валидация
-// в CreateRiteTyped (422). additionalProperties:false → unknown → 400. Имя структуры =
-// контрактное имя схемы в OpenAPI (committed-рукопись → RiteCreateRequest).
+// RiteCreateRequest — Go shape of the POST /v1/augur/rites body (code-first source
+// of both the schema AND validation, handler-native). omen + XOR subject (coven/sid)
+// + allow (byte-passthrough JSONB, ADR-051 category D) + delegate + token fields.
+// allow is json.RawMessage (required:"true"): the raw body bytes go straight to the
+// service validator. The XOR subject and the allow/token shape are domain-validated
+// in CreateRiteTyped (422). additionalProperties:false → unknown → 400. The struct
+// name is the contract schema name in OpenAPI (committed handwritten spec →
+// RiteCreateRequest).
 type RiteCreateRequest struct {
 	Omen         string          `json:"omen" required:"true" doc:"Omen, к которому относится grant"`
 	Coven        *string         `json:"coven,omitempty" doc:"субъект-grant по Coven-метке (XOR с sid)"`
@@ -189,18 +192,18 @@ type RiteCreateRequest struct {
 	TokenNumUses *int            `json:"token_num_uses,omitempty" doc:"лимит использований токена; только vault-delegate"`
 }
 
-// riteCreateOutput — huma-output POST /v1/augur/rites (FULL-TYPED). Status=201;
-// Body — huma-native 201-тело (RiteView). allow — byte-passthrough JSONB. Wire-форма
-// зафиксирована golden-JSON byte-exact-тестом.
+// riteCreateOutput — huma-output for POST /v1/augur/rites (FULL-TYPED). Status=201;
+// Body is the huma-native 201 body (RiteView). allow is byte-passthrough JSONB. The
+// wire shape is pinned by a golden-JSON byte-exact test.
 type riteCreateOutput struct {
 	Status int `json:"-"`
 	Body   RiteView
 }
 
-// riteCreateOperation — метаданные POST /v1/augur/rites. Path = "/rites"
-// относительно chi-группы /v1/augur. DefaultStatus=201. Permission rite.create +
+// riteCreateOperation — metadata for POST /v1/augur/rites. Path = "/rites"
+// relative to the chi group /v1/augur. DefaultStatus=201. Permission rite.create +
 // audit rite.created. Errors: 400 unknown/malformed, 403 RBAC, 404 omen-not-found,
-// 422 XOR-нарушение/битый allow/token-поля, 500.
+// 422 XOR violation/broken allow/token fields, 500.
 func riteCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createRite",
@@ -214,25 +217,27 @@ func riteCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/augur/rites (list by omen) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/augur/rites (list by omen) — READ-with-typed-query (no audit) ===
 
-// riteListInput — huma-input GET /v1/augur/rites?omen=<name>. Omen — обязательный
-// query-фильтр (augur.md §6 — list-all без omen-скоупа отложен). Формат/наличие omen
-// — доменная валидация в ListRitesTyped (422; query-string без enum, как path-name).
+// riteListInput — huma-input for GET /v1/augur/rites?omen=<name>. Omen is a
+// required query filter (augur.md §6 — list-all without an omen scope is deferred).
+// The format/presence of omen is domain-validated in ListRitesTyped (422; a
+// query string without an enum, like path-name).
 type riteListInput struct {
 	Omen string `query:"omen" doc:"фильтр by-omen (обязателен в MVP); пустой/битый → 422"`
 }
 
-// riteListOutput — huma-output GET /v1/augur/rites (FULL-TYPED). Body — huma-native
-// 200-тело (RiteListReply: items[] под `items`, БЕЗ offset/limit/total — list-by-omen
-// без пагинации). Wire-форма зафиксирована golden-тестом.
+// riteListOutput — huma-output for GET /v1/augur/rites (FULL-TYPED). Body is the
+// huma-native 200 body (RiteListReply: items[] under `items`, with NO
+// offset/limit/total — list-by-omen has no pagination). The wire shape is pinned
+// by a golden test.
 type riteListOutput struct {
 	Body RiteListReply
 }
 
-// riteListOperation — метаданные GET /v1/augur/rites. Path = "/rites" относительно
-// chi-группы /v1/augur. DefaultStatus=200. READ-роут: audit НЕ навешан.
-// Errors: 403 RBAC, 422 omen не передан/битый, 500.
+// riteListOperation — metadata for GET /v1/augur/rites. Path = "/rites" relative
+// to the chi group /v1/augur. DefaultStatus=200. READ route: no audit attached.
+// Errors: 403 RBAC, 422 omen missing/broken, 500.
 func riteListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listRites",
@@ -248,15 +253,16 @@ func riteListOperation() huma.Operation {
 
 // === DELETE /v1/augur/rites/{id} (delete) — WRITE+AUDIT rite.revoked ===
 
-// riteDeleteInput — huma-input DELETE /v1/augur/rites/{id}. ID — path-параметр
-// (string: положительное число валидирует доменная DeleteRiteTyped → 422 на не-числе).
+// riteDeleteInput — huma-input for DELETE /v1/augur/rites/{id}. ID is a path
+// parameter (string: DeleteRiteTyped domain-validates it's a positive number →
+// 422 on a non-number).
 type riteDeleteInput struct {
 	ID string `path:"id" doc:"числовой id Rite-а"`
 }
 
-// riteDeleteOperation — метаданные DELETE /v1/augur/rites/{id}. DefaultStatus=204.
+// riteDeleteOperation — metadata for DELETE /v1/augur/rites/{id}. DefaultStatus=204.
 // Permission rite.delete + audit rite.revoked. Errors: 403 RBAC, 404 not-found, 422
-// bad path-id (не положительное число), 500.
+// bad path-id (not a positive number), 500.
 func riteDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteRite",

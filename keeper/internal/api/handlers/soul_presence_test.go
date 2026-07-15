@@ -11,11 +11,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// fakePresence — мок [SoulPresence] для presence-overlay-тестов `GET /v1/souls`.
-// alive — множество SID-ов с «живым» Redis SID-lease (online). err != nil →
-// эмулирует Redis-сбой (handler деградирует fail-safe на PG-снимок). gotSIDs —
-// захват аргумента для проверки, что overlay спрашивает lease ТОЛЬКО про
-// presence-снимковые статусы (connected/disconnected), не про lifecycle.
+// fakePresence — mock [SoulPresence] for presence-overlay tests of `GET /v1/souls`.
+// alive — the set of SIDs holding a "live" Redis SID lease (online). err != nil →
+// emulates a Redis outage (the handler degrades fail-safe to the PG snapshot). gotSIDs —
+// captures the argument to verify the overlay asks about the lease ONLY for
+// presence-snapshot statuses (connected/disconnected), never lifecycle ones.
 type fakePresence struct {
 	alive   map[string]struct{}
 	err     error
@@ -38,11 +38,11 @@ func aliveSet(sids ...string) map[string]struct{} {
 	return m
 }
 
-// TestSoulList_Reconnect_LeaseFlipsToConnected — корневой live-баг (ADR-006(a)):
-// после reaper `mark_disconnected` PG-снимок `souls.status` = disconnected, но
-// Soul переподключился (живой Redis SID-lease). До фикса /v1/souls отдавал stale
-// disconnected; теперь overlay деривирует status из lease → connected, без
-// рестарта/ручных действий и без ожидания следующего тика reaper-а.
+// TestSoulList_Reconnect_LeaseFlipsToConnected — the root live bug (ADR-006(a)):
+// after the reaper's `mark_disconnected`, the PG snapshot `souls.status` = disconnected, but
+// the Soul reconnected (a live Redis SID lease). Before the fix /v1/souls returned a stale
+// disconnected; now the overlay derives status from the lease → connected, without
+// a restart/manual action and without waiting for the reaper's next tick.
 func TestSoulList_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 2,
@@ -51,7 +51,7 @@ func TestSoulList_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 			{SID: "redis-02.example.com", Transport: soul.TransportAgent, Status: soul.StatusDisconnected, RegisteredAt: time.Now().UTC()},
 		},
 	}
-	// redis-01 переподключился (lease жив), redis-02 реально оффлайн (lease мёртв).
+	// redis-01 reconnected (lease alive), redis-02 is genuinely offline (lease dead).
 	presence := &fakePresence{alive: aliveSet("redis-01.example.com")}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, presence, nil)
 
@@ -68,9 +68,9 @@ func TestSoulList_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 	}
 }
 
-// TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected — обратное
-// направление: PG-снимок connected, но lease умер (стрим оборвался, reaper ещё
-// не сверил). Overlay отдаёт фактический disconnected, не stale connected.
+// TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected — the reverse
+// direction: the PG snapshot is connected, but the lease has died (the stream broke, the reaper
+// hasn't reconciled yet). The overlay returns the real disconnected, not a stale connected.
 func TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -78,7 +78,7 @@ func TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected(t *testing.T) 
 			{SID: "web-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusConnected, RegisteredAt: time.Now().UTC()},
 		},
 	}
-	presence := &fakePresence{alive: aliveSet()} // lease мёртв.
+	presence := &fakePresence{alive: aliveSet()} // lease dead.
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, presence, nil)
 
 	rec := doList(t, h, "")
@@ -92,8 +92,8 @@ func TestSoulList_StaleConnectedSnapshot_LeaseFlipsToDisconnected(t *testing.T) 
 }
 
 // TestSoulList_LifecycleStatusesNotOverlaid — pending/revoked/expired/destroyed —
-// НЕ presence-снимки: они описывают онбординг/терминал, не online/offline.
-// Overlay их не трогает (не спрашивает про них lease вовсе) и не флипает.
+// are NOT presence snapshots: they describe onboarding/terminal state, not online/offline.
+// The overlay leaves them alone (doesn't ask about their lease at all) and never flips them.
 func TestSoulList_LifecycleStatusesNotOverlaid(t *testing.T) {
 	now := time.Now().UTC()
 	pool := &fakeSoulPool{
@@ -105,7 +105,7 @@ func TestSoulList_LifecycleStatusesNotOverlaid(t *testing.T) {
 			{SID: "d-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusDestroyed, RegisteredAt: now},
 		},
 	}
-	// Даже если бы lease «оказался жив» для этих SID — overlay их пропускает.
+	// Even if the lease "turned out to be alive" for these SIDs — the overlay skips them.
 	presence := &fakePresence{alive: aliveSet("p-01.example.com", "r-01.example.com", "e-01.example.com", "d-01.example.com")}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, presence, nil)
 
@@ -125,14 +125,14 @@ func TestSoulList_LifecycleStatusesNotOverlaid(t *testing.T) {
 			t.Errorf("%s status = %q, want %q (lifecycle — не presence)", sid, items[sid], st)
 		}
 	}
-	// Lease НЕ запрашивается ни про один lifecycle-SID (overlay фильтрует до вызова).
+	// The lease is NOT queried for any lifecycle SID (the overlay filters before the call).
 	if len(presence.gotSIDs) != 0 {
 		t.Errorf("presence.gotSIDs = %v, want [] (lifecycle-статусы не идут в lease-проверку)", presence.gotSIDs)
 	}
 }
 
-// TestSoulList_PresenceCheckScopedToSnapshotStatuses — в lease-проверку уходят
-// ТОЛЬКО connected/disconnected-кандидаты; lifecycle-SID отфильтрованы.
+// TestSoulList_PresenceCheckScopedToSnapshotStatuses — only connected/disconnected
+// candidates go into the lease check; lifecycle SIDs are filtered out.
 func TestSoulList_PresenceCheckScopedToSnapshotStatuses(t *testing.T) {
 	now := time.Now().UTC()
 	pool := &fakeSoulPool{
@@ -161,8 +161,8 @@ func TestSoulList_PresenceCheckScopedToSnapshotStatuses(t *testing.T) {
 	}
 }
 
-// TestSoulList_PresenceFailSafe — Redis-сбой не искажает список: handler
-// деградирует на PG-снимок status как есть (fail-safe), без 500.
+// TestSoulList_PresenceFailSafe — a Redis outage doesn't corrupt the list: the handler
+// degrades to the PG snapshot status as-is (fail-safe), without a 500.
 func TestSoulList_PresenceFailSafe(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -183,8 +183,8 @@ func TestSoulList_PresenceFailSafe(t *testing.T) {
 	}
 }
 
-// TestSoulList_NilPresence_SnapshotPassthrough — без presence (single-instance
-// dev / unit без Redis) overlay выключен: PG-снимок status отдаётся как есть.
+// TestSoulList_NilPresence_SnapshotPassthrough — without presence (single-instance
+// dev / unit without Redis) the overlay is disabled: the PG snapshot status is returned as-is.
 func TestSoulList_NilPresence_SnapshotPassthrough(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -204,8 +204,8 @@ func TestSoulList_NilPresence_SnapshotPassthrough(t *testing.T) {
 	}
 }
 
-// TestGetSoul_Reconnect_LeaseFlipsToConnected — overlay в GET /v1/souls/{sid}:
-// PG-снимок disconnected + живой lease → connected (тот же live-баг, single-soul).
+// TestGetSoul_Reconnect_LeaseFlipsToConnected — overlay in GET /v1/souls/{sid}:
+// PG snapshot disconnected + a live lease → connected (the same live bug, single-soul).
 func TestGetSoul_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pool := &fakeReadPool{soul: &soul.Soul{
@@ -231,7 +231,7 @@ func TestGetSoul_Reconnect_LeaseFlipsToConnected(t *testing.T) {
 	}
 }
 
-// decodeListStatuses парсит /v1/souls items в map sid→status.
+// decodeListStatuses parses /v1/souls items into a map sid→status.
 func decodeListStatuses(t *testing.T, body []byte) map[string]string {
 	t.Helper()
 	var out struct {

@@ -94,10 +94,10 @@ func (l *DestinyLoader) Load(ctx context.Context, ref DestinyRef) (*DestinyArtif
 	return art, nil
 }
 
-// parseVars читает опциональный `vars.yml` снапшота (destiny-локалы,
-// docs/destiny/vars.md). Отсутствие файла → nil (destiny без локалов).
-// securejoin клампит выход за пределы снапшота; для not-exist возвращает nil,
-// чтобы опциональность файла сохранилась.
+// parseVars reads the snapshot's optional `vars.yml` (destiny locals,
+// docs/destiny/vars.md). File absent → nil (destiny without locals).
+// securejoin clamps escapes outside the snapshot; for not-exist it returns
+// nil, so the file's optionality is preserved.
 func (l *DestinyLoader) parseVars(art *DestinyArtifact) (map[string]any, error) {
 	full, err := securejoin.SecureJoin(art.LocalDir, destinyVarsFile)
 	if err != nil {
@@ -110,7 +110,7 @@ func (l *DestinyLoader) parseVars(art *DestinyArtifact) (map[string]any, error) 
 	return vars, nil
 }
 
-// parseManifest читает и валидирует `destiny.yml` снапшота.
+// parseManifest reads and validates the snapshot's `destiny.yml`.
 func (l *DestinyLoader) parseManifest(art *DestinyArtifact) (*config.DestinyManifest, error) {
 	data, err := readSnapshotFile(art.LocalDir, destinyManifestFile)
 	if err != nil {
@@ -126,11 +126,12 @@ func (l *DestinyLoader) parseManifest(art *DestinyArtifact) (*config.DestinyMani
 	return manifest, nil
 }
 
-// parseTasks читает и валидирует `tasks/main.yml` снапшота как плоский список
-// задач DSL-ядра, затем раскрывает within-destiny include (`tasks/<sub>.yml`,
-// destiny/tasks.md §4) в плоский список — до render-фазы. Include-цели резолвятся
-// строго внутри каталога `tasks/` снапшота (securejoin клампит выход; `../`
-// запрещён ещё на фазе валидации). Циклы детектируются по resolved-пути.
+// parseTasks reads and validates the snapshot's `tasks/main.yml` as a flat
+// list of DSL-core tasks, then expands within-destiny includes
+// (`tasks/<sub>.yml`, destiny/tasks.md §4) into a flat list — before the
+// render phase. Include targets resolve strictly inside the snapshot's
+// `tasks/` directory (securejoin clamps escapes; `../` is already rejected at
+// the validation phase). Cycles are detected by resolved path.
 func (l *DestinyLoader) parseTasks(art *DestinyArtifact) ([]config.Task, error) {
 	data, err := readSnapshotFile(art.LocalDir, destinyTasksFile)
 	if err != nil {
@@ -151,11 +152,12 @@ func (l *DestinyLoader) parseTasks(art *DestinyArtifact) ([]config.Task, error) 
 	return expanded, nil
 }
 
-// destinyIncludeResolver — within-destiny [config.IncludeResolver]: include-цели
-// строго в каталоге `tasks/` снапшота (destiny/tasks.md §4 — сосед в той же
-// папке, выход за её пределы запрещён). securejoin внутри readSnapshotFile
-// клампит `..`/абсолютный путь/симлинк. display-путь (`tasks/<sub>.yml`) — ключ
-// cycle-detection.
+// destinyIncludeResolver — the within-destiny [config.IncludeResolver]:
+// include targets stay strictly inside the snapshot's `tasks/` directory
+// (destiny/tasks.md §4 — a neighbor in the same folder, escaping it is
+// forbidden). securejoin inside readSnapshotFile clamps `..`/absolute
+// paths/symlinks. The display path (`tasks/<sub>.yml`) is the cycle-detection
+// key.
 func destinyIncludeResolver(localDir string) config.IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		rel := path.Join(destinyTasksDir, name)

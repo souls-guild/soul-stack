@@ -1,28 +1,31 @@
 package api
 
-// Агрегатор единой huma-OpenAPI-спеки всех доменов Operator API. Цель — «правда в
-// коде»: одна валидная 3.1-спека, собранная runtime-дампом huma-операций из кода
-// (FastAPI-стиль), без committed-YAML как источника. Точка входа сборки —
-// HumaFullSpecYAML (ниже). Served-механизм уже переключён на этот агрегатор (T4c):
-// GET /openapi.yaml отдаёт runtime-дамп через servedOpenAPIHandler (router.go),
-// meta-embed-пакет удалён; committed docs/keeper/openapi.yaml — производный генерат
-// (make gen-openapi), сверяется с дампом гейтом check-openapi.
+// Aggregator of the unified huma-OpenAPI spec for all Operator API domains. Goal —
+// "truth in code": one valid 3.1 spec assembled by a runtime dump of huma
+// operations from the code (FastAPI-style), without a committed YAML as the
+// source. Assembly entry point — HumaFullSpecYAML (below). The served mechanism is
+// already switched to this aggregator (T4c): GET /openapi.yaml returns the
+// runtime dump via servedOpenAPIHandler (router.go), the meta-embed package is
+// removed; the committed docs/keeper/openapi.yaml is a derived artifact
+// (make gen-openapi), checked against the dump by the check-openapi gate.
 //
-// МЕХАНИЗМ (A2-bis, architect-рекомендация — НЕ менять huma.Operation):
-// per-домен dump уже существует (HumaXSpecYAML через humaDumpSpec на временном
-// chi-роутере). Проблема — двойная path-конвенция: у БОЛЬШИНСТВА доменов
-// huma-Operation.Path ОТНОСИТЕЛЕН chi-группе (`/`, `/{name}`), полный URL даёт
-// chi-mount-префикс; у oracle/augur/herald/errand/catalog/audit/push-runs Path уже
-// полный под /v1. Наивный merge на одну huma.API → коллизии path+method (множество
-// «POST /» от разных групп). A2-bis: каждую РЕГИСТРАЦИОННУЮ ГРУППУ дампим на СВОЮ
-// huma.API, СДВИГАЕМ её paths-ключи на per-группу chi-префикс (тот же, что в
-// buildRouter), затем мержим paths + components.schemas + tags в одну 3.1-спеку.
+// MECHANISM (A2-bis, architect recommendation — do NOT change huma.Operation):
+// a per-domain dump already exists (HumaXSpecYAML via humaDumpSpec on a
+// temporary chi router). The problem — a dual path convention: for MOST domains
+// huma-Operation.Path is RELATIVE to the chi group (`/`, `/{name}`), the full URL
+// comes from the chi mount prefix; for oracle/augur/herald/errand/catalog/audit/
+// push-runs the Path is already full under /v1. A naive merge into one huma.API →
+// path+method collisions (multiple "POST /" from different groups). A2-bis: dump
+// each REGISTRATION GROUP onto its OWN huma.API, SHIFT its paths keys by the
+// per-group chi prefix (the same one used in buildRouter), then merge paths +
+// components.schemas + tags into one 3.1 spec.
 //
-// Единица сборки — РЕГИСТРАЦИОННАЯ ГРУППА (prefix + набор register-функций), а НЕ
-// «домен», потому что префикс — свойство chi-mount-а группы, не домена: push
-// смешивает /v1/push (apply/get) и /v1 (push-runs) в одном HumaPushSpecYAML, поэтому
-// разбит на две группы. Список specGroups зеркалит топологию buildRouter — это и есть
-// будущий drift-guard (агрегатор не должен забыть домен).
+// The unit of assembly is the REGISTRATION GROUP (prefix + a set of register
+// functions), not a "domain", because the prefix is a property of the group's
+// chi mount, not of the domain: push mixes /v1/push (apply/get) and /v1
+// (push-runs) in one HumaPushSpecYAML, hence it is split into two groups. The
+// specGroups list mirrors the buildRouter topology — this is also the future
+// drift-guard (the aggregator must not forget a domain).
 
 import (
 	"fmt"
@@ -34,13 +37,15 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// bearerSecuritySchemeName — имя securityScheme (http/bearer JWT) в собранной
-// спеке. Vьювер /docs читает его для «Try It»; глобальное security-требование
-// ссылается на него же. Имя стандартное для bearer-JWT в OpenAPI-экосистеме.
+// bearerSecuritySchemeName — the securityScheme name (http/bearer JWT) in the
+// assembled spec. The /docs viewer reads it for "Try It"; the global security
+// requirement references the same name. The standard name for bearer-JWT in the
+// OpenAPI ecosystem.
 const bearerSecuritySchemeName = "bearerAuth"
 
-// yamlMarshalSchema сериализует *huma.Schema в каноничную YAML-строку для
-// побайтового сравнения тел одноимённых схем при merge (детект коллизии гейта б).
+// yamlMarshalSchema serializes *huma.Schema into a canonical YAML string for a
+// byte-exact comparison of same-named schema bodies during merge (gate-b
+// collision detection).
 func yamlMarshalSchema(s *huma.Schema) (string, error) {
 	b, err := yaml.Marshal(s)
 	if err != nil {
@@ -49,30 +54,32 @@ func yamlMarshalSchema(s *huma.Schema) (string, error) {
 	return string(b), nil
 }
 
-// specGroup — одна регистрационная группа: chi-префикс mount-а (как в buildRouter)
-// + замыкатель, регистрирующий huma-операции этой группы на переданную API.
-// prefix="/v1" — операции уже несут полный под-/v1 путь (oracle/augur/herald/…);
-// prefix="/v1/<x>" — операции относительны chi-группе r.Route("/<x>").
+// specGroup — a single registration group: the chi mount prefix (as in
+// buildRouter) + a closure that registers this group's huma operations on the
+// given API. prefix="/v1" — operations already carry a full under-/v1 path
+// (oracle/augur/herald/…); prefix="/v1/<x>" — operations are relative to the chi
+// group r.Route("/<x>").
 type specGroup struct {
 	prefix   string
 	register func(huma.API) error
 }
 
-// fullSpecGroups — полный набор регистрационных групп Operator API в топологии
-// buildRouter. Источник истины для агрегатора; добавление домена в router без
-// строки здесь ловит TestFullSpec_CoversAllRoutes (drift-guard).
+// fullSpecGroups — the full set of Operator API registration groups in the
+// buildRouter topology. The source of truth for the aggregator; adding a domain
+// to the router without a line here is caught by TestFullSpec_CoversAllRoutes
+// (drift-guard).
 //
-// Префиксы выверены по router.go (chi-mount каждой группы):
-//   - r.Route("/<x>") + относительный Operation.Path  → prefix "/v1/<x>"
-//   - группа на /v1 c полным под-/v1 Operation.Path    → prefix "/v1"
+// Prefixes are checked against router.go (chi mount of each group):
+//   - r.Route("/<x>") + a relative Operation.Path  → prefix "/v1/<x>"
+//   - a group on /v1 with a full under-/v1 Operation.Path → prefix "/v1"
 //
-// Особые случаи:
-//   - choir смонтирован на группе /v1/incarnations (Operation.Path = /{name}/choirs/…)
-//     → prefix "/v1/incarnations" (НЕ "/v1/choirs").
-//   - push разбит: apply/get относительны /v1/push; push-runs — полный /v1.
+// Special cases:
+//   - choir is mounted on the /v1/incarnations group (Operation.Path =
+//     /{name}/choirs/…) → prefix "/v1/incarnations" (NOT "/v1/choirs").
+//   - push is split: apply/get are relative to /v1/push; push-runs is a full /v1.
 func fullSpecGroups() []specGroup {
 	return []specGroup{
-		// Относительные группы r.Route("/<x>").
+		// Relative groups r.Route("/<x>").
 		{"/v1/operators", func(api huma.API) error {
 			stub := handlers.OperatorSpecStub()
 			registerHumaOperatorCreate(api, stub)
@@ -115,8 +122,8 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationRuns(api, stub)
 			registerHumaIncarnationRunDetail(api, stub)
 			registerHumaIncarnationRunTasks(api, stub)
-			// SSE live-ход прогона (ADR-068 §A3): non-nil zero-deps регистрирует
-			// операцию для спеки (handler-closure при dump не вызывается).
+			// SSE live run progress (ADR-068 §A3): non-nil zero-deps registers the
+			// operation for the spec (the handler closure is not invoked during dump).
 			registerHumaIncarnationRunEvents(api, &runEventsDeps{})
 			registerHumaIncarnationRun(api, stub)
 			registerHumaIncarnationUnlock(api, stub)
@@ -130,8 +137,8 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationRevealableSecrets(api, stub)
 			return nil
 		}},
-		// choir смонтирован на группе /v1/incarnations, Operation.Path несёт
-		// /{name}/choirs/… → тот же prefix /v1/incarnations.
+		// choir is mounted on the /v1/incarnations group, Operation.Path carries
+		// /{name}/choirs/… → the same prefix /v1/incarnations.
 		{"/v1/incarnations", func(api huma.API) error {
 			stub := handlers.ChoirSpecStub()
 			registerHumaChoirCreate(api, stub)
@@ -259,7 +266,7 @@ func fullSpecGroups() []specGroup {
 			return nil
 		}},
 
-		// Группы на /v1 — Operation.Path уже полный под-/v1 путь.
+		// Groups on /v1 — Operation.Path is already a full under-/v1 path.
 		{"/v1", func(api huma.API) error {
 			registerHumaAuditList(api, handlers.AuditSpecStub())
 			return nil
@@ -271,14 +278,14 @@ func fullSpecGroups() []specGroup {
 			registerHumaMyPermissionsList(api, handlers.NewMyPermissionsHandler(nil, nil))
 			return nil
 		}},
-		// GET /v1/cluster — Operation.Path полный под-/v1 (/cluster).
+		// GET /v1/cluster — Operation.Path is full under-/v1 (/cluster).
 		{"/v1", func(api huma.API) error {
 			registerHumaClusterGet(api, handlers.ClusterSpecStub())
 			return nil
 		}},
-		// augur смонтирован через r.Route("/augur") — Operation.Path относителен
-		// (/omens, /rites), полный URL = /v1/augur/… (НЕ полный под-/v1 как oracle/
-		// herald, которые навешаны прямо на /v1).
+		// augur is mounted via r.Route("/augur") — Operation.Path is relative
+		// (/omens, /rites), the full URL = /v1/augur/… (NOT full under-/v1 like
+		// oracle/herald, which are mounted directly on /v1).
 		{"/v1/augur", func(api huma.API) error {
 			stub := handlers.AugurSpecStub()
 			registerHumaOmenCreate(api, stub)

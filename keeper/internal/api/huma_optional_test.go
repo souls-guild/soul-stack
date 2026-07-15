@@ -1,13 +1,13 @@
 package api
 
-// Guard-тесты generic Optional[T] (ADR-054 §Pattern третий tier). Три уровня:
+// Guard tests for the generic Optional[T] (ADR-054 §Pattern, third tier). Three levels:
 //
-//   - UnmarshalJSON — три ветки presence (omitted / explicit null / value);
-//   - Schema(r) — huma-SchemaProvider даёт nullable-схему вложенного T БЕЗ
-//     octet-stream artifact (ключевой инвариант tier-а против RawBody []byte-моста);
-//   - round-trip через РЕАЛЬНУЮ huma-input-привязку (chi+huma) — presence долетает
-//     из тела запроса в Optional[T] так же, как в проде (huma зовёт UnmarshalJSON
-//     только когда ключ физически в теле).
+//   - UnmarshalJSON — the three presence branches (omitted / explicit null / value);
+//   - Schema(r) — the huma SchemaProvider gives a nullable schema of the wrapped T WITHOUT
+//     an octet-stream artifact (the key invariant of this tier against the RawBody []byte bridge);
+//   - round-trip through the REAL huma input binding (chi+huma) — presence makes it through
+//     from the request body into Optional[T] the same way it does in prod (huma calls UnmarshalJSON
+//     only when the key is physically present in the body).
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// TestOptional_UnmarshalJSON_ThreeBranches — json-декод поля Optional[string]
-// внутри объекта: omitted (метод не вызван → Set=false), explicit null
+// TestOptional_UnmarshalJSON_ThreeBranches — json decoding of an Optional[string] field
+// inside an object: omitted (method not called → Set=false), explicit null
 // (Set=true, Null=true, zero-value), value (Set=true, Null=false, Value=x).
 func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
 	type wrap struct {
@@ -79,8 +79,8 @@ func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
 	})
 }
 
-// TestOptional_optionalToPtr — конверт в *T для доменного presence-моста: задано
-// не-null → указатель на значение; omitted/null → nil (presence несёт отдельно Set).
+// TestOptional_optionalToPtr — the conversion to *T for the domain presence bridge: a set
+// non-null value → a pointer to the value; omitted/null → nil (presence is carried separately by Set).
 func TestOptional_optionalToPtr(t *testing.T) {
 	if p := optionalToPtr(Optional[string]{}); p != nil {
 		t.Errorf("omitted: optionalToPtr=%v, want nil", *p)
@@ -93,9 +93,9 @@ func TestOptional_optionalToPtr(t *testing.T) {
 	}
 }
 
-// TestOptional_Schema_NullableNoOctetStream — huma.SchemaProvider Optional[string]
-// даёт схему вложенного string с Nullable:true (3.1 `type: [string, null]`), БЕЗ
-// октет-потока. Прямой ассерт на возвращённую *huma.Schema.
+// TestOptional_Schema_NullableNoOctetStream — huma.SchemaProvider on Optional[string]
+// gives the schema of the wrapped string with Nullable:true (3.1 `type: [string, null]`), WITHOUT
+// an octet-stream. A direct assertion on the returned *huma.Schema.
 func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
 	s := Optional[string]{}.Schema(reg)
@@ -109,10 +109,10 @@ func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 	if !s.Nullable {
 		t.Errorf("Schema.Nullable = %v, want true (presence-сброс через null)", s.Nullable)
 	}
-	// octet-stream живёт на уровне requestBody-MIME (не на schema) — его отсутствие
-	// сторожит golden OpenAPI-фрагмента (TestHumaRole_PatchPermissions_RequestBody_JSONOnly).
-	// Здесь сторожим, что схема — чистый скаляр без binary-кодировки (рецидив RawBody []byte
-	// дал бы ContentEncoding:"base64"/Format:"binary", а не nullable-string).
+	// octet-stream lives at the requestBody-MIME level (not on the schema) — its absence
+	// is guarded by the golden OpenAPI fragment (TestHumaRole_PatchPermissions_RequestBody_JSONOnly).
+	// Here we guard that the schema is a pure scalar without binary encoding (a RawBody []byte
+	// regression would give ContentEncoding:"base64"/Format:"binary", not a nullable string).
 	if s.ContentEncoding != "" {
 		t.Errorf("Schema.ContentEncoding = %q, want пусто (рецидив binary/RawBody-моста)", s.ContentEncoding)
 	}
@@ -121,8 +121,8 @@ func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 	}
 }
 
-// TestOptional_Schema_Int_Nullable — non-string скаляр: Optional[int] даёт схему
-// integer с Nullable:true (3.1 `type: [integer, null]`), без octet-stream/binary.
+// TestOptional_Schema_Int_Nullable — a non-string scalar: Optional[int] gives the schema
+// of integer with Nullable:true (3.1 `type: [integer, null]`), without octet-stream/binary.
 func TestOptional_Schema_Int_Nullable(t *testing.T) {
 	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
 	s := Optional[int]{}.Schema(reg)
@@ -138,20 +138,20 @@ func TestOptional_Schema_Int_Nullable(t *testing.T) {
 	}
 }
 
-// optStructField — мелкий non-scalar тип для guard-теста ниже. huma на нём вернул бы
-// `$ref` при allowRef=true, поэтому он — именно тот путь, что ронял регистрацию.
+// optStructField — a small non-scalar type for the guard test below. huma would return
+// a `$ref` for it with allowRef=true, so it's exactly the path that used to crash registration.
 type optStructField struct {
 	A string `json:"a"`
 	B int    `json:"b"`
 }
 
-// TestOptional_Schema_StructT_NoRefNoPanic — BLOCKER-guard (ADR-054 §третий tier):
-// Optional[<struct>] как поле request-body. До фикса Schema() отдавал huma `$ref` на
-// компоненту (allowRef=true) и ставил Nullable=true поверх ref-узла → huma ПАНИКОВАЛ
-// при РЕГИСТРАЦИИ операции («nullable is not supported for ... $ref»). Тест реально
-// регистрирует операцию с таким полем (паника была на регистрации, не на Schema()) и
-// проверяет, что схема — чистый inline nullable-object (`type: [object, null]` с
-// properties), а не ref. allowRef=false закрыл blocker — регресс уронит этот тест.
+// TestOptional_Schema_StructT_NoRefNoPanic — a BLOCKER guard (ADR-054 §third tier):
+// Optional[<struct>] as a request-body field. Before the fix, Schema() gave huma a `$ref` to
+// the component (allowRef=true) and set Nullable=true on top of the ref node → huma PANICKED
+// at operation REGISTRATION ("nullable is not supported for ... $ref"). The test actually
+// registers an operation with such a field (the panic was at registration, not at Schema()) and
+// checks that the schema is a pure inline nullable object (`type: [object, null]` with
+// properties), not a ref. allowRef=false closed the blocker — a regression will redden this test.
 func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 	type structBody struct {
 		Field Optional[optStructField] `json:"field" required:"false"`
@@ -160,7 +160,7 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 		Body structBody
 	}
 
-	// Прямой ассерт на схему поля: inline-object, nullable, БЕЗ $ref.
+	// A direct assertion on the field's schema: inline object, nullable, WITHOUT $ref.
 	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
 	fs := Optional[optStructField]{}.Schema(reg)
 	if fs == nil {
@@ -179,8 +179,8 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 		t.Errorf("Schema.Properties не несёт inline-поля struct-T: %v", fs.Properties)
 	}
 
-	// Главный guard: РЕГИСТРАЦИЯ huma-операции с этим полем не паникует. Именно здесь
-	// huma раскрывает схему body и (до фикса) падал на nullable-ref.
+	// The main guard: REGISTERING the huma operation with this field does not panic. This is
+	// exactly where huma expands the body schema and (before the fix) crashed on nullable-ref.
 	defer func() {
 		if rec := recover(); rec != nil {
 			t.Fatalf("huma.Register с полем Optional[struct] запаниковал: %v (регресс allowRef=false → ref+nullable)", rec)
@@ -197,8 +197,8 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 	})
 }
 
-// TestOptional_Schema_NotInRequired — поле Optional[T] с `required:"false"` НЕ
-// попадает в required схемы тела (presence несёт сам тип, не обязательность поля).
+// TestOptional_Schema_NotInRequired — an Optional[T] field with `required:"false"` does NOT
+// end up in the body schema's required (presence is carried by the type itself, not field mandatoriness).
 func TestOptional_Schema_NotInRequired(t *testing.T) {
 	type body struct {
 		Must string           `json:"must" required:"true"`
@@ -223,10 +223,10 @@ func TestOptional_Schema_NotInRequired(t *testing.T) {
 	}
 }
 
-// TestOptional_RoundTrip_HumaInput — присутствие долетает из ТЕЛА HTTP-запроса в
-// Optional[string] через реальную huma-input-привязку (chi+huma): omitted →
-// Set=false; explicit null → Set=true,Null=true; value → Set=true,Value=x. Это
-// доказывает, что huma-декодер зовёт UnmarshalJSON ровно когда ключ в теле.
+// TestOptional_RoundTrip_HumaInput — presence makes it through from the HTTP request BODY into
+// Optional[string] via the real huma input binding (chi+huma): omitted →
+// Set=false; explicit null → Set=true,Null=true; value → Set=true,Value=x. This
+// proves that the huma decoder calls UnmarshalJSON exactly when the key is in the body.
 func TestOptional_RoundTrip_HumaInput(t *testing.T) {
 	type optBody struct {
 		Field Optional[string] `json:"field" required:"false"`

@@ -8,16 +8,16 @@ import (
 	"testing"
 )
 
-// spyTidingInvalidator — счётчик двухуровневой инвалидации (in-process +
-// cross-keeper). Реализует [TidingInvalidator]. Имитирует
-// herald.Service.InvalidateTidings, который под капотом дёргает оба уровня;
-// тест проверяет именно факт вызова из persist после commit (race-fix
-// ADR-052(g)). Раздельные in-process / publish счётчики держим, чтобы guard
-// был осмыслен и при возможном будущем расщеплении интерфейса.
+// spyTidingInvalidator — a counter for two-level invalidation (in-process +
+// cross-keeper). Implements [TidingInvalidator]. Mimics
+// herald.Service.InvalidateTidings, which internally triggers both levels;
+// the test checks specifically that persist calls it after commit (race fix
+// ADR-052(g)). We keep separate in-process / publish counters so the guard
+// stays meaningful even if the interface gets split in the future.
 type spyTidingInvalidator struct {
 	mu          sync.Mutex
-	inProcess   int // эквивалент InvalidateRules
-	crossKeeper int // эквивалент PublishHeraldInvalidate
+	inProcess   int // equivalent to InvalidateRules
+	crossKeeper int // equivalent to PublishHeraldInvalidate
 	lastName    string
 }
 
@@ -35,9 +35,9 @@ func (s *spyTidingInvalidator) counts() (inProc, cross int) {
 	return s.inProcess, s.crossKeeper
 }
 
-// newVoyageHandlerWithInvalidator — handler со spy-инвалидатором + enforcer,
-// разрешающим incarnation.run/errand.run/herald.read (notify требует herald.read
-// на канал, ADR-052(g)). heraldExists=true выставляет вызывающий тест
+// newVoyageHandlerWithInvalidator — a handler with a spy invalidator + an enforcer
+// that allows incarnation.run/errand.run/herald.read (notify requires herald.read
+// on the channel, ADR-052(g)). heraldExists=true is set by the calling test
 // (notify-existence-check).
 func newVoyageHandlerWithInvalidator(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, inv TidingInvalidator) *VoyageHandler {
 	enf := &fakeVoyageEnforcer{allow: map[string]bool{
@@ -48,13 +48,13 @@ func newVoyageHandlerWithInvalidator(store *fakeVoyageStore, sc VoyageScenarioRe
 	return NewVoyageHandler(store, sc, cmd, nil /*incReader*/, enf, nil /*scoper*/, nil /*auditW*/, inv, 0, 0, nil)
 }
 
-// TestVoyageNotify_InvalidatesAfterCommit — guard A (race-fix ADR-052(g)):
-// ephemeral-Tiding из notify вставляется прямым InsertTiding в voyage-tx, в
-// обход herald.Service-инвалидации; persist обязан ЯВНО инвалидировать снимок
-// dispatcher-а ПОСЛЕ commit, иначе быстрый прогон диспетчит терминал против
-// устаревшего TTL-снимка и уведомление молча промахивается.
+// TestVoyageNotify_InvalidatesAfterCommit — guard A (race fix ADR-052(g)):
+// the ephemeral Tiding from notify is inserted via a direct InsertTiding in the voyage tx,
+// bypassing herald.Service invalidation; persist must EXPLICITLY invalidate the
+// dispatcher's snapshot AFTER commit, otherwise a fast run dispatches the terminal against
+// a stale TTL snapshot and the notification silently misses.
 //
-// Этот тест КРАСНЫЙ без фикса (handler не звал инвалидацию вовсе).
+// This test is RED without the fix (the handler never called invalidation at all).
 func TestVoyageNotify_InvalidatesAfterCommit(t *testing.T) {
 	store := &fakeVoyageStore{heraldExists: true}
 	inv := &spyTidingInvalidator{}
@@ -83,8 +83,8 @@ func TestVoyageNotify_InvalidatesAfterCommit(t *testing.T) {
 	}
 }
 
-// TestVoyageNotify_NoNotify_NoInvalidate — negative-guard: без notify-блока
-// инвалидировать нечего (ephemeral-правил не создано) — invalidate НЕ зовётся.
+// TestVoyageNotify_NoNotify_NoInvalidate — negative guard: without a notify block
+// there's nothing to invalidate (no ephemeral rules were created) — invalidate is NOT called.
 func TestVoyageNotify_NoNotify_NoInvalidate(t *testing.T) {
 	store := &fakeVoyageStore{}
 	inv := &spyTidingInvalidator{}
@@ -105,9 +105,9 @@ func TestVoyageNotify_NoNotify_NoInvalidate(t *testing.T) {
 	}
 }
 
-// TestVoyageNotify_TidingInsertFails_NoInvalidate — ключевой инвариант
-// «только после commit»: сбой INSERT INTO tidings откатывает tx (Voyage не
-// создан), invalidate НЕ зовётся (нечего инвалидировать — правила в БД нет).
+// TestVoyageNotify_TidingInsertFails_NoInvalidate — the key "only after commit"
+// invariant: an INSERT INTO tidings failure rolls back the tx (the Voyage isn't
+// created), invalidate is NOT called (nothing to invalidate — no rules in the DB).
 func TestVoyageNotify_TidingInsertFails_NoInvalidate(t *testing.T) {
 	store := &fakeVoyageStore{heraldExists: true, insertTidingErr: context.DeadlineExceeded}
 	inv := &spyTidingInvalidator{}

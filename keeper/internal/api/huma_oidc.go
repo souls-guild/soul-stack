@@ -1,17 +1,17 @@
 package api
 
-// Федеративная OIDC-аутентификация операторов: GET /auth/oidc/login + GET
-// /auth/oidc/callback (ADR-058, стадия 2). ROOT-mount ВНЕ /v1 (parity
-// /auth/ldap/login): публичные браузерные redirect-эндпоинты (JWT ещё нет —
-// RequireJWT неприменим).
+// Federated OIDC authentication for operators: GET /auth/oidc/login + GET
+// /auth/oidc/callback (ADR-058, stage 2). ROOT-mount OUTSIDE /v1 (parity with
+// /auth/ldap/login): public browser redirect endpoints (no JWT yet —
+// RequireJWT does not apply).
 //
-// /auth/oidc/login   → 302 на authorization_endpoint IdP (state+nonce+PKCE);
-// /auth/oidc/callback → валидация id_token → внутренний JWT в HttpOnly-cookie →
-//                       302 на UI (Set-Cookie + Location).
+// /auth/oidc/login    → 302 to the IdP authorization_endpoint (state+nonce+PKCE);
+// /auth/oidc/callback → id_token validation → internal JWT in an HttpOnly cookie →
+//                        302 to the UI (Set-Cookie + Location).
 //
-// Audit пишет САМ handler (operator.login после выпуска JWT, как у LDAP).
-// FULL-TYPED huma-операции (паттерн ADR-054): query-input → header-output
-// (Location + Set-Cookie). Ошибки санитизированы (anti-oracle).
+// Audit is written by the handler ITSELF (operator.login after issuing the JWT,
+// same as LDAP). FULL-TYPED huma operations (ADR-054 pattern): query-input →
+// header-output (Location + Set-Cookie). Errors are sanitized (anti-oracle).
 
 import (
 	"context"
@@ -28,12 +28,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// oidcCallbackSuccessRedirect — куда редиректить браузер после успешного логина.
-// `/ui` — встроенный UI (ADR-055); cookie уже выставлен, UI подхватит сессию.
+// oidcCallbackSuccessRedirect — where to redirect the browser after a successful login.
+// `/ui` — the built-in UI (ADR-055); the cookie is already set, the UI will pick up the session.
 const oidcCallbackSuccessRedirect = "/ui"
 
-// OIDCAuthDeps — зависимости OIDC-эндпоинтов. nil → не монтируются (opt-in,
-// как LDAPAuth): keeper.yml::auth.oidc не задан → способ логина недоступен.
+// OIDCAuthDeps — dependencies of the OIDC endpoints. nil → not mounted (opt-in,
+// same as LDAPAuth): keeper.yml::auth.oidc not set → this login method is unavailable.
 type OIDCAuthDeps struct {
 	Authenticator oidcAuthenticator
 	Mapper        auth.Mapper
@@ -43,9 +43,9 @@ type OIDCAuthDeps struct {
 	Logger        *slog.Logger
 }
 
-// oidcAuthenticator — узкий контракт OIDC-аутентификатора (избегаем импорта
-// тяжёлого oidc-пакета в api-слой по реализации; *oidc.Authenticator
-// удовлетворяет автоматически).
+// oidcAuthenticator — a narrow OIDC authenticator contract (avoids importing the
+// heavy oidc package into the api layer for the implementation; *oidc.Authenticator
+// satisfies it automatically).
 type oidcAuthenticator interface {
 	BeginLogin(ctx context.Context) (oidcauth.Authorization, error)
 	CompleteLogin(ctx context.Context, code, state string) (auth.ExternalIdentity, error)
@@ -53,10 +53,10 @@ type oidcAuthenticator interface {
 
 // --- /auth/oidc/login ---
 
-// oidcLoginInput — input без полей (login-старт не требует параметров).
+// oidcLoginInput — input with no fields (starting login requires no parameters).
 type oidcLoginInput struct{}
 
-// oidcLoginOutput — 302 на IdP. Тело пустое; Location — authorization-URL.
+// oidcLoginOutput — 302 to the IdP. Body is empty; Location is the authorization URL.
 type oidcLoginOutput struct {
 	Status   int    `json:"-"`
 	Location string `header:"Location" json:"-"`
@@ -72,21 +72,21 @@ func oidcLoginOperation() huma.Operation {
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
 		// 429 — anti-bruteforce throttle (AuthLoginLimit middleware, HIGH-3:
-		// гасит flow-state-flood на старте login-flow).
+		// dampens flow-state flood at the start of the login flow).
 		Errors: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 
 // --- /auth/oidc/callback ---
 
-// oidcCallbackInput — query от IdP-редиректа: code + state (+ опц. error).
+// oidcCallbackInput — query from the IdP redirect: code + state (+ optional error).
 type oidcCallbackInput struct {
 	Code  string `query:"code" doc:"authorization code от IdP"`
 	State string `query:"state" doc:"opaque CSRF-state, выданный на /auth/oidc/login"`
 	Error string `query:"error" doc:"код ошибки от IdP (если аутентификация отклонена)"`
 }
 
-// oidcCallbackOutput — 302 на UI + Set-Cookie с внутренним JWT.
+// oidcCallbackOutput — 302 to the UI + Set-Cookie with the internal JWT.
 type oidcCallbackOutput struct {
 	Status    int    `json:"-"`
 	Location  string `header:"Location" json:"-"`
@@ -107,8 +107,8 @@ func oidcCallbackOperation() huma.Operation {
 	}
 }
 
-// registerHumaOIDCLogin монтирует GET /auth/oidc/login + /callback через huma.
-// d nil → no-op (opt-in-домен).
+// registerHumaOIDCLogin mounts GET /auth/oidc/login + /callback via huma.
+// d nil → no-op (opt-in domain).
 func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 	if d == nil {
 		return
@@ -126,7 +126,7 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 	})
 
 	huma.Register(humaAPI, oidcCallbackOperation(), func(ctx context.Context, in *oidcCallbackInput) (*oidcCallbackOutput, error) {
-		// IdP вернул error (user denied / IdP-ошибка) → отказ без утечки причины.
+		// IdP returned an error (user denied / IdP error) → reject without leaking the reason.
 		if in.Error != "" {
 			if d.Logger != nil {
 				d.Logger.Debug("auth/oidc callback: idp returned error", slog.String("error", in.Error))
@@ -150,10 +150,10 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 			return nil, huma.NewError(http.StatusInternalServerError, "internal error")
 		}
 
-		// ЕДИНАЯ cookie-фабрика (newSessionCookie): SameSite=Strict симметрично LDAP
-		// (MED-фикс рассинхрона, ADR-058(g)). Strict безопасен для callback-а:
-		// cookie СТАВИТСЯ на ответе callback-а, а ОТПРАВЛЯЕТСЯ на последующей
-		// same-site навигации /ui (302). См. doc newSessionCookie.
+		// A SINGLE cookie factory (newSessionCookie): SameSite=Strict symmetric with LDAP
+		// (MED fix for the mismatch, ADR-058(g)). Strict is safe for the callback:
+		// the cookie is SET on the callback response and SENT on the subsequent
+		// same-site navigation to /ui (302). See the newSessionCookie doc.
 		cookie := newSessionCookie(token, d.TTL)
 
 		if d.Audit != nil {
@@ -182,8 +182,8 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 	})
 }
 
-// oidcLoginProblem маппит sentinel-ошибки auth в problem+json (parity
-// ldapLoginProblem). Anti-oracle: причина отказа наружу не утекает.
+// oidcLoginProblem maps auth sentinel errors to problem+json (parity with
+// ldapLoginProblem). Anti-oracle: the failure reason does not leak externally.
 func oidcLoginProblem(err error) huma.StatusError {
 	switch {
 	case errors.Is(err, auth.ErrAuthFailed):
@@ -199,7 +199,7 @@ func oidcLoginProblem(err error) huma.StatusError {
 	}
 }
 
-// HumaOIDCSpecYAML — OpenAPI-фрагмент OIDC-роутов (parity HumaAuthSpecYAML).
+// HumaOIDCSpecYAML — the OpenAPI fragment of the OIDC routes (parity with HumaAuthSpecYAML).
 func HumaOIDCSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		registerHumaOIDCLogin(api, oidcAuthSpecStub())
@@ -207,7 +207,7 @@ func HumaOIDCSpecYAML() (string, error) {
 	})
 }
 
-// oidcAuthSpecStub — non-nil заглушка зависимостей для dump-спеки.
+// oidcAuthSpecStub — a non-nil dependency stub for the spec dump.
 func oidcAuthSpecStub() *OIDCAuthDeps {
 	return &OIDCAuthDeps{}
 }

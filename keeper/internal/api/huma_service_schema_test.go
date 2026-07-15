@@ -1,7 +1,7 @@
-// Доказательный гейт выравнивания имён SERVICE-схем под committed-рукопись (тираж-батч
-// N1). Контрактные имена присутствуют; технические huma-Go-имена отсутствуют;
-// scenarios-list-envelope ServiceScenariosListReply сверен по форме (service/ref/
-// scenarios[], items.$ref на Scenario); ServiceListReply — items-only.
+// Proof gate for aligning SERVICE schema names to the committed hand-written spec (rollout batch
+// N1). Contract names are present; technical huma-Go names are absent;
+// the scenarios-list envelope ServiceScenariosListReply is checked against the shape (service/ref/
+// scenarios[], items.$ref to Scenario); ServiceListReply — items-only.
 package api
 
 import (
@@ -10,9 +10,9 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// serviceContractSchemas — request/view/envelope-имена service-домена ровно как в
-// committed-рукописи. ServiceListReply / ServiceRefsListReply / прочие reply уже несут
-// oapi-типы с контрактными именами; ServiceScenariosListReply выровнен envelope-alias-ом.
+// serviceContractSchemas — request/view/envelope names of the service domain exactly as in the
+// committed hand-written spec. ServiceListReply / ServiceRefsListReply / the other replies already carry
+// oapi types with contract names; ServiceScenariosListReply is aligned via the envelope alias.
 var serviceContractSchemas = []string{
 	"ServiceRegisterRequest",
 	"ServiceUpdateRequest",
@@ -26,15 +26,15 @@ var serviceContractSchemas = []string{
 	"GitRef",
 }
 
-// serviceForbiddenSchemas — технические huma-Go-имена. ServiceScenariosReply — Go-имя
-// handler-типа, выровненное в ServiceScenariosListReply через envelope-alias.
+// serviceForbiddenSchemas — technical huma-Go names. ServiceScenariosReply — the Go name
+// of the handler type, aligned to ServiceScenariosListReply via the envelope alias.
 var serviceForbiddenSchemas = []string{
 	"ServiceRegisterHumaBody",
 	"ServiceUpdateHumaBody",
 	"ServiceScenariosReply",
 }
 
-// TestSchemaNames_Service — гейт N1. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Service — gate N1. Contract names are present, technical ones are not.
 func TestSchemaNames_Service(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range serviceContractSchemas {
@@ -49,10 +49,10 @@ func TestSchemaNames_Service(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_ServiceEnvelopes — гейт N1 (ENVELOPE). ServiceListReply — items-only
-// (items.$ref на ServiceView); ServiceScenariosListReply — service/ref/scenarios форма
-// (items.$ref на Scenario), выровнен через envelope-alias handlers.ServiceScenariosReply.
-// Мутация (снять registerServiceEnvelopes) краснит: huma эмитит handler-Go-имя
+// TestSchemaNames_ServiceEnvelopes — gate N1 (ENVELOPE). ServiceListReply — items-only
+// (items.$ref to ServiceView); ServiceScenariosListReply — the service/ref/scenarios shape
+// (items.$ref to Scenario), aligned via the envelope alias handlers.ServiceScenariosReply.
+// A mutation (removing registerServiceEnvelopes) turns this red: huma emits the handler Go name
 // ServiceScenariosReply.
 func TestSchemaNames_ServiceEnvelopes(t *testing.T) {
 	y, err := HumaFullSpecYAML()
@@ -70,8 +70,8 @@ func TestSchemaNames_ServiceEnvelopes(t *testing.T) {
 	assertScenariosEnvelope(t, schemas)
 }
 
-// assertScenariosEnvelope проверяет форму ServiceScenariosListReply по рукописи:
-// service/ref (string) + scenarios[] (array, items.$ref на Scenario).
+// assertScenariosEnvelope checks the shape of ServiceScenariosListReply against the hand-written spec:
+// service/ref (string) + scenarios[] (array, items.$ref to Scenario).
 func assertScenariosEnvelope(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	const name = "ServiceScenariosListReply"

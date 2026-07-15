@@ -1,13 +1,15 @@
 package handlers
 
-// ТЕСТ-ШИМ handler-native (T5d-2c-full): тонкие (w,r)-обёртки над *Typed-функциями
-// incarnation-домена, воспроизводящие прежнюю (w,r)-семантику маршрутизации (декод
-// body/query → *Typed → render статуса из problem.Type / 2xx + body). Через них существующие
-// поведенческие тесты прогоняют РОВНО ту же бизнес-логику, что монтирует huma-роут, не таща
-// httptest-биндинг huma в unit-тест. Прод (w,r)-методы сняты — это только тестовая оболочка.
+// TEST SHIM handler-native (T5d-2c-full): thin (w,r) wrappers over the *Typed functions
+// of the incarnation domain, reproducing the previous (w,r) routing semantics (decode
+// body/query → *Typed → render status from problem.Type / 2xx + body). Through them the
+// existing behavioral tests exercise EXACTLY the same business logic that the huma route
+// mounts, without dragging huma's httptest binding into the unit test. The production (w,r)
+// methods have been removed — this is only a test shell.
 //
-// JSON-bind-тесты (BadJSON/UnknownField) к шимам НЕ применяются: strict-декод/required/
-// additionalProperties делает huma на своём слое, доменная функция получает уже декодированное.
+// JSON bind tests (BadJSON/UnknownField) do NOT apply to the shims: strict decoding/required/
+// additionalProperties are handled by huma at its own layer, the domain function receives
+// already-decoded data.
 
 import (
 	"encoding/json"
@@ -26,11 +28,11 @@ import (
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// shimLogger — discard-логгер для render-веток шима.
+// shimLogger — a discard logger for the shim's render branches.
 var shimLogger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 
-// renderProblem пишет в recorder problem+json из *problemError *Typed-функции (status из
-// problem.Type через problem.New). Не-problem → 500.
+// renderProblem writes problem+json to the recorder from the *Typed function's *problemError
+// (status from problem.Type via problem.New). Non-problem → 500.
 func renderProblem(rec *httptest.ResponseRecorder, err error) {
 	if d, ok := AsProblemDetails(err); ok {
 		problem.Write(rec, d)
@@ -39,12 +41,12 @@ func renderProblem(rec *httptest.ResponseRecorder, err error) {
 	problem.Write(rec, problem.New(problem.TypeInternalError, "", "internal error"))
 }
 
-// shimClaims извлекает claims из request-контекста (через тот же middleware-ключ, что прод).
+// shimClaims extracts claims from the request context (via the same middleware key as production).
 func shimClaims(r *http.Request) (*keeperjwt.Claims, bool) {
 	return middleware.ClaimsFromContext(r.Context())
 }
 
-// incCreate — шим POST /v1/incarnations: декод body → IncarnationCreateRequestInput → CreateTyped.
+// incCreate — shim for POST /v1/incarnations: decode body → IncarnationCreateRequestInput → CreateTyped.
 func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -73,7 +75,7 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	return rec
 }
 
-// incGet — шим GET /v1/incarnations/{name}.
+// incGet — shim for GET /v1/incarnations/{name}.
 func incGet(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -87,8 +89,8 @@ func incGet(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
-// incList — шим GET /v1/incarnations: парс query (offset/limit/service/status/coven/sort +
-// state.<field>) → ListTyped с scope-резолвером из claims.
+// incList — shim for GET /v1/incarnations: parses the query (offset/limit/service/status/coven/sort +
+// state.<field>) → ListTyped with a scope resolver derived from claims.
 func incList(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -128,7 +130,7 @@ func incList(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder 
 	return rec
 }
 
-// incHistory — шим GET /v1/incarnations/{name}/history.
+// incHistory — shim for GET /v1/incarnations/{name}/history.
 func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -159,7 +161,7 @@ func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	return rec
 }
 
-// incRun — шим POST /v1/incarnations/{name}/scenarios/{scenario}.
+// incRun — shim for POST /v1/incarnations/{name}/scenarios/{scenario}.
 func incRun(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -183,7 +185,7 @@ func incRun(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
-// incUnlock — шим POST /v1/incarnations/{name}/unlock.
+// incUnlock — shim for POST /v1/incarnations/{name}/unlock.
 func incUnlock(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -208,7 +210,7 @@ func incUnlock(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	return rec
 }
 
-// incUpgrade — шим POST /v1/incarnations/{name}/upgrade.
+// incUpgrade — shim for POST /v1/incarnations/{name}/upgrade.
 func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -230,7 +232,7 @@ func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	return rec
 }
 
-// incCheckDrift — шим POST /v1/incarnations/{name}/check-drift.
+// incCheckDrift — shim for POST /v1/incarnations/{name}/check-drift.
 func incCheckDrift(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -248,7 +250,7 @@ func incCheckDrift(h *IncarnationHandler, r *http.Request) *httptest.ResponseRec
 	return rec
 }
 
-// incUpdateHosts — шим PATCH /v1/incarnations/{name}/hosts.
+// incUpdateHosts — shim for PATCH /v1/incarnations/{name}/hosts.
 func incUpdateHosts(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -278,7 +280,7 @@ func incUpdateHosts(h *IncarnationHandler, r *http.Request) *httptest.ResponseRe
 	return rec
 }
 
-// incSetTraits — шим PUT /v1/incarnations/{name}/traits: декод body.traits →
+// incSetTraits — shim for PUT /v1/incarnations/{name}/traits: decode body.traits →
 // SetTraitsTyped.
 func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
@@ -297,9 +299,9 @@ func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseReco
 	return rec
 }
 
-// shimGetReplyJSON — wire-форма IncarnationGetView для тестового render (повторяет json-теги
-// прежнего IncarnationGetReply: covens/spec/state/status_details nullable-без-omitempty,
-// last_drift_* omitempty). Тестам важны имена ключей/null-семантика, не enum-named-схема.
+// shimGetReplyJSON — the wire shape of IncarnationGetView for test rendering (mirrors the json
+// tags of the former IncarnationGetReply: covens/spec/state/status_details nullable-without-omitempty,
+// last_drift_* omitempty). The tests care about key names/null semantics, not an enum-named schema.
 func shimGetReplyJSON(v IncarnationGetView) any {
 	type driftJSON struct {
 		HostsClean       int    `json:"hosts_clean"`
@@ -344,7 +346,7 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 	return out
 }
 
-// shimHistoryEntryJSON — wire-форма StateHistoryView для тестового render.
+// shimHistoryEntryJSON — the wire shape of StateHistoryView for test rendering.
 func shimHistoryEntryJSON(v StateHistoryView) any {
 	return struct {
 		ApplyID      string          `json:"apply_id"`
@@ -368,8 +370,8 @@ func ptrMapShim(m map[string]any) *map[string]any {
 	return &m
 }
 
-// incDTOJSON — декод-форма wire-тела GET/PATCH-hosts incarnation для тестов (повторяет ключи
-// прежнего incarnationDTO). Тесты декодируют тело шима в неё и проверяют поля.
+// incDTOJSON — the decode shape of the GET/PATCH-hosts incarnation wire body for tests (mirrors
+// the keys of the former incarnationDTO). Tests decode the shim's body into it and check the fields.
 type incDTOJSON struct {
 	Name          string         `json:"name"`
 	Status        string         `json:"status"`

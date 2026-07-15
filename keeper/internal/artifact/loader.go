@@ -50,7 +50,7 @@ func (s *snapshotter) lockFor(name string) *sync.Mutex {
 
 // snapshot materializes an immutable snapshot of the gitURL repository at
 // the commit ref resolves to, and returns (sha1, snapshot path). kind — an
-// artifact label for log messages ("сервиса"/"destiny").
+// artifact label for log messages ("service"/"destiny").
 //
 // Algorithm (PM decisions): open/clone the working clone → fetch → resolve
 // ref to sha1. If a snapshot for sha1 already exists — reuse it (immutable);

@@ -7,38 +7,40 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RunPlanTask — строка «плана задач прогона» (apply_run_plan, миграция 096, NIM-37):
-// host-инвариантные метаданные одной отрендеренной задачи по её глобальному
-// plan_index. name/module/no_log/passage одинаковы на всех хостах прогона, поэтому
-// хранятся РАЗ на (apply_id, plan_index), а per-host статус/output эндпоинт /tasks
-// добирает из audit_log (task.executed).
+// RunPlanTask is a row of the "run task plan" (apply_run_plan, migration 096, NIM-37):
+// the host-invariant metadata of one rendered task keyed by its global
+// plan_index. name/module/no_log/passage are the same across all hosts of the
+// run, so they are stored ONCE per (apply_id, plan_index); the per-host
+// status/output is pulled by the /tasks endpoint from audit_log (task.executed).
 type RunPlanTask struct {
 	ApplyID string
 
-	// PlanIndex — ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему плану прогона (все
-	// Passage) = RenderedTask.Index (ADR-056 §S1 Variant B). Ключ корреляции с
-	// per-host результатом в audit_log (payload.plan_index).
+	// PlanIndex is the GLOBAL cross-cutting task index over the whole run plan
+	// (all Passages) = RenderedTask.Index (ADR-056 §S1 Variant B). The
+	// correlation key with the per-host result in audit_log (payload.plan_index).
 	PlanIndex int
 
 	Name   string
 	Module string
 	NoLog  bool
 
-	// Passage — индекс Passage staged-render (ADR-056); N=1 → 0.
+	// Passage is the Passage index of the staged render (ADR-056); N=1 → 0.
 	Passage int
 
-	// Params — JSON операторских input-параметров задачи (NIM-37 S1b), уже
-	// masked seal-aware механизмом на write-path-е (scenario.persistRunPlan).
-	// nil/пусто → jsonb NULL: no_log-задача (params подавлены) либо задача без
-	// params. Транспортные ключи (template_content/render_context) отфильтрованы
-	// до записи. Store слой значения НЕ маскирует — только персистит/читает как есть.
+	// Params is the JSON of the task's operator input parameters (NIM-37 S1b),
+	// already masked by the seal-aware mechanism on the write path
+	// (scenario.persistRunPlan). nil/empty → jsonb NULL: either a no_log task
+	// (params suppressed) or a task without params. Transport-only keys
+	// (template_content/render_context) are filtered out before the write. The
+	// store layer does NOT mask values — it only persists/reads them as-is.
 	Params []byte
 }
 
-// insertRunPlanSQL — bulk-upsert плана одним запросом через unnest-массивы
-// (apply_id общий, остальные колонки — параллельные массивы). ON CONFLICT DO
-// UPDATE идемпотентен: staged-прогон переспрашивает Render per-Passage, но план
-// (Index/name/module/no_log/passage) стабилен — повторная запись безвредна.
+// insertRunPlanSQL is a bulk-upsert of the plan in a single query via unnest
+// arrays (apply_id shared, the remaining columns are parallel arrays). ON
+// CONFLICT DO UPDATE is idempotent: a staged run re-invokes Render per
+// Passage, but the plan (Index/name/module/no_log/passage) is stable — a
+// repeat write is harmless.
 const insertRunPlanSQL = `
 INSERT INTO apply_run_plan (apply_id, plan_index, name, module, no_log, passage, params)
 SELECT $1, u.plan_index, u.name, u.module, u.no_log, u.passage, u.params::jsonb
@@ -48,9 +50,10 @@ ON CONFLICT (apply_id, plan_index)
 DO UPDATE SET name = EXCLUDED.name, module = EXCLUDED.module, no_log = EXCLUDED.no_log, passage = EXCLUDED.passage, params = EXCLUDED.params
 `
 
-// InsertRunPlan пишет план задач прогона (apply_run_plan) одним bulk-upsert-ом.
-// Пустой tasks → no-op (нечего писать). Непустой ApplyID обязателен. Вызывается
-// один раз при dispatch (scenario-runner) — план host-инвариантен.
+// InsertRunPlan writes the run's task plan (apply_run_plan) in a single
+// bulk-upsert. Empty tasks → no-op (nothing to write). A non-empty ApplyID is
+// required. Called once at dispatch (scenario-runner) — the plan is
+// host-invariant.
 func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks []RunPlanTask) error {
 	if applyID == "" {
 		return fmt.Errorf("applyrun: empty apply_id")
@@ -64,8 +67,8 @@ func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks
 	modules := make([]string, len(tasks))
 	noLogs := make([]bool, len(tasks))
 	passages := make([]int, len(tasks))
-	// params — параллельный text[]-массив (каждый элемент — JSON или NULL),
-	// кастуется в jsonb в SQL. nil-элемент (no_log / нет params) → jsonb NULL.
+	// params is a parallel text[] array (each element is JSON or NULL), cast
+	// to jsonb in SQL. A nil element (no_log / no params) → jsonb NULL.
 	params := make([]*string, len(tasks))
 	for i, t := range tasks {
 		planIdx[i] = t.PlanIndex
@@ -92,9 +95,9 @@ WHERE apply_id = $1
 ORDER BY plan_index ASC
 `
 
-// SelectRunPlanByApplyID возвращает план задач прогона, отсортированный по
-// глобальному plan_index. Пустой результат — прогон без сохранённого плана
-// (упал до render, либо прогон до NIM-37): caller трактует как пустой план.
+// SelectRunPlanByApplyID returns the run's task plan, sorted by the global
+// plan_index. An empty result means a run with no persisted plan (it failed
+// before render, or predates NIM-37): the caller treats this as an empty plan.
 func SelectRunPlanByApplyID(ctx context.Context, db ExecQueryRower, applyID string) ([]RunPlanTask, error) {
 	rows, err := db.Query(ctx, selectRunPlanByApplyIDSQL, applyID)
 	if err != nil {
@@ -120,10 +123,11 @@ const runExistsForIncarnationSQL = `
 SELECT EXISTS(SELECT 1 FROM apply_runs WHERE apply_id = $1 AND incarnation_name = $2)
 `
 
-// RunExistsForIncarnation сообщает, есть ли у инкарнации `name` прогон `applyID`.
-// Scope-guard эндпоинта /tasks: apply_run_plan не несёт incarnation_name, поэтому
-// принадлежность прогона инкарнации проверяется по apply_runs (иначе чужой apply_id
-// вернул бы чужой план). Отсутствие → caller отдаёт 404 (parity SelectRunDetail).
+// RunExistsForIncarnation reports whether incarnation `name` has a run
+// `applyID`. The scope guard for the /tasks endpoint: apply_run_plan carries
+// no incarnation_name, so the run's ownership by the incarnation is checked
+// against apply_runs (otherwise a foreign apply_id would return a foreign
+// plan). Absence → the caller returns 404 (parity with SelectRunDetail).
 func RunExistsForIncarnation(ctx context.Context, db ExecQueryRower, applyID, name string) (bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, runExistsForIncarnationSQL, applyID, name).Scan(&exists); err != nil {

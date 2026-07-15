@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD apply_runs через testcontainers-go. Паттерн
-// совпадает с keeper/internal/incarnation/integration_test.go.
+// Integration tests for the apply_runs CRUD via testcontainers-go. The pattern
+// matches keeper/internal/incarnation/integration_test.go.
 
 package applyrun
 
@@ -196,7 +196,7 @@ func TestIntegration_Insert_DuplicateKey(t *testing.T) {
 }
 
 func TestIntegration_Insert_SameApplyDifferentSID(t *testing.T) {
-	// apply_id-model A: один apply_id, разный sid → две независимые строки.
+	// apply_id model A: one apply_id, different sid → two independent rows.
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
@@ -224,7 +224,7 @@ func TestIntegration_Insert_SameApplyDifferentSID(t *testing.T) {
 func TestIntegration_Insert_FKViolation(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// incarnation отсутствует → FK violation.
+	// The incarnation doesn't exist → FK violation.
 	err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "a", SID: "s", IncarnationName: "ghost", Scenario: "create",
 		Status: StatusRunning,
@@ -242,7 +242,7 @@ func TestIntegration_Insert_CHECKViolation_BadStatus(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
-	// Обходим Go-validation прямым Exec-ом, проверяя SQL-side CHECK.
+	// Bypass Go validation with a direct Exec, exercising the SQL-side CHECK.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
 		 VALUES ('a', 's', 'redis-prod', 'create', 'error_locked')`)
@@ -279,13 +279,13 @@ func TestIntegration_UpdateStatus_SetsFinishedAt(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateStatus_ErrorSummaryCoalesce — COALESCE-семантика
-// error_summary на ЛЕГИТИМНОМ переходе running→terminal: summary пишется при
-// running→failed. Append-only guard (ADR-027(j), S-P2.4) запрещает
-// terminal→terminal перезапись — повторный UpdateStatus(failed→failed) теперь
-// отвергается [ErrApplyRunAlreadyTerminal] (а не выполняет ещё один COALESCE).
-// Тест отражает новый инвариант, а не обходит его: первый коммиттер-терминал
-// побеждает, второй — no-op-отказ.
+// TestIntegration_UpdateStatus_ErrorSummaryCoalesce — the error_summary COALESCE
+// semantics on a LEGITIMATE running→terminal transition: the summary is written on
+// running→failed. The append-only guard (ADR-027(j), S-P2.4) forbids a
+// terminal→terminal overwrite — a repeat UpdateStatus(failed→failed) is now
+// rejected with [ErrApplyRunAlreadyTerminal] (instead of running another COALESCE).
+// The test reflects the new invariant rather than working around it: the first
+// terminal committer wins, the second is a no-op rejection.
 func TestIntegration_UpdateStatus_ErrorSummaryCoalesce(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -298,19 +298,19 @@ func TestIntegration_UpdateStatus_ErrorSummaryCoalesce(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// running→failed: summary записан (COALESCE на легитимном переходе).
+	// running→failed: the summary is written (COALESCE on a legitimate transition).
 	if err := UpdateStatus(ctx, integrationPool, "a", "s", 0, StatusFailed, strp("boom")); err != nil {
 		t.Fatalf("UpdateStatus#1 (running→failed): %v", err)
 	}
 
-	// Повторный terminal-write (failed→failed) отвергается append-only guard-ом
-	// ДО любой записи — caller трактует как no-op (первый коммиттер победил).
+	// The repeat terminal write (failed→failed) is rejected by the append-only guard
+	// BEFORE any write — the caller treats it as a no-op (the first committer won).
 	err := UpdateStatus(ctx, integrationPool, "a", "s", 0, StatusFailed, nil)
 	if !errors.Is(err, ErrApplyRunAlreadyTerminal) {
 		t.Fatalf("UpdateStatus#2 (failed→failed): err = %v, want ErrApplyRunAlreadyTerminal", err)
 	}
 
-	// Отвергнутый второй write не тронул error_summary: остался "boom".
+	// The rejected second write didn't touch error_summary: it stayed "boom".
 	got, err := SelectByApplyID(ctx, integrationPool, "a", "s")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
@@ -365,7 +365,7 @@ func TestIntegration_SelectIncarnationByApplyID_NotFound(t *testing.T) {
 }
 
 func TestIntegration_ApplyRuns_FK_OnIncarnationDelete(t *testing.T) {
-	// CASCADE: при удалении incarnation строки apply_runs исчезают.
+	// CASCADE: deleting the incarnation makes apply_runs rows disappear.
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
@@ -392,7 +392,7 @@ func TestIntegration_ApplyRuns_FK_OnIncarnationDelete(t *testing.T) {
 }
 
 func TestIntegration_ApplyRuns_FK_OnOperatorDelete_SetsNull(t *testing.T) {
-	// SET NULL: при удалении оператора started_by_aid обнуляется.
+	// SET NULL: deleting the operator clears started_by_aid.
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
@@ -405,8 +405,8 @@ func TestIntegration_ApplyRuns_FK_OnOperatorDelete_SetsNull(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// incarnation создан archon-alice → сначала обнуляем его FK там, чтобы
-	// удалить оператора без конфликта (incarnation.created_by_aid тоже SET NULL).
+	// The incarnation was created by archon-alice → first clear its FK there, so
+	// the operator can be deleted without a conflict (incarnation.created_by_aid is also SET NULL).
 	if _, err := integrationPool.Exec(ctx,
 		`DELETE FROM operators WHERE aid = 'archon-alice'`); err != nil {
 		t.Fatalf("DELETE operator: %v", err)
@@ -426,8 +426,8 @@ func TestIntegration_SelectStatusesByApplyID(t *testing.T) {
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// Три хоста одного прогона (apply_id-model A), плюс шумовая строка
-	// другого apply_id — она в выборку попасть не должна.
+	// Three hosts of one run (apply_id model A), plus a noise row of
+	// another apply_id — it must not end up in the selection.
 	for _, sid := range []string{"host-c", "host-a", "host-b"} {
 		if err := Insert(ctx, integrationPool, &ApplyRun{
 			ApplyID: "01HBARRIER", SID: sid, IncarnationName: "redis-prod",
@@ -443,7 +443,7 @@ func TestIntegration_SelectStatusesByApplyID(t *testing.T) {
 		t.Fatalf("Insert noise: %v", err)
 	}
 
-	// Переводим один хост в success, другой в failed с summary.
+	// Move one host to success, the other to failed with a summary.
 	if err := UpdateStatus(ctx, integrationPool, "01HBARRIER", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus host-a: %v", err)
 	}
@@ -492,9 +492,9 @@ func TestIntegration_SelectStatusesByApplyID_Empty(t *testing.T) {
 }
 
 // TestIntegration_RequestCancel_FlagsRunningHosts — cluster-wide Cancel (G1):
-// RequestCancel ставит cancel_requested на все running-строки прогона; флаг
-// читается обратно через SelectStatusesByApplyID (тот путь, по которому его
-// видит barrier-поллинг run-goroutine-а).
+// RequestCancel sets cancel_requested on all running rows of the run; the flag
+// is read back via SelectStatusesByApplyID (the same path the run goroutine's
+// barrier polling uses to see it).
 func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -509,7 +509,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 			t.Fatalf("Insert sid=%s: %v", sid, err)
 		}
 	}
-	// Шумовой прогон — его cancel_requested трогать нельзя.
+	// A noise run — its cancel_requested must not be touched.
 	if err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HKEEP", SID: "host-a", IncarnationName: "redis-prod",
 		Scenario: "restart", Status: StatusRunning,
@@ -517,7 +517,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 		t.Fatalf("Insert noise: %v", err)
 	}
 
-	// До отмены флаг нигде не стоит.
+	// Before cancellation the flag isn't set anywhere.
 	before, err := SelectStatusesByApplyID(ctx, integrationPool, "01HCANCEL")
 	if err != nil {
 		t.Fatalf("SelectStatuses before: %v", err)
@@ -549,7 +549,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 		}
 	}
 
-	// Шумовой прогон не затронут.
+	// The noise run is unaffected.
 	noise, err := SelectStatusesByApplyID(ctx, integrationPool, "01HKEEP")
 	if err != nil {
 		t.Fatalf("SelectStatuses noise: %v", err)
@@ -559,8 +559,8 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 	}
 }
 
-// TestIntegration_RequestCancel_TerminalNoOp — Cancel уже завершённого
-// прогона (все строки терминальны) не ставит флаг: affected=0, no-op.
+// TestIntegration_RequestCancel_TerminalNoOp — Cancel of an already-finished
+// run (all rows terminal) doesn't set the flag: affected=0, a no-op.
 func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -593,8 +593,8 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	}
 }
 
-// TestIntegration_RequestCancel_Idempotent — повторный RequestCancel на
-// running-прогоне идемпотентен (флаг true→true, без ошибки).
+// TestIntegration_RequestCancel_Idempotent — a repeat RequestCancel on a
+// running run is idempotent (the flag stays true→true, no error).
 func TestIntegration_RequestCancel_Idempotent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -616,8 +616,8 @@ func TestIntegration_RequestCancel_Idempotent(t *testing.T) {
 	}
 }
 
-// TestIntegration_RequestCancel_UnknownApplyID — отмена несуществующего
-// прогона: affected=0, без ошибки.
+// TestIntegration_RequestCancel_UnknownApplyID — cancelling a non-existent
+// run: affected=0, no error.
 func TestIntegration_RequestCancel_UnknownApplyID(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -630,13 +630,13 @@ func TestIntegration_RequestCancel_UnknownApplyID(t *testing.T) {
 	}
 }
 
-// TestIntegration_RequestCancel_PartialRunning — прогон с mixed-хостами: один
-// уже success (терминал), второй ещё running. Фильтр status='running' в
-// RequestCancel ставит флаг ТОЛЬКО на running-строку (affected=1, не 2);
-// barrier-у этого достаточно ([cancelRequested] видит true на любой строке).
-// Граница между all-running ([TestIntegration_RequestCancel_FlagsRunningHosts])
-// и all-terminal ([TestIntegration_RequestCancel_TerminalNoOp]): отмена прогона,
-// у которого часть хостов уже отстрелялась.
+// TestIntegration_RequestCancel_PartialRunning — a run with mixed hosts: one
+// is already success (terminal), the other is still running. The status='running'
+// filter in RequestCancel sets the flag ONLY on the running row (affected=1, not 2);
+// that's enough for the barrier ([cancelRequested] sees true on any row).
+// The boundary between all-running ([TestIntegration_RequestCancel_FlagsRunningHosts])
+// and all-terminal ([TestIntegration_RequestCancel_TerminalNoOp]): cancelling a run
+// where part of the hosts have already finished.
 func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -651,7 +651,7 @@ func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 			t.Fatalf("Insert sid=%s: %v", sid, err)
 		}
 	}
-	// host-a уже завершился success — он не должен получить cancel_requested.
+	// host-a already finished with success — it must not get cancel_requested.
 	if err := UpdateStatus(ctx, integrationPool, "01HMIXED", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus host-a: %v", err)
 	}
@@ -678,15 +678,15 @@ func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 	if !byID["host-b"].CancelRequested {
 		t.Error("host-b (running) не получил cancel_requested")
 	}
-	// barrier увидит флаг на любой строке прогона — partial-флага достаточно.
+	// The barrier will see the flag on any row of the run — a partial flag is enough.
 	if !cancelRequestedAny(got) {
 		t.Error("ни одна строка не несёт cancel_requested — barrier не отменит прогон")
 	}
 }
 
-// cancelRequestedAny — тестовое зеркало scenario.cancelRequested: barrier-у
-// достаточно флага на любой строке прогона. Дублируем приватный хелпер пакета
-// scenario здесь, чтобы applyrun-тест не тянул import scenario.
+// cancelRequestedAny — a test mirror of scenario.cancelRequested: the barrier
+// only needs the flag on any row of the run. We duplicate the scenario package's
+// private helper here so the applyrun test doesn't pull in an import of scenario.
 func cancelRequestedAny(statuses []HostStatus) bool {
 	for i := range statuses {
 		if statuses[i].CancelRequested {
@@ -704,14 +704,14 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 
 	seedApplyRun(t, "01HFAIL", "host-a")
 
-	// Первая упавшая задача фиксирует task_idx (локальный 1) + failed_plan_index
-	// (глобальный 4 — staged/per-host-where, локальный ≠ глобальный) + summary.
+	// The first failed task pins task_idx (local 1) + failed_plan_index
+	// (global 4 — staged/per-host-where, local ≠ global) + the summary.
 	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 0, 1, 4,
 		"task 4 core.pkg.installed: E: Version '7.2.4' not found"); err != nil {
 		t.Fatalf("RecordTaskFailure first: %v", err)
 	}
-	// Вторая упавшая задача НЕ затирает (COALESCE first-failure-wins) — ни
-	// task_idx, ни failed_plan_index, ни summary.
+	// The second failed task does NOT overwrite (COALESCE first-failure-wins) —
+	// neither task_idx, nor failed_plan_index, nor the summary.
 	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 0, 3, 9, "task 9 later boom"); err != nil {
 		t.Fatalf("RecordTaskFailure second: %v", err)
 	}
@@ -726,13 +726,13 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 	if got.ErrorSummary == nil || *got.ErrorSummary != "task 4 core.pkg.installed: E: Version '7.2.4' not found" {
 		t.Errorf("error_summary = %v, want первой задачи", got.ErrorSummary)
 	}
-	// Статус остаётся running до RunResult.
+	// The status stays running until RunResult.
 	if got.Status != StatusRunning {
 		t.Errorf("status = %q, want running (RecordTaskFailure не трогает статус)", got.Status)
 	}
 
-	// failed_plan_index читается через HostStatus-проекцию (SelectByApplyID её не
-	// несёт). Глобальный индекс первой упавшей задачи = 4 (first-failure-wins).
+	// failed_plan_index is read via the HostStatus projection (SelectByApplyID doesn't
+	// carry it). The global index of the first failed task = 4 (first-failure-wins).
 	statuses, err := SelectStatusesByApplyID(ctx, integrationPool, "01HFAIL")
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -758,21 +758,22 @@ func TestIntegration_RecordTaskFailure_NotFound(t *testing.T) {
 	}
 }
 
-// TestIntegration_WardClaimColumns_Phase0 — критерий приёмки ADR-027 Phase 0:
-// миграция 025 применена к схеме контейнера; существующая apply_runs-строка
-// старого пути (Insert) сосуществует с новыми Ward-claim колонками, которые
-// получают DEFAULT (attempt=0, claim_* NULL) и никем не пишутся; CHECK status
-// принимает planned/claimed и сохраняет running/success/failed/cancelled;
-// partial-индекс claim-скана создан. Down/up-обратимость 025 покрывается
-// migrate-пакетом (TestIntegration_MigrateApply_DownThenUp прогоняет полный
-// down→up) + sanity на содержимое down.sql (migrations_test).
+// TestIntegration_WardClaimColumns_Phase0 — the ADR-027 Phase 0 acceptance
+// criterion: migration 025 is applied to the container schema; an existing
+// apply_runs row from the old path (Insert) coexists with the new Ward-claim
+// columns, which get a DEFAULT (attempt=0, claim_* NULL) and are written by
+// no one; the status CHECK accepts planned/claimed and keeps
+// running/success/failed/cancelled; the claim-scan partial index is created.
+// The 025 down/up reversibility is covered by the migrate package
+// (TestIntegration_MigrateApply_DownThenUp runs a full down→up) + a sanity
+// check on the down.sql content (migrations_test).
 func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// Строка старого пути через обычный Insert — CRUD не знает про Ward-claim.
+	// An old-path row via plain Insert — the CRUD layer knows nothing about Ward-claim.
 	if err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HWARD", SID: "host-a", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusRunning,
@@ -780,7 +781,7 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 		t.Fatalf("Insert legacy row: %v", err)
 	}
 
-	// Ward-claim колонки существуют и несут DEFAULT-значения у строки старого пути.
+	// The Ward-claim columns exist and carry DEFAULT values on the old-path row.
 	var (
 		attempt        int
 		claimByKID     *string

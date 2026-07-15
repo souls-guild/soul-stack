@@ -67,27 +67,29 @@ type BrokerMetrics struct {
 	fetchDuration *prometheus.HistogramVec
 }
 
-// Исходы обработки AugurRequest для keeper_augur_fetch_total{decision}. Closed
-// enum в 3 значения; параллель с denied/error/ok-ветвями processAugurRequest.
+// Outcomes of handling an AugurRequest for keeper_augur_fetch_total{decision}.
+// A closed 3-value enum; parallels the denied/error/ok branches of processAugurRequest.
 const (
 	DecisionOK     = "ok"
 	DecisionDenied = "denied"
 	DecisionError  = "error"
 )
 
-// SourceUnknown — значение label-а `source`, когда тип Omen-а ещё не определён в
-// момент учёта (Omen не найден при резолве / concurrency-limit отбил запрос до
-// резолва). Не путать с closed-enum [SourceType] vault/prometheus/elk —
-// SourceUnknown в реестре не существует, это метка «source неизвестен».
+// SourceUnknown — the value of the `source` label when the Omen's type isn't
+// determined yet at the point of accounting (Omen not found during resolve /
+// concurrency limit rejected the request before resolve). Not to be confused
+// with the closed enum [SourceType] vault/prometheus/elk — SourceUnknown
+// doesn't exist in the registry, it's a "source unknown" marker.
 const SourceUnknown = "unknown"
 
-// RegisterBrokerMetrics создаёт keeper_augur_*-collectors и регистрирует их в
-// [obs.Registry]. Возвращает дескриптор для wire-up через gRPC-handler
-// (AugurDeps.Metrics).
+// RegisterBrokerMetrics creates the keeper_augur_*-collectors and registers
+// them in [obs.Registry]. Returns a handle for wire-up through the gRPC
+// handler (AugurDeps.Metrics).
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на одном
-// Registry); падать сразу удобнее, чем носить ленивую инициализацию (паттерн
-// идентичен [rbac.RegisterRBACMetrics] / [scenario.RegisterScenarioMetrics]).
+// MustRegister: a duplicate registration is a programmer error (called twice
+// on the same Registry); failing fast is more convenient than carrying lazy
+// initialization (the pattern is identical to [rbac.RegisterRBACMetrics] /
+// [scenario.RegisterScenarioMetrics]).
 func RegisterBrokerMetrics(reg *obs.Registry) *BrokerMetrics {
 	m := &BrokerMetrics{
 		fetchTotal: prometheus.NewCounterVec(
@@ -110,13 +112,15 @@ func RegisterBrokerMetrics(reg *obs.Registry) *BrokerMetrics {
 	return m
 }
 
-// ObserveFetch фиксирует терминал одной обработки AugurRequest: инкрементирует
-// fetch_total{source,decision} и кладёт длительность в fetch_duration{source}.
-// source — тип Omen-а ([SourceType]) или [SourceUnknown], если тип ещё не
-// определён; decision — один из [DecisionOK]/[DecisionDenied]/[DecisionError].
+// ObserveFetch records the terminal outcome of one AugurRequest handling: it
+// increments fetch_total{source,decision} and puts the duration into
+// fetch_duration{source}. source is the Omen's type ([SourceType]) or
+// [SourceUnknown] if the type isn't determined yet; decision is one of
+// [DecisionOK]/[DecisionDenied]/[DecisionError].
 //
-// nil-получатель — no-op: брокер может подниматься без observability (unit-тесты,
-// сборки без Augur-wire-up), caller не проверяет nil на каждом запросе.
+// nil receiver is a no-op: the broker can come up without observability
+// (unit tests, builds without Augur wire-up), so the caller doesn't need to
+// check for nil on every request.
 func (m *BrokerMetrics) ObserveFetch(source, decision string, dur time.Duration) {
 	if m == nil {
 		return

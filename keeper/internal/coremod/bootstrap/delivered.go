@@ -1,51 +1,54 @@
-// Package bootstrap реализует keeper-side core-модуль `core.bootstrap.delivered`
-// (ADR-063, docs/keeper/modules.md) — тонкую доставку per-VM bootstrap-токена по
-// SSH на свежесозданные cloud-init-VM.
+// Package bootstrap implements the keeper-side core module `core.bootstrap.delivered`
+// (ADR-063, docs/keeper/modules.md) — thin delivery of the per-VM bootstrap token
+// over SSH to freshly-created cloud-init VMs.
 //
-// Закрывает BUG#2 cloud-provision: до этого scenario нёс адрес-заглушку
-// `keeper.push.applied`, который keeper-dispatch отвергал как unknown module —
-// созданная VM никогда не получала токен и не онбордилась.
+// Closes BUG#2 cloud-provision: previously the scenario carried the placeholder
+// address `keeper.push.applied`, which keeper-dispatch rejected as an unknown
+// module — the created VM never received a token and never onboarded.
 //
-// Дизайн A1 («тонкая доставка», + init-фаза по ADR-063 amendment): cloud-init
-// (B-flat, ADR-017(h)) уже поставил на VM soul-бинарь + CA + systemd-unit.
-// Модуль кладёт токен, redeem-ит его (`soul init`, seed-guard-идемпотентно) и
-// опционально активирует unit. Поток per-host (последовательно): Authorize
+// Design A1 ("thin delivery", + init phase per the ADR-063 amendment): cloud-init
+// (B-flat, ADR-017(h)) has already put the soul binary + CA + systemd unit on the
+// VM. The module writes the token, redeems it (`soul init`, seed-guard-idempotent)
+// and optionally activates the unit. Per-host flow (sequential): Authorize
 // (deny → fail-closed) → ephemeral keypair + Sign → Dial (CA-signed host-cert
-// verify) → запись токена в `token_path` (★токен в STDIN, не в argv) →
-// soul init (см. initSoulCmdFmt) → опц. daemon-reload + enable + start.
-// Ошибка любого хоста прерывает шаг (B1-strict): state не коммитится, прогон
-// уходит в error_locked.
+// verify) → write the token to `token_path` (★token over STDIN, not argv) →
+// soul init (see initSoulCmdFmt) → optional daemon-reload + enable + start.
+// A failure on any host aborts the step (B1-strict): state isn't committed, the
+// run goes to error_locked.
 //
-// install-режим (опц. param `install: true`, только transport=teleport, ADR-063
-// amendment «full-install over SSH»): платформа без cloud-init userdata (напр. WB
-// namespace без `ci_user_data`) не получает setch до доставки — модуль сам ставит
-// ВЕСЬ install-blueprint по той же Teleport-сессии ПЕРЕД токеном. Шаги install-а —
-// единый источник soulinstall.RenderInstallScript (каталоги → keeper-ca.pem(STDIN)
-// → soul.yml(STDIN) → soul.service(STDIN) → curl-бинарь); blueprint-параметры
-// резолвятся из того же keeper.yml::cloud_init + Vault, что и cloud-init userdata
-// (config-reuse). token-write и `systemctl start` в RenderInstallScript НЕ входят —
-// их добавляет этот модуль после install-шагов. Любой ненулевой exit install-шага
-// валит хост (B1-strict, как остальной поток). install=true в direct-режиме —
-// Validate-ошибка (там setch ставит cloud-init, install не нужен).
+// install mode (optional param `install: true`, transport=teleport only, ADR-063
+// amendment "full-install over SSH"): a platform without cloud-init userdata (e.g.
+// a WB namespace without `ci_user_data`) doesn't get set up before delivery — the
+// module itself lays down the ENTIRE install blueprint over the same Teleport
+// session BEFORE the token. The install steps come from a single source,
+// soulinstall.RenderInstallScript (directories → keeper-ca.pem(STDIN) →
+// soul.yml(STDIN) → soul.service(STDIN) → curl binary); blueprint parameters are
+// resolved from the same keeper.yml::cloud_init + Vault as cloud-init userdata
+// (config-reuse). token-write and `systemctl start` are NOT part of
+// RenderInstallScript — this module adds them after the install steps. Any
+// non-zero exit from an install step fails the host (B1-strict, same as the rest
+// of the flow). install=true in direct mode is a Validate error (there, setup
+// comes from cloud-init, install isn't needed).
 //
-// Транспортные режимы (ADR-063 amendment «Teleport by-name transport»):
-//   - direct (default): generic push.Dial по primary_ip — Authorize/Sign/
-//     ephemeral + CA-signed host-cert verify (host-CA из Vault), C1.
-//   - teleport: доставка через Teleport Proxy BY-NAME (target = SID/FQDN, НЕ
-//     primary_ip). Транспорт + user-auth + host-verify целиком через Teleport
-//     identity-file (keeper-side Teleport-Dialer, push.NewTeleportDialer):
-//     Authorize/Sign/ephemeral НЕ вызываются, Vault host-CA НЕ требуется
-//     (host-verify через Teleport CA, C1 неприменим). Свежая VM появляется в
-//     Teleport только через ~3-5мин после создания → connect оборачивается
-//     retry-with-backoff до `join_wait_timeout` (по deadline — failed, B1-strict).
+// Transport modes (ADR-063 amendment "Teleport by-name transport"):
+//   - direct (default): generic push.Dial by primary_ip — Authorize/Sign/
+//     ephemeral + CA-signed host-cert verify (host CA from Vault), C1.
+//   - teleport: delivery via Teleport Proxy BY-NAME (target = SID/FQDN, NOT
+//     primary_ip). Transport + user-auth + host-verify entirely through the
+//     Teleport identity file (keeper-side Teleport-Dialer, push.NewTeleportDialer):
+//     Authorize/Sign/ephemeral are NOT called, Vault host-CA is NOT required
+//     (host-verify via Teleport CA, C1 not applicable). A fresh VM shows up in
+//     Teleport only ~3-5min after creation → connect is wrapped in
+//     retry-with-backoff up to `join_wait_timeout` (past the deadline — failed,
+//     B1-strict).
 //
-// Границы MVP (ADR-063): один key-based SshProvider, доставка только токена,
-// хосты обрабатываются последовательно. Cloud-init CA-signed host-key (C1) —
-// required-для-live, следующий слайс: до него Dial реджектит host-cert свежей VM
-// (голый host-key без подписи CA), и live-e2e не пройдёт.
+// MVP boundaries (ADR-063): one key-based SshProvider, token-only delivery,
+// hosts processed sequentially. Cloud-init CA-signed host-key (C1) is
+// required-for-live, the next slice: without it Dial rejects a fresh VM's
+// host-cert (a bare host-key with no CA signature), and live-e2e won't pass.
 //
-// Симметрично keeper/internal/coremod/cloud: тот же интерфейс sdk/module,
-// тот же Registry-pattern, тот же audit-маскинг секретов.
+// Symmetric with keeper/internal/coremod/cloud: the same sdk/module interface,
+// the same Registry pattern, the same audit secret-masking.
 package bootstrap
 
 import (

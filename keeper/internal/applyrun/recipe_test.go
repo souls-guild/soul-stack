@@ -7,9 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// TestRecipe_MarshalUnmarshalRoundtrip — roundtrip рецепта через jsonb-форму.
-// Ключевая проверка инварианта A: vault-ref в Input сохраняется как СТРОКА
-// без раскрытия (marshal/unmarshal не интерпретируют `vault:`-ссылку).
+// TestRecipe_MarshalUnmarshalRoundtrip — a recipe roundtrip through the jsonb form.
+// The key check is invariant A: the vault-ref in Input is preserved as a STRING,
+// unresolved (marshal/unmarshal do not interpret the `vault:` reference).
 func TestRecipe_MarshalUnmarshalRoundtrip(t *testing.T) {
 	aid := "archon-alice"
 	const vaultRef = "vault:secret/data/db#password"
@@ -28,7 +28,7 @@ func TestRecipe_MarshalUnmarshalRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	// vault-ref должен лежать в jsonb как есть — не раскрыт, не замаскирован.
+	// The vault-ref must sit in jsonb as-is — unresolved, unmasked.
 	if !strings.Contains(string(b), vaultRef) {
 		t.Fatalf("marshalled recipe lost vault-ref verbatim; got: %s", b)
 	}
@@ -57,8 +57,8 @@ func TestRecipe_MarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 }
 
-// TestMarshalRecipe_Nil — старый путь Insert(running) рецепт не несёт:
-// nil-рецепт → (nil, nil) → SQL NULL в колонке.
+// TestMarshalRecipe_Nil — the old Insert(running) path carries no recipe:
+// a nil recipe → (nil, nil) → SQL NULL in the column.
 func TestMarshalRecipe_Nil(t *testing.T) {
 	b, err := MarshalRecipe(nil)
 	if err != nil {
@@ -69,8 +69,8 @@ func TestMarshalRecipe_Nil(t *testing.T) {
 	}
 }
 
-// TestUnmarshalRecipe_Empty — SQL NULL (nil / пустые байты) из колонки старых
-// строк → (nil, nil), не ошибка парсера.
+// TestUnmarshalRecipe_Empty — SQL NULL (nil / empty bytes) from old rows'
+// column → (nil, nil), not a parser error.
 func TestUnmarshalRecipe_Empty(t *testing.T) {
 	for _, in := range [][]byte{nil, {}} {
 		r, err := UnmarshalRecipe(in)
@@ -83,10 +83,10 @@ func TestUnmarshalRecipe_Empty(t *testing.T) {
 	}
 }
 
-// TestRecipe_FromUpgradeRoundtrip — jsonb-персистенция FromUpgrade (ADR-0068):
-// Acolyte при claim обязан прочитать флаг и рендерить upgrade/<slug>/, а не
-// scenario/. true → присутствует в jsonb; дефолт false опущен (omitempty,
-// forward-compat со старыми рецептами).
+// TestRecipe_FromUpgradeRoundtrip — jsonb persistence of FromUpgrade (ADR-0068):
+// at claim the Acolyte must read the flag and render upgrade/<slug>/, not
+// scenario/. true → present in jsonb; the false default is omitted (omitempty,
+// forward-compat with old recipes).
 func TestRecipe_FromUpgradeRoundtrip(t *testing.T) {
 	in := &Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "redis", Ref: "v2.0.0"},
@@ -108,8 +108,8 @@ func TestRecipe_FromUpgradeRoundtrip(t *testing.T) {
 		t.Errorf("FromUpgrade = false, want true (round-trip)")
 	}
 
-	// Дефолт false — omitempty опускает ключ (forward-compat: старые рецепты без
-	// поля читаются как false → обычный scenario/-путь).
+	// The false default — omitempty drops the key (forward-compat: old recipes
+	// without the field read as false → the normal scenario/ path).
 	legacy := &Recipe{ServiceRef: artifact.ServiceRef{Name: "redis", Ref: "v1"}, ScenarioName: "create"}
 	lb, err := MarshalRecipe(legacy)
 	if err != nil {
@@ -120,8 +120,8 @@ func TestRecipe_FromUpgradeRoundtrip(t *testing.T) {
 	}
 }
 
-// TestUnmarshalRecipe_NilInput — рецепт сценария без input (Input nil)
-// roundtrip-ит корректно.
+// TestUnmarshalRecipe_NilInput — a scenario recipe without input (Input nil)
+// round-trips correctly.
 func TestUnmarshalRecipe_NilInput(t *testing.T) {
 	in := &Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Ref: "main"},

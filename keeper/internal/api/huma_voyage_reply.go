@@ -1,37 +1,38 @@
 package api
 
-// HUMA-NATIVE reply-DTO VOYAGE-домена (Teardown T5b, финал — группа 4, паттерн pilot T5a
-// huma_incarnation_reply.go). Reply/output Body huma-операций voyage — native Go-struct в
-// пакете api, НЕ генерёный legacy-генерата. Граница/инварианты — см. шапку huma_incarnation_reply.go.
+// HUMA-NATIVE reply-DTO of the VOYAGE domain (Teardown T5b, final — batch 4, pilot pattern T5a
+// huma_incarnation_reply.go). Reply/output Body of the voyage huma operations — a native Go struct in
+// package api, NOT legacy-generated. Boundary/invariants — see the huma_incarnation_reply.go header.
 //
-// ★ ДЕДУП VOYAGE+CADENCE СИНХРОННО. voyage-схемы (Voyage/VoyageSummary/VoyageListReply +
-// shared VoyageTarget) дублируются между voyage-доменом и cadence-runs (GET /v1/cadences/
-// {id}/runs возвращает ТЕ ЖЕ типы). TestFullSpec_NoSchemaCollision дедуплицирует одноимённые
-// схемы ТОЛЬКО при byte-identical теле. Поэтому voyage И cadence-runs ОБЯЗАНЫ ссылаться на
-// ОДИН native-набор api.Voyage/api.VoyageListReply: voyage-домен — прямым native-Body,
-// cadence-runs — alias-ом generic-envelope на native api.VoyageListReply (huma_cadence_
-// envelope.go, registerCadenceEnvelopes). Тело Voyage идентично by construction → коллизии нет.
+// ★ VOYAGE+CADENCE DEDUP IN SYNC. voyage schemas (Voyage/VoyageSummary/VoyageListReply +
+// shared VoyageTarget) are duplicated between the voyage domain and cadence-runs (GET /v1/cadences/
+// {id}/runs returns the SAME types). TestFullSpec_NoSchemaCollision deduplicates same-named
+// schemas ONLY when the body is byte-identical. So voyage AND cadence-runs MUST reference
+// ONE native set api.Voyage/api.VoyageListReply: the voyage domain — a direct native Body,
+// cadence-runs — a generic-envelope alias over the native api.VoyageListReply (huma_cadence_
+// envelope.go, registerCadenceEnvelopes). The Voyage body is identical by construction → no collision.
 //
-// ENUM (architect minor — сверено с meta/openapi.yaml :7654-7851). ВСЕ voyage reply-enum
-// ОБЪЯВЛЕНЫ INLINE (`type: string` + `enum:` прямо на свойстве, БЕЗ standalone-схемы $ref):
+// ENUM (architect minor — checked against meta/openapi.yaml :7654-7851). ALL voyage reply enums
+// are DECLARED INLINE (`type: string` + `enum:` directly on the property, with NO standalone $ref schema):
 //   - Voyage.kind/status/batch_mode/on_failure       → VoyageKind/Status/BatchMode/OnFailure;
 //   - VoyageTargetEntry.target_kind/status           → VoyageTargetEntryTargetKind/Status;
 //   - VoyageCreateReply.kind/status                  → VoyageCreateReplyKind/Status;
 //   - VoyagePreviewReply.kind/batch_mode             → VoyagePreviewReplyKind/BatchMode;
 //   - VoyageCancelReply.status                       → VoyageCancelReplyStatus.
-// Standalone-схемы для них рукопись НЕ объявляет → enum-alias-механизм (как aliasIncarnation-
-// Status) НЕ применяется. Поля — NATIVE enum-тип (huma_enums.go, T5d-2c-full Phase 1) — huma
-// инлайнит их как `type: string` с enum-набором (byte-exact с прежним legacy-генерата-Body; native value
-// идентичен oapi value). Конвертер кастует legacy-генерата → native (value напрямую, pointer — helper).
+// The hand-written spec does NOT declare standalone schemas for them → the enum-alias mechanism
+// (like aliasIncarnationStatus) does NOT apply. Fields are a NATIVE enum type (huma_enums.go, T5d-2c-full
+// Phase 1) — huma inlines them as `type: string` with an enum set (byte-exact with the former
+// legacy-generated Body; native value identical to the oapi value). The converter casts legacy-generated → native
+// (value directly, pointer via a helper).
 //
-// SHARED VoyageTarget (КЛАСС A). Voyage.target — РЕЮЗ существующего native api.VoyageTarget
-// (huma_voyage_target.go), той же схемы, что input voyage/cadence. НЕ дублируем тип.
+// SHARED VoyageTarget (CLASS A). Voyage.target — REUSES the existing native api.VoyageTarget
+// (huma_voyage_target.go), the same schema as the voyage/cadence input. We do NOT duplicate the type.
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). voyage_id — машинно ULID (audit.NewULID,
-// handlers/voyage.go:988); started_by_aid ← operator.AIDPattern. Чисто формат для
-// клиент-кодогена; pattern не влияет на json.Marshal (golden цел). VoyageTarget.sids
-// НЕ тегируется: тип shared input↔output, на INPUT pattern стал бы рантайм-422.
+// OUTPUT PATTERN (documentation only, NOT runtime validation): huma does NOT validate the
+// response body (empirically 200, not 500). voyage_id — machine ULID (audit.NewULID,
+// handlers/voyage.go:988); started_by_aid ← operator.AIDPattern. Purely a format for
+// client codegen; the pattern does not affect json.Marshal (golden stays intact). VoyageTarget.sids
+// is NOT tagged: the type is shared input↔output, and a pattern on INPUT would become a runtime 422.
 
 import (
 	"time"
@@ -39,12 +40,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === nested-листья (форма 1:1 с legacy-генерата) ===
+// === nested leaves (1:1 shape with legacy-generated) ===
 
-// VoyageSummary — native агрегаты прогона (форма 1:1 с VoyageSummary, types.gen.go :3973):
-// total/succeeded/failed/cancelled — int БЕЗ omitempty (required, рукопись :7710); no_match —
-// *int С omitempty (0/nil → ключ опущен, как handler noMatchPtr). Имя структуры = контрактное
-// имя схемы.
+// VoyageSummary — native run aggregates (1:1 shape with VoyageSummary, types.gen.go :3973):
+// total/succeeded/failed/cancelled — int WITHOUT omitempty (required, hand-written spec :7710); no_match —
+// *int WITH omitempty (0/nil → key omitted, like the handler noMatchPtr). The struct name = the contract
+// schema name.
 type VoyageSummary struct {
 	Cancelled int  `json:"cancelled"`
 	Failed    int  `json:"failed"`
@@ -53,10 +54,10 @@ type VoyageSummary struct {
 	Total     int  `json:"total"`
 }
 
-// VoyageTargetEntry — native строка voyage_targets (All-runs drill; форма 1:1 с
-// VoyageTargetEntry, types.gen.go :4001): apply_id/errand_id/finished_at — *-С omitempty
-// (взаимоисключающие back-link-и kind=scenario/command → ключ опущен); status/target_kind —
-// inline oapi-enum (huma инлайнит `type: string`); batch_index — int; target_id — string.
+// VoyageTargetEntry — a native voyage_targets row (All-runs drill; 1:1 shape with
+// VoyageTargetEntry, types.gen.go :4001): apply_id/errand_id/finished_at — pointer WITH omitempty
+// (mutually exclusive kind=scenario/command back-links → key omitted); status/target_kind —
+// inline oapi enum (huma inlines `type: string`); batch_index — int; target_id — string.
 type VoyageTargetEntry struct {
 	ApplyID    *string                     `json:"apply_id,omitempty"`
 	BatchIndex int                         `json:"batch_index"`
@@ -67,17 +68,17 @@ type VoyageTargetEntry struct {
 	TargetKind VoyageTargetEntryTargetKind `json:"target_kind"`
 }
 
-// === Voyage (детальный snapshot) — форма 1:1 с Voyage ===
+// === Voyage (detailed snapshot) — 1:1 shape with Voyage ===
 
-// Voyage — native snapshot Voyage-прогона (GET detail / list item; форма 1:1 с Voyage,
-// types.gen.go :3787). Поля required-по-рукописи (:7789) — без omitempty (attempt/current_
+// Voyage — native snapshot of a Voyage run (GET detail / list item; 1:1 shape with Voyage,
+// types.gen.go :3787). Fields required by the hand-written spec (:7789) — without omitempty (attempt/current_
 // batch_index/dry_run/scope_size/total_batches/started_by_aid/voyage_id/kind/status/created_at);
-// pointer-optional С omitempty — все nullable-поля (batch_*/concurrency/fail_threshold/finished_
+// pointer-optional WITH omitempty — all nullable fields (batch_*/concurrency/fail_threshold/finished_
 // at/module/on_failure/require_alive/scenario_name/schedule_at/started_at/summary/target). enum
-// kind/status/batch_mode/on_failure — inline oapi-enum (huma `type: string`). Target — РЕЮЗ
-// shared api.VoyageTarget (КЛАСС A; та же схема, что input). Summary — native VoyageSummary.
-// date-time — наносекундный wire (handler присваивает голый time.Time БЕЗ .UTC()/Truncate).
-// Имя структуры = контрактное имя схемы.
+// kind/status/batch_mode/on_failure — inline oapi enum (huma `type: string`). Target — REUSES the
+// shared api.VoyageTarget (CLASS A; the same schema as the input). Summary — native VoyageSummary.
+// date-time — nanosecond wire precision (the handler assigns a bare time.Time WITHOUT .UTC()/Truncate).
+// The struct name = the contract schema name.
 type Voyage struct {
 	Attempt           int              `json:"attempt"`
 	BatchMode         *VoyageBatchMode `json:"batch_mode,omitempty"`
@@ -105,13 +106,13 @@ type Voyage struct {
 	VoyageID          string           `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// === обёртки (форма 1:1 с legacy-генерата) ===
+// === wrappers (1:1 shape with legacy-generated) ===
 
-// VoyageListReply — native 200-envelope GET /v1/voyages (форма 1:1 с VoyageListReply,
-// types.gen.go :3923): items/offset/limit/total (offset/limit/total — int, parity legacy-генерата);
-// items.$ref на native Voyage. ★ ОБЩИЙ тип для voyage-list И cadence-runs (последний — через
-// alias generic-envelope → api.VoyageListReply, huma_cadence_envelope.go) → одна named-схема
-// VoyageListReply byte-identical в обоих доменах. Имя структуры = контрактное имя схемы.
+// VoyageListReply — native 200 envelope for GET /v1/voyages (1:1 shape with VoyageListReply,
+// types.gen.go :3923): items/offset/limit/total (offset/limit/total — int, parity with legacy-generated);
+// items.$ref to native Voyage. ★ SHARED type for voyage-list AND cadence-runs (the latter — via
+// a generic-envelope alias → api.VoyageListReply, huma_cadence_envelope.go) → one named schema
+// VoyageListReply byte-identical in both domains. The struct name = the contract schema name.
 type VoyageListReply struct {
 	Items  []Voyage `json:"items"`
 	Limit  int      `json:"limit"`
@@ -119,17 +120,17 @@ type VoyageListReply struct {
 	Total  int      `json:"total"`
 }
 
-// VoyageTargetsReply — native 200-тело GET /v1/voyages/{id}/targets (форма 1:1 с
+// VoyageTargetsReply — native 200 body for GET /v1/voyages/{id}/targets (1:1 shape with
 // VoyageTargetsReply, types.gen.go :4021): voyage_id + targets[] (native VoyageTargetEntry),
-// оба required. Имя структуры = контрактное имя схемы.
+// both required. The struct name = the contract schema name.
 type VoyageTargetsReply struct {
 	Targets  []VoyageTargetEntry `json:"targets"`
 	VoyageID string              `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// VoyageCreateReply — native 202-тело POST /v1/voyages (форма 1:1 с VoyageCreateReply,
-// types.gen.go :3839): voyage_id/kind/scope_size/status/location (все required). kind/status —
-// inline oapi-enum (huma `type: string`). Имя структуры = контрактное имя схемы.
+// VoyageCreateReply — native 202 body for POST /v1/voyages (1:1 shape with VoyageCreateReply,
+// types.gen.go :3839): voyage_id/kind/scope_size/status/location (all required). kind/status —
+// inline oapi enum (huma `type: string`). The struct name = the contract schema name.
 type VoyageCreateReply struct {
 	Kind      VoyageCreateReplyKind   `json:"kind"`
 	Location  string                  `json:"location"`
@@ -138,10 +139,10 @@ type VoyageCreateReply struct {
 	VoyageID  string                  `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// VoyagePreviewReply — native 200-тело POST /v1/voyages/preview (форма 1:1 с
+// VoyagePreviewReply — native 200 body for POST /v1/voyages/preview (1:1 shape with
 // VoyagePreviewReply, types.gen.go :3951): kind/scope_size/total_batches/batch_mode
-// (required) + effective_batch_size (*int С omitempty). kind/batch_mode — inline oapi-enum.
-// Имя структуры = контрактное имя схемы.
+// (required) + effective_batch_size (*int WITH omitempty). kind/batch_mode — inline oapi enum.
+// The struct name = the contract schema name.
 type VoyagePreviewReply struct {
 	BatchMode          VoyagePreviewReplyBatchMode `json:"batch_mode"`
 	EffectiveBatchSize *int                        `json:"effective_batch_size,omitempty"`
@@ -150,23 +151,23 @@ type VoyagePreviewReply struct {
 	TotalBatches       int                         `json:"total_batches"`
 }
 
-// VoyageCancelReply — native 202-тело DELETE /v1/voyages/{id} (форма 1:1 с
+// VoyageCancelReply — native 202 body for DELETE /v1/voyages/{id} (1:1 shape with
 // VoyageCancelReply, types.gen.go :3830): voyage_id + status:cancelled (required).
-// status — inline oapi-enum. Имя структуры = контрактное имя схемы.
+// status — inline oapi enum. The struct name = the contract schema name.
 type VoyageCancelReply struct {
 	Status   VoyageCancelReplyStatus `json:"status"`
 	VoyageID string                  `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// === проекторы handlers.X → api-native (граница api↔handlers, byte-exact form passthrough) ===
+// === projectors handlers.X → api-native (api↔handlers boundary, byte-exact form passthrough) ===
 //
-// Handler-native (T5d): извлечённые *Typed-функции отдают плоские handlers-DTO (plain-string
-// enum-поля, target-pointer-slice — handlers/voyage.go). Эти проекторы переводят их В api-native
-// wire-DTO (named-enum-поля → huma-schema, value-slice target). Конвертеров legacy-генерата больше нет —
-// граница строит wire-DTO из доменных handler-полей напрямую (паттерн huma_operator_reply.go).
+// Handler-native (T5d): the extracted *Typed functions return flat handlers DTOs (plain-string
+// enum fields, target pointer-slice — handlers/voyage.go). These projectors convert them INTO api-native
+// wire-DTO (named-enum fields → huma schema, value-slice target). There are no more legacy-generated converters —
+// the boundary builds the wire-DTO directly from the domain handler fields (pattern from huma_operator_reply.go).
 
-// ptrVoyageBatchMode / ptrVoyageOnFailure — каст указателя plain-string → native-enum БЕЗ потери
-// nil-ности (nil → nil, для byte-exact omitempty). Underlying string идентичен.
+// ptrVoyageBatchMode / ptrVoyageOnFailure — casts a plain-string pointer → native enum WITHOUT losing
+// nil-ness (nil → nil, for byte-exact omitempty). The underlying string is identical.
 func ptrVoyageBatchMode(s *string) *VoyageBatchMode {
 	if s == nil {
 		return nil
@@ -196,11 +197,11 @@ func toVoyageSummary(o *handlers.VoyageSummaryDTO) *VoyageSummary {
 	}
 }
 
-// toVoyageTarget — проекция handler-DTO target → native api.VoyageTarget (КЛАСС A reuse).
-// handlers.VoyageTargetDTO несёт pointer-slice/pointer-string (*[]string/*string); native —
-// value-slice/value-string с omitempty. Разыменование сохраняет byte-exact: nil-указатель →
-// nil-slice/"" → (omitempty) ключ опущен. Voyage.target опущен целиком (graceful), когда у
-// домена нет target_origin.
+// toVoyageTarget — projects the handler-DTO target → native api.VoyageTarget (CLASS A reuse).
+// handlers.VoyageTargetDTO carries pointer-slice/pointer-string (*[]string/*string); native —
+// value-slice/value-string with omitempty. Dereferencing preserves byte-exactness: nil pointer →
+// nil-slice/"" → (omitempty) key omitted. Voyage.target is omitted entirely (gracefully) when the
+// domain has no target_origin.
 func toVoyageTarget(o *handlers.VoyageTargetDTO) *VoyageTarget {
 	if o == nil {
 		return nil
@@ -266,7 +267,7 @@ func toVoyageTargetEntry(o handlers.VoyageTargetEntryDTO) VoyageTargetEntry {
 }
 
 func toVoyageListReply(o handlers.VoyageListReply) VoyageListReply {
-	// Сохраняем nil-ность среза (nil → wire `null`, [] → `[]`) для byte-exact.
+	// Preserve slice nil-ness (nil → wire `null`, [] → `[]`) for byte-exactness.
 	var items []Voyage
 	if o.Items != nil {
 		items = make([]Voyage, len(o.Items))

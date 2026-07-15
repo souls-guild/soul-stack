@@ -8,78 +8,78 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// SelectorExtractor — функция извлечения runtime-context-а из request-а
-// для permission-проверки.
+// SelectorExtractor — a function that extracts the runtime context from the request
+// for the permission check.
 //
-// Endpoint, не требующий контекста (например, `POST /v1/operators` —
-// permission `operator.create` без селектора), передаёт NoSelector.
-// Endpoint c контекстом (например, `POST /v1/incarnations`) — closure,
-// читающий name из body / path и возвращающий `{"incarnation": name}`.
+// An endpoint that needs no context (e.g. `POST /v1/operators` —
+// permission `operator.create` without a selector) passes NoSelector.
+// An endpoint with context (e.g. `POST /v1/incarnations`) — a closure
+// that reads name from the body / path and returns `{"incarnation": name}`.
 //
-// nil-возврат и пустая map эквивалентны: permission с селектором не
-// сматчит, но bare-permission и full-wildcard — да.
+// A nil return and an empty map are equivalent: a permission with a selector will
+// not match, but a bare permission and full-wildcard will.
 type SelectorExtractor func(r *http.Request) map[string]string
 
-// NoSelector — empty-extractor для endpoints без контекстных фильтров.
-// Используется на operator endpoints (`POST /v1/operators*`) — permission-ы
-// для них (`operator.create` / `operator.revoke` / `operator.issue-token`)
-// в rbac.md селекторов не имеют, контекст всегда пуст.
+// NoSelector — an empty extractor for endpoints without context filters.
+// Used on operator endpoints (`POST /v1/operators*`) — their permissions
+// (`operator.create` / `operator.revoke` / `operator.issue-token`)
+// have no selectors in rbac.md, the context is always empty.
 func NoSelector(_ *http.Request) map[string]string { return nil }
 
-// MultiSelectorExtractor — функция извлечения НАБОРА runtime-context-ов из
-// request-а для permission-проверки с OR-семантикой по контекстам.
+// MultiSelectorExtractor — a function that extracts a SET of runtime contexts from the
+// request for a permission check with OR-semantics across contexts.
 //
-// Нужна там, где один ключ селектора имеет МНОЖЕСТВО кандидатов-значений, а
-// [rbac.Permission.Matches] оперирует single-value context-ом (`coven=` для
-// incarnation = `incarnation.covens ∪ {name}`, ADR-008 amendment a). Каждый
-// возвращённый context описывает один кандидат (одна coven-метка плюс
-// неизменные `incarnation`/`service`); permission допускается, если матчит
-// ХОТЯ БЫ ОДИН из контекстов (см. [RequirePermissionMulti]).
+// Needed where one selector key has MULTIPLE candidate values, while
+// [rbac.Permission.Matches] operates on a single-value context (`coven=` for
+// an incarnation = `incarnation.covens ∪ {name}`, ADR-008 amendment a). Each
+// returned context describes one candidate (one coven label plus the
+// unchanged `incarnation`/`service`); the permission is granted if it matches
+// AT LEAST ONE of the contexts (see [RequirePermissionMulti]).
 //
-// Контракт возвратов:
-//   - nil / пустой slice → доступ только bare-/`*`-permission-ам (как
-//     nil-возврат у [SelectorExtractor]): ни один coven-/service-scoped не
-//     сматчит. Используется, когда экстрактор не смог прочитать данные
-//     (incarnation не найдена / битый body) — fail-closed для scoped-ролей.
-//   - непустой slice → permission проходит при матче любого контекста.
+// Return contract:
+//   - nil / an empty slice → access only for bare-/`*`-permissions (same as a
+//     nil return from [SelectorExtractor]): no coven-/service-scoped permission will
+//     match. Used when the extractor failed to read the data
+//     (incarnation not found / broken body) — fail-closed for scoped roles.
+//   - a non-empty slice → the permission passes if any context matches.
 //
-// Внутри одного context-а сохраняется AND-семантика [rbac.Permission.Matches]
-// (например, permission `... on coven=prod` И неявно по service не нарушается —
-// service-only-permission матчит при любой coven-итерации, coven-only — при
-// своей метке).
+// Within a single context the AND-semantics of [rbac.Permission.Matches] still hold
+// (e.g. a permission `... on coven=prod` is not implicitly broken by service —
+// a service-only permission matches on any coven iteration, a coven-only one — on its
+// own label).
 type MultiSelectorExtractor func(r *http.Request) []map[string]string
 
-// PermissionChecker — узкое подмножество rbac-поверхности, нужное
-// middleware-у. Реализуется и [rbac.Enforcer], и [rbac.Holder] (последний
-// обёртывает Enforcer с pointer-cmp invalidation для hot-reload-а
-// `rbac:`-блока через [config.Store], см. ADR-021 + docs/keeper/config.md).
+// PermissionChecker — the narrow subset of the rbac surface the
+// middleware needs. Implemented by both [rbac.Enforcer] and [rbac.Holder] (the latter
+// wraps the Enforcer with pointer-cmp invalidation for hot-reloading the
+// `rbac:` block via [config.Store], see ADR-021 + docs/keeper/config.md).
 //
-// Сужение нужно для двух целей: (1) unit-тесты могут передать прямой
-// Enforcer без подъёма Store; (2) production wire-up в `keeper run` передаёт
-// Holder, который пересобирает Enforcer на каждый Reload-swap.
+// The narrowing serves two purposes: (1) unit tests can pass a direct
+// Enforcer without standing up a Store; (2) the production wire-up in `keeper run` passes a
+// Holder, which rebuilds the Enforcer on every Reload swap.
 type PermissionChecker interface {
 	Check(aid, resource, action string, context map[string]string) error
 }
 
-// ActionHolder — узкая поверхность existence-gate read-эндпоинтов (ADR-047 §г
-// amendment 2026-06-04), нужная [RequireAction]. Реализуется и [rbac.Enforcer],
-// и [rbac.Holder] (как [PermissionChecker]).
+// ActionHolder — the narrow existence-gate surface for read endpoints (ADR-047 §d
+// amendment 2026-06-04), needed by [RequireAction]. Implemented by both [rbac.Enforcer]
+// and [rbac.Holder] (like [PermissionChecker]).
 //
-// Отдельный интерфейс, а не расширение [PermissionChecker]: вопрос другой
-// (existence без scope-контекста, без error — bool), сигнатура иная. Узкий
-// контракт держит зависимость middleware минимальной и позволяет unit-тесту
-// передать прямой Enforcer без Store.
+// A separate interface rather than an extension of [PermissionChecker]: the question is
+// different (existence without a scope context, bool instead of error), the signature differs. The narrow
+// contract keeps the middleware's dependency minimal and lets a unit test
+// pass a direct Enforcer without a Store.
 type ActionHolder interface {
 	HoldsAction(aid, resource, action string) bool
 }
 
-// RequirePermission — middleware-фабрика. Должен использоваться после
-// [RequireJWT] (иначе ClaimsFromContext вернёт ok=false → 500-логика, не
-// 401: missing JWT — конфиг-ошибка сервера, не пользователя).
+// RequirePermission — a middleware factory. Must be used after
+// [RequireJWT] (otherwise ClaimsFromContext returns ok=false → 500 logic, not
+// 401: a missing JWT is a server configuration error, not the user's).
 //
-// При deny возвращает 403 problem+json. При misconfiguration (нет
-// claims в context) — 500 (логирование делает caller через server-wide
-// recovery; здесь только короткий generic-detail).
+// On deny it returns 403 problem+json. On misconfiguration (no
+// claims in the context) — 500 (logging is done by the caller via server-wide
+// recovery; here only a short generic detail).
 func RequirePermission(e PermissionChecker, resource, action string, extractor SelectorExtractor) func(http.Handler) http.Handler {
 	if extractor == nil {
 		extractor = NoSelector
@@ -88,17 +88,17 @@ func RequirePermission(e PermissionChecker, resource, action string, extractor S
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFromContext(r.Context())
 			if !ok {
-				// JWT-middleware не отработал — это ошибка конфигурации
-				// chain-а, а не клиента. 500 без подробностей.
+				// The JWT middleware did not run — this is a chain configuration
+				// error, not the client's. 500 with no detail.
 				WriteInternal(w, r)
 				return
 			}
 			ctx := extractor(r)
 			if err := e.Check(claims.Subject, resource, action, ctx); err != nil {
 				// ErrOperatorRevoked → 401 (ADR-014 Amendment 2026-05-27,
-				// parity с expired JWT — токен больше не доверенный).
-				// ErrPermissionDenied и всё остальное → 403 (внутреннюю
-				// диагностику не leak-аем, подробности — в audit-middleware).
+				// parity with an expired JWT — the token is no longer trusted).
+				// ErrPermissionDenied and everything else → 403 (internal
+				// diagnostics are not leaked, detail lives in the audit middleware).
 				if errors.Is(err, rbac.ErrOperatorRevoked) {
 					problem.Write(w, problem.New(problem.TypeOperatorRevokedToken, r.URL.Path,
 						"archon "+claims.Subject+" has been revoked"))
@@ -116,22 +116,22 @@ func RequirePermission(e PermissionChecker, resource, action string, extractor S
 	}
 }
 
-// RequireAction — middleware-фабрика existence-gate read-эндпоинтов (ADR-047 §г
-// amendment 2026-06-04). Должен использоваться после [RequireJWT] (как
+// RequireAction — a middleware factory for the existence-gate on read endpoints (ADR-047 §d
+// amendment 2026-06-04). Must be used after [RequireJWT] (like
 // [RequirePermission]).
 //
-// Отличие от [RequirePermission]: тот зовёт scope-aware [PermissionChecker.Check]
-// со scope-контекстом из [SelectorExtractor] и режет scoped-оператора, чей
-// контекст не сматчил селектор. Read-эндпоинт на этапе middleware ещё НЕ знает
-// scope-контекста (host/coven/state резолвятся из строк БД, которых нет до
-// фетча), поэтому `Check(...,nil)` дал бы ложный deny для scoped-permission.
-// RequireAction спрашивает другое — держит ли оператор действие В ПРИНЦИПЕ
-// ([ActionHolder.HoldsAction]); сужение по scope делает handler после фетча
-// (per-resource резолверы soulpurview/statepredicate).
+// Difference from [RequirePermission]: that one calls the scope-aware [PermissionChecker.Check]
+// with a scope context from [SelectorExtractor] and cuts off a scoped operator whose
+// context did not match the selector. At the middleware stage a read endpoint does NOT yet know
+// the scope context (host/coven/state are resolved from DB rows that don't exist before the
+// fetch), so `Check(...,nil)` would produce a false deny for a scoped permission.
+// RequireAction asks a different question — does the operator hold the action AT ALL
+// ([ActionHolder.HoldsAction]); the scope narrowing is done by the handler after the fetch
+// (per-resource resolvers soulpurview/statepredicate).
 //
-// Не держит действие → 403 (тот же problem+json-стиль, что [RequirePermission]).
-// Missing claims → 500 (паритет: JWT-middleware не отработал = конфиг-ошибка
-// chain-а, не клиента).
+// Does not hold the action → 403 (the same problem+json style as [RequirePermission]).
+// Missing claims → 500 (parity: the JWT middleware did not run = a chain configuration
+// error, not the client's).
 func RequireAction(h ActionHolder, resource, action string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,26 +150,26 @@ func RequireAction(h ActionHolder, resource, action string) func(http.Handler) h
 	}
 }
 
-// RequireAnyPermission — middleware-фабрика с OR-семантикой по НАБОРУ
-// `<action>` одного resource в едином контексте [SelectorExtractor]. Должен
-// использоваться после [RequireJWT] (как [RequirePermission]).
+// RequireAnyPermission — a middleware factory with OR-semantics over a SET of
+// `<action>` values for one resource in a single [SelectorExtractor] context. Must
+// be used after [RequireJWT] (like [RequirePermission]).
 //
-// Отличие от [RequirePermissionMulti]: тот OR-ит один `<resource>.<action>` по
-// набору *контекстов* (multi-value `coven=`); этот OR-ит несколько
-// *permission-имён* `<resource>.<action_i>` в одном контексте. Нужен там, где
-// эндпоинт допускает любое из нескольких прав — например, гранулярное
-// `cadence.enable` ИЛИ backcompat-грант `cadence.update` на
-// `POST /v1/cadences/{id}/enable` (роли со старым `cadence.update` не теряют
-// доступ при вводе гранулярных enable/disable, ADR-046 amendment 2026-06-02).
+// Difference from [RequirePermissionMulti]: that one ORs a single `<resource>.<action>` across a
+// set of *contexts* (multi-value `coven=`); this one ORs several
+// *permission names* `<resource>.<action_i>` in a single context. Needed where an
+// endpoint accepts any of several rights — e.g. the granular
+// `cadence.enable` OR the backcompat grant `cadence.update` on
+// `POST /v1/cadences/{id}/enable` (roles with the old `cadence.update` do not lose
+// access when granular enable/disable is introduced, ADR-046 amendment 2026-06-02).
 //
-// Допуск, если [PermissionChecker.Check] вернул nil ХОТЯ БЫ для одного action.
-// При deny возвращает 403 с упоминанием ПЕРВОГО action набора (канонического
-// для эндпоинта); при missing claims — 500 (паритет [RequirePermission]).
+// Granted if [PermissionChecker.Check] returned nil for AT LEAST ONE action.
+// On deny it returns 403 mentioning the FIRST action of the set (the canonical one
+// for the endpoint); on missing claims — 500 (parity with [RequirePermission]).
 //
-// Side-effect метрики: Check вызывается по разу на каждый action до первого
-// allow, поэтому при матче не-первого права счётчик rbac_checks_total{result=
-// "deny"} над-считан (паритет over-count у [RequirePermissionMulti]). Набор
-// actions короткий (2 для cadence toggle), эффект минорный.
+// Metrics side-effect: Check is called once per action up to the first
+// allow, so on a match of a non-first right the rbac_checks_total{result=
+// "deny"} counter is over-counted (parity with the over-count in [RequirePermissionMulti]). The
+// actions set is short (2 for the cadence toggle), the effect is minor.
 func RequireAnyPermission(e PermissionChecker, resource string, actions []string, extractor SelectorExtractor) func(http.Handler) http.Handler {
 	if extractor == nil {
 		extractor = NoSelector
@@ -190,8 +190,8 @@ func RequireAnyPermission(e PermissionChecker, resource string, actions []string
 					return
 				}
 				lastErr = err
-				// revoked-AID — короткое замыкание в 401 на любом action
-				// (паритет [RequirePermissionMulti], ADR-014 Amendment).
+				// revoked-AID — short-circuits to 401 on any action
+				// (parity with [RequirePermissionMulti], ADR-014 Amendment).
 				if errors.Is(err, rbac.ErrOperatorRevoked) {
 					problem.Write(w, problem.New(problem.TypeOperatorRevokedToken, r.URL.Path,
 						"archon "+claims.Subject+" has been revoked"))
@@ -207,30 +207,30 @@ func RequireAnyPermission(e PermissionChecker, resource string, actions []string
 	}
 }
 
-// RequirePermissionMulti — middleware-фабрика с OR-семантикой по набору
-// контекстов из [MultiSelectorExtractor]. Должен использоваться после
-// [RequireJWT] (как [RequirePermission]).
+// RequirePermissionMulti — a middleware factory with OR-semantics over a set of
+// contexts from [MultiSelectorExtractor]. Must be used after
+// [RequireJWT] (like [RequirePermission]).
 //
-// Допуск, если [PermissionChecker.Check] вернул nil ХОТЯ БЫ для одного
-// контекста. Это приземляет multi-value `coven=` без правки
-// [rbac.Permission.Matches] (single-value context): экстрактор разворачивает
-// `incarnation.covens ∪ {name}` в по-кандидатный набор контекстов, OR — здесь.
-// Пустой набор (extractor вернул nil/[]) → пробуем единственный пустой
-// context: проходят только bare-/`*`-permission-ы (fail-closed для
-// coven-/service-scoped, как и у nil-возврата [SelectorExtractor]).
+// Granted if [PermissionChecker.Check] returned nil for AT LEAST ONE
+// context. This lands multi-value `coven=` without changing
+// [rbac.Permission.Matches] (a single-value context): the extractor expands
+// `incarnation.covens ∪ {name}` into a per-candidate set of contexts, the OR happens here.
+// An empty set (the extractor returned nil/[]) → try a single empty
+// context: only bare-/`*`-permissions pass (fail-closed for
+// coven-/service-scoped ones, same as a nil return from [SelectorExtractor]).
 //
-// При deny возвращает 403; при missing claims — 500 (паритет
+// On deny it returns 403; on missing claims — 500 (parity with
 // [RequirePermission]).
 //
-// Side-effect метрики: [PermissionChecker.Check] вызывается по разу на каждый
-// контекст набора, а keeper_rbac_checks_total наблюдается ВНУТРИ Check-а
-// (Holder-обёртка, keeper/internal/rbac/metrics.go). Поэтому один логический
-// incarnation-гейт даёт до N инкрементов счётчика, и при матче не-первого
-// контекста — N-1 ложных `deny` перед итоговым `allow`. Это осознанный minor:
-// убрать его без no-observe-варианта Check-а нельзя (у middleware нет
-// метрик-поверхности — он работает через узкий [PermissionChecker]), а вводить
-// её ради нита избыточно. Учитывать при алертинге на rbac_checks_total{result="deny"}:
-// для coven-scoped incarnation-эндпоинтов deny над-считан на размер набора контекстов.
+// Metrics side-effect: [PermissionChecker.Check] is called once per
+// context of the set, and keeper_rbac_checks_total is observed INSIDE Check
+// (the Holder wrapper, keeper/internal/rbac/metrics.go). So one logical
+// incarnation gate produces up to N counter increments, and on a match of a non-first
+// context — N-1 spurious `deny`s before the final `allow`. This is a deliberate minor issue:
+// removing it without a no-observe variant of Check is not possible (the middleware has no
+// metrics surface — it works through the narrow [PermissionChecker]), and introducing
+// one for this nit alone is excessive. Take this into account when alerting on rbac_checks_total{result="deny"}:
+// for coven-scoped incarnation endpoints deny is over-counted by the size of the context set.
 func RequirePermissionMulti(e PermissionChecker, resource, action string, extractor MultiSelectorExtractor) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -244,9 +244,9 @@ func RequirePermissionMulti(e PermissionChecker, resource, action string, extrac
 			if extractor != nil {
 				contexts = extractor(r)
 			}
-			// Пустой набор → одна попытка с пустым context-ом (bare/`*` пройдут,
-			// scoped — нет). Это сохраняет fail-closed для scoped-ролей, когда
-			// экстрактор не смог приземлить данные (404 / битый body).
+			// An empty set → a single attempt with an empty context (bare/`*` pass,
+			// scoped ones do not). This preserves fail-closed for scoped roles when
+			// the extractor failed to land the data (404 / broken body).
 			if len(contexts) == 0 {
 				contexts = []map[string]string{nil}
 			}
@@ -259,9 +259,9 @@ func RequirePermissionMulti(e PermissionChecker, resource, action string, extrac
 					return
 				}
 				lastErr = err
-				// ErrOperatorRevoked — короткое замыкание: revoked-AID не
-				// «не подходит к одному из context-ов», он deny на любой
-				// context. Маппим в 401 сразу (ADR-014 Amendment 2026-05-27).
+				// ErrOperatorRevoked — short-circuits: a revoked AID does not
+				// merely "not fit one of the contexts", it is a deny on any
+				// context. Map it to 401 right away (ADR-014 Amendment 2026-05-27).
 				if errors.Is(err, rbac.ErrOperatorRevoked) {
 					problem.Write(w, problem.New(problem.TypeOperatorRevokedToken, r.URL.Path,
 						"archon "+claims.Subject+" has been revoked"))

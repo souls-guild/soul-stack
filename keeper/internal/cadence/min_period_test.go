@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// minPeriodRow — стуб строки SELECT MIN(interval_seconds), bool_or(...).
+// minPeriodRow is a stub row for SELECT MIN(interval_seconds), bool_or(...).
 // dest[0] = **int (nullable), dest[1] = *bool (nullable).
 type minPeriodRow struct {
 	minIv   *int
@@ -44,22 +44,22 @@ func TestDerivedMinPeriod(t *testing.T) {
 		want   time.Duration
 		wantOK bool
 	}{
-		// «частое»: interval=30 → derived 30 (внутри коридора 30..60).
+		// "frequent": interval=30 → derived 30 (inside the 30..60 corridor).
 		{"interval 30", MinPeriod{MinIntervalSeconds: iv(30)}, 30 * time.Second, true},
-		// «редкое»: interval=3600 → derived 3600 (clamp потом срежет до ceiling 60).
+		// "rare": interval=3600 → derived 3600 (clamp will later cut it down to ceiling 60).
 		{"interval 3600 raw", MinPeriod{MinIntervalSeconds: iv(3600)}, 3600 * time.Second, true},
-		// cron-only: interval_seconds NULL у cron → derived = cronGranularity 60s.
+		// cron-only: interval_seconds is NULL for cron → derived = cronGranularity 60s.
 		{"cron only", MinPeriod{HasCron: true}, 60 * time.Second, true},
-		// смешанное: interval=45 + cron → min(45, 60) = 45.
+		// mixed: interval=45 + cron → min(45, 60) = 45.
 		{"mixed interval 45 + cron", MinPeriod{MinIntervalSeconds: iv(45), HasCron: true}, 45 * time.Second, true},
-		// смешанное: interval=120 + cron → min(120, 60) = 60 (cron «выигрывает»).
+		// mixed: interval=120 + cron → min(120, 60) = 60 (cron "wins").
 		{"mixed interval 120 + cron", MinPeriod{MinIntervalSeconds: iv(120), HasCron: true}, 60 * time.Second, true},
-		// floor-под-минимум (interval=10): derived 10 без floor-clamp — floor
-		// применяет Clamp, отдельная reject-валидация в Pass B.
+		// below-floor (interval=10): derived 10 without the floor clamp — the
+		// floor is applied by Clamp, a separate reject-validation lives in Pass B.
 		{"interval 10 below floor (no floor here)", MinPeriod{MinIntervalSeconds: iv(10)}, 10 * time.Second, true},
-		// interval=10 + cron → min(10, 60) = 10 (floor — Pass B/Clamp, не тут).
+		// interval=10 + cron → min(10, 60) = 10 (floor is Pass B/Clamp, not here).
 		{"interval 10 + cron", MinPeriod{MinIntervalSeconds: iv(10), HasCron: true}, 10 * time.Second, true},
-		// пусто: ни interval, ни cron → ok=false (вызывающий берёт poll_idle).
+		// empty: neither interval nor cron → ok=false (the caller falls back to poll_idle).
 		{"empty registry → idle signal", MinPeriod{}, 0, false},
 	}
 	for _, tc := range tests {

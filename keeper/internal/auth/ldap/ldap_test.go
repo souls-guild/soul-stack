@@ -12,17 +12,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
 )
 
-// fakeConn — подменное LDAP-соединение для unit-тестов (без реального LDAP).
-// Запоминает все bind-credentials, чтобы тесты проверяли НЕ-логирование/НЕ-утечку
-// пароля наружу и сценарии bad-bind.
+// fakeConn is a stand-in LDAP connection for unit tests (no real LDAP).
+// It records all bind credentials so tests can verify the password is
+// NOT logged/leaked and cover bad-bind scenarios.
 type fakeConn struct {
-	// userEntry — запись, которую вернёт user-search (nil → 0 записей).
+	// userEntry is the entry returned by the user search (nil → 0 entries).
 	userEntry *ldapv3.Entry
-	// groupEntries — записи group-search.
+	// groupEntries are the entries returned by the group search.
 	groupEntries []*ldapv3.Entry
-	// userPassword — «правильный» пароль user-bind-а; re-bind с другим → fail.
+	// userPassword is the "correct" password for the user bind; re-bind with a different one → fail.
 	userPassword string
-	// servicePassword — «правильный» пароль service-bind-а.
+	// servicePassword is the "correct" password for the service bind.
 	servicePassword string
 
 	bindCalls []bindCall
@@ -49,7 +49,7 @@ func (f *fakeConn) Bind(dn, password string) error {
 
 func (f *fakeConn) Search(req *ldapv3.SearchRequest) (*ldapv3.SearchResult, error) {
 	f.searches = append(f.searches, req)
-	// group-search по member/group_filter — отличаем по присутствию userDN в фильтре.
+	// Group search by member/group_filter — distinguished by whether userDN is present in the filter.
 	if f.userEntry != nil && strings.Contains(req.Filter, escapeForTest(f.userEntry.DN)) {
 		return &ldapv3.SearchResult{Entries: f.groupEntries}, nil
 	}
@@ -67,7 +67,7 @@ func mkEntry(dn, attr, val string) *ldapv3.Entry {
 	return &ldapv3.Entry{DN: dn, Attributes: []*ldapv3.EntryAttribute{{Name: attr, Values: []string{val}}}}
 }
 
-// validSearchConfig — корректный search-bind конфиг (ldaps://).
+// validSearchConfig is a valid search-bind config (ldaps://).
 func validSearchConfig() Config {
 	return Config{
 		URL:          "ldaps://ldap.example.com:636",
@@ -82,7 +82,7 @@ func validSearchConfig() Config {
 	}
 }
 
-// withFakeDial подменяет dial-фабрику аутентификатора на возврат заданного conn.
+// withFakeDial replaces the authenticator's dial factory to return the given conn.
 func withFakeDial(a *Authenticator, fc *fakeConn) {
 	a.dial = func(_ context.Context, _ Config, _ *tls.Config) (conn, error) { return fc, nil }
 }
@@ -91,7 +91,7 @@ func withFakeDial(a *Authenticator, fc *fakeConn) {
 
 func TestNew_PlaintextRejected(t *testing.T) {
 	cfg := validSearchConfig()
-	cfg.URL = "ldap://ldap.example.com:389" // без StartTLS
+	cfg.URL = "ldap://ldap.example.com:389" // without StartTLS
 	if _, err := New(cfg, nil); err == nil {
 		t.Fatalf("expected New to reject plaintext ldap:// without start_tls")
 	}
@@ -122,7 +122,7 @@ func TestNew_SearchRequiresBindCreds(t *testing.T) {
 	}
 }
 
-// --- (2) Пароль / bind-creds не утекают в ошибку ---
+// --- (2) Password / bind creds do not leak into the error ---
 
 func TestAuthenticate_NoPasswordLeakInError(t *testing.T) {
 	a, err := New(validSearchConfig(), nil)
@@ -148,7 +148,7 @@ func TestAuthenticate_NoPasswordLeakInError(t *testing.T) {
 	}
 }
 
-// --- happy path: search-bind возвращает identity с derived AID + группами ---
+// --- happy path: search-bind returns an identity with derived AID + groups ---
 
 func TestAuthenticate_HappySearchBind(t *testing.T) {
 	a, err := New(validSearchConfig(), nil)
@@ -181,7 +181,7 @@ func TestAuthenticate_HappySearchBind(t *testing.T) {
 	}
 }
 
-// --- username экранируется (anti-injection) ---
+// --- username is escaped (anti-injection) ---
 
 func TestAuthenticate_UsernameEscapedInFilter(t *testing.T) {
 	a, err := New(validSearchConfig(), nil)
@@ -195,7 +195,7 @@ func TestAuthenticate_UsernameEscapedInFilter(t *testing.T) {
 	}
 	withFakeDial(a, fc)
 
-	// inject-попытка: `*)(uid=*` должна быть экранирована до литерала.
+	// injection attempt: `*)(uid=*` must be escaped to a literal.
 	_, _ = a.Authenticate(context.Background(), "*)(uid=*", "p")
 	if len(fc.searches) == 0 {
 		t.Fatalf("expected at least one search")
@@ -206,21 +206,21 @@ func TestAuthenticate_UsernameEscapedInFilter(t *testing.T) {
 	}
 }
 
-// --- не та запись (0 или >1) → ErrAuthFailed ---
+// --- wrong entry count (0 or >1) → ErrAuthFailed ---
 
 func TestAuthenticate_NoUserEntry(t *testing.T) {
 	a, err := New(validSearchConfig(), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	fc := &fakeConn{servicePassword: "svc-secret"} // userEntry=nil → 0 записей
+	fc := &fakeConn{servicePassword: "svc-secret"} // userEntry=nil → 0 entries
 	withFakeDial(a, fc)
 	if _, err := a.Authenticate(context.Background(), "ghost", "p"); !errors.Is(err, auth.ErrAuthFailed) {
 		t.Fatalf("missing user must map to auth.ErrAuthFailed, got %v", err)
 	}
 }
 
-// --- пустой пароль отбивается до bind (anti unauthenticated-bind) ---
+// --- empty password is rejected before bind (anti unauthenticated-bind) ---
 
 func TestAuthenticate_EmptyPasswordRejected(t *testing.T) {
 	a, err := New(validSearchConfig(), nil)

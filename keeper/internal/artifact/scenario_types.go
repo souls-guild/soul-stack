@@ -8,48 +8,53 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// typesCatalogFile — каталог переиспространяемых именованных типов в корне
-// Service-репо (`types.yml`), сиблинг service.yml/scenario/. Параллель
+// typesCatalogFile — catalog of reusable named types at the root of the
+// Service repo (`types.yml`), a sibling of service.yml/scenario/. Parallels
 // scenarioMainFile/serviceManifestFile.
 const typesCatalogFile = "types.yml"
 
-// typesSectionKey — единственный top-level ключ в types.yml.
+// typesSectionKey — the sole top-level key in types.yml.
 const typesSectionKey = "types"
 
-// typeRefKey — ключ-дискриминатор ссылки на именованный тип в input-DSL.
+// typeRefKey — discriminator key for a reference to a named type in the input DSL.
 const typeRefKey = "$type"
 
-// typeAnnotationKey — forward-compat аннотация, которую backend кладёт рядом с
-// резолвнутым узлом: `x-type: <Имя>` — оригинальное имя типа, чтобы UI отрисовал
-// виджет/подпись «это значение типа X». БЕЗ резолва UI получил бы сырой `$type`
-// и сломался бы молча — поэтому резолв строго backend-side ДО проекции.
+// typeAnnotationKey — forward-compat annotation the backend attaches next to
+// the resolved node: `x-type: <Name>` — the original type name, so the UI can
+// render a widget/label "this is a value of type X". WITHOUT the resolve the
+// UI would get the raw `$type` and fail silently — so the resolve is strictly
+// backend-side BEFORE the projection.
 const typeAnnotationKey = "x-type"
 
-// typeRequiredAnnotationKey — field-level обязательность узла-ссылки `$type`
-// (NIM-72). DTO-ключ `required` на резолвнутом object-узле занят object-level
-// списком обязательных ДЕТЕЙ типа (массив имён), поэтому «само поле обязательно»
-// выражается отдельной аннотацией `x-required: true` — UI ставит `*` на поле,
-// не путая её со списком required-детей.
+// typeRequiredAnnotationKey — field-level requiredness of a `$type` reference
+// node (NIM-72). The DTO key `required` on the resolved object node is taken
+// by the object-level list of the type's required CHILDREN (an array of
+// names), so "this field itself is required" is expressed by a separate
+// `x-required: true` annotation — the UI puts a `*` on the field without
+// confusing it with the required-children list.
 const typeRequiredAnnotationKey = "x-required"
 
-// typeRefResolveDepthLimit — страховочный предел глубины подстановки (cycle-
-// detection ловит патологию раньше; этот лимит — second line для runaway).
+// typeRefResolveDepthLimit — a safety cap on substitution depth (cycle
+// detection catches the pathological case earlier; this limit is a second
+// line of defense against runaway recursion).
 const typeRefResolveDepthLimit = 64
 
-// typeCatalog — сырой (untyped) каталог типов: имя → тело схемы как map[string]any
-// (форма из types.yml). DTO-сторона работает с raw-map InputSchema (UI рисует
-// форму без серверной типизации), поэтому каталог тоже raw — резолв = подстановка
-// тела типа на место узла-ссылки, аннотированная x-type. Cycle-detection — на
-// прогоне резолва (loadTypeCatalog не разворачивает вложенность, только парсит).
+// typeCatalog — raw (untyped) catalog of types: name → schema body as
+// map[string]any (the shape from types.yml). The DTO side works with a
+// raw-map InputSchema (the UI renders the form without server-side typing),
+// so the catalog is raw too — resolving means substituting the type body for
+// the reference node, annotated with x-type. Cycle detection happens during
+// the resolve pass (loadTypeCatalog doesn't expand nesting, only parses).
 type typeCatalog map[string]map[string]any
 
-// loadTypeCatalog читает `<serviceRoot>/types.yml` и возвращает сырой каталог
-// типов (имя → тело схемы). Отсутствие файла → пустой каталог без ошибки (типы
-// опциональны). Невалидный YAML / неожиданная форма → warning в logger + пустой
-// каталог (как partial-success ListScenarios: каталог не валит весь listing,
-// просто $type-ссылки останутся неразрешёнными и UI это переживёт лучше, чем
-// 500). Полную валидацию каталога (duplicate/cycle/unknown) делает soul-lint и
-// render-pipeline — здесь best-effort проекция для UI.
+// loadTypeCatalog reads `<serviceRoot>/types.yml` and returns the raw type
+// catalog (name → schema body). Missing file → empty catalog, no error
+// (types are optional). Invalid YAML / unexpected shape → warning to the
+// logger + empty catalog (like ListScenarios' partial-success: the catalog
+// doesn't fail the whole listing, $type references just stay unresolved and
+// the UI survives that better than a 500). Full catalog validation
+// (duplicate/cycle/unknown) is done by soul-lint and the render pipeline —
+// this is a best-effort projection for the UI.
 func loadTypeCatalog(serviceRoot string, logger *slog.Logger) typeCatalog {
 	data, err := readSnapshotFile(serviceRoot, typesCatalogFile)
 	if err != nil {
@@ -74,13 +79,14 @@ func loadTypeCatalog(serviceRoot string, logger *slog.Logger) typeCatalog {
 	return typeCatalog(raw.Types)
 }
 
-// resolveScenarioTypeRefs резолвит `$type`-ссылки в raw-map InputSchema сценария
-// по каталогу типов: каждый узел `{$type: T}` заменяется телом типа T из
-// каталога + аннотацией `x-type: T`. Резолв рекурсивен (items/properties/
-// additional_properties) и cycle-safe: повторный заход в тип на текущей ветке
-// обхода обрывается (узел остаётся как есть с `$type` — UI это переживёт; полную
-// ошибку cycle поднимает soul-lint/render). Возвращает НОВУЮ map (исходник не
-// мутируется). nil-каталог / nil-схема → схема как есть.
+// resolveScenarioTypeRefs resolves `$type` references in a scenario's raw-map
+// InputSchema against the type catalog: each `{$type: T}` node is replaced
+// with type T's body from the catalog + an `x-type: T` annotation. The
+// resolve is recursive (items/properties/additional_properties) and
+// cycle-safe: re-entering a type on the current traversal branch stops
+// (the node is left as-is with `$type` — the UI survives that; the full
+// cycle error is raised by soul-lint/render). Returns a NEW map (the source
+// isn't mutated). nil catalog / nil schema → schema as-is.
 func resolveScenarioTypeRefs(schema map[string]any, catalog typeCatalog) map[string]any {
 	if schema == nil {
 		return nil
@@ -92,24 +98,25 @@ func resolveScenarioTypeRefs(schema map[string]any, catalog typeCatalog) map[str
 	return out
 }
 
-// resolveTypeNode резолвит один input-узел. `stack` — множество имён типов на
-// текущей ветке обхода (cycle-detection). `depth` — страховка от runaway.
+// resolveTypeNode resolves a single input node. `stack` is the set of type
+// names on the current traversal branch (cycle detection). `depth` guards
+// against runaway recursion.
 func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth int) any {
 	m, ok := node.(map[string]any)
 	if !ok || depth > typeRefResolveDepthLimit {
 		return node
 	}
 
-	// Узел-ссылка: подставляем тело типа + аннотация x-type.
+	// Reference node: substitute the type body + the x-type annotation.
 	if ref, isRef := stringValue(m[typeRefKey]); isRef {
 		if stack[ref] {
-			// Цикл — оставляем узел как есть (best-effort; soul-lint поднимет
-			// input_type_cycle). Не уходим в бесконечную рекурсию.
+			// Cycle — leave the node as-is (best-effort; soul-lint raises
+			// input_type_cycle). Avoid infinite recursion.
 			return cloneNode(m)
 		}
 		body, found := catalog[ref]
 		if !found {
-			// Неизвестный тип — узел как есть (soul-lint поднимет input_type_unknown).
+			// Unknown type — node as-is (soul-lint raises input_type_unknown).
 			return cloneNode(m)
 		}
 		stack[ref] = true
@@ -120,12 +127,14 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 		if rm == nil {
 			rm = map[string]any{}
 		}
-		// Аннотация имени типа для UI + presentational overlay узла-ссылки поверх
-		// тела типа. field-level `required: <bool>` не кладём в DTO-ключ `required`
-		// (он занят object-level списком обязательных детей типа, массив) — вместо
-		// этого отдельная аннотация x-required (NIM-72): UI ставит `*` на само поле,
-		// не путая её со списком required-детей. description/required_when — отдельные
-		// ключи, безопасны, если тип их не задал.
+		// Type-name annotation for the UI + a presentational overlay of the
+		// reference node on top of the type body. We don't put field-level
+		// `required: <bool>` into the DTO key `required` (it's taken by the
+		// object-level array of the type's required children) — instead a
+		// separate x-required annotation (NIM-72): the UI puts a `*` on the
+		// field itself without confusing it with the required-children list.
+		// description/required_when are separate keys, safe even if the type
+		// didn't set them.
 		rm[typeAnnotationKey] = ref
 		if rb, ok := m["required"].(bool); ok && rb {
 			rm[typeRequiredAnnotationKey] = true
@@ -141,7 +150,7 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 		return rm
 	}
 
-	// Обычный узел: рекурсия в items/properties/additional_properties.
+	// Regular node: recurse into items/properties/additional_properties.
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		switch k {
@@ -164,15 +173,15 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 	return out
 }
 
-// stringValue — безопасное извлечение строки из any.
+// stringValue — safe extraction of a string from any.
 func stringValue(v any) (string, bool) {
 	s, ok := v.(string)
 	return s, ok
 }
 
-// cloneNode — глубокая копия raw-map узла (map/slice рекурсивно), чтобы резолв не
-// мутировал каталог и общий тип, использованный дважды, не «портился» между
-// потребителями. Скаляры копируются по значению.
+// cloneNode — deep copy of a raw-map node (map/slice recursively), so the
+// resolve doesn't mutate the catalog and a shared type used twice doesn't
+// get "corrupted" between consumers. Scalars are copied by value.
 func cloneNode(v any) any {
 	switch x := v.(type) {
 	case map[string]any:

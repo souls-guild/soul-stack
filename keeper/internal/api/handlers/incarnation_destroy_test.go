@@ -1,9 +1,9 @@
 package handlers
 
-// HANDLER-NATIVE тесты DestroyTyped (T5d-2c-full): прямой вызов доменной функции вместо
-// httptest+(w,r). Status-коды проверяются через problem.Type sentinel-а (wantProblem); 202 —
-// err==nil + view.ApplyID. Bind-тесты (allow_destroy missing/non-bool → 400) СНЕСЕНЫ: huma биндит
-// bool до DestroyTyped, доменная функция bool уже получает.
+// HANDLER-NATIVE tests for DestroyTyped (T5d-2c-full): direct calls into the domain function
+// instead of httptest+(w,r). Status codes are checked via the problem.Type sentinel (wantProblem);
+// 202 means err==nil + view.ApplyID. Bind tests (allow_destroy missing/non-bool → 400) are REMOVED:
+// huma binds the bool before DestroyTyped, so the domain function already receives a bool.
 
 import (
 	"context"
@@ -19,8 +19,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeDestroyer — мок [DestroyStarter]: фиксирует переданный RunSpec teardown-а
-// и счётчик вызовов StartDestroy. err задаёт фейл старта прогона.
+// fakeDestroyer — a mock of [DestroyStarter]: captures the RunSpec passed to teardown
+// and the StartDestroy call count. err simulates a run-start failure.
 type fakeDestroyer struct {
 	gotSpec scenario.RunSpec
 	calls   int
@@ -33,8 +33,8 @@ func (f *fakeDestroyer) StartDestroy(_ context.Context, spec scenario.RunSpec) e
 	return f.err
 }
 
-// fakeAuditWriter — мок [audit.Writer]: копит записанные события для проверки
-// destroy_started / destroy_completed (force в payload).
+// fakeAuditWriter — a mock of [audit.Writer]: accumulates written events to check
+// destroy_started / destroy_completed (force in the payload).
 type fakeAuditWriter struct {
 	events []*audit.Event
 }
@@ -44,16 +44,16 @@ func (f *fakeAuditWriter) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// newDestroyHandler собирает handler со всеми destroy-deps. hasScenario управляет
-// fakeLoader (есть ли scenario `destroy` в снапшоте).
+// newDestroyHandler assembles the handler with all destroy deps. hasScenario controls
+// fakeLoader (whether the `destroy` scenario is present in the snapshot).
 func newDestroyHandler(db *fakeIncDB, destroyer *fakeDestroyer, aw *fakeAuditWriter, hasScenario bool) *IncarnationHandler {
 	loader := &fakeLoader{hasDestroyScenario: hasScenario}
 	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, nil, &fakeResolver{ok: true}, loader, aw, nil, nil)
 }
 
-// destroyDB конструирует fakeIncDB под полный destroy-поток: SelectByName
-// (prepare/404) отдаёт строку статуса status; Destroy SELECT FOR UPDATE
-// (state, status) — тот же status.
+// destroyDB builds a fakeIncDB for the full destroy flow: SelectByName
+// (prepare/404) returns a row with the given status; Destroy's SELECT FOR UPDATE
+// (state, status) returns the same status.
 func destroyDB(name, status string) *fakeIncDB {
 	return &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, status) },
@@ -61,7 +61,7 @@ func destroyDB(name, status string) *fakeIncDB {
 	}
 }
 
-// --- 202 + teardown (scenario есть, allow_destroy=false) ---------------
+// --- 202 + teardown (scenario present, allow_destroy=false) ---------------
 
 func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
@@ -78,7 +78,7 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	if destroyer.calls != 1 {
 		t.Fatalf("StartDestroy calls = %d, want 1 (teardown)", destroyer.calls)
 	}
-	// applyID handler-а == applyID teardown-spec-а (общая корреляция).
+	// handler applyID == teardown-spec applyID (shared correlation).
 	if destroyer.gotSpec.ApplyID != view.ApplyID {
 		t.Errorf("teardown ApplyID = %q, want %q (handler apply_id)", destroyer.gotSpec.ApplyID, view.ApplyID)
 	}
@@ -88,17 +88,17 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	if destroyer.gotSpec.StartedByAID != "archon-alice" {
 		t.Errorf("teardown StartedByAID = %q", destroyer.gotSpec.StartedByAID)
 	}
-	// Teardown катится развёрнутой версией сервиса (inc.ServiceVersion = "v1").
+	// Teardown runs against the deployed service version (inc.ServiceVersion = "v1").
 	if destroyer.gotSpec.ServiceRef.Ref != "v1" {
 		t.Errorf("teardown ServiceRef.Ref = %q, want v1 (deployed version)", destroyer.gotSpec.ServiceRef.Ref)
 	}
-	// force=false → НЕ должно быть прямого DELETE строки (его делает run.go S-D3).
+	// force=false → there must be no direct row DELETE (that's handled by run.go S-D3).
 	for _, sql := range db.execCalls {
 		if strings.Contains(sql, "DELETE FROM incarnation") {
 			t.Errorf("force=false не должен делать DELETE напрямую; got exec %q", sql)
 		}
 	}
-	// audit destroy_started пишет service-слой Destroy (source=api), force=false.
+	// audit destroy_started is written by the Destroy service layer (source=api), force=false.
 	if !hasEvent(aw, audit.EventIncarnationDestroyStarted) {
 		t.Errorf("ожидался audit destroy_started")
 	}
@@ -107,14 +107,14 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	}
 }
 
-// newDestroyHandlerLifecycle — как newDestroyHandler, но с lifecycle-блоком
-// манифеста снапшота (S3: auto_destroy).
+// newDestroyHandlerLifecycle — like newDestroyHandler, but with the snapshot
+// manifest's lifecycle block (S3: auto_destroy).
 func newDestroyHandlerLifecycle(db *fakeIncDB, destroyer *fakeDestroyer, aw *fakeAuditWriter, hasScenario bool, lc *config.LifecycleConfig) *IncarnationHandler {
 	loader := &fakeLoader{hasDestroyScenario: hasScenario, lifecycle: lc}
 	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, nil, &fakeResolver{ok: true}, loader, aw, nil, nil)
 }
 
-// sawDeleteIncarnation — был ли прямой DELETE строки incarnation среди exec-ов.
+// sawDeleteIncarnation — whether a direct DELETE of the incarnation row occurred among the execs.
 func sawDeleteIncarnation(db *fakeIncDB) bool {
 	for _, sql := range db.execCalls {
 		if strings.Contains(sql, "DELETE FROM incarnation") {
@@ -125,15 +125,15 @@ func sawDeleteIncarnation(db *fakeIncDB) bool {
 }
 
 // TestIncarnation_Destroy_AutoDestroyFalse_DirectDelete — lifecycle.auto_destroy=
-// false: удаление ВСЕГДА прямое (DELETE без teardown), приоритет над
-// allow_destroy=false — даже при наличии scenario `destroy`.
+// false: deletion is ALWAYS direct (DELETE without teardown), taking priority over
+// allow_destroy=false — even when a `destroy` scenario exists.
 func TestIncarnation_Destroy_AutoDestroyFalse_DirectDelete(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
-	// scenario `destroy` ЕСТЬ, но auto_destroy=false → teardown пропускается.
+	// the `destroy` scenario EXISTS, but auto_destroy=false → teardown is skipped.
 	h := newDestroyHandlerLifecycle(db, destroyer, aw, true, &config.LifecycleConfig{AutoDestroy: boolPtr(false)})
-	// allow_destroy=false — auto_destroy=false должен иметь приоритет.
+	// allow_destroy=false — auto_destroy=false must take priority.
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
@@ -146,8 +146,8 @@ func TestIncarnation_Destroy_AutoDestroyFalse_DirectDelete(t *testing.T) {
 }
 
 // TestIncarnation_Destroy_AutoDestroyFalse_NoScenario_DirectDelete — auto_destroy=
-// false + НЕТ scenario `destroy` + allow_destroy=false: всё равно прямой DELETE
-// (приоритет над scenario-missing-gate, который иначе вернул бы 422).
+// false + NO `destroy` scenario + allow_destroy=false: still a direct DELETE
+// (takes priority over the scenario-missing gate, which would otherwise return 422).
 func TestIncarnation_Destroy_AutoDestroyFalse_NoScenario_DirectDelete(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
@@ -164,9 +164,9 @@ func TestIncarnation_Destroy_AutoDestroyFalse_NoScenario_DirectDelete(t *testing
 	}
 }
 
-// TestIncarnation_Destroy_AutoDestroyDefault_Teardown — манифест без lifecycle
-// (auto_destroy дефолтно true) + allow_destroy=false + scenario есть → teardown
-// как сегодня (backcompat).
+// TestIncarnation_Destroy_AutoDestroyDefault_Teardown — manifest without lifecycle
+// (auto_destroy defaults to true) + allow_destroy=false + scenario present → teardown
+// as before (backcompat).
 func TestIncarnation_Destroy_AutoDestroyDefault_Teardown(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
@@ -183,16 +183,16 @@ func TestIncarnation_Destroy_AutoDestroyDefault_Teardown(t *testing.T) {
 	}
 }
 
-// --- 422: allow_destroy=false и нет scenario `destroy` ----------------
+// --- 422: allow_destroy=false and no `destroy` scenario ----------------
 
 func TestIncarnation_Destroy_NoScenario_NoForce_422(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
-	h := newDestroyHandler(db, destroyer, aw, false) // нет scenario
+	h := newDestroyHandler(db, destroyer, aw, false) // no scenario
 	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
 	wantProblem(t, err, problem.TypeValidationFailed)
-	// incarnation НЕ тронут: ни перехода в destroying, ни teardown.
+	// incarnation is NOT touched: no transition to destroying, no teardown.
 	if destroyer.calls != 0 {
 		t.Errorf("StartDestroy calls = %d, want 0 (отказ ДО destroying)", destroyer.calls)
 	}
@@ -204,21 +204,21 @@ func TestIncarnation_Destroy_NoScenario_NoForce_422(t *testing.T) {
 	}
 }
 
-// --- allow_destroy=true без scenario → force-DELETE -------------------
+// --- allow_destroy=true without scenario → force-DELETE -------------------
 
 func TestIncarnation_Destroy_Force_NoScenario_202_Delete(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
-	h := newDestroyHandler(db, destroyer, aw, false) // нет scenario, но force=true
+	h := newDestroyHandler(db, destroyer, aw, false) // no scenario, but force=true
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
-	// force-путь: teardown пропущен.
+	// force path: teardown is skipped.
 	if destroyer.calls != 0 {
 		t.Errorf("StartDestroy calls = %d, want 0 (force пропускает teardown)", destroyer.calls)
 	}
-	// force-путь делает DELETE строки напрямую (DeleteAfterTeardown).
+	// force path deletes the row directly (DeleteAfterTeardown).
 	if !sawDeleteIncarnation(db) {
 		t.Errorf("force-путь должен делать DELETE FROM incarnation; execCalls=%v", db.execCalls)
 	}
@@ -234,16 +234,16 @@ func TestIncarnation_Destroy_Force_NoScenario_202_Delete(t *testing.T) {
 	}
 }
 
-// --- allow_destroy=true с scenario → всё равно force-DELETE -----------
+// --- allow_destroy=true with scenario → still force-DELETE -----------
 //
-// force означает «снести без teardown» независимо от наличия scenario
-// (decisions.md: force-путь destroying→немедленный DELETE).
+// force means "delete without teardown" regardless of whether a scenario exists
+// (decisions.md: force path destroying→immediate DELETE).
 
 func TestIncarnation_Destroy_Force_WithScenario_SkipsTeardown(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
-	h := newDestroyHandler(db, destroyer, aw, true) // scenario есть, но force=true
+	h := newDestroyHandler(db, destroyer, aw, true) // scenario present, but force=true
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
@@ -255,7 +255,7 @@ func TestIncarnation_Destroy_Force_WithScenario_SkipsTeardown(t *testing.T) {
 	}
 }
 
-// --- allow_destroy маппится в force (status_details + audit payload) --
+// --- allow_destroy maps to force (status_details + audit payload) --
 
 func TestIncarnation_Destroy_AllowDestroyMapsToForce(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
@@ -264,8 +264,8 @@ func TestIncarnation_Destroy_AllowDestroyMapsToForce(t *testing.T) {
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
-	// status_details.force=true пишется в UPDATE-Exec Destroy-tx — проверяем,
-	// что переход в destroying произошёл (history INSERT + status UPDATE).
+	// status_details.force=true is written in the UPDATE-Exec Destroy tx — we check
+	// that the transition to destroying happened (history INSERT + status UPDATE).
 	var sawStatusUpdate bool
 	for _, sql := range db.execCalls {
 		if strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "status") {
@@ -280,7 +280,7 @@ func TestIncarnation_Destroy_AllowDestroyMapsToForce(t *testing.T) {
 	}
 }
 
-// --- 404: incarnation не существует ------------------------------------
+// --- 404: incarnation does not exist ------------------------------------
 
 func TestIncarnation_Destroy_NotFound_404(t *testing.T) {
 	db := &fakeIncDB{
@@ -291,7 +291,7 @@ func TestIncarnation_Destroy_NotFound_404(t *testing.T) {
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
-// --- 409: статус не допускает destroy (applying) ----------------------
+// --- 409: status does not allow destroy (applying) ----------------------
 
 func TestIncarnation_Destroy_NotDestroyable_409(t *testing.T) {
 	db := destroyDB("redis-prod", "applying")
@@ -304,11 +304,11 @@ func TestIncarnation_Destroy_NotDestroyable_409(t *testing.T) {
 	}
 }
 
-// --- 500: destroyer не сконфигурирован --------------------------------
+// --- 500: destroyer is not configured --------------------------------
 
 func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
-	// destroyer/services/loader nil → endpoint не сконфигурирован.
+	// destroyer/services/loader nil → the endpoint is not configured.
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
 	wantProblem(t, err, problem.TypeInternalError)
@@ -317,7 +317,7 @@ func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 	}
 }
 
-// --- 422: невалидное path-name ----------------------------------------
+// --- 422: invalid path name ----------------------------------------
 
 func TestIncarnation_Destroy_InvalidName_422(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
@@ -326,18 +326,18 @@ func TestIncarnation_Destroy_InvalidName_422(t *testing.T) {
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
-// --- force-DELETE no-op (гонка: строка уже снесена) → 202 -------------
+// --- force-DELETE no-op (race: row already deleted) → 202 -------------
 
 func TestIncarnation_Destroy_Force_DeleteNoOp_202(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	db.deleteTag = pgconn.NewCommandTag("DELETE 0") // RowsAffected==0 → Deleted=false
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, &fakeDestroyer{}, aw, false)
-	// no-op DELETE — не ошибка (идемпотентность S-D3): handler возвращает 202.
+	// no-op DELETE is not an error (idempotency S-D3): the handler returns 202.
 	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
 		t.Fatalf("DestroyTyped err = %v (no-op DELETE не ошибка)", err)
 	}
-	// destroy_completed НЕ пишется при no-op (Deleted=false).
+	// destroy_completed is NOT written on no-op (Deleted=false).
 	if hasEvent(aw, audit.EventIncarnationDestroyCompleted) {
 		t.Errorf("destroy_completed не должен писаться при no-op DELETE")
 	}
@@ -354,8 +354,8 @@ func hasEvent(aw *fakeAuditWriter, et audit.EventType) bool {
 	return false
 }
 
-// eventForce возвращает значение payload["force"] первого события типа et
-// (false если события нет / поля нет).
+// eventForce returns the payload["force"] value of the first event of type et
+// (false if there is no such event / no such field).
 func eventForce(aw *fakeAuditWriter, et audit.EventType) bool {
 	for _, ev := range aw.events {
 		if ev.EventType == et {

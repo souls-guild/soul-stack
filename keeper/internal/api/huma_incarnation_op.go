@@ -154,11 +154,11 @@ type incHistoryInput struct {
 }
 
 // incHistoryOutput — huma-output GET /v1/incarnations/{name}/history (FULL-TYPED). Body
-// — TAGGED native envelope incarnationHistoryReply (items.$ref на native StateHistoryEntry
-// с json-тегами: snake_case-wire). Прежде Body был handlers.IncarnationHistoryReply (=
-// PagedResponse[StateHistoryView]) — untagged View → PascalCase-wire (контракт-баг #7).
-// Register-func проецирует reply.Items через newStateHistoryEntry. Схема OpenAPI не
-// меняется (та же alias-цель incarnationHistoryReply).
+// — TAGGED native envelope incarnationHistoryReply (items.$ref to native StateHistoryEntry
+// with json tags: snake_case wire). Previously Body was handlers.IncarnationHistoryReply (=
+// PagedResponse[StateHistoryView]) — untagged View → PascalCase wire (contract bug #7).
+// The register func projects reply.Items through newStateHistoryEntry. The OpenAPI schema is
+// unchanged (same alias target incarnationHistoryReply).
 type incHistoryOutput struct {
 	Body incarnationHistoryReply
 }
@@ -176,15 +176,15 @@ func incHistoryOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs (runs) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/incarnations/{name}/runs (runs) — READ-with-typed-query (NO audit) ===
 //
-// Список прогонов инкарнации (свёртка apply_runs по apply_id) + per-run детали ниже.
-// Закрывает UI-баг apply_id→/voyages/ 404: прогон инкарнации (apply_run) — НЕ Voyage,
-// у него свой read-view. scope-гейт — тот же inScope-предикат, что у History (action=
-// incarnation.history): эндпоинты в incarnation-домене, per-{name} scope in-handler.
+// List of incarnation runs (apply_runs folded by apply_id) + per-run details below.
+// Closes the UI bug apply_id→/voyages/ 404: an incarnation run (apply_run) is NOT a Voyage,
+// it has its own read-view. The scope gate is the same inScope predicate as History (action=
+// incarnation.history): the endpoints live in the incarnation domain, per-{name} scope in-handler.
 
 // incRunsInput — huma-input GET /v1/incarnations/{name}/runs. Name — path; offset/limit
-// — int32 с default (out-of-range → 400 в RunsTyped).
+// — int32 with a default (out-of-range → 400 in RunsTyped).
 type incRunsInput struct {
 	Name   string `path:"name" doc:"имя инкарнации"`
 	Offset int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
@@ -192,7 +192,7 @@ type incRunsInput struct {
 }
 
 // incRunsOutput — huma-output GET .../runs (FULL-TYPED). Body — TAGGED native envelope
-// incarnationRunsReply (items.$ref на native RunSummaryEntry: snake_case-wire).
+// incarnationRunsReply (items.$ref to native RunSummaryEntry: snake_case wire).
 type incRunsOutput struct {
 	Body incarnationRunsReply
 }
@@ -210,17 +210,17 @@ func incRunsOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs/{apply_id} (run detail) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/incarnations/{name}/runs/{apply_id} (run detail) — READ-with-path (NO audit) ===
 
-// incRunDetailInput — huma-input GET .../runs/{apply_id}. Name/ApplyID — path. Формат
-// apply_id (ULID) валидирует RunDetailTyped → 400 (не-ULID), симметрично History-фильтру.
+// incRunDetailInput — huma-input GET .../runs/{apply_id}. Name/ApplyID — path. The
+// apply_id format (ULID) is validated by RunDetailTyped → 400 (non-ULID), symmetric with the History filter.
 type incRunDetailInput struct {
 	Name    string `path:"name" doc:"имя инкарнации"`
 	ApplyID string `path:"apply_id" doc:"ULID прогона; не-ULID → 400"`
 }
 
 // incRunDetailOutput — huma-output GET .../runs/{apply_id} (FULL-TYPED). Body — native
-// RunDetailReply (шапка прогона + срез по хостам с адресом упавшей задачи).
+// RunDetailReply (run header + per-host slice with the address of the failed task).
 type incRunDetailOutput struct {
 	Body RunDetailReply
 }
@@ -238,17 +238,17 @@ func incRunDetailOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs/{apply_id}/tasks (run task plan + per-host) — READ (БЕЗ audit) — NIM-37 ===
+// === GET /v1/incarnations/{name}/runs/{apply_id}/tasks (run task plan + per-host) — READ (NO audit) — NIM-37 ===
 
 // incRunTasksInput — huma-input GET .../runs/{apply_id}/tasks. Name/ApplyID — path.
-// Формат apply_id (ULID) валидирует RunTasksTyped → 400 (не-ULID).
+// The apply_id format (ULID) is validated by RunTasksTyped → 400 (non-ULID).
 type incRunTasksInput struct {
 	Name    string `path:"name" doc:"имя инкарнации"`
 	ApplyID string `path:"apply_id" doc:"ULID прогона; не-ULID → 400"`
 }
 
 // incRunTasksOutput — huma-output GET .../runs/{apply_id}/tasks (FULL-TYPED). Body —
-// native RunTasksReply (план задач прогона + per-host результаты).
+// native RunTasksReply (the run's task plan + per-host results).
 type incRunTasksOutput struct {
 	Body RunTasksReply
 }
@@ -269,17 +269,17 @@ func incRunTasksOperation() huma.Operation {
 // === POST /v1/incarnations/{name}/scenarios/{scenario} (run) — MIDDLEWARE-AUDIT incarnation.scenario_started (202+body) ===
 
 // incRunInput — huma-input POST .../scenarios/{scenario}. Name/Scenario — path; Body —
-// ПОИНТЕР (опц. тело: huma помечает RequestBody.Required=false для *T, на пустом body
-// Body=nil — parity legacy io.EOF→zero-value). input опционален.
+// A POINTER (opt. body: huma marks RequestBody.Required=false for *T, on an empty body
+// Body=nil — parity with legacy io.EOF→zero-value). input is optional.
 type incRunInput struct {
 	Name     string                 `path:"name" doc:"имя инкарнации"`
 	Scenario string                 `path:"scenario" doc:"имя сценария"`
 	Body     *IncarnationRunRequest `doc:"опц. тело: input scenario"`
 }
 
-// IncarnationRunRequest — Go-форма тела POST .../scenarios/{scenario}. name/scenario
-// echo из path игнорируются (авторитет — path). input опционален.
-// additionalProperties:false → unknown поле → 400. Имя = контрактное имя схемы (T4b).
+// IncarnationRunRequest — Go form of the POST .../scenarios/{scenario} body. name/scenario
+// echoed from the path are ignored (the path is authoritative). input is optional.
+// additionalProperties:false → unknown field → 400. The name = the contract schema name (T4b).
 type IncarnationRunRequest struct {
 	Name     *string        `json:"name,omitempty" doc:"echo path-name (игнорируется)"`
 	Scenario *string        `json:"scenario,omitempty" doc:"echo path-scenario (игнорируется)"`
@@ -308,7 +308,7 @@ func incRunOperation() huma.Operation {
 
 // === POST /v1/incarnations/{name}/unlock (unlock) — MIDDLEWARE-AUDIT incarnation.unlocked (200+body) ===
 
-// incUnlockInput — huma-input POST .../unlock. Name — path; Body — typed тело.
+// incUnlockInput — huma-input POST .../unlock. Name — path; Body — a typed body.
 type incUnlockInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
 	Body IncarnationUnlockRequest

@@ -7,13 +7,15 @@ import (
 	"testing"
 )
 
-// redisServiceRoot — корень реального redis-Service-репо в examples/ (относительно
-// пакета keeper/internal/artifact). Каталог директив = source of truth фичи.
+// redisServiceRoot — the root of the real redis Service repo under examples/
+// (relative to the keeper/internal/artifact package). The directive catalog is
+// the feature's source of truth.
 const redisServiceRoot = "../../../examples/service/redis"
 
-// requireRedisExamples скипает тест, если source-tree без examples/ (custom-сборка),
-// иначе возвращает АБСОЛЮТНЫЙ корень redis-сервиса (securejoin требует абсолютный
-// base, как production ServiceArtifact.LocalDir). Parity со skip committed-spec-guard-а.
+// requireRedisExamples skips the test if the source tree has no examples/
+// (custom build), otherwise returns the ABSOLUTE root of the redis service
+// (securejoin requires an absolute base, like the production
+// ServiceArtifact.LocalDir). Parity with the committed-spec-guard skip.
 func requireRedisExamples(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs(redisServiceRoot)
@@ -26,8 +28,8 @@ func requireRedisExamples(t *testing.T) string {
 	return root
 }
 
-// TestLoadDirectiveCatalog_FullRealCatalog — guard #1: реальный каталог несёт все 6
-// серий, известные имена присутствуют, опечатки нет.
+// TestLoadDirectiveCatalog_FullRealCatalog — guard #1: the real catalog
+// carries all 6 series, known names are present, no typos.
 func TestLoadDirectiveCatalog_FullRealCatalog(t *testing.T) {
 	root := requireRedisExamples(t)
 	cat, err := LoadDirectiveCatalog(root, "")
@@ -50,14 +52,15 @@ func TestLoadDirectiveCatalog_FullRealCatalog(t *testing.T) {
 		}
 	}
 
-	// Известная директива есть в 8.2; её опечатка — нет (guard на генератор).
+	// A known directive is present in 8.2; its typo variant is not (a guard on
+	// the generator).
 	if !containsStr(cat["8.2"], "maxmemory") {
 		t.Errorf("директива maxmemory отсутствует в серии 8.2")
 	}
 	if containsStr(cat["8.2"], "maxmemoyr") {
 		t.Errorf("опечатка maxmemoyr просочилась в серию 8.2")
 	}
-	// Каждая серия отсортирована.
+	// Every series is sorted.
 	for s, names := range cat {
 		if !sort.StringsAreSorted(names) {
 			t.Errorf("серия %q не отсортирована", s)
@@ -65,8 +68,8 @@ func TestLoadDirectiveCatalog_FullRealCatalog(t *testing.T) {
 	}
 }
 
-// TestLoadDirectiveCatalog_VersionNarrows — guard #2: version сужает до серии
-// major.minor; чужая (8.2-only) директива отсутствует в 6.2.
+// TestLoadDirectiveCatalog_VersionNarrows — guard #2: version narrows to the
+// major.minor series; a foreign (8.2-only) directive is absent from 6.2.
 func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 	root := requireRedisExamples(t)
 
@@ -75,7 +78,7 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 		t.Fatalf("LoadDirectiveCatalog(full): %v", err)
 	}
 
-	// 8.2.2 → ровно серия 8.2.
+	// 8.2.2 → exactly series 8.2.
 	v82, err := LoadDirectiveCatalog(root, "8.2.2")
 	if err != nil {
 		t.Fatalf("LoadDirectiveCatalog(8.2.2): %v", err)
@@ -87,7 +90,7 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 		t.Errorf("maxmemory отсутствует в сужении 8.2")
 	}
 
-	// 6.2.21 → ровно серия 6.2.
+	// 6.2.21 → exactly series 6.2.
 	v62, err := LoadDirectiveCatalog(root, "6.2.21")
 	if err != nil {
 		t.Fatalf("LoadDirectiveCatalog(6.2.21): %v", err)
@@ -96,7 +99,8 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 		t.Fatalf("version=6.2.21 → %v, want ровно {6.2}", keysOf(v62))
 	}
 
-	// Директива, что есть в 8.2, но нет в 6.2, — отсутствует в сужении 6.2.
+	// A directive present in 8.2 but absent from 6.2 is missing from the 6.2
+	// narrowing.
 	only82 := firstOnlyIn(full["8.2"], full["6.2"])
 	if only82 == "" {
 		t.Skip("не нашлось 8.2-only директивы для cross-version-проверки")
@@ -106,10 +110,11 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 	}
 }
 
-// TestLoadDirectiveCatalog_NoCatalog — guard #3 (loader-половина): сервис без
-// redis_directives (и без essence-файла) → пустой non-nil map + nil-ошибка.
+// TestLoadDirectiveCatalog_NoCatalog — guard #3 (the loader half): a service
+// without redis_directives (and without an essence file) → an empty non-nil
+// map + nil error.
 func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
-	// (а) essence/_default.yaml есть, но без redis_directives.
+	// (a) essence/_default.yaml exists, but without redis_directives.
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "essence", "_default.yaml"), "conf_dir: /etc/redis\nmemory_reserve_percent: 75\n")
 	cat, err := LoadDirectiveCatalog(root, "")
@@ -123,7 +128,7 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 		t.Errorf("каталог %v, want пустой", keysOf(cat))
 	}
 
-	// (б) essence-файла нет вовсе → тоже пустой каталог, без ошибки.
+	// (b) essence file is absent entirely → also an empty catalog, no error.
 	empty := t.TempDir()
 	cat2, err := LoadDirectiveCatalog(empty, "8.2.2")
 	if err != nil {
@@ -134,8 +139,8 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 	}
 }
 
-// TestLoadDirectiveCatalog_SortsNames — имена внутри серии сортируются (defensive:
-// генератор мог отдать неотсортированный список).
+// TestLoadDirectiveCatalog_SortsNames — names within a series are sorted
+// (defensive: the generator might have returned an unsorted list).
 func TestLoadDirectiveCatalog_SortsNames(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "essence", "_default.yaml"),
@@ -150,36 +155,39 @@ func TestLoadDirectiveCatalog_SortsNames(t *testing.T) {
 	}
 }
 
-// TestFilterDirectivesByVersion — юнит правила сужения (эмуляция assert-regex).
+// TestFilterDirectivesByVersion — a unit test of the narrowing rule (emulates
+// the assert regex).
 func TestFilterDirectivesByVersion(t *testing.T) {
 	cat := map[string][]string{
 		"6.2": {"a"},
 		"7.4": {"b"},
 		"8.2": {"c"},
 	}
-	// version="" → каталог целиком (тот же map).
+	// version="" → the whole catalog (the same map).
 	if got := FilterDirectivesByVersion(cat, ""); len(got) != 3 {
 		t.Errorf("version='' → %d серий, want 3", len(got))
 	}
-	// distro-пин с epoch-префиксом матчит серию.
+	// A distro pin with an epoch prefix matches the series.
 	if got := FilterDirectivesByVersion(cat, "5:7.4.1-1~deb12u7"); len(got) != 1 || got["7.4"] == nil {
 		t.Errorf("epoch-пин 5:7.4.1 → %v, want {7.4}", keysOf(got))
 	}
-	// 7.4 не цепляет 7.04-подобное (граница серии — трейлинг-точка).
+	// 7.4 does not catch a 7.04-like series (the series boundary is the
+	// trailing dot).
 	if got := FilterDirectivesByVersion(cat, "7.42.0"); len(got) != 0 {
 		t.Errorf("7.42.0 → %v, want пусто (7.4 не матчит 7.42)", keysOf(got))
 	}
-	// Неизвестная версия → пустой non-nil map (assert-skip-семантика).
+	// An unknown version → an empty non-nil map (assert-skip semantics).
 	got := FilterDirectivesByVersion(cat, "9.9.9")
 	if got == nil || len(got) != 0 {
 		t.Errorf("9.9.9 → %v, want пустой non-nil", got)
 	}
 }
 
-// TestListScenarios_RedisSettingsHasDirectivesAnnotation — guard #5: метка
-// x-directives:redis долетает в DTO input_schema.redis_settings для create /
-// create_from_souls (через covenant extends) И update_config (прямо в input).
-// Иначе фронт молча перестанет валидировать директивы.
+// TestListScenarios_RedisSettingsHasDirectivesAnnotation — guard #5: the
+// x-directives:redis marker makes it into the DTO input_schema.redis_settings
+// for create / create_from_souls (via covenant extends) AND update_config
+// (directly in input). Otherwise the frontend silently stops validating
+// directives.
 func TestListScenarios_RedisSettingsHasDirectivesAnnotation(t *testing.T) {
 	root := requireRedisExamples(t)
 	scenarios, err := ListScenarios(root, nil)
@@ -250,7 +258,8 @@ func keysOf(m map[string][]string) []string {
 	return out
 }
 
-// firstOnlyIn возвращает первый (по сортировке) элемент a, отсутствующий в b.
+// firstOnlyIn returns the first (in sort order) element of a that is absent
+// from b.
 func firstOnlyIn(a, b []string) string {
 	set := make(map[string]bool, len(b))
 	for _, s := range b {

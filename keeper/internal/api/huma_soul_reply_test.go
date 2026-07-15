@@ -1,17 +1,17 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO SOUL-домена (handler-native T5d). soul
-// больше НЕ зависит от legacy-генерата — golden сверяет json native-значения с ЗАФИКСИРОВАННОЙ
-// строкой-эталоном (pinned). Гарантирует wire-форму:
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the SOUL domain (handler-native T5d). soul
+// no longer depends on the legacy generator — golden compares native json values against a PINNED
+// reference string. Guarantees the wire shape:
 //
-//   - категория A (date-time): registered_at/expires_at/started_at/last_seen_at → RFC3339Nano;
-//   - категория B ([]-vs-null): covens (SoulListEntry) — БЕЗ omitempty → `[]`/значение;
-//     traits (SoulListEntry) — map БЕЗ omitempty → `{}`/object (handler coalesce → `{}`);
-//   - категория C (omitempty): bootstrap_token/covens(create)/expires_at; history-поля
-//     finished_at/incarnation/module/scenario/voyage_id — ключ опущен при nil;
-//   - категория D (nullable): SoulListEntry.created_by_aid/last_seen_at/last_seen_by_kid/
-//     requested_at — БЕЗ omitempty → `null` при nil;
-//   - enum status/transport/type: тот же string-байт.
+//   - category A (date-time): registered_at/expires_at/started_at/last_seen_at → RFC3339Nano;
+//   - category B ([]-vs-null): covens (SoulListEntry) — WITHOUT omitempty → `[]`/value;
+//     traits (SoulListEntry) — map WITHOUT omitempty → `{}`/object (handler coalesce → `{}`);
+//   - category C (omitempty): bootstrap_token/covens(create)/expires_at; history fields
+//     finished_at/incarnation/module/scenario/voyage_id — key omitted when nil;
+//   - category D (nullable): SoulListEntry.created_by_aid/last_seen_at/last_seen_by_kid/
+//     requested_at — WITHOUT omitempty → `null` when nil;
+//   - enum status/transport/type: the same string bytes.
 //
-// Покрыты обе указательных ветки (full / nil-optionals). Мутация формы native-struct краснит case.
+// Both pointer branches are covered (full / nil-optionals). A mutation in the native-struct shape reds out the case.
 package api
 
 import (
@@ -39,26 +39,26 @@ func TestGoldenWire_SoulReply(t *testing.T) {
 	tok := "BOOTSTRAP.TOKEN.PLAIN"
 	covens := []string{"prod", "eu"}
 
-	// --- SoulCreateReply: transport=agent (token+expires+covens заданы) ---
+	// --- SoulCreateReply: transport=agent (token+expires+covens set) ---
 	goldenSoulWire(t, "CreateReply/agent_full",
 		SoulCreateReply{BootstrapToken: &tok, Covens: &covens, CreatedByAID: "archon-alice", ExpiresAt: &ts2, RegisteredAt: ts, SID: "web1.example.com", Status: SoulStatus("pending"), Transport: SoulTransport("agent")},
 		`{"bootstrap_token":"BOOTSTRAP.TOKEN.PLAIN","covens":["prod","eu"],"created_by_aid":"archon-alice","expires_at":"2026-06-13T01:02:03.456789012Z","registered_at":"2026-06-14T12:34:56.789012345Z","sid":"web1.example.com","status":"pending","transport":"agent"}`)
-	// --- SoulCreateReply: transport=ssh (token/expires/covens опущены — omitempty) ---
+	// --- SoulCreateReply: transport=ssh (token/expires/covens omitted — omitempty) ---
 	goldenSoulWire(t, "CreateReply/ssh_nil_optionals",
 		SoulCreateReply{BootstrapToken: nil, Covens: nil, CreatedByAID: "archon-bob", ExpiresAt: nil, RegisteredAt: ts, SID: "db1.example.com", Status: SoulStatus("pending"), Transport: SoulTransport("ssh")},
 		`{"created_by_aid":"archon-bob","registered_at":"2026-06-14T12:34:56.789012345Z","sid":"db1.example.com","status":"pending","transport":"ssh"}`)
 
-	// --- SoulIssueTokenReply (все required) ---
+	// --- SoulIssueTokenReply (all required) ---
 	goldenSoulWire(t, "IssueTokenReply",
 		SoulIssueTokenReply{BootstrapToken: tok, ExpiresAt: ts, SID: "web1.example.com"},
 		`{"bootstrap_token":"BOOTSTRAP.TOKEN.PLAIN","expires_at":"2026-06-14T12:34:56.789012345Z","sid":"web1.example.com"}`)
 
-	// --- SoulSshTargetReply: nested class-A SoulSshTarget (ssh_provider задан) ---
+	// --- SoulSshTargetReply: nested class-A SoulSshTarget (ssh_provider set) ---
 	provider := "openssh-prod"
 	goldenSoulWire(t, "SshTargetReply/full",
 		SoulSshTargetReply{SID: "web1.example.com", SSHTarget: SoulSshTarget{SSHPort: 22, SSHUser: "deploy", SoulPath: "/usr/local/bin/soul", SSHProvider: provider}},
 		`{"sid":"web1.example.com","ssh_target":{"soul_path":"/usr/local/bin/soul","ssh_port":22,"ssh_provider":"openssh-prod","ssh_user":"deploy"}}`)
-	// --- SoulSshTargetReply: ssh_provider nil (omitempty опущен) ---
+	// --- SoulSshTargetReply: ssh_provider nil (omitempty omitted) ---
 	goldenSoulWire(t, "SshTargetReply/nil_provider",
 		SoulSshTargetReply{SID: "db1.example.com", SSHTarget: SoulSshTarget{SSHPort: 2222, SSHUser: "root", SoulPath: "/opt/soul"}},
 		`{"sid":"db1.example.com","ssh_target":{"soul_path":"/opt/soul","ssh_port":2222,"ssh_user":"root"}}`)

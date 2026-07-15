@@ -928,10 +928,10 @@ func TestVoyageCreate_WindowWithBatchSize422(t *testing.T) {
 	}
 }
 
-// kind=scenario + batch_mode=window → 202 (S-W2: guard снят, появился
-// scenario-исполнитель скользящего окна; единица окна = инкарнация). batch_mode=
-// 'window' уходит в Insert, batch_index=0 у всех инкарнаций (плоский прогон,
-// ADR-043 amendment §7).
+// kind=scenario + batch_mode=window → 202 (S-W2: the guard was lifted, a
+// sliding-window scenario executor appeared; the window unit = incarnation).
+// batch_mode='window' goes into Insert, batch_index=0 for all incarnations (a
+// flat run, ADR-043 amendment §7).
 func TestVoyageCreate_ScenarioWindowOK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a", "inc-b", "inc-c"}}, &fakeVoyageCommandResolver{}, allowAll())
@@ -960,7 +960,7 @@ func TestVoyageCreate_ScenarioWindowOK(t *testing.T) {
 	}
 }
 
-// batch_mode вне {barrier, window} → 422.
+// batch_mode outside {barrier, window} → 422.
 func TestVoyageCreate_InvalidBatchMode422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())
@@ -974,8 +974,8 @@ func TestVoyageCreate_InvalidBatchMode422(t *testing.T) {
 	}
 }
 
-// batch_mode=barrier (явный) — текущее поведение, batch_mode NULL не пишется как
-// 'barrier' (forward-compat: «не задано» = barrier, см. buildVoyageRow).
+// batch_mode=barrier (explicit) — current behavior, batch_mode NULL is not
+// written as 'barrier' (forward-compat: "unset" = barrier, see buildVoyageRow).
 func TestVoyageCreate_ExplicitBarrier_NotPersistedAsValue(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())
@@ -997,9 +997,9 @@ func TestVoyageCreate_ExplicitBarrier_NotPersistedAsValue(t *testing.T) {
 
 // --- tests: batch_percent (S-W3) ---
 
-// batch_percent резолвится в эффективный batch_size = ceil(scope * pct/100):
-// scope=5 хостов, pct=50 → ceil(2.5)=3 пишется в insertSQL batch_size (index 7),
-// а batch_percent — в index 17.
+// batch_percent resolves into an effective batch_size = ceil(scope * pct/100):
+// scope=5 hosts, pct=50 → ceil(2.5)=3 is written to insertSQL batch_size
+// (index 7), and batch_percent — into index 17.
 func TestVoyageCreate_BatchPercent_ResolvesEffectiveBatchSize(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3", "h4", "h5"}}
@@ -1023,7 +1023,7 @@ func TestVoyageCreate_BatchPercent_ResolvesEffectiveBatchSize(t *testing.T) {
 	if bp != 50 {
 		t.Errorf("batch_percent arg = %v, want 50", bp)
 	}
-	// batch_index по эффективному размеру 3: [0,0,0,1,1].
+	// batch_index by the effective size 3: [0,0,0,1,1].
 	want := []int{0, 0, 0, 1, 1}
 	if len(idxs) != len(want) {
 		t.Fatalf("batch_indexes = %v, want %v", idxs, want)
@@ -1035,7 +1035,7 @@ func TestVoyageCreate_BatchPercent_ResolvesEffectiveBatchSize(t *testing.T) {
 	}
 }
 
-// batch_size + batch_percent одновременно → 422 (взаимоисключение, §2).
+// batch_size + batch_percent simultaneously → 422 (mutually exclusive, §2).
 func TestVoyageCreate_BatchSizeAndPercent_MutuallyExclusive422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1052,7 +1052,7 @@ func TestVoyageCreate_BatchSizeAndPercent_MutuallyExclusive422(t *testing.T) {
 	}
 }
 
-// batch_percent + batch_mode=window → 422 (percent не используется в window, §2).
+// batch_percent + batch_mode=window → 422 (percent is not used in window, §2).
 func TestVoyageCreate_BatchPercentWithWindow422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1066,7 +1066,7 @@ func TestVoyageCreate_BatchPercentWithWindow422(t *testing.T) {
 	}
 }
 
-// batch_percent вне [1,100] → 422.
+// batch_percent outside [1,100] → 422.
 func TestVoyageCreate_BatchPercentOutOfRange422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1080,9 +1080,9 @@ func TestVoyageCreate_BatchPercentOutOfRange422(t *testing.T) {
 	}
 }
 
-// --- tests: fail_threshold (S-W3, handler-валидация) ---
+// --- tests: fail_threshold (S-W3, handler validation) ---
 
-// fail_threshold пишется в Insert (index 18); <=0 → 422.
+// fail_threshold is written to Insert (index 18); <=0 → 422.
 func TestVoyageCreate_FailThreshold_Persisted(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1", "h2"}}, allowAll())
@@ -1117,7 +1117,7 @@ func TestVoyageCreate_FailThresholdNonPositive422(t *testing.T) {
 
 // --- tests: max_batch_size (S-W4) ---
 
-// barrier: эффективный batch_size > max_batch_size → 422 voyage_batch_size_too_large.
+// barrier: effective batch_size > max_batch_size → 422 voyage_batch_size_too_large.
 func TestVoyageCreate_BatchSizeExceedsCap422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandlerBatchCap(store, &fakeVoyageScenarioResolver{},
@@ -1156,7 +1156,7 @@ func TestVoyageCreate_WindowConcurrencyExceedsCap422(t *testing.T) {
 	}
 }
 
-// batch_size == max_batch_size → ok (граница включительна).
+// batch_size == max_batch_size → ok (the boundary is inclusive).
 func TestVoyageCreate_BatchSizeAtCap_OK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandlerBatchCap(store, &fakeVoyageScenarioResolver{},
@@ -1171,8 +1171,8 @@ func TestVoyageCreate_BatchSizeAtCap_OK(t *testing.T) {
 	}
 }
 
-// barrier: batch_percent даёт эффективный batch_size > max_batch_size → 422
-// voyage_batch_size_too_large. scope=4 хоста, pct=75 → ceil(3)=3 > cap 2.
+// barrier: batch_percent gives an effective batch_size > max_batch_size → 422
+// voyage_batch_size_too_large. scope=4 hosts, pct=75 → ceil(3)=3 > cap 2.
 func TestVoyageCreate_BatchPercentEffectiveExceedsCap422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandlerBatchCap(store, &fakeVoyageScenarioResolver{},
@@ -1193,10 +1193,10 @@ func TestVoyageCreate_BatchPercentEffectiveExceedsCap422(t *testing.T) {
 	}
 }
 
-// --- tests: require_alive (S-W4, проброс в command-фильтр) ---
+// --- tests: require_alive (S-W4, propagated into the command filter) ---
 
-// require_alive=true прокидывается в VoyageCommandFilter.RequireAlive и пишется
-// в Insert (index 20).
+// require_alive=true is propagated into VoyageCommandFilter.RequireAlive and
+// written to Insert (index 20).
 func TestVoyageCreate_RequireAlive_PropagatedAndPersisted(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &captureCommandResolver{out: []string{"h1"}}
@@ -1399,7 +1399,7 @@ func TestVoyageCancel_RBACDenied(t *testing.T) {
 			return voyageFullRow{vals: voyageRowVals(gotID, voyage.KindScenario, voyage.StatusPending)}
 		},
 	}
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // нет incarnation.run
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, enf)
 
 	rec := httptest.NewRecorder()
@@ -1432,7 +1432,7 @@ func (r *voyageRowsIter) Values() ([]any, error)                       { return 
 func (r *voyageRowsIter) RawValues() [][]byte                          { return nil }
 func (r *voyageRowsIter) Conn() *pgx.Conn                              { return nil }
 
-// voyageTargetRowsIter — для SelectTargets (8 колонок).
+// voyageTargetRowsIter — for SelectTargets (8 columns).
 type voyageTargetRowsIter struct {
 	rows [][]any
 	idx  int
@@ -1479,7 +1479,7 @@ func (r *voyageTargetRowsIter) Conn() *pgx.Conn                              { r
 
 // --- S-med-3: scope cap (voyage_scope_too_large) ---
 
-// voyageCapSIDs генерирует n валидных SID-ов для cap-тестов command-ветки.
+// voyageCapSIDs generates n valid SIDs for the command-branch cap tests.
 func voyageCapSIDs(n int) []string {
 	out := make([]string, n)
 	for i := 0; i < n; i++ {
@@ -1488,7 +1488,7 @@ func voyageCapSIDs(n int) []string {
 	return out
 }
 
-// (а) scope > cap → 422 voyage_scope_too_large (command-ветка); ни COPY, ни commit.
+// (a) scope > cap → 422 voyage_scope_too_large (command branch); neither COPY nor commit.
 func TestVoyageCreate_Command_ScopeTooLarge(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(5)}
@@ -1512,7 +1512,7 @@ func TestVoyageCreate_Command_ScopeTooLarge(t *testing.T) {
 	}
 }
 
-// (а') scope > cap → 422 (scenario-ветка).
+// (a') scope > cap → 422 (scenario branch).
 func TestVoyageCreate_Scenario_ScopeTooLarge(t *testing.T) {
 	store := &fakeVoyageStore{}
 	sc := &fakeVoyageScenarioResolver{out: []string{"inc-a", "inc-b", "inc-c", "inc-d"}}
@@ -1530,7 +1530,7 @@ func TestVoyageCreate_Scenario_ScopeTooLarge(t *testing.T) {
 	}
 }
 
-// (б) scope == cap → ok (граница включительна); CopyFrom вставил ровно cap строк.
+// (b) scope == cap → ok (the boundary is inclusive); CopyFrom inserted exactly cap rows.
 func TestVoyageCreate_Command_ScopeAtCap(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(3)}
@@ -1548,7 +1548,7 @@ func TestVoyageCreate_Command_ScopeAtCap(t *testing.T) {
 	}
 }
 
-// (в) cap=0 → безлимит: большой scope проходит, CopyFrom вставляет все строки.
+// (c) cap=0 → unlimited: a large scope passes, CopyFrom inserts all rows.
 func TestVoyageCreate_Command_CapUnlimited(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(50)}
@@ -1566,10 +1566,10 @@ func TestVoyageCreate_Command_CapUnlimited(t *testing.T) {
 	}
 }
 
-// --- tests: batch (строковое поле, S1) ---
+// --- tests: batch (string field, S1) ---
 
-// batch:"5" эквивалентен batch_size:5 по эффекту: тот же batch_size в Insert
-// (index 7) и тот же batch_index-разбиение.
+// batch:"5" is equivalent to batch_size:5 in effect: the same batch_size in
+// Insert (index 7) and the same batch_index split.
 func TestVoyageCreate_BatchString_HostsEqualsBatchSize(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3", "h4", "h5", "h6"}}
@@ -1589,7 +1589,7 @@ func TestVoyageCreate_BatchString_HostsEqualsBatchSize(t *testing.T) {
 	if bs != 5 {
 		t.Errorf("batch_size arg = %v, want 5 (batch:\"5\" == batch_size:5)", bs)
 	}
-	// 6 единиц по 5 → Leg-и [0,0,0,0,0,1].
+	// 6 units of 5 → legs [0,0,0,0,0,1].
 	want := []int{0, 0, 0, 0, 0, 1}
 	if len(idxs) != len(want) {
 		t.Fatalf("batch_indexes = %v, want %v", idxs, want)
@@ -1601,7 +1601,7 @@ func TestVoyageCreate_BatchString_HostsEqualsBatchSize(t *testing.T) {
 	}
 }
 
-// batch:"25%" при scope=10 → effective batch_size = ceil(10*25/100) = 3 (как
+// batch:"25%" with scope=10 → effective batch_size = ceil(10*25/100) = 3 (like
 // batch_percent:25). batch_size (index 7) = 3, batch_percent (index 17) = 25.
 func TestVoyageCreate_BatchString_PercentResolvesEffectiveBatchSize(t *testing.T) {
 	store := &fakeVoyageStore{}
@@ -1627,7 +1627,7 @@ func TestVoyageCreate_BatchString_PercentResolvesEffectiveBatchSize(t *testing.T
 	}
 }
 
-// fail-closed: malformed batch → 422 с человекочитаемым detail, до Insert.
+// fail-closed: malformed batch → 422 with a human-readable detail, before Insert.
 func TestVoyageCreate_BatchString_Malformed422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1647,7 +1647,7 @@ func TestVoyageCreate_BatchString_Malformed422(t *testing.T) {
 	}
 }
 
-// percent вне диапазона → 422 (parity batch_percent).
+// percent outside the range → 422 (parity batch_percent).
 func TestVoyageCreate_BatchString_PercentOutOfRange422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1664,7 +1664,7 @@ func TestVoyageCreate_BatchString_PercentOutOfRange422(t *testing.T) {
 	}
 }
 
-// conflict: batch + batch_size одновременно → 422 voyage_batch_spec_conflict.
+// conflict: batch + batch_size simultaneously → 422 voyage_batch_spec_conflict.
 func TestVoyageCreate_BatchString_ConflictWithBatchSize422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1684,7 +1684,7 @@ func TestVoyageCreate_BatchString_ConflictWithBatchSize422(t *testing.T) {
 	}
 }
 
-// conflict: batch + batch_percent одновременно → 422 voyage_batch_spec_conflict.
+// conflict: batch + batch_percent simultaneously → 422 voyage_batch_spec_conflict.
 func TestVoyageCreate_BatchString_ConflictWithBatchPercent422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1701,7 +1701,7 @@ func TestVoyageCreate_BatchString_ConflictWithBatchPercent422(t *testing.T) {
 	}
 }
 
-// window + batch → 422 (parity существующего window-guard для batch_size/percent).
+// window + batch → 422 (parity with the existing window guard for batch_size/percent).
 func TestVoyageCreate_BatchString_WithWindow422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1718,8 +1718,8 @@ func TestVoyageCreate_BatchString_WithWindow422(t *testing.T) {
 	}
 }
 
-// batch:"" (явная пустая строка) → трактуется как «не задано»: весь scope одним
-// Leg, 202, batch_size NULL (не 422).
+// batch:"" (an explicit empty string) → treated as "unset": the whole scope in
+// one leg, 202, batch_size NULL (not 422).
 func TestVoyageCreate_BatchString_EmptyTreatedAsUnset(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3"}}
@@ -1746,7 +1746,7 @@ func TestVoyageCreate_BatchString_EmptyTreatedAsUnset(t *testing.T) {
 	}
 }
 
-// backcompat: старый batch_size:5 без batch работает (не сломан добавлением batch).
+// backcompat: the old batch_size:5 without batch still works (not broken by adding batch).
 func TestVoyageCreate_Backcompat_BatchSizeWithoutBatch(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3"}}
@@ -1767,7 +1767,7 @@ func TestVoyageCreate_Backcompat_BatchSizeWithoutBatch(t *testing.T) {
 	}
 }
 
-// backcompat: старый batch_percent:25 без batch работает.
+// backcompat: the old batch_percent:25 without batch still works.
 func TestVoyageCreate_Backcompat_BatchPercentWithoutBatch(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(10)}
@@ -1788,10 +1788,10 @@ func TestVoyageCreate_Backcompat_BatchPercentWithoutBatch(t *testing.T) {
 	}
 }
 
-// --- tests: max_failures (S2 строковых batch-полей, ADR-043 amendment 2026-06-09) ---
+// --- tests: max_failures (S2 of the string batch fields, ADR-043 amendment 2026-06-09) ---
 
-// max_failures:"3" → абсолютный fail_threshold = 3 (как fail_threshold:3).
-// fail_threshold пишется в Insert (index 18).
+// max_failures:"3" → an absolute fail_threshold = 3 (like fail_threshold:3).
+// fail_threshold is written to Insert (index 18).
 func TestVoyageCreate_MaxFailures_HostsEqualsFailThreshold(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3", "h4", "h5"}}
@@ -1812,7 +1812,7 @@ func TestVoyageCreate_MaxFailures_HostsEqualsFailThreshold(t *testing.T) {
 	}
 }
 
-// max_failures:"25%" при scope=8 хостов → ceil(8*25/100) = 2.
+// max_failures:"25%" with scope=8 hosts → ceil(8*25/100) = 2.
 func TestVoyageCreate_MaxFailures_Percent_Command_ScopeEight(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(8)}
@@ -1833,8 +1833,8 @@ func TestVoyageCreate_MaxFailures_Percent_Command_ScopeEight(t *testing.T) {
 	}
 }
 
-// max_failures:"50%" при scope=4 инкарнации (scenario) → ceil(4*50/100) = 2.
-// Подтверждает: единица прогона scenario = инкарнация, та же база, что effBatchSize.
+// max_failures:"50%" with scope=4 incarnations (scenario) → ceil(4*50/100) = 2.
+// Confirms: the scenario run unit = incarnation, the same base as effBatchSize.
 func TestVoyageCreate_MaxFailures_Percent_Scenario_ScopeFour(t *testing.T) {
 	store := &fakeVoyageStore{}
 	sc := &fakeVoyageScenarioResolver{out: []string{"inc-a", "inc-b", "inc-c", "inc-d"}}
@@ -1855,7 +1855,7 @@ func TestVoyageCreate_MaxFailures_Percent_Scenario_ScopeFour(t *testing.T) {
 	}
 }
 
-// max_failures:"100%" при scope=5 → весь scope (clamp [1,scope]): ceil(5*100/100)=5.
+// max_failures:"100%" with scope=5 → the whole scope (clamp [1,scope]): ceil(5*100/100)=5.
 func TestVoyageCreate_MaxFailures_PercentHundred_ClampsToScope(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(5)}
@@ -1876,7 +1876,7 @@ func TestVoyageCreate_MaxFailures_PercentHundred_ClampsToScope(t *testing.T) {
 	}
 }
 
-// fail-closed: malformed max_failures → 422 с человекочитаемым detail, до Insert.
+// fail-closed: malformed max_failures → 422 with a human-readable detail, before Insert.
 func TestVoyageCreate_MaxFailures_Malformed422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1896,7 +1896,7 @@ func TestVoyageCreate_MaxFailures_Malformed422(t *testing.T) {
 	}
 }
 
-// percent вне диапазона → 422 (parity batch_percent), до Insert.
+// percent outside the range → 422 (parity batch_percent), before Insert.
 func TestVoyageCreate_MaxFailures_PercentOutOfRange422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1913,7 +1913,7 @@ func TestVoyageCreate_MaxFailures_PercentOutOfRange422(t *testing.T) {
 	}
 }
 
-// conflict: max_failures + fail_threshold одновременно → 422 voyage_batch_spec_conflict.
+// conflict: max_failures + fail_threshold simultaneously → 422 voyage_batch_spec_conflict.
 func TestVoyageCreate_MaxFailures_ConflictWithFailThreshold422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1"}}, allowAll())
@@ -1933,7 +1933,7 @@ func TestVoyageCreate_MaxFailures_ConflictWithFailThreshold422(t *testing.T) {
 	}
 }
 
-// empty max_failures:"" → «не задано» (no-op, не 422): fail_threshold остаётся NULL.
+// empty max_failures:"" → "unset" (a no-op, not 422): fail_threshold stays NULL.
 func TestVoyageCreate_MaxFailures_EmptyTreatedAsUnset(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: []string{"h1", "h2"}}
@@ -1954,9 +1954,10 @@ func TestVoyageCreate_MaxFailures_EmptyTreatedAsUnset(t *testing.T) {
 	}
 }
 
-// backcompat: старый fail_threshold:3 без max_failures работает (уже покрыт
-// TestVoyageCreate_FailThreshold_Persisted — здесь проверяем явное сосуществование
-// в одном раунде: max_failures отсутствует ⇒ fail_threshold int проходит как раньше).
+// backcompat: the old fail_threshold:3 without max_failures still works (already
+// covered by TestVoyageCreate_FailThreshold_Persisted — here we check explicit
+// coexistence in one round: max_failures absent ⇒ fail_threshold int passes as
+// before).
 func TestVoyageCreate_Backcompat_FailThresholdWithoutMaxFailures(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &fakeVoyageCommandResolver{out: voyageCapSIDs(10)}
@@ -1979,7 +1980,7 @@ func TestVoyageCreate_Backcompat_FailThresholdWithoutMaxFailures(t *testing.T) {
 
 // --- tests: preview (POST /v1/voyages/preview, ADR-043 amendment §4) ---
 
-// decodePreviewBody — разбор voyagePreviewReply из rec.Body.
+// decodePreviewBody — parses a voyagePreviewReply from rec.Body.
 func decodePreviewBody(t *testing.T, body []byte) voyagePreviewReply {
 	t.Helper()
 	var r voyagePreviewReply
@@ -1989,9 +1990,10 @@ func decodePreviewBody(t *testing.T, body []byte) voyagePreviewReply {
 	return r
 }
 
-// Preview не персистит и не раскрывает SID-список: barrier scenario, batch=2 на
-// 3 инкарнации → scope_size=3, effective_batch_size=2, total_batches=2. Store не
-// тронут (insertCalls=0), сырой JSON не содержит SID/incarnation-полей.
+// Preview does not persist and does not disclose the SID list: barrier
+// scenario, batch=2 over 3 incarnations → scope_size=3, effective_batch_size=2,
+// total_batches=2. The store is untouched (insertCalls=0), the raw JSON
+// carries no SID/incarnation fields.
 func TestVoyagePreview_Scenario_NoPersist_NoDisclosure(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a", "inc-b", "inc-c"}}, &fakeVoyageCommandResolver{}, allowAll())
@@ -2013,12 +2015,12 @@ func TestVoyagePreview_Scenario_NoPersist_NoDisclosure(t *testing.T) {
 	if rep.TotalBatches != 2 {
 		t.Errorf("total_batches = %d, want 2 (ceil 3/2)", rep.TotalBatches)
 	}
-	// No-persist: ни Insert, ни InsertTargets, ни commit.
+	// No-persist: neither Insert, nor InsertTargets, nor commit.
 	if store.insertCalls != 0 || store.insertTargets != 0 || store.committed {
 		t.Errorf("preview персистил: insertCalls=%d insertTargets=%d committed=%v, want 0/0/false",
 			store.insertCalls, store.insertTargets, store.committed)
 	}
-	// No-disclosure: сырой JSON не содержит имён единиц / target-полей.
+	// No-disclosure: the raw JSON carries no unit names / target fields.
 	for _, forbidden := range []string{"inc-a", "inc-b", "inc-c", "\"sids\"", "\"incarnations\"", "\"hosts\"", "target_resolved"} {
 		if strings.Contains(rec.Body.String(), forbidden) {
 			t.Errorf("preview-ответ раскрывает единицы (нашёл %q): %s", forbidden, rec.Body.String())
@@ -2026,7 +2028,7 @@ func TestVoyagePreview_Scenario_NoPersist_NoDisclosure(t *testing.T) {
 	}
 }
 
-// barrier batch=N% → ceil(scope*pct/100). 4 хоста, batch=25% → eff=1,
+// barrier batch=N% → ceil(scope*pct/100). 4 hosts, batch=25% → eff=1,
 // total_batches=4.
 func TestVoyagePreview_Command_BarrierPercent(t *testing.T) {
 	store := &fakeVoyageStore{}
@@ -2051,8 +2053,8 @@ func TestVoyagePreview_Command_BarrierPercent(t *testing.T) {
 	}
 }
 
-// window-режим: effective_batch_size опущен (omitempty), total_batches=1,
-// batch_mode=window. Без null-мусора в сыром JSON.
+// window mode: effective_batch_size is omitted (omitempty), total_batches=1,
+// batch_mode=window. No null junk in the raw JSON.
 func TestVoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"h1", "h2", "h3"}}, allowAll())
@@ -2076,10 +2078,10 @@ func TestVoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 	}
 }
 
-// max_scope превышен → 422 voyage_scope_too_large (как Create), без persist.
+// max_scope exceeded → 422 voyage_scope_too_large (like Create), without persist.
 func TestVoyagePreview_MaxScopeExceeded_422(t *testing.T) {
 	store := &fakeVoyageStore{}
-	// maxScope=2; резолвер вернул 3 → cap-reject.
+	// maxScope=2; the resolver returned 3 → cap-reject.
 	h := newVoyageHandlerCap(store, &fakeVoyageScenarioResolver{out: []string{"inc-a", "inc-b", "inc-c"}}, &fakeVoyageCommandResolver{}, allowAll(), 2)
 
 	rec := httptest.NewRecorder()
@@ -2097,11 +2099,11 @@ func TestVoyagePreview_MaxScopeExceeded_422(t *testing.T) {
 	}
 }
 
-// RBAC-by-kind deny parity: scenario без incarnation.run → 403 (тот же гейт, что
-// Create).
+// RBAC-by-kind deny parity: scenario without incarnation.run → 403 (the same
+// gate as Create).
 func TestVoyagePreview_ScenarioRBACDenied_403(t *testing.T) {
 	store := &fakeVoyageStore{}
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // incarnation.run нет
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, &fakeVoyageCommandResolver{}, enf)
 
 	rec := httptest.NewRecorder()
@@ -2113,7 +2115,7 @@ func TestVoyagePreview_ScenarioRBACDenied_403(t *testing.T) {
 	}
 }
 
-// Empty resolve → 422 voyage_empty_target (как Create).
+// Empty resolve → 422 voyage_empty_target (like Create).
 func TestVoyagePreview_EmptyTarget_422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{out: nil}, &fakeVoyageCommandResolver{}, allowAll())
@@ -2130,8 +2132,8 @@ func TestVoyagePreview_EmptyTarget_422(t *testing.T) {
 	}
 }
 
-// scoped command preview parity (ADR-047 S4): явный чужой SID (DeniedExplicit) →
-// 403, без persist.
+// scoped command preview parity (ADR-047 S4): an explicit foreign SID
+// (DeniedExplicit) → 403, without persist.
 func TestVoyagePreview_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{
@@ -2156,8 +2158,8 @@ func TestVoyagePreview_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 	}
 }
 
-// scoped command preview: широкий target урезан до Purview → scope_size =
-// подмножество (наследует ResolveSIDsInScope), 200, без persist.
+// scoped command preview: a wide target is trimmed to the Purview → scope_size
+// = a subset (inherits ResolveSIDsInScope), 200, without persist.
 func TestVoyagePreview_CommandScoped_WideTargetTrimmed_200(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"a1.example.com", "a2.example.com"}}}
@@ -2180,7 +2182,7 @@ func TestVoyagePreview_CommandScoped_WideTargetTrimmed_200(t *testing.T) {
 	}
 }
 
-// Malformed JSON → 400 (как Create).
+// Malformed JSON → 400 (like Create).
 func TestVoyagePreview_BadJSON_400(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, allowAll())
@@ -2193,7 +2195,7 @@ func TestVoyagePreview_BadJSON_400(t *testing.T) {
 	}
 }
 
-// --- guard: wire-equivalence миграции на oapi-типы (ADR-051) ---
+// --- guard: wire-equivalence of the migration to oapi types (ADR-051) ---
 
 // toVoyageDTO мигрирован на pointer-optional поля [Voyage] (scenario_name/
 // module/batch_mode/on_failure — `*string`/`*enum` вместо `string ...,omitempty`;

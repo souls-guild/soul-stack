@@ -17,27 +17,29 @@ import (
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
-// gitRepo — алиас открытого репозитория go-git. Держит go-git-импорт внутри
-// git.go: остальной пакет работает с репозиторием как с непрозрачным handle.
+// gitRepo — an alias for an open go-git repository. Keeps the go-git import
+// confined to git.go: the rest of the package works with the repository as an
+// opaque handle.
 type gitRepo = git.Repository
 
-// fetchAllRefSpec обновляет в рабочем клоне все ветки и теги форс-режимом.
-// Без этого ветка, продвинувшаяся на remote, не была бы видна локальному
-// ResolveRevision (PM-decision: всегда fetch + checkout).
+// fetchAllRefSpec updates all branches and tags in the working clone in force
+// mode. Without it, a branch that advanced on the remote would not be visible
+// to the local ResolveRevision (PM decision: always fetch + checkout).
 const fetchAllRefSpec config.RefSpec = "+refs/heads/*:refs/remotes/origin/*"
 
-// openOrClone открывает рабочий клон под workDir или клонирует его, если каталог
-// ещё не репозиторий либо существующий клон битый (нет origin-remote — keeper
-// убит mid-clone). Возвращает открытый репозиторий.
+// openOrClone opens the working clone under workDir, or clones it if the
+// directory is not yet a repository, or the existing clone is broken (no
+// origin remote — keeper was killed mid-clone). Returns the open repository.
 func openOrClone(ctx context.Context, workDir, gitURL string, auth transport.AuthMethod) (*gitRepo, error) {
 	repo, err := git.PlainOpen(workDir)
 	if err == nil {
-		// Self-heal битого клона: keeper, убитый mid-clone, оставляет каталог,
-		// который PlainOpen открывает, но без origin-remote — последующий fetch
-		// падает ErrRemoteNotFound НАВСЕГДА до ручной чистки. Ловим строго
-		// ErrRemoteNotFound (транзиентные ошибки чтения config не сносим) и
-		// пере-клонируем. Доступ к workDir сериализован per-name mutex-ом в
-		// snapshotter.snapshot, гонки с этим RemoveAll нет.
+		// Self-heal a broken clone: keeper killed mid-clone leaves a directory
+		// that PlainOpen opens fine, but without an origin remote — a
+		// subsequent fetch fails with ErrRemoteNotFound FOREVER until a manual
+		// cleanup. We catch strictly ErrRemoteNotFound (transient config-read
+		// errors are not treated as broken) and re-clone. Access to workDir is
+		// serialized by a per-name mutex in snapshotter.snapshot, so there is
+		// no race with this RemoveAll.
 		_, rerr := repo.Remote("origin")
 		if rerr == nil {
 			return repo, nil
@@ -45,13 +47,15 @@ func openOrClone(ctx context.Context, workDir, gitURL string, auth transport.Aut
 		if !errors.Is(rerr, git.ErrRemoteNotFound) {
 			return nil, fmt.Errorf("artifact: проверка origin-remote клона %s: %w", workDir, rerr)
 		}
-		// Падаем в общую clone-ветку ниже через RemoveAll + PlainCloneContext.
+		// Fall through to the common clone branch below via RemoveAll +
+		// PlainCloneContext.
 	} else if !errors.Is(err, git.ErrRepositoryNotExists) {
 		return nil, fmt.Errorf("artifact: открытие рабочего клона %s: %w", workDir, err)
 	}
 
-	// Каталог мог существовать как пустой/битый — убираем перед чистым клоном,
-	// чтобы PlainCloneContext не упал на ErrRepositoryAlreadyExists.
+	// The directory might have existed as empty/broken — remove it before a
+	// clean clone, so PlainCloneContext doesn't fail with
+	// ErrRepositoryAlreadyExists.
 	if rmErr := os.RemoveAll(workDir); rmErr != nil {
 		return nil, fmt.Errorf("artifact: очистка перед клоном %s: %w", workDir, rmErr)
 	}
@@ -66,7 +70,8 @@ func openOrClone(ctx context.Context, workDir, gitURL string, auth transport.Aut
 	return repo, nil
 }
 
-// fetch обновляет рабочий клон с remote. NoErrAlreadyUpToDate — не ошибка.
+// fetch updates the working clone from the remote. NoErrAlreadyUpToDate is
+// not an error.
 func fetch(ctx context.Context, repo *gitRepo, auth transport.AuthMethod) error {
 	err := repo.FetchContext(ctx, &git.FetchOptions{
 		RefSpecs: []config.RefSpec{fetchAllRefSpec},
@@ -80,15 +85,16 @@ func fetch(ctx context.Context, repo *gitRepo, auth transport.AuthMethod) error 
 	return nil
 }
 
-// resolveRef резолвит git-ref (tag/branch/HEAD) в commit-hash. Пустой ref — HEAD.
+// resolveRef resolves a git ref (tag/branch/HEAD) to a commit hash. An empty
+// ref means HEAD.
 //
-// Remote-tracking-форма (`refs/remotes/origin/<ref>`) проверяется ПЕРЕД голым
-// `<ref>`: fetch кладёт ветки в `refs/remotes/origin/*` (см. fetchAllRefSpec) и
-// продвигает их, тогда как локальная `refs/heads/<ref>` от исходного клона
-// остаётся на старом коммите (мы делаем fetch, а не pull). Без этого
-// приоритета продвинувшаяся ветка резолвилась бы в устаревший tip.
+// The remote-tracking form (`refs/remotes/origin/<ref>`) is checked BEFORE
+// the bare `<ref>`: fetch places branches under `refs/remotes/origin/*` (see
+// fetchAllRefSpec) and advances them, whereas the local `refs/heads/<ref>`
+// from the initial clone stays on the old commit (we do a fetch, not a pull).
+// Without this priority, an advanced branch would resolve to a stale tip.
 //
-// Порядок: тег → remote-tracking-ветка → как есть (полный hash / HEAD).
+// Order: tag → remote-tracking branch → as-is (full hash / HEAD).
 func resolveRef(repo *gitRepo, ref string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
@@ -109,8 +115,9 @@ func resolveRef(repo *gitRepo, ref string) (string, error) {
 	return "", fmt.Errorf("artifact: ref %q не резолвится в репозитории: %w", ref, lastErr)
 }
 
-// checkout переводит рабочий клон в detached-HEAD на указанный commit. Force —
-// чтобы перезатереть остатки предыдущего checkout-а без ручной чистки worktree.
+// checkout puts the working clone into a detached-HEAD state at the given
+// commit. Force — to overwrite leftovers from a previous checkout without
+// manually cleaning the worktree.
 func checkout(repo *gitRepo, sha1 string) error {
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -125,8 +132,9 @@ func checkout(repo *gitRepo, sha1 string) error {
 	return nil
 }
 
-// exportTree копирует дерево файлов рабочего клона из src в dst, опуская каталог
-// `.git`. Снапшот остаётся чистым деревом сервиса без git-метаданных.
+// exportTree copies the working clone's file tree from src to dst, skipping
+// the `.git` directory. The snapshot remains a clean service tree without
+// git metadata.
 func exportTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -139,7 +147,7 @@ func exportTree(src, dst string) error {
 		if rel == "." {
 			return nil
 		}
-		// `.git` и всё под ним пропускаем целиком.
+		// Skip `.git` and everything under it entirely.
 		if rel == ".git" || strings.HasPrefix(rel, ".git"+string(os.PathSeparator)) {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -151,8 +159,9 @@ func exportTree(src, dst string) error {
 			return os.MkdirAll(target, 0o755)
 		}
 		if !d.Type().IsRegular() {
-			// Симлинки и спец-файлы в снапшот не переносим — рендер читает
-			// только обычные файлы, символьная цель — потенциальный escape.
+			// Symlinks and special files are not carried into the snapshot —
+			// the render phase reads only regular files, a symlink target is
+			// a potential escape.
 			return nil
 		}
 		return copyFile(path, target)
@@ -179,9 +188,9 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// authFor выбирает auth-метод по схеме URL. SSH (`ssh://` или scp-форма
-// `user@host:path`) — через SSH-agent (PM-decision; Vault-auth post-MVP).
-// `file://`/`https://` auth не требуют (MVP).
+// authFor picks the auth method by the URL scheme. SSH (`ssh://` or the scp
+// form `user@host:path`) — via SSH agent (PM decision; Vault auth is
+// post-MVP). `file://`/`https://` need no auth (MVP).
 func authFor(gitURL string) (transport.AuthMethod, error) {
 	if !isSSHURL(gitURL) {
 		return nil, nil
@@ -194,7 +203,8 @@ func authFor(gitURL string) (transport.AuthMethod, error) {
 	return auth, nil
 }
 
-// isSSHURL распознаёт ssh-схему и scp-подобную форму `git@host:org/repo.git`.
+// isSSHURL recognizes the ssh scheme and the scp-like form
+// `git@host:org/repo.git`.
 func isSSHURL(gitURL string) bool {
 	if strings.HasPrefix(gitURL, "ssh://") {
 		return true
@@ -202,13 +212,13 @@ func isSSHURL(gitURL string) bool {
 	if strings.Contains(gitURL, "://") {
 		return false
 	}
-	// scp-форма: `user@host:path`, двоеточие после хоста, без схемы.
+	// scp form: `user@host:path`, a colon after the host, no scheme.
 	at := strings.Index(gitURL, "@")
 	colon := strings.Index(gitURL, ":")
 	return at >= 0 && colon > at
 }
 
-// sshUser извлекает имя пользователя из ssh-URL; по умолчанию `git`.
+// sshUser extracts the username from an ssh URL; defaults to `git`.
 func sshUser(gitURL string) string {
 	if strings.HasPrefix(gitURL, "ssh://") {
 		if u, err := url.Parse(gitURL); err == nil && u.User != nil {

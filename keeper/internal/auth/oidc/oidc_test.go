@@ -20,29 +20,30 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
 )
 
-// --- mock IdP: discovery + JWKS + token-endpoint, подписывает id_token RSA ---
+// --- mock IdP: discovery + JWKS + token-endpoint, signs id_token with RSA ---
 
 const (
 	testClientID = "soul-keeper"
 	testKID      = "test-key-1"
 )
 
-// mockIdP — минимальный OIDC-провайдер на httptest для unit-тестов. Держит
-// RSA-ключ, отдаёт discovery/JWKS, на /token возвращает заранее сформированный
-// id_token (управляется полями claims/sign-key — для негативных сценариев).
+// mockIdP is a minimal OIDC provider on httptest for unit tests. It holds an
+// RSA key, serves discovery/JWKS, and /token returns a pre-built id_token
+// (controlled via the claims/sign-key fields — for negative scenarios).
 type mockIdP struct {
 	srv     *httptest.Server
 	key     *rsa.PrivateKey
-	signKey *rsa.PrivateKey // ключ для ПОДПИСИ id_token (обычно == key; для теста bad-sig — чужой)
+	signKey *rsa.PrivateKey // key used to SIGN the id_token (usually == key; a foreign one for the bad-sig test)
 
-	// idTokenClaims — claims, которые попадут в id_token при следующем /token.
-	// Тест выставляет их перед CompleteLogin.
+	// idTokenClaims are the claims that will land in the id_token on the next
+	// /token call. The test sets them before CompleteLogin.
 	mu            sync.Mutex
 	idTokenClaims map[string]any
-	// gotCodeVerifier — code_verifier, пришедший в последнем /token (для проверки
-	// PKCE-enforcement: без него тест эмулирует отказ).
+	// gotCodeVerifier is the code_verifier received on the last /token call
+	// (used to check PKCE enforcement: without it the test emulates a denial).
 	gotCodeVerifier string
-	// requirePKCE — если true, /token вернёт ошибку при отсутствии code_verifier.
+	// requirePKCE — if true, /token returns an error when code_verifier is
+	// missing.
 	requirePKCE bool
 }
 
@@ -77,7 +78,7 @@ func newMockIdP(t *testing.T) *mockIdP {
 		m.mu.Unlock()
 
 		if requirePKCE && m.gotCodeVerifier == "" {
-			// PKCE-enforcement IdP: без verifier обмен невозможен.
+			// PKCE-enforcing IdP: without the verifier, the exchange is impossible.
 			w.WriteHeader(http.StatusBadRequest)
 			writeJSON(w, map[string]any{"error": "invalid_grant", "error_description": "PKCE verifier required"})
 			return
@@ -91,7 +92,7 @@ func newMockIdP(t *testing.T) *mockIdP {
 			"expires_in":   3600,
 		})
 	})
-	// TLS-сервер: issuer обязан быть https:// (security-инвариант New).
+	// TLS server: the issuer must be https:// (New's security invariant).
 	m.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(m.srv.Close)
 	return m
@@ -99,9 +100,9 @@ func newMockIdP(t *testing.T) *mockIdP {
 
 func (m *mockIdP) issuer() string { return m.srv.URL }
 
-// caPEM — leaf-сертификат TLS-сервера в PEM (для Config.TLSCA → httpClient
-// доверяет mock IdP). httptest подписывает leaf этим же сертификатом (self-signed),
-// поэтому он годится как CA для теста.
+// caPEM is the TLS server's leaf certificate in PEM (for Config.TLSCA →
+// httpClient trusts the mock IdP). httptest signs the leaf with this very
+// certificate (self-signed), so it also works as the CA for the test.
 func (m *mockIdP) caPEM() []byte {
 	cert := m.srv.Certificate()
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
@@ -124,7 +125,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// signIDToken подписывает claims RS256-ключом signKey и kid=testKID.
+// signIDToken signs claims with the RS256 signKey and kid=testKID.
 func signIDToken(issuer string, claims map[string]any, signKey *rsa.PrivateKey) string {
 	signer, err := jose.NewSigner(
 		jose.SigningKey{Algorithm: jose.RS256, Key: signKey},
@@ -149,8 +150,8 @@ func signIDToken(issuer string, claims map[string]any, signKey *rsa.PrivateKey) 
 	return s
 }
 
-// fakeFlowStore — in-memory FlowStore для unit-тестов (без Redis). Single-use
-// Consume (удаляет запись), чтобы воспроизвести anti-replay.
+// fakeFlowStore is an in-memory FlowStore for unit tests (no Redis). Consume
+// is single-use (deletes the entry) to reproduce anti-replay behavior.
 type fakeFlowStore struct {
 	mu sync.Mutex
 	m  map[string]FlowState
@@ -176,7 +177,7 @@ func (s *fakeFlowStore) Consume(_ context.Context, state string) (FlowState, err
 	return fs, nil
 }
 
-// newTestAuthenticator поднимает Authenticator против mock IdP.
+// newTestAuthenticator spins up an Authenticator against the mock IdP.
 func newTestAuthenticator(t *testing.T, idp *mockIdP, store FlowStore) *Authenticator {
 	t.Helper()
 	a, err := New(context.Background(), Config{
@@ -194,7 +195,7 @@ func newTestAuthenticator(t *testing.T, idp *mockIdP, store FlowStore) *Authenti
 	return a
 }
 
-// stateFromURL извлекает state из authorization-URL.
+// stateFromURL extracts state from the authorization URL.
 func stateFromURL(t *testing.T, rawURL string) string {
 	t.Helper()
 	u, err := url.Parse(rawURL)
@@ -204,7 +205,7 @@ func stateFromURL(t *testing.T, rawURL string) string {
 	return u.Query().Get("state")
 }
 
-// --- (0) New валидирует инварианты ---
+// --- (0) New validates invariants ---
 
 func TestNew_RejectsNonHTTPSIssuer(t *testing.T) {
 	_, err := New(context.Background(), Config{
@@ -225,7 +226,7 @@ func TestNew_RequiresStore(t *testing.T) {
 	}
 }
 
-// --- (1) BeginLogin: PKCE S256 challenge + state в URL, verifier server-side ---
+// --- (1) BeginLogin: PKCE S256 challenge + state in the URL, verifier stays server-side ---
 
 func TestBeginLogin_EmitsPKCEChallengeAndState(t *testing.T) {
 	idp := newMockIdP(t)
@@ -250,7 +251,7 @@ func TestBeginLogin_EmitsPKCEChallengeAndState(t *testing.T) {
 	if q.Get("nonce") == "" {
 		t.Error("authorization URL must carry nonce")
 	}
-	// code_verifier остаётся server-side (НЕ в URL).
+	// code_verifier stays server-side (NOT in the URL).
 	if strings.Contains(authz.RedirectTo, store.m[authz.State].CodeVerifier) {
 		t.Error("code_verifier must NOT appear in redirect URL")
 	}
@@ -259,7 +260,7 @@ func TestBeginLogin_EmitsPKCEChallengeAndState(t *testing.T) {
 	}
 }
 
-// --- (2) happy path: валидный id_token + nonce → identity ---
+// --- (2) happy path: a valid id_token + nonce → identity ---
 
 func TestCompleteLogin_Happy(t *testing.T) {
 	idp := newMockIdP(t)
@@ -291,13 +292,13 @@ func TestCompleteLogin_Happy(t *testing.T) {
 	if len(ext.Groups) != 2 || ext.Groups[0] != "ops" {
 		t.Errorf("Groups = %v, want [ops admins]", ext.Groups)
 	}
-	// PKCE-enforcement: IdP получил code_verifier.
+	// PKCE enforcement: the IdP received code_verifier.
 	if idp.gotCodeVerifier == "" {
 		t.Error("token exchange must send PKCE code_verifier")
 	}
 }
 
-// --- (3) ★ PKCE-enforced: code-exchange БЕЗ verifier отвергается IdP ---
+// --- (3) ★ PKCE-enforced: code-exchange WITHOUT the verifier is rejected by the IdP ---
 
 func TestCompleteLogin_PKCEEnforced(t *testing.T) {
 	idp := newMockIdP(t) // requirePKCE=true
@@ -305,8 +306,8 @@ func TestCompleteLogin_PKCEEnforced(t *testing.T) {
 	a := newTestAuthenticator(t, idp, store)
 
 	authz, _ := a.BeginLogin(context.Background())
-	// Подменяем verifier на пустой в store → exchange уйдёт без code_verifier →
-	// PKCE-IdP отвергнет (invalid_grant).
+	// Replace the verifier with an empty one in the store → the exchange will
+	// go out without code_verifier → the PKCE IdP rejects it (invalid_grant).
 	store.mu.Lock()
 	fs := store.m[authz.State]
 	fs.CodeVerifier = ""
@@ -328,14 +329,14 @@ func TestCompleteLogin_StateMismatch(t *testing.T) {
 	a := newTestAuthenticator(t, idp, store)
 
 	_, _ = a.BeginLogin(context.Background())
-	// state, которого нет в store (CSRF / подделка).
+	// a state that is not in the store (CSRF / forgery).
 	_, err := a.CompleteLogin(context.Background(), "auth-code", "forged-state")
 	if !errors.Is(err, auth.ErrAuthFailed) {
 		t.Fatalf("unknown state must fail with ErrAuthFailed, got %v", err)
 	}
 }
 
-// --- (4b) ★ single-use: повторный callback с тем же state → deny (replay) ---
+// --- (4b) ★ single-use: a repeated callback with the same state → deny (replay) ---
 
 func TestCompleteLogin_StateSingleUse(t *testing.T) {
 	idp := newMockIdP(t)
@@ -351,7 +352,7 @@ func TestCompleteLogin_StateSingleUse(t *testing.T) {
 	if _, err := a.CompleteLogin(context.Background(), "code", authz.State); err != nil {
 		t.Fatalf("first CompleteLogin: %v", err)
 	}
-	// state потреблён (single-use Consume) → повтор отвергается.
+	// state has been consumed (single-use Consume) → the repeat is rejected.
 	if _, err := a.CompleteLogin(context.Background(), "code", authz.State); !errors.Is(err, auth.ErrAuthFailed) {
 		t.Fatalf("replayed state must fail with ErrAuthFailed, got %v", err)
 	}
@@ -367,7 +368,7 @@ func TestCompleteLogin_NonceMismatch(t *testing.T) {
 	authz, _ := a.BeginLogin(context.Background())
 	idp.setClaims(map[string]any{
 		"sub": "s", "preferred_username": "alice",
-		"nonce": "WRONG-NONCE", // не совпадает с сохранённым
+		"nonce": "WRONG-NONCE", // does not match the stored one
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
 	_, err := a.CompleteLogin(context.Background(), "code", authz.State)
@@ -376,7 +377,7 @@ func TestCompleteLogin_NonceMismatch(t *testing.T) {
 	}
 }
 
-// --- (6) ★ id_token: невалидная подпись → deny ---
+// --- (6) ★ id_token: invalid signature → deny ---
 
 func TestCompleteLogin_BadSignature(t *testing.T) {
 	idp := newMockIdP(t)
@@ -384,7 +385,7 @@ func TestCompleteLogin_BadSignature(t *testing.T) {
 	a := newTestAuthenticator(t, idp, store)
 
 	authz, _ := a.BeginLogin(context.Background())
-	// id_token подписан ЧУЖИМ ключом (не тем, что в JWKS).
+	// id_token is signed with a FOREIGN key (not the one in JWKS).
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	idp.setSignKey(otherKey)
 	idp.setClaims(map[string]any{
@@ -409,7 +410,7 @@ func TestCompleteLogin_Expired(t *testing.T) {
 	idp.setClaims(map[string]any{
 		"sub": "s", "preferred_username": "alice",
 		"nonce": store.m[authz.State].Nonce,
-		"exp":   time.Now().Add(-time.Hour).Unix(), // истёк
+		"exp":   time.Now().Add(-time.Hour).Unix(), // expired
 		"iat":   time.Now().Add(-2 * time.Hour).Unix(),
 	})
 	_, err := a.CompleteLogin(context.Background(), "code", authz.State)
@@ -418,7 +419,7 @@ func TestCompleteLogin_Expired(t *testing.T) {
 	}
 }
 
-// --- (8) ★ id_token: неверный aud → deny ---
+// --- (8) ★ id_token: wrong aud → deny ---
 
 func TestCompleteLogin_WrongAudience(t *testing.T) {
 	idp := newMockIdP(t)
@@ -463,7 +464,7 @@ func TestCompleteLogin_EmptyAIDClaim(t *testing.T) {
 		"sub":   "s",
 		"nonce": store.m[authz.State].Nonce,
 		"exp":   time.Now().Add(time.Hour).Unix(),
-		// preferred_username (aid_claim) отсутствует → AID пуст.
+		// preferred_username (aid_claim) is absent → AID is empty.
 	})
 	_, err := a.CompleteLogin(context.Background(), "code", authz.State)
 	if !errors.Is(err, auth.ErrAuthFailed) {

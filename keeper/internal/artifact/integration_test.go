@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestIntegration_ConcurrentLoadsSameSnapshot прогоняет несколько параллельных
-// Load одного сервиса/ref через local-fs git: per-service Mutex должен
-// сериализовать git-операции, а все вызовы — вернуть один и тот же снапшот без
-// гонок и без частичных каталогов.
+// TestIntegration_ConcurrentLoadsSameSnapshot runs several parallel Load calls
+// for the same service/ref through local-fs git: a per-service Mutex must
+// serialize the git operations, and all calls must return the same snapshot
+// with no races and no partial directories.
 func TestIntegration_ConcurrentLoadsSameSnapshot(t *testing.T) {
 	tr := newTestRepo(t)
 	tr.writeFile("scenario/deploy/main.yml", "on: keeper\n")
@@ -48,8 +48,8 @@ func TestIntegration_ConcurrentLoadsSameSnapshot(t *testing.T) {
 	}
 }
 
-// TestIntegration_MultiServiceParallel проверяет, что разные сервисы грузятся
-// независимо (отдельные cache-каталоги, отдельные per-service locks).
+// TestIntegration_MultiServiceParallel checks that different services load
+// independently (separate cache directories, separate per-service locks).
 func TestIntegration_MultiServiceParallel(t *testing.T) {
 	loader := newLoader(t)
 

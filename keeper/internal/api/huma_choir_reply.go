@@ -1,24 +1,25 @@
 package api
 
-// HUMA-NATIVE wire-DTO CHOIR/VOICE-домена (handler-native T5d-2c). Reply/output Body
-// huma-операций choir/voice — native Go-struct в пакете api, БЕЗ legacy-генерата. Handler
-// (handlers/choir.go) возвращает доменные result-ы с плоскими полями; register-func
-// (huma_choir.go) проецирует их В ЭТИ типы напрямую (newChoir / newVoice /
-// newChoirListReply / newVoiceListReply) — конвертеров legacy-генерата → native больше нет.
+// HUMA-NATIVE wire-DTO of the CHOIR/VOICE domain (handler-native T5d-2c). The Reply/
+// output Body of the choir/voice huma operations is a native Go struct in the api
+// package, WITHOUT the legacy generator. The handler (handlers/choir.go) returns domain
+// results with flat fields; the register func (huma_choir.go) projects them INTO THESE
+// types directly (newChoir / newVoice / newChoirListReply / newVoiceListReply) —
+// legacy-generator → native converters no longer exist.
 //
-// ИНВАРИАНТЫ (★ wire byte-exact + ★ имя схемы стабильно): форма байт-в-байт = прежний
-// legacy-генерата (те же json-теги; created_by_aid/description/min_size/max_size — `*` БЕЗ
-// omitempty → `null` при nil, категория D; time.Time-wire; envelope int — НЕ int32).
-// Имя EXPORTED-struct = контрактное (Choir / Voice / ChoirListReply / VoiceListReply) →
-// huma DefaultSchemaNamer даёт ту же схему.
+// INVARIANTS (★ wire byte-exact + ★ stable schema name): the shape is byte-for-byte the
+// former legacy generator's (the same json tags; created_by_aid/description/min_size/
+// max_size — `*` WITHOUT omitempty → `null` when nil, category D; time.Time wire;
+// envelope int — NOT int32). The EXPORTED-struct name = the contract name (Choir / Voice
+// / ChoirListReply / VoiceListReply) → huma DefaultSchemaNamer produces the same schema.
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). created_by_aid/added_by_aid ←
+// OUTPUT-PATTERN (documentation only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). created_by_aid/added_by_aid ←
 // operator.AIDPattern; Voice.sid ← soul.SIDPattern; incarnation_name ←
-// incarnation.NamePattern (батч 5, FK на incarnation; path-{name} при записи).
-// Формат для клиент-кодогена; pattern не влияет на json.Marshal (golden byte-exact
-// цел). choir_name НЕ тегируется: своя грамматика choir.choirNamePattern (kebab+`_`),
-// вне name-скоупа этого батча.
+// incarnation.NamePattern (batch 5, FK to incarnation; path-{name} on write). The
+// format is for client codegen; the pattern does not affect json.Marshal (golden
+// byte-exact stays intact). choir_name is NOT tagged: it has its own grammar
+// choir.choirNamePattern (kebab+`_`), outside this batch's name scope.
 
 import (
 	"time"
@@ -26,11 +27,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежним legacy-генерата) ===
+// === top-level reply DTO (1:1 with the former legacy generator's shape) ===
 
-// Choir — native проекция Choir-записи (форма 1:1 с прежним Choir). created_by_aid/
-// description/min_size/max_size — `*` БЕЗ omitempty (nil → `null`); created_at —
-// наносекундный time-wire.
+// Choir — a native projection of a Choir record (1:1 with the former Choir).
+// created_by_aid/description/min_size/max_size — `*` WITHOUT omitempty (nil → `null`);
+// created_at — nanosecond time wire.
 type Choir struct {
 	ChoirName       string    `json:"choir_name"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -41,8 +42,9 @@ type Choir struct {
 	MinSize         *int      `json:"min_size"`
 }
 
-// Voice — native проекция Voice-членства (форма 1:1 с прежним Voice). added_by_aid/
-// position/role — `*` БЕЗ omitempty (nil → `null`); added_at — наносекундный time-wire.
+// Voice — a native projection of Voice membership (1:1 with the former Voice).
+// added_by_aid/position/role — `*` WITHOUT omitempty (nil → `null`); added_at —
+// nanosecond time wire.
 type Voice struct {
 	AddedAt         time.Time `json:"added_at"`
 	AddedByAID      *string   `json:"added_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
@@ -53,10 +55,10 @@ type Voice struct {
 	SID             string    `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern
 }
 
-// === envelope reply-DTO (element-поле → native, форма 1:1) ===
+// === envelope reply DTO (element field → native, 1:1 shape) ===
 
-// ChoirListReply — native 200-envelope GET .../choirs (форма 1:1 с прежним
-// ChoirListReply). items — []Choir; limit/offset/total — int (НЕ int32).
+// ChoirListReply — the native 200 envelope for GET .../choirs (1:1 with the former
+// ChoirListReply). items — []Choir; limit/offset/total — int (NOT int32).
 type ChoirListReply struct {
 	Items  []Choir `json:"items"`
 	Limit  int     `json:"limit"`
@@ -64,7 +66,7 @@ type ChoirListReply struct {
 	Total  int     `json:"total"`
 }
 
-// VoiceListReply — native 200-envelope GET .../voices (форма 1:1 с прежним
+// VoiceListReply — the native 200 envelope for GET .../voices (1:1 with the former
 // VoiceListReply).
 type VoiceListReply struct {
 	Items  []Voice `json:"items"`
@@ -73,9 +75,9 @@ type VoiceListReply struct {
 	Total  int     `json:"total"`
 }
 
-// === проекция доменных result-ов handler-а → native wire-DTO ===
+// === projection of the handler's domain results → native wire DTO ===
 
-// newChoir проецирует доменный handlers.ChoirView в native Choir.
+// newChoir projects the domain handlers.ChoirView into a native Choir.
 func newChoir(v handlers.ChoirView) Choir {
 	return Choir{
 		ChoirName:       v.ChoirName,
@@ -88,7 +90,7 @@ func newChoir(v handlers.ChoirView) Choir {
 	}
 }
 
-// newVoice проецирует доменный handlers.VoiceView в native Voice.
+// newVoice projects the domain handlers.VoiceView into a native Voice.
 func newVoice(v handlers.VoiceView) Voice {
 	return Voice{
 		AddedAt:         v.AddedAt,
@@ -101,9 +103,9 @@ func newVoice(v handlers.VoiceView) Voice {
 	}
 }
 
-// newChoirListReply проецирует доменный handlers.ChoirListPage в native envelope
-// ChoirListReply (items non-nil []; offset 0, limit/total = len — full list без
-// серверной пагинации, parity легаси ListChoirs).
+// newChoirListReply projects the domain handlers.ChoirListPage into the native envelope
+// ChoirListReply (items non-nil []; offset 0, limit/total = len — a full list with no
+// server-side pagination, parity with the legacy ListChoirs).
 func newChoirListReply(p handlers.ChoirListPage) ChoirListReply {
 	items := make([]Choir, 0, len(p.Items))
 	for _, v := range p.Items {
@@ -112,7 +114,7 @@ func newChoirListReply(p handlers.ChoirListPage) ChoirListReply {
 	return ChoirListReply{Items: items, Offset: 0, Limit: len(items), Total: len(items)}
 }
 
-// newVoiceListReply проецирует доменный handlers.VoiceListPage в native envelope
+// newVoiceListReply projects the domain handlers.VoiceListPage into the native envelope
 // VoiceListReply (items non-nil []; offset 0, limit/total = len).
 func newVoiceListReply(p handlers.VoiceListPage) VoiceListReply {
 	items := make([]Voice, 0, len(p.Items))

@@ -1,15 +1,15 @@
 package api
 
-// FULL-TYPED форма ORACLE-домена (vigils + decrees; code-first источник OpenAPI,
-// ADR-054 §Pattern). ТИРАЖ-БАТЧ-2b (oracle целиком на huma по эталонам role/operator/
-// augur): vigil create (WRITE+AUDIT vigil.created), vigil list (read-with-typed-
+// FULL-TYPED shape of the ORACLE domain (vigils + decrees; code-first source of OpenAPI,
+// ADR-054 §Pattern). ROLLOUT BATCH 2b (oracle entirely on huma following the role/operator/
+// augur patterns): vigil create (WRITE+AUDIT vigil.created), vigil list (read-with-typed-
 // query), vigil get (read-with-path), vigil delete (WRITE+AUDIT vigil.deleted);
-// decree симметрично (decree.created / decree.deleted). Go-типы — единственный
-// источник правды (JSON Schema + валидация + typed-output).
+// decree symmetrically (decree.created / decree.deleted). Go types are the single
+// source of truth (JSON Schema + validation + typed output).
 //
-// vigil/decree-операции несут ПОЛНЫЕ пути (/vigils[/{name}], /decrees[/{name}]) и
-// монтируются на /v1 напрямую (per-route RBAC chi-группа) — distinct-path для
-// spec-dump (иначе vigil-POST и decree-POST осели бы на одном «/»).
+// vigil/decree operations carry FULL paths (/vigils[/{name}], /decrees[/{name}]) and
+// are mounted directly on /v1 (per-route RBAC chi group) — a distinct path for the
+// spec dump (otherwise vigil-POST and decree-POST would land on the same "/").
 
 import (
 	"encoding/json"
@@ -20,19 +20,19 @@ import (
 
 // === POST /v1/vigils (create) — WRITE+AUDIT vigil.created ===
 
-// vigilCreateInput — huma-input POST /v1/vigils (FULL-TYPED). Body —
-// типизированное тело: huma декодит и валидирует по схеме.
+// vigilCreateInput — huma input POST /v1/vigils (FULL-TYPED). Body —
+// the typed body: huma decodes and validates it against the schema.
 type vigilCreateInput struct {
 	Body VigilCreateRequest
 }
 
-// VigilCreateRequest — Go-форма тела POST /v1/vigils (code-first источник схемы И
-// валидации). Повторяет доменный VigilCreateRequest: имя + XOR-субъект
-// (coven/sid) + interval/check + params (byte-passthrough JSONB, ADR-051 категория D)
-// + enabled. params — *json.RawMessage: сырые байты тела едут в service напрямую.
-// XOR-субъект и форма interval/check/params — доменная валидация в CreateVigilTyped
+// VigilCreateRequest — the Go shape of the POST /v1/vigils body (code-first source of the schema AND
+// validation). Mirrors the domain VigilCreateRequest: name + XOR subject
+// (coven/sid) + interval/check + params (byte-passthrough JSONB, ADR-051 category D)
+// + enabled. params — *json.RawMessage: the raw body bytes go straight to the service.
+// The XOR subject and the shape of interval/check/params are domain validation in CreateVigilTyped
 // (422). required:"true" — missing→422; additionalProperties:false → unknown→400.
-// Имя структуры = контрактное имя схемы в OpenAPI (committed-рукопись → VigilCreateRequest).
+// The struct name = the contract schema name in OpenAPI (committed hand-written spec → VigilCreateRequest).
 type VigilCreateRequest struct {
 	Name     string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Vigil-а (kebab-case, 1..63)"`
 	Coven    *[]string        `json:"coven,omitempty" doc:"субъект-метки coven (XOR с sid)"`
@@ -43,18 +43,18 @@ type VigilCreateRequest struct {
 	Enabled  *bool            `json:"enabled,omitempty" doc:"активна ли проверка (по умолчанию true)"`
 }
 
-// vigilCreateOutput — huma-output POST /v1/vigils (FULL-TYPED). Status=201; Body —
-// native 201-тело (VigilView). params — byte-passthrough JSONB. Wire-форма
-// зафиксирована golden-JSON byte-exact-тестом.
+// vigilCreateOutput — huma output POST /v1/vigils (FULL-TYPED). Status=201; Body —
+// the native 201 body (VigilView). params — byte-passthrough JSONB. The wire shape
+// is pinned by a golden-JSON byte-exact test.
 type vigilCreateOutput struct {
 	Status int `json:"-"`
 	Body   VigilView
 }
 
-// vigilCreateOperation — метаданные POST /v1/vigils. Path = "/vigils" (полный, для
-// distinct spec-dump). DefaultStatus=201. Permission vigil.create + audit
+// vigilCreateOperation — metadata for POST /v1/vigils. Path = "/vigils" (full, for a
+// distinct spec dump). DefaultStatus=201. Permission vigil.create + audit
 // vigil.created. Errors: 400 unknown/malformed, 403 RBAC, 409 vigil-exists, 422
-// валидация name/interval/check/субъект, 500.
+// validation of name/interval/check/subject, 500.
 func vigilCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createVigil",
@@ -68,25 +68,25 @@ func vigilCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/vigils (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/vigils (list) — READ-with-typed-query (no audit) ===
 
-// vigilListInput — huma-input GET /v1/vigils (FULL-TYPED typed-query). offset/limit
-// — int32 (committed-спека несёт int32) с default. bad-int → 400 (parseInto). ГРАНИЦЫ
-// enforce-ит CheckPageBounds в ListVigilsTyped → 400 (НЕ huma minimum/maximum).
+// vigilListInput — huma input GET /v1/vigils (FULL-TYPED typed query). offset/limit
+// — int32 (the committed spec carries int32) with a default. bad-int → 400 (parseInto). BOUNDS
+// are enforced by CheckPageBounds in ListVigilsTyped → 400 (NOT huma minimum/maximum).
 type vigilListInput struct {
 	Offset int32 `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
 	Limit  int32 `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// vigilListOutput — huma-output GET /v1/vigils (FULL-TYPED). Body — native
-// 200-envelope (VigilListReply: items/offset/limit/total). Wire-форма зафиксирована
-// golden-тестом.
+// vigilListOutput — huma output GET /v1/vigils (FULL-TYPED). Body — the native
+// 200 envelope (VigilListReply: items/offset/limit/total). The wire shape is pinned
+// by a golden test.
 type vigilListOutput struct {
 	Body VigilListReply
 }
 
-// vigilListOperation — метаданные GET /v1/vigils. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
+// vigilListOperation — metadata for GET /v1/vigils. DefaultStatus=200. READ route:
+// audit not wired. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
 func vigilListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listVigils",
@@ -100,22 +100,22 @@ func vigilListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/vigils/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/vigils/{name} (get) — READ-with-path (no audit) ===
 
-// vigilGetInput — huma-input GET /v1/vigils/{name}. Name — path. Формат name
-// (reOracleName) — доменная валидация в GetVigilTyped (422).
+// vigilGetInput — huma input GET /v1/vigils/{name}. Name — path. The name format
+// (reOracleName) is domain validation in GetVigilTyped (422).
 type vigilGetInput struct {
 	Name string `path:"name" doc:"имя Vigil-а"`
 }
 
-// vigilGetOutput — huma-output GET /v1/vigils/{name} (FULL-TYPED). Body — native
-// 200-тело (VigilView). Wire-форма зафиксирована golden-тестом.
+// vigilGetOutput — huma output GET /v1/vigils/{name} (FULL-TYPED). Body — the native
+// 200 body (VigilView). The wire shape is pinned by a golden test.
 type vigilGetOutput struct {
 	Body VigilView
 }
 
-// vigilGetOperation — метаданные GET /v1/vigils/{name}. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Permission vigil.list (read покрыт list-правом). Errors: 403,
+// vigilGetOperation — metadata for GET /v1/vigils/{name}. DefaultStatus=200. READ route:
+// audit not wired. Permission vigil.list (read is covered by the list permission). Errors: 403,
 // 404, 422 bad path-name, 500.
 func vigilGetOperation() huma.Operation {
 	return huma.Operation{
@@ -132,19 +132,19 @@ func vigilGetOperation() huma.Operation {
 
 // === DELETE /v1/vigils/{name} (delete) — WRITE+AUDIT vigil.deleted ===
 
-// vigilDeleteInput — huma-input DELETE /v1/vigils/{name}. Name — path. Body нет.
+// vigilDeleteInput — huma input DELETE /v1/vigils/{name}. Name — path. No Body.
 type vigilDeleteInput struct {
 	Name string `path:"name" doc:"имя Vigil-а"`
 }
 
-// oracleNoContentOutput — общий huma-output 204-write-роутов oracle (vigil.delete /
-// decree.delete). БЕЗ Body (легаси-контракт: 204 No Content). huma на output без Body
-// делает SetStatus(204) → пустое тело (wire-идентично прежнему WriteHeader(204)).
+// oracleNoContentOutput — the shared huma output for 204 write routes of oracle (vigil.delete /
+// decree.delete). NO Body (legacy contract: 204 No Content). huma on an output without Body
+// does SetStatus(204) → empty body (wire-identical to the former WriteHeader(204)).
 type oracleNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// vigilDeleteOperation — метаданные DELETE /v1/vigils/{name}. DefaultStatus=204.
+// vigilDeleteOperation — metadata for DELETE /v1/vigils/{name}. DefaultStatus=204.
 // Permission vigil.delete + audit vigil.deleted. Errors: 403, 404, 422 bad path-name,
 // 500.
 func vigilDeleteOperation() huma.Operation {
@@ -162,18 +162,18 @@ func vigilDeleteOperation() huma.Operation {
 
 // === POST /v1/decrees (create) — WRITE+AUDIT decree.created ===
 
-// decreeCreateInput — huma-input POST /v1/decrees (FULL-TYPED). Body —
-// типизированное тело.
+// decreeCreateInput — huma input POST /v1/decrees (FULL-TYPED). Body —
+// the typed body.
 type decreeCreateInput struct {
 	Body DecreeCreateRequest
 }
 
-// DecreeCreateRequest — Go-форма тела POST /v1/decrees (code-first источник схемы
-// И валидации). Повторяет доменный DecreeCreateRequest: имя + on_beacon +
-// XOR-субъект (coven/sid) + incarnation_name + action_scenario/action_input
+// DecreeCreateRequest — the Go shape of the POST /v1/decrees body (code-first source of the schema
+// AND validation). Mirrors the domain DecreeCreateRequest: name + on_beacon +
+// XOR subject (coven/sid) + incarnation_name + action_scenario/action_input
 // (byte-passthrough JSONB) + where-CEL + cooldown + enabled. action_input —
-// *json.RawMessage. Валидация субъекта/where-CEL/cooldown — доменная (422). Имя
-// структуры = контрактное имя схемы в OpenAPI (committed-рукопись → DecreeCreateRequest).
+// *json.RawMessage. Subject/where-CEL/cooldown validation is domain-level (422). The struct
+// name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
 type DecreeCreateRequest struct {
 	Name            string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Decree-а (kebab-case, 1..63)"`
 	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Vigil-а, на чей Portent правило реагирует"`
@@ -187,17 +187,17 @@ type DecreeCreateRequest struct {
 	Enabled         *bool            `json:"enabled,omitempty" doc:"активно ли правило (по умолчанию true)"`
 }
 
-// decreeCreateOutput — huma-output POST /v1/decrees (FULL-TYPED). Status=201; Body —
-// native 201-тело (DecreeView). action_input — byte-passthrough JSONB. Wire-форма
-// зафиксирована golden-JSON byte-exact-тестом.
+// decreeCreateOutput — huma output POST /v1/decrees (FULL-TYPED). Status=201; Body —
+// the native 201 body (DecreeView). action_input — byte-passthrough JSONB. The wire shape
+// is pinned by a golden-JSON byte-exact test.
 type decreeCreateOutput struct {
 	Status int `json:"-"`
 	Body   DecreeView
 }
 
-// decreeCreateOperation — метаданные POST /v1/decrees. Path = "/decrees".
+// decreeCreateOperation — metadata for POST /v1/decrees. Path = "/decrees".
 // DefaultStatus=201. Permission decree.create + audit decree.created. Errors: 400
-// unknown/malformed, 403 RBAC, 409 decree-exists, 422 валидация полей/субъекта/
+// unknown/malformed, 403 RBAC, 409 decree-exists, 422 validation of fields/subject/
 // where-CEL/cooldown, 500.
 func decreeCreateOperation() huma.Operation {
 	return huma.Operation{
@@ -212,10 +212,10 @@ func decreeCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/decrees (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/decrees (list) — READ-with-typed-query (no audit) ===
 
-// decreeListInput — huma-input GET /v1/decrees (FULL-TYPED typed-query). offset/limit
-// — int32 с default; диапазон enforce-ит CheckPageBounds → 400.
+// decreeListInput — huma input GET /v1/decrees (FULL-TYPED typed query). offset/limit
+// — int32 with a default; the range is enforced by CheckPageBounds → 400.
 type decreeListInput struct {
 	Offset int32 `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
 	Limit  int32 `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
@@ -227,8 +227,8 @@ type decreeListOutput struct {
 	Body DecreeListReply
 }
 
-// decreeListOperation — метаданные GET /v1/decrees. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
+// decreeListOperation — metadata for GET /v1/decrees. DefaultStatus=200. READ route:
+// audit not wired. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
 func decreeListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listDecrees",
@@ -242,22 +242,22 @@ func decreeListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/decrees/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/decrees/{name} (get) — READ-with-path (no audit) ===
 
-// decreeGetInput — huma-input GET /v1/decrees/{name}. Name — path. Формат name —
-// доменная валидация в GetDecreeTyped (422).
+// decreeGetInput — huma input GET /v1/decrees/{name}. Name — path. The name format is
+// domain validation in GetDecreeTyped (422).
 type decreeGetInput struct {
 	Name string `path:"name" doc:"имя Decree-а"`
 }
 
-// decreeGetOutput — huma-output GET /v1/decrees/{name} (FULL-TYPED). Body — native
-// 200-тело (DecreeView).
+// decreeGetOutput — huma output GET /v1/decrees/{name} (FULL-TYPED). Body — the native
+// 200 body (DecreeView).
 type decreeGetOutput struct {
 	Body DecreeView
 }
 
-// decreeGetOperation — метаданные GET /v1/decrees/{name}. DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Permission decree.list (read покрыт list-правом).
+// decreeGetOperation — metadata for GET /v1/decrees/{name}. DefaultStatus=200.
+// READ route: audit not wired. Permission decree.list (read is covered by the list permission).
 // Errors: 403, 404, 422 bad path-name, 500.
 func decreeGetOperation() huma.Operation {
 	return huma.Operation{
@@ -274,13 +274,13 @@ func decreeGetOperation() huma.Operation {
 
 // === DELETE /v1/decrees/{name} (delete) — WRITE+AUDIT decree.deleted ===
 
-// decreeDeleteInput — huma-input DELETE /v1/decrees/{name}. Name — path. Body нет.
+// decreeDeleteInput — huma input DELETE /v1/decrees/{name}. Name — path. No Body.
 type decreeDeleteInput struct {
 	Name string `path:"name" doc:"имя Decree-а"`
 }
 
-// decreeDeleteOperation — метаданные DELETE /v1/decrees/{name}. DefaultStatus=204.
-// Permission decree.delete + audit decree.deleted (каскад чистит cooldown-state).
+// decreeDeleteOperation — metadata for DELETE /v1/decrees/{name}. DefaultStatus=204.
+// Permission decree.delete + audit decree.deleted (cascade clears cooldown state).
 // Errors: 403, 404, 422 bad path-name, 500.
 func decreeDeleteOperation() huma.Operation {
 	return huma.Operation{

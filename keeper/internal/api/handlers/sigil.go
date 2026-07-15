@@ -1,16 +1,16 @@
-// Sigil-handler-ы Operator API (Sigil S4a) — доменный слой над [sigil.Service].
-// Тот же service вызывает MCP-tool-handler (S4b), что гарантирует один источник
-// правды для plugin.allow/revoke/list.
+// Sigil handlers for the Operator API (Sigil S4a) — a domain layer over [sigil.Service].
+// The same service is called by the MCP tool handler (S4b), which guarantees a single source
+// of truth for plugin.allow/revoke/list.
 //
-// T5d (handler-native): домен sigil отвязан от legacy-генерата. *Typed-функции принимают
-// NATIVE input-типы (организованы huma-input-ом в пакете api) и возвращают
-// доменные result-ы с ПЛОСКИМИ wire-полями — native wire-DTO (схему OpenAPI)
-// строит пакет api из этих полей. (w,r)-оболочки сняты; HTTP обслуживает huma
-// full-typed (api/huma_sigil.go), MCP зовёт sigil.Service напрямую (мимо handler).
+// T5d (handler-native): the sigil domain is decoupled from the legacy codegen. *Typed functions
+// accept NATIVE input types (organized via huma-input in the api package) and return
+// domain result types with FLAT wire fields — the native wire-DTO (OpenAPI schema) is
+// built by the api package from these fields. The (w,r) wrappers are gone; HTTP is served by huma
+// full-typed (api/huma_sigil.go), MCP calls sigil.Service directly (bypassing the handler).
 //
-// Бизнес-логика (чтение слота кеша, подпись, CRUD реестра) — в [sigil.Service];
-// handler только маппит sentinel-ошибки в RFC 7807. RBAC-проверка — в middleware
-// (см. api/router.go), здесь её нет.
+// Business logic (cache-slot read, signing, registry CRUD) lives in [sigil.Service];
+// the handler only maps sentinel errors to RFC 7807. RBAC check is in middleware
+// (see api/router.go), not here.
 package handlers
 
 import (
@@ -27,29 +27,29 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// reSigilSegment — closed-charset path-сегментов Sigil (namespace / name / ref).
-// kebab-case + точки (теги вида v1.0.0) + подчёркивание; БЕЗ слешей и `..`.
+// reSigilSegment — the closed charset for Sigil path segments (namespace / name / ref).
+// kebab-case + dots (tags like v1.0.0) + underscore; NO slashes or `..`.
 //
-// ref как одиночный path-сегмент (а не body / catch-all): tag-ref (`v1.2.3`)
-// помещается в сегмент без экранирования, как SID=FQDN с точками
-// (operator-api.md → ID в path). Branch-ref со слешем (`feature/x`) в MVP через
-// path-DELETE НЕ поддерживается (плагины пинят к тегу-метке, не к движущейся
-// ветке; вариант C: ref — стабильная метка допуска). Слеш в ref → 422; catch-
-// all-сегмент отвергнут (ломает drift-test {ref}↔chi и допускает path-traversal).
+// ref as a single path segment (not body / catch-all): a tag-ref (`v1.2.3`)
+// fits into a segment without escaping, like SID=FQDN with dots
+// (operator-api.md → ID in path). A branch-ref with a slash (`feature/x`) via
+// path-DELETE is NOT supported in the MVP (plugins pin to a tag label, not a moving
+// branch; variant C: ref is a stable admission label). A slash in ref → 422; a catch-
+// all segment is rejected (breaks the {ref}↔chi drift test and allows path traversal).
 var reSigilSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-// SigilHandler — три endpoint-а Sigil allow-list-а (allow / list / revoke).
-// Делегирует бизнес-логику в [sigil.Service].
+// SigilHandler — the three Sigil allow-list endpoints (allow / list / revoke).
+// Delegates business logic to [sigil.Service].
 //
-// Все зависимости immutable; safe for concurrent use — состояние между
-// запросами не держит.
+// All dependencies are immutable; safe for concurrent use — holds no state between
+// requests.
 type SigilHandler struct {
 	svc    *sigil.Service
 	logger *slog.Logger
 }
 
-// NewSigilHandler создаёт handler. svc обязателен (паника при nil —
-// единственная точка misconfiguration, caller обязан передать non-nil).
+// NewSigilHandler creates the handler. svc is required (panics on nil —
+// the single misconfiguration point, the caller must pass non-nil).
 func NewSigilHandler(svc *sigil.Service, logger *slog.Logger) *SigilHandler {
 	if svc == nil {
 		panic("handlers.NewSigilHandler: sigil.Service is nil")
@@ -60,27 +60,27 @@ func NewSigilHandler(svc *sigil.Service, logger *slog.Logger) *SigilHandler {
 	return &SigilHandler{svc: svc, logger: logger}
 }
 
-// SigilSpecStub — непустой *SigilHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaSigilSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [RoleSpecStub]).
+// SigilSpecStub — a non-empty *SigilHandler stub for generating the huma OpenAPI
+// fragment (HumaSigilSpecYAML): the domain handler is not invoked during dump, but
+// huma.Register requires non-nil for its no-op nil-check. svc is nil — the handler
+// never executes in spec mode (parity with [RoleSpecStub]).
 func SigilSpecStub() *SigilHandler {
 	return &SigilHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// SigilAllowInput — NATIVE request-форма POST /v1/plugins/sigils (handler-native
-// T5d). Заменяет PluginSigilAllowRequest: huma-input (пакет api) биндит/
-// валидирует тело по своим полям, затем зовёт AllowTyped с этой плоской моделью.
-// Формат сегментов (reSigilSegment) — доменная валидация в AllowTyped (422).
+// SigilAllowInput — the NATIVE request shape for POST /v1/plugins/sigils (handler-native
+// T5d). Replaces PluginSigilAllowRequest: huma-input (package api) binds/
+// validates the body against its own fields, then calls AllowTyped with this flat model.
+// Segment format (reSigilSegment) is a domain validation in AllowTyped (422).
 type SigilAllowInput struct {
 	Namespace string
 	Name      string
 	Ref       string
 }
 
-// SigilAllowView — ПЛОСКАЯ доменная проекция 201-тела POST /v1/plugins/sigils
-// (handler-native T5d). Пакет api проецирует её в native-схему PluginSigilAllowReply
-// (register-func). namespace/name/ref (echo тройки) + sha256 (посчитан Keeper-ом).
+// SigilAllowView — a FLAT domain projection of the 201 body for POST /v1/plugins/sigils
+// (handler-native T5d). Package api projects it into the native PluginSigilAllowReply schema
+// (register-func). namespace/name/ref (echoed triple) + sha256 (computed by the Keeper).
 type SigilAllowView struct {
 	Namespace string
 	Name      string
@@ -88,10 +88,10 @@ type SigilAllowView struct {
 	SHA256    string
 }
 
-// SigilView — ПЛОСКАЯ доменная проекция одной записи allow-list-а (element
-// SigilListPage.Items), handler-native T5d. Пакет api проецирует её в native-схему
-// PluginSigilView. AllowedAt/RevokedAt уже усечены до секунд (parity легаси-wire);
-// RevokedAt nil у активных → ключ опускается native-типом. БЕЗ signature/manifest.
+// SigilView — a FLAT domain projection of a single allow-list entry (element of
+// SigilListPage.Items), handler-native T5d. Package api projects it into the native
+// PluginSigilView schema. AllowedAt/RevokedAt are already truncated to seconds (parity with the legacy wire);
+// RevokedAt is nil for active entries → the key is omitted by the native type. WITHOUT signature/manifest.
 type SigilView struct {
 	Namespace    string
 	Name         string
@@ -102,21 +102,21 @@ type SigilView struct {
 	RevokedAt    *time.Time
 }
 
-// SigilListPage — доменный результат GET /v1/plugins/sigils (handler-native T5d).
-// Пакет api проецирует Items → native PluginSigilListReply (items non-nil → `[]`).
+// SigilListPage — the domain result of GET /v1/plugins/sigils (handler-native T5d).
+// Package api projects Items → native PluginSigilListReply (items non-nil → `[]`).
 type SigilListPage struct {
 	Items []SigilView
 }
 
-// SigilAllowReply — результат [SigilHandler.AllowTyped] (handler-native). Несёт
-// доменную проекцию 201-тела (SigilAllowView) + caller AID (для audit-payload).
+// SigilAllowReply — the result of [SigilHandler.AllowTyped] (handler-native). Carries
+// the domain projection of the 201 body (SigilAllowView) + the caller AID (for the audit payload).
 type SigilAllowReply struct {
 	View      SigilAllowView
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload allow-роута (parity легаси: namespace/name/
-// ref/sha256/allowed_by_aid; без signature/manifest).
+// AuditPayload assembles the audit payload for the allow route (parity with the legacy: namespace/name/
+// ref/sha256/allowed_by_aid; without signature/manifest).
 func (r SigilAllowReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"namespace":      r.View.Namespace,
@@ -127,9 +127,9 @@ func (r SigilAllowReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// AllowTyped — доменная функция POST /v1/plugins/sigils (handler-native): валидация
-// тройки + svc.Allow + sentinel→problem. Ошибки — *problemError; успех —
-// [SigilAllowReply] (доменная проекция 201-тела + audit-поля).
+// AllowTyped — the domain function for POST /v1/plugins/sigils (handler-native): validates
+// the triple + svc.Allow + sentinel→problem. Errors are *problemError; success is
+// [SigilAllowReply] (domain projection of the 201 body + audit fields).
 func (h *SigilHandler) AllowTyped(ctx context.Context, claims *jwt.Claims, in SigilAllowInput) (SigilAllowReply, error) {
 	var zero SigilAllowReply
 	if msg, valid := validateSigilTriple(in.Namespace, in.Name, in.Ref); !valid {
@@ -173,10 +173,10 @@ func (h *SigilHandler) AllowTyped(ctx context.Context, claims *jwt.Claims, in Si
 	}, nil
 }
 
-// ListTyped — доменная функция GET /v1/plugins/sigils (handler-native, READ без
-// audit): читает реестр активных допусков и собирает [SigilListPage] (items non-nil).
-// Ошибка чтения → *problemError (500). date-time → UTC+Truncate(Second) (наносекунды
-// не уезжают в wire); RevokedAt nil у активных → ключ опускается native-типом.
+// ListTyped — the domain function for GET /v1/plugins/sigils (handler-native, READ without
+// audit): reads the registry of active grants and assembles [SigilListPage] (items non-nil).
+// A read error → *problemError (500). date-time → UTC+Truncate(Second) (nanoseconds
+// don't leak into the wire); RevokedAt is nil for active entries → the key is omitted by the native type.
 func (h *SigilHandler) ListTyped(ctx context.Context) (SigilListPage, error) {
 	views, err := h.svc.List(ctx)
 	if err != nil {
@@ -203,16 +203,16 @@ func (h *SigilHandler) ListTyped(ctx context.Context) (SigilListPage, error) {
 	return SigilListPage{Items: items}, nil
 }
 
-// SigilRevokeReply — извлечённый результат [SigilHandler.RevokeTyped] (FULL-TYPED).
-// Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// SigilRevokeReply — the extracted result of [SigilHandler.RevokeTyped] (FULL-TYPED).
+// Carries audit fields (the HTTP response is an empty 204 body).
 type SigilRevokeReply struct {
 	Namespace string
 	Name      string
 	Ref       string
 }
 
-// AuditPayload собирает audit-payload revoke-роута (parity легаси: namespace/name/
-// ref). Общий для (w,r) и huma-B.
+// AuditPayload assembles the audit payload for the revoke route (parity with the legacy: namespace/name/
+// ref). Shared between (w,r) and huma-B.
 func (r SigilRevokeReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"namespace": r.Namespace,
@@ -221,9 +221,9 @@ func (r SigilRevokeReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// RevokeTyped — извлечённая доменная функция DELETE /v1/plugins/sigils/{namespace}/
-// {name}/{ref} (FULL-TYPED ADR-054 §Pattern (б)): валидация тройки path-сегментов +
-// svc.Revoke + sentinel→problem. Ошибки — *problemError; успех — [SigilRevokeReply].
+// RevokeTyped — the extracted domain function for DELETE /v1/plugins/sigils/{namespace}/
+// {name}/{ref} (FULL-TYPED ADR-054 §Pattern (b)): validates the triple of path segments +
+// svc.Revoke + sentinel→problem. Errors are *problemError; success is [SigilRevokeReply].
 func (h *SigilHandler) RevokeTyped(ctx context.Context, claims *jwt.Claims, namespace, name, ref string) (SigilRevokeReply, error) {
 	var zero SigilRevokeReply
 	if msg, valid := validateSigilTriple(namespace, name, ref); !valid {
@@ -251,9 +251,9 @@ func (h *SigilHandler) RevokeTyped(ctx context.Context, claims *jwt.Claims, name
 	return SigilRevokeReply{Namespace: namespace, Name: name, Ref: ref}, nil
 }
 
-// validateSigilTriple проверяет тройку (namespace, name, ref) против
-// [reSigilSegment]. Возвращает (human-readable msg, false) на первой
-// невалидной части, ("", true) если все валидны.
+// validateSigilTriple checks the (namespace, name, ref) triple against
+// [reSigilSegment]. Returns (human-readable msg, false) at the first
+// invalid part, ("", true) if all are valid.
 func validateSigilTriple(namespace, name, ref string) (string, bool) {
 	switch {
 	case namespace == "":

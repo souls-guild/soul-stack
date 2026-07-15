@@ -10,28 +10,32 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// essenceDefaultFile — baseline-слой essence сервиса (`essence/_default.yaml`),
-// host-agnostic. Каталог директив (`redis_directives`) живёт здесь; полная
-// host-резолюция для его чтения не нужна. Параллель typesCatalogFile.
+// essenceDefaultFile — the service essence baseline layer
+// (`essence/_default.yaml`), host-agnostic. The directive catalog
+// (`redis_directives`) lives here; full host resolution is not needed to
+// read it. Parallel to typesCatalogFile.
 const essenceDefaultFile = "essence/_default.yaml"
 
-// DirectiveCatalog — снапшот-каталог директив: SHA1 материализованного снапшота
-// (служит ETag-ом, каталог immutable на git-ref) + карта `серия(major.minor) →
-// отсортированные имена директив`. Форма результата lister-а /directives.
+// DirectiveCatalog — a snapshot directive catalog: the SHA1 of the
+// materialized snapshot (serves as an ETag, the catalog is immutable at a
+// given git ref) + a map of `series (major.minor) → sorted directive names`.
+// The result shape of the /directives lister.
 type DirectiveCatalog struct {
 	SHA1       string
 	Directives map[string][]string
 }
 
-// LoadDirectiveCatalog читает каталог валидных имён директив сервиса из
-// `essence/_default.yaml` снапшота (ключ `redis_directives`, карта серия→[]имя)
-// и, если version непуст, сужает его до серии major.minor этой версии (та же
-// логика, что assert рендера, см. FilterDirectivesByVersion). serviceRoot —
-// абсолютный путь к снапшоту (ServiceArtifact.LocalDir).
+// LoadDirectiveCatalog reads the service's catalog of valid directive names
+// from the `essence/_default.yaml` snapshot (key `redis_directives`, a
+// series→[]name map) and, if version is non-empty, narrows it to that
+// version's major.minor series (the same logic as the render phase's assert,
+// see FilterDirectivesByVersion). serviceRoot — the absolute path to the
+// snapshot (ServiceArtifact.LocalDir).
 //
-// Сервис без каталога (нет essence/_default.yaml ИЛИ нет ключа redis_directives)
-// → непустой пустой map + nil-ошибка (фронт мягко деградирует, HTTP 200). Ошибка
-// чтения (кроме NotExist) / невалидный YAML → ошибка (handler маппит в 502).
+// A service without a catalog (no essence/_default.yaml OR no
+// redis_directives key) → a non-nil empty map + nil error (the frontend
+// degrades gracefully, HTTP 200). A read error (other than NotExist) /
+// invalid YAML → an error (the handler maps it to 502).
 func LoadDirectiveCatalog(serviceRoot, version string) (map[string][]string, error) {
 	full, err := loadDirectiveCatalogFull(serviceRoot)
 	if err != nil {
@@ -40,8 +44,8 @@ func LoadDirectiveCatalog(serviceRoot, version string) (map[string][]string, err
 	return FilterDirectivesByVersion(full, version), nil
 }
 
-// loadDirectiveCatalogFull читает весь каталог (все серии) из
-// `essence/_default.yaml`. Отсутствие файла/ключа → пустой non-nil map (soft).
+// loadDirectiveCatalogFull reads the whole catalog (all series) from
+// `essence/_default.yaml`. Missing file/key → an empty non-nil map (soft).
 func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 	data, err := readSnapshotFile(serviceRoot, essenceDefaultFile)
 	if err != nil {
@@ -50,7 +54,8 @@ func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 		}
 		return nil, err
 	}
-	// Узкий срез top-level essence: остальные ключи yaml.Unmarshal игнорирует.
+	// A narrow slice of top-level essence: yaml.Unmarshal ignores the
+	// remaining keys.
 	var raw struct {
 		RedisDirectives map[string][]string `yaml:"redis_directives"`
 	}
@@ -60,19 +65,21 @@ func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 	if raw.RedisDirectives == nil {
 		return map[string][]string{}, nil
 	}
-	// Defensive-сортировка (генератор каталога обычно уже отсортировал имена).
+	// Defensive sort (the catalog generator has usually already sorted the
+	// names).
 	for _, names := range raw.RedisDirectives {
 		sort.Strings(names)
 	}
 	return raw.RedisDirectives, nil
 }
 
-// FilterDirectivesByVersion сужает каталог до серий, к которым относится version
-// (напр. "8.2.2" → серия "8.2"). version=="" → каталог целиком (тот же map).
-// Правило членства — зеркало assert'а create/update_config (essence #6): серия s
-// матчит version, если version ~ `^([0-9]+:)?<s>[.]` (опц. epoch-prefix distro-
-// пина `5:7.0.15…`; трейлинг-точка = граница серии, чтобы 7.0 не цеплял 7.04).
-// version без известной серии → пустой non-nil map (не блокируем, как assert-skip).
+// FilterDirectivesByVersion narrows the catalog to the series version belongs
+// to (e.g. "8.2.2" → series "8.2"). version=="" → the whole catalog (the same
+// map). The membership rule mirrors the create/update_config assert (essence
+// #6): series s matches version if version ~ `^([0-9]+:)?<s>[.]` (optional
+// epoch prefix of a distro pin `5:7.0.15…`; the trailing dot is the series
+// boundary, so 7.0 does not catch 7.04). version with no known series → an
+// empty non-nil map (we don't block, same as an assert-skip).
 func FilterDirectivesByVersion(catalog map[string][]string, version string) map[string][]string {
 	if version == "" {
 		return catalog
@@ -86,9 +93,10 @@ func FilterDirectivesByVersion(catalog map[string][]string, version string) map[
 	return out
 }
 
-// directiveSeriesMatchesVersion — регексп-мэтч серии против версии, идентичный
-// CEL-assert'у рендера (RE2 в обоих). series приходит из доверенного каталога
-// (major.minor), потому Compile не падает; err → false (defensive).
+// directiveSeriesMatchesVersion — a regex match of series against version,
+// identical to the render phase's CEL assert (RE2 in both). series comes from
+// the trusted catalog (major.minor), so Compile never fails; err → false
+// (defensive).
 func directiveSeriesMatchesVersion(series, version string) bool {
 	re, err := regexp.Compile("^([0-9]+:)?" + series + "[.]")
 	if err != nil {

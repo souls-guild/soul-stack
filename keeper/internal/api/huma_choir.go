@@ -1,12 +1,13 @@
 package api
 
-// Регистрация и spec-dump CHOIR/VOICE-домена на huma full-typed (БАТЧ-2f WRITE-SELF-
-// AUDIT по эталону cadence pilot + soul/synod multi-resource, ADR-054 §Pattern).
-// create/delete/add-voice/remove-voice — WRITE-SELF-AUDIT: choir/voice пишут audit
-// ВНУТРИ извлечённых *Typed-функций (handlers/choir.go writeAuditCtx), audit-middleware
-// НЕ навешан (отличие от middleware-audit-доменов role/operator). list/list-voices —
-// read (БЕЗ audit). ВСЕ роуты монтируются через newHumaCadenceAPI (self-audit НЕ
-// нужен audit-middleware). MCP choir-домена НЕТ (known-limitation).
+// Registration and spec-dump of the CHOIR/VOICE domain on huma full-typed (BATCH-2f
+// WRITE-SELF-AUDIT following the cadence-pilot + soul/synod multi-resource template,
+// ADR-054 §Pattern). create/delete/add-voice/remove-voice are WRITE-SELF-AUDIT: choir/
+// voice write audit INSIDE the extracted *Typed functions (handlers/choir.go
+// writeAuditCtx), with no audit middleware wired (unlike the middleware-audit domains
+// role/operator). list/list-voices are read (no audit). ALL routes are mounted via
+// newHumaCadenceAPI (self-audit does NOT need audit middleware). There is no MCP for
+// the choir domain (known limitation).
 
 import (
 	"context"
@@ -19,10 +20,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// registerHumaChoirCreate монтирует POST /v1/incarnations/{name}/choirs через huma
-// (WRITE-SELF-AUDIT: choir.created пишет САМ handler внутри CreateTyped). choirH nil →
-// no-op. Handler: claims → конверт typed-body → CreateTyped (create + self-audit) →
-// 201 С ТЕЛОМ.
+// registerHumaChoirCreate mounts POST /v1/incarnations/{name}/choirs via huma
+// (WRITE-SELF-AUDIT: choir.created is written by the handler ITSELF inside CreateTyped).
+// choirH nil → no-op. Handler: claims → convert the typed body → CreateTyped (create +
+// self-audit) → 201 WITH BODY.
 func registerHumaChoirCreate(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -45,8 +46,8 @@ func registerHumaChoirCreate(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaChoirList монтирует GET /v1/incarnations/{name}/choirs через huma (READ,
-// БЕЗ audit). choirH nil → no-op.
+// registerHumaChoirList mounts GET /v1/incarnations/{name}/choirs via huma (READ,
+// no audit). choirH nil → no-op.
 func registerHumaChoirList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -60,8 +61,8 @@ func registerHumaChoirList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaChoirDelete монтирует DELETE /v1/incarnations/{name}/choirs/{choir} через
-// huma (WRITE-SELF-AUDIT: choir.deleted пишет САМ handler внутри DeleteTyped).
+// registerHumaChoirDelete mounts DELETE /v1/incarnations/{name}/choirs/{choir} via
+// huma (WRITE-SELF-AUDIT: choir.deleted is written by the handler ITSELF inside DeleteTyped).
 func registerHumaChoirDelete(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -78,8 +79,8 @@ func registerHumaChoirDelete(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaVoiceAdd монтирует POST /v1/incarnations/{name}/choirs/{choir}/voices
-// через huma (WRITE-SELF-AUDIT: choir.voice_added пишет САМ handler внутри AddVoiceTyped).
+// registerHumaVoiceAdd mounts POST /v1/incarnations/{name}/choirs/{choir}/voices via
+// huma (WRITE-SELF-AUDIT: choir.voice_added is written by the handler ITSELF inside AddVoiceTyped).
 func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -101,8 +102,8 @@ func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaVoiceList монтирует GET /v1/incarnations/{name}/choirs/{choir}/voices
-// через huma (READ, БЕЗ audit).
+// registerHumaVoiceList mounts GET /v1/incarnations/{name}/choirs/{choir}/voices via
+// huma (READ, no audit).
 func registerHumaVoiceList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -116,8 +117,8 @@ func registerHumaVoiceList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaVoiceRemove монтирует DELETE /v1/incarnations/{name}/choirs/{choir}/
-// voices/{sid} через huma (WRITE-SELF-AUDIT: choir.voice_removed пишет САМ handler).
+// registerHumaVoiceRemove mounts DELETE /v1/incarnations/{name}/choirs/{choir}/
+// voices/{sid} via huma (WRITE-SELF-AUDIT: choir.voice_removed is written by the handler ITSELF).
 func registerHumaVoiceRemove(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
@@ -134,14 +135,14 @@ func registerHumaVoiceRemove(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// choirMissingClaims — defensive-ответ при отсутствии claims (недостижим: RequireJWT
-// кладёт claims до huma). problem+json (parity cadenceMissingClaims).
+// choirMissingClaims — a defensive response for missing claims (unreachable: RequireJWT
+// puts claims in place before huma). problem+json (parity with cadenceMissingClaims).
 func choirMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// choirProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity cadenceProblem).
+// choirProblem delivers a *Typed function's error through huma as problem+json. The
+// domain *handlers.problemError → humaProblemError; non-problem → 500 (parity with cadenceProblem).
 func choirProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -149,9 +150,9 @@ func choirProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaChoirSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma choir/voice-
-// роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-
-// таргета тиража и guard-теста. Делегирует generic [humaDumpSpec]. Возвращает 3.1.0.
+// HumaChoirSpecYAML assembles the OpenAPI fragment of ALL huma-migrated choir/voice
+// routes as a YAML string, WITHOUT mounting on a real router. A hook for the rollout's
+// spec-merge target and the guard test. Delegates to the generic [humaDumpSpec]. Returns 3.1.0.
 func HumaChoirSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ChoirSpecStub()

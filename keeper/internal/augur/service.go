@@ -11,51 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Management-Service Augur-реестра (operator-facing CRUD Omen / Rite через
-// OpenAPI / MCP, augur.md §4 / rbac.md §Augur). Один источник правды для REST-
-// handler-а и MCP-tool-а: оба вызывают этот Service, чтобы валидация и error-
-// контракт не разъехались (паттерн serviceregistry.Service).
+// The Augur registry's management Service (operator-facing CRUD for
+// Omen / Rite through OpenAPI / MCP, augur.md §4 / rbac.md §Augur). A single
+// source of truth for the REST handler and the MCP tool: both call this
+// Service so validation and the error contract don't drift apart (the
+// serviceregistry.Service pattern).
 //
-// ОТЛИЧИЕ от брокера (broker*.go / resolve.go): тот резолвит AugurRequest от
-// Soul-а (auth + egress); Service здесь — только управление записями реестра.
-// Брокер этот тип НЕ использует.
+// DIFFERENCE from the broker (broker*.go / resolve.go): the broker resolves
+// an AugurRequest from a Soul (auth + egress); the Service here only manages
+// registry records. The broker doesn't use this type.
 
-// ErrValidation — sentinel для service-валидации, которую management-Service
-// проводит ДО round-trip-а в БД (формат name / source_type / auth_ref / allow /
-// субъект / token-поля). Transport маппит в 422 (REST TypeValidationFailed /
-// MCP validation-failed). Конкретный диагностический текст — в обёрнутой
-// ошибке (errors.Unwrap), для лога; клиенту отдаётся wrapped-сообщение целиком
-// (оно уже public — формируется здесь, без internal SQL/stack-деталей).
+// ErrValidation — a sentinel for the service validation that the management
+// Service runs BEFORE the DB round trip (format of name / source_type /
+// auth_ref / allow / subject / token fields). Transport maps it to 422 (REST
+// TypeValidationFailed / MCP validation-failed). The specific diagnostic text
+// is in the wrapped error (errors.Unwrap), for the log; the client gets the
+// whole wrapped message (it's already public — built here, without internal
+// SQL/stack details).
 var ErrValidation = errors.New("augur: validation failed")
 
-// ServicePool — узкое подмножество pgxpool.Pool, нужное [Service]. Реальный
-// `*pgxpool.Pool` удовлетворяет автоматически (через [ExecQueryRower]).
-// Объявлено локально (как serviceregistry/rbac), чтобы пакет не тянул
-// pgxpool в публичную поверхность.
+// ServicePool — the narrow subset of pgxpool.Pool that [Service] needs. A
+// real `*pgxpool.Pool` satisfies it automatically (through
+// [ExecQueryRower]). Declared locally (like serviceregistry/rbac) so the
+// package doesn't pull pgxpool into its public surface.
 type ServicePool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// Compile-time check: pool/Tx удовлетворяют ServicePool через ExecQueryRower.
+// Compile-time check: pool/Tx satisfy ServicePool through ExecQueryRower.
 var _ ServicePool = (ExecQueryRower)(nil)
 
-// ServiceDeps — зависимости [Service]. Все поля immutable после конструктора.
+// ServiceDeps — [Service]'s dependencies. All fields are immutable after
+// the constructor.
 type ServiceDeps struct {
 	Pool   ServicePool
 	Logger *slog.Logger
 }
 
-// Service — бизнес-логика operator-facing CRUD Augur-реестра. Безопасен для
-// конкурентного использования: deps immutable, состояния между вызовами не
-// держит.
+// Service — the business logic for operator-facing CRUD of the Augur
+// registry. Safe for concurrent use: deps are immutable, it holds no state
+// between calls.
 type Service struct {
 	pool   ServicePool
 	logger *slog.Logger
 }
 
-// NewService собирает management-Service. Pool обязателен.
+// NewService assembles the management Service. Pool is required.
 func NewService(d ServiceDeps) (*Service, error) {
 	if d.Pool == nil {
 		return nil, errors.New("augur: ServiceDeps.Pool is nil")
@@ -65,8 +68,8 @@ func NewService(d ServiceDeps) (*Service, error) {
 
 // --- Omen -------------------------------------------------------------
 
-// CreateOmenInput — параметры CreateOmen. CallerAID опционален (nil →
-// created_by_aid IS NULL; transport заполняет caller-ом из claims).
+// CreateOmenInput — CreateOmen's parameters. CallerAID is optional (nil →
+// created_by_aid IS NULL; transport fills it in from the caller's claims).
 type CreateOmenInput struct {
 	Name       string
 	SourceType string
@@ -75,13 +78,13 @@ type CreateOmenInput struct {
 	CallerAID  *string
 }
 
-// CreateOmen валидирует поля ДО round-trip-а (better error, нет лишнего
-// обращения на битом вводе), затем вставляет запись.
+// CreateOmen validates fields BEFORE the round trip (a better error, no
+// wasted call on bad input), then inserts the record.
 //
-// Возврат:
-//   - [ErrValidation] (wrapped) — битый name / source_type / endpoint / auth_ref (422);
-//   - [ErrOmenAlreadyExists] — name занят (409);
-//   - wrapped fmt.Errorf — FK/CHECK/инфра (500).
+// Returns:
+//   - [ErrValidation] (wrapped) — bad name / source_type / endpoint / auth_ref (422);
+//   - [ErrOmenAlreadyExists] — name already taken (409);
+//   - wrapped fmt.Errorf — FK/CHECK/infra failure (500).
 func (s *Service) CreateOmen(ctx context.Context, in CreateOmenInput) (*Omen, error) {
 	src := SourceType(in.SourceType)
 	if !ValidName(in.Name) {
@@ -110,28 +113,29 @@ func (s *Service) CreateOmen(ctx context.Context, in CreateOmenInput) (*Omen, er
 	return o, nil
 }
 
-// ListOmens возвращает страницу Omen-ов и общее количество (sort created_at
-// DESC, name ASC).
+// ListOmens returns a page of Omens and the total count (sorted by
+// created_at DESC, name ASC).
 func (s *Service) ListOmens(ctx context.Context, offset, limit int) ([]*Omen, int, error) {
 	return SelectAllOmens(ctx, s.pool, offset, limit)
 }
 
-// GetOmen читает Omen по PK. [ErrOmenNotFound] если нет.
+// GetOmen reads an Omen by PK. [ErrOmenNotFound] if it doesn't exist.
 func (s *Service) GetOmen(ctx context.Context, name string) (*Omen, error) {
 	return SelectOmenByName(ctx, s.pool, name)
 }
 
-// DeleteOmen удаляет Omen по PK (Rite-ы уходят каскадом). [ErrOmenNotFound]
-// если записи не было.
+// DeleteOmen deletes an Omen by PK (its Rites cascade). [ErrOmenNotFound]
+// if the record didn't exist.
 func (s *Service) DeleteOmen(ctx context.Context, name string) error {
 	return DeleteOmen(ctx, s.pool, name)
 }
 
 // --- Rite -------------------------------------------------------------
 
-// CreateRiteInput — параметры CreateRite. Субъект — XOR Coven/SID. allow —
-// сырой JSONB (форма проверяется против source_type Omen-а). TokenTTL /
-// TokenNumUses осмысленны только для vault-Omen с Delegate=true.
+// CreateRiteInput — CreateRite's parameters. Subject is XOR Coven/SID.
+// allow is raw JSONB (its shape is checked against the Omen's source_type).
+// TokenTTL / TokenNumUses only make sense for a vault-Omen with
+// Delegate=true.
 type CreateRiteInput struct {
 	Omen         string
 	Coven        *string
@@ -143,14 +147,15 @@ type CreateRiteInput struct {
 	CallerAID    *string
 }
 
-// CreateRite валидирует субъект (XOR) ДО round-trip-а, затем вставляет.
-// allow-shape по source_type и token-поля довалидирует [InsertRite] (требует
-// резолва Omen-а тем же db) — её ошибки тоже оборачиваются в [ErrValidation].
+// CreateRite validates the subject (XOR) BEFORE the round trip, then
+// inserts. The allow shape by source_type and the token fields are further
+// validated by [InsertRite] (it needs to resolve the Omen on the same db)
+// — its errors are also wrapped into [ErrValidation].
 //
-// Возврат:
-//   - [ErrValidation] (wrapped) — битый субъект / allow / token-поля (422);
-//   - [ErrOmenNotFound] — Omen не существует (404);
-//   - wrapped fmt.Errorf — FK/CHECK/инфра (500).
+// Returns:
+//   - [ErrValidation] (wrapped) — bad subject / allow / token fields (422);
+//   - [ErrOmenNotFound] — the Omen doesn't exist (404);
+//   - wrapped fmt.Errorf — FK/CHECK/infra failure (500).
 func (s *Service) CreateRite(ctx context.Context, in CreateRiteInput) (*Rite, error) {
 	r := &Rite{
 		Omen:         in.Omen,
@@ -173,10 +178,11 @@ func (s *Service) CreateRite(ctx context.Context, in CreateRiteInput) (*Rite, er
 	}
 
 	if err := InsertRite(ctx, s.pool, r); err != nil {
-		// InsertRite резолвит Omen и довалидирует allow-shape / token-поля. Эти
-		// ошибки помечены sentinel-ами ErrAllowShape / ErrTokenFields — это
-		// service-валидация, а не инфра; маппим в ErrValidation. ErrOmenNotFound /
-		// FK-violation пробрасываются как есть (404 / 500).
+		// InsertRite resolves the Omen and further validates the allow shape /
+		// token fields. These errors are marked with the ErrAllowShape /
+		// ErrTokenFields sentinels — this is service validation, not infra; map
+		// them to ErrValidation. ErrOmenNotFound / FK-violation are passed through
+		// as-is (404 / 500).
 		if isRiteValidationError(err) {
 			return nil, fmt.Errorf("%w: %s", ErrValidation, err.Error())
 		}
@@ -185,25 +191,26 @@ func (s *Service) CreateRite(ctx context.Context, in CreateRiteInput) (*Rite, er
 	return r, nil
 }
 
-// ListRitesByOmen возвращает все Rite-ы одного Omen-а (sort created_at DESC,
-// id ASC). Фильтр CRUD list-by-omen (augur.md §6).
+// ListRitesByOmen returns all Rites for one Omen (sorted by created_at
+// DESC, id ASC). The CRUD list-by-omen filter (augur.md §6).
 func (s *Service) ListRitesByOmen(ctx context.Context, omen string) ([]*Rite, error) {
 	return SelectRitesByOmen(ctx, s.pool, omen)
 }
 
-// DeleteRite удаляет Rite по суррогатному PK. [ErrRiteNotFound] если записи не
-// было.
+// DeleteRite deletes a Rite by its surrogate PK. [ErrRiteNotFound] if the
+// record didn't exist.
 func (s *Service) DeleteRite(ctx context.Context, id int64) error {
 	return DeleteRite(ctx, s.pool, id)
 }
 
-// isRiteValidationError отличает service-валидацию InsertRite (allow-shape /
-// token-поля) от not-found / инфра. allow/token-валидаторы ([ValidateAllow] /
-// [ValidateTokenFields]) живут в storage-слайсе и не знают про management-
-// Service [ErrValidation], поэтому помечают свои ошибки sentinel-ами
-// [ErrAllowShape] / [ErrTokenFields]; матчим через errors.Is, а не по
-// строковому префиксу текста (переименование диагностики не должно молча
-// сломать маппинг 422→500).
+// isRiteValidationError distinguishes InsertRite's service validation
+// (allow-shape / token fields) from not-found / infra failures. The
+// allow/token validators ([ValidateAllow] / [ValidateTokenFields]) live in
+// the storage slice and don't know about the management Service's
+// [ErrValidation], so they mark their errors with the [ErrAllowShape] /
+// [ErrTokenFields] sentinels; we match via errors.Is rather than a string
+// prefix of the text (renaming the diagnostic shouldn't silently break the
+// 422→500 mapping).
 func isRiteValidationError(err error) bool {
 	return errors.Is(err, ErrAllowShape) || errors.Is(err, ErrTokenFields)
 }

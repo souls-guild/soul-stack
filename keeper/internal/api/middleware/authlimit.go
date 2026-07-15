@@ -1,21 +1,21 @@
 package middleware
 
-// Anti-bruteforce middleware публичных login-эндпоинтов (ADR-058(g), HIGH-3).
-// Навешивается на chi-группу `/auth/*` ПЕРЕД huma-операциями login-а. Два слоя,
-// оба cluster-shared через Redis (LoginGuard):
+// Anti-bruteforce middleware for the public login endpoints (ADR-058(g), HIGH-3).
+// Attached to the chi group `/auth/*` BEFORE the login huma operations. Two layers,
+// both cluster-shared via Redis (LoginGuard):
 //
-//  1. LOCKOUT (fail-CLOSED): принципал (IP / username), набравший порог неудач,
-//     блокируется на backoff. Проверяется ДО next. При Redis-ошибке трактуется
-//     как «заблокировано» — login — security-периметр, недоступность Redis НЕ
-//     должна открывать брутфорс (в ОТЛИЧИЕ от Tempo fail-open).
-//  2. THROTTLE частоты (fail-OPEN): token-bucket на принципал, гасит флуд
-//     (включая flow-state-flood на /auth/oidc/login). Берётся ДО next, на каждую
-//     попытку. При Redis-ошибке — passthrough (доступность login-страницы).
+//  1. LOCKOUT (fail-CLOSED): a principal (IP / username) that has hit the failure
+//     threshold is blocked for a backoff period. Checked BEFORE next. On a Redis error
+//     it is treated as "blocked" — login is a security perimeter, Redis unavailability must
+//     NOT open the door to bruteforce (UNLIKE Tempo's fail-open).
+//  2. Rate THROTTLE (fail-OPEN): a token-bucket per principal, damps floods
+//     (including flow-state flood on /auth/oidc/login). Taken BEFORE next, on every
+//     attempt. On a Redis error — passthrough (login-page availability).
 //
-// ПОСЛЕ next: если ответ — auth-failure (401/403), инкрементим счётчик неудач
-// для IP и username (RecordFailure). Успех (2xx/302) и прочие коды счётчик не
-// трогают. anti-oracle: единый 429 + Retry-After без раскрытия, по IP это или по
-// username, locked или throttled.
+// AFTER next: if the response is an auth-failure (401/403), increment the failure
+// counter for the IP and username (RecordFailure). Success (2xx/302) and other codes leave the
+// counter untouched. anti-oracle: a single 429 + Retry-After without disclosing whether
+// it was by IP or by username, locked or throttled.
 
 import (
 	"bytes"
@@ -31,10 +31,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// LoginGuard — поверхность anti-bruteforce-примитива, нужная middleware.
-// Реализуется *redis.LoginGuard. Интерфейс (а не конкретный тип) — чтобы
-// middleware жил в api/middleware без import-зависимости на internal/redis и
-// чтобы unit-тесты подменяли guard fake-ом (как RateLimiter у Tempo).
+// LoginGuard — the anti-bruteforce primitive surface the middleware needs.
+// Implemented by *redis.LoginGuard. An interface (not a concrete type) — so
+// the middleware lives in api/middleware without an import dependency on internal/redis, and so
+// unit tests can swap the guard with a fake (like Tempo's RateLimiter).
 type LoginGuard interface {
 	Allow(ctx context.Context, scope, principal string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error)
 	Locked(ctx context.Context, scope, principal string) (locked bool, retryAfter time.Duration, err error)
@@ -45,16 +45,16 @@ const (
 	authScopeIP   = "ip"
 	authScopeUser = "user"
 
-	// maxLoginBodySnoop — потолок чтения тела login-а для извлечения username.
-	// Тело login-а — крошечный JSON; больше читать незачем (anti-DoS дублирует
-	// общий maxBody на /auth-группе). Прочитанное буферизуется и возвращается в
-	// r.Body, чтобы handler перечитал его целиком.
+	// maxLoginBodySnoop — the ceiling on reading the login body to extract the username.
+	// The login body is a tiny JSON; reading more is pointless (anti-DoS is already covered by
+	// the shared maxBody on the /auth group). What's read is buffered and returned into
+	// r.Body so the handler can re-read it in full.
 	maxLoginBodySnoop = 4 << 10 // 4 KiB
 )
 
-// AuthLoginLimitConfig — статические параметры anti-bruteforce-лимита. Читаются
-// один раз на сборке middleware (НЕ hot-path — login редок). Резолв из
-// config.KeeperAuth.ResolvedLoginRateLimit() в daemon.
+// AuthLoginLimitConfig — the static parameters of the anti-bruteforce limit. Read
+// once when the middleware is assembled (NOT a hot path — login is rare). Resolved from
+// config.KeeperAuth.ResolvedLoginRateLimit() in the daemon.
 type AuthLoginLimitConfig struct {
 	Rate             float64
 	Burst            int
@@ -63,14 +63,14 @@ type AuthLoginLimitConfig struct {
 	LockoutBackoff   time.Duration
 }
 
-// AuthLoginLimit возвращает chi-middleware anti-bruteforce login-а.
+// AuthLoginLimit returns the login anti-bruteforce chi-middleware.
 //
-// guard=nil → passthrough (нет Redis — login без throttle, как Tempo при
-// limiter=nil; согласуется с OPTIONAL-tier). extractUsername — опц. экстрактор
-// username из запроса (LDAP: из JSON-тела; OIDC-login: nil — только per-IP).
-// recordFailures — писать ли счётчик неудач: true для login-а (LDAP) и
-// OIDC-callback (где решается успех/неудача); для OIDC-login (старт flow,
-// «неудачи» нет) — false (только throttle флуда).
+// guard=nil → passthrough (no Redis — login without throttling, like Tempo with
+// limiter=nil; consistent with the OPTIONAL tier). extractUsername — an optional extractor
+// of the username from the request (LDAP: from the JSON body; OIDC-login: nil — per-IP only).
+// recordFailures — whether to write the failure counter: true for login (LDAP) and the
+// OIDC callback (where success/failure is decided); for OIDC-login (start of the flow,
+// there is no "failure") — false (throttling of floods only).
 func AuthLoginLimit(
 	guard LoginGuard,
 	cfg AuthLoginLimitConfig,
@@ -89,13 +89,13 @@ func AuthLoginLimit(
 				username = extractUsername(r)
 			}
 
-			// 1. LOCKOUT (fail-closed). IP — всегда; username — если извлёкся.
+			// 1. LOCKOUT (fail-closed). IP — always; username — if extracted.
 			if blocked, retryAfter := lockedAny(r.Context(), guard, ip, username, logger); blocked {
 				writeAuth429(w, r, retryAfter)
 				return
 			}
 
-			// 2. THROTTLE (fail-open). IP — всегда; username — если извлёкся.
+			// 2. THROTTLE (fail-open). IP — always; username — if extracted.
 			if throttled, retryAfter := throttledAny(r.Context(), guard, cfg, ip, username, logger); throttled {
 				writeAuth429(w, r, retryAfter)
 				return
@@ -104,7 +104,7 @@ func AuthLoginLimit(
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 
-			// 3. ПОСЛЕ: auth-failure (401/403) → инкремент счётчика неудач.
+			// 3. AFTER: an auth-failure (401/403) → increment the failure counter.
 			if recordFailures && isAuthFailure(rec.status) {
 				recordFailureFor(r.Context(), guard, cfg, authScopeIP, ip, logger)
 				if username != "" {
@@ -115,8 +115,8 @@ func AuthLoginLimit(
 	}
 }
 
-// lockedAny проверяет lockout по IP и (если задан) username. Fail-closed: при
-// Redis-ошибке возвращает blocked=true (login-периметр не открываем брутфорсу).
+// lockedAny checks lockout by IP and (if set) username. Fail-closed: on a
+// Redis error it returns blocked=true (the login perimeter is not opened to bruteforce).
 func lockedAny(ctx context.Context, guard LoginGuard, ip, username string, logger *slog.Logger) (bool, time.Duration) {
 	for _, p := range []struct{ scope, principal string }{
 		{authScopeIP, ip},
@@ -127,7 +127,7 @@ func lockedAny(ctx context.Context, guard LoginGuard, ip, username string, logge
 		}
 		locked, retryAfter, err := guard.Locked(ctx, p.scope, p.principal)
 		if err != nil {
-			// Fail-CLOSED (HIGH-3): Redis недоступен → считаем заблокированным.
+			// Fail-CLOSED (HIGH-3): Redis unavailable → treat as blocked.
 			if logger != nil {
 				logger.Warn("auth/limit: lockout check failed — fail-closed (treating as locked)",
 					slog.String("scope", p.scope), slog.Any("error", err))
@@ -141,11 +141,11 @@ func lockedAny(ctx context.Context, guard LoginGuard, ip, username string, logge
 	return false, 0
 }
 
-// throttledAny берёт токен троттла по IP и (если задан) username. Fail-open: при
-// Redis-ошибке/битом конфиге — passthrough (не блокируем).
+// throttledAny takes a throttle token by IP and (if set) username. Fail-open: on a
+// Redis error/broken config — passthrough (do not block).
 func throttledAny(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitConfig, ip, username string, logger *slog.Logger) (bool, time.Duration) {
 	if cfg.Rate <= 0 || cfg.Burst <= 0 {
-		return false, 0 // битый конфиг → fail-open (как Tempo)
+		return false, 0 // broken config → fail-open (like Tempo)
 	}
 	for _, p := range []struct{ scope, principal string }{
 		{authScopeIP, ip},
@@ -156,7 +156,7 @@ func throttledAny(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitConfi
 		}
 		allowed, retryAfter, err := guard.Allow(ctx, p.scope, p.principal, cfg.Rate, cfg.Burst)
 		if err != nil {
-			// Fail-OPEN: троттл при Redis-флапе не блокирует (доступность login).
+			// Fail-OPEN: a Redis flap does not block the throttle (login availability).
 			if logger != nil {
 				logger.Debug("auth/limit: throttle check failed — fail-open",
 					slog.String("scope", p.scope), slog.Any("error", err))
@@ -170,8 +170,8 @@ func throttledAny(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitConfi
 	return false, 0
 }
 
-// recordFailureFor инкрементит счётчик неудач принципала; ошибку только логирует
-// (счётчик best-effort — потеря инкремента не должна валить ответ login-а).
+// recordFailureFor increments the principal's failure counter; an error is only logged
+// (the counter is best-effort — losing an increment must not break the login response).
 func recordFailureFor(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitConfig, scope, principal string, logger *slog.Logger) {
 	if cfg.LockoutThreshold <= 0 {
 		return
@@ -185,35 +185,35 @@ func recordFailureFor(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitC
 		return
 	}
 	if lockedNow && logger != nil {
-		// Принципал заблокирован — INFO (операционно полезно), без секрета.
+		// Principal locked out — INFO (operationally useful), no secret in it.
 		logger.Info("auth/limit: principal locked out after repeated login failures",
 			slog.String("scope", scope))
 	}
 }
 
-// defaultLockedRetry — Retry-After при fail-closed lockout (Redis-ошибка): не
-// раскрываем реальный backoff (его не знаем), даём консервативную паузу.
+// defaultLockedRetry — Retry-After for a fail-closed lockout (Redis error): we do
+// not disclose the real backoff (we don't know it), we give a conservative pause instead.
 const defaultLockedRetry = 60 * time.Second
 
-// isAuthFailure — код ответа, трактуемый как проваленная аутентификация для
-// счётчика неудач: 401 (bad credentials, ErrAuthFailed) и 403 (revoked / no role
-// mapping / provisioning disabled). 2xx/302 (успех) и 5xx (наша ошибка) — НЕ
-// неудача пользователя, счётчик не трогаем.
+// isAuthFailure — the response codes treated as a failed authentication for the
+// failure counter: 401 (bad credentials, ErrAuthFailed) and 403 (revoked / no role
+// mapping / provisioning disabled). 2xx/302 (success) and 5xx (our own error) are NOT
+// a user failure, the counter is left untouched.
 func isAuthFailure(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
-// LDAPUsernameExtractor извлекает `username` из JSON-тела POST /auth/ldap/login,
-// буферизует и возвращает тело в r.Body (handler перечитает целиком). Ошибка
-// парсинга / не-JSON → "" (per-username слой просто не применяется, per-IP
-// остаётся). Не логирует тело (содержит пароль).
+// LDAPUsernameExtractor extracts `username` from the JSON body of POST /auth/ldap/login,
+// buffers it, and returns the body into r.Body (the handler re-reads it in full). A parse
+// error / non-JSON body → "" (the per-username layer simply does not apply, per-IP
+// still stands). Does not log the body (it contains the password).
 func LDAPUsernameExtractor(r *http.Request) string {
 	if r.Body == nil {
 		return ""
 	}
 	buf, err := io.ReadAll(io.LimitReader(r.Body, maxLoginBodySnoop+1))
 	_ = r.Body.Close()
-	// Вернуть тело handler-у в любом случае (даже если парс не удался).
+	// Return the body to the handler in any case (even if the parse failed).
 	r.Body = io.NopCloser(bytes.NewReader(buf))
 	if err != nil || len(buf) > maxLoginBodySnoop {
 		return ""
@@ -227,22 +227,22 @@ func LDAPUsernameExtractor(r *http.Request) string {
 	return body.Username
 }
 
-// clientIP — IP прямого пира (r.RemoteAddr). НЕ доверяет X-Forwarded-For/
-// X-Real-IP (spoofable без trusted-proxy-конфигурации, которой у Keeper-а пока
-// нет — см. observations). За L4-LB (passthrough) RemoteAddr — реальный клиент;
-// за L7-proxy все попытки сойдутся на IP прокси (тогда per-username-слой несёт
-// основную защиту). Порт отбрасывается (иначе каждый эфемерный порт — свой
-// принципал, и per-IP-лимит обходится).
+// clientIP — the IP of the direct peer (r.RemoteAddr). Does NOT trust X-Forwarded-For/
+// X-Real-IP (spoofable without a trusted-proxy configuration, which Keeper does not
+// have yet — see observations). Behind an L4 LB (passthrough) RemoteAddr is the real client;
+// behind an L7 proxy all attempts collapse onto the proxy's IP (then the per-username layer carries
+// the main defense). The port is dropped (otherwise every ephemeral port is its own
+// principal, and the per-IP limit is bypassed).
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr // без порта (редко) — как есть
+		return r.RemoteAddr // no port (rare) — return as-is
 	}
 	return host
 }
 
-// writeAuth429 пишет 429 + Retry-After + RFC 7807 problem+json
-// ([problem.TypeAuthThrottled]). anti-oracle: detail без указания scope/причины.
+// writeAuth429 writes 429 + Retry-After + RFC 7807 problem+json
+// ([problem.TypeAuthThrottled]). anti-oracle: the detail does not disclose scope/reason.
 func writeAuth429(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	secs := int(retryAfter / time.Second)
 	if retryAfter%time.Second > 0 {
@@ -259,8 +259,8 @@ func writeAuth429(w http.ResponseWriter, r *http.Request, retryAfter time.Durati
 	))
 }
 
-// statusRecorder — обёртка ResponseWriter, фиксирующая статус-код (для пост-
-// проверки auth-failure). Минимальная: huma пишет тело сам, нам нужен лишь код.
+// statusRecorder — a ResponseWriter wrapper that records the status code (for the
+// post-hoc auth-failure check). Minimal: huma writes the body itself, we only need the code.
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int

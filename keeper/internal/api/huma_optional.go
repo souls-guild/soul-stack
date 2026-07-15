@@ -58,41 +58,41 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Schema реализует huma.SchemaProvider: отдаёт схему вложенного типа T, помеченную
-// nullable (3.1-форма `type: [<t>, null]`). huma на поле с этим типом НЕ добавляет
-// его в required автоматически (required управляется тегами поля: `required:"false"`
-// держит поле опциональным).
+// Schema implements huma.SchemaProvider: returns the schema of the wrapped type T, marked
+// nullable (3.1 form `type: [<t>, null]`). huma does NOT auto-add a field of this type
+// to required (required is controlled by the field tags: `required:"false"`
+// keeps the field optional).
 //
-// allowRef=false ОБЯЗАТЕЛЕН: схема T ВСЕГДА инлайнится (а не отдаётся как `$ref` на
-// зарегистрированную компоненту), поэтому Nullable применяется к РЕАЛЬНОЙ inline-схеме
-// для ЛЮБОГО T — скаляр даёт `type: [<t>, null]`, struct даёт
-// `type: [object, null]` с inline-properties. С allowRef=true huma вернул бы для
-// struct-T голый `{"$ref": …}`, а `Nullable=true` поверх ref-узла роняет регистрацию
-// операции паникой «nullable is not supported for ref». Presence-tier валиден для
-// любого T (скаляр и struct), не только скалярного.
+// allowRef=false is MANDATORY: the schema of T is ALWAYS inlined (never returned as a `$ref`
+// to a registered component), so Nullable applies to the REAL inline schema
+// for ANY T — a scalar gives `type: [<t>, null]`, a struct gives
+// `type: [object, null]` with inline properties. With allowRef=true huma would return a
+// bare `{"$ref": …}` for struct-T, and `Nullable=true` on top of a ref node crashes operation
+// registration with a panic "nullable is not supported for ref". The presence tier is valid for
+// any T (scalar and struct), not just scalars.
 //
-// requestBody операции остаётся application/json (никакого octet-stream artifact) —
-// ключевой инвариант tier-а против RawBody []byte-моста.
+// The operation's requestBody stays application/json (no octet-stream artifact) —
+// the key invariant of this tier against the RawBody []byte bridge.
 func (o Optional[T]) Schema(r huma.Registry) *huma.Schema {
 	s := r.Schema(reflect.TypeFor[T](), false, "")
 	s.Nullable = true
 	return s
 }
 
-// Get возвращает значение и флаг «значение задано и не null» (Set && !Null).
+// Get returns the value and a flag "value is set and not null" (Set && !Null).
 func (o Optional[T]) Get() (T, bool) {
 	return o.Value, o.Set && !o.Null
 }
 
-// IsNull — поле присутствовало со значением null (явный сброс).
+// IsNull — the field was present with a null value (an explicit reset).
 func (o Optional[T]) IsNull() bool {
 	return o.Set && o.Null
 }
 
-// optionalToPtr переводит Optional[T] в *T для доменного presence-конверта:
-// задано не-null значение (Set && !Null) → указатель на копию Value; иначе
-// (omitted или explicit null) → nil. Presence-факт несёт отдельно поле Set —
-// доменный SetDefaultScope строится из него, а не из nil-ности указателя.
+// optionalToPtr converts Optional[T] to *T for the domain presence bridge:
+// a set non-null value (Set && !Null) → a pointer to a copy of Value; otherwise
+// (omitted or explicit null) → nil. The presence fact is carried separately by the Set field —
+// the domain SetDefaultScope is built from it, not from the pointer's nilness.
 func optionalToPtr[T any](o Optional[T]) *T {
 	if v, ok := o.Get(); ok {
 		return &v

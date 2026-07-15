@@ -1,22 +1,22 @@
-// Guard против drift между huma-struct-тегами OpenAPI-ограничений и
-// АВТОРИТЕТНЫМИ рантайм-источниками валидации.
+// Guard against drift between the huma struct tags of OpenAPI constraints and
+// the AUTHORITATIVE runtime sources of validation.
 //
-// ПРОБЛЕМА (см. delegation): huma-тег `pattern:"…"` / `minimum:"…"` /
-// `maximum:"…"` принимает только строковый ЛИТЕРАЛ — нельзя сослаться на
-// const operator.AIDPattern / rbac.RoleNamePattern. Значит литерал в теге и
-// рантайм-const синхронятся ВРУЧНУЮ; при изменении одной стороны другая молча
-// разойдётся, и собранная OpenAPI-спека начнёт врать о контракте.
+// THE PROBLEM (see delegation): the huma tag `pattern:"…"` / `minimum:"…"` /
+// `maximum:"…"` only accepts a string LITERAL — it cannot reference
+// const operator.AIDPattern / rbac.RoleNamePattern. So the literal in the tag and
+// the runtime const are synced MANUALLY; when one side changes, the other silently
+// drifts, and the assembled OpenAPI spec starts lying about the contract.
 //
-// Этот тест извлекает значение тега РЕФЛЕКСИЕЙ по тем же op-input-структурам,
-// которые huma компилирует в спеку (reflect.StructTag поля), и сверяет его
-// ДОСЛОВНО с авторитетным рантайм-источником (const-паттерн или числовая
-// граница доменного валидатора). Красный тест = тег устарел относительно
-// рантайма (или наоборот).
+// This test extracts the tag value by REFLECTION over the same op-input structs
+// that huma compiles into the spec (reflect.StructTag fields), and checks it
+// VERBATIM against the authoritative runtime source (a const pattern or the numeric
+// bound of a domain validator). A red test = the tag is stale relative to
+// the runtime (or vice versa).
 //
-// ТИРАЖ: перед возвратом ~145 ограничений каждое новое (поле, тег) ↔
-// (рантайм-источник) добавляется одной строкой в constraintSyncCases ниже.
-// Этот тест — стоп-инвариант массовой операции: пока пара не сверена с
-// рантаймом, drift проходит молча.
+// ROLLOUT: before this returns ~145 constraints, each new (field, tag) ↔
+// (runtime source) pair is added as one line to constraintSyncCases below.
+// This test is the stop invariant of the mass operation: until a pair has been checked
+// against the runtime, drift passes silently.
 package api
 
 import (
@@ -36,86 +36,86 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// Числовые границы ssh_target.ssh_port. Авторитетный рантайм-источник —
-// доменный валидатор SoulHandler.UpdateSshTargetTyped (handlers/soul.go:1526:
-// `req.SSHPort < 1 || req.SSHPort > 65535`). Отдельной const в коде нет:
-// дублируем литералы здесь рядом со ссылкой, чтобы при смене границы валидатора
-// тест краснел и заставлял синхронизировать тег.
+// Numeric bounds of ssh_target.ssh_port. The authoritative runtime source is the
+// domain validator SoulHandler.UpdateSshTargetTyped (handlers/soul.go:1526:
+// `req.SSHPort < 1 || req.SSHPort > 65535`). There is no separate const in the code:
+// we duplicate the literals here next to the reference, so that when the validator's bound
+// changes the test goes red and forces the tag to be synced.
 const (
 	sshPortRuntimeMin = "1"
 	sshPortRuntimeMax = "65535"
 )
 
-// Числовые границы батч-параметров прогона (Voyage create/preview, Cadence
-// create/patch). Авторитетные рантайм-источники — доменные валидаторы:
+// Numeric bounds of run batch parameters (Voyage create/preview, Cadence
+// create/patch). The authoritative runtime sources are the domain validators:
 //   - voyage/cadence batch_size / concurrency / fail_threshold: `*v <= 0` →
-//     минимум 1 (handlers/voyage.go:430/436/443, voyage/crud.go:107/110/119,
-//     cadence/crud.go:116/122/125; все 422). Верхней границы у batch_size/
-//     fail_threshold нет (handler НЕ 422-ит сверху) → тег только minimum.
+//     minimum 1 (handlers/voyage.go:430/436/443, voyage/crud.go:107/110/119,
+//     cadence/crud.go:116/122/125; all 422). There is no upper bound for batch_size/
+//     fail_threshold (the handler does NOT 422 from above) → the tag has minimum only.
 //   - batch_percent: `< 1 || > 100` → [1, 100] (handlers/voyage.go:433,
 //     voyage/crud.go:116, cadence/crud.go:119; 422).
-//   - VOYAGE concurrency верх — voyageMaxConcurrency=500 (handlers/voyage.go:443:
-//     `concurrency > voyageMaxConcurrency` → 422). CADENCE concurrency верх НЕ
-//     ограничен рантаймом (cadence/crud.go валидирует только `<= 0`) → у Cadence
-//     concurrency тег maximum НЕ ставится, чтобы не 422-ить принимаемое значение.
+//   - VOYAGE concurrency upper bound — voyageMaxConcurrency=500 (handlers/voyage.go:443:
+//     `concurrency > voyageMaxConcurrency` → 422). CADENCE concurrency's upper bound is NOT
+//     constrained by the runtime (cadence/crud.go only validates `<= 0`) → for Cadence
+//     the concurrency maximum tag is NOT set, so as not to 422 an otherwise-accepted value.
 //
-// Экспортной const у этих границ нет (литералы в валидаторах) — дублируем здесь
-// рядом со ссылкой, как ssh_port в пилоте. Кандидаты на экспорт (voyage.MinBatchValue
-// и т.п.), если границы начнут меняться.
+// There is no exported const for these bounds (literals live in the validators) — we duplicate them here
+// next to the reference, like ssh_port in the pilot. Candidates for export (voyage.MinBatchValue
+// etc) if the bounds start changing.
 const (
 	batchValueRuntimeMin   = "1"   // batch_size / concurrency / fail_threshold: <= 0 → 422
 	batchPercentRuntimeMin = "1"   // batch_percent: < 1 → 422
 	batchPercentRuntimeMax = "100" // batch_percent: > 100 → 422
 )
 
-// voyageConcurrencyRuntimeMax — верхняя граница concurrency ТОЛЬКО для Voyage
-// (handlers.voyageMaxConcurrency = 500, handlers/voyage.go:158/443). const
-// неэкспортируемый (пакет handlers) — дублируем литерал. Кандидат на экспорт.
+// voyageConcurrencyRuntimeMax — the upper bound of concurrency ONLY for Voyage
+// (handlers.voyageMaxConcurrency = 500, handlers/voyage.go:158/443). The const
+// is unexported (package handlers) — we duplicate the literal. A candidate for export.
 const voyageConcurrencyRuntimeMax = "500"
 
-// ID-форматы output-полей (ТИРАЖ-БАТЧ 3: документационный pattern на машинно-
-// генерируемых ID response-Body). Авторитетные источники без ЭКСПОРТНОГО const —
-// дублируем литерал рядом со ссылкой (как ssh_port/batch выше); кандидаты на экспорт.
+// ID formats of output fields (ROLLOUT BATCH 3: a documentation pattern on machine-
+// generated response-Body IDs). Authoritative sources without an EXPORTED const —
+// we duplicate the literal next to the reference (like ssh_port/batch above); candidates for export.
 //
-//   - ulidRuntimePattern: audit.NewULID → Crockford base32, 26 символов. Авторитет —
-//     неэкспортируемый audit.ulidPattern (shared/audit/ulid.go:30, IsValidULID). Тот же
-//     литерал уже несёт errandAccepted.ErrandID (huma_errand_accepted.go). Кандидат на
-//     экспорт audit.ULIDPattern.
-//   - sha256RuntimePattern: hex(sha256), lowercase 64 chars. Авторитет — hex.EncodeToString
-//     над sha256.Sum256 (pluginhost/slot.go:173 для plugin-бинаря; keyservice.go:287
-//     для key_id = SPKI-DER). Экспортной const нет (формат hex.EncodeToString). Кандидат
-//     на экспорт sigil.SHA256HexPattern.
+//   - ulidRuntimePattern: audit.NewULID → Crockford base32, 26 characters. The authority —
+//     the unexported audit.ulidPattern (shared/audit/ulid.go:30, IsValidULID). The same
+//     literal is also carried by errandAccepted.ErrandID (huma_errand_accepted.go). A candidate for
+//     export as audit.ULIDPattern.
+//   - sha256RuntimePattern: hex(sha256), lowercase 64 chars. The authority — hex.EncodeToString
+//     over sha256.Sum256 (pluginhost/slot.go:173 for the plugin binary; keyservice.go:287
+//     for key_id = SPKI-DER). No exported const (the format is hex.EncodeToString). A candidate
+//     for export as sigil.SHA256HexPattern.
 //
-// SID/AID имеют ЭКСПОРТНЫЕ const → кейсы ссылаются на soul.SIDPattern / operator.AIDPattern
-// напрямую (не дублируем литерал).
+// SID/AID have EXPORTED consts → the cases reference soul.SIDPattern / operator.AIDPattern
+// directly (we don't duplicate the literal).
 const (
-	ulidRuntimePattern   = "^[0-9A-HJKMNP-TV-Z]{26}$" // = audit.ulidPattern (неэкспортируемый)
+	ulidRuntimePattern   = "^[0-9A-HJKMNP-TV-Z]{26}$" // = audit.ulidPattern (unexported)
 	sha256RuntimePattern = "^[0-9a-f]{64}$"           // = hex(sha256), lowercase 64 chars
 )
 
-// Рантайм-источники INPUT-паттернов БЕЗ экспортного const — дублируем литерал рядом
-// со ссылкой (как ssh_port/batch выше); кандидаты на экспорт.
+// Runtime sources of INPUT patterns WITHOUT an exported const — we duplicate the literal next
+// to the reference (like ssh_port/batch above); candidates for export.
 //
-//   - sigilSegmentRuntimePattern: closed-charset path-сегментов Sigil (namespace/name/ref).
-//     Авторитет — неэкспортируемый reSigilSegment (api/handlers/sigil.go:39 + mcp/
-//     sigil_revoke.go:17, validateSigilTriple → 422 ДО svc.Allow/Revoke). ref здесь —
-//     tag-ref ЭТИМ же валидатором (НЕ произвольный git-ref): слеш → 422. Кандидат на
-//     экспорт sigil.SegmentPattern.
-//   - choirNameRuntimePattern: имя Choir, kebab + `_`. Авторитет — неэкспортируемый
-//     choir.choirNamePattern (choir.go:35, ValidChoirName); CreateTyped 422-ит ДО
-//     INSERT. Handler инлайнит тот же литерал в текст ошибки (handlers/choir.go:156).
-//     Кандидат на экспорт choir.NamePattern.
-//   - soulPathRuntimePattern: soul_path обязан начинаться с `/` (абсолютный Unix-путь).
-//     Рантайм — `req.SoulPath == "" || req.SoulPath[0] != '/'` → 422 (handlers/soul.go:1532).
-//     Эквивалент = `^/` (start-anchor): пустая строка не матчит (422), голый `/` матчит
-//     (рантайм его ПРИНИМАЕТ) — НЕ `^/.+`, иначе ложный 422 на валидном `/`.
+//   - sigilSegmentRuntimePattern: closed-charset path segments of Sigil (namespace/name/ref).
+//     The authority — the unexported reSigilSegment (api/handlers/sigil.go:39 + mcp/
+//     sigil_revoke.go:17, validateSigilTriple → 422 BEFORE svc.Allow/Revoke). ref here is
+//     validated by that SAME validator as a tag-ref (NOT an arbitrary git ref): a slash → 422. A candidate for
+//     export as sigil.SegmentPattern.
+//   - choirNameRuntimePattern: the Choir name, kebab + `_`. The authority — the unexported
+//     choir.choirNamePattern (choir.go:35, ValidChoirName); CreateTyped 422s BEFORE
+//     INSERT. The handler inlines the same literal into the error text (handlers/choir.go:156).
+//     A candidate for export as choir.NamePattern.
+//   - soulPathRuntimePattern: soul_path must start with `/` (an absolute Unix path).
+//     The runtime — `req.SoulPath == "" || req.SoulPath[0] != '/'` → 422 (handlers/soul.go:1532).
+//     Equivalent = `^/` (start anchor): an empty string doesn't match (422), a bare `/` does match
+//     (the runtime ACCEPTS it) — NOT `^/.+`, otherwise a valid `/` would falsely 422.
 const (
-	sigilSegmentRuntimePattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" // = reSigilSegment (неэкспортируемый, ×2 копии)
-	choirNameRuntimePattern    = "^[a-z][a-z0-9_-]*$"                 // = choir.choirNamePattern (неэкспортируемый)
+	sigilSegmentRuntimePattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" // = reSigilSegment (unexported, ×2 copies)
+	choirNameRuntimePattern    = "^[a-z][a-z0-9_-]*$"                 // = choir.choirNamePattern (unexported)
 	soulPathRuntimePattern     = "^/"                                 // = SoulPath[0]!='/' (start-with-slash, non-empty)
 )
 
-// constraintTagKind — какой huma-тег ограничения сверяется в кейсе.
+// constraintTagKind — which huma constraint tag is checked in the case.
 type constraintTagKind string
 
 const (
@@ -126,48 +126,48 @@ const (
 	tagMaxLength constraintTagKind = "maxLength"
 )
 
-// Length-границы (ТИРАЖ-БАТЧ 6). Авторитетные рантайм-источники без ЭКСПОРТНОГО
-// const — дублируем литерал рядом со ссылкой (как ssh_port/batch выше).
+// Length bounds (ROLLOUT BATCH 6). Authoritative runtime sources without an EXPORTED
+// const — we duplicate the literal next to the reference (like ssh_port/batch above).
 //
-//   - reasonRuntimeMinLen: unlock/rerun-last reason — рантайм 422-ит
-//     `reason == ""` (UnlockTyped / RerunLastTyped; обе TypeValidationFailed → 422).
-//   - covenRuntimeMaxLen: длина Coven-метки — soul.ValidCoven len>63 → 422
-//     (soul.go:81, covenMaxLen=63). Тот же предел у declared-роли
-//     (validHostRole len>63, incarnation.go:177) и у incarnation-имени через
-//     pattern `{0,62}` (макс 63). Экспортной const у covenMaxLen нет (литерал
-//     в ValidCoven) — кандидат на экспорт soul.CovenMaxLen.
+//   - reasonRuntimeMinLen: unlock/rerun-last reason — the runtime 422s on
+//     `reason == ""` (UnlockTyped / RerunLastTyped; both TypeValidationFailed → 422).
+//   - covenRuntimeMaxLen: the length of a Coven label — soul.ValidCoven len>63 → 422
+//     (soul.go:81, covenMaxLen=63). The same limit applies to the declared role
+//     (validHostRole len>63, incarnation.go:177) and to the incarnation name via the
+//     pattern `{0,62}` (max 63). There is no exported const for covenMaxLen (the literal
+//     is in ValidCoven) — a candidate for export as soul.CovenMaxLen.
 //
-// Верхняя граница reason — ЭКСПОРТНАЯ incarnation.ReasonMaxLen (=500): и тег
-// maxLength, и рантайм-валидатор (UnlockTyped / RerunLastTyped 422-ят
-// `len(reason) > ReasonMaxLen`) ссылаются на этот единый const, поэтому кейс
-// runtime берёт его напрямую через strconv.Itoa (не литерал).
+// The upper bound of reason is the EXPORTED incarnation.ReasonMaxLen (=500): both the
+// maxLength tag and the runtime validator (UnlockTyped / RerunLastTyped 422 on
+// `len(reason) > ReasonMaxLen`) reference this single const, so the case's
+// runtime value is taken directly via strconv.Itoa (not a literal).
 const (
-	reasonRuntimeMinLen = "1"  // reason == "" → 422 (нижняя граница)
+	reasonRuntimeMinLen = "1"  // reason == "" → 422 (lower bound)
 	covenRuntimeMaxLen  = "63" // ValidCoven / validHostRole len > 63 → 422
 )
 
-// sshUserRuntimeMinLen — ssh_user непустота. Рантайм 422-ит `req.SSHUser == ""`
+// sshUserRuntimeMinLen — ssh_user non-emptiness. The runtime 422s on `req.SSHUser == ""`
 // (UpdateSshTargetTyped handlers/soul.go:1529, TypeValidationFailed → 422).
-// SoulSshTarget — class-A shared input↔output: minLength:1 на единой схеме
-// (как committed-рукопись :6378); INPUT реально 422-ит пустое, OUTPUT doc-only.
+// SoulSshTarget — class-A shared input↔output: minLength:1 on the single schema
+// (like the committed manuscript :6378); INPUT really does 422 on empty, OUTPUT is doc-only.
 const sshUserRuntimeMinLen = "1"
 
-// synodDescRuntimeMin — Synod description непустота для PATCH. Рантайм
-// UpdateTyped 422-ит `req.Description == ""` (handlers/synod.go). CreateTyped
-// пустое ПРИНИМАЕТ (Description *string опц.) → minLength только на Update.
-// Верхняя граница — ЭКСПОРТНАЯ rbac.SynodDescriptionMaxLen (=1024); CreateTyped
-// и UpdateTyped оба 422-ят `len > SynodDescriptionMaxLen`.
+// synodDescRuntimeMin — Synod description non-emptiness for PATCH. The runtime
+// UpdateTyped 422s on `req.Description == ""` (handlers/synod.go). CreateTyped
+// ACCEPTS empty (Description *string is optional) → minLength only on Update.
+// The upper bound is the EXPORTED rbac.SynodDescriptionMaxLen (=1024); both CreateTyped
+// and UpdateTyped 422 on `len > SynodDescriptionMaxLen`.
 const synodDescRuntimeMin = "1"
 
-// constraintSyncCase — одна сверяемая пара «тег op-input-поля ↔ рантайм-источник».
+// constraintSyncCase — one checked pair "op-input field tag ↔ runtime source".
 //
-//	structPtr  — указатель на zero-значение op-input-структуры (для reflect.Type).
-//	fieldPath  — путь к полю: одно имя ("AID") или цепочка через embedded/Body
-//	             ("Body", "AID"). Совпадает с тем, как huma спускается по структуре.
-//	tag        — какой именно тег ограничения читать.
-//	runtime    — ожидаемое значение: дословно const-паттерн или числовая граница
-//	             доменного рантайм-валидатора. ИСТОЧНИК ПРАВДЫ — рантайм, не тег.
-//	source     — человекочитаемая ссылка на рантайм-источник для текста ошибки.
+//	structPtr  — a pointer to a zero value of the op-input struct (for reflect.Type).
+//	fieldPath  — the path to the field: a single name ("AID") or a chain through embedded/Body
+//	             ("Body", "AID"). Matches how huma descends the struct.
+//	tag        — which constraint tag exactly to read.
+//	runtime    — the expected value: verbatim the const pattern or the numeric bound
+//	             of the domain runtime validator. The SOURCE OF TRUTH is the runtime, not the tag.
+//	source     — a human-readable reference to the runtime source, for the error text.
 type constraintSyncCase struct {
 	name      string
 	structPtr any
@@ -177,20 +177,20 @@ type constraintSyncCase struct {
 	source    string
 }
 
-// constraintSyncCases — реестр пар. ТИРАЖ: добавляй сюда строку на каждое
-// возвращаемое в спеку ограничение. Если рантайм-источник — новый const,
-// импортируй его и сошлись на него в runtime (не копируй литерал руками,
-// если const доступен из этого пакета).
+// constraintSyncCases — the registry of pairs. ROLLOUT: add a line here for each
+// constraint returned in the spec. If the runtime source is a new const,
+// import it and reference it in runtime (don't copy the literal by hand
+// if the const is available from this package).
 //
-// Покрыто на текущем коде (пилотные теги):
-//   - AID на operator.create / operator.get / operator.revoke /
-//     operator.issue-token (×4 поля, все ← operator.AIDPattern);
-//   - AID на role.revoke-operator (path) и GrantOperatorRequest.AID (body,
-//     общий тип для role.grant-operator + synod.add-operator) ← operator.AIDPattern;
-//   - role name на role.create ← rbac.RoleNamePattern;
-//   - ssh_port minimum/maximum на soul.ssh-target ← границы UpdateSshTargetTyped.
+// Covered in the current code (pilot tags):
+//   - AID on operator.create / operator.get / operator.revoke /
+//     operator.issue-token (×4 fields, all ← operator.AIDPattern);
+//   - AID on role.revoke-operator (path) and GrantOperatorRequest.AID (body,
+//     a shared type for role.grant-operator + synod.add-operator) ← operator.AIDPattern;
+//   - role name on role.create ← rbac.RoleNamePattern;
+//   - ssh_port minimum/maximum on soul.ssh-target ← the bounds of UpdateSshTargetTyped.
 var constraintSyncCases = []constraintSyncCase{
-	// --- AID-паттерн (operator.AIDPattern) ---
+	// --- AID pattern (operator.AIDPattern) ---
 	{
 		name:      "operator.create AID",
 		structPtr: &operatorCreateInput{},
@@ -240,7 +240,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "operator.AIDPattern",
 	},
 
-	// --- role-name-паттерн (rbac.RoleNamePattern) ---
+	// --- role name pattern (rbac.RoleNamePattern) ---
 	{
 		name:      "role.create name",
 		structPtr: &roleCreateInput{},
@@ -250,7 +250,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "rbac.RoleNamePattern",
 	},
 
-	// --- ssh_port границы (UpdateSshTargetTyped, handlers/soul.go:1526) ---
+	// --- ssh_port bounds (UpdateSshTargetTyped, handlers/soul.go:1526) ---
 	{
 		name:      "soul.ssh-target ssh_port minimum",
 		structPtr: &soulSshTargetInput{},
@@ -268,10 +268,10 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "SoulHandler.UpdateSshTargetTyped (ssh_port <= 65535)",
 	},
 
-	// --- kebab-имя name/on_beacon (oracle.NamePattern ^[a-z0-9-]{1,63}$) ---
-	// Авторитет — oracle.NamePattern (oracle/validate.go); тот же литерал несут
-	// augur.NamePattern / herald.NamePattern (см. ниже). Каждый источник свой —
-	// сверяем поле с ЕГО доменным валидатором, не с чужим однотипным.
+	// --- kebab name name/on_beacon (oracle.NamePattern ^[a-z0-9-]{1,63}$) ---
+	// The authority — oracle.NamePattern (oracle/validate.go); the same literal is also carried by
+	// augur.NamePattern / herald.NamePattern (see below). Each source is its own —
+	// we check the field against ITS OWN domain validator, not another same-shaped one.
 	{
 		name:      "vigil.create name",
 		structPtr: &vigilCreateInput{},
@@ -329,10 +329,10 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "herald.NamePattern (prepareNotifyTidingsErr, voyage_notify.go:103)",
 	},
 
-	// --- service/synod-имя (^[a-z][a-z0-9-]*$) ---
-	// service name — собственный serviceregistry.NamePattern (НЕ rbac.RoleNamePattern,
-	// хоть литерал совпадает: разные домены, разные SQL CHECK). synod name — reRoleName
-	// (rbac.RoleNamePattern), единый с role name по решению synod.go.
+	// --- service/synod name (^[a-z][a-z0-9-]*$) ---
+	// service name — its own serviceregistry.NamePattern (NOT rbac.RoleNamePattern,
+	// even though the literal matches: different domains, different SQL CHECKs). synod name — reRoleName
+	// (rbac.RoleNamePattern), shared with role name by synod.go's decision.
 	{
 		name:      "service.register name",
 		structPtr: &serviceRegisterInput{},
@@ -351,10 +351,10 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// --- coven label (soul.CovenPattern ^[a-z][a-z0-9]*(-[a-z0-9]+)*$) ---
-	// covens[] / labels[] — per-element ValidCoven (пустой элемент отвергают и huma-
-	// pattern, и ValidCoven → match). label (append/remove) и selector.coven НЕ
-	// тегируются: label-валидность зависит от mode (replace требует ПУСТОЙ label,
-	// pattern бы ложно 422-ил валидный replace), selector.coven — фильтр.
+	// covens[] / labels[] — per-element ValidCoven (an empty element is rejected by both the huma
+	// pattern and ValidCoven → matching). label (append/remove) and selector.coven are NOT
+	// tagged: label validity depends on mode (replace requires an EMPTY label,
+	// the pattern would falsely 422 a valid replace), selector.coven is a filter.
 	{
 		name:      "soul.create covens[]",
 		structPtr: &soulCreateInput{},

@@ -249,14 +249,15 @@ func TestNextRunAnchored_BrokenCron(t *testing.T) {
 	}
 }
 
-// TestNextRunAnchored_Cron_NoFutureSlot — cron валиден синтаксически, но не имеет
-// будущего слота в горизонте robfig (~5 лет): "0 0 30 2 *" = 30 февраля, которого
-// никогда не бывает → Schedule.Next возвращает zero-time. Без IsZero-guard первый же
-// NextRun(scheduledFor) дал бы zero, цикл `for !next.After(now)` крутился бы вечно под
-// PG-lock (wedged conductor-tx, ADR-046 §4). Guard должен вернуть ОШИБКУ, не зависнуть.
+// TestNextRunAnchored_Cron_NoFutureSlot — the cron is syntactically valid but
+// has no future slot within robfig's horizon (~5 years): "0 0 30 2 *" =
+// February 30, which never occurs → Schedule.Next returns zero-time. Without
+// the IsZero guard, the very first NextRun(scheduledFor) call would give zero,
+// and the `for !next.After(now)` loop would spin forever under the PG lock
+// (wedged conductor-tx, ADR-046 §4). The guard must return an ERROR, not hang.
 func TestNextRunAnchored_Cron_NoFutureSlot(t *testing.T) {
 	t.Parallel()
-	// Sanity: выражение парсится валидно (zero приходит из Next, не из Parse).
+	// Sanity: the expression parses validly (zero comes from Next, not from Parse).
 	if _, err := ParseCron("0 0 30 2 *"); err != nil {
 		t.Fatalf("0 0 30 2 * должно парситься валидно: %v", err)
 	}
@@ -264,7 +265,7 @@ func TestNextRunAnchored_Cron_NoFutureSlot(t *testing.T) {
 	scheduledFor := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	now := scheduledFor.Add(time.Minute)
 
-	// Сам тест не должен зависнуть: гоним в горутине с дедлайном.
+	// The test itself must not hang: run it in a goroutine with a deadline.
 	type res struct {
 		t   time.Time
 		err error

@@ -9,15 +9,16 @@ import (
 	git "github.com/go-git/go-git/v5"
 )
 
-// TestOpenOrClone_HealsBrokenWorkClone воспроизводит keeper, убитый mid-clone:
-// work-clone существует и PlainOpen проходит, но origin-remote нет — без
-// self-heal последующий fetch падал бы ErrRemoteNotFound навсегда. Проверяем,
-// что openOrClone детектит битый клон, пере-клонирует с origin и fetch проходит.
+// TestOpenOrClone_HealsBrokenWorkClone reproduces keeper killed mid-clone: the
+// work clone exists and PlainOpen succeeds, but there is no origin remote —
+// without self-heal, a subsequent fetch would fail with ErrRemoteNotFound
+// forever. We check that openOrClone detects the broken clone, re-clones with
+// origin, and that fetch then succeeds.
 func TestOpenOrClone_HealsBrokenWorkClone(t *testing.T) {
 	tr := newTestRepo(t)
 	workDir := filepath.Join(t.TempDir(), "_work")
 
-	// Битый клон: инициализируем репозиторий без origin-remote.
+	// Broken clone: initialize a repository without an origin remote.
 	if _, err := git.PlainInit(workDir, false); err != nil {
 		t.Fatalf("PlainInit битого клона: %v", err)
 	}
@@ -37,9 +38,10 @@ func TestOpenOrClone_HealsBrokenWorkClone(t *testing.T) {
 	}
 }
 
-// TestOpenOrClone_KeepsHealthyClone помечает узкость ловли: сносим ТОЛЬКО клон без
-// origin. Здоровый клон с origin не должен трогаться — проверяем, что повторный
-// openOrClone переиспользует тот же .git (modtime сохраняется), а не сносит его.
+// TestOpenOrClone_KeepsHealthyClone marks the narrowness of the catch: we
+// tear down ONLY a clone without origin. A healthy clone with origin must not
+// be touched — we check that a repeated openOrClone reuses the same .git
+// (modtime is preserved) instead of tearing it down.
 func TestOpenOrClone_KeepsHealthyClone(t *testing.T) {
 	tr := newTestRepo(t)
 	workDir := filepath.Join(t.TempDir(), "_work")

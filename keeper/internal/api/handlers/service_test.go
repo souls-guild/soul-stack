@@ -14,24 +14,24 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// svcFakePool — узкий мок [serviceregistry.ServicePool] для unit-тестов
-// ServiceHandler-а. Классифицирует SQL по подстроке и отдаёт заданный тестом
-// исход. Покрывает ДОМЕННЫЙ слой (*Typed: маппинг sentinel→problem / статусы /
-// audit-payload); консистентность SQL-логики Service-а валидируют
-// serviceregistry/integration_test.go (testcontainers PG). bind/decode/400-кейсы
-// покрывает huma-integration (handler-native T5d).
+// svcFakePool — a narrow mock of [serviceregistry.ServicePool] for ServiceHandler
+// unit tests. Classifies SQL by substring and returns the outcome set by the test.
+// Covers the DOMAIN layer (*Typed: sentinel→problem mapping / statuses /
+// audit-payload); the consistency of Service's SQL logic is validated by
+// serviceregistry/integration_test.go (testcontainers PG). bind/decode/400 cases
+// are covered by huma-integration (handler-native T5d).
 type svcFakePool struct {
-	// insertErr — ошибка RETURNING-scan-а INSERT (Register): pgErr unique → 409,
+	// insertErr — the RETURNING-scan error for INSERT (Register): pgErr unique → 409,
 	// pgErr FK → 404; nil → 201.
 	insertErr error
-	// updateErr — ошибка RETURNING-scan-а UPDATE (Update): pgx.ErrNoRows → 404.
+	// updateErr — the RETURNING-scan error for UPDATE (Update): pgx.ErrNoRows → 404.
 	updateErr error
 	// deleteRows — RowsAffected DELETE (Deregister): 0 → ErrNotFound (404).
 	deleteRows int64
-	// getRow — исход SELECT … WHERE name (Get): nil → ErrNotFound; иначе строка.
+	// getRow — the outcome of SELECT … WHERE name (Get): nil → ErrNotFound; otherwise a row.
 	getValues []any
 	getErr    error
-	// listValues — строки SELECT … ORDER BY name (List); каждая — []any на 8 колонок.
+	// listValues — rows from SELECT … ORDER BY name (List); each is a []any of 8 columns.
 	listValues [][]any
 }
 
@@ -85,10 +85,10 @@ func itoa(n int64) string {
 	if n == 0 {
 		return "0"
 	}
-	return "1" // достаточно для RowsAffected-классификации (0 vs >0)
+	return "1" // enough for RowsAffected classification (0 vs >0)
 }
 
-// svcRows — pgx.Rows-обёртка над списком []any-строк (8 колонок ServiceEntry).
+// svcRows — a pgx.Rows wrapper over a list of []any rows (8 ServiceEntry columns).
 type svcRows struct {
 	rows [][]any
 	idx  int
@@ -106,8 +106,8 @@ func (r *svcRows) Values() ([]any, error)                       { return nil, ni
 func (r *svcRows) RawValues() [][]byte                          { return nil }
 func (r *svcRows) Conn() *pgx.Conn                              { return nil }
 
-// newServiceHandler собирает ServiceHandler поверх serviceregistry.Service на
-// fake-pool (без lister-ов).
+// newServiceHandler assembles a ServiceHandler on top of serviceregistry.Service over a
+// fake pool (without listers).
 func newServiceHandler(t *testing.T, pool *svcFakePool) *ServiceHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
@@ -117,7 +117,7 @@ func newServiceHandler(t *testing.T, pool *svcFakePool) *ServiceHandler {
 	return NewServiceHandler(svc, nil, nil, nil, nil, nil, nil)
 }
 
-// newServiceHandlerWith собирает ServiceHandler поверх pool + произвольных lister-ов.
+// newServiceHandlerWith assembles a ServiceHandler on top of pool + arbitrary listers.
 func newServiceHandlerWith(t *testing.T, pool *svcFakePool, refs ServiceRefsLister, scen ServiceScenarioLister, ss ServiceStateSchemaLister, deps ServiceDependenciesLister) *ServiceHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
@@ -127,8 +127,8 @@ func newServiceHandlerWith(t *testing.T, pool *svcFakePool, refs ServiceRefsList
 	return NewServiceHandler(svc, refs, scen, ss, deps, nil, nil)
 }
 
-// newServiceHandlerWithDirectives собирает ServiceHandler поверх pool + directives-
-// lister-а (остальные listers nil) для тестов /directives-домена.
+// newServiceHandlerWithDirectives assembles a ServiceHandler on top of pool + a directives
+// lister (the other listers are nil) for /directives-domain tests.
 func newServiceHandlerWithDirectives(t *testing.T, pool *svcFakePool, directives ServiceDirectivesLister) *ServiceHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
@@ -220,7 +220,7 @@ func TestServiceHandler_List_Empty_NonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
-	// non-nil пустой срез (native-проекция в api отдаёт items:[]).
+	// non-nil empty slice (the native projection in api returns items:[]).
 	if page.Items == nil {
 		t.Errorf("empty list items is nil, want non-nil empty slice")
 	}
@@ -288,8 +288,8 @@ func TestServiceHandler_Deregister_NotFound_404(t *testing.T) {
 
 // --- ListRefs ---
 
-// fakeRefsLister — простой ServiceRefsLister: возвращает заданный набор refs
-// либо ошибку. Запоминает имя сервиса/git-URL, с которыми его дёрнули.
+// fakeRefsLister — a simple ServiceRefsLister: returns the given set of refs
+// or an error. Remembers the service name/git URL it was called with.
 type fakeRefsLister struct {
 	refs       []artifact.GitRef
 	err        error
@@ -309,8 +309,8 @@ func (f *fakeRefsLister) ListRefs(_ context.Context, name, gitURL string) ([]art
 	return f.refs, nil
 }
 
-// Invalidate реализует интерфейс, который handler проверяет через type-assertion
-// в invalidateRefs (для синхронизации кеша после Update/Deregister).
+// Invalidate implements the interface that the handler checks via type assertion
+// in invalidateRefs (to sync the cache after Update/Deregister).
 func (f *fakeRefsLister) Invalidate(name string) {
 	f.invalidate = append(f.invalidate, name)
 }
@@ -363,14 +363,14 @@ func TestServiceHandler_ListRefs_EmptyRefs_200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRefsTyped: %v", err)
 	}
-	// non-nil пустой срез (native-проекция отдаёт refs:[]).
+	// non-nil empty slice (the native projection returns refs:[]).
 	if reply.Refs == nil {
 		t.Errorf("empty refs is nil, want non-nil empty slice")
 	}
 }
 
-// TestServiceHandler_Update_InvalidatesRefs — после успешного UpdateTyped handler
-// инвалидирует refs-кеш по имени (чтобы следующий /refs увидел новый git-URL).
+// TestServiceHandler_Update_InvalidatesRefs — after a successful UpdateTyped, the handler
+// invalidates the refs cache by name (so the next /refs sees the new git URL).
 func TestServiceHandler_Update_InvalidatesRefs(t *testing.T) {
 	lister := &fakeRefsLister{refs: []artifact.GitRef{{Name: "v1", Type: artifact.GitRefTypeTag, Commit: "a"}}}
 	h := newServiceHandlerWith(t, &svcFakePool{}, lister, nil, nil, nil)
@@ -396,9 +396,9 @@ func TestServiceHandler_Deregister_InvalidatesRefs(t *testing.T) {
 
 // --- ListScenarios ---
 
-// fakeScenariosLister — простой ServiceScenarioLister: возвращает заданный
-// набор scenario либо ошибку; запоминает аргументы вызова + поддерживает
-// Invalidate (handler полагается на type-assertion в invalidateScenarios).
+// fakeScenariosLister — a simple ServiceScenarioLister: returns the given
+// set of scenarios or an error; remembers the call arguments and supports
+// Invalidate (the handler relies on a type assertion in invalidateScenarios).
 type fakeScenariosLister struct {
 	scenarios  []artifact.Scenario
 	err        error
@@ -441,8 +441,8 @@ func TestServiceHandler_ListScenarios_200(t *testing.T) {
 	if lister.gotName != "web" || lister.gotGitURL != "https://git/web.git" || lister.gotRef != "v1.0.0" {
 		t.Errorf("lister dispatch = (%q, %q, %q)", lister.gotName, lister.gotGitURL, lister.gotRef)
 	}
-	// kind размечается handler-ом по канону LifecycleScenarioNames: create →
-	// lifecycle, add_replicas → operational. UI читает каталог, не хардкодит.
+	// kind is tagged by the handler per the LifecycleScenarioNames canon: create →
+	// lifecycle, add_replicas → operational. The UI reads the catalog, doesn't hardcode it.
 	kinds := map[string]string{}
 	for _, s := range got.Scenarios {
 		kinds[s.Name] = s.Kind
@@ -455,10 +455,10 @@ func TestServiceHandler_ListScenarios_200(t *testing.T) {
 	}
 }
 
-// Имена из LifecycleScenarioNames (create/destroy) размечаются как lifecycle,
-// любое другое — operational. `converge` выведен из набора (amend ADR-031,
-// 2026-06-10): это operational drift-target, не lifecycle. Тест охраняет
-// разметку каталога на handler-уровне от рассинхрона канона и DTO-разметки.
+// Names from LifecycleScenarioNames (create/destroy) are tagged as lifecycle,
+// anything else as operational. `converge` was removed from the set (amend ADR-031,
+// 2026-06-10): it's an operational drift target, not lifecycle. The test guards
+// the handler-level catalog tagging against canon/DTO-tagging drift.
 func TestServiceHandler_ListScenarios_KindByLifecycleCanon(t *testing.T) {
 	lister := &fakeScenariosLister{scenarios: []artifact.Scenario{
 		{Name: "converge", Path: "scenario/converge/main.yml"},
@@ -485,11 +485,11 @@ func TestServiceHandler_ListScenarios_KindByLifecycleCanon(t *testing.T) {
 	}
 }
 
-// runnable размечается handler-ом по канону scenario-пакета (ADR-042 «тупой
-// фронт»): create=true (bootstrap-run), destroy=false (удаление — спец-флоу
-// DELETE, не run), converge/operational=true. UI фильтрует Run-форму по этому
-// признаку, не по хардкоду имён. Тест охраняет от рассинхрона канона и
-// DTO-разметки (S4 lifecycle-rework).
+// runnable is tagged by the handler per the scenario-package canon (ADR-042 "dumb
+// frontend"): create=true (bootstrap-run), destroy=false (deletion is a dedicated
+// DELETE flow, not a run), converge/operational=true. The UI filters the Run form by
+// this flag, not by hardcoded names. The test guards against canon/DTO-tagging
+// drift (S4 lifecycle-rework).
 func TestServiceHandler_ListScenarios_RunnableByCanon(t *testing.T) {
 	lister := &fakeScenariosLister{scenarios: []artifact.Scenario{
 		{Name: "converge", Path: "scenario/converge/main.yml"},
@@ -523,8 +523,8 @@ func TestServiceHandler_ListScenarios_RunnableByCanon(t *testing.T) {
 	}
 }
 
-// `?ref=...` переопределяет ref из реестра — UI смотрит scenario-листинг
-// конкретного tag-а до Upgrade.
+// `?ref=...` overrides the ref from the registry — the UI looks at the scenario
+// listing of a specific tag before Upgrade.
 func TestServiceHandler_ListScenarios_RefQueryOverride(t *testing.T) {
 	lister := &fakeScenariosLister{scenarios: []artifact.Scenario{{Name: "create"}}}
 	h := newServiceHandlerWith(t, &svcFakePool{getValues: serviceRow("web", "https://git/web.git", "v1.0.0")}, nil, lister, nil, nil)
@@ -597,9 +597,9 @@ func TestServiceHandler_Deregister_InvalidatesScenarios(t *testing.T) {
 
 // --- ListStateSchema ---
 
-// fakeStateSchemaLister — простой ServiceStateSchemaLister: возвращает заданный
-// info или ошибку; запоминает аргументы вызова + поддерживает Invalidate
-// (handler полагается на type-assertion в invalidateStateSchema).
+// fakeStateSchemaLister — a simple ServiceStateSchemaLister: returns the given
+// info or an error; remembers the call arguments and supports Invalidate
+// (the handler relies on a type assertion in invalidateStateSchema).
 type fakeStateSchemaLister struct {
 	info       *artifact.StateSchemaInfo
 	err        error
@@ -697,9 +697,9 @@ func TestServiceHandler_ListStateSchema_NoLister_500(t *testing.T) {
 	wantProblem(t, err, problem.TypeInternalError)
 }
 
-// Декларация структуры в service.yml — опциональна; native-проекция omitempty
-// выбрасывает `schema` из JSON, а migrations превращается в []. Здесь проверяем
-// доменную форму: Schema nil, Migrations non-nil [].
+// The structure declaration in service.yml is optional; the native projection's omitempty
+// drops `schema` from the JSON, while migrations becomes []. Here we verify the
+// domain shape: Schema nil, Migrations non-nil [].
 func TestServiceHandler_ListStateSchema_NoSchemaDecl(t *testing.T) {
 	lister := &fakeStateSchemaLister{info: &artifact.StateSchemaInfo{Version: 1, Schema: nil, Migrations: nil}}
 	h := newServiceHandlerWith(t, &svcFakePool{getValues: serviceRow("web", "https://git/web.git", "v1")}, nil, nil, lister, nil)
@@ -718,7 +718,7 @@ func TestServiceHandler_ListStateSchema_NoSchemaDecl(t *testing.T) {
 	}
 }
 
-// Defensive: lister вернул (nil, nil) — handler отдаёт 502, не пустоту.
+// Defensive: the lister returned (nil, nil) — the handler returns 502, not emptiness.
 func TestServiceHandler_ListStateSchema_LoaderReturnsNilInfo_502(t *testing.T) {
 	lister := &fakeStateSchemaLister{info: nil, err: nil}
 	h := newServiceHandlerWith(t, &svcFakePool{getValues: serviceRow("web", "https://git/web.git", "v1")}, nil, nil, lister, nil)
@@ -740,9 +740,9 @@ func TestServiceHandler_Update_InvalidatesStateSchema(t *testing.T) {
 
 // --- ListDependencies ---
 
-// fakeDependenciesLister — простой ServiceDependenciesLister: возвращает
-// заданный deps или ошибку; запоминает аргументы вызова + поддерживает
-// Invalidate (handler полагается на type-assertion в invalidateDependencies).
+// fakeDependenciesLister — a simple ServiceDependenciesLister: returns
+// the given deps or an error; remembers the call arguments and supports
+// Invalidate (the handler relies on a type assertion in invalidateDependencies).
 type fakeDependenciesLister struct {
 	deps       *artifact.ServiceDependencies
 	err        error
@@ -837,7 +837,7 @@ func TestServiceHandler_ListDependencies_NoLister_500(t *testing.T) {
 	wantProblem(t, err, problem.TypeInternalError)
 }
 
-// Сервис без destiny/modules — оба блока non-nil [] (native-проекция отдаёт []).
+// A service without destiny/modules — both blocks are non-nil [] (the native projection returns []).
 func TestServiceHandler_ListDependencies_EmptyBlocks(t *testing.T) {
 	lister := &fakeDependenciesLister{deps: &artifact.ServiceDependencies{
 		Destiny: []artifact.Dependency{},
@@ -853,7 +853,7 @@ func TestServiceHandler_ListDependencies_EmptyBlocks(t *testing.T) {
 	}
 }
 
-// Defensive: lister вернул (nil, nil) — handler отдаёт 502, не пустоту.
+// Defensive: the lister returned (nil, nil) — the handler returns 502, not emptiness.
 func TestServiceHandler_ListDependencies_LoaderReturnsNil_502(t *testing.T) {
 	lister := &fakeDependenciesLister{deps: nil, err: nil}
 	h := newServiceHandlerWith(t, &svcFakePool{getValues: serviceRow("web", "https://git/web.git", "v1")}, nil, nil, nil, lister)

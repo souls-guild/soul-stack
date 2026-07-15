@@ -21,13 +21,13 @@ func tempoTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeRateLimiter — controllable [RateLimiter] для middleware-тестов.
+// fakeRateLimiter — controllable [RateLimiter] for middleware tests.
 type fakeRateLimiter struct {
 	allowed    bool
 	retryAfter time.Duration
 	err        error
 
-	// записанные аргументы последнего Allow — для проверки прокидывания AID/bucket.
+	// arguments recorded from the last Allow call — for verifying AID/bucket pass-through.
 	gotAID    string
 	gotBucket string
 	gotRate   float64
@@ -46,13 +46,13 @@ func withTestClaims(r *http.Request, aid string) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// staticLimits — провайдер фиксированных rate/burst для тестов (имитирует
-// config.Store snapshot без hot-reload).
+// staticLimits — a fixed rate/burst provider for tests (simulates a
+// config.Store snapshot without hot-reload).
 func staticLimits(rate float64, burst int) func() RateLimitLimits {
 	return func() RateLimitLimits { return RateLimitLimits{Rate: rate, Burst: burst} }
 }
 
-// fakeTempoMetrics — счётчики allowed/rejected по endpoint-у для проверки emit.
+// fakeTempoMetrics — allowed/rejected counters per endpoint for verifying emit.
 type fakeTempoMetrics struct {
 	allowed  map[string]int
 	rejected map[string]int
@@ -139,7 +139,7 @@ func TestRateLimit_Exceeded_429_RetryAfter_Problem(t *testing.T) {
 		t.Fatalf("ожидался 429, got %d", rec.Code)
 	}
 
-	// Retry-After округляется ВВЕРХ: 1500ms → 2с.
+	// Retry-After rounds UP: 1500ms → 2s.
 	ra := rec.Header().Get("Retry-After")
 	if ra == "" {
 		t.Fatal("ожидался заголовок Retry-After")
@@ -169,7 +169,7 @@ func TestRateLimit_Exceeded_429_RetryAfter_Problem(t *testing.T) {
 	}
 }
 
-// TestRateLimit_RetryAfter_Floor1s — retryAfter < 1с округляется до минимума 1.
+// TestRateLimit_RetryAfter_Floor1s — retryAfter < 1s rounds up to the minimum of 1.
 func TestRateLimit_RetryAfter_Floor1s(t *testing.T) {
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	lim := &fakeRateLimiter{allowed: false, retryAfter: 50 * time.Millisecond}
@@ -215,7 +215,7 @@ func TestRateLimit_NoClaims_FailOpen(t *testing.T) {
 	mw := RateLimit(lim, "voyage_create", staticLimits(10, 20), nil, tempoTestLogger())(next)
 
 	rec := httptest.NewRecorder()
-	// Без WithClaims — claims в context отсутствуют.
+	// Without WithClaims — no claims in the context.
 	req := httptest.NewRequest(http.MethodPost, "/v1/voyages", nil)
 	mw.ServeHTTP(rec, req)
 
@@ -230,15 +230,15 @@ func TestRateLimit_NoClaims_FailOpen(t *testing.T) {
 	}
 }
 
-// bucketingLimiter — fake [RateLimiter], держащий НЕЗАВИСИМЫЕ счётчики остатка
-// токенов per-(aid, bucket). Имитирует Redis-ключ `tempo:<aid>:<bucket>`: разные
-// bucket-имена → разные ключи → независимые квоты (без refill — для теста окна
-// достаточно). Нужен, чтобы доказать инвариант «voyage_create и voyage_preview не
-// делят квоту» на уровне middleware (без testcontainers, ADR-050 amendment
+// bucketingLimiter — a fake [RateLimiter] that keeps INDEPENDENT remaining-token
+// counters per-(aid, bucket). Simulates the Redis key `tempo:<aid>:<bucket>`: different
+// bucket names → different keys → independent quotas (no refill — sufficient
+// for the window test). Needed to prove the invariant "voyage_create and voyage_preview
+// don't share a quota" at the middleware level (without testcontainers, ADR-050 amendment
 // 2026-06-17).
 type bucketingLimiter struct {
-	burst     map[string]int // (aid|bucket) → начальная глубина (capacity)
-	remaining map[string]int // (aid|bucket) → остаток токенов
+	burst     map[string]int // (aid|bucket) → starting depth (capacity)
+	remaining map[string]int // (aid|bucket) → remaining tokens
 }
 
 func newBucketingLimiter() *bucketingLimiter {
@@ -258,13 +258,13 @@ func (l *bucketingLimiter) Allow(_ context.Context, aid, bucket string, _ float6
 	return true, 0, nil
 }
 
-// TestRateLimit_PreviewAndCreate_SeparateBuckets — ИНВАРИАНТ ADR-050 amendment
-// 2026-06-17: voyage_create и voyage_preview — РАЗНЫЕ bucket-ключи per-AID, не
-// делят квоту. Исчерпание create-бакета НЕ 429-ит preview, и наоборот.
+// TestRateLimit_PreviewAndCreate_SeparateBuckets — INVARIANT of ADR-050 amendment
+// 2026-06-17: voyage_create and voyage_preview are DIFFERENT bucket keys per-AID, they
+// don't share a quota. Exhausting the create bucket does NOT 429 preview, and vice versa.
 //
-// Burst=1 на каждый bucket: один запрос проходит, второй — 429. Доказываем, что
-// после исчерпания create preview всё ещё имеет полный собственный burst (и
-// симметрично). Один и тот же limiter (общий Redis-аналог), один AID.
+// Burst=1 on each bucket: one request passes, the second gets 429. We prove that
+// after create is exhausted, preview still has its own full burst (and
+// symmetrically). Same limiter (a shared Redis analog), one AID.
 func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 	const aid = "archon-alice"
 	const burst = 1
@@ -285,7 +285,7 @@ func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 		return rec.Code
 	}
 
-	// 1. Исчерпываем create-бакет: первый — 202, второй — 429.
+	// 1. Exhaust the create bucket: the first — 202, the second — 429.
 	if code := do(createMW, "/v1/voyages"); code != http.StatusAccepted {
 		t.Fatalf("create #1: ожидался 202 в пределах burst, got %d", code)
 	}
@@ -293,17 +293,17 @@ func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 		t.Fatalf("create #2: ожидался 429 (бакет create исчерпан), got %d", code)
 	}
 
-	// 2. preview НЕ затронут исчерпанием create: первый preview проходит (202).
+	// 2. preview is NOT affected by exhausting create: the first preview passes (202).
 	if code := do(previewMW, "/v1/voyages/preview"); code != http.StatusAccepted {
 		t.Fatalf("preview #1: ожидался 202 — preview не делит квоту с create, got %d", code)
 	}
-	// preview исчерпан собственным burst → второй preview 429.
+	// preview is exhausted by its own burst → the second preview gets 429.
 	if code := do(previewMW, "/v1/voyages/preview"); code != http.StatusTooManyRequests {
 		t.Fatalf("preview #2: ожидался 429 (собственный preview-бакет исчерпан), got %d", code)
 	}
 
-	// 3. Симметрия: исчерпание preview не влияет на create. create уже исчерпан в
-	//    шаге 1; проверяем обратное направление на свежем AID.
+	// 3. Symmetry: exhausting preview does not affect create. create was already exhausted in
+	//    step 1; we check the reverse direction on a fresh AID.
 	const aid2 = "archon-bob"
 	doAs := func(mw func(http.Handler) http.Handler, path, who string) int {
 		rec := httptest.NewRecorder()
@@ -317,15 +317,15 @@ func TestRateLimit_PreviewAndCreate_SeparateBuckets(t *testing.T) {
 	if code := doAs(previewMW, "/v1/voyages/preview", aid2); code != http.StatusTooManyRequests {
 		t.Fatalf("bob preview #2: ожидался 429 (preview-бакет исчерпан), got %d", code)
 	}
-	// create-бакет bob-а нетронут исчерпанием его preview → проходит.
+	// bob's create bucket is untouched by exhausting his preview → it passes.
 	if code := doAs(createMW, "/v1/voyages", aid2); code != http.StatusAccepted {
 		t.Fatalf("bob create #1: ожидался 202 — create не делит квоту с preview, got %d", code)
 	}
 }
 
-// TestRateLimit_NonPositiveLimits_FailOpen — провайдер вернул нулевой/битый
-// rate/burst (hot-reload подсунул невалид) → fail-OPEN passthrough, limiter не
-// дёргается (Allow всё равно отверг бы их ошибкой).
+// TestRateLimit_NonPositiveLimits_FailOpen — the provider returned a zero/broken
+// rate/burst (hot-reload slipped in an invalid value) → fail-OPEN passthrough, the limiter is
+// not invoked (Allow would have rejected them with an error anyway).
 func TestRateLimit_NonPositiveLimits_FailOpen(t *testing.T) {
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

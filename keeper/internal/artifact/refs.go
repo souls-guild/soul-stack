@@ -12,14 +12,17 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// GitRef — одна запись git-ref-листинга: tag или branch с commit-hash-ом.
+// GitRef — a single entry of a git ref listing: a tag or branch with its
+// commit hash.
 //
-// Name — голое имя ref-а (`v2.0.0` / `main`), без `refs/tags/` / `refs/heads/`-
-// префикса. Type — `"tag"` либо `"branch"`. Commit — полный sha1. IsDefault —
-// true только для дефолтной ветки remote (HEAD-symref); у tag-ов всегда false.
+// Name — the bare ref name (`v2.0.0` / `main`), without a `refs/tags/` /
+// `refs/heads/` prefix. Type — `"tag"` or `"branch"`. Commit — the full sha1.
+// IsDefault — true only for the remote's default branch (HEAD symref); always
+// false for tags.
 //
-// Используется UI-слоем (`GET /v1/services/{name}/refs`) для рендера dropdown
-// «git-ref» в Upgrade-modal: выбор из реальных ref-ов вместо свободного ввода.
+// Used by the UI layer (`GET /v1/services/{name}/refs`) to render the
+// "git-ref" dropdown in the Upgrade modal: picking from real refs instead of
+// free-form input.
 type GitRef struct {
 	Name      string `json:"name"`
 	Type      string `json:"type"`
@@ -27,46 +30,49 @@ type GitRef struct {
 	IsDefault bool   `json:"is_default,omitempty"`
 }
 
-// Тип-маркеры GitRef.Type (стабильны для UI/JSON).
+// Type markers for GitRef.Type (stable for UI/JSON).
 const (
 	GitRefTypeTag    = "tag"
 	GitRefTypeBranch = "branch"
 )
 
-// RefsLister — поверхность listing-а git-ref-ов remote-репозитория. Объявлено
-// интерфейсом, чтобы кешер (`serviceregistry.RefsCache`) и handler могли
-// принимать минимальную зависимость; реализация — [ListRefs].
+// RefsLister — the surface for listing a remote repository's git refs.
+// Declared as an interface so that the cacher (`serviceregistry.RefsCache`)
+// and the handler can accept a minimal dependency; the implementation is
+// [ListRefs].
 type RefsLister interface {
 	ListRefs(ctx context.Context, gitURL string) ([]GitRef, error)
 }
 
-// RefsListerFunc — функциональная реализация [RefsLister] (handler-у удобно
-// передавать чистую функцию, а не строить wrapper-тип).
+// RefsListerFunc — a functional implementation of [RefsLister] (convenient
+// for a handler to pass a plain function instead of building a wrapper
+// type).
 type RefsListerFunc func(ctx context.Context, gitURL string) ([]GitRef, error)
 
-// ListRefs делает функцию реализующей [RefsLister].
+// ListRefs makes the function implement [RefsLister].
 func (f RefsListerFunc) ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
 	return f(ctx, gitURL)
 }
 
-// ListRefs опрашивает remote `gitURL` и возвращает все теги + ветки (анализ
-// ref-prefix-а). Семантически — `git ls-remote --tags --heads`, реализуется
-// через go-git `remote.ListContext` (один RPC, без клонирования; SSH-auth —
-// через [authFor], тот же путь, что у snapshotter-а).
+// ListRefs queries the remote `gitURL` and returns all tags + branches
+// (ref-prefix analysis). Semantically — `git ls-remote --tags --heads`,
+// implemented via go-git's `remote.ListContext` (a single RPC, no cloning;
+// SSH auth — via [authFor], the same path the snapshotter uses).
 //
-// Сортировка детерминирована и предсказуема для UI dropdown:
+// Sorting is deterministic and predictable for the UI dropdown:
 //
-//   - Tags — semver desc (валидный semver выше lex), при равенстве lex desc;
-//     v-prefix допустим и сравнивается без него.
-//   - Branches — `main`/`master` всегда первыми (помечены IsDefault, если они
-//     совпадают с HEAD-symref remote-а), остальные lex asc.
-//   - Результат: сначала все tag-и, затем все branch-и (раздельные блоки;
-//     UI обычно группирует их визуально).
+//   - Tags — semver desc (a valid semver ranks above lex), lex desc on ties;
+//     a v-prefix is allowed and compared without it.
+//   - Branches — `main`/`master` always come first (marked IsDefault if they
+//     match the remote's HEAD symref), the rest are lex asc.
+//   - Result: all tags first, then all branches (separate blocks; the UI
+//     usually groups them visually).
 //
-// Auth: SSH через ssh-agent (см. [authFor]; Vault-auth — post-MVP). Схема
-// валидируется через [validateGitScheme] (`file://` только под env-флагом).
-// Ошибки git/network возвращаются как есть caller-у — handler выше маппит их
-// в 502 Bad Gateway (внешний git-источник unreachable / отказал).
+// Auth: SSH via ssh-agent (see [authFor]; Vault auth is post-MVP). The scheme
+// is validated via [validateGitScheme] (`file://` only under the env flag).
+// git/network errors are returned to the caller as-is — the handler above
+// maps them to 502 Bad Gateway (the external git source is unreachable /
+// failed).
 func ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
 	if gitURL == "" {
 		return nil, fmt.Errorf("artifact: git URL пуст")
@@ -79,9 +85,9 @@ func ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
 		return nil, err
 	}
 
-	// In-memory remote: не материализуем клон, ls-remote ходит только по
-	// info/refs (HTTP-smart) или ssh-side ls. Тип Remote-а с конфигом без
-	// in-memory storage достаточно: ListContext не требует object-store.
+	// In-memory remote: we don't materialize a clone, ls-remote only hits
+	// info/refs (HTTP-smart) or ssh-side ls. A Remote with a config and no
+	// in-memory storage is enough: ListContext doesn't need an object store.
 	remote := git.NewRemote(nil, &config.RemoteConfig{
 		Name: "origin",
 		URLs: []string{gitURL},
@@ -93,15 +99,16 @@ func ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
 	return classifyRefs(refs), nil
 }
 
-// classifyRefs разбирает плоский список [*plumbing.Reference] на отсортированные
-// блоки (tags semver-desc, затем branches с дефолтной первой). Чистая функция
-// для удобства теста: не требует remote-а / сети.
+// classifyRefs splits a flat list of [*plumbing.Reference] into sorted blocks
+// (tags semver-desc, then branches with the default one first). A pure
+// function for testability: needs no remote / network.
 //
-// HEAD-symref (если remote его прислал) используется для пометки IsDefault на
-// совпадающей ветке. Annotated-tag-объекты в ls-remote приходят парой
-// `refs/tags/<name>` + `refs/tags/<name>^{}` — peeled-форма (`^{}`) даёт commit-
-// hash, голая — sha объекта тега. Берём peeled, если он есть (commit «куда
-// указывает тег»), иначе голую (lightweight tag = прямой commit-hash).
+// The HEAD symref (if the remote sent one) is used to mark IsDefault on the
+// matching branch. Annotated tag objects arrive from ls-remote as a pair:
+// `refs/tags/<name>` + `refs/tags/<name>^{}` — the peeled form (`^{}`) gives
+// the commit hash, the bare one gives the tag object's sha. We take the
+// peeled one if present (the commit "the tag points to"), otherwise the bare
+// one (a lightweight tag = a direct commit hash).
 func classifyRefs(refs []*plumbing.Reference) []GitRef {
 	const (
 		tagPrefix    = "refs/tags/"
@@ -109,7 +116,7 @@ func classifyRefs(refs []*plumbing.Reference) []GitRef {
 		peeledSuffix = "^{}"
 	)
 
-	// peeled[<name>] = commit для annotated-тегов (заменяет sha тег-объекта).
+	// peeled[<name>] = commit for annotated tags (replaces the tag object's sha).
 	peeled := make(map[string]string)
 	for _, r := range refs {
 		name := r.Name().String()
@@ -120,8 +127,8 @@ func classifyRefs(refs []*plumbing.Reference) []GitRef {
 		peeled[short] = r.Hash().String()
 	}
 
-	// HEAD-symref для пометки IsDefault. plumbing.Reference при ls-remote
-	// HEAD приходит как SymbolicReference на refs/heads/<branch>.
+	// HEAD symref for marking IsDefault. During ls-remote, HEAD arrives as a
+	// plumbing.Reference SymbolicReference pointing at refs/heads/<branch>.
 	defaultBranch := ""
 	for _, r := range refs {
 		if r.Name() == plumbing.HEAD && r.Type() == plumbing.SymbolicReference {
@@ -139,7 +146,7 @@ func classifyRefs(refs []*plumbing.Reference) []GitRef {
 		switch {
 		case strings.HasPrefix(name, tagPrefix):
 			if strings.HasSuffix(name, peeledSuffix) {
-				continue // peeled-форма учтена в map-е
+				continue // the peeled form is already accounted for in the map
 			}
 			short := strings.TrimPrefix(name, tagPrefix)
 			commit := r.Hash().String()
@@ -158,8 +165,8 @@ func classifyRefs(refs []*plumbing.Reference) []GitRef {
 		}
 	}
 
-	// Fallback: если HEAD-symref remote не прислал, помечаем main/master как
-	// default по convention (UI всё равно нужен якорь для preselect-а).
+	// Fallback: if the remote didn't send a HEAD symref, mark main/master as
+	// default by convention (the UI still needs an anchor for preselection).
 	if defaultBranch == "" {
 		fallback := pickFallbackDefault(branches)
 		if fallback != "" {
@@ -181,8 +188,9 @@ func classifyRefs(refs []*plumbing.Reference) []GitRef {
 	return out
 }
 
-// sortTags — semver desc; не-semver идут после semver-валидных, между собой
-// lex desc. v-prefix допустим (`v2.0.0` == `2.0.0` для сравнения).
+// sortTags — semver desc; non-semver ones go after semver-valid ones, lex
+// desc among themselves. A v-prefix is allowed (`v2.0.0` == `2.0.0` for
+// comparison).
 func sortTags(tags []GitRef) {
 	sort.Slice(tags, func(i, j int) bool {
 		si, oki := parseSemver(tags[i].Name)
@@ -203,7 +211,7 @@ func sortTags(tags []GitRef) {
 	})
 }
 
-// sortBranches — default первая, остальные lex asc.
+// sortBranches — the default one first, the rest lex asc.
 func sortBranches(branches []GitRef) {
 	sort.SliceStable(branches, func(i, j int) bool {
 		if branches[i].IsDefault != branches[j].IsDefault {
@@ -213,9 +221,9 @@ func sortBranches(branches []GitRef) {
 	})
 }
 
-// pickFallbackDefault — `main` либо `master`, если они есть в списке веток.
-// Применяется ТОЛЬКО когда remote не вернул HEAD-symref (старые серверы,
-// `file://`-clones без HEAD). Возвращает имя или пустую строку.
+// pickFallbackDefault — `main` or `master`, if present in the branch list.
+// Applied ONLY when the remote didn't return a HEAD symref (old servers,
+// `file://` clones without HEAD). Returns the name or an empty string.
 func pickFallbackDefault(branches []GitRef) string {
 	for _, b := range branches {
 		if b.Name == "main" {
@@ -230,17 +238,18 @@ func pickFallbackDefault(branches []GitRef) string {
 	return ""
 }
 
-// semver — минимальная структура для сравнения tag-ов: только major/minor/patch
-// (pre-release/build-metadata в UI dropdown сортировать строго по spec-у — over-
-// engineering). Pre-release suffix сохраняется в Pre для tie-break-а через lex.
+// semver — a minimal structure for comparing tags: only major/minor/patch
+// (sorting pre-release/build-metadata strictly per spec in a UI dropdown
+// would be over-engineering). The pre-release suffix is kept in Pre for a
+// lex tie-break.
 type semver struct {
 	Major, Minor, Patch int
 	Pre                 string
 }
 
-// parseSemver принимает `[v]MAJOR.MINOR.PATCH[-pre]` и возвращает (semver, true)
-// при успешном разборе. Любое отклонение — false (тег попадает в «не-semver»-
-// блок и сортируется лексикографически).
+// parseSemver accepts `[v]MAJOR.MINOR.PATCH[-pre]` and returns (semver, true)
+// on a successful parse. Any deviation — false (the tag falls into the
+// "non-semver" block and is sorted lexicographically).
 func parseSemver(tag string) (semver, bool) {
 	s := strings.TrimPrefix(tag, "v")
 	pre := ""
@@ -267,10 +276,10 @@ func parseSemver(tag string) (semver, bool) {
 	return semver{Major: maj, Minor: min, Patch: pat, Pre: pre}, true
 }
 
-// compareSemver возвращает -1/0/1: a < b / a == b / a > b. Pre-release-версия
-// (`-rc.1`) меньше release (по semver-spec §11); между собой pre-releases
-// сравниваются лексикографически (упрощение MVP, достаточно для desc-сортировки
-// UI dropdown).
+// compareSemver returns -1/0/1: a < b / a == b / a > b. A pre-release version
+// (`-rc.1`) is less than a release (per semver-spec §11); pre-releases are
+// compared lexicographically among themselves (an MVP simplification, good
+// enough for the UI dropdown's desc sort).
 func compareSemver(a, b semver) int {
 	if a.Major != b.Major {
 		return cmpInt(a.Major, b.Major)
@@ -281,7 +290,7 @@ func compareSemver(a, b semver) int {
 	if a.Patch != b.Patch {
 		return cmpInt(a.Patch, b.Patch)
 	}
-	// pre == "" — release, выше любой pre-release.
+	// pre == "" — a release, ranks above any pre-release.
 	if a.Pre == "" && b.Pre != "" {
 		return 1
 	}

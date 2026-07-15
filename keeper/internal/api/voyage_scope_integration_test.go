@@ -2,13 +2,13 @@
 
 package api
 
-// E2E на реальной PG/роутере: ADR-047 S4 — command-путь Voyage (`errand.run`)
-// пересекает резолвнутый target с Purview Архонта (target ∩ Purview). Гибрид-
-// семантика: явный чужой SID → 403; широкий target → урезание; пустое
-// пересечение → 422; Unrestricted (cluster-admin) → полный резолв (backcompat).
+// E2E over a real PG/router: ADR-047 S4 — the command path of Voyage (`errand.run`)
+// intersects the resolved target with the Archon's Purview (target ∩ Purview). Hybrid
+// semantics: an explicit foreign SID → 403; a wide target → narrowing; an empty
+// intersection → 422; Unrestricted (cluster-admin) → full resolve (backcompat).
 //
-// Закрывает security-leak: ранее command-таргет резолвился cluster-wide без
-// scope, scoped-Архонт мог запустить command на чужом coven.
+// Closes a security leak: the command target used to resolve cluster-wide without
+// scope, so a scoped Archon could run a command on a foreign coven.
 
 import (
 	"encoding/json"
@@ -21,9 +21,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// errandRunScopeRBAC — роль со scoped errand.run (`on coven=<coven>`): Архонт
-// может запускать command-Voyage только на хостах своего coven. Scope для S4-
-// пересечения берётся из селектора самого права errand.run.
+// errandRunScopeRBAC — a role with scoped errand.run (`on coven=<coven>`): the Archon
+// can only launch a command-Voyage on hosts in its own coven. The scope for the S4
+// intersection comes from the selector of the errand.run permission itself.
 func errandRunScopeRBAC(aid, coven string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -34,8 +34,8 @@ func errandRunScopeRBAC(aid, coven string) *rbactest.Config {
 	}
 }
 
-// errandRunRegexScopeRBAC — scoped errand.run на regex-измерении (`on regex=<pat>`):
-// видимость command-таргета = regexMatch по SID ([soulpurview.CompiledScope.Visible]).
+// errandRunRegexScopeRBAC — scoped errand.run on the regex dimension (`on regex=<pat>`):
+// command-target visibility = regexMatch against the SID ([soulpurview.CompiledScope.Visible]).
 func errandRunRegexScopeRBAC(aid, pattern string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -46,8 +46,8 @@ func errandRunRegexScopeRBAC(aid, pattern string) *rbactest.Config {
 	}
 }
 
-// errandRunSoulprintScopeRBAC — scoped errand.run с coven + soulprint-измерением
-// (S3b-2b отложено → Purview.Partial: под-показ, coven работает, soulprint — нет).
+// errandRunSoulprintScopeRBAC — scoped errand.run with the coven + soulprint dimension
+// (S3b-2b is deferred → Purview.Partial: under-showing, coven works, soulprint does not).
 func errandRunSoulprintScopeRBAC(aid, coven, soulprintExpr string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -59,7 +59,7 @@ func errandRunSoulprintScopeRBAC(aid, coven, soulprintExpr string) *rbactest.Con
 	}
 }
 
-// errandRunUnrestrictedRBAC — bare errand.run (без default_scope) →
+// errandRunUnrestrictedRBAC — bare errand.run (no default_scope) →
 // Purview.Unrestricted (cluster-admin backcompat).
 func errandRunUnrestrictedRBAC(aid string) *rbactest.Config {
 	return &rbactest.Config{
@@ -71,7 +71,7 @@ func errandRunUnrestrictedRBAC(aid string) *rbactest.Config {
 	}
 }
 
-// postCommandVoyage — POST /v1/voyages kind=command; возвращает статус + тело.
+// postCommandVoyage — POST /v1/voyages kind=command; returns the status + body.
 func postCommandVoyage(t *testing.T, base, tok, body string) (int, string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/voyages", strings.NewReader(body))
@@ -87,7 +87,7 @@ func postCommandVoyage(t *testing.T, base, tok, body string) (int, string) {
 }
 
 // Guard #1: scoped errand.run on coven=A, target coven=B → 422 voyage_empty_target
-// (пересечение пусто, чужой coven не запустился).
+// (the intersection is empty, the foreign coven did not launch).
 func TestIntegration_Voyage_CommandScope_TargetForeignCoven_422(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
@@ -108,8 +108,8 @@ func TestIntegration_Voyage_CommandScope_TargetForeignCoven_422(t *testing.T) {
 	}
 }
 
-// Guard #2: scoped coven=A, явный sids=[host-в-B] → 403 (anti-escalation: явное
-// указание чужого хоста = попытка эскалации, не молчаливое урезание).
+// Guard #2: scoped coven=A, an explicit sids=[host-in-B] → 403 (anti-escalation: an
+// explicit foreign host = an escalation attempt, not silent narrowing).
 func TestIntegration_Voyage_CommandScope_ExplicitForeignSID_403(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
@@ -127,12 +127,12 @@ func TestIntegration_Voyage_CommandScope_ExplicitForeignSID_403(t *testing.T) {
 	}
 }
 
-// Guard #3: scoped coven=A, target coven=A, хост с covens=[A,B] → запуск OK
-// (виден по A; multi-membership не мешает).
+// Guard #3: scoped coven=A, target coven=A, a host with covens=[A,B] → the run is OK
+// (visible via A; multi-membership doesn't get in the way).
 func TestIntegration_Voyage_CommandScope_MultiCovenHostVisible_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
-	// Хост в обоих covens A и B. Архонт scoped на A → виден.
+	// A host in both covens A and B. The Archon is scoped to A → visible.
 	seedSoulFull(t, "ab-01.example.com", "agent", soul.StatusConnected, []string{"coven-a", "coven-b"}, "archon-a")
 
 	base, stop := startServer(t, errandRunScopeRBAC("archon-a", "coven-a"))
@@ -149,13 +149,13 @@ func TestIntegration_Voyage_CommandScope_MultiCovenHostVisible_202(t *testing.T)
 	}
 }
 
-// Guard #4: широкий target coven=[shared] (3 хоста, смешанная видимость), scope
-// coven=A → резолвится только подмножество, видимое по A (урезание, НЕ весь
-// shared). Хосты shared+A видимы; хост только-shared урезан.
+// Guard #4: a wide target coven=[shared] (3 hosts, mixed visibility), scope
+// coven=A → only the subset visible via A resolves (narrowing, NOT the whole
+// shared). shared+A hosts are visible; the shared-only host is narrowed out.
 func TestIntegration_Voyage_CommandScope_WideTargetTrimmed_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
-	// Все три в shared; первые два ещё и в coven-a (видимы scope=A), третий — нет.
+	// All three are in shared; the first two are also in coven-a (visible under scope=A), the third is not.
 	seedSoulFull(t, "a-01.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-a"}, "archon-a")
 	seedSoulFull(t, "a-02.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-a"}, "archon-a")
 	seedSoulFull(t, "x-01.example.com", "agent", soul.StatusConnected, []string{"shared"}, "archon-a")
@@ -164,21 +164,21 @@ func TestIntegration_Voyage_CommandScope_WideTargetTrimmed_202(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-a", []string{"cmd-ops"})
 
-	// Target coven=shared резолвит все 3 (по AND-фильтру @> [shared]); scope=A
-	// урезает до 2 видимых (a-01, a-02), x-01 (только shared) выпадает.
+	// Target coven=shared resolves all 3 (via the AND filter @> [shared]); scope=A
+	// narrows it to the 2 visible (a-01, a-02), x-01 (shared-only) drops out.
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["shared"]}}`)
 	if code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 (урезание без отказа); body=%s", code, body)
 	}
-	// scope_size = 2 (видимые по coven-a), НЕ 3 (весь shared).
+	// scope_size = 2 (visible via coven-a), NOT 3 (the whole shared).
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
 		t.Errorf("scope_size = %d, want 2 (урезано до видимых coven-a, не весь shared)", scope)
 	}
 }
 
-// Guard #5: Unrestricted (cluster-admin) → полный резолв (backcompat). Архонт без
-// default_scope видит весь флот, command запускается на всех.
+// Guard #5: Unrestricted (cluster-admin) → full resolve (backcompat). An Archon
+// without default_scope sees every soul, the command runs on all of them.
 func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-admin", "")
@@ -190,7 +190,7 @@ func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing
 	defer stop()
 	tok := newValidTokenFor(t, "archon-admin", []string{"cmd-admin"})
 
-	// Target coven=B — Unrestricted-Архонт запускает (его scope не урезает).
+	// Target coven=B — an Unrestricted Archon launches it (its scope doesn't narrow anything).
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-b"]}}`)
 	if code != http.StatusAccepted {
@@ -200,7 +200,7 @@ func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing
 		t.Errorf("scope_size = %d, want 2 (весь coven-b, без урезания)", scope)
 	}
 
-	// Явный SID любого coven — тоже OK (не 403): Unrestricted без DeniedExplicit.
+	// An explicit SID from any coven is also OK (not 403): Unrestricted has no DeniedExplicit.
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["a-01.example.com"]}}`)
 	if code2 != http.StatusAccepted {
@@ -208,8 +208,8 @@ func TestIntegration_Voyage_CommandScope_Unrestricted_FullResolve_202(t *testing
 	}
 }
 
-// Guard #6: regex-scoped errand.run on host=^web- → только web-* (regex-измерение
-// Purview через Visible). target coven=prod (широкий) урезается до web-*.
+// Guard #6: regex-scoped errand.run on host=^web- → only web-* (the regex dimension
+// of Purview via Visible). target coven=prod (wide) narrows down to web-*.
 func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-web", "")
@@ -221,7 +221,7 @@ func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-web", []string{"cmd-regex-ops"})
 
-	// Широкий target coven=prod (3 хоста); regex-scope ^web- урезает до 2 web-*.
+	// A wide target coven=prod (3 hosts); regex-scope ^web- narrows it to 2 web-*.
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["prod"]}}`)
 	if code != http.StatusAccepted {
@@ -231,7 +231,7 @@ func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
 		t.Errorf("scope_size = %d, want 2 (только web-*, db-01 урезан regex-ом)", scope)
 	}
 
-	// Явный db-01 (не матчит ^web-) → 403 (anti-escalation).
+	// An explicit db-01 (doesn't match ^web-) → 403 (anti-escalation).
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["db-01.example.com"]}}`)
 	if code2 != http.StatusForbidden {
@@ -239,16 +239,16 @@ func TestIntegration_Voyage_CommandScope_RegexScope_202(t *testing.T) {
 	}
 }
 
-// Guard #7: soulprint-scoped (Partial — S3b-2b отложено) → под-показ: coven-
-// измерение работает, soulprint НЕ вычисляется (хост, доступный ТОЛЬКО по
-// soulprint, не зацеплен — fail-closed, никогда over-show). Архонт с
-// coven=A + soulprint=... видит ровно coven-A; чужого не цепляет.
+// Guard #7: soulprint-scoped (Partial — S3b-2b deferred) → under-showing: the coven
+// dimension works, soulprint is NOT evaluated (a host reachable ONLY via
+// soulprint is not caught — fail-closed, never over-show). An Archon with
+// coven=A + soulprint=... sees exactly coven-A; nothing foreign gets caught.
 func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-sp", "")
-	// Оба в shared. a-01 ещё и в coven-a (виден по coven-измерению). b-01 в
-	// coven-b — доступен был бы ТОЛЬКО по soulprint (не вычисляется в MVP →
-	// Partial под-показ), по coven-a НЕ виден → не зацеплен.
+	// Both are in shared. a-01 is also in coven-a (visible via the coven dimension). b-01 is
+	// in coven-b — it would only be reachable via soulprint (not evaluated in the MVP →
+	// Partial under-showing), it is NOT visible via coven-a → not caught.
 	seedSoulFull(t, "a-01.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-a"}, "archon-sp")
 	seedSoulFull(t, "b-01.example.com", "agent", soul.StatusConnected, []string{"shared", "coven-b"}, "archon-sp")
 
@@ -256,8 +256,8 @@ func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testi
 	defer stop()
 	tok := newValidTokenFor(t, "archon-sp", []string{"cmd-sp-ops"})
 
-	// Широкий target coven=shared (2 хоста): coven-A работает (a-01), soulprint
-	// под-показ (b-01 не зацеплен). scope_size = 1.
+	// A wide target coven=shared (2 hosts): coven-A works (a-01), soulprint
+	// under-shows (b-01 is not caught). scope_size = 1.
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["shared"]}}`)
 	if code != http.StatusAccepted {
@@ -267,8 +267,8 @@ func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testi
 		t.Errorf("scope_size = %d, want 1 (coven-a работает, soulprint под-показ)", scope)
 	}
 
-	// Явный b-01 (вне coven-A, доступен был бы только по soulprint) → 403
-	// (fail-closed: под-показ скрывает, явное указание = эскалация).
+	// An explicit b-01 (outside coven-A, would only be reachable via soulprint) → 403
+	// (fail-closed: under-showing hides it, an explicit reference = escalation).
 	code2, body2 := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"sids":["b-01.example.com"]}}`)
 	if code2 != http.StatusForbidden {
@@ -276,7 +276,7 @@ func TestIntegration_Voyage_CommandScope_SoulprintPartial_UnderShow_202(t *testi
 	}
 }
 
-// scopeSizeFromReply вытаскивает scope_size из 202-тела voyageCreateReply.
+// scopeSizeFromReply extracts scope_size from the voyageCreateReply 202 body.
 func scopeSizeFromReply(t *testing.T, body string) int {
 	t.Helper()
 	var reply struct {

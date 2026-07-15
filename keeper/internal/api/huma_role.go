@@ -1,19 +1,19 @@
 package api
 
-// PILOT-2 разворота OpenAPI spec-first → code-first на huma v2, FULL-TYPED форма
-// (ADR-054 §Audit). Доказывает РОУТ POST /v1/roles поверх chi-mux через huma как
-// ЭТАЛОН тиража ~30 middleware-audit-доменов: тот же FULL-TYPED-конверт, что pilot-1
-// (cadence), ПЛЮС huma-native audit-middleware (вариант B, huma_audit.go) — потому
-// что role писал audit через apimiddleware.Audit + SetAuditPayload, а full-typed
-// huma САМ пишет ответ (StatusRecorder к нему неприменим). Pilot-1 cadence писал
-// self-audit ВНУТРИ CreateTyped (emitWrite) и middleware-audit не имел — для тиража
-// доменов с middleware-audit нужен именно вариант B.
+// PILOT-2 of the OpenAPI spec-first → code-first rollout onto huma v2, FULL-TYPED form
+// (ADR-054 §Audit). Proves the POST /v1/roles ROUTE on top of chi-mux through huma as
+// the REFERENCE for rolling out ~30 middleware-audit domains: the same FULL-TYPED envelope
+// as pilot-1 (cadence), PLUS huma-native audit-middleware (variant B, huma_audit.go) —
+// because role used to write audit through apimiddleware.Audit + SetAuditPayload, while
+// full-typed huma writes the response ITSELF (StatusRecorder does not apply to it). Pilot-1
+// cadence wrote self-audit INSIDE CreateTyped (emitWrite) and had no middleware-audit —
+// rolling out domains with middleware-audit needs exactly variant B.
 //
-// Граница та же, что pilot-1 (huma_cadence.go §FULL-TYPED PATTERN): typed input +
-// извлечённая CreateTyped + тонкий конверт + typed output (без Body — 201 пустое,
-// легаси-контракт). Отличие — payload кладётся на huma-ctx через
-// SetHumaAuditPayload (а не на *http.Request через SetAuditPayload), middleware
-// читает после next.
+// The boundary is the same as pilot-1 (huma_cadence.go §FULL-TYPED PATTERN): typed input +
+// extracted CreateTyped + a thin envelope + typed output (no Body — empty 201,
+// legacy contract). The difference — the payload is placed on the huma-ctx via
+// SetHumaAuditPayload (rather than on *http.Request via SetAuditPayload), the middleware
+// reads it after next.
 
 import (
 	"context"

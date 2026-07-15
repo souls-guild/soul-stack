@@ -1,14 +1,15 @@
-// Package health — реализация `/healthz` (liveness) и `/readyz` (readiness)
-// для Keeper-а.
+// Package health implements `/healthz` (liveness) and `/readyz` (readiness)
+// for the Keeper.
 //
-// Маршруты вне `/v1/*`, без auth (operator-api.md § Health / Meta), не
-// пишутся в audit (high-frequency probes от k8s/balancer).
+// Routes outside `/v1/*`, no auth (operator-api.md § Health / Meta), not
+// written to audit (high-frequency probes from k8s/balancer).
 //
-// `/healthz` — статический 200; «процесс жив». `/readyz` — пингует
-// зависимости (Postgres + Redis обязательны, Vault — если сконфигурён), на
-// failure отдаёт 503 со списком провалившихся checks в JSON. Полный набор
-// зависимостей нужен для fail-fast: нездоровый Keeper отдаёт `not_ready`, и
-// LB уводит трафик на здоровый инстанс кластера (ADR-002, HA-кластер Keeper).
+// `/healthz` is a static 200; "process is alive". `/readyz` pings
+// dependencies (Postgres + Redis are required, Vault if configured); on
+// failure it returns 503 with the list of failed checks in JSON. The full
+// set of dependencies is needed for fail-fast: an unhealthy Keeper returns
+// `not_ready`, and the LB routes traffic to a healthy cluster instance
+// (ADR-002, Keeper HA cluster).
 package health
 
 import (
@@ -20,54 +21,54 @@ import (
 	"time"
 )
 
-// perCheckTimeout — жёсткий per-dependency timeout для ping-операции.
-// Без него `/readyz` (unauthenticated endpoint) становится DoS-вектором:
-// атакующий открывает сотни параллельных запросов, каждый удерживает
-// PG-connection до общего request-timeout-а (десятки секунд).
-// 2s — порядок «достаточно для здорового PG/Vault, бьёт по slow-path».
+// perCheckTimeout is a hard per-dependency timeout for the ping operation.
+// Without it `/readyz` (an unauthenticated endpoint) becomes a DoS vector:
+// an attacker opens hundreds of parallel requests, each holding a
+// PG connection until the overall request timeout (tens of seconds).
+// 2s is roughly "enough for a healthy PG/Vault, hits the slow path".
 const perCheckTimeout = 2 * time.Second
 
-// Pinger — минимальный интерфейс health-проверки одной зависимости.
-// PG-pool и Vault-client оба реализуют `Ping(ctx) error`, поэтому
-// каждый из них подходит без adapter-а.
+// Pinger is the minimal health-check interface for a single dependency.
+// PG-pool and Vault-client both implement `Ping(ctx) error`, so
+// each of them fits without an adapter.
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
-// Deps — зависимости, доступность которых проверяет `/readyz`. PG и Redis —
-// обязательные (без них Keeper не обслуживает запросы: реестры в Postgres,
-// lease/heartbeat в Redis — ADR-005/006); Vault — опционален (nil, если в
-// инсталляции не сконфигурён). Любой nil-Pinger check пропускается и в
-// response не упоминается.
+// Deps holds the dependencies whose availability `/readyz` checks. PG and
+// Redis are required (without them Keeper cannot serve requests: registries
+// live in Postgres, lease/heartbeat in Redis — ADR-005/006); Vault is
+// optional (nil if not configured in the installation). Any nil-Pinger
+// check is skipped and not mentioned in the response.
 type Deps struct {
 	PG    Pinger
 	Redis Pinger
 	Vault Pinger
 }
 
-// Handler — собранные health-эндпоинты, регистрируется в роутере.
+// Handler holds the assembled health endpoints, registered on the router.
 type Handler struct {
 	deps Deps
 }
 
-// NewHandler собирает handler из зависимостей. Любая зависимость может
-// быть nil — тогда соответствующий check пропускается (handler не
-// сообщает о ней в response).
+// NewHandler assembles a handler from the dependencies. Any dependency can
+// be nil — the corresponding check is then skipped (the handler does not
+// mention it in the response).
 func NewHandler(deps Deps) *Handler {
 	return &Handler{deps: deps}
 }
 
-// Healthz пишет 200 OK с фиксированным телом. Не зависит от состояния
-// внешних систем (по определению liveness — «процесс отвечает»).
+// Healthz writes 200 OK with a fixed body. Does not depend on the state of
+// external systems (by definition of liveness — "the process responds").
 func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// Readyz проверяет все непустые зависимости параллельно, каждую под
-// per-check timeout-ом ([perCheckTimeout]). Overall-latency = max по
-// проверкам (а не sum) — нужно для k8s probes с коротким period.
+// Readyz checks all non-nil dependencies in parallel, each under the
+// per-check timeout ([perCheckTimeout]). Overall latency = max across
+// checks (not sum) — needed for k8s probes with a short period.
 //
-// На failure любой из проверок — 503 со списком статусов в `checks{}`.
+// On failure of any check — 503 with the list of statuses in `checks{}`.
 type readyResp struct {
 	Status string            `json:"status"`
 	Checks map[string]string `json:"checks"`
@@ -87,16 +88,17 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, resp)
 }
 
-// Check пингует все непустые зависимости [Deps] параллельно (каждую под
-// [perCheckTimeout]) и возвращает карту `name → "ok" | причина-провала` +
-// агрегированный флаг «все ли ok». Nil-Pinger check пропускается (в карту не
-// попадает). Единый источник health-семантики: `/readyz` ([Handler.Readyz]) и
-// `GET /v1/cluster` self_health (per-instance PG/Redis/Vault) считают доступность
-// одинаково — расхождения между liveness-пробой и cluster-view не будет.
+// Check pings all non-nil dependencies from [Deps] in parallel (each under
+// [perCheckTimeout]) and returns a map `name → "ok" | failure reason` plus
+// an aggregated "all ok" flag. A nil-Pinger check is skipped (not included
+// in the map). Single source of health semantics: `/readyz` ([Handler.Readyz])
+// and `GET /v1/cluster` self_health (per-instance PG/Redis/Vault) compute
+// availability the same way — no divergence between the liveness probe and
+// the cluster view.
 func Check(ctx context.Context, deps Deps) (map[string]string, bool) {
 	type result struct {
 		name string
-		msg  string // пустой = ok
+		msg  string // empty = ok
 	}
 	type namedPinger struct {
 		name string
@@ -127,9 +129,9 @@ func Check(ctx context.Context, deps Deps) (map[string]string, bool) {
 				results[i] = result{name: name}
 				return
 			}
-			// Различаем timeout (наш per-check ctx истёк) от транспортной
-			// ошибки — оператору сильно полезнее: timeout = «висит», error
-			// = «отказывает с понятной причиной».
+			// Distinguish a timeout (our per-check ctx expired) from a
+			// transport error — much more useful to the operator: timeout
+			// = "hanging", error = "failing with a clear reason".
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				results[i] = result{name: name, msg: "ping timeout (2s)"}
 				return

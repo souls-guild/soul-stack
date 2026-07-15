@@ -11,26 +11,28 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// PluginAdapter реализует [PluginHost] поверх keeper/internal/pluginhost.
-// Заменяет [StubHost] в проде (см. wire-up в keeper/cmd/keeper/main.go).
+// PluginAdapter implements [PluginHost] on top of keeper/internal/pluginhost.
+// Replaces [StubHost] in prod (see wire-up in keeper/cmd/keeper/main.go).
 //
-// Lookup провайдера — по `manifest.name` среди discovery-кеша, который уже
-// отфильтрован [pluginhost.FilterByCatalog] по `keeper.yml::plugins.cloud_drivers[].name`
-// (PM-decision delegation.md #1). Сравнение CASE-sensitive, как и в каталоге.
+// Provider lookup is by `manifest.name` among the discovery cache, which is
+// already filtered by [pluginhost.FilterByCatalog] against
+// `keeper.yml::plugins.cloud_drivers[].name` (PM-decision delegation.md #1).
+// Comparison is CASE-sensitive, same as in the catalog.
 //
-// Spawn-цикл — one-shot per RPC (ADR-020(d), PM-decision delegation.md #3):
-// Spawn → Create/Destroy → Close. Никаких long-lived connections;
-// изоляция между задачами гарантируется новым процессом плагина.
+// Spawn cycle is one-shot per RPC (ADR-020(d), PM-decision delegation.md #3):
+// Spawn → Create/Destroy → Close. No long-lived connections;
+// isolation between tasks is guaranteed by a fresh plugin process.
 type PluginAdapter struct {
 	host      *pluginhost.Host
 	providers map[string]pluginhost.Discovered
 }
 
-// NewPluginAdapter индексирует переданный discovery-список по `manifest.name`
-// для O(1) lookup-а в Create/Destroy. Дубликаты имён в discovery недопустимы:
-// FilterByCatalog не дедуплицирует, но caller (wire-up в main.go) подаёт
-// только cloud_driver-плагины. При коллизии имени возвращается ошибка —
-// это конфигурационная проблема (две записи с одинаковым `name`), не runtime.
+// NewPluginAdapter indexes the given discovery list by `manifest.name` for
+// O(1) lookup in Create/Destroy. Duplicate names in discovery are not
+// allowed: FilterByCatalog doesn't deduplicate, but the caller (wire-up in
+// main.go) only feeds it cloud_driver plugins. A name collision returns an
+// error — that's a configuration problem (two entries with the same
+// `name`), not a runtime one.
 func NewPluginAdapter(host *pluginhost.Host, discovered []pluginhost.Discovered) (*PluginAdapter, error) {
 	if host == nil {
 		return nil, errors.New("cloud adapter: pluginhost.Host is nil")
@@ -52,8 +54,9 @@ func NewPluginAdapter(host *pluginhost.Host, discovered []pluginhost.Discovered)
 	return &PluginAdapter{host: host, providers: providers}, nil
 }
 
-// encodeStruct кодирует map[string]any в *structpb.Struct; nil/пустой map →
-// nil (proto-поле остаётся unset). `field` — имя для error-контекста.
+// encodeStruct encodes map[string]any into *structpb.Struct; a nil/empty
+// map → nil (the proto field stays unset). `field` is the name used for
+// error context.
 func encodeStruct(m map[string]any, field string) (*structpb.Struct, error) {
 	if len(m) == 0 {
 		return nil, nil
@@ -65,8 +68,8 @@ func encodeStruct(m map[string]any, field string) (*structpb.Struct, error) {
 	return s, nil
 }
 
-// Providers возвращает список индексированных имён провайдеров. Используется
-// для диагностики при unknown-provider-ошибке и в logging-выводе main-а.
+// Providers returns the list of indexed provider names. Used for
+// diagnostics on unknown-provider errors and in main's logging output.
 func (a *PluginAdapter) Providers() []string {
 	out := make([]string, 0, len(a.providers))
 	for name := range a.providers {
@@ -75,9 +78,10 @@ func (a *PluginAdapter) Providers() []string {
 	return out
 }
 
-// Create — реализация [PluginHost.Create]. Spawn one-shot, server-stream
-// Read до EOF, аггрегация всех VmInfo из всех событий стрима. `driver` —
-// имя CloudDriver-плагина (= Provider.Type), под которым он в discovery-кеше.
+// Create is the [PluginHost.Create] implementation. One-shot spawn,
+// server-stream Read until EOF, aggregating all VmInfo from every stream
+// event. `driver` is the CloudDriver plugin name (= Provider.Type) it is
+// registered under in the discovery cache.
 func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata, name string) ([]*pluginv1.VmInfo, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -122,25 +126,27 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 	return vms, nil
 }
 
-// createEventStream — узкое подмножество grpc.ServerStreamingClient[CreateEvent]
-// (только Recv), достаточное для агрегации Create-стрима. Узкий интерфейс
-// позволяет покрыть [collectCreateVMs] unit-тестом без живого gRPC-плагина.
+// createEventStream is a narrow subset of
+// grpc.ServerStreamingClient[CreateEvent] (Recv only), enough to aggregate
+// the Create stream. The narrow interface lets [collectCreateVMs] be
+// covered by a unit test without a live gRPC plugin.
 type createEventStream interface {
 	Recv() (*pluginv1.CreateEvent, error)
 }
 
-// collectCreateVMs читает Create-стрим драйвера до EOF и агрегирует созданные
-// VM. Driver-failure ОБЯЗАН пропагироваться ошибкой (а не молча терять VM):
-// CreateEvent.failed=true — это сбой всей операции (cluster read-only, quota,
-// и т.п.), драйвер закрывает стрим после первого такого события (контракт
-// proto/plugin/v1/clouddriver.proto → CreateEvent). Симметрично stream-level
-// обработке failed в [PluginAdapter.Resize].
+// collectCreateVMs reads the driver's Create stream until EOF and
+// aggregates the created VMs. A driver failure MUST propagate as an error
+// (never silently drop VMs): CreateEvent.failed=true means the whole
+// operation failed (cluster read-only, quota, etc.), and the driver closes
+// the stream after the first such event (contract in
+// proto/plugin/v1/clouddriver.proto → CreateEvent). Symmetric with the
+// stream-level handling of failed in [PluginAdapter.Resize].
 //
-// Возврат ошибки здесь → applyCreated отдаёт failed-event → шаг
-// `core.cloud.created` падает → incarnation error_locked (НЕ ложный
-// operational с 0 VM). Если драйвер прислал failed=true, частично собранные
-// vms НЕ возвращаются: провижн как целое провалился, нельзя онбордить
-// подмножество как успех.
+// Returning an error here → applyCreated emits a failed-event → the
+// `core.cloud.created` step fails → incarnation goes error_locked (NOT a
+// false operational with 0 VMs). If the driver sent failed=true, the
+// partially collected vms are NOT returned: provisioning failed as a
+// whole, so a subset can't be onboarded as a success.
 func collectCreateVMs(stream createEventStream) ([]*pluginv1.VmInfo, error) {
 	var vms []*pluginv1.VmInfo
 	for {
@@ -165,9 +171,10 @@ func collectCreateVMs(stream createEventStream) ([]*pluginv1.VmInfo, error) {
 	return vms, nil
 }
 
-// Destroy — реализация [PluginHost.Destroy]. Spawn one-shot, server-stream
-// Read до EOF, аггрегация `vm_id` из всех событий — это «фактически
-// удалённые» (provider может отвергнуть подмножество, см. контракт).
+// Destroy is the [PluginHost.Destroy] implementation. One-shot spawn,
+// server-stream Read until EOF, aggregating `vm_id` from every event —
+// these are the "actually deleted" ones (the provider may reject a
+// subset, see the contract).
 func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials map[string]any, vmIDs []string) ([]string, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -211,7 +218,7 @@ func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials 
 	return destroyed, nil
 }
 
-// Status — реализация [PluginHost.Status]. Spawn one-shot, unary RPC.
+// Status is the [PluginHost.Status] implementation. One-shot spawn, unary RPC.
 func (a *PluginAdapter) Status(ctx context.Context, driver string, credentials map[string]any, vmID string) (*pluginv1.StatusReply, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -241,8 +248,8 @@ func (a *PluginAdapter) Status(ctx context.Context, driver string, credentials m
 	return rep, nil
 }
 
-// List — реализация [PluginHost.List]. Spawn one-shot, server-stream Read до
-// EOF, аггрегация всех VmInfo.
+// List is the [PluginHost.List] implementation. One-shot spawn,
+// server-stream Read until EOF, aggregating all VmInfo.
 func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, filter map[string]any) ([]*pluginv1.VmInfo, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -288,10 +295,11 @@ func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, fi
 	return vms, nil
 }
 
-// Resize — реализация [PluginHost.Resize]. Spawn one-shot, server-stream Read
-// до EOF, агрегация per-vm результатов из финального события. Stream-level
-// failed=true (включая resize.unsupported от драйвера без Resizable-capability)
-// превращается в ошибку с message события — модуль маппит её в failed-event.
+// Resize is the [PluginHost.Resize] implementation. One-shot spawn,
+// server-stream Read until EOF, aggregating per-vm results from the final
+// event. Stream-level failed=true (including resize.unsupported from a
+// driver without the Resizable capability) becomes an error carrying the
+// event's message — the module maps it to a failed-event.
 func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials map[string]any, vmIDs []string, desired *pluginv1.ResizeSpec, allowDowntime bool) ([]*pluginv1.VmResizeResult, error) {
 	d, ok := a.providers[driver]
 	if !ok {
@@ -334,9 +342,10 @@ func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials m
 				d.Manifest.Address(), recvErr, plugin.StderrTail())
 		}
 		if ev.GetFailed() {
-			// Stream-level сбой всей операции (включая resize.unsupported от
-			// драйвера без Resizable). Превращаем в ошибку — модуль выдаст
-			// failed-event с этим message.
+			// Stream-level failure of the whole operation (including
+			// resize.unsupported from a driver without Resizable). Turn it
+			// into an error — the module will emit a failed-event with
+			// this message.
 			return nil, fmt.Errorf("%s", ev.GetMessage())
 		}
 		if len(ev.GetResults()) > 0 {

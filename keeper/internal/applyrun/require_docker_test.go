@@ -2,8 +2,8 @@ package applyrun
 
 import "os"
 
-// requireDocker — true, если CI требует обязательного docker-а.
-// Паттерн совпадает с incarnation / operator / auditpg / api пакетами.
+// requireDocker reports whether CI requires docker to be mandatory.
+// Mirrors the pattern used by the incarnation / operator / auditpg / api packages.
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
 	return v == "1" || v == "true"

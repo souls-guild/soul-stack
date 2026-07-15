@@ -25,37 +25,37 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// discardSlog — logger в /dev/null для middleware.Audit в unit-тестах.
+// discardSlog — a logger into /dev/null for middleware.Audit in unit tests.
 func discardSlog() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
-// fakeSoulPool — мок [SoulPool] для unit-тестов Soul-handler-а. Диспетчер
-// SQL поверх soul.* / bootstraptoken.* CRUD. BeginTx возвращает [soulTx],
-// проксирующую обратно. Транзакционная consistency (rollback на сбое) —
-// integration-тест; здесь проверяем маппинг ошибок и shape ответа.
+// fakeSoulPool — mock [SoulPool] for unit tests of the Soul handler. Dispatches
+// SQL across soul.* / bootstraptoken.* CRUD. BeginTx returns [soulTx],
+// which proxies back. Transactional consistency (rollback on failure) is
+// covered by the integration test; here we check error mapping and response shape.
 type fakeSoulPool struct {
 	beginErr error
 
-	// soulExists: SelectBySID отдаёт строку (для issue-token); nil → ErrNoRows.
+	// soulExists: SelectBySID returns a row (for issue-token); nil → ErrNoRows.
 	existingSoul *soul.Soul
-	// soulInsertErr: ошибка soul.Insert (например, unique-violation).
+	// soulInsertErr: error from soul.Insert (e.g. a unique-violation).
 	soulInsertErr error
-	// tokenInsertErr: ошибка bootstraptoken.Insert (active-exists).
+	// tokenInsertErr: error from bootstraptoken.Insert (active-exists).
 	tokenInsertErr error
-	// activeTokenID: token_id, который вернёт ExpireActiveBySID; "" → нет
-	// активного токена (pgx.ErrNoRows из RETURNING).
+	// activeTokenID: the token_id that ExpireActiveBySID will return; "" → no
+	// active token (pgx.ErrNoRows from RETURNING).
 	activeTokenID string
 
-	// listCount: значение COUNT(*) для List (SelectAll). Считывается из
-	// QueryRow при наличии "COUNT(*) FROM souls" в SQL.
+	// listCount: the COUNT(*) value for List (SelectAll). Read from
+	// QueryRow when the SQL contains "COUNT(*) FROM souls".
 	listCount int
-	// listSouls: строки, которые отдаст Query (SelectAll). nil → пустой набор.
+	// listSouls: the rows that Query (SelectAll) will return. nil → an empty set.
 	listSouls []*soul.Soul
-	// listQueryErr: ошибка Query (SelectAll list-pass) для проверки 500-маппинга.
+	// listQueryErr: error from Query (SelectAll list-pass), for checking 500 mapping.
 	listQueryErr error
-	// lastListWhere: фрагмент SQL последнего list-QueryRow/Query (для проверки
-	// что фильтры дошли до SQL без конкатенации значений).
+	// lastListWhere: the SQL fragment from the last list-QueryRow/Query (to check
+	// that filters reached the SQL without value concatenation).
 	lastListArgs []any
 
 	expireCalled bool
@@ -64,40 +64,40 @@ type fakeSoulPool struct {
 	commitCalled   bool
 	rollbackCalled bool
 
-	// bulk-поля для AssignCoven: listCount служит count-ом (Matched);
-	// CTE-чанк отдаёт (bulkScanned, bulkChanged, bulkMaxSID). bulkMaxSID=""
-	// и bulkScanned<bulkChunkSize → итерация завершается одним чанком.
+	// bulk fields for AssignCoven: listCount serves as the count (Matched);
+	// the CTE chunk returns (bulkScanned, bulkChanged, bulkMaxSID). bulkMaxSID=""
+	// and bulkScanned<bulkChunkSize → the iteration finishes in a single chunk.
 	bulkChanged    int
 	bulkScanned    int
 	bulkMaxSID     string
 	bulkChunkCalls int
 	lastBulkArgs   []any
 
-	// bulkChunkPlan — per-call сценарий чанков для multi-chunk / partial.
-	// Если задан, каждый chunk-QueryRow берёт следующий шаг из плана (по
-	// bulkChunkCalls); иначе работает статичный одно-чанковый путь выше.
-	// Завершающий пустой чанк (scanned<bulkChunkSize) caller обязан положить
-	// сам — fake его не дописывает (моделируем ровно то, что вернёт PG).
+	// bulkChunkPlan — per-call chunk scenario for multi-chunk / partial cases.
+	// If set, each chunk-QueryRow takes the next step from the plan (indexed by
+	// bulkChunkCalls); otherwise the static single-chunk path above runs.
+	// The caller must supply the trailing empty chunk (scanned<bulkChunkSize)
+	// itself — the fake doesn't append it (we model exactly what PG would return).
 	bulkChunkPlan []bulkChunkStep
 
-	// updateSshTargetCalls — счётчик UPDATE souls SET ssh_target. notFound=true
-	// → RETURNING вернёт pgx.ErrNoRows (моделирует «SID не существует»).
+	// updateSshTargetCalls — counter of UPDATE souls SET ssh_target calls. notFound=true
+	// → RETURNING returns pgx.ErrNoRows (models "the SID doesn't exist").
 	updateSshTargetCalls    int
 	updateSshTargetNotFound bool
 	lastUpdateSshTargetArgs []any
 
-	// scopeEvalAll — весь набор строк ListForScopeEval (S3b-2a keyset-режим),
-	// эмулирующий содержимое `souls`. Fake сам применяет keyset-окно по
-	// (registered_at, sid)-границе из args (как реальная PG), чтобы курсорный
-	// обход не давал дублей/пропусков. Порядок в наборе задавать НЕ обязательно —
-	// fake сортирует как SQL (registered_at DESC, sid ASC).
+	// scopeEvalAll — the full set of ListForScopeEval rows (S3b-2a keyset mode),
+	// emulating the contents of `souls`. The fake applies the keyset window itself over
+	// the (registered_at, sid) boundary from args (like real PG does), so cursor
+	// traversal produces no duplicates/gaps. The set's order doesn't need to be set up —
+	// the fake sorts it like the SQL does (registered_at DESC, sid ASC).
 	scopeEvalAll     []soul.ScopeEvalRow
-	scopeEvalQueries int // счётчик scope-eval Query-вызовов (cap/добор-проверка).
+	scopeEvalQueries int // counter of scope-eval Query calls (cap/backfill check).
 }
 
-// bulkChunkStep — один шаг плана multi-chunk: что вернёт CTE-чанк
-// (scanned/changed/maxSID) либо ошибку (err != nil → errRow, моделирует
-// сбой коммита чанка → BulkAssignCoven отдаёт BulkPartial).
+// bulkChunkStep — one step of a multi-chunk plan: what the CTE chunk
+// returns (scanned/changed/maxSID) or an error (err != nil → errRow, models
+// a chunk-commit failure → BulkAssignCoven returns BulkPartial).
 type bulkChunkStep struct {
 	scanned int
 	changed int
@@ -105,15 +105,15 @@ type bulkChunkStep struct {
 	err     error
 }
 
-// fakeScoper — мок [PurviewResolver] для unit-тестов List/AssignCoven. Поля
-// мапятся в [rbac.Purview]: covens → Covens, unrestricted → Unrestricted.
-// Доп. поля покрывают scope-ветки List (Empty / regex keyset / soulprint Partial).
+// fakeScoper — mock [PurviewResolver] for unit tests of List/AssignCoven. Fields
+// map to [rbac.Purview]: covens → Covens, unrestricted → Unrestricted.
+// The extra fields cover List's scope branches (Empty / regex keyset / soulprint Partial).
 type fakeScoper struct {
 	covens         []string
 	unrestricted   bool
-	empty          bool     // Purview{} (fail-closed): ни одного измерения.
-	regexes        []string // regex-измерение (keyset-режим, S3b-2a).
-	soulprintExprs []string // введённое не-вычисляемое измерение (Partial-ветка).
+	empty          bool     // Purview{} (fail-closed): no dimension at all.
+	regexes        []string // regex dimension (keyset mode, S3b-2a).
+	soulprintExprs []string // an introduced non-evaluable dimension (Partial branch).
 }
 
 func (s fakeScoper) ResolvePurview(_, _, _ string) rbac.Purview {
@@ -142,13 +142,13 @@ func (f *fakeSoulPool) Exec(_ context.Context, sql string, args ...any) (pgconn.
 func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "WITH chunk AS"):
-		// Bulk chunk CTE: возвращает (scanned, changed, max_sid). Один чанк
-		// меньше bulkChunkSize → BulkAssignCoven завершает итерацию. Эта ветка
-		// ПЕРВОЙ: CTE содержит и `FROM souls`, и `WHERE sid IN(...)`, иначе бы
-		// сматчилась soul-select-ветка ниже.
+		// Bulk chunk CTE: returns (scanned, changed, max_sid). One chunk
+		// smaller than bulkChunkSize → BulkAssignCoven finishes the iteration. This branch
+		// comes FIRST: the CTE contains both `FROM souls` and `WHERE sid IN(...)`, otherwise
+		// the soul-select branch below would match it instead.
 		f.lastBulkArgs = args
-		// Multi-chunk / partial: шаг плана по номеру вызова. Ошибка в шаге →
-		// errRow (моделирует сбой коммита чанка → BulkPartial).
+		// Multi-chunk / partial: the plan step indexed by call number. An error in the step →
+		// errRow (models a chunk-commit failure → BulkPartial).
 		if f.bulkChunkPlan != nil {
 			idx := f.bulkChunkCalls
 			f.bulkChunkCalls++
@@ -176,15 +176,15 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 		if f.soulInsertErr != nil {
 			return errRow{err: f.soulInsertErr}
 		}
-		// RETURNING registered_at, requested_at (оба non-NULL; PG
-		// проставляет requested_at через COALESCE(..., NOW())).
+		// RETURNING registered_at, requested_at (both non-NULL; PG
+		// fills in requested_at via COALESCE(..., NOW())).
 		now := time.Now().UTC()
 		return staticRow{values: []any{now, now}}
 
 	case strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid = $1"):
-		// SelectBySID: точечный фильтр по PK. Узкий matcher с `= $1` ОТ
-		// `sid = ANY($n)` (bulk-selector через sids), иначе COUNT-ветка с
-		// sids-предикатом неверно матчилась бы сюда.
+		// SelectBySID: a point filter on PK. A narrow matcher with `= $1` to distinguish it FROM
+		// `sid = ANY($n)` (the bulk selector via sids), otherwise the COUNT branch with
+		// a sids predicate would incorrectly match here.
 		if f.existingSoul == nil {
 			return errRow{err: pgx.ErrNoRows}
 		}
@@ -198,7 +198,7 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 		// last_seen_at, last_seen_by_kid, created_by_aid, requested_at, note.
 		return staticRow{values: []any{
 			s.SID, string(s.Transport), string(s.Status), s.Coven,
-			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
+			[]byte(nil), // traits jsonb (ADR-060): NULL → an empty map in scanSoul
 			s.RegisteredAt, lastSeenAt, lastSeenByKID, createdByAID, requestedAt, note,
 		}}
 
@@ -227,7 +227,7 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 		if f.updateSshTargetNotFound {
 			return errRow{err: pgx.ErrNoRows}
 		}
-		// RETURNING sid — отдаём именно тот SID, что прилетел в $1.
+		// RETURNING sid — return exactly the SID that arrived in $1.
 		var sid string
 		if len(args) > 0 {
 			if s, ok := args[0].(string); ok {
@@ -240,9 +240,9 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 }
 
 func (f *fakeSoulPool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	// scope-eval keyset-окно (ListForScopeEval) тянет ПОЛНУЮ карточку (как
-	// SelectAll), поэтому различаем по keyset-сортировке `ORDER BY
-	// registered_at DESC, sid ASC` БЕЗ `OFFSET` (SelectAll имеет OFFSET).
+	// The scope-eval keyset window (ListForScopeEval) pulls the FULL record (like
+	// SelectAll), so we distinguish by the keyset ordering `ORDER BY
+	// registered_at DESC, sid ASC` WITHOUT `OFFSET` (SelectAll has OFFSET).
 	if strings.Contains(sql, "ORDER BY registered_at DESC, sid ASC") && !strings.Contains(sql, "OFFSET") {
 		if f.listQueryErr != nil {
 			return nil, f.listQueryErr
@@ -262,16 +262,16 @@ func (f *fakeSoulPool) Query(_ context.Context, sql string, args ...any) (pgx.Ro
 	return nil, errors.New("fakeSoulPool.Query: unexpected SQL: " + sql)
 }
 
-// scopeEvalWindow воспроизводит keyset-страницу ListForScopeEval над
-// scopeEvalAll (как реальная PG): user-filter (status/transport/coven) как
-// SQL WHERE, keyset-предикат `registered_at < curAt OR (== curAt AND sid >
-// curSid)`, сортировка registered_at DESC, sid ASC, LIMIT pageSize.
+// scopeEvalWindow reproduces the ListForScopeEval keyset page over
+// scopeEvalAll (like real PG does): the user filter (status/transport/coven) as
+// SQL WHERE, the keyset predicate `registered_at < curAt OR (== curAt AND sid >
+// curSid)`, ordering by registered_at DESC, sid ASC, LIMIT pageSize.
 //
-// Args идут в порядке объявления clauses в [soul.buildScopeEvalSQL]:
-// сначала filter-args (status/transport/coven, по наличию в SQL), затем
-// keyset-границы (curAt, curSid) при наличии, затем pageSize последним.
-// Какие clauses присутствуют — определяем по тексту SQL (как реальная PG
-// видит WHERE), а args вычитываем позиционно в том же порядке.
+// Args arrive in the order clauses are declared in [soul.buildScopeEvalSQL]:
+// filter-args first (status/transport/coven, when present in the SQL), then
+// the keyset boundary (curAt, curSid) if present, then pageSize last.
+// Which clauses are present is determined from the SQL text (the way real PG
+// sees WHERE), and args are read positionally in the same order.
 func (f *fakeSoulPool) scopeEvalWindow(sql string, args []any) []soul.ScopeEvalRow {
 	sorted := append([]soul.ScopeEvalRow(nil), f.scopeEvalAll...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -337,7 +337,7 @@ func (f *fakeSoulPool) scopeEvalWindow(sql string, args []any) []soul.ScopeEvalR
 	return out
 }
 
-// containsStr — есть ли v среди xs (для coven-ANY-фильтра в fake).
+// containsStr — reports whether v is among xs (for the coven-ANY filter in the fake).
 func containsStr(xs []string, v string) bool {
 	for _, x := range xs {
 		if x == v {
@@ -347,8 +347,8 @@ func containsStr(xs []string, v string) bool {
 	return false
 }
 
-// scopeEvalRows — pgx.Rows над []soul.ScopeEvalRow (ПОЛНАЯ карточка souls) для
-// keyset-режима List. Порядок Scan совпадает с ListForScopeEval-проекцией:
+// scopeEvalRows — pgx.Rows over []soul.ScopeEvalRow (the FULL souls record) for
+// List's keyset mode. The Scan order matches the ListForScopeEval projection:
 // sid, transport, status, coven, traits, registered_at, last_seen_at,
 // last_seen_by_kid, created_by_aid, requested_at, note.
 type scopeEvalRows struct {
@@ -370,7 +370,7 @@ func (r *scopeEvalRows) Scan(dest ...any) error {
 	*dest[1].(*string) = string(row.Transport)
 	*dest[2].(*string) = string(row.Status)
 	*dest[3].(*[]string) = row.Coven
-	// traits jsonb (ADR-060): nil Traits → nil-bytes (ListForScopeEval → пустой map).
+	// traits jsonb (ADR-060): nil Traits → nil bytes (ListForScopeEval → an empty map).
 	if len(row.Traits) > 0 {
 		b, err := json.Marshal(row.Traits)
 		if err != nil {
@@ -402,8 +402,8 @@ func (r *scopeEvalRows) Values() ([]any, error)                       { return n
 func (r *scopeEvalRows) RawValues() [][]byte                          { return nil }
 func (r *scopeEvalRows) Conn() *pgx.Conn                              { return nil }
 
-// soulRows — pgx.Rows-stub под [soul.SelectAll]: отдаёт преднастроенный
-// набор Soul-ов в порядке scanSoul (sid, transport, status, coven, traits,
+// soulRows — a pgx.Rows stub for [soul.SelectAll]: returns a preconfigured
+// set of Souls in scanSoul order (sid, transport, status, coven, traits,
 // registered_at, last_seen_at, last_seen_by_kid, created_by_aid,
 // requested_at, note).
 type soulRows struct {
@@ -425,7 +425,7 @@ func (r *soulRows) Scan(dest ...any) error {
 	*dest[1].(*string) = string(s.Transport)
 	*dest[2].(*string) = string(s.Status)
 	*dest[3].(*[]string) = s.Coven
-	// traits jsonb (ADR-060): nil Traits → nil-bytes (scanSoul → пустой map).
+	// traits jsonb (ADR-060): nil Traits → nil bytes (scanSoul → an empty map).
 	if len(s.Traits) > 0 {
 		b, err := json.Marshal(s.Traits)
 		if err != nil {
@@ -457,7 +457,7 @@ func (r *soulRows) Values() ([]any, error)                       { return nil, n
 func (r *soulRows) RawValues() [][]byte                          { return nil }
 func (r *soulRows) Conn() *pgx.Conn                              { return nil }
 
-// soulTx проксирует pgx.Tx-методы на fakeSoulPool; неиспользуемые — panic.
+// soulTx proxies pgx.Tx methods onto fakeSoulPool; unused ones panic.
 type soulTx struct{ pool *fakeSoulPool }
 
 func (t *soulTx) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -486,8 +486,8 @@ func (t *soulTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row 
 }
 func (t *soulTx) Conn() *pgx.Conn { return nil }
 
-// doCreate строго разбирает JSON-тело (DisallowUnknownFields — как прежний (w,r)-роут,
-// bad/unknown JSON → 400) и вызывает CreateTyped напрямую (handler-native T5d).
+// doCreate strictly decodes the JSON body (DisallowUnknownFields — like the former (w,r)-route,
+// bad/unknown JSON → 400) and calls CreateTyped directly (handler-native T5d).
 func doCreate(t *testing.T, h *SoulHandler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/souls", nil)
@@ -509,8 +509,8 @@ func doCreate(t *testing.T, h *SoulHandler, body string) *httptest.ResponseRecor
 	return rec
 }
 
-// soulCreateViewJSON проецирует доменный SoulCreateView в map json-ключей native
-// SoulCreateReply (covens всегда present; bootstrap_token/expires_at omitempty).
+// soulCreateViewJSON projects the domain SoulCreateView into a map of the native
+// SoulCreateReply's json keys (covens always present; bootstrap_token/expires_at omitempty).
 func soulCreateViewJSON(v SoulCreateView) map[string]any {
 	m := map[string]any{
 		"sid":            v.SID,
@@ -529,7 +529,7 @@ func soulCreateViewJSON(v SoulCreateView) map[string]any {
 	return m
 }
 
-// doIssueToken вызывает IssueTokenTyped напрямую (handler-native T5d), парся ?force=.
+// doIssueToken calls IssueTokenTyped directly (handler-native T5d), parsing ?force=.
 func doIssueToken(t *testing.T, h *SoulHandler, sid, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/v1/souls/" + sid + "/issue-token"
@@ -551,8 +551,8 @@ func doIssueToken(t *testing.T, h *SoulHandler, sid, query string) *httptest.Res
 	return rec
 }
 
-// doAssignCoven строго разбирает JSON-тело и вызывает AssignCovenTyped напрямую
-// (handler-native T5d), парся ?dry_run=. reply.Body — соль custom MarshalJSON.
+// doAssignCoven strictly decodes the JSON body and calls AssignCovenTyped directly
+// (handler-native T5d), parsing ?dry_run=. reply.Body relies on a custom MarshalJSON.
 func doAssignCoven(t *testing.T, h *SoulHandler, body, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/v1/souls/coven"
@@ -576,8 +576,8 @@ func doAssignCoven(t *testing.T, h *SoulHandler, body, query string) *httptest.R
 	return rec
 }
 
-// decodeCovenAssignBody строго (DisallowUnknownFields) разбирает JSON-тело coven-assign в
-// native SoulCovenAssignInput (parity прежней (w,r)-strict-декодировки → bad/unknown → 400).
+// decodeCovenAssignBody strictly (DisallowUnknownFields) decodes the coven-assign JSON body into
+// the native SoulCovenAssignInput (parity with the former (w,r) strict decoding → bad/unknown → 400).
 func decodeCovenAssignBody(body string) (SoulCovenAssignInput, error) {
 	var raw struct {
 		Mode     string   `json:"mode"`
@@ -675,8 +675,8 @@ func TestAssignCoven_DryRun_QueryParam(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_NegativeScope_LabelOutOfScope — КРИТИЧНЫЙ scope-test (гейт b):
-// оператор с coven=dev НЕ может навесить prod ни через all, ни через sids.
+// TestAssignCoven_NegativeScope_LabelOutOfScope — CRITICAL scope test (gate b):
+// an operator with coven=dev CANNOT attach prod, neither via all nor via sids.
 func TestAssignCoven_NegativeScope_LabelOutOfScope(t *testing.T) {
 	for _, sel := range []string{
 		`{"all":true}`,
@@ -688,15 +688,15 @@ func TestAssignCoven_NegativeScope_LabelOutOfScope(t *testing.T) {
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("selector %s: status = %d, want 422, body=%s", sel, rec.Code, rec.Body.String())
 		}
-		// Метка вне scope отвергнута ДО БД — ни count, ни UPDATE.
+		// A label outside scope is rejected BEFORE the DB — neither count nor UPDATE.
 		if pool.bulkChunkCalls != 0 {
 			t.Errorf("selector %s: UPDATE выполнен на out-of-scope метке", sel)
 		}
 	}
 }
 
-// TestAssignCoven_NegativeScope_InScopeLabel_Allowed — та же coven=dev роль
-// МОЖЕТ навесить dev (метка в scope): доходит до bulk-слоя.
+// TestAssignCoven_NegativeScope_InScopeLabel_Allowed — the same coven=dev role
+// CAN attach dev (label in scope): reaches the bulk layer.
 func TestAssignCoven_NegativeScope_InScopeLabel_Allowed(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
@@ -717,11 +717,11 @@ func TestAssignCoven_BadMode_422(t *testing.T) {
 	}
 }
 
-// --- mode=replace handler (3 кейса: успех, label-out-of-scope, host-out-of-scope) ---
+// --- mode=replace handler (3 cases: success, label-out-of-scope, host-out-of-scope) ---
 
-// TestAssignCoven_Replace_Happy — replace меняет набор; на admin (unrestricted)
-// scope гейт b не срабатывает, BulkReplaceCoven вызывается, ответ содержит
-// labels[], не label.
+// TestAssignCoven_Replace_Happy — replace changes the set; on admin (unrestricted)
+// scope gate b doesn't trigger, BulkReplaceCoven is called, the response contains
+// labels[], not label.
 func TestAssignCoven_Replace_Happy(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 2, bulkScanned: 2, bulkChanged: 2}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -749,8 +749,8 @@ func TestAssignCoven_Replace_Happy(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Replace_LabelOutOfScope_422 — гейт (b) на replace: набор
-// с меткой вне scope → 422 ДО любого обращения к БД.
+// TestAssignCoven_Replace_LabelOutOfScope_422 — gate (b) on replace: a set
+// with a label outside scope → 422 BEFORE any DB access.
 func TestAssignCoven_Replace_LabelOutOfScope_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
@@ -763,13 +763,13 @@ func TestAssignCoven_Replace_LabelOutOfScope_422(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Replace_HostOutOfScope_0Changed — гейт (a) на replace через
-// fake: scope=dev, but selector=sids[prod-host], handler пускает в bulk-слой
-// (метки набора в scope), но scope-предикат в WHERE пустит фактически 0 хостов.
-// На fakeDB matched=0 заставит вернуть пустой Report без chunk-вызова —
-// проверяем 200 + changed=0.
+// TestAssignCoven_Replace_HostOutOfScope_0Changed — gate (a) on replace via
+// the fake: scope=dev, but selector=sids[prod-host], the handler lets it into the bulk layer
+// (the set's labels are in scope), but the scope predicate in WHERE actually lets through 0 hosts.
+// On fakeDB matched=0 forces an empty Report to be returned without a chunk call —
+// we check 200 + changed=0.
 func TestAssignCoven_Replace_HostOutOfScope_0Changed(t *testing.T) {
-	pool := &fakeSoulPool{listCount: 0} // scope-фильтр сделал matched=0.
+	pool := &fakeSoulPool{listCount: 0} // the scope filter made matched=0.
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"replace","labels":["dev"],"selector":{"sids":["prod-host.example.com"]}}`, "")
 	if rec.Code != http.StatusOK {
@@ -785,7 +785,7 @@ func TestAssignCoven_Replace_HostOutOfScope_0Changed(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Replace_RejectsLabelField_422 — XOR-валидация: label+replace.
+// TestAssignCoven_Replace_RejectsLabelField_422 — XOR validation: label+replace.
 func TestAssignCoven_Replace_RejectsLabelField_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"replace","label":"prod","selector":{"all":true}}`, "")
@@ -794,7 +794,7 @@ func TestAssignCoven_Replace_RejectsLabelField_422(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Append_RejectsLabelsField_422 — XOR-валидация: labels+append.
+// TestAssignCoven_Append_RejectsLabelsField_422 — XOR validation: labels+append.
 func TestAssignCoven_Append_RejectsLabelsField_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignCoven(t, h, `{"mode":"append","labels":["prod"],"selector":{"all":true}}`, "")
@@ -803,8 +803,8 @@ func TestAssignCoven_Append_RejectsLabelsField_422(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Replace_EmptyLabels_OK — пустой labels = «снять все» —
-// валидный кейс, доходит до bulk-слоя.
+// TestAssignCoven_Replace_EmptyLabels_OK — empty labels = "remove all" —
+// a valid case, reaches the bulk layer.
 func TestAssignCoven_Replace_EmptyLabels_OK(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -820,10 +820,10 @@ func TestAssignCoven_Replace_EmptyLabels_OK(t *testing.T) {
 	}
 }
 
-// --- selector.incarnation handler (3 кейса: матч, no-match, scope) ---
+// --- selector.incarnation handler (3 cases: match, no-match, scope) ---
 
-// TestAssignCoven_Incarnation_Match — incarnation-селектор доходит до bulk-слоя
-// (handler не отвергает; fake matched=2, changed=2).
+// TestAssignCoven_Incarnation_Match — the incarnation selector reaches the bulk layer
+// (the handler doesn't reject; fake matched=2, changed=2).
 func TestAssignCoven_Incarnation_Match(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 2, bulkScanned: 2, bulkChanged: 2}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -838,7 +838,7 @@ func TestAssignCoven_Incarnation_Match(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Incarnation_NoMatch_0 — incarnation-селектор без матча
+// TestAssignCoven_Incarnation_NoMatch_0 — an incarnation selector with no match
 // (listCount=0) → 200 + 0/0.
 func TestAssignCoven_Incarnation_NoMatch_0(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 0}
@@ -857,9 +857,9 @@ func TestAssignCoven_Incarnation_NoMatch_0(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Incarnation_ScopeIntersection — incarnation в комбинации со
-// scope: handler доходит до bulk-слоя, аргументы count включают и
-// incarnation-имя, и scope-массив.
+// TestAssignCoven_Incarnation_ScopeIntersection — incarnation combined with
+// scope: the handler reaches the bulk layer, the count arguments include both
+// the incarnation name and the scope array.
 func TestAssignCoven_Incarnation_ScopeIntersection(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
@@ -883,8 +883,8 @@ func TestAssignCoven_Incarnation_ScopeIntersection(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Incarnation_InvalidName_422 — невалидное имя incarnation →
-// 422 ДО БД.
+// TestAssignCoven_Incarnation_InvalidName_422 — an invalid incarnation name →
+// 422 BEFORE the DB.
 func TestAssignCoven_Incarnation_InvalidName_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)

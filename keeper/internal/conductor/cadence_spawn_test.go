@@ -499,16 +499,17 @@ func TestSpawner_Run_NilPool(t *testing.T) {
 	}
 }
 
-// --- Run: ошибка в processOne → откат всей tx, next_run не сдвинут ---
+// --- Run: error in processOne → rolls back the whole tx, next_run not advanced ---
 
-// TestSpawner_Run_ProcessError_RollsBack доказывает атомарность тика (и switchover-
-// безопасность ADR-048: после переезда исполнителя гарантия «нет двойного спавна»
-// сохранена дословно). Одна due-cadence, resolver падает внутри processOne → Run
-// возвращает ошибку БЕЗ commit-а, defer вызывает Rollback. affected==0 (ничего не
-// создано). Раз tx откачена, AdvanceSchedule не зафиксирован → на следующем тике
-// строка снова due → задвоения нет. То же страхует транзиент C3→C4: если бы оба
-// исполнителя (reaper+conductor) на миг тикали, FOR UPDATE SKIP LOCKED отдал бы
-// строку лишь одному, а advance next_run_at в той же tx убрал бы её из due.
+// TestSpawner_Run_ProcessError_RollsBack proves tick atomicity (and the switchover
+// safety of ADR-048: after moving the executor the "no double spawn" guarantee
+// holds verbatim). One due-cadence, resolver fails inside processOne → Run
+// returns an error WITHOUT a commit, defer calls Rollback. affected==0 (nothing
+// created). Since the tx is rolled back, AdvanceSchedule isn't persisted → on the
+// next tick the row is due again → no double-spawn. The same guards the C3→C4
+// transient: if both executors (reaper+conductor) ticked for a moment, FOR UPDATE
+// SKIP LOCKED would hand the row to only one, and advancing next_run_at in the
+// same tx would remove it from due.
 func TestSpawner_Run_ProcessError_RollsBack(t *testing.T) {
 	want := errors.New("pg down")
 	tx := &spawnFakeTx{
@@ -541,9 +542,9 @@ func TestSpawner_Run_ProcessError_RollsBack(t *testing.T) {
 	}
 }
 
-// TestSpawner_Run_ExecError_RollsBack — вариант с execErr!=nil: резолв успешен,
-// но AdvanceSchedule (Exec) падает после Insert voyage → весь тик откатывается
-// (вставленный voyage не зафиксирован), affected==0, next_run не сдвинут.
+// TestSpawner_Run_ExecError_RollsBack — the execErr!=nil variant: resolve succeeds,
+// but AdvanceSchedule (Exec) fails after Insert voyage → the whole tick rolls back
+// (the inserted voyage isn't persisted), affected==0, next_run not advanced.
 func TestSpawner_Run_ExecError_RollsBack(t *testing.T) {
 	execErr := errors.New("advance failed")
 	tx := &spawnFakeTx{
@@ -571,8 +572,8 @@ func TestSpawner_Run_ExecError_RollsBack(t *testing.T) {
 	}
 }
 
-// TestSpawner_Run_Success_Commits — happy-path: одна due-cadence, резолв непустой
-// → Insert voyage + advance + commit, affected==1, tx зафиксирована.
+// TestSpawner_Run_Success_Commits — happy path: one due-cadence, resolve non-empty
+// → Insert voyage + advance + commit, affected==1, tx committed.
 func TestSpawner_Run_Success_Commits(t *testing.T) {
 	tx := &spawnFakeTx{
 		dueRows: []*cadence.Cadence{intervalScenarioCadence(cadence.OverlapPolicyParallel)},

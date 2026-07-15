@@ -1,20 +1,20 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO VOYAGE-домена (handler-native T5d). voyage
-// больше НЕ зависит от legacy-генерата — golden сверяет json native-значения с ЗАФИКСИРОВАННОЙ
-// строкой-эталоном (pinned). Гарантирует wire-форму:
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the VOYAGE domain (handler-native T5d). voyage
+// no longer depends on the legacy generator — golden compares json native values against a PINNED
+// reference string. Guarantees the wire shape:
 //
-//   - категория A (date-time): created_at/started_at/finished_at/schedule_at → тот же RFC3339Nano;
-//   - категория C (omitempty): batch_*/concurrency/fail_threshold/module/on_failure/require_alive/
+//   - category A (date-time): created_at/started_at/finished_at/schedule_at → the same RFC3339Nano;
+//   - category C (omitempty): batch_*/concurrency/fail_threshold/module/on_failure/require_alive/
 //     scenario_name/summary/target/no_match/apply_id/errand_id/finished_at/effective_batch_size —
-//     ключ опущен при nil; обязательные required-поля — присутствуют;
-//   - enum kind/status/batch_mode/on_failure/target_kind: тот же string-байт;
-//   - nested Voyage→Summary (native VoyageSummary) и Voyage→Target (class-A reuse api.VoyageTarget).
+//     key omitted when nil; required fields are present;
+//   - enum kind/status/batch_mode/on_failure/target_kind: the same string byte value;
+//   - nested Voyage→Summary (native VoyageSummary) and Voyage→Target (class-A reuse api.VoyageTarget).
 //
-// ★ TARGET (class-A normalization). native api.VoyageTarget — value-slice/value-string С omitempty.
-// Для nil-указателя И для populated-slice (то, что реально кладёт handler через unmarshal
-// target_origin) wire byte-exact. Не-nil-пустой-указатель native нормализует в опущенный ключ —
-// принятая class-A совместимость, здесь НЕ тестируется (handler такой формы не порождает).
+// ★ TARGET (class-A normalization). native api.VoyageTarget — value-slice/value-string WITH omitempty.
+// For a nil pointer AND for a populated slice (what the handler actually produces via unmarshal of
+// target_origin), the wire is byte-exact. A non-nil-empty pointer is normalized by native into an
+// omitted key — accepted class-A compatibility, NOT tested here (the handler never produces that shape).
 //
-// Мутация формы native-struct (убрать omitempty / сменить json-тег / сменить тип поля) краснит case.
+// Mutating the native struct shape (dropping omitempty / changing a json tag / changing a field type) reds out the case.
 package api
 
 import (
@@ -40,17 +40,17 @@ func TestGoldenWire_VoyageReply(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 34, 56, 789012345, time.UTC)
 	ts2 := time.Date(2026, 6, 13, 1, 2, 3, 456789012, time.UTC)
 
-	// --- VoyageCreateReply (все required) ---
+	// --- VoyageCreateReply (all required) ---
 	goldenVoyageWire(t, "CreateReply",
 		VoyageCreateReply{Kind: VoyageCreateReplyKind("scenario"), Location: "/v1/voyages/01H", ScopeSize: 5, Status: VoyageCreateReplyStatus("pending"), VoyageID: "01H"},
 		`{"kind":"scenario","location":"/v1/voyages/01H","scope_size":5,"status":"pending","voyage_id":"01H"}`)
 
-	// --- VoyagePreviewReply: effective_batch_size задан (barrier) ---
+	// --- VoyagePreviewReply: effective_batch_size set (barrier) ---
 	ebs := 3
 	goldenVoyageWire(t, "PreviewReply/barrier_full",
 		VoyagePreviewReply{BatchMode: VoyagePreviewReplyBatchMode("barrier"), EffectiveBatchSize: &ebs, Kind: VoyagePreviewReplyKind("command"), ScopeSize: 12, TotalBatches: 4},
 		`{"batch_mode":"barrier","effective_batch_size":3,"kind":"command","scope_size":12,"total_batches":4}`)
-	// --- VoyagePreviewReply: effective_batch_size опущен (window, omitempty) ---
+	// --- VoyagePreviewReply: effective_batch_size omitted (window, omitempty) ---
 	goldenVoyageWire(t, "PreviewReply/window_nil_ebs",
 		VoyagePreviewReply{BatchMode: VoyagePreviewReplyBatchMode("window"), EffectiveBatchSize: nil, Kind: VoyagePreviewReplyKind("command"), ScopeSize: 12, TotalBatches: 1},
 		`{"batch_mode":"window","kind":"command","scope_size":12,"total_batches":1}`)
@@ -60,7 +60,7 @@ func TestGoldenWire_VoyageReply(t *testing.T) {
 		VoyageCancelReply{Status: VoyageCancelReplyStatus("cancelled"), VoyageID: "01H"},
 		`{"status":"cancelled","voyage_id":"01H"}`)
 
-	// --- VoyageSummary: no_match задан / опущен ---
+	// --- VoyageSummary: no_match set / omitted ---
 	nm := 2
 	goldenVoyageWire(t, "Summary/no_match_set",
 		VoyageSummary{Cancelled: 1, Failed: 0, NoMatch: &nm, Succeeded: 7, Total: 10},
@@ -90,13 +90,13 @@ func TestGoldenWire_VoyageReply(t *testing.T) {
 		},
 		`{"targets":[{"apply_id":"01APPLY","batch_index":0,"finished_at":"2026-06-13T01:02:03.456789012Z","status":"succeeded","target_id":"web-prod","target_kind":"incarnation"},{"batch_index":1,"errand_id":"01ERRAND","status":"running","target_id":"h1","target_kind":"sid"}],"voyage_id":"01H"}`)
 
-	// --- Voyage: FULL (все optional заданы; nested Summary + Target populated) ---
+	// --- Voyage: FULL (all optional fields set; nested Summary + Target populated) ---
 	nbm := VoyageBatchMode("barrier")
 	nof := VoyageOnFailure("continue")
 	bsz, bpc, conc, fth := 4, 25, 2, 1
 	ra := true
 	scen, mod := "deploy", "core.cmd.shell"
-	// Target populated: непустые slice/string → byte-exact native (value-slice).
+	// Target populated: non-empty slice/string → byte-exact native (value-slice).
 	incs := []string{"web-prod", "db-prod"}
 	svc := "web"
 	sids := []string{"h1", "h2"}
@@ -116,7 +116,7 @@ func TestGoldenWire_VoyageReply(t *testing.T) {
 	goldenVoyageWire(t, "Voyage/full", nativeFull,
 		`{"attempt":1,"batch_mode":"barrier","batch_percent":25,"batch_size":4,"concurrency":2,"created_at":"2026-06-14T12:34:56.789012345Z","current_batch_index":2,"dry_run":false,"fail_threshold":1,"finished_at":"2026-06-13T01:02:03.456789012Z","kind":"scenario","module":"core.cmd.shell","on_failure":"continue","require_alive":true,"scenario_name":"deploy","schedule_at":"2026-06-13T01:02:03.456789012Z","scope_size":7,"started_at":"2026-06-14T12:34:56.789012345Z","started_by_aid":"archon-alice","status":"running","summary":{"cancelled":0,"failed":1,"no_match":2,"succeeded":5,"total":7},"target":{"coven":["prod","eu"],"incarnations":["web-prod","db-prod"],"service":"web","sids":["h1","h2"],"where":"soulprint.self.os.family == 'debian'"},"total_batches":3,"voyage_id":"01H"}`)
 
-	// --- Voyage: MINIMAL (только required; все optional nil → ключи опущены, target/summary опущены) ---
+	// --- Voyage: MINIMAL (only required fields; all optional nil → keys omitted, target/summary omitted) ---
 	nativeMin := Voyage{
 		Attempt: 0, CreatedAt: ts, CurrentBatchIndex: 0, DryRun: true,
 		Kind: VoyageKind("command"), ScopeSize: 0, StartedByAID: "archon-bob",
@@ -131,11 +131,11 @@ func TestGoldenWire_VoyageReply(t *testing.T) {
 		`{"items":[{"attempt":1,"batch_mode":"barrier","batch_percent":25,"batch_size":4,"concurrency":2,"created_at":"2026-06-14T12:34:56.789012345Z","current_batch_index":2,"dry_run":false,"fail_threshold":1,"finished_at":"2026-06-13T01:02:03.456789012Z","kind":"scenario","module":"core.cmd.shell","on_failure":"continue","require_alive":true,"scenario_name":"deploy","schedule_at":"2026-06-13T01:02:03.456789012Z","scope_size":7,"started_at":"2026-06-14T12:34:56.789012345Z","started_by_aid":"archon-alice","status":"running","summary":{"cancelled":0,"failed":1,"no_match":2,"succeeded":5,"total":7},"target":{"coven":["prod","eu"],"incarnations":["web-prod","db-prod"],"service":"web","sids":["h1","h2"],"where":"soulprint.self.os.family == 'debian'"},"total_batches":3,"voyage_id":"01H"},{"attempt":0,"created_at":"2026-06-14T12:34:56.789012345Z","current_batch_index":0,"dry_run":true,"kind":"command","scope_size":0,"started_by_aid":"archon-bob","status":"pending","total_batches":1,"voyage_id":"01J"}],"limit":50,"offset":0,"total":2}`)
 }
 
-// TestGoldenWire_VoyageConverters проверяет, что проекторы handlers.X → api-native сохраняют
-// byte-exact wire против зафиксированного эталона (а не только форма типов): маршалит результат
-// проектора и сверяет байты. handler-native T5d: вход проектора — плоский handlers-DTO
-// (plain-string enum, pointer-slice target). Ловит регресс в самом маппинге полей (перепутанные/
-// пропущенные/nil-сорванные), включая глубокую цепочку Voyage→Summary/Target и nil-Items-ветку.
+// TestGoldenWire_VoyageConverters verifies that the handlers.X → api-native projectors preserve
+// byte-exact wire output against the pinned reference (not just the type shape): it marshals the
+// projector's result and compares bytes. handler-native T5d: the projector input is a flat handlers-DTO
+// (plain-string enum, pointer-slice target). Catches regressions in the field mapping itself (swapped/
+// missing/nil-mishandled fields), including the deep Voyage→Summary/Target chain and the nil-Items branch.
 func TestGoldenWire_VoyageConverters(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 0, 0, 123456789, time.UTC)
 	nm := 1
@@ -168,7 +168,7 @@ func TestGoldenWire_VoyageConverters(t *testing.T) {
 	}
 	goldenVoyageWire(t, "conv/Voyage", toVoyage(voyH),
 		`{"attempt":2,"batch_mode":"window","created_at":"2026-06-14T12:00:00.123456789Z","current_batch_index":0,"dry_run":false,"kind":"command","scope_size":4,"started_by_aid":"archon-x","status":"running","summary":{"cancelled":0,"failed":0,"no_match":1,"succeeded":3,"total":4},"target":{"incarnations":["web"],"where":"x == 1"},"total_batches":1,"voyage_id":"1"}`)
-	// Voyage без summary/target (nil — оба опущены).
+	// Voyage without summary/target (nil — both omitted).
 	voyNilH := handlers.VoyageDTO{Attempt: 0, CreatedAt: ts, CurrentBatchIndex: 0, DryRun: true, Kind: "scenario", ScopeSize: 0, StartedByAID: "archon-y", Status: "pending", TotalBatches: 1, VoyageID: "2"}
 	goldenVoyageWire(t, "conv/Voyage_nil_nested", toVoyage(voyNilH),
 		`{"attempt":0,"created_at":"2026-06-14T12:00:00.123456789Z","current_batch_index":0,"dry_run":true,"kind":"scenario","scope_size":0,"started_by_aid":"archon-y","status":"pending","total_batches":1,"voyage_id":"2"}`)
@@ -176,7 +176,7 @@ func TestGoldenWire_VoyageConverters(t *testing.T) {
 	listH := handlers.VoyageListReply{Items: []handlers.VoyageDTO{voyH, voyNilH}, Limit: 10, Offset: 0, Total: 2}
 	goldenVoyageWire(t, "conv/ListReply", toVoyageListReply(listH),
 		`{"items":[{"attempt":2,"batch_mode":"window","created_at":"2026-06-14T12:00:00.123456789Z","current_batch_index":0,"dry_run":false,"kind":"command","scope_size":4,"started_by_aid":"archon-x","status":"running","summary":{"cancelled":0,"failed":0,"no_match":1,"succeeded":3,"total":4},"target":{"incarnations":["web"],"where":"x == 1"},"total_batches":1,"voyage_id":"1"},{"attempt":0,"created_at":"2026-06-14T12:00:00.123456789Z","current_batch_index":0,"dry_run":true,"kind":"scenario","scope_size":0,"started_by_aid":"archon-y","status":"pending","total_batches":1,"voyage_id":"2"}],"limit":10,"offset":0,"total":2}`)
-	// nil-Items ветка: handler-safe (схема required items), но проектор обязан сохранить nil → `null`.
+	// nil-Items branch: handler-safe (schema requires items), but the projector must preserve nil → `null`.
 	listNilH := handlers.VoyageListReply{Items: nil, Limit: 0, Offset: 0, Total: 0}
 	goldenVoyageWire(t, "conv/ListReply_nil_items", toVoyageListReply(listNilH),
 		`{"items":null,"limit":0,"offset":0,"total":0}`)

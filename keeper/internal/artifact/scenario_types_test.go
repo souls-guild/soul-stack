@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// writeTypesCatalog — кладёт types.yml в корень тестового serviceRoot.
+// writeTypesCatalog — puts types.yml at the root of the test serviceRoot.
 func writeTypesCatalog(t *testing.T, root, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, typesCatalogFile), []byte(body), 0o644); err != nil {
@@ -14,8 +14,8 @@ func writeTypesCatalog(t *testing.T, root, body string) {
 	}
 }
 
-// DTO резолвит самостоятельную $type-ссылку: узел заменяется телом типа +
-// аннотация x-type.
+// DTO resolves a standalone $type reference: the node is replaced by the
+// type body + the x-type annotation.
 func TestListScenarios_ResolvesBareTypeRef(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -43,7 +43,7 @@ func TestListScenarios_ResolvesBareTypeRef(t *testing.T) {
 	if !ok {
 		t.Fatalf("target не map: %#v", got[0].InputSchema["target"])
 	}
-	// $type заменён телом типа.
+	// $type is replaced by the type body.
 	if _, stillRef := target[typeRefKey]; stillRef {
 		t.Fatalf("$type должен быть резолвнут, остался сырым: %#v", target)
 	}
@@ -54,13 +54,13 @@ func TestListScenarios_ResolvesBareTypeRef(t *testing.T) {
 	if !ok || props["host"] == nil {
 		t.Fatalf("target.properties.host отсутствует: %#v", target)
 	}
-	// x-type аннотация присутствует.
+	// x-type annotation is present.
 	if target[typeAnnotationKey] != "Endpoint" {
 		t.Fatalf("x-type = %v, ожидался Endpoint", target[typeAnnotationKey])
 	}
 }
 
-// DTO резолвит items:{$type} (массив элементов-типа).
+// DTO resolves items:{$type} (an array of typed elements).
 func TestListScenarios_ResolvesItemsTypeRef(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -94,7 +94,8 @@ func TestListScenarios_ResolvesItemsTypeRef(t *testing.T) {
 	}
 }
 
-// Вложенность тип→тип: тело типа, ссылающегося на другой тип, тоже резолвится.
+// Type→type nesting: the body of a type that references another type is
+// also resolved.
 func TestListScenarios_ResolvesNestedTypeRef(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -135,8 +136,8 @@ func TestListScenarios_ResolvesNestedTypeRef(t *testing.T) {
 	}
 }
 
-// Цикл в каталоге → DTO НЕ зависает (узел остаётся как есть, без бесконечной
-// рекурсии). Полную ошибку cycle поднимает soul-lint.
+// A cycle in the catalog → DTO does NOT hang (the node is left as-is, no
+// infinite recursion). The full cycle error is raised by soul-lint.
 func TestListScenarios_CycleDoesNotHang(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -156,7 +157,7 @@ func TestListScenarios_CycleDoesNotHang(t *testing.T) {
     $type: A
 `)
 
-	// Не зависает — если бы рекурсия была бесконечной, тест бы не завершился.
+	// Doesn't hang — if the recursion were infinite, the test wouldn't finish.
 	got, err := ListScenarios(root, discardLogger())
 	if err != nil {
 		t.Fatalf("ListScenarios: %v", err)
@@ -166,7 +167,7 @@ func TestListScenarios_CycleDoesNotHang(t *testing.T) {
 	}
 }
 
-// Неизвестный тип → узел остаётся сырым (best-effort; soul-lint поднимет unknown).
+// Unknown type → the node stays raw (best-effort; soul-lint raises unknown).
 func TestListScenarios_UnknownTypeLeftRaw(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -191,7 +192,8 @@ func TestListScenarios_UnknownTypeLeftRaw(t *testing.T) {
 	}
 }
 
-// Back-compat: сценарий без $type и сервис без types.yml не ломаются.
+// Back-compat: a scenario without $type and a service without types.yml
+// don't break.
 func TestListScenarios_NoTypesCatalog_BackCompat(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "deploy", `input:
@@ -219,8 +221,9 @@ func TestListScenarios_NoTypesCatalog_BackCompat(t *testing.T) {
 	}
 }
 
-// Общий тип в двух местах не «портится» между потребителями (clone, не shared
-// pointer): аннотация x-type у обоих корректна.
+// A shared type used in two places doesn't get "corrupted" between
+// consumers (clone, not a shared pointer): the x-type annotation is correct
+// for both.
 func TestListScenarios_SharedTypeIsolated(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -251,10 +254,11 @@ func TestListScenarios_SharedTypeIsolated(t *testing.T) {
 	}
 }
 
-// TestListScenarios_TypeRefKeepsRequiredChildren — NIM-72: при резолве $type для
-// DTO object-level `required: [name, perms]` тела типа (массив детей) НЕ
-// перезаписывается булевым `required: true` узла-ссылки (клоббер списка, на
-// который завязан UI). Presentational-ключ description переносится.
+// TestListScenarios_TypeRefKeepsRequiredChildren — NIM-72: when resolving
+// $type for the DTO, the object-level `required: [name, perms]` of the type
+// body (an array of children) is NOT overwritten by the reference node's
+// boolean `required: true` (which would clobber the list the UI relies on).
+// The presentational description key is carried over.
 func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -284,14 +288,15 @@ func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	if !ok {
 		t.Fatalf("user не map: %#v", got[0].InputSchema["user"])
 	}
-	// $type резолвнут + x-type аннотация.
+	// $type is resolved + x-type annotation.
 	if _, stillRef := user[typeRefKey]; stillRef {
 		t.Fatalf("$type должен быть резолвнут: %#v", user)
 	}
 	if user[typeAnnotationKey] != "AclUser" {
 		t.Fatalf("x-type = %v, ожидался AclUser", user[typeAnnotationKey])
 	}
-	// object-level required-массив НЕ перезаписан булевым true узла-ссылки.
+	// object-level required array is NOT overwritten by the reference node's
+	// boolean true.
 	req, ok := user["required"].([]any)
 	if !ok {
 		t.Fatalf("required должен остаться массивом [name perms], got %#v (%T)", user["required"], user["required"])
@@ -299,20 +304,22 @@ func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	if len(req) != 2 || req[0] != "name" || req[1] != "perms" {
 		t.Fatalf("required-массив искажён: %#v", req)
 	}
-	// properties типа сохранены.
+	// the type's properties are preserved.
 	if _, ok := user["properties"].(map[string]any); !ok {
 		t.Fatalf("properties должны сохраниться: %#v", user)
 	}
-	// presentational description узла-ссылки перенесён.
+	// the reference node's presentational description is carried over.
 	if user["description"] != "ACL user" {
 		t.Fatalf("description = %v, ожидался перенос с узла-ссылки", user["description"])
 	}
 }
 
-// TestListScenarios_TypeRefCarriesXRequired — NIM-72: field-level `required: true`
-// узла-ссылки $type проецируется отдельной аннотацией x-required (DTO-ключ required
-// занят массивом обязательных детей типа) — UI ставит `*` на само поле, не путая
-// её со списком required-детей. Массив детей при этом сохраняется.
+// TestListScenarios_TypeRefCarriesXRequired — NIM-72: the $type reference
+// node's field-level `required: true` is projected as a separate x-required
+// annotation (the DTO key required is taken by the array of the type's
+// required children) — the UI puts a `*` on the field itself without
+// confusing it with the required-children list. The children array is
+// preserved.
 func TestListScenarios_TypeRefCarriesXRequired(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -336,20 +343,22 @@ func TestListScenarios_TypeRefCarriesXRequired(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	user := got[0].InputSchema["user"].(map[string]any)
-	// x-required аннотация присутствует и равна true.
+	// x-required annotation is present and equals true.
 	if user[typeRequiredAnnotationKey] != true {
 		t.Fatalf("x-required = %v, ожидался true (field-level required узла-ссылки)", user[typeRequiredAnnotationKey])
 	}
-	// required-массив детей типа НЕ затронут (уживается с x-required).
+	// the type's required-children array is NOT affected (coexists with
+	// x-required).
 	req, ok := user["required"].([]any)
 	if !ok || len(req) != 2 {
 		t.Fatalf("required должен остаться массивом [name perms], got %#v", user["required"])
 	}
 }
 
-// TestListScenarios_TypeRefNoXRequiredWhenAbsent — NIM-72: без field-level
-// `required: true` на узле-ссылке аннотация x-required НЕ появляется (обязательность
-// поля по умолчанию false; ложный `*` не рисуем). Проверяем и bare-ref, и items-форму.
+// TestListScenarios_TypeRefNoXRequiredWhenAbsent — NIM-72: without
+// field-level `required: true` on the reference node, the x-required
+// annotation does NOT appear (field requiredness defaults to false; we
+// don't draw a false `*`). Checks both the bare-ref and the items form.
 func TestListScenarios_TypeRefNoXRequiredWhenAbsent(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
@@ -383,8 +392,9 @@ func TestListScenarios_TypeRefNoXRequiredWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestListScenarios_TypeRefCarriesRequiredWhen — NIM-72: required_when узла-ссылки
-// переносится в DTO (отдельный ключ, не конфликтует с required-массивом типа).
+// TestListScenarios_TypeRefCarriesRequiredWhen — NIM-72: the reference
+// node's required_when is carried over into the DTO (a separate key,
+// doesn't conflict with the type's required array).
 func TestListScenarios_TypeRefCarriesRequiredWhen(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:

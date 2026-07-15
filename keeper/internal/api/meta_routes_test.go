@@ -1,16 +1,16 @@
 package api
 
-// Guard-тесты meta-зоны (механизм A, ADR-054 doc-viewer). БЕЗОПАСНОСТЬ-инвариант:
+// Guard tests for the meta zone (mechanism A, ADR-054 doc-viewer). SECURITY invariant:
 //
-//   - /healthz, /readyz — ПУБЛИЧНЫЕ (liveness/readiness), 200 без JWT.
-//   - /docs — ПУБЛИЧНЫЙ shell вьювера, 200 без JWT (поле ввода JWT; API-
-//     поверхность НЕ раскрыта — спека приходит лишь после fetch за JWT).
-//   - /openapi.yaml + /openapi.json — ЗА JWT: 401 без токена, 200 с валидным.
-//     Раньше /openapi.yaml был публичным (T1); механизм A спрятал полную
-//     API-поверхность за Bearer. JSON-вариант фетчит вьювер /docs (RapiDoc).
+//   - /healthz, /readyz — PUBLIC (liveness/readiness), 200 without a JWT.
+//   - /docs — the PUBLIC viewer shell, 200 without a JWT (a JWT input field; the API
+//     surface is NOT exposed — the spec arrives only after a fetch with a JWT).
+//   - /openapi.yaml + /openapi.json — BEHIND a JWT: 401 without a token, 200 with a valid one.
+//     /openapi.yaml used to be public (T1); mechanism A hid the full
+//     API surface behind Bearer. The JSON variant is fetched by the /docs viewer (RapiDoc).
 //
-// Тесты прогоняют роуты через РЕАЛЬНЫЙ buildRouter. Регресс (публичная спека или
-// auth на /healthz/readyz/docs) ловится сменой кода ответа.
+// The tests drive the routes through the REAL buildRouter. A regression (a public spec or
+// auth on /healthz/readyz/docs) is caught by a changed response code.
 
 import (
 	"encoding/json"
@@ -30,12 +30,12 @@ import (
 )
 
 const (
-	metaSigningKey = "0123456789abcdef0123456789abcdef" // 32 байта (HS256)
+	metaSigningKey = "0123456789abcdef0123456789abcdef" // 32 bytes (HS256)
 	metaIssuer     = "keeper.api.meta-test"
 )
 
-// metaVerifier строит verifier поверх metaSigningKey/metaIssuer — для проверки
-// JWT на /openapi.yaml.
+// metaVerifier builds a verifier on top of metaSigningKey/metaIssuer — for verifying
+// the JWT on /openapi.yaml.
 func metaVerifier(t *testing.T) *keeperjwt.Verifier {
 	t.Helper()
 	v, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer)
@@ -45,7 +45,7 @@ func metaVerifier(t *testing.T) *keeperjwt.Verifier {
 	return v
 }
 
-// metaValidToken выпускает валидный JWT (тот же ключ/issuer, что у metaVerifier).
+// metaValidToken issues a valid JWT (the same key/issuer as metaVerifier).
 func metaValidToken(t *testing.T) string {
 	t.Helper()
 	iss, err := keeperjwt.NewIssuer([]byte(metaSigningKey), metaIssuer)
@@ -59,10 +59,10 @@ func metaValidToken(t *testing.T) string {
 	return tok
 }
 
-// metaRouter собирает РЕАЛЬНЫЙ buildRouter с non-nil healthH (все Pinger-ы nil →
-// Readyz пропускает проверки → 200) и переданным verifier-ом (нужен для JWT-гейта
-// /openapi.yaml). verifier может быть nil для тестов, где /openapi.yaml не зовётся
-// с токеном (без токена RequireJWT отвечает 401 ДО разыменования verifier).
+// metaRouter assembles the REAL buildRouter with a non-nil healthH (all Pingers nil →
+// Readyz skips the checks → 200) and the given verifier (needed for the JWT gate on
+// /openapi.yaml). verifier may be nil for tests where /openapi.yaml is never called
+// with a token (without a token RequireJWT responds 401 BEFORE dereferencing verifier).
 func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 	t.Helper()
 	healthH := health.NewHandler(health.Deps{})
@@ -98,25 +98,25 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		false,                                // webUIEnabled — meta tests don't check /ui (guard in webui_routes_test.go)
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
-		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
-		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
+		nil,                                  // soulStatsStaleFn (default 90s in the test)
+		nil,                                  // clusterH (cluster-view not mounted in the test)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
 		nil,                                  // logger
 	)
 }
 
-// TestMetaRoutes_Public_200 — healthz/readyz/docs отвечают 200 БЕЗ JWT (публичны).
-// Регресс (попадание под RequireJWT/RBAC) дал бы 401/403/панику на nil-verifier.
+// TestMetaRoutes_Public_200 — healthz/readyz/docs respond 200 WITHOUT a JWT (public).
+// A regression (falling under RequireJWT/RBAC) would give 401/403/a panic on a nil verifier.
 func TestMetaRoutes_Public_200(t *testing.T) {
 	r := metaRouter(t, nil)
 	for _, path := range []string{"/healthz", "/readyz", "/docs"} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, path, http.NoBody) // НИКАКОГО Authorization-заголовка
+		req := httptest.NewRequest(http.MethodGet, path, http.NoBody) // NO Authorization header
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s БЕЗ JWT = %d, want 200 (публичный meta-роут); body=%s",
@@ -125,13 +125,13 @@ func TestMetaRoutes_Public_200(t *testing.T) {
 	}
 }
 
-// TestMetaRoutes_OpenAPI_RequiresJWT — guard механизма A: /openapi.yaml ЗА JWT.
-//   - без Authorization → 401 (спека НЕ раскрывается анонимам);
-//   - с валидным Bearer → 200, тело — runtime-дамп huma-агрегатора (3.1).
+// TestMetaRoutes_OpenAPI_RequiresJWT — guard for mechanism A: /openapi.yaml is BEHIND a JWT.
+//   - without Authorization → 401 (the spec is NOT exposed to anonymous callers);
+//   - with a valid Bearer → 200, body — the runtime dump of the huma aggregator (3.1).
 func TestMetaRoutes_OpenAPI_RequiresJWT(t *testing.T) {
 	r := metaRouter(t, metaVerifier(t))
 
-	// (1) Без токена — 401.
+	// (1) Without a token — 401.
 	recNoAuth := httptest.NewRecorder()
 	reqNoAuth := httptest.NewRequest(http.MethodGet, "/openapi.yaml", http.NoBody)
 	r.ServeHTTP(recNoAuth, reqNoAuth)
@@ -140,7 +140,7 @@ func TestMetaRoutes_OpenAPI_RequiresJWT(t *testing.T) {
 			recNoAuth.Code, recNoAuth.Body.String())
 	}
 
-	// (2) С валидным токеном — 200 + application/yaml + huma 3.1-дамп.
+	// (2) With a valid token — 200 + application/yaml + huma 3.1 dump.
 	recAuth := httptest.NewRecorder()
 	reqAuth := httptest.NewRequest(http.MethodGet, "/openapi.yaml", http.NoBody)
 	reqAuth.Header.Set("Authorization", "Bearer "+metaValidToken(t))
@@ -155,20 +155,20 @@ func TestMetaRoutes_OpenAPI_RequiresJWT(t *testing.T) {
 	if recAuth.Body.Len() == 0 {
 		t.Fatal("тело /openapi.yaml пусто — huma-дамп не отдан")
 	}
-	// huma сортирует top-level ключи алфавитно — `openapi:` не обязан быть первым;
-	// проверяем версию как подстроку (3.1 vs прежняя 3.0.3-рукопись).
+	// huma sorts top-level keys alphabetically — `openapi:` need not come first;
+	// we check the version as a substring (3.1 vs the former 3.0.3 hand-written spec).
 	if !strings.Contains(recAuth.Body.String(), "openapi: 3.1") {
 		t.Error("served-спека не содержит `openapi: 3.1` — версия дампа не 3.1")
 	}
 }
 
-// TestMetaRoutes_Docs_ShellAndAssets — /docs отдаёт HTML-shell вьювера (поле JWT +
-// подключённый RapiDoc web-component), а /docs/assets/* — вшитую статику, ОБА без
-// JWT. API-поверхность в shell не раскрыта (только поле ввода токена).
+// TestMetaRoutes_Docs_ShellAndAssets — /docs serves the HTML viewer shell (a JWT field +
+// the embedded RapiDoc web component), and /docs/assets/* — the embedded static assets, BOTH without
+// a JWT. The API surface is not exposed in the shell (only the token input field).
 func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 	r := metaRouter(t, nil)
 
-	// (1) Shell-страница.
+	// (1) Shell page.
 	recShell := httptest.NewRecorder()
 	r.ServeHTTP(recShell, httptest.NewRequest(http.MethodGet, "/docs", http.NoBody))
 	if recShell.Code != http.StatusOK {
@@ -179,12 +179,12 @@ func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 	}
 	body := recShell.Body.String()
 	for _, marker := range []string{
-		"Paste your Archon JWT",       // поле ввода токена
+		"Paste your Archon JWT",       // token input field
 		"<rapi-doc",                   // RapiDoc web-component
-		"/docs/assets/rapidoc-min.js", // подключение вшитого скрипта
-		"loadSpec",                    // inline-render объектом (не spec-url)
-		"allow-advanced-search",       // full-text поиск — причина перехода на RapiDoc
-		"sessionStorage",              // XSS-гигиена (не localStorage)
+		"/docs/assets/rapidoc-min.js", // reference to the embedded script
+		"loadSpec",                    // inline render with an object (not spec-url)
+		"allow-advanced-search",       // full-text search — the reason for switching to RapiDoc
+		"sessionStorage",              // XSS hygiene (not localStorage)
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("/docs shell не содержит ожидаемый маркер %q", marker)
@@ -194,7 +194,7 @@ func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 		t.Error("/docs использует localStorage — XSS-гигиена требует sessionStorage")
 	}
 
-	// (2) Вшитый ассет — публичен, непуст, корректный JS-Content-Type.
+	// (2) The embedded asset — public, non-empty, correct JS Content-Type.
 	recAsset := httptest.NewRecorder()
 	r.ServeHTTP(recAsset, httptest.NewRequest(http.MethodGet, "/docs/assets/rapidoc-min.js", http.NoBody))
 	if recAsset.Code != http.StatusOK {
@@ -205,14 +205,14 @@ func TestMetaRoutes_Docs_ShellAndAssets(t *testing.T) {
 	}
 }
 
-// TestMetaRoutes_OpenAPIJSON_RequiresJWT — guard механизма A для JSON-варианта
-// спеки (фетчит вьювер /docs, RapiDoc loadSpec):
-//   - без Authorization → 401 (спека НЕ раскрывается анонимам);
-//   - с валидным Bearer → 200, тело — JSON-дамп того же huma-агрегатора (3.1).
+// TestMetaRoutes_OpenAPIJSON_RequiresJWT — guard for mechanism A for the JSON variant
+// of the spec (fetched by the /docs viewer, RapiDoc loadSpec):
+//   - without Authorization → 401 (the spec is NOT exposed to anonymous callers);
+//   - with a valid Bearer → 200, body — the JSON dump of the same huma aggregator (3.1).
 func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 	r := metaRouter(t, metaVerifier(t))
 
-	// (1) Без токена — 401.
+	// (1) Without a token — 401.
 	recNoAuth := httptest.NewRecorder()
 	r.ServeHTTP(recNoAuth, httptest.NewRequest(http.MethodGet, "/openapi.json", http.NoBody))
 	if recNoAuth.Code != http.StatusUnauthorized {
@@ -220,7 +220,7 @@ func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 			recNoAuth.Code, recNoAuth.Body.String())
 	}
 
-	// (2) С валидным токеном — 200 + application/json + huma 3.1-дамп.
+	// (2) With a valid token — 200 + application/json + huma 3.1 dump.
 	recAuth := httptest.NewRecorder()
 	reqAuth := httptest.NewRequest(http.MethodGet, "/openapi.json", http.NoBody)
 	reqAuth.Header.Set("Authorization", "Bearer "+metaValidToken(t))
@@ -235,28 +235,28 @@ func TestMetaRoutes_OpenAPIJSON_RequiresJWT(t *testing.T) {
 	if recAuth.Body.Len() == 0 {
 		t.Fatal("тело /openapi.json пусто — huma-дамп не отдан")
 	}
-	// JSON-форма 3.1: версия в кавычках как значение ключа "openapi".
+	// JSON form 3.1: the version is quoted as the value of the "openapi" key.
 	if !strings.Contains(recAuth.Body.String(), `"openapi":"3.1`) {
 		t.Error("served-JSON-спека не содержит `\"openapi\":\"3.1` — версия дампа не 3.1")
 	}
 }
 
-// TestDocsShell_SetApiKey_CleanJWT — контракт-guard механизма A: setApiKey
-// получает ЧИСТЫЙ jwt без Bearer-префикса. RapiDoc сам добавляет 'Bearer ' для
-// http/bearer-схемы (bearerAuth), поэтому двойной префикс ('Bearer Bearer …')
-// сломал бы "Try It". КРАСНЕЕТ, если кто-то вернёт ручной Bearer-префикс В
+// TestDocsShell_SetApiKey_CleanJWT — contract guard for mechanism A: setApiKey
+// receives a CLEAN jwt without a Bearer prefix. RapiDoc itself adds 'Bearer ' for
+// the http/bearer scheme (bearerAuth), so a double prefix ('Bearer Bearer …')
+// would break "Try It". Goes RED if someone returns a manual Bearer prefix INTO
 // setApiKey.
 //
-// ВАЖНО: проверяем именно вызов setApiKey, а НЕ глобальное отсутствие
-// 'Bearer ' + jwt в docsPage — Bearer-префикс ЛЕГИТИМЕН в fetch-заголовке
-// '/openapi.json' (там его добавляет наш JS, RapiDoc к fetch непричастен).
-// Глобальный запрет ложно бил бы по корректной строке fetch.
+// IMPORTANT: we check specifically the setApiKey call, NOT the global absence of
+// 'Bearer ' + jwt in docsPage — a Bearer prefix is LEGITIMATE in the fetch header
+// of '/openapi.json' (our JS adds it there, RapiDoc has nothing to do with that fetch).
+// A global ban would false-positive on that correct fetch string.
 func TestDocsShell_SetApiKey_CleanJWT(t *testing.T) {
 	if !strings.Contains(docsPage, "setApiKey('bearerAuth', jwt)") {
 		t.Error("docsPage не зовёт setApiKey('bearerAuth', jwt) с ЧИСТЫМ jwt — Try It не получит токен")
 	}
-	// RapiDoc сам префиксует 'Bearer ' для http/bearer; ручной префикс в
-	// setApiKey = двойной Bearer.
+	// RapiDoc itself prefixes 'Bearer ' for http/bearer; a manual prefix in
+	// setApiKey = a double Bearer.
 	if strings.Contains(docsPage, "setApiKey('bearerAuth', 'Bearer") {
 		t.Error("docsPage передаёт в setApiKey уже Bearer-префиксованный литерал — двойной префикс ломает Try It")
 	}
@@ -265,10 +265,10 @@ func TestDocsShell_SetApiKey_CleanJWT(t *testing.T) {
 	}
 }
 
-// TestDocsShell_LoadSpec_Object — контракт-guard механизма A: loadSpec получает
-// ОБЪЕКТ (resp.json()), а не строку. RapiDoc.loadSpec(строка) трактует аргумент
-// как spec-URL и фетчит его БЕЗ нашего Bearer → 401. Подаём разобранный JSON.
-// КРАСНЕЕТ, если кто-то вернёт loadSpec(строка)/resp.text().
+// TestDocsShell_LoadSpec_Object — contract guard for mechanism A: loadSpec receives
+// an OBJECT (resp.json()), not a string. RapiDoc.loadSpec(string) treats the argument
+// as a spec URL and fetches it WITHOUT our Bearer → 401. We pass the parsed JSON.
+// Goes RED if someone returns loadSpec(string)/resp.text().
 func TestDocsShell_LoadSpec_Object(t *testing.T) {
 	if !strings.Contains(docsPage, "loadSpec(specObj)") {
 		t.Error("docsPage не зовёт loadSpec(specObj) — RapiDoc.loadSpec(строка) трактует её как spec-URL (фетч без Bearer → 401)")
@@ -281,11 +281,11 @@ func TestDocsShell_LoadSpec_Object(t *testing.T) {
 	}
 }
 
-// TestServedSpec_YAML_JSON_SameSourceOfTruth — guard единого source-of-truth:
-// YAML и JSON served-спеки собираются из ОДНОГО buildFullOpenAPISpec, поэтому
-// после нормализации (YAML→map, JSON→map) структуры обязаны быть идентичны.
-// Если форматы разойдутся (разный агрегатор/ручная правка одного из них) —
-// reflect.DeepEqual покраснеет.
+// TestServedSpec_YAML_JSON_SameSourceOfTruth — guard for a single source of truth:
+// the YAML and JSON served specs are both built from ONE buildFullOpenAPISpec, so
+// after normalization (YAML→map, JSON→map) the structures must be identical.
+// If the formats diverge (a different aggregator/a manual edit to one of them) —
+// reflect.DeepEqual goes red.
 func TestServedSpec_YAML_JSON_SameSourceOfTruth(t *testing.T) {
 	yamlBytes, err := openAPISpecBytes()
 	if err != nil {
@@ -296,11 +296,11 @@ func TestServedSpec_YAML_JSON_SameSourceOfTruth(t *testing.T) {
 		t.Fatalf("openAPISpecJSONBytes: %v", err)
 	}
 
-	// Оба парсим в одну и ту же Go-форму (map[string]any), чтобы сравнение не
-	// зависело от текстовых различий YAML vs JSON (отступы, кавычки, порядок) —
-	// только от СТРУКТУРЫ. yaml.v3 в any даёт map[string]interface{} как и
-	// encoding/json, поэтому DeepEqual сопоставим. Числа выравниваем (JSON даёт
-	// float64, YAML — int) перед сравнением.
+	// We parse both into the same Go form (map[string]any) so the comparison does not
+	// depend on textual differences between YAML vs JSON (indentation, quoting, order) —
+	// only on STRUCTURE. yaml.v3 into any gives a map[string]interface{} just like
+	// encoding/json, so DeepEqual is comparable. We normalize numbers (JSON gives
+	// float64, YAML — int) before comparing.
 	var fromYAML map[string]any
 	if err := yaml.Unmarshal(yamlBytes, &fromYAML); err != nil {
 		t.Fatalf("разбор YAML-спеки: %v", err)
@@ -318,10 +318,10 @@ func TestServedSpec_YAML_JSON_SameSourceOfTruth(t *testing.T) {
 	}
 }
 
-// normalizeNumbers приводит все числовые значения дерева к float64. yaml.v3
-// разбирает целые как int, encoding/json — как float64; без выравнивания
-// DeepEqual ложно краснел бы на идентичных по значению числах (например, на
-// minimum/maximum в схемах пагинации).
+// normalizeNumbers converts all numeric values of the tree to float64. yaml.v3
+// parses integers as int, encoding/json — as float64; without normalizing,
+// DeepEqual would false-positive on numbers that are equal in value (for example,
+// on minimum/maximum in the pagination schemas).
 func normalizeNumbers(v any) {
 	switch t := v.(type) {
 	case map[string]any:

@@ -1,14 +1,16 @@
 package api
 
-// FULL-TYPED форма PUSH-PROVIDER-домена (code-first источник OpenAPI, ADR-054
-// §Pattern). ТИРАЖ-БАТЧ-2b (push-provider целиком на huma по эталонам role/operator):
-// create (WRITE+AUDIT push-provider.created), list (read-with-typed-query), get
-// (read-with-path), update (WRITE+AUDIT push-provider.updated, PUT replace-семантика),
-// delete (WRITE+AUDIT push-provider.deleted). Go-типы — единственный источник правды.
+// FULL-TYPED shape of the PUSH-PROVIDER domain (code-first OpenAPI source, ADR-054
+// §Pattern). ROLLOUT BATCH 2b (push-provider entirely onto huma, following the
+// role/operator references): create (WRITE+AUDIT push-provider.created), list
+// (read-with-typed-query), get (read-with-path), update (WRITE+AUDIT
+// push-provider.updated, PUT replace semantics), delete (WRITE+AUDIT
+// push-provider.deleted). The Go types are the single source of truth.
 //
-// update — PUT с replace-семантикой (params полностью заменяет существующий набор,
-// read-modify-write на клиенте), НЕ presence-tier Optional[T]: у поля params нет
-// «omitted vs null»-семантики (его всегда шлют целиком), поэтому Optional не нужен.
+// update — a PUT with replace semantics (params fully replaces the existing set,
+// read-modify-write on the client), NOT the presence-tier Optional[T]: the params
+// field has no "omitted vs null" semantics (it is always sent whole), so Optional
+// isn't needed.
 
 import (
 	"net/http"
@@ -18,38 +20,38 @@ import (
 
 // === POST /v1/push-providers (create) — WRITE+AUDIT push-provider.created ===
 
-// pushProviderCreateInput — huma-input POST /v1/push-providers (FULL-TYPED). Body —
-// типизированное тело.
+// pushProviderCreateInput — huma input for POST /v1/push-providers (FULL-TYPED). Body —
+// a typed body.
 type pushProviderCreateInput struct {
 	Body PushProviderCreateRequest
 }
 
-// PushProviderCreateRequest — Go-форма тела POST /v1/push-providers (code-first
-// источник схемы И валидации). name + опц. params (opaque map; sensitive-ключи —
-// vault-refs). additionalProperties в params:true (opaque payload), но НА ВЕРХНЕМ
-// уровне тела — false (huma-дефолт) → unknown поле тела → 400. Формат name и
-// sensitive-инвариант params — доменная валидация в CreateTyped (422). Имя структуры =
-// контрактное имя схемы (huma DefaultSchemaNamer берёт reflect.Type.Name()) — выровнено
-// под committed-рукопись (тираж N3). Register-func проецирует в native
-// handlers.PushProviderCreateInput.
+// PushProviderCreateRequest — the Go shape of the POST /v1/push-providers body (code-first
+// source of the schema AND validation). name + optional params (opaque map; sensitive
+// keys — vault-refs). additionalProperties in params:true (opaque payload), but at the
+// TOP level of the body — false (the huma default) → an unknown body field → 400. The
+// format of name and the sensitive-invariant of params — domain validation in
+// CreateTyped (422). The struct name = the contract schema name (huma DefaultSchemaNamer
+// takes reflect.Type.Name()) — aligned to the committed hand-written spec (rollout batch
+// N3). The register-func projects into the native handlers.PushProviderCreateInput.
 type PushProviderCreateRequest struct {
 	Name   string         `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"имя Push-Provider-а (= plugins.ssh_providers[].name)"`
 	Params map[string]any `json:"params,omitempty" doc:"opaque params; sensitive — vault-refs (значения не логируются)"`
 }
 
-// pushProviderCreateOutput — huma-output POST /v1/push-providers (FULL-TYPED).
-// Status=201; Body — native 201-тело (PushProvider). Wire-форма (params
-// нормализован в {}, updated_by_aid nullable, date-time RFC3339Nano без Truncate)
-// зафиксирована golden-JSON byte-exact-тестом.
+// pushProviderCreateOutput — huma output for POST /v1/push-providers (FULL-TYPED).
+// Status=201; Body — the native 201 body (PushProvider). The wire shape (params
+// normalized to {}, updated_by_aid nullable, date-time RFC3339Nano without Truncate)
+// is pinned by a golden-JSON byte-exact test.
 type pushProviderCreateOutput struct {
 	Status int `json:"-"`
 	Body   PushProvider
 }
 
-// pushProviderCreateOperation — метаданные POST /v1/push-providers. Path = "/"
-// относительно chi-группы /v1/push-providers. DefaultStatus=201. Permission
+// pushProviderCreateOperation — the metadata for POST /v1/push-providers. Path = "/"
+// relative to the /v1/push-providers chi group. DefaultStatus=201. Permission
 // push-provider.create + audit push-provider.created. Errors: 400 unknown/malformed,
-// 403 RBAC, 409 push-provider-exists, 422 валидация name/sensitive-param, 500.
+// 403 RBAC, 409 push-provider-exists, 422 name/sensitive-param validation, 500.
 func pushProviderCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createPushProvider",
@@ -63,27 +65,27 @@ func pushProviderCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/push-providers (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/push-providers (list) — READ-with-typed-query (no audit) ===
 
-// pushProviderListInput — huma-input GET /v1/push-providers (FULL-TYPED typed-query).
-// name_pattern — LIKE-prefix-фильтр (string). offset/limit — int32 с default; диапазон
-// enforce-ит CheckPageBounds в ListTyped → 400 (НЕ huma minimum/maximum). bad-int →
-// 400 (parseInto).
+// pushProviderListInput — huma input for GET /v1/push-providers (FULL-TYPED typed-query).
+// name_pattern — a LIKE-prefix filter (string). offset/limit — int32 with a default; the
+// range is enforced by CheckPageBounds in ListTyped → 400 (NOT huma minimum/maximum).
+// bad-int → 400 (parseInto).
 type pushProviderListInput struct {
 	NamePattern string `query:"name_pattern" doc:"LIKE-prefix-фильтр по имени (опц.)"`
 	Offset      int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
 	Limit       int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// pushProviderListOutput — huma-output GET /v1/push-providers (FULL-TYPED). Body —
-// native 200-envelope (PushProviderListReply: items/offset/limit/total).
-// Wire-форма зафиксирована golden-тестом.
+// pushProviderListOutput — huma output for GET /v1/push-providers (FULL-TYPED). Body —
+// the native 200 envelope (PushProviderListReply: items/offset/limit/total).
+// The wire shape is pinned by a golden test.
 type pushProviderListOutput struct {
 	Body PushProviderListReply
 }
 
-// pushProviderListOperation — метаданные GET /v1/push-providers. DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
+// pushProviderListOperation — the metadata for GET /v1/push-providers. DefaultStatus=200.
+// READ route: audit is NOT wired. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
 func pushProviderListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listPushProviders",
@@ -97,22 +99,22 @@ func pushProviderListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/push-providers/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/push-providers/{name} (get) — READ-with-path (no audit) ===
 
-// pushProviderGetInput — huma-input GET /v1/push-providers/{name}. Name — path.
-// Формат name (ValidName) — доменная валидация в GetTyped (422).
+// pushProviderGetInput — huma input for GET /v1/push-providers/{name}. Name — path.
+// The format of name (ValidName) — domain validation in GetTyped (422).
 type pushProviderGetInput struct {
 	Name string `path:"name" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"имя Push-Provider-а"`
 }
 
-// pushProviderGetOutput — huma-output GET /v1/push-providers/{name} (FULL-TYPED).
-// Body — native 200-тело (PushProvider).
+// pushProviderGetOutput — huma output for GET /v1/push-providers/{name} (FULL-TYPED).
+// Body — the native 200 body (PushProvider).
 type pushProviderGetOutput struct {
 	Body PushProvider
 }
 
-// pushProviderGetOperation — метаданные GET /v1/push-providers/{name}.
-// DefaultStatus=200. READ-роут: audit НЕ навешан. Permission push-provider.read.
+// pushProviderGetOperation — the metadata for GET /v1/push-providers/{name}.
+// DefaultStatus=200. READ route: audit is NOT wired. Permission push-provider.read.
 // Errors: 403, 404, 422 bad path-name, 500.
 func pushProviderGetOperation() huma.Operation {
 	return huma.Operation{
@@ -129,32 +131,32 @@ func pushProviderGetOperation() huma.Operation {
 
 // === PUT /v1/push-providers/{name} (update) — WRITE+AUDIT push-provider.updated ===
 
-// pushProviderUpdateInput — huma-input PUT /v1/push-providers/{name}. Name — path;
-// Body — typed тело (replace-семантика params).
+// pushProviderUpdateInput — huma input for PUT /v1/push-providers/{name}. Name — path;
+// Body — a typed body (replace semantics for params).
 type pushProviderUpdateInput struct {
 	Name string `path:"name" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"имя Push-Provider-а"`
 	Body PushProviderUpdateRequest
 }
 
-// PushProviderUpdateRequest — Go-форма тела PUT /v1/push-providers/{name}
-// (replace-семантика: params полностью заменяет существующий набор). Params
-// required:"true" (PUT шлёт полный новый набор; пустой {} легитимен — обнуляет
-// params). НЕ Optional[T]: read-modify-write на клиенте, presence-различения нет.
-// Имя структуры = контрактное имя схемы (huma DefaultSchemaNamer) — выровнено под
-// committed-рукопись (тираж N3). Register-func проецирует в native
-// handlers.PushProviderUpdateInput.
+// PushProviderUpdateRequest — the Go shape of the PUT /v1/push-providers/{name} body
+// (replace semantics: params fully replaces the existing set). Params is
+// required:"true" (PUT sends the full new set; an empty {} is legitimate — it clears
+// params). NOT Optional[T]: read-modify-write on the client, no presence distinction.
+// The struct name = the contract schema name (huma DefaultSchemaNamer) — aligned to
+// the committed hand-written spec (rollout batch N3). The register-func projects into
+// the native handlers.PushProviderUpdateInput.
 type PushProviderUpdateRequest struct {
 	Params map[string]any `json:"params" required:"true" doc:"полный новый набор params (replace); sensitive — vault-refs"`
 }
 
-// pushProviderUpdateOutput — huma-output PUT /v1/push-providers/{name} (FULL-TYPED).
-// Status=200; Body — native 200-тело (PushProvider).
+// pushProviderUpdateOutput — huma output for PUT /v1/push-providers/{name} (FULL-TYPED).
+// Status=200; Body — the native 200 body (PushProvider).
 type pushProviderUpdateOutput struct {
 	Status int `json:"-"`
 	Body   PushProvider
 }
 
-// pushProviderUpdateOperation — метаданные PUT /v1/push-providers/{name}.
+// pushProviderUpdateOperation — the metadata for PUT /v1/push-providers/{name}.
 // DefaultStatus=200. Permission push-provider.update + audit push-provider.updated.
 // Errors: 400 unknown/malformed, 403 RBAC, 404 not-found, 422 bad path-name/
 // sensitive-param, 500.
@@ -173,20 +175,20 @@ func pushProviderUpdateOperation() huma.Operation {
 
 // === DELETE /v1/push-providers/{name} (delete) — WRITE+AUDIT push-provider.deleted ===
 
-// pushProviderDeleteInput — huma-input DELETE /v1/push-providers/{name}. Name — path.
-// Body нет.
+// pushProviderDeleteInput — huma input for DELETE /v1/push-providers/{name}. Name — path.
+// No Body.
 type pushProviderDeleteInput struct {
 	Name string `path:"name" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"имя Push-Provider-а"`
 }
 
-// pushProviderNoContentOutput — huma-output 204-write-роута delete. БЕЗ Body
-// (легаси-контракт: 204 No Content). huma на output без Body → SetStatus(204) →
-// пустое тело (wire-идентично прежнему WriteHeader(204)).
+// pushProviderNoContentOutput — huma output for the delete 204-write route. No Body
+// (legacy contract: 204 No Content). On an output with no Body huma does SetStatus(204) →
+// an empty body (wire-identical to the former WriteHeader(204)).
 type pushProviderNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// pushProviderDeleteOperation — метаданные DELETE /v1/push-providers/{name}.
+// pushProviderDeleteOperation — the metadata for DELETE /v1/push-providers/{name}.
 // DefaultStatus=204. Permission push-provider.delete + audit push-provider.deleted.
 // Errors: 403, 404, 422 bad path-name, 500.
 func pushProviderDeleteOperation() huma.Operation {

@@ -1,14 +1,14 @@
 package api
 
-// Регистрация и spec-dump ORACLE-домена (vigils + decrees) на huma full-typed
-// (handler-native T5d-2c по эталонам role/operator/augur, ADR-054 §Pattern). vigil
-// create/delete + decree create/delete — WRITE+AUDIT (вариант B, huma-audit-
-// middleware; события vigil.created/vigil.deleted/decree.created/decree.deleted);
-// vigil/decree list/get — read (БЕЗ audit). Доменные *Typed-функции
-// (handlers/oracle.go) принимают NATIVE request-типы и возвращают доменные result-ы
-// с плоскими wire-полями; register-func проецирует их в native wire-DTO
-// (huma_oracle_reply.go) НАПРЯМУЮ — legacy-генерата не участвует. MCP oracle-tools зовут
-// oracle.Service напрямую (мимо handler).
+// Registration and spec dump of the ORACLE domain (vigils + decrees) on huma full-typed
+// (handler-native T5d-2c, following role/operator/augur, ADR-054 §Pattern). vigil
+// create/delete + decree create/delete — WRITE+AUDIT (variant B, huma audit
+// middleware; events vigil.created/vigil.deleted/decree.created/decree.deleted);
+// vigil/decree list/get — read (no audit). The domain *Typed functions
+// (handlers/oracle.go) take NATIVE request types and return domain results
+// with flat wire fields; the register func projects them into the native wire DTO
+// (huma_oracle_reply.go) DIRECTLY — the legacy generated code is not involved. MCP oracle-tools call
+// oracle.Service directly (bypassing the handler).
 
 import (
 	"context"
@@ -23,9 +23,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaVigilCreate монтирует POST /v1/vigils через huma (WRITE+AUDIT вариант
+// registerHumaVigilCreate mounts POST /v1/vigils via huma (WRITE+AUDIT variant
 // B — event vigil.created). oracleH nil → no-op. Handler: claims → CreateVigilTyped →
-// audit-payload на huma-ctx → 201 typed output.
+// audit payload on huma-ctx → 201 typed output.
 func registerHumaVigilCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -52,9 +52,9 @@ func registerHumaVigilCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 	})
 }
 
-// registerHumaVigilList монтирует GET /v1/vigils через huma (READ-with-typed-query,
-// БЕЗ audit). oracleH nil → no-op. Handler: typed-query → ListVigilsTyped → typed
-// envelope-output. RBAC vigil.list — на группе.
+// registerHumaVigilList mounts GET /v1/vigils via huma (READ-with-typed-query,
+// no audit). oracleH nil → no-op. Handler: typed query → ListVigilsTyped → typed
+// envelope output. RBAC vigil.list — on the group.
 func registerHumaVigilList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -68,9 +68,9 @@ func registerHumaVigilList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaVigilGet монтирует GET /v1/vigils/{name} через huma (READ-with-path,
-// БЕЗ audit). oracleH nil → no-op. Handler: GetVigilTyped(name) → typed output
-// (404/422 через problem). RBAC vigil.list (read покрыт list-правом) — на группе.
+// registerHumaVigilGet mounts GET /v1/vigils/{name} via huma (READ-with-path,
+// no audit). oracleH nil → no-op. Handler: GetVigilTyped(name) → typed output
+// (404/422 via problem). RBAC vigil.list (read is covered by the list permission) — on the group.
 func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -84,9 +84,9 @@ func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaVigilDelete монтирует DELETE /v1/vigils/{name} через huma (WRITE+AUDIT
-// вариант B — event vigil.deleted). oracleH nil → no-op. Handler: DeleteVigilTyped →
-// audit-payload → пустой 204-output.
+// registerHumaVigilDelete mounts DELETE /v1/vigils/{name} via huma (WRITE+AUDIT
+// variant B — event vigil.deleted). oracleH nil → no-op. Handler: DeleteVigilTyped →
+// audit payload → empty 204 output.
 func registerHumaVigilDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -101,9 +101,9 @@ func registerHumaVigilDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 	})
 }
 
-// registerHumaDecreeCreate монтирует POST /v1/decrees через huma (WRITE+AUDIT вариант
+// registerHumaDecreeCreate mounts POST /v1/decrees via huma (WRITE+AUDIT variant
 // B — event decree.created). oracleH nil → no-op. Handler: claims → CreateDecreeTyped
-// → audit-payload → 201 typed output.
+// → audit payload → 201 typed output.
 func registerHumaDecreeCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -133,9 +133,9 @@ func registerHumaDecreeCreate(humaAPI huma.API, oracleH *handlers.OracleHandler)
 	})
 }
 
-// registerHumaDecreeList монтирует GET /v1/decrees через huma (READ-with-typed-query,
-// БЕЗ audit). oracleH nil → no-op. Handler: typed-query → ListDecreesTyped → typed
-// envelope-output. RBAC decree.list — на группе.
+// registerHumaDecreeList mounts GET /v1/decrees via huma (READ-with-typed-query,
+// no audit). oracleH nil → no-op. Handler: typed query → ListDecreesTyped → typed
+// envelope output. RBAC decree.list — on the group.
 func registerHumaDecreeList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -149,9 +149,9 @@ func registerHumaDecreeList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaDecreeGet монтирует GET /v1/decrees/{name} через huma (READ-with-path,
-// БЕЗ audit). oracleH nil → no-op. Handler: GetDecreeTyped(name) → typed output
-// (404/422 через problem). RBAC decree.list (read покрыт list-правом) — на группе.
+// registerHumaDecreeGet mounts GET /v1/decrees/{name} via huma (READ-with-path,
+// no audit). oracleH nil → no-op. Handler: GetDecreeTyped(name) → typed output
+// (404/422 via problem). RBAC decree.list (read is covered by the list permission) — on the group.
 func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -165,9 +165,9 @@ func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaDecreeDelete монтирует DELETE /v1/decrees/{name} через huma (WRITE+AUDIT
-// вариант B — event decree.deleted). oracleH nil → no-op. Handler: DeleteDecreeTyped
-// → audit-payload → пустой 204-output.
+// registerHumaDecreeDelete mounts DELETE /v1/decrees/{name} via huma (WRITE+AUDIT
+// variant B — event decree.deleted). oracleH nil → no-op. Handler: DeleteDecreeTyped
+// → audit payload → empty 204 output.
 func registerHumaDecreeDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
@@ -182,15 +182,15 @@ func registerHumaDecreeDelete(humaAPI huma.API, oracleH *handlers.OracleHandler)
 	})
 }
 
-// oracleMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// oracleMissingClaims — a defensive response for missing claims in ctx (unreachable:
+// RequireJWT puts claims in before huma). problem+json (parity with roleMissingClaims).
 func oracleMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// oracleProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
-// roleProblem).
+// oracleProblem delivers a *Typed function's error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; a non-problem error → 500 (parity
+// with roleProblem).
 func oracleProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -198,18 +198,18 @@ func oracleProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaOracleAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// oracle (vigil create/delete, decree create/delete) монтируется на СВОЕЙ chi-группе
-// с собственным event-типом.
+// newHumaOracleAPI assembles a huma.API on top of a chi group with huma audit middleware
+// (variant B) for the given event type (parity with newHumaRoleAPI). Each oracle write route
+// (vigil create/delete, decree create/delete) is mounted on ITS OWN chi group
+// with its own event type.
 func newHumaOracleAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaOracleSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma oracle-
-// роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-
-// таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaOracleSpecYAML assembles the OpenAPI fragment of ALL oracle routes migrated to huma
+// as a YAML string, WITHOUT mounting on a real router. A hook for the rollout's spec-merge
+// target and for the guard test. Delegates to the generic [humaDumpSpec] via the same
+// register functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaOracleSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.OracleSpecStub()

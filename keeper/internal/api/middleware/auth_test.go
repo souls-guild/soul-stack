@@ -39,8 +39,8 @@ func newToken(t *testing.T, ttl time.Duration) string {
 	return tok
 }
 
-// nextOK — handler, который проверяет, что middleware пропустил запрос
-// и пишет 200. Используется для positive-case-ов.
+// nextOK — a handler that verifies the middleware let the request through
+// and writes 200. Used for positive cases.
 func nextOK(t *testing.T, wantSubject string) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +57,7 @@ func nextOK(t *testing.T, wantSubject string) http.Handler {
 	})
 }
 
-// nextShouldNotRun — handler, который должен НЕ вызываться (401-case).
+// nextShouldNotRun — a handler that must NOT be called (401 case).
 func nextShouldNotRun(t *testing.T) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,16 +150,16 @@ func TestRequireJWT_BadToken(t *testing.T) {
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeUnauthenticated)
 }
 
-// TestRevokedJWT_Returns401 — ADR-014 Amendment 2026-05-27: JWT валиден по
-// подписи и exp, но AID Архонта попал в Snapshot.Revoked → RequirePermission
-// возвращает 401 с problem-detail `operator-revoked-token` (parity с
-// expired). НЕ 403 — токен больше не доверенный.
+// TestRevokedJWT_Returns401 — ADR-014 Amendment 2026-05-27: the JWT is valid by
+// signature and exp, but the Archon's AID landed in Snapshot.Revoked → RequirePermission
+// returns 401 with the problem-detail `operator-revoked-token` (parity with
+// expired). NOT 403 — the token is no longer trusted.
 func TestRevokedJWT_Returns401(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
 
-	// Enforcer с ролью `*` для archon-alice + revoke-меткой на тот же AID:
-	// моделирует «уволенный сотрудник с ещё активной ролью в каталоге».
+	// Enforcer with a `*` role for archon-alice + a revoke marker on the same AID:
+	// models "a terminated employee whose role in the catalog is still active".
 	revokedAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
 	e, err := rbactest.NewEnforcer(&rbactest.Config{
 		Roles: []rbactest.Role{
@@ -181,10 +181,10 @@ func TestRevokedJWT_Returns401(t *testing.T) {
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeOperatorRevokedToken)
 }
 
-// TestRevokedJWT_Returns401_MultiSelector — то же, что TestRevokedJWT_Returns401,
-// но через RequirePermissionMulti (используется на /incarnations/{name}-роутах).
-// Revoke-short-circuit-проверка должна сработать на первой же итерации, не
-// деградировать до 403.
+// TestRevokedJWT_Returns401_MultiSelector — the same as TestRevokedJWT_Returns401,
+// but through RequirePermissionMulti (used on /incarnations/{name} routes).
+// The revoke short-circuit check must fire on the very first iteration, not
+// degrade to 403.
 func TestRevokedJWT_Returns401_MultiSelector(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
@@ -215,9 +215,9 @@ func TestRevokedJWT_Returns401_MultiSelector(t *testing.T) {
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeOperatorRevokedToken)
 }
 
-// TestSSE_QueryToken_Valid_200 — EventSource не умеет custom-заголовки,
-// поэтому SSE-канал принимает JWT в query-param `access_token`. Валидный
-// токен на `GET .../events?access_token=<jwt>` → 200 + claims в context.
+// TestSSE_QueryToken_Valid_200 — EventSource cannot send custom headers,
+// so the SSE channel accepts the JWT in the `access_token` query param. A valid
+// token on `GET .../events?access_token=<jwt>` → 200 + claims in the context.
 func TestSSE_QueryToken_Valid_200(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
@@ -230,8 +230,8 @@ func TestSSE_QueryToken_Valid_200(t *testing.T) {
 	}
 }
 
-// TestSSE_QueryToken_Valid_200_AcceptHeader — SSE-канал распознаётся также
-// по `Accept: text/event-stream` (путь без суффикса /events).
+// TestSSE_QueryToken_Valid_200_AcceptHeader — the SSE channel is also recognized
+// by `Accept: text/event-stream` (a path without the /events suffix).
 func TestSSE_QueryToken_Valid_200_AcceptHeader(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
@@ -245,8 +245,8 @@ func TestSSE_QueryToken_Valid_200_AcceptHeader(t *testing.T) {
 	}
 }
 
-// TestSSE_QueryToken_Invalid_401 — невалидный query-token на SSE-канале →
-// 401 (тот же verifier, что и для Bearer).
+// TestSSE_QueryToken_Invalid_401 — an invalid query token on the SSE channel →
+// 401 (the same verifier as for Bearer).
 func TestSSE_QueryToken_Invalid_401(t *testing.T) {
 	v := newVerifier(t)
 	h := RequireJWT(v)(nextShouldNotRun(t))
@@ -256,9 +256,9 @@ func TestSSE_QueryToken_Invalid_401(t *testing.T) {
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeUnauthenticated)
 }
 
-// TestSSE_QueryToken_OnNonSSE_Ignored — query-token на обычном GET (не
-// /events, без Accept SSE) НЕ принимается: токен в URL разрешён строго для
-// потокового канала. Валидный JWT в query → всё равно 401.
+// TestSSE_QueryToken_OnNonSSE_Ignored — a query token on a plain GET (not
+// /events, without an SSE Accept) is NOT accepted: a token in the URL is allowed strictly for
+// the streaming channel. A valid JWT in the query → still 401.
 func TestSSE_QueryToken_OnNonSSE_Ignored(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
@@ -269,21 +269,21 @@ func TestSSE_QueryToken_OnNonSSE_Ignored(t *testing.T) {
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeUnauthenticated)
 }
 
-// TestSSE_QueryToken_OnPost_Ignored — query-token на mutating-методе (POST)
-// игнорируется даже с валидным JWT: query-token только для GET + SSE.
+// TestSSE_QueryToken_OnPost_Ignored — a query token on a mutating method (POST)
+// is ignored even with a valid JWT: a query token is only for GET + SSE.
 func TestSSE_QueryToken_OnPost_Ignored(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
 	h := RequireJWT(v)(nextShouldNotRun(t))
 	rec := httptest.NewRecorder()
-	// POST на путь с /events-суффиксом + валидный токен в query — всё равно 401.
+	// POST to a path with the /events suffix + a valid token in the query — still 401.
 	req := httptest.NewRequest(http.MethodPost, "/v1/voyages/run-1/events?access_token="+tok, nil)
 	h.ServeHTTP(rec, req)
 	assertProblem(t, rec, http.StatusUnauthorized, problem.TypeUnauthenticated)
 }
 
-// TestSSE_BearerStillWorks — обычный `Authorization: Bearer` на SSE-канале
-// продолжает работать (header имеет приоритет над query-param).
+// TestSSE_BearerStillWorks — a regular `Authorization: Bearer` on the SSE channel
+// keeps working (the header takes priority over the query param).
 func TestSSE_BearerStillWorks(t *testing.T) {
 	v := newVerifier(t)
 	tok := newToken(t, time.Hour)
@@ -307,8 +307,8 @@ func testRequestContext() (ctx contextLike) {
 	return httptest.NewRequest(http.MethodGet, "/", nil).Context()
 }
 
-// contextLike — alias для context.Context (импорт через test-helper, чтобы
-// тестовый код оставался декларативным).
+// contextLike — an alias for context.Context (imported via a test helper so the
+// test code stays declarative).
 type contextLike = interface {
 	Deadline() (time.Time, bool)
 	Done() <-chan struct{}

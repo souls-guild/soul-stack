@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// fakeScenarioResolver / fakeCommandResolver — стабы резолверов под cadence-
-// интерфейсы. Захватывают аргументы, возвращают запрограммированный snapshot/err.
+// fakeScenarioResolver / fakeCommandResolver — stubs of resolvers for the cadence
+// interfaces. Capture arguments, return a programmed snapshot/err.
 type fakeScenarioResolver struct {
 	gotIncs    []string
 	gotService string
@@ -54,7 +54,7 @@ func TestResolveScope_Scenario(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("scope = %v, want 2", got)
 	}
-	if sr.gotService != "redis" || sr.gotCoven != "prod-eu" { // первый coven
+	if sr.gotService != "redis" || sr.gotCoven != "prod-eu" { // first coven
 		t.Errorf("scenario filter: service=%q coven=%q", sr.gotService, sr.gotCoven)
 	}
 }
@@ -136,7 +136,7 @@ func TestBuildVoyage_ScenarioBarrier(t *testing.T) {
 			t.Errorf("target[%d].status = %q", i, tg.Status)
 		}
 	}
-	// target_resolved — JSON-массив имён.
+	// target_resolved — a JSON array of names.
 	var names []string
 	if err := json.Unmarshal(v.TargetResolved, &names); err != nil {
 		t.Fatalf("target_resolved unmarshal: %v", err)
@@ -164,11 +164,11 @@ func TestBuildVoyage_CommandWindow(t *testing.T) {
 	if v.BatchSize != nil {
 		t.Errorf("window: batch_size должен быть nil, got %v", v.BatchSize)
 	}
-	if v.TotalBatches != 1 { // window → одна волна
+	if v.TotalBatches != 1 { // window → one wave
 		t.Errorf("total_batches = %d, want 1", v.TotalBatches)
 	}
 	for i, tg := range targets {
-		if tg.BatchIndex != 0 { // window → все в Leg 0
+		if tg.BatchIndex != 0 { // window → all in Leg 0
 			t.Errorf("target[%d].batch_index = %d, want 0", i, tg.BatchIndex)
 		}
 		if tg.TargetKind != voyage.TargetKindSID {
@@ -181,7 +181,7 @@ func TestBuildVoyage_BatchPercent(t *testing.T) {
 	t.Parallel()
 	c := intervalCadence()
 	c.BatchSize = nil
-	c.BatchPercent = intptr(50) // 50% от 4 = 2
+	c.BatchPercent = intptr(50) // 50% of 4 = 2
 	resolved := []string{"a", "b", "c", "d"}
 
 	v, _ := BuildVoyage(c, "VOY03", resolved)
@@ -193,16 +193,16 @@ func TestBuildVoyage_BatchPercent(t *testing.T) {
 	}
 }
 
-// TestBuildVoyage_FailThresholdPercent — ключевой late-binding (ADR-043 amendment
-// 2026-06-09, Cadence-recipe S3): fail_threshold_percent рецепта Cadence резолвится
-// в АБСОЛЮТНЫЙ voyage.FailThreshold на СПАВН-scope (len(resolved)), а не на
-// create-time. Спавнящийся Voyage не несёт percent-колонки — получает уже
-// абсолютный порог. ceil(scope*pct/100): 25% от 10 = 3.
+// TestBuildVoyage_FailThresholdPercent — key late-binding case (ADR-043 amendment
+// 2026-06-09, Cadence-recipe S3): the Cadence recipe's fail_threshold_percent resolves
+// to an ABSOLUTE voyage.FailThreshold at SPAWN-scope (len(resolved)), not at
+// create-time. The spawned Voyage doesn't carry a percent column — it gets the
+// already-absolute threshold. ceil(scope*pct/100): 25% of 10 = 3.
 func TestBuildVoyage_FailThresholdPercent(t *testing.T) {
 	t.Parallel()
 	c := intervalCadence()
 	c.FailThreshold = nil
-	c.FailThresholdPercent = intptr(25) // 25% от spawn-scope
+	c.FailThresholdPercent = intptr(25) // 25% of spawn-scope
 	resolved := []string{"i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10"}
 
 	v, _ := BuildVoyage(c, "VOY04", resolved)
@@ -211,9 +211,9 @@ func TestBuildVoyage_FailThresholdPercent(t *testing.T) {
 	}
 }
 
-// TestBuildVoyage_FailThresholdPercent_DifferentScopes — тот же рецепт-процент даёт
-// РАЗНЫЙ абсолютный порог при разном spawn-scope (доказывает резолв именно на
-// spawn-scope, не на фиксированном create-scope). 30%: от 3 → 1, от 100 → 30.
+// TestBuildVoyage_FailThresholdPercent_DifferentScopes — the same recipe percent gives
+// a DIFFERENT absolute threshold at a different spawn-scope (proves the resolve happens
+// at spawn-scope, not at a fixed create-scope). 30%: of 3 → 1, of 100 → 30.
 func TestBuildVoyage_FailThresholdPercent_DifferentScopes(t *testing.T) {
 	t.Parallel()
 	mk := func() *Cadence {
@@ -242,9 +242,9 @@ func TestBuildVoyage_FailThresholdPercent_DifferentScopes(t *testing.T) {
 	}
 }
 
-// TestBuildVoyage_FailThresholdAbsolute — абсолютный fail_threshold проходит как
-// есть, percent не влияет (nil). backcompat: рецепты без percent работают как
-// раньше.
+// TestBuildVoyage_FailThresholdAbsolute — an absolute fail_threshold passes through
+// as-is, percent has no effect (nil). backcompat: recipes without percent work as
+// before.
 func TestBuildVoyage_FailThresholdAbsolute(t *testing.T) {
 	t.Parallel()
 	c := intervalCadence()
@@ -258,8 +258,8 @@ func TestBuildVoyage_FailThresholdAbsolute(t *testing.T) {
 	}
 }
 
-// TestEffectiveFailThreshold — pure-функция резолва порога: clamp [1, scope],
-// nil-кейсы. Зеркало effectiveBatchSize.
+// TestEffectiveFailThreshold — pure function resolving the threshold: clamp [1, scope],
+// nil cases. Mirrors effectiveBatchSize.
 func TestEffectiveFailThreshold(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

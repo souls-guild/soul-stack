@@ -1,18 +1,19 @@
 package api
 
-// Guard-тесты БАТЧА-1 read-tier тиража: три READ-каталога (permissions /
-// event-types / me-permissions) переведены со strict на huma full-typed (ADR-054
-// §Pattern, READ-вариант pilot-1 БЕЗ audit). Доказывают, что huma-роуты поверх chi:
+// Guard tests for the BATCH-1 read-tier rollout: three READ catalogs (permissions /
+// event-types / me-permissions) migrated from strict to huma full-typed (ADR-054
+// §Pattern, the READ variant of pilot-1, no audit). They prove that huma routes on
+// top of chi:
 //
 //   - wire: 200 + typed output (Content-Type application/json);
-//   - GOLDEN byte-exact: huma-200-reply == legacy oapi-reply того же handler-а
-//     (omitempty/[]-vs-null/набор ключей/$schema-отсутствие) — главный guard read-
-//     tier тиража;
-//   - no-audit: READ не пишет audit (нет middleware) — прогон с capture-writer даёт
-//     0 событий;
-//   - claims: me-permissions читает AID из ctx (RequireJWT положил), nil-claims →
-//     500 problem+json (defensive parity доменного Get);
-//   - OpenAPI-фрагмент: huma генерит 3.1-спеку из FULL-TYPED Go-типов.
+//   - GOLDEN byte-exact: huma-200-reply == legacy oapi-reply of the same handler
+//     (omitempty/[]-vs-null/key set/$schema absence) — the main guard of the read-
+//     tier rollout;
+//   - no-audit: READ does not write audit (no middleware) — a run with a capture
+//     writer yields 0 events;
+//   - claims: me-permissions reads the AID from ctx (RequireJWT put it there),
+//     nil claims → 500 problem+json (defensive parity with the domain Get);
+//   - OpenAPI fragment: huma generates a 3.1 spec from the FULL-TYPED Go types.
 
 import (
 	"encoding/json"
@@ -30,7 +31,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// catalogInjectClaims навешивает claims (заменяет RequireJWT в проде).
+// catalogInjectClaims injects claims (replaces RequireJWT in prod).
 func catalogInjectClaims(aid string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -40,8 +41,8 @@ func catalogInjectClaims(aid string) func(http.Handler) http.Handler {
 	}
 }
 
-// remarshalSorted перекладывает reply через map → канонический marshal (ключи
-// сортируются) — golden фиксирует НАБОР ключей/форму/$schema-отсутствие, не порядок.
+// remarshalSorted round-trips the reply through a map → canonical marshal (keys get
+// sorted) — golden fixes the SET of keys/shape/$schema absence, not the order.
 func remarshalSorted(t *testing.T, raw []byte) string {
 	t.Helper()
 	var v any
@@ -69,9 +70,9 @@ func humaPermissionsRouter(t *testing.T, permH *handlers.PermissionCatalogHandle
 }
 
 // TestHumaPermissions_GoldenWire — GOLDEN byte-exact read-tier: huma-200-reply ==
-// legacy oapi-reply того же handler-а. Каталог статичен → huma и legacy обязаны
-// дать идентичные байты (после ремаршала через map для нормализации порядка).
-// Дрейф (huma вмешает $schema / поле потеряет []-форму) ломает равенство.
+// legacy oapi-reply of the same handler. The catalog is static → huma and legacy
+// must produce identical bytes (after remarshaling through a map to normalize
+// order). Drift (huma injects $schema / a field loses its []-shape) breaks equality.
 func TestHumaPermissions_GoldenWire(t *testing.T) {
 	permH := handlers.NewPermissionCatalogHandler(nil)
 	r := humaPermissionsRouter(t, permH)
@@ -85,7 +86,7 @@ func TestHumaPermissions_GoldenWire(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 
-	// Эталон: native-проекция доменного ListTyped() (handler-native T5d, без legacy-генерата).
+	// Reference: native projection of the domain ListTyped() (handler-native T5d, no legacy generator).
 	want := remarshalSorted(t, mustMarshal(t, newPermissionCatalogReply(permH.ListTyped())))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
@@ -93,7 +94,7 @@ func TestHumaPermissions_GoldenWire(t *testing.T) {
 	}
 }
 
-// mustMarshal — json.Marshal с t.Fatal на ошибке (эталон для huma↔native golden).
+// mustMarshal — json.Marshal with t.Fatal on error (reference for the huma↔native golden).
 func mustMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -181,7 +182,7 @@ func humaMyPermissionsRouter(t *testing.T, meH *handlers.MyPermissionsHandler, a
 }
 
 // TestHumaMyPermissions_GoldenWire — GOLDEN byte-exact: huma-200 == legacy oapi-reply
-// для конкретного AID (permissions non-nil, pointer-optional, snake_case scope-ключи).
+// for a specific AID (permissions non-nil, pointer-optional, snake_case scope keys).
 func TestHumaMyPermissions_GoldenWire(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "ops", Operators: []string{"archon-alice"}, Permissions: []string{"incarnation.run", "soul.list"}},
@@ -195,7 +196,7 @@ func TestHumaMyPermissions_GoldenWire(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Эталон: native-проекция доменного GetTyped(aid) для того же AID.
+	// Reference: native projection of the domain GetTyped(aid) for the same AID.
 	want := remarshalSorted(t, mustMarshal(t, newMyPermissionsReply(meH.GetTyped("archon-alice"))))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
@@ -203,9 +204,9 @@ func TestHumaMyPermissions_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaMyPermissions_ScopeWire — SECURITY-relevant: state-измерение scope
-// (ADR-047 S2c) долетает через huma-роут под snake_case-ключом `state` (регресс
-// конвертера = молчаливая утеря scope-предиката).
+// TestHumaMyPermissions_ScopeWire — SECURITY-relevant: the state dimension of scope
+// (ADR-047 S2c) makes it through the huma route under the snake_case key `state`
+// (a converter regression = a silent loss of the scope predicate).
 func TestHumaMyPermissions_ScopeWire(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{
@@ -227,8 +228,8 @@ func TestHumaMyPermissions_ScopeWire(t *testing.T) {
 	}
 }
 
-// TestHumaMyPermissions_NoClaims_500 — defensive parity доменного Get: без claims
-// в ctx (auth-chain не собрана) → 500 problem+json.
+// TestHumaMyPermissions_NoClaims_500 — defensive parity with the domain Get: without
+// claims in ctx (the auth chain is not assembled) → 500 problem+json.
 func TestHumaMyPermissions_NoClaims_500(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{})
 	meH := handlers.NewMyPermissionsHandler(e, nil)
@@ -260,7 +261,7 @@ func TestHumaMyPermissions_NoAudit(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: три READ-каталога из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: three READ catalogs from FULL-TYPED Go types ===
 
 func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaCatalogSpecYAML()
@@ -270,9 +271,9 @@ func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 	if !strings.Contains(frag, "openapi: 3.1.0") {
 		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
 	}
-	// Дамп строится на bare chi-роутере (без /v1-префикса), поэтому пути в
-	// фрагменте — относительные к группе /v1 (/permissions, /event-types,
-	// /me/permissions); /v1-префикс добавляет реальный mount (router.go).
+	// The dump is built on a bare chi router (without the /v1 prefix), so the paths
+	// in the fragment are relative to the /v1 group (/permissions, /event-types,
+	// /me/permissions); the real mount (router.go) adds the /v1 prefix.
 	for _, want := range []string{
 		"listPermissions", "listEventTypes", "listMyPermissions",
 		"/permissions", "/event-types", "/me/permissions",
@@ -281,7 +282,7 @@ func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
 		}
 	}
-	// READ-каталоги без входа → НЕ должны нести requestBody/octet-stream.
+	// READ catalogs have no input → must NOT carry requestBody/octet-stream.
 	if strings.Contains(frag, "octet-stream") {
 		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream (READ-каталог не имеет тела запроса):\n%s", frag)
 	}
