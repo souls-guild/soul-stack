@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeLister — программируемый artifact.RefsLister: считает вызовы и отдаёт
-// заданные refs / ошибку.
+// fakeLister — a programmable artifact.RefsLister: counts calls and returns
+// preset refs / error.
 type fakeLister struct {
 	mu    sync.Mutex
 	calls atomic.Int64
@@ -42,7 +42,7 @@ func TestRefsCache_HitMiss(t *testing.T) {
 	}}
 	c := NewRefsCache(lister, time.Hour)
 
-	// Первый вызов — miss → lister дёрнут.
+	// First call — miss → lister invoked.
 	got, err := c.ListRefs(context.Background(), "web", "file:///tmp/web")
 	if err != nil {
 		t.Fatalf("ListRefs #1: %v", err)
@@ -51,10 +51,10 @@ func TestRefsCache_HitMiss(t *testing.T) {
 		t.Fatalf("refs = %+v", got)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
-	// Второй вызов на тот же name — hit.
+	// Second call on the same name — hit.
 	got2, err := c.ListRefs(context.Background(), "web", "file:///tmp/web")
 	if err != nil {
 		t.Fatalf("ListRefs #2: %v", err)
@@ -63,7 +63,7 @@ func TestRefsCache_HitMiss(t *testing.T) {
 		t.Fatalf("refs hit = %+v", got2)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
@@ -74,13 +74,13 @@ func TestRefsCache_Expiry(t *testing.T) {
 	if _, err := c.ListRefs(context.Background(), "web", "g"); err != nil {
 		t.Fatalf("#1: %v", err)
 	}
-	// Подменяем clock на «через 200ms».
+	// Swap the clock to "200ms later".
 	c.now = func() time.Time { return time.Now().Add(200 * time.Millisecond) }
 	if _, err := c.ListRefs(context.Background(), "web", "g"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после истечения TTL = %d, want 2", n)
+		t.Errorf("calls after TTL expiry = %d, want 2", n)
 	}
 }
 
@@ -96,7 +96,7 @@ func TestRefsCache_Invalidate(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после Invalidate = %d, want 2", n)
+		t.Errorf("calls after Invalidate = %d, want 2", n)
 	}
 }
 
@@ -108,17 +108,17 @@ func TestRefsCache_ErrorNotCached(t *testing.T) {
 	if _, err := c.ListRefs(context.Background(), "web", "g"); !errors.Is(err, listerErr) {
 		t.Fatalf("err = %v, want %v", err, listerErr)
 	}
-	// Второй вызов — снова дёрнем lister (ошибки не кешируются).
+	// Second call — hits the lister again (errors aren't cached).
 	if _, err := c.ListRefs(context.Background(), "web", "g"); !errors.Is(err, listerErr) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после двух ошибок = %d, want 2", n)
+		t.Errorf("calls after two errors = %d, want 2", n)
 	}
 }
 
-// TestRefsCache_PerNameLock — параллельные запросы для одного сервиса
-// сериализуются: lister дёрнут ОДИН раз, остальные получают результат из кеша.
+// TestRefsCache_PerNameLock — concurrent requests for one service are
+// serialized: the lister is invoked ONCE, the rest get the result from cache.
 func TestRefsCache_PerNameLock(t *testing.T) {
 	lister := &fakeLister{
 		refs:  []artifact.GitRef{{Name: "v1", Type: artifact.GitRefTypeTag, Commit: "a"}},
@@ -143,11 +143,11 @@ func TestRefsCache_PerNameLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, ожидалось 1 (per-name lock не сработал)", n)
+		t.Errorf("calls = %d, expected 1 (per-name lock did not work)", n)
 	}
 }
 
-// TestRefsCache_PerNameIsolation — разные сервисы кешируются независимо.
+// TestRefsCache_PerNameIsolation — different services are cached independently.
 func TestRefsCache_PerNameIsolation(t *testing.T) {
 	lister := &fakeLister{refs: []artifact.GitRef{{Name: "v1", Type: artifact.GitRefTypeTag, Commit: "a"}}}
 	c := NewRefsCache(lister, time.Hour)
@@ -159,14 +159,14 @@ func TestRefsCache_PerNameIsolation(t *testing.T) {
 		t.Fatalf("api: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, ожидалось 2 (две разные записи кеша)", n)
+		t.Errorf("calls = %d, expected 2 (two independent cache entries)", n)
 	}
 }
 
 func TestRefsCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected panic on nil lister")
 		}
 	}()
 	_ = NewRefsCache(nil, time.Hour)

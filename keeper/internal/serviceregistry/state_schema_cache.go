@@ -8,44 +8,44 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// StateSchemaTTL — окно валидности кешированного state-schema-ответа одного
-// Service-а. 60s — парный [ScenariosTTL]-выбор: тот же UX-баланс «дёрганий
-// remote репо при открытии UI Schema explorer-а» vs. свежести (новая
-// миграция, положенная в репо минуту назад, оператор увидит спустя ≤60s).
+// StateSchemaTTL — validity window of a cached state-schema response for one
+// Service. 60s — paired with the [ScenariosTTL] choice: the same UX balance between
+// "hammering the remote repo on every UI Schema explorer open" vs. freshness (a new
+// migration dropped into the repo a minute ago is visible to the operator within ≤60s).
 const StateSchemaTTL = 60 * time.Second
 
-// StateSchemaLister — поверхность listing-а state_schema-метаданных
-// (`state_schema_version` + опц. декларация структуры + цепочка миграций) из
-// локально-материализованного снапшота Service-репо. Объявлено интерфейсом
-// для подмены fake-ом в тестах handler-а; production-реализация — функция
-// поверх [artifact.ServiceLoader] + [artifact.ListStateSchema].
+// StateSchemaLister — surface for listing state_schema metadata
+// (`state_schema_version` + optional structure declaration + migration chain) from
+// a locally materialized snapshot of the Service repo. Declared as an interface
+// so it can be swapped for a fake in handler tests; the production implementation
+// is a function on top of [artifact.ServiceLoader] + [artifact.ListStateSchema].
 //
-// Контракт: дёргается под per-(name+ref) lock-ом в [StateSchemaCache]; ref —
-// явный, потому что разные версии одного сервиса могут иметь разный
-// state_schema_version (UI Schema explorer показывает версию выбранного ref-а).
+// Contract: invoked under the per-(name+ref) lock in [StateSchemaCache]; ref is
+// explicit because different versions of the same service can have a different
+// state_schema_version (the UI Schema explorer shows the version of the selected ref).
 type StateSchemaLister interface {
 	ListStateSchema(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error)
 }
 
-// StateSchemaListerFunc — функциональная реализация [StateSchemaLister]
-// (парный [ScenarioListerFunc] для handler-side wire-up без обёрточного
-// именованного типа).
+// StateSchemaListerFunc — functional implementation of [StateSchemaLister]
+// (paired with [ScenarioListerFunc] for handler-side wire-up without a wrapper
+// named type).
 type StateSchemaListerFunc func(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error)
 
-// ListStateSchema делает функцию реализующей [StateSchemaLister].
+// ListStateSchema makes the function implement [StateSchemaLister].
 func (f StateSchemaListerFunc) ListStateSchema(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error) {
 	return f(ctx, name, gitURL, ref)
 }
 
-// StateSchemaCache — in-process TTL-кеш ответа
-// [StateSchemaLister.ListStateSchema] по ключу `(name, ref)`. Per-Keeper, не
-// cluster-wide: state-schema — read-only представление, отставание между
-// инстансами не нарушает консистентность реестра (parity с [ScenariosCache]).
+// StateSchemaCache — in-process TTL cache for
+// [StateSchemaLister.ListStateSchema] responses keyed by `(name, ref)`. Per-Keeper, not
+// cluster-wide: state-schema is a read-only view, lag between instances doesn't
+// break registry consistency (parity with [ScenariosCache]).
 //
-// Безопасен для конкурентного использования. Per-ключ Mutex сериализует «один
-// in-flight loader на ключ» — параллельные клики «Open Schema explorer» не
-// лупят git-clone N раз. На уровне самого loader-а [artifact.ServiceLoader]
-// тоже несёт per-name lock + переиспользует snapshot-каталог по sha1.
+// Safe for concurrent use. A per-key Mutex serializes "one in-flight loader per
+// key" — parallel clicks on "Open Schema explorer" don't hammer git-clone N times.
+// At the loader level itself, [artifact.ServiceLoader] also carries a per-name
+// lock + reuses the snapshot directory by sha1.
 type StateSchemaCache struct {
 	lister StateSchemaLister
 	ttl    time.Duration
@@ -55,24 +55,24 @@ type StateSchemaCache struct {
 	entries map[stateSchemaKey]*stateSchemaEntry
 }
 
-// stateSchemaKey — композитный ключ кеша. name+ref хранятся раздельно для
-// корректной инвалидации по name (Update/Deregister Service-а сбрасывает все
-// ref-варианты под этим name; parity с [scenariosKey]).
+// stateSchemaKey — composite cache key. name+ref are stored separately for
+// correct invalidation by name (Update/Deregister of a Service resets all
+// ref variants under that name; parity with [scenariosKey]).
 type stateSchemaKey struct {
 	name string
 	ref  string
 }
 
-// stateSchemaEntry — одна запись кеша. lock сериализует concurrent loader-
-// вызовы одного ключа; info/expires — закешированный ответ.
+// stateSchemaEntry — one cache entry. lock serializes concurrent loader
+// calls for one key; info/expires is the cached response.
 type stateSchemaEntry struct {
 	lock    sync.Mutex
 	info    *artifact.StateSchemaInfo
 	expires time.Time
 }
 
-// NewStateSchemaCache собирает кеш поверх lister-а. lister обязателен (паника
-// при nil — симметрично [NewScenariosCache]); ttl ≤ 0 нормализуется в
+// NewStateSchemaCache assembles a cache on top of a lister. lister is required
+// (panics on nil — symmetric with [NewScenariosCache]); ttl ≤ 0 is normalized to
 // [StateSchemaTTL].
 func NewStateSchemaCache(lister StateSchemaLister, ttl time.Duration) *StateSchemaCache {
 	if lister == nil {
@@ -89,12 +89,12 @@ func NewStateSchemaCache(lister StateSchemaLister, ttl time.Duration) *StateSche
 	}
 }
 
-// ListStateSchema возвращает state-schema info для (name, gitURL, ref). Hit —
-// отдаём из кеша; miss или истекший TTL — один loader-call под per-ключ
-// lock-ом.
+// ListStateSchema returns state-schema info for (name, gitURL, ref). Hit —
+// serve from the cache; miss or expired TTL — one loader call under the
+// per-key lock.
 //
-// Кешируется ТОЛЬКО success-ответ: при ошибке следующий запрос снова попытается
-// loader (best-effort + читаемость failure-ов в UI; parity с
+// ONLY a success response is cached: on error the next request retries the
+// loader (best-effort + readable failures in the UI; parity with
 // [ScenariosCache.ListScenarios]).
 func (c *StateSchemaCache) ListStateSchema(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error) {
 	entry := c.entryFor(stateSchemaKey{name: name, ref: ref})
@@ -115,10 +115,10 @@ func (c *StateSchemaCache) ListStateSchema(ctx context.Context, name, gitURL, re
 	return cloneStateSchemaInfo(info), nil
 }
 
-// Invalidate сбрасывает все записи кеша для данного name (все варианты ref).
-// Семантика — парная с [ScenariosCache.Invalidate]: после Update/Deregister
-// Service-а устаревшие закешированные state-schema должны исчезнуть, чтобы
-// следующий запрос вернул listing нового git-источника. Идемпотентен.
+// Invalidate resets all cache entries for the given name (all ref variants).
+// Semantics are paired with [ScenariosCache.Invalidate]: after Update/Deregister
+// of a Service, stale cached state-schema entries must disappear so the
+// next request returns a listing from the new git source. Idempotent.
 func (c *StateSchemaCache) Invalidate(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,9 +129,9 @@ func (c *StateSchemaCache) Invalidate(name string) {
 	}
 }
 
-// entryFor возвращает (создавая при необходимости) stateSchemaEntry для key.
-// Не держит c.mu во время loader-вызова — это работа per-ключ lock-а внутри
-// entry.
+// entryFor returns (creating if needed) the stateSchemaEntry for key.
+// Doesn't hold c.mu during the loader call — that's the job of the per-key
+// lock inside entry.
 func (c *StateSchemaCache) entryFor(key stateSchemaKey) *stateSchemaEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -143,11 +143,11 @@ func (c *StateSchemaCache) entryFor(key stateSchemaKey) *stateSchemaEntry {
 	return e
 }
 
-// cloneStateSchemaInfo — мелкая копия структуры, чтобы caller не мог изменить
-// кешированную запись. Schema/Migrations — ссылочные типы; копируем slice
-// миграций (handler сериализует в JSON и за рамки кеша не передаёт);
-// Schema-map deep-copy НЕ делаем сознательно (parity с cloneScenarios:
-// InputSchema-map тоже не клонируется — UI её только читает).
+// cloneStateSchemaInfo — a shallow copy of the struct so the caller can't mutate
+// the cached entry. Schema/Migrations are reference types; we copy the migrations
+// slice (the handler serializes it to JSON and doesn't pass it beyond the cache);
+// we deliberately do NOT deep-copy the Schema map (parity with cloneScenarios:
+// the InputSchema map isn't cloned either — the UI only reads it).
 func cloneStateSchemaInfo(in *artifact.StateSchemaInfo) *artifact.StateSchemaInfo {
 	if in == nil {
 		return nil

@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное repository-у.
-// Симметрично augur/provider: unit-тесты ходят через fake без подъёма PG,
-// production даёт реальный pool / Conn / Tx.
+// ExecQueryRower — the narrow subset of pgxpool.Pool the repository needs.
+// Symmetric with augur/provider: unit tests go through a fake without spinning up PG,
+// production supplies a real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -26,8 +26,8 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// SQLSTATE для UNIQUE / FK / CHECK нарушений. Держим локально (как
-// augur/rbac), чтобы не тянуть pgerrcode в keeper.
+// SQLSTATE codes for UNIQUE / FK / CHECK violations. Kept locally (like
+// augur/rbac) to avoid pulling pgerrcode into keeper.
 const (
 	pgErrCodeUniqueViolation     = "23505"
 	pgErrCodeForeignKeyViolation = "23503"
@@ -59,13 +59,13 @@ RETURNING created_at, updated_at
 
 const deleteServiceSQL = `DELETE FROM service_registry WHERE name = $1`
 
-// InsertService вставляет новую запись Service-а и наполняет CreatedAt/UpdatedAt
-// из RETURNING. Валидация полей — на service-слое (service.go) ДО вызова.
+// InsertService inserts a new Service record and fills CreatedAt/UpdatedAt
+// from RETURNING. Field validation happens at the service layer (service.go) BEFORE the call.
 //
-// Возврат:
-//   - [ErrAlreadyExists]    — UNIQUE по PK service_registry.name (23505);
-//   - [ErrOperatorNotFound] — FK-violation на created_by_aid/updated_by_aid;
-//   - wrapped fmt.Errorf на CHECK-violation / прочее.
+// Returns:
+//   - [ErrAlreadyExists]    — UNIQUE on PK service_registry.name (23505);
+//   - [ErrOperatorNotFound] — FK violation on created_by_aid/updated_by_aid;
+//   - wrapped fmt.Errorf for CHECK violation / other.
 func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) error {
 	if e == nil {
 		return fmt.Errorf("serviceregistry: nil service entry")
@@ -79,13 +79,13 @@ func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 	return nil
 }
 
-// GetService читает запись Service-а по PK. [ErrNotFound] при pgx.ErrNoRows.
+// GetService reads a Service record by PK. [ErrNotFound] on pgx.ErrNoRows.
 func GetService(ctx context.Context, db ExecQueryRower, name string) (*ServiceEntry, error) {
 	return scanService(db.QueryRow(ctx, selectServiceByNameSQL, name))
 }
 
-// ListServices возвращает все записи Service-ов. Сортировка — `name ASC`
-// (детерминированный порядок list-а; данных мало, пагинация не нужна).
+// ListServices returns all Service records. Sorted by `name ASC`
+// (deterministic list order; the data volume is small, pagination isn't needed).
 func ListServices(ctx context.Context, db ExecQueryRower) ([]*ServiceEntry, error) {
 	const listSQL = `SELECT ` + serviceColumns + `
 FROM service_registry
@@ -110,14 +110,14 @@ ORDER BY name ASC`
 	return out, nil
 }
 
-// UpdateService заменяет mutable-поля записи (git/ref/refresh/updated_by_aid) и
-// двигает updated_at. Name — PK, не меняется (rename = delete+insert). Наполняет
-// CreatedAt/UpdatedAt из RETURNING.
+// UpdateService replaces the mutable fields of a record (git/ref/refresh/updated_by_aid) and
+// bumps updated_at. Name is the PK, it doesn't change (rename = delete+insert). Fills
+// CreatedAt/UpdatedAt from RETURNING.
 //
-// Возврат:
-//   - [ErrNotFound]         — нет строки по PK (pgx.ErrNoRows из RETURNING);
-//   - [ErrOperatorNotFound] — FK-violation на updated_by_aid;
-//   - wrapped fmt.Errorf на CHECK-violation / прочее.
+// Returns:
+//   - [ErrNotFound]         — no row by PK (pgx.ErrNoRows from RETURNING);
+//   - [ErrOperatorNotFound] — FK violation on updated_by_aid;
+//   - wrapped fmt.Errorf for CHECK violation / other.
 func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) error {
 	if e == nil {
 		return fmt.Errorf("serviceregistry: nil service entry")
@@ -134,7 +134,7 @@ func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 	return nil
 }
 
-// DeleteService удаляет запись Service-а по PK. [ErrNotFound] если строки не было.
+// DeleteService deletes a Service record by PK. [ErrNotFound] if the row didn't exist.
 func DeleteService(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, deleteServiceSQL, name)
 	if err != nil {
@@ -166,9 +166,9 @@ func scanService(row pgx.Row) (*ServiceEntry, error) {
 	return &e, nil
 }
 
-// mapServiceWriteError маппит pgx-ошибки insert/update-пути в sentinel-ы:
-// UNIQUE → [ErrAlreadyExists], FK → [ErrOperatorNotFound], CHECK / прочее →
-// wrapped (с сохранением оригинала через %w для errors.Is).
+// mapServiceWriteError maps pgx errors from the insert/update path to sentinels:
+// UNIQUE → [ErrAlreadyExists], FK → [ErrOperatorNotFound], CHECK / other →
+// wrapped (preserving the original via %w for errors.Is).
 func mapServiceWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -188,9 +188,9 @@ func mapServiceWriteError(err error) error {
 
 const selectSettingSQL = `SELECT key, value, updated_by_aid, updated_at FROM keeper_settings WHERE key = $1`
 
-// upsertSettingSQL — INSERT-or-UPDATE настройки по PK key. keeper_settings —
-// плоский key-value: set-семантика естественнее delete+insert, ON CONFLICT
-// сохраняет идемпотентность повторного SetSetting.
+// upsertSettingSQL — INSERT-or-UPDATE a setting by PK key. keeper_settings is a
+// flat key-value store: set semantics are more natural than delete+insert, ON CONFLICT
+// keeps repeated SetSetting calls idempotent.
 const upsertSettingSQL = `
 INSERT INTO keeper_settings (key, value, updated_by_aid, updated_at)
 VALUES ($1, $2, $3, NOW())
@@ -199,7 +199,7 @@ SET value = EXCLUDED.value, updated_by_aid = EXCLUDED.updated_by_aid, updated_at
 RETURNING updated_at
 `
 
-// GetSetting читает настройку по key. [ErrSettingNotFound] при pgx.ErrNoRows.
+// GetSetting reads a setting by key. [ErrSettingNotFound] on pgx.ErrNoRows.
 func GetSetting(ctx context.Context, db ExecQueryRower, key string) (*Setting, error) {
 	var (
 		s            Setting
@@ -216,11 +216,11 @@ func GetSetting(ctx context.Context, db ExecQueryRower, key string) (*Setting, e
 	return &s, nil
 }
 
-// SetSetting upsert-ит настройку (key → value), двигая updated_at. updatedByAID
-// опционален (nil → NULL). Наполняет UpdatedAt из RETURNING.
+// SetSetting upserts a setting (key → value), bumping updated_at. updatedByAID
+// is optional (nil → NULL). Fills UpdatedAt from RETURNING.
 //
-// Возврат: [ErrOperatorNotFound] на FK-violation updated_by_aid; wrapped на
-// CHECK / прочее.
+// Returns: [ErrOperatorNotFound] on FK violation for updated_by_aid; wrapped for
+// CHECK / other.
 func SetSetting(ctx context.Context, db ExecQueryRower, s *Setting) error {
 	if s == nil {
 		return fmt.Errorf("serviceregistry: nil setting")
@@ -245,8 +245,8 @@ func mapSettingWriteError(err error) error {
 	return fmt.Errorf("serviceregistry: write setting: %w", err)
 }
 
-// strOrNil переводит *string в args-значение: nil → nil (PG NULL), иначе
-// разыменованная строка. Иначе pgx видит typed-nil-pointer вместо NULL.
+// strOrNil converts a *string into an args value: nil → nil (PG NULL), otherwise
+// the dereferenced string. Without this, pgx sees a typed nil pointer instead of NULL.
 func strOrNil(p *string) any {
 	if p == nil {
 		return nil
@@ -254,9 +254,9 @@ func strOrNil(p *string) any {
 	return *p
 }
 
-// wrapPgErr добавляет SQLSTATE в сообщение, если ошибка — pgconn.PgError.
-// Упрощает диагностику «таблица не существует» (миграция не применена) от
-// транспортных сбоев (как rbac.wrapPgErr).
+// wrapPgErr adds the SQLSTATE to the message if the error is a pgconn.PgError.
+// Simplifies distinguishing "table doesn't exist" (migration not applied) from
+// transport failures (like rbac.wrapPgErr).
 func wrapPgErr(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

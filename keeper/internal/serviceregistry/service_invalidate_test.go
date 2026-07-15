@@ -11,12 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// hookPool — управляемый ExecQueryRower для тестов invalidate-хука: QueryRow
-// отдаёт успешный/ошибочный row (Insert/Update/SetSetting), Exec — заданный tag
-// + ошибку (Delete). Так проверяется, что invalidate зовётся ТОЛЬКО после
-// успешного commit-а конкретной мутации.
+// hookPool — a controllable ExecQueryRower for invalidate-hook tests: QueryRow
+// returns a successful/error row (Insert/Update/SetSetting), Exec — a preset tag
+// + error (Delete). Verifies that invalidate is called ONLY after a successful
+// commit of a specific mutation.
 type hookPool struct {
-	queryRowErr error // nil → row.Scan успешен (Insert/Update/SetSetting прошли)
+	queryRowErr error // nil → row.Scan succeeds (Insert/Update/SetSetting went through)
 	execTag     pgconn.CommandTag
 	execErr     error
 }
@@ -33,8 +33,8 @@ func (p *hookPool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error
 	return nil, errors.New("hookPool: Query not configured")
 }
 
-// scanRow — на err==nil успешно заполняет все переданные *time.Time текущим
-// временем (RETURNING created_at/updated_at), иначе возвращает err.
+// scanRow — on err==nil fills all passed *time.Time with the current
+// time (RETURNING created_at/updated_at), otherwise returns err.
 type scanRow struct{ err error }
 
 func (r scanRow) Scan(dest ...any) error {
@@ -50,15 +50,15 @@ func (r scanRow) Scan(dest ...any) error {
 	return nil
 }
 
-// countingInvalidator — тестовый [Invalidator], считающий вызовы Invalidate.
+// countingInvalidator — a test [Invalidator] that counts Invalidate calls.
 type countingInvalidator struct {
 	calls atomic.Int64
 }
 
 func (c *countingInvalidator) Invalidate(_ context.Context) { c.calls.Add(1) }
 
-// TestService_Invalidate_NilSafe — без подключённого invalidator-а
-// Service.invalidate — no-op (single-Keeper/dev без Redis), не паникует.
+// TestService_Invalidate_NilSafe — without a connected invalidator,
+// Service.invalidate is a no-op (single-Keeper/dev without Redis), doesn't panic.
 func TestService_Invalidate_NilSafe(t *testing.T) {
 	s, err := NewService(ServiceDeps{Pool: &hookPool{}})
 	if err != nil {
@@ -70,8 +70,8 @@ func TestService_Invalidate_NilSafe(t *testing.T) {
 	s.invalidate(context.Background())
 }
 
-// TestService_Invalidate_SetInvalidatorTracksCalls — подключённый invalidator
-// дёргается на каждый invalidate; SetInvalidator(nil) возвращает к no-op.
+// TestService_Invalidate_SetInvalidatorTracksCalls — a connected invalidator
+// fires on every invalidate; SetInvalidator(nil) reverts to no-op.
 func TestService_Invalidate_SetInvalidatorTracksCalls(t *testing.T) {
 	s, err := NewService(ServiceDeps{Pool: &hookPool{}})
 	if err != nil {
@@ -93,9 +93,9 @@ func TestService_Invalidate_SetInvalidatorTracksCalls(t *testing.T) {
 	}
 }
 
-// TestService_Invalidate_OnlyAfterSuccessfulCommit — invalidate зовётся ровно
-// на успешных мутациях (Create/Update/SetSetting → ok, Delete → ok) и НЕ
-// зовётся, когда мутация провалилась (Delete по отсутствующему name).
+// TestService_Invalidate_OnlyAfterSuccessfulCommit — invalidate is called exactly
+// on successful mutations (Create/Update/SetSetting → ok, Delete → ok) and is NOT
+// called when the mutation fails (Delete on a nonexistent name).
 func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 	t.Run("create-success-invalidates", func(t *testing.T) {
 		inv := &countingInvalidator{}
@@ -113,7 +113,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 
 	t.Run("create-failure-no-invalidate", func(t *testing.T) {
 		inv := &countingInvalidator{}
-		// UNIQUE-violation на Insert → CreateService возвращает ошибку, хук молчит.
+		// UNIQUE-violation on Insert → CreateService returns an error, the hook stays silent.
 		pgErr := &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "service_registry_pkey"}
 		s := mustService(t, &hookPool{queryRowErr: pgErr})
 		s.SetInvalidator(inv)
@@ -157,7 +157,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 
 	t.Run("delete-success-invalidates", func(t *testing.T) {
 		inv := &countingInvalidator{}
-		// CommandTag c RowsAffected>0 → DeleteService успешен.
+		// CommandTag with RowsAffected>0 → DeleteService succeeds.
 		s := mustService(t, &hookPool{execTag: pgconn.NewCommandTag("DELETE 1")})
 		s.SetInvalidator(inv)
 		if err := s.DeleteService(context.Background(), "web"); err != nil {
@@ -170,7 +170,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 
 	t.Run("delete-notfound-no-invalidate", func(t *testing.T) {
 		inv := &countingInvalidator{}
-		// CommandTag c RowsAffected==0 → DeleteService → ErrNotFound, хук молчит.
+		// CommandTag with RowsAffected==0 → DeleteService → ErrNotFound, the hook stays silent.
 		s := mustService(t, &hookPool{execTag: pgconn.CommandTag{}})
 		s.SetInvalidator(inv)
 		if err := s.DeleteService(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {

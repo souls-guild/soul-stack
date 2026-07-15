@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD реестра Service-ов и keeper_settings через
-// testcontainers-go. Паттерн совпадает с keeper/internal/augur/integration_test.go.
+// Integration tests for the Service registry / keeper_settings CRUD via
+// testcontainers-go. Pattern matches keeper/internal/augur/integration_test.go.
 
 package serviceregistry
 
@@ -168,7 +168,7 @@ func TestIntegration_Service_DuplicateName(t *testing.T) {
 func TestIntegration_Service_NameFormatCHECK(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// Прямой INSERT в обход Go-валидации: SQL CHECK должен отбить bad name.
+	// Direct INSERT bypassing Go validation: the SQL CHECK must reject a bad name.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO service_registry (name, git, ref) VALUES ('Bad_Name', 'g', 'r')`)
 	if err == nil {
@@ -179,12 +179,12 @@ func TestIntegration_Service_NameFormatCHECK(t *testing.T) {
 func TestIntegration_Service_GitRefNonemptyCHECK(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// Прямой INSERT: пустой git → CHECK service_registry_git_nonempty.
+	// Direct INSERT: empty git → CHECK service_registry_git_nonempty.
 	if _, err := integrationPool.Exec(ctx,
 		`INSERT INTO service_registry (name, git, ref) VALUES ('web', '', 'r')`); err == nil {
 		t.Fatal("expected CHECK violation for empty git")
 	}
-	// Пустой ref → CHECK service_registry_ref_nonempty.
+	// Empty ref → CHECK service_registry_ref_nonempty.
 	if _, err := integrationPool.Exec(ctx,
 		`INSERT INTO service_registry (name, git, ref) VALUES ('web', 'g', '')`); err == nil {
 		t.Fatal("expected CHECK violation for empty ref")
@@ -214,7 +214,7 @@ func TestIntegration_Service_UnknownOperatorFK(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	svc := newService(t)
-	// Оператор не засеян → FK-violation на created_by_aid.
+	// Operator not seeded → FK-violation on created_by_aid.
 	_, err := svc.CreateService(ctx, CreateServiceInput{
 		Name: "web", Git: "g", Ref: "r", CallerAID: ptrStr("archon-ghost"),
 	})
@@ -274,7 +274,7 @@ func TestIntegration_Setting_UpsertRoundTrip(t *testing.T) {
 		t.Errorf("value mismatch: %q", got.Value)
 	}
 
-	// Повторный SetSetting — upsert (update value).
+	// Repeated SetSetting — upsert (update value).
 	if _, err := svc.SetSetting(ctx, SetSettingInput{
 		Key: SettingDefaultDestinySource, Value: "git@example.com:destiny2.git",
 	}); err != nil {
@@ -287,7 +287,7 @@ func TestIntegration_Setting_UpsertRoundTrip(t *testing.T) {
 	if got2.Value != "git@example.com:destiny2.git" {
 		t.Errorf("upsert value mismatch: %q", got2.Value)
 	}
-	// updated_by_aid обнулился (второй вызов без CallerAID).
+	// updated_by_aid reset to nil (second call without CallerAID).
 	if got2.UpdatedByAID != nil {
 		t.Errorf("updated_by_aid = %v after upsert without caller, want nil", got2.UpdatedByAID)
 	}
@@ -296,7 +296,7 @@ func TestIntegration_Setting_UpsertRoundTrip(t *testing.T) {
 func TestIntegration_Setting_KeyFormatCHECK(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// Прямой INSERT в обход Go-валидации: SQL CHECK должен отбить bad key.
+	// Direct INSERT bypassing Go validation: the SQL CHECK must reject a bad key.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO keeper_settings (key, value) VALUES ('Bad-Key', 'v')`)
 	if err == nil {
@@ -310,16 +310,16 @@ func TestIntegration_Service_NullCreatedByOnOperatorDelete(t *testing.T) {
 	ctx := context.Background()
 	svc := newService(t)
 	aid := "archon-alice"
-	// CreateService заполняет created_by_aid И updated_by_aid автором.
+	// CreateService fills both created_by_aid AND updated_by_aid with the author.
 	if _, err := svc.CreateService(ctx, CreateServiceInput{Name: "web", Git: "g", Ref: "r", CallerAID: &aid}); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
-	// FK на created_by_aid / updated_by_aid — ON DELETE SET NULL: удаление
-	// оператора-автора УСПЕШНО, запись Service-а переживает offboarding.
+	// FK on created_by_aid / updated_by_aid — ON DELETE SET NULL: deleting
+	// the author operator SUCCEEDS, the Service record survives offboarding.
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM operators WHERE aid = 'archon-alice'`); err != nil {
 		t.Fatalf("expected FK SET NULL: deleting operator that authored a service must succeed: %v", err)
 	}
-	// Оба audit-поля обнулились, запись на месте.
+	// Both audit fields reset to nil, the record is intact.
 	got, err := svc.GetService(ctx, "web")
 	if err != nil {
 		t.Fatalf("GetService after operator delete: %v", err)

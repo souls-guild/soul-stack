@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeDirectiveLister — программируемый DirectiveLister: считает вызовы, отдаёт
-// заданный каталог или ошибку, опционально с задержкой для проверки per-ключ lock-а.
+// fakeDirectiveLister is a programmable DirectiveLister: counts calls, returns
+// configured catalog or error, optionally with delay for testing per-key lock.
 type fakeDirectiveLister struct {
 	calls   atomic.Int64
 	catalog *artifact.DirectiveCatalog
@@ -50,21 +50,21 @@ func TestDirectivesCache_HitMiss(t *testing.T) {
 		t.Fatalf("catalog = %+v", got)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
-	// Hit: тот же ключ — loader не дёргается.
+	// Hit: same key—loader not called.
 	if _, err := c.ListDirectives(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
 func TestDirectivesCache_ReturnedCatalogIsClone(t *testing.T) {
-	// Мутация возвращённого caller-ом каталога не портит кешированный (внешний map
-	// клонируется на чтение).
+	// Mutation of caller-returned catalog does not corrupt cached (external map
+	// is cloned on read).
 	lister := &fakeDirectiveLister{catalog: sampleCatalog()}
 	c := NewDirectivesCache(lister, time.Hour)
 
@@ -80,7 +80,7 @@ func TestDirectivesCache_ReturnedCatalogIsClone(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if len(second.Directives["8.2"]) != 2 {
-		t.Errorf("кеш повреждён мутацией caller-а: %+v", second.Directives)
+		t.Errorf("cache corrupted by caller mutation: %+v", second.Directives)
 	}
 }
 
@@ -94,9 +94,9 @@ func TestDirectivesCache_KeyByNameAndRef(t *testing.T) {
 	if _, err := c.ListDirectives(context.Background(), "redis", "g", "v2"); err != nil {
 		t.Fatalf("#v2: %v", err)
 	}
-	// Тот же name, разные ref → две независимые записи.
+	// Same name, different ref—two independent records.
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestDirectivesCache_Expiry(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после TTL = %d, want 2", n)
+		t.Errorf("calls after TTL = %d, want 2", n)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestDirectivesCache_Invalidate_DropsAllRefs(t *testing.T) {
 	lister := &fakeDirectiveLister{catalog: sampleCatalog()}
 	c := NewDirectivesCache(lister, time.Hour)
 
-	// Прогреваем три ключа: redis@v1, redis@v2, mongo@v1.
+	// Warm up three keys: redis@v1, redis@v2, mongo@v1.
 	if _, err := c.ListDirectives(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("warm redis@v1: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDirectivesCache_Invalidate_DropsAllRefs(t *testing.T) {
 
 	c.Invalidate("redis")
 
-	// Оба ref для redis выкинуты, mongo остаётся в кеше.
+	// Both ref for redis dropped, mongo stays in cache.
 	if _, err := c.ListDirectives(context.Background(), "redis", "g", "v1"); err != nil {
 		t.Fatalf("post-inv redis@v1: %v", err)
 	}
@@ -144,9 +144,9 @@ func TestDirectivesCache_Invalidate_DropsAllRefs(t *testing.T) {
 	if _, err := c.ListDirectives(context.Background(), "mongo", "g", "v1"); err != nil {
 		t.Fatalf("post-inv mongo@v1: %v", err)
 	}
-	// redis@v1 + redis@v2 пересчитаны (2), mongo@v1 — из кеша (0).
+	// redis@v1 + redis@v2 recalculated (2), mongo@v1 from cache (0).
 	if n := lister.calls.Load() - preInvalidate; n != 2 {
-		t.Errorf("calls после Invalidate(\"redis\") = %d, want 2 (mongo должен остаться в кеше)", n)
+		t.Errorf("calls after Invalidate(\"redis\") = %d, want 2 (mongo should stay in cache)", n)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestDirectivesCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors not cached)", n)
 	}
 }
 
@@ -187,14 +187,14 @@ func TestDirectivesCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
 func TestDirectivesCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected panic on nil lister")
 		}
 	}()
 	_ = NewDirectivesCache(nil, time.Hour)

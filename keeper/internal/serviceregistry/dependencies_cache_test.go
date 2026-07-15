@@ -11,9 +11,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeDependenciesLister — программируемый DependenciesLister: считает вызовы,
-// отдаёт заданный deps или ошибку, опционально с задержкой для проверки
-// per-ключ lock-а (parity с fakeStateSchemaLister).
+// fakeDependenciesLister — a programmable DependenciesLister: counts calls,
+// returns a given deps or an error, optionally with a delay for testing the
+// per-key lock (parity with fakeStateSchemaLister).
 type fakeDependenciesLister struct {
 	calls atomic.Int64
 	deps  *artifact.ServiceDependencies
@@ -54,13 +54,13 @@ func TestDependenciesCache_HitMiss(t *testing.T) {
 		t.Fatalf("Destiny = %+v", got.Destiny)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 	if _, err := c.ListDependencies(context.Background(), "web", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestDependenciesCache_KeyByNameAndRef(t *testing.T) {
 		t.Fatalf("#v2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestDependenciesCache_Invalidate_DropsAllRefs(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load() - pre; n != 2 {
-		t.Errorf("calls после Invalidate(\"web\") = %d, want 2 (api остаётся в кеше)", n)
+		t.Errorf("calls after Invalidate(\"web\") = %d, want 2 (api stays in cache)", n)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestDependenciesCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors not cached)", n)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestDependenciesCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
@@ -157,14 +157,14 @@ func TestDependenciesCache_ClonesOnReturn(t *testing.T) {
 		t.Fatalf("ListDependencies #2: %v", err)
 	}
 	if got2.Destiny[0].Ref == "MUTATED" {
-		t.Errorf("кеш не клонирует Destiny: повтор вернул %q", got2.Destiny[0].Ref)
+		t.Errorf("cache does not clone Destiny: repeat returned %q", got2.Destiny[0].Ref)
 	}
 }
 
 func TestDependenciesCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected panic on nil lister")
 		}
 	}()
 	_ = NewDependenciesCache(nil, time.Hour)

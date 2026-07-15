@@ -1,13 +1,13 @@
-// Package serviceregistry — Postgres-реестр Service-ов и cluster-wide
-// key-value настроек Keeper-а (миграции 034 service_registry / 035
-// keeper_settings). Переносит каталог `services[]` и top-level скаляры из
-// статического keeper.yml в managed-через-OpenAPI/MCP таблицы, симметрично
-// RBAC-storage (ADR-028).
+// Package serviceregistry — Postgres registry of Services and Keeper's
+// cluster-wide key-value settings (migrations 034 service_registry / 035
+// keeper_settings). Moves the `services[]` catalog and top-level scalars out
+// of static keeper.yml into tables managed via OpenAPI/MCP, symmetric to
+// RBAC storage (ADR-028).
 //
-// Слой slice S1: типы + raw-SQL CRUD ([repository.go]) + service-обёртка с
-// валидацией ([service.go]). holder-снимок и cluster-wide-инвалидация (S2),
-// transport-фасад OpenAPI/MCP (S3), hard-cut конфига и переключение
-// потребителей (S4) — отдельные слайсы, здесь их НЕТ.
+// Slice S1: types + raw-SQL CRUD ([repository.go]) + validating service
+// wrapper ([service.go]). Holder snapshot + cluster-wide invalidation (S2),
+// OpenAPI/MCP transport facade (S3), and config hard-cut / consumer
+// switchover (S4) are separate slices — not here.
 package serviceregistry
 
 import (
@@ -18,16 +18,16 @@ import (
 	"time"
 )
 
-// Sentinel-ошибки CRUD-слоя. Transport-сторона (отдельный слайс S3) маппит на
-// HTTP-коды:
-//   - ErrAlreadyExists  → 409 (UNIQUE по PK service_registry.name);
-//   - ErrNotFound       → 404 (нет строки по PK);
-//   - ErrInvalidName    → 422 (name не по формату);
-//   - ErrInvalidGit     → 422 (git пустой);
-//   - ErrInvalidRef     → 422 (ref пустой);
-//   - ErrInvalidRefresh → 422 (refresh не парсится как duration);
-//   - ErrOperatorNotFound → 404 (FK-violation на created_by_aid/updated_by_aid:
-//     ссылающийся оператор не существует).
+// Sentinel errors of the CRUD layer. The transport side (separate slice S3)
+// maps them to HTTP codes:
+//   - ErrAlreadyExists  → 409 (UNIQUE on PK service_registry.name);
+//   - ErrNotFound       → 404 (no row for the PK);
+//   - ErrInvalidName    → 422 (name doesn't match the format);
+//   - ErrInvalidGit     → 422 (git is empty);
+//   - ErrInvalidRef     → 422 (ref is empty);
+//   - ErrInvalidRefresh → 422 (refresh doesn't parse as a duration);
+//   - ErrOperatorNotFound → 404 (FK violation on created_by_aid/updated_by_aid:
+//     the referenced operator doesn't exist).
 var (
 	ErrAlreadyExists    = errors.New("serviceregistry: service name already exists")
 	ErrNotFound         = errors.New("serviceregistry: service name not found")
@@ -37,29 +37,29 @@ var (
 	ErrInvalidRefresh   = errors.New("serviceregistry: invalid refresh duration")
 	ErrOperatorNotFound = errors.New("serviceregistry: referenced operator (AID) not found")
 
-	// ErrSettingNotFound — нет строки в keeper_settings по key (GetSetting).
+	// ErrSettingNotFound — no row in keeper_settings for the key (GetSetting).
 	ErrSettingNotFound = errors.New("serviceregistry: setting key not found")
-	// ErrInvalidSettingKey — key не по формату keeper_settings_key_format.
+	// ErrInvalidSettingKey — key doesn't match keeper_settings_key_format.
 	ErrInvalidSettingKey = errors.New("serviceregistry: invalid setting key")
 
-	// ErrEmptyProvisioningMethods — ключ provisioning_allowed_methods ЗАДАН, но
-	// распарсенный набор пуст (значение пустое / только пробелы / только запятые).
-	// Это config-ERROR (anti-lockout): пустая политика заблокировала бы СОЗДАНИЕ
-	// операторов всеми методами (user/ldap/oidc) — оператор не должен залочить
-	// себя молча. Дефолт «всё разрешено» сигнализируется ОТСУТСТВИЕМ ключа, а не
-	// пустым значением.
+	// ErrEmptyProvisioningMethods — the provisioning_allowed_methods key is SET,
+	// but the parsed set is empty (value empty / whitespace-only / commas-only).
+	// This is a config ERROR (anti-lockout): an empty policy would block operator
+	// CREATION via all methods (user/ldap/oidc) — an operator must not silently
+	// lock themselves out. The "everything allowed" default is signaled by the
+	// key's ABSENCE, not by an empty value.
 	ErrInvalidProvisioningMethod = errors.New("serviceregistry: provisioning method must be one of {user,ldap,oidc}")
 	ErrEmptyProvisioningMethods  = errors.New("serviceregistry: provisioning_allowed_methods is set but empty (anti-lockout)")
 )
 
-// NamePattern — каноническая форма имени Service-а: совпадает с CHECK
-// service_registry_name_format в 034-миграции (как rbac.reRoleName). Дублируется
-// в Go для прикладной валидации до round-trip-а (better error, нет лишнего
-// обращения к БД на битом имени).
+// NamePattern — canonical Service name form: matches CHECK
+// service_registry_name_format in migration 034 (like rbac.reRoleName).
+// Duplicated in Go for application-level validation before the round trip
+// (better error, no wasted DB round trip on a malformed name).
 const NamePattern = `^[a-z][a-z0-9-]*$`
 
-// SettingKeyPattern — форма ключа keeper_settings: совпадает с CHECK
-// keeper_settings_key_format в 035-миграции (snake_case).
+// SettingKeyPattern — keeper_settings key form: matches CHECK
+// keeper_settings_key_format in migration 035 (snake_case).
 const SettingKeyPattern = `^[a-z][a-z0-9_]*$`
 
 var (
@@ -67,48 +67,50 @@ var (
 	settingKeyRe = regexp.MustCompile(SettingKeyPattern)
 )
 
-// ValidName проверяет имя Service-а на каноническую форму.
+// ValidName checks a Service name against the canonical form.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// ValidSettingKey проверяет ключ keeper_settings на каноническую форму.
+// ValidSettingKey checks a keeper_settings key against the canonical form.
 func ValidSettingKey(key string) bool { return settingKeyRe.MatchString(key) }
 
-// Well-known ключи keeper_settings. Семантика и набор живут здесь, не в схеме
-// (таблица untyped — см. 035-миграцию). default_module_source НЕ заводится: у
-// него нет потребителя в keeper-коде (мёртвое поле прежнего конфига).
+// Well-known keeper_settings keys. Semantics and the set live here, not in
+// the schema (the table is untyped — see migration 035). default_module_source
+// is NOT introduced: it has no consumer in keeper code (a dead field from the
+// old config).
 const (
-	// SettingDefaultDestinySource — дефолтный git-источник Destiny.
+	// SettingDefaultDestinySource — default git source for Destiny.
 	SettingDefaultDestinySource = "default_destiny_source"
 
-	// SettingProvisioningAllowedMethods — CSV из домена {user,ldap,oidc}: список
-	// разрешённых способов СОЗДАНИЯ оператора (created_via-методов). Гейтит только
-	// ветку создания (POST /v1/operators → "user"; federated auto-provision →
-	// "ldap"/"oidc"); bootstrap/system НЕ гейтятся никогда. ОТСУТСТВИЕ ключа =
-	// всё разрешено (back-compat); ЗАДАН-но-пустой = config-error
-	// ([ErrEmptyProvisioningMethods], anti-lockout). Семантика парсинга —
+	// SettingProvisioningAllowedMethods — CSV from the domain {user,ldap,oidc}:
+	// the list of allowed operator-CREATION methods (created_via methods). Gates
+	// only the creation branch (POST /v1/operators → "user"; federated
+	// auto-provision → "ldap"/"oidc"); bootstrap/system are NEVER gated. Key
+	// ABSENT = everything allowed (back-compat); SET-but-empty = config error
+	// ([ErrEmptyProvisioningMethods], anti-lockout). Parsing semantics —
 	// [ParseProvisioningMethods].
 	SettingProvisioningAllowedMethods = "provisioning_allowed_methods"
 )
 
-// provisioningMethodDomain — закрытый набор created_via-методов, которые можно
-// указать в политике provisioning_allowed_methods. bootstrap/system сюда НЕ
-// входят: они не гейтятся (bootstrap первого Архонта через `keeper init`,
-// system — внутренние записи) — попытка задать их в политике = ошибка.
+// provisioningMethodDomain — the closed set of created_via methods that can be
+// specified in the provisioning_allowed_methods policy. bootstrap/system are
+// NOT included: they aren't gated (bootstrap of the first Archon via
+// `keeper init`, system = internal records) — specifying them in the policy
+// is an error.
 var provisioningMethodDomain = map[string]struct{}{
 	"user": {},
 	"ldap": {},
 	"oidc": {},
 }
 
-// ParseProvisioningMethods парсит CSV-значение политики provisioning_allowed_methods
-// в set разрешённых методов. Семантика:
-//   - split по ',', trim пробелов, отбрасывание пустых элементов, lowercase;
-//   - каждый элемент валидируется против [provisioningMethodDomain] ({user,ldap,
-//     oidc}); невалидный → [ErrInvalidProvisioningMethod];
-//   - пустой результат (csv="" / только запятые-пробелы) → [ErrEmptyProvisioningMethods].
+// ParseProvisioningMethods parses the CSV value of the
+// provisioning_allowed_methods policy into a set of allowed methods. Semantics:
+//   - split on ',', trim whitespace, drop empty elements, lowercase;
+//   - each element is validated against [provisioningMethodDomain] ({user,ldap,
+//     oidc}); invalid → [ErrInvalidProvisioningMethod];
+//   - empty result (csv="" / commas-and-whitespace only) → [ErrEmptyProvisioningMethods].
 //
-// «Ключ отсутствует» обрабатывается ВЫШЕ (PoolSource.Load: ErrSettingNotFound →
-// политика не задана), сюда передаётся только заданное значение.
+// "Key absent" is handled ABOVE (PoolSource.Load: ErrSettingNotFound → policy
+// not set); only a set value is passed in here.
 func ParseProvisioningMethods(csv string) (map[string]bool, error) {
 	out := make(map[string]bool)
 	for _, part := range strings.Split(csv, ",") {
@@ -127,13 +129,13 @@ func ParseProvisioningMethods(csv string) (map[string]bool, error) {
 	return out, nil
 }
 
-// ServiceEntry — runtime-представление строки реестра service_registry. Несёт
-// git-координаты Service-а (Name/Git/Ref, ADR-007) плюс audit-метаданные;
-// реестр перенесён из удалённого `keeper.yml::services[]` (ADR-029).
+// ServiceEntry — runtime representation of a service_registry row. Carries
+// the Service's git coordinates (Name/Git/Ref, ADR-007) plus audit metadata;
+// the registry replaces the removed `keeper.yml::services[]` (ADR-029).
 //
-// Refresh — duration-строка авто-refresh ("5m"); nil = без авто-refresh (NULL в
-// БД). CreatedByAID / UpdatedByAID — AID оператора-автора/последнего правщика;
-// nil = NULL (seed / без инициатора-Архонта / до первого update).
+// Refresh — auto-refresh duration string ("5m"); nil = no auto-refresh (NULL
+// in the DB). CreatedByAID / UpdatedByAID — AID of the author/last editor
+// operator; nil = NULL (seed / no initiating Archon / before the first update).
 type ServiceEntry struct {
 	Name         string    `json:"name"`
 	Git          string    `json:"git"`
@@ -145,7 +147,7 @@ type ServiceEntry struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// Setting — runtime-представление строки keeper_settings.
+// Setting — runtime representation of a keeper_settings row.
 type Setting struct {
 	Key          string    `json:"key"`
 	Value        string    `json:"value"`

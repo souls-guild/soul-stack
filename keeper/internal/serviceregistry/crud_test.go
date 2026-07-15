@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub для unit-тестов без подъёма PG. Возвращает
-// заданную ошибку из QueryRow.Scan / Exec, чтобы проверить error-mapping.
+// fakeDB is an ExecQueryRower stub for unit tests without a live PG. Returns
+// a configured error from QueryRow.Scan / Exec to exercise error-mapping.
 type fakeDB struct {
 	queryRowErr error
 	execTag     pgconn.CommandTag
@@ -41,7 +41,7 @@ func (r errRow) Scan(_ ...any) error {
 
 func ptr[T any](v T) *T { return &v }
 
-// TestValidateFields — прикладная валидация полей Service-записи.
+// TestValidateFields — field validation of a Service record.
 func TestValidateFields(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -78,7 +78,7 @@ func TestValidateFields(t *testing.T) {
 	}
 }
 
-// TestValidSettingKey — формат ключа keeper_settings (snake_case).
+// TestValidSettingKey — keeper_settings key format (snake_case).
 func TestValidSettingKey(t *testing.T) {
 	cases := []struct {
 		key  string
@@ -99,7 +99,7 @@ func TestValidSettingKey(t *testing.T) {
 	}
 }
 
-// TestMapServiceWriteError — маппинг pgx-ошибок write-пути в sentinel-ы.
+// TestMapServiceWriteError — mapping of pgx write-path errors to sentinels.
 func TestMapServiceWriteError(t *testing.T) {
 	t.Run("unique→ErrAlreadyExists", func(t *testing.T) {
 		pgErr := &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "service_registry_pkey"}
@@ -146,7 +146,7 @@ func TestMapServiceWriteError(t *testing.T) {
 	})
 }
 
-// TestMapSettingWriteError — FK-violation upsert-а настройки → ErrOperatorNotFound.
+// TestMapSettingWriteError — FK-violation on setting upsert → ErrOperatorNotFound.
 func TestMapSettingWriteError(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: pgErrCodeForeignKeyViolation, ConstraintName: "keeper_settings_updated_by_aid_fkey"}
 	got := mapSettingWriteError(pgErr)
@@ -155,9 +155,9 @@ func TestMapSettingWriteError(t *testing.T) {
 	}
 }
 
-// TestService_CreateValidationBeforeDB — битый ввод ловится валидацией ДО
-// обращения к БД. fakeDB.QueryRow вернул бы ErrNoRows на любой реальный вызов;
-// проверяем, что до него дело не доходит (возвращается validation-sentinel).
+// TestService_CreateValidationBeforeDB — bad input is caught by validation
+// BEFORE touching the DB. fakeDB.QueryRow would return ErrNoRows on any real
+// call; we verify it never gets called (a validation sentinel is returned instead).
 func TestService_CreateValidationBeforeDB(t *testing.T) {
 	svc, err := NewService(ServiceDeps{Pool: &fakeDB{}})
 	if err != nil {
@@ -171,8 +171,8 @@ func TestService_CreateValidationBeforeDB(t *testing.T) {
 	}
 }
 
-// TestService_GetSettingValidatesKey — GetSetting/SetSetting отбивают битый ключ
-// до round-trip-а.
+// TestService_GetSettingValidatesKey — GetSetting/SetSetting reject a bad key
+// before the round-trip.
 func TestService_GetSettingValidatesKey(t *testing.T) {
 	svc, err := NewService(ServiceDeps{Pool: &fakeDB{}})
 	if err != nil {
@@ -186,7 +186,7 @@ func TestService_GetSettingValidatesKey(t *testing.T) {
 	}
 }
 
-// TestNewService_NilPool — конструктор отвергает nil-pool.
+// TestNewService_NilPool — the constructor rejects a nil pool.
 func TestNewService_NilPool(t *testing.T) {
 	if _, err := NewService(ServiceDeps{}); err == nil {
 		t.Fatal("NewService(nil pool) = nil error, want error")

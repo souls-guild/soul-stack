@@ -8,48 +8,47 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// ScenariosTTL — окно валидности кешированного scenario-listing-а одного
-// Service-а. 60s — парный [RefsTTL]-выбор: тот же UX-баланс «дёрганий remote
-// репо при открытии Run-modal в UI» vs. свежести listing-а (новый scenario,
-// положенный в репо минуту назад, оператор увидит спустя ≤60s).
+// ScenariosTTL — validity window of a cached scenario listing for one Service.
+// 60s mirrors the [RefsTTL] choice: same UX balance between "hammering the remote
+// repo when opening the Run modal in the UI" vs. listing freshness (a scenario
+// added to the repo a minute ago becomes visible to the operator within ≤60s).
 const ScenariosTTL = 60 * time.Second
 
-// ScenarioLister — поверхность listing-а scenario из локально-материализованного
-// снапшота Service-репо (`scenario/*/main.yml`). Объявлено интерфейсом, чтобы
-// тесты могли подменить реальный loader fake-ом, а handler — принимать
-// минимальную зависимость.
+// ScenarioLister — surface for listing scenarios from a locally materialized
+// snapshot of the Service repo (`scenario/*/main.yml`). Declared as an interface so
+// tests can swap the real loader for a fake, and the handler depends on a minimal
+// surface.
 //
-// Контракт: дёргается под per-(name+ref) lock-ом в [ScenariosCache]; реализация
-// в production — [ScenariosLister.ListScenarios] поверх [artifact.ServiceLoader].
+// Contract: invoked under a per-(name+ref) lock in [ScenariosCache]; the
+// production implementation is [ScenariosLister.ListScenarios] over
+// [artifact.ServiceLoader].
 type ScenarioLister interface {
 	ListScenarios(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error)
 }
 
-// ScenarioListerFunc — функциональная реализация [ScenarioLister] (парный
-// [artifact.RefsListerFunc]-у для handler-side wire-up без оборачивания в
-// именованный тип).
+// ScenarioListerFunc — functional implementation of [ScenarioLister] (mirrors
+// [artifact.RefsListerFunc] for handler-side wiring without a named type).
 type ScenarioListerFunc func(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error)
 
-// ListScenarios делает функцию реализующей [ScenarioLister].
+// ListScenarios makes the function satisfy [ScenarioLister].
 func (f ScenarioListerFunc) ListScenarios(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error) {
 	return f(ctx, name, gitURL, ref)
 }
 
-// ScenariosCache — in-process TTL-кеш ответа [ScenarioLister.ListScenarios] по
-// ключу `(name, ref)` (не по `(name)`-only: один сервис может запрашиваться с
-// разными ref-ами — UI dropdown показывает scenarios конкретной версии).
+// ScenariosCache — in-process TTL cache of [ScenarioLister.ListScenarios]
+// responses keyed by `(name, ref)` (not `(name)`-only: one service can be queried
+// with different refs — the UI dropdown shows scenarios for a specific version).
 //
-// Per-Keeper, не cluster-wide: scenario — read-only представление, отставание
-// между инстансами не нарушает консистентность реестра. Cluster-wide Redis-кеш
-// — отдельный slice по запросу (парный с [RefsCache]-обоснованием).
+// Per-Keeper, not cluster-wide: scenarios are a read-only view, so lag between
+// instances doesn't break registry consistency. A cluster-wide Redis cache is a
+// separate slice for later (mirrors the [RefsCache] rationale).
 //
-// Безопасен для конкурентного использования. Per-ключ Mutex сериализует
-// «один in-flight loader на ключ» — параллельные клики «Run scenario» для
-// одного (name,ref) не лупят git-clone N раз. На уровне самого loader-а
-// `artifact.ServiceLoader` тоже несёт per-name lock + переиспользует
-// snapshot-каталог по sha1 — но это другой уровень: handler-сторона должна
-// иметь свой short-circuit, чтобы не вызывать loader N раз подряд для одного
-// и того же ключа.
+// Safe for concurrent use. A per-key Mutex serializes "one in-flight loader per
+// key" — parallel "Run scenario" clicks for the same (name,ref) don't hammer
+// git-clone N times. The loader itself (`artifact.ServiceLoader`) also carries a
+// per-name lock + reuses the snapshot directory by sha1 — but that's a different
+// layer: the handler side needs its own short-circuit so it doesn't call the
+// loader N times in a row for the same key.
 type ScenariosCache struct {
 	lister ScenarioLister
 	ttl    time.Duration
@@ -59,24 +58,24 @@ type ScenariosCache struct {
 	entries map[scenariosKey]*scenariosEntry
 }
 
-// scenariosKey — композитный ключ кеша. name+ref хранятся раздельно для
-// корректной инвалидации по name (Update/Deregister Service-а сбрасывает все
-// ref-варианты под этим name).
+// scenariosKey — composite cache key. name+ref are stored separately for correct
+// invalidation by name (Update/Deregister of a Service clears all ref variants
+// under that name).
 type scenariosKey struct {
 	name string
 	ref  string
 }
 
-// scenariosEntry — одна запись кеша. lock сериализует concurrent loader-вызовы
-// одного ключа; scenarios/expires — закешированный ответ.
+// scenariosEntry — one cache entry. lock serializes concurrent loader calls for
+// the same key; scenarios/expires is the cached response.
 type scenariosEntry struct {
 	lock      sync.Mutex
 	scenarios []artifact.Scenario
 	expires   time.Time
 }
 
-// NewScenariosCache собирает кеш поверх lister-а. lister обязателен (паника
-// при nil — симметрично [NewRefsCache]); ttl ≤ 0 нормализуется в [ScenariosTTL].
+// NewScenariosCache builds a cache over a lister. lister is required (panics on
+// nil — symmetric with [NewRefsCache]); ttl ≤ 0 is normalized to [ScenariosTTL].
 func NewScenariosCache(lister ScenarioLister, ttl time.Duration) *ScenariosCache {
 	if lister == nil {
 		panic("serviceregistry.NewScenariosCache: lister is nil")
@@ -92,14 +91,14 @@ func NewScenariosCache(lister ScenarioLister, ttl time.Duration) *ScenariosCache
 	}
 }
 
-// ListScenarios возвращает scenarios для (name, gitURL, ref). Hit — отдаём из
-// кеша; miss или истекший TTL — один loader-call под per-ключ lock-ом.
+// ListScenarios returns scenarios for (name, gitURL, ref). Hit — served from the
+// cache; miss or expired TTL — one loader call under the per-key lock.
 //
-// Возврат: либо успешный []Scenario (может быть пустым — сервис без сценариев
-// валиден), либо ошибка lister-а «как есть» — caller (handler) маппит её в 502
-// Bad Gateway. Кешируется ТОЛЬКО success-ответ: при ошибке следующий запрос
-// снова попытается loader (best-effort + читаемость failure-ов в UI; парная
-// семантика с [RefsCache.ListRefs]).
+// Return: either a successful []Scenario (may be empty — a service with no
+// scenarios is valid), or the lister's error as-is — the caller (handler) maps it
+// to 502 Bad Gateway. Only a success response is cached: on error, the next
+// request retries the loader (best-effort + readable failures in the UI; mirrors
+// [RefsCache.ListRefs] semantics).
 func (c *ScenariosCache) ListScenarios(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error) {
 	entry := c.entryFor(scenariosKey{name: name, ref: ref})
 
@@ -119,10 +118,10 @@ func (c *ScenariosCache) ListScenarios(ctx context.Context, name, gitURL, ref st
 	return cloneScenarios(scenarios), nil
 }
 
-// Invalidate сбрасывает все записи кеша для данного name (все варианты ref).
-// Семантика — парная с [RefsCache.Invalidate]: после Update/Deregister Service-а
-// устаревшие закешированные scenarios должны исчезнуть, чтобы следующий запрос
-// вернул listing нового git-источника. Идемпотентен.
+// Invalidate clears all cache entries for the given name (all ref variants).
+// Mirrors [RefsCache.Invalidate] semantics: after Update/Deregister of a Service,
+// stale cached scenarios must disappear so the next request returns a listing from
+// the new git source. Idempotent.
 func (c *ScenariosCache) Invalidate(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -133,9 +132,8 @@ func (c *ScenariosCache) Invalidate(name string) {
 	}
 }
 
-// entryFor возвращает (создавая при необходимости) scenariosEntry для key.
-// Не держит c.mu во время loader-вызова — это работа per-ключ lock-а внутри
-// entry.
+// entryFor returns (creating if needed) the scenariosEntry for key. Doesn't hold
+// c.mu during the loader call — that's handled by the per-key lock inside entry.
 func (c *ScenariosCache) entryFor(key scenariosKey) *scenariosEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,10 +145,10 @@ func (c *ScenariosCache) entryFor(key scenariosKey) *scenariosEntry {
 	return e
 }
 
-// cloneScenarios — мелкая копия slice-а, чтобы caller не мог изменить
-// кешированный массив. Scenario.InputSchema — map (ссылочный тип); deep-copy
-// его не делаем сознательно: handler сразу сериализует в JSON, а caller-у вне
-// handler-а кеш не передаётся.
+// cloneScenarios — shallow copy of the slice so the caller can't mutate the
+// cached array. Scenario.InputSchema is a map (reference type); deliberately not
+// deep-copied: the handler serializes it to JSON right away, and callers outside
+// the handler never receive the cache.
 func cloneScenarios(in []artifact.Scenario) []artifact.Scenario {
 	if in == nil {
 		return nil

@@ -8,45 +8,46 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// RefsTTL — окно валидности кешированного git-ls-remote ответа. Совпадает с
-// рекомендацией ТЗ: 60s — баланс между «дёрганиями» remote-репо при открытии
-// Upgrade-modal в UI и приемлемой свежестью списка ref-ов (тег, появившийся
-// минуту назад, оператор увидит спустя ≤60s после рефреша страницы).
+// RefsTTL — validity window of a cached git-ls-remote response. Matches the spec
+// recommendation: 60s balances "hammering" the remote repo when opening the
+// Upgrade modal in the UI against acceptable freshness of the ref list (a tag
+// added a minute ago becomes visible to the operator within ≤60s of a page
+// refresh).
 const RefsTTL = 60 * time.Second
 
-// RefsCache — in-process TTL-кеш ответа [artifact.ListRefs] по имени Service-а
-// (не по git-URL: имя устойчивее — переименование git-источника в реестре не
-// должно унаследовать ref-ы старого репо).
+// RefsCache — in-process TTL cache of [artifact.ListRefs] responses keyed by
+// Service name (not git URL: name is more stable — renaming the git source in the
+// registry shouldn't inherit the old repo's refs).
 //
-// Per-Keeper, не cluster-wide: refs — read-only представление, отставание между
-// инстансами не нарушает консистентность реестра. Если в кластере один из
-// keeper-ов уже подтянул refs, остальные сделают свой ls-remote при первом
-// запросе на их адрес — это пренебрежимый трафик к git-источнику (UI dropdown
-// открывают редко). Cluster-wide Redis-кеш — отдельный slice по запросу.
+// Per-Keeper, not cluster-wide: refs are a read-only view, so lag between
+// instances doesn't break registry consistency. If one keeper in the cluster has
+// already fetched refs, the others will do their own ls-remote on their first
+// request — negligible traffic to the git source (the UI dropdown is opened
+// rarely). A cluster-wide Redis cache is a separate slice for later.
 //
-// Безопасен для конкурентного использования. Per-name Mutex сериализует
-// «один in-flight ls-remote на сервис» — параллельные клики «открыть Upgrade»
-// для одного сервиса не лупят одинаковый ls-remote N раз.
+// Safe for concurrent use. A per-name Mutex serializes "one in-flight ls-remote
+// per service" — parallel "open Upgrade" clicks for the same service don't hammer
+// the same ls-remote N times.
 type RefsCache struct {
 	lister artifact.RefsLister
 	ttl    time.Duration
-	now    func() time.Time // для тестов
+	now    func() time.Time // for tests
 
 	mu      sync.Mutex
 	entries map[string]*refsEntry
 }
 
-// refsEntry — одна запись кеша. lock сериализует concurrent ls-remote одного
-// и того же сервиса; refs/expires — закешированный ответ (зашитый под lock-ом
-// при write-е, читается атомарно после Lock/Unlock).
+// refsEntry — one cache entry. lock serializes concurrent ls-remote calls for the
+// same service; refs/expires is the cached response (written under the lock,
+// read atomically after Lock/Unlock).
 type refsEntry struct {
 	lock    sync.Mutex
 	refs    []artifact.GitRef
 	expires time.Time
 }
 
-// NewRefsCache собирает кеш поверх lister-а. lister обязателен (паника при nil
-// — единственная точка misconfiguration); ttl ≤0 нормализуется в [RefsTTL].
+// NewRefsCache builds a cache over a lister. lister is required (panics on nil —
+// the only misconfiguration point); ttl ≤0 is normalized to [RefsTTL].
 func NewRefsCache(lister artifact.RefsLister, ttl time.Duration) *RefsCache {
 	if lister == nil {
 		panic("serviceregistry.NewRefsCache: lister is nil")
@@ -62,17 +63,18 @@ func NewRefsCache(lister artifact.RefsLister, ttl time.Duration) *RefsCache {
 	}
 }
 
-// ListRefs возвращает refs для (name, gitURL). Если в кеше валидная запись —
-// сразу её. Иначе — один ls-remote через lister под per-name lock-ом (остальные
-// горутины для того же name ждут результата).
+// ListRefs returns refs for (name, gitURL). If there's a valid cache entry,
+// return it immediately. Otherwise, one ls-remote through the lister under the
+// per-name lock (other goroutines for the same name wait for the result).
 //
-// name — ключ кеша; gitURL — параметр запроса к lister-у (handler читает оба из
-// записи реестра, мы их не валидируем повторно — это работа service-слоя).
+// name is the cache key; gitURL is the parameter passed to the lister (the
+// handler reads both from the registry entry; we don't re-validate them here —
+// that's the service layer's job).
 //
-// Возврат: либо успешный []GitRef (может быть пустым), либо ошибка lister-а
-// «как есть» — caller (handler) маппит её в 502 Bad Gateway. Кешируется ТОЛЬКО
-// success-ответ: при ошибке следующий запрос снова попытается ls-remote
-// (best-effort + читаемость failure-ов в UI).
+// Return: either a successful []GitRef (may be empty), or the lister's error
+// as-is — the caller (handler) maps it to 502 Bad Gateway. Only a success
+// response is cached: on error, the next request retries ls-remote (best-effort +
+// readable failures in the UI).
 func (c *RefsCache) ListRefs(ctx context.Context, name, gitURL string) ([]artifact.GitRef, error) {
 	entry := c.entryFor(name)
 
@@ -92,17 +94,17 @@ func (c *RefsCache) ListRefs(ctx context.Context, name, gitURL string) ([]artifa
 	return cloneRefs(refs), nil
 }
 
-// Invalidate сбрасывает кеш для name (после Update/Deregister реестра имеет
-// смысл выкинуть устаревшую запись, чтобы следующий запрос вернул refs нового
-// git-источника). Идемпотентен: нет записи — no-op.
+// Invalidate clears the cache for name (after a registry Update/Deregister, the
+// stale entry should be dropped so the next request returns refs from the new git
+// source). Idempotent: no entry — no-op.
 func (c *RefsCache) Invalidate(name string) {
 	c.mu.Lock()
 	delete(c.entries, name)
 	c.mu.Unlock()
 }
 
-// entryFor возвращает (создавая при необходимости) refsEntry для name. Не
-// держит c.mu во время ls-remote — это работа per-name lock-а внутри entry.
+// entryFor returns (creating if needed) the refsEntry for name. Doesn't hold c.mu
+// during ls-remote — that's handled by the per-name lock inside entry.
 func (c *RefsCache) entryFor(name string) *refsEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -114,8 +116,8 @@ func (c *RefsCache) entryFor(name string) *refsEntry {
 	return e
 }
 
-// cloneRefs делает мелкую копию slice-а, чтобы caller не мог изменить
-// кешированный массив (GitRef — value-type, deep-copy не требуется).
+// cloneRefs makes a shallow copy of the slice so the caller can't mutate the
+// cached array (GitRef is a value type, deep-copy isn't needed).
 func cloneRefs(in []artifact.GitRef) []artifact.GitRef {
 	if in == nil {
 		return nil

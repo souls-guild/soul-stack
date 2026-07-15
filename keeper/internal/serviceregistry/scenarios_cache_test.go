@@ -11,9 +11,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeScenarioLister — программируемый ScenarioLister: считает вызовы (всего и
-// по ключу), отдаёт заданный scenarios или ошибку, опционально с задержкой
-// для проверки per-ключ lock-а.
+// fakeScenarioLister is a programmable ScenarioLister: counts calls (total and
+// per key), returns configured scenarios or error, optionally with delay
+// for testing per-key lock.
 type fakeScenarioLister struct {
 	mu        sync.Mutex
 	calls     atomic.Int64
@@ -58,15 +58,15 @@ func TestScenariosCache_HitMiss(t *testing.T) {
 		t.Fatalf("scenarios = %+v", got)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
-	// Hit: тот же ключ.
+	// Hit: same key.
 	if _, err := c.ListScenarios(context.Background(), "web", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
@@ -81,9 +81,9 @@ func TestScenariosCache_KeyByNameAndRef(t *testing.T) {
 	if _, err := c.ListScenarios(context.Background(), "web", "g", "v2"); err != nil {
 		t.Fatalf("#v2: %v", err)
 	}
-	// Тот же name, разные ref → две независимые записи.
+	// Same name, different ref—two independent records.
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestScenariosCache_Expiry(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после TTL = %d, want 2", n)
+		t.Errorf("calls after TTL = %d, want 2", n)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestScenariosCache_Invalidate_DropsAllRefs(t *testing.T) {
 	lister.scenarios = []artifact.Scenario{{Name: "create"}}
 	c := NewScenariosCache(lister, time.Hour)
 
-	// Прогреваем три ключа: web@v1, web@v2, api@v1.
+	// Warm up three keys: web@v1, web@v2, api@v1.
 	if _, err := c.ListScenarios(context.Background(), "web", "g", "v1"); err != nil {
 		t.Fatalf("warm web@v1: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestScenariosCache_Invalidate_DropsAllRefs(t *testing.T) {
 
 	c.Invalidate("web")
 
-	// Оба ref для web должны быть выкинуты, api — остаться в кеше.
+	// Both ref for web should be dropped, api stays in cache.
 	if _, err := c.ListScenarios(context.Background(), "web", "g", "v1"); err != nil {
 		t.Fatalf("post-inv web@v1: %v", err)
 	}
@@ -133,9 +133,9 @@ func TestScenariosCache_Invalidate_DropsAllRefs(t *testing.T) {
 	if _, err := c.ListScenarios(context.Background(), "api", "g", "v1"); err != nil {
 		t.Fatalf("post-inv api@v1: %v", err)
 	}
-	// web@v1 + web@v2 пересчитаны (2 вызова), api@v1 — из кеша (0).
+	// web@v1 + web@v2 recalculated (2 calls), api@v1 from cache (0).
 	if n := lister.calls.Load() - preInvalidate; n != 2 {
-		t.Errorf("calls после Invalidate(\"web\") = %d, want 2 (api должен остаться в кеше)", n)
+		t.Errorf("calls after Invalidate(\"web\") = %d, want 2 (api should stay in cache)", n)
 	}
 }
 
@@ -152,7 +152,7 @@ func TestScenariosCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors not cached)", n)
 	}
 }
 
@@ -179,14 +179,14 @@ func TestScenariosCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
 func TestScenariosCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected panic on nil lister")
 		}
 	}()
 	_ = NewScenariosCache(nil, time.Hour)

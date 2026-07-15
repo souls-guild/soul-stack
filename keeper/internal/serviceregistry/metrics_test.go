@@ -18,8 +18,8 @@ func TestRegisterRegistryMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterRegistryMetrics returned nil")
 	}
 
-	// Vec/Histogram/Counter без первого Observe/Inc семейство не публикуют —
-	// прогоняем все Observe-методы, затем сверяем присутствие семейств.
+	// Vec/Histogram/Counter don't publish a family before the first
+	// Observe/Inc — run all Observe methods, then check the families exist.
 	m.ObserveRebuildSuccess(2*time.Millisecond, 3)
 	m.ObserveRebuildError(time.Millisecond, rebuildErrorLoad)
 	m.ObserveInvalidation()
@@ -82,24 +82,24 @@ func TestRegistryMetrics_RebuildErrorKind(t *testing.T) {
 	if !strings.Contains(body, `keeper_serviceregistry_snapshot_rebuild_errors_total{kind="load"} 2`) {
 		t.Errorf("load error count mismatch; got=\n%s", body)
 	}
-	// Каждый ObserveRebuildError тоже наблюдает длительность.
+	// Each ObserveRebuildError also observes duration.
 	if !strings.Contains(body, `keeper_serviceregistry_snapshot_rebuild_duration_seconds_count 2`) {
 		t.Errorf("rebuild duration count should be 2; got=\n%s", body)
 	}
 }
 
 func TestRegistryMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Holder может подниматься без obs-стека (NewHolder в bootstrap-пути,
-	// unit-тесты до wire-up метрик). Метод на nil-получателе — no-op без паники.
+	// Holder can start without obs stack (NewHolder in bootstrap path,
+	// unit tests before metrics wire-up). Method on nil receiver—no-op without panic.
 	var m *RegistryMetrics
 	m.ObserveRebuildSuccess(time.Second, 1)
 	m.ObserveRebuildError(time.Second, rebuildErrorLoad)
 	m.ObserveInvalidation()
 }
 
-// TestHolder_RefreshRecordsSnapshotMetrics — интеграция Holder.Refresh с
-// метриками: число Service-ов берётся из построенного снимка. fakeSnapSource/
-// snapWith переиспользуются из holder_test.go (тот же пакет).
+// TestHolder_RefreshRecordsSnapshotMetrics is integration of Holder.Refresh with
+// metrics: Service count is taken from the built snapshot. fakeSnapSource/
+// snapWith are reused from holder_test.go (same package).
 func TestHolder_RefreshRecordsSnapshotMetrics(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRegistryMetrics(reg)
@@ -121,7 +121,7 @@ func TestHolder_RefreshRecordsSnapshotMetrics(t *testing.T) {
 	}
 }
 
-// TestHolder_RefreshLoadErrorKind — отказ src.Load маппится в kind=load.
+// TestHolder_RefreshLoadErrorKind tests that src.Load failure maps to kind=load.
 func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRegistryMetrics(reg)
@@ -132,7 +132,7 @@ func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 	h.SetMetrics(m)
-	src.set(nil, errors.New("db down")) // источник падает после первичной загрузки
+	src.set(nil, errors.New("db down")) // source fails after initial load
 
 	if err := h.Refresh(context.Background()); err == nil {
 		t.Fatal("expected Refresh error")
@@ -144,11 +144,11 @@ func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 	}
 }
 
-// TestHolder_SetMetricsRace воспроизводит init-order daemon-а: фоновый Run
-// (запускается в setupServiceRegistry) живёт, когда SetMetrics вызывается позже в
-// setupMetricsRegistry. В этом окне Run конкурентно читает поле metrics (через
-// Refresh.ObserveRebuild*), пока SetMetrics его пишет. С atomic.Pointer Store/Load
-// атомарны, race-детектор чист (паттерн rbac.Holder).
+// TestHolder_SetMetricsRace reproduces daemon init-order: background Run
+// (started in setupServiceRegistry) is alive when SetMetrics is called later in
+// setupMetricsRegistry. During this window Run concurrently reads metrics field (via
+// Refresh.ObserveRebuild*) while SetMetrics writes it. With atomic.Pointer Store/Load
+// atomic, race detector is clean (pattern from rbac.Holder).
 func TestHolder_SetMetricsRace(t *testing.T) {
 	src := &fakeSnapSource{snap: snapWith("git@x:destiny.git", "web")}
 	h, err := NewHolder(context.Background(), src, time.Millisecond, nil)

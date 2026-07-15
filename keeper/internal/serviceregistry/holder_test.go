@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// fakeSnapSource — управляемый SnapshotSource для тестов Holder без Postgres-а.
-// Снимок и ошибка меняются между Refresh-ами под Mutex-ом (Run читает в фоне).
+// fakeSnapSource — a controllable SnapshotSource for Holder tests without Postgres.
+// Snapshot and error change between Refresh calls under a Mutex (Run reads in the background).
 type fakeSnapSource struct {
 	mu   sync.Mutex
 	snap *Snapshot
@@ -35,8 +35,8 @@ func (f *fakeSnapSource) set(snap *Snapshot, err error) {
 	f.err = err
 }
 
-// snapWith — хелпер: снимок с заданными Service-ами (по name) и скаляром
-// default_destiny_source.
+// snapWith — helper: a snapshot with the given Services (by name) and the
+// default_destiny_source scalar.
 func snapWith(dds string, names ...string) *Snapshot {
 	s := &Snapshot{
 		services:             map[string]ServiceEntry{},
@@ -79,7 +79,7 @@ func TestHolder_Refresh_PicksUpChange(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 
-	// До перечита api-service отсутствует, скаляр пуст.
+	// Before refresh: api-service is absent, scalar is empty.
 	if _, ok := h.Resolve("api"); ok {
 		t.Fatalf("Resolve(api) ok=true before refresh, want false")
 	}
@@ -87,7 +87,7 @@ func TestHolder_Refresh_PicksUpChange(t *testing.T) {
 		t.Fatalf("DefaultDestinySource = %q before refresh, want empty", got)
 	}
 
-	// Меняем снимок в БД: добавился api + задан default_destiny_source.
+	// Change the snapshot in the DB: api added + default_destiny_source set.
 	src.set(snapWith("git@x:destiny.git", "web", "api"), nil)
 	if err := h.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
@@ -108,7 +108,7 @@ func TestHolder_Refresh_ErrorKeepsPrevSnapshot(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 
-	// Перечит падает — активный снимок должен остаться прежним.
+	// Refresh fails — the active snapshot should stay unchanged.
 	src.set(nil, errors.New("db blip"))
 	if err := h.Refresh(context.Background()); err == nil {
 		t.Fatal("Refresh should return error on Load failure")
@@ -132,13 +132,13 @@ func TestHolder_Run_TTLPolls(t *testing.T) {
 	defer cancel()
 	go h.Run(ctx)
 
-	// Меняем снимок; фоновый ticker должен подхватить за несколько интервалов.
+	// Change the snapshot; the background ticker should pick it up within a few intervals.
 	src.set(snapWith("", "web", "api"), nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, ok := h.Resolve("api"); ok {
-			break // подхвачено
+			break // picked up
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("TTL-poll did not pick up new service within deadline")
@@ -158,18 +158,18 @@ func TestHolder_NilSource_EmptySnapshot(t *testing.T) {
 	if got := h.DefaultDestinySource(); got != "" {
 		t.Errorf("nil-source DefaultDestinySource = %q, want empty", got)
 	}
-	// Run при nil-src — no-op, не виснет.
+	// Run with a nil src — no-op, doesn't hang.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	h.Run(ctx)
 }
 
-// fakeInvSource — управляемый InvalidationSource для тестов WatchInvalidations
-// без Redis-а. invalidate() имитирует приход чужого invalidate-сигнала; Watch
-// блокируется до ctx.Done() или fatalErr.
+// fakeInvSource — a controllable InvalidationSource for WatchInvalidations
+// tests without Redis. invalidate() simulates an incoming invalidate signal
+// from elsewhere; Watch blocks until ctx.Done() or fatalErr.
 type fakeInvSource struct {
 	signals chan struct{}
-	err     error // если задан — Watch возвращает её сразу (имитация фатальной подписки)
+	err     error // if set, Watch returns it immediately (simulates a fatal subscribe)
 }
 
 func newFakeInvSource() *fakeInvSource {
@@ -192,9 +192,9 @@ func (f *fakeInvSource) Watch(ctx context.Context, onInvalidate func()) error {
 	}
 }
 
-// TestHolder_WatchInvalidations_NearInstantRefresh — приход invalidate-сигнала
-// рефрешит снимок БЕЗ ожидания TTL-poll-а (interval=час, тик не сработает в окне
-// теста).
+// TestHolder_WatchInvalidations_NearInstantRefresh — an incoming invalidate
+// signal refreshes the snapshot WITHOUT waiting for TTL-poll (interval=1h,
+// the tick won't fire within the test window).
 func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 	src := &fakeSnapSource{snap: snapWith("", "web")}
 	h, err := NewHolder(context.Background(), src, time.Hour, nil)
@@ -211,15 +211,15 @@ func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 		t.Fatalf("Resolve(api) ok=true before invalidate, want false")
 	}
 
-	// Меняем снимок в БД и шлём invalidate — Holder должен near-instant
-	// перечитать (не дожидаясь часового TTL-тика).
+	// Change the snapshot in the DB and send invalidate — Holder should
+	// re-read near-instantly (not waiting for the hourly TTL tick).
 	src.set(snapWith("", "web", "api"), nil)
 	invSrc.invalidate()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, ok := h.Resolve("api"); ok {
-			break // подхвачено через pub/sub-invalidate
+			break // picked up via pub/sub-invalidate
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("invalidate did not trigger near-instant refresh within deadline")
@@ -228,8 +228,8 @@ func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 	}
 }
 
-// TestHolder_WatchInvalidations_TTLFallbackStillWorks — даже когда invalidate НЕ
-// приходит, TTL-poll [Run] всё равно рефрешит снимок (fallback не сломан).
+// TestHolder_WatchInvalidations_TTLFallbackStillWorks — even when invalidate
+// never arrives, TTL-poll [Run] still refreshes the snapshot (fallback isn't broken).
 func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	src := &fakeSnapSource{snap: snapWith("", "web")}
 	h, err := NewHolder(context.Background(), src, 5*time.Millisecond, nil)
@@ -241,14 +241,14 @@ func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go h.Run(ctx)                        // TTL-poll
-	go h.WatchInvalidations(ctx, invSrc) // pub/sub — но сигнал НЕ шлём
+	go h.WatchInvalidations(ctx, invSrc) // pub/sub — but we don't send the signal
 
 	src.set(snapWith("", "web", "api"), nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, ok := h.Resolve("api"); ok {
-			break // подхвачено TTL-poll-ом (fallback)
+			break // picked up by TTL-poll (fallback)
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("TTL-poll fallback did not pick up change without invalidate")
@@ -257,9 +257,9 @@ func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	}
 }
 
-// TestHolder_WatchInvalidations_FatalSubscribeFailSoft — фатальная ошибка
-// подписки НЕ роняет: WatchInvalidations возвращается (логирует warn), daemon
-// продолжает на TTL-poll.
+// TestHolder_WatchInvalidations_FatalSubscribeFailSoft — a fatal subscribe
+// error does NOT crash: WatchInvalidations returns (logs a warning), the
+// daemon continues on TTL-poll.
 func TestHolder_WatchInvalidations_FatalSubscribeFailSoft(t *testing.T) {
 	src := &fakeSnapSource{snap: snapWith("", "web")}
 	h, err := NewHolder(context.Background(), src, time.Hour, nil)
@@ -276,32 +276,32 @@ func TestHolder_WatchInvalidations_FatalSubscribeFailSoft(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		// OK — вернулся без паники/виса.
+		// OK — returned without panic/hang.
 	case <-time.After(2 * time.Second):
 		t.Fatal("WatchInvalidations did not return on fatal subscribe error")
 	}
 }
 
-// TestHolder_WatchInvalidations_NilSourceNoop — при nil-БД-источнике или
-// nil-инвалидаторе Watch — no-op.
+// TestHolder_WatchInvalidations_NilSourceNoop — with a nil DB source or
+// nil invalidator, Watch is a no-op.
 func TestHolder_WatchInvalidations_NilSourceNoop(t *testing.T) {
 	h, err := NewHolder(context.Background(), nil, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("NewHolder(nil src): %v", err)
 	}
-	h.WatchInvalidations(context.Background(), newFakeInvSource()) // не виснет
+	h.WatchInvalidations(context.Background(), newFakeInvSource()) // doesn't hang
 
 	h2, err := NewHolder(context.Background(), &fakeSnapSource{snap: snapWith("", "web")}, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("NewHolder: %v", err)
 	}
-	h2.WatchInvalidations(context.Background(), nil) // не виснет
+	h2.WatchInvalidations(context.Background(), nil) // doesn't hang
 }
 
-// TestHolder_AtomicSnapshot_Race — конкурентные синхронные геттеры (Resolve/
-// DefaultDestinySource) против фонового Refresh-а: atomic-swap снимка не должен
-// давать data race (-race). Каждый итог геттера сам по себе согласован
-// (читает один опубликованный снимок).
+// TestHolder_AtomicSnapshot_Race — concurrent synchronous getters (Resolve/
+// DefaultDestinySource) against a background Refresh: the snapshot's atomic
+// swap must not produce a data race (-race). Each getter result is internally
+// consistent (reads one published snapshot).
 func TestHolder_AtomicSnapshot_Race(t *testing.T) {
 	src := &fakeSnapSource{snap: snapWith("git@x:a.git", "web")}
 	h, err := NewHolder(context.Background(), src, time.Hour, nil)
@@ -314,7 +314,7 @@ func TestHolder_AtomicSnapshot_Race(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Писатель: чередует два снимка через Refresh.
+	// Writer: alternates two snapshots via Refresh.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -328,7 +328,7 @@ func TestHolder_AtomicSnapshot_Race(t *testing.T) {
 		}
 	}()
 
-	// Читатели: синхронные геттеры в несколько goroutine.
+	// Readers: synchronous getters across several goroutines.
 	for g := 0; g < 4; g++ {
 		wg.Add(1)
 		go func() {

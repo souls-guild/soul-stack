@@ -8,43 +8,43 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// DependenciesTTL — окно валидности кешированного dependencies-ответа одного
-// Service-а. 60s — парный [StateSchemaTTL] / [ScenariosTTL]-выбор: тот же
-// UX-баланс «дёрганий remote репо при открытии UI Service Detail» vs. свежести
-// (изменённый `destiny:`/`modules:`-блок оператор увидит спустя ≤60s).
+// DependenciesTTL is the TTL window for a cached dependencies response of one
+// Service. 60s matches [StateSchemaTTL] / [ScenariosTTL] choice: same UX
+// balance of "jerking" remote repo on UI Service Detail open vs. freshness
+// (operator sees changed `destiny:`/`modules:` block within ≤60s).
 const DependenciesTTL = 60 * time.Second
 
-// DependenciesLister — поверхность listing-а git-зависимостей (destiny/modules
-// из `service.yml`) одного снапшота Service-репо. Объявлено интерфейсом для
-// подмены fake-ом в тестах handler-а; production-реализация — функция поверх
+// DependenciesLister is the surface for listing git dependencies (destiny/modules
+// from `service.yml`) of one Service repo snapshot. Declared as interface for
+// fake substitution in handler tests; production implementation is a function over
 // [artifact.ServiceLoader] + [artifact.ListDependencies].
 //
-// Контракт: дёргается под per-(name+ref) lock-ом в [DependenciesCache]; ref —
-// явный, потому что разные версии одного сервиса могут декларировать разные
-// зависимости (UI Service Detail показывает зависимости выбранного ref-а).
+// Contract: called under per-(name+ref) lock in [DependenciesCache]; ref is
+// explicit because different versions of one service may declare different
+// dependencies (UI Service Detail shows dependencies of selected ref).
 type DependenciesLister interface {
 	ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error)
 }
 
-// DependenciesListerFunc — функциональная реализация [DependenciesLister]
-// (парный [StateSchemaListerFunc] для handler-side wire-up без обёрточного
-// именованного типа).
+// DependenciesListerFunc is the functional implementation of [DependenciesLister]
+// (paired [StateSchemaListerFunc] for handler-side wire-up without wrapper
+// named type).
 type DependenciesListerFunc func(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error)
 
-// ListDependencies делает функцию реализующей [DependenciesLister].
+// ListDependencies makes the function implement [DependenciesLister].
 func (f DependenciesListerFunc) ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error) {
 	return f(ctx, name, gitURL, ref)
 }
 
-// DependenciesCache — in-process TTL-кеш ответа
-// [DependenciesLister.ListDependencies] по ключу `(name, ref)`. Per-Keeper, не
-// cluster-wide: dependencies — read-only представление, отставание между
-// инстансами не нарушает консистентность реестра (parity с [StateSchemaCache]).
+// DependenciesCache is an in-process TTL cache of
+// [DependenciesLister.ListDependencies] response by key `(name, ref)`. Per-Keeper, not
+// cluster-wide: dependencies are read-only view, lag between
+// instances does not break registry consistency (parity with [StateSchemaCache]).
 //
-// Безопасен для конкурентного использования. Per-ключ Mutex сериализует «один
-// in-flight loader на ключ» — параллельные открытия Service Detail не лупят
-// git-clone N раз. На уровне самого loader-а [artifact.ServiceLoader] тоже
-// несёт per-name lock + переиспользует snapshot-каталог по sha1.
+// Safe for concurrent use. Per-key Mutex serializes "one
+// in-flight loader per key"—parallel Service Detail opens do not
+// loop git-clone N times. At the loader level [artifact.ServiceLoader] also
+// carries per-name lock and reuses snapshot dir by sha1.
 type DependenciesCache struct {
 	lister DependenciesLister
 	ttl    time.Duration
@@ -54,24 +54,24 @@ type DependenciesCache struct {
 	entries map[dependenciesKey]*dependenciesEntry
 }
 
-// dependenciesKey — композитный ключ кеша. name+ref хранятся раздельно для
-// корректной инвалидации по name (Update/Deregister Service-а сбрасывает все
-// ref-варианты под этим name; parity с [stateSchemaKey]).
+// dependenciesKey is a composite cache key. name+ref are stored separately for
+// correct invalidation by name (Service Update/Deregister drops all
+// ref variants under that name; parity with [stateSchemaKey]).
 type dependenciesKey struct {
 	name string
 	ref  string
 }
 
-// dependenciesEntry — одна запись кеша. lock сериализует concurrent loader-
-// вызовы одного ключа; deps/expires — закешированный ответ.
+// dependenciesEntry is one cache record. lock serializes concurrent loader
+// calls for one key; deps/expires is the cached response.
 type dependenciesEntry struct {
 	lock    sync.Mutex
 	deps    *artifact.ServiceDependencies
 	expires time.Time
 }
 
-// NewDependenciesCache собирает кеш поверх lister-а. lister обязателен (паника
-// при nil — симметрично [NewStateSchemaCache]); ttl ≤ 0 нормализуется в
+// NewDependenciesCache builds cache over the lister. lister is required (panic
+// on nil—symmetrically [NewStateSchemaCache]); ttl ≤ 0 is normalized to
 // [DependenciesTTL].
 func NewDependenciesCache(lister DependenciesLister, ttl time.Duration) *DependenciesCache {
 	if lister == nil {
@@ -88,11 +88,11 @@ func NewDependenciesCache(lister DependenciesLister, ttl time.Duration) *Depende
 	}
 }
 
-// ListDependencies возвращает dependencies для (name, gitURL, ref). Hit —
-// отдаём из кеша; miss или истекший TTL — один loader-call под per-ключ lock-ом.
+// ListDependencies returns dependencies for (name, gitURL, ref). Hit—
+// serve from cache; miss or expired TTL—one loader call under per-key lock.
 //
-// Кешируется ТОЛЬКО success-ответ: при ошибке следующий запрос снова попытается
-// loader (best-effort + читаемость failure-ов в UI; parity с
+// Only success response is cached: on error, next request tries
+// loader again (best-effort + UI failure readability; parity with
 // [StateSchemaCache.ListStateSchema]).
 func (c *DependenciesCache) ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error) {
 	entry := c.entryFor(dependenciesKey{name: name, ref: ref})
@@ -113,10 +113,10 @@ func (c *DependenciesCache) ListDependencies(ctx context.Context, name, gitURL, 
 	return cloneDependencies(deps), nil
 }
 
-// Invalidate сбрасывает все записи кеша для данного name (все варианты ref).
-// Семантика — парная с [StateSchemaCache.Invalidate]: после Update/Deregister
-// Service-а устаревшие закешированные dependencies должны исчезнуть, чтобы
-// следующий запрос вернул listing нового git-источника. Идемпотентен.
+// Invalidate drops all cache records for the given name (all ref variants).
+// Semantics—paired with [StateSchemaCache.Invalidate]: after Service Update/Deregister
+// stale cached dependencies must disappear so
+// next request returns listing of new git source. Idempotent.
 func (c *DependenciesCache) Invalidate(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -127,8 +127,8 @@ func (c *DependenciesCache) Invalidate(name string) {
 	}
 }
 
-// entryFor возвращает (создавая при необходимости) dependenciesEntry для key.
-// Не держит c.mu во время loader-вызова — это работа per-ключ lock-а внутри
+// entryFor returns (creating if needed) dependenciesEntry for key.
+// Does not hold c.mu during loader call—that is per-key lock work inside
 // entry.
 func (c *DependenciesCache) entryFor(key dependenciesKey) *dependenciesEntry {
 	c.mu.Lock()
@@ -141,10 +141,10 @@ func (c *DependenciesCache) entryFor(key dependenciesKey) *dependenciesEntry {
 	return e
 }
 
-// cloneDependencies — мелкая копия структуры, чтобы caller не мог изменить
-// кешированную запись. Destiny/Modules — слайсы значений (Dependency без
-// ссылочных полей), копируем оба (handler сериализует в JSON и за рамки кеша не
-// передаёт; parity с cloneStateSchemaInfo).
+// cloneDependencies is a shallow copy of the structure so caller cannot modify
+// the cached record. Destiny/Modules are value slices (Dependency without
+// pointer fields); we copy both (handler serializes to JSON and does not pass
+// outside cache; parity with cloneStateSchemaInfo).
 func cloneDependencies(in *artifact.ServiceDependencies) *artifact.ServiceDependencies {
 	if in == nil {
 		return nil

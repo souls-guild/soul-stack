@@ -8,92 +8,92 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// RegistryMetrics — набор Prometheus-collector-ов реестра Service-ов/keeper_settings
-// (ADR-029, snapshot-rebuild + cluster-инвалидация). Зеркало keeper_rbac_snapshot_*
-// для Holder-а реестра (тот же паттерн SetMetrics/ObserveRebuild*/ObserveInvalidation,
-// что у [rbac.Holder]); регистрируется отдельным helper-ом поверх компонент-
-// агностичного [obs.Registry] (ADR-024 §4.0): registry-core не знает про конкретные
-// метрики, а keeper_serviceregistry_*-метрики — частность этого Holder-а.
+// RegistryMetrics is the set of Prometheus collectors for the Service/keeper_settings
+// registry (ADR-029, snapshot-rebuild + cluster invalidation). Mirrors keeper_rbac_snapshot_*
+// for the registry's Holder (same SetMetrics/ObserveRebuild*/ObserveInvalidation pattern
+// as [rbac.Holder]); registered by a separate helper on top of the component-
+// agnostic [obs.Registry] (ADR-024 §4.0): registry-core doesn't know about specific
+// metrics, keeper_serviceregistry_*-metrics are this Holder's own business.
 //
-// Метрики живут здесь (keeper/internal/serviceregistry), а не в shared/obs, потому
-// что привязаны к keeper-внутреннему [Holder] и не переиспользуются Soul-ом
-// (ADR-011: shared/ — действительно поперечный код; реестр Service-ов — Keeper-side).
+// Metrics live here (keeper/internal/serviceregistry), not in shared/obs, because
+// they're tied to the keeper-internal [Holder] and aren't reused by Soul
+// (ADR-011: shared/ is truly cross-cutting code; the Service registry is Keeper-side).
 //
-// БЕЗОПАСНОСТЬ + кардинальность (ADR-024 §2.2): в label-ы НЕ кладём имя Service-а,
-// git/ref, значение настройки. Разрез rebuild-ошибки — только closed-enum `kind`
-// (load/parse). Снимок реестра — это публичный каталог (имена/git-refs), не
-// секрет, но cardinality по числу Service-ов всё равно недопустима в метриках.
+// SECURITY + cardinality (ADR-024 §2.2): labels carry NO Service name,
+// git/ref, or setting value. The rebuild-error breakdown is only the closed-enum
+// `kind` (load/parse). The registry snapshot is a public catalog (names/git-refs),
+// not a secret, but cardinality by Service count is still unacceptable in metrics.
 //
-// Имена — Prometheus convention (snake_case, _total для counter, _seconds для
-// histogram длительности, _timestamp_seconds для абсолютного времени; ADR-024 §2.1).
+// Names follow Prometheus convention (snake_case, _total for a counter, _seconds for
+// a duration histogram, _timestamp_seconds for absolute time; ADR-024 §2.1).
 type RegistryMetrics struct {
-	// rebuildDuration — длительность одной пересборки снимка реестра в секундах
-	// (src.Load из БД: ListServices + GetSetting). Наблюдается на каждом
-	// [Holder.Refresh] (TTL-poll, pub/sub-инвалидация, lazy-путь), независимо от
-	// исхода.
+	// rebuildDuration — duration of one registry snapshot rebuild in seconds
+	// (src.Load from the DB: ListServices + GetSetting). Observed on every
+	// [Holder.Refresh] (TTL-poll, pub/sub invalidation, lazy path), regardless
+	// of outcome.
 	rebuildDuration prometheus.Histogram
 
-	// rebuildErrorsTotal — счётчик неуспешных пересборок снимка, разрезанный по
-	// фазе отказа: `load` — src.Load (БД недоступна/ошибка SELECT-ов), `parse` —
-	// построение снимка из строк (зарезервировано: текущий PoolSource.Load не
-	// имеет отдельной parse-фазы, но симметрия с rbac оставляет ветку под будущий
-	// типизированный декодер). Деталь причины — в log/trace caller-а.
+	// rebuildErrorsTotal — counter of failed snapshot rebuilds, broken down by
+	// failure phase: `load` — src.Load (DB unavailable/SELECT error), `parse` —
+	// building the snapshot from rows (reserved: the current PoolSource.Load has
+	// no separate parse phase, but symmetry with rbac keeps the branch for a future
+	// typed decoder). Failure detail lives in the caller's log/trace.
 	rebuildErrorsTotal *prometheus.CounterVec
 
-	// lastSuccessTimestamp — Unix-time последней УСПЕШНОЙ пересборки снимка.
-	// Возраст снимка считается в PromQL как `time() - <этот gauge>`.
+	// lastSuccessTimestamp — Unix time of the last SUCCESSFUL snapshot rebuild.
+	// Snapshot age is computed in PromQL as `time() - <this gauge>`.
 	lastSuccessTimestamp prometheus.Gauge
 
-	// services — число Service-ов в актуальном снимке (gauge, обновляется на
-	// каждом успешном Refresh).
+	// services — number of Services in the current snapshot (gauge, updated on
+	// every successful Refresh).
 	services prometheus.Gauge
 
-	// invalidationsTotal — счётчик принятых cluster-wide инвалидаций реестра
-	// ([Holder.WatchInvalidations] callback). Инкремент на каждый сигнал, до
-	// запуска перечита. Self-origin уже отфильтрован источником.
+	// invalidationsTotal — counter of accepted cluster-wide registry invalidations
+	// ([Holder.WatchInvalidations] callback). Incremented on every signal, before
+	// the re-read runs. Self-origin is already filtered out by the source.
 	invalidationsTotal prometheus.Counter
 }
 
-// Фазы отказа пересборки снимка для keeper_serviceregistry_snapshot_rebuild_errors_total.
-// Closed enum: `load` — отказ src.Load из БД; `parse` — отказ построения снимка из
-// прочитанных строк (зарезервировано, см. [RegistryMetrics.rebuildErrorsTotal]).
+// Snapshot-rebuild failure phases for keeper_serviceregistry_snapshot_rebuild_errors_total.
+// Closed enum: `load` — src.Load from the DB failed; `parse` — building the snapshot
+// from read rows failed (reserved, see [RegistryMetrics.rebuildErrorsTotal]).
 const (
 	rebuildErrorLoad  = "load"
 	rebuildErrorParse = "parse"
 )
 
-// RegisterRegistryMetrics создаёт keeper_serviceregistry_*-collectors и
-// регистрирует их в [obs.Registry]. Возвращает дескриптор для wire-up через
+// RegisterRegistryMetrics creates the keeper_serviceregistry_*-collectors and
+// registers them in [obs.Registry]. Returns a handle for wiring via
 // [Holder.SetMetrics].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на одном
-// Registry); падать сразу удобнее, чем носить ленивую инициализацию (паттерн
-// идентичен [rbac.RegisterRBACMetrics]).
+// MustRegister: a duplicate registration is a programmer error (called twice on
+// the same Registry); failing fast is simpler than carrying lazy init (pattern
+// identical to [rbac.RegisterRBACMetrics]).
 func RegisterRegistryMetrics(reg *obs.Registry) *RegistryMetrics {
 	m := &RegistryMetrics{
 		rebuildDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "keeper_serviceregistry_snapshot_rebuild_duration_seconds",
-			Help:    "Длительность пересборки снимка реестра Service-ов в секундах (Load из БД).",
+			Help:    "Duration of registry snapshot rebuild in seconds (Load from DB).",
 			Buckets: prometheus.DefBuckets,
 		}),
 		rebuildErrorsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_serviceregistry_snapshot_rebuild_errors_total",
-				Help: "Количество неуспешных пересборок снимка реестра, разрезанное по kind (load/parse).",
+				Help: "Count of failed snapshot rebuilds, broken down by kind (load/parse).",
 			},
 			[]string{"kind"},
 		),
 		lastSuccessTimestamp: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_serviceregistry_snapshot_last_success_timestamp_seconds",
-			Help: "Unix-время последней успешной пересборки снимка реестра (возраст = time() - этот gauge).",
+			Help: "Unix time of the last successful snapshot rebuild (age = time() - this gauge).",
 		}),
 		services: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_serviceregistry_snapshot_services",
-			Help: "Число Service-ов в актуальном снимке реестра.",
+			Help: "Number of Services in the current snapshot.",
 		}),
 		invalidationsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_serviceregistry_invalidations_received_total",
-			Help: "Количество принятых cluster-wide инвалидаций реестра Service-ов (pub/sub-сигналов).",
+			Help: "Count of accepted cluster-wide registry invalidations (pub/sub signals).",
 		}),
 	}
 	reg.Registerer().MustRegister(
@@ -106,11 +106,11 @@ func RegisterRegistryMetrics(reg *obs.Registry) *RegistryMetrics {
 	return m
 }
 
-// ObserveRebuildSuccess фиксирует успешную пересборку снимка ([Holder.Refresh]):
-// наблюдает длительность, обновляет last_success_timestamp (Unix-now) и gauge
-// числа Service-ов по актуальному снимку. nil-получатель — no-op (Holder может
-// подниматься без observability: NewHolder в bootstrap-пути / unit-тестах до
-// wire-up метрик).
+// ObserveRebuildSuccess records a successful snapshot rebuild ([Holder.Refresh]):
+// observes the duration, updates last_success_timestamp (Unix-now), and the gauge
+// of Service count from the current snapshot. nil receiver — no-op (Holder can
+// start without observability: NewHolder in the bootstrap path / unit tests before
+// metrics are wired up).
 func (m *RegistryMetrics) ObserveRebuildSuccess(dur time.Duration, serviceCount int) {
 	if m == nil {
 		return
@@ -120,10 +120,10 @@ func (m *RegistryMetrics) ObserveRebuildSuccess(dur time.Duration, serviceCount 
 	m.services.Set(float64(serviceCount))
 }
 
-// ObserveRebuildError фиксирует неуспешную пересборку снимка: наблюдает
-// длительность и инкрементирует rebuild_errors_total с явной фазой отказа.
-// Caller ([Holder.Refresh]) знает фазу точно, поэтому она передаётся, а не
-// угадывается по типу ошибки. nil-получатель — no-op.
+// ObserveRebuildError records a failed snapshot rebuild: observes the
+// duration and increments rebuild_errors_total with an explicit failure phase.
+// The caller ([Holder.Refresh]) knows the phase precisely, so it's passed in
+// rather than guessed from the error type. nil receiver — no-op.
 func (m *RegistryMetrics) ObserveRebuildError(dur time.Duration, kind string) {
 	if m == nil {
 		return
@@ -132,8 +132,8 @@ func (m *RegistryMetrics) ObserveRebuildError(dur time.Duration, kind string) {
 	m.rebuildErrorsTotal.WithLabelValues(kind).Inc()
 }
 
-// ObserveInvalidation инкрементирует invalidations_received_total на один
-// принятый cluster-сигнал. nil-получатель — no-op.
+// ObserveInvalidation increments invalidations_received_total by one
+// accepted cluster signal. nil receiver — no-op.
 func (m *RegistryMetrics) ObserveInvalidation() {
 	if m == nil {
 		return

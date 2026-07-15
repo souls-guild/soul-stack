@@ -11,9 +11,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeStateSchemaLister — программируемый StateSchemaLister: считает вызовы
-// (всего и по ключу), отдаёт заданный info или ошибку, опционально с задержкой
-// для проверки per-ключ lock-а (parity с fakeScenarioLister).
+// fakeStateSchemaLister — a programmable StateSchemaLister: counts calls
+// (total and per key), returns a configured info or error, optionally with
+// a delay for testing the per-key lock (parity with fakeScenarioLister).
 type fakeStateSchemaLister struct {
 	mu       sync.Mutex
 	calls    atomic.Int64
@@ -72,14 +72,14 @@ func TestStateSchemaCache_HitMiss(t *testing.T) {
 		t.Fatalf("Version = %d", got.Version)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после miss = %d, want 1", n)
+		t.Errorf("calls after miss = %d, want 1", n)
 	}
 
 	if _, err := c.ListStateSchema(context.Background(), "web", "g", "v1"); err != nil {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls после hit = %d, want 1 (кеш не сработал)", n)
+		t.Errorf("calls after hit = %d, want 1 (cache did not work)", n)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestStateSchemaCache_KeyByNameAndRef(t *testing.T) {
 		t.Fatalf("#v2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (per-(name,ref) ключи)", n)
+		t.Errorf("calls = %d, want 2 (per-(name,ref) keys)", n)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestStateSchemaCache_Expiry(t *testing.T) {
 		t.Fatalf("#2: %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls после TTL = %d, want 2", n)
+		t.Errorf("calls after TTL = %d, want 2", n)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestStateSchemaCache_Invalidate_DropsAllRefs(t *testing.T) {
 		t.Fatalf("post-inv api@v1: %v", err)
 	}
 	if n := lister.calls.Load() - preInvalidate; n != 2 {
-		t.Errorf("calls после Invalidate(\"web\") = %d, want 2 (api должен остаться в кеше)", n)
+		t.Errorf("calls after Invalidate(\"web\") = %d, want 2 (api should stay in cache)", n)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestStateSchemaCache_ErrorNotCached(t *testing.T) {
 		t.Fatalf("#2 err = %v", err)
 	}
 	if n := lister.calls.Load(); n != 2 {
-		t.Errorf("calls = %d, want 2 (ошибки не кешируются)", n)
+		t.Errorf("calls = %d, want 2 (errors not cached)", n)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestStateSchemaCache_PerKeyLock(t *testing.T) {
 		}
 	}
 	if n := lister.calls.Load(); n != 1 {
-		t.Errorf("calls = %d, want 1 (per-key lock не сработал)", n)
+		t.Errorf("calls = %d, want 1 (per-key lock did not work)", n)
 	}
 }
 
@@ -201,22 +201,22 @@ func TestStateSchemaCache_ClonesOnReturn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListStateSchema: %v", err)
 	}
-	// Mutate возвращённый Migrations slice; повторный вызов должен отдать
-	// нетронутый кешированный snapshot.
+	// Mutate returned Migrations slice; next call should return
+	// untouched cached snapshot.
 	got.Migrations[0].Path = "MUTATED"
 	got2, err := c.ListStateSchema(context.Background(), "web", "g", "v1")
 	if err != nil {
 		t.Fatalf("ListStateSchema #2: %v", err)
 	}
 	if got2.Migrations[0].Path == "MUTATED" {
-		t.Errorf("кеш не клонирует Migrations: повтор вернул %q", got2.Migrations[0].Path)
+		t.Errorf("cache does not clone Migrations: repeat returned %q", got2.Migrations[0].Path)
 	}
 }
 
 func TestStateSchemaCache_NilLister_Panics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatalf("ожидалась паника при nil lister")
+			t.Fatalf("expected panic on nil lister")
 		}
 	}()
 	_ = NewStateSchemaCache(nil, time.Hour)
