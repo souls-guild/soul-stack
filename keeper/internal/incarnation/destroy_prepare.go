@@ -9,73 +9,76 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// Sentinel-ошибки prepare-фазы destroy (резолв снапшота сервиса ДО транзакции
-// Destroy). Отделены от tx-уровневого [ErrIncarnationNotDestroyable]:
-//   - ErrServiceNotRegistered  → caller маппит в internal-error / 500 (сервис
-//     incarnation должен быть в реестре сервисов; переиспользуется из
-//     upgrade_prepare.go — та же причина).
-//   - ErrDestroyScenarioMissing → 422 / 409 validation-failed (force=false и в
-//     снапшоте нет scenario `destroy`: teardown выполнить нечем). Возвращается
-//     ДО перехода в destroying — incarnation остаётся нетронутой.
-//   - ErrLoadTargetSnapshot     → internal-error / 500 (git/loader-фейл;
-//     переиспользуется из upgrade_prepare.go).
-//   - ErrTargetSnapshotInvalid  → internal-error / 500 (снапшот без манифеста;
-//     переиспользуется из upgrade_prepare.go).
+// Sentinel errors for the destroy prepare phase (resolves the service snapshot
+// BEFORE the Destroy transaction). Separate from the tx-level
+// [ErrIncarnationNotDestroyable]:
+//   - ErrServiceNotRegistered  → caller maps to internal-error / 500 (the
+//     incarnation's service must be in the service registry; reused from
+//     upgrade_prepare.go — same reason).
+//   - ErrDestroyScenarioMissing → 422 / 409 validation-failed (force=false and
+//     the snapshot has no `destroy` scenario: nothing to run teardown with).
+//     Returned BEFORE the transition to destroying — incarnation stays untouched.
+//   - ErrLoadTargetSnapshot     → internal-error / 500 (git/loader failure;
+//     reused from upgrade_prepare.go).
+//   - ErrTargetSnapshotInvalid  → internal-error / 500 (snapshot without a
+//     manifest; reused from upgrade_prepare.go).
 //
 // ErrServiceNotRegistered / ErrLoadTargetSnapshot / ErrTargetSnapshotInvalid
-// объявлены в upgrade_prepare.go — переиспользуем как есть (та же семантика
-// резолва снапшота, дубликат был бы багом).
+// are declared in upgrade_prepare.go — reused as-is (same snapshot-resolve
+// semantics, a duplicate would be a bug).
 var ErrDestroyScenarioMissing = errors.New("incarnation: service snapshot has no `destroy` scenario")
 
-// destroyScenarioName — имя teardown-сценария в снапшоте сервиса
-// (scenario/orchestration.md §1: `scenario/<name>/main.yml`). Совпадает с
-// destroyScenarioLabel (destroy.go) по значению, но это разные роли: label —
-// метка перехода в state_history, name — имя файла сценария в репо. Держим
-// отдельную константу, чтобы будущая смена одной не утянула другую молча.
+// destroyScenarioName — the teardown scenario's name in the service snapshot
+// (scenario/orchestration.md §1: `scenario/<name>/main.yml`). Matches
+// destroyScenarioLabel (destroy.go) in value, but they're different roles: label
+// is the state_history transition tag, name is the scenario file name in the repo.
+// Kept as a separate constant so a future change to one doesn't silently drag the
+// other.
 const destroyScenarioName = "destroy"
 
-// destroyScenarioMainFile — относительный путь точки входа teardown-сценария в
-// снапшоте сервиса. Тот же формат, что scenario.scenarioMainFile.
+// destroyScenarioMainFile — relative path to the teardown scenario's entry point
+// in the service snapshot. Same format as scenario.scenarioMainFile.
 const destroyScenarioMainFile = "scenario/" + destroyScenarioName + "/main.yml"
 
-// DestroyScenarioReader — узкая поверхность загрузчика снапшота сервиса для
-// pre-check наличия teardown-сценария: материализует снапшот по ref-у и читает
-// из него файл. Реальный [artifact.ServiceLoader] удовлетворяет структурно;
-// unit-тесты дают fake. Резолв ref → git-координаты делает [ServiceResolver]
-// (общий с upgrade_prepare.go).
+// DestroyScenarioReader — narrow surface of the service snapshot loader for the
+// teardown-scenario pre-check: materializes the snapshot at a ref and reads a file
+// from it. The real [artifact.ServiceLoader] satisfies it structurally; unit tests
+// supply a fake. Resolving ref → git coordinates is [ServiceResolver]'s job
+// (shared with upgrade_prepare.go).
 type DestroyScenarioReader interface {
 	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
 	ReadFile(art *artifact.ServiceArtifact, file string) ([]byte, error)
 }
 
-// PrepareDestroy — handler-уровневая подготовка destroy (паттерн [PrepareUpgrade]):
-// ДО транзакции [Destroy] проверяет, что teardown выполним. Git-загрузка снапшота
-// под FOR UPDATE недопустима (долгая I/O под row-lock-ом), поэтому проверка
-// вынесена сюда, ПЕРЕД переходом в destroying.
+// PrepareDestroy — handler-level destroy preparation (mirrors the
+// [PrepareUpgrade] pattern): BEFORE the [Destroy] transaction, checks that
+// teardown is runnable. Loading the snapshot from git under FOR UPDATE is
+// unacceptable (long I/O under a row lock), so the check happens here, BEFORE the
+// transition to destroying.
 //
-// Шаги:
-//  1. Resolve(inc.Service) → git-координаты текущей версии сервиса. Ref
-//     переопределяется на inc.ServiceVersion (teardown катится той версией
-//     сервиса, что развёрнута, а не tip-ом).
-//  2. Load(ref) → снапшот сервиса.
-//  3. Наличие scenario/destroy/main.yml в снапшоте.
+// Steps:
+//  1. Resolve(inc.Service) → git coordinates of the current service version. Ref
+//     is overridden to inc.ServiceVersion (teardown runs against the deployed
+//     service version, not tip).
+//  2. Load(ref) → service snapshot.
+//  3. Check for scenario/destroy/main.yml in the snapshot.
 //
-// Семантика force:
-//   - force=false И scenario `destroy` отсутствует → [ErrDestroyScenarioMissing]
-//     (teardown выполнить нечем — caller вернёт 422/409 ДО destroying).
-//   - force=true → snapshot всё равно загружается и проверяется (диагностика),
-//     но отсутствие scenario НЕ блокирует: force означает «снести без teardown»
-//     (S-D3 удалит строку напрямую). ok=true.
-//   - scenario присутствует → ok=true независимо от force.
+// force semantics:
+//   - force=false AND scenario `destroy` is missing → [ErrDestroyScenarioMissing]
+//     (nothing to run teardown with — caller returns 422/409 BEFORE destroying).
+//   - force=true → the snapshot is still loaded and checked (diagnostics), but a
+//     missing scenario does NOT block: force means "tear down without teardown"
+//     (S-D3 deletes the row directly). ok=true.
+//   - scenario present → ok=true regardless of force.
 //
-// Возвращает загруженный снапшот сервиса (`art`): caller читает из него
-// `lifecycle.auto_destroy` (S3 enforcement) без второго git-load-а. При ошибке
-// art == nil. art != nil ⇒ art.Manifest валиден (Load парсит manifest).
+// Returns the loaded service snapshot (`art`): the caller reads
+// `lifecycle.auto_destroy` from it (S3 enforcement) without a second git load. On
+// error art == nil. art != nil ⇒ art.Manifest is valid (Load parses the manifest).
 //
-// Чистая от HTTP/MCP-транспорта: возвращает типизированные sentinel-ошибки,
-// caller маппит их в свой error-формат. Саму проводку в handler делает S-D4.
-// inc приходит уже загруженным (caller делает SelectByName сам — для
-// 404-семантики и FOR UPDATE-гонки в Destroy).
+// Transport-agnostic (no HTTP/MCP): returns typed sentinel errors, the caller
+// maps them to its own error format. Wiring this into the handler is S-D4's job.
+// inc arrives already loaded (the caller does SelectByName itself — for 404
+// semantics and the FOR UPDATE race in Destroy).
 func PrepareDestroy(
 	ctx context.Context,
 	resolver ServiceResolver,
@@ -87,8 +90,8 @@ func PrepareDestroy(
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrServiceNotRegistered, inc.Service)
 	}
-	// Teardown катится развёрнутой версией сервиса, а не tip-ом ветки: scenario
-	// `destroy` берём из того же ref-а, что и текущий incarnation.
+	// Teardown runs against the deployed service version, not branch tip: the
+	// `destroy` scenario is taken from the same ref as the current incarnation.
 	ref.Ref = inc.ServiceVersion
 
 	art, err := reader.Load(ctx, ref)
@@ -109,20 +112,21 @@ func PrepareDestroy(
 	return art, nil
 }
 
-// HasDestroyScenario — экспортированный probe наличия scenario `destroy` в уже
-// загруженном снапшоте (S3: handler/MCP перепроверяют teardown-выполнимость
-// ПОСЛЕ резолва `lifecycle.auto_destroy`, когда effectiveForce=false — обычный
-// teardown-путь). Без второго git-load-а: art уже материализован [PrepareDestroy].
-// Тонкая обёртка над [destroyScenarioExists] (та же os.ErrNotExist→false-семантика).
+// HasDestroyScenario — exported probe for the `destroy` scenario's presence in an
+// already-loaded snapshot (S3: handler/MCP re-check teardown runnability AFTER
+// resolving `lifecycle.auto_destroy`, when effectiveForce=false — the regular
+// teardown path). No second git load: art is already materialized by
+// [PrepareDestroy]. Thin wrapper over [destroyScenarioExists] (same
+// os.ErrNotExist→false semantics).
 func HasDestroyScenario(reader DestroyScenarioReader, art *artifact.ServiceArtifact) (bool, error) {
 	return destroyScenarioExists(reader, art)
 }
 
-// destroyScenarioExists проверяет наличие scenario/destroy/main.yml в снапшоте.
-// Отсутствие файла (os.ErrNotExist сквозь loader-обёртку) — это (false, nil),
-// а не ошибка: «нет teardown-сценария» — нормальный исход проверки, решение по
-// нему принимает PrepareDestroy с учётом force. Любая иная I/O-ошибка чтения
-// прокидывается caller-у.
+// destroyScenarioExists checks for scenario/destroy/main.yml in the snapshot. A
+// missing file (os.ErrNotExist through the loader wrapper) is (false, nil), not an
+// error: "no teardown scenario" is a normal check outcome, and PrepareDestroy
+// decides what to do with it based on force. Any other I/O read error is
+// propagated to the caller.
 func destroyScenarioExists(reader DestroyScenarioReader, art *artifact.ServiceArtifact) (bool, error) {
 	_, err := reader.ReadFile(art, destroyScenarioMainFile)
 	if err == nil {

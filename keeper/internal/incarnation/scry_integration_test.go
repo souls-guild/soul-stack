@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// TestIntegration_SelectScryCandidates_HappyPath — iterator-предикат правила
-// `scry_background`: возвращает только ready/drift incarnation БЕЗ активного
-// прогона, сортируя по `last_drift_check_at NULLS FIRST`.
+// TestIntegration_SelectScryCandidates_HappyPath — the iterator predicate of the
+// `scry_background` rule: returns only ready/drift incarnations WITHOUT an active
+// run, sorted by `last_drift_check_at NULLS FIRST`.
 func TestIntegration_SelectScryCandidates_HappyPath(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 	creator := "archon-alice"
 
-	// 3 incarnation: a — ready, никогда не сканировалась; b — drift, со старым
-	// last_drift_check_at; c — applying (должен быть исключён).
+	// 3 incarnations: a — ready, never scanned; b — drift, with a stale
+	// last_drift_check_at; c — applying (should be excluded).
 	for _, n := range []string{"alpha-ready", "beta-drift", "gamma-applying"} {
 		status := StatusReady
 		switch n {
@@ -36,7 +36,7 @@ func TestIntegration_SelectScryCandidates_HappyPath(t *testing.T) {
 		}
 	}
 
-	// beta-drift: проставляем last_drift_check_at в прошлом.
+	// beta-drift: set last_drift_check_at in the past.
 	old := time.Now().Add(-24 * time.Hour).UTC()
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET last_drift_check_at = $1 WHERE name = 'beta-drift'`, old); err != nil {
@@ -50,7 +50,7 @@ func TestIntegration_SelectScryCandidates_HappyPath(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2 (ready+drift, applying excluded); got=%+v", len(got), got)
 	}
-	// ORDER BY last_drift_check_at NULLS FIRST → alpha-ready (NULL) идёт первым.
+	// ORDER BY last_drift_check_at NULLS FIRST → alpha-ready (NULL) comes first.
 	if got[0].Name != "alpha-ready" {
 		t.Errorf("got[0].Name = %q, want alpha-ready (NULLS FIRST)", got[0].Name)
 	}
@@ -59,8 +59,8 @@ func TestIntegration_SelectScryCandidates_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_SelectScryCandidates_ExcludesActiveApplyRuns — incarnation с
-// не-завершённым apply_run (finished_at IS NULL) исключается, независимо от
+// TestIntegration_SelectScryCandidates_ExcludesActiveApplyRuns — an incarnation with
+// an unfinished apply_run (finished_at IS NULL) is excluded, regardless of
 // status.
 func TestIntegration_SelectScryCandidates_ExcludesActiveApplyRuns(t *testing.T) {
 	resetAll(t)
@@ -76,7 +76,7 @@ func TestIntegration_SelectScryCandidates_ExcludesActiveApplyRuns(t *testing.T) 
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Активный apply_run (без finished_at).
+	// An active apply_run (without finished_at).
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status, started_by_aid)
 VALUES ('01HACTIVE000000000000000A', 'host-1', 'alpha', 'create', 'running', $1)`, creator); err != nil {
@@ -91,7 +91,7 @@ VALUES ('01HACTIVE000000000000000A', 'host-1', 'alpha', 'create', 'running', $1)
 		t.Fatalf("len(got) = %d, want 0 (active apply_run blocks scan); got=%+v", len(got), got)
 	}
 
-	// Завершаем прогон — incarnation становится кандидатом.
+	// Finish the run — the incarnation becomes a candidate.
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE apply_runs SET status='success', finished_at=NOW() WHERE apply_id='01HACTIVE000000000000000A'`); err != nil {
 		t.Fatalf("finish apply_runs: %v", err)
@@ -105,8 +105,8 @@ VALUES ('01HACTIVE000000000000000A', 'host-1', 'alpha', 'create', 'running', $1)
 	}
 }
 
-// TestIntegration_SelectScryCandidates_MinIntervalThrottle — при заданном
-// min_interval inкарнация со свежим last_drift_check_at исключается.
+// TestIntegration_SelectScryCandidates_MinIntervalThrottle — given a
+// min_interval, an incarnation with a fresh last_drift_check_at is excluded.
 func TestIntegration_SelectScryCandidates_MinIntervalThrottle(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -123,8 +123,8 @@ func TestIntegration_SelectScryCandidates_MinIntervalThrottle(t *testing.T) {
 		}
 	}
 	now := time.Now().UTC()
-	// fresh — 1 минуту назад; stale — час назад. min_interval = 30m: fresh
-	// должна быть исключена, stale — пройти.
+	// fresh — 1 minute ago; stale — an hour ago. min_interval = 30m: fresh
+	// should be excluded, stale should pass.
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET last_drift_check_at = $1 WHERE name = 'fresh'`, now.Add(-time.Minute)); err != nil {
 		t.Fatalf("seed fresh: %v", err)
@@ -146,8 +146,8 @@ func TestIntegration_SelectScryCandidates_MinIntervalThrottle(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateDriftScanResult_HappyPath — пишет колонки и читается
-// через SelectByName.
+// TestIntegration_UpdateDriftScanResult_HappyPath — writes the columns and reads
+// them back via SelectByName.
 func TestIntegration_UpdateDriftScanResult_HappyPath(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -162,8 +162,8 @@ func TestIntegration_UpdateDriftScanResult_HappyPath(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// 123456 µs (ненулевая доля секунды): PG timestamptz хранит микросекунды,
-	// round-trip обязан сохранить sub-second-точность без усечения до секунд.
+	// 123456 µs (a non-zero fraction of a second): PG timestamptz stores microseconds,
+	// the round-trip must preserve sub-second precision without truncating to seconds.
 	scannedAt := time.Date(2026, 5, 26, 12, 0, 0, 123456000, time.UTC)
 	summary := DriftScanSummary{
 		HostsDrifted: 1, HostsClean: 2, HostsUnsupported: 0, HostsFailed: 0,
@@ -186,8 +186,8 @@ func TestIntegration_UpdateDriftScanResult_HappyPath(t *testing.T) {
 	if got.LastDriftSummary == nil {
 		t.Fatalf("LastDriftSummary is nil")
 	}
-	// Typed round-trip: запись scry → чтение колонки в DriftScanSummary — без
-	// потерь по counts и sub-second (µs) scanned_at.
+	// Typed round-trip: writing scry → reading the column into DriftScanSummary — no
+	// loss on counts or sub-second (µs) scanned_at.
 	if got.LastDriftSummary.HostsDrifted != 1 {
 		t.Errorf("hosts_drifted = %d, want 1", got.LastDriftSummary.HostsDrifted)
 	}
@@ -202,8 +202,8 @@ func TestIntegration_UpdateDriftScanResult_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_CountActiveDryRuns — counter для throttle-cap-а:
-// учитывает только recipe.dry_run=true + finished_at IS NULL.
+// TestIntegration_CountActiveDryRuns — a counter for the throttle cap:
+// counts only recipe.dry_run=true + finished_at IS NULL.
 func TestIntegration_CountActiveDryRuns(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -218,20 +218,20 @@ func TestIntegration_CountActiveDryRuns(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// (a) обычный live apply_run (без recipe-dry_run) — не считается.
+	// (a) a regular live apply_run (without recipe-dry_run) — not counted.
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe)
 VALUES ('01HRUN1000000000000000000A', 'host-1', 'alpha', 'create', 'running', $1, NULL)`, creator); err != nil {
 		t.Fatalf("seed non-dry: %v", err)
 	}
-	// (b) dry_run live — считается.
+	// (b) dry_run live — counted.
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe)
 VALUES ('01HDRY10000000000000000001', 'host-1', 'alpha', 'converge', 'planned', $1,
         '{"service_ref":{},"scenario_name":"converge","dry_run":true}'::jsonb)`, creator); err != nil {
 		t.Fatalf("seed dry-live: %v", err)
 	}
-	// (c) dry_run finished — НЕ считается.
+	// (c) dry_run finished — NOT counted.
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe, finished_at)
 VALUES ('01HDRY20000000000000000002', 'host-2', 'alpha', 'converge', 'success', $1,

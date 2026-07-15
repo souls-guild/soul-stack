@@ -1,8 +1,8 @@
 //go:build integration
 
-// Integration-тест StateLister против живой PG (testcontainers): реальная
-// выборка по service/coven (SQL-pushdown) + page-by-page дренаж + проброс
-// state-jsonb. Переиспользует integrationPool / resetAll / seedOperator из
+// Integration test for StateLister against a live PG (testcontainers): real
+// service/coven filtering (SQL pushdown) + page-by-page draining + state-jsonb
+// passthrough. Reuses integrationPool / resetAll / seedOperator from
 // integration_test.go.
 
 package incarnation
@@ -21,7 +21,7 @@ func TestIntegration_StateLister_PushdownAndPages(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 
-	// redis-сервис, coven=prod, разные redis_version в state.
+	// redis service, coven=prod, different redis_version in state.
 	mk := func(name, service string, covens []string, state map[string]any) {
 		t.Helper()
 		inc := &Incarnation{
@@ -41,7 +41,7 @@ func TestIntegration_StateLister_PushdownAndPages(t *testing.T) {
 
 	l := NewStateLister(integrationPool)
 
-	// pushdown service=redis & coven=prod → ровно redis-prod-a, redis-prod-b.
+	// pushdown service=redis & coven=prod → exactly redis-prod-a, redis-prod-b.
 	got := drain(t, l, statepredicate.BaseFilter{Service: "redis", Coven: "prod"})
 	if len(got) != 2 {
 		t.Fatalf("service=redis coven=prod: got %d строк %v, want 2", len(got), names(got))
@@ -56,20 +56,20 @@ func TestIntegration_StateLister_PushdownAndPages(t *testing.T) {
 	if _, ok := byName["redis-prod-b"]; !ok {
 		t.Errorf("redis-prod-b отсутствует в выборке")
 	}
-	// state-jsonb пробросился (фундамент под CEL-eval).
+	// state-jsonb passed through (foundation for CEL-eval).
 	if byName["redis-prod-a"]["redis_version"] != "8.0" {
 		t.Errorf("state не пробросился: %+v", byName["redis-prod-a"])
 	}
 
-	// pushdown только service=postgres → ровно pg-prod.
+	// pushdown service=postgres only → exactly pg-prod.
 	gotPg := drain(t, l, statepredicate.BaseFilter{Service: "postgres"})
 	if len(gotPg) != 1 || gotPg[0].Name != "pg-prod" {
 		t.Fatalf("service=postgres: got %v, want [pg-prod]", names(gotPg))
 	}
 }
 
-// Многостраничный дренаж против живой PG: создаём > statePageSize инкарнаций,
-// проверяем что offset/limit-цикл обходит все без потерь и дублей.
+// Multi-page drain against a live PG: create > statePageSize incarnations,
+// verify the offset/limit loop visits all of them without loss or duplicates.
 func TestIntegration_StateLister_MultiPage(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")

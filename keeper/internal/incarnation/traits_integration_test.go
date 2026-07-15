@@ -1,10 +1,11 @@
 //go:build integration
 
-// Integration-guard релокации Trait per-soul → per-incarnation (ADR-060 amend,
-// R1): incarnation.traits round-trip + sync-hook проекция в souls.traits
-// хостов-членов (на create-эмуляции и на bind нового хоста) + сохранность
-// read-слоя souls.traits (projection target) под containment-таргетинг (where:
-// soulprint.self.traits.<key> опирается на тот же jsonb).
+// Integration guard for the Trait per-soul → per-incarnation relocation
+// (ADR-060 amend, R1): incarnation.traits round trip + sync-hook projection
+// into member hosts' souls.traits (on create-emulation and on binding a new
+// host) + the souls.traits read layer (projection target) keeps serving
+// containment targeting (where: soulprint.self.traits.<key> relies on the
+// same jsonb).
 
 package incarnation
 
@@ -16,9 +17,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// seedSoul вставляет минимальную souls-строку с заданными coven (членство в
-// инкарнации = имя инкарнации ∈ coven, ADR-008). traits — пустой `{}` (projection
-// target до sync-hook-а).
+// seedSoul inserts a minimal souls row with the given coven (incarnation
+// membership = incarnation name ∈ coven, ADR-008). traits is empty `{}`
+// (projection target before the sync hook).
 func seedSoul(t *testing.T, sid string, coven []string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -46,8 +47,8 @@ func resetSouls(t *testing.T) {
 	}
 }
 
-// TestIntegration_IncarnationTraits_RoundTrip — incarnation.traits пишется в
-// колонку и читается обратно (источник истины Trait, R1).
+// TestIntegration_IncarnationTraits_RoundTrip — incarnation.traits is written
+// to the column and read back (Trait source of truth, R1).
 func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -78,7 +79,7 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 		t.Errorf("Traits.owners = %v", got.Traits["owners"])
 	}
 
-	// Пустой traits → `{}` (NOT NULL DEFAULT), не nil.
+	// Empty traits → `{}` (NOT NULL DEFAULT), not nil.
 	inc2 := &Incarnation{
 		Name: "redis-dev", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
@@ -92,15 +93,15 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_SyncTraitsToHosts_ProjectsToMembers — sync-hook проецирует
-// incarnation.traits в souls.traits ВСЕХ хостов-членов (coven ∋ incName) и НЕ
-// трогает чужие хосты.
+// TestIntegration_SyncTraitsToHosts_ProjectsToMembers — the sync hook projects
+// incarnation.traits into souls.traits of ALL member hosts (coven ∋ incName)
+// and does NOT touch foreign hosts.
 func TestIntegration_SyncTraitsToHosts_ProjectsToMembers(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
 	ctx := context.Background()
 
-	// Два члена redis-prod + один чужой хост (другая инкарнация).
+	// Two redis-prod members + one foreign host (a different incarnation).
 	seedSoul(t, "host-a.example.com", []string{"redis-prod", "dc1"})
 	seedSoul(t, "host-b.example.com", []string{"redis-prod"})
 	seedSoul(t, "outsider.example.com", []string{"other-inc"})
@@ -116,15 +117,15 @@ func TestIntegration_SyncTraitsToHosts_ProjectsToMembers(t *testing.T) {
 			t.Errorf("%s souls.traits = %v, want team=dba env=prod (projection)", sid, got)
 		}
 	}
-	// Чужой хост не затронут.
+	// The foreign host is untouched.
 	if got := soulTraits(t, "outsider.example.com"); len(got) != 0 {
 		t.Errorf("outsider souls.traits = %v, want empty (вне инкарнации)", got)
 	}
 }
 
-// TestIntegration_SyncTraitsToHosts_NewHostPicksUp — bind-сценарий: хост,
-// привязавшийся к инкарнации ПОСЛЕ её create, при повторном sync подхватывает
-// traits своей инкарнации (идемпотентная replace-проекция).
+// TestIntegration_SyncTraitsToHosts_NewHostPicksUp — bind scenario: a host
+// that bound to the incarnation AFTER its create picks up its incarnation's
+// traits on a repeat sync (idempotent replace projection).
 func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
@@ -136,14 +137,14 @@ func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 		t.Fatalf("SyncTraitsToHosts#1: %v", err)
 	}
 
-	// Новый хост привязался к инкарнации (bind через core.soul.registered);
-	// его souls.traits ещё пуст.
+	// A new host bound to the incarnation (bind via core.soul.registered);
+	// its souls.traits is still empty.
 	seedSoul(t, "host-c.example.com", []string{"redis-prod"})
 	if got := soulTraits(t, "host-c.example.com"); len(got) != 0 {
 		t.Fatalf("new host pre-sync traits = %v, want empty", got)
 	}
 
-	// Повторный sync (bind-хук) проецирует на ВСЕХ членов, включая нового.
+	// A repeat sync (bind hook) projects onto ALL members, including the new one.
 	if err := SyncTraitsToHosts(ctx, integrationPool, "redis-prod", traits); err != nil {
 		t.Fatalf("SyncTraitsToHosts#2: %v", err)
 	}
@@ -152,10 +153,10 @@ func TestIntegration_SyncTraitsToHosts_NewHostPicksUp(t *testing.T) {
 	}
 }
 
-// TestIntegration_ProjectedTraits_ContainmentTargeting — read-слой (projection
-// target souls.traits) продолжает обслуживать containment-таргетинг по
-// спроецированным traits (фундамент where: soulprint.self.traits.<key>, тот же
-// jsonb @>). Проверяем сам PG-предикат на спроецированных данных.
+// TestIntegration_ProjectedTraits_ContainmentTargeting — the read layer
+// (projection target souls.traits) keeps serving containment targeting over
+// projected traits (the foundation of where: soulprint.self.traits.<key>, the
+// same jsonb @>). Checks the PG predicate itself on projected data.
 func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
@@ -180,8 +181,9 @@ func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateTraits_PersistsAndReturnsKeys — day-2 PUT-путь: целостная
-// замена incarnation.traits персистится в колонку, OldKeys/NewKeys корректны.
+// TestIntegration_UpdateTraits_PersistsAndReturnsKeys — the operational PUT
+// path: a wholesale replace of incarnation.traits is persisted to the column,
+// OldKeys/NewKeys are correct.
 func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -208,7 +210,7 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 		t.Errorf("NewKeys = %v, want [az env] (sorted)", res.NewKeys)
 	}
 
-	// Колонка заменена ЦЕЛИКОМ (старый ключ team исчез).
+	// The column is replaced WHOLESALE (the old team key is gone).
 	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
 	if got.Traits["env"] != "prod" || got.Traits["az"] != "a" {
 		t.Errorf("persisted traits = %v, want env=prod az=a", got.Traits)
@@ -218,7 +220,8 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateTraits_EmptyClears — пустой map очищает метки (колонка → `{}`).
+// TestIntegration_UpdateTraits_EmptyClears — an empty map clears the labels
+// (column → `{}`).
 func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -246,7 +249,8 @@ func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateTraits_NotFound — несуществующая инкарнация → ErrIncarnationNotFound.
+// TestIntegration_UpdateTraits_NotFound — a nonexistent incarnation →
+// ErrIncarnationNotFound.
 func TestIntegration_UpdateTraits_NotFound(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -256,17 +260,19 @@ func TestIntegration_UpdateTraits_NotFound(t *testing.T) {
 	}
 }
 
-// TestIntegration_PgContainmentMatchesArrayWithScalarRHS — ПОДТВЕРЖДЕНИЕ корня
-// BUG #1 на реальном PG (psql-эквивалент из ТЗ): jsonb-containment `@>` со скаляр-
-// RHS МАТЧИТ массив (array-contains-primitive, PG §8.14.3). Именно это делало
-// старое SQL-плечо `traits @> '{"env":"prod"}'::jsonb` истинным для list-Trait
-// `{"env":["prod","stage"]}`, расходясь с GET-путём traitScalarEquals (list→false).
-// Фикс заменил containment на scalar-equality `traits->>$ = $`, которое массив НЕ
-// матчит — что и проверяет соседний скаляр-плечевой тест ниже.
+// TestIntegration_PgContainmentMatchesArrayWithScalarRHS — CONFIRMS the root
+// cause of BUG #1 on real PG (the psql equivalent from the spec): jsonb
+// containment `@>` with a scalar RHS MATCHES an array (array-contains-primitive,
+// PG §8.14.3). This is exactly what made the old SQL leg
+// `traits @> '{"env":"prod"}'::jsonb` true for the list-Trait
+// `{"env":["prod","stage"]}`, diverging from the GET path's traitScalarEquals
+// (list→false). The fix replaced containment with scalar-equality
+// `traits->>$ = $`, which does NOT match an array — checked by the adjacent
+// scalar-leg test below.
 func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
 	ctx := context.Background()
 	var containmentMatch, scalarMatch bool
-	// @> со скаляр-RHS против массива → TRUE (корень бага).
+	// @> with a scalar RHS against an array → TRUE (root cause of the bug).
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT '{"env":["prod","stage"]}'::jsonb @> '{"env":"prod"}'::jsonb`).Scan(&containmentMatch); err != nil {
 		t.Fatalf("containment probe: %v", err)
@@ -274,7 +280,7 @@ func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
 	if !containmentMatch {
 		t.Error("PG @> со скаляр-RHS НЕ сматчил массив — предпосылка BUG #1 не воспроизвелась (ожидался TRUE)")
 	}
-	// scalar-форма `->>` против массива → текст массива ≠ 'prod' → FALSE (фикс).
+	// the scalar form `->>` against an array → array text ≠ 'prod' → FALSE (the fix).
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT ('{"env":["prod","stage"]}'::jsonb)->>'env' = 'prod'`).Scan(&scalarMatch); err != nil {
 		t.Fatalf("scalar probe: %v", err)
@@ -284,16 +290,17 @@ func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
 	}
 }
 
-// TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet — ГЛАВНЫЙ guard
-// BUG #1: List-путь (SelectAll trait-scope SQL) и GET-путь (traitScalarEquals,
-// scalar-only) дают ОДИНАКОВЫЙ ответ на одних данных. Две инкарнации:
+// TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet — the MAIN guard
+// for BUG #1: the List path (SelectAll trait-scope SQL) and the GET path
+// (traitScalarEquals, scalar-only) give the SAME answer on the same data. Two
+// incarnations:
 //   - redis-list  traits={env:[prod,stage]}  (list-Trait);
 //   - redis-scalar traits={env:prod}          (scalar-Trait).
 //
-// Scope trait=env:prod: scalar — видна (оба пути), list — НЕ видна (оба пути,
-// scalar-only). Раньше List показывал list-инкарнацию (containment @>), а GET
-// давал 404 (traitScalarEquals list→false) — рассинхрон. Здесь доказываем, что
-// после фикса оба пути согласованы на live-PG.
+// Scope trait=env:prod: scalar is visible (both paths), list is NOT visible
+// (both paths, scalar-only). Previously List showed the list-incarnation
+// (containment @>) while GET returned 404 (traitScalarEquals list→false) — a
+// mismatch. Here we prove that after the fix both paths agree on live PG.
 func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -318,7 +325,7 @@ func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 
 	scope := ListScope{Traits: []TraitPair{{Key: "env", Value: "prod"}}}
 
-	// List-путь: SQL trait-scope. Видна должна быть ровно redis-scalar.
+	// List path: SQL trait-scope. Exactly redis-scalar must be visible.
 	out, total, err := SelectAll(ctx, integrationPool, ListFilter{}, scope, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAll trait-scope: %v", err)
@@ -334,8 +341,8 @@ func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 		t.Error("List ВИДИТ list-Trait инкарнацию через trait-scope — BUG #1 не исправлен (containment-семантика)")
 	}
 
-	// GET-путь: тот же scalar-предикат, что traitScalarEquals (scalar-only). Должен
-	// совпасть с List на каждой инкарнации.
+	// GET path: the same scalar predicate as traitScalarEquals (scalar-only).
+	// Must agree with List on every incarnation.
 	for _, name := range []string{"redis-list", "redis-scalar"} {
 		inc, err := SelectByName(ctx, integrationPool, name)
 		if err != nil {
@@ -349,11 +356,12 @@ func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
 	}
 }
 
-// traitScalarEqualsLocal дублирует scalar-only семантику handlers.traitScalarEquals
-// (тот не экспортируется и живёт в api-пакете) для проверки List↔Get-консистентности
-// внутри incarnation-пакета: scalar (string/число/bool) → строковое равенство;
-// list/map → false. Сознательная копия (несколько строк против межпакетной
-// зависимости incarnation→api, которой быть не должно).
+// traitScalarEqualsLocal duplicates the scalar-only semantics of
+// handlers.traitScalarEquals (unexported, lives in the api package) to check
+// List↔Get consistency within the incarnation package: scalar
+// (string/number/bool) → string equality; list/map → false. A deliberate copy
+// (a few lines vs. an incarnation→api cross-package dependency that shouldn't
+// exist).
 func traitScalarEqualsLocal(traits map[string]any, key, value string) bool {
 	v, ok := traits[key]
 	if !ok {

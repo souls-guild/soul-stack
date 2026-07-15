@@ -10,19 +10,20 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// Compile-time: реальный загрузчик удовлетворяет узкой поверхности pre-check-а.
+// Compile-time: the real loader satisfies the narrow pre-check surface.
 var _ DestroyScenarioReader = (*artifact.ServiceLoader)(nil)
 
-// fakeDestroyReader — мок DestroyScenarioReader: Load отдаёт пустой артефакт,
-// ReadFile симулирует наличие/отсутствие scenario/destroy/main.yml или I/O-фейл.
+// fakeDestroyReader — mock DestroyScenarioReader: Load returns an empty
+// artifact, ReadFile simulates presence/absence of scenario/destroy/main.yml or
+// an I/O failure.
 type fakeDestroyReader struct {
 	loadErr error
 
-	hasScenario bool  // true → ReadFile(destroy main) отдаёт content
-	readErr     error // не-nil → ReadFile возвращает эту ошибку (приоритет над hasScenario)
+	hasScenario bool  // true → ReadFile(destroy main) returns content
+	readErr     error // non-nil → ReadFile returns this error (takes priority over hasScenario)
 	loadCalls   int
 	readCalls   int
-	readFile    string // последний запрошенный путь (для проверки, что читался именно destroy main)
+	readFile    string // last requested path (to verify destroy main was actually read)
 }
 
 func (f *fakeDestroyReader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -42,7 +43,7 @@ func (f *fakeDestroyReader) ReadFile(_ *artifact.ServiceArtifact, file string) (
 	if f.hasScenario {
 		return []byte("on: keeper\ntasks: []\n"), nil
 	}
-	// Симулируем loader-обёртку над os.ReadFile отсутствующего файла.
+	// Simulate the loader wrapper over os.ReadFile for a missing file.
 	return nil, fmt.Errorf("artifact: чтение main.yml: %w", os.ErrNotExist)
 }
 
@@ -72,7 +73,7 @@ func TestPrepareDestroy_MissingScenario_NoForce(t *testing.T) {
 }
 
 func TestPrepareDestroy_MissingScenario_Force(t *testing.T) {
-	// force=true → отсутствие teardown-сценария НЕ блокирует destroy.
+	// force=true → a missing teardown scenario does NOT block destroy.
 	reader := &fakeDestroyReader{hasScenario: false}
 	if _, err := PrepareDestroy(context.Background(), fakePrepResolver{ok: true}, reader, destroyInc(), true); err != nil {
 		t.Fatalf("PrepareDestroy force: %v", err)
@@ -80,7 +81,7 @@ func TestPrepareDestroy_MissingScenario_Force(t *testing.T) {
 }
 
 func TestPrepareDestroy_PresentScenario_Force(t *testing.T) {
-	// force=true при наличии scenario тоже ok (force не зависит от наличия).
+	// force=true with a scenario present is also ok (force is independent of presence).
 	reader := &fakeDestroyReader{hasScenario: true}
 	if _, err := PrepareDestroy(context.Background(), fakePrepResolver{ok: true}, reader, destroyInc(), true); err != nil {
 		t.Fatalf("PrepareDestroy force+scenario: %v", err)
@@ -107,8 +108,8 @@ func TestPrepareDestroy_LoadFailed(t *testing.T) {
 }
 
 func TestPrepareDestroy_ReadFileError(t *testing.T) {
-	// I/O-ошибка чтения (НЕ os.ErrNotExist) прокидывается как ErrLoadTargetSnapshot,
-	// не маскируется под «нет сценария».
+	// An I/O read error (NOT os.ErrNotExist) is propagated as
+	// ErrLoadTargetSnapshot, not masked as "no scenario".
 	reader := &fakeDestroyReader{readErr: errors.New("permission denied")}
 	_, err := PrepareDestroy(context.Background(), fakePrepResolver{ok: true}, reader, destroyInc(), false)
 	if !errors.Is(err, ErrLoadTargetSnapshot) {

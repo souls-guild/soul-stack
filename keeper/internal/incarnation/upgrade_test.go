@@ -15,13 +15,13 @@ import (
 
 // --- fake pgx.Tx / TxBeginner ----------------------------------------
 //
-// Транзакционные операции (Unlock / UpgradeStateSchema) ходят через
-// TxBeginner.BeginTx → pgx.Tx. fakeTx реализует pgx.Tx: Exec / QueryRow /
-// Query + Commit / Rollback, остальные методы — заглушки (panic), т.к. в
-// этих code-path-ах не вызываются.
+// Transactional operations (Unlock / UpgradeStateSchema) go through
+// TxBeginner.BeginTx → pgx.Tx. fakeTx implements pgx.Tx: Exec / QueryRow /
+// Query + Commit / Rollback; other methods are stubs (panic) since they're
+// unused in these code paths.
 
-// scriptedRow — QueryRow-ответ для FOR UPDATE: либо значения на Scan, либо
-// ошибка (ErrNoRows для not-found).
+// scriptedRow — QueryRow response for FOR UPDATE: either Scan values or an
+// error (ErrNoRows for not-found).
 type scriptedRow struct {
 	values []any
 	err    error
@@ -38,25 +38,25 @@ func (r scriptedRow) Scan(dest ...any) error {
 }
 
 type fakeTx struct {
-	// FOR UPDATE-ответ (один на транзакцию upgrade/unlock).
+	// FOR UPDATE response (one per upgrade/unlock transaction).
 	selectRow scriptedRow
 
-	// queryRows — последовательность QueryRow-ответов по порядку вызовов (для
-	// операций с несколькими QueryRow в одной tx, напр. UnlockForRerun: FOR UPDATE
-	// + last-scenario probe). Если задан, consumed по индексу queryN; исчерпание
-	// последовательности падает обратно на selectRow (single-QueryRow тесты не
-	// меняются — у них queryRows nil).
+	// queryRows — sequence of QueryRow responses in call order (for operations
+	// with multiple QueryRow calls in one tx, e.g. UnlockForRerun: FOR UPDATE +
+	// last-scenario probe). If set, consumed by queryN index; exhausting the
+	// sequence falls back to selectRow (single-QueryRow tests unaffected — they
+	// leave queryRows nil).
 	queryRows []scriptedRow
 	queryN    int
 
-	execErrAt int // индекс Exec-вызова, на котором вернуть execErr (-1 = никогда)
+	execErrAt int // index of the Exec call at which to return execErr (-1 = never)
 	execErr   error
 	committed bool
 	rolled    bool
 
-	// execTags — CommandTag по индексу Exec-вызова (для проверки RowsAffected,
-	// напр. single-winner DELETE с RowsAffected==0). nil / за пределами длины →
-	// дефолт "UPDATE 1" (исходное поведение, существующие тесты не меняются).
+	// execTags — CommandTag by Exec call index (for checking RowsAffected, e.g.
+	// single-winner DELETE with RowsAffected==0). nil / out of range → default
+	// "UPDATE 1" (original behavior, existing tests unaffected).
 	execTags []pgconn.CommandTag
 
 	execSQLs []string
@@ -107,8 +107,8 @@ func (f *fakeTx) Prepare(context.Context, string, string) (*pgconn.StatementDesc
 }
 func (f *fakeTx) Conn() *pgx.Conn { return nil }
 
-// fakePool — TxBeginner-stub. Раздаёт заранее заготовленные транзакции по
-// порядку BeginTx-вызовов (upgrade-tx, затем migration_failed-tx).
+// fakePool — TxBeginner stub. Hands out pre-built transactions in BeginTx
+// call order (upgrade-tx, then migration_failed-tx).
 type fakePool struct {
 	txs    []*fakeTx
 	beginN int
@@ -123,7 +123,7 @@ func (p *fakePool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 // compile-time check.
 var _ TxBeginner = (*fakePool)(nil)
 
-// newEvaluator — реальный migration-CEL движок (тонкая обёртка для тестов).
+// newEvaluator — real migration-CEL engine (thin wrapper for tests).
 func newEvaluator(t *testing.T) statemigrate.Evaluator {
 	t.Helper()
 	ev, err := statemigrate.NewEvaluator()
@@ -133,7 +133,7 @@ func newEvaluator(t *testing.T) statemigrate.Evaluator {
 	return ev
 }
 
-// setStep собирает миграцию from→to с одним set state.v = <to>.
+// setStep builds a from→to migration with a single set state.v = <to>.
 func setStep(from, to int) *statemigrate.Migration {
 	return &statemigrate.Migration{
 		FromVersion: from,
@@ -183,21 +183,21 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 		if !strings.Contains(tx.execSQLs[i], "INSERT INTO state_history") {
 			t.Errorf("Exec[%d] = %q, want state_history INSERT", i, tx.execSQLs[i])
 		}
-		// scenario-метка = "migration".
+		// scenario label = "migration".
 		if tx.execArgs[i][2] != migrationScenarioLabel {
 			t.Errorf("Exec[%d] scenario = %v, want %q", i, tx.execArgs[i][2], migrationScenarioLabel)
 		}
-		// общий apply_id на все шаги.
+		// shared apply_id across all steps.
 		if tx.execArgs[i][6] != "01HUPGRADE0000000000000000" {
 			t.Errorf("Exec[%d] apply_id = %v, want shared ApplyID", i, tx.execArgs[i][6])
 		}
 	}
-	// разные history_id на шаг.
+	// distinct history_id per step.
 	if tx.execArgs[0][0] == tx.execArgs[1][0] {
 		t.Errorf("history_id not unique per step: %v", tx.execArgs[0][0])
 	}
 
-	// UPDATE: state мигрирован (v=3), schema=3, service_version=v3.0.0.
+	// UPDATE: state migrated (v=3), schema=3, service_version=v3.0.0.
 	up := tx.execArgs[2]
 	if !strings.Contains(tx.execSQLs[2], "UPDATE incarnation") {
 		t.Fatalf("Exec[2] = %q, want incarnation UPDATE", tx.execSQLs[2])
@@ -215,16 +215,16 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 	if up[3] != "v3.0.0" {
 		t.Errorf("UPDATE service_version arg = %v, want v3.0.0", up[3])
 	}
-	// Финальный статус — drift, НЕ ready (ADR-031 amendment): хосты ждут
-	// применения новой версии. status — литерал в SQL (не bind-arg), проверяем
-	// текст UPDATE-statement-а.
+	// Final status is drift, NOT ready (ADR-031 amendment): hosts are still
+	// waiting to apply the new version. status is a SQL literal (not a
+	// bind-arg), so check the UPDATE statement text.
 	if !strings.Contains(tx.execSQLs[2], "status               = 'drift'") {
 		t.Errorf("UPDATE statement = %q, want status='drift' (ADR-031 upgrade→drift)", tx.execSQLs[2])
 	}
 
 	// Drift-transition history (Exec[3]): scenario=upgrade-pending-apply,
-	// zero-diff (state_before==state_after = пост-миграционный final state),
-	// общий apply_id со step-снимками.
+	// zero-diff (state_before==state_after = post-migration final state),
+	// shares apply_id with the step snapshots.
 	if !strings.Contains(tx.execSQLs[3], "INSERT INTO state_history") {
 		t.Fatalf("Exec[3] = %q, want drift-transition state_history INSERT", tx.execSQLs[3])
 	}
@@ -240,10 +240,11 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 	}
 }
 
-// upgradeUPDATEStatus извлекает финальный статус из перехвата Exec-вызовов
-// upgrade-tx: ищет UPDATE incarnation, ставящий статус, и возвращает значение
-// литерала status='<x>'. Статус — литерал в SQL (не bind-arg), поэтому парсим
-// текст statement-а. Пустая строка, если UPDATE incarnation не найден.
+// upgradeUPDATEStatus extracts the final status from the upgrade-tx's
+// captured Exec calls: finds the UPDATE incarnation setting the status and
+// returns the status='<x>' literal value. Status is a SQL literal (not a
+// bind-arg), so we parse the statement text. Returns empty string if no
+// UPDATE incarnation is found.
 func upgradeUPDATEStatus(t *testing.T, tx *fakeTx) string {
 	t.Helper()
 	for _, sql := range tx.execSQLs {
@@ -265,13 +266,13 @@ func upgradeUPDATEStatus(t *testing.T, tx *fakeTx) string {
 	return ""
 }
 
-// TestUpgradeStateSchema_FinalStatusDrift — ПОВЕДЕНЧЕСКИЙ ИНВАРИАНТ (ADR-031
-// amendment, ловит регресс): по успешному upgrade incarnation ОБЯЗАНА уйти в
-// status=drift, НЕ ready. Дыра upgrade↔хосты: БД-state сменился, но хосты
-// остались на старой раскатке — drift сигналит оператору «накати на хосты».
-// Если будущая правка вернёт 'ready' в финальный UPDATE — тест краснеет. Кейсы:
-// миграция из ready, миграция из drift (drift→drift, повторный upgrade), no-op
-// ref-bump.
+// TestUpgradeStateSchema_FinalStatusDrift — BEHAVIORAL INVARIANT (ADR-031
+// amendment, catches regressions): on a successful upgrade the incarnation
+// MUST transition to status=drift, NOT ready. Gap between upgrade and hosts:
+// DB state changed but hosts are still on the old rollout — drift signals the
+// operator to "apply to hosts". If a future change reverts to 'ready' in the
+// final UPDATE, this test fails. Cases: migration from ready, migration from
+// drift (drift→drift, repeated upgrade), no-op ref-bump.
 func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -286,8 +287,8 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// Стартовая schema-версия FOR UPDATE-строки: для миграции =
-			// chain[0].From, для no-op = target (равна current).
+			// Starting schema version of the FOR UPDATE row: for a migration it's
+			// chain[0].From, for a no-op it's target (equal to current).
 			startVer := c.targetVer
 			if len(c.chain) > 0 {
 				startVer = c.chain[0].FromVersion
@@ -315,7 +316,7 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 			if got := upgradeUPDATEStatus(t, tx); got != string(StatusDrift) {
 				t.Errorf("финальный статус = %q, want drift (ADR-031: upgrade оставляет хосты позади БД-state)", got)
 			}
-			// Причина перехода зафиксирована в истории отдельной записью.
+			// The transition reason is recorded as a separate history entry.
 			var sawDriftHistory bool
 			for i, sql := range tx.execSQLs {
 				if strings.Contains(sql, "INSERT INTO state_history") && tx.execArgs[i][2] == upgradeDriftScenarioLabel {
@@ -329,11 +330,12 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 	}
 }
 
-// TestUpgradeStateSchema_LockedStatusNotOverwritten — GUARD: блокирующие
-// статусы (error_locked / migration_failed / applying) НЕ перетираются upgrade-ом
-// в drift. Отказ до любой мутации (gate в upgradeTx): транзакция НЕ коммитится,
-// ни одного Exec. Защищает инвариант «upgrade не сбрасывает блокировку молча» —
-// error_locked/migration_failed требуют явного unlock, applying = идёт прогон.
+// TestUpgradeStateSchema_LockedStatusNotOverwritten — GUARD: blocking statuses
+// (error_locked / migration_failed / applying) are NOT overwritten by upgrade
+// into drift. Rejected before any mutation (gate in upgradeTx): transaction is
+// not committed, zero Exec calls. Protects the invariant "upgrade never
+// silently clears a lock" — error_locked/migration_failed require an explicit
+// unlock, applying means a run is in progress.
 func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
 	cases := []struct {
 		status  string
@@ -362,7 +364,7 @@ func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
 			if !errors.Is(err, c.wantErr) {
 				t.Fatalf("status=%s: err = %v, want %v", c.status, err, c.wantErr)
 			}
-			// Ни мутации, ни коммита: блокирующий статус сохранён as-is.
+			// No mutation, no commit: blocking status preserved as-is.
 			if tx.committed {
 				t.Errorf("status=%s: tx committed — блокирующий статус перетёрт", c.status)
 			}
@@ -376,7 +378,7 @@ func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
 func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
-		// version=2, ref-bump без смены schema.
+		// version=2, ref-bump without a schema change.
 		selectRow: scriptedRow{values: []any{[]byte(`{"v":2}`), 2, "ready"}},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -407,11 +409,11 @@ func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
 	if string(h[3].([]byte)) != string(h[4].([]byte)) {
 		t.Errorf("no-op history not zero-diff: before=%s after=%s", h[3], h[4])
 	}
-	// service_version всё равно обновлён.
+	// service_version is updated regardless.
 	if tx.execArgs[1][3] != "v2.1.0" {
 		t.Errorf("UPDATE service_version = %v, want v2.1.0", tx.execArgs[1][3])
 	}
-	// No-op ref-bump тоже уходит в drift (раскатка нового ref ещё не на хостах).
+	// No-op ref-bump also transitions to drift (the new ref's rollout isn't on hosts yet).
 	if !strings.Contains(tx.execSQLs[1], "status               = 'drift'") {
 		t.Errorf("no-op UPDATE statement = %q, want status='drift'", tx.execSQLs[1])
 	}
@@ -447,7 +449,7 @@ func TestUpgradeStateSchema_DowngradeReject(t *testing.T) {
 }
 
 func TestUpgradeStateSchema_VersionMismatchReject(t *testing.T) {
-	// current=2, но chain[0].From=1 → кто-то проапгрейдил между resolve и lock.
+	// current=2, but chain[0].From=1 → someone upgraded between resolve and lock.
 	tx := &fakeTx{
 		execErrAt: -1,
 		selectRow: scriptedRow{values: []any{[]byte(`{"v":2}`), 2, "ready"}},
@@ -531,14 +533,15 @@ func TestUpgradeStateSchema_NotFound(t *testing.T) {
 	}
 }
 
-// TestUpgradeStateSchema_ApplyError_MigrationFailed: provoке-фейл в write
-// (Exec на INSERT history) → upgrade-tx rollback, отдельная background-tx
-// помечает migration_failed; state НЕ менялся (rollback). Используем write-
-// фейл вместо CEL-ошибки: статически собранная Chain валидна, проще и точнее
-// проверить failure-handling по pool-у с двумя транзакциями.
+// TestUpgradeStateSchema_WriteError_MigrationFailed: provoke a write failure
+// (Exec on INSERT history) → upgrade-tx rolls back, a separate background-tx
+// marks migration_failed; state is unchanged (rollback). We use a write
+// failure instead of a CEL error: a statically built Chain is valid, making it
+// simpler and more precise to verify failure-handling via the pool with two
+// transactions.
 func TestUpgradeStateSchema_WriteError_MigrationFailed(t *testing.T) {
 	upTx := &fakeTx{
-		// fail на первом Exec (INSERT state_history).
+		// fail on the first Exec (INSERT state_history).
 		execErrAt: 0,
 		execErr:   errors.New("db gone"),
 		selectRow: scriptedRow{values: []any{[]byte(`{"v":1}`), 1, "ready"}},
@@ -560,14 +563,14 @@ func TestUpgradeStateSchema_WriteError_MigrationFailed(t *testing.T) {
 	if isUpgradeRejection(err) {
 		t.Errorf("write error must not be a rejection sentinel: %v", err)
 	}
-	// upgrade-tx откатился, не закоммитился.
+	// upgrade-tx rolled back, not committed.
 	if upTx.committed {
 		t.Error("upgrade tx committed despite write error")
 	}
 	if !upTx.rolled {
 		t.Error("upgrade tx not rolled back")
 	}
-	// migration_failed background-tx: BeginTx вызвался дважды, second-tx commit.
+	// migration_failed background-tx: BeginTx called twice, second-tx commits.
 	if pool.beginN != 2 {
 		t.Fatalf("BeginTx calls = %d, want 2 (upgrade + migration_failed)", pool.beginN)
 	}
@@ -582,7 +585,7 @@ func TestUpgradeStateSchema_WriteError_MigrationFailed(t *testing.T) {
 	}
 }
 
-// --- Unlock (unit, через fakeTx) -------------------------------------
+// --- Unlock (unit, via fakeTx) -------------------------------------
 
 func TestUnlock_FromMigrationFailed(t *testing.T) {
 	tx := &fakeTx{
@@ -629,19 +632,19 @@ func TestUnlock_FromErrorLocked_Regression(t *testing.T) {
 	}
 }
 
-// --- UnlockForRerun (unit, через fakeTx) ------------------------------
+// --- UnlockForRerun (unit, via fakeTx) ------------------------------
 
-// TestUnlockForRerun_FromErrorLocked — допуск из error_locked: state не меняется
-// (state_before == state_after), статус → applying (НЕ ready — race-free), под
-// одним FOR UPDATE; snapshot в state_history с меткой rerun-last и общим
-// apply_id; commit.
+// TestUnlockForRerun_FromErrorLocked — allowed from error_locked: state
+// unchanged (state_before == state_after), status → applying (NOT ready —
+// race-free), under a single FOR UPDATE; snapshot in state_history labeled
+// rerun-last with a shared apply_id; commit.
 func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000A"
 	tx := &fakeTx{
 		execErrAt: -1,
 		// #1 FOR UPDATE (state, status, created_scenario, spec); #2 last-run probe
-		// (scenario, apply_id). create-путь (last==created) → input из spec.input,
-		// recipe-probe НЕ идёт.
+		// (scenario, apply_id). create path (last==created) → input from
+		// spec.input, no recipe-probe.
 		queryRows: []scriptedRow{
 			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
 			{values: []any{"create", "01HFAILEDRUN0000000000000A"}},
@@ -659,7 +662,7 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	if res.Scenario != "create" {
 		t.Errorf("Scenario = %q, want create", res.Scenario)
 	}
-	// create-путь: stored spec.input возвращён в UnlockResult.Input.
+	// create path: stored spec.input is returned in UnlockResult.Input.
 	if res.Input == nil {
 		t.Fatal("UnlockResult.Input = nil — spec.input НЕ прочитан под FOR UPDATE")
 	}
@@ -669,7 +672,7 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	if !tx.committed {
 		t.Error("rerun-last tx not committed")
 	}
-	// INSERT history + UPDATE status → applying (НЕ ready).
+	// INSERT history + UPDATE status → applying (NOT ready).
 	if tx.execN != 2 {
 		t.Fatalf("Exec = %d, want 2 (history + update)", tx.execN)
 	}
@@ -688,9 +691,10 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_RejectNonErrorLocked — допуск ЖЁСТКО из error_locked:
-// ready / applying / migration_failed / destroy_failed → ErrIncarnationNotErrorLocked,
-// транзакция НЕ коммитится (для них — обычный unlock + ручной run).
+// TestUnlockForRerun_RejectNonErrorLocked — strictly allowed only from
+// error_locked: ready / applying / migration_failed / destroy_failed →
+// ErrIncarnationNotErrorLocked, transaction not committed (for those, use
+// plain unlock + manual run).
 func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	for _, status := range []string{"ready", "applying", "migration_failed", "destroy_failed", "destroying", "drift"} {
 		t.Run(status, func(t *testing.T) {
@@ -714,15 +718,16 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy-path: последний упавший
-// — add_user (≠ created `create`), его input берётся из recipe apply_run (НЕ из
-// spec.input) → допуск, Scenario=="add_user", Input=={user:alice}.
+// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy path: the last
+// failed run was add_user (≠ created `create`), so its input comes from the
+// recipe's apply_run (NOT spec.input) → allowed, Scenario=="add_user",
+// Input=={user:alice}.
 func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000E"
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			// spec.input несёт version — НЕ должен просочиться (day-2 берёт recipe).
+			// spec.input carries version — must NOT leak through (day-2 uses the recipe).
 			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
 			{values: []any{"add_user", "01HFAILEDRUN0000000000000E"}},
 			{values: []any{[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}},
@@ -746,29 +751,30 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	if _, leaked := res.Input["version"]; leaked {
 		t.Error("UnlockResult.Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
 	}
-	// recipe без from_upgrade → FromUpgrade=false (перезапуск из scenario/, ADR-0068).
+	// recipe without from_upgrade → FromUpgrade=false (rerun from scenario/, ADR-0068).
 	if res.FromUpgrade {
 		t.Error("UnlockResult.FromUpgrade = true, want false (recipe без from_upgrade)")
 	}
 	if !tx.committed {
 		t.Error("rerun-last day-2 tx not committed")
 	}
-	// history-label — rerun-last, применён последний упавший day-2-сценарий.
+	// history label is rerun-last, applied to the last failed day-2 scenario.
 	if tx.execArgs[0][2] != rerunLastScenarioLabel {
 		t.Errorf("history scenario = %v, want %q", tx.execArgs[0][2], rerunLastScenarioLabel)
 	}
 }
 
-// TestUnlockForRerun_Day2_RecipeNull_FailClosed — day-2, но recipe отсутствует
-// (recipe IS NULL / apply_run вычищен → ErrNoRows): fail-closed
-// ErrRerunInputUnavailable, транзакция НЕ коммитится (без silent bootstrap-input).
+// TestUnlockForRerun_Day2_RecipeNull_FailClosed — day-2, but the recipe is
+// missing (recipe IS NULL / apply_run purged → ErrNoRows): fail-closed with
+// ErrRerunInputUnavailable, transaction not committed (no silent
+// bootstrap-input).
 func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
 			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
 			{values: []any{"add_user", "01HFAILEDRUN0000000000000F"}},
-			{err: pgx.ErrNoRows}, // recipe-probe: строки нет (WHERE recipe IS NOT NULL)
+			{err: pgx.ErrNoRows}, // recipe-probe: no row (WHERE recipe IS NOT NULL)
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -785,9 +791,9 @@ func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_BareIncarnation — bare-инкарнация (created_scenario IS
-// NULL) залочена day-2-сценарием: rerun-last применим через recipe-путь
-// (created==nil → day-2), Scenario=="add_user", Input из recipe.
+// TestUnlockForRerun_Day2_BareIncarnation — bare incarnation (created_scenario
+// IS NULL) locked by a day-2 scenario: rerun-last works via the recipe path
+// (created==nil → day-2), Scenario=="add_user", Input from recipe.
 func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
@@ -814,9 +820,10 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_CustomCreateScenario — инкарнация СОЗДАНА `create_cluster`,
-// последний упавший = `create_cluster` → create-путь: Scenario=="create_cluster",
-// input из spec.input (рестарт СОЗДАВШЕГО сценария с его значениями).
+// TestUnlockForRerun_CustomCreateScenario — incarnation was CREATED via
+// `create_cluster`, last failure = `create_cluster` → create path:
+// Scenario=="create_cluster", input from spec.input (restart of the CREATING
+// scenario with its own values).
 func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000C"
 	tx := &fakeTx{
@@ -846,15 +853,15 @@ func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_NoStateHistory_FailClosed — error_locked без единого
-// snapshot-а state_history (недостижимо штатно) → ErrRerunInputUnavailable
-// fail-closed, транзакция НЕ коммитится.
+// TestUnlockForRerun_NoStateHistory_FailClosed — error_locked without a
+// single state_history snapshot (unreachable in normal operation) →
+// fail-closed with ErrRerunInputUnavailable, transaction not committed.
 func TestUnlockForRerun_NoStateHistory_FailClosed(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
 			{values: []any{[]byte(`{}`), "error_locked", "create", []byte("{}")}},
-			{err: pgx.ErrNoRows}, // last-run probe: следа нет
+			{err: pgx.ErrNoRows}, // last-run probe: no trace
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -868,7 +875,7 @@ func TestUnlockForRerun_NoStateHistory_FailClosed(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_NotFound — несуществующая incarnation → ErrIncarnationNotFound.
+// TestUnlockForRerun_NotFound — nonexistent incarnation → ErrIncarnationNotFound.
 func TestUnlockForRerun_NotFound(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
@@ -885,8 +892,8 @@ func TestUnlockForRerun_NotFound(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_EmptyReason — пустой reason отвергается ДО транзакции
-// (явное подтверждение оператора обязательно).
+// TestUnlockForRerun_EmptyReason — empty reason is rejected BEFORE the
+// transaction (explicit operator confirmation required).
 func TestUnlockForRerun_EmptyReason(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{{execErrAt: -1}}}
 	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "", "archon-alice", "01HRERUNHIST000000000000D", "01HRERUN00000000000000000D")
@@ -896,8 +903,8 @@ func TestUnlockForRerun_EmptyReason(t *testing.T) {
 }
 
 func TestUnlock_FromDestroyFailed(t *testing.T) {
-	// S-D2a: destroy_failed снимается так же, как error_locked/migration_failed —
-	// state не меняется, статус → ready.
+	// S-D2a: destroy_failed is cleared the same way as error_locked/migration_failed —
+	// state unchanged, status → ready.
 	tx := &fakeTx{
 		execErrAt: -1,
 		selectRow: scriptedRow{values: []any{[]byte(`{"primary":"redis-01"}`), "destroy_failed"}},
@@ -923,7 +930,7 @@ func TestUnlock_FromDestroyFailed(t *testing.T) {
 }
 
 func TestUnlock_FromDestroying_Rejected(t *testing.T) {
-	// destroying — не unlockable: идёт teardown, не залоченный фейлом.
+	// destroying is not unlockable: teardown is in progress, not locked by a failure.
 	tx := &fakeTx{
 		execErrAt: -1,
 		selectRow: scriptedRow{values: []any{[]byte(`{}`), "destroying"}},
@@ -968,11 +975,11 @@ func TestUnlock_FromApplying_Rejected(t *testing.T) {
 	}
 }
 
-// --- upgrade found-ветвь (ADR-0068 §5/B) ------------------------------
+// --- upgrade found branch (ADR-0068 §5/B) ------------------------------
 
 // TestUpgradeStateSchema_FoundModeApplyingRunHistory — found: UpgradeSlug + R
-// заданы → финальный статус applying (НЕ drift), transition-запись под R со
-// scenario=slug (linkage автозапуска), шаги миграции остаются под M.
+// set → final status applying (NOT drift), transition entry under R with
+// scenario=slug (auto-run linkage), migration steps stay under M.
 func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 	const migM, runR = "01HUPGRADEMIGR00000000000M", "01HUPGRADERUN000000000000R"
 	tx := &fakeTx{
@@ -1008,7 +1015,7 @@ func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 		switch tx.execArgs[i][2] {
 		case "to_v2":
 			// run/drift-history INSERT: 6 args (state_before==state_after=$4),
-			// apply_id на индексе 5 (у migration-step 7 args → индекс 6).
+			// apply_id at index 5 (migration-step has 7 args → index 6).
 			sawRunHistory = true
 			if tx.execArgs[i][5] != runR {
 				t.Errorf("run-history apply_id = %v, want R=%s", tx.execArgs[i][5], runR)
@@ -1029,9 +1036,10 @@ func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 	}
 }
 
-// TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy — АНТИ-СТРЭНДИНГ (ADR-0068
-// §5/B): slug найден, но RunApplyID пуст (caller без автозапуска, напр. MCP) →
-// legacy drift, НЕ applying. Иначе incarnation завис бы в applying без прогона.
+// TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy — ANTI-STRANDING
+// (ADR-0068 §5/B): slug found, but RunApplyID is empty (caller has no
+// auto-run, e.g. MCP) → legacy drift, NOT applying. Otherwise the incarnation
+// would get stuck in applying with no run.
 func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
@@ -1046,7 +1054,7 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 		Chain:            statemigrate.Chain{setStep(1, 2)},
 		Evaluator:        newEvaluator(t),
 		ApplyID:          "01HUPGRADEMIGR00000000000N",
-		UpgradeSlug:      "to_v2", // slug есть, R пуст → caller не автозапускает
+		UpgradeSlug:      "to_v2", // slug present, R empty → caller has no auto-run
 	})
 	if err != nil {
 		t.Fatalf("UpgradeStateSchema: %v", err)
@@ -1065,9 +1073,9 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_FromUpgradeRecipe — упавший day-2-прогон был upgrade-
-// сценарием (recipe.from_upgrade=true, ADR-0068): rerun-last возвращает
-// FromUpgrade=true, чтобы RunSpec перезапустил его из upgrade/, а не scenario/.
+// TestUnlockForRerun_Day2_FromUpgradeRecipe — the failed day-2 run was an
+// upgrade scenario (recipe.from_upgrade=true, ADR-0068): rerun-last returns
+// FromUpgrade=true so RunSpec restarts it from upgrade/, not scenario/.
 func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,

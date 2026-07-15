@@ -12,35 +12,36 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// ErrIncarnationNotDestroyable — destroy отклонён: текущий статус incarnation
-// не входит в множество разрешённых для инициации destroy (409). Handler-сторона
-// маппит в incarnation-locked problem-type.
+// ErrIncarnationNotDestroyable — destroy rejected: the incarnation's current
+// status isn't in the set allowed to initiate destroy (409). The handler side
+// maps this to the incarnation-locked problem-type.
 var ErrIncarnationNotDestroyable = errors.New("incarnation: status does not allow destroy")
 
-// destroyScenarioLabel — значение `state_history.scenario` для перехода
-// инициации destroy. Сам destroy (teardown) — это будущий прогон scenario
-// `destroy` (S-D2), но S-D1 фиксирует только сам факт перевода в `destroying`
-// под этой меткой (state_history требует non-null scenario), симметрично
-// unlock / migration.
+// destroyScenarioLabel — the `state_history.scenario` value for the destroy-
+// initiation transition. Destroy itself (teardown) is a future run of the
+// `destroy` scenario (S-D2); S-D1 only records the transition to `destroying`
+// under this label (state_history requires a non-null scenario), symmetric
+// with unlock / migration.
 const destroyScenarioLabel = "destroy"
 
-// DestroyResult — итог инициации destroy: статус до перевода (для reply / audit)
-// и идентификатор записанного state_history-snapshot-а.
+// DestroyResult — the outcome of a destroy initiation: the status before the
+// transition (for reply / audit) and the recorded state_history snapshot ID.
 type DestroyResult struct {
 	PreviousStatus Status
 	HistoryID      string
 }
 
-// canDestroyFrom — множество статусов, из которых разрешено инициировать
-// destroy. ready — штатный путь; error_locked / migration_failed — снос
-// «застрявшего» инстанса без обязательного unlock (оператор сознательно
-// сносит, а не чинит). applying отвергается: идёт прогон, FOR UPDATE+статус
-// сериализуют гонку с scenario-runner-ом. destroying отвергается:
-// повторная инициация (идемпотентность — задача S-D3, здесь — явный отказ).
+// canDestroyFrom — the set of statuses allowed to initiate destroy. ready is
+// the normal path; error_locked / migration_failed allow tearing down a
+// "stuck" instance without a mandatory unlock first (the operator is
+// deliberately destroying, not fixing). applying is rejected: a run is in
+// progress, FOR UPDATE+status serialize the race with the scenario-runner.
+// destroying is rejected too: a repeat initiation (idempotency is S-D3's job;
+// here it's an explicit refusal).
 //
-// drift (ADR-031, Scry, информационный статус) — допустим: drift НЕ блокирует
-// remediation (как ready). Оператор может снести incarnation в drift точно так
-// же, как из ready, не дожидаясь fix-апплая.
+// drift (ADR-031, Scry, an informational status) is allowed: drift does NOT
+// block remediation (same as ready). An operator can destroy an incarnation in
+// drift exactly like from ready, without waiting for a fix-apply.
 func canDestroyFrom(s Status) bool {
 	switch s {
 	case StatusReady, StatusErrorLocked, StatusMigrationFailed, StatusDrift:
@@ -49,40 +50,41 @@ func canDestroyFrom(s Status) bool {
 	return false
 }
 
-// Destroy инициирует destroy incarnation: переводит строку в `destroying`
-// (S-D1). Teardown (scenario `destroy`, S-D2) и DELETE строки (S-D3) — НЕ в
-// этом слайсе.
+// Destroy initiates incarnation destroy: transitions the row to `destroying`
+// (S-D1). Teardown (scenario `destroy`, S-D2) and row DELETE (S-D3) are NOT
+// part of this slice.
 //
-// Атомарность — тот же транзакционный паттерн, что [Unlock]: одна tx
-// SELECT … FOR UPDATE → guard статуса → INSERT zero-diff state_history →
-// UPDATE status=destroying. FOR UPDATE сериализует destroy относительно
-// конкурентного scenario-runner-а (lockRun лочит ту же строку), закрывая
-// TOCTOU между probe статуса и переводом.
+// Atomicity follows the same transactional pattern as [Unlock]: one tx —
+// SELECT … FOR UPDATE → status guard → INSERT zero-diff state_history →
+// UPDATE status=destroying. FOR UPDATE serializes destroy against a
+// concurrent scenario-runner (lockRun locks the same row), closing the
+// TOCTOU window between the status probe and the transition.
 //
-// guard переходов ([canDestroyFrom]):
-//   - ready / error_locked / migration_failed → destroy разрешён;
-//   - applying → [ErrIncarnationNotDestroyable] (идёт прогон);
-//   - destroying → [ErrIncarnationNotDestroyable] (destroy уже инициирован).
+// Transition guard ([canDestroyFrom]):
+//   - ready / error_locked / migration_failed → destroy allowed;
+//   - applying → [ErrIncarnationNotDestroyable] (a run is in progress);
+//   - destroying → [ErrIncarnationNotDestroyable] (destroy already initiated).
 //
-// force — намерение «destroy без teardown» (force=true → S-D3 удалит строку
-// напрямую, без прогона scenario `destroy`). В S-D1 поведение teardown НЕ
-// реализуется: force только сохраняется в `status_details.force`, чтобы S-D3
-// прочитал намерение из уже залоченной строки.
+// force — intent to "destroy without teardown" (force=true → S-D3 deletes the
+// row directly, without running the `destroy` scenario). S-D1 doesn't implement
+// teardown behavior itself: force is only saved into `status_details.force` so
+// S-D3 can read the intent off the already-locked row.
 //
-// state НЕ меняется (destroy не правит state-граф; teardown работает с хостами,
-// не с jsonb). Пишется zero-diff state_history-snapshot — фиксируем сам факт
-// инициации, симметрично unlock.
+// state is NOT modified (destroy doesn't touch the state graph; teardown works
+// with hosts, not jsonb). A zero-diff state_history snapshot is written to
+// record the initiation itself, symmetric with unlock.
 //
-// audit-event `incarnation.destroy_started` пишется ПОСЛЕ commit-а (как
-// UpdateStateFromRun: DB-консистентность не должна зависеть от audit-write).
-// Фейл audit-write логируется, но НЕ откатывает destroy — переход уже
-// зафиксирован, терять audit-trail молча нельзя, но и блокировать destroy из-за
-// него нельзя. w == nil → trail не пишется (unit/L0). source / archonAID —
-// инициатор (api / mcp), пробрасываются caller-ом.
+// The `incarnation.destroy_started` audit event is written AFTER commit (same
+// as UpdateStateFromRun: DB consistency must not depend on the audit write).
+// An audit-write failure is logged but does NOT roll back destroy — the
+// transition is already committed; silently losing the audit trail is
+// unacceptable, but so is blocking destroy because of it. w == nil → no trail
+// is written (unit/L0). source / archonAID identify the initiator (api / mcp),
+// passed through by the caller.
 //
-// Возврат:
-//   - [ErrIncarnationNotFound] — name не существует (404).
-//   - [ErrIncarnationNotDestroyable] — статус не разрешает destroy (409).
+// Returns:
+//   - [ErrIncarnationNotFound] — name doesn't exist (404).
+//   - [ErrIncarnationNotDestroyable] — status doesn't allow destroy (409).
 func Destroy(
 	ctx context.Context,
 	pool TxBeginner,
@@ -132,10 +134,10 @@ FOR UPDATE
 		changedByArg = archonAID
 	}
 
-	// state_before == state_after: destroy-инициация не меняет state.
-	// apply_id = history_id ($1): инициация не привязана к apply-прогону (схема
-	// требует NOT NULL, FK на apply_runs нет) — подставляем history_id как
-	// уникальный non-null маркер, симметрично unlock.
+	// state_before == state_after: destroy initiation doesn't change state.
+	// apply_id = history_id ($1): initiation isn't tied to an apply run (the
+	// schema requires NOT NULL, no FK to apply_runs) — history_id is used as a
+	// unique non-null marker, symmetric with unlock.
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
@@ -148,8 +150,8 @@ INSERT INTO state_history (
 		return nil, fmt.Errorf("incarnation: insert destroy state_history: %w", err)
 	}
 
-	// status_details.force — намерение для S-D3: force=true → DELETE без
-	// teardown. Без маскинга: force — bool, секретов не несёт.
+	// status_details.force — intent for S-D3: force=true → DELETE without
+	// teardown. No masking needed: force is a bool, carries no secrets.
 	detailsBytes, err := json.Marshal(map[string]any{"force": force})
 	if err != nil {
 		return nil, fmt.Errorf("incarnation: marshal destroy status_details: %w", err)
@@ -168,55 +170,58 @@ WHERE name = $1
 		return nil, fmt.Errorf("incarnation: commit destroy tx: %w", err)
 	}
 
-	// TODO(S-D4/S-D3): запуск teardown + DELETE row. Исполнение teardown уже
-	// реализовано — scenario.Runner.StartDestroy прогоняет scenario `destroy`
-	// против хостов incarnation в режиме TerminalDestroy (S-D2b): success
-	// оставляет `destroying` (DELETE — S-D3), провал → destroy_failed. Здесь
-	// (service-слой Destroy) — только перевод в `destroying`; вызов StartDestroy
-	// из handler-а после commit-а этой транзакции — S-D4 (force=true → S-D3
-	// удалит строку напрямую, без teardown).
+	// TODO(S-D4/S-D3): trigger teardown + DELETE row. Teardown execution is
+	// already implemented — scenario.Runner.StartDestroy runs the `destroy`
+	// scenario against the incarnation's hosts in TerminalDestroy mode (S-D2b):
+	// success leaves `destroying` (DELETE is S-D3), failure → destroy_failed.
+	// Here (the Destroy service layer) we only transition to `destroying`;
+	// calling StartDestroy from the handler after this transaction commits is
+	// S-D4 (force=true → S-D3 deletes the row directly, without teardown).
 
 	writeDestroyAudit(ctx, w, source, archonAID, name, previous, force, logger)
 
 	return &DestroyResult{PreviousStatus: previous, HistoryID: historyID}, nil
 }
 
-// DeleteResult — итог [DeleteAfterTeardown]. Deleted=false означает no-op:
-// строки в статусе `destroying` не оказалось (кто-то уже снёс её / сменил
-// статус — повторный вызов после успешного DELETE идемпотентен).
+// DeleteResult — the outcome of [DeleteAfterTeardown]. Deleted=false means a
+// no-op: no row was found in `destroying` status (someone already removed it /
+// changed the status — a repeat call after a successful DELETE is idempotent).
 type DeleteResult struct {
 	Deleted bool
 }
 
-// DeleteAfterTeardown физически сносит incarnation после успешного teardown-а
-// (S-D3, каскад V3). Одна PG-транзакция, single-winner:
+// DeleteAfterTeardown physically removes the incarnation after a successful
+// teardown (S-D3, cascade V3). One PG transaction, single-winner:
 //
 //  1. INSERT INTO incarnation_archive SELECT … FROM incarnation
-//     WHERE name=$1 AND status='destroying' — снимок compliance-минимума ДО
-//     удаления.
+//     WHERE name=$1 AND status='destroying' — a compliance-minimum snapshot
+//     BEFORE deletion.
 //  2. INSERT INTO state_history_archive SELECT … FROM state_history
-//     WHERE incarnation=$1 — снимок журнала переходов ДО каскада.
-//  3. DELETE FROM incarnation WHERE name=$1 AND status='destroying' — снос
-//     строки. WHERE status='destroying' — single-winner guard: выигрывает
-//     ровно один обработчик, владеющий destroying-переходом. RowsAffected==0
-//     (строки нет / статус сменился / кто-то уже удалил) → транзакция
-//     откатывается, [DeleteResult.Deleted]=false, no-op идемпотентно.
+//     WHERE incarnation=$1 — a snapshot of the transition log BEFORE the cascade.
+//  3. DELETE FROM incarnation WHERE name=$1 AND status='destroying' — removes
+//     the row. WHERE status='destroying' is the single-winner guard: exactly
+//     one handler owning the destroying transition wins. RowsAffected==0
+//     (no row / status changed / already deleted by someone else) → the
+//     transaction rolls back, [DeleteResult.Deleted]=false, an idempotent no-op.
 //
-// Каскад (ON DELETE CASCADE на live state_history / apply_runs /
-// apply_task_register) срабатывает при DELETE; архив записан ДО него, поэтому
-// compliance-данные сохраняются. Архив пишется внутри ТОЙ ЖЕ tx, что и DELETE:
-// либо архив+DELETE атомарно вместе, либо ничего (rollback).
+// The cascade (ON DELETE CASCADE on live state_history / apply_runs /
+// apply_task_register) fires on DELETE; the archive is written before it, so
+// compliance data survives. The archive is written inside the SAME tx as
+// DELETE: either archive+DELETE commit atomically together, or neither does
+// (rollback).
 //
-// Порядок INSERT-ов: incarnation_archive до state_history_archive, оба до
-// DELETE — селекты читают ещё живые строки.
+// INSERT order: incarnation_archive before state_history_archive, both before
+// DELETE — the selects read rows that are still live.
 //
-// audit `incarnation.destroy_completed` пишется ПОСЛЕ commit-а (паттерн
-// [Destroy]: DB-консистентность не зависит от audit-write). Пишется ТОЛЬКО при
-// фактическом удалении (Deleted=true): no-op события не порождает. force идёт
-// в payload (намерение destroy без teardown). w == nil → trail не пишется.
+// The `incarnation.destroy_completed` audit event is written AFTER commit
+// (same pattern as [Destroy]: DB consistency doesn't depend on the audit
+// write). Written ONLY on an actual deletion (Deleted=true): a no-op produces
+// no event. force is carried in the payload (destroy-without-teardown intent).
+// w == nil → no trail is written.
 //
-// Возврат [ErrIncarnationNotFound] НЕ используется: отсутствие destroying-строки
-// — это легитимный no-op (Deleted=false), а не ошибка (идемпотентность S-D3).
+// [ErrIncarnationNotFound] is NOT used as a return: the absence of a
+// destroying row is a legitimate no-op (Deleted=false), not an error
+// (S-D3 idempotency).
 func DeleteAfterTeardown(
 	ctx context.Context,
 	pool TxBeginner,
@@ -235,8 +240,8 @@ func DeleteAfterTeardown(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// (a) Архив строки incarnation — только если она в destroying (тот же guard,
-	// что у DELETE: если статус уже сменился, не архивируем неподходящую строку).
+	// (a) Archive the incarnation row — only if it's in destroying (same guard
+	// as DELETE: if the status already changed, don't archive the wrong row).
 	const archiveIncarnationSQL = `
 INSERT INTO incarnation_archive (
     name, service, service_version, state_schema_version,
@@ -253,10 +258,10 @@ WHERE name = $1 AND status = 'destroying'
 		return nil, fmt.Errorf("incarnation: archive incarnation: %w", err)
 	}
 
-	// (b) Архив журнала state_history (вся история удаляемой incarnation, ДО
-	// каскада). Не привязан к status — журнал архивируется целиком; если строки
-	// incarnation в destroying нет, DELETE ниже даст RowsAffected==0 и tx
-	// откатится, отменив и этот INSERT.
+	// (b) Archive the state_history log (the full history of the incarnation
+	// being removed, BEFORE the cascade). Not gated on status — the whole log
+	// is archived; if no incarnation row is in destroying, the DELETE below
+	// yields RowsAffected==0 and the tx rolls back, undoing this INSERT too.
 	const archiveHistorySQL = `
 INSERT INTO state_history_archive (
     history_id, incarnation_name, scenario, state_before, state_after,
@@ -271,8 +276,8 @@ WHERE incarnation_name = $1
 		return nil, fmt.Errorf("incarnation: archive state_history: %w", err)
 	}
 
-	// (c) Single-winner DELETE. status='destroying' гарантирует, что снос
-	// выполняет только владелец destroying-перехода. RowsAffected==0 → no-op.
+	// (c) Single-winner DELETE. status='destroying' guarantees only the owner
+	// of the destroying transition performs the removal. RowsAffected==0 → no-op.
 	const deleteSQL = `
 DELETE FROM incarnation
 WHERE name = $1 AND status = 'destroying'
@@ -282,8 +287,8 @@ WHERE name = $1 AND status = 'destroying'
 		return nil, fmt.Errorf("incarnation: delete incarnation: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		// Никто не выиграл строку: статус сменился / строка уже удалена. Откат
-		// (defer Rollback) отменяет и записанный выше архив — он не нужен без DELETE.
+		// No one won the row: status changed / row already deleted. The rollback
+		// (defer Rollback) also undoes the archive written above — it's moot without DELETE.
 		return &DeleteResult{Deleted: false}, nil
 	}
 
@@ -296,11 +301,11 @@ WHERE name = $1 AND status = 'destroying'
 	return &DeleteResult{Deleted: true}, nil
 }
 
-// writeDestroyCompletedAudit пишет audit-event `incarnation.destroy_completed`
-// после физического сноса строки. source=keeper_internal (write-path —
-// scenario-runner после барьера, archon_aid колонка NULL). Фейл write-а не
-// валит destroy (строка уже снесена, tx закоммичена), только логируется.
-// Секретов в payload нет (name + force).
+// writeDestroyCompletedAudit writes the `incarnation.destroy_completed` audit
+// event after the row is physically removed. source=keeper_internal (write
+// path — the scenario-runner past the barrier, archon_aid column is NULL). A
+// write failure doesn't fail destroy (the row is already gone, tx committed),
+// it's only logged. No secrets in the payload (name + force).
 func writeDestroyCompletedAudit(
 	ctx context.Context,
 	w audit.Writer,
@@ -325,9 +330,10 @@ func writeDestroyCompletedAudit(
 	}
 }
 
-// writeDestroyAudit пишет audit-event инициации destroy. Вынесено, чтобы
-// логика перехода не смешивалась с best-effort audit-write-ом. Фейл write-а не
-// валит destroy (переход уже закоммичен), только логируется.
+// writeDestroyAudit writes the destroy-initiation audit event. Split out so
+// transition logic doesn't mix with the best-effort audit write. A write
+// failure doesn't fail destroy (the transition is already committed), it's
+// only logged.
 func writeDestroyAudit(
 	ctx context.Context,
 	w audit.Writer,

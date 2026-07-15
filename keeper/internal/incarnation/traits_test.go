@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// --- TraitsFromSpec (мост incarnation.spec.traits → incarnation.traits) ---
+// --- TraitsFromSpec (bridge incarnation.spec.traits → incarnation.traits) ---
 
 func TestTraitsFromSpec_NilSpec(t *testing.T) {
 	got, err := TraitsFromSpec(nil)
@@ -69,7 +69,7 @@ func TestTraitsFromSpec_RejectsNonObject(t *testing.T) {
 }
 
 func TestTraitsFromSpec_RejectsInvalidValue(t *testing.T) {
-	// nested-map значение Trait недопустимо (только scalar|list) — ValidateTraitDelta.
+	// a nested-map Trait value is not allowed (scalar|list only) — ValidateTraitDelta.
 	_, err := TraitsFromSpec(map[string]any{
 		"traits": map[string]any{"bad": map[string]any{"nested": 1}},
 	})
@@ -78,10 +78,11 @@ func TestTraitsFromSpec_RejectsInvalidValue(t *testing.T) {
 	}
 }
 
-// --- Create: traits-арг доходит до INSERT ($11) ---
+// --- Create: the traits arg reaches INSERT ($11) ---
 
-// TestCreate_TraitsPassedThrough — incarnation.Traits сериализуется в jsonb-арг
-// $11 (index 10) INSERT-а (round-trip источника истины Trait, ADR-060 amend R1).
+// TestCreate_TraitsPassedThrough — incarnation.Traits is serialized into the
+// jsonb arg $11 (index 10) of INSERT (round trip of the Trait source of
+// truth, ADR-060 amend R1).
 func TestCreate_TraitsPassedThrough(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -110,7 +111,7 @@ func TestCreate_TraitsPassedThrough(t *testing.T) {
 }
 
 // TestCreate_NilTraitsBecomesEmptyObject — Traits=nil → `{}` (NOT NULL DEFAULT,
-// projection-путь не различает «нет колонки» / «нет меток»).
+// the projection path doesn't distinguish "no column" / "no labels").
 func TestCreate_NilTraitsBecomesEmptyObject(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -130,7 +131,7 @@ func TestCreate_NilTraitsBecomesEmptyObject(t *testing.T) {
 	}
 }
 
-// --- SyncTraitsToHosts: невалидное имя инкарнации ---
+// --- SyncTraitsToHosts: invalid incarnation name ---
 
 func TestSyncTraitsToHosts_RejectsInvalidName(t *testing.T) {
 	err := SyncTraitsToHosts(context.Background(), nil, "Bad_Name", map[string]any{"team": "dba"})
@@ -141,8 +142,8 @@ func TestSyncTraitsToHosts_RejectsInvalidName(t *testing.T) {
 
 // --- UpdateTraits: name-guard + traitKeys ---
 
-// TestUpdateTraits_RejectsInvalidName — невалидное имя отбивается ДО BeginTx
-// (pool=nil здесь безопасен: проверка имени первая).
+// TestUpdateTraits_RejectsInvalidName — an invalid name is rejected BEFORE
+// BeginTx (pool=nil is safe here: the name check comes first).
 func TestUpdateTraits_RejectsInvalidName(t *testing.T) {
 	_, err := UpdateTraits(context.Background(), nil, "Bad_Name", map[string]any{"team": "dba"})
 	if err == nil {
@@ -150,7 +151,7 @@ func TestUpdateTraits_RejectsInvalidName(t *testing.T) {
 	}
 }
 
-// TestTraitKeys — отсортированный nil-safe набор ключей для audit-payload.
+// TestTraitKeys — a sorted nil-safe key set for the audit payload.
 func TestTraitKeys(t *testing.T) {
 	got := traitKeys(map[string]any{"team": "dba", "env": "prod", "az": "a"})
 	want := []string{"az", "env", "team"}
@@ -162,7 +163,7 @@ func TestTraitKeys(t *testing.T) {
 			t.Errorf("traitKeys[%d] = %q, want %q (sorted)", i, got[i], want[i])
 		}
 	}
-	// nil / пустой → пустой slice (не nil), устойчивый JSON.
+	// nil / empty → an empty slice (not nil), stable JSON.
 	if empty := traitKeys(nil); empty == nil || len(empty) != 0 {
 		t.Errorf("traitKeys(nil) = %v, want non-nil empty slice", empty)
 	}

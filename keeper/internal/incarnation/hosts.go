@@ -9,14 +9,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// UpdateHostsMode — операция над declared `spec.hosts[]` для
+// UpdateHostsMode — operation over the declared `spec.hosts[]` for
 // [UpdateHosts] (PATCH /v1/incarnations/{name}/hosts).
 //
-//   - ModeReplace — полная замена списка переданным набором.
-//   - ModeAppend  — добавить переданные hosts; при совпадении SID обновляется
-//     role существующей записи.
-//   - ModeRemove  — удалить записи с указанными SID-ами (role в payload
-//     игнорируется).
+//   - ModeReplace — full replacement of the list with the given set.
+//   - ModeAppend  — add the given hosts; on a matching SID, the existing
+//     record's role is updated.
+//   - ModeRemove  — remove records with the given SIDs (role in the payload
+//     is ignored).
 type UpdateHostsMode string
 
 const (
@@ -25,7 +25,7 @@ const (
 	ModeRemove  UpdateHostsMode = "remove"
 )
 
-// ValidHostsMode — closed enum проверка mode (handler-сторона мапит 422).
+// ValidHostsMode — closed-enum check of mode (handler side maps to 422).
 func ValidHostsMode(m UpdateHostsMode) bool {
 	switch m {
 	case ModeReplace, ModeAppend, ModeRemove:
@@ -34,23 +34,23 @@ func ValidHostsMode(m UpdateHostsMode) bool {
 	return false
 }
 
-// SpecHost — typed-запись declared `spec.hosts[]`. Хранится в jsonb-поле
-// `incarnation.spec.hosts`, форма зеркалит парсер в
-// [topology.parseDeclaredRoles] (`{sid, role}`). Role — опциональна
-// (`null`/пустая строка допустимы — ADR-008: declared-роль может быть null
-// для хостов вне declared-spec).
+// SpecHost — typed record of the declared `spec.hosts[]`. Stored in the jsonb
+// field `incarnation.spec.hosts`, its shape mirrors the parser in
+// [topology.parseDeclaredRoles] (`{sid, role}`). Role is optional
+// (`null`/empty string allowed — ADR-008: declared role can be null
+// for hosts outside the declared spec).
 type SpecHost struct {
 	SID  string `json:"sid"`
 	Role string `json:"role,omitempty"`
 }
 
-// ErrIncarnationNotEditable — статус incarnation не допускает правки spec
-// (destroying / destroy_failed). Handler-сторона маппит в 409
-// incarnation-locked (parity Run/Upgrade gate-status).
+// ErrIncarnationNotEditable — the incarnation's status does not allow spec edits
+// (destroying / destroy_failed). Handler side maps this to 409
+// incarnation-locked (parity with the Run/Upgrade gate status).
 var ErrIncarnationNotEditable = errors.New("incarnation: status does not allow spec edits")
 
-// ErrUnknownSouls — переданные SID-ы отсутствуют в реестре `souls`. Handler
-// маппит в 422; ошибочные SID-ы возвращаются в .Missing для message.
+// ErrUnknownSouls — the given SIDs are missing from the `souls` registry. The
+// handler maps this to 422; the offending SIDs are returned in .Missing for the message.
 type ErrUnknownSouls struct {
 	Missing []string
 }
@@ -59,11 +59,11 @@ func (e *ErrUnknownSouls) Error() string {
 	return fmt.Sprintf("incarnation: %d unknown SID(s) in souls registry: %v", len(e.Missing), e.Missing)
 }
 
-// hostsEditableStatuses — статусы, из которых разрешена правка spec.hosts[].
-// destroying / destroy_failed исключены (incarnation сносится, правки spec
-// бессмысленны). applying — допустим: спек — declared-вход следующего прогона,
-// не текущего; concurrent edit и run сериализуются FOR UPDATE на уровне строки
-// (применение spec.hosts на следующем resolve-е).
+// hostsEditableStatus — statuses from which editing spec.hosts[] is allowed.
+// destroying / destroy_failed are excluded (the incarnation is being torn down, spec
+// edits are meaningless). applying is allowed: the spec is the declared input of the
+// next run, not the current one; concurrent edit and run are serialized via row-level
+// FOR UPDATE (spec.hosts is applied on the next resolve).
 func hostsEditableStatus(s Status) bool {
 	switch s {
 	case StatusDestroying, StatusDestroyFailed:
@@ -72,9 +72,9 @@ func hostsEditableStatus(s Status) bool {
 	return true
 }
 
-// UpdateHostsInput — параметры [UpdateHosts]. Hosts — payload (валидируется
-// caller-ом на формат SID/role и mode-семантику); ChangedByAID — Архонт-
-// инициатор (опционален; nil → audit-нейтрально).
+// UpdateHostsInput — parameters for [UpdateHosts]. Hosts — the payload (validated
+// by the caller for SID/role format and mode semantics); ChangedByAID — the initiating
+// Archon (optional; nil → audit-neutral).
 type UpdateHostsInput struct {
 	Name         string
 	Hosts        []SpecHost
@@ -82,43 +82,43 @@ type UpdateHostsInput struct {
 	ChangedByAID *string
 }
 
-// UpdateHostsResult — итог [UpdateHosts]: снимки old/new для audit-payload
-// + полная обновлённая запись incarnation для response.
+// UpdateHostsResult — outcome of [UpdateHosts]: old/new snapshots for the audit
+// payload + the full updated incarnation record for the response.
 type UpdateHostsResult struct {
 	OldHosts    []SpecHost
 	NewHosts    []SpecHost
 	Incarnation *Incarnation
 }
 
-// UpdateHosts атомарно правит declared `spec.hosts[]` incarnation
-// (ADR-008, UI Hosts editing). Тот же транзакционный паттерн, что
-// [Unlock] / [Destroy]: одна tx SELECT … FOR UPDATE → guard статуса →
-// валидация SID-ов через souls → merge by mode → UPDATE spec/updated_at →
+// UpdateHosts atomically edits an incarnation's declared `spec.hosts[]`
+// (ADR-008, UI Hosts editing). Same transactional pattern as
+// [Unlock] / [Destroy]: one tx SELECT … FOR UPDATE → status guard →
+// SID validation against souls → merge by mode → UPDATE spec/updated_at →
 // commit.
 //
 // Validation:
-//   - SID существует в `souls` (валидируется единым batch-SELECT, не
-//     per-host round-trip): неизвестные SID-ы → [ErrUnknownSouls] (422).
-//     Для mode=remove проверка тоже выполняется (защищает от тихого no-op
-//     на опечатке SID). При пустом hosts (legitimate для replace=пустой
-//     список) проверка skip-ается.
-//   - Mode — closed enum (caller-сторона должна вызвать [ValidHostsMode]).
+//   - SID exists in `souls` (validated via a single batch SELECT, not
+//     a per-host round-trip): unknown SIDs → [ErrUnknownSouls] (422).
+//     For mode=remove the check runs too (guards against a silent no-op
+//     on a mistyped SID). For empty hosts (legitimate for replace=empty
+//     list) the check is skipped.
+//   - Mode — closed enum (the caller side must call [ValidHostsMode]).
 //
 // Merge:
-//   - replace — `spec.hosts` ← payload (включая пустой массив = очистить);
-//   - append  — payload merge-ится в existing; матчинг по SID, новая role
-//     перекрывает старую (insert-or-update);
-//   - remove  — payload-SID-ы вычитаются из existing (role в payload не
-//     учитывается).
+//   - replace — `spec.hosts` ← payload (including an empty array = clear);
+//   - append  — payload is merged into existing; matched by SID, new role
+//     overrides the old one (insert-or-update);
+//   - remove  — payload SIDs are subtracted from existing (role in the payload
+//     is ignored).
 //
-// Возврат:
-//   - [ErrIncarnationNotFound]   — name не существует (404).
-//   - [ErrIncarnationNotEditable] — статус destroying / destroy_failed (409).
-//   - [ErrUnknownSouls]          — переданные SID-ы не в `souls` (422).
+// Returns:
+//   - [ErrIncarnationNotFound]   — name doesn't exist (404).
+//   - [ErrIncarnationNotEditable] — status is destroying / destroy_failed (409).
+//   - [ErrUnknownSouls]          — the given SIDs aren't in `souls` (422).
 //
-// Audit (`incarnation.hosts_updated`) пишется handler-ом (нужен AID + source);
-// сюда передаётся ChangedByAID для будущего расширения (state_history-row
-// для hosts-edits не пишется — это spec-правка, не state-переход, ADR-009).
+// Audit (`incarnation.hosts_updated`) is written by the handler (needs AID + source);
+// ChangedByAID is passed here for future extension (no state_history row
+// is written for hosts edits — this is a spec edit, not a state transition, ADR-009).
 func UpdateHosts(ctx context.Context, pool TxBeginner, in UpdateHostsInput) (*UpdateHostsResult, error) {
 	if !ValidName(in.Name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", in.Name)
@@ -133,8 +133,8 @@ func UpdateHosts(ctx context.Context, pool TxBeginner, in UpdateHostsInput) (*Up
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// SELECT FOR UPDATE — сериализуем с конкурентным Unlock / Upgrade / Destroy /
-	// scenario-runner (все они лочат ту же строку).
+	// SELECT FOR UPDATE — serialize against concurrent Unlock / Upgrade / Destroy /
+	// scenario-runner (they all lock the same row).
 	const selectForUpdateSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
@@ -154,11 +154,11 @@ FOR UPDATE
 		return nil, ErrIncarnationNotEditable
 	}
 
-	// Snapshot существующих spec.hosts[] для merge + audit-payload.
+	// Snapshot of the existing spec.hosts[] for merge + audit payload.
 	oldHosts := readSpecHosts(inc.Spec)
 
-	// Validate SID-ы payload-а в souls (replace+append+remove — все требуют, что
-	// SID существует, чтобы не было silent no-op на опечатке).
+	// Validate the payload's SIDs against souls (replace+append+remove — all require
+	// the SID to exist, so there's no silent no-op on a typo).
 	if len(in.Hosts) > 0 {
 		if err := validateSoulsExist(ctx, tx, in.Hosts); err != nil {
 			return nil, err
@@ -167,16 +167,16 @@ FOR UPDATE
 
 	newHosts := mergeHosts(oldHosts, in.Hosts, in.Mode)
 
-	// Merge только поля `hosts`: остальные ключи spec сохраняются. nil-spec →
-	// инициализируем (NOT NULL DEFAULT '{}' гарантирует non-null в БД, но Spec в
-	// scanIncarnation может быть nil-map при unmarshal-е `{}`).
+	// Merge only the `hosts` field: other spec keys are preserved. nil spec →
+	// initialize it (NOT NULL DEFAULT '{}' guarantees non-null in the DB, but Spec in
+	// scanIncarnation can be a nil map when unmarshaling `{}`).
 	specOut := inc.Spec
 	if specOut == nil {
 		specOut = map[string]any{}
 	}
 	if len(newHosts) == 0 {
-		// Пустой массив сохраняем явно (replace со списком []) — иначе resolver
-		// не отличит «оператор очистил список» от «hosts вообще не было».
+		// Save an empty array explicitly (replace with list []) — otherwise the resolver
+		// can't distinguish "operator cleared the list" from "hosts never existed".
 		specOut["hosts"] = []any{}
 	} else {
 		out := make([]any, 0, len(newHosts))
@@ -217,9 +217,9 @@ RETURNING updated_at
 	}, nil
 }
 
-// readSpecHosts извлекает SpecHost-список из freeform jsonb-spec. Симметрично
-// [topology.parseDeclaredRoles] (тот возвращает map SID→role, тут — упорядоченный
-// список). Любое отклонение формы — пропуск элемента, НЕ ошибка (spec freeform).
+// readSpecHosts extracts the SpecHost list from the freeform jsonb spec. Symmetric with
+// [topology.parseDeclaredRoles] (which returns a SID→role map, here it's an ordered
+// list). Any shape deviation just skips the element, it is NOT an error (spec is freeform).
 func readSpecHosts(spec map[string]any) []SpecHost {
 	if spec == nil {
 		return nil
@@ -248,20 +248,20 @@ func readSpecHosts(spec map[string]any) []SpecHost {
 	return out
 }
 
-// mergeHosts применяет mode к существующему списку. Поддерживает порядок
-// existing → новые добавляются в конец (append-семантика стабильна для UI);
-// remove сохраняет порядок оставшихся; replace полностью переписывает.
+// mergeHosts applies mode to the existing list. Preserves the existing
+// order → new ones are appended at the end (append semantics are stable for the UI);
+// remove preserves the order of what remains; replace fully overwrites.
 func mergeHosts(existing, payload []SpecHost, mode UpdateHostsMode) []SpecHost {
 	switch mode {
 	case ModeReplace:
-		// Копия payload, чтобы caller не зашарил slice с tx.
+		// Copy of payload so the caller doesn't share a slice with tx.
 		out := make([]SpecHost, len(payload))
 		copy(out, payload)
 		return out
 
 	case ModeAppend:
-		// Index existing по SID для O(1) lookup; updates перекрывают role,
-		// новые SID-ы добавляются в конец сохранением порядка payload.
+		// Index existing by SID for O(1) lookup; updates override role,
+		// new SIDs are appended at the end preserving payload order.
 		idx := make(map[string]int, len(existing))
 		for i, h := range existing {
 			idx[h.SID] = i
@@ -292,19 +292,19 @@ func mergeHosts(existing, payload []SpecHost, mode UpdateHostsMode) []SpecHost {
 		}
 		return out
 	}
-	// ValidHostsMode уже отсёк unknown; unreachable.
+	// ValidHostsMode already filtered out unknown; unreachable.
 	return existing
 }
 
-// validateSoulsExist проверяет, что все SID-ы есть в реестре `souls`.
-// Один batch-SELECT (`= ANY($1)`), не per-host round-trip. Пустой in → no-op.
-// Дубликаты в payload не страшны (PG-IN устойчив); порядок Missing совпадает
-// с порядком первого вхождения в payload (стабильно для тестов).
+// validateSoulsExist checks that all SIDs exist in the `souls` registry.
+// One batch SELECT (`= ANY($1)`), not a per-host round-trip. Empty in → no-op.
+// Duplicates in the payload are harmless (PG IN handles them fine); the order of Missing
+// matches the order of first occurrence in the payload (stable for tests).
 func validateSoulsExist(ctx context.Context, db ExecQueryRower, payload []SpecHost) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	// Dedup + сохранение порядка первого вхождения для Missing.
+	// Dedup + preserve the order of first occurrence for Missing.
 	seen := make(map[string]struct{}, len(payload))
 	sids := make([]string, 0, len(payload))
 	for _, h := range payload {

@@ -10,9 +10,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakePrepResolver / fakePrepLoader — минимальные моки ServiceResolver /
-// ServiceSnapshotLoader для unit-тестов PrepareUpgrade (git/реестр сервисов не
-// поднимаются).
+// fakePrepResolver / fakePrepLoader — minimal ServiceResolver /
+// ServiceSnapshotLoader mocks for PrepareUpgrade unit tests (no real git or
+// service registry involved).
 type fakePrepResolver struct {
 	ok bool
 }
@@ -30,8 +30,9 @@ type fakePrepLoader struct {
 
 	chainCalls int
 
-	// upgrades / upgradesErr — ответ ListUpgrades (ADR-0068): непустой список с
-	// FromVersions, содержащим текущий пин, → found. upgradesErr → fail-open legacy.
+	// upgrades / upgradesErr — ListUpgrades response (ADR-0068): a non-empty
+	// list with FromVersions containing the current pin → found. upgradesErr
+	// → fail-open legacy.
 	upgrades    []artifact.Scenario
 	upgradesErr error
 }
@@ -93,7 +94,7 @@ func TestPrepareUpgrade_Happy(t *testing.T) {
 }
 
 func TestPrepareUpgrade_RefBump(t *testing.T) {
-	// Та же схема, другой ref → пустой chain, без ошибки.
+	// Same schema, different ref → empty chain, no error.
 	loader := &fakePrepLoader{targetSchema: 1, chain: statemigrate.Chain{}}
 	in, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
 		prepInc("v1", 1), "v1-hotfix", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
@@ -106,7 +107,7 @@ func TestPrepareUpgrade_RefBump(t *testing.T) {
 }
 
 func TestPrepareUpgrade_Noop(t *testing.T) {
-	// Тот же ref И та же схема → ErrUpgradeNoop, LoadMigrationChain не зовётся.
+	// Same ref AND same schema → ErrUpgradeNoop, LoadMigrationChain isn't called.
 	loader := &fakePrepLoader{targetSchema: 2}
 	_, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
 		prepInc("v2", 2), "v2", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
@@ -119,7 +120,8 @@ func TestPrepareUpgrade_Noop(t *testing.T) {
 }
 
 func TestPrepareUpgrade_DowngradeViaRef(t *testing.T) {
-	// Целевой ref несёт схему ниже текущей → ErrDowngradeViaRef до загрузки chain.
+	// Target ref carries a schema lower than current → ErrDowngradeViaRef
+	// before the chain loads.
 	loader := &fakePrepLoader{targetSchema: 2}
 	_, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
 		prepInc("v3", 3), "v2", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
@@ -157,9 +159,9 @@ func TestPrepareUpgrade_ChainBroken(t *testing.T) {
 	}
 }
 
-// TestPrepareUpgrade_FoundUpgradeScenario — found-ветвь (ADR-0068 §5): upgrade-
-// сценарий, чей from ⊇ текущий пин (v1), резолвится в UpgradeSlug; TargetRef
-// запинен на to_version (для runner.Start автозапуска).
+// TestPrepareUpgrade_FoundUpgradeScenario — found branch (ADR-0068 §5): an
+// upgrade scenario whose from ⊇ the current pin (v1) resolves into
+// UpgradeSlug; TargetRef is pinned to to_version (for runner.Start autorun).
 func TestPrepareUpgrade_FoundUpgradeScenario(t *testing.T) {
 	loader := &fakePrepLoader{
 		targetSchema: 2,
@@ -179,8 +181,8 @@ func TestPrepareUpgrade_FoundUpgradeScenario(t *testing.T) {
 	}
 }
 
-// TestPrepareUpgrade_LegacyNoUpgradeMatch — upgrade-сценарий есть, но from НЕ
-// содержит текущий пин → legacy (UpgradeSlug пуст, §5 fail-open).
+// TestPrepareUpgrade_LegacyNoUpgradeMatch — an upgrade scenario exists, but
+// from does NOT contain the current pin → legacy (UpgradeSlug empty, §5 fail-open).
 func TestPrepareUpgrade_LegacyNoUpgradeMatch(t *testing.T) {
 	loader := &fakePrepLoader{
 		targetSchema: 2,
@@ -197,8 +199,9 @@ func TestPrepareUpgrade_LegacyNoUpgradeMatch(t *testing.T) {
 	}
 }
 
-// TestPrepareUpgrade_ListUpgradesFailsOpenLegacy — сбой скана upgrade/ НЕ роняет
-// апгрейд: fail-open в legacy (§5★, чтобы патч-апгрейды не ломались).
+// TestPrepareUpgrade_ListUpgradesFailsOpenLegacy — a scan failure of upgrade/
+// does NOT fail the upgrade: fail-open into legacy (§5★, so patch upgrades
+// keep working).
 func TestPrepareUpgrade_ListUpgradesFailsOpenLegacy(t *testing.T) {
 	loader := &fakePrepLoader{
 		targetSchema: 2,

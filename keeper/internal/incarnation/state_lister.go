@@ -7,52 +7,52 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/statepredicate"
 )
 
-// StateLister — production-реализация [statepredicate.IncarnationStateLister]
-// поверх [SelectAll]. Двухступенчатый pushdown архитектора:
-//  1. SQL-pushdown: [statepredicate.BaseFilter] (service/coven) мапится в
-//     [ListFilter] → WHERE сужает множество ДО CEL-eval на стороне PG;
-//  2. page-by-page: сужённый набор дренируется страницами фиксированного
-//     размера (offset/limit-цикл [SelectAll]), каждая страница отдаётся в yield
-//     и сразу отпускается — весь набор разом в память не материализуется.
+// StateLister — production implementation of [statepredicate.IncarnationStateLister]
+// on top of [SelectAll]. Two-stage pushdown architecture:
+//  1. SQL-pushdown: [statepredicate.BaseFilter] (service/coven) maps to
+//     [ListFilter] → WHERE narrows set BEFORE CEL-eval on PG side;
+//  2. page-by-page: narrowed set drained in fixed-size pages (offset/limit loop
+//     [SelectAll]), each page passed to yield and immediately released —
+//     full set doesn't materialize in memory at once.
 //
-// Лежит в incarnation-пакете (а не в statepredicate): иначе резолвер потянул бы
-// прямую зависимость на incarnation + pgx и потерял тестируемость. Адаптер
-// связывает узкий интерфейс резолвера с конкретным репозиторием.
+// Located in incarnation package (not statepredicate): otherwise resolver would pull
+// direct dependency on incarnation + pgx and lose testability. Adapter
+// binds resolver's narrow interface to concrete repository.
 type StateLister struct {
 	db ExecQueryRower
 }
 
-// statePageSize — размер страницы page-by-page-дренажа. Совпадает с pageSize
-// voyage-резолвера (handlers.VoyageScenarioPGResolver): компромисс round-trip
-// ↔ память на 100k-флоте. State-jsonb-снимок одной инкарнации мал; 1000 строк
-// на страницу держат рабочее множество резолвера ограниченным независимо от
-// размера сервиса.
+// statePageSize — page size for page-by-page drain. Matches pageSize
+// of voyage-resolver (handlers.VoyageScenarioPGResolver): tradeoff round-trip
+// ↔ memory on 100k fleet. State-jsonb snapshot of single incarnation small; 1000 rows
+// per page keeps resolver's working set bounded regardless of
+// service size.
 const statePageSize = 1000
 
-// NewStateLister конструирует адаптер. db обязателен (реальный *pgxpool.Pool в
-// production, fake в unit-тестах — симметрично прочим CRUD-операциям).
+// NewStateLister constructs adapter. db mandatory (real *pgxpool.Pool in
+// production, fake in unit tests — symmetric with other CRUD operations).
 func NewStateLister(db ExecQueryRower) *StateLister {
 	return &StateLister{db: db}
 }
 
 var _ statepredicate.IncarnationStateLister = (*StateLister)(nil)
 
-// ListStatePages дренирует инкарнации, сужённые base (service/coven), страницами
-// и отдаёт каждую в yield. Резолвер прогоняет CEL-Matches per-page (см.
+// ListStatePages drains incarnations narrowed by base (service/coven) in pages
+// and passes each to yield. Resolver runs CEL-Matches per-page (see
 // [statepredicate.Resolver.ResolveIncarnations]).
 //
-// Пустые страницы в yield не отдаются (offset/limit-цикл прерывается на
-// исчерпании набора). Ошибка из yield (например, не-bool предикат на полном
-// state) прерывает дренаж и пробрасывается наружу — лишние страницы из PG не
-// тянутся. Ошибка [SelectAll] пробрасывается как есть.
+// Empty pages not passed to yield (offset/limit loop breaks on
+// set exhaustion). Error from yield (e.g., non-bool predicate on full
+// state) interrupts drain and propagates — extra pages not fetched from PG.
+// [SelectAll] error propagated as-is.
 func (l *StateLister) ListStatePages(ctx context.Context, base statepredicate.BaseFilter, yield func(page []statepredicate.Stated) error) error {
 	lf := ListFilter{Service: base.Service, Coven: base.Coven}
 
 	// base.Covens (multi-coven, ADDITIVE) → coven∪{name} scope ([ListScope]):
-	// метка матчит и covens[], и name (ADR-008). Пустой Covens → Unrestricted
-	// scope (state-CEL резолвится по всему service-сужённому множеству; coven-
-	// сужение тогда не нужно — типовой путь S3b-3 List, где coven и state —
-	// независимые OR-измерения, объединяемые в outer-SelectAll).
+	// label matches both covens[] and name (ADR-008). Empty Covens → Unrestricted
+	// scope (state-CEL resolves over entire service-narrowed set; coven
+	// narrowing then unnecessary — typical S3b-3 List path where coven and state —
+	// independent OR dimensions, combined in outer-SelectAll).
 	scope := ListScope{Unrestricted: true}
 	if len(base.Covens) > 0 {
 		scope = ListScope{Covens: base.Covens}
@@ -75,7 +75,7 @@ func (l *StateLister) ListStatePages(ctx context.Context, base statepredicate.Ba
 			return err
 		}
 
-		// Последняя страница: offset+len уже покрыл total, либо страница неполная.
+		// Last page: offset+len already covered total, or page incomplete.
 		if offset+len(items) >= total || len(items) < statePageSize {
 			break
 		}

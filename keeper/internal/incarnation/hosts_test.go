@@ -12,17 +12,17 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// hostsTx — fake pgx.Tx для [UpdateHosts]: диспетчеризирует QueryRow / Query
-// по SQL (SELECT FOR UPDATE → строка incarnation, UPDATE RETURNING →
-// updated_at, SELECT FROM souls → набор существующих SID-ов).
+// hostsTx — fake pgx.Tx for [UpdateHosts]: dispatches QueryRow / Query by
+// SQL (SELECT FOR UPDATE → incarnation row, UPDATE RETURNING → updated_at,
+// SELECT FROM souls → set of existing SIDs).
 //
-// fakeTx из upgrade_test.go одноразовый по QueryRow (всегда возвращает
-// selectRow), поэтому для multi-QueryRow-сценариев тут свой stub.
+// upgrade_test.go's fakeTx is single-shot on QueryRow (always returns
+// selectRow), so multi-QueryRow scenarios get their own stub here.
 type hostsTx struct {
 	// SELECT FOR UPDATE incarnation row (scanIncarnation columns).
 	incRow pgx.Row
 
-	// SELECT sid FROM souls WHERE sid = ANY($1): набор существующих SID-ов.
+	// SELECT sid FROM souls WHERE sid = ANY($1): set of existing SIDs.
 	soulsExists map[string]struct{}
 	soulsErr    error
 
@@ -32,7 +32,7 @@ type hostsTx struct {
 	committed bool
 	rolled    bool
 
-	// Захваченные сайд-эффекты для assertions.
+	// Captured side effects for assertions.
 	updateCalled bool
 	updateSpec   []byte
 	soulsQueried []string
@@ -101,8 +101,8 @@ func (p *hostsPool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) 
 	return p.tx, nil
 }
 
-// makeHostsIncRow собирает scriptedRow под SELECT FOR UPDATE incarnation со
-// spec, содержащим переданные hosts. status задаёт текущий статус.
+// makeHostsIncRow builds a scriptedRow for SELECT FOR UPDATE incarnation
+// with a spec containing the given hosts. status sets the current status.
 func makeHostsIncRow(name, status string, hosts []SpecHost) pgx.Row {
 	specMap := map[string]any{}
 	if hosts != nil {
@@ -130,7 +130,7 @@ func makeHostsIncRow(name, status string, hosts []SpecHost) pgx.Row {
 	}}
 }
 
-// soulsSet — sugar для построения map[string]struct{} из списка SID-ов.
+// soulsSet — sugar for building a map[string]struct{} from a SID list.
 func soulsSet(sids ...string) map[string]struct{} {
 	m := make(map[string]struct{}, len(sids))
 	for _, s := range sids {
@@ -178,7 +178,7 @@ func TestMergeHosts_Append_Updates(t *testing.T) {
 	existing := []SpecHost{{SID: "a", Role: "master"}, {SID: "b", Role: "replica"}}
 	payload := []SpecHost{{SID: "a", Role: "replica"}, {SID: "c", Role: "master"}}
 	got := mergeHosts(existing, payload, ModeAppend)
-	// a → role updated, b сохранён, c добавлен в конец.
+	// a → role updated, b kept as-is, c appended at the end.
 	if len(got) != 3 {
 		t.Fatalf("Append len = %d, want 3", len(got))
 	}
@@ -274,7 +274,7 @@ func TestUpdateHosts_Replace_HappyPath(t *testing.T) {
 	if res.NewHosts[0].SID != "a.example" || res.NewHosts[1].SID != "b.example" {
 		t.Errorf("NewHosts = %+v", res.NewHosts)
 	}
-	// Проверяем, что в spec действительно ушли новые hosts.
+	// Verify the new hosts actually made it into spec.
 	var saved map[string]any
 	if err := json.Unmarshal(tx.updateSpec, &saved); err != nil {
 		t.Fatalf("unmarshal saved spec: %v", err)
@@ -380,7 +380,7 @@ func TestUpdateHosts_DestroyingRejected(t *testing.T) {
 func TestUpdateHosts_UnknownSID(t *testing.T) {
 	tx := &hostsTx{
 		incRow:      makeHostsIncRow("redis-prod", "ready", nil),
-		soulsExists: soulsSet("a.example"), // только a, b нет
+		soulsExists: soulsSet("a.example"), // only a, no b
 	}
 	pool := &hostsPool{tx: tx}
 	_, err := UpdateHosts(context.Background(), pool, UpdateHostsInput{
@@ -427,8 +427,8 @@ func TestUpdateHosts_InvalidMode(t *testing.T) {
 	}
 }
 
-// TestUpdateHosts_ReplaceEmpty — replace с пустым payload очищает spec.hosts.
-// SID validation skip-ается (len(payload)==0), UPDATE проходит.
+// TestUpdateHosts_ReplaceEmpty — replace with an empty payload clears
+// spec.hosts. SID validation is skipped (len(payload)==0), UPDATE proceeds.
 func TestUpdateHosts_ReplaceEmpty(t *testing.T) {
 	tx := &hostsTx{
 		incRow: makeHostsIncRow("redis-prod", "ready", []SpecHost{{SID: "a.example", Role: "master"}}),
@@ -445,7 +445,7 @@ func TestUpdateHosts_ReplaceEmpty(t *testing.T) {
 	if len(res.NewHosts) != 0 {
 		t.Errorf("NewHosts = %+v, want empty", res.NewHosts)
 	}
-	// Souls existence query НЕ должен дергаться (len(payload)==0).
+	// Souls existence query must NOT fire (len(payload)==0).
 	if len(tx.soulsQueried) != 0 {
 		t.Errorf("soulsQueried = %v, want none", tx.soulsQueried)
 	}

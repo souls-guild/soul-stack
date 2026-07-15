@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeAuditWriter — собирает записанные audit-events. nil-safe не нужен:
-// тесты передают конкретный экземпляр либо nil-интерфейс явно.
+// fakeAuditWriter — collects recorded audit-events. nil-safe not needed:
+// tests pass concrete instance or explicitly nil-interface.
 type fakeAuditWriter struct {
 	events   []*audit.Event
 	writeErr error
@@ -23,8 +23,8 @@ func (f *fakeAuditWriter) Write(_ context.Context, e *audit.Event) error {
 	return f.writeErr
 }
 
-// destroyPool собирает fakePool с одной транзакцией, чей FOR UPDATE-ответ
-// возвращает (state, status).
+// destroyPool assembles fakePool with single transaction whose FOR UPDATE response
+// returns (state, status).
 func destroyPool(status string) (*fakePool, *fakeTx) {
 	tx := &fakeTx{
 		execErrAt: -1,
@@ -33,9 +33,9 @@ func destroyPool(status string) (*fakePool, *fakeTx) {
 	return &fakePool{txs: []*fakeTx{tx}}, tx
 }
 
-// TestDestroy_AllowedStatuses — destroy разрешён из ready / error_locked /
-// migration_failed: статус переводится в destroying, пишется state_history и
-// audit-event.
+// TestDestroy_AllowedStatuses — destroy allowed from ready / error_locked /
+// migration_failed: status transitions to destroying, state_history and
+// audit-event written.
 func TestDestroy_AllowedStatuses(t *testing.T) {
 	for _, from := range []string{"ready", "error_locked", "migration_failed"} {
 		t.Run(from, func(t *testing.T) {
@@ -64,7 +64,7 @@ func TestDestroy_AllowedStatuses(t *testing.T) {
 			if !strings.Contains(tx.execSQLs[1], "UPDATE incarnation") {
 				t.Errorf("Exec[1] not incarnation UPDATE: %q", tx.execSQLs[1])
 			}
-			// status-аргумент UPDATE — destroying.
+			// status-argument of UPDATE — destroying.
 			if got := tx.execArgs[1][1]; got != string(StatusDestroying) {
 				t.Errorf("UPDATE status arg = %v, want destroying", got)
 			}
@@ -72,9 +72,9 @@ func TestDestroy_AllowedStatuses(t *testing.T) {
 	}
 }
 
-// TestDestroy_RejectedStatuses — destroy отвергается из applying / destroying
-// (и неизвестного статуса): ErrIncarnationNotDestroyable, tx откатывается, в
-// destroying не переводит, audit НЕ пишется.
+// TestDestroy_RejectedStatuses — destroy rejected from applying / destroying
+// (and unknown status): ErrIncarnationNotDestroyable, tx rolls back, doesn't
+// transition to destroying, audit NOT written.
 func TestDestroy_RejectedStatuses(t *testing.T) {
 	for _, from := range []string{"applying", "destroying", "weird"} {
 		t.Run(from, func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestDestroy_RejectedStatuses(t *testing.T) {
 			if !tx.rolled {
 				t.Error("rejected destroy must rollback")
 			}
-			// До UPDATE дело не дошло (guard сработал после FOR UPDATE).
+			// Never reached UPDATE (guard triggered after FOR UPDATE).
 			if tx.execN != 0 {
 				t.Errorf("Exec calls = %d, want 0 (rejected before any write)", tx.execN)
 			}
@@ -103,7 +103,7 @@ func TestDestroy_RejectedStatuses(t *testing.T) {
 	}
 }
 
-// TestDestroy_NotFound — ErrIncarnationNotFound при отсутствии строки.
+// TestDestroy_NotFound — ErrIncarnationNotFound when row absent.
 func TestDestroy_NotFound(t *testing.T) {
 	tx := &fakeTx{execErrAt: -1, selectRow: scriptedRow{err: pgx.ErrNoRows}}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -115,8 +115,8 @@ func TestDestroy_NotFound(t *testing.T) {
 	}
 }
 
-// TestDestroy_AuditEvent — после успешного destroy пишется
-// incarnation.destroy_started с корректным source / AID / payload.
+// TestDestroy_AuditEvent — after successful destroy
+// incarnation.destroy_started written with correct source / AID / payload.
 func TestDestroy_AuditEvent(t *testing.T) {
 	pool, _ := destroyPool("ready")
 	aw := &fakeAuditWriter{}
@@ -149,8 +149,8 @@ func TestDestroy_AuditEvent(t *testing.T) {
 	}
 }
 
-// TestDestroy_ForcePersistedInStatusDetails — force-намерение сохраняется в
-// status_details (для S-D3), в UPDATE идёт JSON с "force".
+// TestDestroy_ForcePersistedInStatusDetails — force intent persisted in
+// status_details (for S-D3), UPDATE goes JSON with "force".
 func TestDestroy_ForcePersistedInStatusDetails(t *testing.T) {
 	for _, force := range []bool{true, false} {
 		pool, tx := destroyPool("ready")
@@ -158,7 +158,7 @@ func TestDestroy_ForcePersistedInStatusDetails(t *testing.T) {
 			audit.SourceAPI, "archon-alice", "01HISTORYID0000000000000000", nil); err != nil {
 			t.Fatalf("Destroy force=%v: %v", force, err)
 		}
-		// UPDATE — второй Exec; status_details — третий аргумент ($3).
+		// UPDATE — second Exec; status_details — third argument ($3).
 		detailsArg, ok := tx.execArgs[1][2].([]byte)
 		if !ok {
 			t.Fatalf("status_details arg type = %T, want []byte", tx.execArgs[1][2])
@@ -170,8 +170,8 @@ func TestDestroy_ForcePersistedInStatusDetails(t *testing.T) {
 	}
 }
 
-// TestDestroy_AuditFailureDoesNotFailDestroy — фейл audit-write НЕ валит
-// destroy (переход уже закоммичен).
+// TestDestroy_AuditFailureDoesNotFailDestroy — audit-write failure does NOT fail
+// destroy (transition already committed).
 func TestDestroy_AuditFailureDoesNotFailDestroy(t *testing.T) {
 	pool, tx := destroyPool("ready")
 	aw := &fakeAuditWriter{writeErr: errors.New("audit down")}
@@ -185,7 +185,7 @@ func TestDestroy_AuditFailureDoesNotFailDestroy(t *testing.T) {
 	}
 }
 
-// TestDestroy_NilAuditWriter — w == nil не паникует, destroy проходит.
+// TestDestroy_NilAuditWriter — w == nil doesn't panic, destroy passes.
 func TestDestroy_NilAuditWriter(t *testing.T) {
 	pool, tx := destroyPool("ready")
 	if _, err := Destroy(context.Background(), pool, nil, "redis-prod", false,

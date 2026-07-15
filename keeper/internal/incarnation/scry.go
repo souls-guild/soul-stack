@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// ScryCandidate — минимальное представление incarnation для iterator-а
-// фонового правила `scry_background` (ADR-031 Slice C, Reaper). Содержит ровно
-// то, что нужно reaper-tick-у, чтобы построить scenario.CheckDriftSpec
-// (Service-резолв + roster + dispatch) и проверить min-interval-throttle на
-// чтении.
+// ScryCandidate — minimal incarnation representation for the iterator of the
+// background rule `scry_background` (ADR-031 Slice C, Reaper). Carries
+// exactly what a reaper tick needs to build scenario.CheckDriftSpec
+// (Service resolve + roster + dispatch) and to check the min-interval
+// throttle on read.
 type ScryCandidate struct {
 	Name             string
 	Service          string
@@ -20,25 +20,24 @@ type ScryCandidate struct {
 	LastDriftCheckAt *time.Time
 }
 
-// SelectScryCandidates возвращает батч incarnation-ов, подходящих для
-// фонового Scry-скана (ADR-031 Slice C, Reaper-правило `scry_background`).
-// Iterator-предикат:
+// SelectScryCandidates returns a batch of incarnations eligible for a
+// background Scry scan (ADR-031 Slice C, Reaper rule `scry_background`).
+// Iterator predicate:
 //
-//   - статус ready или drift (drift — информационный, не блокирует
-//     повторный скан; см. ADR-031);
-//   - нет активного apply-прогона (NOT IN apply_runs WHERE finished_at IS
-//     NULL — исключает все live-claimed/dispatched/running прогоны
-//     независимо от status, не только applying);
-//   - сортировка `last_drift_check_at NULLS FIRST` — естественный round-robin:
-//     никогда не сканированные incarnation идут первыми, дальше — по дате
-//     последнего скана.
+//   - status ready or drift (drift is informational, doesn't block a
+//     repeat scan; see ADR-031);
+//   - no active apply run (NOT IN apply_runs WHERE finished_at IS
+//     NULL — excludes all live claimed/dispatched/running runs
+//     regardless of status, not just applying);
+//   - order by `last_drift_check_at NULLS FIRST` — natural round-robin:
+//     never-scanned incarnations go first, then by the date of the last
+//     scan.
 //
-// Min-interval-throttle (PM-конфиг `min_interval_per_incarnation`) применяется
-// на iterator-level: если задан > 0, исключаем incarnation с
-// `last_drift_check_at + min_interval > NOW()`. Нулевая (или отрицательная)
-// duration → throttle выключен, ORDER BY NULLS FIRST даёт естественную
-// «справедливость». batchSize<=0 → возврат пустого списка без обращения к PG
-// (защитный no-op).
+// The min-interval throttle (PM config `min_interval_per_incarnation`) is
+// applied at the iterator level: if set > 0, exclude incarnations with
+// `last_drift_check_at + min_interval > NOW()`. A zero (or negative)
+// duration → throttle off, ORDER BY NULLS FIRST gives natural fairness.
+// batchSize<=0 → returns an empty list without hitting PG (defensive no-op).
 func SelectScryCandidates(ctx context.Context, db ExecQueryRower, minInterval time.Duration, batchSize int) ([]ScryCandidate, error) {
 	if batchSize <= 0 {
 		return nil, nil
@@ -51,9 +50,9 @@ WHERE status IN ('ready', 'drift')
       SELECT incarnation_name FROM apply_runs WHERE finished_at IS NULL
   )
 `
-	// $1 — min_interval (interval-литерал), $2 — limit. Min-interval-предикат
-	// дописывается условно: при minInterval<=0 не передаём interval, чтобы
-	// PG не выводил тип неиспользуемого параметра.
+	// $1 — min_interval (interval literal), $2 — limit. The min-interval
+	// predicate is appended conditionally: when minInterval<=0 we don't pass
+	// interval, so PG doesn't need to infer the type of an unused parameter.
 	var (
 		sql  string
 		args []any
@@ -91,13 +90,14 @@ LIMIT $1
 	return out, nil
 }
 
-// CountActiveDryRuns возвращает число idoщих фоновых dry_run-прогонов
-// (`apply_runs` с `recipe->>'dry_run'='true'` и не-finished). Используется
-// Reaper-правилом `scry_background` для throttle-cap-а `max_concurrent_in_flight`.
+// CountActiveDryRuns returns the number of in-flight background dry_run runs
+// (`apply_runs` with `recipe->>'dry_run'='true'` and not finished). Used by
+// the Reaper rule `scry_background` for the `max_concurrent_in_flight` throttle cap.
 //
-// Запрос не ходит по индексу (predicate на jsonb-поле), но партиал-индекса
-// заводить не стоит: cardinality dry_run-прогонов на проде ничтожна по
-// сравнению с регулярными apply, full scan по active-pool-у дешёвый.
+// The query doesn't use an index (predicate on a jsonb field), but a partial
+// index isn't worth adding: dry_run run cardinality in production is
+// negligible compared to regular applies, and a full scan over the active
+// pool is cheap.
 func CountActiveDryRuns(ctx context.Context, db ExecQueryRower) (int, error) {
 	const sql = `
 SELECT count(*) FROM apply_runs
@@ -111,10 +111,10 @@ WHERE recipe->>'dry_run' = 'true'
 	return n, nil
 }
 
-// DriftScanSummary — counts-агрегат одной Scry-проверки (ADR-031 Slice C),
-// сохраняемый в колонку `incarnation.last_drift_summary`. Симметричен
-// scenario.DriftSummary, плюс `TotalHosts` и `ScannedAt` для дискриминации
-// устаревших скан-инфо.
+// DriftScanSummary — a counts aggregate of one Scry check (ADR-031 Slice C),
+// stored in the `incarnation.last_drift_summary` column. Symmetric to
+// scenario.DriftSummary, plus `TotalHosts` and `ScannedAt` to discriminate
+// stale scan info.
 type DriftScanSummary struct {
 	HostsDrifted     int       `json:"hosts_drifted"`
 	HostsClean       int       `json:"hosts_clean"`
@@ -124,16 +124,17 @@ type DriftScanSummary struct {
 	ScannedAt        time.Time `json:"scanned_at"`
 }
 
-// UpdateDriftScanResult атомарно проставляет `last_drift_check_at` и
-// `last_drift_summary` после завершения dry_run-прогона converge — фонового
-// (Reaper-правило `scry_background`) или on-demand (REST/MCP CheckDrift,
-// Slice B). Status incarnation НЕ трогает: Slice B делает это отдельным
-// `MarkDriftStatus`; вызывающий должен координировать порядок.
+// UpdateDriftScanResult atomically sets `last_drift_check_at` and
+// `last_drift_summary` after a converge dry_run finishes — background
+// (Reaper rule `scry_background`) or on-demand (REST/MCP CheckDrift,
+// Slice B). Doesn't touch incarnation status: Slice B does that separately
+// via `MarkDriftStatus`; the caller must coordinate ordering.
 //
-// `summary.ScannedAt` записывается caller-ом (обычно `time.Now().UTC()` после
-// сборки DriftReport). UPDATE без WHERE-guard статуса: incarnation за время
-// scan-а могла уйти в applying/destroying — это не мешает зафиксировать факт
-// проверки (информационные поля, не блокирующие).
+// `summary.ScannedAt` is set by the caller (usually `time.Now().UTC()` after
+// assembling the DriftReport). UPDATE has no status WHERE guard: the
+// incarnation may have moved to applying/destroying during the scan — that
+// doesn't prevent recording the fact of the check (informational,
+// non-blocking fields).
 func UpdateDriftScanResult(ctx context.Context, db ExecQueryRower, name string, summary DriftScanSummary) error {
 	if !ValidName(name) {
 		return fmt.Errorf("incarnation: invalid name %q", name)

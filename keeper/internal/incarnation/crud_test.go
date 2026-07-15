@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — execQueryRower-stub для unit-тестов. Захватывает последний SQL
-// и аргументы, отдаёт настраиваемый Row / Rows / Err.
+// fakeDB — execQueryRower stub for unit tests. Captures the last SQL
+// and args, returns a configurable Row / Rows / Err.
 type fakeDB struct {
 	execCalls    int
 	lastExecSQL  string
@@ -122,7 +122,7 @@ func assign(dest, src any) {
 	}
 }
 
-// fakeRows — pgx.Rows-stub. Прогоняет staticRow за staticRow.
+// fakeRows — pgx.Rows stub. Iterates staticRow by staticRow.
 type fakeRows struct {
 	rows []staticRow
 	idx  int
@@ -186,8 +186,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if f.queryRowArgs[0] != "redis-prod" {
 		t.Errorf("args[0] name = %v", f.queryRowArgs[0])
 	}
-	// created_scenario (args[11]): caller не задал поле (nil *string) → NULL в БД
-	// (миграция 090, bare-инкарнация). Нормализации ""→'create' больше нет.
+	// created_scenario (args[11]): caller left the field unset (nil *string) → NULL in DB
+	// (migration 090, bare incarnation). No more ""→'create' normalization.
 	if f.queryRowArgs[11] != nil {
 		t.Errorf("args[11] created_scenario = %v, want nil (NULL для bare)", f.queryRowArgs[11])
 	}
@@ -363,8 +363,8 @@ func TestCreate_NilSpecBecomesEmptyObject(t *testing.T) {
 	}
 }
 
-// TestCreate_NilCovensBecomesEmptySlice — covens=nil кодируется как пустой
-// массив (NOT NULL DEFAULT '{}'): pgx иначе передал бы NULL → violation.
+// TestCreate_NilCovensBecomesEmptySlice — covens=nil encodes as an empty
+// array (NOT NULL DEFAULT '{}'): pgx would otherwise pass NULL → violation.
 // Arg $10 (index 9) — covens.
 func TestCreate_NilCovensBecomesEmptySlice(t *testing.T) {
 	f := &fakeDB{
@@ -392,7 +392,7 @@ func TestCreate_NilCovensBecomesEmptySlice(t *testing.T) {
 	}
 }
 
-// TestCreate_CovensPassedThrough — заданные covens доходят до INSERT-арга $10.
+// TestCreate_CovensPassedThrough — explicitly set covens reach INSERT arg $10.
 func TestCreate_CovensPassedThrough(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -456,7 +456,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 	if len(inc.Covens) != 1 || inc.Covens[0] != "prod" {
 		t.Errorf("Covens = %v, want [prod]", inc.Covens)
 	}
-	// traits jsonb (ADR-060 amend R1) — round-trip scan в Incarnation.Traits.
+	// traits jsonb (ADR-060 amend R1) — round-trip scan into Incarnation.Traits.
 	if inc.Traits["team"] != "dba" {
 		t.Errorf("Traits = %v, want team=dba", inc.Traits)
 	}
@@ -517,7 +517,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 	if !strings.Contains(f.querySQL, "ORDER BY created_at DESC") {
 		t.Errorf("ORDER missing in: %q", f.querySQL)
 	}
-	// args = [offset, limit] без фильтров.
+	// args = [offset, limit] with no filters.
 	if len(f.queryArgs) != 2 || f.queryArgs[0] != 0 || f.queryArgs[1] != 50 {
 		t.Errorf("args = %v", f.queryArgs)
 	}
@@ -596,8 +596,8 @@ func TestSelectAll_FilterByCoven(t *testing.T) {
 
 // --- SelectAll: RBAC scope (ADR-047 S3b-3) ----------------------------
 
-// TestSelectAll_ScopeUnrestricted_NoClause — Unrestricted scope не добавляет ни
-// одного scope-предиката (весь список без сужения). args = [offset, limit].
+// TestSelectAll_ScopeUnrestricted_NoClause — Unrestricted scope adds no
+// scope predicate at all (full list, no narrowing). args = [offset, limit].
 func TestSelectAll_ScopeUnrestricted_NoClause(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{Unrestricted: true}, 0, 50)
@@ -612,10 +612,11 @@ func TestSelectAll_ScopeUnrestricted_NoClause(t *testing.T) {
 	}
 }
 
-// TestSelectAll_ScopeEmpty_FailClosed — ГЛАВНЫЙ security-инвариант на CRUD-слое:
-// scope не Unrestricted и пуст по измерениям (ни Covens, ни StateNames) →
-// предикат FALSE (ни одной incarnation), а НЕ весь список. Defensive-ветка
-// (handler фильтрует пустой scope раньше, но fail-closed обязан жить и здесь).
+// TestSelectAll_ScopeEmpty_FailClosed — the KEY security invariant at the CRUD
+// layer: a scope that's not Unrestricted and empty across dimensions (neither
+// Covens nor StateNames) → FALSE predicate (no incarnation matches), NOT the
+// full list. Defensive branch (the handler filters an empty scope earlier, but
+// fail-closed must hold here too).
 func TestSelectAll_ScopeEmpty_FailClosed(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{}, 0, 50)
@@ -630,10 +631,10 @@ func TestSelectAll_ScopeEmpty_FailClosed(t *testing.T) {
 	}
 }
 
-// TestSelectAll_ScopeCovens_CovenUnionName — coven∪{name} матчер (ADR-008,
-// architect major): scope-coven обязан матчить incarnation и по covens[]-
-// пересечению (`covens && $n`), и по равенству имени (`name = ANY($n)`). Один
-// bind-параметр обслуживает оба плеча OR.
+// TestSelectAll_ScopeCovens_CovenUnionName — coven∪{name} matcher (ADR-008,
+// architect major): scope-coven must match an incarnation both by covens[]
+// intersection (`covens && $n`) and by name equality (`name = ANY($n)`). One
+// bind parameter serves both arms of the OR.
 func TestSelectAll_ScopeCovens_CovenUnionName(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},
@@ -647,15 +648,15 @@ func TestSelectAll_ScopeCovens_CovenUnionName(t *testing.T) {
 	if !strings.Contains(f.querySQL, "name = ANY($1)") {
 		t.Errorf("coven∪{name}: name = ANY($1) отсутствует (incarnation с name=scope-coven должна матчиться): %q", f.querySQL)
 	}
-	// Оба плеча — один и тот же bind ($1), значение = scope-covens.
+	// Both arms use the same bind ($1); value = scope-covens.
 	if covs, ok := f.queryArgs[0].([]string); !ok || len(covs) != 1 || covs[0] != "redis-prod" {
 		t.Errorf("scope-covens bind = %v, want [redis-prod]", f.queryArgs[0])
 	}
 }
 
-// TestSelectAll_ScopeStateNames_PushdownByName — state-измерение приходит
-// предрезолвнутым множеством имён → `name = ANY($n)`-pushdown (CEL не дублируется
-// в CRUD; имена матчатся чистым SQL, total/offset когерентны).
+// TestSelectAll_ScopeStateNames_PushdownByName — the state dimension arrives
+// as a pre-resolved set of names → `name = ANY($n)` pushdown (CEL isn't
+// duplicated in CRUD; names match via plain SQL, total/offset stay coherent).
 func TestSelectAll_ScopeStateNames_PushdownByName(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},
@@ -671,9 +672,10 @@ func TestSelectAll_ScopeStateNames_PushdownByName(t *testing.T) {
 	}
 }
 
-// TestSelectAll_ScopeOR_CovenAndState — OR измерений (architect): coven ∪ state =
-// union. Предикат — единый блок в скобках `(coven-плечо OR name-state-плечо)`,
-// чтобы OR не «протёк» через соседние AND-clause пользовательского фильтра.
+// TestSelectAll_ScopeOR_CovenAndState — OR of dimensions (architect): coven ∪
+// state = union. The predicate is a single parenthesized block
+// `(coven-arm OR name-state-arm)`, so the OR doesn't "leak" across the
+// adjacent AND clause of the user filter.
 func TestSelectAll_ScopeOR_CovenAndState(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{Service: "redis"},
@@ -681,18 +683,18 @@ func TestSelectAll_ScopeOR_CovenAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	// service-фильтр AND scope-блок; внутри scope-блока coven OR state.
+	// service filter AND scope block; inside the scope block, coven OR state.
 	if !strings.Contains(f.querySQL, "service = $1") {
 		t.Errorf("service-фильтр отсутствует: %q", f.querySQL)
 	}
-	// scope-блок обёрнут в скобки и содержит OR между измерениями.
+	// scope block is parenthesized and contains OR between dimensions.
 	if !strings.Contains(f.querySQL, "((covens && $2 OR name = ANY($2)) OR name = ANY($3))") {
 		t.Errorf("OR-блок измерений неверен: %q", f.querySQL)
 	}
 }
 
-// TestSelectAll_ScopeWithUserFilter_AND — пользовательский фильтр AND scope:
-// фильтр сужает ВНУТРИ scope (не расширяет). service AND (scope-блок).
+// TestSelectAll_ScopeWithUserFilter_AND — user filter AND scope: the filter
+// narrows WITHIN the scope (doesn't widen it). service AND (scope-block).
 func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f,
@@ -709,12 +711,13 @@ func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 	}
 }
 
-// --- SelectAll: trait-scope SQL-форма (BUG #1 fix — scalar, не @>) ---------
+// --- SelectAll: trait-scope SQL form (BUG #1 fix — scalar, not @>) ---------
 
-// TestSelectAll_ScopeTrait_ScalarEquality — trait-плечо обязано быть СКАЛЯРНЫМ
-// равенством `traits->>$1 = $2` (ключ+значение раздельными bind-параметрами), а
-// НЕ jsonb-containment `@>`: containment со скаляр-RHS матчит массив (list-Trait),
-// расходясь с GET-путём (traitScalarEquals). Значения в SQL-текст не утекают.
+// TestSelectAll_ScopeTrait_ScalarEquality — the trait arm must be SCALAR
+// equality `traits->>$1 = $2` (key+value as separate bind parameters), NOT
+// jsonb containment `@>`: containment with a scalar RHS matches an array
+// (list-Trait), diverging from the GET path (traitScalarEquals). Values never
+// leak into the SQL text.
 func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},
@@ -725,34 +728,34 @@ func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
 	if !strings.Contains(f.querySQL, "traits->>$1 = $2") {
 		t.Errorf("trait-плечо должно быть scalar `traits->>$1 = $2`, got: %q", f.querySQL)
 	}
-	// Регресс-guard: старая containment-форма НЕ должна вернуться (она и есть BUG #1).
+	// Regression guard: the old containment form must not return (that's exactly BUG #1).
 	if strings.Contains(f.querySQL, "@>") {
 		t.Errorf("trait-плечо использует containment @> (BUG #1 — матчит list): %q", f.querySQL)
 	}
-	// Ключ и значение — раздельные bind-параметры (не конкатенация в SQL-текст).
+	// Key and value are separate bind parameters (not concatenated into SQL text).
 	if len(f.queryArgs) < 2 || f.queryArgs[0] != "env" || f.queryArgs[1] != "prod" {
 		t.Errorf("trait bind-args = %v, want [env prod] раздельно", f.queryArgs)
 	}
 	if strings.Contains(f.querySQL, "env") || strings.Contains(f.querySQL, "prod") {
 		t.Errorf("ключ/значение утекли в текст SQL (должны быть bind): %q", f.querySQL)
 	}
-	// Тот же предикат — в COUNT (иначе total разойдётся с items).
+	// Same predicate in COUNT (otherwise total would diverge from items).
 	if !strings.Contains(f.queryRowSQL, "traits->>$1 = $2") {
 		t.Errorf("trait-плечо отсутствует в COUNT: %q", f.queryRowSQL)
 	}
 }
 
-// TestAppendScopeClause_Table — табличный обзор формы scope-предиката по разным
-// комбинациям измерений ListScope: содержание trait-плеча, OR-объединение в
-// скобках, fail-closed FALSE на пустом не-Unrestricted scope, отсутствие clause
-// при Unrestricted. Проверяет SQL через SelectAll (единственный публичный путь к
-// appendScopeClause), сверяя f.querySQL.
+// TestAppendScopeClause_Table — table-driven overview of the scope-predicate
+// shape across different ListScope dimension combos: trait-arm content,
+// parenthesized OR union, fail-closed FALSE on an empty non-Unrestricted
+// scope, no clause on Unrestricted. Checks the SQL via SelectAll (the only
+// public path to appendScopeClause), comparing f.querySQL.
 func TestAppendScopeClause_Table(t *testing.T) {
 	tests := []struct {
 		name       string
 		scope      ListScope
-		wantSubstr []string // подстроки, обязанные присутствовать
-		denySubstr []string // подстроки, обязанные ОТСУТСТВОВАТЬ
+		wantSubstr []string // substrings that must be present
+		denySubstr []string // substrings that must be ABSENT
 	}{
 		{
 			name:       "один trait → scalar-плечо без OR",
@@ -775,15 +778,15 @@ func TestAppendScopeClause_Table(t *testing.T) {
 				Covens: []string{"prod"},
 				Traits: []TraitPair{{Key: "owner", Value: "alice"}},
 			},
-			// coven занимает $1, trait — $2(key)/$3(value).
+			// coven takes $1, trait — $2(key)/$3(value).
 			wantSubstr: []string{"((covens && $1 OR name = ANY($1)) OR traits->>$2 = $3)"},
 			denySubstr: []string{"@>", "FALSE"},
 		},
 		{
 			name:  "пустой scope, не Unrestricted → fail-closed FALSE",
 			scope: ListScope{},
-			// FALSE-предикат в WHERE; ни одного scope-плеча (имена колонок
-			// traits/covens в SELECT-листе не считаются — проверяем предикаты).
+			// FALSE predicate in WHERE; no scope arm at all (column names
+			// traits/covens in the SELECT list don't count — we check predicates).
 			wantSubstr: []string{"WHERE FALSE"},
 			denySubstr: []string{"traits->>", "covens &&"},
 		},
@@ -850,18 +853,18 @@ func TestSelectAll_StatePredicate_EqString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	// jsonb-pushdown: текстовая выборка через ->>, значение через bind ($1).
+	// jsonb pushdown: text extraction via ->>, value through bind ($1).
 	if !strings.Contains(f.querySQL, "state->>'redis_version' = $1") {
 		t.Errorf("jsonb eq SQL missing in: %q", f.querySQL)
 	}
-	// Тот же предикат должен попасть и в COUNT — иначе total разойдётся.
+	// Same predicate must appear in COUNT too — otherwise total would diverge.
 	if !strings.Contains(f.queryRowSQL, "state->>'redis_version' = $1") {
 		t.Errorf("jsonb eq SQL missing in COUNT: %q", f.queryRowSQL)
 	}
 	if f.queryArgs[0] != "8.0" {
 		t.Errorf("args[0] = %v, want 8.0", f.queryArgs[0])
 	}
-	// Значение — всегда bind-параметр, не конкатенация в текст SQL.
+	// Value is always a bind parameter, never concatenated into SQL text.
 	if strings.Contains(f.querySQL, "8.0") {
 		t.Errorf("value leaked into SQL text (must be bind): %q", f.querySQL)
 	}
@@ -875,7 +878,7 @@ func TestSelectAll_StatePredicate_NumericGt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	// Числовое сравнение: cast (->>)::numeric, значение тоже через bind+cast.
+	// Numeric comparison: cast (->>)::numeric, value also via bind+cast.
 	if !strings.Contains(f.querySQL, "(state->>'memory_mb')::numeric > $1::numeric") {
 		t.Errorf("jsonb numeric gt SQL missing in: %q", f.querySQL)
 	}
@@ -889,11 +892,11 @@ func TestSelectAll_StatePredicate_RejectsInjectionPath(t *testing.T) {
 		"redis_version' OR '1'='1",
 		"redis_version'; DROP TABLE incarnation; --",
 		"foo) OR (1=1",
-		"UPPER",      // не-lowercase
-		"with-dash",  // дефис вне whitelist [a-z0-9_]
-		"with.dot",   // точка вне whitelist
-		"",           // пустой path
-		"with space", // пробел
+		"UPPER",      // not lowercase
+		"with-dash",  // hyphen outside whitelist [a-z0-9_]
+		"with.dot",   // dot outside whitelist
+		"",           // empty path
+		"with space", // space
 	} {
 		f := newCountQueryFakeDB()
 		_, _, err := SelectAll(context.Background(), f, ListFilter{
@@ -902,7 +905,7 @@ func TestSelectAll_StatePredicate_RejectsInjectionPath(t *testing.T) {
 		if !errors.Is(err, ErrInvalidStatePath) {
 			t.Errorf("path %q: err = %v, want ErrInvalidStatePath", bad, err)
 		}
-		// Инъекция не должна долететь до БД: при reject-е запросов нет.
+		// Injection must not reach the DB: no queries on reject.
 		if f.queryRowCalls != 0 || f.queryCalls != 0 {
 			t.Errorf("path %q: запрос ушёл в БД несмотря на reject", bad)
 		}
@@ -931,9 +934,9 @@ func TestSelectAll_StatePredicate_RejectsUnknownOp(t *testing.T) {
 	}
 }
 
-// TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue — для числовых
-// операторов (gt/gte/lt/lte) нечисловое значение должно отбиваться ДО запроса
-// в БД ([ErrInvalidStateValue]), а не падать cast-ошибкой 22P02 на PG-стороне.
+// TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue — for numeric
+// operators (gt/gte/lt/lte) a non-numeric value must be rejected BEFORE the DB
+// query ([ErrInvalidStateValue]), not fail with a 22P02 cast error on the PG side.
 func TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue(t *testing.T) {
 	for _, op := range []StateOp{StateOpGt, StateOpGte, StateOpLt, StateOpLte} {
 		for _, bad := range []string{"abc", "1.2.3", "", "10x", "0x10", " "} {
@@ -944,7 +947,7 @@ func TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue(t *testing.T)
 			if !errors.Is(err, ErrInvalidStateValue) {
 				t.Errorf("op %q value %q: err = %v, want ErrInvalidStateValue", op, bad, err)
 			}
-			// Невалидное значение не должно долетать до БД (иначе 22P02 → 500).
+			// An invalid value must not reach the DB (otherwise 22P02 → 500).
 			if f.queryRowCalls != 0 || f.queryCalls != 0 {
 				t.Errorf("op %q value %q: запрос ушёл в БД несмотря на reject", op, bad)
 			}
@@ -952,8 +955,8 @@ func TestSelectAll_StatePredicate_NumericOp_RejectsNonNumericValue(t *testing.T)
 	}
 }
 
-// TestSelectAll_StatePredicate_NumericOp_AcceptsNumericValue — валидные числовые
-// формы (целые/дробные/отрицательные/экспонента) проходят валидацию.
+// TestSelectAll_StatePredicate_NumericOp_AcceptsNumericValue — valid numeric
+// forms (integer/decimal/negative/exponent) pass validation.
 func TestSelectAll_StatePredicate_NumericOp_AcceptsNumericValue(t *testing.T) {
 	for _, ok := range []string{"1000", "0", "-5", "3.14", "1e3", "-0.5"} {
 		f := newCountQueryFakeDB()
@@ -966,9 +969,9 @@ func TestSelectAll_StatePredicate_NumericOp_AcceptsNumericValue(t *testing.T) {
 	}
 }
 
-// TestSelectAll_StatePredicate_TextOp_AllowsNonNumericValue — для текстовых
-// операторов (eq/ne) нечисловое значение остаётся валидным (числовая
-// валидация НЕ применяется).
+// TestSelectAll_StatePredicate_TextOp_AllowsNonNumericValue — for text
+// operators (eq/ne) a non-numeric value stays valid (numeric validation
+// does NOT apply).
 func TestSelectAll_StatePredicate_TextOp_AllowsNonNumericValue(t *testing.T) {
 	for _, op := range []StateOp{StateOpEq, StateOpNe} {
 		f := newCountQueryFakeDB()
@@ -981,8 +984,8 @@ func TestSelectAll_StatePredicate_TextOp_AllowsNonNumericValue(t *testing.T) {
 	}
 }
 
-// TestSelectAll_StatePredicate_CombinesWithBaseFilter — state-предикат
-// AND базовый фильтр (service/coven): нумерация bind-плейсхолдеров общая.
+// TestSelectAll_StatePredicate_CombinesWithBaseFilter — state predicate
+// AND base filter (service/coven): bind placeholder numbering is shared.
 func TestSelectAll_StatePredicate_CombinesWithBaseFilter(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{
@@ -1030,14 +1033,14 @@ func TestSelectAll_SortByStatus_Desc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	// tie-break по name ASC сохраняется для стабильной пагинации.
+	// tie-break on name ASC is kept for stable pagination.
 	if !strings.Contains(f.querySQL, "ORDER BY status DESC, name ASC") {
 		t.Errorf("ORDER BY status desc missing in: %q", f.querySQL)
 	}
 }
 
-// TestSelectAll_SortByStateField — сортировка по state-полю через jsonb ->>.
-// jsonb-path валидируется тем же whitelist-ом, что и StatePredicate.Path.
+// TestSelectAll_SortByStateField — sort by a state field via jsonb ->>.
+// The jsonb path is validated by the same whitelist as StatePredicate.Path.
 func TestSelectAll_SortByStateField(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{
@@ -1082,8 +1085,8 @@ func TestSelectAll_SortDir_RejectsUnknown(t *testing.T) {
 	}
 }
 
-// TestSelectAll_DefaultSortUnchanged — без SortBy сохраняется legacy-порядок
-// created_at DESC, name ASC (обратная совместимость).
+// TestSelectAll_DefaultSortUnchanged — without SortBy the legacy order
+// created_at DESC, name ASC is preserved (backward compatibility).
 func TestSelectAll_DefaultSortUnchanged(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{Unrestricted: true}, 0, 50)
@@ -1132,7 +1135,7 @@ func TestHistorySelectByName_HappyPath(t *testing.T) {
 	if out[0].StateBefore["v"] != float64(1) {
 		t.Errorf("StateBefore = %v", out[0].StateBefore)
 	}
-	// Без фильтра — only-args [name, offset, limit].
+	// No filter — only-args [name, offset, limit].
 	if len(f.queryArgs) != 3 {
 		t.Errorf("queryArgs len = %d, want 3 (name, offset, limit)", len(f.queryArgs))
 	}
@@ -1142,7 +1145,7 @@ func TestHistorySelectByName_HappyPath(t *testing.T) {
 }
 
 func TestHistorySelectByName_EmptyOK(t *testing.T) {
-	// Существующая incarnation без записей history → total=0, items=[].
+	// Existing incarnation with no history records → total=0, items=[].
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
 			return staticRow{values: []any{int(0)}}
@@ -1202,10 +1205,10 @@ func TestHistorySelectByName_FilterByApplyID(t *testing.T) {
 	}
 }
 
-// TestHistorySelectByName_DefaultsToActiveOnly — по умолчанию (HistoryFilter{}
-// = IncludeArchived:false) WHERE-кляуза включает `archived_at IS NULL`, чтобы
-// soft-deleted-снимки правила Reaper archive_state_history не попадали в
-// Operator API / MCP-ленту истории (ADR-Q19 retention).
+// TestHistorySelectByName_DefaultsToActiveOnly — by default (HistoryFilter{}
+// = IncludeArchived:false) the WHERE clause includes `archived_at IS NULL`,
+// so soft-deleted snapshots from the Reaper archive_state_history rule don't
+// leak into the Operator API / MCP history feed (ADR-Q19 retention).
 func TestHistorySelectByName_DefaultsToActiveOnly(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -1224,10 +1227,10 @@ func TestHistorySelectByName_DefaultsToActiveOnly(t *testing.T) {
 	}
 }
 
-// TestHistorySelectByName_IncludeArchived — при IncludeArchived=true фильтр
-// `archived_at IS NULL` НЕ применяется: возвращаются все снимки, включая
-// soft-deleted. Operator API использует это для разбора «куда делся snapshot N
-// дней назад».
+// TestHistorySelectByName_IncludeArchived — with IncludeArchived=true the
+// `archived_at IS NULL` filter does NOT apply: all snapshots are returned,
+// including soft-deleted ones. Operator API uses this to investigate "where
+// did the snapshot from N days ago go".
 func TestHistorySelectByName_IncludeArchived(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -1247,7 +1250,7 @@ func TestHistorySelectByName_IncludeArchived(t *testing.T) {
 }
 
 func TestHistorySelectByName_FilterApplyID_NoMatch(t *testing.T) {
-	// Существует row, но apply_id фильтр не совпадает → COUNT=0, items=[].
+	// A row exists, but the apply_id filter doesn't match → COUNT=0, items=[].
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
 			return staticRow{values: []any{int(0)}}
@@ -1280,15 +1283,15 @@ func TestHistorySelectByName_RejectsBadOffsetLimit(t *testing.T) {
 
 // --- UpdateStateFromRun ---
 
-// multiExecFake — fakeDB-вариант под single-winner [UpdateStateFromRun]
-// (ADR-027(j) W1): Exec обслуживает state_history INSERT, QueryRow —
-// финальный single-winner UPDATE … RETURNING (guard WHERE status IN
-// (applying,destroying)) и опциональный probe-SELECT статуса.
+// multiExecFake — fakeDB variant for single-winner [UpdateStateFromRun]
+// (ADR-027(j) W1): Exec serves the state_history INSERT, QueryRow serves
+// the final single-winner UPDATE … RETURNING (guard WHERE status IN
+// (applying,destroying)) plus an optional probe-SELECT of status.
 //
-//   - updateRow  — что вернёт финальный UPDATE … RETURNING name. nil →
-//     pgx.ErrNoRows (guard не совпал: 0 строк).
-//   - probeRow   — что вернёт probe-SELECT статуса при 0 строк UPDATE-а.
-//     nil → pgx.ErrNoRows (строки нет → ErrIncarnationNotFound).
+//   - updateRow  — what the final UPDATE … RETURNING name returns. nil →
+//     pgx.ErrNoRows (guard didn't match: 0 rows).
+//   - probeRow   — what the status probe-SELECT returns when UPDATE affects
+//     0 rows. nil → pgx.ErrNoRows (no row at all → ErrIncarnationNotFound).
 type multiExecFake struct {
 	calls   int
 	sqls    []string
@@ -1297,7 +1300,7 @@ type multiExecFake struct {
 	execErr error
 
 	queryRowSQLs []string
-	updateRow    pgx.Row // RETURNING name финального UPDATE (nil → ErrNoRows)
+	updateRow    pgx.Row // RETURNING name of the final UPDATE (nil → ErrNoRows)
 	probeRow     pgx.Row // status probe-SELECT (nil → ErrNoRows)
 }
 
@@ -1315,8 +1318,8 @@ func (f *multiExecFake) Exec(_ context.Context, sql string, args ...any) (pgconn
 	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
 
-// QueryRow различает финальный UPDATE … RETURNING (несёт «UPDATE incarnation»)
-// от probe-SELECT статуса по тексту SQL.
+// QueryRow distinguishes the final UPDATE … RETURNING (carries "UPDATE
+// incarnation") from the status probe-SELECT by SQL text.
 func (f *multiExecFake) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	f.queryRowSQLs = append(f.queryRowSQLs, sql)
 	if strings.Contains(sql, "UPDATE incarnation") {
@@ -1338,7 +1341,7 @@ func (f *multiExecFake) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, 
 func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 	f := &multiExecFake{
 		tags:      []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
-		updateRow: staticRow{values: []any{"redis-prod"}}, // RETURNING name — победитель
+		updateRow: staticRow{values: []any{"redis-prod"}}, // RETURNING name — winner
 	}
 	err := UpdateStateFromRun(context.Background(), f,
 		"redis-prod", "scale", "01HABCDEF000000000000000",
@@ -1350,7 +1353,7 @@ func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
-	// Exec — только state_history INSERT; финальный UPDATE ушёл в QueryRow.
+	// Exec — state_history INSERT only; the final UPDATE went through QueryRow.
 	if f.calls != 1 {
 		t.Fatalf("Exec calls = %d, want 1 (state_history INSERT)", f.calls)
 	}
@@ -1365,7 +1368,7 @@ func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 	}
 }
 
-// applying → success: single-winner коммит проходит (RETURNING вернул строку).
+// applying → success: single-winner commit succeeds (RETURNING returned a row).
 func TestUpdateStateFromRun_SingleWinner_CommitsFromApplying(t *testing.T) {
 	f := &multiExecFake{
 		tags:      []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
@@ -1379,19 +1382,20 @@ func TestUpdateStateFromRun_SingleWinner_CommitsFromApplying(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit from applying: %v", err)
 	}
-	// probe не должен был вызываться — UPDATE сразу выиграл строку.
+	// probe must not be called — UPDATE won the row immediately.
 	if len(f.queryRowSQLs) != 1 {
 		t.Errorf("QueryRow calls = %d, want 1 (UPDATE без probe)", len(f.queryRowSQLs))
 	}
 }
 
-// Статус уже терминальный (ready/error_locked) → UPDATE 0 строк, probe видит
-// не-finalizable статус → ErrAlreadyFinalized (no-op single-winner, НЕ ошибка).
+// Status is already terminal (ready/error_locked) → UPDATE affects 0 rows,
+// probe sees a non-finalizable status → ErrAlreadyFinalized (single-winner
+// no-op, NOT an error).
 func TestUpdateStateFromRun_SingleWinner_AlreadyFinalized(t *testing.T) {
 	for _, st := range []string{"ready", "error_locked", "destroy_failed"} {
 		f := &multiExecFake{
 			tags:      []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
-			updateRow: errRow{err: pgx.ErrNoRows}, // guard не совпал — 0 строк
+			updateRow: errRow{err: pgx.ErrNoRows}, // guard didn't match — 0 rows
 			probeRow:  staticRow{values: []any{st}},
 		}
 		err := UpdateStateFromRun(context.Background(), f,
@@ -1400,15 +1404,15 @@ func TestUpdateStateFromRun_SingleWinner_AlreadyFinalized(t *testing.T) {
 		if !errors.Is(err, ErrAlreadyFinalized) {
 			t.Errorf("status=%s: err = %v, want ErrAlreadyFinalized", st, err)
 		}
-		// должен был добрать статус probe-SELECT-ом (UPDATE + probe = 2 QueryRow).
+		// must have fetched status via probe-SELECT (UPDATE + probe = 2 QueryRow).
 		if len(f.queryRowSQLs) != 2 {
 			t.Errorf("status=%s: QueryRow calls = %d, want 2 (UPDATE + probe)", st, len(f.queryRowSQLs))
 		}
 	}
 }
 
-// Строки нет совсем: UPDATE 0 строк, probe → ErrNoRows → ErrIncarnationNotFound
-// (контракт callers-ов сохранён, не путать с already-finalized no-op).
+// No row exists at all: UPDATE 0 rows, probe → ErrNoRows → ErrIncarnationNotFound
+// (caller contract preserved — don't confuse with the already-finalized no-op).
 func TestUpdateStateFromRun_NotFound(t *testing.T) {
 	f := &multiExecFake{
 		tags:      []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
@@ -1466,9 +1470,9 @@ func TestUpdateStateFromRun_ErrorLockedWithDetails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
-	// status_details уезжает аргументом финального UPDATE … RETURNING (QueryRow):
-	// args финального UPDATE мы не перехватываем в QueryRow-fake, поэтому
-	// проверяем сам факт коммита (err==nil) + что guard стоит в SQL.
+	// status_details travels as an arg of the final UPDATE … RETURNING (QueryRow):
+	// we don't capture the final UPDATE's args in the QueryRow fake, so we
+	// just verify the commit happened (err==nil) + that the guard is in the SQL.
 	if len(f.queryRowSQLs) != 1 || !strings.Contains(f.queryRowSQLs[0], "UPDATE incarnation") {
 		t.Fatalf("QueryRow SQLs = %v, want single UPDATE incarnation", f.queryRowSQLs)
 	}
@@ -1508,9 +1512,9 @@ func TestValidStatus(t *testing.T) {
 	}
 }
 
-// TestCreate_CreatedScenarioPassedThrough — явный CreatedScenario пишется
-// аргументом insert (механизм нескольких create: инкарнация запоминает, каким
-// стартовым сценарием создана).
+// TestCreate_CreatedScenarioPassedThrough — an explicit CreatedScenario is
+// written as an insert argument (multi-create mechanism: the incarnation
+// remembers which start scenario created it).
 func TestCreate_CreatedScenarioPassedThrough(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -1531,8 +1535,9 @@ func TestCreate_CreatedScenarioPassedThrough(t *testing.T) {
 	}
 }
 
-// TestCreate_BareCreatedScenarioNull — bare-инкарнация (CreatedScenario nil) →
-// created_scenario пишется NULL аргументом insert (миграция 090), а не 'create'.
+// TestCreate_BareCreatedScenarioNull — a bare incarnation (CreatedScenario
+// nil) → created_scenario is written as NULL insert argument (migration 090),
+// not 'create'.
 func TestCreate_BareCreatedScenarioNull(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -1552,7 +1557,7 @@ func TestCreate_BareCreatedScenarioNull(t *testing.T) {
 	}
 }
 
-// TestSelectByName_ReadsCreatedScenario — created_scenario вычитывается в
+// TestSelectByName_ReadsCreatedScenario — created_scenario is read into
 // Incarnation.CreatedScenario (round-trip scan), NULL → nil.
 func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
@@ -1579,7 +1584,7 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 		t.Errorf("CreatedScenario = %v, want create_cluster", inc.CreatedScenario)
 	}
 
-	// NULL → nil (bare-инкарнация).
+	// NULL → nil (bare incarnation).
 	bare, err := SelectByName(context.Background(), makeF(nil), "redis-cluster")
 	if err != nil {
 		t.Fatalf("SelectByName(bare): %v", err)
@@ -1589,9 +1594,10 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 	}
 }
 
-// TestSelectByName_ReadsApplyingApplyID — guard ADR-068 §A1: SelectByName читает
-// колонку applying_apply_id в Incarnation.ApplyingApplyID — non-null пока прогон идёт
-// (applying), nil на терминале (NULL). Read-source линковки incarnation→live-run.
+// TestSelectByName_ReadsApplyingApplyID — guard ADR-068 §A1: SelectByName reads
+// the applying_apply_id column into Incarnation.ApplyingApplyID — non-null while
+// a run is in progress (applying), nil at terminal (NULL). Read-source for the
+// incarnation→live-run link.
 func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
 	makeF := func(applyingApplyID any) *fakeDB {
@@ -1603,13 +1609,13 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), any(nil), []byte(nil),
 					"create",        // created_scenario
-					applyingApplyID, // applying_apply_id (string=applying | nil=терминал)
+					applyingApplyID, // applying_apply_id (string=applying | nil=terminal)
 				}}
 			},
 		}
 	}
 
-	// Прогон идёт → non-null apply_id.
+	// Run in progress → non-null apply_id.
 	applying, err := SelectByName(context.Background(), makeF("01HAPPLYINGRUN000000000000"), "redis-cluster")
 	if err != nil {
 		t.Fatalf("SelectByName(applying): %v", err)
@@ -1618,7 +1624,7 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 		t.Errorf("ApplyingApplyID = %v, want 01HAPPLYINGRUN000000000000 (non-null пока applying)", applying.ApplyingApplyID)
 	}
 
-	// Терминал → NULL → nil.
+	// Terminal → NULL → nil.
 	terminal, err := SelectByName(context.Background(), makeF(nil), "redis-cluster")
 	if err != nil {
 		t.Fatalf("SelectByName(terminal): %v", err)

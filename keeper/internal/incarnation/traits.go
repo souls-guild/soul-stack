@@ -10,26 +10,27 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// Trait релоцирован per-soul → per-incarnation (ADR-060 amend, R1). Источник
-// истины — `incarnation.traits` (operator-set, задаётся в incarnation.spec при
-// create). Read-слой остался per-soul (`souls.traits`: soulprint.self.traits /
-// where:traits / soul-lint / topology) — он становится PROJECTION TARGET, не
-// operator-set-per-soul. Этот файл несёт два моста между источником и target-ом:
+// Trait relocated per-soul → per-incarnation (ADR-060 amend, R1). Source of
+// truth is `incarnation.traits` (operator-set, given in incarnation.spec on
+// create). The read layer stays per-soul (`souls.traits`: soulprint.self.traits /
+// where:traits / soul-lint / topology) — it becomes a PROJECTION TARGET, not
+// operator-set-per-soul. This file carries two bridges between the source and
+// the target:
 //
-//   - TraitsFromSpec — operator-set (incarnation.spec.traits) → колонка
-//     incarnation.traits (на create-пути);
-//   - SyncTraitsToHosts — МАТЕРИАЛИЗОВАННАЯ проекция incarnation.traits в
-//     souls.traits хостов-членов (sync-hook на create + bind).
+//   - TraitsFromSpec — operator-set (incarnation.spec.traits) → the
+//     incarnation.traits column (on the create path);
+//   - SyncTraitsToHosts — MATERIALIZED projection of incarnation.traits into
+//     souls.traits of member hosts (sync-hook on create + bind).
 
-// TraitsFromSpec извлекает operator-set traits из freeform jsonb-spec инкарнации
-// (`incarnation.spec.traits`, ADR-060 amend R1). Симметрично [readSpecHosts]
-// (тот читает spec["hosts"]): отсутствие ключа / не-map форма → nil (traits не
-// заданы), без ошибки (spec freeform). Значение каждого ключа полиморфно
-// (scalar | list) — форму валидирует [soul.ValidateTraitDelta], как и per-soul
-// bulk-write; невалидный набор → ошибка (caller 422-ит на create-пути ДО insert).
+// TraitsFromSpec extracts operator-set traits from freeform jsonb spec of incarnation
+// (`incarnation.spec.traits`, ADR-060 amend R1). Symmetric with [readSpecHosts]
+// (which reads spec["hosts"]): missing key / non-map form → nil (traits not
+// set), no error (spec freeform). Value of each key polymorphic
+// (scalar | list) — form validated by [soul.ValidateTraitDelta], same as per-soul
+// bulk-write; invalid set → error (caller 422s on create path BEFORE insert).
 //
-// nil-результат на create-пути попадёт в колонку как `{}` (NOT NULL DEFAULT,
-// marshalJSONB(nil) → `{}`): «инкарнация без traits».
+// nil result on create path goes to column as `{}` (NOT NULL DEFAULT,
+// marshalJSONB(nil) → `{}`): "incarnation without traits".
 func TraitsFromSpec(spec map[string]any) (map[string]any, error) {
 	if spec == nil {
 		return nil, nil
@@ -51,31 +52,31 @@ func TraitsFromSpec(spec map[string]any) (map[string]any, error) {
 	return m, nil
 }
 
-// SyncTraitsToHosts — sync-hook релокации Trait (ADR-060 amend, R1): проецирует
-// `incarnation.traits` МАТЕРИАЛИЗОВАННО в `souls.traits` ВСЕХ хостов-членов
-// инкарнации `incName`. Член инкарнации = хост, у которого имя инкарнации есть
-// в coven[] (ADR-008: incarnation.name — корневая Coven-метка), что выражает
+// SyncTraitsToHosts — sync-hook of Trait relocation (ADR-060 amend, R1): projects
+// `incarnation.traits` MATERIALIZED into `souls.traits` of ALL member hosts
+// of incarnation `incName`. Member of incarnation = host whose incarnation name exists
+// in coven[] (ADR-008: incarnation.name is root Coven label), expressed by
 // [soul.BulkSelector.Incarnation].
 //
-// Точки врезки (sync-hook):
-//   - incarnation create (CreateTyped) — после insert строки;
-//   - bind хоста через core.soul.registered (keeper-dispatch) — после успешной
-//     регистрации, чтобы новопривязанный хост подхватил traits своей инкарнации.
+// Hookpoints (sync-hook):
+//   - incarnation create (CreateTyped) — after row insert;
+//   - host bind via core.soul.registered (keeper-dispatch) — after successful
+//     registration so newly bound host picks up traits of its incarnation.
 //
-// Идемпотентна и повторяема: переиспользует [soul.BulkReplaceTraits] —
-// souls.traits хостов-членов ЗАМЕНЯЕТСЯ целиком на incarnation.traits (пустой
-// map = очистить). Replace (а не merge) намеренно: incarnation.traits —
-// единственный источник истины, проекция выравнивает хосты под него. Это и
-// перетирает per-soul bulk-write (POST /v1/souls/traits) в переходный период —
-// ожидаемо до relocate per-soul API (следующий слайс, ADR-060 amend).
+// Idempotent and re-runnable: reuses [soul.BulkReplaceTraits] —
+// souls.traits of member hosts REPLACED entirely with incarnation.traits (empty
+// map = clear). Replace (not merge) intentional: incarnation.traits is
+// sole source of truth, projection aligns hosts to it. This also
+// overwrites per-soul bulk-write (POST /v1/souls/traits) in transition period —
+// expected until per-soul API relocate (next slice, ADR-060 amend).
 //
-// scope = Unrestricted: это keeper-internal проекция (не operator-инициированный
-// bulk), не подчиняется coven-scope оператора — иначе хосты-члены вне scope
-// инициатора create не получили бы traits своей инкарнации.
+// scope = Unrestricted: this is keeper-internal projection (not operator-initiated
+// bulk), not subject to operator's coven scope — otherwise member hosts outside
+// create initiator's scope wouldn't get traits of their incarnation.
 //
-// 0 хостов-членов (например на create ДО онбординга) → [soul.BulkReplaceTraits]
-// возвращает Matched=0 без ошибки (no-op). [soul.ErrBulkEmptySelector] здесь
-// недостижим: selector всегда несёт Incarnation-критерий.
+// 0 member hosts (e.g., create before onboarding) → [soul.BulkReplaceTraits]
+// returns Matched=0 without error (no-op). [soul.ErrBulkEmptySelector] unreachable
+// here: selector always carries Incarnation criterion.
 func SyncTraitsToHosts(ctx context.Context, db soul.BulkPool, incName string, traits map[string]any) error {
 	if !ValidName(incName) {
 		return fmt.Errorf("incarnation: sync traits: invalid name %q", incName)
@@ -88,30 +89,30 @@ func SyncTraitsToHosts(ctx context.Context, db soul.BulkPool, incName string, tr
 	return nil
 }
 
-// UpdateTraitsResult — итог [UpdateTraits]: снимки old/new ключей для audit-
-// payload + полная обновлённая запись incarnation для response. trait-ЗНАЧЕНИЯ
-// несёт только [Incarnation.Traits]; OldKeys/NewKeys — лишь имена (секрет-гигиена
-// audit-trail, симметрично soul.traits-assign).
+// UpdateTraitsResult — result of [UpdateTraits]: snapshots of old/new keys for audit
+// payload + full updated incarnation record for response. trait-VALUES
+// carried only by [Incarnation.Traits]; OldKeys/NewKeys — names only (secret hygiene
+// audit-trail, symmetric with soul.traits-assign).
 type UpdateTraitsResult struct {
 	OldKeys     []string
 	NewKeys     []string
 	Incarnation *Incarnation
 }
 
-// UpdateTraits целиком ЗАМЕНЯЕТ operator-set trait-метки инкарнации
-// (`incarnation.traits`, ADR-060 amend R1) — зеркало per-soul bulk replace, но на
-// уровне источника истины. Тот же транзакционный паттерн, что [UpdateHosts] /
-// [Unlock]: одна tx SELECT … FOR UPDATE (сериализация с конкурентным
+// UpdateTraits entirely REPLACES operator-set trait labels of incarnation
+// (`incarnation.traits`, ADR-060 amend R1) — mirror of per-soul bulk replace, but at
+// source-of-truth level. Same transactional pattern as [UpdateHosts] /
+// [Unlock]: single tx SELECT … FOR UPDATE (serialization with concurrent
 // Unlock/Upgrade/Destroy/scenario-runner) → UPDATE traits/updated_at → commit.
-// Проекция в `souls.traits` хостов-членов делается caller-ом отдельным
-// sync-hook-ом ([SyncTraitsToHosts]) ПОСЛЕ commit-а — она вне транзакции
-// incarnation (bulk-write по другим строкам, идемпотентна и до-повторяема).
+// Projection to `souls.traits` of member hosts done by caller with separate
+// sync-hook ([SyncTraitsToHosts]) AFTER commit — outside incarnation transaction
+// (bulk-write on other rows, idempotent and re-runnable).
 //
-// traits валидируется caller-ом ([soul.ValidateTraitDelta]); пустой/nil map —
-// «очистить метки» (колонка → `{}`). Возврат [ErrIncarnationNotFound] (404), если
-// name не существует. Статус-гейта НЕТ намеренно: traits — operator-set метки,
-// не state/spec прогона; replace на любом статусе безопасен (проекция выровняет
-// хосты при следующем bind/sync).
+// traits validated by caller ([soul.ValidateTraitDelta]); empty/nil map —
+// "clear labels" (column → `{}`). Returns [ErrIncarnationNotFound] (404) if
+// name doesn't exist. Status-gate intentionally absent: traits are operator-set labels,
+// not run state/spec; replace safe at any status (projection aligns
+// hosts on next bind/sync).
 func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[string]any) (*UpdateTraitsResult, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)
@@ -159,8 +160,8 @@ RETURNING updated_at
 		return nil, fmt.Errorf("incarnation: commit update-traits tx: %w", err)
 	}
 
-	// nil-map нормализуем к `{}`-проекции: read/response-путь не различает «нет
-	// колонки» / «нет меток» (scanIncarnation тоже даёт nil на `{}`).
+	// nil-map normalize to `{}` projection: read/response path doesn't distinguish "no
+	// column" / "no labels" (scanIncarnation also gives nil on `{}`).
 	if traits == nil {
 		traits = map[string]any{}
 	}
@@ -172,8 +173,8 @@ RETURNING updated_at
 	}, nil
 }
 
-// traitKeys — отсортированный набор ключей trait-map (для audit-payload). nil/
-// пустой → пустой slice (устойчивый JSON-вывод).
+// traitKeys — sorted set of trait-map keys (for audit-payload). nil/
+// empty → empty slice (stable JSON output).
 func traitKeys(traits map[string]any) []string {
 	keys := make([]string, 0, len(traits))
 	for k := range traits {

@@ -15,22 +15,22 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/statepredicate"
 )
 
-// Слайс S2: StateLister — production-адаптер statepredicate.IncarnationStateLister
-// поверх SelectAll. Unit-тесты через fake-db (без PG): проверяют (1) маппинг
-// BaseFilter→ListFilter (pushdown service/coven доходит до SQL-args), (2) реальный
-// page-by-page дренаж (набор > страницы → все строки обойдены через offset/limit,
-// ни одна не потеряна), (3) проброс ошибок. Интеграция с живой PG — отдельный
-// integration-тест (build-tag).
+// Slice S2: StateLister — a production adapter of statepredicate.IncarnationStateLister
+// over SelectAll. Unit tests via a fake-db (without PG): verify (1) the
+// BaseFilter→ListFilter mapping (service/coven pushdown reaches SQL args), (2) real
+// page-by-page draining (a set > one page → all rows visited via offset/limit,
+// none lost), (3) error propagation. Integration with a live PG is a separate
+// integration test (build-tag).
 
-// statePageDB — fake-db, моделирующий SelectAll для StateLister: COUNT отдаёт
-// total, SELECT — срез строк по offset/limit из args. Захватывает COUNT-args
-// (проверка pushdown service/coven). Каждая строка — 14 колонок scanIncarnation.
+// statePageDB — a fake-db modeling SelectAll for StateLister: COUNT returns
+// total, SELECT — a slice of rows by offset/limit from args. Captures COUNT args
+// (to check service/coven pushdown). Each row is 14 columns of scanIncarnation.
 type statePageDB struct {
-	rows       []*Incarnation // полный набор (имитация уже-сужённого SQL-результата)
-	countArgs  []any          // args COUNT-запроса (= base-pushdown bind-параметры)
-	queryArgs  [][]any        // args каждого SELECT (для контроля offset/limit-цикла)
+	rows       []*Incarnation // full set (simulates an already-narrowed SQL result)
+	countArgs  []any          // args of the COUNT query (= base-pushdown bind params)
+	queryArgs  [][]any        // args of each SELECT (to check the offset/limit loop)
 	queryCalls int
-	selectErr  error // если задано — SELECT возвращает ошибку
+	selectErr  error // if set — SELECT returns an error
 }
 
 func (d *statePageDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -54,7 +54,7 @@ func (d *statePageDB) Query(_ context.Context, sql string, args ...any) (pgx.Row
 	if d.selectErr != nil {
 		return nil, d.selectErr
 	}
-	// Последние два bind-параметра SelectAll — OFFSET, LIMIT.
+	// The last two bind params of SelectAll are OFFSET, LIMIT.
 	offset := args[len(args)-2].(int)
 	limit := args[len(args)-1].(int)
 	end := offset + limit
@@ -70,7 +70,7 @@ func (d *statePageDB) Query(_ context.Context, sql string, args ...any) (pgx.Row
 	return &fakeRows{rows: page}, nil
 }
 
-// stateCountRow — Row для COUNT(*): scan total в *int.
+// stateCountRow — a Row for COUNT(*): scans total into *int.
 type stateCountRow struct{ total int }
 
 func (r stateCountRow) Scan(dest ...any) error {
@@ -81,16 +81,16 @@ func (r stateCountRow) Scan(dest ...any) error {
 	return nil
 }
 
-// incToStaticRow упаковывает Incarnation в 16-колоночный staticRow в порядке
-// scanIncarnation (name, service, service_version, state_schema_version, spec,
+// incToStaticRow packs an Incarnation into a 16-column staticRow in
+// scanIncarnation order (name, service, service_version, state_schema_version, spec,
 // state, status, status_details, created_by_aid, created_at, updated_at, covens,
 // traits, last_drift_check_at, last_drift_summary, created_scenario).
 func incToStaticRow(inc *Incarnation) staticRow {
 	stateBytes, _ := json.Marshal(inc.State)
 	specBytes := []byte("{}")
 	now := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
-	// nil-колонки передаются нетипизированным nil: assign различает NULL по
-	// `src == nil` (типизированный nil-указатель в interface{} != nil).
+	// nil columns are passed as an untyped nil: assign distinguishes NULL by
+	// `src == nil` (a typed nil pointer in interface{} != nil).
 	return staticRow{values: []any{
 		inc.Name,
 		inc.Service,
@@ -129,7 +129,7 @@ func collectPages(t *testing.T, l *StateLister, base statepredicate.BaseFilter) 
 	return all
 }
 
-// --- pushdown: BaseFilter (service/coven) доходит до SQL как bind-args ---
+// --- pushdown: BaseFilter (service/coven) reaches SQL as bind-args ---
 
 func TestStateLister_PushdownToSQL(t *testing.T) {
 	db := &statePageDB{rows: []*Incarnation{
@@ -139,7 +139,7 @@ func TestStateLister_PushdownToSQL(t *testing.T) {
 
 	_ = collectPages(t, l, statepredicate.BaseFilter{Service: "redis", Coven: "prod"})
 
-	// buildListWhere для Service+Coven биндит два параметра: service, coven.
+	// buildListWhere for Service+Coven binds two parameters: service, coven.
 	if len(db.countArgs) != 2 {
 		t.Fatalf("COUNT получил %d args, want 2 (service+coven pushdown)", len(db.countArgs))
 	}
@@ -151,19 +151,19 @@ func TestStateLister_PushdownToSQL(t *testing.T) {
 	}
 }
 
-// --- BaseFilter.Covens (ADDITIVE multi-coven) → coven∪{name} scope в SQL ---
+// --- BaseFilter.Covens (ADDITIVE multi-coven) → coven∪{name} scope in SQL ---
 
-// TestStateLister_MultiCovenScope_PushdownCovenUnionName — ADDITIVE-поле
-// BaseFilter.Covens (S3b-3) маппится в ListScope coven∪{name}: и covens[]-
-// пересечение, и name-равенство доходят до SQL одним bind-ом. Старый путь
-// (single Coven через ListFilter) при этом НЕ задействован.
+// TestStateLister_MultiCovenScope_PushdownCovenUnionName — the ADDITIVE field
+// BaseFilter.Covens (S3b-3) maps into ListScope coven∪{name}: both the covens[]
+// intersection and the name equality reach SQL as one bind. The old path
+// (single Coven via ListFilter) is NOT engaged here.
 func TestStateLister_MultiCovenScope_PushdownCovenUnionName(t *testing.T) {
 	db := &statePageDB{rows: []*Incarnation{newStated("a", map[string]any{"k": "v"})}}
 	l := NewStateLister(db)
 
 	_ = collectPages(t, l, statepredicate.BaseFilter{Covens: []string{"redis-prod"}})
 
-	// countArgs = [scope-covens] (один bind для обоих плеч coven∪{name}).
+	// countArgs = [scope-covens] (one bind for both arms of coven∪{name}).
 	if len(db.countArgs) != 1 {
 		t.Fatalf("COUNT получил %d args, want 1 (coven∪{name} один bind)", len(db.countArgs))
 	}
@@ -173,10 +173,10 @@ func TestStateLister_MultiCovenScope_PushdownCovenUnionName(t *testing.T) {
 	}
 }
 
-// TestStateLister_NoCovens_UnrestrictedScope — без BaseFilter.Covens лист
-// дренируется БЕЗ scope-сужения (Unrestricted): state-CEL резолвится по всему
-// service-сужённому множеству (типовой S3b-3 List, где coven и state —
-// независимые OR-измерения). countArgs пуст (ни service, ни coven, ни scope).
+// TestStateLister_NoCovens_UnrestrictedScope — without BaseFilter.Covens the list
+// drains WITHOUT scope narrowing (Unrestricted): state-CEL resolves over the whole
+// service-narrowed set (a typical S3b-3 List, where coven and state are
+// independent OR dimensions). countArgs is empty (no service, no coven, no scope).
 func TestStateLister_NoCovens_UnrestrictedScope(t *testing.T) {
 	db := &statePageDB{rows: []*Incarnation{newStated("a", map[string]any{"k": "v"})}}
 	l := NewStateLister(db)
@@ -188,11 +188,11 @@ func TestStateLister_NoCovens_UnrestrictedScope(t *testing.T) {
 	}
 }
 
-// --- page-by-page: набор больше страницы → несколько SELECT-ов, все строки обойдены ---
+// --- page-by-page: a set larger than one page → several SELECTs, all rows visited ---
 
 func TestStateLister_PageByPage(t *testing.T) {
-	// 2.5 страницы (statePageSize=1000) — проверяем многостраничный дренаж и что
-	// ни одна строка не потеряна на границах. Каждая инкарнация уникальна по имени.
+	// 2.5 pages (statePageSize=1000) — check multi-page draining and that
+	// no row is lost at the boundaries. Each incarnation is unique by name.
 	const n = statePageSize*2 + 17
 	rows := make([]*Incarnation, n)
 	for i := range rows {
@@ -206,11 +206,11 @@ func TestStateLister_PageByPage(t *testing.T) {
 	if len(got) != n {
 		t.Fatalf("обойдено %d строк, want %d (ни одна не потеряна)", len(got), n)
 	}
-	// Три страницы (1000 + 1000 + 17).
+	// Three pages (1000 + 1000 + 17).
 	if db.queryCalls != 3 {
 		t.Fatalf("SELECT-ов %d, want 3 (offset/limit-цикл по страницам)", db.queryCalls)
 	}
-	// Offset-ы возрастают на размер страницы.
+	// Offsets increase by the page size.
 	wantOffsets := []int{0, statePageSize, statePageSize * 2}
 	for i, args := range db.queryArgs {
 		off := args[len(args)-2].(int)
@@ -218,7 +218,7 @@ func TestStateLister_PageByPage(t *testing.T) {
 			t.Errorf("страница %d: offset=%d, want %d", i, off, wantOffsets[i])
 		}
 	}
-	// Все имена уникальны и присутствуют.
+	// All names are unique and present.
 	seen := make(map[string]bool, n)
 	for _, s := range got {
 		if seen[s.Name] {
@@ -231,7 +231,7 @@ func TestStateLister_PageByPage(t *testing.T) {
 	}
 }
 
-// --- ровно одна полная страница → один SELECT, без лишнего запроса ---
+// --- exactly one full page → one SELECT, no extra request ---
 
 func TestStateLister_ExactPage(t *testing.T) {
 	rows := make([]*Incarnation, statePageSize)
@@ -245,14 +245,14 @@ func TestStateLister_ExactPage(t *testing.T) {
 	if len(got) != statePageSize {
 		t.Fatalf("got %d, want %d", len(got), statePageSize)
 	}
-	// total==statePageSize: offset+len >= total на первой странице → второй SELECT
-	// не нужен (offset+1000 >= 1000).
+	// total==statePageSize: offset+len >= total on the first page → a second SELECT
+	// is not needed (offset+1000 >= 1000).
 	if db.queryCalls != 1 {
 		t.Errorf("SELECT-ов %d, want 1 (ровно страница, без лишнего round-trip)", db.queryCalls)
 	}
 }
 
-// --- пустой набор → один SELECT, пустой yield (callback не падает) ---
+// --- empty set → one SELECT, empty yield (callback doesn't fail) ---
 
 func TestStateLister_EmptySet(t *testing.T) {
 	db := &statePageDB{rows: nil}
@@ -271,7 +271,7 @@ func TestStateLister_EmptySet(t *testing.T) {
 	}
 }
 
-// --- ошибка SELECT пробрасывается ---
+// --- SELECT error propagates ---
 
 func TestStateLister_SelectError(t *testing.T) {
 	sentinel := errors.New("db down")
@@ -284,10 +284,10 @@ func TestStateLister_SelectError(t *testing.T) {
 	}
 }
 
-// --- ошибка yield прерывает дренаж и пробрасывается (lazy: лишние страницы не тянутся) ---
+// --- yield error stops draining and propagates (lazy: extra pages aren't fetched) ---
 
 func TestStateLister_YieldErrorStops(t *testing.T) {
-	const n = statePageSize + 10 // две страницы
+	const n = statePageSize + 10 // two pages
 	rows := make([]*Incarnation, n)
 	for i := range rows {
 		rows[i] = newStated(fmt.Sprintf("inc-%05d", i), map[string]any{"idx": i})
@@ -297,7 +297,7 @@ func TestStateLister_YieldErrorStops(t *testing.T) {
 
 	sentinel := errors.New("not-bool on full state")
 	err := l.ListStatePages(context.Background(), statepredicate.BaseFilter{}, func([]statepredicate.Stated) error {
-		return sentinel // падаем на первой же странице
+		return sentinel // fail on the very first page
 	})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("ошибка yield должна проброситься: got %v", err)

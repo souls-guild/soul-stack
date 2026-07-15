@@ -36,41 +36,40 @@ var (
 	ErrIncarnationAlreadyExists = errors.New("incarnation: name already exists")
 	ErrIncarnationNotFound      = errors.New("incarnation: name not found")
 	ErrIncarnationNotLocked     = errors.New("incarnation: not in unlockable status")
-	// ErrIncarnationNotErrorLocked — статус НЕ error_locked: rerun-last
-	// допустим строго из error_locked (architecture.md → «Атомарность и
-	// error_locked»: для migration_failed / destroy_failed / прочих — обычный
-	// unlock + ручной run). Отдельный sentinel от [ErrIncarnationNotLocked] (тот
-	// шире — покрывает три блокирующих статуса): rerun сужает допуск до одного.
+	// ErrIncarnationNotErrorLocked — status is not error_locked: rerun-last is
+	// allowed only from error_locked (architecture.md → "Atomicity and
+	// error_locked"; migration_failed/destroy_failed/etc. need a plain unlock +
+	// manual run). Narrower than [ErrIncarnationNotLocked], which covers all
+	// three blocking statuses.
 	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
-	// ErrRerunInputUnavailable — rerun-last не может восстановить input упавшего
-	// day-2-прогона: последний snapshot state_history указывает на apply_run,
-	// чьего рецепта (`apply_runs.recipe`) нет — recipe IS NULL по одной из причин:
-	// прогон упал ДО dispatch (render_failed/no_hosts/preflight) → терминальную
-	// строку пишет sentinel-путь ensureTerminalApplyRun (run.go) без рецепта; ЛИБО
-	// legacy-путь dispatchWave (Insert(running) рецепт не несёт); ЛИБО строка
-	// apply_run вычищена Reaper-ретеншном (purge_apply_runs). Fail-closed: без сохранённого
-	// input перезапуск day-2-сценария применил бы дефолты / упал на input-
-	// валидации — вместо этого отказ, оператор снимает блок обычным unlock и
-	// запускает нужный сценарий вручную с явным input. create-путь (последний
-	// упавший == created_scenario) этого sentinel-а не достигает — input берётся
-	// из incarnation.spec.input, который живёт с инкарнацией. Handler маппит в 409.
+	// ErrRerunInputUnavailable — rerun-last cannot recover the failed day-2
+	// run's input: the last state_history snapshot points to an apply_run whose
+	// recipe (`apply_runs.recipe`) is NULL. Causes: the run failed before
+	// dispatch (render_failed/no_hosts/preflight, recipe-less terminal row from
+	// ensureTerminalApplyRun); the legacy dispatchWave path (Insert(running)
+	// carries no recipe); or the apply_run row was purged by Reaper retention
+	// (purge_apply_runs). Fail-closed: rerunning without the saved input would
+	// apply defaults or fail input validation, so instead we reject — operator
+	// does a plain unlock and runs the scenario manually with explicit input.
+	// The create path (last-failed == created_scenario) never hits this sentinel:
+	// its input comes from incarnation.spec.input. Handler maps to 409.
 	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last cannot recover the failed run's input (recipe unavailable — use unlock + manual run with explicit input)")
 	ErrIncarnationBusy       = errors.New("incarnation: run in progress (applying)")
 	ErrIncarnationLocked     = errors.New("incarnation: locked — unlock required before upgrade")
 	ErrDowngradeUnsupported  = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
 	ErrSchemaVersionMismatch = errors.New("incarnation: current schema version does not match migration chain")
-	// ErrAlreadyFinalized — single-winner state-commit (ADR-027(j), W1): строка
-	// incarnation существует, но уже НЕ в рабочем статусе прогона
-	// (applying / destroying) — другой обработчик выиграл финализацию (RunResult
-	// vs recovery-перехват). НЕ ошибка: caller (commitSuccess / lockIncarnation)
-	// трактует как no-op (логирует «уже финализировано другим»), как
-	// [DeleteAfterTeardown] трактует RowsAffected==0 для DELETE.
+	// ErrAlreadyFinalized — single-winner state-commit (ADR-027(j), W1): the
+	// incarnation row exists but is no longer in a working run status
+	// (applying/destroying) — another handler won finalization (RunResult vs.
+	// recovery takeover). Not an error: caller (commitSuccess/lockIncarnation)
+	// treats it as a no-op (logs "already finalized by another"), same as
+	// [DeleteAfterTeardown] treats RowsAffected==0 for DELETE.
 	ErrAlreadyFinalized = errors.New("incarnation: already finalized by another committer")
-	// ErrOrphanLockNotReleased — снятие осиротевшего applying-lock не состоялось
-	// (single-winner no-op): инкарнация уже НЕ в applying ЛИБО orphan apply_id ей
-	// не принадлежит. НЕ ошибка консистентности — caller (voyageorch recovery-шов,
-	// ADR-027(k)) трактует как «снимать нечего / честный финал прошлого владельца
-	// уже выиграл строку» и продолжает re-run без снятия.
+	// ErrOrphanLockNotReleased — releasing an orphaned applying-lock was a
+	// no-op: the incarnation is no longer applying, or the orphan apply_id
+	// doesn't belong to it. Not a consistency error — caller (voyageorch
+	// recovery seam, ADR-027(k)) treats it as "nothing to release" and
+	// continues the re-run without releasing.
 	ErrOrphanLockNotReleased = errors.New("incarnation: orphan applying-lock not released (no-op)")
 )
 
@@ -80,9 +79,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество интерфейса pgxpool.Pool, нужное
-// CRUD-у. Симметрично [operator.ExecQueryRower]: unit-тесты ходят через
-// fake без подъёма PG, production даёт реальный pool / Conn / Tx.
+// ExecQueryRower — narrow pgxpool.Pool subset needed by CRUD. Mirrors
+// [operator.ExecQueryRower]: unit tests use a fake (no PG needed),
+// production passes a real pool/Conn/Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -96,8 +95,8 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// insertSQL — INSERT с RETURNING для получения server-side created_at /
-// updated_at (DEFAULT NOW()) одной round-trip-ой.
+// insertSQL — INSERT with RETURNING to get server-side created_at/updated_at
+// (DEFAULT NOW()) in one round trip.
 const insertSQL = `
 INSERT INTO incarnation (
     name, service, service_version, state_schema_version,
@@ -107,7 +106,7 @@ INSERT INTO incarnation (
 RETURNING created_at, updated_at
 `
 
-// selectByNameSQL — SELECT всех колонок по PK.
+// selectByNameSQL — SELECT all columns by PK.
 const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
@@ -118,21 +117,21 @@ FROM incarnation
 WHERE name = $1
 `
 
-// StateOp — оператор сравнения state-предиката ([StateEq]). Закрытый набор;
-// любой иной → [ErrInvalidStateOp].
+// StateOp — comparison operator for a state predicate ([StateEq]). Closed
+// set; anything else → [ErrInvalidStateOp].
 type StateOp string
 
 const (
-	StateOpEq  StateOp = "eq" // равенство (текстовое, jsonb ->> = $n)
-	StateOpNe  StateOp = "ne" // неравенство
-	StateOpGt  StateOp = "gt" // больше (числовой cast ::numeric)
+	StateOpEq  StateOp = "eq" // equality (text, jsonb ->> = $n)
+	StateOpNe  StateOp = "ne" // inequality
+	StateOpGt  StateOp = "gt" // greater-than (numeric cast ::numeric)
 	StateOpGte StateOp = "gte"
 	StateOpLt  StateOp = "lt"
 	StateOpLte StateOp = "lte"
 )
 
-// numericStateOps — операторы, требующие числового сравнения (cast обеих
-// сторон в ::numeric). Остальные (eq/ne) — текстовое сравнение jsonb ->>.
+// numericStateOps — operators requiring a numeric comparison (both sides
+// cast to ::numeric). The rest (eq/ne) compare jsonb ->> as text.
 var numericStateOps = map[StateOp]string{
 	StateOpGt:  ">",
 	StateOpGte: ">=",
@@ -140,29 +139,26 @@ var numericStateOps = map[StateOp]string{
 	StateOpLte: "<=",
 }
 
-// textStateOps — операторы текстового сравнения над jsonb ->>.
+// textStateOps — text-comparison operators over jsonb ->>.
 var textStateOps = map[StateOp]string{
 	StateOpEq: "=",
 	StateOpNe: "<>",
 }
 
-// StateEq — предикат по полю jsonb-колонки `state` (фаза 1, jsonb-pushdown).
-// Path — ключ верхнего уровня state-объекта (например `redis_version`);
-// валидируется форматным whitelist-ом [statePathPattern] — НИКОГДА не
-// конкатенируется как SQL-идентификатор без проверки (защита от инъекции).
-// Value всегда уходит bind-параметром ($n), не в текст SQL.
-//
-// MVP: только top-level ключи (без вложенного пути a.b.c). Existence поля
-// против service-specific state_schema НЕ проверяется (разные сервисы — разные
-// поля): несуществующий ключ даёт `state->>'x' = $n` → NULL → пустой результат,
-// что является валидным «ничего не найдено».
+// StateEq — predicate over a `state` jsonb-column field (phase 1, jsonb
+// pushdown). Path is the state object's top-level key (e.g. `redis_version`),
+// validated against the [statePathPattern] whitelist — never concatenated as
+// a SQL identifier unchecked. Value always goes as a bind param ($n), never
+// into SQL text. MVP: top-level keys only (no nested a.b.c path); key
+// existence isn't checked against the service's state_schema — a missing key
+// yields `state->>'x' = $n` → NULL → empty result, a valid "nothing found".
 type StateEq struct {
 	Path  string
 	Op    StateOp
 	Value string
 }
 
-// SortDir — направление сортировки [ListFilter.SortBy].
+// SortDir — sort direction for [ListFilter.SortBy].
 type SortDir string
 
 const (
@@ -170,9 +166,9 @@ const (
 	SortDesc SortDir = "desc"
 )
 
-// sortableColumns — базовые колонки, допустимые в [ListFilter.SortBy]
-// (closed whitelist; state-поля идут отдельным префиксом `state.`). Маппинг
-// логического имени → SQL-выражение (на случай расхождения, сейчас 1:1).
+// sortableColumns — base columns allowed in [ListFilter.SortBy] (closed
+// whitelist; state fields use a separate `state.` prefix). Maps logical
+// name → SQL expression (currently 1:1, in case they diverge later).
 var sortableColumns = map[string]string{
 	"created_at": "created_at",
 	"name":       "name",
@@ -180,17 +176,17 @@ var sortableColumns = map[string]string{
 	"service":    "service",
 }
 
-// statePathPrefix — префикс sort-поля, означающий сортировку по jsonb
-// state-полю (`sort=state.redis_version`).
+// statePathPrefix — sort-field prefix meaning "sort by jsonb state field"
+// (`sort=state.redis_version`).
 const statePathPrefix = "state."
 
-// statePathPattern — форматный whitelist jsonb-path-ключа. Только нижний
-// регистр, цифры, подчёркивание; первый символ — буква. Закрывает SQL-инъекцию
-// через идентификатор: всё, что не матчит, → [ErrInvalidStatePath]. Existence
-// поля против state_schema НЕ проверяется (см. [StateEq]).
+// statePathPattern — format whitelist for a jsonb path key: lowercase,
+// digits, underscore, first char a letter. Closes SQL injection via
+// identifier — anything not matching → [ErrInvalidStatePath]. Key existence
+// against state_schema isn't checked (see [StateEq]).
 var statePathPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// Sentinel-ошибки валидации фильтра/сортировки. Handler маппит все в 422.
+// Sentinel errors for filter/sort validation. Handler maps all to 422.
 var (
 	ErrInvalidStatePath  = errors.New("incarnation: invalid state path (must match [a-z][a-z0-9_]*)")
 	ErrInvalidStateOp    = errors.New("incarnation: invalid state predicate operator")
@@ -199,22 +195,19 @@ var (
 	ErrInvalidSortDir    = errors.New("incarnation: invalid sort direction")
 )
 
-// ListFilter — фильтры для [SelectAll]. Пустые поля означают «не фильтровать».
+// ListFilter — filters for [SelectAll]. Empty fields mean "don't filter".
 //
-// Coven — exact-match по any-of в `incarnation.covens[]` (declared env-теги,
-// ADR-008 amendment a). На SQL — тот же предикат `$n = ANY(covens)`, что
-// используется в `soul.ListFilter.Coven` (souls.coven[]); семантически Coven
-// тут — env-тег incarnation (например `prod` / `staging`), не Coven-метка
-// хоста.
-//
-// StatePredicates — фильтры по полям jsonb-колонки `state` (jsonb-pushdown,
-// фаза 1). AND-комбинируются с базовыми фильтрами и между собой. Path каждого
-// предиката валидируется форматным whitelist-ом ([statePathPattern]).
-//
-// SortBy / SortDir — сортировка. SortBy: базовая колонка из [sortableColumns]
-// либо `state.<field>` (jsonb ->>). Пустой SortBy → legacy-порядок
-// `created_at DESC, name ASC`. SortDir по умолчанию (пустой) — asc. Tie-break
-// по `name ASC` добавляется всегда (стабильная пагинация).
+//   - Coven — exact any-of match against `incarnation.covens[]` (declared
+//     env tags, ADR-008 amendment a); same predicate as `soul.ListFilter.Coven`
+//     (souls.coven[]). Here it's an incarnation env tag (`prod`/`staging`),
+//     not a host Coven label.
+//   - StatePredicates — filters over `state` jsonb-column fields (jsonb
+//     pushdown, phase 1), AND-combined with the base filters and each other.
+//     Each predicate's Path is validated against [statePathPattern].
+//   - SortBy/SortDir — sorting. SortBy is a base column from [sortableColumns]
+//     or `state.<field>` (jsonb ->>); empty → legacy `created_at DESC, name
+//     ASC`. SortDir defaults to asc. `name ASC` tie-break is always appended
+//     (stable pagination).
 type ListFilter struct {
 	Service         string
 	Status          Status
@@ -224,37 +217,37 @@ type ListFilter struct {
 	SortDir         SortDir
 }
 
-// ListScope — RBAC scope-граница видимости (`GET /v1/incarnations`, ADR-047
-// S3b-3), ОТДЕЛЬНАЯ от пользовательских [ListFilter]: filter — что оператор
-// попросил показать (query-params), scope — что ему вообще ПОЛОЖЕНО видеть (из
-// JWT, резолвится handler-ом из [rbac.Purview]). Оба пересекаются AND-ом в WHERE
-// (фильтр сужает ВНУТРИ scope, не наоборот).
+// ListScope — RBAC scope visibility boundary (`GET /v1/incarnations`,
+// ADR-047 S3b-3), separate from user-facing [ListFilter]: filter is what the
+// operator asked to see (query params), scope is what they're allowed to see
+// (from JWT, resolved by the handler via [rbac.Purview]). Both intersect with
+// AND in WHERE (filter narrows inside scope, never the other way).
 //
-// Измерения scope (Covens + StateNames + Traits) объединяются OR-ом («всё мне
-// доступное»): incarnation видна, если она в одном из scope-ковенов ЛИБО её
-// state удовлетворяет одному из state-предикатов scope ЛИБО её traits содержат
-// одну из scope-пар. Это OR между измерениями, в отличие от AND filter∩scope.
+// Scope dimensions (Covens + StateNames + Traits) combine with OR ("anything
+// I can access"): an incarnation is visible if it's in a scope coven, OR its
+// state satisfies a scope state-predicate, OR its traits match a scope pair.
 //
-//   - Covens — coven∪{name} матчер (ADR-008 amendment a): scope-coven матчит
-//     incarnation и по `covens[] && ARRAY[Covens]`, и по `name = ANY(Covens)`
-//     (имя incarnation = корневая Coven-метка). Это шире, чем
-//     [ListFilter.Coven] (тот матчит только covens[]).
-//   - StateNames — имена incarnation-ов, чей state УЖЕ удовлетворил state-CEL-
-//     предикатам scope (StateExprs, ADR-047 S2c). Резолвятся ДО SQL через
-//     keeper/internal/statepredicate (CEL-движок не дублируется), затем
-//     приходят сюда множеством имён → `name = ANY(StateNames)` чистым
-//     SQL-pushdown-ом (total/offset когерентны, без Go-постфильтр-дрейфа).
-//   - Traits — `key:value`-пары scalar-equality-match по `incarnation.traits`
-//     (ADR-047 amendment, ADR-060 п.7 slice 1). Каждая пара — отдельное плечо OR
-//     `traits->>$key = $value` (scalar-only — НЕ jsonb-containment `@>`, тот со
-//     скаляр-RHS матчил бы list-Trait, расходясь с GET-путём). Чистый SQL —
-//     CEL/Go-постфильтр не нужен (точное равенство), total/offset когерентны.
+//   - Covens — coven∪{name} matcher (ADR-008 amendment a): matches both
+//     `covens[] && ARRAY[Covens]` and `name = ANY(Covens)` (incarnation name
+//     is the root Coven label) — broader than [ListFilter.Coven], which only
+//     matches covens[].
+//   - StateNames — names of incarnations whose state already satisfied the
+//     scope's state-CEL predicates (StateExprs, ADR-047 S2c), resolved before
+//     SQL via keeper/internal/statepredicate (no duplicate CEL engine), then
+//     pushed down as `name = ANY(StateNames)` (keeps total/offset coherent,
+//     no Go post-filter drift).
+//   - Traits — `key:value` scalar-equality pairs over `incarnation.traits`
+//     (ADR-047 amendment, ADR-060 §7 slice 1); each pair is a separate OR arm
+//     `traits->>$key = $value` (scalar-only, not jsonb `@>` containment,
+//     which would match list-Traits against a scalar RHS and diverge from the
+//     GET path).
 //
-// Семантика — fail-closed (ADR-047): пустой scope (Covens, StateNames и Traits
-// пусты) при !Unrestricted даёт заведомо-ложный предикат (ни одной incarnation),
-// а НЕ весь список. Unrestricted=true снимает scope-фильтр (весь список). Пустой
-// scope handler НЕ передаёт сюда — он отдаёт пустой ответ до запроса в БД (как
-// souls-пилот), но defensive-ветка ниже сохраняет fail-closed и здесь.
+// Fail-closed semantics (ADR-047): an empty scope (Covens, StateNames, and
+// Traits all empty) with !Unrestricted yields an always-false predicate — no
+// incarnations, not the whole list. Unrestricted=true drops the scope filter
+// entirely. The handler never passes an empty scope here (it short-circuits
+// before hitting the DB), but the defensive branch below preserves fail-closed
+// regardless.
 type ListScope struct {
 	Covens       []string
 	StateNames   []string
@@ -262,32 +255,30 @@ type ListScope struct {
 	Unrestricted bool
 }
 
-// TraitPair — одна `key:value` trait-пара scope (ADR-047 amendment, ADR-060 п.7
-// slice 1). Scalar-only (значение Trait в scope — скаляр; list-Trait одним
-// равенством не выражается). Матчится `traits->>'<key>' = '<value>'` (скалярное
-// равенство, выровнено с GET-путём [traitScalarEquals]): для list-Trait `->>`
-// отдаёт текст массива ≠ скаляр-значению → list НЕ матчится (в отличие от
-// containment `@>`, который матчил бы массив со скаляр-RHS). Ключ/значение НЕ
-// конкатенируются в SQL-текст — уходят раздельными bind-параметрами, инъекция
-// через ключ невозможна.
+// TraitPair — one `key:value` scope trait pair (ADR-047 amendment, ADR-060
+// §7 slice 1). Scalar-only: matches `traits->>'<key>' = '<value>'`, aligned
+// with the GET path [traitScalarEquals]. For a list-Trait, `->>` returns the
+// array's text form ≠ the scalar value, so lists never match — unlike `@>`
+// containment, which would match an array against a scalar RHS. Key/value
+// are separate bind params, never concatenated into SQL text.
 type TraitPair struct {
 	Key   string
 	Value string
 }
 
-// Create вставляет новый incarnation. status проставляется caller-ом
-// (handler-stub передаёт [StatusReady]); scenario-runner в M0.6c-2 будет
-// проставлять APPLYING до завершения прогона.
+// Create inserts a new incarnation. status is set by the caller (handler
+// passes [StatusReady]; the scenario runner sets applying while a run is in
+// progress).
 //
 // Pre-conditions:
-//   - inc.Name соответствует [NamePattern];
-//   - inc.Service / inc.ServiceVersion непустые;
-//   - inc.Status — одно из четырёх MVP-значений.
+//   - inc.Name matches [NamePattern];
+//   - inc.Service / inc.ServiceVersion are non-empty;
+//   - inc.Status is one of the valid statuses.
 //
-// Возврат:
-//   - [ErrIncarnationAlreadyExists] на UNIQUE по PK.
-//   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
-//     несуществующий AID) и CHECK-violation (status / name format).
+// Returns:
+//   - [ErrIncarnationAlreadyExists] on UNIQUE violation on PK.
+//   - wrapped fmt.Errorf on FK violation (`created_by_aid` references a
+//     nonexistent AID) and CHECK violation (status/name format).
 func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 	if inc == nil {
 		return fmt.Errorf("incarnation: nil incarnation")
@@ -305,8 +296,8 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		return fmt.Errorf("incarnation: invalid status %q", inc.Status)
 	}
 	if inc.StateSchemaVersion <= 0 {
-		// 1 — каноническая стартовая версия (ADR-019); 0 / отрицательное —
-		// программная ошибка caller-а.
+		// 1 is the canonical starting version (ADR-019); 0/negative is a caller
+		// bug.
 		return fmt.Errorf("incarnation: state_schema_version must be > 0, got %d", inc.StateSchemaVersion)
 	}
 
@@ -331,25 +322,25 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		createdByAID = *inc.CreatedByAID
 	}
 
-	// covens — NOT NULL DEFAULT '{}': nil-slice кодируем как пустой массив
-	// (pgx иначе передал бы NULL → violation NOT NULL).
+	// covens — NOT NULL DEFAULT '{}': nil-slice encode as empty array
+	// (pgx would otherwise pass NULL → violation NOT NULL).
 	covens := inc.Covens
 	if covens == nil {
 		covens = []string{}
 	}
 
-	// traits — NOT NULL DEFAULT '{}'::jsonb (ADR-060 amend, R1): nil/пустой map →
-	// `{}` ([]byte), как marshalTraitPayload в bulk-write. pgx-codec-auto для
-	// jsonb сознательно не используется — единообразно с Spec/State и souls.traits.
+	// traits — NOT NULL DEFAULT '{}'::jsonb (ADR-060 amend, R1): nil/empty map →
+	// `{}` ([]byte), same as marshalTraitPayload in bulk-write. pgx-codec-auto for
+	// jsonb deliberately not used — consistent with Spec/State and souls.traits.
 	traitsBytes, err := marshalJSONB(inc.Traits)
 	if err != nil {
 		return fmt.Errorf("incarnation: marshal traits: %w", err)
 	}
 
-	// created_scenario — имя стартового сценария (механизм нескольких create,
-	// миграции 089+090). NULLABLE: nil-указатель caller-а = bare-инкарнация
-	// (создана без bootstrap-сценария) → NULL в БД. Нормализации ""→'create'
-	// больше нет — bare и явный 'create' различаются на уровне типа (*string).
+	// created_scenario — name of the startup scenario (multi-create mechanism,
+	// migrations 089+090). NULLABLE: nil-pointer from caller = bare incarnation
+	// (created without bootstrap scenario) → NULL in DB. No normalization ""→'create'
+	// — bare and explicit 'create' differ at type level (*string).
 	var createdScenario any
 	if inc.CreatedScenario != nil {
 		createdScenario = *inc.CreatedScenario
@@ -391,7 +382,7 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("incarnation: insert: %w", err)
 }
 
-// SelectByName читает incarnation по PK. [ErrIncarnationNotFound] при
+// SelectByName reads incarnation by PK. [ErrIncarnationNotFound] on
 // pgx.ErrNoRows.
 func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Incarnation, error) {
 	row := db.QueryRow(ctx, selectByNameSQL, name)
@@ -426,7 +417,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&inc.LastDriftCheckAt,
 		&driftSummaryBytes,
 		&inc.CreatedScenario,
-		&inc.ApplyingApplyID, // ADR-068 §A1: non-null пока applying, null на терминале
+		&inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, null on terminal
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -442,8 +433,8 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	if inc.State, err = unmarshalJSONB(stateBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: unmarshal state: %w", err)
 	}
-	// traits jsonb (ADR-060 amend, R1): `{}` (NOT NULL DEFAULT) → пустой map, не
-	// nil (read/projection-путь не различает «нет колонки» / «нет меток»).
+	// traits jsonb (ADR-060 amend, R1): `{}` (NOT NULL DEFAULT) → empty map, not
+	// nil (read/projection path doesn't distinguish "no column" / "no tags").
 	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: unmarshal traits: %w", err)
 	}
@@ -462,25 +453,25 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	return &inc, nil
 }
 
-// SelectAll возвращает страницу incarnation-ов с применённым фильтром и
-// общее количество элементов, удовлетворяющих фильтру (без offset/limit).
+// SelectAll returns a page of incarnations with applied filter and
+// total count of items matching the filter (without offset/limit).
 //
-// Сортировка управляется [ListFilter.SortBy]/[SortDir]; по умолчанию (пустой
-// SortBy) — legacy-порядок `created_at DESC, name ASC` (поздние выше; tie-break
-// по имени, иначе пагинация неустойчива при одинаковом таймстемпе). Tie-break
-// `name ASC` добавляется всегда.
+// Sorting is controlled by [ListFilter.SortBy]/[SortDir]; by default (empty
+// SortBy) — legacy order `created_at DESC, name ASC` (latest first; tie-break
+// by name, otherwise pagination unstable at same timestamp). Tie-break
+// `name ASC` always appended.
 //
-// State-фильтры ([ListFilter.StatePredicates]) и sort по `state.<field>`
-// валидируются ДО любого запроса в БД ([ErrInvalidStatePath]/[ErrInvalidStateOp]/
-// [ErrInvalidSortField]/[ErrInvalidSortDir]): инъекция через jsonb-path не
-// доходит до PG, значения уходят bind-параметрами.
+// State filters ([ListFilter.StatePredicates]) and sort by `state.<field>`
+// validated before any DB query ([ErrInvalidStatePath]/[ErrInvalidStateOp]/
+// [ErrInvalidSortField]/[ErrInvalidSortDir]): injection via jsonb path
+// doesn't reach PG, values go as bind params.
 //
-// Total и items получаются двумя отдельными запросами вне общей
-// транзакции — total в этом эндпоинте **eventually consistent**: новый
-// incarnation, появившийся между COUNT и SELECT, даст total на единицу
-// больше, чем фактических items на текущей странице. Это сознательный
-// выбор: явная транзакция (REPEATABLE READ) ради ориентира-числа дороже,
-// чем допустимое расхождение в UI-пагинации.
+// Total and items obtained by two separate queries outside a common
+// transaction — total at this endpoint is **eventually consistent**: new
+// incarnation appearing between COUNT and SELECT will give total one
+// greater than actual items on current page. Deliberate choice: explicit
+// transaction (REPEATABLE READ) for consistent count costs more than
+// acceptable pagination drift in UI.
 func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope ListScope, offset, limit int) ([]*Incarnation, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("incarnation: offset must be >= 0, got %d", offset)
@@ -498,14 +489,14 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 		return nil, 0, err
 	}
 
-	// Total — без offset/limit.
+	// Total without offset/limit.
 	countSQL := "SELECT COUNT(*) FROM incarnation" + whereSQL
 	var total int
 	if err := db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("incarnation: count: %w", err)
 	}
 
-	// Items — с offset/limit, append-ом к тем же args.
+	// Items with offset/limit, appended to the same args.
 	listSQL := `SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
@@ -535,12 +526,12 @@ FROM incarnation` + whereSQL + orderSQL +
 	return out, total, nil
 }
 
-// buildListWhere собирает WHERE-clause и args по непустым полям фильтра.
-// Возвращает пустую строку и nil-args при отсутствии фильтров. State-предикаты
-// валидируются (path-whitelist + закрытый набор операторов + числовость
-// значения для numeric-операторов); невалидный →
-// [ErrInvalidStatePath]/[ErrInvalidStateOp]/[ErrInvalidStateValue] без
-// обращения к БД.
+// buildListWhere builds WHERE-clause and args from non-empty filter fields.
+// Returns empty string and nil-args if no filters. State predicates
+// validated (path-whitelist + closed operator set + numeric value for
+// numeric operators); invalid →
+// [ErrInvalidStatePath]/[ErrInvalidStateOp]/[ErrInvalidStateValue] without
+// DB access.
 func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 	var (
 		clauses []string
@@ -562,11 +553,11 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 		if !statePathPattern.MatchString(p.Path) {
 			return "", nil, fmt.Errorf("%w: %q", ErrInvalidStatePath, p.Path)
 		}
-		// Для числовых операторов значение уходит в SQL как `$n::numeric`.
-		// Нечисловое значение (например, опечатка `gt:abc`) на PG-стороне
-		// дало бы cast-ошибку 22P02 → 500; отбиваем здесь до запроса в БД
-		// (handler маппит ErrInvalidStateValue в 422). eq/ne — текстовые,
-		// числовая валидация к ним не применяется.
+		// For numeric operators value goes to SQL as `$n::numeric`.
+		// Non-numeric value (e.g., typo `gt:abc`) would cause PG cast error
+		// 22P02 → 500; catch here before DB query (handler maps
+		// ErrInvalidStateValue to 422). eq/ne are text, numeric validation
+		// doesn't apply to them.
 		if _, numeric := numericStateOps[p.Op]; numeric {
 			if _, err := strconv.ParseFloat(p.Value, 64); err != nil {
 				return "", nil, fmt.Errorf("%w: %q for operator %q", ErrInvalidStateValue, p.Value, p.Op)
@@ -581,7 +572,7 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 		clauses = append(clauses, clause)
 	}
 
-	// RBAC scope-предикат (ADR-047 S3b-3): AND с пользовательским фильтром.
+	// RBAC scope predicate (ADR-047 S3b-3): AND with user filter.
 	clauses, args = appendScopeClause(clauses, args, scope)
 
 	if len(clauses) == 0 {
@@ -594,27 +585,27 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 	return where, args, nil
 }
 
-// appendScopeClause добавляет RBAC scope-предикат (`GET /v1/incarnations`,
-// ADR-047 S3b-3 + amendment trait) одним AND-clause к пользовательскому фильтру.
-// Внутри scope измерения (coven∪{name} ∪ state-names ∪ traits) объединяются
-// OR-ом — единый блок в скобках, чтобы не «протечь» через соседние AND-clause
-// фильтра:
+// appendScopeClause adds RBAC scope predicate (`GET /v1/incarnations`,
+// ADR-047 S3b-3 + trait amendment) as single AND-clause to user filter.
+// Within scope, dimensions (coven∪{name} ∪ state-names ∪ traits) combined
+// with OR — single parenthesized block to avoid leaking through neighboring
+// filter AND-clauses:
 //
 //		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s) OR traits->>$tk = $tv)
 //
-//	  - coven∪{name}: scope-coven матчит incarnation и по covens[]-пересечению,
-//	    и по равенству имени (ADR-008: имя incarnation — корневая Coven-метка).
-//	  - state-names: предрезолвнутые имена incarnation-ов, чей state удовлетворил
-//	    state-CEL scope (StateExprs) — приходят множеством, матчатся `name = ANY`.
-//	  - traits: каждая scope-пара (`key:value`, ADR-060 п.7 slice 1) — отдельное
-//	    плечо `traits->>$tk = $tv` (scalar-equality, scalar-only — НЕ containment
-//	    `@>`, тот со скаляр-RHS матчил бы list-Trait, расходясь с GET-путём
-//	    [traitScalarEquals]); ключ/значение уходят раздельными bind-параметрами,
-//	    в SQL-текст не конкатенируются.
+//	  - coven∪{name}: scope-coven matches incarnation by both covens[]-intersection
+//	    and name equality (ADR-008: incarnation name is root Coven label).
+//	  - state-names: pre-resolved names of incarnations whose state satisfied
+//	    state-CEL scope (StateExprs) — come as set, matched via `name = ANY`.
+//	  - traits: each scope pair (`key:value`, ADR-060 §7 slice 1) — separate
+//	    arm `traits->>$tk = $tv` (scalar-equality, scalar-only — NOT containment
+//	    `@>`, which with scalar RHS would match list-Trait, diverging from GET path
+//	    [traitScalarEquals]); key/value go as separate bind params,
+//	    not concatenated to SQL text.
 //
-// Unrestricted — без ограничения (scope снят). fail-closed: пустой scope (нет
-// ни coven, ни state-names, ни traits) при !Unrestricted даёт `FALSE` — ни одной
-// incarnation (а НЕ весь список). Это симметрично [soul.appendScopeClause].
+// Unrestricted — no restriction (scope removed). fail-closed: empty scope (no
+// coven, state-names, or traits) with !Unrestricted gives `FALSE` — zero
+// incarnations (not full list). Symmetric with [soul.appendScopeClause].
 func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string, []any) {
 	cond, args := ScopeCondition(args, scope)
 	if cond == "" {
@@ -623,12 +614,12 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 	return append(clauses, cond), args
 }
 
-// ScopeCondition — переиспользуемая SQL-форма scope-предиката [ListScope] над
-// колонками таблицы incarnation (covens/name/traits). Экспортирована для
-// встраивания в чужие запросы подзапросом `... IN (SELECT name FROM incarnation
-// WHERE <cond>)` (глобальный read-view прогонов, applyrun) — единый источник
-// семантики scope с [SelectAll]. Placeholder-нумерация продолжает переданные
-// args. Unrestricted → пустое условие; пустой scope → `FALSE` (fail-closed).
+// ScopeCondition — reusable SQL form of scope predicate [ListScope] over
+// incarnation table columns (covens/name/traits). Exported for embedding
+// in other queries as subquery `... IN (SELECT name FROM incarnation
+// WHERE <cond>)` (global read-view of runs, applyrun) — single source of
+// scope semantics with [SelectAll]. Placeholder numbering continues from
+// passed args. Unrestricted → empty condition; empty scope → `FALSE` (fail-closed).
 func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	if scope.Unrestricted {
 		return "", args
@@ -638,7 +629,7 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	if len(scope.Covens) > 0 {
 		args = append(args, scope.Covens)
 		pos := len(args)
-		// coven∪{name}: пересечение covens[] ИЛИ имя ∈ scope-ковенов.
+		// coven∪{name}: intersection of covens[] OR name ∈ scope-covens.
 		dims = append(dims, fmt.Sprintf("(covens && $%d OR name = ANY($%d))", pos, pos))
 	}
 	if len(scope.StateNames) > 0 {
@@ -646,15 +637,15 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 		dims = append(dims, fmt.Sprintf("name = ANY($%d)", len(args)))
 	}
 	for _, tp := range scope.Traits {
-		// scalar-equality плечо (slice 1 — scalar-only): `traits->>$key = $value`.
-		// НЕ jsonb-containment `@>`: PG-containment со скаляр-RHS МАТЧИТ массив
+		// scalar-equality arm (slice 1 — scalar-only): `traits->>$key = $value`.
+		// NOT jsonb-containment `@>`: PG containment with scalar RHS MATCHES arrays
 		// (`{"env":["prod","stage"]} @> {"env":"prod"}` = TRUE — array-contains-
-		// primitive, PG §8.14.3), из-за чего list-Trait попадал в List, но GET-путь
-		// ([traitScalarEquals]) его НЕ видит (list → false) — рассинхрон List↔Get.
-		// `traits->>'<key>'` для массива даёт его ТЕКСТ (`["prod", "stage"]`) ≠
-		// '<value>' → list НЕ матчится, ровно как traitScalarEquals (оба scalar-only,
-		// семантика выровнена). Ключ и значение — раздельные bind-параметры (в SQL-
-		// текст не конкатенируются, инъекция через ключ невозможна).
+		// primitive, PG §8.14.3), so list-Trait entered List but GET path
+		// ([traitScalarEquals]) doesn't see it (list → false) — List↔Get out of sync.
+		// `traits->>'<key>'` for array gives its TEXT (`["prod", "stage"]`) ≠
+		// '<value>' → list does NOT match, same as traitScalarEquals (both scalar-only,
+		// semantics aligned). Key and value are separate bind params (not
+		// concatenated to SQL text, no injection via key possible).
 		args = append(args, tp.Key)
 		keyPos := len(args)
 		args = append(args, tp.Value)
@@ -662,8 +653,8 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	}
 
 	if len(dims) == 0 {
-		// fail-closed: scope введён (не Unrestricted), но пуст по измерениям —
-		// ни одной видимой incarnation. Детерминированный FALSE, не «весь список».
+		// fail-closed: scope introduced (not Unrestricted) but empty by dimensions —
+		// zero visible incarnations. Deterministic FALSE, not "full list".
 		return "FALSE", args
 	}
 
@@ -674,10 +665,10 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	return "(" + scopeClause + ")", args
 }
 
-// stateClause строит один jsonb-pushdown-предикат. Path уже прошёл
-// [statePathPattern] (безопасен как идентификатор), placeholder — bind ($n).
-// Текстовые операторы — `state->>'path' OP $n`; числовые — оба операнда
-// в ::numeric (`(state->>'path')::numeric OP $n::numeric`).
+// stateClause builds single jsonb-pushdown predicate. Path already passed
+// [statePathPattern] (safe as identifier), placeholder is bind ($n).
+// Text operators — `state->>'path' OP $n`; numeric — both operands
+// cast to ::numeric (`(state->>'path')::numeric OP $n::numeric`).
 func stateClause(path string, op StateOp, placeholder string) (string, error) {
 	if sqlOp, ok := textStateOps[op]; ok {
 		return fmt.Sprintf("state->>'%s' %s %s", path, sqlOp, placeholder), nil
@@ -688,10 +679,10 @@ func stateClause(path string, op StateOp, placeholder string) (string, error) {
 	return "", fmt.Errorf("%w: %q", ErrInvalidStateOp, op)
 }
 
-// buildListOrderBy формирует ORDER BY-clause из [ListFilter.SortBy]/[SortDir].
-// Пустой SortBy → legacy `created_at DESC, name ASC`. Иначе: базовая колонка
-// из [sortableColumns] либо `state.<field>` (jsonb ->>, path-whitelist), с
-// направлением из SortDir (default asc) и обязательным tie-break `name ASC`.
+// buildListOrderBy builds ORDER BY-clause from [ListFilter.SortBy]/[SortDir].
+// Empty SortBy → legacy `created_at DESC, name ASC`. Otherwise: base column
+// from [sortableColumns] or `state.<field>` (jsonb >>, path-whitelist), with
+// direction from SortDir (default asc) and mandatory tie-break `name ASC`.
 func buildListOrderBy(f ListFilter) (string, error) {
 	if f.SortBy == "" {
 		return " ORDER BY created_at DESC, name ASC", nil
@@ -719,7 +710,7 @@ func buildListOrderBy(f ListFilter) (string, error) {
 	return fmt.Sprintf(" ORDER BY %s %s, name ASC", expr, dir), nil
 }
 
-// sortDirSQL валидирует направление сортировки. Пустое → ASC (default).
+// sortDirSQL validates sort direction. Empty → ASC (default).
 func sortDirSQL(d SortDir) (string, error) {
 	switch d {
 	case "", SortAsc:
@@ -730,52 +721,52 @@ func sortDirSQL(d SortDir) (string, error) {
 	return "", fmt.Errorf("%w: %q", ErrInvalidSortDir, d)
 }
 
-// finalizableStatuses — рабочие (не-терминальные) статусы прогона, из которых
-// разрешён single-winner финальный коммит ([UpdateStateFromRun], ADR-027(j) W1):
-//   - applying   — обычный прогон (lockRun перевёл сюда на старте);
-//   - destroying — teardown scenario `destroy` (incarnation остаётся в
-//     destroying на всё время прогона, S-D1/S-D2b; финальный write — только
-//     провал-перевод в destroy_failed через lockIncarnation).
+// finalizableStatuses — working (non-terminal) run statuses from which
+// single-winner final commit ([UpdateStateFromRun], ADR-027(j) W1) is allowed:
+//   - applying   — normal run (lockRun transitioned here on start);
+//   - destroying — teardown scenario `destroy` (incarnation stays in
+//     destroying throughout run, S-D1/S-D2b; final write — only
+//     failure transition to destroy_failed via lockIncarnation).
 //
-// Любой иной (терминальный либо уже-перехваченный) статус → строку выиграл
-// другой коммиттер: финальный UPDATE даст RowsAffected==0 → [ErrAlreadyFinalized].
+// Any other (terminal or already-seized) status → row won by another
+// committer: final UPDATE gives RowsAffected==0 → [ErrAlreadyFinalized].
 var finalizableStatuses = map[Status]struct{}{
 	StatusApplying:   {},
 	StatusDestroying: {},
 }
 
-// UpdateStateFromRun — атомарная фиксация результата прогона `RunResult`
-// (ADR-009, M2.4) c single-winner state-commit (ADR-027(j), W1). Внутри одной
-// транзакции:
+// UpdateStateFromRun — atomic commit of run result `RunResult`
+// (ADR-009, M2.4) with single-winner state-commit (ADR-027(j), W1). Within single
+// transaction:
 //
-//  1. INSERT в `state_history` snapshot перехода (state_before/_after,
+//  1. INSERT to `state_history` transition snapshot (state_before/_after,
 //     scenario, apply_id).
 //  2. Single-winner UPDATE incarnation.state + status + status_details +
-//     updated_at = NOW() с guard `WHERE name=$1 AND status IN
-//     ('applying','destroying')` + RETURNING. Только один обработчик «выигрывает»
-//     строку: при гонке recovery-перехвата vs оригинального RunResult двойного
-//     коммита терминала не происходит (симметрично single-winner DELETE в
-//     [DeleteAfterTeardown]). Guard заменяет прежний SELECT … FOR UPDATE —
-//     атомарный CAS-UPDATE сериализует конкурентные коммиты сам.
+//     updated_at = NOW() with guard `WHERE name=$1 AND status IN
+//     ('applying','destroying')` + RETURNING. Only one handler wins
+//     the row: in race of recovery takeover vs original RunResult no double
+//     commit terminal happens (symmetric with single-winner DELETE in
+//     [DeleteAfterTeardown]). Guard replaces former SELECT … FOR UPDATE —
+//     atomic CAS-UPDATE serializes concurrent commits itself.
 //
-// При status = `error_locked` стейт не меняется (caller обычно передаёт
-// stateAfter == stateBefore = текущий state); state_history всё равно
-// пишется (фиксируем сам факт неудачного прогона).
+// When status = `error_locked` state doesn't change (caller typically passes
+// stateAfter == stateBefore = current state); state_history still
+// written (capture the fact of failed run itself).
 //
-// `apply_id` — ULID прогона (RunResult.apply_id); идёт и в state_history,
-// и в audit через caller. Сам audit-write делает event handler уровнем
-// выше (после commit-а, чтобы DB-консистентность не зависела от audit).
+// `apply_id` — ULID of run (RunResult.apply_id); goes to both state_history
+// and audit via caller. Audit write itself done by event handler one level
+// up (after commit, so DB consistency doesn't depend on audit).
 //
-// `changedByAID` = nil — Soul инициирует прогон без identity Архонта
-// (`source: soul_grpc`, см. ADR-022). Допускается non-nil для будущего
-// случая, когда прогон триггерится Operator API и AID известен.
+// `changedByAID` = nil — Soul initiates run without Archon identity
+// (`source: soul_grpc`, see ADR-022). Non-nil allowed for future
+// case when run triggered via Operator API and AID known.
 //
-// Возврат:
-//   - [ErrIncarnationNotFound]  — строки с таким name нет совсем.
-//   - [ErrAlreadyFinalized]     — строка есть, но статус уже не applying/
-//     destroying: финализацию выиграл другой коммиттер (no-op, НЕ паника —
-//     caller логирует и продолжает). Транзакция при этом откатывается (caller
-//     через pgx.BeginFunc), осиротевший state_history-snapshot не остаётся.
+// Returns:
+//   - [ErrIncarnationNotFound]  — no row with this name at all.
+//   - [ErrAlreadyFinalized]     — row exists but status no longer applying/
+//     destroying: another committer won finalization (no-op, NOT panic —
+//     caller logs and continues). Transaction rolls back (caller
+//     via pgx.BeginFunc), orphaned state_history snapshot doesn't remain.
 func UpdateStateFromRun(
 	ctx context.Context,
 	tx ExecQueryRower,
@@ -832,19 +823,18 @@ INSERT INTO state_history (
 		return fmt.Errorf("incarnation: insert state_history: %w", err)
 	}
 
-	// Single-winner guard: коммит проходит ТОЛЬКО если строка ещё в рабочем
-	// статусе прогона (applying / destroying). RETURNING name отдаёт строку
-	// победителю; пустой результат (pgx.ErrNoRows) = строки нет ЛИБО статус уже
-	// сменился — различаем добором статуса ниже (паттерн MarkDispatched).
-	// Терминал прогона снимает applying-флаг И ОБНУЛЯЕТ его epoch (ADR-027 amend
-	// (m-S1)): applying_apply_id/applying_attempt/applying_by_kid/applying_since →
-	// NULL атомарно со сменой статуса. Это единая success/fail/abort/RunResult-
-	// терминальная точка прогона (commitSuccess / lockIncarnation /
-	// correlateRunResult зовут UpdateStateFromRun) — очистка здесь покрывает все
-	// выходы из applying, оставляя строку без «зависшего» epoch (иначе следующий
-	// прогон/Reaper увидел бы протухший applying_since от прошлого владельца).
-	// destroying epoch не несёт (lockRun пишет epoch только для applying), но
-	// безусловное обнуление безвредно и держит инвариант «не-applying ⇒ epoch NULL».
+	// Single-winner guard: commit succeeds ONLY if row still in working run status
+	// (applying / destroying). RETURNING name returns row to winner; empty result
+	// (pgx.ErrNoRows) = row doesn't exist OR status already changed — disambiguate
+	// via status probe below (MarkDispatched pattern). Run terminal clears applying-flag
+	// AND zeroes its epoch (ADR-027 amend (m-S1)): applying_apply_id/applying_attempt/
+	// applying_by_kid/applying_since → NULL atomically with status change.
+	// This single success/fail/abort/RunResult-terminal point of run (commitSuccess /
+	// lockIncarnation / correlateRunResult call UpdateStateFromRun) — cleanup here
+	// covers all exits from applying, leaving row without "stale" epoch (else next
+	// run/Reaper sees stale applying_since from previous owner). destroying carries no
+	// epoch (lockRun writes epoch for applying only), but unconditional zeroing is
+	// harmless and maintains invariant "non-applying ⇒ epoch NULL".
 	const updateSQL = `
 UPDATE incarnation
 SET state             = $2,
@@ -867,9 +857,9 @@ RETURNING name
 		return fmt.Errorf("incarnation: update state: %w", err)
 	}
 
-	// 0 строк: либо строки нет вовсе, либо статус уже терминальный/перехваченный.
-	// Добор статуса различает not-found (контракт callers-ов сохранён) и
-	// already-finalized (single-winner no-op, кто-то выиграл строку первым).
+	// 0 rows: either row doesn't exist at all, or status already terminal/seized.
+	// Status probe disambiguates not-found (caller contract preserved) and
+	// already-finalized (single-winner no-op, someone won the row first).
 	const probeStatusSQL = `SELECT status FROM incarnation WHERE name = $1`
 	var statusStr string
 	if perr := tx.QueryRow(ctx, probeStatusSQL, name).Scan(&statusStr); perr != nil {
@@ -879,57 +869,56 @@ RETURNING name
 		return fmt.Errorf("incarnation: update state probe: %w", perr)
 	}
 	if _, ok := finalizableStatuses[Status(statusStr)]; ok {
-		// Статус всё ещё рабочий, но UPDATE не затронул строку — единственная
-		// причина: гонка чтения внутри одной tx (теоретически недостижима под
-		// snapshot tx). Возвращаем not-found-семантику как защитный дефолт, а не
-		// тихий no-op.
+		// Status still working, but UPDATE touched no rows — only possible reason:
+		// read race within single tx (theoretically unreachable under snapshot tx).
+		// Return not-found semantics as defensive default, not silent no-op.
 		return ErrIncarnationNotFound
 	}
 	return fmt.Errorf("%w (status=%s)", ErrAlreadyFinalized, statusStr)
 }
 
-// TxBeginner — узкое подмножество [pgxpool.Pool], нужное транзакционным
-// операциям (FOR UPDATE → проверка → mutate → commit одним atomic-блоком).
-// Реальный `*pgxpool.Pool` удовлетворяет автоматически; unit-тесты дают
-// fake, возвращающий fake-tx.
+// TxBeginner — narrow subset of [pgxpool.Pool] needed for transactional
+// operations (FOR UPDATE → check → mutate → commit in single atomic block).
+// Real `*pgxpool.Pool` satisfies automatically; unit tests provide
+// fake returning fake-tx.
 type TxBeginner interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
 var _ TxBeginner = (*pgxpool.Pool)(nil)
 
-// UnlockResult — итог [Unlock]: статус до снятия блока (для reply / audit) и
-// идентификатор записанного state_history-snapshot-а.
+// UnlockResult — result of [Unlock]: status before block removal (for reply / audit) and
+// identifier of recorded state_history snapshot.
 //
-// Scenario заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — ""): имя
-// сценария, который caller перезапускает через runner.Start. Это последний
-// упавший сценарий инкарнации (последний snapshot state_history) — bootstrap-
-// сценарий на create-пути (== incarnation.created_scenario) ИЛИ day-2-сценарий
-// (add_user / update_acl / …). Заменяет прежний хардкод «перезапускаем только
-// created_scenario»: rerun-last перезапускает фактически провалившуюся операцию.
+// Scenario filled ONLY by [UnlockForRerun] (for [Unlock] — ""): name
+// of scenario caller reruns via runner.Start. This is the last
+// failed scenario of incarnation (latest state_history snapshot) — bootstrap
+// scenario on create path (== incarnation.created_scenario) OR day-2 scenario
+// (add_user / update_acl / …). Replaces former hardcode "rerun only
+// created_scenario": rerun-last reruns the actually failed operation.
 //
-// Input заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — nil): input упавшего
-// прогона. На create-пути — сохранённый оператор-input incarnation.spec.input
-// (прочитан под тем же FOR UPDATE). На day-2-пути — input из рецепта упавшего
-// apply_run (`apply_runs.recipe.input`, инвариант A: vault-ref строками, секреты
-// не раскрыты). Caller пробрасывает его в RunSpec.Input — rerun-last
-// восстанавливает падение с ТЕМИ ЖЕ входными значениями (version/shards/user/…),
-// а не с дефолтами. nil = сценарий без input.
+// Input filled ONLY by [UnlockForRerun] (for [Unlock] — nil): input of failed
+// run. On create path — saved operator-input incarnation.spec.input
+// (read under same FOR UPDATE). On day-2 path — input from recipe of failed
+// apply_run (`apply_runs.recipe.input`, invariant A: vault-ref as strings, secrets
+// not revealed). Caller passes it to RunSpec.Input — rerun-last
+// recovers failure with SAME input values (version/shards/user/…),
+// not defaults. nil = scenario without input.
 type UnlockResult struct {
 	PreviousStatus Status
 	HistoryID      string
 	Scenario       string
 	Input          map[string]any
-	// FromUpgrade — упавший прогон был upgrade-сценарием (recipe.from_upgrade,
-	// ADR-0068): rerun-last обязан перезапустить его из upgrade/<slug>/, а не
-	// scenario/<slug>/. Заполняется только day-2-путём [UnlockForRerun] (create
-	// никогда не upgrade → false). Caller пробрасывает в RunSpec.FromUpgrade.
+	// FromUpgrade — failed run was upgrade scenario (recipe.from_upgrade,
+	// ADR-0068): rerun-last must rerun it from upgrade/<slug>/, not
+	// scenario/<slug>/. Filled only by day-2 path [UnlockForRerun] (create
+	// never upgrade → false). Caller passes to RunSpec.FromUpgrade.
 	FromUpgrade bool
 }
 
-// InputFromSpec извлекает ключ `input` из freeform jsonb-объекта: либо
-// incarnation.spec (create-путь), либо recipe apply_run (day-2-путь, [UnlockForRerun]).
-// Отсутствие ключа / не-object форма → nil без ошибки (jsonb freeform).
+// InputFromSpec extracts `input` key from freeform jsonb object: either
+// incarnation.spec (create path) or apply_run recipe (day-2 path, [UnlockForRerun]).
+// Missing key / non-object form → nil without error (jsonb freeform).
 func InputFromSpec(spec map[string]any) map[string]any {
 	if spec == nil {
 		return nil
@@ -945,42 +934,42 @@ func InputFromSpec(spec map[string]any) map[string]any {
 	return m
 }
 
-// unlockScenarioLabel — значение `state_history.scenario` для unlock-перехода.
-// Unlock — не прогон scenario, но state_history требует non-null scenario;
-// фиксируем сам факт ручного снятия блока под этой меткой.
+// unlockScenarioLabel — value for `state_history.scenario` on unlock transition.
+// Unlock — not a scenario run, but state_history requires non-null scenario;
+// capture the fact of manual block removal under this label.
 const unlockScenarioLabel = "unlock"
 
-// Unlock снимает блокирующий статус (ADR-009 / ADR-019): переводит
-// incarnation error_locked → ready, migration_failed → ready ИЛИ
-// destroy_failed → ready и пишет snapshot-row в state_history (state НЕ
-// меняется — last known-good сохраняется; unlock не откатывает и не доделывает
-// хосты, оператор берёт ответственность за консистентность, architecture.md →
-// «Атомарность и error_locked»).
+// Unlock removes blocking status (ADR-009 / ADR-019): transitions
+// incarnation error_locked → ready, migration_failed → ready OR
+// destroy_failed → ready and writes snapshot-row to state_history (state does NOT
+// change — last known-good preserved; unlock doesn't roll back or complete
+// hosts, operator takes responsibility for consistency, architecture.md →
+// "Atomicity and error_locked").
 //
-// migration_failed снимается так же безопасно, как error_locked: миграция
-// атомарна в одной tx, при фейле rollback оставляет дореформенный
-// (консистентный) state, поэтому unlock возвращает incarnation в рабочее
-// состояние без риска полу-применённой миграции (ADR-019, атомарность).
+// migration_failed removed as safely as error_locked: migration
+// is atomic in single tx, on failure rollback leaves pre-reform
+// (consistent) state, so unlock returns incarnation to working
+// state without risk of half-applied migration (ADR-019, atomicity).
 //
-// destroy_failed (S-D2a) снимается тем же путём: teardown работает с хостами,
-// а не с jsonb-state, поэтому при упавшем teardown-е state остаётся
-// last known-good — unlock возвращает incarnation в ready без риска
-// рассинхрона state-графа. Оператор тем самым отказывается от destroy и берёт
-// инстанс обратно в работу (альтернативы — повторить destroy / force-снести —
-// появятся в S-D2b/S-D3).
+// destroy_failed (S-D2a) removed same way: teardown works with hosts,
+// not jsonb-state, so on failed teardown state remains
+// last known-good — unlock returns incarnation to ready without risk
+// of state-graph divergence. Operator thereby rejects destroy and takes
+// instance back to work (alternatives — retry destroy / force-remove —
+// appear in S-D2b/S-D3).
 //
-// Атомарность: одна транзакция SELECT … FOR UPDATE → проверка статуса →
-// INSERT state_history → UPDATE status. FOR UPDATE сериализует unlock
-// относительно конкурентного scenario-runner-а (его lockRun лочит ту же
-// строку).
+// Atomicity: single transaction SELECT … FOR UPDATE → status check →
+// INSERT state_history → UPDATE status. FOR UPDATE serializes unlock
+// relative to concurrent scenario-runner (its lockRun locks same
+// row).
 //
-// Возврат:
-//   - [ErrIncarnationNotFound] — name не существует (404).
-//   - [ErrIncarnationNotLocked] — статус не error_locked, не migration_failed
-//     и не destroy_failed (409): нельзя анлочить ready/applying/destroying.
+// Returns:
+//   - [ErrIncarnationNotFound] — name doesn't exist (404).
+//   - [ErrIncarnationNotLocked] — status not error_locked, not migration_failed
+//     and not destroy_failed (409): can't unlock ready/applying/destroying.
 //
-// reason пишется в audit-payload caller-ом (state_history-схема MVP не
-// несёт metadata-колонки); previous_status возвращается в [UnlockResult].
+// reason written to audit-payload by caller (state_history schema MVP doesn't
+// carry metadata columns); previous_status returned in [UnlockResult].
 func Unlock(ctx context.Context, pool TxBeginner, name, reason, unlockedByAID, historyID string) (*UnlockResult, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)
@@ -1024,10 +1013,10 @@ FOR UPDATE
 		changedByArg = unlockedByAID
 	}
 
-	// state_before == state_after: unlock не меняет state (ADR-009).
-	// apply_id = history_id ($1): unlock не привязан к apply-прогону (схема
-	// требует NOT NULL, FK на apply_runs нет) — подставляем history_id как
-	// уникальный non-null маркер.
+	// state_before == state_after: unlock doesn't change state (ADR-009).
+	// apply_id = history_id ($1): unlock not tied to apply run (schema
+	// requires NOT NULL, no FK to apply_runs) — substitute history_id as
+	// unique non-null marker.
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
@@ -1040,7 +1029,7 @@ INSERT INTO state_history (
 		return nil, fmt.Errorf("incarnation: insert unlock state_history: %w", err)
 	}
 
-	// status → ready, status_details сбрасываются (блок снят).
+	// status → ready, status_details reset (block removed).
 	const updateSQL = `
 UPDATE incarnation
 SET status = $2, status_details = NULL, updated_at = NOW()
@@ -1056,62 +1045,61 @@ WHERE name = $1
 	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID}, nil
 }
 
-// orphanReleaseScenarioLabel — значение `state_history.scenario` для перехода
-// снятия осиротевшего applying-lock (ADR-027(k) recovery-шов). Отдельная метка
-// от unlockScenarioLabel: это НЕ ручной operator-unlock, а автоматическая
-// реконсиляция dangling-lock реклеймнутым Voyage-владельцем — след в истории
-// должен отличаться для триажа.
+// orphanReleaseScenarioLabel — value for `state_history.scenario` on orphan lock release
+// transition (ADR-027(k) recovery seam). Separate label from unlockScenarioLabel: this
+// is NOT manual operator-unlock, but automatic reconciliation of dangling lock by
+// reclaimed Voyage owner — history trace should differ for triage.
 const orphanReleaseScenarioLabel = "voyage-orphan-release"
 
-// ReleaseApplyingOrphan атомарно снимает осиротевший applying-lock инкарнации,
-// оставшийся от scenario-run мёртвого Keeper-владельца Voyage (recovery-шов,
-// ADR-027(k) / ADR-043). Реклеймнутый VoyageWorker вызывает это ПЕРЕД повторным
-// спавном per-incarnation scenario-run: без снятия lockRun отвергнет re-run
-// («incarnation уже applying»), и Voyage завис бы навсегда.
+// ReleaseApplyingOrphan atomically releases an orphaned applying-lock from an incarnation
+// remaining from a scenario-run of a dead Keeper-owner Voyage (recovery seam,
+// ADR-027(k) / ADR-043). A reclaimed VoyageWorker calls this BEFORE re-spawning
+// per-incarnation scenario-run: without release, lockRun rejects re-run
+// (incarnation already applying), and Voyage would hang forever.
 //
-// Снятие = applying → ready (state НЕ трогаем — last known-good сохраняется,
-// симметрично [Unlock]; orphan-прогон мёртвого владельца не доехал до state-
-// commit-а, поэтому last-good = pre-run state). status_details сбрасываются.
+// Release = applying → ready (state NOT touched — last known-good preserved,
+// symmetric to [Unlock]; orphan-run of dead owner didn't reach state-commit,
+// so last-good = pre-run state). status_details are reset.
 //
-// orphanApplyID — apply_id осиротевшего прогона (back-link из voyage_targets
-// ЭТОГО Voyage от прошлого attempt — caller уже доказал привязку apply_id↔
-// инкарнация↔voyage самим фактом, что взял его из voyage_targets[name]). Caller
-// (voyageorch) обязан провести fencing-проверки (reclaimed-attempt +
-// VerifyOwnership) ДО вызова; здесь — FENCING-1 (защита чужого live-lock) +
-// single-winner CAS под одним FOR UPDATE:
+// orphanApplyID — apply_id of the orphaned run (back-link from voyage_targets
+// of this Voyage from the previous attempt — caller already proved apply_id↔
+// incarnation↔voyage binding by retrieving it from voyage_targets[name]). Caller
+// (voyageorch) must perform fencing-checks (reclaimed-attempt +
+// VerifyOwnership) BEFORE calling; here — FENCING-1 (protection against alien live-lock) +
+// single-winner CAS under one FOR UPDATE:
 //
-//   - FENCING-1 (no-live-rival): снимаем lock ТОЛЬКО если у инкарнации НЕТ
-//     активного (не-терминального) apply_run с apply_id ≠ orphanApplyID. Чужой
-//     живой прогон (прямой run / другой Voyage, стартовавший между крахом и
-//     reclaim) держит активную apply_runs-строку СВОЕГО apply_id → её наличие
-//     блокирует снятие ([ErrOrphanLockNotReleased]). Защита от снятия чужого
-//     live-lock. ВАЖНО: проверка НЕ требует, чтобы apply_run orphanApplyID
-//     существовал — строки orphanApplyID может не быть вовсе: её удалил
-//     retention-purge `purge_apply_runs` (миграция 021, сносит ТЕРМИНАЛЬНЫЕ
-//     apply_runs старше 30d) ЛИБО прошлый владелец крашнулся ДО Insert(apply_runs)
-//     (lockRun уже закоммитил applying, apply_run ещё не вставлен). incarnation-
-//     lock — бесхозный флаг (нет владельца/attempt/lease) — остаётся в обоих
-//     случаях; привязку к orphan даёт voyage_targets back-link на стороне
-//     caller-а, а не наличие apply_run. (NB: reaper-правило reclaim_apply_runs
-//     осиротевшую строку НЕ удаляет — оно делает claimed→planned reset «зависших»
-//     планов, не трогая dispatched/running/терминальные; источник «строки нет»
-//     здесь — именно purge-retention или pre-Insert-краш.)
-//   - SINGLE-WINNER: guard `status='applying'` (CAS). Если честный RunResult
-//     прошлого владельца / параллельный финал уже вывел строку из applying —
-//     UPDATE даст RowsAffected==0 → [ErrOrphanLockNotReleased] (no-op, гонка
-//     закрыта, мы НЕ перетираем чужой терминал).
+//   - FENCING-1 (no-live-rival): release lock ONLY if incarnation HAS NO
+//     active (non-terminal) apply_run with apply_id ≠ orphanApplyID. Alien
+//     live run (direct run / other Voyage, started between crash and
+//     reclaim) holds active apply_runs-row with its own apply_id → its presence
+//     blocks release ([ErrOrphanLockNotReleased]). Protection against releasing alien
+//     live-lock. IMPORTANT: check does NOT require that apply_run orphanApplyID
+//     exists — orphanApplyID row may not exist at all: deleted by
+//     retention-purge `purge_apply_runs` (migration 021, removes TERMINAL
+//     apply_runs older than 30d) OR previous owner crashed BEFORE Insert(apply_runs)
+//     (lockRun already committed applying, apply_run not yet inserted). incarnation-
+//     lock — unclaimed flag (no owner/attempt/lease) — remains in both
+//     cases; binding to orphan given by voyage_targets back-link on caller side,
+//     not by apply_run presence. (NB: reaper-rule reclaim_apply_runs does NOT delete
+//     orphaned row — it does claimed→planned reset of stale plans, not touching
+//     dispatched/running/terminal; source of "row doesn't exist"
+//     here — exactly purge-retention or pre-Insert-crash.)
+//   - SINGLE-WINNER: guard `status='applying'` (CAS). If honest RunResult
+//     of previous owner / concurrent finalization already moved row out of applying —
+//     UPDATE gives RowsAffected==0 → [ErrOrphanLockNotReleased] (no-op, race
+//     closed, we do NOT overwrite alien terminal).
 //
-// Атомарность: одна транзакция SELECT … FOR UPDATE → проверки → INSERT
-// state_history → CAS-UPDATE. FOR UPDATE сериализует снятие относительно
-// конкурентного scenario-runner-а (его lockRun лочит ту же строку).
+// Atomicity: single transaction SELECT … FOR UPDATE → checks → INSERT
+// state_history → CAS-UPDATE. FOR UPDATE serializes release relative to
+// concurrent scenario-runner (its lockRun locks the same row).
 //
-// Возврат:
-//   - nil                        — lock снят (applying → ready), re-run может
-//     стартовать.
-//   - [ErrIncarnationNotFound]   — name не существует (инкарнация снесена между
-//     reclaim и снятием).
-//   - [ErrOrphanLockNotReleased] — снимать нечего (не applying / orphan apply_id
-//     не наш): caller продолжает re-run без снятия.
+// Returns:
+//   - nil                        — lock released (applying → ready), re-run can
+//     start.
+//   - [ErrIncarnationNotFound]   — name doesn't exist (incarnation deleted between
+//     reclaim and release).
+//   - [ErrOrphanLockNotReleased] — nothing to release (not applying / orphan apply_id
+//     not ours): caller continues re-run without release.
 func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, name, orphanApplyID, historyID string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("incarnation: invalid name %q", name)
@@ -1145,21 +1133,21 @@ FOR UPDATE
 		}
 		return fmt.Errorf("incarnation: orphan-release select: %w", err)
 	}
-	// SINGLE-WINNER fast-path: не в applying — снимать нечего (честный RunResult
-	// прошлого владельца / параллельный финал уже выиграл строку). FOR UPDATE
-	// уже сериализовал нас — статус авторитетен в этой tx.
+	// SINGLE-WINNER fast-path: not in applying — nothing to release (honest RunResult
+	// of previous owner / concurrent finalization already won the row). FOR UPDATE
+	// already serialized us — status is authoritative in this tx.
 	if Status(statusStr) != StatusApplying {
 		return ErrOrphanLockNotReleased
 	}
 
-	// FENCING-1 (no-live-rival): у инкарнации НЕ должно быть активного
-	// (не-терминального) apply_run ЧУЖОГО прогона (apply_id ≠ orphanApplyID).
-	// Если есть — между крахом и reclaim стартовал живой прогон (прямой run /
-	// другой Voyage), его applying-lock НЕ наш orphan → НЕ снимаем. Терминальные
-	// статусы (success/failed/cancelled/orphaned/no_match) живой прогон не
-	// держат — игнорируем. Отсутствие строки orphanApplyID допустимо: её снёс
-	// retention-purge purge_apply_runs (терминальные >30d) ИЛИ прошлый владелец
-	// крашнулся ДО Insert(apply_runs); lock — бесхозный флаг — остаётся.
+	// FENCING-1 (no-live-rival): incarnation MUST NOT have active
+	// (non-terminal) apply_run of alien run (apply_id ≠ orphanApplyID).
+	// If exists — between crash and reclaim a live run started (direct run /
+	// other Voyage), its applying-lock is NOT our orphan → do NOT release. Terminal
+	// statuses (success/failed/cancelled/orphaned/no_match) are not held by live run —
+	// ignore. Missing orphanApplyID row is acceptable: deleted by
+	// retention-purge purge_apply_runs (terminal >30d) OR previous owner
+	// crashed BEFORE Insert(apply_runs); lock — unclaimed flag — remains.
 	const liveRivalSQL = `
 SELECT EXISTS (
     SELECT 1 FROM apply_runs
@@ -1176,10 +1164,10 @@ SELECT EXISTS (
 		return ErrOrphanLockNotReleased
 	}
 
-	// state_before == state_after: снятие orphan-lock не меняет state (orphan-
-	// прогон не доехал до commit-а — state остаётся pre-run last-good).
-	// apply_id = orphanApplyID: snapshot перехода коррелирует с осиротевшим
-	// прогоном (схема требует non-null apply_id).
+	// state_before == state_after: releasing orphan-lock does not change state (orphan-
+	// run didn't reach commit — state remains pre-run last-good).
+	// apply_id = orphanApplyID: transition snapshot correlates with orphaned
+	// run (schema requires non-null apply_id).
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
@@ -1192,13 +1180,13 @@ INSERT INTO state_history (
 		return fmt.Errorf("incarnation: insert orphan-release state_history: %w", err)
 	}
 
-	// SINGLE-WINNER CAS: applying → ready. RowsAffected==0 невозможен под
-	// FOR UPDATE+ранней проверкой статуса (мы уже видели applying в этой tx), но
-	// guard сохраняем как явный инвариант перехода. Epoch applying-флага (ADR-027
-	// amend (m-S1)) обнуляется вместе со снятием applying — симметрично терминалу
-	// UpdateStateFromRun: после снятия orphan-lock строка не должна нести epoch
-	// мёртвого владельца (иначе Reaper увидел бы протухший applying_by_kid на
-	// уже-снятой строке). Покрывает оба пути снятия — Voyage (l) и standalone (m).
+	// SINGLE-WINNER CAS: applying → ready. RowsAffected==0 is impossible under
+	// FOR UPDATE+early status check (we already saw applying in this tx), but
+	// keep guard as explicit transition invariant. Epoch of applying-flag (ADR-027
+	// amend (m-S1)) is zeroed together with release of applying — symmetric to
+	// UpdateStateFromRun terminal: after orphan-lock release row must not carry
+	// dead owner's epoch (otherwise Reaper would see stale applying_by_kid on
+	// already-released row). Covers both release paths — Voyage (l) and standalone (m).
 	const updateSQL = `
 UPDATE incarnation
 SET status            = $2,
@@ -1224,61 +1212,60 @@ WHERE name = $1 AND status = 'applying'
 	return nil
 }
 
-// rerunLastScenarioLabel — значение `state_history.scenario` для unlock-части
-// rerun-last. По конвенции unlock-перехода (state_history требует non-null
-// scenario): фиксируем сам факт снятия error_locked под этой меткой, отдельной
-// от unlockScenarioLabel — rerun снимает блок И перезапускает последний упавший
-// сценарий, его след в истории отличается от обычного ручного unlock.
+// rerunLastScenarioLabel — value for `state_history.scenario` on unlock portion
+// of rerun-last. By unlock-transition convention (state_history requires non-null
+// scenario): capture the fact of error_locked release under this label, separate
+// from unlockScenarioLabel — rerun releases block AND restarts the last failed
+// scenario, its trace in history differs from normal manual unlock.
 const rerunLastScenarioLabel = "rerun-last"
 
-// UnlockForRerun — unlock-часть rerun-last (architecture.md → «Атомарность и
-// error_locked»). Атомарно снимает error_locked и переводит incarnation
-// error_locked → applying МИНУЯ ready: окна, в котором конкурентный прогон
-// проскочил бы в освободившийся ready, не возникает (переход под одним
-// FOR UPDATE). State НЕ трогается — last known-good сохраняется (snapshot в
-// state_history, state_before == state_after, симметрично [Unlock]).
+// UnlockForRerun — unlock portion of rerun-last (architecture.md → "Atomicity and
+// error_locked"). Atomically releases error_locked and transitions incarnation
+// error_locked → applying BYPASSING ready: window where concurrent run could slip
+// into freed ready does not occur (transition under single FOR UPDATE). State NOT
+// touched — last known-good preserved (snapshot in state_history, state_before == state_after,
+// symmetric to [Unlock]).
 //
-// Допуск ЖЁСТКО из error_locked: migration_failed / destroy_failed / ready /
-// applying / destroying → [ErrIncarnationNotErrorLocked] (для них — обычный
-// unlock + ручной run).
+// Admission STRICTLY from error_locked: migration_failed / destroy_failed / ready /
+// applying / destroying → [ErrIncarnationNotErrorLocked] (for them — normal
+// unlock + manual run).
 //
-// Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации
-// (последний snapshot state_history: run.go::abort → lockIncarnation →
-// UpdateStateFromRun пишет туда имя упавшего сценария и его apply_id). Это может
-// быть создавший bootstrap (`create`/`create_cluster`/…) ИЛИ day-2-сценарий
-// (add_user / update_acl / …) — оба перезапускаются одинаково.
+// Scope=last-failed: restarts LAST FAILED scenario of incarnation (last
+// state_history snapshot: run.go::abort → lockIncarnation →
+// UpdateStateFromRun writes failed scenario name and its apply_id). This can be
+// bootstrap creator (`create`/`create_cluster`/…) OR day-2-scenario
+// (add_user / update_acl / …) — both restarted identically.
 //
-// Восстановление input упавшего прогона (чтобы перезапуск шёл с ТЕМИ ЖЕ
-// значениями, а не с дефолтами):
-//   - create-путь (последний упавший == incarnation.created_scenario): input из
-//     incarnation.spec.input, прочитанный тем же FOR UPDATE (живёт с инкарнацией).
-//   - day-2-путь (иначе, включая bare-инкарнацию с created_scenario IS NULL):
-//     input из рецепта упавшего apply_run (`apply_runs.recipe.input` по apply_id
-//     последнего snapshot-а; инвариант A — vault-ref строками, секреты не
-//     раскрыты). Рецепт недоступен → fail-closed [ErrRerunInputUnavailable]
-//     (причины и семантика — у sentinel), транзакция НЕ коммитится.
+// Recovery of failed run's input (so restart proceeds with SAME
+// values, not defaults):
+//   - create-path (last failed == incarnation.created_scenario): input from
+//     incarnation.spec.input, read under same FOR UPDATE (lives with incarnation).
+//   - day-2-path (else, including bare-incarnation with created_scenario IS NULL):
+//     input from recipe of failed apply_run (`apply_runs.recipe.input` by apply_id
+//     of last snapshot; invariant A — vault-ref as strings, secrets not
+//     revealed). Recipe unavailable → fail-closed [ErrRerunInputUnavailable]
+//     (reasons and semantics — see sentinel), transaction NOT committed.
 //
-// Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает
-// [UnlockResult.Scenario] через runner.Start с тем же applyID, что передан сюда:
-// статус уже applying, lockRun стартующего прогона лочит ту же строку и видит
-// applying как валидный стартовый статус. Передача applyID сюда нужна для записи
-// его в state_history.apply_id — снимок unlock-перехода коррелирует с запускаемым
-// прогоном.
+// Caller (handler / MCP-tool) AFTER successful commit starts
+// [UnlockResult.Scenario] via runner.Start with same applyID passed here:
+// status already applying, lockRun of starting run locks same row and sees
+// applying as valid start status. Passing applyID here needed for write to
+// state_history.apply_id — unlock-transition snapshot correlates with run being started.
 //
-// Атомарность: одна транзакция SELECT … FOR UPDATE → gate error_locked →
+// Atomicity: single transaction SELECT … FOR UPDATE → gate error_locked →
 // last-failed probe → (day-2) recipe probe → INSERT state_history →
-// UPDATE status=applying → commit. FOR UPDATE сериализует rerun относительно
-// конкурентного scenario-runner-а (его lockRun лочит ту же строку).
+// UPDATE status=applying → commit. FOR UPDATE serializes rerun relative to
+// concurrent scenario-runner (its lockRun locks same row).
 //
-// Возврат:
-//   - [ErrIncarnationNotFound]       — name не существует (404).
-//   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
-//   - [ErrRerunInputUnavailable]     — day-2-путь, но input упавшего прогона
-//     недоступен (recipe IS NULL: ранний abort без рецепта / legacy / apply_run
-//     вычищен — полный список у sentinel) (409).
+// Returns:
+//   - [ErrIncarnationNotFound]       — name doesn't exist (404).
+//   - [ErrIncarnationNotErrorLocked] — status not error_locked (409).
+//   - [ErrRerunInputUnavailable]     — day-2-path but failed run's input
+//     unavailable (recipe IS NULL: early abort without recipe / legacy / apply_run
+//     purged — full list at sentinel) (409).
 //
-// reason пишется в audit-payload caller-ом (state_history-схема MVP не несёт
-// metadata-колонки); previous_status возвращается в [UnlockResult].
+// reason written to audit-payload by caller (state_history-schema MVP doesn't carry
+// metadata-columns); previous_status returned in [UnlockResult].
 func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByAID, historyID, applyID string) (*UnlockResult, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)
@@ -1299,11 +1286,11 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// spec читаем тем же FOR UPDATE-снимком (колонка в конце — порядок state,
-	// status, created_scenario НЕ сдвигается, plain Unlock/Destroy сканируют первые
-	// две, как раньше): на create-пути из spec.input достаём сохранённый оператор-
-	// input для проброса в перезапускаемый bootstrap-прогон (rerun-last
-	// восстанавливает падение с теми же version/shards/…, а не с дефолтами).
+	// read spec under same FOR UPDATE-snapshot (column at end — order of state,
+	// status, created_scenario NOT shifted, plain Unlock/Destroy scan first
+	// two, as before): on create-path extract saved operator-
+	// input from spec.input for passing to restarted bootstrap-run (rerun-last
+	// recovers failure with same version/shards/…, not defaults).
 	const selectForUpdateSQL = `
 SELECT state, status, created_scenario, spec
 FROM incarnation
@@ -1327,12 +1314,12 @@ FOR UPDATE
 		return nil, ErrIncarnationNotErrorLocked
 	}
 
-	// Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации.
-	// Последний snapshot state_history несёт имя упавшего сценария И apply_id того
-	// прогона (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
-	// авторитетная корреляция с рецептом (day-2 input), точнее сопоставления по
-	// имени сценария. Та же FOR UPDATE-tx: чтение сериализовано относительно
-	// конкурентного scenario-runner-а.
+	// Scope=last-failed: restart LAST FAILED scenario of incarnation.
+	// Last state_history snapshot carries failed scenario name AND apply_id of that
+	// run (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
+	// authoritative correlation with recipe (day-2 input), more precise than matching by
+	// scenario name. Same FOR UPDATE-tx: read serialized relative to
+	// concurrent scenario-runner.
 	const lastRunSQL = `
 SELECT scenario, apply_id
 FROM state_history
@@ -1346,33 +1333,33 @@ LIMIT 1
 	)
 	if err := tx.QueryRow(ctx, lastRunSQL, name).Scan(&lastScenario, &lastApplyID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// error_locked без единого snapshot-а — недостижимо штатно (lockIncarnation
-			// всегда пишет state_history при провале). Fail-closed: без следа упавшего
-			// прогона перезапускать нечего.
+			// error_locked without single snapshot — unachievable normally (lockIncarnation
+			// always writes state_history on failure). Fail-closed: without trace of failed
+			// run nothing to restart.
 			return nil, ErrRerunInputUnavailable
 		}
 		return nil, fmt.Errorf("incarnation: rerun-last last-run probe: %w", err)
 	}
 
-	// Восстановление input упавшего прогона: create-путь vs day-2-путь.
-	// fromUpgrade — только day-2 (recipe.from_upgrade); create-путь всегда false.
+	// Recovery of failed run's input: create-path vs day-2-path.
+	// fromUpgrade — day-2 only (recipe.from_upgrade); create-path always false.
 	var (
 		rerunInput  map[string]any
 		fromUpgrade bool
 	)
 	if createdScenario != nil && lastScenario == *createdScenario {
-		// create-путь: последний упавший == создавший bootstrap. Input оператора
-		// хранится в incarnation.spec.input (прочитан под тем же FOR UPDATE):
-		// null/битый jsonb spec-а — не ошибка консистентности (spec freeform;
-		// unmarshal вернёт nil-map), input — nil при отсутствии ключа.
+		// create-path: last failed == bootstrap creator. Operator input
+		// stored in incarnation.spec.input (read under same FOR UPDATE):
+		// null/malformed spec jsonb — not consistency error (spec freeform;
+		// unmarshal returns nil-map), input — nil if key absent.
 		spec, _ := unmarshalJSONB(specBytes)
 		rerunInput = InputFromSpec(spec)
 	} else {
-		// day-2-путь (включая bare-инкарнацию, created_scenario IS NULL): input
-		// упавшего day-2-прогона живёт только в рецепте apply_run. Читаем recipe по
-		// apply_id последнего snapshot-а (любая passage/sid-строка прогона — recipe
-		// один на прогон). Рецепт недоступен → fail-closed
-		// [ErrRerunInputUnavailable] (причины — у sentinel), tx НЕ коммитится.
+		// day-2-path (including bare-incarnation, created_scenario IS NULL): failed
+		// day-2-run input lives only in apply_run recipe. Read recipe by
+		// apply_id of last snapshot (any passage/sid-row of run — recipe
+		// one per run). Recipe unavailable → fail-closed
+		// [ErrRerunInputUnavailable] (reasons — see sentinel), tx NOT committed.
 		const recipeSQL = `
 SELECT recipe
 FROM apply_runs
@@ -1388,13 +1375,13 @@ LIMIT 1
 		}
 		recipe, uerr := unmarshalJSONB(recipeBytes)
 		if uerr != nil {
-			// Битый recipe-jsonb — не консистентно с инвариантом A (recipe пишется
-			// json.Marshal-ом). Fail-closed, а не silent bootstrap-input.
+			// Malformed recipe-jsonb — inconsistent with invariant A (recipe written
+			// by json.Marshal). Fail-closed, not silent bootstrap-input.
 			return nil, ErrRerunInputUnavailable
 		}
 		rerunInput = InputFromSpec(recipe)
-		// recipe.FromUpgrade строкой freeform-jsonb (как InputFromSpec): upgrade-
-		// прогон перезапускается из upgrade/, а не scenario/ (ADR-0068).
+		// recipe.FromUpgrade as freeform-jsonb string (like InputFromSpec): upgrade-
+		// run restarts from upgrade/, not scenario/ (ADR-0068).
 		fromUpgrade, _ = recipe["from_upgrade"].(bool)
 	}
 
@@ -1403,9 +1390,9 @@ LIMIT 1
 		changedByArg = rerunByAID
 	}
 
-	// state_before == state_after: rerun не меняет state (last known-good).
-	// apply_id = $6: снимок unlock-перехода коррелирует с запускаемым прогоном
-	// (тот же applyID использует runner.Start у caller-а).
+	// state_before == state_after: rerun does not change state (last known-good).
+	// apply_id = $6: unlock-transition snapshot correlates with run being started
+	// (same applyID used by runner.Start in caller).
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
@@ -1418,9 +1405,9 @@ INSERT INTO state_history (
 		return nil, fmt.Errorf("incarnation: insert rerun-last state_history: %w", err)
 	}
 
-	// status → applying (МИНУЯ ready), status_details сбрасываются (блок снят).
-	// Конкурентный прогон не проскочит: ready никогда не материализуется, а
-	// FOR UPDATE держит строку до commit-а.
+	// status → applying (BYPASSING ready), status_details reset (block released).
+	// Concurrent run can't slip through: ready never materializes, and
+	// FOR UPDATE holds row until commit.
 	const updateSQL = `
 UPDATE incarnation
 SET status = $2, status_details = NULL, updated_at = NOW()
@@ -1443,96 +1430,96 @@ WHERE name = $1
 	}, nil
 }
 
-// migrationScenarioLabel — значение `state_history.scenario` для шага
-// state_schema-миграции (docs/migrations.md §Атомарность: scenario="migration").
-// Миграция — не прогон scenario через Soul, но state_history требует non-null
-// scenario; фиксируем под этой меткой каждый шаг цепочки.
+// migrationScenarioLabel — value for `state_history.scenario` on state_schema-
+// migration step (docs/migrations.md §Atomicity: scenario="migration").
+// Migration — not scenario run through Soul, but state_history requires non-null
+// scenario; capture each chain step under this label.
 const migrationScenarioLabel = "migration"
 
-// upgradeDriftScenarioLabel — значение `state_history.scenario` для финального
-// перехода upgrade-а в drift (ADR-031, amendment поведения upgrade). Upgrade
-// меняет только incarnation.state + версии одной PG-tx — хосты остаются на
-// СТАРОЙ раскатке, реальное состояние расходится с новым state. Отдельная метка
-// (не `migration`, под которой идут шаги самой миграции) фиксирует ПРИЧИНУ
-// перехода в drift в истории — «новая версия ждёт применения на хостах», чтобы
-// триаж отличал upgrade-drift от drift, найденного Scry-сканом. Симметрично
-// другим transition-меткам (unlock / rerun-last / voyage-orphan-release).
+// upgradeDriftScenarioLabel — value for `state_history.scenario` on upgrade's
+// final transition to drift (ADR-031, amendment to upgrade behavior). Upgrade
+// changes only incarnation.state + version in single PG-tx — hosts remain on
+// OLD deployment, actual state diverges from new state. Separate label
+// (not `migration`, under which migration steps go) captures REASON
+// of transition to drift in history — "new version awaits deployment on hosts", so
+// triage distinguishes upgrade-drift from drift found by Scry-scan. Symmetric
+// to other transition-labels (unlock / rerun-last / voyage-orphan-release).
 const upgradeDriftScenarioLabel = "upgrade-pending-apply"
 
-// UpgradeInput — вход [UpgradeStateSchema]. Caller (Slice 2) резолвит
-// TargetSchemaVer из service.yml целевого снапшота, собирает Chain через
-// [artifact.ServiceLoader.LoadMigrationChain] и генерит ApplyID (ULID одной
-// upgrade-операции, общий для всех шагов цепочки).
+// UpgradeInput — input to [UpgradeStateSchema]. Caller (Slice 2) resolves
+// TargetSchemaVer from service.yml of target snapshot, collects Chain via
+// [artifact.ServiceLoader.LoadMigrationChain], and generates ApplyID (ULID of single
+// upgrade operation, common to all chain steps).
 type UpgradeInput struct {
 	Name             string
-	TargetServiceVer string                 // git-ref целевой версии сервиса (ADR-007)
-	TargetSchemaVer  int                    // state_schema_version из service.yml снапшота
-	Chain            statemigrate.Chain     // цепочка current→target (пустая = no-op ref-bump)
+	TargetServiceVer string                 // git-ref of target service version (ADR-007)
+	TargetSchemaVer  int                    // state_schema_version from service.yml snapshot
+	Chain            statemigrate.Chain     // chain current→target (empty = no-op ref-bump)
 	Evaluator        statemigrate.Evaluator // migration-CEL ([statemigrate.NewEvaluator])
-	ApplyID          string                 // ULID upgrade-операции (M, общий на цепочку миграции)
-	ChangedByAID     *string                // Архонт-инициатор (nil — без identity)
+	ApplyID          string                 // ULID of upgrade operation (M, common to migration chain)
+	ChangedByAID     *string                // Archon initiator (nil — no identity)
 
-	// UpgradeSlug — имя найденного upgrade-сценария для перехода from→to (ADR-0068
-	// §5). Заполняет [PrepareUpgrade] (скан upgrade/ целевого снапшота); пусто →
-	// legacy (drift + host-раскатка вручную).
+	// UpgradeSlug — name of found upgrade-scenario for from→to transition (ADR-0068
+	// §5). Filled by [PrepareUpgrade] (scan upgrade/ of target snapshot); empty →
+	// legacy (drift + host deployment manual).
 	UpgradeSlug string
-	// RunApplyID — ULID Runner-прогона upgrade-сценария (R), ОТДЕЛЬНЫЙ от ApplyID
-	// миграции (M). Found-режим (applying + linkage-снимок под R) включается ТОЛЬКО
-	// когда И UpgradeSlug, И RunApplyID непусты: R — коммит caller-а на автозапуск.
-	// Caller без автозапуска (MCP) оставляет пустым → legacy-drift, чтобы не
-	// зарезервировать applying без прогона (иначе incarnation завис бы). ADR-0068 §5/B.
+	// RunApplyID — ULID of Runner-run of upgrade-scenario (R), SEPARATE from ApplyID
+	// of migration (M). Found-mode (applying + linkage-snapshot under R) enabled ONLY
+	// when BOTH UpgradeSlug AND RunApplyID non-empty: R — caller's commit to auto-start.
+	// Caller without auto-start (MCP) leaves empty → legacy-drift, to not
+	// reserve applying without run (else incarnation would hang). ADR-0068 §5/B.
 	RunApplyID string
-	// TargetRef — git-координаты целевой версии (Ref=to_version), резолвнутые
-	// [PrepareUpgrade]. Для runner.Start(ServiceRef) автозапуска upgrade-сценария.
+	// TargetRef — git-coordinates of target version (Ref=to_version), resolved
+	// by [PrepareUpgrade]. For runner.Start(ServiceRef) auto-start of upgrade-scenario.
 	TargetRef artifact.ServiceRef
 }
 
-// UpgradeResult — итог [UpgradeStateSchema]: схема до/после и число
-// применённых шагов миграции (0 для no-op ref-bump).
+// UpgradeResult — result of [UpgradeStateSchema]: schema before/after and count
+// of applied migration steps (0 for no-op ref-bump).
 type UpgradeResult struct {
 	FromSchemaVer int
 	ToSchemaVer   int
 	Steps         int
 }
 
-// UpgradeStateSchema атомарно применяет state_schema-миграцию incarnation
-// (ADR-019, docs/migrations.md §Атомарность). Тот же транзакционный паттерн,
-// что [Unlock] / scenario.lockRun: одна tx FOR UPDATE → gate статуса → sanity
-// против chain → in-memory [statemigrate.Apply] → per-step INSERT state_history
+// UpgradeStateSchema atomically applies state_schema-migration to incarnation
+// (ADR-019, docs/migrations.md §Atomicity). Same transactional pattern as
+// [Unlock] / scenario.lockRun: single tx FOR UPDATE → status gate → sanity
+// against chain → in-memory [statemigrate.Apply] → per-step INSERT state_history
 // → UPDATE incarnation → commit.
 //
-// Апгрейд разрешён ТОЛЬКО из ready:
-//   - applying        → [ErrIncarnationBusy] (идёт прогон);
-//   - error_locked    → [ErrIncarnationLocked] (нужен unlock);
-//   - migration_failed → [ErrIncarnationLocked] (нужен unlock).
+// Upgrade allowed ONLY from ready:
+//   - applying        → [ErrIncarnationBusy] (run in progress);
+//   - error_locked    → [ErrIncarnationLocked] (unlock needed);
+//   - migration_failed → [ErrIncarnationLocked] (unlock needed).
 //
-// Sanity против chain (защита от гонки resolve↔FOR UPDATE):
-//   - текущая schema-версия должна равняться chain[0].FromVersion;
-//   - TargetSchemaVer должен равняться chain[last].ToVersion;
-//     иначе [ErrSchemaVersionMismatch] (кто-то проапгрейдил между resolve и
-//     блокировкой строки).
-//   - TargetSchemaVer < текущей → [ErrDowngradeUnsupported] (forward-only).
+// Sanity against chain (protection from resolve↔FOR UPDATE race):
+//   - current schema-version must equal chain[0].FromVersion;
+//   - TargetSchemaVer must equal chain[last].ToVersion;
+//     else [ErrSchemaVersionMismatch] (someone upgraded between resolve and
+//     row lock).
+//   - TargetSchemaVer < current → [ErrDowngradeUnsupported] (forward-only).
 //
-// No-op (пустой Chain — сменился ref, но schema_version тот же): [Apply]
-// вернёт FinalState = копию state и пустые Steps; всё равно пишется одна
-// zero-diff state_history-запись (симметрично unlock) и UPDATE service_version.
+// No-op (empty Chain — ref changed but schema_version same): [Apply]
+// returns FinalState = state copy and empty Steps; still writes single
+// zero-diff state_history-record (symmetric to unlock) and UPDATE service_version.
 //
-// По успешному upgrade incarnation переходит в status=drift, НЕ ready (ADR-031,
-// amendment поведения upgrade): БД-state обновлён, но хосты остались на старой
-// раскатке — реальное состояние расходится с новым state, оператору нужен сигнал
-// «накати новую версию». drift информационный, не блокирующий (ADR-031(d));
-// remediation — обычный apply (drift→ready). Переход фиксируется отдельной
-// zero-diff history-записью с причиной ([writeUpgradeDriftHistory]). Это
-// касается и no-op ref-bump-а (смена git-ref без миграции тоже могла поменять
-// раскатку — например шаблоны/пакеты той же schema-версии).
+// On successful upgrade incarnation transitions to status=drift, NOT ready (ADR-031,
+// amendment to upgrade behavior): DB-state updated, but hosts remain on old
+// deployment — actual state diverges from new state, operator needs signal
+// to "deploy new version". drift informational, not blocking (ADR-031(d));
+// remediation — normal apply (drift→ready). Transition captured by separate
+// zero-diff history-record with reason ([writeUpgradeDriftHistory]). Also
+// applies to no-op ref-bump (git-ref change without migration can also change
+// deployment — e.g., templates/packages of same schema-version).
 //
-// При ошибке [Apply] / любого write tx откатывается; затем ОТДЕЛЬНОЙ
-// background-tx incarnation помечается status=migration_failed с masked
-// status_details (паттерн scenario.lockIncarnation; фейл миграции →
-// migration_failed, НЕ error_locked, ADR-019). Ошибка такой пометки
-// оборачивается в возврат, но первичная причина сохраняется через %w.
+// On error in [Apply] / any write tx is rolled back; then SEPARATE
+// background-tx marks incarnation status=migration_failed with masked
+// status_details (pattern from scenario.lockIncarnation; migration failure →
+// migration_failed, NOT error_locked, ADR-019). Error in such marking
+// wrapped in return, but primary cause preserved via %w.
 //
-// Возврат [ErrIncarnationNotFound], если строки нет.
+// Returns [ErrIncarnationNotFound] if row doesn't exist.
 func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeResult, error) {
 	if !ValidName(in.Name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", in.Name)
@@ -1554,13 +1541,13 @@ func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (
 	if err == nil {
 		return res, nil
 	}
-	// Sentinel-отказы (gate / sanity / not-found) — НЕ migration_failed:
-	// state не тронут, incarnation остаётся в исходном статусе.
+	// Sentinel rejections (gate / sanity / not-found) — NOT migration_failed:
+	// state untouched, incarnation remains in original status.
 	if isUpgradeRejection(err) {
 		return nil, err
 	}
-	// Фейл Apply / write внутри tx (rollback уже сделан) → пометить
-	// migration_failed отдельной background-tx.
+	// Apply / write failure inside tx (rollback already done) → mark
+	// migration_failed with separate background-tx.
 	markErr := markMigrationFailed(pool, in, err)
 	if markErr != nil {
 		return nil, fmt.Errorf("incarnation: upgrade failed (%w); пометка migration_failed провалена: %v", err, markErr)
@@ -1568,8 +1555,8 @@ func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (
 	return nil, err
 }
 
-// isUpgradeRejection — true для sentinel-отказов, которые НЕ переводят
-// incarnation в migration_failed (state не изменён, статус сохранён).
+// isUpgradeRejection — true for sentinel rejections that do NOT transition
+// incarnation to migration_failed (state unchanged, status preserved).
 func isUpgradeRejection(err error) bool {
 	return errors.Is(err, ErrIncarnationNotFound) ||
 		errors.Is(err, ErrIncarnationBusy) ||
@@ -1578,9 +1565,9 @@ func isUpgradeRejection(err error) bool {
 		errors.Is(err, ErrSchemaVersionMismatch)
 }
 
-// upgradeTx выполняет всю upgrade-логику в одной PG-транзакции. Выделено из
-// [UpgradeStateSchema], чтобы failure-handling (migration_failed) жил снаружи,
-// после гарантированного rollback (defer Rollback в этой функции).
+// upgradeTx performs all upgrade-logic in single PG-transaction. Separated from
+// [UpgradeStateSchema] so failure-handling (migration_failed) lives outside,
+// after guaranteed rollback (defer Rollback in this function).
 func upgradeTx(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeResult, error) {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -1608,10 +1595,10 @@ FOR UPDATE
 
 	switch Status(statusStr) {
 	case StatusReady, StatusDrift:
-		// ready — штатный путь; drift (ADR-031, Scry) — информационный статус,
-		// upgrade его НЕ блокирует (как и обычный apply). По окончании upgrade-tx
-		// статус — снова drift (хосты ждут применения новой версии, см.
-		// финальный UPDATE), а не ready: смена БД-state ещё не раскатана на хосты.
+		// ready — normal path; drift (ADR-031, Scry) — informational status,
+		// upgrade does NOT block it (same as normal apply). After upgrade-tx
+		// status — back to drift (hosts await new version deployment, see
+		// final UPDATE), not ready: DB-state change not yet deployed to hosts.
 	case StatusApplying:
 		return nil, ErrIncarnationBusy
 	case StatusErrorLocked, StatusMigrationFailed:
@@ -1624,15 +1611,15 @@ FOR UPDATE
 		return nil, ErrDowngradeUnsupported
 	}
 
-	// Sanity против chain (только для непустой цепочки): защита от гонки
-	// resolve(service.yml снапшота) ↔ FOR UPDATE — кто-то мог проапгрейдить
-	// строку между этими точками.
+	// Sanity against chain (only for non-empty chain): protection from race
+	// between resolve(service.yml snapshot) ↔ FOR UPDATE — someone could have upgraded
+	// row between these points.
 	if len(in.Chain) > 0 {
 		if in.Chain[0].FromVersion != currentVer || in.Chain[len(in.Chain)-1].ToVersion != in.TargetSchemaVer {
 			return nil, ErrSchemaVersionMismatch
 		}
 	} else if in.TargetSchemaVer != currentVer {
-		// Пустая цепочка обязана быть ref-bump-ом без смены schema-версии.
+		// Empty chain must be ref-bump without schema-version change.
 		return nil, ErrSchemaVersionMismatch
 	}
 
@@ -1643,7 +1630,7 @@ FOR UPDATE
 
 	applyRes, err := statemigrate.Apply(ctx, currentState, in.Chain, in.Evaluator)
 	if err != nil {
-		return nil, fmt.Errorf("incarnation: миграция %q: %w", in.Name, err)
+		return nil, fmt.Errorf("incarnation: migration %q: %w", in.Name, err)
 	}
 
 	if err := writeMigrationHistory(ctx, tx, in, currentState, applyRes); err != nil {
@@ -1655,18 +1642,18 @@ FOR UPDATE
 		return nil, fmt.Errorf("incarnation: marshal migrated state: %w", err)
 	}
 
-	// found-ветвь (ADR-0068 §5/B): И slug, И R непусты (R = коммит caller-а на
-	// автозапуск; без R applying резервировать нельзя — incarnation завис бы без
-	// прогона, поэтому caller без автозапуска, напр. MCP, идёт legacy).
+	// found-branch (ADR-0068 §5/B): both slug AND R non-empty (R = caller's commit to
+	// auto-start; without R can't reserve applying — incarnation would hang without
+	// run, so caller without auto-start, e.g. MCP, goes legacy).
 	found := in.UpgradeSlug != "" && in.RunApplyID != ""
 
-	// legacy → drift (ADR-031: хосты позади БД-state, remediation = ручной apply),
-	// сюда же no-op ref-bump; found → applying (ADR-0068: управление уходит
-	// Runner-у автозапуска upgrade-сценария, зеркало UnlockForRerun;
-	// applying_apply_id=R дозаполнит lockRun при FromLocked). status — контролируемая
-	// константа (не пользовательский ввод), Sprintf-инъекции нет; legacy-текст
-	// байт-в-байт прежний (регресс-тесты на литерал 'drift'). Gate выше пускает в
-	// UPDATE только из ready/drift — оба валидно переходят и в drift, и в applying.
+	// legacy → drift (ADR-031: hosts behind DB-state, remediation = manual apply),
+	// also no-op ref-bump; found → applying (ADR-0068: control goes to
+	// Runner of upgrade-scenario auto-start, mirror of UnlockForRerun;
+	// applying_apply_id=R filled by lockRun on FromLocked). status — controlled
+	// constant (not user input), no Sprintf injection; legacy-text
+	// byte-for-byte same (regression tests on literal 'drift'). Gate above allows
+	// UPDATE only from ready/drift — both validly transition to both drift and applying.
 	finalStatus := StatusDrift
 	if found {
 		finalStatus = StatusApplying
@@ -1685,11 +1672,11 @@ WHERE name = $1
 		return nil, fmt.Errorf("incarnation: upgrade update: %w", err)
 	}
 
-	// Zero-diff transition-запись (state_before == state_after = пост-миграционный
-	// state): legacy → drift-transition под M (метка upgrade-pending-apply,
-	// отделяет upgrade-drift от Scry-drift при триаже); found → linkage-снимок под
-	// R со scenario=slug (зеркало UnlockForRerun-снимка — линкует автозапуск-прогон
-	// с этим upgrade-ом).
+	// Zero-diff transition-record (state_before == state_after = post-migration
+	// state): legacy → drift-transition under M (label upgrade-pending-apply,
+	// distinguishes upgrade-drift from Scry-drift on triage); found → linkage-snapshot under
+	// R with scenario=slug (mirror of UnlockForRerun-snapshot — links auto-start run
+	// with this upgrade).
 	if found {
 		if err := writeUpgradeRunHistory(ctx, tx, in, applyRes.FinalState); err != nil {
 			return nil, err
@@ -1709,11 +1696,10 @@ WHERE name = $1
 	}, nil
 }
 
-// writeUpgradeDriftHistory пишет zero-diff snapshot перехода incarnation в drift
-// по итогу upgrade-а (state_before == state_after = пост-миграционный final
-// state). scenario-метка [upgradeDriftScenarioLabel] несёт причину перехода
-// (хосты ждут применения новой версии); общий ApplyID связывает её со step-
-// снимками этого upgrade-а.
+// writeUpgradeDriftHistory writes zero-diff snapshot of incarnation transition to drift
+// following upgrade completion (state_before == state_after = post-migration final state).
+// scenario label [upgradeDriftScenarioLabel] captures the transition reason (hosts await
+// new version deployment); common ApplyID links it to step-snapshots of this upgrade.
 func writeUpgradeDriftHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
 	stateBytes, err := marshalJSONB(finalState)
 	if err != nil {
@@ -1737,12 +1723,12 @@ INSERT INTO state_history (
 	return nil
 }
 
-// writeUpgradeRunHistory пишет zero-diff linkage-снимок передачи управления
-// автозапуску upgrade-прогона (found-ветвь ADR-0068 §5/B): apply_id = R
-// ([UpgradeInput.RunApplyID]), scenario = найденный slug, state_before ==
-// state_after = пост-миграционный final state. Зеркало UnlockForRerun-снимка
-// (applying + zero-diff под apply_id прогона) — линкует R с этим upgrade-ом в
-// истории, отдельно от M-меток самой миграции.
+// writeUpgradeRunHistory writes zero-diff linkage-snapshot of control handoff to
+// upgrade-scenario auto-start (found-branch ADR-0068 §5/B): apply_id = R
+// ([UpgradeInput.RunApplyID]), scenario = discovered slug, state_before ==
+// state_after = post-migration final state. Mirror of UnlockForRerun-snapshot
+// (applying + zero-diff under run's apply_id) — links R to this upgrade in history,
+// separate from M-labels of the migration itself.
 func writeUpgradeRunHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
 	stateBytes, err := marshalJSONB(finalState)
 	if err != nil {
@@ -1766,10 +1752,10 @@ INSERT INTO state_history (
 	return nil
 }
 
-// writeMigrationHistory пишет per-step snapshot цепочки в state_history. Один
-// общий ApplyID на upgrade, разные history_id (ULID) на шаг. Для no-op
-// (пустая цепочка) пишется одна zero-diff запись (state_before == state_after),
-// симметрично unlock — фиксируем сам факт ref-bump-а.
+// writeMigrationHistory writes per-step snapshot of the chain to state_history.
+// One common ApplyID per upgrade, distinct history_id (ULID) per step. For no-op
+// (empty chain), writes one zero-diff record (state_before == state_after),
+// symmetric to unlock — captures the fact of the ref-bump itself.
 func writeMigrationHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, before map[string]any, res statemigrate.Result) error {
 	const historyInsertSQL = `
 INSERT INTO state_history (
@@ -1783,7 +1769,7 @@ INSERT INTO state_history (
 	}
 
 	if len(res.Steps) == 0 {
-		// No-op ref-bump: zero-diff snapshot (state неизменно).
+		// No-op ref-bump: zero-diff snapshot (state unchanged).
 		stateBytes, err := marshalJSONB(before)
 		if err != nil {
 			return fmt.Errorf("incarnation: marshal state (no-op history): %w", err)
@@ -1814,12 +1800,12 @@ INSERT INTO state_history (
 	return nil
 }
 
-// markMigrationFailed помечает incarnation status=migration_failed после
-// провала миграции. Отдельная background-tx (паттерн scenario.lockIncarnation):
-// исходный ctx мог быть отменён, но зафиксировать провал надо в любом случае.
-// status_details маскируется через [audit.MaskSecrets] (migration-CEL без
-// vault, но cause может транзитом нести vault-ref из старого state — defense
-// in depth, status_details читается наружу без маскинга).
+// markMigrationFailed marks incarnation status=migration_failed after
+// migration failure. Separate background-tx (pattern from scenario.lockIncarnation):
+// original ctx may have been cancelled, but recording failure must happen regardless.
+// status_details masked via [audit.MaskSecrets] (migration-CEL has no vault,
+// but cause may carry vault-refs from old state in transit — defense in depth,
+// status_details read outbound without masking).
 func markMigrationFailed(pool TxBeginner, in UpgradeInput, cause error) error {
 	wctx := context.Background()
 	details := audit.MaskSecrets(map[string]any{
@@ -1852,36 +1838,31 @@ WHERE name = $1
 	return nil
 }
 
-// HistoryFilter — фильтры для [HistorySelectByName]. Пустые поля — «не
-// фильтровать». ApplyID — ULID конкретного прогона; обычно матчит
-// 0 или 1 row (один state_history-snapshot на apply), но контракт не
-// запрещает несколько при будущем расширении.
+// HistoryFilter — filters for [HistorySelectByName]. Empty fields mean "don't filter".
+// ApplyID — ULID of specific run; typically matches 0 or 1 row (one state_history-snapshot
+// per apply), but contract doesn't forbid multiple on future extension.
 //
-// IncludeArchived — флаг включения soft-deleted-снимков (ADR-Q19 retention,
-// колонка `state_history.archived_at`). По умолчанию false: реестр истории
-// возвращает только активные (`archived_at IS NULL`) снимки — типовой
-// сценарий Operator API / MCP. При true возвращаются все записи (включая
-// помеченные правилом Reaper `archive_state_history`) — нужно для разбора
-// «куда делся snapshot N дней назад».
+// IncludeArchived — flag to include soft-deleted snapshots (ADR-Q19 retention,
+// `state_history.archived_at` column). Default false: history registry returns only
+// active snapshots (`archived_at IS NULL`) — typical Operator API / MCP scenario.
+// When true, returns all records (including those marked by Reaper `archive_state_history` rule)
+// — needed to investigate "where did snapshot N days ago go".
 type HistoryFilter struct {
 	ApplyID         string
 	IncludeArchived bool
 }
 
-// HistorySelectByName возвращает страницу записей `state_history`
-// конкретной incarnation в обратном хронологическом порядке + общее
-// количество (без offset/limit). При непустом `filter.ApplyID`
-// результат дополнительно фильтруется по `apply_id`.
+// HistorySelectByName returns a page of `state_history` records for a specific
+// incarnation in reverse chronological order + total count (without offset/limit).
+// When `filter.ApplyID` is non-empty, result is additionally filtered by `apply_id`.
 //
-// По умолчанию (filter.IncludeArchived = false) возвращаются только
-// активные снимки (`archived_at IS NULL`, ADR-Q19 retention). Total
-// тоже считается по активному множеству — пагинация Operator API не
-// «прыгает» через soft-deleted-дыры.
+// By default (filter.IncludeArchived = false), only active snapshots are returned
+// (`archived_at IS NULL`, ADR-Q19 retention). Total is also counted over active set —
+// Operator API pagination doesn't "jump" through soft-deleted gaps.
 //
-// Возврат ([], 0, nil) для несуществующей incarnation — отдельным запросом
-// проверять existence НЕ обязательно: caller (handler) пусть сначала
-// делает [SelectByName], чтобы вернуть 404, либо признаёт пустую историю
-// валидной для существующей incarnation.
+// Return ([], 0, nil) for non-existent incarnation — no need to check existence
+// with separate query: caller (handler) should first call [SelectByName] to return 404,
+// or accept empty history as valid for an existing incarnation.
 func HistorySelectByName(ctx context.Context, db ExecQueryRower, name string, filter HistoryFilter, offset, limit int) ([]*HistoryEntry, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("incarnation: history offset must be >= 0, got %d", offset)
@@ -1964,9 +1945,9 @@ func scanHistoryEntry(row pgx.Row) (*HistoryEntry, error) {
 	return &entry, nil
 }
 
-// ValidStatus — closed enum проверка status. Дублирует CHECK
-// incarnation_status_valid из миграции (005 + 031 + 036 + 047), чтобы отказывать
-// в Go ещё до round-trip-а. Экспортирована для list-filter в handler-слое.
+// ValidStatus — closed enum check for status. Mirrors CHECK
+// incarnation_status_valid from migration (005 + 031 + 036 + 047) to reject
+// invalid status in Go before round-trip to DB. Exported for list-filter in handler layer.
 func ValidStatus(s Status) bool {
 	switch s {
 	case StatusReady, StatusApplying, StatusErrorLocked, StatusMigrationFailed,
@@ -1976,8 +1957,8 @@ func ValidStatus(s Status) bool {
 	return false
 }
 
-// marshalJSONB сериализует map в bytes для JSONB-колонки. nil → `{}`,
-// симметрично shared/audit и operator.marshalMetadata.
+// marshalJSONB serializes map to bytes for JSONB column. nil → `{}`,
+// symmetric with shared/audit and operator.marshalMetadata.
 func marshalJSONB(m map[string]any) ([]byte, error) {
 	if m == nil {
 		return []byte("{}"), nil
@@ -1985,7 +1966,7 @@ func marshalJSONB(m map[string]any) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// unmarshalJSONB парсит JSONB-bytes в map. Пустые байты / `null` → nil-map.
+// unmarshalJSONB parses JSONB bytes into map. Empty bytes / `null` → nil-map.
 func unmarshalJSONB(b []byte) (map[string]any, error) {
 	if len(b) == 0 {
 		return nil, nil

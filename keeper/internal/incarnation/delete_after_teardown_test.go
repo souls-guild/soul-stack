@@ -11,10 +11,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// deleteTx собирает fakeTx под DeleteAfterTeardown: FOR UPDATE здесь не нужен
-// (DeleteAfterTeardown не делает SELECT — single-winner guard живёт в WHERE
-// status='destroying' самого DELETE). execTags задают RowsAffected для DELETE
-// (третий Exec, idx=2).
+// deleteTx builds a fakeTx for DeleteAfterTeardown: FOR UPDATE isn't needed
+// here (DeleteAfterTeardown doesn't SELECT — the single-winner guard lives in
+// the DELETE's own WHERE status='destroying'). execTags set RowsAffected for
+// the DELETE (third Exec, idx=2).
 func deleteTx(deleteTag pgconn.CommandTag) *fakeTx {
 	return &fakeTx{
 		execErrAt: -1,
@@ -26,9 +26,9 @@ func deleteTx(deleteTag pgconn.CommandTag) *fakeTx {
 	}
 }
 
-// TestDeleteAfterTeardown_HappyWinner — single-winner DELETE удалил строку
-// (RowsAffected==1): archive заполняется ДО DELETE (порядок Exec-ов),
-// транзакция коммитится, Deleted=true, пишется audit destroy_completed.
+// TestDeleteAfterTeardown_HappyWinner — the single-winner DELETE removed the
+// row (RowsAffected==1): the archive is filled BEFORE DELETE (Exec order),
+// the transaction commits, Deleted=true, an audit destroy_completed is written.
 func TestDeleteAfterTeardown_HappyWinner(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -44,11 +44,11 @@ func TestDeleteAfterTeardown_HappyWinner(t *testing.T) {
 	if !tx.committed {
 		t.Error("tx not committed on winning DELETE")
 	}
-	// Замечание: fakeTx.Rollback всегда выставляет rolled=true (defer Rollback
-	// после Commit — стандартный паттерн, реальный pgx такой rollback игнорирует).
-	// Поэтому проверяем committed, а не !rolled (как в Unlock/Upgrade-тестах).
+	// Note: fakeTx.Rollback always sets rolled=true (defer Rollback after Commit
+	// is a standard pattern, real pgx ignores such a rollback). So we check
+	// committed, not !rolled (as in the Unlock/Upgrade tests).
 
-	// Порядок: archive incarnation → archive state_history → DELETE.
+	// Order: archive incarnation → archive state_history → DELETE.
 	if tx.execN != 3 {
 		t.Fatalf("Exec calls = %d, want 3 (archive×2 + DELETE)", tx.execN)
 	}
@@ -61,20 +61,20 @@ func TestDeleteAfterTeardown_HappyWinner(t *testing.T) {
 	if !strings.Contains(tx.execSQLs[2], "DELETE FROM incarnation") {
 		t.Errorf("Exec[2] not DELETE: %q", tx.execSQLs[2])
 	}
-	// Архив пишется ДО DELETE (индексы 0,1 < 2).
+	// The archive is written BEFORE DELETE (indexes 0,1 < 2).
 	if !strings.Contains(tx.execSQLs[2], "status = 'destroying'") {
 		t.Errorf("DELETE missing single-winner guard status='destroying': %q", tx.execSQLs[2])
 	}
-	// Архивный SELECT incarnation тоже под guard-ом destroying.
+	// The archive incarnation SELECT is also under the destroying guard.
 	if !strings.Contains(tx.execSQLs[0], "status = 'destroying'") {
 		t.Errorf("archive incarnation missing destroying guard: %q", tx.execSQLs[0])
 	}
 }
 
-// TestDeleteAfterTeardown_NoOpLoser — RowsAffected==0 (кто-то уже снёс строку /
-// статус сменился): single-winner проиграл → Deleted=false, транзакция НЕ
-// коммитится (rollback откатывает записанный архив), audit НЕ пишется. Никакой
-// ошибки — идемпотентный no-op.
+// TestDeleteAfterTeardown_NoOpLoser — RowsAffected==0 (someone already removed
+// the row / the status changed): the single-winner lost → Deleted=false, the
+// transaction does NOT commit (rollback discards the written archive), no
+// audit is written. No error — an idempotent no-op.
 func TestDeleteAfterTeardown_NoOpLoser(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 0"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -98,9 +98,9 @@ func TestDeleteAfterTeardown_NoOpLoser(t *testing.T) {
 	}
 }
 
-// TestDeleteAfterTeardown_AuditCompleted — на успешном DELETE пишется
-// incarnation.destroy_completed: source=keeper_internal, payload {name, force},
-// без секретов.
+// TestDeleteAfterTeardown_AuditCompleted — on a successful DELETE,
+// incarnation.destroy_completed is written: source=keeper_internal, payload
+// {name, force}, no secrets.
 func TestDeleteAfterTeardown_AuditCompleted(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -130,8 +130,8 @@ func TestDeleteAfterTeardown_AuditCompleted(t *testing.T) {
 	}
 }
 
-// TestDeleteAfterTeardown_AuditFailureDoesNotFail — фейл audit-write НЕ валит
-// destroy (строка уже снесена, tx закоммичена).
+// TestDeleteAfterTeardown_AuditFailureDoesNotFail — an audit-write failure does
+// NOT fail destroy (the row is already gone, the tx is committed).
 func TestDeleteAfterTeardown_AuditFailureDoesNotFail(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -149,7 +149,7 @@ func TestDeleteAfterTeardown_AuditFailureDoesNotFail(t *testing.T) {
 	}
 }
 
-// TestDeleteAfterTeardown_NilAuditWriter — w == nil не паникует.
+// TestDeleteAfterTeardown_NilAuditWriter — w == nil doesn't panic.
 func TestDeleteAfterTeardown_NilAuditWriter(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -166,8 +166,8 @@ func TestDeleteAfterTeardown_NilAuditWriter(t *testing.T) {
 	}
 }
 
-// TestDeleteAfterTeardown_RejectsBadName — невалидное имя отвергается до
-// round-trip-а (никакой транзакции).
+// TestDeleteAfterTeardown_RejectsBadName — an invalid name is rejected before
+// the round trip (no transaction at all).
 func TestDeleteAfterTeardown_RejectsBadName(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{deleteTx(pgconn.NewCommandTag("DELETE 1"))}}
 	_, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "BAD_NAME", false, nil)
@@ -179,11 +179,11 @@ func TestDeleteAfterTeardown_RejectsBadName(t *testing.T) {
 	}
 }
 
-// TestDeleteAfterTeardown_ArchiveErrorAborts — фейл архив-INSERT-а откатывает
-// транзакцию и не доходит до DELETE (архив+DELETE атомарны).
+// TestDeleteAfterTeardown_ArchiveErrorAborts — an archive-INSERT failure rolls
+// back the transaction and never reaches DELETE (archive+DELETE are atomic).
 func TestDeleteAfterTeardown_ArchiveErrorAborts(t *testing.T) {
 	tx := &fakeTx{
-		execErrAt: 0, // фейл на первом Exec (archive incarnation)
+		execErrAt: 0, // fail on the first Exec (archive incarnation)
 		execErr:   errors.New("archive boom"),
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -198,7 +198,7 @@ func TestDeleteAfterTeardown_ArchiveErrorAborts(t *testing.T) {
 	if !tx.rolled {
 		t.Error("tx must rollback on archive failure")
 	}
-	// До DELETE дело не дошло (упали на первом Exec).
+	// Never reached DELETE (failed on the first Exec).
 	if tx.execN != 1 {
 		t.Errorf("Exec calls = %d, want 1 (aborted at archive incarnation)", tx.execN)
 	}

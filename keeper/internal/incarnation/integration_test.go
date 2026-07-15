@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD incarnation / state_history через testcontainers-go.
-// Паттерн совпадает с keeper/internal/operator/integration_test.go.
+// Integration tests for incarnation / state_history CRUD via testcontainers-go.
+// Pattern matches keeper/internal/operator/integration_test.go.
 
 package incarnation
 
@@ -73,8 +73,8 @@ func run(m *testing.M) int {
 func resetAll(t *testing.T) {
 	t.Helper()
 	// CASCADE: state_history / apply_runs / apply_task_register → incarnation →
-	// operators (FK chain). archive-таблицы (S-D3) FK-связей не имеют — чистим
-	// явным перечислением.
+	// operators (FK chain). archive tables (S-D3) have no FK links — clear via
+	// explicit enumeration.
 	_, err := integrationPool.Exec(context.Background(),
 		`TRUNCATE TABLE state_history, apply_runs, incarnation,
 		 incarnation_archive, state_history_archive,
@@ -182,11 +182,11 @@ func TestIntegration_Create_CHECKViolation_BadName(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 	creator := "archon-alice"
-	// ValidName fail-fast в Go — но SQL CHECK дублирует. Гасим Go-validation
-	// через corner case: имя из символов, проходящих NamePattern, но с
-	// верхним регистром (NamePattern reject-ит, тест уже в crud_test).
-	// Здесь явно проверяем что SQL-side CHECK для bad-status работает,
-	// если кто-то обойдёт Go-check (например, прямой Exec со старым enum).
+	// ValidName fail-fast in Go — but SQL CHECK duplicates. Suppress Go-validation
+	// via corner case: name with characters passing NamePattern, but with
+	// uppercase (NamePattern rejects it, test already in crud_test).
+	// Here explicitly verify SQL-side CHECK for bad-status works,
+	// if someone bypasses Go-check (e.g., direct Exec with old enum).
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO incarnation (name, service, service_version, status, created_by_aid)
 		 VALUES ($1, 'svc', 'v1', 'destroyed', $2)`,
@@ -220,7 +220,7 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 		if err := Create(ctx, integrationPool, inc); err != nil {
 			t.Fatalf("Create %s: %v", name, err)
 		}
-		// Гарантия монотонного created_at для устойчивой сортировки в проверках.
+		// Guarantees monotonic created_at for stable sort order in checks.
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -234,7 +234,7 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 	if len(out) != 2 {
 		t.Errorf("len(out) = %d, want 2", len(out))
 	}
-	// DESC по created_at → последний (mysql-d) первым.
+	// DESC by created_at → last (mysql-d) first.
 	if out[0].Name != "mysql-d" {
 		t.Errorf("out[0].Name = %q, want mysql-d", out[0].Name)
 	}
@@ -248,9 +248,9 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 	}
 }
 
-// TestIntegration_SelectAll_StateFilter — реальный jsonb-pushdown ->>
-// в PG: eq по string-полю, numeric-cast по числовому, несуществующее поле,
-// сортировка по state-полю.
+// TestIntegration_SelectAll_StateFilter — real jsonb pushdown ->>
+// in PG: eq on a string field, numeric-cast on a numeric one, a nonexistent
+// field, sort by a state field.
 func TestIntegration_SelectAll_StateFilter(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -276,7 +276,7 @@ func TestIntegration_SelectAll_StateFilter(t *testing.T) {
 		}
 	}
 
-	// eq по string-полю: redis_version=8.0 → a, c.
+	// eq on a string field: redis_version=8.0 → a, c.
 	out, total, err := SelectAll(ctx, integrationPool, ListFilter{
 		StatePredicates: []StateEq{{Path: "redis_version", Op: StateOpEq, Value: "8.0"}},
 	}, ListScope{Unrestricted: true}, 0, 50)
@@ -298,7 +298,7 @@ func TestIntegration_SelectAll_StateFilter(t *testing.T) {
 		t.Errorf("numeric: total=%d len=%d, want 2/2", total, len(out))
 	}
 
-	// Несуществующее state-поле → пусто, НЕ ошибка.
+	// A nonexistent state field → empty, NOT an error.
 	out, total, err = SelectAll(ctx, integrationPool, ListFilter{
 		StatePredicates: []StateEq{{Path: "ghost_field", Op: StateOpEq, Value: "x"}},
 	}, ListScope{Unrestricted: true}, 0, 50)
@@ -309,22 +309,22 @@ func TestIntegration_SelectAll_StateFilter(t *testing.T) {
 		t.Errorf("ghost: total=%d len=%d, want 0/0", total, len(out))
 	}
 
-	// Сортировка по state-полю (memory_mb asc) с tie-break name.
+	// Sort by a state field (memory_mb asc) with tie-break name.
 	out, _, err = SelectAll(ctx, integrationPool, ListFilter{
 		SortBy: "state.memory_mb", SortDir: SortAsc,
 	}, ListScope{Unrestricted: true}, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAll sort: %v", err)
 	}
-	// ->> отдаёт текст; "2048" < "4096" < "512" лексикографически — проверяем
-	// именно текстовый порядок (numeric-sort — отдельная задача, не в объёме).
+	// ->> returns text; "2048" < "4096" < "512" lexicographically — we're checking
+	// the textual order specifically (numeric-sort is a separate task, out of scope).
 	if len(out) != 3 {
 		t.Fatalf("sort: len=%d, want 3", len(out))
 	}
 }
 
-// TestIntegration_SelectAll_StateFilter_InjectionSafe — попытка инъекции
-// через state-path не доходит до PG (reject до запроса), таблица цела.
+// TestIntegration_SelectAll_StateFilter_InjectionSafe — an injection attempt
+// via state-path never reaches PG (rejected before the query), the table stays intact.
 func TestIntegration_SelectAll_StateFilter_InjectionSafe(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -345,9 +345,9 @@ func TestIntegration_SelectAll_StateFilter_InjectionSafe(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidStatePath", err)
 	}
 
-	// Таблица должна остаться — строка на месте.
+	// The table must remain — the row is in place.
 	if _, err := SelectByName(ctx, integrationPool, "redis-prod"); err != nil {
-		t.Fatalf("incarnation пропал после попытки инъекции: %v", err)
+		t.Fatalf("incarnation vanished after injection attempt: %v", err)
 	}
 }
 
@@ -364,7 +364,7 @@ func TestIntegration_HistorySelectByName(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Прямой INSERT в state_history — handler-level Write придёт в M0.6c-2.
+	// Direct INSERT into state_history — handler-level Write arrives in M0.6c-2.
 	for i, hid := range []string{"01HFIRST", "01HSECOND"} {
 		_, err := integrationPool.Exec(ctx, `
 INSERT INTO state_history (history_id, incarnation_name, scenario,
@@ -387,7 +387,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 	if total != 2 || len(out) != 2 {
 		t.Errorf("total = %d, len = %d", total, len(out))
 	}
-	// DESC по at → 01HSECOND первым.
+	// DESC by at → 01HSECOND first.
 	if out[0].HistoryID != "01HSECOND" {
 		t.Errorf("out[0] = %q, want 01HSECOND", out[0].HistoryID)
 	}
@@ -415,7 +415,7 @@ func TestIntegration_HistorySelectByName_EmptyHistory(t *testing.T) {
 }
 
 func TestIntegration_StateHistory_FK_OnIncarnationDelete(t *testing.T) {
-	// CASCADE: при удалении incarnation history-row-ы исчезают.
+	// CASCADE: when incarnation deleted history-rows disappear.
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
@@ -448,9 +448,9 @@ VALUES ('01HFOO', 'redis-prod', 'create', '{}', '{"x":1}', $1, '01HAPPLY')`,
 	}
 }
 
-// TestIntegration_Unlock_FromErrorLocked проверяет happy-path unlock:
-// error_locked → ready, status_details сброшены, в state_history появляется
-// snapshot-row (scenario=unlock, state не изменён), previous_status вернулся.
+// TestIntegration_Unlock_FromErrorLocked verifies happy-path unlock:
+// error_locked → ready, status_details reset, state_history gets
+// snapshot-row (scenario=unlock, state unchanged), previous_status returned.
 func TestIntegration_Unlock_FromErrorLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -505,8 +505,8 @@ func TestIntegration_Unlock_FromErrorLocked(t *testing.T) {
 	}
 }
 
-// TestIntegration_Unlock_NotLocked проверяет, что unlock из ready отвергается
-// (ErrIncarnationNotLocked) и не пишет в state_history.
+// TestIntegration_Unlock_NotLocked verifies unlock from ready is rejected
+// (ErrIncarnationNotLocked) and doesn't write to state_history.
 func TestIntegration_Unlock_NotLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -530,11 +530,11 @@ func TestIntegration_Unlock_NotLocked(t *testing.T) {
 	}
 }
 
-// TestIntegration_Unlock_FromApplying проверяет, что unlock залоченной-в-
-// applying incarnation отвергается (ErrIncarnationNotLocked → 409): unlock
-// допустим только из error_locked. applying семантически опаснее ready —
-// прогон ещё идёт, ручное снятие не должно вмешиваться. State и статус не
-// трогаются, в state_history ничего не пишется.
+// TestIntegration_Unlock_FromApplying verifies unlock on applying-locked
+// incarnation is rejected (ErrIncarnationNotLocked → 409): unlock
+// allowed only from error_locked. applying semantically riskier than ready —
+// run still in progress, manual release must not interfere. State and status not
+// touched, nothing written to state_history.
 func TestIntegration_Unlock_FromApplying(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -571,11 +571,11 @@ func TestIntegration_Unlock_FromApplying(t *testing.T) {
 	}
 }
 
-// TestIntegration_Unlock_FromMigrationFailed проверяет, что unlock снимает
-// migration_failed → ready (ADR-019): миграция атомарна в одной tx, при фейле
-// rollback оставляет дореформенный консистентный state, поэтому unlock
-// возвращает incarnation в рабочее состояние. State НЕ трогается, в
-// state_history появляется snapshot-row (scenario=unlock).
+// TestIntegration_Unlock_FromMigrationFailed verifies unlock releases
+// migration_failed → ready (ADR-019): migration atomic in single tx, on failure
+// rollback leaves pre-reform consistent state, so unlock
+// returns incarnation to working state. State NOT touched, state_history gets
+// snapshot-row (scenario=unlock).
 func TestIntegration_Unlock_FromMigrationFailed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -620,7 +620,7 @@ func TestIntegration_Unlock_FromMigrationFailed(t *testing.T) {
 	}
 }
 
-// TestIntegration_Unlock_NotFound проверяет 404-путь: unlock несуществующей
+// TestIntegration_Unlock_NotFound verifies 404-path: unlock non-existent
 // incarnation → ErrIncarnationNotFound.
 func TestIntegration_Unlock_NotFound(t *testing.T) {
 	resetAll(t)
@@ -630,8 +630,8 @@ func TestIntegration_Unlock_NotFound(t *testing.T) {
 	}
 }
 
-// seedDestroyable создаёт incarnation в destroying + одну state_history-row +
-// один apply_run (для проверки каскада V3). Возвращает creator-AID.
+// seedDestroyable creates incarnation in destroying + one state_history-row +
+// one apply_run (for cascade V3 check). Returns creator-AID.
 func seedDestroyable(t *testing.T, name string) {
 	t.Helper()
 	ctx := context.Background()
@@ -665,9 +665,9 @@ VALUES ('01HDESTROYAPPLY000000000', $1, $2, 'destroy', 'success', $3)`,
 }
 
 // TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade — happy-path S-D3:
-// single-winner DELETE сносит destroying-строку, каскад убивает live
-// state_history / apply_runs, а архив (incarnation_archive /
-// state_history_archive), записанный ДО DELETE в той же tx, переживает каскад.
+// single-winner DELETE removes destroying-row, cascade kills live
+// state_history / apply_runs, but archive (incarnation_archive /
+// state_history_archive), written BEFORE DELETE in same tx, survives cascade.
 func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	resetAll(t)
 	seedDestroyable(t, "redis-prod")
@@ -682,12 +682,12 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 		t.Fatal("Deleted = false, want true")
 	}
 
-	// Live incarnation снесена.
+	// Live incarnation deleted.
 	if _, err := SelectByName(ctx, integrationPool, "redis-prod"); !errors.Is(err, ErrIncarnationNotFound) {
 		t.Errorf("SelectByName after delete: err = %v, want ErrIncarnationNotFound", err)
 	}
 
-	// Каскад снёс live state_history и apply_runs.
+	// Cascade deleted live state_history and apply_runs.
 	var liveHist, liveRuns int
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM state_history WHERE incarnation_name = 'redis-prod'`).Scan(&liveHist); err != nil {
@@ -704,7 +704,7 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 		t.Errorf("live apply_runs after cascade = %d, want 0", liveRuns)
 	}
 
-	// Архив incarnation пережил каскад с ключевыми колонками.
+	// Archive incarnation survived cascade with key columns.
 	var (
 		archName, archService, archVersion, archStatus string
 		archReplicas                                   float64
@@ -725,7 +725,7 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 		t.Errorf("archive spec.replicas = %v, want 3", archReplicas)
 	}
 
-	// Архив state_history пережил каскад.
+	// Archive state_history survived cascade.
 	var archHist int
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM state_history_archive WHERE incarnation_name = 'redis-prod'`).Scan(&archHist); err != nil {
@@ -735,16 +735,16 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 		t.Errorf("state_history_archive rows = %d, want 1 (survived cascade)", archHist)
 	}
 
-	// audit destroy_completed записан.
+	// audit destroy_completed written.
 	if len(aw.events) != 1 || aw.events[0].EventType != audit.EventIncarnationDestroyCompleted {
 		t.Errorf("audit events = %+v, want one destroy_completed", aw.events)
 	}
 }
 
-// TestIntegration_DeleteAfterTeardown_SingleWinner — два конкурентных вызова на
-// одну destroying-строку: ровно один удаляет (Deleted=true), второй — no-op
-// (Deleted=false), архив записывается ровно один раз. Эмулируем гонку
-// последовательными вызовами (WHERE status='destroying' — авторитет guard-а).
+// TestIntegration_DeleteAfterTeardown_SingleWinner — two concurrent calls on
+// single destroying-row: exactly one deletes (Deleted=true), second — no-op
+// (Deleted=false), archive written exactly once. Emulate race
+// with sequential calls (WHERE status='destroying' — guard authority).
 func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 	resetAll(t)
 	seedDestroyable(t, "redis-prod")
@@ -758,7 +758,7 @@ func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 		t.Error("first call Deleted = false, want true (winner)")
 	}
 
-	// Второй вызов: строки в destroying уже нет → no-op, не ошибка.
+	// Second call: row no longer in destroying → no-op, not error.
 	res2, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil)
 	if err != nil {
 		t.Fatalf("second DeleteAfterTeardown: %v", err)
@@ -767,7 +767,7 @@ func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 		t.Error("second call Deleted = true, want false (loser, idempotent no-op)")
 	}
 
-	// Архив записан ровно один раз (второй вызов откатился).
+	// Archive written exactly once (second call rolled back).
 	var n int
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM incarnation_archive WHERE name = 'redis-prod'`).Scan(&n); err != nil {
@@ -778,9 +778,9 @@ func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 	}
 }
 
-// TestIntegration_DeleteAfterTeardown_NotDestroying — строка в ready (не
-// destroying): single-winner guard не матчит → no-op (Deleted=false), строка
-// остаётся жива, архив пуст.
+// TestIntegration_DeleteAfterTeardown_NotDestroying — row in ready (not
+// destroying): single-winner guard doesn't match → no-op (Deleted=false), row
+// remains alive, archive empty.
 func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -801,7 +801,7 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 	if res.Deleted {
 		t.Error("Deleted = true, want false (guard rejects non-destroying)")
 	}
-	// Строка жива.
+	// Row alive.
 	got, err := SelectByName(ctx, integrationPool, "redis-prod")
 	if err != nil {
 		t.Fatalf("SelectByName: %v (row must survive no-op)", err)
@@ -809,8 +809,8 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready (untouched)", got.Status)
 	}
-	// Архив пуст (rollback откатил архив-INSERT, если он что-то записал —
-	// archive incarnation тоже под guard-ом destroying, так что записать нечего).
+	// Archive empty (rollback reverted archive-INSERT, if it wrote anything —
+	// archive incarnation also under destroying guard, so nothing to write).
 	var n int
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM incarnation_archive WHERE name = 'redis-prod'`).Scan(&n); err != nil {
@@ -821,9 +821,9 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 	}
 }
 
-// seedApplyingWithApplyRun создаёт incarnation в applying + одну apply_runs-строку
-// (apply_id, sid, name). Моделирует осиротевший scenario-run прошлого владельца
-// Voyage (recovery-шов ADR-027(k)).
+// seedApplyingWithApplyRun creates incarnation in applying + one apply_runs-row
+// (apply_id, sid, name). Models orphaned scenario-run of previous Voyage owner
+// (recovery seam ADR-027(k)).
 func seedApplyingWithApplyRun(t *testing.T, name, applyID, sid string) {
 	t.Helper()
 	ctx := context.Background()
@@ -846,9 +846,9 @@ VALUES ($1, $2, $3, 'create', 'running', $4)`,
 	}
 }
 
-// TestIntegration_ReleaseApplyingOrphan_HappyPath — orphan от прошлого attempt
-// (applying + apply_runs (orphanApplyID, name) есть) → снят: applying → ready,
-// state не тронут (last known-good), state_history несёт snapshot снятия.
+// TestIntegration_ReleaseApplyingOrphan_HappyPath — orphan from previous attempt
+// (applying + apply_runs (orphanApplyID, name) exists) → released: applying → ready,
+// state untouched (last known-good), state_history carries release snapshot.
 func TestIntegration_ReleaseApplyingOrphan_HappyPath(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -881,10 +881,10 @@ func TestIntegration_ReleaseApplyingOrphan_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReleaseApplyingOrphan_LiveRival — FENCING-1: инкарнация в
-// applying, и у неё есть АКТИВНЫЙ (running) apply_run ЧУЖОГО apply_id (живой
-// прогон стартовал между крахом и reclaim) → НЕ снят (no-op), статус остаётся
-// applying. Защита от снятия чужого live-lock.
+// TestIntegration_ReleaseApplyingOrphan_LiveRival — FENCING-1: incarnation in
+// applying, and it has ACTIVE (running) apply_run of alien apply_id (live
+// run started between crash and reclaim) → NOT released (no-op), status remains
+// applying. Protection against releasing alien live-lock.
 func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -893,10 +893,10 @@ func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
 		orphanApply = "01HORPHANAPPLY0000000002"
 		rivalApply  = "01HRIVALAPPLY00000000002"
 	)
-	// apply_runs принадлежит ЖИВОМУ прогону (rivalApply, running).
+	// apply_runs belongs to LIVE run (rivalApply, running).
 	seedApplyingWithApplyRun(t, name, rivalApply, name+".host-01")
 
-	// Снимаем orphan-lock по orphanApply — но живой rival держит активную строку.
+	// Release orphan-lock by orphanApply — but live rival holds active row.
 	err := ReleaseApplyingOrphan(ctx, integrationPool, name, orphanApply, "01HORPHANHIST00000000002")
 	if !errors.Is(err, ErrOrphanLockNotReleased) {
 		t.Fatalf("err = %v, want ErrOrphanLockNotReleased (live rival)", err)
@@ -915,10 +915,10 @@ func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished — orphan apply_run уже
-// вычищен reaper-ом (apply_runs=0), но incarnation-lock — бесхозный флаг —
-// остался в applying → снимаем (привязка к orphan дана voyage_targets back-link
-// на стороне caller-а; здесь нет живого rival → снятие безопасно).
+// TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished — orphan apply_run already
+// purged by reaper (apply_runs=0), but incarnation-lock — unclaimed flag —
+// remains in applying → release (binding to orphan given by voyage_targets back-link
+// on caller side; no live rival here → release safe).
 func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -934,7 +934,7 @@ func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 	if err := Create(ctx, integrationPool, inc); err != nil {
 		t.Fatalf("Create applying: %v", err)
 	}
-	// НИ ОДНОЙ apply_runs-строки (orphan-run вычищен reaper-ом).
+	// NO apply_runs-rows (orphan-run purged by reaper).
 
 	if err := ReleaseApplyingOrphan(ctx, integrationPool, name, "01HORPHANAPPLY0000000005", "01HORPHANHIST00000000005"); err != nil {
 		t.Fatalf("ReleaseApplyingOrphan (orphan-run vanished): %v", err)
@@ -949,10 +949,10 @@ func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReleaseApplyingOrphan_NotApplying — SINGLE-WINNER: честный
-// RunResult прошлого владельца уже финализировал инкарнацию (ready), apply_runs
-// (orphanApplyID, name) есть → снятие no-op (ErrOrphanLockNotReleased), статус
-// не тронут. Гонка закрыта: мы НЕ перетираем чужой терминал.
+// TestIntegration_ReleaseApplyingOrphan_NotApplying — SINGLE-WINNER: honest
+// RunResult of previous owner already finalized incarnation (ready), apply_runs
+// (orphanApplyID, name) exist → release is no-op (ErrOrphanLockNotReleased), status
+// untouched. Race closed: we do NOT overwrite alien terminal.
 func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -961,7 +961,7 @@ func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 		applyID = "01HORPHANAPPLY0000000003"
 	)
 	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
-	// Честный финал перевёл инкарнацию в ready ДО нашего снятия.
+	// Honest finalize moved incarnation to ready BEFORE our release.
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET status = 'ready' WHERE name = $1`, name); err != nil {
 		t.Fatalf("simulate honest finalize: %v", err)
@@ -985,8 +985,8 @@ func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReleaseApplyingOrphan_NotFound — инкарнация снесена между
-// reclaim и снятием → ErrIncarnationNotFound.
+// TestIntegration_ReleaseApplyingOrphan_NotFound — incarnation deleted between
+// reclaim and release → ErrIncarnationNotFound.
 func TestIntegration_ReleaseApplyingOrphan_NotFound(t *testing.T) {
 	resetAll(t)
 	err := ReleaseApplyingOrphan(context.Background(), integrationPool, "ghost",
@@ -996,7 +996,7 @@ func TestIntegration_ReleaseApplyingOrphan_NotFound(t *testing.T) {
 	}
 }
 
-// readApplyingEpoch читает 4 epoch-колонки applying-флага (ADR-027 amend (m-S1)).
+// readApplyingEpoch reads 4 epoch-columns of applying-flag (ADR-027 amend (m-S1)).
 func readApplyingEpoch(t *testing.T, name string) (applyID, kid *string, attempt *int, since *string) {
 	t.Helper()
 	const q = `
@@ -1008,9 +1008,9 @@ FROM incarnation WHERE name = $1`
 	return applyID, kid, attempt, since
 }
 
-// setApplyingEpoch имитирует запись epoch lockRun-ом (scenario.lockApplyingWithEpoch):
-// проставляет все 4 колонки на уже-applying-строке. Нужен, чтобы проверить ОЧИСТКУ
-// epoch в терминалах (UpdateStateFromRun / ReleaseApplyingOrphan).
+// setApplyingEpoch mimics epoch write by lockRun (scenario.lockApplyingWithEpoch):
+// sets all 4 columns on already-applying row. Needed to verify epoch CLEANUP
+// at terminals (UpdateStateFromRun / ReleaseApplyingOrphan).
 func setApplyingEpoch(t *testing.T, name, applyID, kid string) {
 	t.Helper()
 	const q = `
@@ -1023,9 +1023,9 @@ WHERE name = $1`
 }
 
 // TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess — guard ADR-027 amend
-// (m-S1) задача (3): success-терминал прогона (UpdateStateFromRun → ready) ОБНУЛЯЕТ
-// все 4 epoch-колонки атомарно со снятием applying. Это единая точка терминала
-// (commitSuccess зовёт её), очистка здесь покрывает success-путь.
+// (m-S1) task (3): success-terminal of run (UpdateStateFromRun → ready) ZEROES
+// all 4 epoch-columns atomically with applying release. This single terminal point
+// (commitSuccess calls it), cleanup here covers success-path.
 func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -1053,14 +1053,14 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
 	}
 	a, k, att, s := readApplyingEpoch(t, name)
 	if a != nil || k != nil || att != nil || s != nil {
-		t.Errorf("epoch не обнулён на success-терминале: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+		t.Errorf("epoch not zeroed at success-terminal: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
 	}
 }
 
 // TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail — guard ADR-027 amend
-// (m-S1) задача (3): fail-терминал (UpdateStateFromRun → error_locked, путь
-// lockIncarnation) тоже ОБНУЛЯЕТ epoch (та же UpdateStateFromRun-точка для всех
-// терминалов прогона).
+// (m-S1) task (3): fail-terminal (UpdateStateFromRun → error_locked, path
+// lockIncarnation) also ZEROES epoch (same UpdateStateFromRun-point for all
+// run terminals).
 func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -1073,7 +1073,7 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 
 	stateBefore := map[string]any{"primary": name + "-01"}
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
-		stateBefore, stateBefore, // state не меняем при фейле
+		stateBefore, stateBefore, // state not changed on failure
 		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002"); err != nil {
 		t.Fatalf("UpdateStateFromRun (fail): %v", err)
 	}
@@ -1087,13 +1087,13 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 	}
 	a, k, att, s := readApplyingEpoch(t, name)
 	if a != nil || k != nil || att != nil || s != nil {
-		t.Errorf("epoch не обнулён на fail-терминале: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+		t.Errorf("epoch not zeroed at fail-terminal: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
 	}
 }
 
 // TestIntegration_ReleaseApplyingOrphan_ClearsEpoch — guard ADR-027 amend (m-S1)
-// задача (3): снятие осиротевшего lock-а (recovery-путь) тоже ОБНУЛЯЕТ epoch
-// вместе со applying→ready. После снятия строка не несёт epoch мёртвого владельца.
+// task (3): releasing orphaned lock (recovery-path) also ZEROES epoch
+// together with applying→ready. After release row carries no dead owner's epoch.
 func TestIntegration_ReleaseApplyingOrphan_ClearsEpoch(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -1117,6 +1117,6 @@ func TestIntegration_ReleaseApplyingOrphan_ClearsEpoch(t *testing.T) {
 	}
 	a, k, att, s := readApplyingEpoch(t, name)
 	if a != nil || k != nil || att != nil || s != nil {
-		t.Errorf("epoch не обнулён при orphan-release: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+		t.Errorf("epoch not zeroed at orphan-release: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
 	}
 }
