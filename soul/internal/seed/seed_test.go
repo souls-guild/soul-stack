@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// keypair генерирует согласованную пару (cert.pem, key.pem) — self-signed
-// ECDSA-cert, который проходит tls.X509KeyPair. ECDSA — быстрее RSA в тестах.
+// keypair generates a matching pair (cert.pem, key.pem) — a self-signed
+// ECDSA cert that passes tls.X509KeyPair. ECDSA is faster than RSA in tests.
 func keypair(t *testing.T) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -42,8 +42,8 @@ func keypair(t *testing.T) (certPEM, keyPEM []byte) {
 	return certPEM, keyPEM
 }
 
-// validMaterial — согласованный Material с заданной CA-строкой (ca не участвует
-// в X509-валидации, поэтому может быть произвольной).
+// validMaterial — a matching Material with the given CA string (ca isn't
+// involved in X509 validation, so it can be arbitrary).
 func validMaterial(t *testing.T, ca string) *Material {
 	t.Helper()
 	cert, key := keypair(t)
@@ -67,13 +67,13 @@ func TestWriteAndLoad_RoundTrip(t *testing.T) {
 		t.Fatalf("Load returned mismatched material")
 	}
 
-	// Первичный Write создаёт v1 + current -> v1.
+	// The initial Write creates v1 + current -> v1.
 	if v := readVersions(t, dir); len(v) != 1 || v[0] != 1 {
 		t.Fatalf("versions = %v; want [1]", v)
 	}
 	assertCurrent(t, dir, "v1")
 
-	// key.pem активной версии должен быть 0o400.
+	// key.pem of the active version must be 0o400.
 	st, err := os.Stat(filepath.Join(dir, "v1", KeyFile))
 	if err != nil {
 		t.Fatalf("stat key: %v", err)
@@ -84,16 +84,16 @@ func TestWriteAndLoad_RoundTrip(t *testing.T) {
 }
 
 func TestLoad_MissingCurrent(t *testing.T) {
-	// Пустой каталог: нет current → ErrIncomplete.
+	// Empty directory: no current → ErrIncomplete.
 	_, err := Load(t.TempDir())
 	if !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("Load: %v; want ErrIncomplete", err)
 	}
 }
 
-// TestLoad_FlatFormatHardCut: в каталоге лежат плоские cert/key/ca без current.
-// Hard-cut M1 — авто-миграции нет, Load даёт ErrIncomplete (а не читает плоский
-// формат).
+// TestLoad_FlatFormatHardCut: the directory has flat cert/key/ca without
+// current. Hard-cut M1 — no auto-migration, Load returns ErrIncomplete
+// (instead of reading the flat format).
 func TestLoad_FlatFormatHardCut(t *testing.T) {
 	dir := t.TempDir()
 	cert, key := keypair(t)
@@ -112,8 +112,8 @@ func TestLoad_FlatFormatHardCut(t *testing.T) {
 	}
 }
 
-// TestWrite_Rotation: вторая запись создаёт v2, current -> v2, v1 сохранён
-// (current + 1 предыдущая).
+// TestWrite_Rotation: the second write creates v2, current -> v2, v1 is kept
+// (current + 1 previous).
 func TestWrite_Rotation(t *testing.T) {
 	dir := t.TempDir()
 	first := validMaterial(t, "ca1")
@@ -124,7 +124,7 @@ func TestWrite_Rotation(t *testing.T) {
 	if err := Write(dir, second); err != nil {
 		t.Fatalf("rotation Write: %v", err)
 	}
-	// v1 + v2 на диске, current -> v2.
+	// v1 + v2 on disk, current -> v2.
 	if v := readVersions(t, dir); len(v) != 2 || v[0] != 1 || v[1] != 2 {
 		t.Fatalf("versions = %v; want [1 2]", v)
 	}
@@ -139,8 +139,8 @@ func TestWrite_Rotation(t *testing.T) {
 	}
 }
 
-// TestWrite_PrunesOldVersions: после трёх ротаций остаётся только current и
-// одна предыдущая (v3 + v4), v1/v2 удалены.
+// TestWrite_PrunesOldVersions: after three rotations, only current and one
+// previous remain (v3 + v4), v1/v2 are removed.
 func TestWrite_PrunesOldVersions(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 4; i++ {

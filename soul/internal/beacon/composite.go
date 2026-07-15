@@ -2,27 +2,27 @@ package beacon
 
 import "log/slog"
 
-// CompositeRegistry — соединяет core (статический) и plugin (resolver-over-
-// pluginhost) beacon-наборы для scheduler-а. Lookup идёт последовательно: сперва
-// core (priority — чтобы plugin не подменил `core.beacon.*` именами), потом
-// plugin. Полная аналогия [soul/internal/runtime.CompositeRegistry] для
-// SoulModule.
+// CompositeRegistry joins the core (static) and plugin (resolver-over-
+// pluginhost) beacon sets for the scheduler. Lookup checks core first (so a
+// plugin can't shadow `core.beacon.*` names), then plugin. Mirrors
+// [soul/internal/runtime.CompositeRegistry] for SoulModule.
 //
-// PluginLookup — отдельный интерфейс: composite не зависит от pluginhost-а,
-// связывание происходит в cmd/soul wire-up.
+// PluginLookup is a separate interface so composite doesn't depend on
+// pluginhost; wiring happens in cmd/soul.
 type CompositeRegistry struct {
 	core   BeaconLookup
 	plugin BeaconLookup
 	logger *slog.Logger
 }
 
-// NewCompositeRegistry собирает реестр. Любая из веток может быть nil (например,
-// в push-режиме plugin-discovery нет — передаётся nil); Lookup пропустит ветку.
+// NewCompositeRegistry builds the registry. Either branch may be nil (e.g. in
+// push mode there's no plugin discovery — pass nil); Lookup skips a nil
+// branch.
 //
-// Конфликт имён core ↔ plugin не возможен в норме: plugin-имена резолвятся как
-// `<namespace>.<name>` (например `community.zfs-degraded`), core — как
-// `core.beacon.<name>`. Но защита в порядке проверки оставлена: core всегда
-// первым, даже при ручном тиражировании имени.
+// A core ↔ plugin name clash shouldn't normally happen: plugin names resolve
+// as `<namespace>.<name>` (e.g. `community.zfs-degraded`), core as
+// `core.beacon.<name>`. But the check order still guards against it: core is
+// always checked first, even if a name is manually duplicated.
 func NewCompositeRegistry(core, plugin BeaconLookup, logger *slog.Logger) *CompositeRegistry {
 	if logger == nil {
 		logger = slog.Default()
@@ -30,7 +30,7 @@ func NewCompositeRegistry(core, plugin BeaconLookup, logger *slog.Logger) *Compo
 	return &CompositeRegistry{core: core, plugin: plugin, logger: logger}
 }
 
-// Lookup — последовательный поиск по слоям. Возвращает первый match.
+// Lookup searches layers sequentially. Returns the first match.
 func (c *CompositeRegistry) Lookup(name string) (Beacon, bool) {
 	if c.core != nil {
 		if b, ok := c.core.Lookup(name); ok {

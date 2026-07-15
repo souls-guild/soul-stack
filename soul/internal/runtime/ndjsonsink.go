@@ -10,29 +10,29 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// NDJSONSink — реализация [EventSink] для push-режима (`soul apply`, ADR-004).
-// Пишет каждый TaskEvent и финальный RunResult как одну строку protojson
-// (NDJSON / JSON-lines), которую Keeper читает из stdout SSH-сессии.
+// NDJSONSink — [EventSink] implementation for push mode (`soul apply`,
+// ADR-004). Writes each TaskEvent and the final RunResult as one protojson
+// line (NDJSON / JSON-lines), which Keeper reads from the SSH session's stdout.
 //
-// Те же proto-сообщения, что и pull-режим (EventStream), — единый контракт
-// (ADR-012). Транспорт другой: вместо gRPC-стрима — построчный stdout.
+// Same proto messages as pull mode (EventStream) — one shared contract
+// (ADR-012). The transport differs: line-oriented stdout instead of a gRPC stream.
 type NDJSONSink struct {
 	w   io.Writer
 	enc protojson.MarshalOptions
-	// lastStatus — статус последнего записанного RunResult. Caller (`soul
-	// apply`) читает его после Run для exit-кода: ApplyRunner всегда шлёт ровно
-	// один RunResult в конце прогона.
+	// lastStatus is the status of the last written RunResult. The caller
+	// (`soul apply`) reads it after Run for the exit code: ApplyRunner always
+	// sends exactly one RunResult at the end of a run.
 	lastStatus keeperv1.RunStatus
 }
 
-// NewNDJSONSink собирает sink поверх w (обычно os.Stdout). Каждое сообщение
-// сериализуется в одну строку (без отступов) и завершается '\n'.
+// NewNDJSONSink builds a sink over w (typically os.Stdout). Each message is
+// serialized to one line (no indentation) and terminated with '\n'.
 func NewNDJSONSink(w io.Writer) *NDJSONSink {
 	return &NDJSONSink{
 		w: w,
-		// Multiline:false — гарантия «одно сообщение = одна строка» (NDJSON).
-		// EmitUnpopulated:false — компактный вывод; Keeper-side reader
-		// использует те же proto-дефолты при Unmarshal.
+		// Multiline:false guarantees "one message = one line" (NDJSON).
+		// EmitUnpopulated:false keeps output compact; the Keeper-side reader
+		// uses the same proto defaults on Unmarshal.
 		enc: protojson.MarshalOptions{Multiline: false},
 	}
 }
@@ -46,8 +46,8 @@ func (s *NDJSONSink) SendRunResult(rr *keeperv1.RunResult) error {
 	return s.writeLine(rr)
 }
 
-// LastStatus возвращает статус последнего записанного RunResult. До первого
-// SendRunResult — RUN_STATUS_UNSPECIFIED.
+// LastStatus returns the status of the last written RunResult.
+// RUN_STATUS_UNSPECIFIED until the first SendRunResult.
 func (s *NDJSONSink) LastStatus() keeperv1.RunStatus {
 	return s.lastStatus
 }

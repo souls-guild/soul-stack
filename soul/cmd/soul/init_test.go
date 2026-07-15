@@ -2,14 +2,14 @@ package main
 
 import "testing"
 
-// TestResolveInitToken проверяет precedence источников bootstrap-токена для
-// `soul init`: явный --token побеждает env SOUL_BOOTSTRAP_TOKEN, при пустом
-// флаге берётся env, при обоих пустых — ошибка.
+// TestResolveInitToken verifies the bootstrap-token source precedence for
+// `soul init`: an explicit --token wins over env SOUL_BOOTSTRAP_TOKEN; an
+// empty flag falls back to env; both empty is an error.
 func TestResolveInitToken(t *testing.T) {
-	// Пустая env-строка эквивалентна «не задано»: os.Getenv возвращает "", и
-	// resolveInitToken трактует это как отсутствие источника. t.Setenv всегда
-	// выставляет детерминированное значение и снимает его после теста, изолируя
-	// от env окружения CI.
+	// An empty env string is equivalent to "unset": os.Getenv returns "", and
+	// resolveInitToken treats that as no source. t.Setenv always sets a
+	// deterministic value and unsets it after the test, isolating from the
+	// CI's env.
 	tests := []struct {
 		name      string
 		flagToken string

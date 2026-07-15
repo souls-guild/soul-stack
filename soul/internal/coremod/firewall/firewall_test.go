@@ -32,7 +32,7 @@ func apply(t *testing.T, r *internaltest.Runner, state string, params map[string
 	return stream
 }
 
-// --- Зафиксированные образцы вывода CLI (парсинг хрупок между версиями) ---
+// --- Fixed CLI output samples (parsing is fragile across versions) ---
 
 const ufwStatusSample = `Status: active
 
@@ -45,10 +45,10 @@ To                         Action      From
 443/tcp                    ALLOW       Anywhere (v6)
 `
 
-// ufwStatusInSample — вариант вывода `ufw status`, где колонка Action содержит
-// direction-токен (`ALLOW IN` / `DENY IN`) даже в non-verbose-режиме (часть
-// сборок ufw). Парсер обязан игнорировать направление, иначе `IN` попадёт в
-// source и сломает идемпотентность no-source-правил.
+// ufwStatusInSample is a variant of `ufw status` output where the Action
+// column carries a direction token (`ALLOW IN` / `DENY IN`) even in
+// non-verbose mode (some ufw builds). The parser must ignore the direction,
+// or `IN` leaks into source and breaks idempotency of no-source rules.
 const ufwStatusInSample = `Status: active
 
 To                         Action      From
@@ -160,14 +160,14 @@ func ufwRunner() *internaltest.Runner {
 
 func firewalldRunner() *internaltest.Runner {
 	r := internaltest.NewRunner()
-	// DetectFirewall: ufw нет (127), firewall-cmd есть.
+	// DetectFirewall: ufw absent (127), firewall-cmd present.
 	r.On("firewall-cmd --version", util.Result{ExitCode: 0})
 	r.On("firewall-cmd --list-ports", util.Result{Stdout: firewalldListPortsSample})
 	r.On("firewall-cmd --list-rich-rules", util.Result{Stdout: firewalldRichRulesSample})
 	return r
 }
 
-// --- ufw: idempotency через парсинг status ---
+// --- ufw: idempotency via status parsing ---
 
 func TestUFW_Present_AlreadyPresentSimplePort_NoOp(t *testing.T) {
 	r := ufwRunner()
@@ -188,9 +188,10 @@ func TestUFW_Present_AlreadyPresentWithSource_NoOp(t *testing.T) {
 	}
 }
 
-// Source с host-битами (10.0.0.1/8) нормализуется к сети (10.0.0.0/8), как её
-// печатает ufw status → правило считается присутствующим → changed=false. Без
-// нормализации сравнение строк дало бы present=false и повторный add (drift).
+// Source with host bits (10.0.0.1/8) normalizes to the network (10.0.0.0/8)
+// as printed by ufw status → the rule is considered present → changed=false.
+// Without normalization, string comparison would give present=false and a
+// repeated add (drift).
 func TestUFW_Present_SourceWithHostBits_Idempotent(t *testing.T) {
 	r := ufwRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.1/8"})
@@ -202,11 +203,11 @@ func TestUFW_Present_SourceWithHostBits_Idempotent(t *testing.T) {
 	}
 }
 
-// TestUFW_Present_AllowInFormat_Idempotent: вывод `ufw status` с direction-
-// токеном (`ALLOW IN`) для no-source-правила 9100/tcp. Парсер обязан
-// проигнорировать `IN`, иначе оно уйдёт в source, правило не совпадёт и каждый
-// прогон дал бы повторный `ufw allow` (мнимый changed=true). Ожидается
-// present=true → changed=false → без add.
+// TestUFW_Present_AllowInFormat_Idempotent: `ufw status` output with a
+// direction token (`ALLOW IN`) for the no-source rule 9100/tcp. The parser
+// must ignore `IN`, or it leaks into source, the rule won't match, and every
+// run would repeat `ufw allow` (a false changed=true). Expected:
+// present=true → changed=false → no add.
 func TestUFW_Present_AllowInFormat_Idempotent(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.On("ufw --version", util.Result{ExitCode: 0})
@@ -220,9 +221,9 @@ func TestUFW_Present_AllowInFormat_Idempotent(t *testing.T) {
 	}
 }
 
-// TestUFW_Present_AllowInFormat_WithSource_Idempotent: тот же direction-формат,
-// но правило с source (5432/tcp from 10.0.0.0/8) — `IN` не должен сдвинуть
-// разбор source.
+// TestUFW_Present_AllowInFormat_WithSource_Idempotent: same direction format,
+// but a rule with source (5432/tcp from 10.0.0.0/8) — `IN` must not shift
+// source parsing.
 func TestUFW_Present_AllowInFormat_WithSource_Idempotent(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.On("ufw --version", util.Result{ExitCode: 0})
@@ -249,7 +250,7 @@ func TestUFW_Present_NewRule_Adds(t *testing.T) {
 }
 
 func TestUFW_Present_DenyAndAllowDistinct(t *testing.T) {
-	// 53 в образце — DENY; запрос allow 53 должен считаться отсутствующим.
+	// 53 in the sample is DENY; requesting allow 53 should be treated as absent.
 	r := ufwRunner()
 	r.On("ufw allow 53/tcp", util.Result{ExitCode: 0})
 	stream := apply(t, r, "present", map[string]any{"port": 53, "proto": "tcp", "action": "allow"})
@@ -296,8 +297,8 @@ func TestFirewalld_Present_RichRulePresent_NoOp(t *testing.T) {
 	}
 }
 
-// firewalld-зеркало UFW-теста: 10.0.0.1/8 нормализуется к сети 10.0.0.0/8,
-// которая уже есть в rich-rules → changed=false, никакого add.
+// firewalld mirror of the UFW test: 10.0.0.1/8 normalizes to the network
+// 10.0.0.0/8, which is already in rich-rules → changed=false, no add.
 func TestFirewalld_Present_SourceWithHostBits_Idempotent(t *testing.T) {
 	r := firewalldRunner()
 	stream := apply(t, r, "present", map[string]any{"port": 5432, "proto": "tcp", "source": "10.0.0.1/8"})
@@ -360,14 +361,14 @@ func TestFirewalld_Zone_PassedThrough(t *testing.T) {
 	}
 }
 
-// TestFirewalld_DenyWithoutSource_RichRule: action=deny без source → правило
-// идёт через rich-rule с reject (простой --add-port всегда accept). Покрываем
-// add → idempotent → delete.
+// TestFirewalld_DenyWithoutSource_RichRule: action=deny without source →
+// goes through a rich-rule with reject (plain --add-port is always accept).
+// Covers add → idempotent → delete.
 func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 	denyParams := map[string]any{"port": 7000, "proto": "tcp", "action": "deny"}
 	wantRich := `rule family="ipv4" port port="7000" protocol="tcp" reject`
 
-	// add: целевого rich-rule в выводе нет → --add-rich-rule + --reload.
+	// add: the target rich-rule isn't in the output yet → --add-rich-rule + --reload.
 	add := firewalldRunner()
 	add.On("firewall-cmd --permanent --add-rich-rule="+wantRich, util.Result{ExitCode: 0})
 	add.On("firewall-cmd --reload", util.Result{ExitCode: 0})
@@ -382,7 +383,7 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 		t.Fatalf("deny не должен идти через --add-port: %v", add.Calls)
 	}
 
-	// idempotent: тот же reject уже в --list-rich-rules → changed=false, без add.
+	// idempotent: the same reject is already in --list-rich-rules → changed=false, no add.
 	idem := firewalldRunner()
 	idem.On("firewall-cmd --list-rich-rules", util.Result{Stdout: wantRich + "\n"})
 	stream = apply(t, idem, "present", denyParams)
@@ -393,7 +394,7 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 		t.Fatalf("--add-rich-rule вызван при идемпотентности deny: %v", idem.Calls)
 	}
 
-	// delete: rich-rule присутствует → --remove-rich-rule + --reload.
+	// delete: rich-rule is present → --remove-rich-rule + --reload.
 	del := firewalldRunner()
 	del.On("firewall-cmd --list-rich-rules", util.Result{Stdout: wantRich + "\n"})
 	del.On("firewall-cmd --permanent --remove-rich-rule="+wantRich, util.Result{ExitCode: 0})
@@ -407,8 +408,8 @@ func TestFirewalld_DenyWithoutSource_RichRule(t *testing.T) {
 	}
 }
 
-// TestFirewalld_Zone_Idempotent: правило уже открыто в указанной зоне (зона
-// проброшена и в --list-ports) → changed=false, никакого --add-port.
+// TestFirewalld_Zone_Idempotent: the rule is already open in the given zone
+// (the zone is also passed to --list-ports) → changed=false, no --add-port.
 func TestFirewalld_Zone_Idempotent(t *testing.T) {
 	r := firewalldRunner()
 	r.On("firewall-cmd --list-ports --zone public", util.Result{Stdout: "8080/tcp\n"})
@@ -421,9 +422,9 @@ func TestFirewalld_Zone_Idempotent(t *testing.T) {
 	}
 }
 
-// TestUFW_UDPDistinctFromTCP: allow 53/udp не путается с bare 53 в status
-// (который парсится как 53/tcp DENY) → правило считается отсутствующим, ufw
-// allow 53/udp добавляется.
+// TestUFW_UDPDistinctFromTCP: allow 53/udp isn't confused with bare 53 in
+// status (parsed as 53/tcp DENY) → the rule is treated as absent, ufw allow
+// 53/udp gets added.
 func TestUFW_UDPDistinctFromTCP(t *testing.T) {
 	r := ufwRunner()
 	r.On("ufw allow 53/udp", util.Result{ExitCode: 0})
@@ -439,18 +440,18 @@ func TestUFW_UDPDistinctFromTCP(t *testing.T) {
 // --- backend not detected ---
 
 func TestApply_NoFirewall_Fails(t *testing.T) {
-	r := internaltest.NewRunner() // всё → 127
+	r := internaltest.NewRunner() // everything → 127
 	stream := apply(t, r, "present", map[string]any{"port": 22})
 	if !stream.Last().Failed {
 		t.Fatal("без firewall-инструмента Apply должен зафейлиться")
 	}
 }
 
-// --- КРИТИЧЕСКИЙ ИНВАРИАНТ БЕЗОПАСНОСТИ ---
-// Apply НИКОГДА не должен генерировать команд, включающих файрвол целиком или
-// меняющих default policy: ufw enable / ufw default / firewall-cmd
-// --set-default-zone / systemctl start firewalld. Иначе на удалённом хосте с
-// deny-by-default отрежется SSH.
+// --- CRITICAL SECURITY INVARIANT ---
+// Apply must NEVER generate commands that enable the firewall wholesale or
+// change the default policy: ufw enable / ufw default / firewall-cmd
+// --set-default-zone / systemctl start firewalld. Otherwise SSH gets cut off
+// on a remote deny-by-default host.
 
 func TestUFW_NeverGeneratesEnableOrDefault(t *testing.T) {
 	cases := []struct {
@@ -467,7 +468,7 @@ func TestUFW_NeverGeneratesEnableOrDefault(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := ufwRunner()
-			r.Fallback = util.Result{ExitCode: 0} // любой add/delete «успешен»
+			r.Fallback = util.Result{ExitCode: 0} // any add/delete "succeeds"
 			r.On("ufw status", util.Result{Stdout: ufwStatusSample})
 			apply(t, r, c.state, c.params)
 			assertNoDangerousFirewallCmd(t, r)
@@ -499,8 +500,8 @@ func TestFirewalld_NeverGeneratesEnableOrDefault(t *testing.T) {
 	}
 }
 
-// assertNoDangerousFirewallCmd проверяет, что среди вызванных команд нет ни
-// одной, включающей файрвол целиком или меняющей default policy.
+// assertNoDangerousFirewallCmd checks that none of the called commands
+// enable the firewall wholesale or change the default policy.
 func assertNoDangerousFirewallCmd(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	banned := []string{

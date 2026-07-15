@@ -1,24 +1,27 @@
-// Package augur реализует core-модуль `core.augur.fetch` (ADR-025,
-// docs/keeper/augur.md) — Soul-side read-probe живого доступа к внешней системе
-// через брокер Augur.
+// Package augur implements the `core.augur.fetch` core module (ADR-025,
+// docs/keeper/augur.md) — a Soul-side read-probe for live access to an
+// external system through the Augur broker.
 //
-// Verb MVP:
-//   - fetch: запросить у Keeper-а значение из Omen-а (vault KV / prometheus /
-//     elk) в момент apply. Модуль шлёт AugurRequest в EventStream и ждёт
-//     коррелированный AugurReply; при OK кладёт inline_data в register-output.
+// MVP verb:
+//   - fetch: request a value from an Omen (vault KV / prometheus / elk) via
+//     the Keeper at apply time. The module sends an AugurRequest over
+//     EventStream and waits for a correlated AugurReply; on OK it puts
+//     inline_data into the register output.
 //
-// Семантика changed:
-//   - changed = false ВСЕГДА, конструктивно и ненастраиваемо: read-probe не
-//     меняет состояние хоста (прецедент — core.http.probe / core.exec.run).
+// changed semantics:
+//   - changed = false ALWAYS, by construction and not configurable: a
+//     read-probe never changes host state (precedent: core.http.probe /
+//     core.exec.run).
 //
-// Граница ADR-012(d): данные приходят inline ЧЕРЕЗ Keeper (delegate=false,
-// MVP-1). На Soul внешний токен/credential не попадает — Augur-клиент знает
-// только request_id-корреляцию, не master-cred. Делегация (delegate=true,
-// scoped_*) — MVP-2; здесь не обрабатывается (Augur-клиент вернёт ошибку на OK
-// без inline_data).
+// ADR-012(d) boundary: data arrives inline THROUGH the Keeper (delegate=false,
+// MVP-1). No external token/credential reaches Soul — the Augur client only
+// knows the request_id correlation, never the master credential. Delegation
+// (delegate=true, scoped_*) is MVP-2 and isn't handled here (the Augur client
+// returns an error on OK without inline_data).
 //
-// Авторизация — Keeper-side (§6 augur.md): Omen-существование, SID→covens, Rite,
-// allow-list. DENIED/ERROR/UNSPECIFIED → ошибка шага без секретного материала.
+// Authorization is Keeper-side (§6 augur.md): Omen existence, SID→covens,
+// Rite, allow-list. DENIED/ERROR/UNSPECIFIED → step error without secret
+// material.
 package augur
 
 import (
@@ -33,25 +36,26 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — каноническая верхушка адреса модуля.
+// Name — canonical module address top-level.
 const Name = "core.augur"
 
-// verbFetch — единственный поддерживаемый verb.
+// verbFetch — the only supported verb.
 const verbFetch = "fetch"
 
-// Module — реализация sdk/module.SoulModule для core.augur.
+// Module — sdk/module.SoulModule implementation for core.augur.
 //
-// Augur-клиент модуль НЕ держит полем: он приходит per-прогон через
-// stream.Context() (soul/internal/augur.FromContext) — клиент привязан к
-// конкретной EventStream-сессии, а модуль stateless и переиспользуется между
-// прогонами.
+// The module does NOT hold the Augur client as a field: it arrives per-run
+// via stream.Context() (soul/internal/augur.FromContext) — the client is
+// bound to a specific EventStream session, while the module is stateless and
+// reused across runs.
 type Module struct{}
 
 func New() *Module { return &Module{} }
 
-// Validate проверяет verb и обязательные params (omen / query). known-state и
-// required частично дублируются с manifest-DSL осознанно — здесь только базовые
-// семантики формы; авторизацию (allow-list) проверяет Keeper, не Soul.
+// Validate checks the verb and required params (omen / query). known-state
+// and required are deliberately duplicated with the manifest DSL — this only
+// covers basic shape semantics; authorization (allow-list) is checked by the
+// Keeper, not Soul.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.GetState() != verbFetch {
@@ -77,12 +81,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return m.applyFetch(stream, req)
 }
 
-// applyFetch реализует verb `fetch`: один AugurRequest → AugurReply через
-// EventStream. Контракт ошибок:
-//   - Augur недоступен в прогоне (push-режим / нет сессии) → failed;
-//   - DENIED/ERROR/UNSPECIFIED от Keeper-а → failed (причина без секрета);
-//   - таймаут/разрыв стрима (ctx / клиент закрыт) → failed;
-//   - OK → changed=false + inline_data как register-output.
+// applyFetch implements the `fetch` verb: one AugurRequest → AugurReply over
+// EventStream. Error contract:
+//   - Augur unavailable this run (push mode / no session) → failed;
+//   - DENIED/ERROR/UNSPECIFIED from the Keeper → failed (reason without secret);
+//   - stream timeout/disconnect (ctx / client closed) → failed;
+//   - OK → changed=false + inline_data as the register output.
 func (m *Module) applyFetch(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest) error {
 	omen, err := util.StringParam(req.GetParams(), "omen")
 	if err != nil {
@@ -96,8 +100,9 @@ func (m *Module) applyFetch(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 	ctx := stream.Context()
 	fetcher, applyID, ok := soulaugur.FromContext(ctx)
 	if !ok {
-		// Push-режим (soul apply) или сессия без Augur-плумбинга: брокер
-		// недоступен. Не молчим — read-probe без брокера бессмыслен.
+		// Push mode (soul apply) or a session without Augur plumbing: the
+		// broker is unavailable. We don't stay silent — a read-probe without
+		// a broker is meaningless.
 		return util.SendFailed(stream, "core.augur.fetch: брокер Augur недоступен в этом прогоне (нет EventStream-сессии)")
 	}
 
@@ -106,17 +111,18 @@ func (m *Module) applyFetch(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 		return util.SendFailed(stream, fetchErrorMessage(omen, ferr))
 	}
 
-	// OK: inline_data — google.protobuf.Struct (§5.3 augur.md). Кладём его как
-	// register-output as-is (скаляр уже завёрнут Keeper-ом в {value:..}; map —
-	// натуральный объект). changed=false конструктивно — read-probe.
+	// OK: inline_data is a google.protobuf.Struct (§5.3 augur.md). We put it
+	// into the register output as-is (a scalar is already wrapped by the
+	// Keeper in {value:..}; a map is a natural object). changed=false by
+	// construction — it's a read-probe.
 	out := reply.GetInlineData().AsMap()
 	return util.SendFinal(stream, false, out)
 }
 
-// fetchErrorMessage формирует понятное сообщение об ошибке шага без секретного
-// материала. Причина (от Keeper-а / транспорта) уже без значения/токена (§8
-// augur.md), но мы добавляем имя Omen-а для диагностики — query/значение НЕ
-// логируем (query может нести путь к секрету).
+// fetchErrorMessage builds a clear step-error message without secret
+// material. The reason (from the Keeper / transport) is already free of
+// values/tokens (§8 augur.md), but we add the Omen name for diagnostics —
+// query/value are NOT logged (query may carry a path to a secret).
 func fetchErrorMessage(omen string, err error) string {
 	switch {
 	case errors.Is(err, soulaugur.ErrDenied):

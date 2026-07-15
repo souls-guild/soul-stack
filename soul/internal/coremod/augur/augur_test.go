@@ -14,8 +14,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// applyStream — fake grpc.ServerStreamingServer[ApplyEvent] с настраиваемым
-// Context (нужен, чтобы прокинуть Augur-клиент через stream.Context()).
+// applyStream — fake grpc.ServerStreamingServer[ApplyEvent] with a settable
+// Context (needed to thread the Augur client through stream.Context()).
 type applyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	ctx    context.Context
@@ -36,7 +36,7 @@ func (s *applyStream) last() *pluginv1.ApplyEvent {
 	return s.events[len(s.events)-1]
 }
 
-// fakeFetcher эмулирует soulaugur.Fetcher без живой сессии.
+// fakeFetcher emulates soulaugur.Fetcher without a live session.
 type fakeFetcher struct {
 	reply     *keeperv1.AugurReply
 	err       error
@@ -138,7 +138,7 @@ func TestApply_OK_InlineDataToRegister(t *testing.T) {
 	if ev.GetOutput().GetFields()["value"].GetStringValue() != "s3cr3t" {
 		t.Fatalf("inline_data не попал в register: %v", ev.GetOutput())
 	}
-	// Контекст прогона корректно прокинут в Fetch.
+	// The run context was correctly threaded through to Fetch.
 	if ff.gotApply != "apply-42" || ff.gotOmen != "vault-prod" {
 		t.Fatalf("Fetch получил неверный контекст: apply=%q omen=%q", ff.gotApply, ff.gotOmen)
 	}
@@ -168,7 +168,7 @@ func TestApply_OK_MapInlineData(t *testing.T) {
 	}
 }
 
-// --- Apply: ошибки ---
+// --- Apply: errors ---
 
 func TestApply_Denied_IsStepError(t *testing.T) {
 	ff := &fakeFetcher{err: soulaugur.ErrDenied}
@@ -185,7 +185,7 @@ func TestApply_Denied_IsStepError(t *testing.T) {
 	if !ev.GetFailed() {
 		t.Fatal("DENIED должен давать failed-шаг")
 	}
-	// query не должен светиться в сообщении (может нести путь к секрету).
+	// query must not leak into the message (may carry a secret path).
 	if got := ev.GetMessage(); strings.Contains(got, "secret/forbidden") {
 		t.Fatalf("сообщение об ошибке светит query: %q", got)
 	}
@@ -222,7 +222,7 @@ func TestApply_ClientClosed_IsStepError(t *testing.T) {
 }
 
 func TestApply_AugurUnavailable_IsStepError(t *testing.T) {
-	// ctx БЕЗ Augur-плумбинга (push-режим / сессия без Augur).
+	// ctx WITHOUT Augur plumbing (push mode / session without Augur).
 	s := &applyStream{ctx: context.Background()}
 	m := augurmod.New()
 	req := &pluginv1.ApplyRequest{
@@ -258,7 +258,7 @@ func TestApply_MissingParams(t *testing.T) {
 	m := augurmod.New()
 	req := &pluginv1.ApplyRequest{
 		State:  "fetch",
-		Params: mustStruct(t, map[string]any{"omen": "o"}), // нет query
+		Params: mustStruct(t, map[string]any{"omen": "o"}), // no query
 	}
 	if err := m.Apply(req, s); err != nil {
 		t.Fatalf("Apply: %v", err)

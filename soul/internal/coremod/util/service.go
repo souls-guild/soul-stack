@@ -6,21 +6,21 @@ import (
 	"strings"
 )
 
-// ServiceActive — init-агностичная проверка, запущен ли сервис name. Единый
-// источник истины для core.service (idempotency-проверка active-состояния) и
-// core-beacon `core.beacon.service_down` (наблюдение активности). Раньше эти
-// потребители держали свои копии и разъезжались (OpenRC false-up баг:
-// `rc-service status` даёт exit 0 и для остановленного сервиса).
+// ServiceActive is an init-agnostic check for whether service name is
+// running. Single source of truth for core.service (active-state idempotency
+// check) and the core-beacon `core.beacon.service_down` (activity
+// monitoring). These consumers used to keep separate copies and drift apart
+// (OpenRC false-up bug: `rc-service status` exits 0 even for a stopped service).
 //
-// Корректная форма по init-системам:
+// Correct form per init system:
 //   - systemd: `systemctl is-active --quiet` → exit 0 = active;
-//   - OpenRC:  `rc-service <name> status` → exit 0 + stdout содержит "started"
-//     (одного exit 0 НЕ достаточно — он бывает и у stopped, exit 3 = stopped);
+//   - OpenRC:  `rc-service <name> status` → exit 0 + stdout contains "started"
+//     (exit 0 alone is NOT enough — stopped services can also exit 0; exit 3 = stopped);
 //   - SysV:    `service <name> status` → exit 0 = active.
 //
-// Ошибка — только если runner не смог выполнить команду либо init-система не из
-// поддерживаемого набора. Не-нулевой exit интерпретируется как «не активен», а
-// не как ошибка (это валидное состояние).
+// Returns an error only if the runner failed to execute the command, or the
+// init system isn't supported. A non-zero exit means "not active", not an
+// error — that's a valid state.
 func ServiceActive(ctx context.Context, runner Runner, init InitSystem, name string) (bool, error) {
 	switch init {
 	case InitSystemSystemd:
@@ -45,39 +45,40 @@ func ServiceActive(ctx context.Context, runner Runner, init InitSystem, name str
 	return false, fmt.Errorf("ServiceActive: unsupported init %q", init)
 }
 
-// DaemonReloadMode — режим централизованного daemon-reload в core.service
-// (param `daemon_reload`, ADR-015 amendment). Closed-set: применяется перед
-// мутирующими actions (running/restarted/enabled).
+// DaemonReloadMode is the centralized daemon-reload mode for core.service
+// (param `daemon_reload`, ADR-015 amendment). Closed set, applied before
+// mutating actions (running/restarted/enabled).
 type DaemonReloadMode string
 
 const (
-	// DaemonReloadAuto — gated по systemd-флагу NeedDaemonReload: reload только
-	// при рассинхроне unit-файла с загруженным определением. Дефолт.
+	// DaemonReloadAuto gates on the systemd NeedDaemonReload flag: reload
+	// only when the unit file is out of sync with the loaded definition. Default.
 	DaemonReloadAuto DaemonReloadMode = "auto"
-	// DaemonReloadAlways — безусловный daemon-reload перед action.
+	// DaemonReloadAlways always daemon-reloads before the action.
 	DaemonReloadAlways DaemonReloadMode = "always"
-	// DaemonReloadNever — явный opt-out: reload не делается вообще.
+	// DaemonReloadNever is an explicit opt-out: reload never runs.
 	DaemonReloadNever DaemonReloadMode = "never"
 )
 
-// EnsureDaemonReloaded выполняет `systemctl daemon-reload` перед мутирующим
-// action core.service (start/restart/enable), если того требует режим mode и
-// init-система. Закрывает баг: после изменения unit-файла без daemon-reload
-// `systemctl restart` тихо рестартует со СТАРЫМ определением (exit 0, лишь
-// warning).
+// EnsureDaemonReloaded runs `systemctl daemon-reload` before a mutating
+// core.service action (start/restart/enable), if mode and the init system
+// require it. Fixes a bug: without daemon-reload after a unit-file edit,
+// `systemctl restart` silently restarts with the OLD definition (exit 0,
+// just a warning).
 //
-// Семантика по init-системам и режимам:
-//   - non-systemd (openrc/sysv) — no-op (false, nil): у них нет daemon-reload;
-//   - mode never — no-op (false, nil): явный opt-out оператора;
-//   - mode always — безусловный `systemctl daemon-reload` (true, nil);
+// Semantics per init system and mode:
+//   - non-systemd (openrc/sysv) — no-op (false, nil): no daemon-reload concept;
+//   - mode never — no-op (false, nil): explicit operator opt-out;
+//   - mode always — unconditional `systemctl daemon-reload` (true, nil);
 //   - mode auto — `systemctl show <name> --property=NeedDaemonReload --value`;
-//     при `yes` → reload (true), иначе no-op (false). На первом install нового
-//     unit флаг = `no` (systemd подхватит определение на start) — reload не нужен.
+//     reloads (true) on `yes`, no-op (false) otherwise. On a fresh unit
+//     install the flag is `no` (systemd picks up the definition on start) —
+//     no reload needed.
 //
-// reloaded возвращается для диагностики (output["reloaded"]) и НЕ влияет на
-// changed шага: reload — побочное условие применения, не самостоятельное
-// изменение состояния сервиса. Исполняется через тот же Runner, что прочие
-// systemctl-вызовы модуля (мокается в unit-тестах).
+// reloaded is returned for diagnostics (output["reloaded"]) and does NOT
+// affect the step's changed: reload is a side effect of applying, not an
+// independent service-state change. Runs through the same Runner as the
+// module's other systemctl calls (mocked in unit tests).
 func EnsureDaemonReloaded(ctx context.Context, runner Runner, init InitSystem, name string, mode DaemonReloadMode) (reloaded bool, err error) {
 	if init != InitSystemSystemd || mode == DaemonReloadNever {
 		return false, nil

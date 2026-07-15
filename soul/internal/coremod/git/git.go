@@ -1,16 +1,16 @@
-// Package git реализует core-модуль `core.git` ([ADR-015]).
+// Package git implements the `core.git` core module ([ADR-015]).
 //
-// Состояния:
-//   - cloned: путь содержит git-репо (или будет склонирован, если отсутствует).
-//   - pulled: путь содержит git-репо + `git pull` (или клон + сразу pull-семантика).
+// States:
+//   - cloned: path contains a git repo (or gets cloned if missing).
+//   - pulled: path contains a git repo + `git pull` (or clone + pull semantics).
 //
 // Idempotency:
-//   - cloned: если path/.git существует — no-op.
-//   - pulled: всегда делает clone-if-missing + pull. Changed=true только если
-//     HEAD изменился (сравнение rev-parse HEAD до и после).
+//   - cloned: no-op if path/.git exists.
+//   - pulled: always clone-if-missing + pull. Changed=true only if HEAD
+//     changed (rev-parse HEAD compared before/after).
 //
-// MVP: не реализуем смену remote URL / submodule / lfs / sparse-checkout —
-// слишком много развилок для первой версии.
+// MVP: no remote URL change / submodule / lfs / sparse-checkout — too many
+// branches for a first version.
 package git
 
 import (
@@ -33,8 +33,8 @@ const Name = "core.git"
 
 type Module struct {
 	Runner util.Runner
-	// StatDir — подменяемый в тестах os.Stat для path/.git. Возвращает (true, nil)
-	// для каталога, (false, nil) для отсутствующего/не-каталога.
+	// StatDir is a swappable-in-tests os.Stat for path/.git. Returns (true, nil)
+	// for a directory, (false, nil) for missing/non-directory.
 	StatDir func(path string) (bool, error)
 }
 
@@ -45,24 +45,25 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-params (repo/path) делегированы в
-// shared/coremanifest/git.yaml (единый источник с soul-lint). Типы опциональных
-// branch/depth проверяют Apply-getters; cross-field-инвариантов нет.
+// Validate delegates known-state + required-params (repo/path) to
+// shared/coremanifest/git.yaml (single source shared with soul-lint). Types
+// of the optional branch/depth params are checked by the Apply getters; no
+// cross-field invariants.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe). core.git НЕ объявляет read-safe Plan в MVP,
-// host применяет default-deny на dry_run (FAILED `plan.unsupported`). Причина:
-// для state `pulled` drift «есть ли upstream-обновления?» требует `git fetch` —
-// сетевое read-only действие к remote-у, чего Apply ДО мутации НЕ делает (clone
-// + pull выполняются как мутация). Pure-read-вывод из существующей Apply-логики
-// получить нельзя без расширения протокола fetch-уровня. Для `cloned` локального
-// state достаточно (StatDir(path/.git) + headRev), но реализовывать половину
-// контракта означало бы рассогласовать поведение state — отдельный slice (Slice
-// B) сделает либо обе ветки, либо явный split «core.git.cloned» с PlanReadSafe и
-// «core.git.pulled» без.
+// Plan is a no-op (no PlanReadSafe). core.git doesn't declare read-safe Plan
+// in the MVP, so the host applies default-deny on dry_run (FAILED
+// `plan.unsupported`). Reason: state `pulled`'s drift check ("any upstream
+// updates?") needs `git fetch`, a network read against the remote that Apply
+// doesn't do before mutating (clone+pull are the mutation itself), so
+// pure-read output isn't available without extending the protocol with a
+// fetch phase. `cloned` alone could support it (StatDir(path/.git) + headRev),
+// but implementing only half the contract would split state behavior — a
+// follow-up slice should either do both or split into "core.git.cloned" (with
+// PlanReadSafe) and "core.git.pulled" (without).
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
@@ -156,8 +157,8 @@ func (m *Module) runClone(ctx context.Context, repo, path, branch string, depth 
 	if hasDepth && depth > 0 {
 		args = append(args, "--depth", strconv.FormatInt(depth, 10))
 	}
-	// `--` отделяет позиционные аргументы от опций: repo, начинающийся с `-`
-	// (например `--upload-pack=<cmd>`), иначе распарсится git как опция —
+	// `--` separates positional args from options: a repo starting with `-`
+	// (e.g. `--upload-pack=<cmd>`) would otherwise parse as a git option —
 	// argument injection (security review L1).
 	args = append(args, "--", repo, path)
 	r := m.Runner.Run(ctx, "git", args...)
@@ -185,8 +186,8 @@ func (m *Module) runPull(ctx context.Context, path string) error {
 	return nil
 }
 
-// headRev — `git rev-parse HEAD` в cwd=path. Возвращает sha; best-effort
-// (если ошибка — пустая строка, не блокируем основной flow).
+// headRev runs `git rev-parse HEAD` in cwd=path. Returns the sha; best-effort
+// (empty string on error, doesn't block the main flow).
 func (m *Module) headRev(ctx context.Context, path string) (string, error) {
 	r := m.Runner.RunOpts(ctx, util.RunOptions{
 		Name: "git",

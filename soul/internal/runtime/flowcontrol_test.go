@@ -11,8 +11,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// changedModule — модуль, всегда сообщающий changed=true и фиксирующий факт
-// вызова Apply (для проверки «when:false → Apply не вызывался»).
+// changedModule — module that always reports changed=true and records
+// whether Apply was called (for testing "when:false → Apply not invoked").
 func changedModule(called *bool) *fakeModule {
 	return &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -24,8 +24,8 @@ func changedModule(called *bool) *fakeModule {
 	}
 }
 
-// okOutputModule — OK-модуль (changed=false, failed=false), публикующий output-
-// поля. Для проверки register.self.<output-поле> в changed_when/failed_when.
+// okOutputModule — OK module (changed=false, failed=false) publishing output
+// fields, for testing register.self.<field> in changed_when/failed_when.
 func okOutputModule(out map[string]any) *fakeModule {
 	return &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -34,7 +34,7 @@ func okOutputModule(out map[string]any) *fakeModule {
 	}
 }
 
-// failedModule — модуль, всегда возвращающий failed=true (для проверки
+// failedModule — module that always returns failed=true (for testing
 // failed_when:false = ignore_errors).
 func failedModule(called *bool) *fakeModule {
 	return &fakeModule{
@@ -47,7 +47,7 @@ func failedModule(called *bool) *fakeModule {
 	}
 }
 
-// TestWhen_False_Skips — when:"false" → задача SKIPPED, mod.Apply НЕ вызывается.
+// TestWhen_False_Skips — when:"false" → task SKIPPED, mod.Apply NOT called.
 func TestWhen_False_Skips(t *testing.T) {
 	var called bool
 	reg := mapRegistry{"core.pkg": changedModule(&called)}
@@ -77,7 +77,7 @@ func TestWhen_False_Skips(t *testing.T) {
 	}
 }
 
-// TestWhen_True_Runs — when:"true" → задача выполняется (CHANGED).
+// TestWhen_True_Runs — when:"true" → task runs (CHANGED).
 func TestWhen_True_Runs(t *testing.T) {
 	var called bool
 	reg := mapRegistry{"core.pkg": changedModule(&called)}
@@ -101,8 +101,8 @@ func TestWhen_True_Runs(t *testing.T) {
 	}
 }
 
-// TestWhen_Empty_RunsUnconditionally — пустой when → безусловный запуск (regression:
-// существующие destiny без when ведут себя как раньше).
+// TestWhen_Empty_RunsUnconditionally — empty when → unconditional run
+// (regression: existing destinies without when behave as before).
 func TestWhen_Empty_RunsUnconditionally(t *testing.T) {
 	var called bool
 	reg := mapRegistry{"core.pkg": changedModule(&called)}
@@ -121,8 +121,8 @@ func TestWhen_Empty_RunsUnconditionally(t *testing.T) {
 	}
 }
 
-// TestWhen_FromFlowContext — when ссылается на flow_context (input/self),
-// доставленный Keeper-ом: input.do_restart && soulprint.self.os.family == 'debian'.
+// TestWhen_FromFlowContext — when references flow_context (input/self)
+// delivered by Keeper: input.do_restart && soulprint.self.os.family == 'debian'.
 func TestWhen_FromFlowContext(t *testing.T) {
 	var called bool
 	reg := mapRegistry{"core.service": changedModule(&called)}
@@ -153,9 +153,9 @@ func TestWhen_FromFlowContext(t *testing.T) {
 	}
 }
 
-// TestWhen_RefsPreviousRegister — when второй задачи ссылается на register
-// первой по ИМЕНИ (register.probe.changed). Первая (register: "probe") меняет
-// state → вторая выполняется.
+// TestWhen_RefsPreviousRegister — the second task's when references the first
+// task's register by NAME (register.probe.changed). First task (register:
+// "probe") changes state → second task runs.
 func TestWhen_RefsPreviousRegister(t *testing.T) {
 	var secondCalled bool
 	reg := mapRegistry{
@@ -186,11 +186,11 @@ func TestWhen_RefsPreviousRegister(t *testing.T) {
 	}
 }
 
-// TestWhen_RefsPreviousRegister_False — register первой задачи не changed →
-// when:register.probe.changed второй = false → SKIPPED.
+// TestWhen_RefsPreviousRegister_False — first task's register not changed →
+// second task's when:register.probe.changed = false → SKIPPED.
 func TestWhen_RefsPreviousRegister_False(t *testing.T) {
 	var secondCalled bool
-	okModule := &fakeModule{ // probe: changed=false (OK без изменений)
+	okModule := &fakeModule{ // probe: changed=false (OK, no changes)
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 			return stream.Send(&pluginv1.ApplyEvent{Changed: false})
 		},
@@ -220,11 +220,11 @@ func TestWhen_RefsPreviousRegister_False(t *testing.T) {
 	}
 }
 
-// TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired — when:true, но onchanges-
-// источник не changed → SKIPPED (связка AND: исполняется только при обоих).
+// TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired — when:true, but the
+// onchanges source is not changed → SKIPPED (AND: runs only if both hold).
 func TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired(t *testing.T) {
 	var secondCalled bool
-	okModule := &fakeModule{ // источник: changed=false
+	okModule := &fakeModule{ // source: changed=false
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 			return stream.Send(&pluginv1.ApplyEvent{Changed: false})
 		},
@@ -244,7 +244,7 @@ func TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired(t *testing.T) {
 				Name:         "restart",
 				Module:       "core.service.restarted",
 				When:         "true",
-				OnchangesIdx: []int32{0}, // источник не changed → onchanges не сработал
+				OnchangesIdx: []int32{0}, // source not changed → onchanges didn't fire
 			},
 		},
 	}, sink)
@@ -259,12 +259,12 @@ func TestWhen_AndOnchanges_WhenTrueButOnchangesNotFired(t *testing.T) {
 	}
 }
 
-// TestWhen_AndOnchanges_BothSatisfied — when:true И onchanges-источник changed →
-// задача выполняется.
+// TestWhen_AndOnchanges_BothSatisfied — when:true AND onchanges source
+// changed → task runs.
 func TestWhen_AndOnchanges_BothSatisfied(t *testing.T) {
 	var secondCalled bool
 	reg := mapRegistry{
-		"core.file":    changedModule(nil), // источник: changed=true
+		"core.file":    changedModule(nil), // source: changed=true
 		"core.service": changedModule(&secondCalled),
 	}
 	sink := &recordingSink{}
@@ -290,8 +290,8 @@ func TestWhen_AndOnchanges_BothSatisfied(t *testing.T) {
 	}
 }
 
-// TestWhen_RuntimeError_Fails — when ссылается на несуществующий register →
-// runtime-error CEL → задача FAILED, прогон останавливается (templating.md §10).
+// TestWhen_RuntimeError_Fails — when references a nonexistent register →
+// CEL runtime error → task FAILED, run stops (templating.md §10).
 func TestWhen_RuntimeError_Fails(t *testing.T) {
 	var called bool
 	reg := mapRegistry{"core.pkg": changedModule(&called)}
@@ -322,10 +322,11 @@ func TestWhen_RuntimeError_Fails(t *testing.T) {
 	}
 }
 
-// --- changed_when (override changed ПОСЛЕ Apply) ---
+// --- changed_when (override changed AFTER Apply) ---
 
-// TestChangedWhen_False_OverridesChanged — changed_when:false на CHANGED-модуле →
-// итог OK (changed снят). Классический probe-кейс: задача не считается изменяющей.
+// TestChangedWhen_False_OverridesChanged — changed_when:false on a CHANGED
+// module → result OK (changed cleared). Classic probe case: task not counted
+// as changing.
 func TestChangedWhen_False_OverridesChanged(t *testing.T) {
 	reg := mapRegistry{"core.exec": changedModule(nil)}
 	sink := &recordingSink{}
@@ -348,7 +349,7 @@ func TestChangedWhen_False_OverridesChanged(t *testing.T) {
 	}
 }
 
-// TestChangedWhen_True_OverridesToChanged — changed_when:true на OK-модуле → CHANGED.
+// TestChangedWhen_True_OverridesToChanged — changed_when:true on an OK module → CHANGED.
 func TestChangedWhen_True_OverridesToChanged(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 0})}
 	sink := &recordingSink{}
@@ -367,14 +368,14 @@ func TestChangedWhen_True_OverridesToChanged(t *testing.T) {
 	}
 }
 
-// TestChangedWhen_DoesNotTriggerOnchanges — changed_when:false на источнике
-// onchanges → handler НЕ выполняется (триггерится по переопределённому changed,
-// не сырому, destiny/tasks.md §9).
+// TestChangedWhen_DoesNotTriggerOnchanges — changed_when:false on the onchanges
+// source → handler does NOT run (triggers on the overridden changed, not the
+// raw one, destiny/tasks.md §9).
 func TestChangedWhen_DoesNotTriggerOnchanges(t *testing.T) {
 	var handlerCalled bool
 	reg := mapRegistry{
-		"core.exec":    changedModule(nil),            // сырой changed=true, но changed_when:false
-		"core.service": changedModule(&handlerCalled), // handler по onchanges
+		"core.exec":    changedModule(nil),            // raw changed=true, but changed_when:false
+		"core.service": changedModule(&handlerCalled), // handler via onchanges
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -396,10 +397,10 @@ func TestChangedWhen_DoesNotTriggerOnchanges(t *testing.T) {
 	}
 }
 
-// --- failed_when (override failed ПОСЛЕ Apply) ---
+// --- failed_when (override failed AFTER Apply) ---
 
-// TestFailedWhen_True_OnOkModule_Fails — failed_when:true на OK-модуле → FAILED
-// (искусственный провал по бизнес-условию).
+// TestFailedWhen_True_OnOkModule_Fails — failed_when:true on an OK module →
+// FAILED (synthetic failure from a business condition).
 func TestFailedWhen_True_OnOkModule_Fails(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 3})}
 	sink := &recordingSink{}
@@ -425,10 +426,10 @@ func TestFailedWhen_True_OnOkModule_Fails(t *testing.T) {
 	}
 }
 
-// TestFailedWhen_False_IgnoresError — failed_when:false на упавшем модуле →
-// IGNORE_ERRORS: задача OK, RunStatus SUCCESS, исходная ошибка СОХРАНЕНА только в
-// register.self.ignored_error. TaskEvent.error при этом ПУСТ — контракт apply.proto
-// (error заполнен только при FAILED/TIMED_OUT).
+// TestFailedWhen_False_IgnoresError — failed_when:false on a failing module →
+// IGNORE_ERRORS: task OK, RunStatus SUCCESS, original error preserved only in
+// register.self.ignored_error. TaskEvent.error stays EMPTY — apply.proto
+// contract (error is set only for FAILED/TIMED_OUT).
 func TestFailedWhen_False_IgnoresError(t *testing.T) {
 	reg := mapRegistry{"core.exec": failedModule(nil)}
 	sink := &recordingSink{}
@@ -449,18 +450,18 @@ func TestFailedWhen_False_IgnoresError(t *testing.T) {
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult = %v, want SUCCESS", sink.runResult.GetStatus())
 	}
-	// Аудит: исходная ошибка модуля не потеряна.
+	// Audit: the original module error isn't lost.
 	if got := ev.GetRegisterData().GetFields()["ignored_error"].GetStringValue(); got != "boom" {
 		t.Errorf("register.ignored_error = %q, want %q", got, "boom")
 	}
-	// Контракт apply.proto: TaskEvent.error пуст при не-FAILED статусе.
+	// apply.proto contract: TaskEvent.error is empty for non-FAILED status.
 	if ev.GetError() != nil {
 		t.Errorf("TaskEvent.error = %v, want nil (статус OK — error должен быть пуст)", ev.GetError())
 	}
 }
 
-// TestFailedWhen_False_DoesNotSwallowTimedOut — failed_when:false НЕ глушит
-// TIMED_OUT: таймаут инфраструктурный, остаётся терминальным fail-stop.
+// TestFailedWhen_False_DoesNotSwallowTimedOut — failed_when:false does NOT
+// suppress TIMED_OUT: the timeout is infrastructural, stays a terminal fail-stop.
 func TestFailedWhen_False_DoesNotSwallowTimedOut(t *testing.T) {
 	slowModule := &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -488,8 +489,9 @@ func TestFailedWhen_False_DoesNotSwallowTimedOut(t *testing.T) {
 	}
 }
 
-// TestChangedWhenAndFailedWhen_FailedPrioritised — обе ветки вместе: changed_when:true
-// дал бы CHANGED, но failed_when:true → итог FAILED (failed приоритетнее).
+// TestChangedWhenAndFailedWhen_FailedPrioritised — both branches together:
+// changed_when:true would give CHANGED, but failed_when:true → result FAILED
+// (failed takes priority).
 func TestChangedWhenAndFailedWhen_FailedPrioritised(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 1})}
 	sink := &recordingSink{}
@@ -513,9 +515,9 @@ func TestChangedWhenAndFailedWhen_FailedPrioritised(t *testing.T) {
 	}
 }
 
-// TestFlowControl_RegisterSelf_RuntimeError_Fails — changed_when ссылается на
-// несуществующее register.self-поле → runtime-error CEL → задача FAILED
-// (опечатка в имени output-поля = ошибка, templating.md §10).
+// TestFlowControl_RegisterSelf_RuntimeError_Fails — changed_when references a
+// nonexistent register.self field → CEL runtime error → task FAILED (a typo
+// in an output field name is an error, templating.md §10).
 func TestFlowControl_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 0})}
 	sink := &recordingSink{}
@@ -538,8 +540,8 @@ func TestFlowControl_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	}
 }
 
-// TestIgnoreErrors_DoesNotStopRun — задача N с failed_when:false падает в модуле,
-// но прогон НЕ останавливается: задача N+1 ВЫПОЛНЯЕТСЯ (fail-stop не сработал).
+// TestIgnoreErrors_DoesNotStopRun — task N with failed_when:false fails in the
+// module, but the run does NOT stop: task N+1 RUNS (fail-stop didn't trigger).
 func TestIgnoreErrors_DoesNotStopRun(t *testing.T) {
 	var nextCalled bool
 	reg := mapRegistry{
@@ -569,16 +571,17 @@ func TestIgnoreErrors_DoesNotStopRun(t *testing.T) {
 	}
 }
 
-// --- QA-пробелы покрытия ---
+// --- QA coverage gaps ---
 
-// TestWhenSkipped_SubsequentSeesSkippedNotChanged — задача с register:X пропущена
-// по when:false → последующая видит register.X.skipped == true и changed == false
-// (skipped ≠ changed; не триггерит onchanges/не врёт во when последующей).
+// TestWhenSkipped_SubsequentSeesSkippedNotChanged — a task with register:X is
+// skipped by when:false → the next task sees register.X.skipped == true and
+// changed == false (skipped ≠ changed; doesn't trigger onchanges or lie in a
+// downstream when).
 func TestWhenSkipped_SubsequentSeesSkippedNotChanged(t *testing.T) {
 	var reactByWhenCalled bool
 	var reactByOnchangesCalled bool
 	reg := mapRegistry{
-		"core.exec":    changedModule(nil), // если бы выполнился — changed=true
+		"core.exec":    changedModule(nil), // would report changed=true if it ran
 		"core.service": changedModule(&reactByWhenCalled),
 		"core.cmd":     changedModule(&reactByOnchangesCalled),
 	}
@@ -588,27 +591,27 @@ func TestWhenSkipped_SubsequentSeesSkippedNotChanged(t *testing.T) {
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		Tasks: []*keeperv1.RenderedTask{
 			{Name: "probe", Module: "core.exec.run", Register: "probe", When: "false"},
-			// видит register.probe.skipped == true
+			// sees register.probe.skipped == true
 			{Name: "react skip", Module: "core.service.restarted", When: "register.probe.skipped"},
-			// onchanges на пропущенной задаче НЕ срабатывает (skipped ≠ changed)
+			// onchanges on a skipped task does NOT fire (skipped ≠ changed)
 			{Name: "react onchanges", Module: "core.cmd.run", OnchangesIdx: []int32{0}},
 		},
 	}, sink)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// probe скипнут.
+	// probe was skipped.
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Errorf("probe status = %v, want SKIPPED", got)
 	}
 	if sink.taskEvents[0].GetRegisterData().GetFields()["changed"].GetBoolValue() {
 		t.Errorf("probe register.changed = true, want false (skipped ≠ changed)")
 	}
-	// when:register.probe.skipped → true → react выполнился.
+	// when:register.probe.skipped → true → react ran.
 	if !reactByWhenCalled {
 		t.Errorf("react-by-when не выполнился, хотя register.probe.skipped == true")
 	}
-	// onchanges по skipped-источнику НЕ срабатывает.
+	// onchanges on a skipped source does NOT fire.
 	if reactByOnchangesCalled {
 		t.Errorf("react-by-onchanges выполнился, хотя источник skipped (не changed)")
 	}
@@ -617,9 +620,9 @@ func TestWhenSkipped_SubsequentSeesSkippedNotChanged(t *testing.T) {
 	}
 }
 
-// TestFailedWhen_RegisterSelf_RuntimeError_Fails — failed_when ссылается на
-// несуществующее register.self-поле → runtime-error CEL → задача FAILED
-// (симметрично changed_when_error; templating.md §10).
+// TestFailedWhen_RegisterSelf_RuntimeError_Fails — failed_when references a
+// nonexistent register.self field → CEL runtime error → task FAILED
+// (symmetric with changed_when_error; templating.md §10).
 func TestFailedWhen_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 0})}
 	sink := &recordingSink{}
@@ -642,9 +645,9 @@ func TestFailedWhen_RegisterSelf_RuntimeError_Fails(t *testing.T) {
 	}
 }
 
-// TestFailedWhen_SeesChangedWhenResult — заявленный порядок changed_when→failed_when:
-// OK-модуль + changed_when:true (переводит в changed) + failed_when:register.self.changed
-// → FAILED, т.к. failed_when читает уже применённый changed_when-ом changed=true.
+// TestFailedWhen_SeesChangedWhenResult — documented order changed_when→failed_when:
+// OK module + changed_when:true (flips to changed) + failed_when:register.self.changed
+// → FAILED, because failed_when reads the changed=true already applied by changed_when.
 func TestFailedWhen_SeesChangedWhenResult(t *testing.T) {
 	reg := mapRegistry{"core.exec": okOutputModule(map[string]any{"exit_code": 0})}
 	sink := &recordingSink{}
@@ -668,14 +671,14 @@ func TestFailedWhen_SeesChangedWhenResult(t *testing.T) {
 	}
 }
 
-// TestIgnoredError_VisibleDownstreamByName — downstream видит register.<name>.ignored_error:
-// задача A (register:X, failed_when:false) проглатывает ошибку модуля → задача B со
-// when по register.X.ignored_error выполняется (видимость ignored_error по register-имени,
-// не только register.self в той же задаче).
+// TestIgnoredError_VisibleDownstreamByName — downstream sees register.<name>.ignored_error:
+// task A (register:X, failed_when:false) swallows the module error → task B with
+// when on register.X.ignored_error runs (ignored_error is visible by register name,
+// not just register.self within the same task).
 func TestIgnoredError_VisibleDownstreamByName(t *testing.T) {
 	var downstreamCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil), // падает с Message:"boom", failed_when:false глушит
+		"core.exec":    failedModule(nil), // fails with Message:"boom", failed_when:false suppresses it
 		"core.service": changedModule(&downstreamCalled),
 	}
 	sink := &recordingSink{}
@@ -698,17 +701,17 @@ func TestIgnoredError_VisibleDownstreamByName(t *testing.T) {
 	}
 }
 
-// TestIgnoreThenRealFail — самый дорогой путь к ложному SUCCESS: задача A падает в
-// модуле, но failed_when:false глушит её (OK + register.A.ignored_error); задача B
-// падает в модуле БЕЗ failed_when → реальный FAILED; задача C НЕ исполняется
-// (fail-stop), итог прогона RUN_STATUS_FAILED. Подтверждает, что ignore_errors в
-// середине цепочки НЕ маскирует последующий реальный провал.
+// TestIgnoreThenRealFail — the costliest path to a false SUCCESS: task A fails
+// in the module but failed_when:false suppresses it (OK + register.A.ignored_error);
+// task B fails in the module WITHOUT failed_when → real FAILED; task C does NOT
+// run (fail-stop), run result RUN_STATUS_FAILED. Confirms ignore_errors mid-chain
+// does NOT mask a later real failure.
 func TestIgnoreThenRealFail(t *testing.T) {
 	var cCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),       // A: падает, failed_when:false → ignore
-		"core.service": failedModule(nil),       // B: падает БЕЗ failed_when → реальный FAILED
-		"core.cmd":     changedModule(&cCalled), // C: не должна исполниться
+		"core.exec":    failedModule(nil),       // A: fails, failed_when:false → ignore
+		"core.service": failedModule(nil),       // B: fails WITHOUT failed_when → real FAILED
+		"core.cmd":     changedModule(&cCalled), // C: must not run
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -723,19 +726,19 @@ func TestIgnoreThenRealFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// A: проглоченная ошибка, статус OK, ignored_error сохранён.
+	// A: swallowed error, status OK, ignored_error recorded.
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Errorf("A status = %v, want OK (ignore_errors)", got)
 	}
 	if got := sink.taskEvents[0].GetRegisterData().GetFields()["ignored_error"].GetStringValue(); got != "boom" {
 		t.Errorf("A register.ignored_error = %q, want %q", got, "boom")
 	}
-	// B: реальный провал, fail-stop.
+	// B: real failure, fail-stop.
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("B status = %v, want FAILED", got)
 	}
-	// C: не исполнена (fail-stop после B) — приходит как SKIPPED (rescue-проход
-	// цикла), но mod.Apply не вызван.
+	// C: not executed (fail-stop after B) — arrives as SKIPPED (loop's rescue
+	// pass), but mod.Apply is never called.
 	if cCalled {
 		t.Errorf("C исполнилась, хотя B реально упал (fail-stop не сработал)")
 	}
@@ -750,9 +753,9 @@ func TestIgnoreThenRealFail(t *testing.T) {
 	}
 }
 
-// TestChangedWhenTrue_OnFailedModule_StaysFailed — changed_when:true на РЕАЛЬНО
-// упавшем модуле (без failed_when) → задача FAILED. failed приоритетнее changed;
-// changed_when:true НЕ маскирует провал модуля. Подтверждает приоритет статусов.
+// TestChangedWhenTrue_OnFailedModule_StaysFailed — changed_when:true on a module
+// that REALLY fails (no failed_when) → task FAILED. failed outranks changed;
+// changed_when:true does NOT mask a module failure. Confirms status priority.
 func TestChangedWhenTrue_OnFailedModule_StaysFailed(t *testing.T) {
 	reg := mapRegistry{"core.exec": failedModule(nil)}
 	sink := &recordingSink{}
@@ -770,7 +773,7 @@ func TestChangedWhenTrue_OnFailedModule_StaysFailed(t *testing.T) {
 	if ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("status = %v, want FAILED (failed приоритетнее changed_when:true)", ev.GetStatus())
 	}
-	// Источник ошибки — сам модуль (boom), не синтетика flow-control.
+	// Error source is the module itself (boom), not flow-control synthetics.
 	if got := ev.GetError().GetMessage(); got != "boom" {
 		t.Errorf("error.message = %q, want %q (исходная ошибка модуля)", got, "boom")
 	}

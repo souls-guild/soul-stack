@@ -44,13 +44,13 @@ func (f *fakeModule) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreaming
 	return nil
 }
 
-// readSafeModule — fakeModule с маркером ErrandReadSafe (опт-ин в whitelist).
+// readSafeModule is a fakeModule with the ErrandReadSafe marker (opt-in to the whitelist).
 type readSafeModule struct{ fakeModule }
 
 func (readSafeModule) ErrandReadSafe() {}
 
-// planSafeModule — fakeModule с обоими маркерами (ErrandReadSafe + PlanReadSafe);
-// тестируем dry_run-ветку.
+// planSafeModule is a fakeModule with both markers (ErrandReadSafe + PlanReadSafe);
+// exercises the dry_run branch.
 type planSafeModule struct{ fakeModule }
 
 func (planSafeModule) ErrandReadSafe() {}
@@ -171,8 +171,8 @@ func TestRun_ModuleNotAllowed_Unknown(t *testing.T) {
 
 func TestRun_ModuleNotAllowed_NoMarker(t *testing.T) {
 	t.Parallel()
-	// Модуль зарегистрирован, но НЕ имеет ErrandReadSafe и не в hardcoded-
-	// списке → reject defense-in-depth.
+	// Module is registered but does NOT have ErrandReadSafe and isn't in the
+	// hardcoded list → reject, defense-in-depth.
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{},
 	}
@@ -214,7 +214,7 @@ func TestRun_AllowedByMarker(t *testing.T) {
 	if v := res.GetOutput().GetFields()["status"].GetNumberValue(); v != 200 {
 		t.Errorf("output.status = %v", v)
 	}
-	// stdout/stderr должны быть пустые — read-safe модуль их не пишет.
+	// stdout/stderr must be empty — a read-safe module doesn't write them.
 	if res.GetStdout() != "" || res.GetStderr() != "" {
 		t.Errorf("stdout/stderr non-empty: %q / %q", res.GetStdout(), res.GetStderr())
 	}
@@ -222,7 +222,7 @@ func TestRun_AllowedByMarker(t *testing.T) {
 
 func TestRun_DryRun_NotPlanReadSafe(t *testing.T) {
 	t.Parallel()
-	// core.cmd.shell — hardcoded-whitelist, но БЕЗ PlanReadSafe → dry_run reject.
+	// core.cmd.shell is on the hardcoded whitelist but WITHOUT PlanReadSafe → dry_run reject.
 	reg := mapRegistry{"core.cmd": &fakeModule{}}
 	r := New(reg, nil, nil)
 	res := r.Run(context.Background(), &keeperv1.ErrandRequest{
@@ -272,7 +272,7 @@ func TestRun_TimedOut(t *testing.T) {
 	reg := mapRegistry{
 		"core.cmd": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				// Уважаем ctx — реальный shell-exec тоже делает.
+				// Respects ctx — a real shell-exec does too.
 				<-stream.Context().Done()
 				return stream.Context().Err()
 			},
@@ -299,10 +299,10 @@ func TestRun_TimedOut(t *testing.T) {
 func TestRun_BadModuleAddress(t *testing.T) {
 	t.Parallel()
 	r := New(mapRegistry{}, nil, nil)
-	// Невалидный shape — FAILED bad_module_address. `core.cmd` без `.shell`
-	// формально разбирается как (core, cmd) — это уже валидный split-адрес,
-	// и treat-ится как MODULE_NOT_ALLOWED (модуль `core` не существует),
-	// см. отдельный assertion ниже.
+	// Invalid shape — FAILED bad_module_address. `core.cmd` without `.shell`
+	// formally parses as (core, cmd) — that's already a valid split address,
+	// and is treated as MODULE_NOT_ALLOWED (module `core` doesn't exist),
+	// see the separate assertion below.
 	cases := []string{"", "core", "core.cmd."}
 	for _, m := range cases {
 		res := r.Run(context.Background(), &keeperv1.ErrandRequest{
@@ -324,18 +324,18 @@ func TestRun_NilRequest(t *testing.T) {
 	}
 }
 
-// TestRun_CancelByExternalSignal — slice E5: Runner.Cancel(errandID) отменяет
-// активную Run-горутину → возвращает status CANCELLED, не блокируясь дольше.
+// TestRun_CancelByExternalSignal — slice E5: Runner.Cancel(errandID) cancels
+// the active Run goroutine → returns status CANCELLED without blocking longer.
 //
-// Сценарий: модуль блокируется до ctx.Done(); параллельная goroutine вызывает
-// Cancel через короткий интервал. Run должен вернуть CANCELLED + duration_ms
-// < 1s (не дождаться timeout-а).
+// Scenario: the module blocks until ctx.Done(); a parallel goroutine calls
+// Cancel after a short interval. Run must return CANCELLED + duration_ms
+// < 1s (not wait out the timeout).
 func TestRun_CancelByExternalSignal(t *testing.T) {
 	t.Parallel()
 	reg := mapRegistry{
 		"core.cmd": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				// блокируемся до cancel-а ctx (либо timeout — он 30s, не достанем).
+				// blocks until ctx is cancelled (or timeout — it's 30s, we won't hit it).
 				<-stream.Context().Done()
 				return stream.Context().Err()
 			},
@@ -348,11 +348,11 @@ func TestRun_CancelByExternalSignal(t *testing.T) {
 		done <- r.Run(context.Background(), &keeperv1.ErrandRequest{
 			ErrandId:       "e-cancel",
 			Module:         "core.cmd.shell",
-			TimeoutSeconds: 30, // достаточно большой, чтобы не сработал
+			TimeoutSeconds: 30, // large enough to never fire
 		})
 	}()
 
-	// Дать Run-у успеть зарегистрироваться в active-map.
+	// Give Run time to register itself in the active map.
 	time.Sleep(50 * time.Millisecond)
 	if !r.Cancel("e-cancel") {
 		t.Fatalf("Cancel(e-cancel) = false, want true")
@@ -371,8 +371,8 @@ func TestRun_CancelByExternalSignal(t *testing.T) {
 	}
 }
 
-// TestRun_CancelUnknown — Cancel неизвестного errand_id возвращает false (race
-// с собственным терминалом — безопасный no-op).
+// TestRun_CancelUnknown — Cancel on an unknown errand_id returns false (race
+// with its own terminal state — a safe no-op).
 func TestRun_CancelUnknown(t *testing.T) {
 	t.Parallel()
 	r := New(mapRegistry{}, nil, nil)

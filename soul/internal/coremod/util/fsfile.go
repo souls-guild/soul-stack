@@ -11,12 +11,12 @@ import (
 	"syscall"
 )
 
-// ParseMode разбирает октальный mode-параметр (например, "0644"). Пустая
-// строка → дефолт 0o644. Невалидная восьмеричная строка → ошибка с именем
-// параметра. Биты сверх ModePerm отбрасываются.
+// ParseMode parses an octal mode param (e.g. "0644"). Empty string → default
+// 0o644. Invalid octal string → error naming the param. Bits beyond ModePerm
+// are dropped.
 //
-// Единая точка для всех core-модулей, материализующих файлы (core.file,
-// core.url, …); не дублировать локальными копиями.
+// Single source for all core modules that materialize files (core.file,
+// core.url, …); don't duplicate locally.
 func ParseMode(modeStr string) (fs.FileMode, error) {
 	if modeStr == "" {
 		return fs.FileMode(0o644), nil
@@ -28,21 +28,22 @@ func ParseMode(modeStr string) (fs.FileMode, error) {
 	return fs.FileMode(parsed) & fs.ModePerm, nil
 }
 
-// ReadRegularFile читает содержимое regular-файла по абсолютному пути src.
-// Используется core-модулями, которые копируют содержимое уже лежащего на хосте
-// файла (core.file.present с src). Контракт (security-граница):
+// ReadRegularFile reads the contents of a regular file at absolute path src.
+// Used by core modules that copy the contents of a file already on the host
+// (core.file.present with src). Contract (security boundary):
 //
-//   - src обязан быть абсолютным (filepath.IsAbs) — относительный reject, чтобы
-//     resolve относительно cwd Soul-демона (обычно root) не стал footgun-ом;
-//   - тип проверяется через os.Lstat + IsRegular(), ИМЕННО Lstat: симлинк
-//     reject-ится, а не следуется — защита от подмены источника симлинком на
-//     чувствительный файл между объявлением и применением;
-//   - каталог / симлинк / device / socket / fifo → explicit-reject (MVP — только
-//     regular file);
-//   - отсутствие / permission-ошибка чтения пробрасываются как есть.
+//   - src must be absolute (filepath.IsAbs) — relative paths are rejected so
+//     resolving against the Soul daemon's cwd (usually root) can't become a
+//     footgun;
+//   - type is checked via os.Lstat + IsRegular(), Lstat SPECIFICALLY: a
+//     symlink is rejected, not followed — guards against swapping the source
+//     for a symlink to a sensitive file between declaration and apply;
+//   - directory / symlink / device / socket / fifo → explicit reject (MVP —
+//     regular files only);
+//   - missing-file / permission errors are propagated as-is.
 //
-// Файл читается в память один раз; вызывающий хэширует и пишет тот же буфер
-// (без двойного чтения — защита от TOCTOU между сверкой и записью).
+// The file is read into memory once; the caller hashes and writes that same
+// buffer (no double read — guards against TOCTOU between check and write).
 func ReadRegularFile(src string) ([]byte, error) {
 	if !filepath.IsAbs(src) {
 		return nil, fmt.Errorf("src must be absolute: %q", src)
@@ -60,12 +61,12 @@ func ReadRegularFile(src string) ([]byte, error) {
 	return os.ReadFile(src)
 }
 
-// AtomicWrite материализует data в path атомарно: temp-файл в той же
-// директории + rename. Гарантирует, что наблюдатель видит либо старый, либо
-// полный новый файл, но не частично записанный. На любой ошибке temp удаляется.
+// AtomicWrite materializes data at path atomically: temp file in the same
+// directory + rename. Guarantees an observer sees either the old file or the
+// full new one, never a partial write. The temp file is removed on any error.
 //
-// Единая точка для core-модулей, которым важна атомарность записи (core.file
-// rendered, core.url fetched); не дублировать локальными копиями.
+// Single source for core modules that need write atomicity (core.file
+// rendered, core.url fetched); don't duplicate locally.
 func AtomicWrite(path string, data []byte, mode fs.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -100,24 +101,26 @@ func AtomicWrite(path string, data []byte, mode fs.FileMode) error {
 	return nil
 }
 
-// AtomicWritePreserving материализует data в path атомарно (как AtomicWrite),
-// но с правилом preserve-by-default для in-place правки СУЩЕСТВУЮЩЕГО файла
-// ([ADR-015], пилот core.line, паттерн для будущих in-place core — core.repo):
+// AtomicWritePreserving materializes data at path atomically (like
+// AtomicWrite), but with preserve-by-default semantics for in-place edits of
+// an EXISTING file ([ADR-015], core.line pilot, pattern for future in-place
+// core modules like core.repo):
 //
-//   - mode:  modeStr=="" и файл существовал → сохранить текущий mode исходного
-//     файла; modeStr задан → ParseMode(modeStr) (override). Файла не было →
-//     ParseMode(modeStr) (для "" это дефолт 0644).
-//   - owner/group: не заданы и файл существовал → восстановить старые uid/gid;
-//     заданы → ApplyOwnership (override). Файла не было → ApplyOwnership только
-//     если что-то задано (иначе остаётся owner текущего процесса).
+//   - mode: modeStr=="" and the file existed → keep the original file's
+//     current mode; modeStr set → ParseMode(modeStr) (override). File didn't
+//     exist → ParseMode(modeStr) ("" defaults to 0644).
+//   - owner/group: unset and the file existed → restore the old uid/gid; set →
+//     ApplyOwnership (override). File didn't exist → ApplyOwnership only if
+//     something is set (otherwise keeps the current process's owner).
 //
-// rename теряет mode/owner оригинала (temp создаётся с правами процесса),
-// поэтому preserve восстанавливается ЯВНО после записи. Снимок mode+uid+gid
-// делается ДО записи (Stat исходного файла).
+// rename loses the original's mode/owner (the temp file is created with the
+// process's own permissions), so preserve is restored EXPLICITLY after the
+// write. The mode+uid+gid snapshot is taken BEFORE the write (Stat of the
+// original file).
 //
-// lookupUser/lookupGroup — точки подмены для unit-тестов (как в ApplyOwnership).
-// Единая наследуемая форма: in-place core-модули вызывают эту функцию, не
-// дублируя preserve-логику локально.
+// lookupUser/lookupGroup — substitution points for unit tests (as in
+// ApplyOwnership). A single inherited form: in-place core modules call this
+// function instead of duplicating preserve logic locally.
 func AtomicWritePreserving(
 	path string, data []byte, modeStr, owner, group string,
 	lookupUser func(name string) (*user.User, error),
@@ -158,9 +161,9 @@ func AtomicWritePreserving(
 		}
 		return nil
 	}
-	// owner/group не заданы: для существовавшего файла rename сбросил владельца
-	// на процесс — восстанавливаем исходные uid/gid. Для нового файла оставляем
-	// владельца процесса (поведение AtomicWrite без ownership).
+	// owner/group unset: for an existing file, rename reset the owner to the
+	// process — restore the original uid/gid. For a new file, leave the
+	// process owner as-is (AtomicWrite's behavior without ownership).
 	if existed && hadOwnerSys {
 		if err := os.Chown(path, prevUID, prevGID); err != nil {
 			return fmt.Errorf("restore ownership %s: %v", path, err)
@@ -169,13 +172,13 @@ func AtomicWritePreserving(
 	return nil
 }
 
-// ApplyOwnership резолвит owner/group → uid/gid, сравнивает с текущими, делает
-// chown если расходится. changed=true только если хотя бы одно значение
-// действительно поменялось. lookupUser/lookupGroup — точки подмены для
-// unit-тестов (в проде — user.Lookup / user.LookupGroup).
+// ApplyOwnership resolves owner/group → uid/gid, compares against current,
+// and chowns if they differ. changed=true only if at least one value actually
+// changed. lookupUser/lookupGroup — substitution points for unit tests
+// (production uses user.Lookup / user.LookupGroup).
 //
-// Единая точка для core-модулей, выставляющих owner/group на файлах
-// (core.file, core.url); не дублировать локальными копиями.
+// Single source for core modules that set owner/group on files (core.file,
+// core.url); don't duplicate locally.
 func ApplyOwnership(
 	path, owner, group string,
 	lookupUser func(name string) (*user.User, error),
@@ -194,11 +197,12 @@ func ApplyOwnership(
 	return true, nil
 }
 
-// OwnershipDrift — pure-read половина ApplyOwnership (ADR-031 Scry): резолвит
-// owner/group → uid/gid и сравнивает с текущими БЕЗ chown. Возвращает drift
-// (хотя бы одно значение расходится) и целевые wantUID/wantGID (для последующего
-// chown в ApplyOwnership). Чистое чтение — ApplyOwnership строится поверх неё,
-// Plan-путь использует её напрямую (drift без мутации).
+// OwnershipDrift is the pure-read half of ApplyOwnership (ADR-031 Scry):
+// resolves owner/group → uid/gid and compares against current WITHOUT
+// chowning. Returns drift (at least one value differs) and the target
+// wantUID/wantGID (for a subsequent chown in ApplyOwnership). Pure read —
+// ApplyOwnership is built on top of it, and the Plan path uses it directly
+// (drift without mutation).
 func OwnershipDrift(
 	path, owner, group string,
 	lookupUser func(name string) (*user.User, error),
@@ -210,8 +214,8 @@ func OwnershipDrift(
 	}
 	sys, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		// На системах, где Sys() не Stat_t (теоретически — Windows), chown
-		// не имеет смысла. Soul-агент таргетит unix, это не блокер.
+		// On systems where Sys() isn't Stat_t (theoretically Windows), chown
+		// makes no sense. The Soul agent targets unix, so this isn't a blocker.
 		return false, 0, 0, fmt.Errorf("chown not supported on this platform")
 	}
 	wantUID = int(sys.Uid)

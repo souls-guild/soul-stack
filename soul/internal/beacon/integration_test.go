@@ -10,9 +10,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TestSchedulerWithRealFileBeacon — сквозной путь VigilSnapshot → реальный
-// core.beacon.file_changed → edge-triggered Portent на реальном (не fake)
-// тикере. Покрывает production newTicker + Default-реестр + parse interval.
+// TestSchedulerWithRealFileBeacon — end-to-end path VigilSnapshot → real
+// core.beacon.file_changed → edge-triggered Portent on a real (not fake)
+// ticker. Covers production newTicker + Default registry + interval parsing.
 func TestSchedulerWithRealFileBeacon(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "watched")
@@ -33,14 +33,14 @@ func TestSchedulerWithRealFileBeacon(t *testing.T) {
 	}
 	s.Apply(ctx, []*keeperv1.VigilDef{def})
 
-	// baseline (первый тик) не должен дать Portent.
+	// baseline (first tick) must not emit a Portent.
 	select {
 	case ev := <-s.Portents():
 		t.Fatalf("baseline не должен эмитить Portent, получили %q", ev.GetBeaconName())
 	case <-time.After(80 * time.Millisecond):
 	}
 
-	// Меняем файл — следующий тик должен поднять Portent.
+	// Change the file — the next tick should raise a Portent.
 	if err := os.WriteFile(path, []byte("v2-changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +57,9 @@ func TestSchedulerWithRealFileBeacon(t *testing.T) {
 	}
 }
 
-// TestSchedulerReplaceAllSwapsSet — ReplaceAll заменяет набор: после второго
-// snapshot с другим Vigil первый перестаёт наблюдаться, второй наблюдает.
+// TestSchedulerReplaceAllSwapsSet — ReplaceAll swaps the set: after a second
+// snapshot with a different Vigil, the first stops being watched and the
+// second is watched.
 func TestSchedulerReplaceAllSwapsSet(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a")
@@ -77,18 +78,18 @@ func TestSchedulerReplaceAllSwapsSet(t *testing.T) {
 
 	vigilA := &keeperv1.VigilDef{Name: "watch-a", Check: FileChangedName, Interval: "20ms", Params: paramStruct(t, map[string]any{"path": pathA})}
 	s.Apply(ctx, []*keeperv1.VigilDef{vigilA})
-	time.Sleep(60 * time.Millisecond) // дать baseline установиться
+	time.Sleep(60 * time.Millisecond) // let baseline settle
 
-	// ReplaceAll: только watch-b. watch-a останавливается.
+	// ReplaceAll: only watch-b. watch-a is stopped.
 	vigilB := &keeperv1.VigilDef{Name: "watch-b", Check: FileChangedName, Interval: "20ms", Params: paramStruct(t, map[string]any{"path": pathB})}
 	s.Apply(ctx, []*keeperv1.VigilDef{vigilB})
-	time.Sleep(60 * time.Millisecond) // baseline для watch-b
+	time.Sleep(60 * time.Millisecond) // baseline for watch-b
 
-	// Меняем A — Portent НЕ должен прийти (watch-a остановлен).
+	// Change A — a Portent must NOT arrive (watch-a is stopped).
 	if err := os.WriteFile(pathA, []byte("a-changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Меняем B — Portent должен прийти от watch-b.
+	// Change B — a Portent should arrive from watch-b.
 	if err := os.WriteFile(pathB, []byte("b-changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}

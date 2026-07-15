@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyPresent материализует описание репозитория для выбранного backend-а.
-// Идемпотентность: целевой файл + (для apt) ключ совпадают → changed=false.
+// applyPresent materializes the repo description for the chosen backend.
+// Idempotency: target file + (for apt) key match → changed=false.
 func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	if p.uri == "" {
 		return util.SendFailed(stream, `param "uri": required for state present`)
@@ -36,9 +36,9 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	}
 }
 
-// applyAbsent удаляет описание репозитория. GPG-ключ НЕ удаляется намеренно: он
-// может использоваться другими репозиториями; ручная чистка ключа — отдельный
-// явный шаг оператора.
+// applyAbsent removes the repo description. The GPG key is deliberately NOT
+// removed: it may be shared by other repos; manual key cleanup is a separate,
+// explicit operator step.
 func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	switch mgr {
 	case util.PkgMgrApt:
@@ -54,9 +54,9 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 
 // --- apt ---
 
-// applyAptPresent пишет /etc/apt/sources.list.d/<name>.list в современном
-// deb822-простом one-line формате с signed-by= на keyring. Ключ (если задан)
-// материализуется в /etc/apt/keyrings/<name>.gpg.
+// applyAptPresent writes /etc/apt/sources.list.d/<name>.list in the modern
+// deb822 one-line format with signed-by= pointing at the keyring. The key
+// (if set) is materialized at /etc/apt/keyrings/<name>.gpg.
 func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	listPath := filepath.Join(m.AptSourcesDir, p.name+".list")
 	keyPath := filepath.Join(m.AptKeyringsDir, p.name+".gpg")
@@ -64,8 +64,8 @@ func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 	var warnings []string
 	addRepoWarnings(&warnings, mgr, p)
 
-	// Ключ кладём первым: .list ссылается на keyPath через signed-by=, и
-	// idempotency content-сравнения .list завязано на наличие этой ссылки.
+	// Write the key first: .list references keyPath via signed-by=, and
+	// .list's content-comparison idempotency depends on that reference existing.
 	keyChanged := false
 	if p.gpgKey != "" {
 		ch, kerr := m.ensureKey(keyPath, p.gpgKey)
@@ -88,13 +88,13 @@ func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 	}, warnings)
 }
 
-// aptListContent собирает одну строку sources.list.d. Формат:
+// aptListContent builds a single sources.list.d line. Format:
 //
 //	deb [signed-by=<keyPath> arch=...] <uri> <suite> <components...>
 //
-// signed-by присутствует только если ключ задан (привязка доверия к репо).
-// enabled=false → строка закомментирована (apt не имеет enabled-флага в
-// one-line формате; стандартная практика — comment-out).
+// signed-by is present only if a key is set (binds trust to the repo).
+// enabled=false → the line is commented out (apt has no enabled flag in the
+// one-line format; comment-out is the standard practice).
 func aptListContent(p repoParams, keyPath string) []byte {
 	var opts []string
 	if p.gpgKey != "" {
@@ -121,7 +121,7 @@ func aptListContent(p repoParams, keyPath string) []byte {
 
 // --- dnf / yum ---
 
-// applyYumPresent пишет /etc/yum.repos.d/<name>.repo в ini-формате.
+// applyYumPresent writes /etc/yum.repos.d/<name>.repo in ini format.
 func (m *Module) applyYumPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	repoPath := filepath.Join(m.YumReposDir, p.name+".repo")
 
@@ -141,9 +141,9 @@ func (m *Module) applyYumPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 	}, warnings)
 }
 
-// yumRepoContent собирает ini-секцию репозитория. gpgcheck/enabled — 0/1.
-// gpgkey пишется только если gpg_key задан (для yum это URL или file:// путь;
-// мы пишем значение как есть — оператор задаёт URL ключа).
+// yumRepoContent builds the repo's ini section. gpgcheck/enabled are 0/1.
+// gpgkey is written only if gpg_key is set (for yum this is a URL or
+// file:// path; we write the value as-is — the operator supplies the key URL).
 func yumRepoContent(p repoParams) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s]\n", p.name)
@@ -159,10 +159,10 @@ func yumRepoContent(p repoParams) []byte {
 
 // --- apk ---
 
-// applyApkPresent добавляет/обновляет строку в /etc/apk/repositories.
-// apk хранит репозитории построчно; idempotency — наличие точной строки.
-// Формат строки: `<uri>` (apk не использует suite/components в URL — оператор
-// кладёт полный URL в uri). enabled=false → строка закомментирована.
+// applyApkPresent adds/updates a line in /etc/apk/repositories.
+// apk stores repos one per line; idempotency means an exact line match.
+// Line format: `<uri>` (apk doesn't use suite/components in the URL — the
+// operator puts the full URL in uri). enabled=false → line is commented out.
 func (m *Module) applyApkPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	wantLine := apkLine(p)
 	changed, err := m.upsertApkLine(wantLine)
@@ -171,8 +171,8 @@ func (m *Module) applyApkPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 	}
 
 	var warnings []string
-	// apk gpg_check на уровне строки репозитория не выражается (ключи лежат в
-	// /etc/apk/keys/); gpg_check=false по-прежнему предупреждаем для симметрии.
+	// apk gpg_check can't be expressed at the repo-line level (keys live in
+	// /etc/apk/keys/); we still warn on gpg_check=false for symmetry.
 	addRepoWarnings(&warnings, mgr, p)
 
 	return finalOutput(stream, changed, map[string]any{
@@ -182,10 +182,10 @@ func (m *Module) applyApkPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 	}, warnings)
 }
 
-// applyApkAbsent удаляет строку репозитория. apk не хранит имя репо в файле,
-// поэтому идентичность — uri: absent для apk ТРЕБУЕТ uri (в отличие от
-// apt/yum, где есть файл <name>). Без uri удаление было бы угадыванием и риском
-// снести чужую строку.
+// applyApkAbsent removes a repo line. apk doesn't store the repo name in the
+// file, so identity is the uri: absent for apk REQUIRES uri (unlike
+// apt/yum, which have a <name> file). Without uri, removal would be a guess
+// and risk deleting the wrong line.
 func (m *Module) applyApkAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], p repoParams) error {
 	if p.uri == "" {
 		return util.SendFailed(stream, `param "uri": required for apk repo absent (apk has no per-repo file, removal matches by uri)`)
@@ -208,9 +208,9 @@ func apkLine(p repoParams) string {
 	return p.uri
 }
 
-// upsertApkLine идемпотентно вставляет/обновляет строку репозитория. Имя репо в
-// apk не хранится в файле, поэтому совпадение ищется по uri (с учётом
-// возможного `# ` префикса). Если строка уже точно равна want — no-op.
+// upsertApkLine idempotently inserts/updates a repo line. apk doesn't store
+// the repo name in the file, so matching is by uri (accounting for a
+// possible `# ` prefix). If the line already exactly equals want — no-op.
 func (m *Module) upsertApkLine(want string) (bool, error) {
 	lines, err := readLines(m.ApkReposFile)
 	if err != nil {
@@ -231,8 +231,8 @@ func (m *Module) upsertApkLine(want string) (bool, error) {
 	return true, m.writeLines(m.ApkReposFile, lines)
 }
 
-// removeApkLine удаляет строку с заданным uri (учитывая возможный `# `
-// префикс закомментированной строки). Возвращает changed.
+// removeApkLine removes the line with the given uri (accounting for a
+// possible `# ` prefix on a commented-out line). Returns changed.
 func (m *Module) removeApkLine(uri string) (bool, error) {
 	lines, err := readLines(m.ApkReposFile)
 	if err != nil {
@@ -254,11 +254,11 @@ func (m *Module) removeApkLine(uri string) (bool, error) {
 	return true, m.writeLines(m.ApkReposFile, out)
 }
 
-// --- общие файловые операции ---
+// --- shared file operations ---
 
-// ensureFile пишет content в path, если файла нет или содержимое отличается.
-// Запись — preserve-by-default (util.AtomicWritePreserving): права/владелец
-// существующего файла сохраняются. Возвращает changed.
+// ensureFile writes content to path if the file is missing or its content
+// differs. Writes are preserve-by-default (util.AtomicWritePreserving):
+// an existing file's perms/owner are kept. Returns changed.
 func (m *Module) ensureFile(path string, content []byte) (bool, error) {
 	cur, existed, err := readFile(path)
 	if err != nil {
@@ -276,14 +276,15 @@ func (m *Module) ensureFile(path string, content []byte) (bool, error) {
 	return true, nil
 }
 
-// ensureKey материализует GPG-ключ в keyPath, если его нет или содержимое
-// отличается. gpgKey трактуется как inline-содержимое ключа (PEM/ASCII-armored
-// или бинарный keyring — пишем как есть). Ключ критичен для supply-chain.
+// ensureKey materializes a GPG key at keyPath if it's missing or its content
+// differs. gpgKey is treated as inline key content (PEM/ASCII-armored or a
+// binary keyring — written as-is). The key is critical for supply-chain
+// integrity.
 //
-// Замечание: gpgKey-как-URL (скачать ключ по https) в MVP НЕ реализуется —
-// download-by-URL это отдельный модуль core.url; здесь ключ передаётся inline
-// (CEL может подставить содержимое через ${ file(...) } или vault). Это
-// сознательное ограничение MVP, расширяемо позже.
+// Note: gpgKey-as-URL (fetch the key over https) is NOT implemented in MVP —
+// download-by-URL belongs to a separate core.url module; here the key is
+// always passed inline (CEL can substitute content via ${ file(...) } or
+// vault). This is a deliberate MVP limitation, extensible later.
 func (m *Module) ensureKey(keyPath, gpgKey string) (bool, error) {
 	cur, existed, err := readFile(keyPath)
 	if err != nil {
@@ -296,7 +297,7 @@ func (m *Module) ensureKey(keyPath, gpgKey string) (bool, error) {
 	if mkErr := os.MkdirAll(filepath.Dir(keyPath), 0o755); mkErr != nil {
 		return false, fmt.Errorf("mkdir %s: %v", filepath.Dir(keyPath), mkErr)
 	}
-	// Ключ читается apt-ом — mode 0644 (мир может читать публичный ключ).
+	// Key is read by apt — mode 0644 (world-readable public key).
 	if werr := util.AtomicWrite(keyPath, want, 0o644); werr != nil {
 		return false, werr
 	}
@@ -317,9 +318,9 @@ func (m *Module) removeFile(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 	return finalOutput(stream, true, map[string]any{"path": path}, nil)
 }
 
-// addRepoWarnings добавляет обязательные warning-и opt-out-ов (gpg_check=false,
-// http uri) — симметрично checksum-opt-out в core.url. Warning попадает в
-// output (паттерн core.line), а не теряется.
+// addRepoWarnings adds mandatory opt-out warnings (gpg_check=false, http uri)
+// — symmetric with the checksum opt-out in core.url. The warning lands in
+// output (core.line pattern) instead of being lost.
 func addRepoWarnings(warnings *[]string, mgr util.PkgMgr, p repoParams) {
 	if !p.gpgCheck {
 		*warnings = append(*warnings, fmt.Sprintf("repo %q: gpg_check disabled — packages will NOT be cryptographically verified (supply-chain risk)", p.name))
@@ -332,17 +333,17 @@ func addRepoWarnings(warnings *[]string, mgr util.PkgMgr, p repoParams) {
 	}
 }
 
-// gpgNoKeyDetail возвращает backend-специфичное продолжение warning-а
-// «gpg_check enabled but no gpg_key set». dnf/yum жёстко требуют gpgkey= при
-// gpgcheck=1 (иначе установка падает); apt и apk опираются на свои хранилища
-// доверия (/etc/apt/keyrings + global keyring, /etc/apk/keys).
+// gpgNoKeyDetail returns the backend-specific continuation of the
+// "gpg_check enabled but no gpg_key set" warning. dnf/yum strictly require
+// gpgkey= when gpgcheck=1 (otherwise install fails); apt and apk fall back
+// to their own trust stores (/etc/apt/keyrings + global keyring, /etc/apk/keys).
 func gpgNoKeyDetail(mgr util.PkgMgr) string {
 	switch mgr {
 	case util.PkgMgrDnf, util.PkgMgrYum:
 		return "gpgcheck=1 without gpgkey will fail package install on the host"
 	case util.PkgMgrApk:
 		return "signature verification relies on keys in /etc/apk/keys"
-	default: // apt и прочее
+	default: // apt and others
 		return "signature verification relies on the system/global trust store"
 	}
 }
@@ -381,10 +382,10 @@ func readLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-// writeLines пишет /etc/apk/repositories построчно. Это in-place правка
-// существующего файла, поэтому запись — preserve-by-default
-// (util.AtomicWritePreserving): права/владелец существующего файла сохраняются
-// (симметрично ensureFile для apt/yum и fstab в core.mount).
+// writeLines writes /etc/apk/repositories line by line. This is an in-place
+// edit of an existing file, so writes are preserve-by-default
+// (util.AtomicWritePreserving): the existing file's perms/owner are kept
+// (symmetric with ensureFile for apt/yum and fstab in core.mount).
 func (m *Module) writeLines(path string, lines []string) error {
 	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
 		return fmt.Errorf("mkdir %s: %v", filepath.Dir(path), mkErr)
@@ -396,7 +397,7 @@ func (m *Module) writeLines(path string, lines []string) error {
 	return nil
 }
 
-// finalOutput собирает финальный ApplyEvent с changed и (если есть) warnings.
+// finalOutput builds the final ApplyEvent with changed and (if any) warnings.
 func finalOutput(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, output map[string]any, warnings []string) error {
 	output["changed"] = changed
 	if len(warnings) > 0 {

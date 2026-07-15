@@ -24,8 +24,8 @@ func ed25519PubPEM(t *testing.T) ([]byte, ed25519.PublicKey) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), pub
 }
 
-// TestParseSigilPubKeys_MultiBlocks — N конкатенированных PEM-блоков → N ключей
-// в порядке записи (multi-anchor ротация, ADR-026(h) R3).
+// TestParseSigilPubKeys_MultiBlocks verifies N concatenated PEM blocks yield N
+// keys in order (multi-anchor rotation, ADR-026(h) R3).
 func TestParseSigilPubKeys_MultiBlocks(t *testing.T) {
 	pem1, want1 := ed25519PubPEM(t)
 	pem2, want2 := ed25519PubPEM(t)
@@ -46,8 +46,8 @@ func TestParseSigilPubKeys_MultiBlocks(t *testing.T) {
 	}
 }
 
-// TestParseSigilPubKeys_SingleBlock — один блок → list длины 1 (обратная
-// совместимость с single-anchor seed-ом).
+// TestParseSigilPubKeys_SingleBlock verifies one block → a list of length 1
+// (backward compatibility with a single-anchor seed).
 func TestParseSigilPubKeys_SingleBlock(t *testing.T) {
 	pemBytes, want := ed25519PubPEM(t)
 	got, err := ParseSigilPubKeys(pemBytes)
@@ -62,8 +62,8 @@ func TestParseSigilPubKeys_SingleBlock(t *testing.T) {
 	}
 }
 
-// TestParseSigilPubKeys_EmptyIsDisabled — пустой вход = Sigil выключен →
-// (nil, nil), без ошибки.
+// TestParseSigilPubKeys_EmptyIsDisabled verifies empty input (Sigil disabled)
+// → (nil, nil), no error.
 func TestParseSigilPubKeys_EmptyIsDisabled(t *testing.T) {
 	for _, in := range [][]byte{nil, {}} {
 		got, err := ParseSigilPubKeys(in)
@@ -76,7 +76,7 @@ func TestParseSigilPubKeys_EmptyIsDisabled(t *testing.T) {
 	}
 }
 
-// TestParseSigilPubKeys_NotPEM — мусор вместо PEM → ErrSigilPubKeyFormat.
+// TestParseSigilPubKeys_NotPEM verifies garbage instead of PEM → ErrSigilPubKeyFormat.
 func TestParseSigilPubKeys_NotPEM(t *testing.T) {
 	_, err := ParseSigilPubKeys([]byte("not a pem block"))
 	if !errors.Is(err, ErrSigilPubKeyFormat) {
@@ -84,8 +84,8 @@ func TestParseSigilPubKeys_NotPEM(t *testing.T) {
 	}
 }
 
-// TestParseSigilPubKeys_TrailingGarbage — валидный блок + мусорный хвост →
-// ErrSigilPubKeyFormat (не молчаливое усечение набора).
+// TestParseSigilPubKeys_TrailingGarbage verifies a valid block + garbage tail →
+// ErrSigilPubKeyFormat (no silent truncation of the set).
 func TestParseSigilPubKeys_TrailingGarbage(t *testing.T) {
 	pemBytes, _ := ed25519PubPEM(t)
 	in := append(append([]byte{}, pemBytes...), []byte("garbage tail")...)
@@ -95,8 +95,8 @@ func TestParseSigilPubKeys_TrailingGarbage(t *testing.T) {
 	}
 }
 
-// TestParseSigilPubKeys_WrongKeyTypeInSet — один из блоков не ed25519 → ошибка
-// формата (fail-closed на битом якоре, а не выкидывание блока из набора).
+// TestParseSigilPubKeys_WrongKeyTypeInSet verifies one non-ed25519 block →
+// format error (fail-closed on a bad anchor, not just dropping it from the set).
 func TestParseSigilPubKeys_WrongKeyTypeInSet(t *testing.T) {
 	ed, _ := ed25519PubPEM(t)
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

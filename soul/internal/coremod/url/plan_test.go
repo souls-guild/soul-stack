@@ -7,11 +7,12 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/url"
 )
 
-// TestURL_NotPlanReadSafe — core.url в MVP НЕ объявляет PlanReadSafe: pure-read
-// drift «нужно ли скачать?» для бесчексумной ветки требует HEAD-запроса к
-// remote-у, которого Apply ДО мутации не делает (см. doc Plan). Host применит
-// default-deny (FAILED `plan.unsupported`) на dry_run — отдельный slice
-// добавит HEAD-probe с opt-out-флагами симметрично Apply.
+// TestURL_NotPlanReadSafe — core.url in MVP does NOT declare PlanReadSafe:
+// pure-read drift ("does this need downloading?") for the no-checksum branch
+// requires a HEAD request that Apply doesn't make before mutating (see the
+// Plan doc). The host applies default-deny (FAILED `plan.unsupported`) on
+// dry_run — a HEAD-probe with opt-out flags symmetric to Apply is a separate
+// future slice.
 func TestURL_NotPlanReadSafe(t *testing.T) {
 	m := url.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {

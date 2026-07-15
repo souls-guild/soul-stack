@@ -14,7 +14,7 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// dropInPath — путь drop-in, который строит applyApplied (filepath.Join + .conf).
+// dropInPath is the drop-in path built by applyApplied (filepath.Join + .conf).
 func dropInPath(dir, fname string) string {
 	if !strings.HasSuffix(fname, ".conf") {
 		fname += ".conf"
@@ -42,8 +42,8 @@ func reloadCalled(r *internaltest.Runner) bool {
 	return false
 }
 
-// TestApplied_NewDropIn_WritesAndReloads — файла нет → пишем drop-in (changed) +
-// reload (auto: file-change). Контент детерминирован, sorted keys.
+// TestApplied_NewDropIn_WritesAndReloads — file doesn't exist → write drop-in
+// (changed) + reload (auto: file-change). Content is deterministic, sorted keys.
 func TestApplied_NewDropIn_WritesAndReloads(t *testing.T) {
 	dir := t.TempDir()
 	r := internaltest.NewRunner()
@@ -78,9 +78,9 @@ func TestApplied_NewDropIn_WritesAndReloads(t *testing.T) {
 	}
 }
 
-// TestApplied_EmptySettings_NoOp — пустой набор settings (len==0): ранний no-op,
-// changed=false, БЕЗ записи пустого drop-in и БЕЗ reload (general-purpose edge:
-// bulk-задача без параметров — нечего применять).
+// TestApplied_EmptySettings_NoOp — empty settings (len==0): early no-op,
+// changed=false, no empty drop-in written and no reload (a bulk task with no
+// params has nothing to apply).
 func TestApplied_EmptySettings_NoOp(t *testing.T) {
 	dir := t.TempDir()
 	r := internaltest.NewRunner()
@@ -107,8 +107,8 @@ func TestApplied_EmptySettings_NoOp(t *testing.T) {
 	}
 }
 
-// TestPlanApplied_EmptySettings_NoDrift — пустой набор settings → drift=false
-// (симметрия с applyApplied: нечего применять → нет дрейфа), без записи.
+// TestPlanApplied_EmptySettings_NoDrift — empty settings → drift=false
+// (symmetric with applyApplied: nothing to apply means no drift), no write.
 func TestPlanApplied_EmptySettings_NoDrift(t *testing.T) {
 	dir := t.TempDir()
 	r := internaltest.NewRunner()
@@ -129,8 +129,8 @@ func TestPlanApplied_EmptySettings_NoDrift(t *testing.T) {
 	}
 }
 
-// TestApplied_Idempotent_SameMap — drop-in уже совпадает → changed=false, БЕЗ
-// записи и БЕЗ reload (reload-gating: auto + нет file-change → no-op).
+// TestApplied_Idempotent_SameMap — drop-in already matches → changed=false, no
+// write, no reload (reload-gating: auto + no file-change → no-op).
 func TestApplied_Idempotent_SameMap(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")
@@ -159,7 +159,7 @@ func TestApplied_Idempotent_SameMap(t *testing.T) {
 	}
 }
 
-// TestApplied_Drift_RewritesAndReloads — контент drop-in отличается → перезапись
+// TestApplied_Drift_RewritesAndReloads — drop-in content differs → rewrite
 // (changed) + reload (file-change).
 func TestApplied_Drift_RewritesAndReloads(t *testing.T) {
 	dir := t.TempDir()
@@ -190,8 +190,8 @@ func TestApplied_Drift_RewritesAndReloads(t *testing.T) {
 	}
 }
 
-// TestApplied_ReloadAlways_NoFileChange — reload=always при отсутствии file-change
-// всё равно зовёт sysctl -p; changed=false (reload сам change не помечает).
+// TestApplied_ReloadAlways_NoFileChange — reload=always still calls sysctl -p
+// even without a file-change; changed=false (reload itself doesn't mark changed).
 func TestApplied_ReloadAlways_NoFileChange(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")
@@ -217,8 +217,8 @@ func TestApplied_ReloadAlways_NoFileChange(t *testing.T) {
 	}
 }
 
-// TestApplied_ReloadNever_FileChange — reload=never НЕ зовёт sysctl -p даже при
-// file-change (явный opt-out); changed=true (файл всё равно записан).
+// TestApplied_ReloadNever_FileChange — reload=never never calls sysctl -p even
+// on file-change (explicit opt-out); changed=true (file is still written).
 func TestApplied_ReloadNever_FileChange(t *testing.T) {
 	dir := t.TempDir()
 	r := internaltest.NewRunner()
@@ -239,8 +239,8 @@ func TestApplied_ReloadNever_FileChange(t *testing.T) {
 	}
 }
 
-// TestApplied_IgnoreFailures_AddsDashE — ignore_failures=true → reload через
-// `sysctl -e -p <file>` (контейнерный режим, глушит read-only ключи).
+// TestApplied_IgnoreFailures_AddsDashE — ignore_failures=true → reload via
+// `sysctl -e -p <file>` (container mode, silences read-only keys).
 func TestApplied_IgnoreFailures_AddsDashE(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")
@@ -272,7 +272,7 @@ func TestApplied_IgnoreFailures_AddsDashE(t *testing.T) {
 	}
 }
 
-// TestApplied_ReloadFails_Fails — non-zero exit reload-а → шаг падает (Failed).
+// TestApplied_ReloadFails_Fails — a non-zero reload exit code fails the step.
 func TestApplied_ReloadFails_Fails(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")
@@ -290,7 +290,7 @@ func TestApplied_ReloadFails_Fails(t *testing.T) {
 	}
 }
 
-// TestApplied_FilenameSuffix — filename без .conf → суффикс добавляется.
+// TestApplied_FilenameSuffix — filename without .conf gets the suffix appended.
 func TestApplied_FilenameSuffix(t *testing.T) {
 	dir := t.TempDir()
 	r := internaltest.NewRunner()
@@ -313,11 +313,11 @@ func TestApplied_FilenameSuffix(t *testing.T) {
 }
 
 // TestApplied_Validate_RequiredAndReloadEnum — settings/filename required;
-// reload вне enum → ошибка валидации.
+// reload outside the enum → validation error.
 func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 	m := sysctl.New()
 
-	// settings отсутствует → ok=false.
+	// settings missing → ok=false.
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "applied",
 		Params: mustStruct(t, map[string]any{"filename": "30-redis"}),
@@ -326,7 +326,7 @@ func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 		t.Fatal("Validate applied без settings: ok unexpectedly")
 	}
 
-	// reload с неизвестным значением → ok=false.
+	// reload with an unknown value → ok=false.
 	bad, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "applied",
 		Params: mustStruct(t, map[string]any{
@@ -339,7 +339,7 @@ func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 		t.Fatal("Validate applied reload=reload-pls: ok=true (должно быть отклонено)")
 	}
 
-	// валидный набор → ok=true.
+	// valid set → ok=true.
 	good, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "applied",
 		Params: mustStruct(t, map[string]any{
@@ -353,8 +353,8 @@ func TestApplied_Validate_RequiredAndReloadEnum(t *testing.T) {
 	}
 }
 
-// TestPlanApplied_Clean_NoMutation — drop-in совпадает → drift=false, без записи
-// и без reload (Scry pure-read).
+// TestPlanApplied_Clean_NoMutation — drop-in matches → drift=false, no write,
+// no reload (Scry pure-read).
 func TestPlanApplied_Clean_NoMutation(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")
@@ -383,7 +383,7 @@ func TestPlanApplied_Clean_NoMutation(t *testing.T) {
 	}
 }
 
-// TestPlanApplied_Drift — контент отличается → drift=true, Plan не пишет файл.
+// TestPlanApplied_Drift — content differs → drift=true, Plan doesn't write the file.
 func TestPlanApplied_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := dropInPath(dir, "30-redis")

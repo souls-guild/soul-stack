@@ -51,7 +51,7 @@ func assertUnchanged(t *testing.T, path string, before fileSnap) {
 	}
 }
 
-// TestPlan_Present_Match_Clean — Plan(present), файл уже совпадает → clean.
+// TestPlan_Present_Match_Clean: Plan(present), file already matches → clean.
 func TestPlan_Present_Match_Clean(t *testing.T) {
 	dir := t.TempDir()
 	name := "backup"
@@ -80,7 +80,7 @@ func TestPlan_Present_Match_Clean(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Present_Missing_Drift — Plan(present), файла нет → drift.
+// TestPlan_Present_Missing_Drift: Plan(present), file missing → drift.
 func TestPlan_Present_Missing_Drift(t *testing.T) {
 	dir := t.TempDir()
 	name := "backup"
@@ -106,7 +106,7 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_ContentDrift — содержимое отличается → drift, файл не тронут.
+// TestPlan_Present_ContentDrift: content differs → drift, file untouched.
 func TestPlan_Present_ContentDrift(t *testing.T) {
 	dir := t.TempDir()
 	name := "backup"
@@ -134,7 +134,7 @@ func TestPlan_Present_ContentDrift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_Exists_Drift — Plan(absent), файл существует → drift.
+// TestPlan_Absent_Exists_Drift: Plan(absent), file exists → drift.
 func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	dir := t.TempDir()
 	name := "backup"
@@ -158,7 +158,7 @@ func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_Missing_Clean — Plan(absent), файла нет → clean.
+// TestPlan_Absent_Missing_Clean: Plan(absent), file missing → clean.
 func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	dir := t.TempDir()
 	m := &cron.Module{Dir: dir}

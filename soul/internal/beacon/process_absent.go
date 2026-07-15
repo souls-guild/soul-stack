@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// ProcessAbsentName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// ProcessAbsentName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const ProcessAbsentName = beaconaddr.ProcessAbsent
 
 const (
@@ -17,21 +17,23 @@ const (
 	stateProcessAbsent  State = "absent"
 )
 
-// ProcessAbsent — core-beacon наблюдения за наличием процесса (ADR-030).
-// Read-only: только опрос через `pgrep` (нет kill/signal). State: "present" если
-// процесс по паттерну найден, "absent" если нет. Переход present↔absent
-// edge-triggered → Portent (типичный кейс — упавший демон).
+// ProcessAbsent is the core-beacon that observes process presence (ADR-030).
+// Read-only: polls via `pgrep` only (no kill/signal). State: "present" if a
+// process matching the pattern is found, "absent" otherwise. A
+// present↔absent transition is edge-triggered → Portent (typical case: a
+// crashed daemon).
 //
-// Через util.Runner (как core.service / core.beacon.service_down), а не скан
-// /proc: pgrep OS-агностичен (Linux/BSD), а Runner мок-абелен в unit-тестах.
+// Uses util.Runner (like core.service / core.beacon.service_down) rather
+// than scanning /proc: pgrep is OS-agnostic (Linux/BSD), and Runner is
+// mockable in unit tests.
 //
-// Param `pattern` (string, required) — имя/ERE-паттерн процесса (matches против
-// имени процесса, как `pgrep <pattern>`).
+// Param `pattern` (string, required) — process name/ERE pattern (matched
+// against the process name, like `pgrep <pattern>`).
 type ProcessAbsent struct {
 	Runner util.Runner
 }
 
-// NewProcessAbsent собирает beacon с production-Runner-ом (os/exec).
+// NewProcessAbsent builds the beacon with a production Runner (os/exec).
 func NewProcessAbsent() *ProcessAbsent { return &ProcessAbsent{Runner: util.OSRunner{}} }
 
 func (b *ProcessAbsent) Check(ctx context.Context, params *structpb.Struct) (State, *structpb.Struct, error) {
@@ -40,8 +42,8 @@ func (b *ProcessAbsent) Check(ctx context.Context, params *structpb.Struct) (Sta
 		return "", nil, err
 	}
 
-	// pgrep: exit 0 — найдено хотя бы одно совпадение; exit 1 — совпадений нет;
-	// exit ≥2 — ошибка самого pgrep (битый паттерн / нет бинаря) → ошибка Check.
+	// pgrep: exit 0 — at least one match found; exit 1 — no matches;
+	// exit ≥2 — pgrep itself errored (bad pattern / missing binary) → Check error.
 	r := b.Runner.Run(ctx, "pgrep", pattern)
 	if r.Err != nil {
 		return "", nil, fmt.Errorf("pgrep %s: %v", pattern, r.Err)

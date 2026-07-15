@@ -1,20 +1,20 @@
-// Package augur — Soul-side клиент брокера Augur (ADR-025, docs/keeper/augur.md).
+// Package augur — Soul-side client for the Augur broker (ADR-025, docs/keeper/augur.md).
 //
-// Augur даёт Soul-у живой (во время apply) доступ к внешним системам через
-// Keeper: модуль core.augur.fetch шлёт AugurRequest в EventStream и ждёт
-// коррелированный AugurReply. Транспорт — only-add сообщения в существующем
-// EventStream-е (FromSoul.augur_request / FromKeeper.augur_reply), нового RPC
-// нет (ADR-012(c)).
+// Augur gives Soul live (during apply) access to external systems through
+// Keeper: the core.augur.fetch module sends an AugurRequest over EventStream
+// and waits for a correlated AugurReply. Transport is only-add messages on
+// the existing EventStream (FromSoul.augur_request / FromKeeper.augur_reply),
+// no new RPC (ADR-012(c)).
 //
-// Клиент живёт ровно одну EventStream-сессию: pending-map коррелирует
-// in-flight-запросы по request_id, recv-loop сессии доставляет AugurReply.
-// При разрыве/закрытии сессии все ожидающие отменяются (Close) — request_id
-// уникален лишь per-stream (§5.1 augur.md), поэтому переживать reconnect ему
-// незачем.
+// The client lives exactly one EventStream session: the pending map
+// correlates in-flight requests by request_id, the session's recv-loop
+// delivers AugurReply. On session break/close all waiters are cancelled
+// (Close) — request_id is only unique per-stream (§5.1 augur.md), so there's
+// no need to survive a reconnect.
 //
-// MVP-1 (delegate=false): Soul получает значение inline через Keeper
-// (AugurReply.inline_data). Делегация (delegate=true, scoped_*) — MVP-2, здесь
-// не обрабатывается.
+// MVP-1 (delegate=false): Soul gets the value inline through Keeper
+// (AugurReply.inline_data). Delegation (delegate=true, scoped_*) is MVP-2,
+// not handled here.
 package augur
 
 import (
@@ -29,37 +29,39 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// ErrClientClosed — клиент закрыт (сессия EventStream завершилась) до того, как
-// пришёл AugurReply. Возвращается из Fetch ожидающим запросам при Close.
+// ErrClientClosed — client closed (EventStream session ended) before an
+// AugurReply arrived. Returned by Fetch to waiting callers on Close.
 var ErrClientClosed = errors.New("augur: клиент закрыт (EventStream-сессия завершена)")
 
-// ErrDenied — Augur отказал в доступе (AugurStatus DENIED либо защитная
-// трактовка UNSPECIFIED как deny, §5.1 augur.md). Несёт причину от Keeper-а
-// без секретного материала.
+// ErrDenied — Augur denied access (AugurStatus DENIED, or UNSPECIFIED
+// defensively treated as deny, §5.1 augur.md). Carries the reason from
+// Keeper without any secret material.
 var ErrDenied = errors.New("augur: доступ запрещён")
 
-// ErrRemote — сбой исполнения на стороне Keeper-а/Omen (AugurStatus ERROR).
+// ErrRemote — execution failure on the Keeper/Omen side (AugurStatus ERROR).
 var ErrRemote = errors.New("augur: ошибка исполнения на Keeper-е")
 
-// requestSender — узкая поверхность EventStream-сессии, нужная клиенту: только
-// отправка FromSoul. Выделена ради тестируемости без живого gRPC и чтобы клиент
-// не зависел от soul/internal/grpc (тот зависит от runtime — циклов избегаем).
+// requestSender — the narrow EventStream-session surface the client needs:
+// just sending FromSoul. Kept separate for testability without a live gRPC
+// connection, and so the client doesn't depend on soul/internal/grpc (which
+// depends on runtime — avoids an import cycle).
 //
-// Не concurrent-safe у реальной сессии (один writer на bidi-stream); клиент
-// сериализует Send под sendMu.
+// Not concurrent-safe on the real session (one writer per bidi-stream); the
+// client serializes Send under sendMu.
 type requestSender interface {
 	SendFromSoul(*keeperv1.FromSoul) error
 }
 
-// Client — Augur-клиент одной EventStream-сессии.
+// Client — Augur client for a single EventStream session.
 //
-// Один writer (sendMu сериализует Send в stream — bidi-stream не допускает
-// concurrent Send). Доставку AugurReply делает recv-loop сессии через Deliver:
-// он НЕ блокируется (буферизованный канал на 1 + неблокирующая запись).
+// One writer (sendMu serializes Send on the stream — bidi-stream doesn't
+// allow concurrent Send). AugurReply delivery happens via the session's
+// recv-loop calling Deliver: it does NOT block (buffered channel of size 1 +
+// non-blocking write).
 type Client struct {
 	sender requestSender
-	// entropy — монотонный источник для ULID request_id. Под sendMu (генерация
-	// идёт в момент отправки) — отдельного мьютекса не нужно.
+	// entropy — monotonic source for ULID request_id. Covered by sendMu
+	// (generation happens at send time) — no separate mutex needed.
 	entropy *ulid.MonotonicEntropy
 
 	sendMu sync.Mutex
@@ -69,8 +71,9 @@ type Client struct {
 	closed  bool
 }
 
-// NewClient собирает клиент поверх EventStream-сессии. Источник энтропии для
-// request_id монотонный (lexically-sortable, без коллизий в пределах сессии).
+// NewClient builds a client on top of an EventStream session. The entropy
+// source for request_id is monotonic (lexically sortable, collision-free
+// within a session).
 func NewClient(sender requestSender) *Client {
 	return &Client{
 		sender:  sender,
@@ -79,20 +82,20 @@ func NewClient(sender requestSender) *Client {
 	}
 }
 
-// Fetch шлёт AugurRequest и блокируется до коррелированного AugurReply, отмены
-// ctx или закрытия клиента. Возвращает inline_data (delegate=false, §5.3) при
-// OK; ErrDenied/ErrRemote/ErrClientClosed иначе.
+// Fetch sends an AugurRequest and blocks until the correlated AugurReply, ctx
+// cancellation, or client close. Returns inline_data (delegate=false, §5.3)
+// on OK; ErrDenied/ErrRemote/ErrClientClosed otherwise.
 //
-// request_id генерируется здесь (Soul-side ULID, уникален per-stream, §5.1).
-// pending-канал регистрируется ДО Send — иначе быстрый AugurReply мог бы прийти
-// в recv-loop раньше регистрации и потеряться.
+// request_id is generated here (Soul-side ULID, unique per-stream, §5.1). The
+// pending channel is registered BEFORE Send — otherwise a fast AugurReply
+// could arrive at the recv-loop before registration and get lost.
 func (c *Client) Fetch(ctx context.Context, applyID, omen, query string) (*keeperv1.AugurReply, error) {
 	reqID, replyCh, err := c.register()
 	if err != nil {
 		return nil, err
 	}
-	// Снимаем регистрацию при любом исходе — таймаут/отмена/доставка. Без этого
-	// pending-map протекал бы на отменённых запросах.
+	// Unregister on any outcome — timeout/cancel/delivery. Without this the
+	// pending map would leak on cancelled requests.
 	defer c.discard(reqID)
 
 	req := &keeperv1.FromSoul{
@@ -114,18 +117,19 @@ func (c *Client) Fetch(ctx context.Context, applyID, omen, query string) (*keepe
 		return nil, ctx.Err()
 	case reply, ok := <-replyCh:
 		if !ok {
-			// Канал закрыт из Close — сессия порвалась, ответа не будет.
+			// Channel closed by Close — session broke, no reply is coming.
 			return nil, ErrClientClosed
 		}
 		return classify(reply)
 	}
 }
 
-// Deliver вызывается recv-loop-ом сессии при FromKeeper.augur_reply. НЕ
-// блокируется: находит pending-канал по request_id и пишет в него неблокирующе
-// (канал буферизован на 1, единственный потребитель Fetch уже ждёт либо ушёл по
-// таймауту — во втором случае default отбрасывает поздний ответ). Возвращает
-// true, если ответ был кому доставлен (для диагностики «осиротевший reply»).
+// Deliver is called by the session's recv-loop on FromKeeper.augur_reply. It
+// does NOT block: looks up the pending channel by request_id and writes to it
+// non-blocking (channel buffered to 1; the sole consumer Fetch is either
+// already waiting or has timed out — in the latter case default drops the
+// late reply). Returns true if the reply was delivered to someone (for
+// "orphaned reply" diagnostics).
 func (c *Client) Deliver(reply *keeperv1.AugurReply) bool {
 	if reply == nil {
 		return false
@@ -140,15 +144,15 @@ func (c *Client) Deliver(reply *keeperv1.AugurReply) bool {
 	case ch <- reply:
 		return true
 	default:
-		// Потребитель уже ушёл (таймаут/cancel) — поздний ответ отбрасываем,
-		// recv-loop не блокируется.
+		// Consumer already gone (timeout/cancel) — drop the late reply,
+		// recv-loop doesn't block.
 		return false
 	}
 }
 
-// Close закрывает клиент: будущие Fetch отвергаются, все ожидающие получают
-// ErrClientClosed (закрытие их каналов). Вызывается при завершении сессии
-// EventStream. Идемпотентен.
+// Close closes the client: future Fetch calls are rejected, all waiters get
+// ErrClientClosed (by closing their channels). Called when the EventStream
+// session ends. Idempotent.
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -162,9 +166,9 @@ func (c *Client) Close() {
 	}
 }
 
-// register генерирует request_id и регистрирует pending-канал. Канал
-// буферизован на 1 — Deliver пишет неблокирующе даже если Fetch уже на грани
-// select. Ошибка — только если клиент закрыт.
+// register generates a request_id and registers the pending channel. The
+// channel is buffered to 1 — Deliver writes non-blocking even if Fetch
+// hasn't reached select yet. Errors only if the client is closed.
 func (c *Client) register() (string, <-chan *keeperv1.AugurReply, error) {
 	ch := make(chan *keeperv1.AugurReply, 1)
 	c.mu.Lock()
@@ -172,9 +176,9 @@ func (c *Client) register() (string, <-chan *keeperv1.AugurReply, error) {
 	if c.closed {
 		return "", nil, ErrClientClosed
 	}
-	// ULID под mu (entropy мутируется монотонным генератором). Коллизия в
-	// пределах сессии исключена монотонностью; перегенерация на случай
-	// маловероятного дубля в map — defensive.
+	// ULID generated under mu (entropy is mutated by the monotonic generator).
+	// Collisions within a session are ruled out by monotonicity; regenerating
+	// on an unlikely map dup is defensive.
 	var id string
 	for {
 		id = ulid.MustNew(ulid.Now(), c.entropy).String()
@@ -186,30 +190,31 @@ func (c *Client) register() (string, <-chan *keeperv1.AugurReply, error) {
 	return id, ch, nil
 }
 
-// discard снимает pending-канал (Fetch завершился по таймауту/cancel/доставке).
-// Безопасен при уже закрытом клиенте (Close мог удалить запись).
+// discard removes the pending channel (Fetch finished via timeout/cancel/
+// delivery). Safe if the client is already closed (Close may have removed
+// the entry).
 func (c *Client) discard(reqID string) {
 	c.mu.Lock()
 	delete(c.pending, reqID)
 	c.mu.Unlock()
 }
 
-// send сериализует отправку FromSoul (bidi-stream — один writer).
+// send serializes FromSoul sends (bidi-stream — single writer).
 func (c *Client) send(msg *keeperv1.FromSoul) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	return c.sender.SendFromSoul(msg)
 }
 
-// classify интерпретирует AugurReply. UNSPECIFIED трактуется как DENIED
-// (default-deny, §5.1 augur.md): отсутствие явного OK — запрет. delegate=true
-// результаты (scoped_*) — MVP-2; в MVP-1 при OK ожидается inline_data.
+// classify interprets an AugurReply. UNSPECIFIED is treated as DENIED
+// (default-deny, §5.1 augur.md): no explicit OK means denied. delegate=true
+// results (scoped_*) are MVP-2; MVP-1 expects inline_data on OK.
 func classify(reply *keeperv1.AugurReply) (*keeperv1.AugurReply, error) {
 	switch reply.GetStatus() {
 	case keeperv1.AugurStatus_AUGUR_STATUS_OK:
 		if reply.GetInlineData() == nil {
-			// OK без inline_data в MVP-1 — это либо delegate=true (не поддержан
-			// здесь), либо рассогласование с Keeper-ом. Не молчим, явная ошибка.
+			// OK without inline_data in MVP-1 means either delegate=true (not
+			// supported here) or a Keeper mismatch. Fail loud, not silent.
 			return nil, fmt.Errorf("augur: OK без inline_data (delegate=true не поддержан в MVP-1)")
 		}
 		return reply, nil
@@ -218,14 +223,14 @@ func classify(reply *keeperv1.AugurReply) (*keeperv1.AugurReply, error) {
 	case keeperv1.AugurStatus_AUGUR_STATUS_ERROR:
 		return nil, wrapReason(ErrRemote, reply.GetError())
 	default:
-		// UNSPECIFIED и любой неизвестный статус — deny (защита).
+		// UNSPECIFIED and any unknown status — deny (defensive).
 		return nil, wrapReason(ErrDenied, reply.GetError())
 	}
 }
 
-// wrapReason добавляет причину Keeper-а к sentinel-ошибке, если она есть.
-// Причина приходит от Keeper-а без секрета (§8 augur.md: значения/токены в
-// диагностику не пишутся).
+// wrapReason appends the Keeper's reason to the sentinel error, if present.
+// The reason comes from Keeper without any secret (§8 augur.md: values/
+// tokens are never written to diagnostics).
 func wrapReason(base error, reason string) error {
 	if reason == "" {
 		return base

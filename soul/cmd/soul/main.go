@@ -1,27 +1,27 @@
-// Package main — entrypoint бинаря `soul` под ADR-004 / ADR-011 / ADR-012.
+// Package main is the entrypoint for the `soul` binary under ADR-004 / ADR-011 / ADR-012.
 //
-// Subcommand-router на stdlib `flag`:
+// Subcommand router on stdlib `flag`:
 //
 //	soul init  --token=<bootstrap-token> [--config=<path>] [--sid=<sid>]
 //	soul run                            [--config=<path>]
 //	soul apply                          [--config=<path>]
 //	soul help
 //
-// `init` — единократный bootstrap-цикл (ADR-012(b)): генерация key+CSR →
-// unary Bootstrap RPC к Keeper → запись SoulSeed на диск. Bootstrap-токен
-// берётся из --token ИЛИ из env SOUL_BOOTSTRAP_TOKEN (флаг побеждает env).
-// Env-форма предпочтительнее: флаг светится в `ps` и shell-history, env — нет.
+// `init` — one-shot bootstrap cycle (ADR-012(b)): generate key+CSR →
+// unary Bootstrap RPC to Keeper → write SoulSeed to disk. Bootstrap token
+// comes from --token OR env SOUL_BOOTSTRAP_TOKEN (flag wins over env).
+// The env form is preferred: the flag shows up in `ps` and shell history, env doesn't.
 //
-// `run` — долгоживущий демон-loop: load SoulSeed → Discover custom-плагинов
-// → собрать Registry (core + custom) → dial EventStream к Keeper → recv-loop
+// `run` — long-lived daemon loop: load SoulSeed → discover custom plugins
+// → build Registry (core + custom) → dial EventStream to Keeper → recv-loop
 // + dispatch ApplyRequest → ApplyRunner → send TaskEvent / RunResult.
-// Reconnect при разрыве — внутренний loop с экспоненциальным backoff.
+// Reconnect on disconnect — internal loop with exponential backoff.
 //
-// `apply` — push-oneshot режим (ADR-004): читает отрендеренный ApplyRequest
-// (protojson) из stdin → собирает Registry (core + custom) → ApplyRunner →
-// пишет поток TaskEvent + финальный RunResult в stdout как NDJSON (protojson).
-// exit 0 при RunResult.status==success, 1 иначе. SoulSeed/mTLS не требуется —
-// доверие обеспечивает аутентифицированный Архонт + SSH-канал от Keeper-а.
+// `apply` — push-oneshot mode (ADR-004): reads a rendered ApplyRequest
+// (protojson) from stdin → builds Registry (core + custom) → ApplyRunner →
+// writes a stream of TaskEvent + final RunResult to stdout as NDJSON (protojson).
+// exit 0 on RunResult.status==success, 1 otherwise. No SoulSeed/mTLS required —
+// trust comes from the authenticated Archon + SSH channel from Keeper.
 package main
 
 import (
@@ -66,32 +66,32 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// envBootstrapToken — env-var с bootstrap-токеном для `soul init`,
-// безопасная альтернатива --token (флаг виден в `ps`/shell-history).
+// envBootstrapToken is the env var carrying the bootstrap token for `soul init`,
+// a safer alternative to --token (the flag is visible in `ps`/shell history).
 const envBootstrapToken = "SOUL_BOOTSTRAP_TOKEN"
 
 const (
 	defaultConfigPath = "/etc/soul/soul.yml"
-	// defaultSoulMetricsListen — loopback по умолчанию для `/metrics`
-	// (docs/soul/config.md → metrics.listen). Loopback, чтобы метрик-порт не
-	// торчал наружу — главная защита Soul-метрик в этом slice (auth отложен).
+	// defaultSoulMetricsListen is the default loopback address for `/metrics`
+	// (docs/soul/config.md → metrics.listen). Loopback keeps the metrics port
+	// from facing outward — the main protection for Soul metrics in this slice (auth deferred).
 	defaultSoulMetricsListen = "127.0.0.1:9091"
 )
 
-// leaseHeldBackoffCap — модест-cap reconnect-backoff для lease-held ветки
-// (Dial отвергнут AlreadyExists: SID-lease ещё держит живой holder, см.
-// soulgrpc.IsLeaseHeld). Намеренно мал и НЕ конфигурируем: после краха keeper-а
-// presence истекает за ~30s, после чего force-release освобождает lease — Soul
-// обязан переподключиться в пределах нескольких секунд, а не ждать общий
-// transport-cap (keeper.retry.backoff.max, десятки секунд). Значение не доводим
-// до конфиг-ключа: это внутренний инвариант recovery-latency, а не оператор-tunable.
+// leaseHeldBackoffCap is a modest reconnect-backoff cap for the lease-held branch
+// (Dial rejected with AlreadyExists: the SID lease still holds a live holder, see
+// soulgrpc.IsLeaseHeld). Deliberately small and NOT configurable: after a keeper
+// crash presence expires in ~30s, after which force-release frees the lease — Soul
+// must reconnect within a few seconds, not wait out the general
+// transport cap (keeper.retry.backoff.max, tens of seconds). Not promoted to a
+// config key: it's an internal recovery-latency invariant, not an operator tunable.
 const leaseHeldBackoffCap = 3 * time.Second
 
-// soulVersion печатается в Hello.soul_version и BootstrapRequest.soul_version
-// для аудита. Значение по умолчанию — для `go run`/IDE-сборок; в релизных
-// сборках перезаписывается линкером через `-ldflags "-X ...soulVersion=<ver>"`
-// (см. Makefile, переменная VERSION). Именно `var`, а не `const`, потому что
-// `-X` умеет инжектить только в package-level string-переменные.
+// soulVersion is reported in Hello.soul_version and BootstrapRequest.soul_version
+// for auditing. The default is for `go run`/IDE builds; release builds
+// overwrite it via the linker with `-ldflags "-X ...soulVersion=<ver>"`
+// (see Makefile, VERSION variable). It's a `var`, not a `const`, because
+// `-X` can only inject into package-level string variables.
 var soulVersion = "0.0.0-dev"
 
 const (
@@ -142,10 +142,10 @@ Commands:
 Run "soul <command> --help" for command-specific flags.`)
 }
 
-// resolveInitToken выбирает bootstrap-токен по precedence: явный --token
-// побеждает env SOUL_BOOTSTRAP_TOKEN (флаг = override). Пустой --token → env.
-// Оба пусты → ошибка (хотя бы один источник обязателен). Env-форма безопаснее:
-// --token виден в `ps`/shell-history, env — нет.
+// resolveInitToken picks the bootstrap token by precedence: explicit --token
+// wins over env SOUL_BOOTSTRAP_TOKEN (flag overrides). Empty --token → env.
+// Both empty → error (at least one source is required). The env form is safer:
+// --token is visible in `ps`/shell history, env isn't.
 func resolveInitToken(flagToken string) (string, error) {
 	if flagToken != "" {
 		return flagToken, nil
@@ -156,8 +156,8 @@ func resolveInitToken(flagToken string) (string, error) {
 	return "", fmt.Errorf("soul init: provide token via --token or %s", envBootstrapToken)
 }
 
-// runInit парсит флаги, поднимает зависимости (config), вызывает
-// bootstrap.Run и печатает итоги.
+// runInit parses flags, brings up dependencies (config), calls
+// bootstrap.Run, and prints the result.
 func runInit(args []string) int {
 	var (
 		configPath string
@@ -194,10 +194,10 @@ func runInit(args []string) int {
 	}
 	logger := shlog.New(shlog.FromSoul(cfg.Logging))
 
-	// Bootstrap-фаза бьёт в bootstrap_port; перебор хостов упорядочен по
-	// priority, без in-group shuffle — bootstrap one-shot, порядок
-	// детерминирован (spray есть только в EventStream-клиенте). failback
-	// к bootstrap неприменим (one-shot). См. docs/soul/connection.md.
+	// The bootstrap phase hits bootstrap_port; hosts are tried in priority
+	// order, no in-group shuffle — bootstrap is one-shot, order is
+	// deterministic (spray only applies to the EventStream client). Failback
+	// doesn't apply to bootstrap (one-shot). See docs/soul/connection.md.
 	endpoints := make([]string, 0, len(cfg.Keeper.Endpoints))
 	for _, ep := range orderedByPriority(cfg.Keeper.Endpoints) {
 		endpoints = append(endpoints, ep.BootstrapAddr())
@@ -209,7 +209,7 @@ func runInit(args []string) int {
 		return exitError
 	}
 
-	// --sid флаг > config.sid > os.Hostname (резолв ниже в bootstrap.Run).
+	// --sid flag > config.sid > os.Hostname (resolved below in bootstrap.Run).
 	if sid == "" {
 		sid = cfg.SID
 	}
@@ -241,14 +241,14 @@ func runInit(args []string) int {
 
 // runDaemon — `soul run`.
 //
-// Жизненный цикл:
+// Lifecycle:
 //  1. Load config + load SoulSeed (cert/key/ca).
-//  2. Discover custom-плагинов в paths.modules (warnings logged, не fatal).
-//  3. Сборка Registry: coremod.Default() — single source для MVP.
-//     (custom-modules через pluginhost — wire-up для discovery'я,
-//     dispatch к ним — Plugin.d / M2.3).
-//  4. Reconnect-loop: Dial → recv-loop → дисконнект → backoff → retry.
-//     SIGINT/SIGTERM прерывают loop.
+//  2. Discover custom plugins under paths.modules (warnings logged, not fatal).
+//  3. Build Registry: coremod.Default() — single source for MVP.
+//     (custom modules go through pluginhost — wired up for discovery,
+//     dispatch to them is Plugin.d / M2.3).
+//  4. Reconnect loop: Dial → recv-loop → disconnect → backoff → retry.
+//     SIGINT/SIGTERM interrupt the loop.
 func runDaemon(args []string) int {
 	var configPath string
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -265,10 +265,10 @@ func runDaemon(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	// Store вместо плоского loadSoulConfig (ADR-021 hot-reload): даёт снимок
-	// для стартового wire-up + перечитывается по SIGHUP. reconnect-loop и
-	// soulprint-ticker читают store.Get() в точке использования, поэтому
-	// next-iteration видит новые keeper.retry/failback + soulprint.refresh_interval.
+	// Store instead of the flat loadSoulConfig (ADR-021 hot-reload): gives a snapshot
+	// for startup wire-up and is re-read on SIGHUP. reconnect-loop and the
+	// soulprint ticker read store.Get() at point of use, so the
+	// next iteration sees updated keeper.retry/failback + soulprint.refresh_interval.
 	store, diags, err := config.LoadSoulStore(configPath, config.ValidateOptions{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: load config %q: %v\n", configPath, err)
@@ -290,20 +290,20 @@ func runDaemon(args []string) int {
 	}
 	logger, logLevel := shlog.NewWithLevel(shlog.FromSoul(cfg.Logging))
 
-	// Hot-reload `logging.level` (ADR-021): сдвигаем порог логирования по
-	// новому снимку на каждый успешный Store-swap. file/format/rotation —
-	// restart-required (docs/soul/config.md), их не трогаем.
+	// Hot-reload `logging.level` (ADR-021): shift the log threshold to the
+	// new snapshot on every successful Store swap. file/format/rotation are
+	// restart-required (docs/soul/config.md), left untouched.
 	store.OnReload(func(_, newCfg *config.SoulConfig) {
 		if newCfg != nil {
 			logLevel.Set(newCfg.Logging.Level)
 		}
 	})
 
-	// SIGHUP-reload (ADR-021(b)): отдельный signal-канал внутри WatchSIGHUP,
-	// SIGHUP не путается с SIGINT/SIGTERM из signalContext. Запускается только
-	// при hot_reload.enable_signal (default true). push-режим (soul apply)
-	// hot-reload не касается — это one-shot. Audit на стороне Soul нет
-	// (нет audit_log-БД), reload только логируется.
+	// SIGHUP reload (ADR-021(b)): separate signal channel inside WatchSIGHUP,
+	// SIGHUP doesn't get mixed up with SIGINT/SIGTERM from signalContext. Only
+	// runs when hot_reload.enable_signal (default true). Push mode (soul apply)
+	// is unaffected by hot-reload — it's one-shot. No audit on the Soul side
+	// (no audit_log DB), reload is only logged.
 	if cfg.HotReload.SignalEnabled() {
 		reloadCh := config.WatchSIGHUP(ctx, store)
 		go config.LogReloads(reloadCh, logger)
@@ -312,8 +312,8 @@ func runDaemon(args []string) int {
 		logger.Info("soul run: SIGHUP config reload disabled (hot_reload.enable_signal=false)")
 	}
 
-	// SoulSeed — load до всего остального: если bootstrap не выполнен,
-	// дальше идти бессмысленно. Чёткое сообщение «run soul init».
+	// SoulSeed — load before everything else: if bootstrap hasn't run,
+	// there's no point continuing. Clear message: "run soul init".
 	seedPaths := seed.PathsIn(cfg.Paths.Seed)
 	seedMaterial, err := seed.Load(cfg.Paths.Seed)
 	if err != nil {
@@ -327,38 +327,38 @@ func runDaemon(args []string) int {
 		return exitError
 	}
 
-	// Набор trust-anchor-ов verify Sigil (ADR-026(h), R3 multi-anchor): парсим
-	// sigil_pubkey.pem из seed-а — он может нести несколько PEM-блоков подряд
-	// (multi-anchor для безразрывной ротации ключа подписи). Пусто (Sigil
-	// выключен на Keeper) → пустой набор: verify любого custom-плагина
-	// fail-closed по no_trust_anchor. Битый PEM → отказ старта (не молчаливое
-	// fail-open). Core-модули статические — verify не проходят, не затронуты.
+	// Sigil-verify trust-anchor set (ADR-026(h), R3 multi-anchor): parse
+	// sigil_pubkey.pem from the seed — it may carry several concatenated PEM
+	// blocks (multi-anchor for seamless signing-key rotation). Empty (Sigil
+	// disabled on Keeper) → empty set: any custom-plugin verify
+	// fail-closed on no_trust_anchor. Broken PEM → refuse to start (no silent
+	// fail-open). Core modules are static — don't go through verify, unaffected.
 	sigilAnchors, err := seed.ParseSigilPubKeys(seedMaterial.SigilPubKeyPEM)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
 	}
 
-	// Sigil-кеш (ADR-026, S6a) живёт на runtime-уровне Soul — создаётся один
-	// раз здесь, вне reconnect-loop, поэтому допуски плагинов переживают разрыв
-	// и переустановку EventStream-а. Keeper рассылает PluginSigil broadcast-ом
-	// при подключении; recv-loop в handleSession складывает их сюда. Verify
-	// против кеша — S6b (через SigilLookupAdapter в pluginhost.Host).
+	// The Sigil cache (ADR-026, S6a) lives at Soul's runtime level — created once
+	// here, outside the reconnect loop, so plugin grants survive an EventStream
+	// disconnect and re-establishment. Keeper broadcasts PluginSigil on
+	// connect; the recv-loop in handleSession stores them here. Verify
+	// against the cache is S6b (via SigilLookupAdapter in pluginhost.Host).
 	sigils := sigilcache.New()
 
 	// Custom-modules discovery + lazy-spawn wire-up (ADR-020(d): one-shot per
-	// Apply). Warnings — non-fatal: core MVP остаётся работоспособным без
-	// custom-плагинов. Сам Host создаётся даже при пустом списке плагинов —
-	// это дёшево, упрощает code path при отсутствии paths.modules. Trust-anchor
-	// + кеш-адаптер прокидываются в Host для fail-closed Sigil-verify плагинов.
+	// Apply). Warnings are non-fatal: core MVP stays functional without
+	// custom plugins. The Host itself is created even with an empty plugin list —
+	// it's cheap and simplifies the code path when paths.modules is unset. Trust-anchor
+	// + cache adapter are threaded into Host for fail-closed Sigil-verify of plugins.
 	registry, anchorSet, beaconLookup, err := buildRegistry(cfg, logger, "soul run", sigilAnchors, pluginhost.NewSigilLookupAdapter(sigils))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
 	}
 
-	// EventStream-фаза бьёт в event_stream_port; priority + spray-shuffle
-	// сохраняются (docs/soul/connection.md).
+	// The EventStream phase hits event_stream_port; priority + spray-shuffle
+	// still apply (docs/soul/connection.md).
 	endpoints := make([]soulgrpc.Endpoint, 0, len(cfg.Keeper.Endpoints))
 	for _, ep := range cfg.Keeper.Endpoints {
 		endpoints = append(endpoints, soulgrpc.Endpoint{Addr: ep.EventStreamAddr(), Priority: ep.Priority})
@@ -374,18 +374,18 @@ func runDaemon(args []string) int {
 		return exitError
 	}
 
-	// Per-endpoint retry (keeper.retry.max_attempts) + плоская inter-attempt пауза
-	// = reuse backoff.initial/jitter (никаких новых конфиг-ключей). backoff здесь
-	// нужен только для статической сборки ClientConfig; reconnectLoop читает свой
-	// snapshot из store per-iteration (hot-reload).
+	// Per-endpoint retry (keeper.retry.max_attempts) + a flat inter-attempt pause
+	// = reuse backoff.initial/jitter (no new config keys). backoff here is
+	// only needed for the static ClientConfig build; reconnectLoop reads its own
+	// snapshot from the store per iteration (hot-reload).
 	clientBackoff, err := loadBackoff(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
 	}
-	// SID-резолв: config.sid > os.Hostname (lowercased). Lowercase симметричен
-	// bootstrap.Run (bootstrap.go) — иначе хост с MixedCase-hostname получит на
-	// init и run разный SID. `soul run` не имеет --sid флага (в отличие от init).
+	// SID resolution: config.sid > os.Hostname (lowercased). Lowercasing mirrors
+	// bootstrap.Run (bootstrap.go) — otherwise a host with a MixedCase hostname would get
+	// different SIDs on init vs run. `soul run` has no --sid flag (unlike init).
 	sid := cfg.SID
 	if sid == "" {
 		host, err := os.Hostname()
@@ -396,11 +396,11 @@ func runDaemon(args []string) int {
 		sid = strings.ToLower(strings.TrimSpace(host))
 	}
 
-	// Observability-стек (ADR-024). Registry шарится между exposition-handler-ом
-	// `/metrics` и инструментацией подсистем (apply-цикл / EventStream-клиент /
-	// soulprint-коллектор). Регистрируем soul_*-collectors сразу — дескрипторы
-	// прокидываются в подсистемы ниже. docs/observability.md §4.0: collector
-	// живёт рядом с подсистемой, register — на soul-registry.
+	// Observability stack (ADR-024). The Registry is shared between the `/metrics`
+	// exposition handler and subsystem instrumentation (apply cycle / EventStream
+	// client / soulprint collector). Register soul_*-collectors right away — the
+	// handles are threaded into the subsystems below. docs/observability.md §4.0: the
+	// collector lives next to its subsystem, registration happens on the soul-registry.
 	reg := obs.NewRegistry()
 	applyMetrics := runtime.RegisterApplyMetrics(reg)
 	eventStreamMetrics := soulgrpc.RegisterEventStreamMetrics(reg)
@@ -408,15 +408,15 @@ func runDaemon(args []string) int {
 	beaconMetrics := beacon.RegisterBeaconMetrics(reg)
 	errandMetrics := errandrunner.Register(reg)
 
-	// `/metrics` — listener на cfg.Metrics.Listen (loopback 127.0.0.1:9091
-	// по умолчанию). Опц. HTTP Basic-auth через metrics.basic_auth: пароль
-	// читается из файла на диске (у Soul нет vault-клиента, ADR-012). Без
-	// basic-auth защита эндпоинта — loopback-bind. Опционален: при
-	// metrics.enabled=false listener не поднимается.
+	// `/metrics` — listener on cfg.Metrics.Listen (loopback 127.0.0.1:9091
+	// by default). Optional HTTP Basic-auth via metrics.basic_auth: the password
+	// is read from a file on disk (Soul has no vault client, ADR-012). Without
+	// basic-auth, the endpoint's only protection is the loopback bind. Optional: with
+	// metrics.enabled=false the listener isn't started.
 	if cfg.Metrics != nil && cfg.Metrics.Enabled {
-		// Default loopback-адрес (docs/soul/config.md → metrics.listen),
-		// если оператор включил метрики, но не задал listen — config-парсер
-		// defaults не инжектит, применяем здесь.
+		// Default loopback address (docs/soul/config.md → metrics.listen)
+		// for when the operator enables metrics but doesn't set listen — the
+		// config parser doesn't inject defaults, apply it here.
 		metricsListen := cfg.Metrics.Listen
 		if metricsListen == "" {
 			metricsListen = defaultSoulMetricsListen
@@ -445,9 +445,9 @@ func runDaemon(args []string) int {
 		logger.Info("soul run: metrics listener disabled (metrics.enabled=false or unset)")
 	}
 
-	// OTel-провайдер (ADR-024): service.name="soul" + кастомный soulstack.sid.
-	// Trace-export при otel.enabled+endpoint; иначе no-op. Setup один раз за
-	// процесс — otel.* restart-required (hot-reload его не трогает).
+	// OTel provider (ADR-024): service.name="soul" + custom soulstack.sid.
+	// Trace export when otel.enabled+endpoint; no-op otherwise. Set up once per
+	// process — otel.* is restart-required (hot-reload doesn't touch it).
 	otelProvider, err := obs.SetupOTel(ctx, obs.OTelConfig{
 		Enabled:       cfg.OTel != nil && cfg.OTel.Enabled,
 		Endpoint:      soulOTelEndpoint(cfg.OTel),
@@ -486,16 +486,16 @@ func runDaemon(args []string) int {
 
 	runner := runtime.NewApplyRunner(registry, applyMetrics)
 
-	// Errand-runner (ADR-033): pull-ad-hoc exec одиночного модуля. Тот же
-	// Registry, что у applyrunner — core + plugin через CompositeRegistry. Per-
-	// process: stateless, переживает reconnect/swap (как ApplyRunner). Concurrent-
-	// safe (Errand-ы не сериализуются на Soul, в отличие от apply, ADR-012(a)).
+	// Errand runner (ADR-033): pull-based ad-hoc exec of a single module. Same
+	// Registry as applyrunner — core + plugin via CompositeRegistry. Per-
+	// process: stateless, survives reconnect/swap (like ApplyRunner). Concurrent-
+	// safe (Errands aren't serialized on Soul, unlike apply, ADR-012(a)).
 	errandRunner := errandrunner.New(registry, logger, errandMetrics)
 
-	// Beacon-scheduler (ADR-030 S1) — per-process, как ApplyRunner: набор Vigil
-	// и их last-state переживают reconnect/swap. Безвреден без Vigil (ничего не
-	// делает до первого VigilSnapshot). Активный набор едет через handleSession
-	// (ReplaceAll), поднятые Portent уходят writer-loop-ом той же сессии.
+	// Beacon scheduler (ADR-030 S1) — per-process, like ApplyRunner: the set of
+	// Vigils and their last-state survive reconnect/swap. Harmless without Vigils
+	// (does nothing until the first VigilSnapshot). The active set is delivered via
+	// handleSession (ReplaceAll), raised Portents go out through the same session's writer-loop.
 	scheduler := beacon.NewScheduler(beacon.SchedulerConfig{
 		Registry: beaconLookup,
 		SID:      sid,
@@ -504,10 +504,10 @@ func runDaemon(args []string) int {
 	})
 	defer scheduler.Stop()
 
-	// Стартовая валидация keeper.retry/failback/soulprint.refresh_interval —
-	// fail-fast при кривом конфиге на старте. После старта эти значения
-	// перечитываются из store.Get() per-iteration (reconnect-loop /
-	// soulprint-ticker), поэтому SIGHUP-reload меняет их без рестарта.
+	// Startup validation of keeper.retry/failback/soulprint.refresh_interval —
+	// fail-fast on a broken config at startup. After startup these values
+	// are re-read from store.Get() per iteration (reconnect-loop /
+	// soulprint ticker), so SIGHUP reload updates them without a restart.
 	if _, err := loadBackoff(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
@@ -524,17 +524,17 @@ func runDaemon(args []string) int {
 	sp := soulprintPusher{
 		collector: soulprint.NewCollector(soulprint.NewSystemSource(), soulprintMetrics),
 		sid:       sid,
-		// interval не фиксируем здесь: handleSession читает актуальное
-		// soulprint.refresh_interval из store на старте каждой сессии (hot-reload).
+		// interval isn't fixed here: handleSession reads the current
+		// soulprint.refresh_interval from the store at the start of each session (hot-reload).
 	}
 
-	// Soulprint-факт → core-модули (Вариант A, ADR-018(b)): собираем снимок хоста
-	// один раз на старте и инжектим в ApplyRunner. core.pkg/core.service читают
-	// pkg_mgr/init_system из факта (primary), это убирает падение на alpine с
-	// openrc-soulprint без openrc-tools (BUG-B) и даёт единый source-of-truth с
-	// CEL `soulprint.self.os.*`. Факт периодически пере-собирается для Keeper-а
-	// (soulprintPusher), но для backend-выбора достаточно старта: pkg_mgr/
-	// init_system хоста за время жизни процесса не меняются.
+	// Soulprint facts → core modules (Variant A, ADR-018(b)): collect a host
+	// snapshot once at startup and inject it into ApplyRunner. core.pkg/core.service read
+	// pkg_mgr/init_system from the facts (primary), which fixes the crash on alpine with
+	// openrc-soulprint without openrc-tools (BUG-B) and gives a single source-of-truth with
+	// CEL `soulprint.self.os.*`. The facts are periodically re-collected for Keeper
+	// (soulprintPusher), but for backend selection the startup snapshot suffices: host
+	// pkg_mgr/init_system don't change over the process lifetime.
 	runner.SetHostFacts(hostFactsFromSoulprint(sp.collector.Collect(ctx, sid)))
 
 	logger.Info("soul run: ready", slog.String("sid", sid), slog.Int("endpoints", len(endpoints)))
@@ -543,26 +543,26 @@ func runDaemon(args []string) int {
 	return exitOK
 }
 
-// buildRegistry собирает Registry модулей (core + custom) — общий код pull и
-// push. core всегда доступен; custom discovery идёт по cfg.Paths.Modules,
-// warnings — non-fatal. logPrefix различает источник вызова в логах
+// buildRegistry assembles the module Registry (core + custom) — shared code for pull
+// and push. core is always available; custom discovery walks cfg.Paths.Modules,
+// warnings are non-fatal. logPrefix distinguishes the call site in logs
 // ("soul run" / "soul apply").
 //
-// anchors + sigils — DI verify Sigil (ADR-026(h), R3 multi-anchor) в
-// pluginhost.Host: custom-плагины проходят fail-closed verify перед Spawn. В
-// pull (`soul run`) прокидываются НАБОР trust-anchor-ов из seed-а и адаптер
-// runtime-кеша; в push (`soul apply`) — пустой набор и nil-lookup (broadcast-кеша
-// Sigil в push нет), custom-плагины fail-closed, core MVP работает (статические
-// модули verify не проходят).
+// anchors + sigils are DI for Sigil verify (ADR-026(h), R3 multi-anchor) in
+// pluginhost.Host: custom plugins go through fail-closed verify before Spawn. In
+// pull (`soul run`) we thread through the trust-anchor SET from the seed and the
+// runtime-cache adapter; in push (`soul apply`) — an empty set and nil lookup (push has
+// no Sigil broadcast cache), custom plugins fail-closed, core MVP works (static
+// modules don't go through verify).
 //
-// Вторым результатом возвращает atomic-holder набора якорей ([sharedhost.AnchorSet])
-// самого Host-а: recv-loop (`soul run`) подменяет в нём набор по runtime-сообщению
-// [keeperv1.SigilTrustAnchors] (R3-S6, ReplaceAll), и тот же holder читается verify-
-// фазой при Spawn. push (`soul apply`) holder игнорирует (broadcast-канала нет).
+// The second return value is the Host's own atomic anchor-set holder ([sharedhost.AnchorSet]):
+// the recv-loop (`soul run`) swaps its contents on the [keeperv1.SigilTrustAnchors]
+// runtime message (R3-S6, ReplaceAll), and the same holder is read by the verify
+// phase at Spawn. push (`soul apply`) ignores the holder (no broadcast channel).
 //
-// Третьим результатом — composite beacon-Lookup (ADR-030 V5-2): core-beacon
-// (статика) + plugin-beacon из того же discovered-набора (kind=soul_beacon
-// отдельный реестр поверх pluginhost.Host.SpawnBeacon).
+// The third return value is a composite beacon Lookup (ADR-030 V5-2): core-beacon
+// (static) + plugin-beacon from the same discovered set (kind=soul_beacon is a
+// separate registry layered on pluginhost.Host.SpawnBeacon).
 func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string, anchors []ed25519.PublicKey, sigils sharedhost.SigilLookup) (*runtime.CompositeRegistry, *sharedhost.AnchorSet, beacon.BeaconLookup, error) {
 	host, err := pluginhost.NewHost(cfg.PluginRuntime, anchors, sigils)
 	if err != nil {
@@ -589,9 +589,9 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 		discovered,
 		logger,
 	)
-	// Конфликты имён `<namespace>.<name>` между core и custom разрешаются в
-	// пользу core (защита от подмены core.* кастомным плагином). Имена
-	// записываем в лог для аудита; повторяется при каждом hot-register.
+	// Name conflicts `<namespace>.<name>` between core and custom resolve in
+	// favor of core (protects against a custom plugin shadowing core.*). Names
+	// are logged for audit; repeats on every hot-register.
 	var core *coremod.Registry
 	logShadowedByCore := func() {
 		for _, name := range pluginReg.Names() {
@@ -601,11 +601,11 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 			}
 		}
 	}
-	// core.module (ADR-065) получает Sigil-набор/якоря/корень кеша — те же,
-	// что у verify custom-плагинов; в push-режиме sigils/anchors nil →
-	// install-шаг fail-closed module_not_allowed. Rescan — hot-register
-	// (ADR-065(d)) после успешной установки; beacon-реестр при этом НЕ
-	// пересобирается (MVP-ограничение ADR-065, hot-reload soul_beacon — post-MVP).
+	// core.module (ADR-065) gets the same Sigil set/anchors/cache root
+	// used to verify custom plugins; in push mode sigils/anchors are nil →
+	// the install step fail-closed module_not_allowed. Rescan is a hot-register
+	// (ADR-065(d)) after a successful install; the beacon registry is NOT
+	// rebuilt in the process (MVP limitation of ADR-065, hot-reload for soul_beacon is post-MVP).
 	core = coremod.Default(installmod.Deps{
 		Sigils:      sigils,
 		Anchors:     host.SigilAnchors,
@@ -632,9 +632,9 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 		slog.Int("custom", len(pluginReg.Names())),
 	)
 
-	// Beacon composite-lookup (ADR-030 V5-2): plugin-beacon — out-of-core
-	// одноимённый реестр над тем же pluginhost.Host (SpawnBeacon-метод). discovered
-	// фильтруется по kind=soul_beacon внутри NewPluginRegistry.
+	// Beacon composite lookup (ADR-030 V5-2): plugin-beacon is an out-of-core
+	// registry of the same shape, layered on the same pluginhost.Host (SpawnBeacon
+	// method). discovered is filtered by kind=soul_beacon inside NewPluginRegistry.
 	sharedDiscovered := make([]sharedhost.Discovered, len(discovered))
 	for i, d := range discovered {
 		sharedDiscovered[i] = d
@@ -648,11 +648,11 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 	return runtime.NewCompositeRegistry(core, pluginReg), host.SigilAnchors, beaconLookup, nil
 }
 
-// beaconHostAdapter — узкий мост *pluginhost.Host → beacon.PluginBeaconSpawner.
-// Адаптирует тип возврата SpawnBeacon (*pluginhost.BeaconPlugin) к
-// beacon.PluginBeaconSession (узкий интерфейс), чтобы beacon-пакет НЕ
-// импортировал pluginhost (минимизация сцеплений; параллель
-// runtime.PluginHostSpawner для SoulModule).
+// beaconHostAdapter is a narrow bridge *pluginhost.Host → beacon.PluginBeaconSpawner.
+// Adapts SpawnBeacon's return type (*pluginhost.BeaconPlugin) to
+// beacon.PluginBeaconSession (a narrow interface) so the beacon package doesn't
+// import pluginhost (minimizes coupling; mirrors
+// runtime.PluginHostSpawner for SoulModule).
 type beaconHostAdapter struct {
 	host *pluginhost.Host
 }
@@ -667,16 +667,16 @@ func (a beaconHostAdapter) SpawnBeacon(ctx context.Context, d sharedhost.Discove
 
 // runApply — `soul apply` (push-oneshot, ADR-004).
 //
-// Жизненный цикл:
-//  1. (опц.) Load config — только для путей custom-модулей (paths.modules) и
-//     plugin_runtime; SoulSeed/keeper-endpoints в push не нужны.
+// Lifecycle:
+//  1. (opt.) Load config — only for custom-module paths (paths.modules) and
+//     plugin_runtime; SoulSeed/keeper-endpoints aren't needed in push.
 //  2. Read stdin → protojson.Unmarshal → ApplyRequest (apply_id + RenderedTask[]).
-//  3. Сборка Registry: core + custom (как в `run`).
-//  4. ApplyRunner.Run с NDJSONSink → stdout: поток TaskEvent + RunResult.
-//  5. exit 0 при RunResult.status==SUCCESS, иначе 1.
+//  3. Build Registry: core + custom (same as `run`).
+//  4. ApplyRunner.Run with NDJSONSink → stdout: stream of TaskEvent + RunResult.
+//  5. exit 0 on RunResult.status==SUCCESS, otherwise 1.
 //
-// Та же proto-семантика и тот же ApplyRunner, что и pull — отличается только
-// транспорт (stdin/stdout вместо EventStream).
+// Same proto semantics and the same ApplyRunner as pull — only the
+// transport differs (stdin/stdout instead of EventStream).
 func runApply(args []string) int {
 	var configPath string
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
@@ -693,9 +693,9 @@ func runApply(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
-	// Config опционален: при ошибке загрузки (нет файла / push-хост без
-	// soul.yml) идём с пустым cfg — core-модулей достаточно, custom discovery
-	// просто не запустится. Жёсткой ошибки нет, в отличие от run/init.
+	// Config is optional: on load failure (no file / push host without
+	// soul.yml) proceed with an empty cfg — core modules are enough, custom discovery
+	// just won't run. No hard error here, unlike run/init.
 	cfg, cfgErr := loadSoulConfig(configPath)
 	if cfgErr != nil {
 		cfg = &config.SoulConfig{}
@@ -723,11 +723,10 @@ func runApply(args []string) int {
 		return exitError
 	}
 
-	// Push (`soul apply`) не имеет broadcast-кеша Sigil и не грузит seed —
-	// verify Sigil идёт с nil trust-anchor/lookup. Custom-плагины в push
-	// fail-closed (no_trust_anchor/no_sigil); core MVP не затронут.
-	// push (`soul apply`) не имеет broadcast-канала Sigil — holder якорей не нужен
-	// (custom-плагины fail-closed; core MVP не затронут), игнорируем второй результат.
+	// Push (`soul apply`) has no Sigil broadcast cache/channel and doesn't load a
+	// seed — verify runs with nil trust-anchor/lookup, so the anchor holder
+	// (2nd return value) isn't needed either. Custom plugins fail-closed
+	// (no_trust_anchor/no_sigil); core MVP is unaffected.
 	registry, _, _, err := buildRegistry(cfg, logger, "soul apply", nil, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul apply: %v\n", err)
@@ -741,17 +740,17 @@ func runApply(args []string) int {
 		slog.String("apply_id", req.GetApplyId()),
 		slog.Int("tasks", len(req.GetTasks())),
 	)
-	// ApplyRunner шлёт TaskEvent-ы и финальный RunResult в sink. error здесь —
-	// только I/O-сбой записи в stdout (бизнес-ошибки задач уезжают через
-	// TaskEvent/RunResult). Финальный RunResult в этом случае не записан, но
-	// статус мы определить не можем — выходим с ошибкой.
+	// ApplyRunner sends TaskEvents and the final RunResult to sink. An error here
+	// only means an I/O failure writing to stdout (task business errors travel via
+	// TaskEvent/RunResult). The final RunResult wasn't written in that case, and we
+	// can't determine a status — bail out with an error.
 	if err := runner.Run(ctx, req, sink); err != nil {
 		fmt.Fprintf(os.Stderr, "soul apply: %v\n", err)
 		return exitError
 	}
 
-	// exit-код по финальному статусу прогона. Run уже записал RunResult в
-	// stdout; статус нужен Keeper-у и как код возврата SSH-сессии.
+	// Exit code follows the run's final status. Run already wrote the RunResult to
+	// stdout; the status is needed both by Keeper and as the SSH session's return code.
 	if sink.LastStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		logger.Info("soul apply: finished", slog.String("status", sink.LastStatus().String()))
 		return exitError
@@ -760,21 +759,21 @@ func runApply(args []string) int {
 	return exitOK
 }
 
-// reconnectLoop — внешний цикл: Dial → handleSession → backoff → repeat.
+// reconnectLoop is the outer loop: Dial → handleSession → backoff → repeat.
 //
-// Каждый Dial-fail увеличивает delay экспоненциально (capped к backoff.max);
-// успешный Dial сбрасывает delay. Stop — на отмене ctx (SIGTERM).
+// Each Dial failure increases delay exponentially (capped at backoff.max);
+// a successful Dial resets delay. Stops when ctx is cancelled (SIGTERM).
 //
-// keeper.retry.backoff и keeper.failback читаются из store.Get() на каждой
-// итерации (hot-reload, ADR-021): SIGHUP-reload меняет их без рестарта.
-// store-снимок уже прошёл semantic-валидацию (невалидный duration отвергнут
-// на reload-фазе), поэтому resolveBackoff/resolveFailback здесь
-// best-effort — на parse-ошибке возвращают дефолты + warn, не падают.
+// keeper.retry.backoff and keeper.failback are read from store.Get() on every
+// iteration (hot-reload, ADR-021): SIGHUP reload updates them without a restart.
+// The store snapshot has already passed semantic validation (an invalid duration
+// is rejected at the reload phase), so resolveBackoff/resolveFailback here are
+// best-effort — on a parse error they return defaults + warn, they don't panic.
 func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, metrics *soulgrpc.EventStreamMetrics, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
 	delay := resolveBackoff(store, logger).initial
-	// Первая итерация — initial connect; каждая последующая попытка Dial — это
-	// reconnect (после разрыва или после неудачного dial). soul_eventstream_
-	// reconnects_total считает именно попытки переустановки, не первичную.
+	// The first iteration is the initial connect; every subsequent Dial attempt is a
+	// reconnect (after a disconnect or a failed dial). soul_eventstream_
+	// reconnects_total counts re-establishment attempts only, not the initial one.
 	firstAttempt := true
 	for ctx.Err() == nil {
 		if !firstAttempt {
@@ -784,13 +783,13 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		b := resolveBackoff(store, logger)
 		sess, err := client.Dial(ctx)
 		if err != nil {
-			// lease-held (все endpoint-ы отдали AlreadyExists, SID-lease ещё держит
-			// живой/не-истёкший holder после краха keeper-а) — soft-failure: Dial удался
-			// на транспорте, отвергнута только сессия. Капируем backoff модест-значением
-			// leaseHeldBackoffCap, чтобы Soul переподключился в пределах секунд после
-			// истечения presence (force-release), а не долбил выживших keeper-ов всё окно
-			// и не ждал раздутый общий transport-cap (keeper.retry.backoff.max). Общий cap
-			// для transport-сбоев НЕ трогаем — там exponential до max уместен.
+			// lease-held (every endpoint returned AlreadyExists, the SID lease still holds a
+			// live/unexpired holder after a keeper crash) is a soft failure: Dial succeeded
+			// at the transport level, only the session was rejected. Cap backoff at the modest
+			// leaseHeldBackoffCap so Soul reconnects within seconds of
+			// presence expiring (force-release), instead of hammering surviving keepers the whole
+			// window or waiting out the inflated general transport cap (keeper.retry.backoff.max). The general cap
+			// for transport failures is left alone — exponential up to max is appropriate there.
 			backoffCap := b.max
 			leaseHeld := soulgrpc.IsLeaseHeld(err)
 			if leaseHeld {
@@ -810,18 +809,18 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 			delay = nextDelay(delay, backoffCap)
 			continue
 		}
-		// Успешный dial — сбрасываем backoff к актуальному initial.
+		// Successful dial — reset backoff to the current initial.
 		delay = b.initial
 		metrics.SetConnected(true)
 		handleSession(ctx, store, client, sess, runner, errandRunner, sp, sigils, anchors, scheduler, logger)
-		// handleSession вернулся = сессия закрыта (clean EOF или error).
-		// На следующей итерации Dial снова попробует.
+		// handleSession returned = session closed (clean EOF or error).
+		// The next iteration will try Dial again.
 		metrics.SetConnected(false)
 	}
 }
 
-// resolveBackoff читает keeper.retry.backoff из текущего store-снимка.
-// На nil-снимке / parse-ошибке — дефолты + warn (см. reconnectLoop).
+// resolveBackoff reads keeper.retry.backoff from the current store snapshot.
+// On a nil snapshot / parse error — defaults + warn (see reconnectLoop).
 func resolveBackoff(store *config.Store[config.SoulConfig], logger *slog.Logger) backoffParams {
 	cfg := store.Get()
 	if cfg == nil {
@@ -835,8 +834,8 @@ func resolveBackoff(store *config.Store[config.SoulConfig], logger *slog.Logger)
 	return b
 }
 
-// resolveFailback читает keeper.failback из текущего store-снимка.
-// На nil-снимке / parse-ошибке — дефолты + warn.
+// resolveFailback reads keeper.failback from the current store snapshot.
+// On a nil snapshot / parse error — defaults + warn.
 func resolveFailback(store *config.Store[config.SoulConfig], logger *slog.Logger) failbackParams {
 	def := failbackParams{enabled: true, interval: 1 * time.Hour, spray: 10 * time.Minute}
 	cfg := store.Get()
@@ -851,8 +850,8 @@ func resolveFailback(store *config.Store[config.SoulConfig], logger *slog.Logger
 	return fb
 }
 
-// resolveSoulprintInterval читает soulprint.refresh_interval из текущего
-// store-снимка. На nil-снимке / parse-ошибке — дефолт 5m + warn.
+// resolveSoulprintInterval reads soulprint.refresh_interval from the current
+// store snapshot. On a nil snapshot / parse error — default 5m + warn.
 func resolveSoulprintInterval(store *config.Store[config.SoulConfig], logger *slog.Logger) time.Duration {
 	const def = 5 * time.Minute
 	cfg := store.Get()
@@ -867,15 +866,15 @@ func resolveSoulprintInterval(store *config.Store[config.SoulConfig], logger *sl
 	return d
 }
 
-// parseTrustAnchorSet парсит набор trust-anchor-ов из runtime-сообщения
-// [keeperv1.SigilTrustAnchors] (R3-S6): каждый элемент `pubkey_pem` — один SPKI
-// PEM-блок "PUBLIC KEY" (как пишет keeper-side sigil.Signer.AnchorSetPEM). Парсинг
-// каждого блока — той же [seed.ParseSigilPubKeys], что и набор из seed-а
-// (bootstrap, R3-S4): форма byte-идентична, парсер общий.
+// parseTrustAnchorSet parses the trust-anchor set from the runtime
+// [keeperv1.SigilTrustAnchors] message (R3-S6): each `pubkey_pem` element is a single
+// SPKI "PUBLIC KEY" PEM block (as written by keeper-side sigil.Signer.AnchorSetPEM). Each
+// block is parsed with the same [seed.ParseSigilPubKeys] used for the seed's
+// anchor set (bootstrap, R3-S4): byte-identical form, shared parser.
 //
-// fail-closed: любой битый блок → ошибка для всего набора (caller НЕ подменяет
-// holder, оставляет прежний валидный набор). Пустой вход → пустой набор без
-// ошибки (Sigil выключен на Keeper — валидное состояние).
+// fail-closed: any broken block → error for the whole set (caller does NOT swap the
+// holder, keeps the previous valid set). Empty input → empty set, no
+// error (Sigil disabled on Keeper is a valid state).
 func parseTrustAnchorSet(pems []string) ([]ed25519.PublicKey, error) {
 	if len(pems) == 0 {
 		return nil, nil
@@ -886,41 +885,41 @@ func parseTrustAnchorSet(pems []string) ([]ed25519.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("anchor %d: %w", i, err)
 		}
-		// Каждый элемент = ровно один SPKI-блок; ParseSigilPubKeys допускает
-		// конкатенацию (вернёт N), но контракт SigilTrustAnchors — один блок на
-		// строку. Принимаем всё, что распарсилось (defensive к конкатенации).
+		// Each element = exactly one SPKI block; ParseSigilPubKeys allows
+		// concatenation (returns N), but the SigilTrustAnchors contract is one block per
+		// entry. Accept whatever parses (defensive against concatenation).
 		out = append(out, keys...)
 	}
 	return out, nil
 }
 
-// recvResult — результат одного чтения из stream. Передаётся из reader-горутины
-// в select-loop handleSession-а.
+// recvResult is the outcome of a single stream read. Passed from the reader goroutine
+// to handleSession's select-loop.
 type recvResult struct {
 	msg *keeperv1.FromKeeper
 	err error
 }
 
-// handleSession — recv-loop одной сессии. Принимает FromKeeper, диспетчит
-// ApplyRequest в ApplyRunner.Run. Возврат — на io.EOF / Recv-error / cancel.
+// handleSession is the recv-loop for one session. Accepts FromKeeper, dispatches
+// ApplyRequest to ApplyRunner.Run. Returns on io.EOF / Recv error / cancel.
 //
-// Если включён failback, рядом запускается failbackLoop, который периодически
-// пробует подняться на более предпочтительный приоритет. При успехе текущая
-// сессия закрывается и заменяется новой (zero-downtime: новая открыта до того,
-// как старая закрыта). Failback-горутина останавливается при выходе из
-// handleSession.
+// When failback is enabled, a failbackLoop runs alongside it, periodically
+// trying to move up to a more preferred priority. On success the current
+// session is closed and replaced with a new one (zero-downtime: the new one is open before
+// the old one closes). The failback goroutine stops when handleSession
+// exits.
 func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], client *soulgrpc.Client, sess *soulgrpc.StreamSession, runner *runtime.ApplyRunner, errandRunner *errandrunner.Runner, sp soulprintPusher, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet, scheduler *beacon.Scheduler, logger *slog.Logger) {
-	// failback и soulprint.refresh_interval читаются из store на старте каждой
-	// сессии (hot-reload, ADR-021): новая сессия после reconnect/swap видит
-	// актуальные значения. Внутри сессии они фиксированы — изменение применяется
-	// при следующем reconnect (sub-second-латентность не нужна).
+	// failback and soulprint.refresh_interval are read from the store at the start of
+	// each session (hot-reload, ADR-021): a new session after reconnect/swap sees
+	// current values. Within a session they're fixed — a change applies
+	// at the next reconnect (sub-second latency isn't needed here).
 	fb := resolveFailback(store, logger)
 	sp.interval = resolveSoulprintInterval(store, logger)
 
-	// failbackCtx живёт ровно для одной попытки failback-loop. При swap-е
-	// предыдущий cancel вызывается до создания нового — это держит число
-	// активных failback-горутин ≤ 1. defer ниже вызывает текущий cancel при
-	// выходе.
+	// failbackCtx lives for exactly one failback-loop attempt. On swap, the
+	// previous cancel is called before creating a new one — this keeps the
+	// number of active failback goroutines ≤ 1. The defer below calls the
+	// current cancel on exit.
 	var (
 		failbackCtx    context.Context
 		failbackCancel context.CancelFunc
@@ -933,21 +932,21 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	}
 	defer stopFailback()
 
-	// WardRoster (Soul-reconcile, ADR-027(g), S6): ПЕРВОЕ app-сообщение после
-	// handshake — снимок ведомых apply-прогонов (ReplaceAll). Шлём ДО любого
-	// другого app-сообщения, чтобы Keeper-sweep осиротевших dispatched-строк
-	// произошёл до прихода RunResult-ов/TaskEvent-ов этого SID-а. Пустой набор
-	// (рестарт процесса) — явная декларация «ничего не ведётся». Ошибка = разрыв
-	// стрима: выходим, reconnect поднимет заново (как initial soulprint ниже).
+	// WardRoster (Soul-reconcile, ADR-027(g), S6): the FIRST app message after
+	// handshake — a snapshot of tracked apply runs (ReplaceAll). Sent BEFORE any
+	// other app message so Keeper's sweep of orphaned dispatched rows
+	// happens before this SID's RunResults/TaskEvents arrive. An empty set
+	// (process restart) is an explicit "nothing is tracked" declaration. Error = stream
+	// broken: bail out, reconnect will re-establish it (like the initial soulprint below).
 	if err := sess.SendWardRoster(runner.ActiveSet()); err != nil {
 		logger.Warn("ward-roster: send failed (stream broken)", slog.Any("error", err))
 		return
 	}
 
-	// Первый SoulprintReport отправляется сразу при установке сессии (онбординг:
-	// Keeper получает факты свежеподключённого хоста). Дальше — по тикеру
-	// refresh_interval. Все Send идут из этого select-loop-а (через soulprintTick),
-	// а не из горутины — StreamSession не concurrent-safe для Send (один writer).
+	// The first SoulprintReport is sent right when the session is established (onboarding:
+	// Keeper gets facts for the freshly-connected host). After that, on the refresh_interval
+	// ticker. All Sends happen from this select-loop (via soulprintTick),
+	// not from a goroutine — StreamSession isn't concurrent-safe for Send (one writer only).
 	if err := sp.pushOnce(ctx, sess); err != nil {
 		logger.Warn("soulprint: initial report send failed", slog.Any("error", err))
 	}
@@ -965,22 +964,22 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	}
 	startFailback(sess.Priority())
 
-	// Augur-клиент привязан к конкретной сессии (pending-map + Send в её stream,
-	// ADR-025). Создаётся per-session: AugurRequest шлёт apply-горутина, ответ
-	// reader-горутина доставляет напрямую в клиент (Deliver), минуя select-loop —
-	// иначе deadlock: select-loop заблокирован в runner.Run, пока идёт apply, а
-	// AugurReply пришёл бы через тот же recvCh, который читает заблокированный
-	// loop. При выходе/swap клиент закрывается (ожидающие Fetch получают
-	// ErrClientClosed). request_id уникален лишь per-stream — переживать
-	// reconnect клиенту незачем.
+	// The Augur client is bound to a specific session (pending-map + Send on its
+	// stream, ADR-025). Created per-session: the apply goroutine sends AugurRequest, the
+	// reader goroutine delivers the reply straight to the client (Deliver), bypassing the
+	// select-loop — otherwise deadlock: the select-loop is blocked in runner.Run while
+	// apply runs, and AugurReply would arrive on the same recvCh that the blocked
+	// loop reads. On exit/swap the client is closed (pending Fetches get
+	// ErrClientClosed). request_id is unique only per-stream — no need for the client
+	// to survive a reconnect.
 	augurClient := augur.NewClient(sess)
 
-	// reader-горутина читает текущую sess; при swap её перезапускают на
-	// новой sess. Канал recvCh не буферизованный — gate, через который
-	// reader сообщает результат каждого Recv-а; select-loop по нему диспетчит.
-	// AugurReply reader доставляет напрямую в Augur-клиент (Deliver) и НЕ шлёт
-	// в recvCh — корреляция request↔reply идёт через pending-map клиента, а не
-	// через select-loop (тот в это время занят runner.Run).
+	// The reader goroutine reads the current sess; on swap it's restarted on
+	// the new sess. recvCh is unbuffered — a gate through which the
+	// reader reports each Recv's outcome; select-loop dispatches on it.
+	// The reader delivers AugurReply straight to the Augur client (Deliver) instead of
+	// sending it on recvCh — request↔reply correlation goes through the client's pending-map,
+	// not the select-loop (which is busy in runner.Run at that point).
 	recvCh := make(chan recvResult)
 	readerDone := make(chan struct{})
 	startReader := func(s *soulgrpc.StreamSession, ac *augur.Client) {
@@ -1021,19 +1020,19 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 		case <-ctx.Done():
 			return
 		case <-soulprintTick:
-			// Тик пересборки фактов: собираем и шлём из этого loop-а (writer один).
-			// Ошибка отправки = разрыв стрима — выходим, reconnect поднимет заново.
+			// Facts-refresh tick: collect and send from this loop (single writer).
+			// Send error = stream broken — bail out, reconnect will re-establish it.
 			if err := sp.pushOnce(ctx, sess); err != nil {
 				logger.Warn("soulprint: report send failed (stream broken)", slog.Any("error", err))
 				return
 			}
 		case portent := <-scheduler.Portents():
-			// Beacon-scheduler поднял Portent на смену состояния (ADR-030,
-			// edge-triggered). Шлём из этого select-loop-а — единственного writer-а
-			// сессии (StreamSession не concurrent-safe для Send). Ошибка = разрыв
-			// стрима: выходим, reconnect поднимет заново; событие уже извлечено из
-			// канала и при разрыве теряется (как soulprint-тик) — следующая смена
-			// State снова его поднимет.
+			// Beacon scheduler raised a Portent on a state change (ADR-030,
+			// edge-triggered). Sent from this select-loop — the session's only
+			// writer (StreamSession isn't concurrent-safe for Send). Error = stream
+			// broken: bail out, reconnect will re-establish it; the event is already pulled off the
+			// channel and is lost on disconnect (like the soulprint tick) — the next State
+			// change will raise it again.
 			if err := sess.SendFromSoul(&keeperv1.FromSoul{
 				Payload: &keeperv1.FromSoul_PortentEvent{PortentEvent: portent},
 			}); err != nil {
@@ -1043,10 +1042,10 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				return
 			}
 		case newSess := <-swapCh:
-			// Failback нашёл better priority — переключаемся: сначала закрываем
-			// старый stream (это разморозит reader-Recv с err), потом ставим
-			// новый и запускаем нового reader-а. До закрытия старого мы уже
-			// держим новую сессию открытой → zero-downtime.
+			// Failback found a better priority — switch over: close the
+			// old stream first (this unblocks reader-Recv with an err), then set the
+			// new one and start a new reader. We already hold the new session
+			// open before closing the old one → zero-downtime.
 			oldSess := sess
 			oldAugur := augurClient
 			sess = newSess
@@ -1055,8 +1054,8 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				slog.Int("new_priority", newSess.Priority()),
 				slog.String("session_id", newSess.SessionID()),
 			)
-			// Старый Augur-клиент закрываем (ожидающие Fetch на старой сессии
-			// получают ErrClientClosed) — старый stream сейчас будет закрыт.
+			// Close the old Augur client (pending Fetches on the old session
+			// get ErrClientClosed) — the old stream is about to be closed.
 			oldAugur.Close()
 			_ = oldSess.Close()
 			<-readerDone
@@ -1084,31 +1083,31 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Int("tasks", len(req.GetTasks())),
 					slog.Int("attempt", int(req.GetAttempt())),
 				)
-				// attempt-fencing-guard (ADR-027(g), Phase 2): отвергаем
-				// stale-ApplyRequest (attempt < виденного для apply_id) — дубль
-				// протухшего Ward, чей оригинальный apply уже принят. B1: отвергнутый
-				// молча дропается (метрика + debug-лог внутри AcceptAttempt),
-				// RunResult НЕ шлётся — барьер Keeper-а закроет оригинальный apply
-				// (больший attempt) своим RunResult, runTimeout — нижняя страховка.
+				// attempt-fencing guard (ADR-027(g), Phase 2): reject a
+				// stale ApplyRequest (attempt < the one already seen for apply_id) — a duplicate
+				// from a stale Ward whose original apply has already been accepted. B1: a rejected
+				// request is silently dropped (metric + debug log inside AcceptAttempt),
+				// no RunResult is sent — Keeper's barrier will close the original apply
+				// (higher attempt) with its own RunResult, runTimeout is the backstop.
 				if !runner.AcceptAttempt(req.GetApplyId(), req.GetAttempt()) {
 					continue
 				}
-				// Извлекаем W3C traceparent из ApplyRequest в ctx, чтобы apply.run
-				// внутри runner.Run поднялся как child span-а grpc.apply_dispatch
-				// Keeper-а (сквозная трасса оператор → Keeper → Soul, ADR-024).
-				// Пустой trace_context (старый Keeper без поля) → Extract no-op,
-				// apply.run остаётся корнем (forward-compat деградация).
+				// Extract the W3C traceparent from ApplyRequest into ctx so apply.run
+				// inside runner.Run comes up as a child span of Keeper's
+				// grpc.apply_dispatch (end-to-end trace operator → Keeper → Soul, ADR-024).
+				// Empty trace_context (old Keeper without the field) → Extract is a no-op,
+				// apply.run stays root (forward-compat degradation).
 				applyCtx := otel.GetTextMapPropagator().Extract(ctx,
 					propagation.MapCarrier{"traceparent": req.GetTraceContext()})
-				// Augur-клиент + apply_id в ctx прогона: core.augur.fetch достанет
-				// их через stream.Context() (общий SoulModule-контракт state+params
-				// этого не выражает). delegate=false — данные приходят inline через
-				// Keeper, root-credential (учётка внешней системы) на Soul не
-				// попадает (ADR-025).
+				// Augur client + apply_id in the run's ctx: core.augur.fetch retrieves
+				// them via stream.Context() (the generic SoulModule contract of state+params
+				// can't express this). delegate=false — data arrives inline through
+				// Keeper, the root credential (external system's account) never
+				// reaches Soul (ADR-025).
 				applyCtx = augur.WithRun(applyCtx, augurClient, req.GetApplyId())
-				// FetchModule-транспорт текущей сессии для core.module.installed
-				// (ADR-065): та же ClientConn, отдельный HTTP/2-стрим; паттерн
-				// augur.WithRun.
+				// FetchModule transport for the current session, for core.module.installed
+				// (ADR-065): same ClientConn, separate HTTP/2 stream; mirrors the
+				// augur.WithRun pattern.
 				applyCtx = installmod.WithFetcher(applyCtx, sess)
 				if err := runner.Run(applyCtx, req, sess); err != nil {
 					logger.Error("apply: send failed (stream broken)", slog.Any("error", err))
@@ -1123,10 +1122,10 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Bool("cancelled", cancelled),
 				)
 			case *keeperv1.FromKeeper_CancelErrand:
-				// ADR-033 slice E5: оператор отменил in-flight Errand через
-				// DELETE /v1/errands/{id} → Keeper отправил CancelErrand нам.
-				// Best-effort: Errand мог уже завершиться (race с собственным
-				// терминалом) — Cancel вернёт false, лог + молча игнор.
+				// ADR-033 slice E5: the operator cancelled an in-flight Errand via
+				// DELETE /v1/errands/{id} → Keeper sent us CancelErrand.
+				// Best-effort: the Errand may have already finished (race with its own
+				// terminal state) — Cancel returns false, log + silently ignore.
 				cancelReq := payload.CancelErrand
 				cancelled := errandRunner.Cancel(cancelReq.GetErrandId())
 				logger.Info("errand: cancel received",
@@ -1134,16 +1133,16 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Bool("cancelled", cancelled),
 				)
 			case *keeperv1.FromKeeper_ErrandRequest:
-				// ADR-033: pull-ad-hoc exec одиночного модуля. Run в отдельной
-				// горутине, чтобы не блокировать recv-loop сессии (apply сейчас
-				// блокирует loop — это его особенность из-за ADR-012(a) «один
-				// in-flight apply»; Errand такой инвариант не несёт, может идти
-				// параллельно apply-у и параллельно другим Errand-ам).
+				// ADR-033: pull-based ad-hoc exec of a single module. Run in a separate
+				// goroutine so it doesn't block the session's recv-loop (apply currently
+				// blocks the loop — that's specific to it, due to ADR-012(a)'s "one
+				// in-flight apply" invariant; Errand carries no such invariant, can run
+				// alongside apply and alongside other Errands).
 				//
-				// Send результата делает та же горутина. StreamSession НЕ
-				// concurrent-safe для Send: одновременная отправка ErrandResult
-				// и TaskEvent/RunResult из apply-горутины может расщепить кадр.
-				// Защита — через writeMu в StreamSession (см. send_mutex.go).
+				// The same goroutine sends the result. StreamSession is NOT
+				// concurrent-safe for Send: sending ErrandResult and
+				// TaskEvent/RunResult from the apply goroutine at the same time could split a frame.
+				// Protected via writeMu in StreamSession (see send_mutex.go).
 				errReq := payload.ErrandRequest
 				logger.Info("errand: received",
 					slog.String("errand_id", errReq.GetErrandId()),
@@ -1160,33 +1159,33 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					}
 				}(errReq)
 			case *keeperv1.FromKeeper_SigilSnapshot:
-				// Полный active-набор допусков (ADR-026(h), Вариант A): применяем
-				// как ReplaceAll — заменяем ВЕСЬ кеш этим набором. Отсутствующий в
-				// snapshot допуск забывается → near-instant revoke (S6c) без
-				// перезапуска Soul-а. Пустой snapshot = ни один плагин не допущен.
-				// Snapshot — ЕДИНСТВЕННЫЙ авторитетный источник набора; кеш —
-				// единый writer (этот recv-loop), читатели verify-фазы берут RLock.
+				// The full active grant set (ADR-026(h), Variant A): applied
+				// as ReplaceAll — replaces the ENTIRE cache with this set. A grant missing from the
+				// snapshot is forgotten → near-instant revoke (S6c) without
+				// restarting Soul. Empty snapshot = no plugin is granted.
+				// Snapshot is the ONLY authoritative source for the set; the cache has a
+				// single writer (this recv-loop), verify-phase readers take an RLock.
 				snap := payload.SigilSnapshot.GetSigils()
 				sigils.ReplaceAll(snap)
 				logger.Info("sigil: snapshot applied (ReplaceAll)",
 					slog.Int("count", len(snap)),
 				)
 			case *keeperv1.FromKeeper_SigilTrustAnchors:
-				// Полный набор trust-anchor-ов подписи Sigil (ADR-026(h), R3-S6):
-				// ReplaceAll в atomic-holder Host-а. Набор переживает reconnect
-				// (holder создан вне reconnect-loop), но новый broadcast при каждом
-				// подключении/ротации приводит его к актуальному состоянию: якорь вне
-				// нового набора «забывается» (retired-ключ перестаёт верифицировать
-				// допуски), новый primary становится доверенным near-instant.
+				// The full Sigil signing trust-anchor set (ADR-026(h), R3-S6):
+				// ReplaceAll on the Host's atomic holder. The set survives reconnect
+				// (the holder is created outside the reconnect loop), but a fresh broadcast on every
+				// connect/rotation brings it up to date: an anchor missing from the
+				// new set is "forgotten" (a retired key stops verifying
+				// grants), a new primary becomes trusted near-instantly.
 				//
-				// fail-closed на битом наборе: если хоть один PEM не парсится, НЕ
-				// подменяем holder (оставляем прежний валидный набор), warn — иначе
-				// мусорный/неполный набор открыл бы дыру в verify. Пустой набор
-				// (Sigil выключен на Keeper) — валидное состояние: holder стирается,
-				// verify любого плагина fail-closed по no_trust_anchor.
+				// fail-closed on a broken set: if even one PEM fails to parse, do NOT
+				// swap the holder (keep the previous valid set), warn — otherwise a
+				// garbage/incomplete set would open a hole in verify. An empty set
+				// (Sigil disabled on Keeper) is a valid state: the holder is cleared,
+				// any plugin verify fail-closes on no_trust_anchor.
 				if anchors == nil {
-					// holder отсутствует (например push-режим / тестовая обвязка без
-					// Host) — раздавать некуда; verify и так fail-closed.
+					// No holder (e.g. push mode / test harness without a
+					// Host) — nowhere to distribute to; verify already fail-closes.
 					break
 				}
 				pems := payload.SigilTrustAnchors.GetPubkeyPem()
@@ -1203,12 +1202,12 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Int("count", len(parsed)),
 				)
 			case *keeperv1.FromKeeper_PluginSigil:
-				// Одиночный PluginSigil (ADR-026(h), Вариант A) — broadcast-
-				// уведомление о новом допуске, НЕ мутация набора. Авторитет набора
-				// — только SigilSnapshot, поэтому здесь НЕ делаем upsert: иначе
-				// потеря/дубль одиночного сообщения исказила бы кеш, а revoke не
-				// сработал бы (одиночное сообщение не умеет «забыть» допуск).
-				// Набор восстановится из ближайшего snapshot-а.
+				// A single PluginSigil (ADR-026(h), Variant A) is a broadcast
+				// notification about a new grant, NOT a set mutation. Only SigilSnapshot
+				// is authoritative for the set, so we deliberately don't upsert here: otherwise
+				// a lost/duplicated single message would corrupt the cache, and revoke
+				// wouldn't work (a single message can't "forget" a grant).
+				// The set self-heals from the next snapshot.
 				sig := payload.PluginSigil
 				logger.Debug("sigil: single notification (set unchanged, snapshot is authoritative)",
 					slog.String("namespace", sig.GetNamespace()),
@@ -1216,11 +1215,11 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.String("ref", sig.GetRef()),
 				)
 			case *keeperv1.FromKeeper_VigilSnapshot:
-				// Полный active-набор Vigil (ADR-030, ReplaceAll — паттерн
-				// SigilSnapshot): scheduler заменяет весь локальный набор. Vigil вне
-				// snapshot останавливается и забывается (disable/удаление без
-				// перезапуска Soul-а), новый — стартует с baseline без Portent. ctx —
-				// родительский demon-context: набор переживает текущую сессию.
+				// The full active Vigil set (ADR-030, ReplaceAll — same pattern as
+				// SigilSnapshot): the scheduler replaces the entire local set. A Vigil missing from the
+				// snapshot is stopped and forgotten (disable/removal without
+				// restarting Soul), a new one starts from baseline with no Portent. ctx is the
+				// parent daemon context: the set survives the current session.
 				vigils := payload.VigilSnapshot.GetVigils()
 				scheduler.Apply(ctx, vigils)
 				logger.Info("beacon: vigil snapshot applied (ReplaceAll)",
@@ -1237,15 +1236,15 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	}
 }
 
-// failbackLoop — периодически пытается установить новый stream на priority <
-// currentPriority. При успехе шлёт новую сессию в swapCh и завершается
-// (handleSession перезапустит loop с новым priority). При currentPriority=1
-// или отсутствии higher-priority endpoint-ов — тихо завершается (некуда
-// возвращаться).
+// failbackLoop periodically tries to establish a new stream at priority <
+// currentPriority. On success it sends the new session on swapCh and returns
+// (handleSession will restart the loop with the new priority). With currentPriority=1
+// or no higher-priority endpoints, it quietly returns (nothing to
+// fail back to).
 //
-// Интервал — fb.interval ± fb.spray (равномерный jitter), [docs/soul/connection.md
-// → Failback]. spray не растягивает interval, защищает только от стадного
-// эффекта.
+// Interval is fb.interval ± fb.spray (uniform jitter), [docs/soul/connection.md
+// → Failback]. spray doesn't stretch the interval, it only guards against a thundering
+// herd.
 func failbackLoop(ctx context.Context, client *soulgrpc.Client, currentPriority int, fb failbackParams, swapCh chan<- *soulgrpc.StreamSession, logger *slog.Logger) {
 	if currentPriority <= 1 {
 		return
@@ -1258,9 +1257,9 @@ func failbackLoop(ctx context.Context, client *soulgrpc.Client, currentPriority 
 		newSess, err := client.DialPriority(ctx, currentPriority)
 		if err != nil {
 			if soulgrpc.IsNoHigherPriority(err) {
-				// Конфиг изменился через hot-reload? Безопасно завершаем —
-				// handleSession при следующей сессии перезапустит loop с
-				// актуальным priority.
+				// Config changed via hot-reload? Safe to just return —
+				// handleSession will restart the loop with the
+				// current priority on the next session.
 				return
 			}
 			logger.Debug("failback: attempt failed", slog.Any("error", err))
@@ -1276,8 +1275,8 @@ func failbackLoop(ctx context.Context, client *soulgrpc.Client, currentPriority 
 	}
 }
 
-// failbackInterval — fb.interval ± fb.spray равномерно. spray=0 → ровно
-// interval. Гарантирует d > 0 (отрицательный interval clamping в interval/2).
+// failbackInterval computes fb.interval ± fb.spray uniformly. spray=0 → exactly
+// interval. Guarantees d > 0 (negative interval is clamped to interval/2).
 func failbackInterval(interval, spray time.Duration) time.Duration {
 	if spray <= 0 {
 		return interval
@@ -1290,7 +1289,7 @@ func failbackInterval(interval, spray time.Duration) time.Duration {
 	return d
 }
 
-// backoffParams — экспоненциальный backoff между reconnect-попытками
+// backoffParams is the exponential backoff between reconnect attempts
 // (soul.yml::keeper.retry.backoff). Defaults: 1s → 30s, jitter on.
 type backoffParams struct {
 	initial time.Duration
@@ -1298,42 +1297,42 @@ type backoffParams struct {
 	jitter  bool
 }
 
-// failbackParams — параметры proactive-возврата на более предпочтительный
-// приоритет (soul.yml::keeper.failback). Defaults: enabled=true, interval=1h,
-// spray=10m ([docs/soul/connection.md → Параметры]).
+// failbackParams are the parameters for proactively returning to a more preferred
+// priority (soul.yml::keeper.failback). Defaults: enabled=true, interval=1h,
+// spray=10m ([docs/soul/connection.md → Parameters]).
 type failbackParams struct {
 	enabled  bool
 	interval time.Duration
 	spray    time.Duration
 }
 
-// soulprintReportSink — узкая поверхность StreamSession для отправки
-// SoulprintReport. Выделена ради тестируемости soulprintPusher без живого gRPC.
+// soulprintReportSink is the narrow StreamSession surface for sending
+// SoulprintReport. Kept separate so soulprintPusher is testable without live gRPC.
 type soulprintReportSink interface {
 	SendSoulprintReport(*keeperv1.SoulprintReport) error
 }
 
-// soulprintPusher — сбор + периодическая отправка SoulprintReport (M2.3,
-// ADR-018). Stateless относительно сессии: pushOnce принимает sink текущей
-// сессии, тикер только сигналит select-loop-у handleSession (он же writer).
+// soulprintPusher collects and periodically sends SoulprintReport (M2.3,
+// ADR-018). Stateless with respect to the session: pushOnce takes the current
+// session's sink, the ticker only signals handleSession's select-loop (which is the writer).
 type soulprintPusher struct {
 	collector *soulprint.Collector
 	sid       string
 	interval  time.Duration
 }
 
-// pushOnce собирает факты хоста и отправляет один SoulprintReport в sink.
-// Сбор быстрый (чтение /proc / net), идёт в вызывающей горутине (select-loop).
+// pushOnce collects host facts and sends one SoulprintReport to sink.
+// Collection is fast (reading /proc / net), runs in the caller's goroutine (select-loop).
 func (p soulprintPusher) pushOnce(ctx context.Context, sink soulprintReportSink) error {
 	return sink.SendSoulprintReport(p.collector.Collect(ctx, p.sid))
 }
 
-// hostFactsFromSoulprint извлекает узкий backend-снимок (pkg-mgr / init-система)
-// из собранного SoulprintReport для инжекта в core-модули (Вариант A, ADR-018(b)).
-// nil/sparse-отчёт (factless хост, частичный сбор) → пустой HostFacts: core-модули
-// откатятся на runtime-детект. Значения строк os.pkg_mgr/os.init_system совпадают
-// с closed-set util.PkgMgr/util.InitSystem (ADR-018 — единый словарь); неизвестное
-// значение трактуется детекторами как unknown через ResolvePkgMgr/ResolveInitSystem.
+// hostFactsFromSoulprint extracts a narrow backend snapshot (pkg-mgr / init-system)
+// from a collected SoulprintReport for injection into core modules (Variant A, ADR-018(b)).
+// A nil/sparse report (factless host, partial collection) → empty HostFacts: core modules
+// fall back to runtime detection. os.pkg_mgr/os.init_system string values match
+// the closed-set util.PkgMgr/util.InitSystem (ADR-018 — shared vocabulary); an unknown
+// value is treated as unknown by the detectors via ResolvePkgMgr/ResolveInitSystem.
 func hostFactsFromSoulprint(rep *keeperv1.SoulprintReport) coremodutil.HostFacts {
 	os := rep.GetTypedFacts().GetOs()
 	return coremodutil.HostFacts{
@@ -1342,10 +1341,9 @@ func hostFactsFromSoulprint(rep *keeperv1.SoulprintReport) coremodutil.HostFacts
 	}
 }
 
-// startTicker запускает горутину, которая каждые interval шлёт сигнал в tick.
-// Канал tick должен быть буферизован на 1 — если select-loop занят (apply
-// in-flight), тик не теряется, но и не копится (coalescing: один отложенный
-// тик достаточен). Возвращает stop-функцию для остановки горутины.
+// startTicker runs a goroutine that signals tick every interval. tick must be
+// buffered 1: if the select-loop is busy (apply in-flight), the tick isn't
+// lost but doesn't pile up either (coalescing). Returns a stop func.
 func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) func() {
 	tickerCtx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -1358,7 +1356,7 @@ func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) 
 			case <-t.C:
 				select {
 				case tick <- struct{}{}:
-				default: // предыдущий тик ещё не обработан — пропускаем (coalescing)
+				default: // previous tick not yet consumed — skip (coalescing)
 				}
 			}
 		}
@@ -1367,7 +1365,7 @@ func (p soulprintPusher) startTicker(ctx context.Context, tick chan<- struct{}) 
 }
 
 // loadSoulprintInterval — soul.yml::soulprint.refresh_interval. Default 5m
-// (docs/soul/config.md). Отсутствие блока → дефолт.
+// (docs/soul/config.md). Missing block → default.
 func loadSoulprintInterval(cfg *config.SoulConfig) (time.Duration, error) {
 	const def = 5 * time.Minute
 	if cfg.Soulprint == nil || cfg.Soulprint.RefreshInterval == "" {
@@ -1427,10 +1425,10 @@ func loadBackoff(cfg *config.SoulConfig) (backoffParams, error) {
 	return b, nil
 }
 
-// resolveMaxAttempts — soul.yml::keeper.retry.max_attempts с резолвом 0→2
-// (симметрично дефолту в soulgrpc.NewClient). Опущенный блок retry / нулевое
-// значение → defaultClientMaxAttempts. Валидация (>=1) уже сделана на
-// config-фазе (shared/config/schema.go), здесь только резолв дефолта.
+// resolveMaxAttempts — soul.yml::keeper.retry.max_attempts, resolving 0→2
+// (mirrors the default in soulgrpc.NewClient). Missing retry block / zero
+// value → defaultClientMaxAttempts. Validation (>=1) already happened at the
+// config phase (shared/config/schema.go); this only resolves the default.
 func resolveMaxAttempts(cfg *config.SoulConfig) int {
 	const defaultClientMaxAttempts = 2
 	if cfg.Keeper.Retry == nil || cfg.Keeper.Retry.MaxAttempts <= 0 {
@@ -1458,8 +1456,8 @@ func nextDelay(cur, max time.Duration) time.Duration {
 	return n
 }
 
-// withJitter добавляет ±25% случайного разброса. Используется при отсутствии
-// дедупликации reconnect-ов (thundering herd при общем сбое Keeper-cluster-а).
+// withJitter adds ±25% random spread, guarding against a reconnect thundering
+// herd on a cluster-wide Keeper outage.
 func withJitter(d time.Duration, enabled bool) time.Duration {
 	if !enabled || d <= 0 {
 		return d
@@ -1468,8 +1466,8 @@ func withJitter(d time.Duration, enabled bool) time.Duration {
 	return d + time.Duration(rand.Int64N(int64(delta*2))) - delta
 }
 
-// sleepCtx ждёт d или ctx-cancel. Возвращает true, если время вышло
-// (можно продолжать), false — если ctx отменён (выходить).
+// sleepCtx waits for d or ctx cancellation. Returns true on timeout (continue),
+// false if ctx was cancelled (caller should exit).
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -1481,11 +1479,11 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// orderedByPriority возвращает endpoints, упорядоченные по priority (меньше
-// → раньше), без мутации исходного slice. priority=0 нормализуется в 1
-// (default = высший), как в EventStream-клиенте (internal/grpc). Используется
-// bootstrap-фазой: failback к ней неприменим (one-shot), но порядок перебора
-// тот же. См. docs/soul/connection.md.
+// orderedByPriority returns endpoints sorted by priority (lower first)
+// without mutating the input slice. priority=0 normalizes to 1 (default =
+// highest), mirroring the EventStream client (internal/grpc). Used by the
+// bootstrap phase: failback doesn't apply there (one-shot), but the ordering
+// is the same. See docs/soul/connection.md.
 func orderedByPriority(in []config.SoulKeeperEndpoint) []config.SoulKeeperEndpoint {
 	out := make([]config.SoulKeeperEndpoint, len(in))
 	copy(out, in)
@@ -1499,10 +1497,10 @@ func orderedByPriority(in []config.SoulKeeperEndpoint) []config.SoulKeeperEndpoi
 	return out
 }
 
-// loadSoulConfig читает soul.yml + валидирует. Возвращает первую error-фазу
-// в виде понятного сообщения. Поля logging (включая logging.file /
-// logging.rotation.max_age_days) теперь нормативны в shared-схеме — отдельного
-// overlay-прохода больше нет.
+// loadSoulConfig reads and validates soul.yml, returning the first error
+// phase as a readable message. logging fields (including logging.file /
+// logging.rotation.max_age_days) are now normative in the shared schema — no
+// separate overlay pass anymore.
 func loadSoulConfig(path string) (*config.SoulConfig, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -1522,8 +1520,8 @@ func loadSoulConfig(path string) (*config.SoulConfig, error) {
 	return cfg, nil
 }
 
-// soulOTelEndpoint извлекает endpoint из опц. otel-блока (пустая строка,
-// если блок не задан) — для obs.OTelConfig без nil-разыменования.
+// soulOTelEndpoint extracts the endpoint from the optional otel block (empty
+// string if unset), avoiding a nil-deref in obs.OTelConfig.
 func soulOTelEndpoint(o *config.SoulOTel) string {
 	if o == nil {
 		return ""
@@ -1531,21 +1529,21 @@ func soulOTelEndpoint(o *config.SoulOTel) string {
 	return o.Endpoint
 }
 
-// resolveSoulMetricsBasicAuth собирает *obs.BasicAuth для soul-`/metrics`.
+// resolveSoulMetricsBasicAuth builds *obs.BasicAuth for soul's `/metrics`.
 //
-// Возвращает (nil, nil), если basic-auth не настроен/выключен — listener
-// поднимается без auth (защита — loopback-bind). При enabled читает пароль
-// из файла на диске (у Soul нет vault-клиента, ADR-012): одна строка,
-// trailing-whitespace/newline отбрасывается. Пустой файл — ошибка
-// (fail-fast: лучше упасть на старте, чем поднять `/metrics` с пустым
-// паролем). Содержимое файла в лог/ошибку не попадает.
+// Returns (nil, nil) if basic-auth is unset/disabled — the listener comes up
+// without auth (loopback-bind is the protection). When enabled, reads the
+// password from a file on disk (Soul has no vault client, ADR-012): one line,
+// trailing whitespace/newline trimmed. Empty file → error (fail-fast: better
+// to fail at startup than serve `/metrics` with an empty password). File
+// contents never appear in logs/errors.
 func resolveSoulMetricsBasicAuth(b *config.SoulMetricsBasicAuth) (*obs.BasicAuth, error) {
 	if b == nil || !b.Enabled {
 		return nil, nil
 	}
 	raw, err := os.ReadFile(b.PasswordFile)
 	if err != nil {
-		// b.PasswordFile — путь (не секрет), эхаем его для диагностики.
+		// b.PasswordFile is a path (not a secret) — echoed for diagnostics.
 		return nil, fmt.Errorf("read metrics.basic_auth.password_file %q: %w", b.PasswordFile, err)
 	}
 	pass := strings.TrimRight(string(raw), "\r\n")
@@ -1555,9 +1553,9 @@ func resolveSoulMetricsBasicAuth(b *config.SoulMetricsBasicAuth) (*obs.BasicAuth
 	return &obs.BasicAuth{Username: b.Username, Password: pass}, nil
 }
 
-// signalContext — context, отменяемый по SIGINT/SIGTERM. SIGHUP сюда НЕ
-// входит — он обрабатывается отдельным каналом в [config.WatchSIGHUP], чтобы
-// reload не путался с shutdown.
+// signalContext — a context cancelled on SIGINT/SIGTERM. SIGHUP is handled
+// separately via [config.WatchSIGHUP] so reload doesn't get tangled with
+// shutdown.
 func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }

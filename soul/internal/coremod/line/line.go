@@ -1,25 +1,27 @@
-// Package line реализует core-модуль `core.line` ([ADR-015]) — in-place
-// построчную правку существующего файла. Это первый core-модуль, который НЕ
-// перезаписывает файл целиком (как core.file), а изменяет отдельные строки.
+// Package line implements the core module `core.line` ([ADR-015]) —
+// in-place line editing of an existing file. The first core module that
+// does NOT rewrite the whole file (like core.file) but edits individual
+// lines.
 //
-// Состояния MVP (урезанный безопасный вариант — ровно та причина, по которой
-// lineinfile откладывали: «regex matches not what you think»):
+// MVP states (a deliberately narrowed safe subset — the exact reason
+// lineinfile got deferred elsewhere: "regex matches not what you think"):
 //
-//   - present: строка `line` присутствует в файле. С `regexp` — первая
-//     матчащая строка заменяется на `line` (при >1 совпадении меняется только
-//     первая + warning); без `regexp` — точная строка добавляется, если её нет.
-//   - absent:  с `regexp` удаляются ВСЕ матчащие строки; без `regexp` —
-//     удаляются все точные совпадения `line`.
+//   - present: line `line` is present in the file. With `regexp`, the first
+//     matching line is replaced by `line` (>1 match → only the first is
+//     changed + warning); without `regexp`, the exact line is appended if
+//     missing.
+//   - absent: with `regexp`, ALL matching lines are removed; without
+//     `regexp`, all exact matches of `line` are removed.
 //
-// Сознательные ограничения MVP (расширяемо позже без breaking change):
-//   - backrefs (подстановка групп regexp в `line`) НЕ поддержаны.
-//   - insertafter / insertbefore — только литеральная строка либо
-//     EOF / BOF соответственно, НЕ regexp (предсказуемость позиции вставки).
+// Deliberate MVP limitations (extensible later without a breaking change):
+//   - backrefs (substituting regexp groups into `line`) are NOT supported.
+//   - insertafter / insertbefore accept only a literal string or EOF / BOF
+//     respectively, NOT regexp (predictable insertion position).
 //
-// Запись — атомарная (util.AtomicWrite: temp+rename), а не in-place truncate.
-// Идемпотентность: повторный прогон → changed=false.
+// Writes are atomic (util.AtomicWrite: temp+rename), not in-place truncate.
+// Idempotent: a repeat run → changed=false.
 //
-// [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
+// [ADR-015]: docs/adr/0015-core-modules-mvp.md
 package line
 
 import (
@@ -34,14 +36,14 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — каноническая верхушка адреса.
+// Name is the module's canonical address.
 const Name = "core.line"
 
-// Module — реализация sdk/module.SoulModule для core.line.
+// Module implements sdk/module.SoulModule for core.line.
 //
-// LookupUser / LookupGroup вынесены в поля для тестабельности (подмена без
-// обращения к /etc/passwd) — симметрично core.file; используются только при
-// create=true с owner/group.
+// LookupUser / LookupGroup are fields for testability (substitution without
+// touching /etc/passwd) — symmetric with core.file; used only when
+// create=true with owner/group.
 type Module struct {
 	LookupUser  func(name string) (*user.User, error)
 	LookupGroup func(name string) (*user.Group, error)
@@ -54,13 +56,13 @@ func New() *Module {
 	}
 }
 
-// Validate НЕ делегирован целиком в util.ValidateAgainstManifest (в отличие от
-// core.exec): сверх known-state + required(path) у core.line есть cross-field-
-// инварианты, которые manifest-DSL не выражает — `line` обязателен для present
-// (но не для absent), absent требует line ИЛИ regexp, insertafter/insertbefore
-// взаимоисключаемы, regexp обязан компилироваться. known-state/required(path)
-// дублируются с line.yaml осознанно — единый источник невозможен без cross-field
-// в DSL.
+// Validate is NOT fully delegated to util.ValidateAgainstManifest (unlike
+// core.exec): beyond known-state + required(path), core.line has cross-field
+// invariants the manifest DSL can't express — `line` is required for present
+// (not for absent), absent requires line OR regexp, insertafter/insertbefore
+// are mutually exclusive, regexp must compile. known-state/required(path)
+// intentionally duplicate line.yaml — no single source is possible without
+// cross-field checks in the DSL.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
@@ -81,10 +83,10 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		}
 	}
 
-	// present обязан иметь line — это точное значение, которым управляем
-	// (добавляем при отсутствии regexp / на него заменяем при regexp). absent
-	// без regexp использует line как критерий точного совпадения для удаления,
-	// поэтому хотя бы одно из line/regexp обязано присутствовать.
+	// present requires line — the exact value being managed (appended when
+	// regexp is absent / replaced onto when regexp is present). absent
+	// without regexp uses line as the exact-match criterion for removal, so
+	// at least one of line/regexp must be present.
 	line, lerr := util.OptStringParam(req.Params, "line")
 	if lerr != nil {
 		errs = append(errs, lerr.Error())
@@ -100,8 +102,9 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		}
 	}
 
-	// insertafter / insertbefore взаимоисключающие; конкретные допустимые
-	// значения (EOF/BOF/литерал) разруливаются в Apply при вставке.
+	// insertafter / insertbefore are mutually exclusive; the specific
+	// allowed values (EOF/BOF/literal) are resolved in Apply at insertion
+	// time.
 	insAfter, iaerr := util.OptStringParam(req.Params, "insertafter")
 	if iaerr != nil {
 		errs = append(errs, iaerr.Error())
@@ -117,22 +120,25 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.line.Plan — pure-read (ADR-031 Scry):
-// читает файл и прогоняет ту же чистую функцию presentEdit/absentEdit, что
-// applyPresent/applyAbsent (changed уже там). НЕ мутирует ФС (маркер для host-а,
-// default-deny).
+// PlanReadSafe declares core.line.Plan as pure-read (ADR-031 Scry): reads
+// the file and runs the same pure presentEdit/absentEdit functions as
+// applyPresent/applyAbsent (changed is already there). Doesn't mutate the
+// filesystem (marker for the host, default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее содержимое файла
-// (тот же readFile, что в Apply) и переиспользует чистые presentEdit/absentEdit
-// — те уже возвращают `changed`. НЕ мутирует ФС: ни AtomicWrite, ни AtomicWritePreserving.
+// Plan is a pure-read dry-run (ADR-031 Scry): reads the file's current
+// content (the same readFile as Apply) and reuses the pure
+// presentEdit/absentEdit functions — they already return `changed`. Doesn't
+// mutate the filesystem: no AtomicWrite, no AtomicWritePreserving.
 //
-// create=true (state present, файла нет) → drift=true (Apply создал бы файл).
-// create=false (state present, файла нет) → drift=true (Apply вернул бы failed,
-// но это всё ещё «отличие от желаемого», и Plan честно его репортит — оператор
-// видит, что dry_run упрётся в create:false).
+// create=true (state present, file missing) → drift=true (Apply would
+// create the file).
+// create=false (state present, file missing) → drift=true (Apply would
+// return failed, but that's still "differs from desired", and Plan honestly
+// reports it — the operator sees dry_run would hit create:false).
 //
-// absent + файла нет → drift=false (нечего удалять, симметрично applyAbsent).
+// absent + file missing → drift=false (nothing to remove, symmetric with
+// applyAbsent).
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	path, err := util.StringParam(req.Params, "path")
 	if err != nil {
@@ -162,8 +168,8 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	switch req.State {
 	case "present":
 		if !existed {
-			// Apply создал бы файл (если create=true) или вернул бы failed; в обоих
-			// случаях желаемое состояние НЕ достигнуто → drift.
+			// Apply would create the file (if create=true) or return failed;
+			// either way the desired state is NOT reached → drift.
 			return util.SendPlanFinal(stream, true)
 		}
 		lines, _ := splitLines(content)

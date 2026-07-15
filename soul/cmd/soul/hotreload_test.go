@@ -15,9 +15,9 @@ import (
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 )
 
-// soulFixtureStore — копирует golden soul.yml во временный файл и оборачивает
-// в Store. Возвращает Store и путь (для последующего редактирования + Reload,
-// что эквивалентно SIGHUP-перечитыванию).
+// soulFixtureStore copies the golden soul.yml into a temp file and wraps it
+// in a Store. Returns the Store and the path (for a later edit + Reload,
+// equivalent to a SIGHUP re-read).
 func soulFixtureStore(t *testing.T) (*config.Store[config.SoulConfig], string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.FromSlash("../../../examples/soul/soul.yml"))
@@ -40,8 +40,8 @@ func soulFixtureStore(t *testing.T) (*config.Store[config.SoulConfig], string) {
 	return store, path
 }
 
-// TestResolveBackoff_ReflectsReload — после редактирования файла + Reload
-// resolveBackoff видит новое keeper.retry.backoff (hot-reload, ADR-021).
+// TestResolveBackoff_ReflectsReload — after editing the file + Reload,
+// resolveBackoff sees the new keeper.retry.backoff (hot-reload, ADR-021).
 func TestResolveBackoff_ReflectsReload(t *testing.T) {
 	t.Parallel()
 	store, path := soulFixtureStore(t)
@@ -70,8 +70,8 @@ func TestResolveBackoff_ReflectsReload(t *testing.T) {
 	}
 }
 
-// TestResolveSoulprintInterval_ReflectsReload — soulprint.refresh_interval
-// перечитывается из снимка после Reload.
+// TestResolveSoulprintInterval_ReflectsReload — soulprint.refresh_interval is
+// re-read from the snapshot after Reload.
 func TestResolveSoulprintInterval_ReflectsReload(t *testing.T) {
 	t.Parallel()
 	store, path := soulFixtureStore(t)
@@ -95,8 +95,9 @@ func TestResolveSoulprintInterval_ReflectsReload(t *testing.T) {
 	}
 }
 
-// TestLevelSubscriber_ReflectsReload — подписка logger-level на store
-// (как в runDaemon) реально двигает порог фильтрации на Reload-swap.
+// TestLevelSubscriber_ReflectsReload — the logger-level subscription on
+// store (as in runDaemon) actually moves the filter threshold on a
+// Reload-swap.
 func TestLevelSubscriber_ReflectsReload(t *testing.T) {
 	t.Parallel()
 	store, path := soulFixtureStore(t)
@@ -122,7 +123,7 @@ func TestLevelSubscriber_ReflectsReload(t *testing.T) {
 	if !res.Swapped {
 		t.Fatalf("Swapped=false on valid edit: %+v", res.Diagnostics)
 	}
-	// OnReload-subscriber запускается в отдельной goroutine; дождёмся эффекта.
+	// OnReload subscriber runs in a separate goroutine; wait for the effect.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		logger.Debug("post-reload-debug-probe")

@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// planStream — fake grpc.ServerStreamingServer[PlanEvent] для тестов Plan.
+// planStream is a fake grpc.ServerStreamingServer[PlanEvent] for Plan tests.
 type planStream struct {
 	grpc.ServerStreamingServer[pluginv1.PlanEvent]
 	events []*pluginv1.PlanEvent
@@ -27,8 +27,8 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// TestPlan_Present_Match_Clean — Plan(present) при совпадающем content:
-// changed=false и файл НЕ изменён на диске (pure-read, ADR-031 Scry).
+// TestPlan_Present_Match_Clean — Plan(present) with matching content:
+// changed=false and the file is NOT modified on disk (pure-read, ADR-031 Scry).
 func TestPlan_Present_Match_Clean(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -51,8 +51,8 @@ func TestPlan_Present_Match_Clean(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Present_ContentMismatch_Drift — Plan(present) при расхождении
-// content: changed=true, файл НЕ переписан.
+// TestPlan_Present_ContentMismatch_Drift — Plan(present) with mismatched
+// content: changed=true, the file is NOT rewritten.
 func TestPlan_Present_ContentMismatch_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -75,8 +75,8 @@ func TestPlan_Present_ContentMismatch_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Present_Missing_Drift — Plan(present) для отсутствующего файла:
-// changed=true (Apply создал бы) и файл НЕ создан.
+// TestPlan_Present_Missing_Drift — Plan(present) for a missing file:
+// changed=true (Apply would create it) and the file is NOT created.
 func TestPlan_Present_Missing_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -97,8 +97,8 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Absent_Present_Drift — Plan(absent) при существующем файле:
-// changed=true (Apply удалил бы) и файл НЕ удалён.
+// TestPlan_Absent_Present_Drift — Plan(absent) with an existing file:
+// changed=true (Apply would delete it) and the file is NOT deleted.
 func TestPlan_Absent_Present_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -121,8 +121,8 @@ func TestPlan_Absent_Present_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_Missing_Clean — Plan(absent) для отсутствующего файла:
-// changed=false (нечего удалять).
+// TestPlan_Absent_Missing_Clean — Plan(absent) for a missing file:
+// changed=false (nothing to delete).
 func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nope.txt")
@@ -140,8 +140,9 @@ func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_Src_Missing_Drift — Plan(present, src) для отсутствующего
-// dest: changed=true (Apply создал бы), src НЕ скопирован, dest НЕ создан.
+// TestPlan_Present_Src_Missing_Drift — Plan(present, src) for a missing
+// dest: changed=true (Apply would create it), src is NOT copied, dest is NOT
+// created.
 func TestPlan_Present_Src_Missing_Drift(t *testing.T) {
 	src := seedSrc(t, "payload\n")
 	dst := filepath.Join(t.TempDir(), "dest")
@@ -162,8 +163,8 @@ func TestPlan_Present_Src_Missing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_Src_Match_Clean — Plan(present, src) при dest == src-байты:
-// changed=false и dest НЕ переписан.
+// TestPlan_Present_Src_Match_Clean — Plan(present, src) when dest == src
+// bytes: changed=false and dest is NOT rewritten.
 func TestPlan_Present_Src_Match_Clean(t *testing.T) {
 	src := seedSrc(t, "same\n")
 	dst := filepath.Join(t.TempDir(), "dest")
@@ -186,8 +187,8 @@ func TestPlan_Present_Src_Match_Clean(t *testing.T) {
 	assertUnchanged(t, dst, before)
 }
 
-// TestPlan_Present_Src_Unreadable_PlanFailed — src отсутствует во время Plan →
-// Plan возвращает error (PlanFailed), НЕ false-clean (ADR-031).
+// TestPlan_Present_Src_Unreadable_PlanFailed — src is missing during Plan →
+// Plan returns an error (PlanFailed), NOT false-clean (ADR-031).
 func TestPlan_Present_Src_Unreadable_PlanFailed(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "dest")
 
@@ -205,7 +206,7 @@ func TestPlan_Present_Src_Unreadable_PlanFailed(t *testing.T) {
 	}
 }
 
-// fileState — снимок (содержимое, mode) файла для сверки pure-read в assertUnchanged.
+// fileState is a (content, mode) snapshot of a file to verify pure-read in assertUnchanged.
 type fileState struct {
 	content string
 	mode    os.FileMode

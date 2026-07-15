@@ -14,22 +14,24 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// FileChangedName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// FileChangedName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const FileChangedName = beaconaddr.FileChanged
 
-// stateFileMissing — sentinel-state для отсутствующего файла. Появление/
-// исчезновение файла так же edge-triggered, как смена содержимого: переход
-// hash↔"missing" — это смена State, scheduler эмитит Portent.
+// stateFileMissing is the sentinel state for a missing file. File
+// appearance/disappearance is edge-triggered just like content change: a
+// hash↔"missing" transition is a State change, so the scheduler emits a
+// Portent.
 const stateFileMissing State = "missing"
 
-// FileChanged — core-beacon наблюдения за изменением файла (ADR-030 S1).
-// Read-only: SHA-256 содержимого, без записи. State = hex-хеш файла либо
-// "missing", если файла нет. Смена хеша (правка/ротация/удаление) → Portent.
+// FileChanged is the core-beacon for watching file changes (ADR-030 S1).
+// Read-only: SHA-256 of content, no writes. State is the file's hex hash, or
+// "missing" if the file is absent. A hash change (edit/rotation/deletion)
+// emits a Portent.
 //
-// Param `path` (string, required) — абсолютный путь к наблюдаемому файлу.
+// Param `path` (string, required) — absolute path of the watched file.
 type FileChanged struct{}
 
-// NewFileChanged собирает beacon. Состояния у проверки нет — чистое чтение FS.
+// NewFileChanged builds the beacon. The check itself is stateless — a pure FS read.
 func NewFileChanged() *FileChanged { return &FileChanged{} }
 
 func (b *FileChanged) Check(_ context.Context, params *structpb.Struct) (State, *structpb.Struct, error) {
@@ -48,10 +50,10 @@ func (b *FileChanged) Check(_ context.Context, params *structpb.Struct) (State, 
 	return hash, fileData(path, hash), nil
 }
 
-// hashFile считает SHA-256 файла потоково (io.Copy, без загрузки целиком в
-// память — наблюдаемый файл может быть крупным). os.ErrNotExist прокидывается
-// наружу для отдельной обработки "missing"-state. Параллель archive.hashFile,
-// но тот приватен своему пакету — дублировать 8 строк дешевле кросс-импорта.
+// hashFile streams the file's SHA-256 (io.Copy, no full in-memory load — the
+// watched file may be large). os.ErrNotExist propagates for separate
+// "missing"-state handling. Parallels archive.hashFile, which is private to
+// its own package — duplicating 8 lines is cheaper than a cross-import.
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

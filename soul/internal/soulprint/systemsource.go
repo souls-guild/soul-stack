@@ -8,12 +8,14 @@ import (
 	"strings"
 )
 
-// systemSource — production-реализация [Source]. Linux читает /proc и
-// /etc/os-release; прочие платформы (macOS dev-машина и т.п.) — best-effort
-// через runtime/net + платформо-зависимые helper-ы (systemsource_*.go).
+// systemSource is the production [Source] implementation. Linux reads /proc
+// and /etc/os-release; other platforms (macOS dev machine, etc.) get
+// best-effort via runtime/net plus platform-specific helpers
+// (systemsource_*.go).
 //
-// osReleasePath / readFile вынесены в поля ради тестов platform-независимых
-// веток (parse os-release, network) без касания реальной ФС.
+// osReleasePath / readFile are fields so platform-independent branches
+// (os-release parsing, network) can be tested without touching the real
+// filesystem.
 type systemSource struct {
 	osReleasePath string
 	readFile      func(string) ([]byte, error)
@@ -21,7 +23,7 @@ type systemSource struct {
 	interfaces    func() ([]net.Interface, error)
 }
 
-// NewSystemSource собирает production-Source поверх реальной ФС/сети.
+// NewSystemSource builds the production Source over the real filesystem/network.
 func NewSystemSource() Source {
 	return &systemSource{
 		osReleasePath: "/etc/os-release",
@@ -31,9 +33,9 @@ func NewSystemSource() Source {
 	}
 }
 
-// Hostname — короткое имя (без домена). os.Hostname на части систем возвращает
-// FQDN — обрезаем по первой точке, чтобы соответствовать семантике ADR-018
-// (hostname короткий, fqdn — отдельный факт в network).
+// Hostname returns the short name (no domain). os.Hostname returns an FQDN
+// on some systems — truncated at the first dot to match ADR-018 semantics
+// (hostname is short; fqdn is a separate fact under network).
 func (s *systemSource) Hostname() string {
 	h, err := s.hostname()
 	if err != nil {
@@ -46,15 +48,16 @@ func (s *systemSource) Hostname() string {
 	return h
 }
 
-// Arch — Go-нотация архитектуры (amd64 / arm64), совпадает со значениями,
-// которые ждут core-модули и essence pipeline.
+// Arch returns Go's architecture notation (amd64 / arm64), matching what
+// core modules and the essence pipeline expect.
 func (s *systemSource) Arch() string {
 	return runtime.GOARCH
 }
 
-// OS — family/distro/version/codename. На Linux — из /etc/os-release. На прочих
-// ОС os-release нет: family/distro выводятся из runtime.GOOS (darwin/windows),
-// version best-effort через платформо-зависимый osVersion (systemsource_*.go).
+// OS returns family/distro/version/codename. On Linux, from /etc/os-release.
+// Other OSes have no os-release: family/distro derive from runtime.GOOS
+// (darwin/windows), version is best-effort via the platform-specific
+// osVersion (systemsource_*.go).
 func (s *systemSource) OS(ctx context.Context) OSInfo {
 	if runtime.GOOS == "linux" {
 		raw, err := s.readFile(s.osReleasePath)
@@ -72,9 +75,10 @@ func (s *systemSource) OS(ctx context.Context) OSInfo {
 	return s.osNonLinux(ctx)
 }
 
-// osNonLinux — best-effort OSInfo для не-Linux. darwin → family/distro фиксируем
-// (macos), version через osVersion (sw_vers/sysctl). windows → family/distro,
-// version пока пусто (детект — пост-MVP). Прочие GOOS → family=GOOS.
+// osNonLinux returns best-effort OSInfo for non-Linux. darwin → fixed
+// family/distro (macos), version via osVersion (sw_vers/sysctl). windows →
+// family/distro, version left empty for now (detection is post-MVP). Other
+// GOOS → family=GOOS.
 func (s *systemSource) osNonLinux(ctx context.Context) OSInfo {
 	switch runtime.GOOS {
 	case "darwin":
@@ -86,16 +90,16 @@ func (s *systemSource) osNonLinux(ctx context.Context) OSInfo {
 	}
 }
 
-// Kernel / CPU / Memory делегируются платформо-зависимым функциям
+// Kernel / CPU / Memory delegate to platform-specific functions
 // (systemsource_linux.go / systemsource_darwin.go / systemsource_other.go).
 func (s *systemSource) Kernel(ctx context.Context) KernelInfo { return kernelInfo(ctx) }
 func (s *systemSource) CPU(ctx context.Context) CPUInfo       { return cpuInfo(ctx) }
 func (s *systemSource) Memory(ctx context.Context) MemoryInfo { return memoryInfo(ctx) }
 
-// Network — кроссплатформенно через net.Interfaces. primary_ip эвристика —
-// первый non-loopback up-интерфейс с глобально-маршрутизируемым IPv4.
-// (default-route detection — пост-MVP уточнение; для 90% случаев non-loopback
-// global IPv4 совпадает с bind-адресом, ADR-018.)
+// Network is cross-platform via net.Interfaces. primary_ip heuristic: the
+// first non-loopback up interface with a globally-routable IPv4.
+// (default-route detection is a post-MVP refinement; for 90% of cases,
+// non-loopback global IPv4 matches the bind address, ADR-018.)
 func (s *systemSource) Network() NetworkInfo {
 	out := NetworkInfo{FQDN: s.fqdn()}
 	ifaces, err := s.interfaces()
@@ -132,9 +136,9 @@ func (s *systemSource) Network() NetworkInfo {
 	return out
 }
 
-// fqdn — полный FQDN. os.Hostname отдаёт FQDN на корректно сконфигурированных
-// хостах; если короткое — возвращаем как есть (reverse-DNS lookup в MVP не
-// делаем, чтобы не блокироваться на сети при каждом сборе фактов).
+// fqdn returns the full FQDN. os.Hostname yields the FQDN on correctly
+// configured hosts; if short, returned as-is (no reverse-DNS lookup in MVP,
+// to avoid blocking on the network on every fact collection).
 func (s *systemSource) fqdn() string {
 	h, err := s.hostname()
 	if err != nil {
@@ -143,8 +147,8 @@ func (s *systemSource) fqdn() string {
 	return strings.TrimSpace(h)
 }
 
-// isPrimaryCandidate — интерфейс up, не loopback, IP глобально маршрутизируем
-// (не link-local, не loopback). Первый такой → primary_ip.
+// isPrimaryCandidate: interface is up, not loopback, IP is globally routable
+// (not link-local, not loopback). The first such interface → primary_ip.
 func isPrimaryCandidate(iface net.Interface, ip net.IP) bool {
 	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 		return false

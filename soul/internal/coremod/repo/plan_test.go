@@ -26,7 +26,7 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// snapshotRoot фиксирует все файлы дерева root для verify-no-mutation.
+// snapshotRoot captures all files under root for verify-no-mutation checks.
 func snapshotRoot(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -54,7 +54,7 @@ func assertRootUnchanged(t *testing.T, root string, before map[string]string) {
 	}
 }
 
-// TestPlan_Apt_Missing_Drift — нет файла .list → drift, без мутаций.
+// TestPlan_Apt_Missing_Drift — no .list file → drift, no mutations.
 func TestPlan_Apt_Missing_Drift(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	before := snapshotRoot(t, root)
@@ -75,7 +75,7 @@ func TestPlan_Apt_Missing_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Apt_Match_Clean — .list совпадает, без gpg_key → clean.
+// TestPlan_Apt_Match_Clean — .list matches, no gpg_key → clean.
 func TestPlan_Apt_Match_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
@@ -103,7 +103,7 @@ func TestPlan_Apt_Match_Clean(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Apt_KeyMissing_Drift — .list совпадает, но gpg_key задан и файла нет → drift.
+// TestPlan_Apt_KeyMissing_Drift — .list matches, but gpg_key is set and the file is missing → drift.
 func TestPlan_Apt_KeyMissing_Drift(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
@@ -133,7 +133,7 @@ func TestPlan_Apt_KeyMissing_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Yum_Match_Clean — .repo совпадает → clean.
+// TestPlan_Yum_Match_Clean — .repo matches → clean.
 func TestPlan_Yum_Match_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrYum)
 	if err := os.MkdirAll(m.YumReposDir, 0o755); err != nil {
@@ -162,7 +162,7 @@ func TestPlan_Yum_Match_Clean(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Apk_LineMatch_Clean — строка в repositories точно совпадает → clean.
+// TestPlan_Apk_LineMatch_Clean — the line in repositories matches exactly → clean.
 func TestPlan_Apk_LineMatch_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApk)
 	if err := os.MkdirAll(filepath.Dir(m.ApkReposFile), 0o755); err != nil {
@@ -189,7 +189,7 @@ func TestPlan_Apk_LineMatch_Clean(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Absent_Apt_Exists_Drift — .list существует → drift.
+// TestPlan_Absent_Apt_Exists_Drift — .list exists → drift.
 func TestPlan_Absent_Apt_Exists_Drift(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
@@ -214,7 +214,7 @@ func TestPlan_Absent_Apt_Exists_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
-// TestPlan_Absent_Apt_Missing_Clean — .list нет → clean.
+// TestPlan_Absent_Apt_Missing_Clean — no .list → clean.
 func TestPlan_Absent_Apt_Missing_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
 	before := snapshotRoot(t, root)

@@ -26,7 +26,8 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// assertNoMutatingFirewallCalls фейлит, если runner получил allow/deny/delete/add/remove/reload.
+// assertNoMutatingFirewallCalls fails if the runner received
+// allow/deny/delete/add/remove/reload.
 func assertNoMutatingFirewallCalls(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	for _, c := range r.Calls {
@@ -51,7 +52,7 @@ func planOn(t *testing.T, r *internaltest.Runner, state string, params map[strin
 	return stream
 }
 
-// TestPlan_UFW_Present_AlreadyPresent_Clean — 80/tcp уже в ufw status → clean.
+// TestPlan_UFW_Present_AlreadyPresent_Clean: 80/tcp already in ufw status → clean.
 func TestPlan_UFW_Present_AlreadyPresent_Clean(t *testing.T) {
 	r := ufwRunner()
 	stream := planOn(t, r, "present", map[string]any{"port": 80, "proto": "tcp"})
@@ -61,7 +62,7 @@ func TestPlan_UFW_Present_AlreadyPresent_Clean(t *testing.T) {
 	assertNoMutatingFirewallCalls(t, r)
 }
 
-// TestPlan_UFW_Present_Missing_Drift — 9999/tcp нет в status → drift.
+// TestPlan_UFW_Present_Missing_Drift: 9999/tcp not in status → drift.
 func TestPlan_UFW_Present_Missing_Drift(t *testing.T) {
 	r := ufwRunner()
 	stream := planOn(t, r, "present", map[string]any{"port": 9999, "proto": "tcp"})
@@ -71,7 +72,7 @@ func TestPlan_UFW_Present_Missing_Drift(t *testing.T) {
 	assertNoMutatingFirewallCalls(t, r)
 }
 
-// TestPlan_UFW_Absent_Present_Drift — 80/tcp в status → drift (Apply удалил бы).
+// TestPlan_UFW_Absent_Present_Drift: 80/tcp in status → drift (Apply would remove it).
 func TestPlan_UFW_Absent_Present_Drift(t *testing.T) {
 	r := ufwRunner()
 	stream := planOn(t, r, "absent", map[string]any{"port": 80, "proto": "tcp"})
@@ -81,7 +82,7 @@ func TestPlan_UFW_Absent_Present_Drift(t *testing.T) {
 	assertNoMutatingFirewallCalls(t, r)
 }
 
-// TestPlan_UFW_Absent_Missing_Clean — 9999/tcp нет → clean.
+// TestPlan_UFW_Absent_Missing_Clean: 9999/tcp missing → clean.
 func TestPlan_UFW_Absent_Missing_Clean(t *testing.T) {
 	r := ufwRunner()
 	stream := planOn(t, r, "absent", map[string]any{"port": 9999, "proto": "tcp"})
@@ -91,7 +92,7 @@ func TestPlan_UFW_Absent_Missing_Clean(t *testing.T) {
 	assertNoMutatingFirewallCalls(t, r)
 }
 
-// TestPlan_Firewalld_Present_Match_Clean — port 80/tcp в list-ports → clean.
+// TestPlan_Firewalld_Present_Match_Clean: port 80/tcp in list-ports → clean.
 func TestPlan_Firewalld_Present_Match_Clean(t *testing.T) {
 	r := firewalldRunner()
 	stream := planOn(t, r, "present", map[string]any{"port": 80, "proto": "tcp"})
@@ -101,7 +102,7 @@ func TestPlan_Firewalld_Present_Match_Clean(t *testing.T) {
 	assertNoMutatingFirewallCalls(t, r)
 }
 
-// TestPlan_Firewalld_Present_Missing_Drift — порт не в list-ports → drift.
+// TestPlan_Firewalld_Present_Missing_Drift: port not in list-ports → drift.
 func TestPlan_Firewalld_Present_Missing_Drift(t *testing.T) {
 	r := firewalldRunner()
 	stream := planOn(t, r, "present", map[string]any{"port": 9999, "proto": "tcp"})

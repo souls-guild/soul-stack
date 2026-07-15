@@ -1,30 +1,32 @@
-// Package noop реализует core-модуль `core.noop` ([ADR-015]) — no-op-шаг,
-// который ничего не делает и всегда возвращает успех без изменения состояния
+// Package noop implements the core-module `core.noop` ([ADR-015]) — a no-op
+// step that does nothing and always succeeds without changing state
 // (changed=false).
 //
-// Verb MVP:
-//   - run: no-op. Не читает и не меняет состояние хоста. Любые `params:`
-//     принимаются и игнорируются (схема пустая) — шаг существует как
-//     синтаксический якорь, а не как операция над ресурсом.
+// MVP verb:
+//   - run: no-op. Doesn't read or change host state. Any `params:` are
+//     accepted and ignored (empty schema) — the step exists as a syntactic
+//     anchor, not an operation on a resource.
 //
-// Назначение:
-//   - barrier-якорь: задача `core.noop.run`, обращающаяся к `register.*`
-//     нескольких предыдущих задач, даёт точку, в которой фреймворк дожидается
-//     их завершения (implicit barrier через register-зависимости). Сам барьер
-//     даёт `require:`/register-граф, а не модуль; noop — пустое тело такой
-//     задачи.
-//   - placeholder: пустой шаг, удобный как заглушка в каркасе destiny/scenario
-//     до появления реальной логики, либо как носитель `output:`-проекции
-//     (`output:` читает `register.*` предыдущих задач, своей работы не делает).
+// Purpose:
+//   - barrier anchor: a `core.noop.run` task referencing `register.*` of
+//     several prior tasks gives a point where the framework waits for them
+//     to finish (implicit barrier via register dependencies). The barrier
+//     itself is the `require:`/register graph, not the module; noop is just
+//     that task's empty body.
+//   - placeholder: an empty step, handy as a stand-in in a destiny/scenario
+//     skeleton before real logic exists, or as a carrier for an `output:`
+//     projection (`output:` reads prior tasks' `register.*`, doing no work
+//     of its own).
 //
-// Семантика changed:
-//   - changed = false ВСЕГДА, конструктивно и ненастраиваемо: no-op не меняет
-//     состояние хоста. Прецедент — read-probe-модули (`core.http`, `core.exec`):
-//     модуль не объявляет drift, а интерпретацию задаёт scenario.
+// changed semantics:
+//   - changed = false ALWAYS, by construction and not configurable: no-op
+//     never changes host state. Precedent — read-probe modules (`core.http`,
+//     `core.exec`): the module doesn't declare drift, the scenario decides
+//     the interpretation.
 //
-// Идемпотентность: no-op идемпотентен по природе (пустая операция).
+// Idempotency: no-op is idempotent by nature (empty operation).
 //
-// [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
+// [ADR-015]: docs/adr/0015-core-modules-mvp.md
 package noop
 
 import (
@@ -37,35 +39,36 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — каноническая верхушка адреса.
+// Name — the canonical address root.
 const Name = "core.noop"
 
-// Module — реализация sdk/module.SoulModule для core.noop. Состояния нет:
-// модуль не держит зависимостей, единственный verb `run` — пустая операция.
+// Module — sdk/module.SoulModule implementation for core.noop. No state:
+// the module holds no dependencies, its only verb `run` is a no-op.
 type Module struct{}
 
 func New() *Module { return &Module{} }
 
-// Validate принимает только verb `run`. `params:` не проверяются — схема пустая
-// (любые ключи игнорируются Apply), известность verb-а достаточна.
+// Validate accepts only the verb `run`. `params:` aren't checked — the schema
+// is empty (Apply ignores any keys), knowing the verb is enough.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe). core.noop не имеет желаемого состояния хоста,
-// сверяемого pure-read-ом: drift в смысле ADR-031 не определён (changed всегда
-// false конструктивно). Host применяет default-deny — dry_run для core.noop
-// возвращает FAILED `plan.unsupported`, и это конструктивный отказ, а не ложное
-// «нет дрифта». Сам шаг no-op по природе, но вне контракта Plan/Apply ADR-031.
+// Plan — no-op (no PlanReadSafe). core.noop has no desired host state to
+// check with a pure-read: drift in the ADR-031 sense is undefined (changed is
+// always false by construction). The host applies default-deny — dry_run for
+// core.noop returns FAILED `plan.unsupported`, which is a deliberate refusal,
+// not a false "no drift". The step is no-op by nature, but outside the
+// Plan/Apply ADR-031 contract.
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
 
-// ErrandReadSafe — marker [sdkmodule.ErrandReadSafe] (ADR-033 §2): no-op не
-// мутирует состояние хоста и не имеет побочных эффектов, поэтому безопасен к
-// ad-hoc invocation через Errand pull-контур. Явный опт-ин в whitelist
-// Errand-runner-а, симметрично read-probe-модулям (core.http).
+// ErrandReadSafe — marker [sdkmodule.ErrandReadSafe] (ADR-033 §2): no-op
+// doesn't mutate host state and has no side effects, so it's safe for
+// ad-hoc invocation via the Errand pull loop. Explicit opt-in to the
+// Errand-runner's whitelist, symmetric with read-probe modules (core.http).
 func (m *Module) ErrandReadSafe() {}
 
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {

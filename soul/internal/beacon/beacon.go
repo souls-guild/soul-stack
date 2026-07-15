@@ -1,20 +1,20 @@
-// Package beacon — Soul-side event-driven мониторинг (ADR-030, срез S1).
+// Package beacon — Soul-side event-driven monitoring (ADR-030, slice S1).
 //
-// Состав:
-//   - [Beacon]: read-only интерфейс тела проверки (`core.beacon.<name>`,
-//     параллель core-модулям). Beacon наблюдает состояние хоста и НЕ мутирует
-//     его — это инвариант конструкции (ADR-030).
-//   - [Registry]: статический реестр встроенных core-beacon (как coremod.Default
-//     для модулей). Покрывает весь канонический набор адресов
+// Contents:
+//   - [Beacon]: read-only interface for a check's body (`core.beacon.<name>`,
+//     parallels core modules). Beacon observes host state and does NOT mutate
+//     it — a construction invariant (ADR-030).
+//   - [Registry]: static registry of built-in core beacons (like
+//     coremod.Default for modules). Covers the full canonical address set
 //     [beaconaddr.All] (service_down / file_changed / port_closed / disk_full /
-//     process_absent / http_unhealthy); [Default] паникует при рассинхроне с
-//     ним — баг сборки, не ввод. soul_beacon-плагины — S5, сейчас только
-//     встроенные.
-//   - [Scheduler] (scheduler.go): per-process планировщик активного набора
-//     Vigil, edge-triggered эмиссия Portent.
+//     process_absent / http_unhealthy); [Default] panics on a mismatch with
+//     it — a build bug, not bad input. soul_beacon plugins are S5, only
+//     built-ins exist so far.
+//   - [Scheduler] (scheduler.go): per-process scheduler for the active Vigil
+//     set, edge-triggered Portent emission.
 //
-// Soul-safe изоляция (ADR-012(d)): пакет не тянет Vault/cel-go — beacon-проверки
-// читают только локальное состояние хоста.
+// Soul-safe isolation (ADR-012(d)): the package doesn't pull in Vault/cel-go —
+// beacon checks only read local host state.
 package beacon
 
 import (
@@ -25,51 +25,51 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// State — результат одной beacon-проверки: непрозрачная строка состояния хоста.
-// Scheduler сравнивает её с предыдущим значением (edge-triggered): смена State
-// → Portent. Семантика строки — на усмотрение конкретного beacon-а
-// (`core.beacon.service_down` → "up"/"down"; `core.beacon.file_changed` → хеш
-// файла либо "missing").
+// State — the result of one beacon check: an opaque host-state string.
+// Scheduler compares it against the previous value (edge-triggered): a State
+// change → Portent. String semantics are up to the individual beacon
+// (`core.beacon.service_down` → "up"/"down"; `core.beacon.file_changed` →
+// file hash or "missing").
 type State = string
 
-// Beacon — тело одной проверки. Read-only по конструкции (ADR-030): Check
-// наблюдает состояние хоста и возвращает его, но НЕ изменяет систему.
+// Beacon — the body of one check. Read-only by construction (ADR-030): Check
+// observes host state and returns it, but does NOT change the system.
 //
-// Возвращает:
-//   - state: текущее состояние (см. [State]);
-//   - data:  факты для PortentEvent.data (путь файла, имя сервиса, хеш и т.п.);
-//     может быть nil, тогда Portent несёт только base-поля scheduler-а;
-//   - err:   проверка не смогла выполниться (например невалидный param). На
-//     ошибке scheduler пропускает тик — baseline/last-state не трогаются, Portent
-//     не эмитится (ошибка проверки ≠ смена состояния хоста).
+// Returns:
+//   - state: current state (see [State]);
+//   - data:  facts for PortentEvent.data (file path, service name, hash, etc.);
+//     may be nil, in which case Portent only carries the scheduler's base fields;
+//   - err:   the check couldn't run (e.g. an invalid param). On error the
+//     scheduler skips the tick — baseline/last-state are untouched, no Portent
+//     is emitted (a check error ≠ a host state change).
 type Beacon interface {
 	Check(ctx context.Context, params *structpb.Struct) (state State, data *structpb.Struct, err error)
 }
 
-// BeaconLookup — узкий интерфейс резолва beacon-а по адресу VigilDef.check.
-// Реализуют статический [Registry] (core-beacon) и [CompositeRegistry]
-// (core + plugin-beacon ADR-030 V5-2). Scheduler оперирует только этим
-// интерфейсом — не различает встроенные и plugin-beacon (Composite-резолв
-// решает диспетчеризацию).
+// BeaconLookup — narrow interface for resolving a beacon by VigilDef.check
+// address. Implemented by the static [Registry] (core beacons) and
+// [CompositeRegistry] (core + plugin beacons, ADR-030 V5-2). Scheduler only
+// operates through this interface — it doesn't distinguish built-in from
+// plugin beacons (the Composite resolver handles dispatch).
 type BeaconLookup interface {
 	Lookup(name string) (Beacon, bool)
 }
 
-// Registry — статический набор встроенных core-beacon, адресуемых по имени
-// (`core.beacon.service_down` / `core.beacon.file_changed`). Иммутабелен после
-// сборки [Default]; Lookup — единственная операция, нужная scheduler-у.
+// Registry — static set of built-in core beacons, addressed by name
+// (`core.beacon.service_down` / `core.beacon.file_changed`). Immutable after
+// [Default] builds it; Lookup is the only operation the scheduler needs.
 type Registry struct {
 	beacons map[string]Beacon
 }
 
-// Default собирает реестр всех встроенных core-beacon MVP (ADR-030 S1).
+// Default builds the registry of all built-in core beacons for MVP (ADR-030 S1).
 //
-// Покрытие канонического набора [beaconaddr.All] проверяется тут же: реестр
-// обязан содержать impl ровно для каждого адреса и не больше. Рассинхрон —
-// программный баг сборки (забыли зарегистрировать новый beacon или адрес
-// уехал из общего источника), а не пользовательский ввод → паника при инициа-
-// лизации, а не молча неполный реестр (тот самый класс, что давал S3/OpenRC
-// баги до выноса в shared).
+// Coverage of the canonical [beaconaddr.All] set is checked right here: the
+// registry must contain exactly one impl per address, no more, no less. A
+// mismatch is a build-time programmer bug (forgot to register a new beacon,
+// or an address drifted from the shared source), not user input → panic at
+// init time rather than a silently incomplete registry (the same bug class
+// that caused S3/OpenRC issues before the move to shared).
 func Default() *Registry {
 	beacons := map[string]Beacon{
 		ServiceDownName:   NewServiceDown(),
@@ -92,15 +92,15 @@ func Default() *Registry {
 	return &Registry{beacons: beacons}
 }
 
-// Lookup возвращает beacon по адресу `core.beacon.<name>` (VigilDef.check).
-// Второй результат false — нет такого встроенного beacon-а (scheduler
-// логирует и пропускает Vigil, не падая).
+// Lookup returns the beacon for a `core.beacon.<name>` address (VigilDef.check).
+// A false second result means no such built-in beacon exists (scheduler
+// logs and skips the Vigil instead of failing).
 func (r *Registry) Lookup(name string) (Beacon, bool) {
 	b, ok := r.beacons[name]
 	return b, ok
 }
 
-// Names возвращает адреса всех зарегистрированных beacon-ов (для логов старта).
+// Names returns the addresses of all registered beacons (for startup logs).
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.beacons))
 	for name := range r.beacons {

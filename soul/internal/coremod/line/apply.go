@@ -15,14 +15,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// lineParams — разобранные и провалидированные параметры одного Apply-вызова.
-// Собираются один раз в начале present/absent, дальше передаются в чистые
-// функции редактирования.
+// lineParams holds the parsed and validated params for one Apply call.
+// Assembled once at the start of present/absent, then passed to the pure
+// editing functions.
 type lineParams struct {
 	line         string
 	regexp       *regexp.Regexp
-	insertAfter  string // "" | "EOF" | литерал
-	insertBefore string // "" | "BOF" | литерал
+	insertAfter  string // "" | "EOF" | literal
+	insertBefore string // "" | "BOF" | literal
 	create       bool
 	mode         string
 	owner        string
@@ -33,8 +33,9 @@ func (m *Module) readParams(req *pluginv1.ApplyRequest) (lineParams, error) {
 	return readParamsFromStruct(req.Params)
 }
 
-// readParamsFromStruct — общий extractor для Apply и Plan (разные request-типы
-// делят одинаковую структуру params). Apply раньше делал то же самое inline.
+// readParamsFromStruct is the shared extractor for Apply and Plan (different
+// request types share the same params structure). Apply used to do this
+// inline.
 func readParamsFromStruct(params *structpb.Struct) (lineParams, error) {
 	var p lineParams
 	var err error
@@ -82,8 +83,8 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// Apply дублирует ключевые валидации намеренно (defense-in-depth: Apply
-	// может вызываться без предшествующего Validate).
+	// Apply deliberately duplicates key validations (defense-in-depth: Apply
+	// can be called without a preceding Validate).
 	if p.line == "" {
 		return util.SendFailed(stream, `param "line": required for state present`)
 	}
@@ -96,7 +97,7 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		if !p.create {
 			return util.SendFailed(stream, fmt.Sprintf("%s: file not found, set create:true to create it", path))
 		}
-		// create=true: новый файл = единственная строка.
+		// create=true: new file = single line.
 		mode, perr := util.ParseMode(p.mode)
 		if perr != nil {
 			return util.SendFailed(stream, perr.Error())
@@ -125,8 +126,8 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		})
 	}
 
-	// in-place правка существующего файла: preserve mode/owner/group по
-	// умолчанию (ADR-015), явные mode/owner/group — override.
+	// in-place edit of an existing file: preserve mode/owner/group by
+	// default (ADR-015), explicit mode/owner/group override.
 	if werr := util.AtomicWritePreserving(
 		path, []byte(joinLines(out.lines, trailingNL)),
 		p.mode, p.owner, p.group, m.LookupUser, m.LookupGroup,
@@ -151,8 +152,8 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// Apply дублирует ключевые валидации намеренно (defense-in-depth: Apply
-	// может вызываться без предшествующего Validate).
+	// Apply deliberately duplicates key validations (defense-in-depth: Apply
+	// can be called without a preceding Validate).
 	if p.line == "" && p.regexp == nil {
 		return util.SendFailed(stream, `state absent requires "line" or "regexp"`)
 	}
@@ -162,7 +163,7 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 		return util.SendFailed(stream, rerr.Error())
 	}
 	if !existed {
-		// absent + файла нет → нечего удалять, no-op (create игнорируется).
+		// absent + file missing → nothing to remove, no-op (create is ignored).
 		return util.SendFinal(stream, false, map[string]any{
 			"path":    path,
 			"changed": false,
@@ -181,9 +182,9 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 		})
 	}
 
-	// absent правит существующий файл — preserve mode/owner/group (ADR-015);
-	// absent не принимает явных mode/owner/group, поэтому всегда сохраняем
-	// текущие.
+	// absent edits an existing file — preserve mode/owner/group (ADR-015);
+	// absent doesn't accept explicit mode/owner/group, so current ones are
+	// always kept.
 	if werr := util.AtomicWritePreserving(
 		path, []byte(joinLines(out.lines, trailingNL)),
 		"", "", "", m.LookupUser, m.LookupGroup,
@@ -220,11 +221,11 @@ func readFile(path string) (content []byte, existed bool, err error) {
 	}
 }
 
-// splitLines режет содержимое на логические строки без терминаторов \n.
-// trailingNL фиксирует, оканчивался ли исходный файл переводом строки, чтобы
-// joinLines восстановил это (и пустой файл не превращался в файл с пустой
-// строкой). CRLF не нормализуется: \r остаётся частью строки и сравнивается
-// как есть (предсказуемость — не угадываем намерения).
+// splitLines splits content into logical lines without \n terminators.
+// trailingNL records whether the source file ended with a newline, so
+// joinLines can restore it (and an empty file doesn't turn into a file with
+// one empty line). CRLF isn't normalized: \r stays part of the line and is
+// compared as-is (predictability — we don't guess intent).
 func splitLines(content []byte) (lines []string, trailingNL bool) {
 	if len(content) == 0 {
 		return nil, false
@@ -237,8 +238,8 @@ func splitLines(content []byte) (lines []string, trailingNL bool) {
 	return strings.Split(s, "\n"), trailingNL
 }
 
-// joinLines собирает строки обратно. trailingNL восстанавливает финальный
-// перевод строки. Пустой набор строк → пустой файл.
+// joinLines reassembles lines. trailingNL restores the final newline. An
+// empty set of lines → empty file.
 func joinLines(lines []string, trailingNL bool) string {
 	if len(lines) == 0 {
 		return ""

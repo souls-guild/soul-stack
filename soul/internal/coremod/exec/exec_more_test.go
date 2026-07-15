@@ -12,9 +12,10 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// apply — прогон Apply (state=run) на переданном модуле; возвращает финальное
-// событие. Контракт core-модуля: ошибки доменной логики идут в failed-event,
-// сам Apply возвращает Go-error только при сбое стрима — здесь его нет.
+// apply runs Apply (state=run) on the given module and returns the final
+// event. Core module contract: domain-logic errors go into the failed
+// event; Apply itself only returns a Go error on a stream failure — not
+// exercised here.
 func apply(t *testing.T, m *exec.Module, params map[string]any) *pluginv1.ApplyEvent {
 	t.Helper()
 	stream := &internaltest.ApplyStream{}
@@ -31,10 +32,10 @@ func apply(t *testing.T, m *exec.Module, params map[string]any) *pluginv1.ApplyE
 	return ev
 }
 
-// noStat — StatFile, который никогда не находит файл (creates всегда промахивается).
+// noStat is a StatFile that never finds a file (creates always misses).
 func noStat(string) (bool, error) { return false, nil }
 
-// Неизвестный state → failed с понятным message (ветка req.State != "run").
+// Unknown state → failed with a clear message (branch req.State != "run").
 func TestApply_UnknownState_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := newModule(r, noStat)
@@ -57,14 +58,14 @@ func TestApply_UnknownState_Failed(t *testing.T) {
 	}
 }
 
-// argv-форма: метасимволы (|, >, ;, $VAR) НЕ интерпретируются shell-ом, а
-// уходят как литеральные аргументы в RunOpts. Это ключевое отличие core.exec
-// от core.cmd. Проверяем, что модуль НЕ оборачивает вызов в sh -c, а строит
-// ключ напрямую из cmd+args.
+// argv form: metacharacters (|, >, ;, $VAR) are NOT interpreted by a
+// shell, they pass through as literal arguments in RunOpts. This is the
+// key difference from core.cmd. Verifies the module does NOT wrap the
+// call in sh -c, but builds the key directly from cmd+args.
 func TestApply_Argv_MetacharsAreLiteral(t *testing.T) {
 	r := internaltest.NewRunner()
-	// Если бы модуль использовал shell, ключ был бы "sh -c ...". argv-форма
-	// даёт ключ "echo a|b > c ; $HOME" — метасимволы как обычные аргументы.
+	// If the module used a shell, the key would be "sh -c ...". The argv
+	// form gives key "echo a|b > c ; $HOME" — metacharacters as plain args.
 	key := "echo a|b > c ; $HOME"
 	r.Results[key] = []util.Result{{ExitCode: 0, Stdout: "a|b > c ; $HOME\n"}}
 	m := newModule(r, noStat)
@@ -84,8 +85,9 @@ func TestApply_Argv_MetacharsAreLiteral(t *testing.T) {
 	}
 }
 
-// Ошибка запуска основного процесса (бинарь не найден / permission) → Result.Err
-// → failed с message "exec <cmd>: <err>". Единственный путь к failed от runner-а.
+// Launch error for the main process (binary not found / permission) →
+// Result.Err → failed with message "exec <cmd>: <err>". The only path to
+// failed from the runner.
 func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["nonexistent-binary"] = []util.Result{{Err: os.ErrNotExist}}
@@ -100,9 +102,9 @@ func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 	}
 }
 
-// Извлечение опциональных параметров неверного типа → failed на этапе разбора,
-// не доходя до runner-а. Покрывает каждую ветку err из OptStringSlice/
-// OptString/OptStringMap извлечения в Apply.
+// Extracting optional parameters of the wrong type → failed at the parsing
+// stage, never reaching the runner. Covers every err branch from the
+// OptStringSlice/OptString/OptStringMap extraction in Apply.
 func TestApply_BadParamTypes_Failed(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -132,9 +134,10 @@ func TestApply_BadParamTypes_Failed(t *testing.T) {
 	}
 }
 
-// creates: stat вернул ошибку (не ErrNotExist, напр. permission denied) →
-// shouldSkip отдаёт serr → failed, команда НЕ запускается. Ветка serr в Apply
-// и err-ветка StatFile в shouldSkip.
+// creates: stat returned an error (not ErrNotExist, e.g. permission
+// denied) → shouldSkip returns serr → failed, the command does NOT run.
+// Covers the serr branch in Apply and the err branch of StatFile in
+// shouldSkip.
 func TestApply_Creates_StatError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := newModule(r, func(string) (bool, error) { return false, os.ErrPermission })
@@ -148,7 +151,7 @@ func TestApply_Creates_StatError_Failed(t *testing.T) {
 	}
 }
 
-// creates: файла нет → НЕ skip, основная команда выполняется (ветка exists==false).
+// creates: file absent → NOT skipped, the main command runs (exists==false branch).
 func TestApply_Creates_Absent_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["touch /x"] = []util.Result{{ExitCode: 0}}
@@ -163,9 +166,9 @@ func TestApply_Creates_Absent_Runs(t *testing.T) {
 	}
 }
 
-// unless: exit != 0 → условие ложно → основная команда выполняется (ветка
-// ExitCode != 0 в unless). Guard-проверка идёт через shell (sh -c), основная
-// команда — argv.
+// unless: exit != 0 → condition false → the main command runs (ExitCode
+// != 0 branch in unless). The guard check goes through a shell (sh -c),
+// the main command is argv.
 func TestApply_Unless_False_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c test -f /etc/passwd"] = []util.Result{{ExitCode: 1}}
@@ -185,8 +188,8 @@ func TestApply_Unless_False_Runs(t *testing.T) {
 	}
 }
 
-// unless: ошибка запуска guard-проверки → failed (ветка r.Err в unless-ветке
-// shouldSkip + serr в Apply).
+// unless: guard-check launch error → failed (r.Err branch in the unless
+// path of shouldSkip + serr in Apply).
 func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c broken"] = []util.Result{{Err: os.ErrPermission}}
@@ -198,8 +201,8 @@ func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 	}
 }
 
-// onlyif: exit == 0 → условие истинно → основная команда выполняется (ветка
-// ExitCode == 0 в onlyif).
+// onlyif: exit == 0 → condition true → the main command runs (ExitCode ==
+// 0 branch in onlyif).
 func TestApply_Onlyif_True_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c which make"] = []util.Result{{ExitCode: 0}}
@@ -219,7 +222,7 @@ func TestApply_Onlyif_True_Runs(t *testing.T) {
 	}
 }
 
-// onlyif: ошибка запуска guard-проверки → failed (ветка r.Err в onlyif).
+// onlyif: guard-check launch error → failed (r.Err branch in onlyif).
 func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c broken"] = []util.Result{{Err: os.ErrPermission}}
@@ -231,16 +234,16 @@ func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 	}
 }
 
-// Сквозной проход всех трёх guard-ов без skip: creates промах, unless ложно
-// (exit!=0), onlyif истинно (exit 0) → команда выполняется. Проверяет порядок
-// creates → unless → onlyif и что guard-проверки идут через shell, а основная
-// команда — argv.
+// End-to-end pass through all three guards without a skip: creates misses,
+// unless is false (exit!=0), onlyif is true (exit 0) → the command runs.
+// Verifies the creates → unless → onlyif order and that guard checks go
+// through a shell while the main command is argv.
 func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
-	r.Results["sh -c absent"] = []util.Result{{ExitCode: 1}}  // unless ложно
-	r.Results["sh -c present"] = []util.Result{{ExitCode: 0}} // onlyif истинно
+	r.Results["sh -c absent"] = []util.Result{{ExitCode: 1}}  // unless false
+	r.Results["sh -c present"] = []util.Result{{ExitCode: 0}} // onlyif true
 	r.Results["do work"] = []util.Result{{ExitCode: 0, Stdout: "done"}}
-	m := newModule(r, noStat) // creates: нет файла
+	m := newModule(r, noStat) // creates: no file
 
 	ev := apply(t, m, map[string]any{
 		"cmd":     "do",
@@ -255,7 +258,7 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	if ev.Output.Fields["stdout"].GetStringValue() != "done" {
 		t.Fatalf("stdout=%q", ev.Output.Fields["stdout"].GetStringValue())
 	}
-	// порядок: unless-проверка раньше onlyif-проверки, основная команда последней
+	// order: unless check before onlyif check, main command last
 	want := []string{"sh -c absent", "sh -c present", "do work"}
 	if len(r.Calls) != 3 {
 		t.Fatalf("ожидал 3 вызова %v, получил %v", want, r.Calls)
@@ -267,8 +270,8 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	}
 }
 
-// stderr из Result прокидывается в output вместе со stdout/exit_code (поле
-// stderr не покрыто базовыми тестами).
+// stderr from Result is threaded into output alongside stdout/exit_code
+// (the stderr field isn't covered by the basic tests).
 func TestApply_OutputCarriesStderr(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["probe"] = []util.Result{{ExitCode: 3, Stdout: "out", Stderr: "err-text"}}
@@ -286,8 +289,8 @@ func TestApply_OutputCarriesStderr(t *testing.T) {
 	}
 }
 
-// Plan — no-op stub: не падает и не шлёт событий (nil-stream допустим, т.к.
-// реализация его игнорирует).
+// Plan is a no-op stub: doesn't panic and sends no events (a nil stream is
+// fine since the implementation ignores it).
 func TestPlan_NoOp(t *testing.T) {
 	m := exec.New()
 	if err := m.Plan(&pluginv1.PlanRequest{}, nil); err != nil {
@@ -295,9 +298,10 @@ func TestPlan_NoOp(t *testing.T) {
 	}
 }
 
-// Production New(): реальный argv-запуск /bin/true без shell. Метасимвол в
-// аргументе остаётся литералом — printf печатает его дословно, shell-расширения
-// не происходит. Закрывает production-путь Runner + envSlice(nil).
+// Production New(): a real argv launch of /bin/true without a shell. The
+// metacharacter in the argument stays literal — printf prints it verbatim,
+// no shell expansion happens. Covers the production Runner path +
+// envSlice(nil).
 func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 	m := exec.New()
 	ev := apply(t, m, map[string]any{
@@ -305,7 +309,7 @@ func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 		"args": []any{"%s", "$HOME|;>"},
 	})
 	if ev.Failed {
-		// fallback: на некоторых системах printf в /bin
+		// fallback: on some systems printf lives in /bin
 		m2 := exec.New()
 		ev = apply(t, m2, map[string]any{
 			"cmd":  "/bin/echo",
@@ -316,7 +320,7 @@ func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 		t.Fatalf("argv-запуск упал: msg=%q", ev.Message)
 	}
 	got := ev.Output.Fields["stdout"].GetStringValue()
-	// shell не вызывался → $HOME не раскрыто, метасимволы литеральны.
+	// no shell was invoked → $HOME wasn't expanded, metacharacters stay literal.
 	if got != "$HOME|;>" && got != "$HOME|;>\n" {
 		t.Fatalf("ожидал литеральный вывод без shell-расширения, got=%q", got)
 	}
@@ -325,13 +329,13 @@ func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 	}
 }
 
-// Production New(): non-zero exit от реального /bin/false НЕ делает шаг failed
-// (контракт core.exec — пользователь решает через failed_when). exit_code=1.
+// Production New(): non-zero exit from a real /bin/false does NOT fail the
+// step (core.exec's contract — the user decides via failed_when). exit_code=1.
 func TestApply_Production_RealFalse_NonZeroNotFailed(t *testing.T) {
 	m := exec.New()
 	ev := apply(t, m, map[string]any{"cmd": "/usr/bin/false"})
 	if ev.Failed {
-		// fallback на /bin/false
+		// fallback to /bin/false
 		m2 := exec.New()
 		ev = apply(t, m2, map[string]any{"cmd": "/bin/false"})
 	}
@@ -346,8 +350,8 @@ func TestApply_Production_RealFalse_NonZeroNotFailed(t *testing.T) {
 	}
 }
 
-// Production New(): реальный бинарь не найден → Result.Err → failed (production
-// runCmd возвращает Err для ENOENT).
+// Production New(): a real binary not found → Result.Err → failed
+// (production runCmd returns Err for ENOENT).
 func TestApply_Production_BinaryNotFound_Failed(t *testing.T) {
 	m := exec.New()
 	ev := apply(t, m, map[string]any{"cmd": "/nonexistent/soul-stack/no-such-binary-zzz"})
@@ -356,8 +360,9 @@ func TestApply_Production_BinaryNotFound_Failed(t *testing.T) {
 	}
 }
 
-// Production creates: реальный существующий файл → реальный fileExists/osStat
-// вернёт true → skip без запуска команды. Закрывает osstat.go (ветка err==nil).
+// Production creates: a real existing file → the real fileExists/osStat
+// returns true → skip without running the command. Covers osstat.go
+// (err==nil branch).
 func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
@@ -382,11 +387,11 @@ func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 	}
 }
 
-// Production creates: stat реально упал с ошибкой, отличной от ErrNotExist
-// (permission denied на родительском каталоге) → osStat возвращает (false,err)
-// → shouldSkip отдаёт serr → failed, команда НЕ запускается. Закрывает
-// последнюю ветку osstat.go (return false, err). Под root EACCES не возникает —
-// тогда тест нерелевантен и пропускается.
+// Production creates: stat really fails with an error other than
+// ErrNotExist (permission denied on the parent dir) → osStat returns
+// (false, err) → shouldSkip returns serr → failed, the command does NOT
+// run. Covers the last branch of osstat.go (return false, err). EACCES
+// doesn't happen under root — the test is then irrelevant and skipped.
 func TestApply_Production_Creates_StatPermissionError_Failed(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("под root permission denied не воспроизводится")
@@ -400,7 +405,7 @@ func TestApply_Production_Creates_StatPermissionError_Failed(t *testing.T) {
 	if err := os.Chmod(locked, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) // чтобы TempDir-cleanup смог удалить
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) // so TempDir cleanup can remove it
 
 	m := exec.New()
 	ev := apply(t, m, map[string]any{
@@ -412,8 +417,8 @@ func TestApply_Production_Creates_StatPermissionError_Failed(t *testing.T) {
 	}
 }
 
-// Production creates: файла нет → реальный osStat вернёт (false,nil) через
-// ветку ErrNotExist → команда выполняется. Закрывает osstat.go (ErrNotExist).
+// Production creates: no file → the real osStat returns (false, nil) via
+// the ErrNotExist branch → the command runs. Covers osstat.go (ErrNotExist).
 func TestApply_Production_Creates_Absent_Runs(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")

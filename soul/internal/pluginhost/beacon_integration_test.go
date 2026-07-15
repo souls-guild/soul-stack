@@ -16,10 +16,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// buildBeaconEchoPlugin собирает test-плагин testdata/beacon-plugin и кладёт
-// его в outDir как `soul-beacon-echo`. Возвращает абсолютный путь к бинарю.
-// Параллель buildEchoPlugin (integration_test.go) — те же inputs, тот же
-// GOWORK=off-режим для отдельного go.mod-подмодуля testdata/.
+// buildBeaconEchoPlugin builds the test plugin testdata/beacon-plugin and
+// places it in outDir as `soul-beacon-echo`. Returns the absolute path to the
+// binary. Mirrors buildEchoPlugin (integration_test.go) — same inputs, same
+// GOWORK=off mode for the separate go.mod submodule testdata/.
 func buildBeaconEchoPlugin(t *testing.T, outDir string) string {
 	t.Helper()
 	srcDir, err := filepath.Abs("testdata/beacon-plugin")
@@ -37,9 +37,9 @@ func buildBeaconEchoPlugin(t *testing.T, outDir string) string {
 	return binPath
 }
 
-// setupBeaconHostAndDiscovered — параллель setupHostAndDiscovered: поднимает
-// modulesRoot c одним kind=soul_beacon плагином (testdata/beacon-plugin),
-// собирает Sigil-trust для него и возвращает готовый Host + Discovered.
+// setupBeaconHostAndDiscovered mirrors setupHostAndDiscovered: sets up
+// modulesRoot with a single kind=soul_beacon plugin (testdata/beacon-plugin),
+// builds Sigil trust for it, and returns a ready Host + Discovered.
 func setupBeaconHostAndDiscovered(t *testing.T) (*Host, Discovered, func()) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -52,7 +52,7 @@ func setupBeaconHostAndDiscovered(t *testing.T) (*Host, Discovered, func()) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	binPath := buildBeaconEchoPlugin(t, moduleDir)
-	// manifest.name=echo → BinaryName=soul-beacon-echo (конвенция Manifest.BinaryName).
+	// manifest.name=echo → BinaryName=soul-beacon-echo (Manifest.BinaryName convention).
 	if err := os.WriteFile(filepath.Join(moduleDir, "manifest.yaml"), []byte(`kind: soul_beacon
 protocol_version: 1
 namespace: wb
@@ -95,9 +95,9 @@ spec:
 	return h, found[0], func() {}
 }
 
-// TestSpawnBeaconHappyPath — full L1 roundtrip: Discover → Spawn (с реальным
+// TestSpawnBeaconHappyPath — full L1 roundtrip: Discover → Spawn (with real
 // Sigil-verify) → Validate(ok) → Check(state=alerted, payload, state_cookie) →
-// Close. Покрывает SDK contract в реальном subprocess-gRPC окружении.
+// Close. Covers the SDK contract in a real subprocess-gRPC environment.
 func TestSpawnBeaconHappyPath(t *testing.T) {
 	h, d, cleanup := setupBeaconHostAndDiscovered(t)
 	defer cleanup()
@@ -143,8 +143,8 @@ func TestSpawnBeaconHappyPath(t *testing.T) {
 	}
 }
 
-// TestSpawnBeaconValidationFailure — Validate без topic возвращает Ok=false с
-// ошибкой; Spawn проходит, RPC возвращает структурный негатив.
+// TestSpawnBeaconValidationFailure — Validate without topic returns Ok=false
+// with an error; Spawn succeeds, the RPC returns a structured negative.
 func TestSpawnBeaconValidationFailure(t *testing.T) {
 	h, d, cleanup := setupBeaconHostAndDiscovered(t)
 	defer cleanup()
@@ -167,10 +167,10 @@ func TestSpawnBeaconValidationFailure(t *testing.T) {
 	}
 }
 
-// TestSpawnBeaconRejectsKindMismatch — попытка SpawnBeacon на manifest kind=
-// soul_module даёт ошибку до exec (защита от kind-cross на Soul-host-е).
+// TestSpawnBeaconRejectsKindMismatch — SpawnBeacon on a manifest with kind=
+// soul_module errors before exec (guards against kind-cross on the Soul host).
 func TestSpawnBeaconRejectsKindMismatch(t *testing.T) {
-	h, modD, cleanup := setupHostAndDiscovered(t) // soul_module-плагин из echo-теста
+	h, modD, cleanup := setupHostAndDiscovered(t) // soul_module plugin from the echo test
 	defer cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -180,10 +180,10 @@ func TestSpawnBeaconRejectsKindMismatch(t *testing.T) {
 	}
 }
 
-// TestSpawnBeaconDigestMismatchRejected — security-ветка: integrity-gate
-// блокирует beacon-плагин с подменённым бинарём. Параллель
-// TestSpawnDigestMismatchRejected для soul_module — Sigil-verify не зависит
-// от kind, общая логика shared/pluginhost.
+// TestSpawnBeaconDigestMismatchRejected — security branch: the integrity gate
+// blocks a beacon plugin with a tampered binary. Mirrors
+// TestSpawnDigestMismatchRejected for soul_module — Sigil-verify doesn't
+// depend on kind, shared logic lives in shared/pluginhost.
 func TestSpawnBeaconDigestMismatchRejected(t *testing.T) {
 	h, d, cleanup := setupBeaconHostAndDiscovered(t)
 	defer cleanup()
@@ -191,17 +191,17 @@ func TestSpawnBeaconDigestMismatchRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Первый Spawn — verify+seal проходят (валидный допуск).
+	// First Spawn — verify+seal pass (valid admission).
 	p, err := h.SpawnBeacon(ctx, d)
 	if err != nil {
 		t.Fatalf("первый SpawnBeacon: %v", err)
 	}
 	_ = p.Close()
 
-	// Подмена бинаря: digest перестаёт совпадать.
+	// Tamper the binary: the digest stops matching.
 	tamperBinary(t, d.BinaryPath)
 
-	// Второй Spawn должен отказать.
+	// The second Spawn must be denied.
 	_, err = h.SpawnBeacon(ctx, d)
 	if err == nil {
 		t.Fatal("SECURITY: SpawnBeacon запустил подменённый бинарь")

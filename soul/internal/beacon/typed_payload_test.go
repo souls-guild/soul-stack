@@ -9,8 +9,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// L0 unit-тесты typed PortentPayload (V5-1, ADR-030 amendment 2026-05-26):
-// roundtrip каждого из 6 typed payload через proto Marshal/Unmarshal +
+// L0 unit tests for typed PortentPayload (V5-1, ADR-030 amendment 2026-05-26):
+// roundtrip each of the 6 typed payloads through proto Marshal/Unmarshal +
 // dual-write data+typed (deprecation period).
 
 func mustStruct(t *testing.T, fields map[string]any) *structpb.Struct {
@@ -22,8 +22,8 @@ func mustStruct(t *testing.T, fields map[string]any) *structpb.Struct {
 	return s
 }
 
-// roundtripPortent выполняет marshal → unmarshal и возвращает unmarshaled
-// сообщение. Любой proto-сбой — t.Fatal.
+// roundtripPortent marshals → unmarshals and returns the unmarshaled
+// message. Any proto failure is a t.Fatal.
 func roundtripPortent(t *testing.T, ev *keeperv1.PortentEvent) *keeperv1.PortentEvent {
 	t.Helper()
 	bytes, err := proto.Marshal(ev)
@@ -53,7 +53,7 @@ func TestFillTypedPayload_FileChanged(t *testing.T) {
 	if fc.GetPath() != "/etc/passwd" || fc.GetSha256() != "deadbeef" {
 		t.Errorf("FileChangedPortent = %+v", fc)
 	}
-	// dual-write: data-ветка тоже сохранилась после roundtrip.
+	// dual-write: the data branch is also preserved after roundtrip.
 	if got.GetData() == nil || got.GetData().GetFields()["path"].GetStringValue() != "/etc/passwd" {
 		t.Error("legacy data-ветка должна быть заполнена в hand-off-период")
 	}
@@ -151,7 +151,7 @@ func TestFillTypedPayload_HTTPUnhealthy(t *testing.T) {
 }
 
 func TestFillTypedPayload_Inotify(t *testing.T) {
-	// data shape от core.beacon.inotify::inotifyData с двумя событиями.
+	// data shape from core.beacon.inotify::inotifyData with two events.
 	data := mustStruct(t, map[string]any{
 		"path":  "/var/log/audit",
 		"count": 2,
@@ -186,8 +186,8 @@ func TestFillTypedPayload_Inotify(t *testing.T) {
 }
 
 func TestFillTypedPayload_InotifyEmptyEvents(t *testing.T) {
-	// Граничный кейс: count=0, events ключа нет. Payload-ветка всё равно
-	// выставляется (scheduler решает, эмитить ли Portent по state).
+	// Edge case: count=0, no events key. The payload branch is still set
+	// (the scheduler decides whether to emit a Portent based on state).
 	data := mustStruct(t, map[string]any{
 		"path":  "/etc/x",
 		"count": 0,
@@ -209,9 +209,9 @@ func TestFillTypedPayload_InotifyEmptyEvents(t *testing.T) {
 }
 
 func TestFillTypedPayload_UnknownCheckNoop(t *testing.T) {
-	// Plugin-beacon (V5-2): неизвестный check-address не должен выставлять
-	// typed payload — ветка остаётся nil, чтобы plugin-apply-loop сам выставил
-	// `custom: Struct`.
+	// Plugin beacon (V5-2): an unknown check address must not set a typed
+	// payload — the branch stays nil so the plugin-apply-loop can set
+	// `custom: Struct` itself.
 	data := mustStruct(t, map[string]any{"x": "y"})
 	ev := &keeperv1.PortentEvent{BeaconName: "plugin-v1", Data: data}
 	fillTypedPayload(ev, "soul_beacon.example", data)
@@ -222,8 +222,8 @@ func TestFillTypedPayload_UnknownCheckNoop(t *testing.T) {
 }
 
 func TestFillTypedPayload_NilDataNoop(t *testing.T) {
-	// nil-data — beacon вернул pure-state-смену без атрибутов; payload не
-	// заполняем (всё равно нечего класть).
+	// nil data — the beacon returned a pure state change with no attributes;
+	// don't fill payload (nothing to put there anyway).
 	ev := &keeperv1.PortentEvent{BeaconName: "v1"}
 	fillTypedPayload(ev, beaconaddr.FileChanged, nil)
 	if ev.GetPayload() != nil {
@@ -231,9 +231,9 @@ func TestFillTypedPayload_NilDataNoop(t *testing.T) {
 	}
 }
 
-// TestPortentEvent_OneofExclusive — proto-инвариант: при roundtrip ровно одна
-// typed-ветка установлена (oneof гарантирует на wire), и GetData() сохраняет
-// dual-write значение.
+// TestPortentEvent_OneofExclusive is a proto invariant: after roundtrip
+// exactly one typed branch is set (oneof guarantees it on the wire), and
+// GetData() preserves the dual-write value.
 func TestPortentEvent_OneofExclusive(t *testing.T) {
 	data := mustStruct(t, map[string]any{"path": "/x", "sha256": "abc"})
 	ev := &keeperv1.PortentEvent{
@@ -245,7 +245,7 @@ func TestPortentEvent_OneofExclusive(t *testing.T) {
 	}
 	got := roundtripPortent(t, ev)
 
-	// Ровно одна ветка typed — FileChanged.
+	// Exactly one typed branch — FileChanged.
 	if got.GetFileChanged() == nil {
 		t.Error("file_changed ветка пуста после roundtrip")
 	}
@@ -254,7 +254,7 @@ func TestPortentEvent_OneofExclusive(t *testing.T) {
 		got.GetHttpUnhealthy() != nil || got.GetCustom() != nil {
 		t.Error("oneof нарушен: несколько typed-веток после roundtrip")
 	}
-	// dual-write: legacy data-ветка тоже на месте.
+	// dual-write: the legacy data branch is also present.
 	if got.GetData() == nil {
 		t.Error("data-ветка потеряна после roundtrip")
 	}

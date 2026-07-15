@@ -11,8 +11,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeSender перехватывает отправленные FromSoul и (опционально) автоматически
-// «отвечает» через client.Deliver, эмулируя recv-loop Keeper-а.
+// fakeSender captures sent FromSoul messages and (optionally) automatically
+// "replies" via client.Deliver, emulating the Keeper's recv loop.
 type fakeSender struct {
 	mu       sync.Mutex
 	sent     []*keeperv1.AugurRequest
@@ -39,8 +39,9 @@ func (f *fakeSender) SendFromSoul(msg *keeperv1.FromSoul) error {
 	if hook != nil {
 		hook()
 	}
-	// Эмулируем асинхронный recv-loop: ответ доставляется из отдельной горутины,
-	// как делает reader-горутина handleSession (Deliver вызывается не из Fetch).
+	// Emulate the async recv loop: the reply is delivered from a separate
+	// goroutine, like handleSession's reader goroutine does (Deliver isn't
+	// called from Fetch).
 	if auto != nil && deliver != nil {
 		go func() {
 			if reply := auto(req); reply != nil {
@@ -72,7 +73,7 @@ func TestFetch_OK_CorrelatesByRequestID(t *testing.T) {
 	fs := &fakeSender{}
 	c := NewClient(fs)
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
-		// Эхо request_id — корреляция должна сработать ровно по нему.
+		// Echo request_id — correlation must key off exactly this.
 		return okReply(req.GetRequestId(), map[string]any{"value": "secret-xyz"})
 	}
 	fs.deliver = c.Deliver
@@ -102,8 +103,8 @@ func TestFetch_OK_CorrelatesByRequestID(t *testing.T) {
 func TestFetch_WrongRequestIDNotDelivered_TimesOut(t *testing.T) {
 	fs := &fakeSender{}
 	c := NewClient(fs)
-	// Отвечаем с ЧУЖИМ request_id — корреляция не должна сработать, Fetch ждёт
-	// до отмены ctx.
+	// Reply with a FOREIGN request_id — correlation must not match; Fetch
+	// waits until ctx is canceled.
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
 		return okReply("не-тот-id", map[string]any{"value": 1})
 	}
@@ -131,7 +132,7 @@ func TestFetch_WrongRequestIDNotDelivered_TimesOut(t *testing.T) {
 }
 
 func TestFetch_Timeout_CleansUpPending(t *testing.T) {
-	fs := &fakeSender{} // без auto-ответа: запрос «зависает»
+	fs := &fakeSender{} // no auto-reply: the request "hangs"
 	c := NewClient(fs)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -141,7 +142,7 @@ func TestFetch_Timeout_CleansUpPending(t *testing.T) {
 		t.Fatalf("ожидался DeadlineExceeded, got %v", err)
 	}
 
-	// pending-map очищен по таймауту (discard в defer Fetch).
+	// pending map is cleared on timeout (discard in Fetch's defer).
 	c.mu.Lock()
 	n := len(c.pending)
 	c.mu.Unlock()
@@ -153,8 +154,8 @@ func TestFetch_Timeout_CleansUpPending(t *testing.T) {
 func TestFetch_ParallelRequests_EachGetsOwnReply(t *testing.T) {
 	fs := &fakeSender{}
 	c := NewClient(fs)
-	// Каждому запросу — ответ с эхом его request_id и значением = его query,
-	// чтобы проверить, что параллельные Fetch не перепутали ответы.
+	// Each request gets a reply echoing its request_id with value = its
+	// query, to check that parallel Fetches don't mix up replies.
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
 		return okReply(req.GetRequestId(), map[string]any{"value": req.GetQuery()})
 	}
@@ -202,7 +203,7 @@ func TestFetch_ParallelRequests_EachGetsOwnReply(t *testing.T) {
 }
 
 func TestRequestID_UniquePerStream(t *testing.T) {
-	fs := &fakeSender{} // без ответа — запросы зависнут, но request_id уже сгенерён в Send
+	fs := &fakeSender{} // no reply — requests will hang, but request_id is already generated in Send
 	c := NewClient(fs)
 
 	const n = 500
@@ -280,7 +281,7 @@ func TestFetch_Error(t *testing.T) {
 func TestFetch_UnspecifiedTreatedAsDeny(t *testing.T) {
 	fs := &fakeSender{}
 	c := NewClient(fs)
-	// UNSPECIFIED (zero-value) — должен трактоваться как deny (защита).
+	// UNSPECIFIED (zero-value) must be treated as deny (fail-safe).
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
 		return &keeperv1.AugurReply{RequestId: req.GetRequestId()}
 	}
@@ -297,7 +298,8 @@ func TestFetch_UnspecifiedTreatedAsDeny(t *testing.T) {
 func TestFetch_OKWithoutInlineData_IsError(t *testing.T) {
 	fs := &fakeSender{}
 	c := NewClient(fs)
-	// OK без inline_data (delegate=true в MVP-1 не поддержан) — явная ошибка.
+	// OK without inline_data (delegate=true isn't supported in MVP-1) — an
+	// explicit error.
 	fs.auto = func(req *keeperv1.AugurRequest) *keeperv1.AugurReply {
 		return &keeperv1.AugurReply{
 			RequestId: req.GetRequestId(),
@@ -315,7 +317,7 @@ func TestFetch_OKWithoutInlineData_IsError(t *testing.T) {
 }
 
 func TestClose_UnblocksPendingFetch(t *testing.T) {
-	fs := &fakeSender{} // без ответа
+	fs := &fakeSender{} // no reply
 	c := NewClient(fs)
 
 	errCh := make(chan error, 1)
@@ -326,7 +328,7 @@ func TestClose_UnblocksPendingFetch(t *testing.T) {
 		}()
 	}()
 
-	// Дать Fetch зарегистрировать pending до Close.
+	// Let Fetch register pending before Close.
 	deadline := time.After(time.Second)
 	for {
 		c.mu.Lock()
@@ -380,7 +382,7 @@ func TestSend_ErrorPropagates(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ошибка Send должна проброситься наружу")
 	}
-	// pending очищен даже при ошибке Send.
+	// pending is cleared even when Send errors.
 	c.mu.Lock()
 	n := len(c.pending)
 	c.mu.Unlock()

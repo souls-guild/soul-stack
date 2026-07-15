@@ -10,12 +10,13 @@ import (
 	"syscall"
 )
 
-// osVersion на Linux не используется (version берётся из /etc/os-release
-// VERSION_ID); определён только для единообразия сигнатуры platform-веток.
+// osVersion is unused on Linux (version comes from /etc/os-release
+// VERSION_ID); defined only to keep the platform-branch signature uniform.
 func osVersion(_ context.Context) string { return "" }
 
-// kernelInfo — версия ядра через uname(2). release — голая версия (5.15.0),
-// version — то же с дистрибутив-suffix-ом из uname.release (5.15.0-101-generic).
+// kernelInfo — kernel version via uname(2). release is the bare version
+// (5.15.0), version is the same with the distro suffix from uname.release
+// (5.15.0-101-generic).
 func kernelInfo(_ context.Context) KernelInfo {
 	var u syscall.Utsname
 	if err := syscall.Uname(&u); err != nil {
@@ -28,8 +29,8 @@ func kernelInfo(_ context.Context) KernelInfo {
 	}
 }
 
-// baseKernelRelease обрезает дистрибутив-suffix: "5.15.0-101-generic" → "5.15.0".
-// Берём часть до первого дефиса (linux kernel versioning: X.Y.Z-suffix).
+// baseKernelRelease strips the distro suffix: "5.15.0-101-generic" → "5.15.0".
+// Takes the part before the first hyphen (linux kernel versioning: X.Y.Z-suffix).
 func baseKernelRelease(rel string) string {
 	if i := strings.IndexByte(rel, '-'); i > 0 {
 		return rel[:i]
@@ -37,8 +38,8 @@ func baseKernelRelease(rel string) string {
 	return rel
 }
 
-// cpuInfo — count из числа "processor"-записей /proc/cpuinfo (logical CPUs);
-// model/vendor из первой записи (model name / vendor_id).
+// cpuInfo — count from the number of "processor" entries in /proc/cpuinfo
+// (logical CPUs); model/vendor from the first entry (model name / vendor_id).
 func cpuInfo(_ context.Context) CPUInfo {
 	raw, err := os.ReadFile("/proc/cpuinfo")
 	if err != nil {
@@ -68,9 +69,9 @@ func cpuInfo(_ context.Context) CPUInfo {
 	return info
 }
 
-// memoryInfo — total/available/swap из /proc/meminfo. Значения там в КБ —
-// конвертируем в МБ (целочисленно). available = MemAvailable (более точная
-// оценка, чем MemFree); swap = SwapTotal.
+// memoryInfo — total/available/swap from /proc/meminfo. Values there are in
+// KB — converted to MB (integer division). available = MemAvailable (a more
+// accurate estimate than MemFree); swap = SwapTotal.
 func memoryInfo(_ context.Context) MemoryInfo {
 	raw, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
@@ -95,7 +96,7 @@ func memoryInfo(_ context.Context) MemoryInfo {
 	return info
 }
 
-// parseMeminfoKB извлекает число из строки вида "  16384256 kB". 0 при мусоре.
+// parseMeminfoKB extracts the number from a string like "  16384256 kB". 0 on garbage input.
 func parseMeminfoKB(val string) int64 {
 	fields := strings.Fields(val)
 	if len(fields) == 0 {
@@ -108,9 +109,9 @@ func parseMeminfoKB(val string) int64 {
 	return n
 }
 
-// charsToString собирает строку из C-массива int8/uint8 (Utsname поля),
-// обрезая по первому NUL. На разных arch тип элемента отличается (int8 на
-// amd64, uint8 на arm64) — поэтому generic по signed/unsigned byte.
+// charsToString builds a string from a C int8/uint8 array (Utsname fields),
+// truncating at the first NUL. The element type differs across arches (int8
+// on amd64, uint8 on arm64) — hence generic over signed/unsigned byte.
 func charsToString[T ~int8 | ~uint8](ca []T) string {
 	b := make([]byte, 0, len(ca))
 	for _, c := range ca {

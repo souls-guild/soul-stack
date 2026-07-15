@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// fakeSource — детерминированный Source для проверки Collect → typed_facts
-// без касания реальной системы.
+// fakeSource is a deterministic Source for testing Collect → typed_facts
+// without touching the real system.
 type fakeSource struct {
 	hostname string
 	arch     string
@@ -65,7 +65,7 @@ func TestCollect_FillsTypedFacts(t *testing.T) {
 	if os.GetArch() != "amd64" {
 		t.Errorf("arch=%q want amd64", os.GetArch())
 	}
-	// pkg_mgr/init_system выводятся из family+distro по таблице ADR-018.
+	// pkg_mgr/init_system are derived from family+distro per the ADR-018 table.
 	if os.GetPkgMgr() != "apt" || os.GetInitSystem() != "systemd" {
 		t.Errorf("pkg_mgr/init_system=%q/%q want apt/systemd", os.GetPkgMgr(), os.GetInitSystem())
 	}
@@ -99,9 +99,9 @@ func TestCollect_FillsTypedFacts(t *testing.T) {
 	}
 }
 
-// Collect на пустом Source (нераспознанная ОС / недоступные факты) не должен
-// паниковать и обязан вернуть непустой report с zero-value полями — Keeper
-// толерантен к sparse-фактам (ADR-018).
+// Collect on an empty Source (unrecognized OS / unavailable facts) must not
+// panic and must return a non-empty report with zero-value fields — Keeper
+// tolerates sparse facts (ADR-018).
 func TestCollect_EmptySourceNoPanic(t *testing.T) {
 	rep := NewCollector(fakeSource{}, nil).Collect(context.Background(), "host-x")
 	if rep.GetTypedFacts() == nil {
@@ -110,13 +110,13 @@ func TestCollect_EmptySourceNoPanic(t *testing.T) {
 	if rep.GetTypedFacts().GetSid() != "host-x" {
 		t.Errorf("sid=%q want host-x", rep.GetTypedFacts().GetSid())
 	}
-	// Нераспознанный family → пустые pkg_mgr/init_system, не паника.
+	// Unrecognized family → empty pkg_mgr/init_system, not a panic.
 	if pm := rep.GetTypedFacts().GetOs().GetPkgMgr(); pm != "" {
 		t.Errorf("pkg_mgr=%q want empty for unknown OS", pm)
 	}
 }
 
-// Контракт: collected_at — момент сбора (proto Timestamp валиден).
+// Contract: collected_at is the collection moment (a valid proto Timestamp).
 func TestCollect_CollectedAtIsValid(t *testing.T) {
 	rep := NewCollector(fakeSource{}, nil).Collect(context.Background(), "h")
 	if err := rep.GetCollectedAt().CheckValid(); err != nil {

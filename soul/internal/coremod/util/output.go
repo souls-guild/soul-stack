@@ -8,14 +8,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// SendFinal — отправляет финальный ApplyEvent с changed/failed/output на
-// поток. Output может быть nil (тогда поле опускается). Helper нужен, чтобы
-// каждый core-модуль не повторял boilerplate сборки *pluginv1.ApplyEvent
-// и обращение к stream.Send.
+// SendFinal — sends the final ApplyEvent with changed/failed/output on the
+// stream. Output can be nil (the field is then omitted). This helper exists
+// so each core-module doesn't repeat the *pluginv1.ApplyEvent assembly
+// boilerplate and the stream.Send call.
 //
-// Соглашение по контракту pluginv1.ApplyEvent: финальное событие — это
-// событие с changed или failed; промежуточные диагностические message-ы
-// (без changed/failed) MVP-core пока не шлёт.
+// pluginv1.ApplyEvent contract convention: the final event is the one with
+// changed or failed set; MVP-core doesn't yet send intermediate diagnostic
+// messages (without changed/failed).
 func SendFinal(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, output map[string]any) error {
 	ev := &pluginv1.ApplyEvent{Changed: changed}
 	if output != nil {
@@ -28,36 +28,38 @@ func SendFinal(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed b
 	return stream.Send(ev)
 }
 
-// SendFailed — финальное событие с failed=true и текстом ошибки в message.
-// Output не передаётся — failure-семантика делает поля output бессмысленными.
+// SendFailed — final event with failed=true and the error text in message.
+// No output is passed — failure semantics make the output field meaningless.
 func SendFailed(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], message string) error {
 	return stream.Send(&pluginv1.ApplyEvent{Failed: true, Message: message})
 }
 
-// SendPlanFinal — финальный PlanEvent dry-run (ADR-031 Scry) с машинным
-// `changed` (drift). Параллель SendFinal для Apply: core-модули не повторяют
-// boilerplate сборки *pluginv1.PlanEvent. Output Plan в MVP не передаётся —
-// dry-run сообщает только факт расхождения.
+// SendPlanFinal — final dry-run PlanEvent (ADR-031 Scry) with the machine
+// `changed` (drift). SendFinal's counterpart for Apply: core-modules don't
+// repeat the *pluginv1.PlanEvent assembly boilerplate. Plan output isn't
+// passed in MVP — dry-run only reports the fact of drift.
 func SendPlanFinal(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], changed bool) error {
 	return stream.Send(&pluginv1.PlanEvent{Changed: changed})
 }
 
-// PlanFailed — ошибка dry-run-а: модуль не смог определить drift (невалидный
-// param, неподдержанный backend/state). Возвращается из Plan как Go-error —
-// host (runtime.planTask) маппит ненулевой error в FAILED (plan.error), а НЕ в
-// clean (ADR-031: не false-clean). У PlanEvent нет failed-поля (only-add
-// changed, симметрия с ApplyEvent не дотягивает), поэтому proval плана едет
-// именно error-ом возврата Plan, а не событием — host обязан смотреть на error
-// до changed. Параллель SendFailed для Apply (тот шлёт failed-событие, т.к.
-// ApplyEvent.failed есть; здесь его нет — отсюда разница формы).
+// PlanFailed — a dry-run error: the module couldn't determine drift (invalid
+// param, unsupported backend/state). Returned from Plan as a Go error — the
+// host (runtime.planTask) maps a non-nil error to FAILED (plan.error), NOT to
+// clean (ADR-031: never a false-clean). PlanEvent has no failed field
+// (only-add changed, symmetry with ApplyEvent falls short here), so a plan
+// failure travels as Plan's returned error, not as an event — the host must
+// check error before changed. SendFailed's counterpart for Apply (which sends
+// a failed event, since ApplyEvent.failed exists; here it doesn't — hence the
+// difference in shape).
 func PlanFailed(message string) error {
 	return errors.New(message)
 }
 
-// StringsToAny конвертирует []string в []any для list-значения output:
-// structpb.NewStruct принимает только []any (не []string) в качестве списка.
-// Единая точка для core-модулей, кладущих строковый список в output (warnings и
-// т.п.), чтобы не повторять boilerplate-цикл у каждого вызова.
+// StringsToAny converts []string to []any for a list-valued output field:
+// structpb.NewStruct only accepts []any (not []string) as a list.
+// A single spot for core-modules that put a string list into output
+// (warnings and the like), so they don't repeat the boilerplate loop at
+// every call site.
 func StringsToAny(s []string) []any {
 	out := make([]any, len(s))
 	for i, v := range s {

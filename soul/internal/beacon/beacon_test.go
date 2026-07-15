@@ -6,11 +6,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/beaconaddr"
 )
 
-// TestDefaultRegistry — soul-side половина инварианта «keeper-enum ==
-// soul-registry == shared»: реестр [Default] покрывает РОВНО канонический набор
-// [beaconaddr.All] (и не больше). Keeper-side половина (enum == beaconaddr.All)
-// проверяется в keeper/internal/oracle; общий источник shared/beaconaddr даёт
-// транзитивно keeper-enum == soul-registry — корень устранённого S3-бага.
+// TestDefaultRegistry — soul-side half of the invariant "keeper-enum ==
+// soul-registry == shared": the [Default] registry covers EXACTLY the
+// canonical set [beaconaddr.All] (no more). The keeper-side half (enum ==
+// beaconaddr.All) is checked in keeper/internal/oracle; the shared source
+// shared/beaconaddr transitively gives keeper-enum == soul-registry — the
+// root fix for the S3 bug.
 func TestDefaultRegistry(t *testing.T) {
 	r := Default()
 	canonical := beaconaddr.All()

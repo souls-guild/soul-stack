@@ -1,49 +1,51 @@
-// Package http реализует core-модуль `core.http` ([ADR-015]) — read-probe
-// HTTP-эндпоинта (health-check / API-readiness / чтение версии). Идея
-// заимствована из Ansible `uri`, но сознательно сужена до чтения: «делаем
-// хорошо» вместо мутной вседозволенности.
+// Package http implements the core module `core.http` ([ADR-015]) — a
+// read-probe for an HTTP endpoint (health-check / API-readiness / version
+// read). Idea borrowed from Ansible `uri`, deliberately narrowed to reads
+// only.
 //
 // Verb MVP:
-//   - probe: GET/HEAD-запрос к url, ответ возвращается в register
-//     (status / body / elapsed_ms / headers_keys). Состояние хоста НЕ меняется
-//     (см. ниже), поэтому это verb-форма, а не declarative-state.
+//   - probe: GET/HEAD request to url, response returned via register
+//     (status / body / elapsed_ms / headers_keys). Host state is never
+//     mutated (see below), so this is a verb form, not declarative state.
 //
-// Семантика changed:
-//   - changed = false ВСЕГДА, конструктивно и ненастраиваемо: read-probe не
-//     меняет состояние хоста. Прецедент — `core.exec.run` (модуль даёт факты,
-//     а интерпретирует их `changed_when:` на уровне scenario).
+// changed semantics:
+//   - changed = false ALWAYS, by construction: a read-probe never mutates
+//     host state. Precedent: `core.exec.run` (module reports facts,
+//     `changed_when:` at the scenario level interprets them).
 //
-// Идемпотентность: read-probe идемпотентен по природе (no-op для состояния).
+// Idempotent by nature (no-op on state).
 //
-// Безопасность ([ADR-016] «безопасность на первом месте»). secure-by-default:
-// все три контура взведены, каждый снимается отдельным явным opt-out-param-ом
-// (ортогонально — снятие одного не ослабляет другие):
-//   - https-only (default): http:// и file:// отвергаются
-//     (util.ValidateFetchURL — https при default, http(s) при allow_http).
-//     Снять до http(s) — `allow_http: true` (file:// остаётся запрещён);
-//   - SSRF-guard (default): probe в metadata/loopback/RFC1918/link-local
-//     заблокирован по фактически резолвнутому IP (закрывает прямой SSRF на
-//     cloud-metadata IAM 169.254.169.254 и DNS-rebind, см. util.NewHTTPClient).
-//     Снять для легитимного internal health-check — `allow_private: true`;
-//   - TLS-верификация (default): системный trust store. Снять для self-signed/
-//     internal CA — `insecure_skip_verify: true` (MITM-риск);
-//   - редирект на не-https блокируется (util.CheckRedirect, downgrade-защита);
-//     при allow_http downgrade-hop https→http допускается (AllowHTTPRedirect);
-//   - headers — sensitive-by-construction ([ADR-010] §7.4): значения никогда
-//     не логируются и не попадают в output (в output отдаётся только список
-//     ключей запрошенных заголовков).
+// Security ([ADR-016] "security first"). Secure-by-default: all three
+// guards are armed, each lifted only via its own explicit opt-out param
+// (orthogonal — lifting one doesn't weaken the others):
+//   - https-only (default): http:// and file:// are rejected
+//     (util.ValidateFetchURL — https by default, http(s) with allow_http).
+//     Lift to http(s) via `allow_http: true` (file:// stays forbidden);
+//   - SSRF guard (default): probes to metadata/loopback/RFC1918/link-local
+//     are blocked by the actually-resolved IP (closes direct SSRF on cloud
+//     metadata IAM 169.254.169.254 and DNS-rebind, see util.NewHTTPClient).
+//     Lift for legitimate internal health checks via `allow_private: true`;
+//   - TLS verification (default): system trust store. Lift for self-signed/
+//     internal CA via `insecure_skip_verify: true` (MITM risk);
+//   - redirects to non-https are blocked (util.CheckRedirect, downgrade
+//     protection); with allow_http, an https→http downgrade hop is allowed
+//     (AllowHTTPRedirect);
+//   - headers are sensitive-by-construction ([ADR-010] §7.4): values are
+//     never logged or returned (output only lists the requested header
+//     keys).
 //
-// При снятии любого guard probe возвращает warning в output (поле warnings,
-// конвенция core.repo/core.url): оператор видит факт ослабления контура. В
-// warning попадает только host (НЕ полный URL и НЕ headers — sensitive).
+// Lifting any guard returns a warning in output (`warnings` field,
+// core.repo/core.url convention): the operator sees the guard was weakened.
+// The warning carries only the host (never the full URL or headers).
 //
-// Мутирующие HTTP (POST/PUT/PATCH/DELETE) сознательно отложены post-MVP
-// отдельным ADR-расширением (вероятно `core.http.request`) — тогда же решается
-// changed-контракт для мутаций. Verb `probe` остаётся строго read-only.
+// Mutating HTTP (POST/PUT/PATCH/DELETE) is deliberately deferred post-MVP
+// to a separate ADR extension (likely `core.http.request`), which will also
+// settle the changed contract for mutations. Verb `probe` stays strictly
+// read-only.
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
-// [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
-// [ADR-016]: docs/adr/0016-parity-license.md#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack
+// [ADR-010]: docs/adr/0010-templating.md
+// [ADR-015]: docs/adr/0015-core-modules-mvp.md
+// [ADR-016]: docs/adr/0016-parity-license.md
 package http
 
 import (
@@ -61,42 +63,42 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name — каноническая верхушка адреса.
+// Name is the module's canonical address.
 const Name = "core.http"
 
-// defaultTimeout — таймаут probe по умолчанию, если param timeout не задан.
-// Короче, чем у core.url (300s): probe — health-check, а не download.
+// defaultTimeout is the default probe timeout when param timeout is unset.
+// Shorter than core.url's (300s): probe is a health-check, not a download.
 const defaultTimeout = 30 * time.Second
 
-// defaultMethod — HTTP-метод по умолчанию. Только GET/HEAD (read-only).
+// defaultMethod is the default HTTP method. GET/HEAD only (read-only).
 const defaultMethod = http.MethodGet
 
-// maxBodyBytes — жёсткий cap на читаемое тело ответа (защита от OOM на большом
-// ответе). Тело сверх лимита отбрасывается, в output ставится truncated=true.
+// maxBodyBytes hard-caps the readable response body (OOM protection on large
+// responses). Bytes beyond the limit are discarded; output sets truncated=true.
 const maxBodyBytes = 64 * 1024
 
-// allowedMethods — read-only методы, разрешённые verb-ом probe. Мутирующие
-// (POST/PUT/PATCH/DELETE) сознательно отсутствуют — см. doc-комментарий пакета.
+// allowedMethods are the read-only methods allowed by verb probe. Mutating
+// methods (POST/PUT/PATCH/DELETE) are deliberately absent — see package doc.
 var allowedMethods = map[string]struct{}{
 	http.MethodGet:  {},
 	http.MethodHead: {},
 }
 
-// Module — реализация sdk/module.SoulModule для core.http.
+// Module implements sdk/module.SoulModule for core.http.
 //
-// HTTP-клиент строится per-call фабрикой NewClient из набора opt-out-флагов
-// (allow_private / allow_http / insecure_skip_verify). Три ортогональных bool =
-// 2³=8 комбинаций — пред-собранные инстанции клиента не масштабируются, поэтому
-// клиент собирается just-in-time под фактические флаги задачи.
+// The HTTP client is built per-call by factory NewClient from opt-out flags
+// (allow_private / allow_http / insecure_skip_verify). Three orthogonal bools
+// = 2³=8 combinations, so pre-built client instances don't scale — the
+// client is built just-in-time from the task's actual flags.
 //
-// NewClient вынесен в поле для подмены в unit-тестах: тесты подставляют фабрику,
-// возвращающую fake HTTPDoer без выхода в сеть (и могут проверить, с какими
-// HTTPClientOpts модуль её вызвал).
+// NewClient is a field so unit tests can substitute a factory returning a
+// fake HTTPDoer with no network access (and assert which HTTPClientOpts the
+// module called it with).
 type Module struct {
-	// NewClient — фабрика HTTP-клиента под opt-out-флаги задачи. В проде —
-	// util.NewHTTPClient (системный TLS trust store, downgrade-защита редиректов,
-	// SSRF-guard на dial-фазе; каждый контур ослабляется отдельным полем opts).
-	// В тестах подменяется на возврат fake HTTPDoer.
+	// NewClient builds the HTTP client from the task's opt-out flags. In
+	// production: util.NewHTTPClient (system TLS trust store, redirect
+	// downgrade protection, dial-phase SSRF guard; each guard independently
+	// lifted via an opts field). Tests substitute a fake HTTPDoer.
 	NewClient func(util.HTTPClientOpts) util.HTTPDoer
 }
 
@@ -106,24 +108,23 @@ func New() *Module {
 	}
 }
 
-// Validate НЕ делегирован целиком в util.ValidateAgainstManifest (в отличие от
-// core.exec): сверх known-state + required у core.http есть семантические
-// проверки, которые manifest-DSL не выражает — схема URL (ValidateFetchURL,
-// https-only при default, http(s) при allow_http), enum method (GET|HEAD), парс
-// timeout-duration. Они критичны (ADR-016: SSRF/http-downgrade/мутирующие методы
-// отвергаются на Validate). тип-чек bool-флагов (allow_private/allow_http/
-// insecure_skip_verify) тоже на Validate, чтобы кривой тип падал до Apply.
-// known-state/required
-// дублируются с http.yaml осознанно — единый источник невозможен без этих
-// семантик в DSL.
+// Validate is NOT fully delegated to util.ValidateAgainstManifest (unlike
+// core.exec): beyond known-state + required, core.http has semantic checks
+// the manifest DSL can't express — URL scheme (ValidateFetchURL, https-only
+// by default, http(s) with allow_http), method enum (GET|HEAD), timeout
+// duration parsing. These are critical (ADR-016: SSRF/http-downgrade/mutating
+// methods are rejected at Validate). Bool-flag type checks (allow_private/
+// allow_http/insecure_skip_verify) are here too, so a bad type fails before
+// Apply. known-state/required intentionally duplicate http.yaml — no single
+// source is possible without these semantics in the DSL.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.State != "probe" {
 		errs = append(errs, fmt.Sprintf("unknown verb %q (want probe)", req.State))
 	}
 
-	// allow_http проверяется до url: его значение определяет, какую схему
-	// принимает ValidateFetchURL (https-only при false, http(s) при true).
+	// allow_http is checked before url: its value determines which scheme
+	// ValidateFetchURL accepts (https-only if false, http(s) if true).
 	allowHTTP, berr := util.OptBoolParam(req.Params, "allow_http")
 	if berr != nil {
 		errs = append(errs, berr.Error())
@@ -163,23 +164,24 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe). core.http — verb-модуль (probe): read-probe
-// HTTP-эндпоинта, у него НЕТ желаемого состояния хоста, сверяемого pure-read-ом
-// (changed всегда false конструктивно, см. doc пакета). Drift в смысле ADR-031
-// не определён. Host применяет default-deny: dry_run для core.http возвращает
-// FAILED `plan.unsupported`, и это конструктивный отказ — НЕ ложное «нет
-// дрифта». Сам probe — read-only по природе, но вне контракта Plan/Apply ADR-031.
+// Plan is a no-op (no PlanReadSafe). core.http is a verb module (probe): an
+// HTTP endpoint read-probe has no desired host state to diff via pure-read
+// (changed is always false by construction, see package doc). Drift per
+// ADR-031 is undefined here. The host applies default-deny: dry_run for
+// core.http returns FAILED `plan.unsupported` — a deliberate refusal, not a
+// false "no drift". probe itself is read-only by nature but outside the
+// ADR-031 Plan/Apply contract.
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
 
-// ErrandReadSafe — marker [sdkmodule.ErrandReadSafe] (ADR-033 §2): probe — это
-// read-only HTTP-запрос, не мутирующий состояние хоста (`changed = false`
-// конструктивно, см. doc пакета). Безопасен к ad-hoc invocation через Errand,
-// поэтому модуль явно опт-инит в whitelist Errand-runner-а. Verb-модули
-// core.cmd.shell / core.exec.run остаются в hardcoded-списке (императивны
-// by-design), здесь декларация для будущих read-safe core-добавлений и
-// симметрии с интерфейсным контрактом sdk/module.
+// ErrandReadSafe is marker [sdkmodule.ErrandReadSafe] (ADR-033 §2): probe is
+// a read-only HTTP request that never mutates host state (`changed = false`
+// by construction, see package doc). Safe for ad-hoc invocation via Errand,
+// so the module explicitly opts into the Errand-runner whitelist. Verb
+// modules core.cmd.shell / core.exec.run stay in the hardcoded list
+// (imperative by design); this declares the pattern for future read-safe
+// core additions and symmetry with the sdk/module interface contract.
 func (m *Module) ErrandReadSafe() {}
 
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -189,9 +191,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return m.applyProbe(stream, req)
 }
 
-// normalizedMethod возвращает HTTP-метод probe: пустой param → defaultMethod;
-// иначе — значение, проверенное по allowedMethods. Возвращает ошибку для
-// неизвестного/мутирующего метода. Сравнение по верхнему регистру (get → GET).
+// normalizedMethod returns the probe HTTP method: empty param → defaultMethod;
+// otherwise the value validated against allowedMethods. Returns an error for
+// an unknown/mutating method. Compared upper-cased (get → GET).
 func normalizedMethod(params *structpb.Struct) (string, error) {
 	raw, err := util.OptStringParam(params, "method")
 	if err != nil {
@@ -207,9 +209,9 @@ func normalizedMethod(params *structpb.Struct) (string, error) {
 	return m, nil
 }
 
-// parseTimeout разбирает param timeout по convention `duration` Soul Stack
-// (Go time.ParseDuration + суффикс `<N>d`), через единый shared/config-парсер
-// (симметрично core.url).
+// parseTimeout parses param timeout per the Soul Stack `duration` convention
+// (Go time.ParseDuration + `<N>d` suffix) via the shared/config parser
+// (symmetric with core.url).
 func parseTimeout(s string) (time.Duration, error) {
 	d, err := config.ParseDuration(s)
 	if err != nil {

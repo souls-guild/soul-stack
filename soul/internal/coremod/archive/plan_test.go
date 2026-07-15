@@ -27,7 +27,7 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// dirSnap — снимок entries каталога для assertUnchangedDir.
+// dirSnap snapshots a directory's entries for assertEntries.
 func dirSnap(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -57,8 +57,8 @@ func assertEntries(t *testing.T, dir string, want []string) {
 	}
 }
 
-// TestPlan_Extracted_NoMarker_Drift — dest пустой, marker отсутствует → drift,
-// архив не распакован, dest остался пуст.
+// TestPlan_Extracted_NoMarker_Drift — dest is empty, marker missing → drift;
+// the archive isn't extracted, dest stays empty.
 func TestPlan_Extracted_NoMarker_Drift(t *testing.T) {
 	dir := t.TempDir()
 	src := writeArchive(t, dir, "a.tar", makeTar(t, []tarEntry{
@@ -84,8 +84,8 @@ func TestPlan_Extracted_NoMarker_Drift(t *testing.T) {
 	assertEntries(t, dest, beforeEntries)
 }
 
-// TestPlan_Extracted_MarkerMatches_Clean — marker есть и его sha == sha(src) →
-// drift=false, без мутаций.
+// TestPlan_Extracted_MarkerMatches_Clean — marker exists and its sha ==
+// sha(src) → drift=false, no mutations.
 func TestPlan_Extracted_MarkerMatches_Clean(t *testing.T) {
 	dir := t.TempDir()
 	srcBytes := makeTar(t, []tarEntry{
@@ -120,8 +120,8 @@ func TestPlan_Extracted_MarkerMatches_Clean(t *testing.T) {
 	}
 }
 
-// TestPlan_Extracted_MarkerMismatch_Drift — marker с другим sha → drift,
-// архив не распакован.
+// TestPlan_Extracted_MarkerMismatch_Drift — marker has a different sha →
+// drift; the archive isn't extracted.
 func TestPlan_Extracted_MarkerMismatch_Drift(t *testing.T) {
 	dir := t.TempDir()
 	src := writeArchive(t, dir, "a.tar", makeTar(t, []tarEntry{

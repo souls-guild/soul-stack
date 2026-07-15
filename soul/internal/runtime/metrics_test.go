@@ -24,8 +24,8 @@ func TestRegisterApplyMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterApplyMetrics returned nil")
 	}
 
-	// CounterVec/Histogram без первого Observe sample не публикуют — наблюдаем,
-	// затем проверяем families.
+	// CounterVec/Histogram don't publish before the first Observe sample —
+	// observe, then check families.
 	m.ObserveTask(applyResultOK)
 	m.ObserveApplyDuration(0.5)
 
@@ -37,7 +37,7 @@ func TestRegisterApplyMetrics_RegistersFamilies(t *testing.T) {
 	for _, f := range families {
 		seen[f.GetName()] = true
 	}
-	// Наблюдаем flow-control-метрики, чтобы их families попали в Gather.
+	// Observe flow-control metrics so their families show up in Gather.
 	m.ObserveRetry()
 	m.ObserveSkipped(skipReasonWhen)
 	m.ObserveTimedOut()
@@ -136,9 +136,9 @@ func TestApplyMetrics_NilReceiver_NoOp(t *testing.T) {
 	m.ObserveApplyDuration(1.0)
 }
 
-// TestRun_UpdatesTaskMetrics проверяет, что прогон через ApplyRunner
-// инкрементирует soul_apply_tasks_total по фактическому результату задач и
-// пишет soul_apply_duration_seconds.
+// TestRun_UpdatesTaskMetrics verifies a run through ApplyRunner increments
+// soul_apply_tasks_total by each task's actual result and records
+// soul_apply_duration_seconds.
 func TestRun_UpdatesTaskMetrics(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterApplyMetrics(reg)
@@ -179,7 +179,7 @@ func TestRun_UpdatesTaskMetrics(t *testing.T) {
 	}
 }
 
-// TestRun_FailedTaskMetric — упавшая задача попадает в result="failed".
+// TestRun_FailedTaskMetric — a failed task lands in result="failed".
 func TestRun_FailedTaskMetric(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterApplyMetrics(reg)
@@ -219,8 +219,8 @@ func TestTaskResult_Mapping(t *testing.T) {
 	}
 }
 
-// TestRun_Span_Created — прогон порождает span apply.run с атрибутом apply_id
-// при enabled провайдере.
+// TestRun_Span_Created — a run produces span apply.run with attribute
+// apply_id when the provider is enabled.
 func TestRun_Span_Created(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
@@ -255,8 +255,8 @@ func TestRun_Span_Created(t *testing.T) {
 	}
 }
 
-// TestRun_NoTracer_NoPanic — без явного провайдера (no-op глобальный) прогон не
-// падает. Симулирует OTel disabled.
+// TestRun_NoTracer_NoPanic — with no explicit provider (global no-op) the run
+// doesn't panic. Simulates OTel disabled.
 func TestRun_NoTracer_NoPanic(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{ApplyId: "x"}, &recordingSink{}); err != nil {

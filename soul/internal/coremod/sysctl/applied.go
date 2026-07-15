@@ -20,12 +20,12 @@ import (
 
 const stateApplied = "applied"
 
-// reloadMode извлекает и валидирует param `reload` (default auto). Переиспользует
-// closed-set словарь util.DaemonReloadMode (auto|always|never) — тот же набор,
-// что `daemon_reload` у core.service ([ADR-015] amend), но семантика «применения»
-// у sysctl своя: reload = `sysctl -p <file>` (точечно по drop-in), а не
-// systemctl daemon-reload. Отсутствие/null → auto. Неизвестное строковое
-// значение → ошибка (отвергается на Validate, симметрично core.service).
+// reloadMode extracts and validates the `reload` param (default auto). Reuses
+// the closed-set util.DaemonReloadMode vocabulary (auto|always|never) — the
+// same set as `daemon_reload` on core.service ([ADR-015] amend), but sysctl's
+// "apply" semantics differ: reload = `sysctl -p <file>` (scoped to the
+// drop-in), not systemctl daemon-reload. Missing/null → auto. An unknown
+// string value → error (rejected at Validate, symmetric with core.service).
 func reloadMode(params *structpb.Struct) (util.DaemonReloadMode, error) {
 	s, err := util.OptStringParam(params, "reload")
 	if err != nil {
@@ -41,18 +41,18 @@ func reloadMode(params *structpb.Struct) (util.DaemonReloadMode, error) {
 	}
 }
 
-// applyApplied — state `applied`: bulk-набор `settings` материализуется ОДНИМ
-// детерминированным drop-in `/etc/sysctl.d/<filename>.conf` (sorted keys), reload
-// через `sysctl -p <file>` точечно по drop-in (НЕ весь --system). Reload gating
-// (см. shouldReload):
+// applyApplied handles state `applied`: the bulk `settings` set is
+// materialized as ONE deterministic drop-in `/etc/sysctl.d/<filename>.conf`
+// (sorted keys), reloaded via `sysctl -p <file>` scoped to the drop-in (NOT
+// the whole --system). Reload gating (see shouldReload):
 //
-//   - never → reload не делается ВООБЩЕ (явный opt-out, даже при file-change);
-//   - always → reload безусловно;
-//   - auto → reload только при file-change (как daemon_reload:auto на смену unit);
-//   - сам reload `changed` НЕ помечает (changed=факт записи drop-in).
+//   - never → reload NEVER runs (explicit opt-out, even on file-change);
+//   - always → reload unconditionally;
+//   - auto → reload only on file-change (like daemon_reload:auto on a unit change);
+//   - the reload itself does NOT mark `changed` (changed = drop-in was written).
 //
-// `ignore_failures` → `sysctl -e -p <file>` (-e/--ignore глушит read-only/
-// несуществующие ключи в контейнерах; явный opt-in оператора).
+// `ignore_failures` → `sysctl -e -p <file>` (-e/--ignore silences read-only/
+// nonexistent keys in containers; explicit operator opt-in).
 func (m *Module) applyApplied(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -78,11 +78,12 @@ func (m *Module) applyApplied(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 
 	path := dropInPath(m.Dir, fname)
 
-	// Пустой набор (len==0): ранний no-op. Не пишем пустой drop-in и не reload-им
-	// (general-purpose edge: bulk-задача без параметров — нечего применять; пустой
-	// файл /etc/sysctl.d/<f>.conf — мусор, а reload на нём бессмыслен). changed=false:
-	// состояние «нет параметров» уже выполнено отсутствием записи. Симметрично с
-	// idempotent-веткой ensureDropIn (нет изменения → нет reload).
+	// Empty set (len==0): early no-op. Don't write an empty drop-in and don't
+	// reload (general-purpose edge case: a bulk task with no params has
+	// nothing to apply; an empty /etc/sysctl.d/<f>.conf would be junk, and
+	// reloading it is pointless). changed=false: the "no params" state is
+	// already satisfied by not writing anything. Symmetric with ensureDropIn's
+	// idempotent branch (no change → no reload).
 	if len(settings) == 0 {
 		return util.SendFinal(stream, false, map[string]any{
 			"path":     path,
@@ -109,8 +110,8 @@ func (m *Module) applyApplied(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	})
 }
 
-// shouldReload — gating reload по mode (never opt-out → false всегда; always →
-// true; auto → только при file-change).
+// shouldReload gates reload by mode (never opt-out → always false; always →
+// true; auto → only on file-change).
 func shouldReload(mode util.DaemonReloadMode, changed bool) bool {
 	switch mode {
 	case util.DaemonReloadNever:
@@ -122,9 +123,9 @@ func shouldReload(mode util.DaemonReloadMode, changed bool) bool {
 	}
 }
 
-// planApplied — pure-read drift state `applied` (ADR-031 Scry): сравнивает
-// желаемый детерминированный контент drop-in с существующим файлом БЕЗ записи и
-// reload. drift = файла нет / контент отличается.
+// planApplied is the pure-read drift check for state `applied` (ADR-031
+// Scry): compares the desired deterministic drop-in content against the
+// existing file WITHOUT writing or reloading. drift = file missing / content differs.
 func (m *Module) planApplied(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	settings, err := util.OptStringMapParam(req.Params, "settings")
 	if err != nil {
@@ -141,8 +142,8 @@ func (m *Module) planApplied(req *pluginv1.PlanRequest, stream grpc.ServerStream
 		return util.PlanFailed(err.Error())
 	}
 
-	// Пустой набор → no-op (drift=false), симметрично applyApplied: нечего применять,
-	// пустой drop-in не пишется, значит и дрейфа нет.
+	// Empty set → no-op (drift=false), symmetric with applyApplied: nothing to
+	// apply, no drop-in gets written, so there's no drift either.
 	if len(settings) == 0 {
 		return util.SendPlanFinal(stream, false)
 	}
@@ -161,9 +162,9 @@ func (m *Module) planApplied(req *pluginv1.PlanRequest, stream grpc.ServerStream
 	}
 }
 
-// ensureDropIn пишет drop-in атомарно только при drift (контент отличается /
-// файла нет). Preserve-by-default mode существующего файла; новый файл — 0644
-// (sysctl.d-стандарт). changed=true только при реальной записи.
+// ensureDropIn writes the drop-in atomically only on drift (content differs /
+// file missing). Preserve-by-default mode for an existing file; a new file
+// gets 0644 (sysctl.d convention). changed=true only on an actual write.
 func (m *Module) ensureDropIn(path, want string) (bool, error) {
 	existing, rerr := os.ReadFile(path)
 	switch {
@@ -172,7 +173,7 @@ func (m *Module) ensureDropIn(path, want string) (bool, error) {
 			return false, nil
 		}
 	case errors.Is(rerr, fs.ErrNotExist):
-		// fall through — создаём.
+		// fall through — create it.
 	default:
 		return false, fmt.Errorf("read %s: %v", path, rerr)
 	}
@@ -185,9 +186,9 @@ func (m *Module) ensureDropIn(path, want string) (bool, error) {
 	return true, nil
 }
 
-// reloadDropIn применяет drop-in точечно через `sysctl -p <file>` (НЕ весь
-// --system). `ignore_failures` добавляет `-e` (глушит read-only/несуществующие
-// ключи). argv без shell.
+// reloadDropIn applies the drop-in scoped via `sysctl -p <file>` (NOT the
+// whole --system). `ignore_failures` adds `-e` (silences read-only/nonexistent
+// keys). argv, no shell.
 func (m *Module) reloadDropIn(ctx context.Context, path string, ignoreFailures bool) error {
 	args := make([]string, 0, 3)
 	if ignoreFailures {
@@ -204,9 +205,10 @@ func (m *Module) reloadDropIn(ctx context.Context, path string, ignoreFailures b
 	return nil
 }
 
-// dropInPath собирает путь drop-in в /etc/sysctl.d. `filename` для bulk-state
-// обязателен (required в манифесте); суффикс `.conf` добавляется автоматически,
-// как у present-filename. filepath.Join держит запись внутри m.Dir.
+// dropInPath builds the drop-in path under /etc/sysctl.d. `filename` is
+// required for the bulk state (required in the manifest); the `.conf` suffix
+// is appended automatically, same as present's filename. filepath.Join keeps
+// the write inside m.Dir.
 func dropInPath(dir, fname string) string {
 	if !strings.HasSuffix(fname, ".conf") {
 		fname += ".conf"
@@ -214,10 +216,10 @@ func dropInPath(dir, fname string) string {
 	return filepath.Join(dir, fname)
 }
 
-// renderDropIn строит детерминированный контент drop-in из map: ключи
-// сортируются (стабильный порядок между прогонами → нет ложного change/повторного
-// reload), формат строк `key = value` (sysctl.d-синтаксис). Финальный перевод
-// строки — POSIX-конвенция текстового конфига.
+// renderDropIn builds deterministic drop-in content from a map: keys are
+// sorted (stable order across runs → no false change/repeat reload), lines
+// formatted as `key = value` (sysctl.d syntax). Trailing newline follows the
+// POSIX text-config convention.
 func renderDropIn(settings map[string]string) string {
 	keys := make([]string, 0, len(settings))
 	for k := range settings {

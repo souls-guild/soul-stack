@@ -28,8 +28,8 @@ func TestReplaceAllGet(t *testing.T) {
 	}
 }
 
-// TestKeyIsNamespaceAndName — пара (namespace, name) адресует разные слоты:
-// одинаковый name в разных namespace не коллидирует.
+// TestKeyIsNamespaceAndName: the (namespace, name) pair addresses distinct
+// slots — the same name in different namespaces doesn't collide.
 func TestKeyIsNamespaceAndName(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{
@@ -47,28 +47,29 @@ func TestKeyIsNamespaceAndName(t *testing.T) {
 	}
 }
 
-// TestSurvivesReconnect — структурная гарантия: кеш не привязан к стриму.
-// Один и тот же *Cache переживает множество условных «сессий» (в проде каждая
-// сессия — новый StreamSession, кеш создаётся в runDaemon вне reconnect-loop).
+// TestSurvivesReconnect is a structural guarantee: the cache isn't tied to a
+// stream. The same *Cache survives multiple notional "sessions" (in prod
+// each session is a new StreamSession; the cache is created in runDaemon
+// outside the reconnect loop).
 func TestSurvivesReconnect(t *testing.T) {
-	c := New() // создан один раз на runtime-уровне Soul
+	c := New() // created once at the Soul runtime level
 
-	// «Сессия 1» применила snapshot и закрылась.
+	// "Session 1" applied a snapshot and closed.
 	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "file", "v1")})
 
-	// «Сессия 2» (после reconnect) видит допуск, применённый в сессии 1 —
-	// тот же *Cache не пере-создаётся.
+	// "Session 2" (after reconnect) sees the grant applied in session 1 —
+	// the same *Cache isn't recreated.
 	if got := c.Get("core", "file"); got == nil {
 		t.Fatal("кеш потерял допуск после условного reconnect — он не должен пере-создаваться на сессию")
 	}
 }
 
-// TestReplaceAllAddsAndRevokes — ReplaceAll атомарно добавляет новые допуски и
-// забывает отсутствующие (near-instant revoke, ADR-026(h) S6c).
+// TestReplaceAllAddsAndRevokes: ReplaceAll atomically adds new grants and
+// forgets missing ones (near-instant revoke, ADR-026(h) S6c).
 func TestReplaceAllAddsAndRevokes(t *testing.T) {
 	c := New()
 
-	// Первый snapshot: два допуска.
+	// First snapshot: two grants.
 	c.ReplaceAll([]*keeperv1.PluginSigil{
 		sig("core", "pkg", "v1"),
 		sig("core", "file", "v1"),
@@ -77,8 +78,8 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 		t.Fatal("ReplaceAll должен был добавить оба допуска")
 	}
 
-	// Второй snapshot: core/pkg отозван (отсутствует), добавлен core/service,
-	// core/file обновлён до v2.
+	// Second snapshot: core/pkg revoked (missing), core/service added,
+	// core/file updated to v2.
 	c.ReplaceAll([]*keeperv1.PluginSigil{
 		sig("core", "file", "v2"),
 		sig("core", "service", "v1"),
@@ -95,8 +96,8 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 	}
 }
 
-// TestReplaceAllEmptyClears — пустой snapshot очищает весь кеш (ни один плагин
-// не допущен).
+// TestReplaceAllEmptyClears: an empty snapshot clears the whole cache (no
+// plugin remains granted).
 func TestReplaceAllEmptyClears(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "pkg", "v1")})
@@ -110,8 +111,8 @@ func TestReplaceAllEmptyClears(t *testing.T) {
 	}
 }
 
-// TestReplaceAllSkipsNilElements — nil-элементы внутри snapshot не роняют замену
-// и не создают мусорных ключей.
+// TestReplaceAllSkipsNilElements: nil elements inside a snapshot don't crash
+// the replace and don't create garbage keys.
 func TestReplaceAllSkipsNilElements(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{
@@ -127,8 +128,9 @@ func TestReplaceAllSkipsNilElements(t *testing.T) {
 	}
 }
 
-// TestConcurrentReplaceAllGet — конкурентные ReplaceAll (writer) + Get (readers)
-// под -race: замена набора атомарна, читатель видит целостный набор, гонок нет.
+// TestConcurrentReplaceAllGet: concurrent ReplaceAll (writer) + Get (readers)
+// under -race: the set swap is atomic, readers see a consistent set, no
+// races.
 func TestConcurrentReplaceAllGet(t *testing.T) {
 	c := New()
 	const writers = 8

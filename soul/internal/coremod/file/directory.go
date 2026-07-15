@@ -12,16 +12,16 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyDirectory — state `directory`: декларативное создание каталога
-// (замена `core.exec.run install -d`). Идемпотентность:
-//   - каталога нет → создать (MkdirAll при parents, иначе Mkdir) → changed=true;
-//   - каталог есть, owner/group/mode совпадают → no-op (changed=false);
-//   - каталог есть, но owner/group/mode дрейфят → починить (chmod/chown),
-//     changed=true (паритет с applyPresent);
-//   - путь существует, но это НЕ каталог (файл/симлинк) → ошибка, без перезаписи.
+// applyDirectory implements state `directory`: declarative directory
+// creation (replaces `core.exec.run install -d`). Idempotency:
+//   - directory missing → create (MkdirAll if parents, else Mkdir) → changed=true;
+//   - directory exists, owner/group/mode match → no-op (changed=false);
+//   - directory exists but owner/group/mode drifted → fix (chmod/chown),
+//     changed=true (parity with applyPresent);
+//   - path exists but is NOT a directory (file/symlink) → error, no overwrite.
 //
-// recurse (рекурсивное выставление прав на содержимое) сознательно НЕ
-// реализован в MVP — управляется только сам каталог.
+// recurse (recursively setting permissions on contents) is deliberately NOT
+// implemented in the MVP — only the directory itself is managed.
 func (m *Module) applyDirectory(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest, path string) error {
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {
@@ -50,8 +50,8 @@ func (m *Module) applyDirectory(stream grpc.ServerStreamingServer[pluginv1.Apply
 	switch {
 	case statErr == nil:
 		if !info.IsDir() {
-			// Путь занят файлом/симлинком — не перезаписываем (паритет с
-			// поведением `mkdir`, которое падает на существующем файле).
+			// Path is occupied by a file/symlink — don't overwrite (parity
+			// with `mkdir`, which fails on an existing file).
 			return util.SendFailed(stream, fmt.Sprintf("path %s exists and is not a directory", path))
 		}
 		if modeStr != "" && info.Mode().Perm() != mode {
@@ -66,8 +66,8 @@ func (m *Module) applyDirectory(stream grpc.ServerStreamingServer[pluginv1.Apply
 			return util.SendFailed(stream, mkErr.Error())
 		}
 		created = true
-		// MkdirAll/Mkdir применяют mode с поправкой на umask, поэтому при явном
-		// mode выставляем точные права отдельным chmod.
+		// MkdirAll/Mkdir apply mode adjusted by umask, so an explicit mode
+		// needs a separate chmod to set exact permissions.
 		if modeStr != "" {
 			if cerr := os.Chmod(path, mode); cerr != nil {
 				return util.SendFailed(stream, fmt.Sprintf("chmod %s: %v", path, cerr))
@@ -93,10 +93,10 @@ func (m *Module) applyDirectory(stream grpc.ServerStreamingServer[pluginv1.Apply
 	})
 }
 
-// planDirectory — pure-read drift для state `directory` (ADR-031 Scry):
-// тот же stat + perm/ownership-сравнение, что в начале applyDirectory, но без
-// Mkdir/chmod/chown. Конфликт типа (путь — не каталог) — ошибка плана
-// (util.PlanFailed), а НЕ false-clean.
+// planDirectory is pure-read drift for state `directory` (ADR-031 Scry): the
+// same stat + perm/ownership comparison as the start of applyDirectory, but
+// without Mkdir/chmod/chown. A type conflict (path isn't a directory) is a
+// plan error (util.PlanFailed), NOT a false-clean.
 func (m *Module) planDirectory(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], req *pluginv1.PlanRequest, path string) error {
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {
@@ -118,7 +118,7 @@ func (m *Module) planDirectory(stream grpc.ServerStreamingServer[pluginv1.PlanEv
 	info, statErr := os.Stat(path)
 	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
-		// Каталога нет — Apply создал бы его (drift).
+		// Directory missing — Apply would create it (drift).
 		return util.SendPlanFinal(stream, true)
 	case statErr != nil:
 		return util.PlanFailed(fmt.Sprintf("stat %s: %v", path, statErr))
@@ -142,9 +142,10 @@ func (m *Module) planDirectory(stream grpc.ServerStreamingServer[pluginv1.PlanEv
 	return util.SendPlanFinal(stream, false)
 }
 
-// mkdir создаёт каталог: при parents — MkdirAll (промежуточные каталоги, как
-// `mkdir -p`), иначе Mkdir (отсутствующий родитель → ошибка). mode применяется с
-// поправкой на umask; точные права выставляет вызывающий chmod-ом при явном mode.
+// mkdir creates a directory: with parents, MkdirAll (intermediate
+// directories, like `mkdir -p`), else Mkdir (missing parent → error). mode is
+// applied adjusted by umask; the caller sets exact permissions via a separate
+// chmod when mode is explicit.
 func mkdir(path string, mode fs.FileMode, parents bool) error {
 	if parents {
 		if err := os.MkdirAll(path, mode); err != nil {

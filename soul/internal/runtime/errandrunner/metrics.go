@@ -7,28 +7,29 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// Metrics — soul_errand_*-collectors Errand-runner-а (ADR-033). Регистрируется
-// helper-ом [Register] поверх компонент-агностичного [obs.Registry] — паттерн
-// идентичен [soul/internal/runtime.RegisterApplyMetrics] / Keeper-side errand
-// metrics. Labels — closed enum-ы (ADR-024 §2.2): cardinality безопасна.
+// Metrics — soul_errand_* collectors for the Errand runner (ADR-033).
+// Registered by the [Register] helper on top of the component-agnostic
+// [obs.Registry] — same pattern as [soul/internal/runtime.RegisterApplyMetrics]
+// / keeper-side errand metrics. Labels are closed enums (ADR-024 §2.2):
+// cardinality is safe.
 //
-// nil-получатель Observe* — no-op: Runner поднимается без obs-стека (push-
-// режим не использует Errand, unit-тесты без obs).
+// nil-receiver Observe* is a no-op: Runner can come up without an obs stack
+// (push mode doesn't use Errand, unit tests run without obs).
 type Metrics struct {
-	// errandsTotal — счётчик завершённых Errand-ов, разрезанный по терминалу.
+	// errandsTotal — count of completed Errands, sliced by terminal status.
 	// Closed enum status: success / failed / timed_out / cancelled /
-	// module_not_allowed. Симметрично с keeper-side ResultEvent.Status.
+	// module_not_allowed. Mirrors keeper-side ResultEvent.Status.
 	errandsTotal *prometheus.CounterVec
 
-	// errandDuration — длительность одного Errand-а (от Run до возврата) в
-	// секундах. Label module — closed enum по core-namespace (`core.cmd` /
-	// `core.exec` / `core.http`). Для custom-плагина — `<namespace>.<name>`
-	// без state-суффикса: cardinality ограничена набором установленных
-	// плагинов на конкретном хосте (десятки максимум, ADR-020).
+	// errandDuration — duration of a single Errand (from Run to return) in
+	// seconds. Label module is a closed enum by core namespace (`core.cmd` /
+	// `core.exec` / `core.http`). For a custom plugin it's `<namespace>.<name>`
+	// without the state suffix: cardinality is bounded by the set of plugins
+	// installed on a given host (tens at most, ADR-020).
 	errandDuration *prometheus.HistogramVec
 }
 
-// Status-label-значения для soul_errand_total. Маппинг см. [observeErrandLabel].
+// Status label values for soul_errand_total. See [observeErrandLabel] for the mapping.
 const (
 	labelStatusSuccess          = "success"
 	labelStatusFailed           = "failed"
@@ -37,9 +38,9 @@ const (
 	labelStatusModuleNotAllowed = "module_not_allowed"
 )
 
-// Register создаёт soul_errand_*-collectors и регистрирует их в [obs.Registry].
-// MustRegister: дубликат-регистрация — programmer error (паттерн обвязки
-// идентичен RegisterApplyMetrics).
+// Register creates the soul_errand_* collectors and registers them in
+// [obs.Registry]. MustRegister: duplicate registration is a programmer error
+// (same wiring pattern as RegisterApplyMetrics).
 func Register(reg *obs.Registry) *Metrics {
 	m := &Metrics{
 		errandsTotal: prometheus.NewCounterVec(
@@ -53,10 +54,10 @@ func Register(reg *obs.Registry) *Metrics {
 			prometheus.HistogramOpts{
 				Name: "soul_errand_duration_seconds",
 				Help: "Длительность одного Errand-а в секундах, по модулю (без state-суффикса).",
-				// Errand — одиночный shell/exec/probe, типично < секунды;
-				// server-cap dispatch-а 30s, hard-cap 300s. Bucket-ы покрывают
-				// быстрый shell (50ms), типичный probe (250ms), долгий exec
-				// (несколько секунд) и upper-bound timed_out (300s).
+				// Errand is a single shell/exec/probe, typically < a second;
+				// server-side dispatch cap is 30s, hard cap 300s. Buckets cover
+				// a fast shell (50ms), a typical probe (250ms), a slow exec
+				// (a few seconds), and the timed_out upper bound (300s).
 				Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300},
 			},
 			[]string{"module"},
@@ -66,8 +67,8 @@ func Register(reg *obs.Registry) *Metrics {
 	return m
 }
 
-// ObserveErrand инкрементирует счётчик терминалов по статусу.
-// nil-получатель — no-op.
+// ObserveErrand increments the terminal-status counter.
+// nil receiver is a no-op.
 func (m *Metrics) ObserveErrand(status keeperv1.ErrandStatus) {
 	if m == nil {
 		return
@@ -75,11 +76,11 @@ func (m *Metrics) ObserveErrand(status keeperv1.ErrandStatus) {
 	m.errandsTotal.WithLabelValues(statusLabel(status)).Inc()
 }
 
-// ObserveDuration записывает длительность Errand-а в секундах. module — это
-// fully-qualified `<namespace>.<name>.<state>` (как в запросе), но в label
-// кладётся `<namespace>.<name>` — закрытый по core-set (state-суффикс
-// варьируется и взорвал бы cardinality). Пустой module (early-reject до
-// resolve) → `unknown`.
+// ObserveDuration records an Errand's duration in seconds. module is the
+// fully-qualified `<namespace>.<name>.<state>` (as in the request), but the
+// label gets `<namespace>.<name>` — closed over the core set (the state
+// suffix varies and would blow up cardinality). An empty module (early
+// reject before resolve) → `unknown`.
 func (m *Metrics) ObserveDuration(module string, seconds float64) {
 	if m == nil {
 		return
@@ -87,9 +88,9 @@ func (m *Metrics) ObserveDuration(module string, seconds float64) {
 	m.errandDuration.WithLabelValues(moduleLabel(module)).Observe(seconds)
 }
 
-// statusLabel — закрытый маппинг ErrandStatus → label-value.
-// UNSPECIFIED / RUNNING не терминальны и сюда попасть не должны; defensive →
-// "failed" (терминальный bucket-by-default).
+// statusLabel — closed mapping ErrandStatus → label value.
+// UNSPECIFIED / RUNNING aren't terminal and shouldn't reach here; defensive →
+// "failed" (terminal bucket-by-default).
 func statusLabel(s keeperv1.ErrandStatus) string {
 	switch s {
 	case keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS:
@@ -105,14 +106,14 @@ func statusLabel(s keeperv1.ErrandStatus) string {
 	}
 }
 
-// moduleLabel срезает state-суффикс (`core.cmd.shell` → `core.cmd`). Пустой
-// вход → "unknown" (early-reject до address-parse).
+// moduleLabel strips the state suffix (`core.cmd.shell` → `core.cmd`). Empty
+// input → "unknown" (early reject before address parsing).
 func moduleLabel(full string) string {
 	if full == "" {
 		return "unknown"
 	}
-	// Реализация дублирует splitModuleAddr (12 строк), но здесь нужен только
-	// `<ns>.<name>` без флага ok — упрощённый rfind.
+	// This duplicates splitModuleAddr (12 lines), but here we only need
+	// `<ns>.<name>` without the ok flag — a simplified rfind.
 	for i := len(full) - 1; i >= 0; i-- {
 		if full[i] == '.' {
 			if i > 0 {

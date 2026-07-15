@@ -1,27 +1,27 @@
-// Package user реализует core-модуль `core.user` ([ADR-015]).
+// Package user implements the core-module `core.user` ([ADR-015]).
 //
-// Состояния:
-//   - present: пользователь существует с заданными uid/shell/home/groups.
-//   - absent:  пользователь удалён.
+// States:
+//   - present: user exists with the given uid/shell/home/groups.
+//   - absent:  user removed.
 //
-// Опциональные params present:
-//   - uid (int):        явный uid (useradd -u).
-//   - shell (string):   login shell (useradd -s).
-//   - home (string):    домашний каталог (useradd -d).
-//   - groups ([]string): supplementary-группы (useradd -G a,b).
-//   - system (bool):    системный аккаунт (useradd -r). Для сервис-аккаунтов
-//     stateful-сервисов (например redis).
-//   - group (string):   primary-группа (useradd -g). Группа должна уже
-//     существовать — caller создаёт её через core.group ДО. Отличается от
-//     `groups` (supplementary, -G).
+// Optional present params:
+//   - uid (int):         explicit uid (useradd -u).
+//   - shell (string):    login shell (useradd -s).
+//   - home (string):     home directory (useradd -d).
+//   - groups ([]string): supplementary groups (useradd -G a,b).
+//   - system (bool):     system account (useradd -r), for service accounts of
+//     stateful services (e.g. redis).
+//   - group (string):    primary group (useradd -g). Must already exist —
+//     caller creates it via core.group FIRST. Distinct from `groups`
+//     (supplementary, -G).
 //
-// Семантика present — present-or-create (MVP): существующий пользователь не
-// реконсилится. Новые params (system/group, как и uid/shell/home/groups)
-// действуют ТОЛЬКО при создании; для уже существующего пользователя — no-op,
-// они НЕ триггерят usermod/reconcile.
+// present semantics are present-or-create (MVP): an existing user is not
+// reconciled. New params (system/group, same as uid/shell/home/groups) apply
+// ONLY on creation; for an already-existing user they're a no-op and never
+// trigger usermod/reconcile.
 //
-// Backend: useradd/usermod/userdel (busybox-совместимое подмножество). На
-// alpine это пакет shadow или busybox-built-ins — оба понимают эти флаги.
+// Backend: useradd/usermod/userdel (busybox-compatible subset). On alpine
+// that's the shadow package or busybox built-ins — both understand these flags.
 package user
 
 import (
@@ -40,16 +40,16 @@ import (
 
 const Name = "core.user"
 
-// maxUID — uid_t знаковый 32-бит на Linux; useradd отвергает значения вне
-// диапазона. Верхняя граница защищает от заведомо-битого ввода до запуска
-// подпроцесса.
+// maxUID — uid_t is a signed 32-bit int on Linux; useradd rejects values out
+// of range. The upper bound rejects obviously-bad input before spawning the
+// subprocess.
 const maxUID = 2147483647
 
-// nameRe повторяет NAME_REGEX shadow-utils по умолчанию
-// (`^[a-z_][a-z0-9_-]*\$?$`): имя начинается с буквы/`_`, может оканчиваться на
-// `$` (NIS/Samba machine-account), остальное — нижний регистр/цифры/`_`/`-`.
-// Это конвенция самого useradd — не строже, чтобы не резать легитимные имена.
-// Длина (≤ 32) проверяется отдельно в validName.
+// nameRe mirrors shadow-utils' default NAME_REGEX
+// (`^[a-z_][a-z0-9_-]*\$?$`): name starts with a letter/`_`, may end with `$`
+// (NIS/Samba machine account), rest is lowercase/digits/`_`/`-`.
+// This matches useradd's own convention — not stricter, to avoid rejecting
+// legitimate names. Length (≤ 32) is checked separately in validName.
 var nameRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]*\$?$`)
 
 type Module struct {
@@ -64,18 +64,19 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-param (name) делегированы в
-// shared/coremanifest/user.yaml (единый источник с soul-lint, убран дубль).
-// Поверх делегации — ранний type-guard опциональных params (manifest-DSL его не
-// выражает) и СЕМАНТИЧЕСКИЕ проверки формата/диапазона + arg-injection guard.
-// Это input-validation/safety НАШЕГО кода: отсекаем инъекции (ведущий `-` →
-// argument confusion в argv useradd) и заведомо-битый ввод с понятной ошибкой,
-// НЕ ужесточая реальные ограничения useradd. present/absent семантика не меняется.
+// Validate — known-state + required-param (name) checks are delegated to
+// shared/coremanifest/user.yaml (single source shared with soul-lint, no
+// duplication). On top of delegation: early type-guards for optional params
+// (the manifest DSL can't express them) plus SEMANTIC format/range checks and
+// an arg-injection guard. This is input-validation/safety in OUR code: reject
+// injections (leading `-` → argument confusion in useradd's argv) and
+// obviously-bad input with a clear error, without tightening useradd's actual
+// limits. present/absent semantics are unchanged.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 
-	// name берётся StringParam в Apply; формат-проверка здесь даёт ранний отказ
-	// (soul-lint / Validate-фаза), не дожидаясь запуска useradd.
+	// name is read via StringParam in Apply; the format check here gives an
+	// early rejection (soul-lint / Validate phase) without waiting for useradd.
 	if name, err := util.StringParam(req.Params, "name"); err == nil {
 		if verr := validName("name", name); verr != nil {
 			errs = append(errs, verr.Error())
@@ -129,9 +130,9 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// validName проверяет логин/имя группы по NAME_REGEX shadow-utils + длина ≤ 32.
-// Ведущий `-` отсекается regex-ом (имя обязано начинаться с буквы/`_`), что и
-// есть guard от argument injection: имя `-x` не попадёт в argv как опция.
+// validName checks a login/group name against shadow-utils' NAME_REGEX + length ≤ 32.
+// A leading `-` is rejected by the regex (name must start with a letter/`_`),
+// which is exactly the argument-injection guard: `-x` can't land in argv as a flag.
 func validName(field, name string) error {
 	if name == "" {
 		return fmt.Errorf("param %q: must not be empty", field)
@@ -145,9 +146,9 @@ func validName(field, name string) error {
 	return nil
 }
 
-// validAbsPath требует абсолютный путь без ведущего `-` (defense-in-depth от
-// argument confusion). Существование файла НЕ проверяется — useradd его не
-// требует, гибкость оператора не режем.
+// validAbsPath requires an absolute path without a leading `-` (defense-in-depth
+// against argument confusion). File existence is NOT checked — useradd doesn't
+// require it, and we don't want to restrict operator flexibility.
 func validAbsPath(field, path string) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("param %q: must be an absolute path (start with %q), got %q", field, "/", path)
@@ -155,17 +156,17 @@ func validAbsPath(field, path string) error {
 	return nil
 }
 
-// PlanReadSafe объявляет, что core.user.Plan — pure-read (ADR-031 Scry):
-// читает LookupUser и НЕ мутирует хост (маркер для host-а, default-deny).
+// PlanReadSafe declares core.user.Plan as pure-read (ADR-031 Scry): it calls
+// LookupUser and does NOT mutate the host (marker for the host, default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее наличие пользователя
-// (тот же LookupUser, что в начале Apply) и шлёт PlanEvent.changed — «Apply
-// изменил бы пользователя?». НЕ мутирует хост: ни useradd, ни userdel.
+// Plan — pure-read dry-run (ADR-031 Scry): reads current user presence (the
+// same LookupUser Apply calls first) and sends PlanEvent.changed — "would Apply
+// change the user?". Does NOT mutate the host: no useradd, no userdel.
 //
-// Семантика 1:1 с Apply: present-or-create (uid/shell/home/groups/system/group
-// на уже существующем НЕ триггерят reconcile в MVP — см. doc Apply), поэтому
-// drift для present = «пользователя нет», для absent = «пользователь есть».
+// Semantics match Apply 1:1: present-or-create (uid/shell/home/groups/system/
+// group on an already-existing user do NOT trigger reconcile in MVP — see the
+// Apply doc), so drift for present = "user missing", for absent = "user exists".
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	name, err := util.StringParam(req.Params, "name")
 	if err != nil {
@@ -192,8 +193,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// Формат-проверка name единожды для обоих state: Apply может вызываться без
-	// предшествующей Validate-фазы, инъекционное/битое имя не должно дойти до
+	// Format-check name once for both states: Apply may be called without a
+	// preceding Validate phase, so an injection/bad name must not reach
 	// argv useradd/userdel.
 	if verr := validName("name", name); verr != nil {
 		return util.SendFailed(stream, verr.Error())
@@ -234,9 +235,9 @@ func (m *Module) applyPresent(ctx context.Context, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// Семантические проверки опциональных params и здесь, а не только в Validate:
-	// Apply может быть вызван без предшествующей Validate-фазы, а битый/
-	// инъекционный ввод не должен дойти до argv useradd. name уже проверен в Apply.
+	// Semantic checks for optional params live here too, not just in Validate:
+	// Apply may be called without a preceding Validate phase, and bad/injected
+	// input must not reach argv useradd. name is already checked in Apply.
 	if hasUID && (uid < 0 || uid > maxUID) {
 		return util.SendFailed(stream, fmt.Sprintf("param %q: out of range [0, %d], got %d", "uid", maxUID, uid))
 	}
@@ -262,12 +263,12 @@ func (m *Module) applyPresent(ctx context.Context, stream grpc.ServerStreamingSe
 	}
 
 	if existing, lookupErr := m.LookupUser(name); lookupErr == nil && existing != nil {
-		// Уже есть. По MVP не делаем reconcile uid/shell/home/groups/system/
-		// group — это требует usermod, который меняет state «не для
-		// слабонервных» (например, изменение uid каскадом на права файлов).
-		// Для первой версии достаточно «present-or-create»; reconcile —
-		// следующий slice. Новые params (system/group) тоже НЕ триггерят
-		// reconcile для существующего — они действуют только при создании.
+		// Already exists. MVP doesn't reconcile uid/shell/home/groups/system/
+		// group — that needs usermod, which changes state in ways that aren't
+		// for the faint of heart (e.g. changing uid cascades into file
+		// ownership). present-or-create is enough for v1; reconcile is a
+		// future slice. New params (system/group) also do NOT trigger
+		// reconcile for an existing user — they only apply on creation.
 		return util.SendFinal(stream, false, map[string]any{
 			"name":    name,
 			"exists":  true,
@@ -294,9 +295,10 @@ func (m *Module) applyPresent(ctx context.Context, stream grpc.ServerStreamingSe
 	if len(groups) > 0 {
 		args = append(args, "-G", strings.Join(groups, ","))
 	}
-	// `--` отделяет позиционный name от опций: имя, начинающееся с `-`, иначе
-	// распарсится useradd как флаг (argument injection, defense-in-depth поверх
-	// validName). useradd использует getopt_long — `--` поддержан (man useradd).
+	// `--` separates the positional name from options: a name starting with
+	// `-` would otherwise be parsed by useradd as a flag (argument injection,
+	// defense-in-depth on top of validName). useradd uses getopt_long — `--`
+	// is supported (man useradd).
 	args = append(args, "--", name)
 	if err := m.must(ctx, "useradd", args...); err != nil {
 		return util.SendFailed(stream, err.Error())

@@ -22,19 +22,19 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyFetched реализует state `fetched`.
+// applyFetched implements state `fetched`.
 //
-// Идемпотентность и порядок действий:
-//   - checksum задан + path существует и совпадает по хэшу → no-op (НЕ качаем);
-//   - checksum задан, хэш не совпал / файла нет → скачать во temp → verify →
-//     atomic rename (verify mismatch → failed, temp удаляется, целевой путь
-//     не трогается, supply-chain);
-//   - checksum НЕ задан → всегда скачать во temp → сравнить SHA-256 с
-//     существующим → записать только при diff (корректный changed).
+// Idempotency and order of operations:
+//   - checksum given + path exists and hash matches → no-op (no download);
+//   - checksum given, hash mismatch / file missing → download to temp →
+//     verify → atomic rename (verify mismatch → failed, temp removed,
+//     target path untouched — supply-chain safety);
+//   - checksum NOT given → always download to temp → compare SHA-256 with
+//     the existing file → write only on diff (correct changed).
 //
-// Скачивание всегда идёт во временный файл в директории path, материализация —
-// rename (util.AtomicWrite-паттерн): на целевом пути никогда не возникает
-// частичного или неверифицированного файла.
+// Download always goes to a temp file in path's directory; materialization
+// is a rename (util.AtomicWrite pattern): the target path never sees a
+// partial or unverified file.
 func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest) error {
 	allowHTTP, err := util.OptBoolParam(req.Params, "allow_http")
 	if err != nil {
@@ -106,28 +106,31 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		}
 	}
 
-	// Клиент строится per-Apply из распарсенных opt-out-флагов: каждый флаг
-	// ослабляет независимый контур (схема / dial-guard / TLS-цепочка).
+	// The client is built per-Apply from the parsed opt-out flags: each flag
+	// weakens an independent guard (scheme / dial guard / TLS chain).
 	clientOpts := util.HTTPClientOpts{
 		AllowPrivate:       allowPrivate,
 		InsecureSkipVerify: insecureSkipVerify,
 		AllowHTTPRedirect:  allowHTTP,
 	}
-	// При снятом guard — warning (только host) в output финального события:
-	// оператор видит факт ослабления контура в RunResult (конвенция
-	// core.repo/core.http). Формулировки и host-маскинг — единый helper util.
+	// When a guard is lifted — a warning (host only) in the final event's
+	// output: the operator sees the guard was weakened in RunResult
+	// (core.repo/core.http convention). Wording and host-masking share a
+	// single util helper.
 	warnings := util.GuardWarnings(util.WarnHost(rawURL), clientOpts)
 	client := m.NewClient(clientOpts)
 
-	// Состояние существующего файла. Для checksum-ветки хэшируем по заявленному
-	// алгоритму; для бесчексумной ветки — всегда SHA-256 (формат output).
+	// State of the existing file. For the checksum branch, hash with the
+	// declared algorithm; for the checksum-less branch, always SHA-256
+	// (output format).
 	existingHashHex, existingExists, herr := hashExisting(path, hashAlgoFor(algo))
 	if herr != nil {
 		return util.SendFailed(stream, herr.Error())
 	}
 
-	// checksum задан + существующий файл уже совпадает → контент не качаем, но
-	// mode/owner всё равно приводим к декларации (convergence, как в rendered).
+	// checksum given + existing file already matches → content isn't
+	// downloaded, but mode/owner are still converged to the declaration (as
+	// in rendered).
 	if checksum != "" && existingExists && strings.EqualFold(existingHashHex, wantHex) {
 		attrChanged, aerr := m.converge(path, modeStr, mode, owner, group)
 		if aerr != nil {
@@ -137,24 +140,25 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		return finalOutput(stream, attrChanged, path, rawURL, sha, fileSize(path), warnings)
 	}
 
-	// Скачиваем во временный файл в директории path, считая хэш на лету.
-	// notModified=true означает 304 на conditional-GET (If-None-Match через
-	// headers): тело не скачано, temp не создан.
+	// Download to a temp file in path's directory, hashing on the fly.
+	// notModified=true means a 304 on a conditional GET (If-None-Match via
+	// headers): body not downloaded, temp not created.
 	tmpName, sha256Hex, algoHex, size, notModified, derr := m.download(stream.Context(), client, rawURL, path, headers, timeout, algo)
 	if derr != nil {
 		return util.SendFailed(stream, derr.Error())
 	}
 
-	// 304 Not Modified: оператор задал условный GET (If-None-Match/If-Modified-Since
-	// в headers) и сервер подтвердил, что локальная копия актуальна.
+	// 304 Not Modified: the operator set a conditional GET (If-None-Match/
+	// If-Modified-Since in headers) and the server confirmed the local copy
+	// is current.
 	if notModified {
 		if !existingExists {
-			// Сервер сказал «не изменилось», но локального файла нет: stale
-			// If-None-Match без кэша. Скачивать нельзя (тела нет) — fail-fast.
+			// Server said "not modified" but there's no local file: stale
+			// If-None-Match with no cache. Can't download (no body) — fail-fast.
 			return util.SendFailed(stream, fmt.Sprintf(
 				"server returned 304 but no local file at %s: stale If-None-Match without cache", path))
 		}
-		// Контент актуален → запись не нужна, но mode/owner приводим к декларации.
+		// Content is current → no write needed, but mode/owner are converged.
 		attrChanged, aerr := m.converge(path, modeStr, mode, owner, group)
 		if aerr != nil {
 			return util.SendFailed(stream, aerr.Error())
@@ -168,17 +172,17 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 
 	cleanup := func() { _ = os.Remove(tmpName) }
 
-	// Verify ДО публикации. Mismatch → failed, temp удаляется, целевой путь
-	// не трогается. Неверный хэш не материализуется никогда.
+	// Verify BEFORE publishing. Mismatch → failed, temp removed, target path
+	// untouched. A bad hash is never materialized.
 	if checksum != "" && !strings.EqualFold(algoHex, wantHex) {
 		cleanup()
 		return util.SendFailed(stream, fmt.Sprintf(
 			"checksum mismatch for %s: want %s:%s, got %s:%s", rawURL, algo, wantHex, algo, algoHex))
 	}
 
-	// Бесчексумная ветка: если содержимое совпало с существующим — запись не
-	// нужна, но mode/owner всё равно сверяем/правим (convergence). Сравнение по
-	// SHA-256.
+	// Checksum-less branch: if content matches the existing file, no write is
+	// needed, but mode/owner are still checked/fixed (convergence). Compared
+	// by SHA-256.
 	if checksum == "" && existingExists && strings.EqualFold(existingHashHex, sha256Hex) {
 		cleanup()
 		attrChanged, aerr := m.converge(path, modeStr, mode, owner, group)
@@ -206,11 +210,11 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	return finalOutput(stream, true, path, rawURL, sha256Hex, size, warnings)
 }
 
-// converge приводит mode/owner существующего файла к декларации, когда контент
-// уже совпал и скачивание/перезапись не нужны. Семантика 1:1 с rendered
-// ([file/rendered.go]): mode сверяется и правится только при заданном modeStr
-// (пустой mode не навязывает дефолт существующему файлу); owner/group — через
-// util.ApplyOwnership. changed = mode-diff || owner-diff.
+// converge brings an existing file's mode/owner to the declaration when
+// content already matched and no download/rewrite is needed. Semantics are
+// 1:1 with rendered ([file/rendered.go]): mode is checked/fixed only when
+// modeStr is set (empty mode doesn't force a default onto an existing file);
+// owner/group via util.ApplyOwnership. changed = mode-diff || owner-diff.
 func (m *Module) converge(path, modeStr string, mode fs.FileMode, owner, group string) (bool, error) {
 	modeChanged := false
 	if modeStr != "" {
@@ -238,18 +242,20 @@ func (m *Module) converge(path, modeStr string, mode fs.FileMode, owner, group s
 	return modeChanged || ownerChanged, nil
 }
 
-// download выполняет GET во временный файл рядом с path, считая параллельно
-// SHA-256 (для output) и, если algo задан и не sha256, хэш по algo (для verify).
-// Возвращает имя temp-файла, SHA-256-хэш, algo-хэш (=sha256Hex если algo пуст
-// или sha256), размер и флаг notModified. На любой ошибке temp удаляется внутри.
+// download performs a GET into a temp file next to path, hashing SHA-256
+// (for output) in parallel and, if algo is set and isn't sha256, hashing by
+// algo too (for verify). Returns the temp file name, SHA-256 hash, algo hash
+// (=sha256Hex if algo is empty or sha256), size, and the notModified flag.
+// The temp file is removed internally on any error.
 //
-// notModified=true (HTTP 304) обрабатывается ДО проверки 2xx: при conditional-GET
-// (If-None-Match/If-Modified-Since в headers) 304 — штатный ответ «не изменилось»,
-// тело не качается, temp не создаётся. Решение о no-op/ошибке принимает
-// вызывающий (зависит от наличия локального файла).
+// notModified=true (HTTP 304) is handled BEFORE the 2xx check: on a
+// conditional GET (If-None-Match/If-Modified-Since in headers), 304 is the
+// expected "not modified" response — body isn't downloaded, temp isn't
+// created. The caller decides no-op vs. error (depends on local file
+// presence).
 //
-// client — per-call HTTP-клиент, построенный из opt-out-флагов задачи.
-// headers применяются к запросу, но НИКОГДА не логируются и не возвращаются
+// client is a per-call HTTP client built from the task's opt-out flags.
+// headers are applied to the request but NEVER logged or returned
 // (sensitive-by-construction, [ADR-010] §7.4).
 func (m *Module) download(
 	ctx context.Context, client util.HTTPDoer, rawURL, path string, headers map[string]string,
@@ -271,8 +277,8 @@ func (m *Module) download(
 		return "", "", "", 0, false, fmt.Errorf("fetch %s: %v", rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	// 304 — раньше проверки 2xx: conditional-GET (If-None-Match) штатно отвечает
-	// 304, это не «unexpected status».
+	// 304 comes before the 2xx check: a conditional GET (If-None-Match)
+	// normally gets 304 — not an "unexpected status".
 	if resp.StatusCode == http.StatusNotModified {
 		return "", "", "", 0, true, nil
 	}
@@ -321,9 +327,9 @@ func (m *Module) download(
 	return tmpName, sha256Hex, algoHex, n, false, nil
 }
 
-// parseChecksum разбирает форму "<algo>:<hex>". Поддерживаются sha256 и sha1
-// (md5 сознательно НЕ поддержан — слаб для supply-chain). hex проверяется на
-// корректную длину и алфавит.
+// parseChecksum parses the "<algo>:<hex>" form. sha256 and sha1 are
+// supported (md5 deliberately unsupported — too weak for supply-chain use).
+// hex is checked for correct length and alphabet.
 func parseChecksum(s string) (algo, hexDigest string, err error) {
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
@@ -350,8 +356,8 @@ func parseChecksum(s string) (algo, hexDigest string, err error) {
 	return algo, hexDigest, nil
 }
 
-// hashAlgoFor возвращает hash.Hash для алгоритма checksum. Пустой algo или
-// неизвестный → SHA-256 (бесчексумная ветка работает по SHA-256).
+// hashAlgoFor returns the hash.Hash for a checksum algorithm. Empty or
+// unknown algo → SHA-256 (the checksum-less branch always uses SHA-256).
 func hashAlgoFor(algo string) hash.Hash {
 	if algo == "sha1" {
 		return sha1.New()
@@ -359,8 +365,8 @@ func hashAlgoFor(algo string) hash.Hash {
 	return sha256.New()
 }
 
-// hashExisting хэширует существующий файл переданным хэшем. Возвращает hex,
-// флаг существования и ошибку. Отсутствие файла → ("", false, nil).
+// hashExisting hashes an existing file with the given hash. Returns hex,
+// an existence flag, and an error. Missing file → ("", false, nil).
 func hashExisting(path string, h hash.Hash) (string, bool, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -376,9 +382,10 @@ func hashExisting(path string, h hash.Hash) (string, bool, error) {
 	return hex.EncodeToString(h.Sum(nil)), true, nil
 }
 
-// canonicalSHA256 возвращает SHA-256-хэш файла для output. В no-op-ветке с
-// checksum по sha1 уже посчитанный sha1-хэш для output не годится — пересчитываем
-// SHA-256 файла. Если algo пуст или sha256 — возвращаем уже посчитанный хэш.
+// canonicalSHA256 returns the file's SHA-256 hash for output. In the no-op
+// branch with a sha1 checksum, the already-computed sha1 hash won't do for
+// output — the file's SHA-256 is recomputed. If algo is empty or sha256, the
+// already-computed hash is returned.
 func canonicalSHA256(path, algo, existingHashHex string) (string, error) {
 	if algo == "" || algo == "sha256" {
 		return existingHashHex, nil
@@ -398,10 +405,10 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-// finalOutput собирает output модуля. headers в output НЕ включаются никогда
-// (sensitive-by-construction). url — эхо без headers. warnings (если есть) —
-// host-only guard-предупреждения от util.GuardWarnings, доходят до оператора
-// в RunResult.
+// finalOutput assembles the module's output. headers are never included in
+// output (sensitive-by-construction). url is echoed back without headers.
+// warnings (if any) are host-only guard warnings from util.GuardWarnings,
+// surfaced to the operator in RunResult.
 func finalOutput(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, path, rawURL, sha256Hex string, size int64, warnings []string) error {
 	out := map[string]any{
 		"path":    path,

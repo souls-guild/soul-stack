@@ -1,17 +1,18 @@
-// Package cmd реализует core-модуль `core.cmd` ([ADR-015]).
+// Package cmd implements the `core.cmd` core module ([ADR-015]).
 //
-// Состояние:
-//   - shell: запустить shell-строку через `sh -c "<cmd>"`. В отличие от core.exec
-//     (argv), здесь shell обрабатывает pipes, redirects, glob, переменные.
+// State:
+//   - shell: run a shell string via `sh -c "<cmd>"`. Unlike core.exec (argv),
+//     the shell here handles pipes, redirects, globs, and variables.
 //
-// Idempotency-флаги те же: creates / unless / onlyif. Output: stdout/stderr/exit_code.
+// Same idempotency flags as core.exec: creates / unless / onlyif. Output:
+// stdout/stderr/exit_code.
 //
-// Безопасность: cmd-строка идёт в `sh -c` без escape — это shell by design,
-// модуль TRUSTED-ONLY. Любая интерполяция в cmd (CEL-render, register, soulprint)
-// исполняется shell-ом как код, поэтому источник cmd-строки должен быть доверенным
-// (автор Destiny/scenario), а не внешним вводом. Для argv-формы без shell-семантики
-// — `core.exec`. Шаги, где части cmd приходят из CEL-render, должны использовать
-// `${ q(...) }` (helper-квотинг, post-MVP).
+// Security: the cmd string goes into `sh -c` unescaped — shell by design,
+// TRUSTED-ONLY module. Any interpolation into cmd (CEL-render, register,
+// soulprint) is executed by the shell as code, so the cmd string's source
+// must be trusted (Destiny/scenario author), never external input. Use
+// `core.exec` for argv form without shell semantics. Steps where parts of
+// cmd come from CEL-render should use `${ q(...) }` (quoting helper, post-MVP).
 package cmd
 
 import (
@@ -39,22 +40,22 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-param проверки делегированы в
-// shared/coremanifest/cmd.yaml (единый источник с soul-lint). Cross-field-
-// инвариантов нет (creates/unless/onlyif комбинируются свободно, как в core.exec).
+// Validate delegates known-state + required-param checks to
+// shared/coremanifest/cmd.yaml (single source shared with soul-lint). No
+// cross-field invariants (creates/unless/onlyif combine freely, as in core.exec).
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe). core.cmd — verb-модуль: запуск shell-строки,
-// у него НЕТ желаемого состояния хоста, сверяемого pure-read-ом. Drift в
-// смысле ADR-031 не определён. Host применяет default-deny: dry_run для
-// core.cmd возвращает FAILED `plan.unsupported`, и это конструктивный отказ —
-// НЕ ложное «нет дрифта».
+// Plan is a no-op (no PlanReadSafe). core.cmd is a verb module: it runs a
+// shell string and has no desired host state a pure-read could compare
+// against — drift is undefined in the ADR-031 sense. The host applies
+// default-deny: dry_run for core.cmd returns FAILED `plan.unsupported`, a
+// deliberate refusal, not a false "no drift".
 //
-// Для условного выполнения по факту хоста используйте `creates`/`unless`/
-// `onlyif` (в Apply), либо вынесите идемпотентную часть в declarative-модуль.
+// For host-conditional execution use `creates`/`unless`/`onlyif` (in Apply),
+// or move the idempotent part into a declarative module.
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }

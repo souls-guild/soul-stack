@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// InotifyName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// InotifyName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const InotifyName = beaconaddr.Inotify
 
 const (
@@ -26,93 +26,96 @@ const (
 	stateInotifyEvents State = "events"
 )
 
-// inotifyBufferSize — буфер чтения kernel-events. Kernel-документация
-// рекомендует BUF_LEN ≥ sizeof(struct inotify_event) + NAME_MAX + 1 ≈ 16+256+1.
-// 4 KiB вмещает порядка 16 средних событий за один read — баланс между
-// латентностью и числом read-syscall-ов.
+// inotifyBufferSize is the kernel-event read buffer. Kernel docs recommend
+// BUF_LEN >= sizeof(struct inotify_event) + NAME_MAX + 1 ~= 16+256+1.
+// 4 KiB fits roughly 16 average events per read — a balance between
+// latency and read-syscall count.
 const inotifyBufferSize = 4096
 
-// inotifyReadIdle — задержка между read-syscall-ами, когда kernel-fd пуст.
-// Кратко: read non-blocking → EAGAIN → ожидание перед следующей попыткой. Без
-// pause горутина CPU-spins при затишье. 100 ms — компромисс между real-time
-// откликом и cost-of-wakeup; меньше — больше syscall-нагрузка, больше — выше
-// латентность первого события в окне Check.
+// inotifyReadIdle is the delay between read syscalls when the kernel fd is
+// empty: read non-blocking → EAGAIN → wait before retrying. Without a pause
+// the goroutine CPU-spins when idle. 100 ms balances real-time responsiveness
+// against wakeup cost; lower means more syscall load, higher means more
+// latency for the first event in a Check window.
 const inotifyReadIdle = 100 * time.Millisecond
 
-// InotifyBeacon — core-beacon для kernel inotify syscall (Linux-only, V5-3,
-// ADR-030 amendment 2026-05-26).
+// InotifyBeacon is the core-beacon for the kernel inotify syscall
+// (Linux-only, V5-3, ADR-030 amendment 2026-05-26).
 //
-// Fold-adapter (вариант α из architect-вердикта): per-path background-goroutine
-// читает inotify-fd, аккумулирует события в буфер; Check на каждом тике
-// scheduler-а возвращает «окно» накопленных событий + state quiet/events.
-// Read-only по конструкции (ADR-030): kernel-fd только наблюдает, не пишет.
+// Fold-adapter (variant alpha from the architect verdict): a per-path
+// background goroutine reads the inotify fd and accumulates events in a
+// buffer; Check on each scheduler tick returns the accumulated event
+// "window" plus state quiet/events. Read-only by construction (ADR-030):
+// the kernel fd only observes, never writes.
 //
-// MVP-ограничения (см. docs/module/core/beacon/README.md → core.beacon.inotify):
-//   - recursive: false-only (param `recursive: true` принимается грамматикой,
-//     но текущая imple НЕ рекурсивно регистрирует под-каталоги; отложен до
-//     явного запроса оператора, потенциальный источник багов в новом коде).
-//   - throttle игнорируется (поле есть в params для forward-compat, но в MVP
-//     все события эмитятся; throttle планируется отдельным slice-ом).
+// MVP limitations (see docs/module/core/beacon/README.md → core.beacon.inotify):
+//   - recursive: false-only (param `recursive: true` is accepted by the
+//     grammar, but the current implementation does NOT recursively register
+//     subdirectories; deferred until an operator actually asks for it — a
+//     likely source of bugs in new code).
+//   - throttle is ignored (the field exists in params for forward-compat,
+//     but in MVP all events are emitted; throttle is planned as a separate
+//     slice).
 //
-// Singleton-семантика: один экземпляр InotifyBeacon обслуживает все Vigil-ы
-// этого процесса (статический Registry, как у других core-beacon). State
-// per-path хранится в `watches` map. Несколько Vigil-ов с разными path —
-// независимые kernel-fd и независимые буферы. См. также «Lifecycle» ниже.
+// Singleton semantics: one InotifyBeacon instance serves all Vigils in this
+// process (static Registry, like other core-beacons). Per-path state lives
+// in the `watches` map. Multiple Vigils on different paths get independent
+// kernel fds and independent buffers. See also "Lifecycle" below.
 //
-// Lifecycle (известный trade-off MVP): scheduler не сигнализирует beacon-у
-// «этот Vigil удалён», поэтому fd для исчезнувшего path остаётся открытым до
-// shutdown процесса (kernel сам освободит). В долгоживущем soul-демоне это
-// ограниченный leak (мн-во уникальных path конечно). Явный hook Stop() в
-// интерфейсе Beacon — отложен (см. observations к V5-3).
+// Lifecycle (known MVP trade-off): the scheduler doesn't signal the beacon
+// "this Vigil was removed", so the fd for a vanished path stays open until
+// process shutdown (the kernel reclaims it). In a long-lived soul daemon
+// this is a bounded leak (the set of unique paths is finite). An explicit
+// Stop() hook on the Beacon interface is deferred (see V5-3 observations).
 type InotifyBeacon struct {
 	mu      sync.Mutex
-	watches map[string]*inotifyWatch // path → активный watch
+	watches map[string]*inotifyWatch // path → active watch
 }
 
-// inotifyWatch — одно зарегистрированное наблюдение за path. Принадлежит ровно
-// одному Vigil (один InotifyBeacon → много Vigil → много watch).
+// inotifyWatch is one registered observation of a path. Belongs to exactly
+// one Vigil (one InotifyBeacon → many Vigils → many watches).
 type inotifyWatch struct {
 	fd        int
 	wd        int
 	path      string
 	eventMask uint32
 
-	mu     sync.Mutex // защищает events
+	mu     sync.Mutex // guards events
 	events []inotifyEventBuf
 
 	stopCh chan struct{}
 	done   chan struct{}
 }
 
-// inotifyEventBuf — одно событие из kernel-fd, нормализованное Soul-side в
-// стабильный type-string. Сырой mask наружу не светим (kernel-константы
-// не должны просачиваться в where-CEL Decree).
+// inotifyEventBuf is one event from the kernel fd, normalized Soul-side into
+// a stable type string. The raw mask is never exposed (kernel constants
+// shouldn't leak into where-CEL Decree).
 type inotifyEventBuf struct {
 	op   string
 	name string
 	at   int64
 }
 
-// NewInotify собирает beacon. Никаких kernel-fd на старте — fd создаётся
-// lazily в первом Check для каждого уникального path.
+// NewInotify builds the beacon. No kernel fds at start — fds are created
+// lazily on the first Check for each unique path.
 func NewInotify() *InotifyBeacon {
 	return &InotifyBeacon{watches: make(map[string]*inotifyWatch)}
 }
 
-// Check на первом вызове для path регистрирует kernel-fd и спавнит
-// read-goroutine; на последующих — забирает накопленные события за окно
-// (между предыдущим и текущим Check). Окно пустое → state "quiet",
-// иначе "events". Edge-triggered Portent эмитится scheduler-ом при
-// смене state quiet↔events.
+// Check registers the kernel fd and spawns the read goroutine on the first
+// call for a path; subsequent calls collect the events accumulated in the
+// window since the previous Check. Empty window → state "quiet", otherwise
+// "events". The scheduler emits an edge-triggered Portent on quiet↔events
+// transitions.
 //
 // Params:
-//   - `path` (string, required) — абсолютный путь к файлу или каталогу.
-//   - `events` (list of string, optional) — фильтр типов событий:
-//     "created" / "modified" / "deleted" / "moved" / "attrib". Default —
-//     все пять. Невалидный элемент игнорируется (forward-compat).
-//   - `recursive` (bool, optional, default false) — MVP принимает только
-//     false; true возвращает ошибку валидации.
-//   - `throttle` (string duration, optional) — принимается, в MVP игнорируется.
+//   - `path` (string, required) — absolute path to a file or directory.
+//   - `events` (list of string, optional) — event type filter: "created" /
+//     "modified" / "deleted" / "moved" / "attrib". Default is all five. An
+//     invalid element is ignored (forward-compat).
+//   - `recursive` (bool, optional, default false) — MVP accepts only false;
+//     true returns a validation error.
+//   - `throttle` (string duration, optional) — accepted, ignored in MVP.
 func (b *InotifyBeacon) Check(_ context.Context, params *structpb.Struct) (State, *structpb.Struct, error) {
 	path, err := util.StringParam(params, "path")
 	if err != nil {
@@ -135,7 +138,7 @@ func (b *InotifyBeacon) Check(_ context.Context, params *structpb.Struct) (State
 	w, ok := b.watches[path]
 	b.mu.Unlock()
 
-	// Lazy-init / restart при смене mask.
+	// Lazy-init / restart on mask change.
 	if !ok || w.eventMask != mask {
 		nw, err := b.restartWatch(path, mask, w)
 		if err != nil {
@@ -144,7 +147,7 @@ func (b *InotifyBeacon) Check(_ context.Context, params *structpb.Struct) (State
 		w = nw
 	}
 
-	// Забираем окно событий (под локом self).
+	// Collect the event window (under self's lock).
 	w.mu.Lock()
 	flushed := w.events
 	w.events = nil
@@ -156,9 +159,9 @@ func (b *InotifyBeacon) Check(_ context.Context, params *structpb.Struct) (State
 	return stateInotifyEvents, inotifyData(path, flushed), nil
 }
 
-// restartWatch закрывает старый watch (если был) и регистрирует новый. Возврат
-// — новый watch. Под отдельным внутренним локом B.mu (без удержания на время
-// startWatch — syscall может блокироваться на регистрации).
+// restartWatch closes the old watch (if any) and registers a new one.
+// Returns the new watch. Uses a separate internal B.mu lock (not held during
+// startWatch — the registration syscall can block).
 func (b *InotifyBeacon) restartWatch(path string, mask uint32, old *inotifyWatch) (*inotifyWatch, error) {
 	if old != nil {
 		old.stop()
@@ -173,9 +176,9 @@ func (b *InotifyBeacon) restartWatch(path string, mask uint32, old *inotifyWatch
 	return w, nil
 }
 
-// startWatch создаёт inotify-fd, регистрирует watch на path и спавнит
-// read-goroutine. ENOSPC (max_user_watches исчерпан) приходит из
-// inotify_add_watch — конвертируем в понятную ошибку оператору.
+// startWatch creates an inotify fd, registers a watch on path, and spawns
+// the read goroutine. ENOSPC (max_user_watches exhausted) comes from
+// inotify_add_watch — converted into an operator-readable error.
 func (b *InotifyBeacon) startWatch(path string, mask uint32) (*inotifyWatch, error) {
 	fd, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
 	if err != nil {
@@ -201,25 +204,26 @@ func (b *InotifyBeacon) startWatch(path string, mask uint32) (*inotifyWatch, err
 	return w, nil
 }
 
-// stop останавливает read-goroutine и закрывает kernel-fd. После stop watch
-// больше не получит событий; вызывается из restartWatch (смена mask) либо
-// при shutdown процесса (kernel сам очистит, но defensive cleanup полезен в
-// тестах). Идемпотентен.
+// stop halts the read goroutine and closes the kernel fd. After stop the
+// watch receives no more events; called from restartWatch (mask change) or
+// on process shutdown (the kernel cleans up anyway, but defensive cleanup
+// helps in tests). Idempotent.
 func (w *inotifyWatch) stop() {
 	select {
 	case <-w.stopCh:
-		return // уже остановлен
+		return // already stopped
 	default:
 	}
 	close(w.stopCh)
-	// Closing fd вызывает EBADF в read → readLoop выходит.
+	// Closing fd causes EBADF in read → readLoop exits.
 	_ = unix.Close(w.fd)
 	<-w.done
 }
 
-// readLoop — фон. Читает inotify-fd через unix.Read (non-blocking), парсит
-// inotify_event-структуры и складывает их в w.events под w.mu. На EAGAIN
-// (пусто) — короткий sleep; на EBADF (closed fd) или stopCh — выход.
+// readLoop runs in the background: reads the inotify fd via unix.Read
+// (non-blocking), parses inotify_event structs, and appends them to w.events
+// under w.mu. EAGAIN (empty) → short sleep; EBADF (closed fd) or stopCh →
+// exit.
 func (w *inotifyWatch) readLoop() {
 	defer close(w.done)
 	buf := make([]byte, inotifyBufferSize)
@@ -239,7 +243,7 @@ func (w *inotifyWatch) readLoop() {
 				}
 				continue
 			}
-			// EBADF / EINTR / closed → выход.
+			// EBADF / EINTR / closed → exit.
 			return
 		}
 		if n <= 0 {
@@ -249,9 +253,9 @@ func (w *inotifyWatch) readLoop() {
 	}
 }
 
-// parseAndAppend разбирает буфер inotify_event-ов. Каждое событие имеет
-// фиксированный header (SizeofInotifyEvent) + опц. имя длиной Len (для watch
-// на каталог имя файла, для watch на отдельный файл — пусто).
+// parseAndAppend parses a buffer of inotify_events. Each event has a fixed
+// header (SizeofInotifyEvent) plus an optional name of length Len (the file
+// name for a directory watch, empty for a single-file watch).
 func (w *inotifyWatch) parseAndAppend(buf []byte) {
 	now := time.Now().Unix()
 	var batch []inotifyEventBuf
@@ -263,7 +267,7 @@ func (w *inotifyWatch) parseAndAppend(buf []byte) {
 		if nameLen > 0 {
 			end := offset + unix.SizeofInotifyEvent + nameLen
 			if end > len(buf) {
-				break // битый буфер — kernel не делит события поперёк read, на всякий
+				break // corrupt buffer — kernel never splits an event across reads, just in case
 			}
 			name = strings.TrimRight(string(buf[offset+unix.SizeofInotifyEvent:end]), "\x00")
 		}
@@ -280,8 +284,8 @@ func (w *inotifyWatch) parseAndAppend(buf []byte) {
 	w.mu.Unlock()
 }
 
-// inotifyData собирает PortentEvent.data (legacy Struct-ветка). typed-payload
-// формируется отдельно через fillTypedPayload (typed_payload.go).
+// inotifyData builds PortentEvent.data (legacy Struct branch). The typed
+// payload is built separately via fillTypedPayload (typed_payload.go).
 func inotifyData(path string, events []inotifyEventBuf) *structpb.Struct {
 	fields := map[string]any{
 		"path":  path,
@@ -302,10 +306,10 @@ func inotifyData(path string, events []inotifyEventBuf) *structpb.Struct {
 	return s
 }
 
-// resolveInotifyMask преобразует фильтр оператора (`events: [...]`) в
-// kernel-маску. Пустой фильтр → все 5 поддерживаемых типов событий.
-// Неизвестный элемент молча игнорируется (forward-compat: новые типы
-// добавляются грамматикой, старая imple их не видит).
+// resolveInotifyMask converts the operator's filter (`events: [...]`) into
+// a kernel mask. Empty filter → all 5 supported event types. An unknown
+// element is silently ignored (forward-compat: new types get added to the
+// grammar, an old implementation just doesn't see them).
 func resolveInotifyMask(events []string) uint32 {
 	if len(events) == 0 {
 		return unix.IN_CREATE | unix.IN_MODIFY | unix.IN_DELETE |
@@ -329,11 +333,11 @@ func resolveInotifyMask(events []string) uint32 {
 	return mask
 }
 
-// mapInotifyMaskToOp проецирует kernel-mask в стабильный type-string. Из
-// нескольких бит выбирается «главный» по приоритету (created/deleted поверх
-// modified — типичный паттерн edit→create→delete на одном файле). Системные
-// IN_IGNORED/IN_Q_OVERFLOW отображаются в пустую строку, parseAndAppend их
-// пропускает (это не пользовательские события).
+// mapInotifyMaskToOp projects a kernel mask into a stable type string. When
+// multiple bits are set, the "primary" one wins by priority (created/deleted
+// over modified — the typical edit→create→delete pattern on one file).
+// System IN_IGNORED/IN_Q_OVERFLOW map to an empty string; parseAndAppend
+// skips those (not user-facing events).
 func mapInotifyMaskToOp(mask uint32) string {
 	switch {
 	case mask&unix.IN_CREATE != 0:

@@ -1,25 +1,25 @@
 //go:build integration
 
-// Failback integration-test (Soul-side) — два priority-endpoint-а, проверка
-// proactive-возврата на higher-priority endpoint и graceful-swap живой сессии
-// без message-loss.
+// Failback integration test (Soul-side) — two priority endpoints, verifies
+// proactive return to the higher-priority endpoint and graceful swap of a
+// live session without message loss.
 //
 // Setup:
-//   - два mock EventStream-сервера на разных портах (server-A priority=1,
-//     server-B priority=2), оба под mTLS с общим CA;
-//   - server-A initially down (listener закрыт), server-B up;
-//   - reconnectLoop в горутине теста с failback.interval=200ms.
+//   - two mock EventStream servers on different ports (server-A priority=1,
+//     server-B priority=2), both under mTLS with a shared CA;
+//   - server-A initially down (listener closed), server-B up;
+//   - reconnectLoop runs in a test goroutine with failback.interval=200ms.
 //
-// Фазы (по ТЗ Soul-runtime-extras / failback integration):
+// Phases:
 //  1. Initial connect → server-B (A unreachable).
-//  2. server-A goes up → failback swap → активная сессия на server-A,
-//     старая на B закрыта gracefully.
+//  2. server-A goes up → failback swap → active session moves to server-A,
+//     old session on B closes gracefully.
 //
-// Phase 3 (A down again → fallback back to B) — nice-to-have по ТЗ — здесь
-// сознательно опущена: gRPC-client при abrupt-close TLS-conn-а зависает в
-// Recv() на десятки секунд (keepalive Time=30s / Timeout=10s в client.go);
-// раскручивать это в integration-тесте — раздувание scope. Reconnect-fallback
-// и так покрыт unit-тестами `TestClientDial_FallsBackToNextEndpoint` /
+// Phase 3 (A down again → fallback back to B) is a nice-to-have, deliberately
+// skipped here: on abrupt TLS-conn close the gRPC client hangs in Recv() for
+// tens of seconds (keepalive Time=30s / Timeout=10s in client.go); chasing
+// that in an integration test would blow up scope. Reconnect-fallback is
+// already covered by unit tests `TestClientDial_FallsBackToNextEndpoint` /
 // `TestDialPriority_PicksLowerOnly`.
 package main
 
@@ -60,13 +60,13 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/runtime"
 )
 
-// TestReconnect_LeaseHeld_BackoffNotReset — стрим отвергнут AlreadyExists на
-// handshake (SID-lease ещё держит живой holder после краха keeper-а). Soul НЕ
-// долбит выжившего keeper-а на rate ~1/initial: backoff растёт (модест-cap), а не
-// сбрасывается. Доказательство: за окно T число handshake-попыток ограничено
-// растущей задержкой, а не initial-rate. Когда lease снимается (force-release
-// после presence) — Soul переподключается в пределах нескольких секунд (cap),
-// recovery-latency сохранена.
+// TestReconnect_LeaseHeld_BackoffNotReset — stream is rejected with AlreadyExists
+// on handshake (SID lease still held by a live holder after the keeper crashed).
+// Soul must not hammer the surviving keeper at ~1/initial rate: backoff grows
+// (capped), never resets. Proof: over window T the number of handshake attempts
+// is bounded by the growing delay, not the initial rate. Once the lease is
+// released (force-release after presence), Soul reconnects within a few seconds
+// (cap), preserving recovery latency.
 func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	ca, caKey := mustGenCA(t)
 	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
@@ -78,7 +78,7 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	srvTLS := serverTLS(t, ca, caKey)
 	srv := startMockKeeper(t, srvTLS, "L")
 	defer srv.stop()
-	srv.rejectLease.Store(true) // lease занят живым holder-ом
+	srv.rejectLease.Store(true) // lease held by a live holder
 
 	endpoints := []soulgrpc.Endpoint{{Addr: srv.addr, Priority: 1}}
 	logger := testLogger(t)
@@ -95,10 +95,11 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// transport-max намеренно МАЛ (20ms): если бы lease-held шёл по обычной
-	// transport-семантике с reset-к-initial, за окно набралось бы ~окно/20ms
-	// попыток. Lease-held cap (leaseHeldBackoffCap, секунды) и отсутствие reset
-	// держат число попыток в единицах. initial=20ms/no-jitter — детерминируем.
+	// transport-max is deliberately SMALL (20ms): if lease-held used normal
+	// transport backoff semantics with reset-to-initial, the window would
+	// accumulate ~window/20ms attempts. The lease-held cap (leaseHeldBackoffCap,
+	// seconds) and no reset keep the attempt count in single digits.
+	// initial=20ms/no-jitter makes this deterministic.
 	store := backoffOnlyStore(t, srv.addr, "20ms", "20ms")
 
 	runner := runtime.NewApplyRunner(coremod.Default(), nil)
@@ -115,9 +116,9 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 		<-loopDone
 	}()
 
-	// Окно наблюдения 2s. При reset-к-initial(20ms) было бы ~100 попыток. При
-	// lease-held прогрессии (20→40→80→160→320→640→1280→2560→cap=3000) — ≤ ~8.
-	// Порог 25 — щедрый запас над растущей прогрессией, но далеко ниже initial-rate.
+	// 2s observation window. reset-to-initial(20ms) would yield ~100 attempts.
+	// Lease-held progression (20→40→80→160→320→640→1280→2560→cap=3000) gives ≤ ~8.
+	// Threshold 25 is a generous margin above the progression, still far below initial-rate.
 	if !waitFor(func() bool { return srv.helloCount() >= 1 }, 2*time.Second) {
 		t.Fatal("no handshake attempt observed under lease-held")
 	}
@@ -128,18 +129,18 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	}
 	t.Logf("lease-held handshake attempts in ~2s window: %d (backoff applied, not reset)", attempts)
 
-	// === recovery-latency: lease снят (force-release) → переподключение за секунды ===
+	// === recovery latency: lease released (force-release) → reconnect within seconds ===
 	srv.rejectLease.Store(false)
-	// cap=leaseHeldBackoffCap (3s) + handshake/запас. Должно успеть.
+	// cap=leaseHeldBackoffCap (3s) + handshake margin. Should be enough.
 	if !waitFor(func() bool { return srv.activeStreams() >= 1 }, leaseHeldBackoffCap+3*time.Second) {
 		t.Fatalf("recovery: did not reconnect within %s after lease released", leaseHeldBackoffCap+3*time.Second)
 	}
 }
 
-// TestReconnect_LeaseHeld_SpraysToOtherEndpoint — AlreadyExists на priority=1
-// endpoint НЕ заклинивает spray/failover: Dial доходит до живого priority=2
-// endpoint-а той же сессией, не дожидаясь снятия lease на первом. Страхует
-// легитимный fallback по fallback-list при lease-held на одном keeper-е.
+// TestReconnect_LeaseHeld_SpraysToOtherEndpoint — AlreadyExists on the priority=1
+// endpoint must NOT jam spray/failover: Dial still reaches the live priority=2
+// endpoint in the same session, without waiting for the first lease to release.
+// Guards legitimate fallback-list failover when one keeper has the lease held.
 func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	ca, caKey := mustGenCA(t)
 	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
@@ -149,7 +150,7 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	clientKeyPath := writeRSAPriv(t, dir, "client.key", clientKey)
 
 	srvTLS := serverTLS(t, ca, caKey)
-	// priority=1 — lease-held; priority=2 — живой.
+	// priority=1 is lease-held; priority=2 is alive.
 	leaseHeld := startMockKeeper(t, srvTLS, "P1")
 	defer leaseHeld.stop()
 	leaseHeld.rejectLease.Store(true)
@@ -173,8 +174,9 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	// failback disabled тут не нужен — alive это priority=2, failback потащил бы
-	// на priority=1 (lease-held), что усложнит наблюдение. interval большой.
+	// failback disabled isn't needed here — alive is priority=2, so failback
+	// would pull toward priority=1 (lease-held) and complicate observation.
+	// Interval is set large.
 	store := backoffOnlyStore(t, leaseHeld.addr, "20ms", "200ms")
 
 	runner := runtime.NewApplyRunner(coremod.Default(), nil)
@@ -190,14 +192,14 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 		<-loopDone
 	}()
 
-	// Несмотря на lease-held priority=1, сессия поднимается на живом priority=2.
+	// Despite lease-held priority=1, the session comes up on the live priority=2.
 	if !waitFor(func() bool { return alive.activeStreams() >= 1 }, 3*time.Second) {
 		t.Fatalf("spray: did not connect to alive priority=2 endpoint; P1-hello=%d P2-active=%d",
 			leaseHeld.helloCount(), alive.activeStreams())
 	}
 }
 
-// testLogger — discard по умолчанию, debug на stderr при -v.
+// testLogger — discards by default, debug to stderr under -v.
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
 	if testing.Verbose() {
@@ -206,11 +208,12 @@ func testLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// backoffOnlyStore — Store[SoulConfig] с одним endpoint-ом и заданными
-// backoff.initial/max (no-jitter), failback выключен. Для lease-held тестов, где
-// важна именно reconnect-backoff-семантика, а не failback. primaryAddr —
-// единственный endpoint в конфиге; реальный дайлинг идёт через отдельный Client
-// (его endpoints могут включать больше адресов — конфиг лишь источник backoff).
+// backoffOnlyStore — Store[SoulConfig] with a single endpoint and given
+// backoff.initial/max (no-jitter), failback disabled. For lease-held tests
+// where reconnect-backoff semantics matter, not failback. primaryAddr is the
+// only endpoint in the config; actual dialing goes through a separate Client
+// (whose endpoints may include more addresses — the config is only a backoff
+// source).
 func backoffOnlyStore(t *testing.T, primaryAddr, initial, max string) *config.Store[config.SoulConfig] {
 	t.Helper()
 	host, port := splitHostPort(t, primaryAddr)
@@ -244,10 +247,10 @@ func backoffOnlyStore(t *testing.T, primaryAddr, initial, max string) *config.St
 	return store
 }
 
-// TestFailbackIntegration_TwoEndpoints — happy-path конвейера failback:
-// fallback на priority=2 при недоступном priority=1, потом proactive-swap
-// обратно на priority=1 (zero-downtime: новая сессия открыта до закрытия
-// старой).
+// TestFailbackIntegration_TwoEndpoints — happy-path of the failback pipeline:
+// fallback to priority=2 while priority=1 is unreachable, then proactive swap
+// back to priority=1 (zero-downtime: new session opens before the old one
+// closes).
 func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	ca, caKey := mustGenCA(t)
 	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
@@ -258,13 +261,13 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 
 	srvTLS := serverTLS(t, ca, caKey)
 
-	// server-B (priority=2) — up на весь тест.
+	// server-B (priority=2) stays up for the whole test.
 	srvB := startMockKeeper(t, srvTLS, "B")
 	defer srvB.stop()
 
-	// server-A (priority=1) — занимаем порт, чтобы клиент в фазе 1 получил
-	// connection-refused, а в фазе 2 поднимаем mock-сервер на том же addr,
-	// без правки endpoints в Client после старта reconnectLoop.
+	// server-A (priority=1): reserve the port so phase 1 gets connection-refused,
+	// then bring up the mock server on the same addr in phase 2, without
+	// touching Client endpoints after reconnectLoop has started.
 	srvAAddr := acquirePort(t)
 
 	endpoints := []soulgrpc.Endpoint{
@@ -291,27 +294,27 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 
 	runner := runtime.NewApplyRunner(coremod.Default(), nil)
 
-	// backoff/failback больше не передаются параметрами — reconnectLoop читает
-	// их из store на каждой итерации (hot-reload, ADR-021). Собираем store со
-	// снимком, дающим прежние тест-значения: backoff initial=50ms/max=200ms без
-	// jitter, failback interval=200ms (spray=0 — детерминированный swap).
+	// backoff/failback are no longer passed as params — reconnectLoop reads
+	// them from the store on every iteration (hot-reload, ADR-021). Build a
+	// store snapshot with the old test values: backoff initial=50ms/max=200ms,
+	// no jitter, failback interval=200ms (spray=0 for a deterministic swap).
 	store := failbackTestStore(t, srvAAddr, srvB.addr)
 
-	// soulprintPusher — обязательный аргумент сигнатуры; Pusher реальный
-	// (handleSession шлёт initial-report при установке сессии). Остальные deps —
-	// nil: тест проверяет только failback-swap сессий и не доходит до Apply/
-	// Errand/beacon, где они востребованы:
-	//   - errandRunner — nil: Errand-команды в тесте не приходят;
-	//   - metrics — nil (nil-safe, см. EventStreamMetrics.*);
-	//   - sigils/anchors — nil: verify Sigil нужен только на Apply custom-плагина;
-	//   - scheduler — nil: VigilSnapshot в тесте не приходит.
+	// soulprintPusher is a required signature arg; Pusher is real
+	// (handleSession sends an initial report on session setup). The rest of the
+	// deps are nil: the test only checks failback session swap and never
+	// reaches Apply/Errand/beacon, where they'd be needed:
+	//   - errandRunner — nil: no Errand commands arrive in this test;
+	//   - metrics — nil (nil-safe, see EventStreamMetrics.*);
+	//   - sigils/anchors — nil: Sigil verify only matters on custom-plugin Apply;
+	//   - scheduler — nil: no VigilSnapshot arrives in this test.
 	sp := newTestPusher("soul-host.example")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	loopDone := make(chan struct{})
 	go func() {
 		defer close(loopDone)
-		// Сигнатура: reconnectLoop(ctx, store, client, runner, errandRunner,
+		// Signature: reconnectLoop(ctx, store, client, runner, errandRunner,
 		// sp, metrics, sigils, anchors, scheduler, logger).
 		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
 	}()
@@ -324,7 +327,7 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	if !waitFor(func() bool { return srvB.activeStreams() >= 1 }, 3*time.Second) {
 		t.Fatalf("phase 1: server-B did not get connection; A=%d B=%d", 0, srvB.activeStreams())
 	}
-	// В этот момент A должен оставаться неподключенным.
+	// At this point A must remain unconnected.
 	if got := srvB.activeStreams(); got != 1 {
 		t.Errorf("phase 1: server-B active=%d, want 1", got)
 	}
@@ -333,13 +336,13 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	srvA := startMockKeeperOnAddr(t, srvTLS, "A", srvAAddr)
 	defer srvA.stop()
 
-	// failback.interval=200ms; даём 6× запас (race-сборка медленнее).
+	// failback.interval=200ms; allow 6x margin (race build is slower).
 	if !waitFor(func() bool { return srvA.activeStreams() >= 1 }, 3*time.Second) {
 		t.Fatalf("phase 2: server-A did not pick up failback swap; A=%d B=%d",
 			srvA.activeStreams(), srvB.activeStreams())
 	}
-	// После swap-а B должен закрыться gracefully — handleSession делает
-	// _ = oldSess.Close() сразу после получения новой сессии.
+	// After the swap, B must close gracefully — handleSession calls
+	// _ = oldSess.Close() right after acquiring the new session.
 	if !waitFor(func() bool { return srvB.activeStreams() == 0 }, 2*time.Second) {
 		t.Fatalf("phase 2: server-B not gracefully closed; B active=%d", srvB.activeStreams())
 	}
@@ -347,21 +350,21 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 		t.Errorf("phase 2: server-A active=%d, want 1", got)
 	}
 
-	// Phase 3 (A down → fallback to B) — сознательно опущена (см. doc-comment
-	// в начале файла). Coverage реконнект-fallback-а закрыт unit-тестами
-	// soul/internal/grpc/client_test.go.
+	// Phase 3 (A down → fallback to B) is deliberately skipped (see doc comment
+	// at the top of the file). Reconnect-fallback coverage is handled by unit
+	// tests in soul/internal/grpc/client_test.go.
 }
 
-// --- mock EventStream-сервер (mTLS) ---
+// --- mock EventStream server (mTLS) ---
 
 type mockKeeper struct {
 	keeperv1.UnimplementedKeeperServer
 	label string
 	addr  string
 
-	active        int64       // atomic — счётчик in-flight EventStream-handler-ов
-	helloAttempts int64       // atomic — счётчик принятых Hello (handshake-попыток)
-	rejectLease   atomic.Bool // когда true — отвергать handshake с AlreadyExists (lease-held)
+	active        int64       // atomic — count of in-flight EventStream handlers
+	helloAttempts int64       // atomic — count of received Hello (handshake attempts)
+	rejectLease   atomic.Bool // when true — reject handshake with AlreadyExists (lease-held)
 
 	srv *grpc.Server
 	ln  *trackingListener
@@ -383,8 +386,9 @@ func (m *mockKeeper) EventStream(stream grpc.BidiStreamingServer[keeperv1.FromSo
 		return errors.New("expected Hello")
 	}
 	atomic.AddInt64(&m.helloAttempts, 1)
-	// lease-held: отвергаем ДО HelloReply (как keeper при занятом SID-lease —
-	// acquireSoulLease отдаёт AlreadyExists до handshake-reply).
+	// lease-held: reject BEFORE HelloReply (mirrors keeper behavior when the
+	// SID lease is taken — acquireSoulLease returns AlreadyExists before the
+	// handshake reply).
 	if m.rejectLease.Load() {
 		return status.Errorf(codes.AlreadyExists, "soul lease held by another keeper for sid=%q", hello.GetSidEcho())
 	}
@@ -412,19 +416,18 @@ func (m *mockKeeper) activeStreams() int64 { return atomic.LoadInt64(&m.active) 
 
 func (m *mockKeeper) stop() {
 	m.stopOnce.Do(func() {
-		// Сначала рвём live TCP-конны через trackingListener — это
-		// гарантирует, что Recv() на клиенте сразу получит error
-		// (grpc.Server.Stop() в Go-runtime закрывает listener, но
-		// не всегда мгновенно бьёт уже установленные streams; для
-		// быстрого phase 3-reconnect нам нужен именно жёсткий разрыв).
+		// First kill live TCP conns via trackingListener — this guarantees
+		// the client's Recv() gets an error immediately (grpc.Server.Stop()
+		// closes the listener but doesn't always instantly kill already
+		// established streams; fast phase-3 reconnect needs a hard break).
 		n := m.ln.killAll()
-		_ = n // для отладки можно залогировать m.label, n
+		_ = n // for debugging, could log m.label, n
 		m.srv.Stop()
 		m.wg.Wait()
 	})
 }
 
-// startMockKeeper поднимает mock-сервер на 127.0.0.1:0 (kernel выдаст порт).
+// startMockKeeper starts a mock server on 127.0.0.1:0 (kernel assigns the port).
 func startMockKeeper(t *testing.T, tlsCfg *tls.Config, label string) *mockKeeper {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -434,9 +437,9 @@ func startMockKeeper(t *testing.T, tlsCfg *tls.Config, label string) *mockKeeper
 	return runMockKeeper(t, ln, tlsCfg, label)
 }
 
-// startMockKeeperOnAddr поднимает сервер на конкретном адресе (используется
-// для перезапуска server-A на том же порту, чтобы не править endpoints
-// в Client после старта reconnectLoop).
+// startMockKeeperOnAddr starts a server on a specific address (used to
+// restart server-A on the same port, so Client endpoints don't need editing
+// after reconnectLoop has started).
 func startMockKeeperOnAddr(t *testing.T, tlsCfg *tls.Config, label, addr string) *mockKeeper {
 	t.Helper()
 	ln, err := net.Listen("tcp", addr)
@@ -465,11 +468,10 @@ func runMockKeeper(t *testing.T, ln net.Listener, tlsCfg *tls.Config, label stri
 	return mk
 }
 
-// trackingListener — net.Listener, держащий ссылки на все Accepted-net.Conn,
-// чтобы при stop() их можно было принудительно закрыть. Без этого
-// grpc.Server.Stop() в некоторых ситуациях оставляет уже-открытые streams
-// без явного RST/FIN, и клиенту приходится ждать keepalive-timeout (десятки
-// секунд) до error из Recv().
+// trackingListener — a net.Listener holding refs to every accepted net.Conn
+// so stop() can force-close them all. Without this, grpc.Server.Stop() can
+// leave already-open streams without an explicit RST/FIN, forcing the client
+// to wait out the keepalive timeout (tens of seconds) before Recv() errors.
 type trackingListener struct {
 	net.Listener
 	mu    sync.Mutex
@@ -502,10 +504,10 @@ func (t *trackingListener) killAll() int {
 	return len(conns)
 }
 
-// acquirePort — взять свободный порт у kernel-а и сразу его освободить.
-// Между Close-ом и повторным bind-ом окно race; в localhost-тесте этого
-// окна обычно достаточно (ядро держит порт в FREE-state >5s по умолчанию
-// после явного Close listener-а без активных соединений).
+// acquirePort grabs a free port from the kernel and immediately releases it.
+// There's a race window between Close and the next bind; usually fine for a
+// localhost test (the kernel keeps the port FREE for >5s by default after an
+// explicit listener Close with no active connections).
 func acquirePort(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -517,8 +519,8 @@ func acquirePort(t *testing.T) string {
 	return addr
 }
 
-// serverTLS — серверная TLS-конфигурация: server-cert на 127.0.0.1, mTLS
-// требует клиентский cert от того же CA.
+// serverTLS — server TLS config: server cert on 127.0.0.1, mTLS requires a
+// client cert from the same CA.
 func serverTLS(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey) *tls.Config {
 	t.Helper()
 	serverCertDER, serverKey := mustGenLeaf(t, ca, caKey, "127.0.0.1", true)
@@ -533,7 +535,7 @@ func serverTLS(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey) *tls.C
 	}
 }
 
-// --- self-signed certs (в-памяти) ---
+// --- self-signed certs (in-memory) ---
 
 func mustGenCA(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
@@ -620,13 +622,13 @@ func waitFor(pred func() bool, max time.Duration) bool {
 	return pred()
 }
 
-// failbackTestStore собирает Store[SoulConfig] со снимком, из которого
-// reconnectLoop/handleSession резолвят backoff и failback (hot-reload-источник,
-// ADR-021): initial=50ms/max=200ms без jitter, failback interval=200ms, spray=0.
-// endpoints в конфиге нужны только для прохождения schema-валидации
-// (keeper.endpoints[] обязателен) — реальный дайлинг идёт через soulgrpc.Client,
-// сконструированный отдельно. Паттерн повторяет soulFixtureStore из
-// hotreload_test.go: YAML → временный файл → LoadSoulStore.
+// failbackTestStore builds a Store[SoulConfig] snapshot that reconnectLoop/
+// handleSession resolve backoff and failback from (hot-reload source,
+// ADR-021): initial=50ms/max=200ms, no jitter, failback interval=200ms,
+// spray=0. Config endpoints only exist to pass schema validation
+// (keeper.endpoints[] is required) — actual dialing goes through a
+// separately constructed soulgrpc.Client. Pattern mirrors soulFixtureStore
+// in hotreload_test.go: YAML → temp file → LoadSoulStore.
 func failbackTestStore(t *testing.T, addrA, addrB string) *config.Store[config.SoulConfig] {
 	t.Helper()
 	hostA, portA := splitHostPort(t, addrA)

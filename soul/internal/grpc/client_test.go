@@ -117,7 +117,7 @@ func TestNewClient_MaxRecvMsgSizeFromConfig(t *testing.T) {
 	}
 }
 
-// --- end-to-end через mock EventStream-сервер ---
+// --- end-to-end via mock EventStream server ---
 
 func TestClientDial_HandshakeSuccess(t *testing.T) {
 	srv := newMockEventStream(t, nil)
@@ -149,7 +149,7 @@ func TestClientDial_HandshakeSuccess(t *testing.T) {
 		t.Error("SessionID is empty")
 	}
 
-	// SID_echo доходит до сервера.
+	// SID_echo reaches the server.
 	srv.mu.Lock()
 	hello := srv.received
 	srv.mu.Unlock()
@@ -187,8 +187,8 @@ func TestDialPriority_SkipsCurrentOrLower(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
 
-	// Один endpoint с priority=2; запрашиваем maxPriority=2 → должно вернуть
-	// sentinel «нет higher-priority».
+	// One endpoint at priority=2; requesting maxPriority=2 should return the
+	// "no higher-priority" sentinel.
 	cli, err := NewClient(ClientConfig{
 		Endpoints:        []Endpoint{{Addr: srv.addr, Priority: 2}},
 		SeedCert:         srv.clientCert,
@@ -210,8 +210,8 @@ func TestDialPriority_PicksLowerOnly(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
 
-	// Два endpoint-а: priority=1 (живой mock), priority=2 (dead). Запрос
-	// maxPriority=3 → берётся priority=1.
+	// Two endpoints: priority=1 (live mock), priority=2 (dead). Requesting
+	// maxPriority=3 picks priority=1.
 	cli, err := NewClient(ClientConfig{
 		Endpoints: []Endpoint{
 			{Addr: srv.addr, Priority: 1},
@@ -236,17 +236,17 @@ func TestDialPriority_PicksLowerOnly(t *testing.T) {
 	}
 }
 
-// alreadyExistsHandler — handshake-handler, отвергающий Hello с gRPC
-// AlreadyExists (как keeper при занятом SID-lease: acquireSoulLease отдаёт
-// AlreadyExists ДО HelloReply). Возврат error из handler → EventStream сразу
-// return err, стрим закрывается на handshake.
+// alreadyExistsHandler is a handshake handler that rejects Hello with gRPC
+// AlreadyExists (like keeper on a held SID lease: acquireSoulLease returns
+// AlreadyExists before HelloReply). Returning an error from the handler makes
+// EventStream return immediately, closing the stream at handshake.
 func alreadyExistsHandler(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
 	return nil, status.Errorf(codes.AlreadyExists, "soul lease held by another keeper")
 }
 
-// TestDial_AllEndpointsLeaseHeld_IsLeaseHeld — все endpoint-ы вернули
-// AlreadyExists на handshake → Dial возвращает ошибку, распознаваемую
-// IsLeaseHeld (reconnect-loop применит модест-cap, а не общий transport-cap).
+// TestDial_AllEndpointsLeaseHeld_IsLeaseHeld — all endpoints return
+// AlreadyExists at handshake, so Dial's error must be recognized by
+// IsLeaseHeld (reconnect-loop applies the modest cap, not the transport cap).
 func TestDial_AllEndpointsLeaseHeld_IsLeaseHeld(t *testing.T) {
 	srv := newMockEventStream(t, alreadyExistsHandler)
 	defer srv.stop()
@@ -271,14 +271,14 @@ func TestDial_AllEndpointsLeaseHeld_IsLeaseHeld(t *testing.T) {
 	}
 }
 
-// TestDial_LeaseHeldOnOneEndpoint_SpraysToOther — AlreadyExists на одном
-// endpoint НЕ заклинивает spray: перебор продолжается, второй (живой) endpoint
-// перехватывает сессию. Это страхует легитимный fallback/spray по fallback-list.
+// TestDial_LeaseHeldOnOneEndpoint_SpraysToOther — AlreadyExists on one
+// endpoint must not stall the spray: the walk continues and the second (live)
+// endpoint picks up the session. Guards the legitimate fallback/spray path.
 func TestDial_LeaseHeldOnOneEndpoint_SpraysToOther(t *testing.T) {
 	leaseHeld := newMockEventStream(t, alreadyExistsHandler)
 	defer leaseHeld.stop()
-	// leaseHeld делаем priority=1 (всегда первым в переборе), alive — priority=2
-	// на том же CA; Dial должен пройти мимо lease-held к alive.
+	// leaseHeld is priority=1 (always tried first), alive is priority=2 on the
+	// same CA; Dial should pass over lease-held to alive.
 	alive := newMockEventStreamWithCA(t, nil, leaseHeld)
 	defer alive.stop()
 
@@ -301,16 +301,16 @@ func TestDial_LeaseHeldOnOneEndpoint_SpraysToOther(t *testing.T) {
 		t.Fatalf("Dial: expected fallback to alive endpoint, got err=%v", err)
 	}
 	defer sess.Close()
-	// Дошли до priority=2 (lease-held на priority=1 не заклинил перебор).
+	// Reached priority=2 (lease-held on priority=1 didn't stall the walk).
 	if sess.Priority() != 2 {
 		t.Errorf("session.Priority = %d, want 2 (sprayed past lease-held endpoint)", sess.Priority())
 	}
-	// Итоговая ошибка не lease-held: успех есть, ошибки нет вовсе.
+	// No final error at all: this is a success, not a lease-held failure.
 }
 
-// TestDial_TransportFailure_NotLeaseHeld — transport-сбой (dead port) НЕ
-// классифицируется как lease-held: reconnect-loop оставит общий transport-cap
-// (регресс-guard на различение soft/transport failure).
+// TestDial_TransportFailure_NotLeaseHeld — a transport failure (dead port)
+// must not be classified as lease-held: reconnect-loop should keep the
+// general transport cap (regression guard on the soft/transport distinction).
 func TestDial_TransportFailure_NotLeaseHeld(t *testing.T) {
 	cert, key, ca := mustWriteClientSeed(t)
 	cli, err := NewClient(ClientConfig{
@@ -333,9 +333,10 @@ func TestDial_TransportFailure_NotLeaseHeld(t *testing.T) {
 	}
 }
 
-// TestDial_MixedLeaseHeldAndTransport_NotLeaseHeld — один endpoint lease-held,
-// другой transport-сбой → НЕ lease-held (не все фейлы — AlreadyExists, значит
-// есть реальная недоступность, общий transport-cap уместнее модест-cap).
+// TestDial_MixedLeaseHeldAndTransport_NotLeaseHeld — one endpoint lease-held,
+// another transport failure → NOT lease-held (not all failures are
+// AlreadyExists, so there's real unavailability; the transport cap fits
+// better than the modest cap).
 func TestDial_MixedLeaseHeldAndTransport_NotLeaseHeld(t *testing.T) {
 	leaseHeld := newMockEventStream(t, alreadyExistsHandler)
 	defer leaseHeld.stop()
@@ -416,7 +417,7 @@ func TestStreamSession_SendTaskEventAndRunResult(t *testing.T) {
 		t.Errorf("SendRunResult: %v", err)
 	}
 
-	// Дожидаемся, пока сервер увидит оба сообщения.
+	// Wait for the server to see both messages.
 	if !waitFor(func() bool {
 		srv.mu.Lock()
 		defer srv.mu.Unlock()
@@ -426,9 +427,9 @@ func TestStreamSession_SendTaskEventAndRunResult(t *testing.T) {
 	}
 }
 
-// TestStreamSession_SendWardRoster — WardRoster (Soul-reconcile) доходит до
-// сервера с заполненным набором (apply_id + attempt). Пустой набор — отдельный
-// под-тест: явная декларация «ничего не ведётся».
+// TestStreamSession_SendWardRoster — WardRoster (Soul reconcile) reaches the
+// server with a populated set (apply_id + attempt). The empty-set case is a
+// separate sub-test: an explicit declaration of "nothing in flight".
 func TestStreamSession_SendWardRoster(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
@@ -476,8 +477,8 @@ func TestStreamSession_SendWardRoster(t *testing.T) {
 	}
 }
 
-// TestStreamSession_SendWardRoster_Empty — пустой/nil набор шлёт WardRoster с
-// пустым active[] (явная декларация «ничего не ведётся»), а не пропускает.
+// TestStreamSession_SendWardRoster_Empty — an empty/nil set sends WardRoster
+// with an explicit empty active[] (declares "nothing in flight"), not a skip.
 func TestStreamSession_SendWardRoster_Empty(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
@@ -539,21 +540,22 @@ type mockEventStream struct {
 	resultCount int
 	wardCount   int
 	lastWard    *keeperv1.WardRoster
-	// streamCount — число открытых EventStream-вызовов = число dialOne к этому
-	// серверу (каждый dialOne открывает новый stream). Per-endpoint retry-тесты
-	// считают попытки именно по нему.
+	// streamCount is the number of opened EventStream calls = number of
+	// dialOne attempts to this server (each dialOne opens a new stream).
+	// Per-endpoint retry tests count attempts via this field.
 	streamCount int
 
 	handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error)
-	// ctxHandler — handshake-handler с доступом к контексту стрима. Нужен hang-
-	// кейсам (per-endpoint failover-latency, ctx-cancel-во-время-dialOne): handler
-	// блокируется на stream.Context().Done(), чтобы сервер разблокировался при
-	// закрытии соединения клиентом (sessCancel/conn.Close в dialOne) и
-	// GracefulStop в stop() не висел. Если задан — приоритетнее handler/default.
+	// ctxHandler is a handshake handler with access to the stream context.
+	// Needed for hang cases (per-endpoint failover-latency,
+	// ctx-cancel-during-dialOne): it blocks on stream.Context().Done() so the
+	// server unblocks when the client closes the connection
+	// (sessCancel/conn.Close in dialOne) and GracefulStop in stop() doesn't
+	// hang. Takes priority over handler/default when set.
 	ctxHandler func(ctx context.Context, hello *keeperv1.Hello) (*keeperv1.HelloReply, error)
 }
 
-// dialCount — потокобезопасное число dialOne (EventStream) к серверу.
+// dialCount is the thread-safe count of dialOne (EventStream) calls to the server.
 func (m *mockEventStream) dialCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -631,9 +633,9 @@ func newMockEventStream(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.H
 	return newMockEventStreamWithCA(t, handler, nil)
 }
 
-// newMockEventStreamCtx поднимает mock-сервер с ctx-aware handshake-handler-ом
-// (hang-кейсы failover-latency / ctx-cancel-во-время-dialOne). src — общий
-// CA-материал (как у newMockEventStreamWithCA); nil → свой CA.
+// newMockEventStreamCtx starts a mock server with a ctx-aware handshake
+// handler (hang cases: failover-latency / ctx-cancel-during-dialOne). src is
+// shared CA material as in newMockEventStreamWithCA; nil generates its own CA.
 func newMockEventStreamCtx(t *testing.T, ctxHandler func(ctx context.Context, hello *keeperv1.Hello) (*keeperv1.HelloReply, error), src *mockEventStream) *mockEventStream {
 	t.Helper()
 	mk := newMockEventStreamWithCA(t, nil, src)
@@ -641,21 +643,21 @@ func newMockEventStreamCtx(t *testing.T, ctxHandler func(ctx context.Context, he
 	return mk
 }
 
-// hangHandler — handshake-handler, который НИКОГДА не отвечает: блокируется до
-// закрытия стрима клиентом (sessCancel/conn.Close в dialOne). Клиент всегда
-// срабатывает по своему локальному handshake_timeout (time.After в dialOne) →
-// dialOne отдаёт "handshake timeout" (codes.Unknown → retriable). Серверная
-// горутина разблокируется при разрыве соединения, GracefulStop не висит.
+// hangHandler is a handshake handler that never responds: it blocks until the
+// client closes the stream (sessCancel/conn.Close in dialOne). The client
+// always times out via its local handshake_timeout (time.After in dialOne), so
+// dialOne returns "handshake timeout" (codes.Unknown → retriable). The server
+// goroutine unblocks on disconnect, so GracefulStop doesn't hang.
 func hangHandler(ctx context.Context, _ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
-// seqHandler — handshake-handler, проигрывающий заданную последовательность
-// исходов по числу dialOne-вызовов к этому серверу. На i-й вызов (1-based)
-// отдаёт codes[i-1]: codes.OK → успешный HelloReply, иначе status.Error(code).
-// За пределами последовательности — последний исход повторяется. Моделирует
-// «один endpoint, разные ошибки на разных attempt-ах» (mixed-errors кейс).
+// seqHandler plays back a given sequence of outcomes indexed by dialOne call
+// count against this server. On the i-th call (1-based) it returns
+// codes[i-1]: codes.OK for a successful HelloReply, otherwise
+// status.Error(code). Past the sequence's end, the last outcome repeats.
+// Models "one endpoint, different errors on different attempts".
 func seqHandler(seq ...codes.Code) func(*keeperv1.Hello) (*keeperv1.HelloReply, error) {
 	var calls int
 	return func(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
@@ -672,10 +674,10 @@ func seqHandler(seq ...codes.Code) func(*keeperv1.Hello) (*keeperv1.HelloReply, 
 	}
 }
 
-// newMockEventStreamWithCA поднимает mock-сервер. Если src != nil, новый сервер
-// переиспользует CA/cert-материал src (общий trust для теста с несколькими
-// endpoint-ами под одним клиентским CAPath: spray внутри одной клиентской
-// конфигурации не может верифицировать сервера на разных CA). src=nil → свой CA.
+// newMockEventStreamWithCA starts a mock server. If src != nil, the new server
+// reuses src's CA/cert material (shared trust for a test with multiple
+// endpoints under one client CAPath — a spray within one client config can't
+// verify servers on different CAs). src=nil generates its own CA.
 func newMockEventStreamWithCA(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error), src *mockEventStream) *mockEventStream {
 	t.Helper()
 
@@ -808,9 +810,9 @@ func writeRSAKey(t *testing.T, dir, name string, key *rsa.PrivateKey) string {
 	return path
 }
 
-// mustWriteClientSeed генерит и пишет на диск клиентский mTLS-seed (cert/key/ca)
-// без подъёма сервера. Для dial-тестов к недоступному endpoint-у, где валиден
-// нужен только клиентский материал. Возвращает пути (cert, key, ca).
+// mustWriteClientSeed generates and writes a client mTLS seed (cert/key/ca) to
+// disk without starting a server. For dial tests against an unreachable
+// endpoint, where only the client material matters. Returns paths (cert, key, ca).
 func mustWriteClientSeed(t *testing.T) (cert, key, ca string) {
 	t.Helper()
 	caCert, caKey := mustGenerateCA(t)

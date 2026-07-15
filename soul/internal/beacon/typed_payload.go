@@ -9,30 +9,32 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Typed-payload mapper (V5-1, ADR-030 amendment 2026-05-26): проецирует
-// data *structpb.Struct от встроенных core-beacon в типизированный
-// PortentEvent.payload (oneof). Soul-side в течение 1-release deprecation
-// period заполняет ОБЕ ветки (event.Data + event.Payload) — backward-compat
-// для существующих where-CEL `event.data.<field>`. После 1-release —
-// `data`-ветка удаляется hard-cut (S5-final, parity с push S7-decision).
+// Typed-payload mapper (V5-1, ADR-030 amendment 2026-05-26): projects the
+// data *structpb.Struct from a built-in core-beacon into the typed
+// PortentEvent.payload (oneof). Soul-side fills BOTH branches (event.Data +
+// event.Payload) during a 1-release deprecation period — backward-compat for
+// existing where-CEL `event.data.<field>`. After that release, the `data`
+// branch is removed in a hard cut (S5-final, parity with the push
+// S7-decision).
 //
-// Маппинг плоский: переключатель по check-address из VigilDef.GetCheck() →
-// конкретный builder. Неизвестный check (например plugin-beacon V5-2) →
-// payload не выставляется, data-ветка ещё несёт сырой Struct.
+// The mapping is flat: a switch on the check address from
+// VigilDef.GetCheck() picks the concrete builder. An unknown check (e.g.
+// plugin-beacon V5-2) leaves payload unset; the data branch still carries
+// the raw Struct.
 
-// deprecationWarnOnce сигналит ровно один раз на процесс при первой эмиссии
-// Portent-а с заполненными ОБЕИМИ ветками (data + payload) — чтобы оператор
-// один раз увидел в логах факт hand-off-периода. log-spam при тысячах Portent-ов
-// в час неприемлем.
+// deprecationWarnOnce fires exactly once per process on the first Portent
+// emitted with BOTH branches filled (data + payload), so the operator sees
+// the hand-off period once in the logs. Log-spam at thousands of
+// Portents/hour is unacceptable.
 var deprecationWarnOnce sync.Once
 
-// fillTypedPayload выставляет PortentEvent.Payload (oneof) по check-address
-// Vigil-а из data *structpb.Struct, возвращённого Check-ом конкретного beacon-а.
-// nil-data → no-op (Payload остаётся nil). Неизвестный check → no-op (для
-// plugin-beacon V5-2 ветка `custom` заполняется отдельно apply-loop-ом плагина,
-// не здесь). Локальная функция в этом же пакете — приватный oneof-интерфейс
-// keeperv1.isPortentEvent_Payload здесь доступен через прямое присваивание
-// конкретного типа в Payload-поле.
+// fillTypedPayload sets PortentEvent.Payload (oneof) from the Vigil's
+// check address using the data *structpb.Struct returned by that beacon's
+// Check. nil data → no-op (Payload stays nil). Unknown check → no-op (for
+// plugin-beacon V5-2, the `custom` branch is filled separately by the
+// plugin's apply loop, not here). A local function in this package — the
+// private oneof interface keeperv1.isPortentEvent_Payload is accessible
+// here via direct assignment of the concrete type to the Payload field.
 func fillTypedPayload(ev *keeperv1.PortentEvent, check string, data *structpb.Struct) {
 	if data == nil {
 		return
@@ -74,11 +76,11 @@ func fillTypedPayload(ev *keeperv1.PortentEvent, check string, data *structpb.St
 	}
 }
 
-// buildInotifyPayload собирает InotifyPortent из data-Struct (V5-3). Список
-// events приходит через `data.events: []map{type,file,at}` — projection одного
-// узла в repeated typed-message. Пустой / отсутствующий events → пустой
-// repeated, но Portent всё равно эмитится только при state="events"
-// (scheduler-инвариант), поэтому пустой список не должен встретиться.
+// buildInotifyPayload builds an InotifyPortent from the data Struct (V5-3).
+// The events list arrives via `data.events: []map{type,file,at}` — a
+// projection of one node into a repeated typed message. Empty/missing
+// events → empty repeated, but a Portent is only ever emitted at
+// state="events" (scheduler invariant), so an empty list shouldn't occur.
 func buildInotifyPayload(data *structpb.Struct) *keeperv1.InotifyPortent {
 	out := &keeperv1.InotifyPortent{
 		Path:  getString(data, "path"),
@@ -106,7 +108,7 @@ func buildInotifyPayload(data *structpb.Struct) *keeperv1.InotifyPortent {
 	return out
 }
 
-// getString читает строковое поле Struct-а; отсутствует/не-строка → "".
+// getString reads a string field from the Struct; missing/non-string → "".
 func getString(s *structpb.Struct, key string) string {
 	if s == nil {
 		return ""
@@ -118,9 +120,9 @@ func getString(s *structpb.Struct, key string) string {
 	return v.GetStringValue()
 }
 
-// getNumber читает числовое поле; отсутствует/не-число → 0. proto-json маршалит
-// все числа во float64 (NumberValue), поэтому одна функция и для double, и для
-// int (с явным cast int32(getNumber)).
+// getNumber reads a numeric field; missing/non-number → 0. proto-json
+// marshals all numbers as float64 (NumberValue), so one function covers both
+// double and int (via explicit cast int32(getNumber)).
 func getNumber(s *structpb.Struct, key string) float64 {
 	if s == nil {
 		return 0
@@ -132,7 +134,7 @@ func getNumber(s *structpb.Struct, key string) float64 {
 	return v.GetNumberValue()
 }
 
-// getBool читает bool-поле; отсутствует/не-bool → false.
+// getBool reads a bool field; missing/non-bool → false.
 func getBool(s *structpb.Struct, key string) bool {
 	if s == nil {
 		return false
@@ -144,8 +146,8 @@ func getBool(s *structpb.Struct, key string) bool {
 	return v.GetBoolValue()
 }
 
-// emitDeprecationWarnOnce пишет один раз WARN-лог о dual-write data+payload.
-// Вызывается из emit() после успешной постановки Portent с typed payload.
+// emitDeprecationWarnOnce logs a WARN once about the data+payload dual-write.
+// Called from emit() after successfully queuing a Portent with typed payload.
 func emitDeprecationWarnOnce(logger *slog.Logger) {
 	deprecationWarnOnce.Do(func() {
 		logger.Warn("beacon: PortentEvent.data заполняется параллельно с typed payload — deprecated, 1-release WARN, удалится hard-cut в S5-final (V5-1 ADR-030 amendment 2026-05-26)")

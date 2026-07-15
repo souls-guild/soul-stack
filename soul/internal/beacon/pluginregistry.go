@@ -11,40 +11,41 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// PluginBeaconSpawner — узкий контракт над pluginhost.Host для one-shot
-// per-tick spawn beacon-плагина. В production — обёртка над
-// *pluginhost.Host (Soul-side, kind=soul_beacon); в тестах — fake. Decouple
-// держит beacon-пакет независимым от pluginhost-импорта (избегаем
-// циклической ссылки и хост-deps в unit-тестах scheduler-а).
+// PluginBeaconSpawner — narrow contract over pluginhost.Host for a one-shot
+// per-tick beacon-plugin spawn. In production it wraps *pluginhost.Host
+// (Soul-side, kind=soul_beacon); in tests it's a fake. Decoupling keeps the
+// beacon package independent of the pluginhost import (avoids an import
+// cycle and host deps in the scheduler's unit tests).
 type PluginBeaconSpawner interface {
 	SpawnBeacon(ctx context.Context, d sharedhost.Discovered) (PluginBeaconSession, error)
 }
 
-// PluginBeaconSession — узкий контракт над *pluginhost.BeaconPlugin для одного
-// Check-вызова. Параллель [soul/internal/runtime.PluginSession] для SoulModule.
+// PluginBeaconSession — narrow contract over *pluginhost.BeaconPlugin for a
+// single Check call. Parallels [soul/internal/runtime.PluginSession] for
+// SoulModule.
 type PluginBeaconSession interface {
 	Validate(ctx context.Context, req *pluginv1.ValidateVigilRequest) (*pluginv1.ValidateVigilReply, error)
 	Check(ctx context.Context, req *pluginv1.CheckRequest) (*pluginv1.CheckReply, error)
 	Close() error
 }
 
-// PluginRegistry — реализация [BeaconLookup] над custom-beacon-плагинами,
-// найденными pluginhost.Discover (kind=soul_beacon). Lookup возвращает обёртку
-// [pluginBeacon], которая на каждый Check делает Spawn → Check → Close.
+// PluginRegistry — the [BeaconLookup] implementation over custom beacon
+// plugins found by pluginhost.Discover (kind=soul_beacon). Lookup returns a
+// [pluginBeacon] wrapper that does Spawn → Check → Close on every Check.
 //
-// Concurrency: read-only после конструктора, безопасен для конкурентных
-// Lookup-ов. Spawn-сессии независимы — Host сериализует создание сокетов через
-// atomic-counter (shared/pluginhost).
+// Concurrency: read-only after construction, safe for concurrent Lookups.
+// Spawn sessions are independent — Host serializes socket creation via an
+// atomic counter (shared/pluginhost).
 type PluginRegistry struct {
 	spawner PluginBeaconSpawner
 	beacons map[string]sharedhost.Discovered
 	logger  *slog.Logger
 }
 
-// NewPluginRegistry собирает реестр. discovered — список плагинов
-// kind=soul_beacon (caller отфильтровал по `d.Manifest.Kind`). Имя ключа —
-// `<namespace>.<name>` (manifest.Address()), совпадает с VigilDef.check для
-// plugin-beacon-адресов.
+// NewPluginRegistry builds the registry. discovered is the list of
+// kind=soul_beacon plugins (caller already filtered by `d.Manifest.Kind`).
+// The key name is `<namespace>.<name>` (manifest.Address()), matching
+// VigilDef.check for plugin-beacon addresses.
 func NewPluginRegistry(spawner PluginBeaconSpawner, discovered []sharedhost.Discovered, logger *slog.Logger) *PluginRegistry {
 	if logger == nil {
 		logger = slog.Default()
@@ -59,7 +60,7 @@ func NewPluginRegistry(spawner PluginBeaconSpawner, discovered []sharedhost.Disc
 	return &PluginRegistry{spawner: spawner, beacons: beacons, logger: logger}
 }
 
-// Names — список зарегистрированных plugin-beacon-адресов.
+// Names — the list of registered plugin-beacon addresses.
 func (r *PluginRegistry) Names() []string {
 	out := make([]string, 0, len(r.beacons))
 	for k := range r.beacons {
@@ -68,9 +69,9 @@ func (r *PluginRegistry) Names() []string {
 	return out
 }
 
-// Lookup возвращает per-Vigil обёртку, реализующую [Beacon]. На каждый Check
-// внутри обёртки идёт one-shot Spawn → Check → Close (ADR-020(d), parity с
-// pluginSoulModule в runtime/pluginregistry.go).
+// Lookup returns a per-Vigil wrapper implementing [Beacon]. Each Check inside
+// the wrapper does a one-shot Spawn → Check → Close (ADR-020(d), parity with
+// pluginSoulModule in runtime/pluginregistry.go).
 func (r *PluginRegistry) Lookup(name string) (Beacon, bool) {
 	d, ok := r.beacons[name]
 	if !ok {
@@ -83,19 +84,20 @@ func (r *PluginRegistry) Lookup(name string) (Beacon, bool) {
 	}, true
 }
 
-// pluginBeacon — адаптер one-shot spawn-а под [Beacon]. Реализует только Check;
-// scheduler не зовёт Validate напрямую (manifest-валидация на этапе создания
-// Vigil оператором через OpenAPI).
+// pluginBeacon — a one-shot spawn adapter implementing [Beacon]. Implements
+// only Check; the scheduler never calls Validate directly (manifest
+// validation happens when the operator creates the Vigil via OpenAPI).
 type pluginBeacon struct {
 	discovered sharedhost.Discovered
 	spawner    PluginBeaconSpawner
 	logger     *slog.Logger
 }
 
-// Check делает one-shot Spawn → SoulBeacon.Check → Close. Возвращаемые
-// state/payload/error пробрасываются scheduler-у; non-fatal CheckReply.error
-// (plugin-side soft error) транслируется в Go-ошибку, чтобы scheduler пропустил
-// тик (baseline не трогается, parity с встроенным [Beacon].Check err).
+// Check does a one-shot Spawn → SoulBeacon.Check → Close. The returned
+// state/payload/error are passed through to the scheduler; a non-fatal
+// CheckReply.error (plugin-side soft error) is translated into a Go error so
+// the scheduler skips the tick (baseline untouched, parity with a built-in
+// [Beacon].Check err).
 func (p *pluginBeacon) Check(ctx context.Context, params *structpb.Struct) (State, *structpb.Struct, error) {
 	sess, err := p.spawner.SpawnBeacon(ctx, p.discovered)
 	if err != nil {
@@ -114,8 +116,8 @@ func (p *pluginBeacon) Check(ctx context.Context, params *structpb.Struct) (Stat
 		return "", nil, fmt.Errorf("plugin_check_rpc: %w", err)
 	}
 	if reply.GetError() != "" {
-		// Soft error от плагина — scheduler пропустит тик. Поднимаем как
-		// ошибку Go (а не как state), чтобы baseline не двигался.
+		// Soft error from the plugin — scheduler will skip the tick. Raise it
+		// as a Go error (not as state) so baseline doesn't move.
 		return "", nil, fmt.Errorf("plugin_check_soft: %s", reply.GetError())
 	}
 	return reply.GetState(), reply.GetPayload(), nil

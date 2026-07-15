@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// L0 unit-тест stub-варианта на non-Linux (darwin/windows): Check всегда
-// возвращает ошибку "platform not supported"; реестр Default() при этом
-// собирается без паники (адрес-константа доступна везде, см. beaconaddr.All).
+// L0 unit test for the non-Linux stub variant (darwin/windows): Check always
+// returns "platform not supported"; Default() still assembles the registry
+// without panicking (the address constant is available everywhere, see beaconaddr.All).
 func TestInotifyStub_NotSupported(t *testing.T) {
 	b := NewInotify()
 	state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{

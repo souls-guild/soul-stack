@@ -119,7 +119,7 @@ func TestApply_Present_PrimaryGroup_NoSystem(t *testing.T) {
 }
 
 func TestApply_Present_BackCompat_NoNewParams(t *testing.T) {
-	// Без system/group argv должен остаться прежним (обратная совместимость).
+	// Without system/group, argv must stay the same (backward compatibility).
 	r := internaltest.NewRunner()
 	r.On("useradd -M -u 1001 -s /bin/bash -G wheel -- redis", util.Result{ExitCode: 0})
 	m := &user.Module{
@@ -144,8 +144,8 @@ func TestApply_Present_BackCompat_NoNewParams(t *testing.T) {
 }
 
 func TestApply_Present_Exists_NewParams_NoReconcile(t *testing.T) {
-	// Существующий пользователь + новые params (system/group) → no-op,
-	// reconcile НЕ запускается (present-or-create семантика).
+	// Existing user + new params (system/group) → no-op, reconcile does NOT
+	// run (present-or-create semantics).
 	r := internaltest.NewRunner()
 	m := &user.Module{
 		Runner: r,
@@ -301,12 +301,12 @@ func validateReply(t *testing.T, params map[string]any) *pluginv1.ValidateReply 
 func TestValidate_Name_Invalid(t *testing.T) {
 	cases := map[string]string{
 		"empty":         "",
-		"leading dash":  "-x",                                // arg-injection: имя-опция
-		"space":         "bad name",                          // пробел недопустим
-		"slash":         "ev/il",                             // path-разделитель
-		"uppercase":     "Redis",                             // NAME_REGEX — нижний регистр
-		"leading digit": "1redis",                            // имя не может начинаться с цифры
-		"too long":      "u23456789012345678901234567890123", // 33 символа
+		"leading dash":  "-x",                                // arg-injection: name-as-option
+		"space":         "bad name",                          // space not allowed
+		"slash":         "ev/il",                             // path separator
+		"uppercase":     "Redis",                             // NAME_REGEX — lowercase only
+		"leading digit": "1redis",                            // name can't start with a digit
+		"too long":      "u23456789012345678901234567890123", // 33 chars
 	}
 	for label, name := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -389,8 +389,8 @@ func TestValidate_Groups_Invalid(t *testing.T) {
 }
 
 func TestApply_Present_ArgInjectionSeparator(t *testing.T) {
-	// `--` обязан стоять перед позиционным name в argv useradd (arg-injection
-	// guard, defense-in-depth поверх формат-проверки name).
+	// `--` must precede the positional name in useradd's argv (arg-injection
+	// guard, defense-in-depth on top of name format validation).
 	r := internaltest.NewRunner()
 	r.On("useradd -M -- redis", util.Result{ExitCode: 0})
 	m := &user.Module{
@@ -413,7 +413,7 @@ func TestApply_Present_ArgInjectionSeparator(t *testing.T) {
 }
 
 func TestApply_Present_InvalidName_Fails(t *testing.T) {
-	// Apply без предшествующей Validate: битое имя не должно дойти до useradd.
+	// Apply without a preceding Validate: a malformed name must not reach useradd.
 	r := internaltest.NewRunner()
 	m := &user.Module{
 		Runner: r,

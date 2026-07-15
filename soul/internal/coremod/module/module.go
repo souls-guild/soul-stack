@@ -1,15 +1,15 @@
-// Package module реализует core-модуль `core.module` ([ADR-065]) — доставку
-// SoulModule-плагина на Soul-хост.
+// Package module implements the `core.module` core module ([ADR-065]) —
+// delivering a SoulModule plugin to a Soul host.
 //
-// Состояние:
-//   - installed: плагин из активного Sigil-допуска стянут с Keeper-а
-//     (FetchModule), верифицирован и атомарно установлен в каталожный слот
-//     `<paths.modules>/<ns>-<name>/`. Идемпотентность — по sha256 бинаря
-//     против активного допуска.
+// States:
+//   - installed: a plugin covered by an active Sigil grant is pulled from
+//     Keeper (FetchModule), verified, and atomically installed into the
+//     catalog slot `<paths.modules>/<ns>-<name>/`. Idempotency is by binary
+//     sha256 against the active grant.
 //
-// Порядок apply-flow нормативен ([ADR-065](f)): allow-check ДО fetch →
-// идемпотентность → fetch → verify ДО материализации → atomic rename →
-// hot-register реестра custom-модулей ([Deps.Rescan], ADR-065(d)).
+// The apply-flow order is normative ([ADR-065](f)): allow-check BEFORE fetch
+// → idempotency → fetch → verify BEFORE materialization → atomic rename →
+// hot-register the custom-module registry ([Deps.Rescan], ADR-065(d)).
 //
 // [ADR-065]: docs/adr/0065-core-module-installed.md
 package module
@@ -28,18 +28,19 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — каноническая верхушка адреса.
+// Name — the canonical address prefix.
 const Name = "core.module"
 
 const stateInstalled = "installed"
 
-// reFullName — формат param name `<namespace>.<name>` (границы — naming-rules,
-// «Каталог плагина»).
+// reFullName — the param name format `<namespace>.<name>` (bounds from
+// naming-rules, "Plugin catalog").
 var reFullName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}\.[a-z][a-z0-9-]{0,62}$`)
 
-// Fetcher — транспорт FetchModule ([ADR-012] третий RPC, ADR-065(a)).
-// Реализуется soulgrpc.StreamSession; в прогон приходит через контекст
-// ([WithFetcher]) — fetch привязан к живой EventStream-сессии, модуль stateless.
+// Fetcher — the FetchModule transport ([ADR-012] third RPC, ADR-065(a)).
+// Implemented by soulgrpc.StreamSession; reaches the run via context
+// ([WithFetcher]) — fetch is bound to a live EventStream session, the module
+// itself is stateless.
 //
 // [ADR-012]: docs/adr/0012-keeper-soul-grpc.md
 type Fetcher interface {
@@ -48,8 +49,9 @@ type Fetcher interface {
 
 type fetcherKey struct{}
 
-// WithFetcher кладёт FetchModule-транспорт текущей сессии в ctx прогона
-// (паттерн augur.WithRun: SoulModule-контракт state+params сессию не выражает).
+// WithFetcher puts the current session's FetchModule transport into the run
+// ctx (pattern from augur.WithRun: the SoulModule state+params contract
+// doesn't expose the session).
 func WithFetcher(ctx context.Context, f Fetcher) context.Context {
 	if f == nil {
 		return ctx
@@ -62,32 +64,35 @@ func fetcherFrom(ctx context.Context) (Fetcher, bool) {
 	return f, ok
 }
 
-// Deps — host-зависимости модуля; wire-up в buildRegistry (cmd/soul).
-// Zero-значение валидно и означает fail-closed: без Sigil-набора любой install
-// отказывает module_not_allowed (push-режим `soul apply` без broadcast-кеша).
+// Deps — the module's host dependencies; wired up in buildRegistry (cmd/soul).
+// The zero value is valid and means fail-closed: with no Sigil set, every
+// install rejects with module_not_allowed (push-mode `soul apply` with no
+// broadcast cache).
 type Deps struct {
-	// Sigils — активный локальный набор допусков (runtime-кеш sigilcache через
-	// pluginhost-адаптер). nil = допусков нет.
+	// Sigils — the active local grant set (sigilcache runtime cache via the
+	// pluginhost adapter). nil means no grants.
 	Sigils sharedhost.SigilLookup
-	// Anchors — trust-anchor-ы подписи Sigil для verify скачанных байтов.
+	// Anchors — Sigil signature trust anchors, for verifying downloaded bytes.
 	Anchors *sharedhost.AnchorSet
-	// ModulesRoot — корень кеша модулей Soul (paths.modules).
+	// ModulesRoot — root of Soul's module cache (paths.modules).
 	ModulesRoot string
-	// Rescan — hot-register реестра custom-модулей после успешной установки
-	// (ADR-065(d)): установленный модуль доступен следующей задаче того же
-	// прогона. nil = re-discover только на старте демона.
+	// Rescan — hot-registers the custom-module registry after a successful
+	// install (ADR-065(d)): the installed module becomes available to the
+	// next task in the same run. nil means re-discover only happens at
+	// daemon startup.
 	Rescan func()
 }
 
-// Module — реализация sdk/module.SoulModule для core.module.
+// Module — the sdk/module.SoulModule implementation for core.module.
 type Module struct {
 	deps Deps
 }
 
 func New(deps Deps) *Module { return &Module{deps: deps} }
 
-// Validate: known-state + required — из embed-манифеста; сверх него семантика,
-// которую manifest-DSL не выражает — формат `<namespace>.<name>` у name.
+// Validate: known-state + required come from the embedded manifest; beyond
+// that, semantics the manifest DSL can't express — the `<namespace>.<name>`
+// format of name.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 
@@ -106,9 +111,9 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe): host применяет default-deny на dry_run.
-// Pure-read drift потребовал бы allow-check+sha-сверку без побочек — отдельный
-// слайс при реальном запросе.
+// Plan — no-op (no PlanReadSafe): the host applies default-deny on dry_run.
+// Pure-read drift would need an allow-check + sha comparison without side
+// effects — a separate slice if actually requested.
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
@@ -120,7 +125,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return m.applyInstalled(stream, req)
 }
 
-// splitFullName разбирает `<namespace>.<name>` по первой точке.
+// splitFullName splits `<namespace>.<name>` on the first dot.
 func splitFullName(full string) (namespace, name string, ok bool) {
 	if !reFullName.MatchString(full) {
 		return "", "", false

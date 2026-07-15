@@ -6,19 +6,19 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// Fetcher — узкая поверхность Augur-клиента, нужная модулю core.augur.fetch.
-// Выделена, чтобы модуль не зависел от конкретного *Client (тестируется
-// fake-фетчером) и чтобы исключить доступ модуля к Deliver/Close (это
-// инфраструктура recv-loop-а сессии, не модуля). *Client её удовлетворяет.
+// Fetcher is the narrow Augur-client surface needed by core.augur.fetch.
+// Kept separate so the module doesn't depend on the concrete *Client (can be
+// tested with a fake fetcher) and has no access to Deliver/Close (session
+// recv-loop infrastructure, not the module's concern). *Client satisfies it.
 type Fetcher interface {
 	Fetch(ctx context.Context, applyID, omen, query string) (*keeperv1.AugurReply, error)
 }
 
-// runContext несёт в apply-цикл Augur-клиент сессии и apply_id прогона. Кладётся
-// в ctx перед вызовом модуля (через stream.Context()), потому что общий
-// SoulModule-контракт (state+params) этого не выражает, а custom sub-process
-// модулям доступ к Augur и не положен — это keeper-side доверенный канал только
-// для Soul-side core.
+// runContext carries the session's Augur client and the run's apply_id into
+// the apply cycle. Stored in ctx before the module call (via stream.Context())
+// since the generic SoulModule contract (state+params) can't express it, and
+// custom sub-process modules aren't meant to have Augur access — it's a
+// keeper-side trusted channel for Soul-side core only.
 type runContext struct {
 	fetcher Fetcher
 	applyID string
@@ -26,16 +26,16 @@ type runContext struct {
 
 type ctxKey struct{}
 
-// WithRun кладёт Augur-клиент и apply_id в ctx для одного прогона. fetcher может
-// быть nil (push-режим / сессия без Augur) — тогда FromContext вернёт ok=false,
-// а модуль вернёт понятную ошибку «Augur недоступен».
+// WithRun stores the Augur client and apply_id in ctx for one run. fetcher may
+// be nil (push mode / session without Augur) — FromContext then returns
+// ok=false and the module reports a clear "Augur unavailable" error.
 func WithRun(ctx context.Context, fetcher Fetcher, applyID string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, runContext{fetcher: fetcher, applyID: applyID})
 }
 
-// FromContext извлекает Augur-клиент и apply_id. ok=false, если в ctx ничего нет
-// (apply без Augur-плумбинга) либо fetcher nil — модуль трактует это как
-// «Augur недоступен в этом прогоне».
+// FromContext extracts the Augur client and apply_id. ok=false if ctx carries
+// nothing (apply without Augur plumbing) or fetcher is nil — the module
+// treats this as "Augur unavailable for this run".
 func FromContext(ctx context.Context) (fetcher Fetcher, applyID string, ok bool) {
 	rc, present := ctx.Value(ctxKey{}).(runContext)
 	if !present || rc.fetcher == nil {

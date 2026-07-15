@@ -14,8 +14,8 @@ import (
 	"os/user"
 )
 
-// statUIDGID — uid/gid каталога/файла через syscall.Stat_t. Soul-агент таргетит
-// unix, Stat_t гарантирован (см. util.OwnershipDrift).
+// statUIDGID — uid/gid of a directory/file via syscall.Stat_t. The Soul agent
+// targets unix, Stat_t is guaranteed (see util.OwnershipDrift).
 func statUIDGID(t *testing.T, path string) (uint32, uint32) {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -29,22 +29,23 @@ func statUIDGID(t *testing.T, path string) (uint32, uint32) {
 	return sys.Uid, sys.Gid
 }
 
-// lookupGID — мок LookupGroup, возвращающий фиксированный gid под любым именем.
+// lookupGID — a LookupGroup mock returning a fixed gid for any name.
 func lookupGID(gid uint32) func(string) (*user.Group, error) {
 	return func(string) (*user.Group, error) {
 		return &user.Group{Gid: strconv.Itoa(int(gid))}, nil
 	}
 }
 
-// lookupUID — мок LookupUser, возвращающий фиксированный uid под любым именем.
+// lookupUID — a LookupUser mock returning a fixed uid for any name.
 func lookupUID(uid uint32) func(string) (*user.User, error) {
 	return func(string) (*user.User, error) {
 		return &user.User{Uid: strconv.Itoa(int(uid))}, nil
 	}
 }
 
-// foreignGID ищет supplementary-группу процесса, отличную от gid каталога, в
-// которую chgrp пройдёт без root. Возвращает (gid, true) если нашлась.
+// foreignGID looks for a process supplementary group other than the
+// directory's gid, into which chgrp will succeed without root. Returns
+// (gid, true) if found.
 func foreignGID(t *testing.T, ownGID uint32) (uint32, bool) {
 	t.Helper()
 	groups, err := os.Getgroups()
@@ -59,7 +60,7 @@ func foreignGID(t *testing.T, ownGID uint32) (uint32, bool) {
 	return 0, false
 }
 
-// Guard 1: идемпотентность — каталог есть с нужными атрибутами → changed=false.
+// Guard 1: idempotency — directory exists with the wanted attributes → changed=false.
 func TestApply_Directory_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d")
@@ -89,7 +90,7 @@ func TestApply_Directory_Idempotent(t *testing.T) {
 	}
 }
 
-// Guard 2: создание — каталога нет → changed=true, создан с owner/group/mode.
+// Guard 2: creation — directory missing → changed=true, created with owner/group/mode.
 func TestApply_Directory_Creates(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d")
@@ -130,9 +131,9 @@ func TestApply_Directory_Creates(t *testing.T) {
 	}
 }
 
-// Guard 3: drift owner → changed=true, owner починен. uid-chown требует root,
-// поэтому fix доказываем через group (chgrp в supplementary-группу процесса
-// проходит без root); под root проверяем и uid.
+// Guard 3: owner drift → changed=true, owner fixed. uid-chown requires root,
+// so we prove the fix via group (chgrp into a process supplementary group
+// works without root); under root we also check uid.
 func TestApply_Directory_DriftOwner(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d")
@@ -170,7 +171,7 @@ func TestApply_Directory_DriftOwner(t *testing.T) {
 	}
 }
 
-// Guard 4: drift mode → changed=true, chmod выполнен.
+// Guard 4: mode drift → changed=true, chmod applied.
 func TestApply_Directory_DriftMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "d")
@@ -199,7 +200,7 @@ func TestApply_Directory_DriftMode(t *testing.T) {
 	}
 }
 
-// Guard 5: конфликт типа — путь существует, но это файл → Failed, не перезапись.
+// Guard 5: type conflict — path exists but is a file → Failed, no overwrite.
 func TestApply_Directory_TypeConflict_File(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f")
@@ -218,7 +219,7 @@ func TestApply_Directory_TypeConflict_File(t *testing.T) {
 	if !stream.Last().Failed {
 		t.Fatal("failed=false на конфликте типа (файл)")
 	}
-	// Файл не должен быть тронут.
+	// The file must not be touched.
 	got, _ := os.ReadFile(path)
 	if string(got) != "i am a file" {
 		t.Fatalf("файл изменён: %q", string(got))
@@ -229,7 +230,7 @@ func TestApply_Directory_TypeConflict_File(t *testing.T) {
 	}
 }
 
-// Guard 6a: parents:true создаёт промежуточные каталоги.
+// Guard 6a: parents:true creates intermediate directories.
 func TestApply_Directory_Parents_CreatesIntermediate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a", "b", "c")
@@ -255,7 +256,7 @@ func TestApply_Directory_Parents_CreatesIntermediate(t *testing.T) {
 	}
 }
 
-// Guard 6b: parents:false на отсутствующем родителе → ошибка.
+// Guard 6b: parents:false on a missing parent → error.
 func TestApply_Directory_NoParents_MissingParent_Fails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "missing", "d")
@@ -279,10 +280,10 @@ func TestApply_Directory_NoParents_MissingParent_Fails(t *testing.T) {
 	}
 }
 
-// Guard 7: Plan(Scry) parity — planDirectory сообщает тот же changed, что Apply,
-// без мутации хоста.
+// Guard 7: Plan(Scry) parity — planDirectory reports the same changed as
+// Apply, without mutating the host.
 func TestPlan_Directory_Parity(t *testing.T) {
-	// 7a: каталог совпадает → changed=false, без мутации.
+	// 7a: directory matches → changed=false, no mutation.
 	t.Run("match clean", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "d")
@@ -305,7 +306,7 @@ func TestPlan_Directory_Parity(t *testing.T) {
 		assertDirUnchanged(t, path, before)
 	})
 
-	// 7b: каталога нет → changed=true, без создания (parity с Apply.created).
+	// 7b: directory missing → changed=true, no creation (parity with Apply.created).
 	t.Run("missing drift no mutation", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "d")
@@ -326,7 +327,7 @@ func TestPlan_Directory_Parity(t *testing.T) {
 		}
 	})
 
-	// 7c: drift mode → changed=true, без chmod.
+	// 7c: mode drift → changed=true, no chmod.
 	t.Run("mode drift no mutation", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "d")
@@ -349,7 +350,7 @@ func TestPlan_Directory_Parity(t *testing.T) {
 		assertDirUnchanged(t, path, before)
 	})
 
-	// 7d: конфликт типа (файл) → Plan возвращает error (не false-clean).
+	// 7d: type conflict (file) → Plan returns error (not false-clean).
 	t.Run("type conflict errors", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "f")

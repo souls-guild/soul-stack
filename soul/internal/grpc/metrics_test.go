@@ -15,8 +15,8 @@ func TestRegisterEventStreamMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterEventStreamMetrics returned nil")
 	}
 
-	// connected — gauge, виден сразу со значением 0. reconnects (counter без
-	// label-ов) публикуется сразу же значением 0.
+	// connected is a gauge, visible immediately at 0. reconnects (a counter
+	// with no labels) is also published immediately at 0.
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, "soul_eventstream_connected 0") {
 		t.Errorf("missing connected=0 sample; got=\n%s", body)
@@ -65,8 +65,8 @@ func TestEventStreamMetrics_ReconnectsGrows(t *testing.T) {
 }
 
 func TestEventStreamMetrics_NilReceiver_NoOp(t *testing.T) {
-	// reconnect-loop может подниматься без obs-стека (unit-тесты,
-	// metrics.enabled=false). Все методы на nil-получателе — no-op без паники.
+	// reconnect-loop can start without the obs stack (unit tests,
+	// metrics.enabled=false). All methods on a nil receiver are a no-op, no panic.
 	var m *EventStreamMetrics
 	m.SetConnected(true)
 	m.SetConnected(false)

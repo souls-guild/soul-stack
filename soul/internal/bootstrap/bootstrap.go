@@ -1,18 +1,18 @@
-// Package bootstrap — Soul-side онбординг по [ADR-012(b)].
+// Package bootstrap implements Soul-side onboarding per [ADR-012(b)].
 //
-// `soul init` (entrypoint в cmd/soul) последовательно:
+// `soul init` (entrypoint in cmd/soul), in order:
 //
-//  1. Определяет SID (явный --sid или os.Hostname).
-//  2. Генерирует RSA-key + PKCS#10 CSR (CN = SID).
-//  3. Подключается к одному из Keeper Bootstrap endpoint-ов
-//     (server-only TLS, `keeper.tls.ca` из soul.yml).
-//  4. Вызывает unary Bootstrap RPC с (sid, plain-token, csr_pem).
-//  5. Раскладывает (cert.pem, key.pem, ca.pem) в `paths.seed` через seed.Write.
+//  1. Determines SID (explicit --sid or os.Hostname).
+//  2. Generates an RSA key + PKCS#10 CSR (CN = SID).
+//  3. Connects to one of the Keeper Bootstrap endpoints
+//     (server-only TLS, `keeper.tls.ca` from soul.yml).
+//  4. Calls the unary Bootstrap RPC with (sid, plain-token, csr_pem).
+//  5. Writes (cert.pem, key.pem, ca.pem) to `paths.seed` via seed.Write.
 //
-// Приватный ключ никогда не покидает хост (ADR-012(b)); CSR несёт только
-// public key, token хешится server-side.
+// The private key never leaves the host (ADR-012(b)); the CSR carries only
+// the public key, and the token is hashed server-side.
 //
-// [ADR-012(b)]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
+// [ADR-012(b)]: docs/adr/0012-keeper-soul-grpc.md
 package bootstrap
 
 import (
@@ -38,43 +38,44 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/seed"
 )
 
-// Размер RSA-ключа Soul-стороны. 2048 — индустриальный минимум, совместим с
-// большинством Vault PKI-ролями; смена в одну точку при ужесточении политики.
+// RSA key size for the Soul side. 2048 is the industry minimum, compatible
+// with most Vault PKI roles; a single point to change if policy tightens.
 const rsaKeySize = 2048
 
-// sidRe — каноническая форма SID (= FQDN), синхронизирована с
-// `keeper/internal/soul.SIDPattern`. Дублируется здесь, чтобы Soul-side не
-// тянул internal-пакет Keeper-а.
+// sidRe is the canonical SID form (= FQDN), kept in sync with
+// `keeper/internal/soul.SIDPattern`. Duplicated here so the Soul side
+// doesn't pull in Keeper's internal package.
 var sidRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,253}$`)
 
-// ValidSID — поверхностная проверка SID на Soul-стороне до round-trip-а.
-// Server-side всё равно валидирует через свой regex + PG CHECK.
+// ValidSID is a surface-level SID check on the Soul side before the
+// round-trip. The server side still validates via its own regex + PG CHECK.
 func ValidSID(sid string) bool { return sidRe.MatchString(sid) }
 
-// Config — вход bootstrap.Run.
+// Config is the input to bootstrap.Run.
 type Config struct {
-	// SID — явно заданный SID; пустой → os.Hostname приведённый к lower-case.
+	// SID is the explicit SID; empty → os.Hostname lower-cased.
 	SID string
-	// Token — однократный bootstrap-токен (plain). Никогда не логировать.
+	// Token is the one-time bootstrap token (plain). Never log it.
 	Token string
-	// SeedDir — `paths.seed` из soul.yml. Не пустой.
+	// SeedDir is `paths.seed` from soul.yml. Must not be empty.
 	SeedDir string
-	// KeeperCA — путь к CA-bundle Keeper-а (`keeper.tls.ca` из soul.yml).
-	// Используется для проверки серверного сертификата при server-only TLS-handshake.
+	// KeeperCA is the path to Keeper's CA bundle (`keeper.tls.ca` from
+	// soul.yml). Used to verify the server certificate during the
+	// server-only TLS handshake.
 	KeeperCA string
-	// Endpoints — упорядоченный (по priority) список Keeper Bootstrap-адресов
-	// (`host:bootstrap_port`), извлечённый из `keeper.endpoints[]` через
-	// SoulKeeperEndpoint.BootstrapAddr(). Пробуются по порядку до первого
-	// success; failback к bootstrap неприменим (one-shot).
+	// Endpoints is an ordered (by priority) list of Keeper Bootstrap
+	// addresses (`host:bootstrap_port`), extracted from `keeper.endpoints[]`
+	// via SoulKeeperEndpoint.BootstrapAddr(). Tried in order until the first
+	// success; failback doesn't apply to bootstrap (one-shot).
 	Endpoints []string
-	// HandshakeTimeout — окно на один RPC. Default 10s.
+	// HandshakeTimeout is the window for one RPC. Default 10s.
 	HandshakeTimeout time.Duration
-	// SoulVersion — версия soul-бинаря для аудита онбординга.
-	// Пустая строка допустима.
+	// SoulVersion is the soul binary version, for onboarding audit.
+	// An empty string is fine.
 	SoulVersion string
 }
 
-// Result — итог успешного онбординга.
+// Result is the outcome of a successful onboarding.
 type Result struct {
 	SID      string
 	Endpoint string
@@ -83,9 +84,9 @@ type Result struct {
 	SeedDir  string
 }
 
-// Run выполняет полный bootstrap-цикл. Идемпотентность на стороне Keeper-а
-// не гарантирована: bootstrap-токен сжигается при первом успешном RPC,
-// повторный вызов вернёт PermissionDenied.
+// Run executes the full bootstrap cycle. Not guaranteed idempotent on the
+// Keeper side: the bootstrap token is burned on the first successful RPC,
+// a repeat call returns PermissionDenied.
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, errors.New("bootstrap: token is empty")
@@ -112,10 +113,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("bootstrap: invalid sid %q (must match %s)", sid, sidRe.String())
 	}
 
-	// Генерация key+CSR — до открытия сети. CSR несёт public key + CN=SID;
-	// приватник остаётся в памяти, на диск попадает только после успешного
-	// RPC (вместе с выданным cert-ом). Если bootstrap упадёт, мы ничего
-	// на диске не наследим.
+	// Generate key+CSR before opening the network. CSR carries the public
+	// key + CN=SID; the private key stays in memory and only hits disk
+	// after a successful RPC (together with the issued cert). If bootstrap
+	// fails, we leave nothing behind on disk.
 	key, csrPEM, err := generateKeyAndCSR(sid)
 	if err != nil {
 		return nil, err
@@ -139,8 +140,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		dialErrs    []string
 	)
 	for _, addr := range cfg.Endpoints {
-		// ServerName выставляется per-endpoint: gRPC target вида host:port
-		// — для SNI / hostname-verify нужен только host.
+		// ServerName is set per-endpoint: the gRPC target is host:port —
+		// only the host is needed for SNI / hostname-verify.
 		cfgForAddr := tlsCfg.Clone()
 		if h, ok := hostFromAddr(addr); ok {
 			cfgForAddr.ServerName = h
@@ -158,26 +159,27 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			strings.Join(dialErrs, "\n  - "))
 	}
 
-	// caChainPem из BootstrapReply — это CA-цепочка PKI, по которой Soul
-	// будет верифицировать серверный сертификат при последующем mTLS.
-	// Сохраняем именно её, а не `keeper.tls.ca` (одна цепочка покрывает
-	// весь cluster, обновляется через ротацию через тот же bootstrap).
+	// caChainPem from BootstrapReply is the PKI CA chain Soul will use to
+	// verify the server certificate on subsequent mTLS. We save this one,
+	// not `keeper.tls.ca` (one chain covers the whole cluster, refreshed
+	// through rotation via the same bootstrap).
 	//
-	// sigil_pubkey trust-anchor подписи допусков плагинов (ADR-026, S2b/R3) —
-	// опционален. Приоритет set > single (ADR-026(h)): непустой
-	// sigil_pubkey_pem_set (field 6, multi-anchor для безразрывной ротации)
-	// авторитетнее одиночного sigil_pubkey_pem (field 5, legacy). Оба пустых =
-	// Sigil на Keeper-е не настроен → SigilPubKeyPEM остаётся nil, файл не
-	// пишется, verify плагинов выключен. Персистится в той же версии seed-а, что
-	// cert/key/ca — переживает рестарт (pull-режим verify в S6 без bootstrap).
+	// The sigil_pubkey trust anchor for plugin permission signing (ADR-026,
+	// S2b/R3) is optional. Priority set > single (ADR-026(h)): a non-empty
+	// sigil_pubkey_pem_set (field 6, multi-anchor for gapless rotation)
+	// outranks the single sigil_pubkey_pem (field 5, legacy). Both empty =
+	// Sigil not configured on Keeper → SigilPubKeyPEM stays nil, no file is
+	// written, plugin verify is off. Persisted in the same seed version as
+	// cert/key/ca — survives a restart (pull-mode verify in S6 without
+	// bootstrap).
 	material := &seed.Material{
 		CertPEM: reply.GetCertificatePem(),
 		KeyPEM:  encodeRSAPrivateKeyPEM(key),
 		CAPEM:   reply.GetCaChainPem(),
 	}
-	// Пустой trust-anchor (Sigil выключен на Keeper) → nil, а не []byte{} —
-	// консистентно с seed.Load (nil = «выключен»), чтобы S6-verify не различал
-	// nil/пустой набор якорей.
+	// Empty trust anchor (Sigil off on Keeper) → nil, not []byte{} —
+	// consistent with seed.Load (nil = "off"), so S6 verify doesn't need to
+	// distinguish nil from an empty anchor set.
 	if anchors := sigilAnchorsPEM(reply); len(anchors) > 0 {
 		material.SigilPubKeyPEM = anchors
 	}
@@ -197,7 +199,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	return res, nil
 }
 
-// dialAndBootstrap — одна попытка: gRPC-dial + Bootstrap RPC + close.
+// dialAndBootstrap is one attempt: gRPC dial + Bootstrap RPC + close.
 func dialAndBootstrap(ctx context.Context, addr string, tlsCfg *tls.Config, sid, token string, csrPEM []byte, soulVersion string, timeout time.Duration) (*keeperv1.BootstrapReply, error) {
 	creds := credentials.NewTLS(tlsCfg)
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
@@ -225,7 +227,7 @@ func dialAndBootstrap(ctx context.Context, addr string, tlsCfg *tls.Config, sid,
 	return reply, nil
 }
 
-// generateKeyAndCSR создаёт RSA-key и PKCS#10 CSR с CN=sid.
+// generateKeyAndCSR creates an RSA key and PKCS#10 CSR with CN=sid.
 func generateKeyAndCSR(sid string) (*rsa.PrivateKey, []byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, rsaKeySize)
 	if err != nil {
@@ -243,14 +245,15 @@ func generateKeyAndCSR(sid string) (*rsa.PrivateKey, []byte, error) {
 	return key, csrPEM, nil
 }
 
-// sigilAnchorsPEM извлекает trust-anchor-ы Sigil из BootstrapReply по приоритету
-// set > single (ADR-026(h)): непустой sigil_pubkey_pem_set (field 6) —
-// авторитет, одиночное sigil_pubkey_pem (field 5) при этом игнорируется. Набор
-// собирается конкатенацией PEM-блоков (как их хранит seed-файл sigil_pubkey.pem
-// и парсит seed.ParseSigilPubKeys). Оба источника пусты → nil (Sigil выключен).
+// sigilAnchorsPEM extracts Sigil trust anchors from BootstrapReply by
+// priority set > single (ADR-026(h)): a non-empty sigil_pubkey_pem_set
+// (field 6) is authoritative, and the single sigil_pubkey_pem (field 5) is
+// ignored in that case. The set is assembled by concatenating PEM blocks
+// (the same way the sigil_pubkey.pem seed file stores them and
+// seed.ParseSigilPubKeys parses them). Both sources empty → nil (Sigil off).
 //
-// Каждый элемент set-а нормализуется переводом строки на конце, чтобы
-// конкатенация была корректным multi-PEM (pem.Decode требует границ блоков).
+// Each set element is normalized with a trailing newline so the
+// concatenation is valid multi-PEM (pem.Decode requires block boundaries).
 func sigilAnchorsPEM(reply *keeperv1.BootstrapReply) []byte {
 	if set := reply.GetSigilPubkeyPemSet(); len(set) > 0 {
 		var buf []byte
@@ -271,7 +274,7 @@ func sigilAnchorsPEM(reply *keeperv1.BootstrapReply) []byte {
 	return nil
 }
 
-// encodeRSAPrivateKeyPEM возвращает PKCS#1 PEM-форму ключа.
+// encodeRSAPrivateKeyPEM returns the PKCS#1 PEM form of the key.
 func encodeRSAPrivateKeyPEM(key *rsa.PrivateKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",
@@ -279,8 +282,9 @@ func encodeRSAPrivateKeyPEM(key *rsa.PrivateKey) []byte {
 	})
 }
 
-// hostFromAddr вырезает host из `host:port` (IPv4 / FQDN). IPv6 без скобок
-// и formless-host возвращают (s, false). Этого достаточно для ServerName.
+// hostFromAddr extracts the host from `host:port` (IPv4 / FQDN). IPv6
+// without brackets and formless hosts return (s, false). Sufficient for
+// ServerName.
 func hostFromAddr(s string) (string, bool) {
 	i := strings.LastIndex(s, ":")
 	if i <= 0 {
@@ -288,7 +292,7 @@ func hostFromAddr(s string) (string, bool) {
 	}
 	host := s[:i]
 	if strings.Contains(host, ":") {
-		// IPv6 без скобок — TLS ServerName всё равно бесполезен.
+		// IPv6 without brackets — TLS ServerName would be useless anyway.
 		return "", false
 	}
 	return host, true

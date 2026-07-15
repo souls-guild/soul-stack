@@ -1,14 +1,14 @@
-// Package group реализует core-модуль `core.group` ([ADR-015]).
+// Package group implements the `core.group` core module ([ADR-015]).
 //
-// Состояния:
-//   - present: группа существует с заданным gid.
-//   - absent:  группа удалена.
+// States:
+//   - present: the group exists with the given gid.
+//   - absent:  the group is removed.
 //
-// Опциональные params present:
-//   - gid (int):     явный gid (groupadd -g).
-//   - system (bool): системная группа (groupadd -r), gid из системного
-//     диапазона. Совместимо с gid (можно задать оба). Нужно для сервис-
-//     аккаунтов stateful-сервисов (например primary-группа redis).
+// Optional present params:
+//   - gid (int):     explicit gid (groupadd -g).
+//   - system (bool): system group (groupadd -r), gid from the system range.
+//     Compatible with gid (both can be set). Needed for service accounts of
+//     stateful services (e.g. redis's primary group).
 //
 // Backend: groupadd/groupdel.
 package group
@@ -40,11 +40,11 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-param (name) делегированы в
-// shared/coremanifest/group.yaml (единый источник с soul-lint, убран дубль).
-// Тип-проверка опциональных gid/system оставлена поверх делегации: это ранний
-// type-guard значения (manifest-DSL его не выражает) — контракт «non-bool system
-// / non-int gid отвергаются на Validate» (см. group_test.go).
+// Validate delegates known-state + required-param (name) checks to
+// shared/coremanifest/group.yaml (single source shared with soul-lint, no
+// duplication). Type-checking of optional gid/system stays on top of the
+// delegation: it's an early type guard the manifest DSL can't express — the
+// contract "non-bool system / non-int gid rejected at Validate" (see group_test.go).
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	if _, _, err := util.OptIntParam(req.Params, "gid"); err != nil {
@@ -56,17 +56,18 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.group.Plan — pure-read (ADR-031 Scry):
-// читает LookupGroup и НЕ мутирует хост (маркер для host-а, default-deny).
+// PlanReadSafe declares core.group.Plan as pure-read (ADR-031 Scry): it reads
+// LookupGroup and does NOT mutate the host (marker for the host's default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее наличие группы (тот
-// же LookupGroup, что в начале Apply) и шлёт PlanEvent.changed — «Apply
-// изменил бы группу?». НЕ мутирует хост: ни groupadd, ни groupdel.
+// Plan is a pure-read dry-run (ADR-031 Scry): checks current group presence
+// (the same LookupGroup Apply starts with) and sends PlanEvent.changed —
+// "would Apply change the group?". Does NOT mutate the host: no groupadd or
+// groupdel.
 //
-// Семантика 1:1 с Apply: present-or-create (gid/system на уже существующей
-// группе НЕ триггерят reconcile в MVP — см. doc Apply), поэтому drift для
-// present = «группы нет», для absent = «группа есть».
+// Semantics match Apply 1:1: present-or-create (gid/system on an already
+// existing group do NOT trigger reconcile in MVP — see Apply's doc), so
+// drift for present = "group missing", for absent = "group exists".
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	name, err := util.StringParam(req.Params, "name")
 	if err != nil {

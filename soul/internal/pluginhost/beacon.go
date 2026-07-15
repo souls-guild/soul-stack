@@ -7,23 +7,23 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// BeaconPlugin — Soul-side handle спавн-сессии плагина kind=soul_beacon
-// (ADR-030 V5-2). Embed-ит [sharedhost.BasePlugin] (manifest / conn / Close /
-// StderrTail) и добавляет gRPC-клиент SoulBeacon для Validate / Check.
+// BeaconPlugin is the Soul-side handle for a kind=soul_beacon plugin spawn
+// session (ADR-030 V5-2). Embeds [sharedhost.BasePlugin] (manifest / conn /
+// Close / StderrTail) and adds a SoulBeacon gRPC client for Validate / Check.
 //
-// Жизненный цикл — one-shot per Spawn (ADR-020(d)): caller вызывает
-// [Host.SpawnBeacon] → серия RPC (обычно один Check) → [BeaconPlugin.Close].
-// Beacon-scheduler оборачивает каждый per-tick Check в отдельный Spawn,
-// поэтому connection-pool не нужен; задача оптимизации long-lived process для
-// частых ticks — отдельная (см. ADR-030 V5-2 ТЗ, secondary item).
+// Lifecycle is one-shot per Spawn (ADR-020(d)): the caller invokes
+// [Host.SpawnBeacon] → a series of RPCs (usually one Check) → [BeaconPlugin.Close].
+// The beacon scheduler wraps each per-tick Check in its own Spawn, so no
+// connection pool is needed; optimizing for a long-lived process on frequent
+// ticks is a separate task (see ADR-030 V5-2 spec, secondary item).
 type BeaconPlugin struct {
 	*sharedhost.BasePlugin
 	client pluginv1.SoulBeaconClient
 }
 
-// newBeaconFromBase оборачивает generic [sharedhost.BasePlugin] в Soul-side
-// kind-specific [BeaconPlugin]. Используется только из [Host.SpawnBeacon] —
-// публичного конструктора нет (caller не должен спавнить BasePlugin сам).
+// newBeaconFromBase wraps the generic [sharedhost.BasePlugin] into the
+// Soul-side kind-specific [BeaconPlugin]. Only used from [Host.SpawnBeacon] —
+// there's no public constructor (callers shouldn't spawn a BasePlugin directly).
 func newBeaconFromBase(base *sharedhost.BasePlugin) *BeaconPlugin {
 	return &BeaconPlugin{
 		BasePlugin: base,
@@ -31,15 +31,16 @@ func newBeaconFromBase(base *sharedhost.BasePlugin) *BeaconPlugin {
 	}
 }
 
-// Validate — RPC SoulBeacon.Validate. Пробрасывается caller-у без оборачивания
-// в TaskError — это задача scheduler-а (на ошибку validate scheduler логирует и
-// не запускает Vigil, baseline не устанавливается).
+// Validate is the SoulBeacon.Validate RPC. Passed through to the caller
+// without wrapping in TaskError — that's the scheduler's job (on a validate
+// error the scheduler logs and doesn't start the Vigil, no baseline is set).
 func (p *BeaconPlugin) Validate(ctx context.Context, req *pluginv1.ValidateVigilRequest) (*pluginv1.ValidateVigilReply, error) {
 	return p.client.Validate(ctx, req)
 }
 
-// Check — RPC SoulBeacon.Check. Возвращает state + payload + state_cookie.
-// Scheduler сравнивает state с last per-Vigil; при смене формирует Portent.
+// Check is the SoulBeacon.Check RPC. Returns state + payload + state_cookie.
+// The scheduler compares state with the last per-Vigil value; on a change it
+// raises a Portent.
 func (p *BeaconPlugin) Check(ctx context.Context, req *pluginv1.CheckRequest) (*pluginv1.CheckReply, error) {
 	return p.client.Check(ctx, req)
 }

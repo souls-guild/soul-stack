@@ -24,8 +24,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeDoer — детерминированный HTTPDoer: возвращает body для любого запроса,
-// записывает реально полученные заголовки для проверки. Сетевых вызовов нет.
+// fakeDoer is a deterministic HTTPDoer: returns a fixed body for any request,
+// records the actually-received headers for assertions. No network calls.
 type fakeDoer struct {
 	body       []byte
 	status     int
@@ -65,8 +65,8 @@ func sha256hex(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// warningsOf извлекает список warnings из output последнего события (или nil,
-// если поля нет). Симметрично warningsOf в core.http.
+// warningsOf extracts the warnings list from the last event's output (nil if
+// the field is absent). Symmetric with warningsOf in core.http.
 func warningsOf(ev *pluginv1.ApplyEvent) []string {
 	if ev.Output == nil {
 		return nil
@@ -96,8 +96,8 @@ func sha1hex(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// newModule подменяет фабрику клиента на возврат единственного fakeDoer,
-// игнорируя opts (единый test-seam NewClient, симметрично core.http).
+// newModule overrides the client factory to always return the given fakeDoer,
+// ignoring opts (test seam NewClient, symmetric with core.http).
 func newModule(d *fakeDoer) *url.Module {
 	m := url.New()
 	m.NewClient = func(util.HTTPClientOpts) util.HTTPDoer { return d }
@@ -303,8 +303,8 @@ func TestApply_Checksum_SHA1_VerifyPasses(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true при совпадающем sha1: %s", ev.Message)
 	}
-	// output.sha256 — всегда SHA-256 фактического содержимого, даже когда
-	// checksum задан по sha1.
+	// output.sha256 is always the SHA-256 of the actual content, even when
+	// checksum is given as sha1.
 	if ev.Output.Fields["sha256"].GetStringValue() != sha256hex(body) {
 		t.Fatal("output.sha256 не SHA-256 содержимого")
 	}
@@ -331,11 +331,11 @@ func TestApply_Checksum_Mismatch_Fails_NoMaterialize(t *testing.T) {
 	if !stream.Last().Failed {
 		t.Fatal("failed=false при mismatch checksum")
 	}
-	// Целевой файл не создан.
+	// Target file was not created.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("целевой файл материализован при mismatch: err=%v", err)
 	}
-	// Никаких temp-остатков в директории.
+	// No temp leftovers in the directory.
 	assertNoTempLeftovers(t, dir)
 }
 
@@ -370,7 +370,7 @@ func TestApply_Checksum_Idempotent_SkipsDownload(t *testing.T) {
 	if d.calls != 0 {
 		t.Fatalf("HTTP вызван %d раз при совпадающем checksum (ожидалось 0)", d.calls)
 	}
-	// Файл не перезаписан мусором из fakeDoer.
+	// File wasn't overwritten with garbage from fakeDoer.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
 		t.Fatalf("файл перезаписан: %q", got)
@@ -403,7 +403,7 @@ func TestApply_Checksum_NoOp_AppliesModeDrift(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// Контент совпал → скачивания нет, но mode должен быть приведён к декларации.
+	// Content matched → no download, but mode must still be brought to spec.
 	if !ev.Changed {
 		t.Fatal("changed=false при drift mode на совпавшем checksum")
 	}
@@ -414,7 +414,7 @@ func TestApply_Checksum_NoOp_AppliesModeDrift(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode=%v want 0600", info.Mode().Perm())
 	}
-	// Файл не перезаписан мусором из fakeDoer.
+	// File wasn't overwritten with garbage from fakeDoer.
 	got, _ := os.ReadFile(path)
 	if string(got) != string(body) {
 		t.Fatalf("файл перезаписан: %q", got)
@@ -447,7 +447,7 @@ func TestApply_Checksum_NoOp_ModeMatches_TrueNoOp(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// Контент и mode совпали → истинный no-op.
+	// Content and mode both matched → true no-op.
 	if ev.Changed {
 		t.Fatal("changed=true при совпавших checksum и mode")
 	}
@@ -481,7 +481,7 @@ func TestApply_NoChecksum_NoOp_AppliesModeDrift(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// Контент совпал (бесчексумная ветка) → запись не нужна, но mode-drift правим.
+	// Content matched (no-checksum branch) → no write needed, but mode drift is fixed.
 	if !ev.Changed {
 		t.Fatal("changed=false при drift mode на совпавшем содержимом")
 	}
@@ -519,7 +519,7 @@ func TestApply_NoChecksum_Idempotent_SameContent(t *testing.T) {
 	if ev.Changed {
 		t.Fatal("changed=true при идентичном содержимом (no checksum)")
 	}
-	// Без checksum скачивание всё равно происходит (для сравнения), но diff нет.
+	// Without checksum, download still happens (for comparison), but there's no diff.
 	if d.calls != 1 {
 		t.Fatalf("HTTP вызван %d раз (ожидался 1: скачать-и-сравнить)", d.calls)
 	}
@@ -578,11 +578,11 @@ func TestApply_HeadersSent_NotInOutput(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// Заголовок действительно отправлен в запросе.
+	// Header was actually sent in the request.
 	if got := d.gotHeaders.Get("Authorization"); got != "Bearer super-secret-token" {
 		t.Fatalf("Authorization не отправлен: %q", got)
 	}
-	// headers нет в output ни ключом, ни значением.
+	// headers is absent from output, neither as key nor as value.
 	if _, ok := ev.Output.Fields["headers"]; ok {
 		t.Fatal("headers присутствует в output")
 	}
@@ -630,12 +630,12 @@ func TestApply_MissingURL_Fails(t *testing.T) {
 	}
 }
 
-// --- downgrade-защита: CheckRedirect ---
+// --- downgrade protection: CheckRedirect ---
 
-// TestCheckRedirect_BlocksNonHTTPS проверяет саму CheckRedirect в изоляции:
-// hop на http/любую не-https схему → ошибка; https → nil. Это покрывает
-// downgrade-защиту независимо от fake-инъекции (fake HTTPDoer не прогоняет
-// CheckRedirect реального клиента).
+// TestCheckRedirect_BlocksNonHTTPS tests CheckRedirect in isolation: a hop to
+// http or any non-https scheme errors, https passes. Covers downgrade
+// protection independent of the fake injection (the fake HTTPDoer never runs
+// the real client's CheckRedirect).
 func TestCheckRedirect_BlocksNonHTTPS(t *testing.T) {
 	mkReq := func(raw string) *http.Request {
 		u, err := stdurl.Parse(raw)
@@ -665,18 +665,18 @@ func TestCheckRedirect_BlocksNonHTTPS(t *testing.T) {
 		}
 	}
 
-	// Лимит редиректов: цепочка длиной util.MaxRedirects → ошибка даже на https.
+	// Redirect limit: a chain of length util.MaxRedirects errors even on https.
 	via := make([]*http.Request, url.MaxRedirects)
 	if err := url.CheckRedirect(mkReq("https://ok.example/x"), via); err == nil {
 		t.Fatal("CheckRedirect не остановил цепочку на лимите редиректов")
 	}
 }
 
-// TestApply_Redirect_HTTPS_to_HTTP_Blocked прогоняет реальную redirect-цепочку
-// через httptest: https-сервер отдаёт 302 Location: http://… — fetch обязан
-// упасть (downgrade заблокирован), целевой файл не создаётся.
+// TestApply_Redirect_HTTPS_to_HTTP_Blocked drives a real redirect chain via
+// httptest: an https server sends 302 Location: http://… — fetch must fail
+// (downgrade blocked), and no target file is created.
 func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
-	// http-сервер, куда указывает downgrade-редирект; до него дойти НЕ должны.
+	// http server the downgrade redirect points to; must never be reached.
 	var httpHit bool
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpHit = true
@@ -689,8 +689,8 @@ func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 	}))
 	defer tlsSrv.Close()
 
-	// Реальный клиент модуля (с CheckRedirect), Transport — доверяющий
-	// самоподписанному httptest-cert. CheckRedirect сохраняется.
+	// Real module client (with CheckRedirect); Transport trusts the
+	// self-signed httptest cert. CheckRedirect stays intact.
 	client := url.NewRealClient()
 	client.Transport = tlsSrv.Client().Transport
 
@@ -721,8 +721,8 @@ func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 	assertNoTempLeftovers(t, dir)
 }
 
-// TestValidate_AcceptsUppercaseScheme — `HTTPS://` валиден (схема сверяется
-// регистронезависимо через url.Parse, не строковым префиксом).
+// TestValidate_AcceptsUppercaseScheme — `HTTPS://` is valid (scheme compared
+// case-insensitively via url.Parse, not a string prefix).
 func TestValidate_AcceptsUppercaseScheme(t *testing.T) {
 	m := url.New()
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -737,8 +737,9 @@ func TestValidate_AcceptsUppercaseScheme(t *testing.T) {
 	}
 }
 
-// TestValidate_RejectsControlCharScheme — мусорная/control-char схема и
-// «склейка» через перевод строки отвергаются (наивный HasPrefix их пропускал).
+// TestValidate_RejectsControlCharScheme — garbage/control-char schemes and
+// newline-smuggled scheme strings are rejected (a naive HasPrefix would let
+// them through).
 func TestValidate_RejectsControlCharScheme(t *testing.T) {
 	for _, raw := range []string{
 		"https://example.com/\nhttp://evil.example/x",
@@ -765,7 +766,7 @@ func m_validate(t *testing.T, rawURL string) (*pluginv1.ValidateReply, error) {
 	})
 }
 
-// --- checksum: невалидные форматы ---
+// --- checksum: invalid formats ---
 
 func TestValidate_RejectsBadChecksums(t *testing.T) {
 	cases := map[string]string{
@@ -798,11 +799,11 @@ func TestValidate_RejectsBadChecksums(t *testing.T) {
 	}
 }
 
-// --- timeout: дефолт срабатывает ---
+// --- timeout: default kicks in ---
 
-// TestApply_Timeout_Fails — медленный сервер дольше заданного timeout → fetch
-// падает по контексту, не виснет. Через httptest с задержкой и явный короткий
-// timeout (дефолт 300s в тесте ждать нельзя).
+// TestApply_Timeout_Fails — a server slower than the configured timeout makes
+// fetch fail via context, not hang. Uses httptest with a delay and a short
+// explicit timeout (can't wait out the 300s default in a test).
 func TestApply_Timeout_Fails(t *testing.T) {
 	release := make(chan struct{})
 	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -850,10 +851,11 @@ func TestApply_Timeout_Fails(t *testing.T) {
 	assertNoTempLeftovers(t, dir)
 }
 
-// --- пустой ответ ---
+// --- empty response ---
 
-// TestApply_EmptyBody_CreatesEmptyFile — ответ 0 байт: файл создаётся пустым,
-// output.sha256 = sha256 пустой строки, checksum-ветка сверяет корректно.
+// TestApply_EmptyBody_CreatesEmptyFile — a 0-byte response creates an empty
+// file; output.sha256 is the empty string's sha256, checksum branch verifies
+// correctly.
 func TestApply_EmptyBody_CreatesEmptyFile(t *testing.T) {
 	empty := []byte{}
 	d := &fakeDoer{body: empty}
@@ -889,12 +891,12 @@ func TestApply_EmptyBody_CreatesEmptyFile(t *testing.T) {
 	assertNoTempLeftovers(t, dir)
 }
 
-// --- параллельная запись в один path ---
+// --- parallel writes to the same path ---
 
-// TestApply_ParallelSamePath_NoCorruption — несколько одновременных fetch в
-// одну path: temp-имена уникальны, материализация — atomic rename, поэтому
-// результат — валидное содержимое (last-writer-wins), без повреждения и без
-// temp-остатков.
+// TestApply_ParallelSamePath_NoCorruption — several concurrent fetches to the
+// same path: temp names are unique, materialization is an atomic rename, so
+// the result is valid content (last-writer-wins), with no corruption and no
+// temp leftovers.
 func TestApply_ParallelSamePath_NoCorruption(t *testing.T) {
 	body := []byte("concurrent payload")
 	dir := t.TempDir()
@@ -930,8 +932,8 @@ func TestApply_ParallelSamePath_NoCorruption(t *testing.T) {
 	assertNoTempLeftovers(t, dir)
 }
 
-// assertNoTempLeftovers проверяет, что в директории не осталось temp-файлов
-// модуля (паттерн ".<base>.tmp-*").
+// assertNoTempLeftovers checks that the directory has no leftover module temp
+// files (pattern ".<base>.tmp-*").
 func assertNoTempLeftovers(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

@@ -6,33 +6,33 @@ import (
 	sdkmodule "github.com/souls-guild/soul-stack/sdk/module"
 )
 
-// hardcodedWhitelist — verb-модули, императивные by-design (shell-exec), для
-// которых Errand-runner допускает вызов по имени БЕЗ marker-check-а
-// ([sdkmodule.ErrandReadSafe]). ADR-033 §2: жёсткий список — core.cmd.shell и
-// core.exec.run; всё остальное (включая будущие custom-плагины) проходит
-// через marker-interface default-deny.
+// hardcodedWhitelist — verb modules, imperative by-design (shell-exec), that
+// the Errand runner allows to call by name WITHOUT a marker check
+// ([sdkmodule.ErrandReadSafe]). ADR-033 §2: hardcoded list — core.cmd.shell
+// and core.exec.run; everything else (including future custom plugins) goes
+// through the marker-interface default-deny.
 //
-// Сравнение по точному совпадению полного адреса `<ns>.<name>.<state>`: state
-// важен (`core.cmd.shell` допущен, гипотетический `core.cmd.foo` — нет).
+// Matched by exact equality of the full address `<ns>.<name>.<state>`: state
+// matters (`core.cmd.shell` is allowed, a hypothetical `core.cmd.foo` isn't).
 var hardcodedWhitelist = map[string]struct{}{
 	"core.cmd.shell": {},
 	"core.exec.run":  {},
 }
 
-// IsAllowed проверяет, что модуль mod, адресованный fullName-ом
-// (`<namespace>.<name>.<state>`), безопасно вызвать через Errand. Возвращает
-// (ok, reason). reason всегда `errand_module_not_allowed: <module>` для
-// форматной совместимости с error-кодами [docs/naming-rules.md].
+// IsAllowed checks whether the module mod, addressed by fullName
+// (`<namespace>.<name>.<state>`), is safe to invoke via Errand. Returns
+// (ok, reason). reason is always `errand_module_not_allowed: <module>` for
+// format compatibility with the error codes in [docs/naming-rules.md].
 //
-// Алгоритм (ADR-033 §2):
-//  1. Жёсткий список (verb-модули shell/exec, императивные by-design).
-//  2. [sdkmodule.ErrandReadSafe] marker — модуль сам декларирует «безопасен к
-//     ad-hoc invocation» (BaseModule этот интерфейс НЕ реализует, поэтому
-//     custom-плагин на BaseModule по умолчанию получает default-deny).
-//  3. Иначе reject.
+// Algorithm (ADR-033 §2):
+//  1. Hardcoded list (verb modules shell/exec, imperative by-design).
+//  2. [sdkmodule.ErrandReadSafe] marker — the module declares itself "safe
+//     for ad-hoc invocation" (BaseModule does NOT implement this interface,
+//     so a custom plugin on BaseModule defaults to deny).
+//  3. Otherwise reject.
 //
-// nil-mod — defensive reject (caller обязан вызывать после Lookup; здесь
-// перестраховка).
+// nil-mod — defensive reject (caller must call after Lookup; this is a
+// belt-and-suspenders check).
 func IsAllowed(fullName string, mod sdkmodule.SoulModule) (bool, string) {
 	if _, ok := hardcodedWhitelist[fullName]; ok {
 		return true, ""

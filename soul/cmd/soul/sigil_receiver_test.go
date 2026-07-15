@@ -12,16 +12,18 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/sigilcache"
 )
 
-// dispatchPayload воспроизводит ветки recv-loop handleSession для одного
-// FromKeeper-payload-а в части, относящейся к Sigil (ADR-026(h)).
-// Полный handleSession требует живого *soulgrpc.StreamSession (mTLS-стрим) — это
-// покрыто integration-тестом; здесь изолируем именно диспетчеризацию payload →
-// кеш / holder якорей, чтобы не поднимать gRPC ради проверки этих case.
+// dispatchPayload replays the recv-loop handleSession branches for a single
+// FromKeeper payload, the part relevant to Sigil (ADR-026(h)).
+// Full handleSession needs a live *soulgrpc.StreamSession (mTLS stream) —
+// that's covered by the integration test; here we isolate just the payload →
+// cache / anchor-holder dispatch, to avoid spinning up gRPC just to check
+// these cases.
 //
-// Авторитетный путь набора допусков — SigilSnapshot → ReplaceAll. Одиночный
-// PluginSigil — уведомление, набор НЕ мутирует. SigilTrustAnchors (R3-S6) →
-// ReplaceAll в holder якорей (fail-closed на битом PEM). Если в main.go меняется
-// switch, этот хелпер держим в синхроне — он намеренно дублирует ту же логику.
+// The authoritative allow-set path is SigilSnapshot → ReplaceAll. A single
+// PluginSigil is a notification, it does NOT mutate the set. SigilTrustAnchors
+// (R3-S6) → ReplaceAll on the anchor holder (fail-closed on a broken PEM). If
+// the switch in main.go changes, keep this helper in sync — it deliberately
+// duplicates the same logic.
 func dispatchPayload(msg *keeperv1.FromKeeper, sigils *sigilcache.Cache, anchors *sharedhost.AnchorSet) {
 	switch payload := msg.GetPayload().(type) {
 	case *keeperv1.FromKeeper_SigilSnapshot:
@@ -32,13 +34,13 @@ func dispatchPayload(msg *keeperv1.FromKeeper, sigils *sigilcache.Cache, anchors
 		}
 		parsed, err := parseTrustAnchorSet(payload.SigilTrustAnchors.GetPubkeyPem())
 		if err != nil {
-			return // fail-closed: битый набор — holder не трогаем
+			return // fail-closed: broken set — leave the holder untouched
 		}
 		anchors.SetAnchors(parsed)
 	case *keeperv1.FromKeeper_PluginSigil:
-		// no-op: одиночное уведомление набор не меняет (Вариант A).
+		// no-op: a single notification doesn't change the set (Option A).
 	default:
-		// прочие payload-ы вне зоны этого теста
+		// other payloads are out of scope for this test
 	}
 }
 
@@ -52,7 +54,7 @@ func pluginSigil(ns, name, ref, sha string) *keeperv1.PluginSigil {
 	return &keeperv1.PluginSigil{Namespace: ns, Name: name, Ref: ref, BinarySha256: sha}
 }
 
-// TestReceiverAppliesSnapshot — SigilSnapshot наполняет кеш через ReplaceAll.
+// TestReceiverAppliesSnapshot — SigilSnapshot populates the cache via ReplaceAll.
 func TestReceiverAppliesSnapshot(t *testing.T) {
 	sigils := sigilcache.New()
 
@@ -73,12 +75,12 @@ func TestReceiverAppliesSnapshot(t *testing.T) {
 	}
 }
 
-// TestReceiverSnapshotRevokesAbsent — near-instant revoke (S6c): новый snapshot
-// без ранее допущенного плагина стирает его из кеша (ReplaceAll).
+// TestReceiverSnapshotRevokesAbsent — near-instant revoke (S6c): a new snapshot
+// without a previously allowed plugin erases it from the cache (ReplaceAll).
 func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 	sigils := sigilcache.New()
 
-	// allow: snapshot с двумя допусками.
+	// allow: snapshot with two allow entries.
 	dispatchPayload(snapshotMsg(
 		pluginSigil("core", "pkg", "v1", "aa"),
 		pluginSigil("core", "file", "v1", "bb"),
@@ -87,7 +89,7 @@ func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 		t.Fatal("предусловие: оба допуска должны быть в кеше")
 	}
 
-	// revoke core/pkg: новый snapshot уже без него.
+	// revoke core/pkg: the new snapshot no longer includes it.
 	dispatchPayload(snapshotMsg(pluginSigil("core", "file", "v1", "bb")), sigils, nil)
 
 	if sigils.Get("core", "pkg") != nil {
@@ -98,8 +100,8 @@ func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 	}
 }
 
-// TestReceiverEmptySnapshotClearsCache — пустой snapshot = ни один плагин не
-// допущен (revoke всех).
+// TestReceiverEmptySnapshotClearsCache — an empty snapshot means no plugin is
+// allowed (revoke all).
 func TestReceiverEmptySnapshotClearsCache(t *testing.T) {
 	sigils := sigilcache.New()
 	dispatchPayload(snapshotMsg(pluginSigil("core", "pkg", "v1", "aa")), sigils, nil)
@@ -107,22 +109,22 @@ func TestReceiverEmptySnapshotClearsCache(t *testing.T) {
 		t.Fatal("предусловие: допуск должен быть в кеше")
 	}
 
-	dispatchPayload(snapshotMsg(), sigils, nil) // пустой snapshot
+	dispatchPayload(snapshotMsg(), sigils, nil) // empty snapshot
 
 	if sigils.Get("core", "pkg") != nil {
 		t.Fatal("пустой snapshot должен очистить кеш (ни один плагин не допущен)")
 	}
 }
 
-// TestReceiverSinglePluginSigilDoesNotMutate — одиночный PluginSigil (Вариант A)
-// — уведомление, набор НЕ меняет: ни добавления, ни замены.
+// TestReceiverSinglePluginSigilDoesNotMutate — a single PluginSigil (Option A)
+// is a notification, it does NOT change the set: no additions, no replacements.
 func TestReceiverSinglePluginSigilDoesNotMutate(t *testing.T) {
 	sigils := sigilcache.New()
 
-	// Авторитетный набор из snapshot-а.
+	// The authoritative set comes from the snapshot.
 	dispatchPayload(snapshotMsg(pluginSigil("core", "pkg", "v1", "aa")), sigils, nil)
 
-	// Одиночный PluginSigil НЕ должен ни добавить новый, ни заменить существующий.
+	// A single PluginSigil must NOT add a new one or replace an existing one.
 	dispatchPayload(&keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_PluginSigil{
 		PluginSigil: pluginSigil("core", "pkg", "v2", "bb"),
 	}}, sigils, nil)
@@ -139,7 +141,7 @@ func TestReceiverSinglePluginSigilDoesNotMutate(t *testing.T) {
 	}
 }
 
-// TestReceiverIgnoresNonSigilPayload — не-Sigil payload не трогает кеш.
+// TestReceiverIgnoresNonSigilPayload — a non-Sigil payload doesn't touch the cache.
 func TestReceiverIgnoresNonSigilPayload(t *testing.T) {
 	sigils := sigilcache.New()
 	msg := &keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_HelloReply{
@@ -153,8 +155,8 @@ func TestReceiverIgnoresNonSigilPayload(t *testing.T) {
 	}
 }
 
-// genAnchorPEM генерирует свежий ed25519-публичный ключ в SPKI PEM-форме
-// (симметрично keeper-side sigil.Signer.AnchorSetPEM) для anchors-тестов.
+// genAnchorPEM generates a fresh ed25519 public key in SPKI PEM form
+// (symmetric with keeper-side sigil.Signer.AnchorSetPEM) for anchor tests.
 func genAnchorPEM(t *testing.T) (ed25519.PublicKey, string) {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -174,8 +176,8 @@ func anchorsMsg(pems ...string) *keeperv1.FromKeeper {
 	}}
 }
 
-// TestReceiverAppliesTrustAnchors — SigilTrustAnchors (R3-S6) заменяет holder
-// якорей целиком (ReplaceAll): свежий набор парсится и применяется.
+// TestReceiverAppliesTrustAnchors — SigilTrustAnchors (R3-S6) replaces the
+// anchor holder wholesale (ReplaceAll): the fresh set is parsed and applied.
 func TestReceiverAppliesTrustAnchors(t *testing.T) {
 	holder := sharedhost.NewAnchorSet(nil)
 	_, pem1 := genAnchorPEM(t)
@@ -192,18 +194,18 @@ func TestReceiverAppliesTrustAnchors(t *testing.T) {
 	}
 }
 
-// TestReceiverTrustAnchorsRejectsBrokenPEM — fail-closed: битый PEM в наборе НЕ
-// подменяет holder (прежний валидный набор сохраняется).
+// TestReceiverTrustAnchorsRejectsBrokenPEM — fail-closed: a broken PEM in the
+// set does NOT replace the holder (the previous valid set is kept).
 func TestReceiverTrustAnchorsRejectsBrokenPEM(t *testing.T) {
 	prevPub, prevPEM := genAnchorPEM(t)
 	holder := sharedhost.NewAnchorSet([]ed25519.PublicKey{prevPub})
 
-	// Битый набор: один валидный PEM + один мусор. parseTrustAnchorSet вернёт
-	// ошибку → holder не трогаем.
+	// Broken set: one valid PEM + one piece of garbage. parseTrustAnchorSet
+	// returns an error → the holder is left untouched.
 	_, goodPEM := genAnchorPEM(t)
 	dispatchPayload(anchorsMsg(goodPEM, "not a pem block"), nil, holder)
 
-	// Holder остался прежним: проверяем через повторный парс исходного набора.
+	// The holder stays unchanged: verify by re-parsing the original set.
 	keep, err := parseTrustAnchorSet([]string{prevPEM})
 	if err != nil || len(keep) != 1 || !keep[0].Equal(prevPub) {
 		t.Fatalf("предусловие/инвариант битого набора нарушен: keep=%d err=%v", len(keep), err)
@@ -213,8 +215,8 @@ func TestReceiverTrustAnchorsRejectsBrokenPEM(t *testing.T) {
 	}
 }
 
-// TestReceiverEmptyTrustAnchorsClearsHolder — пустой набор стирает holder
-// (Sigil выключен на Keeper → verify fail-closed по no_trust_anchor).
+// TestReceiverEmptyTrustAnchorsClearsHolder — an empty set clears the holder
+// (Sigil disabled on Keeper → verify fail-closed on no_trust_anchor).
 func TestReceiverEmptyTrustAnchorsClearsHolder(t *testing.T) {
 	pub, _ := genAnchorPEM(t)
 	holder := sharedhost.NewAnchorSet([]ed25519.PublicKey{pub})
@@ -227,9 +229,9 @@ func TestReceiverEmptyTrustAnchorsClearsHolder(t *testing.T) {
 	}
 }
 
-// TestReceiverTrustAnchorsNilHolder — без holder (push / тест без Host) ветка
-// no-op, паники нет.
+// TestReceiverTrustAnchorsNilHolder — without a holder (push / test without a
+// Host) the branch is a no-op, no panic.
 func TestReceiverTrustAnchorsNilHolder(t *testing.T) {
 	_, pem1 := genAnchorPEM(t)
-	dispatchPayload(anchorsMsg(pem1), nil, nil) // не должно паниковать
+	dispatchPayload(anchorsMsg(pem1), nil, nil) // must not panic
 }

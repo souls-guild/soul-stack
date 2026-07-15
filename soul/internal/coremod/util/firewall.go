@@ -2,9 +2,9 @@ package util
 
 import "context"
 
-// Firewall — closed-set файрвол-инструментов для core.firewall ([ADR-015]).
-// MVP: ufw и firewalld; iptables сознательно отложен (требует ip(6)tables-save
-// + chain-семантику, не покрываемую парой add/delete-правил).
+// Firewall is a closed set of firewall tools for core.firewall ([ADR-015]).
+// MVP: ufw and firewalld; iptables is deliberately deferred (needs
+// ip(6)tables-save + chain semantics not covered by a simple add/delete pair).
 type Firewall string
 
 const (
@@ -13,12 +13,12 @@ const (
 	FirewallFirewalld Firewall = "firewalld"
 )
 
-// DetectFirewall — определяет файрвол-инструмент по установленному управляющему
-// бинарю (НЕ по Soulprint): для ufw это `ufw`, для firewalld — `firewall-cmd`.
-// Параллель DetectInitSystem/DetectPkgMgr: проверка через `--version`. ufw
-// первым (более распространён на debian-парке); firewalld — на redhat-парке.
+// DetectFirewall determines the firewall tool by which control binary is
+// installed (NOT by Soulprint): `ufw` for ufw, `firewall-cmd` for firewalld.
+// Mirrors DetectInitSystem/DetectPkgMgr: checked via `--version`. ufw first
+// (more common on the debian fleet); firewalld for the redhat fleet.
 //
-// Принимает Runner — в unit-тестах подменяется на fakeRunner.
+// Takes a Runner — substituted with fakeRunner in unit tests.
 func DetectFirewall(ctx context.Context, r Runner) Firewall {
 	if r.Run(ctx, "ufw", "--version").OK() {
 		return FirewallUFW

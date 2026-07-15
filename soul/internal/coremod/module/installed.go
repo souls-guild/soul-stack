@@ -23,8 +23,8 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
 
-// TaskError-reasons install-шага (открытый каталог, naming-rules → Error codes;
-// едут префиксом в message финального failed-события — прецедент
+// TaskError reasons for the install step (open catalog, naming-rules → Error
+// codes; ride as a message prefix on the final failed event — precedent:
 // errand_module_not_allowed).
 const (
 	reasonNotAllowed   = "module_not_allowed"
@@ -32,11 +32,11 @@ const (
 	reasonVerifyFailed = "module_verify_failed"
 )
 
-// applyInstalled реализует state `installed` (ADR-065(c,f,g)).
+// applyInstalled implements state `installed` (ADR-065(c,f,g)).
 //
-// Нормативный порядок: allow-check ДО fetch → идемпотентность по sha256 →
-// fetch по content-адресу → полный Sigil-verify ДО материализации → atomic
-// install в каталожный слот `<paths.modules>/<ns>-<name>/`.
+// Normative order: allow-check BEFORE fetch → sha256 idempotency → fetch by
+// content address → full Sigil verify BEFORE materialization → atomic
+// install into the catalog slot `<paths.modules>/<ns>-<name>/`.
 func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest) error {
 	fullName, err := util.StringParam(req.GetParams(), "name")
 	if err != nil {
@@ -54,7 +54,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		return util.SendFailed(stream, "paths.modules не задан в soul.yml — кешу модулей некуда материализоваться")
 	}
 
-	// (1) allow-check ДО единого сетевого байта.
+	// (1) allow-check BEFORE a single network byte.
 	var rec *sharedhost.SigilRecord
 	if m.deps.Sigils != nil {
 		rec = m.deps.Sigils.Get(namespace, name)
@@ -79,12 +79,12 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	slotDir := filepath.Join(m.deps.ModulesRoot, namespace+"-"+name)
 	binPath := filepath.Join(slotDir, manifest.BinaryName())
 
-	// (2) идемпотентность: установленный бинарь уже совпадает с активным допуском.
+	// (2) idempotency: the installed binary already matches the active grant.
 	if diskSHA, exists := sha256OfFile(binPath); exists && strings.EqualFold(diskSHA, rec.BinarySHA256hex) {
 		return sendInstalled(stream, false, fullName, rec, binPath)
 	}
 
-	// (3) fetch по content-адресу через FetchModule текущей EventStream-сессии.
+	// (3) fetch by content address via FetchModule of the current EventStream session.
 	fetcher, ok := fetcherFrom(stream.Context())
 	if !ok {
 		return util.SendFailed(stream, fmt.Sprintf(
@@ -95,19 +95,19 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonFetchFailed, fullName, err))
 	}
 
-	// (4) полный Sigil-verify ДО материализации: sha256 байтов == допуск +
-	// подпись + manifest-хеш (shared/pluginhost, ADR-065(f)).
+	// (4) full Sigil verify BEFORE materialization: sha256 of the bytes ==
+	// grant + signature + manifest hash (shared/pluginhost, ADR-065(f)).
 	if err := sharedhost.VerifyArtifactBytes(data, rec, m.deps.Anchors); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonVerifyFailed, fullName, err))
 	}
 
-	// (5) atomic install: manifest из manifest_raw допуска (НЕ из fetch) →
-	// сброс digest-sidecar-а предыдущего бинаря → atomic rename бинаря.
+	// (5) atomic install: manifest from the grant's manifest_raw (NOT from
+	// fetch) → clear the previous binary's digest sidecar → atomic rename.
 	if err := installSlot(slotDir, binPath, rec.Manifest, data); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("install %s: %v", fullName, err))
 	}
 
-	// (6) hot-register (ADR-065(d)) — только при реальной установке.
+	// (6) hot-register (ADR-065(d)) — only on an actual install.
 	if m.deps.Rescan != nil {
 		m.deps.Rescan()
 	}
@@ -115,7 +115,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	return sendInstalled(stream, true, fullName, rec, binPath)
 }
 
-// fetchAll собирает байты бинаря из server-streaming PluginChunk-ответа.
+// fetchAll assembles the binary bytes from the server-streaming PluginChunk response.
 func fetchAll(ctx context.Context, fetcher Fetcher, namespace, name, sha string) ([]byte, error) {
 	stream, err := fetcher.FetchModule(ctx, &keeperv1.PluginFetchRequest{
 		Namespace:    namespace,
@@ -138,10 +138,11 @@ func fetchAll(ctx context.Context, fetcher Fetcher, namespace, name, sha string)
 	}
 }
 
-// installSlot материализует слот: manifest.yaml + бинарь, оба через atomic
-// rename (util.AtomicWrite). Digest-sidecar прежнего бинаря удаляется ДО
-// rename нового — иначе Spawn fail-closed-ил бы свежеустановленный бинарь по
-// stale-sidecar-у (см. shared/pluginhost verifySigilAndSeal).
+// installSlot materializes the slot: manifest.yaml + binary, both via atomic
+// rename (util.AtomicWrite). The previous binary's digest sidecar is removed
+// BEFORE the new one is renamed in — otherwise Spawn would fail-closed the
+// freshly installed binary against a stale sidecar (see shared/pluginhost
+// verifySigilAndSeal).
 func installSlot(slotDir, binPath string, manifestRaw, binData []byte) error {
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		return err
@@ -155,8 +156,8 @@ func installSlot(slotDir, binPath string, manifestRaw, binData []byte) error {
 	return util.AtomicWrite(binPath, binData, 0o755)
 }
 
-// sha256OfFile — hex-digest файла; exists=false при отсутствии или любой ошибке
-// чтения (перезапись через atomic rename исправит нечитаемый слот).
+// sha256OfFile returns the file's hex digest; exists=false on absence or any
+// read error (an atomic-rename overwrite will fix an unreadable slot).
 func sha256OfFile(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {

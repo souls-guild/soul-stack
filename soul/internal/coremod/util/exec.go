@@ -1,7 +1,7 @@
-// Package util — внутренние helper-ы Soul-side core-модулей (ADR-015).
-// Реализует mock-абельный Runner (exec обёртка), осмотр OS-фактов,
-// извлечение типизированных параметров из ApplyRequest.Params и сборку
-// ApplyEvent с output-структурой.
+// Package util — internal helpers for Soul-side core-modules (ADR-015).
+// Implements a mockable Runner (exec wrapper), OS-facts inspection,
+// extraction of typed parameters from ApplyRequest.Params, and assembly
+// of ApplyEvent with an output structure.
 package util
 
 import (
@@ -11,28 +11,29 @@ import (
 	"os/exec"
 )
 
-// Runner — мок-абельная обёртка над os/exec. Каждый core-модуль принимает
-// Runner в свой struct, благодаря чему unit-тесты подменяют его на
-// detection/exec-fake без необходимости иметь реальную систему apt/systemctl.
+// Runner — mockable wrapper over os/exec. Each core-module takes a Runner in
+// its struct, so unit tests can swap in a detection/exec fake without needing
+// a real apt/systemctl on the system.
 //
-// Run обязан возвращать ExitErr (с populated ExitCode) для non-zero exit
-// штатно, без обёртки в *exec.ExitError; ошибка возвращается только при
-// «не запустился» (binary not found, permission denied). Это нужно, чтобы
-// модули могли отличать «команда сказала нет» (idempotent-проверка типа
-// `dpkg -l` для not-installed) от «нет dpkg-binary вовсе».
+// Run must return a non-zero exit via ExitCode (populated), not wrapped in
+// *exec.ExitError; Err is set only when the process failed to start ("didn't
+// launch": binary not found, permission denied). This lets modules
+// distinguish "the command said no" (an idempotency check like `dpkg -l` for
+// not-installed) from "there's no dpkg binary at all".
 //
-// RunOpts — расширенный вариант с cwd/env/stdin, нужен для core.exec / core.cmd
-// (где пользователь явно задаёт окружение и рабочий каталог процесса).
+// RunOpts — extended variant with cwd/env/stdin, needed for core.exec /
+// core.cmd (where the caller explicitly sets the process's environment and
+// working directory).
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) Result
 	RunOpts(ctx context.Context, opts RunOptions) Result
 }
 
-// RunOptions — расширенные параметры запуска для core.exec / core.cmd.
-// Cwd "" = inherit (текущий каталог Soul-агента). Env == nil = inherit;
-// Env != nil = full replace (полный список KEY=VAL, как os/exec.Cmd.Env).
-// Stdin "" = пустой stdin; для command/shell-модулей не используется в MVP,
-// но поле есть, чтобы будущие надстройки не ломали интерфейс.
+// RunOptions — extended run parameters for core.exec / core.cmd.
+// Cwd "" = inherit (the Soul agent's current directory). Env == nil = inherit;
+// Env != nil = full replace (a complete KEY=VAL list, like os/exec.Cmd.Env).
+// Stdin "" = empty stdin; unused by command/shell modules in MVP, but the
+// field exists so future extensions don't break the interface.
 type RunOptions struct {
 	Name  string
 	Args  []string
@@ -41,24 +42,24 @@ type RunOptions struct {
 	Stdin string
 }
 
-// Result — итог одного запуска команды. Stderr/Stdout — строки (не []byte):
-// core-модули парсят их регулярками и сравнивают как строки, бинарный вывод
-// здесь не ожидается.
+// Result — outcome of a single command run. Stderr/Stdout are strings (not
+// []byte): core-modules parse them with regexes and compare as strings,
+// binary output isn't expected here.
 type Result struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
-	// Err непустой только если процесс не удалось запустить
-	// (binary not found, fork failed). Non-zero exit — это ExitCode, не Err.
+	// Err is non-nil only if the process failed to start
+	// (binary not found, fork failed). A non-zero exit is ExitCode, not Err.
 	Err error
 }
 
-// OK — true, если процесс отработал без ошибки запуска и exit-кодом 0.
+// OK — true if the process started without error and exited 0.
 func (r Result) OK() bool { return r.Err == nil && r.ExitCode == 0 }
 
-// OSRunner — production-реализация Runner поверх os/exec. Stdout/stderr
-// захватываются в bytes.Buffer (ограничение по памяти — задача core-модулей
-// в их обёртке, для apt/systemctl-вызовов это десятки KB).
+// OSRunner — production Runner implementation over os/exec. Stdout/stderr
+// are captured into a bytes.Buffer (memory bounding is the core-modules'
+// concern in their wrapper; for apt/systemctl calls this is tens of KB).
 type OSRunner struct{}
 
 func (OSRunner) Run(ctx context.Context, name string, args ...string) Result {

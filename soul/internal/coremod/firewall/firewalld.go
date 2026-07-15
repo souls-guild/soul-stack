@@ -12,16 +12,16 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyFirewalld добавляет/удаляет одно правило через firewall-cmd. НИКОГДА не
-// запускает службу firewalld и не меняет default/target зоны — только
-// add/remove конкретного правила, причём с --permanent + явным reload
-// (правило должно пережить рестарт; reload применяет permanent в runtime, НЕ
-// перезапускает службу и НЕ трогает default policy).
+// applyFirewalld adds/removes a single rule via firewall-cmd. It NEVER starts
+// the firewalld service and never changes the default/target zone — only
+// add/remove of one rule, always with --permanent + an explicit reload (the
+// rule must survive a restart; reload applies the permanent config to
+// runtime, it does NOT restart the service or touch the default policy).
 //
-// Источник (source) реализуется через rich-rule (firewalld не позволяет
-// привязать source к простому --add-port). Без source — простой --add-port.
-// deny-правила требуют rich-rule с reject/drop (простой port — это всегда
-// accept), поэтому action=deny → rich-rule.
+// A source is implemented via rich-rule (firewalld can't attach a source to a
+// plain --add-port). Without a source, a plain --add-port is used. deny rules
+// require rich-rule with reject/drop (a plain port is always accept), so
+// action=deny always goes through rich-rule.
 func (m *Module) applyFirewalld(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], state string, r rule) error {
 	zoneArgs := zoneArgs(r.zone)
 
@@ -59,9 +59,9 @@ func zoneArgs(zone string) []string {
 	return []string{"--zone", zone}
 }
 
-// firewalldRulePresent проверяет наличие правила. Простое allow-правило без
-// source ищем в `--list-ports`; всё остальное (source или deny) — в
-// `--list-rich-rules`.
+// firewalldRulePresent checks whether the rule exists. A plain allow rule
+// without a source is looked up in `--list-ports`; everything else (source or
+// deny) in `--list-rich-rules`.
 func (m *Module) firewalldRulePresent(ctx context.Context, r rule, zoneArgs []string) (bool, error) {
 	if r.source == "" && r.action == "allow" {
 		args := append([]string{"--list-ports"}, zoneArgs...)
@@ -80,9 +80,9 @@ func (m *Module) firewalldRulePresent(ctx context.Context, r rule, zoneArgs []st
 	return firewalldRichRulePresent(res.Stdout, r), nil
 }
 
-// firewalldMutate выполняет --permanent add/remove + reload. op = "--add" |
-// "--remove". reload применяет permanent-конфиг в runtime БЕЗ рестарта службы
-// и БЕЗ изменения default-policy.
+// firewalldMutate runs --permanent add/remove + reload. op = "--add" |
+// "--remove". reload applies the permanent config to runtime WITHOUT
+// restarting the service or changing the default policy.
 func (m *Module) firewalldMutate(ctx context.Context, op string, r rule, zoneArgs []string) error {
 	var spec []string
 	if r.source == "" && r.action == "allow" {
@@ -100,9 +100,9 @@ func (m *Module) firewalldMutate(ctx context.Context, op string, r rule, zoneArg
 	return cmdError("firewall-cmd", []string{"--reload"}, reload)
 }
 
-// richRule собирает firewalld rich-rule. Источник через `source address=`,
-// действие через accept/reject. IPv4 предполагается (family ipv4); для MVP
-// этого достаточно.
+// richRule assembles a firewalld rich-rule. Source via `source address=`,
+// action via accept/reject. IPv4 is assumed (family ipv4); sufficient for the
+// MVP.
 //
 //	rule family="ipv4" source address="10.0.0.0/8" port port="5432" protocol="tcp" accept
 func richRule(r rule) string {
@@ -119,8 +119,8 @@ func richRule(r rule) string {
 	return b.String()
 }
 
-// firewalldPortPresent ищет "5432/tcp" в выводе `firewall-cmd --list-ports`
-// (одна строка, токены через пробел):
+// firewalldPortPresent looks for "5432/tcp" in `firewall-cmd --list-ports`
+// output (one line, space-separated tokens):
 //
 //	22/tcp 80/tcp 443/tcp 5432/tcp
 func firewalldPortPresent(out string, port int, proto string) bool {
@@ -133,10 +133,10 @@ func firewalldPortPresent(out string, port int, proto string) bool {
 	return false
 }
 
-// firewalldRichRulePresent ищет совпадающее rich-rule в выводе
-// `firewall-cmd --list-rich-rules`. Сопоставление по нормализованным
-// компонентам (port/protocol/source/verb), а не по точной строке: firewalld
-// может переупорядочить/переформатировать атрибуты.
+// firewalldRichRulePresent looks for a matching rich-rule in
+// `firewall-cmd --list-rich-rules` output. Matching is by normalized
+// components (port/protocol/source/verb), not exact string, since firewalld
+// may reorder/reformat attributes.
 //
 //	rule family="ipv4" source address="10.0.0.0/8" port port="5432" protocol="tcp" accept
 func firewalldRichRulePresent(out string, r rule) bool {
@@ -167,8 +167,9 @@ type richRuleParsed struct {
 	verb   string // accept | reject | drop
 }
 
-// parseRichRule извлекает из строки rich-rule компоненты port/protocol/source/
-// verb через поиск ключевых токенов. Толерантен к порядку и лишним атрибутам.
+// parseRichRule extracts the port/protocol/source/verb components from a
+// rich-rule line by searching for key tokens. Tolerant of order and extra
+// attributes.
 func parseRichRule(line string) (richRuleParsed, bool) {
 	var p richRuleParsed
 	p.source = extractQuoted(line, "address=")
@@ -195,8 +196,8 @@ func parseRichRule(line string) (richRuleParsed, bool) {
 	return p, true
 }
 
-// extractQuoted находит key (например `address=`) и возвращает значение в
-// кавычках сразу после него. Пусто, если ключ не найден.
+// extractQuoted finds key (e.g. `address=`) and returns the quoted value
+// right after it. Empty if the key isn't found.
 func extractQuoted(line, key string) string {
 	idx := strings.Index(line, key)
 	if idx < 0 {

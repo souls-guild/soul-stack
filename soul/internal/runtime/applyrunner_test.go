@@ -51,9 +51,9 @@ func TestRun_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRun_EchoesAttemptInRunResult — gate-1 (ADR-027(g)): Soul эхает
-// ApplyRequest.attempt в итоговый RunResult.attempt, чтобы Keeper на приёме мог
-// отвергнуть результат устаревшей попытки (correlateRunResult epoch-check).
+// TestRun_EchoesAttemptInRunResult — gate-1 (ADR-027(g)): Soul echoes
+// ApplyRequest.attempt into the final RunResult.attempt, so Keeper can reject
+// a stale-attempt result on receipt (correlateRunResult epoch check).
 func TestRun_EchoesAttemptInRunResult(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -81,7 +81,7 @@ func TestRun_EchoesAttemptInRunResult(t *testing.T) {
 		t.Errorf("RunResult.attempt = %d, want 4 (echo from ApplyRequest)", got)
 	}
 
-	// attempt не задан (старый Keeper) → эхо 0, forward-compat на приёме.
+	// attempt unset (old Keeper) → echoes 0, forward-compat on receipt.
 	zeroSink := &recordingSink{}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "apply-2",
@@ -96,10 +96,10 @@ func TestRun_EchoesAttemptInRunResult(t *testing.T) {
 	}
 }
 
-// TestRun_NoLogEchoedToTaskEvent — [H]-фикс: Soul пробрасывает RenderedTask.NoLog
-// в TaskEvent.NoLog (эхо-флаг для keeper-side audit-suppression). Проверяем оба
-// исхода — успех (changed) и провал — флаг едет в обоих, и не едет, когда задача
-// его не несёт.
+// TestRun_NoLogEchoedToTaskEvent — [H] fix: Soul forwards RenderedTask.NoLog
+// into TaskEvent.NoLog (echo flag for keeper-side audit suppression). Checks
+// both outcomes — success (changed) and failure — the flag carries through in
+// both, and doesn't when the task doesn't set it.
 func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
@@ -134,7 +134,7 @@ func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
 		t.Errorf("task[1].no_log = true, want false")
 	}
 
-	// failed-ветка: no_log тоже едет (это и есть основной канал утечки stderr).
+	// failed branch: no_log carries through too (this is the main stderr-leak channel).
 	failSink := &recordingSink{}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "apply-2",
@@ -184,10 +184,11 @@ func TestRun_ModuleNotFound(t *testing.T) {
 	}
 }
 
-// TestRun_StopsOnFirstFailed — fail-stop с rescue (destiny/tasks.md §8): первая
-// failed-задача помечает прогон FAILED, последующая ОБЫЧНАЯ (без onfail) задача
-// НЕ исполняется (mod.Apply не вызывается), но теперь приходит как SKIPPED-событие
-// (а не отсутствует — цикл проходит до конца ради rescue-хвоста). RunResult FAILED.
+// TestRun_StopsOnFirstFailed — fail-stop with rescue (destiny/tasks.md §8):
+// the first failed task marks the run FAILED, the next ORDINARY (no onfail)
+// task does NOT run (mod.Apply isn't called), but now arrives as a SKIPPED
+// event (not absent — the loop runs to completion for the rescue tail).
+// RunResult is FAILED.
 func TestRun_StopsOnFirstFailed(t *testing.T) {
 	var secondCalled bool
 	reg := mapRegistry{
@@ -205,7 +206,7 @@ func TestRun_StopsOnFirstFailed(t *testing.T) {
 		ApplyId: "stop-test",
 		Tasks: []*keeperv1.RenderedTask{
 			{Module: "core.pkg.installed"},
-			{Module: "core.file.present"}, // обычная задача после провала — SKIPPED, не исполняется
+			{Module: "core.file.present"}, // ordinary task after a failure — SKIPPED, not run
 		},
 	}, sink)
 	if err != nil {
@@ -296,8 +297,8 @@ func TestRun_CancelBetweenTasks(t *testing.T) {
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// SendTaskEvent для первой задачи дёргает Cancel — это симулирует
-	// CancelApply, пришедший по EventStream-у между ApplyEvent-ами.
+	// SendTaskEvent for the first task triggers Cancel — simulates CancelApply
+	// arriving over the EventStream between ApplyEvents.
 	sink.onTask = func(ev *keeperv1.TaskEvent) {
 		if ev.GetTaskIdx() == 0 {
 			r.Cancel(ev.GetApplyId())
@@ -308,7 +309,7 @@ func TestRun_CancelBetweenTasks(t *testing.T) {
 		ApplyId: "cancel-1",
 		Tasks: []*keeperv1.RenderedTask{
 			{Module: "core.pkg.installed"},
-			{Module: "core.pkg.installed"}, // не должна выполниться
+			{Module: "core.pkg.installed"}, // must not run
 		},
 	}, sink)
 	if err != nil {
@@ -323,7 +324,7 @@ func TestRun_CancelBetweenTasks(t *testing.T) {
 }
 
 func TestRun_CancelDuringTask(t *testing.T) {
-	// Модуль уважает ctx — блокируется до cancel, возвращает ctx.Err().
+	// Module respects ctx — blocks until cancel, returns ctx.Err().
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -335,11 +336,11 @@ func TestRun_CancelDuringTask(t *testing.T) {
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// Запускаем Cancel из второй горутины — даём Run время войти в Apply.
+	// Fire Cancel from a second goroutine — give Run time to enter Apply.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Маленький wait, чтобы Apply успел вызваться.
+		// Small wait so Apply has a chance to be called.
 		for i := 0; i < 50; i++ {
 			if r.Cancel("cancel-2") {
 				return
@@ -373,15 +374,16 @@ func TestRun_CancelDuringTask(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_TimesOut — (a) висящий модуль + RenderedTask{Timeout:"50ms"}
-// → задача отваливается ПО task-timeout-у, не по scenario-ceiling. Проверяем:
-// статус TIMED_OUT, register_data.timed_out, RunStatus_FAILED, и что прогон
-// завершился ~timeout (< 1s), а не висел до scenario-ceiling (5 мин).
+// TestRun_TaskTimeout_TimesOut — (a) a hanging module + RenderedTask{Timeout:
+// "50ms"} → the task fails on the task timeout, not the scenario ceiling.
+// Checks: status TIMED_OUT, register_data.timed_out, RunStatus_FAILED, and
+// that the run finished in ~timeout (< 1s), not hung until the scenario
+// ceiling (5 min).
 func TestRun_TaskTimeout_TimesOut(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				// Висим до отмены ctx (per-task timeout его отменит).
+				// Hang until ctx is cancelled (the per-task timeout will cancel it).
 				<-stream.Context().Done()
 				return stream.Context().Err()
 			},
@@ -424,8 +426,8 @@ func TestRun_TaskTimeout_TimesOut(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_EmptyNoLimit — (b) timeout="" → per-task лимита нет, быстрый
-// модуль выполняется штатно (не отменяется).
+// TestRun_TaskTimeout_EmptyNoLimit — (b) timeout="" → no per-task limit, a
+// fast module runs normally (not cancelled).
 func TestRun_TaskTimeout_EmptyNoLimit(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -451,11 +453,12 @@ func TestRun_TaskTimeout_EmptyNoLimit(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_DaySuffix — (b') суффикс `<N>d` (convention `duration`
-// Soul Stack) распознаётся тем же config.ParseDuration, что keeper применяет при
-// парсе destiny. `1d` = валидный большой лимит → модуль выполняется штатно, не
-// падает на «невалидной duration» (как было бы с голым time.ParseDuration,
-// который `1d` не понимает). Подтверждает: Soul-парсер = keeper-валидатор.
+// TestRun_TaskTimeout_DaySuffix — (b') the `<N>d` suffix (Soul Stack's
+// `duration` convention) is recognized by the same config.ParseDuration that
+// keeper uses parsing destiny. `1d` = a valid large limit → the module runs
+// normally, doesn't fail on "invalid duration" (as bare time.ParseDuration
+// would, which doesn't understand `1d`). Confirms: Soul parser = keeper
+// validator.
 func TestRun_TaskTimeout_DaySuffix(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -481,9 +484,10 @@ func TestRun_TaskTimeout_DaySuffix(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_NonPositiveNoLimit — (b”) `0s` (и любой d <= 0) трактуется
-// как «лимита нет», а НЕ как мгновенный дедлайн. Без guard `d > 0` WithTimeout(ctx, 0)
-// истёк бы немедленно → ложный TIMED_OUT ещё до запуска модуля.
+// TestRun_TaskTimeout_NonPositiveNoLimit — (b") `0s` (and any d <= 0) is
+// treated as "no limit", NOT an instant deadline. Without the `d > 0` guard,
+// WithTimeout(ctx, 0) would expire immediately → a false TIMED_OUT before the
+// module even starts.
 func TestRun_TaskTimeout_NonPositiveNoLimit(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -509,10 +513,10 @@ func TestRun_TaskTimeout_NonPositiveNoLimit(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_NotMaskedAsCancel — (c) истёкший ДОЧЕРНИЙ per-task ctx при
-// живом РОДИТЕЛЬСКОМ ctx даёт TIMED_OUT, а не CANCELLED. Это центральный
-// инвариант: timeout не должен попасть под ветку cancel в Run (runCtx.Err()
-// остаётся nil, т.к. taskCtx дочерний).
+// TestRun_TaskTimeout_NotMaskedAsCancel — (c) an expired CHILD per-task ctx
+// with a live PARENT ctx gives TIMED_OUT, not CANCELLED. This is the central
+// invariant: a timeout must not fall into the cancel branch in Run
+// (runCtx.Err() stays nil, since taskCtx is a child).
 func TestRun_TaskTimeout_NotMaskedAsCancel(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
@@ -525,7 +529,7 @@ func TestRun_TaskTimeout_NotMaskedAsCancel(t *testing.T) {
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// Родительский ctx НЕ отменяем — он остаётся живым весь прогон.
+	// Parent ctx is NOT cancelled — it stays alive for the whole run.
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "to-cancel-distinct",
 		Tasks:   []*keeperv1.RenderedTask{{Name: "hang", Module: "core.exec.run", Timeout: "30ms"}},
@@ -551,9 +555,9 @@ func TestRun_TaskTimeout_NotMaskedAsCancel(t *testing.T) {
 	}
 }
 
-// TestRun_TaskTimeout_InvalidDuration — (d) невалидная duration-строка трактуется
-// как «не задан» (лимита нет), Run не падает на служебной ошибке, быстрый модуль
-// выполняется штатно.
+// TestRun_TaskTimeout_InvalidDuration — (d) an invalid duration string is
+// treated as unset (no limit), Run doesn't fail with an internal error, a
+// fast module runs normally.
 func TestRun_TaskTimeout_InvalidDuration(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -587,9 +591,9 @@ func TestCancel_UnknownApplyID(t *testing.T) {
 }
 
 func TestCancel_ConcurrentSafe(t *testing.T) {
-	// Гоняем Cancel-ы параллельно с одним Run-ом — race-детектор должен
-	// промолчать. Тест не валидирует timing-логику (это в CancelDuringTask),
-	// здесь только проверяем отсутствие data race на map active.
+	// Runs Cancel calls concurrently with one Run — the race detector should
+	// stay quiet. This test doesn't validate timing logic (that's
+	// CancelDuringTask), it only checks for no data race on the active map.
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -644,8 +648,8 @@ func TestRun_RegisterDataIncludesOutput(t *testing.T) {
 	}
 }
 
-// TestRun_OnChanges_SourceChanged_Runs — источник changed → onchanges-задача
-// выполняется (mod.Apply вызван), статус не SKIPPED.
+// TestRun_OnChanges_SourceChanged_Runs — source changed → the onchanges task
+// runs (mod.Apply is called), status is not SKIPPED.
 func TestRun_OnChanges_SourceChanged_Runs(t *testing.T) {
 	restarted := false
 	reg := mapRegistry{
@@ -688,16 +692,16 @@ func TestRun_OnChanges_SourceChanged_Runs(t *testing.T) {
 	}
 }
 
-// TestRun_OnChanges_SourceUnchanged_Skipped — источник unchanged (OK без changed)
-// → onchanges-задача ПРОПУСКАЕТСЯ: статус SKIPPED, mod.Apply НЕ вызван,
-// register.skipped == true, register.changed == false. Это центр фикса
-// restart-flap.
+// TestRun_OnChanges_SourceUnchanged_Skipped — source unchanged (OK without
+// changed) → the onchanges task is SKIPPED: status SKIPPED, mod.Apply NOT
+// called, register.skipped == true, register.changed == false. This is the
+// core of the restart-flap fix.
 func TestRun_OnChanges_SourceUnchanged_Skipped(t *testing.T) {
 	restarted := false
 	reg := mapRegistry{
 		"core.file": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				// OK без changes — конфиг уже в нужном состоянии.
+				// OK with no changes — config is already in the desired state.
 				return stream.Send(&pluginv1.ApplyEvent{Changed: false, Message: "no change"})
 			},
 		},
@@ -741,14 +745,14 @@ func TestRun_OnChanges_SourceUnchanged_Skipped(t *testing.T) {
 	if rd["failed"].GetBoolValue() {
 		t.Errorf("register.failed == true у skipped задачи")
 	}
-	// SKIPPED — не fail: прогон успешен.
+	// SKIPPED is not a failure: the run succeeds.
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("runResult.status = %v, want SUCCESS (skip ≠ fail)", sink.runResult.GetStatus())
 	}
 }
 
-// TestRun_OnChanges_MultiSource_AnyChanged — несколько источников, хотя бы один
-// changed → onchanges-задача выполняется (any-семантика, destiny/tasks.md §8).
+// TestRun_OnChanges_MultiSource_AnyChanged — multiple sources, at least one
+// changed → the onchanges task runs (any semantics, destiny/tasks.md §8).
 func TestRun_OnChanges_MultiSource_AnyChanged(t *testing.T) {
 	ran := false
 	reg := mapRegistry{
@@ -759,7 +763,7 @@ func TestRun_OnChanges_MultiSource_AnyChanged(t *testing.T) {
 		},
 		"core.user": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-				return stream.Send(&pluginv1.ApplyEvent{Changed: true}) // этот изменился
+				return stream.Send(&pluginv1.ApplyEvent{Changed: true}) // this one changed
 			},
 		},
 		"core.service": &fakeModule{
@@ -791,9 +795,9 @@ func TestRun_OnChanges_MultiSource_AnyChanged(t *testing.T) {
 	}
 }
 
-// TestRun_OnChanges_SkippedDoesNotTrigger — skipped-источник НЕ триггерит
-// onchanges дальше (skipped ≠ changed): задача A пропущена по своему onchanges,
-// задача B с onchanges на A → тоже пропущена (А не дала changed).
+// TestRun_OnChanges_SkippedDoesNotTrigger — a skipped source does NOT trigger
+// onchanges downstream (skipped ≠ changed): task A is skipped by its own
+// onchanges, task B with onchanges on A → also skipped (A gave no changed).
 func TestRun_OnChanges_SkippedDoesNotTrigger(t *testing.T) {
 	ran := map[string]bool{}
 	reg := mapRegistry{
@@ -822,8 +826,8 @@ func TestRun_OnChanges_SkippedDoesNotTrigger(t *testing.T) {
 		ApplyId: "oc-chain",
 		Tasks: []*keeperv1.RenderedTask{
 			{Name: "conf", Module: "core.file.present"},                             // idx 0: unchanged
-			{Name: "a", Module: "core.service.restarted", OnchangesIdx: []int32{0}}, // idx 1: skipped (источник unchanged)
-			{Name: "b", Module: "core.cmd.run", OnchangesIdx: []int32{1}},           // idx 2: onchanges на skipped a → тоже skip
+			{Name: "a", Module: "core.service.restarted", OnchangesIdx: []int32{0}}, // idx 1: skipped (source unchanged)
+			{Name: "b", Module: "core.cmd.run", OnchangesIdx: []int32{1}},           // idx 2: onchanges on skipped a → also skip
 		},
 	}, sink)
 	if err != nil {
@@ -842,7 +846,7 @@ func TestRun_OnChanges_SkippedDoesNotTrigger(t *testing.T) {
 	}
 }
 
-// TestSkipOnChanges — unit табличный тест gating-предиката.
+// TestSkipOnChanges — table-driven unit test for the gating predicate.
 func TestSkipOnChanges(t *testing.T) {
 	t.Parallel()
 	changed := buildRegisterData(keeperv1.TaskStatus_TASK_STATUS_CHANGED, nil)
@@ -894,8 +898,8 @@ type recordingSink struct {
 	taskEvents []*keeperv1.TaskEvent
 	runResult  *keeperv1.RunResult
 	taskErr    error
-	// onTask — hook, вызывается до записи event-а в taskEvents. Используется
-	// тестами cancel-логики для симуляции CancelApply между задачами.
+	// onTask — hook called before the event is recorded in taskEvents. Used by
+	// cancel-logic tests to simulate CancelApply between tasks.
 	onTask func(*keeperv1.TaskEvent)
 }
 

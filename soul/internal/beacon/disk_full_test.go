@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// fakeUsage возвращает фиксированный процент использования — детерминированно,
-// без зависимости от реального свободного места хоста.
+// fakeUsage returns a fixed usage percentage — deterministic,
+// independent of the host's actual free space.
 func fakeUsage(percent float64) func(string) (diskUsage, error) {
 	return func(string) (diskUsage, error) { return diskUsage{usedPercent: percent}, nil }
 }
@@ -41,7 +41,7 @@ func TestDiskFullOverThreshold(t *testing.T) {
 }
 
 func TestDiskFullAtThresholdIsFull(t *testing.T) {
-	// Ровно порог → "full" (граница включающая: использование ≥ threshold).
+	// Exactly at threshold → "full" (inclusive boundary: usage ≥ threshold).
 	b := &DiskFull{Usage: fakeUsage(90)}
 	state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"path": "/"}))
 	if err != nil {
@@ -53,7 +53,7 @@ func TestDiskFullAtThresholdIsFull(t *testing.T) {
 }
 
 func TestDiskFullCustomThreshold(t *testing.T) {
-	// 50% при пороге 40 → full; тот же процент при дефолтном пороге был бы ok.
+	// 50% at threshold 40 → full; the same percentage at the default threshold would be ok.
 	b := &DiskFull{Usage: fakeUsage(50)}
 	state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"path":              "/",
@@ -71,12 +71,12 @@ func TestDiskFullCustomThreshold(t *testing.T) {
 }
 
 func TestDiskFullRealStatfs(t *testing.T) {
-	// Сквозной прогон production-сэмплера на t.TempDir (реальная ФС): процент
-	// в диапазоне [0,100], проверка не флейчит на самом значении.
+	// End-to-end run of the production sampler on t.TempDir (real filesystem):
+	// percentage is in [0,100]; the check doesn't flake on the actual value.
 	b := NewDiskFull()
 	state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"path":              t.TempDir(),
-		"threshold_percent": 100, // 100 → full только при полностью забитой ФС
+		"threshold_percent": 100, // 100 → full only when the filesystem is completely full
 	}))
 	if err != nil {
 		t.Fatalf("Check: %v", err)
@@ -85,8 +85,8 @@ func TestDiskFullRealStatfs(t *testing.T) {
 	if up < 0 || up > 100 {
 		t.Fatalf("used_percent вне [0,100]: %v", up)
 	}
-	// При пороге 100 ФС обычно "ok" (не забита под завязку); проверяем лишь, что
-	// state — один из валидных, без жёсткой привязки к занятости тестового хоста.
+	// At threshold 100 the filesystem is usually "ok" (not packed to the brim); we
+	// only check that state is one of the valid values, without pinning to the test host's actual usage.
 	if state != stateDiskOK && state != stateDiskFull {
 		t.Fatalf("неожиданный state %q", state)
 	}

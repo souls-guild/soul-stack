@@ -42,8 +42,8 @@ func TestMaskAndCapBytes_Empty(t *testing.T) {
 	}
 }
 
-// TestOutputCollector_ExtractFinal_Shell — финал ApplyEvent с stdout/stderr/
-// exit_code (формат core.cmd / core.exec) корректно разлагается.
+// TestOutputCollector_ExtractFinal_Shell — a final ApplyEvent with
+// stdout/stderr/exit_code (core.cmd / core.exec format) decomposes correctly.
 func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 	t.Parallel()
 	c := newOutputCollector(context.Background(), OutputCapBytes)
@@ -51,7 +51,7 @@ func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 		"stdout":    "line1\nline2",
 		"stderr":    "err1",
 		"exit_code": float64(2),
-		// Дополнительное поле — должно остаться в structured.
+		// Extra field — should remain in structured.
 		"trace": "x",
 	})
 	if err := c.Send(&pluginv1.ApplyEvent{Changed: true, Output: out}); err != nil {
@@ -73,7 +73,7 @@ func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 	if v := structured.GetFields()["trace"].GetStringValue(); v != "x" {
 		t.Errorf("structured.trace = %q", v)
 	}
-	// shell-каналы НЕ должны течь в structured.
+	// shell channels must NOT leak into structured.
 	for _, k := range []string{"stdout", "stderr", "exit_code"} {
 		if _, ok := structured.GetFields()[k]; ok {
 			t.Errorf("structured содержит shell-поле %q", k)
@@ -81,8 +81,8 @@ func TestOutputCollector_ExtractFinal_Shell(t *testing.T) {
 	}
 }
 
-// TestOutputCollector_ExtractFinal_ReadSafe — для read-safe модуля без shell-
-// полей весь output сохраняется в structured как есть.
+// TestOutputCollector_ExtractFinal_ReadSafe — for a read-safe module without
+// shell fields, the whole output is kept in structured as-is.
 func TestOutputCollector_ExtractFinal_ReadSafe(t *testing.T) {
 	t.Parallel()
 	c := newOutputCollector(context.Background(), OutputCapBytes)
@@ -100,7 +100,7 @@ func TestOutputCollector_ExtractFinal_ReadSafe(t *testing.T) {
 	}
 }
 
-// TestOutputCollector_ExtractFinal_NoEvent — модуль ничего не прислал.
+// TestOutputCollector_ExtractFinal_NoEvent — the module sent nothing.
 func TestOutputCollector_ExtractFinal_NoEvent(t *testing.T) {
 	t.Parallel()
 	c := newOutputCollector(context.Background(), OutputCapBytes)
@@ -110,7 +110,7 @@ func TestOutputCollector_ExtractFinal_NoEvent(t *testing.T) {
 	}
 }
 
-// TestOutputCollector_ExtractFinal_NilOutput — финальный ApplyEvent без Output.
+// TestOutputCollector_ExtractFinal_NilOutput — final ApplyEvent without Output.
 func TestOutputCollector_ExtractFinal_NilOutput(t *testing.T) {
 	t.Parallel()
 	c := newOutputCollector(context.Background(), OutputCapBytes)
@@ -121,7 +121,7 @@ func TestOutputCollector_ExtractFinal_NilOutput(t *testing.T) {
 	}
 }
 
-// TestOutputCollector_LastEvent — берём именно последний event.
+// TestOutputCollector_LastEvent — picks exactly the last event.
 func TestOutputCollector_LastEvent(t *testing.T) {
 	t.Parallel()
 	c := newOutputCollector(context.Background(), OutputCapBytes)

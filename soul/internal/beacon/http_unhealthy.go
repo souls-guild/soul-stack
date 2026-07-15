@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// HTTPUnhealthyName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// HTTPUnhealthyName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const HTTPUnhealthyName = beaconaddr.HTTPUnhealthy
 
 const (
@@ -19,46 +19,47 @@ const (
 	stateHTTPUnhealthy State = "unhealthy"
 )
 
-// httpUnhealthyDefaultTimeout — таймаут одного health-GET. Короткий: beacon-тик,
-// а не download (симметрично core.http.probe).
+// httpUnhealthyDefaultTimeout is the timeout for one health GET. Short: a
+// beacon tick, not a download (mirrors core.http.probe).
 const httpUnhealthyDefaultTimeout = 30 * time.Second
 
-// HTTPUnhealthy — core-beacon наблюдения за здоровьем HTTP-эндпоинта (ADR-030).
-// Read-only: один GET, без чтения тела. State: "healthy" если статус-код входит
-// в status_codes (default [200]), иначе "unhealthy". Транспортная ошибка
-// (DNS/TLS/timeout/недоступен) — тоже "unhealthy" с точки зрения наблюдателя
-// (это событие интереса, а не ошибка Check). Переход healthy↔unhealthy
-// edge-triggered → Portent.
+// HTTPUnhealthy is a core-beacon that observes an HTTP endpoint's health
+// (ADR-030). Read-only: a single GET, body not read. State: "healthy" if the
+// status code is in status_codes (default [200]), otherwise "unhealthy". A
+// transport error (DNS/TLS/timeout/unreachable) is also "unhealthy" from the
+// observer's perspective (an event of interest, not a Check error).
+// healthy↔unhealthy transition is edge-triggered → Portent.
 //
-// Безопасность переиспользуется у core.http (паттерн opt-out security-vs-
-// flexibility, симметрично core.http.probe / core.url): util.ValidateFetchURL +
-// util.NewHTTPClient (SSRF-guard на dial-фазе, downgrade-защита редиректов,
-// системный TLS trust store). Дефолт максимально безопасный (https + SSRF-guard +
-// TLS-верификация); под internal-таргет (`https://127.0.0.1:8443/health`,
-// RFC1918) оператор явно поднимает opt-out-флаги в VigilDef.params. data НЕ несёт
-// тела/заголовков (sensitive) — только url и статус-код.
+// Security is reused from core.http (opt-out security-vs-flexibility
+// pattern, mirrors core.http.probe / core.url): util.ValidateFetchURL +
+// util.NewHTTPClient (SSRF guard at the dial phase, redirect downgrade
+// protection, system TLS trust store). Default is maximally secure (https +
+// SSRF guard + TLS verification); for an internal target
+// (`https://127.0.0.1:8443/health`, RFC1918) the operator explicitly raises
+// the opt-out flags in VigilDef.params. data carries NO body/headers
+// (sensitive) — only url and status code.
 //
-// warn при снятии guard здесь не нужен (в отличие от apply-модулей): beacon —
-// read-probe по расписанию без output-warnings-канала; явный флаг в Vigil.params
-// и есть согласие оператора.
+// No warn on guard-lowering here (unlike apply modules): beacon is a
+// scheduled read-probe with no output-warnings channel; the explicit flag in
+// Vigil.params already is the operator's consent.
 //
 // Params:
-//   - `url` (string, required) — https-эндпоинт (http:// — только с allow_http);
-//   - `status_codes` (list of int, optional, default [200]) — «здоровые» коды;
+//   - `url` (string, required) — https endpoint (http:// only with allow_http);
+//   - `status_codes` (list of int, optional, default [200]) — "healthy" codes;
 //   - `timeout` (string duration, optional, default "30s");
-//   - `allow_http` (bool, optional, default false) — принять http:// (снимает
-//     https-only и downgrade-защиту редиректов, не открывает SSRF);
-//   - `insecure_skip_verify` (bool, optional, default false) — не верифицировать
-//     TLS (self-signed / internal CA);
-//   - `allow_private` (bool, optional, default false) — снять SSRF dial-guard
-//     (loopback/RFC1918 internal-эндпоинт).
+//   - `allow_http` (bool, optional, default false) — accept http:// (lifts
+//     https-only and redirect downgrade protection, doesn't open SSRF);
+//   - `insecure_skip_verify` (bool, optional, default false) — skip TLS
+//     verification (self-signed / internal CA);
+//   - `allow_private` (bool, optional, default false) — lift the SSRF dial
+//     guard (loopback/RFC1918 internal endpoint).
 type HTTPUnhealthy struct {
-	// NewClient вынесен в поле для подмены fake HTTPDoer в unit-тестах (без
-	// выхода в сеть). В проде — util.NewHTTPClient.
+	// NewClient is a field so unit tests can substitute a fake HTTPDoer
+	// (no network access). In production — util.NewHTTPClient.
 	NewClient func(util.HTTPClientOpts) util.HTTPDoer
 }
 
-// NewHTTPUnhealthy собирает beacon с production-фабрикой HTTP-клиента.
+// NewHTTPUnhealthy builds a beacon with the production HTTP client factory.
 func NewHTTPUnhealthy() *HTTPUnhealthy {
 	return &HTTPUnhealthy{
 		NewClient: func(opts util.HTTPClientOpts) util.HTTPDoer { return util.NewHTTPClient(opts) },
@@ -105,17 +106,18 @@ func (b *HTTPUnhealthy) Check(ctx context.Context, params *structpb.Struct) (Sta
 		return "", nil, fmt.Errorf("build request for %s: %v", rawURL, err)
 	}
 
-	// Клиент строится под opt-out-флаги задачи (нулевые opts = максимально
-	// безопасный клиент: SSRF-guard + downgrade-защита + TLS-верификация). Три
-	// контура ортогональны — allow_http не открывает SSRF (dial-guard отдельно).
+	// The client is built from the task's opt-out flags (zero opts = maximally
+	// secure client: SSRF guard + downgrade protection + TLS verification).
+	// The three contours are orthogonal — allow_http doesn't open SSRF
+	// (dial guard is separate).
 	resp, derr := b.NewClient(util.HTTPClientOpts{
 		AllowPrivate:       allowPrivate,
 		InsecureSkipVerify: insecureSkipVerify,
 		AllowHTTPRedirect:  allowHTTP,
 	}).Do(req)
 	if derr != nil {
-		// Транспортная ошибка — эндпоинт недоступен наблюдателю → "unhealthy"
-		// (status 0). Это валидное состояние, а не ошибка Check.
+		// A transport error means the endpoint is unreachable to the observer →
+		// "unhealthy" (status 0). A valid state, not a Check error.
 		return stateHTTPUnhealthy, httpData(rawURL, 0), nil
 	}
 	_ = resp.Body.Close()
@@ -126,9 +128,10 @@ func (b *HTTPUnhealthy) Check(ctx context.Context, params *structpb.Struct) (Sta
 	return stateHTTPUnhealthy, httpData(rawURL, resp.StatusCode), nil
 }
 
-// httpData несёт ТОЛЬКО url и статус-код. Тело и заголовки ответа сюда не
-// попадают: sensitive-by-construction (ADR-010 §7.4) — beacon не светит payload
-// в Portent/логи. status == 0 — транспортная ошибка (эндпоинт недоступен).
+// httpData carries ONLY url and status code. Response body and headers never
+// land here: sensitive-by-construction (ADR-010 §7.4) — beacon doesn't leak
+// payload into Portent/logs. status == 0 means a transport error (endpoint
+// unreachable).
 func httpData(url string, status int) *structpb.Struct {
 	s, _ := structpb.NewStruct(map[string]any{
 		"url":    url,
@@ -137,7 +140,7 @@ func httpData(url string, status int) *structpb.Struct {
 	return s
 }
 
-// containsStatus — линейный поиск (status_codes — короткий список, типично 1–3).
+// containsStatus does a linear scan (status_codes is a short list, typically 1–3).
 func containsStatus(codes []int64, status int) bool {
 	for _, c := range codes {
 		if c == int64(status) {

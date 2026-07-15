@@ -6,9 +6,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// StringParam извлекает обязательный строковый параметр из ApplyRequest.Params.
-// Возвращает ошибку с указанием имени параметра — она проксируется наружу как
-// failed-event с понятным message.
+// StringParam extracts a required string parameter from
+// ApplyRequest.Params. Returns an error naming the parameter — it's
+// surfaced as a failed-event with a clear message.
 func StringParam(params *structpb.Struct, key string) (string, error) {
 	v, err := lookup(params, key)
 	if err != nil {
@@ -21,7 +21,7 @@ func StringParam(params *structpb.Struct, key string) (string, error) {
 	return s.StringValue, nil
 }
 
-// OptStringParam — то же, но опциональный. Возвращает "", nil если ключа нет.
+// OptStringParam is the same, but optional. Returns "", nil if the key is absent.
 func OptStringParam(params *structpb.Struct, key string) (string, error) {
 	if params == nil || params.Fields == nil {
 		return "", nil
@@ -40,8 +40,8 @@ func OptStringParam(params *structpb.Struct, key string) (string, error) {
 	return s.StringValue, nil
 }
 
-// OptIntParam — опциональный integer (для uid/gid). proto json маршалит числа
-// как float64, поэтому принимаем NumberValue и проверяем целостность.
+// OptIntParam is an optional integer (for uid/gid). proto json marshals
+// numbers as float64, so we accept NumberValue and check integrality.
 func OptIntParam(params *structpb.Struct, key string) (int64, bool, error) {
 	if params == nil || params.Fields == nil {
 		return 0, false, nil
@@ -64,8 +64,8 @@ func OptIntParam(params *structpb.Struct, key string) (int64, bool, error) {
 	return int64(f), true, nil
 }
 
-// OptBoolParam — опциональный bool (для флагов вида core.line.create).
-// Отсутствие ключа или null → false, nil. Non-bool значение → ошибка.
+// OptBoolParam is an optional bool (for flags like core.line.create).
+// Missing key or null → false, nil. Non-bool value → error.
 func OptBoolParam(params *structpb.Struct, key string) (bool, error) {
 	if params == nil || params.Fields == nil {
 		return false, nil
@@ -84,12 +84,12 @@ func OptBoolParam(params *structpb.Struct, key string) (bool, error) {
 	return b.BoolValue, nil
 }
 
-// TriBoolParam — опциональный bool с различением «ключ отсутствует» от «false».
-// Симметрично OptIntParam: возвращает (value, present, error). Нужен там, где
-// три исхода семантически различны — например param `enabled` у
-// core.service.running: опущено = не управлять enabled, true = enable,
-// false = disable. Голый OptBoolParam для этого не годится (даёт false и на
-// отсутствие, и на явный false).
+// TriBoolParam is an optional bool that distinguishes "key absent" from
+// "false". Mirrors OptIntParam: returns (value, present, error). Needed
+// where three outcomes are semantically distinct — e.g. core.service.running's
+// `enabled` param: omitted = don't manage enabled, true = enable,
+// false = disable. Plain OptBoolParam doesn't work here (gives false for
+// both absence and an explicit false).
 func TriBoolParam(params *structpb.Struct, key string) (value bool, present bool, err error) {
 	if params == nil || params.Fields == nil {
 		return false, false, nil
@@ -108,8 +108,8 @@ func TriBoolParam(params *structpb.Struct, key string) (value bool, present bool
 	return b.BoolValue, true, nil
 }
 
-// OptStringMapParam — опциональный map string→string (для core.exec.env).
-// Все значения map обязаны быть строками; non-string значение → ошибка.
+// OptStringMapParam is an optional map string→string (for core.exec.env).
+// All map values must be strings; a non-string value → error.
 func OptStringMapParam(params *structpb.Struct, key string) (map[string]string, error) {
 	if params == nil || params.Fields == nil {
 		return nil, nil
@@ -136,12 +136,11 @@ func OptStringMapParam(params *structpb.Struct, key string) (map[string]string, 
 	return out, nil
 }
 
-// OptStructMapParam — опциональный произвольный map (для core.file.rendered
-// vars). В отличие от OptStringMapParam значения не обязаны быть строками:
-// vars приходят уже CEL-rendered и могут содержать числа/булевы/вложенные
-// объекты/списки, которые text/template обрабатывает нативно. Возврат —
-// structpb.AsMap() (рекурсивная конвертация в map[string]any). Отсутствие
-// ключа или null → nil, nil без ошибки.
+// OptStructMapParam is an optional arbitrary map (for core.file.rendered
+// vars). Unlike OptStringMapParam, values need not be strings: vars arrive
+// already CEL-rendered and can hold numbers/bools/nested objects/lists,
+// which text/template handles natively. Returns structpb.AsMap() (recursive
+// conversion to map[string]any). Missing key or null → nil, nil, no error.
 func OptStructMapParam(params *structpb.Struct, key string) (map[string]any, error) {
 	if params == nil || params.Fields == nil {
 		return nil, nil
@@ -160,7 +159,7 @@ func OptStructMapParam(params *structpb.Struct, key string) (map[string]any, err
 	return sv.StructValue.AsMap(), nil
 }
 
-// OptStringSliceParam — опциональный список строк (для core.user.groups).
+// OptStringSliceParam is an optional list of strings (for core.user.groups).
 func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	if params == nil || params.Fields == nil {
 		return nil, nil
@@ -187,9 +186,9 @@ func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) 
 	return out, nil
 }
 
-// OptIntSliceParam — опциональный список integer-ов (для core.http.probe
-// status_codes). proto json маршалит числа как float64, поэтому каждый элемент
-// проверяется на целостность (как в OptIntParam). Отсутствие ключа или null →
+// OptIntSliceParam is an optional list of integers (for core.http.probe's
+// status_codes). proto json marshals numbers as float64, so each element is
+// checked for integrality (as in OptIntParam). Missing key or null →
 // nil, nil.
 func OptIntSliceParam(params *structpb.Struct, key string) ([]int64, error) {
 	if params == nil || params.Fields == nil {
@@ -221,12 +220,12 @@ func OptIntSliceParam(params *structpb.Struct, key string) ([]int64, error) {
 	return out, nil
 }
 
-// ParamPresent сообщает, присутствует ли ключ в params со значимым значением.
-// Явный null трактуется как отсутствие — симметрично Opt*Param-getter-ам.
-// В отличие от них различает «ключа нет» от «есть пустая строка»: нужно для
-// cross-field XOR-инвариантов (например content vs src в core.file.present),
-// где `content: ""` вместе с `src:` обязан ловиться как конфликт, а не
-// маскироваться пустотой строки.
+// ParamPresent reports whether a key is present in params with a meaningful
+// value. An explicit null is treated as absent — mirrors the Opt*Param
+// getters. Unlike them, it distinguishes "key absent" from "empty string
+// present": needed for cross-field XOR invariants (e.g. content vs src in
+// core.file.present), where `content: ""` together with `src:` must be
+// caught as a conflict, not masked by the empty string.
 func ParamPresent(params *structpb.Struct, key string) bool {
 	if params == nil || params.Fields == nil {
 		return false

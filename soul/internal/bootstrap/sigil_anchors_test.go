@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/seed"
 )
 
-// realPubPEM генерирует SPKI-PEM реального ed25519-pubkey (как пишет keeper-side
-// Signer.PublicKeyPEM) — для проверки парса собранного набора.
+// realPubPEM generates a real ed25519-pubkey SPKI PEM (as written by the
+// keeper-side Signer.PublicKeyPEM) — to test parsing of the assembled set.
 func realPubPEM(t *testing.T) string {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -26,7 +26,7 @@ func realPubPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 }
 
-// ptr — короткий хелпер для optional-поля sigil_pubkey_pem (proto oneof).
+// ptr — short helper for the optional sigil_pubkey_pem field (proto oneof).
 func ptr(s string) *string { return &s }
 
 const (
@@ -34,13 +34,13 @@ const (
 	pemB = "-----BEGIN PUBLIC KEY-----\nBBBB\n-----END PUBLIC KEY-----\n"
 )
 
-// TestSigilAnchorsPEM_Priority — приоритет set > single (ADR-026(h)).
+// TestSigilAnchorsPEM_Priority — set takes priority over single (ADR-026(h)).
 func TestSigilAnchorsPEM_Priority(t *testing.T) {
 	tests := []struct {
 		name   string
 		single *string
 		set    []string
-		want   string // "" == nil (Sigil выключен)
+		want   string // "" == nil (Sigil disabled)
 	}{
 		{
 			name: "both empty -> nil (Sigil off)",
@@ -53,7 +53,7 @@ func TestSigilAnchorsPEM_Priority(t *testing.T) {
 		},
 		{
 			name: "set non-empty -> set wins, single ignored",
-			// single задан, но при непустом set он должен игнорироваться.
+			// single is set, but must be ignored when set is non-empty.
 			single: ptr(pemA),
 			set:    []string{pemB},
 			want:   pemB,
@@ -87,9 +87,9 @@ func TestSigilAnchorsPEM_Priority(t *testing.T) {
 	}
 }
 
-// TestSigilAnchorsPEM_NormalizesBlockSeparators — элементы set без trailing \n
-// конкатенируются с разделителем, чтобы seed.ParseSigilPubKeys увидел границы
-// блоков (multi-PEM остаётся валидным).
+// TestSigilAnchorsPEM_NormalizesBlockSeparators — set elements without a
+// trailing \n get concatenated with a separator, so seed.ParseSigilPubKeys
+// sees the block boundaries (multi-PEM stays valid).
 func TestSigilAnchorsPEM_NormalizesBlockSeparators(t *testing.T) {
 	noNL := "-----BEGIN PUBLIC KEY-----\nCCCC\n-----END PUBLIC KEY-----"
 	reply := &keeperv1.BootstrapReply{
@@ -102,8 +102,8 @@ func TestSigilAnchorsPEM_NormalizesBlockSeparators(t *testing.T) {
 	}
 }
 
-// TestSigilAnchorsPEM_RealKeysRoundTrip — собранный из реального multi-anchor
-// набора PEM распарсивается seed.ParseSigilPubKeys обратно в N ключей.
+// TestSigilAnchorsPEM_RealKeysRoundTrip — the PEM assembled from a real
+// multi-anchor set parses back into N keys via seed.ParseSigilPubKeys.
 func TestSigilAnchorsPEM_RealKeysRoundTrip(t *testing.T) {
 	reply := &keeperv1.BootstrapReply{
 		SigilPubkeyPemSet: []string{realPubPEM(t), realPubPEM(t)},

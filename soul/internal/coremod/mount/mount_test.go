@@ -216,10 +216,10 @@ func TestApply_Mounted_NoFstabWrite(t *testing.T) {
 	}
 }
 
-// TestApply_Present_PreservesFstabMode проверяет preserve-by-default (паттерн
-// пилота core.line): правка fstab (опции) не сбрасывает его mode на дефолт.
-// fstab часто 0644, но оператор/дистрибутив мог выставить нестандартный mode —
-// модуль обязан его сохранить.
+// TestApply_Present_PreservesFstabMode checks preserve-by-default (the
+// core.line pilot pattern): editing fstab (options) doesn't reset its mode to
+// default. fstab is often 0644, but the operator/distro may have set a
+// non-standard mode — the module must preserve it.
 func TestApply_Present_PreservesFstabMode(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -227,7 +227,7 @@ func TestApply_Present_PreservesFstabMode(t *testing.T) {
 	if err := os.WriteFile(fstab, []byte("/dev/sdb1 "+target+" ext4 defaults 0 0\n"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// WriteFile уважает umask — выставляем точный mode явно.
+	// WriteFile respects umask — set the exact mode explicitly.
 	if err := os.Chmod(fstab, 0o600); err != nil {
 		t.Fatalf("seed chmod: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestApply_Present_PreservesFstabMode(t *testing.T) {
 	}
 }
 
-// TestApply_Absent_PreservesFstabMode — то же для удаления строки из fstab.
+// TestApply_Absent_PreservesFstabMode — same, for removing a line from fstab.
 func TestApply_Absent_PreservesFstabMode(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -298,9 +298,9 @@ func TestApply_Absent_PreservesFstabMode(t *testing.T) {
 	}
 }
 
-// TestApply_Present_IdempotentRepeatKeepsFile — повторный прогон с тем же
-// содержимым: changed=false, mode и mtime fstab не меняются (no-op ветка
-// upsertFstab не должна вызывать запись вообще).
+// TestApply_Present_IdempotentRepeatKeepsFile — rerunning with the same
+// content: changed=false, fstab's mode and mtime don't change (the no-op
+// branch of upsertFstab must not write at all).
 func TestApply_Present_IdempotentRepeatKeepsFile(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")

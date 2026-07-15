@@ -24,11 +24,11 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// runnerFor собирает fakeRunner, который заставляет util.DetectPkgMgr вернуть
-// заданный pkg-mgr (через `command -v <bin>`).
+// runnerFor builds a fakeRunner that makes util.DetectPkgMgr return the given
+// pkg-mgr (via `command -v <bin>`).
 func runnerFor(mgr util.PkgMgr) *internaltest.Runner {
 	r := internaltest.NewRunner()
-	r.Fallback = util.Result{ExitCode: 127} // command not found для прочих
+	r.Fallback = util.Result{ExitCode: 127} // command not found for everything else
 	bin := map[util.PkgMgr]string{
 		util.PkgMgrApt: "apt-get",
 		util.PkgMgrDnf: "dnf",
@@ -39,8 +39,8 @@ func runnerFor(mgr util.PkgMgr) *internaltest.Runner {
 	return r
 }
 
-// newModule собирает Module с подменёнными на TempDir каталогами и runner-ом
-// под нужный pkg-mgr.
+// newModule builds a Module with directories swapped to TempDir and a runner
+// for the given pkg-mgr.
 func newModule(t *testing.T, mgr util.PkgMgr) (*repo.Module, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -258,7 +258,7 @@ func TestYum_Present_GpgCheckFalseWritesZero(t *testing.T) {
 	if !strings.Contains(got, "gpgcheck=0") {
 		t.Fatalf("gpg_check=false должно дать gpgcheck=0:\n%s", got)
 	}
-	// gpg_check=false обязан вернуть warning (opt-out + warning).
+	// gpg_check=false must return a warning (opt-out + warning).
 	ws := warningsOf(stream.Last())
 	if !hasSubstr(ws, "gpg_check disabled") {
 		t.Fatalf("ожидался warning про gpg_check, got %v", ws)
@@ -307,9 +307,9 @@ func TestApk_Present_Idempotent(t *testing.T) {
 	}
 }
 
-// TestApk_Present_PreservesMode: правка существующего /etc/apk/repositories —
-// in-place, поэтому mode исходного файла сохраняется (AtomicWritePreserving),
-// а идемпотентный повтор → changed=false.
+// TestApk_Present_PreservesMode: editing an existing /etc/apk/repositories is
+// in-place, so the original file's mode is preserved (AtomicWritePreserving),
+// and an idempotent repeat gives changed=false.
 func TestApk_Present_PreservesMode(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApk)
 	if mkErr := os.MkdirAll(filepath.Dir(m.ApkReposFile), 0o755); mkErr != nil {
@@ -369,7 +369,7 @@ func TestApt_Absent_RemovesListKeepsKey(t *testing.T) {
 	if _, err := os.Stat(listPath); !os.IsNotExist(err) {
 		t.Fatal(".list не удалён")
 	}
-	// Ключ намеренно НЕ трогается (может использоваться другими репо).
+	// The key is deliberately left alone (may be shared with other repos).
 	if _, err := os.Stat(keyPath); err != nil {
 		t.Fatalf("ключ не должен удаляться при absent: %v", err)
 	}
@@ -396,9 +396,10 @@ func TestApt_Present_HTTPUriWarns(t *testing.T) {
 	}
 }
 
-// TestYum_Present_GpgCheckTrueNoKeyWarns: gpg_check включён (дефолт), но gpg_key
-// не задан → warning (для dnf/yum это означает gpgcheck=1 без gpgkey= → отказ
-// установки на хосте). Симметрично warning при gpg_check=false.
+// TestYum_Present_GpgCheckTrueNoKeyWarns: gpg_check enabled (default) but
+// gpg_key unset → warning (for dnf/yum this means gpgcheck=1 without
+// gpgkey=, which fails package install on the host). Symmetric with the
+// gpg_check=false warning.
 func TestYum_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrDnf)
 	stream := applyTo(t, m, "present", map[string]any{
@@ -413,7 +414,7 @@ func TestYum_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 	}
 }
 
-// TestYum_Present_GpgCheckTrueWithKeyNoWarn: gpg_key задан → warning отсутствует.
+// TestYum_Present_GpgCheckTrueWithKeyNoWarn: gpg_key set → no warning.
 func TestYum_Present_GpgCheckTrueWithKeyNoWarn(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrDnf)
 	stream := applyTo(t, m, "present", map[string]any{
@@ -425,8 +426,8 @@ func TestYum_Present_GpgCheckTrueWithKeyNoWarn(t *testing.T) {
 	}
 }
 
-// TestApk_Present_GpgCheckTrueNoKeyWarns: для apk warning про отсутствие gpg_key
-// должен указывать на /etc/apk/keys, а не на dnf/yum-специфику (gpgkey=).
+// TestApk_Present_GpgCheckTrueNoKeyWarns: for apk, the missing-gpg_key
+// warning should point to /etc/apk/keys, not the dnf/yum-specific gpgkey=.
 func TestApk_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApk)
 	stream := applyTo(t, m, "present", map[string]any{
@@ -449,7 +450,7 @@ func TestApk_Present_GpgCheckTrueNoKeyWarns(t *testing.T) {
 func TestApply_NoPkgMgr_Fails(t *testing.T) {
 	root := t.TempDir()
 	m := repo.New()
-	m.Runner = internaltest.NewRunner() // всё → 127, ничего не найдено
+	m.Runner = internaltest.NewRunner() // everything → 127, nothing found
 	m.AptSourcesDir = root
 	stream := &internaltest.ApplyStream{}
 	if err := m.Apply(&pluginv1.ApplyRequest{

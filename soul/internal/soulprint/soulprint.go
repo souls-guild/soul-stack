@@ -1,19 +1,20 @@
-// Package soulprint — Soul-side сбор фактов о хосте по typed-схеме ADR-018.
+// Package soulprint is the Soul-side collector of host facts per the ADR-018
+// typed schema.
 //
-// Collector собирает [keeperv1.SoulprintFacts] (os/kernel/cpu/memory/network +
-// корневые sid/hostname) из инъецируемого [Source] и заполняет
-// [keeperv1.SoulprintReport] для отправки Keeper-у через EventStream
+// Collector gathers [keeperv1.SoulprintFacts] (os/kernel/cpu/memory/network +
+// root sid/hostname) from an injected [Source] and fills a
+// [keeperv1.SoulprintReport] to send to Keeper over EventStream
 // (cmd/soul → StreamSession.SendSoulprintReport).
 //
-// Основная цель — Linux (/proc, /etc/os-release). На macOS (dev-машина) и
-// прочих ОС значения best-effort/частичные — Collect никогда не паникует и не
-// возвращает error: отсутствующий факт остаётся zero-value, Keeper толерантен
-// к sparse-полям (ADR-018).
+// Primary target is Linux (/proc, /etc/os-release). On macOS (dev machine)
+// and other OSes values are best-effort/partial — Collect never panics and
+// never returns an error: a missing fact stays zero-value, Keeper tolerates
+// sparse fields (ADR-018).
 //
-// pkg_mgr / init_system НЕ детектятся через `command -v` (это задача
-// рантайм-выбора бинаря в core-модулях, см. coremod/util.DetectPkgMgr) —
-// здесь они выводятся из family+distro по фиксированной таблице маппинга
-// (osrelease.go), как требует ADR-018.
+// pkg_mgr / init_system are NOT detected via `command -v` (that's the job of
+// runtime binary selection in core modules, see coremod/util.DetectPkgMgr) —
+// here they're derived from family+distro via a fixed mapping table
+// (osrelease.go), as ADR-018 requires.
 package soulprint
 
 import (
@@ -25,31 +26,32 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// Collector собирает Soulprint-факты. Source инъецируется ради тестируемости
-// (production — [NewSystemSource], unit-тесты — fake). Без состояния между
-// вызовами: каждый Collect — независимый снимок.
+// Collector gathers Soulprint facts. Source is injected for testability
+// (production — [NewSystemSource], unit tests — fake). Stateless across
+// calls: each Collect is an independent snapshot.
 type Collector struct {
 	src     Source
 	metrics *SoulprintMetrics
 }
 
-// NewCollector собирает Collector над переданным Source. Для production —
+// NewCollector builds a Collector over the given Source. For production —
 // soulprint.NewCollector(soulprint.NewSystemSource(), metrics).
 //
-// metrics — soul_soulprint_*-collectors (ADR-024); nil → инструментация
-// выключена (nil-safe методы [SoulprintMetrics] — no-op): push-режим и
-// unit-тесты поднимаются без obs-стека.
+// metrics feeds soul_soulprint_*-collectors (ADR-024); nil → instrumentation
+// disabled (nil-safe [SoulprintMetrics] methods — no-op): push mode and unit
+// tests can run without an obs stack.
 func NewCollector(src Source, metrics *SoulprintMetrics) *Collector {
 	return &Collector{src: src, metrics: metrics}
 }
 
-// Collect делает один снимок фактов хоста и заворачивает его в SoulprintReport
-// с collected_at = now (Soul-side timestamp, ADR-018). sid — echo для логов
-// (authority — mTLS peer cert), приходит из cmd/soul (config.sid > hostname).
+// Collect takes one snapshot of host facts and wraps it in a SoulprintReport
+// with collected_at = now (Soul-side timestamp, ADR-018). sid is an echo for
+// logs (authority is the mTLS peer cert), comes from cmd/soul
+// (config.sid > hostname).
 //
-// Ошибок не возвращает: любой недоступный факт остаётся zero-value. Это
-// сознательно — частичный отчёт полезнее отсутствующего, а Keeper не требует
-// заполненности (sparse JSONB, ADR-018).
+// Never returns an error: any unavailable fact stays zero-value. Deliberate
+// — a partial report beats none, and Keeper doesn't require completeness
+// (sparse JSONB, ADR-018).
 func (c *Collector) Collect(ctx context.Context, sid string) *keeperv1.SoulprintReport {
 	start := time.Now()
 	defer func() { c.metrics.ObserveCollectDuration(time.Since(start).Seconds()) }()
@@ -58,9 +60,9 @@ func (c *Collector) Collect(ctx context.Context, sid string) *keeperv1.Soulprint
 		CollectedAt: timestamppb.Now(),
 		TypedFacts:  c.collectFacts(ctx, sid),
 	}
-	// Collect best-effort и не возвращает error (ADR-018): отсутствующий факт —
-	// zero-value, не сбой. Поэтому всегда `ok`; `failed` зарезервирован под
-	// будущие fatal-сценарии сбора.
+	// Collect is best-effort and never returns an error (ADR-018): a missing
+	// fact is zero-value, not a failure. So always `ok`; `failed` is reserved
+	// for future fatal collection scenarios.
 	c.metrics.ObserveCollection(collectResultOK)
 	return rep
 }

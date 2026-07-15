@@ -15,28 +15,29 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyRendered реализует state `rendered` модуля core.file ([ADR-010]).
+// applyRendered implements state `rendered` of module core.file ([ADR-010]).
 //
-// Контракт params (всё, кроме template_content/render_context, симметрично present):
-//   - template_content: literal text/template-шаблон (Keeper прочитал .tmpl
-//     as-is после CEL-фазы, text/template НЕ рендерил);
-//   - render_context:   КОРЕНЬ text/template-контекста {vars, self, role,
-//     essence} (templating.md §3.2), собранный Keeper-side per-host; передаётся
-//     движку корнем, поэтому шаблон видит `.vars.*`/`.self.*`/`.role`/`.essence.*`;
-//   - path:             целевой файл (обязателен, читается в Apply);
-//   - mode/owner/group: опциональны, как у present.
+// Params contract (everything except template_content/render_context is
+// symmetric with present):
+//   - template_content: literal text/template template (Keeper read the .tmpl
+//     file as-is after the CEL phase, text/template did NOT render it yet);
+//   - render_context:   the ROOT of the text/template context {vars, self, role,
+//     essence} (templating.md §3.2), assembled Keeper-side per-host; passed to
+//     the engine as the root, so the template sees `.vars.*`/`.self.*`/`.role`/`.essence.*`;
+//   - path:             target file (required, read in Apply);
+//   - mode/owner/group: optional, same as present.
 //
-// Плоский корень vars/`template`-путь Soul НЕ читает: Keeper доставляет только
-// template_content + render_context (см. injectTemplateContent / setRenderContext
-// на keeper-стороне, A1/ADR-012(d)).
+// Soul does NOT read the flat vars root or a `template` path: Keeper only
+// delivers template_content + render_context (see injectTemplateContent /
+// setRenderContext on the keeper side, A1/ADR-012(d)).
 //
-// Идемпотентность: рендерим в память → SHA-256 нового content сверяем с
-// существующим файлом → запись только при diff. Запись атомарна (temp+rename
-// в той же директории). mode/owner применяются всегда после материализации,
-// changed=true если изменился хотя бы один из content/mode/owner.
+// Idempotency: render into memory → compare the new content's SHA-256 against
+// the existing file → write only on diff. Write is atomic (temp+rename in the
+// same directory). mode/owner are always applied after materialization;
+// changed=true if any of content/mode/owner changed.
 func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest, path string) error {
-	// Defense-in-depth: дублирует проверку в Apply (см. file.go) — на случай,
-	// если applyRendered позовут вне Apply-switch (например, новой entry-point).
+	// Defense-in-depth: duplicates the check in Apply (see file.go) — in case
+	// applyRendered is called outside the Apply switch (e.g. a new entry point).
 	if !filepath.IsAbs(path) {
 		return util.SendFailed(stream, fmt.Sprintf("path must be absolute: %q", path))
 	}
@@ -49,10 +50,10 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 		return util.SendFailed(stream, err.Error())
 	}
 	if renderContext == nil {
-		// render_context — корень §3.2 ({vars,self,role,essence}); без него
-		// шаблоны с `.self.*`/`.vars.*` падают strict-mode. Keeper обязан его
-		// доставить (handoff не настроен — прод-блокер golden-path, как было с
-		// template_content).
+		// render_context is the §3.2 root ({vars,self,role,essence}); without
+		// it, templates using `.self.*`/`.vars.*` fail under strict-mode.
+		// Keeper must deliver it (missing handoff is a golden-path prod
+		// blocker, same as template_content was).
 		return util.SendFailed(stream, fmt.Sprintf("render %s: отсутствует render_context (Keeper не доставил корень §3.2)", path))
 	}
 	modeStr, err := util.OptStringParam(req.Params, "mode")
@@ -75,8 +76,8 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 
 	rendered, err := m.engine.Render(templateContent, renderContext)
 	if err != nil {
-		// ErrParse/ErrExecute (включая missingkey=error для отсутствующей
-		// переменной) → штатный failed-event шага, не gRPC-ошибка.
+		// ErrParse/ErrExecute (including missingkey=error for a missing
+		// variable) → a normal step failed-event, not a gRPC error.
 		return util.SendFailed(stream, fmt.Sprintf("render %s: %v", path, err))
 	}
 	renderedBytes := []byte(rendered)
@@ -108,7 +109,7 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 			return util.SendFailed(stream, werr.Error())
 		}
 	} else if modeChanged {
-		// content совпал — atomicWrite не вызывался; mode правим отдельно.
+		// content matched — atomicWrite wasn't called; fix mode separately.
 		if cerr := os.Chmod(path, mode); cerr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("chmod %s: %v", path, cerr))
 		}
@@ -132,10 +133,10 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 	})
 }
 
-// planRendered — pure-read drift для state rendered (ADR-031 Scry): рендерит
-// шаблон В ПАМЯТЬ (рендер чист — побочных эффектов нет) и сверяет sha256/mode/
-// ownership с существующим файлом БЕЗ записи. Та же read-логика, что applyRendered,
-// минус AtomicWrite/Chmod/Chown.
+// planRendered is the pure-read drift check for state rendered (ADR-031
+// Scry): renders the template IN MEMORY (rendering is pure — no side
+// effects) and compares sha256/mode/ownership against the existing file
+// WITHOUT writing. Same read logic as applyRendered, minus AtomicWrite/Chmod/Chown.
 func (m *Module) planRendered(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], req *pluginv1.PlanRequest, path string) error {
 	templateContent, err := util.StringParam(req.Params, "template_content")
 	if err != nil {

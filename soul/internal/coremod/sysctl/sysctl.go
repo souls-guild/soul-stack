@@ -1,17 +1,17 @@
-// Package sysctl реализует core-модуль `core.sysctl` ([ADR-015]).
+// Package sysctl implements the `core.sysctl` core module ([ADR-015]).
 //
-// Состояния:
-//   - present: ОДИН ключ kernel-параметра `name` имеет значение `value`, persist
-//     запись в `/etc/sysctl.d/<filename>.conf`. Применяется через `sysctl -w`
-//     (runtime) + запись в файл (persist after reboot). Idempotency: текущее
-//     значение читается через `sysctl -n <name>`; если уже совпадает И
-//     persist-файл содержит ту же запись — no-op, иначе обновляем оба. `filename`
-//     опционален (default — `<name>` с заменой '.' на '-').
-//   - applied: BULK-набор `settings` (map ключ→значение) пишется ОДНИМ
-//     детерминированным drop-in `/etc/sysctl.d/<filename>.conf` (sorted keys);
-//     reload (`sysctl -p <file>`, точечно) только при изменении файла. См.
-//     applied.go. Осознанное исключение из границы с core.file: модуль сам
-//     владеет drop-in + reload + idempotency (Ansible-модель), [ADR-015] amend.
+// States:
+//   - present: a single kernel-param key `name` is set to `value`, persisted
+//     to `/etc/sysctl.d/<filename>.conf`. Applied via `sysctl -w` (runtime) +
+//     a file write (persist after reboot). Idempotent: reads the current
+//     value via `sysctl -n <name>`; no-op if it already matches AND the
+//     persist file has the same entry, otherwise updates both. `filename` is
+//     optional (defaults to `<name>` with '.' replaced by '-').
+//   - applied: a bulk `settings` map (key→value) is written as ONE
+//     deterministic drop-in `/etc/sysctl.d/<filename>.conf` (sorted keys);
+//     reload (`sysctl -p <file>`) only on file change. See applied.go.
+//     Deliberate exception to the core.file boundary: the module owns
+//     drop-in + reload + idempotency itself (Ansible-style), [ADR-015] amend.
 package sysctl
 
 import (
@@ -31,7 +31,7 @@ import (
 
 const Name = "core.sysctl"
 
-// SysctlDir — каталог persist-конфигов sysctl. Подменяется в unit-тестах.
+// SysctlDir is the sysctl persist-config directory. Overridden in unit tests.
 const SysctlDir = "/etc/sysctl.d"
 
 type Module struct {
@@ -46,11 +46,11 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-params (present: name/value; applied:
-// settings/filename) делегированы в shared/coremanifest/sysctl.yaml (единый
-// источник с soul-lint). Cross-field-guard поверх делегации: reload — closed-set
-// enum (auto|always|never) у state `applied`, симметрично daemon_reload в
-// core.service (runtime-проверка значения, не литерала).
+// Validate delegates known-state + required-params (present: name/value;
+// applied: settings/filename) to shared/coremanifest/sysctl.yaml (shared
+// source with soul-lint). Cross-field guard on top of delegation: reload is a
+// closed-set enum (auto|always|never) for state `applied`, symmetric with
+// daemon_reload in core.service.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	if req.State == stateApplied {
@@ -61,13 +61,13 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.sysctl.Plan — pure-read (ADR-031 Scry):
-// читает `sysctl -n` (read-only) + persist-файл, НЕ мутирует (маркер для host-а,
+// PlanReadSafe declares core.sysctl.Plan as pure-read (ADR-031 Scry): reads
+// `sysctl -n` (read-only) + the persist file, never mutates (marker for
 // default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее состояние хоста и шлёт
-// PlanEvent.changed — «Apply изменил бы хост?». НЕ мутирует. Покрывает
+// Plan is a pure-read dry-run (ADR-031 Scry): reads the current host state and
+// reports whether Apply would change the host. Never mutates. Covers
 // present/applied.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	switch req.State {
@@ -80,10 +80,10 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	}
 }
 
-// planPresent — pure-read dry-run state `present`: читает текущее значение
-// runtime (`sysctl -n <name>`, read-only) + содержимое persist-файла. НЕ
-// мутирует: ни `sysctl -w`, ни запись persist-файла. `sysctl -n` — read-only
-// вызов того же бэкенда, который Apply использует для idempotency перед записью.
+// planPresent is the pure-read dry-run for state `present`: reads the current
+// runtime value (`sysctl -n <name>`, read-only) plus the persist file's
+// content. Never mutates: no `sysctl -w`, no persist-file write. `sysctl -n`
+// is the same read-only call Apply uses for idempotency before writing.
 func (m *Module) planPresent(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
@@ -106,7 +106,7 @@ func (m *Module) planPresent(req *pluginv1.PlanRequest, stream grpc.ServerStream
 	}
 	path := filepath.Join(m.Dir, fname)
 
-	// runtime read через `sysctl -n` — то же, что Apply использует до `-w`.
+	// runtime read via `sysctl -n` — same call Apply uses before `-w`.
 	r := m.Runner.Run(ctx, "sysctl", "-n", name)
 	if r.Err != nil {
 		return util.PlanFailed(fmt.Sprintf("sysctl -n: %v", r.Err))
@@ -120,7 +120,7 @@ func (m *Module) planPresent(req *pluginv1.PlanRequest, stream grpc.ServerStream
 		return util.SendPlanFinal(stream, true)
 	}
 
-	// persist-файл сравнение.
+	// persist-file comparison.
 	wantLine := name + " = " + value + "\n"
 	existing, rerr := os.ReadFile(path)
 	switch {
@@ -187,8 +187,8 @@ func (m *Module) ensureRuntime(ctx context.Context, name, value string) (bool, e
 		return false, fmt.Errorf("sysctl -n: %v", r.Err)
 	}
 	if r.ExitCode == 0 {
-		// sysctl -n может вернуть «1\t0» (для tcp_keepalive multi-values); нормализуем
-		// по полям через Fields, чтобы не зависеть от tab vs space.
+		// sysctl -n can return "1\t0" (multi-value keys like tcp_keepalive);
+		// normalize via Fields to not depend on tab vs space.
 		current := normalizeSysctlValue(r.Stdout)
 		want := normalizeSysctlValue(value)
 		if current == want {
@@ -227,9 +227,9 @@ func (m *Module) ensurePersist(path, name, value string) (bool, error) {
 	return true, nil
 }
 
-// normalizeSysctlValue — sysctl показывает значения с tab-разделителями для
-// multi-value ключей; пользователь же может задать пробелы. Сводим к одному
-// пробелу + trim, чтобы сравнение было содержательным.
+// normalizeSysctlValue — sysctl shows tab-separated values for multi-value
+// keys, but the user may write spaces. Collapse to a single space + trim so
+// comparisons are meaningful.
 func normalizeSysctlValue(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

@@ -148,7 +148,7 @@ func TestApply_MultiValueNormalization(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	r := internaltest.NewRunner()
-	// kernel возвращает с tab между значениями
+	// kernel returns values separated by a tab
 	r.On("sysctl -n net.ipv4.tcp_keepalive", util.Result{ExitCode: 0, Stdout: "1\t0\n"})
 	m := &sysctl.Module{Runner: r, Dir: dir}
 

@@ -1,34 +1,33 @@
-// Package archive реализует core-модуль `core.archive` ([ADR-015]).
+// Package archive implements the `core.archive` core module ([ADR-015]).
 //
-// Состояние:
-//   - extracted: распаковать архив `path` в каталог `dest`.
+// State:
+//   - extracted: extract archive `path` into directory `dest`.
 //
-// Поддерживаемые форматы: tar / tar.gz (.tgz) / tar.bz2 (.tbz2) / zip.
-// `format` опционален — auto-detect по расширению. Распаковка делается
-// in-process средствами Go stdlib (`archive/tar`, `archive/zip`,
-// `compress/gzip`, `compress/bzip2`): без внешних утилит (`tar`/`unzip`) и без
-// порождения подпроцессов. Это снимает зависимость от хостовых бинарей и даёт
-// per-entry контроль безопасности (zip-slip / zip-bomb / symlink-политика),
-// который backend-утилитам недоступен.
+// Supported formats: tar / tar.gz (.tgz) / tar.bz2 (.tbz2) / zip. `format`
+// is optional — auto-detected from the extension. Extraction happens
+// in-process via Go stdlib (`archive/tar`, `archive/zip`, `compress/gzip`,
+// `compress/bzip2`): no external tools (`tar`/`unzip`), no subprocesses.
+// This drops the dependency on host binaries and gives per-entry security
+// control (zip-slip / zip-bomb / symlink policy) that backend tools can't offer.
 //
-// Security-инварианты (жёсткие, не настраиваемые флагами):
-//   - zip-slip: запись с `..` или абсолютным путём, выводящим за пределы
-//     `dest`, → fail-fast (вся распаковка прерывается, НЕ тихий clamp).
-//   - zip-bomb: суммарный распакованный размер ограничен `max_size`
-//     (дефолт 1 GiB), число записей — `max_entries` (дефолт 100000), а
-//     отношение распакованных байт к сжатым — `max_ratio` (дефолт 100).
-//     Ratio-лимит ловит бомбу, обходящую max_size маленьким сжатым размером
-//     (10 KiB → 10 GiB). Проверка fail-fast В ПРОЦЕССЕ распаковки.
-//   - symlink: создаётся только если резолвнутый target остаётся внутри `dest`.
-//   - setuid/setgid/sticky биты из архива всегда маскируются (anti-privesc).
-//   - hardlink / devnode / char / fifo → ошибка (в MVP не поддерживаем).
-//   - owner/group из архива не берутся — файлы получают владельца процесса soul.
+// Security invariants (hard, not configurable via flags):
+//   - zip-slip: an entry with `..` or an absolute path that escapes `dest`
+//     fails fast (the whole extraction aborts, no silent clamp).
+//   - zip-bomb: total uncompressed size is capped by `max_size` (default
+//     1 GiB), entry count by `max_entries` (default 100000), and the
+//     uncompressed:compressed ratio by `max_ratio` (default 100). The ratio
+//     limit catches bombs that dodge max_size with a tiny compressed size
+//     (10 KiB → 10 GiB). Checked fail-fast DURING extraction.
+//   - symlink: created only if the resolved target stays within `dest`.
+//   - setuid/setgid/sticky bits from the archive are always stripped (anti-privesc).
+//   - hardlink / devnode / char / fifo → error (unsupported in the MVP).
+//   - owner/group from the archive are ignored — files get the soul process's owner.
 //
-// Idempotency: SHA-256 исходного архива записывается в `<dest>/.soul-archive.sha256`
-// после распаковки. На повторных применениях, если хеш совпадает — no-op.
-// Это grounded-проверка «архив тот же», а не «файлы внутри dest все на месте»
-// (последнее требует полного walk + сравнение чексумм каждого файла — over-kill
-// для MVP).
+// Idempotency: the source archive's SHA-256 is written to
+// `<dest>/.soul-archive.sha256` after extraction. Reapplying is a no-op if
+// the hash matches. This is a grounded check that "it's the same archive",
+// not that "all files in dest are still present" (the latter needs a full
+// walk + per-file checksum comparison — overkill for the MVP).
 package archive
 
 import (
@@ -59,14 +58,13 @@ import (
 
 const Name = "core.archive"
 
-// MarkerFile — имя файла-маркера для idempotency-проверки. Помещается в dest.
+// MarkerFile is the marker filename for idempotency checks, placed in dest.
 const MarkerFile = ".soul-archive.sha256"
 
-// Дефолты zip-bomb-лимитов: суммарный распакованный размер, число записей и
-// максимальное отношение распакованных байт к сжатым (compression ratio).
-// Переопределяются params `max_size` / `max_entries` / `max_ratio`.
-// max_ratio=0 отключает проверку (выбор пользователя — escape для легитимных
-// высокосжимаемых архивов, текст/логи дают ratio в сотни).
+// Default zip-bomb limits: total uncompressed size, entry count, and max
+// compression ratio. Overridable via params max_size/max_entries/max_ratio.
+// max_ratio=0 disables the check (escape hatch for legitimate highly
+// compressible archives — text/logs can have ratios in the hundreds).
 const (
 	defaultMaxSize    int64 = 1 << 30 // 1 GiB
 	defaultMaxEntries int64 = 100000
@@ -77,13 +75,11 @@ type Module struct{}
 
 func New() *Module { return &Module{} }
 
-// Validate НЕ делегирован целиком в util.ValidateAgainstManifest (в отличие от
-// core.exec): сверх known-state + required (которые manifest выражает) у
-// core.archive есть enum-проверка `format` (tar|tar.gz|tar.bz2|zip) — её
-// урезанный plugin.InputParamDef DSL не выражает (enum отложен, см. H1). Чтобы
-// runtime ловил неизвестный format до распаковки, оставляем ручную форму.
-// known-state/required дублируются с manifest осознанно — единый источник
-// невозможен без enum-поддержки в DSL.
+// Validate is not fully delegated to util.ValidateAgainstManifest (unlike
+// core.exec): core.archive also enforces an enum check on `format`
+// (tar|tar.gz|tar.bz2|zip), which the manifest DSL can't express yet (enum
+// support deferred, see H1), so this stays manual. known-state/required
+// duplicate the manifest deliberately — no single source until enum support lands.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.State != "extracted" {
@@ -103,25 +99,22 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.archive.Plan — pure-read (ADR-031 Scry):
-// читает hashFile(src) + marker, НЕ распаковывает архив (маркер для host-а,
-// default-deny).
+// PlanReadSafe declares core.archive.Plan as pure-read (ADR-031 Scry): it
+// hashes src and reads the marker, never extracts (host-side default-deny marker).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): хэширует исходный архив (читающая
-// операция) и сравнивает с marker-файлом в dest — тот же сравнительный read,
-// что выполняет Apply ДО распаковки. НЕ мутирует: ни MkdirAll(dest), ни
-// extract, ни запись marker.
+// Plan is a pure-read dry-run (ADR-031 Scry): hashes the source archive and
+// compares against the marker file in dest — the same comparison Apply does
+// before extracting. Never mutates: no MkdirAll, no extract, no marker write.
 //
-// Семантика drift симметрична Apply-idempotency:
-//   - drift=false, если marker существует и его содержимое == sha256(src);
-//   - drift=true в любом другом случае (marker нет, sha не совпал, dest нет).
+// Drift semantics mirror Apply idempotency:
+//   - drift=false if marker exists and matches sha256(src);
+//   - drift=true otherwise (no marker, hash mismatch, no dest).
 //
-// Замечание о точности (ADR-015 «grounded-проверка»): marker-инвариант проверяет
-// «архив тот же», а НЕ «все файлы внутри dest на месте» — это ограничение MVP,
-// унаследованное от Apply. Plan честно отражает то же поведение: если файл из
-// dest удалён руками, marker-инвариант clean, drift=false (Apply тоже не
-// заметил бы). Полный walk dest+чексумминг каждого файла — отдельный slice.
+// Same MVP limitation as Apply (ADR-015 "grounded check"): the marker proves
+// "same archive", not "all files still present in dest". If a file was
+// removed from dest by hand, the marker stays clean and drift=false — a full
+// walk + per-file checksum is a separate slice.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	if req.State != "extracted" {
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
@@ -231,13 +224,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	})
 }
 
-// limits — zip-bomb-бюджет распаковки. maxSize/maxEntries — абсолютные потолки;
-// maxRatio — потолок отношения распакованных байт к сжатым (0 = выключено).
-// usedSize/entries/compressed аккумулируются в ходе распаковки. compressed —
-// число прочитанных СЖАТЫХ байт источника: для zip берётся per-entry из
-// заголовка (CompressedSize64), для tar.gz/tar.bz2 — счётчиком на исходном
-// потоке (countingReader); для голого tar остаётся 0 (ratio не проверяется —
-// несжатый формат бомбой по ratio быть не может).
+// limits is the zip-bomb budget for extraction. maxSize/maxEntries are hard
+// caps; maxRatio caps the uncompressed:compressed ratio (0 = disabled).
+// usedSize/entries/compressed accumulate during extraction. compressed counts
+// COMPRESSED source bytes read: per-entry header (CompressedSize64) for zip,
+// a countingReader on the source stream for tar.gz/tar.bz2; stays 0 for
+// plain tar (an uncompressed format can't be a ratio bomb, so ratio isn't checked).
 type limits struct {
 	maxSize    int64
 	maxEntries int64
@@ -247,7 +239,7 @@ type limits struct {
 	compressed int64
 }
 
-// countEntry учитывает очередную запись против maxEntries.
+// countEntry counts one more entry against maxEntries.
 func (l *limits) countEntry() error {
 	l.entries++
 	if l.entries > l.maxEntries {
@@ -256,7 +248,7 @@ func (l *limits) countEntry() error {
 	return nil
 }
 
-// addSize учитывает n распакованных байт против maxSize.
+// addSize counts n uncompressed bytes against maxSize.
 func (l *limits) addSize(n int64) error {
 	l.usedSize += n
 	if l.usedSize > l.maxSize {
@@ -265,17 +257,17 @@ func (l *limits) addSize(n int64) error {
 	return nil
 }
 
-// addCompressed учитывает n прочитанных СЖАТЫХ байт (per-entry для zip).
+// addCompressed counts n compressed bytes read (per-entry for zip).
 func (l *limits) addCompressed(n int64) {
 	l.compressed += n
 }
 
-// checkRatio проверяет отношение распакованных байт к сжатым против maxRatio.
-// Вызывается ПОСЛЕ учёта очередного файла (usedSize и compressed обновлены) —
-// так превышение ловится в процессе, до конца распаковки. maxRatio=0 — проверка
-// выключена. compressed=0 при ненулевом usedSize (голый tar или ещё не прочитан
-// ни один сжатый байт) трактуется как «ratio неопределён» → пропуск: голый tar
-// несжат, бомбой по ratio не бывает, а max_size его и так ограничивает.
+// checkRatio checks the uncompressed:compressed ratio against maxRatio.
+// Called AFTER accounting for each file (usedSize and compressed updated),
+// so it's caught mid-extraction rather than at the end. maxRatio=0 disables
+// the check. compressed=0 with nonzero usedSize (plain tar, or no compressed
+// bytes read yet) is treated as "ratio undefined" and skipped: plain tar is
+// uncompressed and can't be a ratio bomb, and max_size already bounds it.
 func (l *limits) checkRatio() error {
 	if l.maxRatio == 0 || l.compressed == 0 {
 		return nil
@@ -311,7 +303,7 @@ func parseLimits(params *structpb.Struct) (*limits, error) {
 		}
 		l.maxEntries = n
 	}
-	// max_ratio: 0 разрешён (disable), отрицательное — ошибка конфигурации.
+	// max_ratio: 0 is allowed (disable), negative is a config error.
 	if n, present, ierr := util.OptIntParam(params, "max_ratio"); ierr != nil {
 		return nil, ierr
 	} else if present {
@@ -323,11 +315,11 @@ func parseLimits(params *structpb.Struct) (*limits, error) {
 	return l, nil
 }
 
-// countingReader оборачивает сжатый поток источника и аккумулирует число
-// фактически прочитанных СЖАТЫХ байт в lim.compressed. Для tar.gz/tar.bz2 это
-// единственный способ узнать compressed-размер инкрементально (per-entry его в
-// потоке нет) — gzip/bzip2-декодер читает ровно столько сжатого, сколько нужно
-// для уже выданных распакованных байт, поэтому ratio проверяется в процессе.
+// countingReader wraps the source's compressed stream and accumulates actual
+// COMPRESSED bytes read into lim.compressed. For tar.gz/tar.bz2 this is the
+// only way to track compressed size incrementally (no per-entry size in the
+// stream) — the gzip/bzip2 decoder reads exactly as much compressed data as
+// needed for the uncompressed bytes emitted so far, so ratio checks stay live.
 type countingReader struct {
 	r   io.Reader
 	lim *limits
@@ -410,8 +402,8 @@ func extractTar(r io.Reader, dest string, lim *limits) error {
 		case tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
 			return fmt.Errorf("archive: entry %q: unsupported type", hdr.Name)
 		default:
-			// PAX/GNU служебные заголовки (x/g/sparse-метаданные): не несут
-			// файлов, молча пропускаем — состав извлечённого дерева не меняют.
+			// PAX/GNU metadata headers (x/g/sparse): carry no file data,
+			// skip silently — they don't affect the extracted tree.
 			continue
 		}
 	}
@@ -458,8 +450,8 @@ func extractZip(src, dest string, lim *limits) error {
 			if werr != nil {
 				return werr
 			}
-			// compressed-размер записи известен из заголовка zip (per-entry) —
-			// учитываем и проверяем ratio fail-fast после каждого файла.
+			// zip entry's compressed size is known from its header (per-entry) —
+			// account for it and fail-fast check ratio after each file.
 			lim.addCompressed(int64(zf.CompressedSize64))
 			if err := lim.checkRatio(); err != nil {
 				return err
@@ -469,12 +461,12 @@ func extractZip(src, dest string, lim *limits) error {
 	return nil
 }
 
-// resolveEntry строит безопасный путь записи внутри dest и FAIL-FAST падает,
-// если запись выводит за пределы dest (`..` / абсолютный путь). SecureJoin
-// возвращает clamped-путь (молча зажимает escape) — поэтому на clamp не
-// полагаемся: детектируем escape лексически (выбор пользователя — явная ошибка,
-// не тихий clamp). Абсолютный путь Join схлопывает невидимо, поэтому ловится
-// отдельно через IsAbs; `..` — через выход результата за пределы dest.
+// resolveEntry builds a safe write path inside dest and FAILS FAST if the
+// entry escapes dest (`..` or absolute path). SecureJoin silently clamps
+// escapes, so we don't rely on that — escapes are detected lexically instead
+// (explicit error, not a silent clamp). An absolute path collapses invisibly
+// in Join, so it's caught separately via IsAbs; `..` is caught by the result
+// landing outside dest.
 func resolveEntry(dest, name string) (string, error) {
 	clean := filepath.ToSlash(name)
 	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "/") {
@@ -491,12 +483,11 @@ func resolveEntry(dest, name string) (string, error) {
 	return joined, nil
 }
 
-// writeSymlink создаёт symlink target → link, только если резолвнутый link
-// остаётся внутри dest (within-dest политика). target — уже безопасный путь
-// самого symlink-файла внутри dest; link резолвится относительно директории
-// symlink-а (linkDir). Абсолютный target по определению указывает вне dest →
-// ошибка; относительный — резолвится лексически от linkDir и проверяется на
-// выход за dest.
+// writeSymlink creates symlink target → link, only if the resolved link stays
+// within dest. target is already a safe path inside dest; link resolves
+// relative to its directory (linkDir). An absolute link target is by
+// definition outside dest → error; a relative one is resolved lexically from
+// linkDir and checked against escaping dest.
 func writeSymlink(dest, target, link string) error {
 	if filepath.IsAbs(link) {
 		return fmt.Errorf("archive: symlink %q target escapes dest", link)
@@ -524,9 +515,8 @@ func withinDest(dest, p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// writeFileEntry материализует обычный файл записи. Размер контролируется через
-// io.LimitReader: читаем не больше остатка бюджета+1, аккумулируем фактически
-// записанное; превышение maxSize → ошибка (zip-bomb).
+// writeFileEntry materializes a regular file entry. Size is bounded via
+// io.LimitReader (budget+1); exceeding maxSize is a zip-bomb error.
 func writeFileEntry(target string, r io.Reader, mode fs.FileMode, lim *limits) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("archive: mkdir %s: %v", filepath.Dir(target), err)
@@ -535,8 +525,8 @@ func writeFileEntry(target string, r io.Reader, mode fs.FileMode, lim *limits) e
 	if err != nil {
 		return fmt.Errorf("archive: create %s: %v", target, err)
 	}
-	// budget+1 позволяет обнаружить превышение ровно на лимите (io.Copy дочитает
-	// один лишний байт, addSize его поймает).
+	// budget+1 detects overrun exactly at the limit (io.Copy reads one
+	// extra byte, addSize catches it).
 	budget := lim.maxSize - lim.usedSize + 1
 	n, cerr := io.Copy(f, io.LimitReader(r, budget))
 	if closeErr := f.Close(); closeErr != nil && cerr == nil {
@@ -551,7 +541,7 @@ func writeFileEntry(target string, r io.Reader, mode fs.FileMode, lim *limits) e
 	return lim.addSize(n)
 }
 
-// readZipSymlink читает тело zip-записи symlink — это путь target.
+// readZipSymlink reads a zip symlink entry's body — the target path.
 func readZipSymlink(zf *zip.File) (string, error) {
 	rc, err := zf.Open()
 	if err != nil {
@@ -565,13 +555,13 @@ func readZipSymlink(zf *zip.File) (string, error) {
 	return string(data), nil
 }
 
-// safeFileMode маскирует setuid/setgid/sticky из mode архива (anti-privesc,
-// жёсткий инвариант) и оставляет только permission-биты.
+// safeFileMode strips setuid/setgid/sticky from the archive mode
+// (anti-privesc invariant), keeping only permission bits.
 func safeFileMode(mode fs.FileMode) fs.FileMode {
 	return mode & 0o777
 }
 
-// dirMode — mode каталога из архива (маскированный); пустой/нулевой → 0o755.
+// dirMode is the archive's directory mode (masked); zero/empty falls back to 0o755.
 func dirMode(mode fs.FileMode) fs.FileMode {
 	perm := mode & 0o777
 	if perm == 0 {
@@ -603,11 +593,11 @@ func knownFormat(f string) bool {
 	return false
 }
 
-// parseSize разбирает человекочитаемый размер: голое число (байты) или число с
-// суффиксом KiB/MiB/GiB (бинарные множители; регистр суффикса игнорируется).
-// Десятичные SI-суффиксы (KB/MB) и дроби не поддерживаются — для max_size это
-// явный отказ (invalid size), а НЕ тихий partial-parse: остаток после снятия
-// известного суффикса обязан быть чистым целым, иначе ошибка конфигурации.
+// parseSize parses a human-readable size: a bare number (bytes) or a number
+// with a KiB/MiB/GiB suffix (binary multipliers, case-insensitive). Decimal
+// SI suffixes (KB/MB) and fractions aren't supported — an unrecognized
+// remainder after stripping a known suffix is a config error, not a silent
+// partial-parse.
 func parseSize(s string) (int64, error) {
 	str := strings.TrimSpace(s)
 	if str == "" {
@@ -624,13 +614,13 @@ func parseSize(s string) (int64, error) {
 		mult, upper = 1<<10, strings.TrimSuffix(upper, "KIB")
 	}
 	upper = strings.TrimSpace(upper)
-	// ParseInt по всему остатку: любой нераспознанный суффикс/мусор/дробь даёт
-	// ошибку, а не молчаливый partial-parse префикса (footgun: "10MB" → 10 байт).
+	// ParseInt on the full remainder: any unrecognized suffix/garbage/fraction
+	// errors instead of silently parsing a prefix (footgun: "10MB" → 10 bytes).
 	n, err := strconv.ParseInt(upper, 10, 64)
 	if err != nil || n < 0 {
 		return 0, fmt.Errorf("param %q: invalid size %q (want число или N[KiB|MiB|GiB])", "max_size", s)
 	}
-	// Защита от переполнения при умножении.
+	// Guard against overflow on multiplication.
 	if mult != 1 && n > (1<<62)/mult {
 		return 0, fmt.Errorf("param %q: size %q too large", "max_size", s)
 	}

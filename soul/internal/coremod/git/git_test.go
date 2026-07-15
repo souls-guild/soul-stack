@@ -114,7 +114,7 @@ func TestApply_Cloned_DepthAndBranch(t *testing.T) {
 func TestApply_Pulled_Existing_HeadSame_NoChange(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
-	// before и after — одинаковый sha
+	// before and after are the same sha
 	r.OnSeq("[cwd=/srv/app] git rev-parse HEAD",
 		util.Result{ExitCode: 0, Stdout: "same\n"},
 		util.Result{ExitCode: 0, Stdout: "same\n"},
@@ -187,9 +187,9 @@ func TestApply_Pulled_Missing_Clones(t *testing.T) {
 	}
 }
 
-// TestApply_Cloned_DashRepo_SeparatorPresent защищает фикс security review L1:
-// repo, начинающийся с `-`, должен идти после `--`, иначе git распарсит его как
-// опцию (argument injection).
+// TestApply_Cloned_DashRepo_SeparatorPresent guards the security review L1
+// fix: a repo starting with `-` must go after `--`, otherwise git parses it
+// as an option (argument injection).
 func TestApply_Cloned_DashRepo_SeparatorPresent(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}

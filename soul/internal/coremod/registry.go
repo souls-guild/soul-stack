@@ -1,19 +1,19 @@
-// Package coremod — соединяет core-модули Soul-стороны в единый Registry.
+// Package coremod wires Soul-side core modules into a single Registry.
 //
-// Core-модули из ADR-015 статически встроены в `soul`-бинарь. Registry
-// связывает каноническое имя верхнего уровня (`core.pkg` / `core.file` / …)
-// с реализацией sdk/module.SoulModule.
+// Core modules from ADR-015 are statically compiled into the `soul` binary.
+// Registry maps a canonical top-level name (`core.pkg` / `core.file` / …) to
+// an sdk/module.SoulModule implementation.
 //
-// MVP — 20 Soul-side модулей: pkg / file / service / user / group (Core.a.1),
+// MVP — 20 Soul-side modules: pkg / file / service / user / group (Core.a.1),
 // exec / cmd / cron / mount (Core.a.2), git / archive / sysctl (Core.a.3),
-// url (Core.a.4), line (Core.a.5 — пилот in-place построчной правки, ADR-015),
-// repo / firewall (Core.a.6 — пакетный репозиторий + правило файрвола, ADR-015),
+// url (Core.a.4), line (Core.a.5 — pilot in-place line editing, ADR-015),
+// repo / firewall (Core.a.6 — package repository + firewall rule, ADR-015),
 // http (Core.a.7 — read-probe HTTP, verb probe, changed=false, ADR-015),
-// noop (ADR-015 — no-op/barrier-якорь, verb run, changed=false),
-// augur (ADR-025 — read-probe живого доступа к внешней системе через брокер
-// Augur, verb fetch, changed=false),
-// module (ADR-065 — доставка SoulModule-плагина: allow-check → FetchModule →
-// Sigil-verify → atomic install; host-зависимости через Deps).
+// noop (ADR-015 — no-op/barrier anchor, verb run, changed=false),
+// augur (ADR-025 — read-probe live access to an external system via the
+// Augur broker, verb fetch, changed=false),
+// module (ADR-065 — SoulModule plugin delivery: allow-check → FetchModule →
+// Sigil-verify → atomic install; host dependencies via Deps).
 package coremod
 
 import (
@@ -40,22 +40,22 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/user"
 )
 
-// Registry — иммутабельный набор «имя модуля → реализация SoulModule».
+// Registry is an immutable "module name → SoulModule implementation" map.
 //
-// Лукап — за O(1). Ключ — полное имя модуля без state-суффикса
-// (`core.pkg`, не `core.pkg.installed`); state-суффикс приходит в
-// pluginv1.ApplyRequest.state и обрабатывается реализацией модуля.
+// Lookup is O(1). The key is the full module name without a state suffix
+// (`core.pkg`, not `core.pkg.installed`); the state suffix arrives in
+// pluginv1.ApplyRequest.state and is handled by the module implementation.
 type Registry struct {
 	mods map[string]module.SoulModule
 }
 
-// Default возвращает Registry со всеми 20 Soul-side core-модулями MVP.
-// Используется при wire-up в cmd/soul; в тестах удобнее собрать собственный
-// Registry через NewRegistry с фиксированными зависимостями.
+// Default returns a Registry with all 20 Soul-side core modules of the MVP.
+// Used for wire-up in cmd/soul; in tests it's more convenient to build your
+// own Registry via NewRegistry with fixed dependencies.
 //
-// install — host-зависимости core.module (ADR-065: Sigil-набор, trust-anchor-ы,
-// корень кеша модулей). Zero-значение валидно (push-режим/тесты): install-шаг
-// откажет fail-closed module_not_allowed.
+// install — host dependencies for core.module (ADR-065: Sigil set, trust
+// anchors, module cache root). The zero value is valid (push mode/tests): the
+// install step will fail-closed with module_not_allowed.
 func Default(install installmod.Deps) *Registry {
 	return NewRegistry(map[string]module.SoulModule{
 		augur.Name:      augur.New(),
@@ -81,8 +81,8 @@ func Default(install installmod.Deps) *Registry {
 	})
 }
 
-// NewRegistry собирает Registry из произвольного набора реализаций. Все
-// имена должны быть в форме `core.<module>` (без state-суффикса).
+// NewRegistry builds a Registry from an arbitrary set of implementations. All
+// names must be in the form `core.<module>` (without a state suffix).
 func NewRegistry(mods map[string]module.SoulModule) *Registry {
 	cp := make(map[string]module.SoulModule, len(mods))
 	for k, v := range mods {
@@ -91,15 +91,15 @@ func NewRegistry(mods map[string]module.SoulModule) *Registry {
 	return &Registry{mods: cp}
 }
 
-// Lookup возвращает модуль по каноническому имени и флаг наличия.
-// Возврат — readonly интерфейс, мутация со стороны вызывающего невозможна.
+// Lookup returns the module by canonical name and a presence flag.
+// The returned value is a read-only interface, callers cannot mutate it.
 func (r *Registry) Lookup(name string) (module.SoulModule, bool) {
 	m, ok := r.mods[name]
 	return m, ok
 }
 
-// Names возвращает список зарегистрированных модулей в недетерминированном
-// порядке (Go map iteration). Используется для diagnostic-вывода / healthz.
+// Names returns the registered modules in non-deterministic order (Go map
+// iteration). Used for diagnostic output / healthz.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.mods))
 	for k := range r.mods {

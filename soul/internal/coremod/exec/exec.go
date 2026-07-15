@@ -1,16 +1,16 @@
-// Package exec реализует core-модуль `core.exec` ([ADR-015]).
+// Package exec implements the core module `core.exec` ([ADR-015]).
 //
-// Состояния:
-//   - run: запустить процесс с argv (без shell).
+// States:
+//   - run: launch a process with argv (no shell).
 //
-// Idempotency-флаги (заимствовано из Ansible command):
-//   - creates: если указанный файл существует — пропуск (changed=false).
-//   - unless: запустить вспомогательную команду; если её exit=0 — пропуск.
-//   - onlyif: запустить вспомогательную команду; если её exit≠0 — пропуск.
+// Idempotency flags (borrowed from Ansible command):
+//   - creates: skip if the given file exists (changed=false).
+//   - unless: run a helper command; skip if its exit=0.
+//   - onlyif: run a helper command; skip if its exit≠0.
 //
-// Output: stdout, stderr, exit_code. Non-zero exit основной команды НЕ
-// считается failed автоматически — пользователь решает через `failed_when:`
-// в scenario, что считать ошибкой (например, grep с exit 1 — норма).
+// Output: stdout, stderr, exit_code. A non-zero exit from the main command is
+// NOT automatically considered failed — the user decides via `failed_when:`
+// in the scenario what counts as an error (e.g. grep exiting 1 is normal).
 package exec
 
 import (
@@ -28,8 +28,8 @@ const Name = "core.exec"
 
 type Module struct {
 	Runner util.Runner
-	// StatFile подменяется в тестах для проверки `creates`. В проде —
-	// fileExists поверх os.Stat.
+	// StatFile is swapped out in tests to check `creates`. In production it's
+	// fileExists over os.Stat.
 	StatFile func(path string) (bool, error)
 }
 
@@ -41,21 +41,21 @@ func New() *Module {
 }
 
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	// Per-field-проверки (known-state + required cmd) декларированы в
-	// shared/coremanifest/exec.yaml — единый источник с soul-lint. Cross-field-
-	// инвариантов у core.exec нет (creates/unless/onlyif комбинируются свободно).
+	// Per-field checks (known-state + required cmd) are declared in
+	// shared/coremanifest/exec.yaml — a single source shared with soul-lint.
+	// core.exec has no cross-field invariants (creates/unless/onlyif combine freely).
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op (без PlanReadSafe). core.exec — verb-модуль: выполнение argv-
-// команды, у него НЕТ желаемого состояния хоста, которое можно сверить pure-
-// read-ом. Drift в смысле ADR-031 здесь не определён. Host применяет default-
-// deny: dry_run для core.exec возвращает FAILED `plan.unsupported`, и это
-// конструктивный отказ — НЕ ложное «нет дрифта».
+// Plan is a no-op (no PlanReadSafe). core.exec is a verb module: running an
+// argv command has NO desired host state to check with a pure read. Drift in
+// the ADR-031 sense isn't defined here. The host applies default-deny:
+// dry_run for core.exec returns FAILED `plan.unsupported`, and that's a
+// deliberate rejection — NOT a false "no drift".
 //
-// Для условного выполнения по факту хоста используйте `creates`/`unless`/
-// `onlyif` (в Apply), либо вынесите идемпотентную часть в declarative-модуль
+// For conditional execution based on host facts, use `creates`/`unless`/
+// `onlyif` (in Apply), or move the idempotent part into a declarative module
 // (core.file/core.service/...).
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
@@ -123,9 +123,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	})
 }
 
-// shouldSkip — общая проверка `creates`/`unless`/`onlyif` (порядок: creates →
-// unless → onlyif; первая срабатывающая выигрывает). reason — короткая метка
-// для output, удобно в логах debug-ить «почему ничего не запустилось».
+// shouldSkip is the combined `creates`/`unless`/`onlyif` check (order: creates
+// → unless → onlyif; the first match wins). reason is a short label for
+// output, handy for debug-logging "why nothing ran".
 func (m *Module) shouldSkip(ctx context.Context, creates, unless, onlyif string) (bool, string, error) {
 	if creates != "" {
 		exists, err := m.StatFile(creates)

@@ -9,9 +9,9 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
 
-// Тесты production-Runner (OSRunner) поверх реального os/exec. Используем
-// /bin/sh и sleep — они есть и на macOS, и на Linux-CI. Бинарный вывод не
-// проверяем (Result хранит строки), только текстовые контракты.
+// Tests for the production Runner (OSRunner) over real os/exec. Uses /bin/sh
+// and sleep — available on both macOS and Linux CI. Doesn't check binary
+// output (Result stores strings), only text contracts.
 
 func TestOSRunner_ExitCodeZero(t *testing.T) {
 	r := util.OSRunner{}
@@ -27,8 +27,8 @@ func TestOSRunner_ExitCodeZero(t *testing.T) {
 	}
 }
 
-// Non-zero exit обязан вернуться как ExitCode без Err — это контракт Runner:
-// модули отличают «команда сказала нет» от «бинаря нет».
+// Non-zero exit must come back as ExitCode without Err — that's the Runner
+// contract: modules distinguish "command said no" from "binary missing".
 func TestOSRunner_NonZeroExitIsExitCodeNotErr(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.Run(context.Background(), "/bin/sh", "-c", "exit 7")
@@ -57,8 +57,8 @@ func TestOSRunner_CapturesStdoutAndStderr(t *testing.T) {
 	}
 }
 
-// Stderr должен наполняться и при non-zero exit (модули парсят stderr на
-// idempotent-проверках dpkg/apt).
+// Stderr must be populated on non-zero exit too (modules parse stderr for
+// dpkg/apt idempotency checks).
 func TestOSRunner_StderrOnFailure(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.Run(context.Background(), "/bin/sh", "-c", "echo boom 1>&2; exit 2")
@@ -70,7 +70,7 @@ func TestOSRunner_StderrOnFailure(t *testing.T) {
 	}
 }
 
-// «Не запустился» (binary not found) → Err непустой, ExitCode 0, OK()=false.
+// "Failed to start" (binary not found) → Err non-nil, ExitCode 0, OK()=false.
 func TestOSRunner_BinaryNotFoundSetsErr(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.Run(context.Background(), "/nonexistent/soul-no-such-binary")
@@ -82,12 +82,13 @@ func TestOSRunner_BinaryNotFoundSetsErr(t *testing.T) {
 	}
 }
 
-// argv передаётся без shell: метасимволы трактуются как литералы аргумента,
-// а не интерпретируются оболочкой (защита от инъекции через имена пакетов).
+// argv is passed without a shell: metacharacters are treated as literal
+// argument bytes, not interpreted by a shell (guards against injection via
+// package names).
 func TestOSRunner_NoShellArgvLiteral(t *testing.T) {
 	r := util.OSRunner{}
-	// $HOME и ; cat не должны раскрываться/исполняться — echo печатает аргумент
-	// дословно. /bin/echo, не builtin, чтобы гарантировать отсутствие shell.
+	// $HOME and ; cat must not expand/execute — echo prints the argument
+	// verbatim. /bin/echo, not the builtin, to guarantee no shell is involved.
 	arg := "$HOME; rm -rf /tmp/should-not; `whoami`"
 	res := r.Run(context.Background(), "/bin/echo", arg)
 	if res.Err != nil {
@@ -98,8 +99,8 @@ func TestOSRunner_NoShellArgvLiteral(t *testing.T) {
 	}
 }
 
-// Таймаут контекста реально прерывает долгоживущий процесс: Run возвращается
-// заметно раньше длительности sleep.
+// A context timeout actually kills a long-running process: Run returns well
+// before sleep's duration elapses.
 func TestOSRunner_ContextTimeoutKillsProcess(t *testing.T) {
 	r := util.OSRunner{}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -112,14 +113,14 @@ func TestOSRunner_ContextTimeoutKillsProcess(t *testing.T) {
 	if elapsed > 5*time.Second {
 		t.Fatalf("Run took %v — процесс не был убит по таймауту", elapsed)
 	}
-	// Убитый сигналом процесс возвращает ошибку запуска или ненулевой exit;
-	// в любом случае это не успех.
+	// A process killed by signal returns either a start error or a non-zero
+	// exit — either way, not success.
 	if res.OK() {
 		t.Fatalf("OK()=true want false (процесс должен быть прерван), elapsed=%v", elapsed)
 	}
 }
 
-// Отмена контекста извне (cancel) также прерывает процесс.
+// External context cancellation (cancel) also kills the process.
 func TestOSRunner_ContextCancelKillsProcess(t *testing.T) {
 	r := util.OSRunner{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,13 +153,13 @@ func TestOSRunner_RunOptsCwd(t *testing.T) {
 		t.Fatalf("Err=%v", res.Err)
 	}
 	got := strings.TrimSpace(res.Stdout)
-	// macOS отдаёт /private/<tmp>, dir может быть /var/... — сравниваем по суффиксу.
+	// macOS returns /private/<tmp> while dir may be /var/... — compare by suffix.
 	if !strings.HasSuffix(got, strings.TrimPrefix(dir, "/private")) && got != dir {
 		t.Fatalf("pwd=%q want cwd %q", got, dir)
 	}
 }
 
-// Env != nil = полный replace окружения процесса.
+// Env != nil = full replace of the process environment.
 func TestOSRunner_RunOptsEnvFullReplace(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.RunOpts(context.Background(), util.RunOptions{
@@ -174,8 +175,8 @@ func TestOSRunner_RunOptsEnvFullReplace(t *testing.T) {
 	}
 }
 
-// Env != nil действительно заменяет (не дополняет): унаследованная переменная
-// PATH из родителя не видна, если её нет в заданном Env.
+// Env != nil truly replaces (doesn't merge): an inherited PATH variable from
+// the parent isn't visible if it's absent from the given Env.
 func TestOSRunner_RunOptsEnvReplacesNotMerges(t *testing.T) {
 	t.Setenv("SOUL_PARENT_ONLY", "leaked")
 	r := util.OSRunner{}
@@ -192,7 +193,7 @@ func TestOSRunner_RunOptsEnvReplacesNotMerges(t *testing.T) {
 	}
 }
 
-// Env == nil = inherit: родительская переменная видна.
+// Env == nil = inherit: the parent variable is visible.
 func TestOSRunner_RunOptsEnvNilInherits(t *testing.T) {
 	t.Setenv("SOUL_INHERIT_VAR", "inherited")
 	r := util.OSRunner{}
@@ -223,7 +224,7 @@ func TestOSRunner_RunOptsStdin(t *testing.T) {
 	}
 }
 
-// Пустой Stdin: cat по пустому stdin завершается успешно с пустым выводом.
+// Empty Stdin: cat on an empty stdin exits successfully with empty output.
 func TestOSRunner_RunOptsEmptyStdin(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.RunOpts(context.Background(), util.RunOptions{
@@ -235,7 +236,7 @@ func TestOSRunner_RunOptsEmptyStdin(t *testing.T) {
 	}
 }
 
-// RunOpts тоже отражает non-zero exit как ExitCode без Err.
+// RunOpts also reports non-zero exit as ExitCode without Err.
 func TestOSRunner_RunOptsNonZeroExit(t *testing.T) {
 	r := util.OSRunner{}
 	res := r.RunOpts(context.Background(), util.RunOptions{

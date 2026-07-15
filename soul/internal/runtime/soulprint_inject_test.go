@@ -13,14 +13,14 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// awareModule — fakeModule, реализующий util.SoulprintAware: фиксирует факт,
-// инжектнутый runner-ом перед Apply (Вариант A, ADR-018(b)).
+// awareModule is a fakeModule implementing util.SoulprintAware: records the
+// fact injected by the runner before Apply (Variant A, ADR-018(b)).
 type awareModule struct {
 	module.BaseModule
 	gotFacts util.HostFacts
 	awareSet bool
-	// applyHostFacts — снимок facts на момент Apply: проверяет, что SetHostFacts
-	// вызван ИМЕННО ДО Apply (а не после).
+	// applyHostFacts is a snapshot of facts at Apply time: verifies SetHostFacts
+	// is called BEFORE Apply (not after).
 	applyHostFacts util.HostFacts
 }
 
@@ -30,12 +30,12 @@ func (a *awareModule) SetHostFacts(f util.HostFacts) {
 }
 
 func (a *awareModule) Apply(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	a.applyHostFacts = a.gotFacts // facts уже должны быть инжектнуты
+	a.applyHostFacts = a.gotFacts // facts must already be injected
 	return stream.Send(&pluginv1.ApplyEvent{Changed: true})
 }
 
-// TestRun_InjectsHostFactsIntoAwareModule — runner инжектит собранный soulprint-
-// факт в SoulprintAware-модуль ПЕРЕД Apply.
+// TestRun_InjectsHostFactsIntoAwareModule — the runner injects the collected
+// soulprint fact into a SoulprintAware module BEFORE Apply.
 func TestRun_InjectsHostFactsIntoAwareModule(t *testing.T) {
 	mod := &awareModule{}
 	reg := mapRegistry{"core.pkg": mod}
@@ -59,8 +59,9 @@ func TestRun_InjectsHostFactsIntoAwareModule(t *testing.T) {
 	}
 }
 
-// TestRun_NonAwareModule_NoPanic — модуль без util.SoulprintAware не получает
-// факт и работает штатно (out-of-process-плагины, Вариант A не трогает контракт).
+// TestRun_NonAwareModule_NoPanic — a module without util.SoulprintAware
+// doesn't receive the fact and works normally (out-of-process plugins,
+// Variant A doesn't touch the contract).
 func TestRun_NonAwareModule_NoPanic(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": &fakeModule{

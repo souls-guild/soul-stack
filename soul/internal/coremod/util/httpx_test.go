@@ -12,20 +12,22 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
 
-// netguardBlocked распознаёт отказ SSRF-guard (netguard.blockedErr) по тексту:
-// guard-нутый dial метаданных отвергается синхронно с этой сигнатурой, тогда как
-// при снятом guard-е dial фейлит сетевой ошибкой/таймаутом без неё.
+// netguardBlocked recognizes an SSRF-guard denial (netguard.blockedErr) by
+// text: a guarded dial to metadata is rejected synchronously with this
+// signature, whereas with the guard lifted, dial fails with a network
+// error/timeout without it.
 func netguardBlocked(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "ssrf-guard blocked")
 }
 
-// Исчерпывающее покрытие SSRF-guard-логики (классификатор IP, guardedDialContext
-// с rebind / multi-IP кейсами, redirect-downgrade, https-only) живёт в
-// shared/netguard. Здесь — публичные обёртки util для core.url / core.http:
-// делегирование подключено и работает, проводка guard в NewHTTPClient на месте.
+// Exhaustive coverage of the SSRF-guard logic (IP classifier,
+// guardedDialContext with rebind / multi-IP cases, redirect-downgrade,
+// https-only) lives in shared/netguard. Here — util's public wrappers for
+// core.url / core.http: delegation is wired up and working, guard plumbing
+// in NewHTTPClient is in place.
 
-// mkRedirReq собирает минимальный *http.Request только с URL — CheckRedirect
-// смотрит лишь на req.URL.Scheme/Host.
+// mkRedirReq builds a minimal *http.Request with just a URL — CheckRedirect
+// only looks at req.URL.Scheme/Host.
 func mkRedirReq(t *testing.T, raw string) *http.Request {
 	t.Helper()
 	u, err := stdurl.Parse(raw)
@@ -104,8 +106,8 @@ func TestIsBlockedIP(t *testing.T) {
 }
 
 func TestNewHTTPClient_GuardWiring(t *testing.T) {
-	// Нулевое значение opts = прежний NewHTTPClient(false): максимально
-	// безопасный клиент. Проверяем поведенческую эквивалентность.
+	// Zero-value opts = the old NewHTTPClient(false): a maximally safe
+	// client. Verifying behavioral equivalence.
 	t.Run("zero opts: DialContext выставлен + downgrade-защита + TLS дефолт", func(t *testing.T) {
 		c := util.NewHTTPClient(util.HTTPClientOpts{})
 		tr, ok := c.Transport.(*http.Transport)
@@ -124,7 +126,7 @@ func TestNewHTTPClient_GuardWiring(t *testing.T) {
 		if err := c.CheckRedirect(mkRedirReq(t, "http://evil.example/x"), nil); err == nil {
 			t.Fatal("NewHTTPClient.CheckRedirect пропустил downgrade https->http")
 		}
-		// Guard реально подключён: литеральный metadata IP не дойдёт до dial.
+		// Guard is actually wired in: a literal metadata IP never reaches dial.
 		if _, err := tr.DialContext(context.Background(), "tcp", "169.254.169.254:443"); !netguardBlocked(err) {
 			t.Fatalf("guard не заблокировал dial в metadata: %v", err)
 		}
@@ -136,11 +138,12 @@ func TestNewHTTPClient_GuardWiring(t *testing.T) {
 		if !ok {
 			t.Fatalf("Transport не *http.Transport: %T", c.Transport)
 		}
-		// http.DefaultTransport.Clone() несёт ненулевой дефолтный DialContext;
-		// при AllowPrivate=true мы его НЕ оборачиваем netguard-ом. Проверяем
-		// поведенчески: guard снят — metadata-IP не отвергается на check-фазе
-		// dial-а (соединение пытается реально установиться и фейлит по сети, а
-		// не по netguard-блоку). Без guard-а ошибка — НЕ netguard-вердикт.
+		// http.DefaultTransport.Clone() carries a non-nil default DialContext;
+		// with AllowPrivate=true we do NOT wrap it with netguard. Verifying
+		// behaviorally: guard lifted — the metadata IP isn't rejected at
+		// dial's check phase (the connection actually attempts to establish
+		// and fails over the network, not via a netguard block). Without the
+		// guard, the error is NOT a netguard verdict.
 		if tr.DialContext == nil {
 			t.Fatal("AllowPrivate=true: DialContext nil — дефолтный dialer потерян")
 		}
@@ -189,7 +192,7 @@ func TestNewHTTPClient_GuardWiring(t *testing.T) {
 		if err := c.CheckRedirect(mkRedirReq(t, "file:///etc/passwd"), nil); err == nil {
 			t.Fatal("AllowHTTPRedirect=true: не-http(s) схема должна отвергаться")
 		}
-		// SSRF-guard на месте: AllowHTTPRedirect не открывает private.
+		// SSRF-guard is in place: AllowHTTPRedirect doesn't open up private.
 		tr := c.Transport.(*http.Transport)
 		if tr.DialContext == nil {
 			t.Fatal("AllowHTTPRedirect не должен снимать SSRF-guard")

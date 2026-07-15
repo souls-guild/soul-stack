@@ -9,20 +9,20 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Plugin — Soul-side handle спавн-сессии плагина kind=soul_module. Embed-ит
-// [sharedhost.BasePlugin] (manifest / conn / Close / StderrTail) и добавляет
-// gRPC-клиент SoulModule для Validate / Plan / Apply.
+// Plugin is the Soul-side handle for a spawned kind=soul_module plugin session.
+// Embeds [sharedhost.BasePlugin] (manifest / conn / Close / StderrTail) and adds
+// a SoulModule gRPC client for Validate / Plan / Apply.
 //
-// Жизненный цикл — one-shot per Spawn (ADR-020(d)): caller вызывает [Host.Spawn]
-// → серия RPC → [Plugin.Close]. Connection-pooling не предусмотрен.
+// Lifecycle is one-shot per Spawn (ADR-020(d)): caller calls [Host.Spawn] →
+// a series of RPCs → [Plugin.Close]. No connection pooling.
 type Plugin struct {
 	*sharedhost.BasePlugin
 	client pluginv1.SoulModuleClient
 }
 
-// newPluginFromBase оборачивает generic [sharedhost.BasePlugin] в Soul-side
-// kind-specific [Plugin]. Используется только из [Host.Spawn] — публичного
-// конструктора нет (caller не должен спавнить BasePlugin сам).
+// newPluginFromBase wraps the generic [sharedhost.BasePlugin] into a Soul-side
+// kind-specific [Plugin]. Used only from [Host.Spawn] — no public constructor
+// (callers must not spawn a BasePlugin themselves).
 func newPluginFromBase(base *sharedhost.BasePlugin) *Plugin {
 	return &Plugin{
 		BasePlugin: base,
@@ -30,28 +30,27 @@ func newPluginFromBase(base *sharedhost.BasePlugin) *Plugin {
 	}
 }
 
-// errKindMismatch — ошибка Spawn-метода при попытке запустить плагин чужого
-// kind-а в kind-specific wrap. Указывает на ошибку конструкции Discovered
-// (например, в тесте) или на drift между Discover-фильтром и manifest-ом
-// плагина.
+// errKindMismatch is the Spawn error when wrapping a plugin of the wrong kind
+// into a kind-specific wrapper. Indicates a bad Discovered construction (e.g.
+// in a test) or drift between the Discover filter and the plugin's manifest.
 func errKindMismatch(want, got string) error {
 	return fmt.Errorf("pluginhost: expected kind=%s, got kind=%q", want, got)
 }
 
-// Validate — RPC SoulModule.Validate. Пробрасывается caller-у без оборачивания
-// в TaskError — это задача apply-цикла (Core.b / M2.1.b.3).
+// Validate calls RPC SoulModule.Validate. Errors pass through unwrapped —
+// wrapping into TaskError is the apply cycle's job (Core.b / M2.1.b.3).
 func (p *Plugin) Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	return p.client.Validate(ctx, req)
 }
 
-// Plan — RPC SoulModule.Plan. Возвращает stream — caller сам читает и
-// агрегирует PlanEvent-ы.
+// Plan calls RPC SoulModule.Plan. Returns a stream — caller reads and
+// aggregates PlanEvents itself.
 func (p *Plugin) Plan(ctx context.Context, req *pluginv1.PlanRequest) (grpc.ServerStreamingClient[pluginv1.PlanEvent], error) {
 	return p.client.Plan(ctx, req)
 }
 
-// Apply — RPC SoulModule.Apply. Возвращает stream — caller сам читает все
-// ApplyEvent-ы (последний — финальный, с changed/failed/output согласно
+// Apply calls RPC SoulModule.Apply. Returns a stream — caller reads all
+// ApplyEvents (the last one is final, carrying changed/failed/output per
 // docs/destiny/tasks.md).
 func (p *Plugin) Apply(ctx context.Context, req *pluginv1.ApplyRequest) (grpc.ServerStreamingClient[pluginv1.ApplyEvent], error) {
 	return p.client.Apply(ctx, req)

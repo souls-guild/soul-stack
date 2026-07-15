@@ -247,7 +247,7 @@ func TestApply_MissingPath_Fails(t *testing.T) {
 	}
 }
 
-// seedSrc создаёт regular-файл-источник в t.TempDir() и возвращает его путь.
+// seedSrc creates a regular source file in t.TempDir() and returns its path.
 func seedSrc(t *testing.T, content string) string {
 	t.Helper()
 	src := filepath.Join(t.TempDir(), "src.bin")
@@ -338,8 +338,8 @@ func TestApply_Present_Src_ModeOnlyDrift(t *testing.T) {
 	}
 }
 
-// owner/group-drift при src-ветке: содержимое совпадает, но группа дрейфит.
-// chgrp на supplementary-группу процесса проходит без root (как в directory_test).
+// owner/group drift on the src branch: content matches but the group drifts.
+// chgrp to a supplementary group of the process works without root (as in directory_test).
 func TestApply_Present_Src_GroupDrift(t *testing.T) {
 	src := seedSrc(t, "same\n")
 	dst := filepath.Join(t.TempDir(), "dest")
@@ -399,8 +399,8 @@ func TestApply_Present_ContentSrcMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// Тонкость: content:"" (пустая строка, ключ ПРИСУТСТВУЕТ) вместе с src — всё
-// равно конфликт. Ловится по присутствию ключа, не по пустоте строки.
+// Subtlety: content:"" (empty string, key IS PRESENT) together with src still
+// conflicts. Detected by key presence, not string emptiness.
 func TestApply_Present_EmptyContentPlusSrc_StillConflict(t *testing.T) {
 	ev := applyPresent(t, map[string]any{
 		"path":    filepath.Join(t.TempDir(), "x"),
@@ -439,7 +439,7 @@ func TestApply_Present_Src_Directory_Fails(t *testing.T) {
 	}
 }
 
-// src-симлинк reject-ится через Lstat (не следуется) — защита от подмены.
+// A src symlink is rejected via Lstat (not followed) — protects against substitution.
 func TestApply_Present_Src_Symlink_Fails(t *testing.T) {
 	target := seedSrc(t, "real\n")
 	link := filepath.Join(t.TempDir(), "link")
@@ -485,7 +485,7 @@ func TestValidate_Present_Src_Relative_Fails(t *testing.T) {
 	}
 }
 
-// Атомарность src-ветки: после записи в каталоге dest не остаётся temp-файлов.
+// Atomicity of the src branch: no leftover temp files in the dest directory after a write.
 func TestApply_Present_Src_AtomicNoLeftoverTemp(t *testing.T) {
 	src := seedSrc(t, "payload\n")
 	destDir := t.TempDir()

@@ -11,24 +11,26 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// M2 flow-control edge — комбинации requisite-ов и взаимодействие until↔changed_when,
-// отсутствовавшие в flowcontrol_test/onfail_test/retry_test. Каждый тест закрывает
-// конкретный пробел из qa-gaps; уже покрытые ветки (multi-source onfail частичный
-// провал → TestOnFail_MultiSource_AnyFailed, retry+failed_when:false →
-// TestRetry_FailedWhenFalse_SingleAttempt, skipped→onchanges →
-// TestWhenSkipped_SubsequentSeesSkippedNotChanged) здесь НЕ дублируются.
+// M2 flow-control edge cases — requisite combinations and until↔changed_when
+// interaction not covered by flowcontrol_test/onfail_test/retry_test. Each test
+// closes a specific qa-gaps item; branches already covered elsewhere (partial
+// multi-source onfail failure → TestOnFail_MultiSource_AnyFailed,
+// retry+failed_when:false → TestRetry_FailedWhenFalse_SingleAttempt,
+// skipped→onchanges → TestWhenSkipped_SubsequentSeesSkippedNotChanged) are NOT
+// duplicated here.
 
-// TestWhen_Onchanges_Onfail_AllThree_AllSatisfied — все три requisite на одной
-// задаче в нормальном (без провалов) прогоне. onfail требует упавшего источника —
-// его нет → задача SKIPPED по AND-связке, даже когда when:true И onchanges-источник
-// changed. Подтверждает, что onfail участвует в AND наравне с when/onchanges:
-// gating-цепочка `!when || skipOnChanges || skipOnFail` (applyrunner.go).
+// TestWhen_Onchanges_Onfail_AllThree_AllSatisfied — all three requisites on one
+// task in a normal (no-failure) run. onfail requires a failed source — there is
+// none → the task is SKIPPED by the AND chain, even though when:true AND the
+// onchanges source changed. Confirms onfail participates in the AND alongside
+// when/onchanges: gating chain `!when || skipOnChanges || skipOnFail`
+// (applyrunner.go).
 func TestWhen_Onchanges_Onfail_AllThree_AllSatisfied(t *testing.T) {
 	var targetCalled bool
 	reg := mapRegistry{
 		"core.file":    changedModule(nil),           // src onchanges: changed=true
-		"core.exec":    changedModule(nil),           // src onfail: OK (НЕ упал)
-		"core.service": changedModule(&targetCalled), // цель: when+onchanges+onfail
+		"core.exec":    changedModule(nil),           // src onfail: OK (did NOT fail)
+		"core.service": changedModule(&targetCalled), // target: when+onchanges+onfail
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -43,7 +45,7 @@ func TestWhen_Onchanges_Onfail_AllThree_AllSatisfied(t *testing.T) {
 				Module:       "core.service.restarted",
 				When:         "true",
 				OnchangesIdx: []int32{0}, // cfg changed → onchanges OK
-				OnfailIdx:    []int32{1}, // probe НЕ упал → onfail НЕ сработал
+				OnfailIdx:    []int32{1}, // probe did NOT fail → onfail did NOT trigger
 			},
 		},
 	}, sink)
@@ -61,16 +63,17 @@ func TestWhen_Onchanges_Onfail_AllThree_AllSatisfied(t *testing.T) {
 	}
 }
 
-// TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied — те же три requisite,
-// но onfail-источник упал И when:true И onchanges-источник changed → все три ветки
-// AND пройдены → задача исполняется. Зеркало предыдущего: onfail-задача с
-// дополнительными when/onchanges-ограничениями отрабатывает, когда ВСЕ выполнены.
+// TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied — same three
+// requisites, but the onfail source failed AND when:true AND the onchanges
+// source changed → all three AND branches pass → the task runs. Mirror of the
+// previous test: an onfail task with additional when/onchanges constraints
+// fires when ALL of them are satisfied.
 func TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied(t *testing.T) {
 	var targetCalled bool
 	reg := mapRegistry{
 		"core.file":    changedModule(nil),           // src onchanges: changed=true
-		"core.exec":    failedModule(nil),            // src onfail: УПАЛ
-		"core.service": changedModule(&targetCalled), // цель-rescue
+		"core.exec":    failedModule(nil),            // src onfail: FAILED
+		"core.service": changedModule(&targetCalled), // rescue target
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -85,7 +88,7 @@ func TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied(t *testing.T) {
 				Module:       "core.service.restarted",
 				When:         "true",
 				OnchangesIdx: []int32{0},
-				OnfailIdx:    []int32{1}, // probe упал → onfail сработал
+				OnfailIdx:    []int32{1}, // probe failed → onfail triggered
 			},
 		},
 	}, sink)
@@ -98,21 +101,22 @@ func TestWhen_Onchanges_Onfail_AllThree_OnfailFiresWhenSatisfied(t *testing.T) {
 	if got := sink.taskEvents[2].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_CHANGED {
 		t.Errorf("target status = %v, want CHANGED", got)
 	}
-	// probe упал → прогон FAILED; target — onfail-rescue, его исполнение провал не отменяет.
+	// probe failed → run is FAILED; target is the onfail rescue — its execution doesn't cancel the failure.
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult = %v, want FAILED (источник onfail упал)", sink.runResult.GetStatus())
 	}
 }
 
-// TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins — все три заданы, onfail-источник
-// упал И onchanges-источник changed, но when:false → SKIPPED. when ПЕРВЫМ в
-// gating-цепочке: !when коротит AND до проверки requisite-ов. Подтверждает приоритет
-// when над сработавшими onchanges/onfail.
+// TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins — all three set, the onfail
+// source failed AND the onchanges source changed, but when:false → SKIPPED.
+// when comes FIRST in the gating chain: !when short-circuits the AND before
+// the requisites are checked. Confirms when takes priority over triggered
+// onchanges/onfail.
 func TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins(t *testing.T) {
 	var targetCalled bool
 	reg := mapRegistry{
-		"core.file":    changedModule(nil), // onchanges-источник changed
-		"core.exec":    failedModule(nil),  // onfail-источник упал
+		"core.file":    changedModule(nil), // onchanges source changed
+		"core.exec":    failedModule(nil),  // onfail source failed
 		"core.service": changedModule(&targetCalled),
 	}
 	sink := &recordingSink{}
@@ -126,7 +130,7 @@ func TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins(t *testing.T) {
 			{
 				Name:         "target",
 				Module:       "core.service.restarted",
-				When:         "false", // короткое замыкание AND
+				When:         "false", // short-circuits the AND
 				OnchangesIdx: []int32{0},
 				OnfailIdx:    []int32{1},
 			},
@@ -143,19 +147,20 @@ func TestWhen_Onchanges_Onfail_AllThree_WhenFalseWins(t *testing.T) {
 	}
 }
 
-// TestUntil_WithChangedWhenOverride_Exhausted — взаимодействие until↔changed_when:
-// модуль реально changed, но changed_when:false снимает changed → until
-// `register.self.changed` видит ПЕРЕОПРЕДЕЛЁННЫЙ changed=false на каждой попытке →
-// никогда не truthy → until_exhausted FAILED. Подтверждает, что until-eval работает
-// с register.self ПОСЛЕ override (changed_when применён до until), а не с сырым
-// исходом модуля. Существующий TestUntil_ChangedWhenError покрывает только
-// error-ветку changed_when; здесь — happy-override влияет на until.
+// TestUntil_WithChangedWhenOverride_Exhausted — until↔changed_when interaction:
+// the module is genuinely changed, but changed_when:false clears changed →
+// until `register.self.changed` sees the OVERRIDDEN changed=false on every
+// attempt → never truthy → until_exhausted FAILED. Confirms until-eval works
+// off register.self AFTER the override (changed_when applies before until),
+// not the module's raw outcome. The existing TestUntil_ChangedWhenError only
+// covers changed_when's error branch; this covers the happy-path override
+// affecting until.
 func TestUntil_WithChangedWhenOverride_Exhausted(t *testing.T) {
 	var attempts int
 	reg := mapRegistry{"core.exec": &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 			attempts++
-			return stream.Send(&pluginv1.ApplyEvent{Changed: true}) // сырой changed=true
+			return stream.Send(&pluginv1.ApplyEvent{Changed: true}) // raw changed=true
 		},
 	}}
 	sink := &recordingSink{}
@@ -169,8 +174,8 @@ func TestUntil_WithChangedWhenOverride_Exhausted(t *testing.T) {
 				Module:      "core.exec.run",
 				RetryCount:  3,
 				RetryDelay:  "1ms",
-				ChangedWhen: "false",                 // снимает сырой changed
-				Until:       "register.self.changed", // видит снятый changed → всегда false
+				ChangedWhen: "false",                 // clears the raw changed
+				Until:       "register.self.changed", // sees the cleared changed → always false
 			},
 		},
 	}, sink)
@@ -189,16 +194,16 @@ func TestUntil_WithChangedWhenOverride_Exhausted(t *testing.T) {
 	}
 }
 
-// TestUntil_WithChangedWhenOverride_TrueExits — обратная сторона: changed_when:true
-// поднимает changed на OK-модуле → until `register.self.changed` видит true на 1-й
-// попытке → выход (одна попытка, CHANGED). Доказывает, что override и в truthy-
-// сторону прокидывается в until-eval.
+// TestUntil_WithChangedWhenOverride_TrueExits — the flip side: changed_when:true
+// raises changed on an OK module → until `register.self.changed` sees true on
+// the 1st attempt → exits (one attempt, CHANGED). Proves the override also
+// propagates into until-eval on the truthy side.
 func TestUntil_WithChangedWhenOverride_TrueExits(t *testing.T) {
 	var attempts int
 	reg := mapRegistry{"core.exec": &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 			attempts++
-			return stream.Send(&pluginv1.ApplyEvent{}) // OK, сырой changed=false
+			return stream.Send(&pluginv1.ApplyEvent{}) // OK, raw changed=false
 		},
 	}}
 	sink := &recordingSink{}
@@ -212,8 +217,8 @@ func TestUntil_WithChangedWhenOverride_TrueExits(t *testing.T) {
 				Module:      "core.exec.run",
 				RetryCount:  5,
 				RetryDelay:  "1ms",
-				ChangedWhen: "true",                  // поднимает changed на OK-модуле
-				Until:       "register.self.changed", // видит поднятый changed → true сразу
+				ChangedWhen: "true",                  // raises changed on an OK module
+				Until:       "register.self.changed", // sees the raised changed → true immediately
 			},
 		},
 	}, sink)
@@ -228,15 +233,16 @@ func TestUntil_WithChangedWhenOverride_TrueExits(t *testing.T) {
 	}
 }
 
-// TestOnFail_SkippedSource_Skips — источник onfail SKIPPED (по when:false), а не
-// failed. skipped ≠ failed → onfail НЕ срабатывает → rescue SKIPPED. Зеркало
-// TestWhenSkipped (там skipped-источник не триггерит onchanges); здесь — что
-// skipped-источник не триггерит и onfail. Закрывает downstream-onfail-на-skipped.
+// TestOnFail_SkippedSource_Skips — the onfail source is SKIPPED (via
+// when:false), not failed. skipped ≠ failed → onfail does NOT trigger → rescue
+// SKIPPED. Mirror of TestWhenSkipped (where a skipped source doesn't trigger
+// onchanges); here — a skipped source doesn't trigger onfail either. Closes
+// the downstream-onfail-on-skipped gap.
 func TestOnFail_SkippedSource_Skips(t *testing.T) {
 	var srcCalled, rescueCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(&srcCalled),     // A: упал бы, но when:false → SKIPPED
-		"core.service": changedModule(&rescueCalled), // rescue по onfail:[A]
+		"core.exec":    failedModule(&srcCalled),     // A: would fail, but when:false → SKIPPED
+		"core.service": changedModule(&rescueCalled), // rescue via onfail:[A]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -257,7 +263,7 @@ func TestOnFail_SkippedSource_Skips(t *testing.T) {
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
 		t.Fatalf("A status = %v, want SKIPPED", got)
 	}
-	// skipped-источник несёт failed=false → onfail не активируется.
+	// a skipped source carries failed=false → onfail doesn't activate.
 	if rescueCalled {
 		t.Errorf("rescue исполнился на SKIPPED-источник (skipped ≠ failed — onfail не должен срабатывать)")
 	}

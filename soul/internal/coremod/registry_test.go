@@ -27,11 +27,11 @@ func TestDefault_ContainsAllCoreMVP(t *testing.T) {
 		"core.repo", "core.firewall",
 		// Core.a.7
 		"core.http",
-		// ADR-015 — no-op/barrier-якорь
+		// ADR-015 — no-op/barrier anchor
 		"core.noop",
 		// ADR-025 — read-probe Augur
 		"core.augur",
-		// ADR-065 — доставка SoulModule-плагина
+		// ADR-065 — SoulModule plugin delivery
 		"core.module",
 	}
 	for _, name := range want {

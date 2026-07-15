@@ -50,7 +50,7 @@ func assertUnchanged(t *testing.T, path string, before fileSnap) {
 	}
 }
 
-// TestPlan_Present_LineExists_Clean — строка уже есть → drift=false.
+// TestPlan_Present_LineExists_Clean — line already present → drift=false.
 func TestPlan_Present_LineExists_Clean(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -73,7 +73,7 @@ func TestPlan_Present_LineExists_Clean(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Present_LineMissing_Drift — строки нет → drift=true.
+// TestPlan_Present_LineMissing_Drift — line missing → drift=true.
 func TestPlan_Present_LineMissing_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -96,7 +96,7 @@ func TestPlan_Present_LineMissing_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Present_FileMissing_Drift — файла нет → drift=true (Apply create-or-fail).
+// TestPlan_Present_FileMissing_Drift — file missing → drift=true (Apply create-or-fail).
 func TestPlan_Present_FileMissing_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nope.txt")
@@ -117,8 +117,8 @@ func TestPlan_Present_FileMissing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_Regexp_NoMatch_Drift — regexp без совпадений → Apply
-// добавил бы строку → drift=true.
+// TestPlan_Present_Regexp_NoMatch_Drift — regexp with no match → Apply would
+// add the line → drift=true.
 func TestPlan_Present_Regexp_NoMatch_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -141,7 +141,7 @@ func TestPlan_Present_Regexp_NoMatch_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_LineExists_Drift — строка есть → drift=true.
+// TestPlan_Absent_LineExists_Drift — line present → drift=true.
 func TestPlan_Absent_LineExists_Drift(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -164,7 +164,7 @@ func TestPlan_Absent_LineExists_Drift(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_LineMissing_Clean — строки нет → drift=false.
+// TestPlan_Absent_LineMissing_Clean — line missing → drift=false.
 func TestPlan_Absent_LineMissing_Clean(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
@@ -187,7 +187,7 @@ func TestPlan_Absent_LineMissing_Clean(t *testing.T) {
 	assertUnchanged(t, path, before)
 }
 
-// TestPlan_Absent_FileMissing_Clean — файла нет → нечего удалять → clean.
+// TestPlan_Absent_FileMissing_Clean — file missing → nothing to remove → clean.
 func TestPlan_Absent_FileMissing_Clean(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nope.txt")

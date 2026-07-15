@@ -34,7 +34,7 @@ func (f fakeLookup) Get(namespace, name string) *sharedhost.SigilRecord {
 type fakeChunkStream struct {
 	grpc.ServerStreamingClient[keeperv1.PluginChunk]
 	chunks [][]byte
-	err    error // отдаётся после чанков вместо io.EOF
+	err    error // returned after chunks are exhausted, instead of io.EOF
 }
 
 func (s *fakeChunkStream) Recv() (*keeperv1.PluginChunk, error) {
@@ -198,7 +198,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// --- Apply: allow-check ДО fetch ---
+// --- Apply: allow-check BEFORE fetch ---
 
 func TestApplyNotAllowedNoSigil(t *testing.T) {
 	f := newFixture(t)
@@ -218,7 +218,7 @@ func TestApplyNotAllowedRefMismatch(t *testing.T) {
 	}
 }
 
-// --- Apply: идемпотентность ---
+// --- Apply: idempotency ---
 
 func TestApplyIdempotentSkipsFetch(t *testing.T) {
 	f := newFixture(t)

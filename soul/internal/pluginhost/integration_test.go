@@ -20,10 +20,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// sigilFor подписывает валидный SigilRecord под бинарь+manifest из Discovered
-// тем же общим helper-ом, что Keeper при Sign (BuildSigilBlock +
-// NormalizeManifestBytes — симметрия sign↔verify). Возвращает trust-anchor и
-// лукап с единственным допуском, готовые к навешиванию на Host.
+// sigilFor signs a valid SigilRecord for the binary+manifest from Discovered,
+// using the same helper Keeper uses for Sign (BuildSigilBlock +
+// NormalizeManifestBytes — sign/verify symmetry). Returns a trust-anchor and
+// a lookup with the single grant, ready to attach to a Host.
 func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLookup) {
 	t.Helper()
 	manifest, err := os.ReadFile(filepath.Join(d.Dir, "manifest.yaml"))
@@ -50,7 +50,7 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	return pub, testLookup{d.Manifest.Namespace + "." + d.Manifest.Name: rec}
 }
 
-// testLookup — минимальный sharedhost.SigilLookup поверх map.
+// testLookup is a minimal sharedhost.SigilLookup backed by a map.
 type testLookup map[string]*sharedhost.SigilRecord
 
 func (l testLookup) Get(ns, name string) *sharedhost.SigilRecord { return l[ns+"."+name] }
@@ -65,15 +65,15 @@ func fileSHA256Hex(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// buildEchoPlugin собирает test-плагин testdata/echo-plugin и кладёт его в
-// outDir как `soul-mod-echo`. Возвращает абсолютный путь к бинарю.
+// buildEchoPlugin builds the testdata/echo-plugin test plugin and places it in
+// outDir as `soul-mod-echo`. Returns the absolute path to the binary.
 //
-// Сборка идёт с GOWORK=off, потому что плагин — отдельный go.mod-модуль
-// в testdata/ (формально не часть workspace; иначе go-инструменты будут
-// требовать его inclusion в go.work корня проекта).
+// Builds with GOWORK=off because the plugin is a separate go.mod module under
+// testdata/ (not formally part of the workspace; otherwise go tooling would
+// require its inclusion in the root go.work).
 //
-// На darwin длина sun_path Unix-сокета ограничена ~104 байтами; outDir
-// должен быть коротким (использовать /tmp/ss-host-, не t.TempDir).
+// On darwin, Unix socket sun_path length is capped at ~104 bytes; outDir must
+// be short (use /tmp/ss-host-, not t.TempDir).
 func buildEchoPlugin(t *testing.T, outDir string) string {
 	t.Helper()
 	srcDir, err := filepath.Abs("testdata/echo-plugin")
@@ -91,9 +91,9 @@ func buildEchoPlugin(t *testing.T, outDir string) string {
 	return binPath
 }
 
-// shortHostDir — короткая директория под /tmp для socket+modules: на darwin
-// `t.TempDir()` живёт под /var/folders/... и длина unix-sun_path превышает
-// предел. На linux это безопасно, но единый подход проще.
+// shortHostDir is a short /tmp directory for socket+modules: on darwin
+// `t.TempDir()` lives under /var/folders/... and exceeds the unix sun_path
+// length limit. Safe on linux too, but a single approach is simpler.
 func shortHostDir(t *testing.T, prefix string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", prefix)
@@ -154,7 +154,7 @@ spec:
 		SigilAnchors:   sharedhost.NewAnchorSet([]ed25519.PublicKey{pub}),
 		Sigils:         sigils,
 	}}
-	_ = binPath // помечает использование
+	_ = binPath // marks it used
 	return h, found[0], func() {}
 }
 
@@ -251,7 +251,7 @@ func TestSpawnApplyValidationFailure(t *testing.T) {
 	}
 	defer p.Close()
 
-	vr, err := p.Validate(ctx, &pluginv1.ValidateRequest{State: "applied"}) // без name
+	vr, err := p.Validate(ctx, &pluginv1.ValidateRequest{State: "applied"}) // no name
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -283,9 +283,9 @@ func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 	h, d, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
 
-	// Манифест плагина в нашей фикстуре имеет required_capabilities: [].
-	// Подсовываем не-пустой required: vault_access, при host-е, где разрешено
-	// только network_outbound.
+	// The plugin manifest in our fixture has required_capabilities: [].
+	// Feed it a non-empty required: vault_access, while the host only allows
+	// network_outbound.
 	d.Manifest.RequiredCapabilities = []string{"vault_access"}
 	h.AllowedCapabilities = map[pluginv1.Capability]struct{}{
 		pluginv1.Capability_CAPABILITY_NETWORK_OUTBOUND: {},
@@ -298,8 +298,8 @@ func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 	}
 }
 
-// TestSpawnParallel — несколько Spawn-ов параллельно работают корректно
-// (разные сокеты, нет коллизий имён).
+// TestSpawnParallel verifies multiple concurrent Spawns work correctly
+// (distinct sockets, no name collisions).
 func TestSpawnParallel(t *testing.T) {
 	h, d, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()

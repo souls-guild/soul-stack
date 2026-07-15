@@ -8,7 +8,7 @@ import (
 	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 )
 
-// withRescan пересобирает модуль fixture с Rescan-счётчиком (S4, ADR-065(d)).
+// withRescan rebuilds the fixture's module with a Rescan counter (S4, ADR-065(d)).
 func (f *fixture) withRescan(calls *int) {
 	deps := f.deps
 	deps.Rescan = func() { *calls++ }

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// DiskFullName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// DiskFullName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const DiskFullName = beaconaddr.DiskFull
 
 const (
@@ -18,32 +18,33 @@ const (
 	stateDiskFull State = "full"
 )
 
-// diskFullDefaultThreshold — порог использования ФС по умолчанию (процент).
-// "full" взводится при использовании ≥ порога.
+// diskFullDefaultThreshold is the default filesystem usage threshold
+// (percent). "full" triggers when usage ≥ threshold.
 const diskFullDefaultThreshold = 90.0
 
-// diskUsage — снимок использования файловой системы: процент занятого места.
-// Считается через statfs (read-only syscall), без парсинга вывода `df` — точнее
-// и без зависимости от локали/формата утилиты.
+// diskUsage is a filesystem usage snapshot: percent of space used. Computed
+// via statfs (read-only syscall), not by parsing `df` output — more accurate
+// and independent of locale/tool output format.
 type diskUsage struct {
 	usedPercent float64
 }
 
-// DiskFull — core-beacon наблюдения за заполнением файловой системы (ADR-030).
-// Read-only: один statfs-вызов, без записи. State: "full" если использование ФС
-// ≥ threshold_percent, иначе "ok". Переход ok↔full edge-triggered → Portent.
+// DiskFull is the core-beacon for observing filesystem fill level (ADR-030).
+// Read-only: a single statfs call, no writes. State is "full" when usage ≥
+// threshold_percent, otherwise "ok". The ok↔full transition is
+// edge-triggered → Portent.
 //
 // Params:
-//   - `path` (string, required) — точка монтирования либо любой путь внутри ФС;
-//   - `threshold_percent` (int, optional, default 90) — порог "full", 1..100.
+//   - `path` (string, required) — mount point or any path within the filesystem;
+//   - `threshold_percent` (int, optional, default 90) — "full" threshold, 1..100.
 type DiskFull struct {
-	// Usage вынесен в поле для подмены в unit-тестах детерминированным снимком
-	// (реальный statfs зависит от свободного места хоста — флейк). В проде —
-	// statfsUsage поверх syscall.Statfs.
+	// Usage is a field so unit tests can swap in a deterministic snapshot
+	// (real statfs depends on host free space — flaky). In production it's
+	// statfsUsage over syscall.Statfs.
 	Usage func(path string) (diskUsage, error)
 }
 
-// NewDiskFull собирает beacon с production-сэмплером (syscall.Statfs).
+// NewDiskFull builds a beacon with the production sampler (syscall.Statfs).
 func NewDiskFull() *DiskFull { return &DiskFull{Usage: statfsUsage} }
 
 func (b *DiskFull) Check(_ context.Context, params *structpb.Struct) (State, *structpb.Struct, error) {
@@ -68,13 +69,13 @@ func (b *DiskFull) Check(_ context.Context, params *structpb.Struct) (State, *st
 	return state, diskData(path, u.usedPercent, threshold), nil
 }
 
-// statfsUsage считает процент занятого места через statfs (read-only).
-// used = total - Bavail; процент от total. Bavail (а не Bfree) — блоки,
-// доступные непривилегированному процессу: root-reserved (~5% по умолчанию у
-// ext-семейства) считается занятым, как и у обычного `df`. Иначе used_percent
-// завышался против `df` и beacon ложно-рано взводил "full". Total/avail берутся
-// в блоках Bsize — процент сокращает Bsize. Пустая ФС (Blocks == 0) → 0%, чтобы
-// не делить на ноль.
+// statfsUsage computes percent used via statfs (read-only). used = total -
+// Bavail; percent of total. Bavail (not Bfree) is blocks available to an
+// unprivileged process: root-reserved space (~5% by default on ext-family
+// filesystems) counts as used, matching plain `df`. Using Bfree instead would
+// undercount used_percent relative to `df` and delay the beacon's "full"
+// trigger. Total/avail are in Bsize blocks — the percentage cancels Bsize
+// out. An empty filesystem (Blocks == 0) → 0%, avoiding division by zero.
 func statfsUsage(path string) (diskUsage, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
@@ -97,8 +98,8 @@ func diskData(path string, usedPercent, threshold float64) *structpb.Struct {
 	return s
 }
 
-// optThresholdPercent разбирает опциональный threshold_percent (1..100). Пустой
-// param → def. proto-json маршалит числа во float64 (OptIntParam требует целое).
+// optThresholdPercent parses the optional threshold_percent (1..100). Empty
+// param → def. proto-json marshals numbers as float64 (OptIntParam requires an integer).
 func optThresholdPercent(params *structpb.Struct, def float64) (float64, error) {
 	n, ok, err := util.OptIntParam(params, "threshold_percent")
 	if err != nil {

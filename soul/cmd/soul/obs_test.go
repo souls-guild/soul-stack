@@ -17,7 +17,7 @@ func TestSoulOTelEndpoint(t *testing.T) {
 	}
 }
 
-// Дефолт loopback-адреса метрик зафиксирован и совпадает с docs/soul/config.md.
+// The default metrics loopback address is pinned and matches docs/soul/config.md.
 func TestDefaultSoulMetricsListen(t *testing.T) {
 	if defaultSoulMetricsListen != "127.0.0.1:9091" {
 		t.Errorf("defaultSoulMetricsListen = %q, want 127.0.0.1:9091", defaultSoulMetricsListen)

@@ -39,8 +39,8 @@ func TestSystemSource_FQDNKeepsFull(t *testing.T) {
 	}
 }
 
-// OS-ветка для не-Linux (darwin/windows/прочее) не читает os-release —
-// проверяем osNonLinux напрямую, не завися от GOOS теста.
+// The non-Linux OS branch (darwin/windows/other) doesn't read os-release —
+// test osNonLinux directly, independent of the test's GOOS.
 func TestSystemSource_OSNonLinux(t *testing.T) {
 	s := &systemSource{}
 	got := s.osNonLinux(context.Background())
@@ -60,7 +60,7 @@ func TestSystemSource_OSNonLinux(t *testing.T) {
 	}
 }
 
-// OS на Linux читает /etc/os-release через инъецированный readFile.
+// OS on Linux reads /etc/os-release via an injected readFile.
 func TestSystemSource_OSLinuxParse(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux-only os-release branch")
@@ -90,7 +90,7 @@ func TestSystemSource_OSLinuxReadError(t *testing.T) {
 	}
 }
 
-// Arch всегда непуст (runtime.GOARCH).
+// Arch is always non-empty (runtime.GOARCH).
 func TestSystemSource_Arch(t *testing.T) {
 	s := &systemSource{}
 	if s.Arch() == "" {
@@ -98,7 +98,7 @@ func TestSystemSource_Arch(t *testing.T) {
 	}
 }
 
-// Network на пустом списке интерфейсов: FQDN заполнен, интерфейсов нет, паники нет.
+// Network with an empty interface list: FQDN is populated, no interfaces, no panic.
 func TestSystemSource_NetworkEmpty(t *testing.T) {
 	s := &systemSource{
 		hostname:   func() (string, error) { return "h.example", nil },
@@ -153,8 +153,8 @@ func TestIsPrimaryCandidate(t *testing.T) {
 	}
 }
 
-// Smoke: production NewSystemSource на текущем хосте собирает факты без паники
-// (best-effort: tolerance по значениям, проверяем только инварианты).
+// Smoke: production NewSystemSource on the current host collects facts
+// without panicking (best-effort: tolerant of values, we only check invariants).
 func TestNewSystemSource_SmokeCollect(t *testing.T) {
 	rep := NewCollector(NewSystemSource(), nil).Collect(context.Background(), "smoke-sid")
 	tf := rep.GetTypedFacts()

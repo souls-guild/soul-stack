@@ -11,13 +11,13 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TestOnFail_NoFailures_Skips — нормальный прогон без провалов: onfail-задача
-// (onfail:[A]) ВСЕГДА SKIPPED — её источник OK, rescue не нужен.
+// TestOnFail_NoFailures_Skips — normal run with no failures: the onfail task
+// (onfail:[A]) is ALWAYS SKIPPED — its source is OK, no rescue needed.
 func TestOnFail_NoFailures_Skips(t *testing.T) {
 	var rescueCalled bool
 	reg := mapRegistry{
 		"core.exec":    changedModule(nil),           // A: OK (changed)
-		"core.service": changedModule(&rescueCalled), // rescue по onfail:[A]
+		"core.service": changedModule(&rescueCalled), // rescue via onfail:[A]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -43,14 +43,14 @@ func TestOnFail_NoFailures_Skips(t *testing.T) {
 	}
 }
 
-// TestOnFail_SourceFailed_RescueRuns — A падает → rescue B (onfail:[A]) ИСПОЛНЯЕТСЯ,
-// обычная C (после A, без onfail) SKIPPED, RunResult FAILED (rescue не отменяет провал).
+// TestOnFail_SourceFailed_RescueRuns — A fails → rescue B (onfail:[A]) RUNS,
+// plain C (after A, no onfail) SKIPPED, RunResult FAILED (rescue doesn't cancel the failure).
 func TestOnFail_SourceFailed_RescueRuns(t *testing.T) {
 	var rescueCalled, plainCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),            // A: падает
-		"core.service": changedModule(&rescueCalled), // B: rescue по onfail:[A]
-		"core.cmd":     changedModule(&plainCalled),  // C: обычная, после A
+		"core.exec":    failedModule(nil),            // A: fails
+		"core.service": changedModule(&rescueCalled), // B: rescue via onfail:[A]
+		"core.cmd":     changedModule(&plainCalled),  // C: plain, after A
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -86,14 +86,14 @@ func TestOnFail_SourceFailed_RescueRuns(t *testing.T) {
 	}
 }
 
-// TestOnFail_MultiSource_AnyFailed — onfail:[A,B]: упал любой → rescue исполняется
-// (any-семантика, зеркало onchanges). Здесь A OK, B падает → rescue запускается.
+// TestOnFail_MultiSource_AnyFailed — onfail:[A,B]: if either fails → rescue runs
+// (any semantics, mirrors onchanges). Here A is OK, B fails → rescue triggers.
 func TestOnFail_MultiSource_AnyFailed(t *testing.T) {
 	var rescueCalled bool
 	reg := mapRegistry{
 		"core.exec":    changedModule(nil),           // A: OK
-		"core.file":    failedModule(nil),            // B: падает
-		"core.service": changedModule(&rescueCalled), // rescue по onfail:[A,B]
+		"core.file":    failedModule(nil),            // B: fails
+		"core.service": changedModule(&rescueCalled), // rescue via onfail:[A,B]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -120,8 +120,8 @@ func TestOnFail_MultiSource_AnyFailed(t *testing.T) {
 	}
 }
 
-// TestOnFail_TimedOutSource_RescueRuns — источник A истёк по timeout (TIMED_OUT —
-// частный случай failed) → rescue B (onfail:[A]) исполняется.
+// TestOnFail_TimedOutSource_RescueRuns — source A times out (TIMED_OUT is a
+// special case of failed) → rescue B (onfail:[A]) runs.
 func TestOnFail_TimedOutSource_RescueRuns(t *testing.T) {
 	var rescueCalled bool
 	slowModule := &fakeModule{
@@ -132,7 +132,7 @@ func TestOnFail_TimedOutSource_RescueRuns(t *testing.T) {
 	}
 	reg := mapRegistry{
 		"core.exec":    slowModule,                   // A: TIMED_OUT
-		"core.service": changedModule(&rescueCalled), // rescue по onfail:[A]
+		"core.service": changedModule(&rescueCalled), // rescue via onfail:[A]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -158,14 +158,14 @@ func TestOnFail_TimedOutSource_RescueRuns(t *testing.T) {
 	}
 }
 
-// TestOnFail_IgnoredErrorSource_Skips — источник A падает в модуле, но failed_when:false
-// (ignore_errors) делает её OK → onfail НЕ срабатывает (источник OK, не failed),
-// rescue SKIPPED, прогон SUCCESS.
+// TestOnFail_IgnoredErrorSource_Skips — source A fails in the module, but
+// failed_when:false (ignore_errors) makes it OK → onfail does NOT fire (source
+// is OK, not failed), rescue SKIPPED, run SUCCESS.
 func TestOnFail_IgnoredErrorSource_Skips(t *testing.T) {
 	var rescueCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),            // A: падает в модуле, но failed_when:false глушит
-		"core.service": changedModule(&rescueCalled), // rescue по onfail:[A]
+		"core.exec":    failedModule(nil),            // A: fails in the module, but failed_when:false suppresses it
+		"core.service": changedModule(&rescueCalled), // rescue via onfail:[A]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -194,17 +194,18 @@ func TestOnFail_IgnoredErrorSource_Skips(t *testing.T) {
 	}
 }
 
-// TestOnFail_MultipleFailures_RescueTailRuns — несколько провалов: A падает (первый
-// failed НЕ ломает цикл), обычная B SKIPPED, rescue C (onfail:[A]) исполняется,
-// обычная D после C тоже SKIPPED. Подтверждает: первый failed не break-ает цикл,
-// onfail-хвост отрабатывает, обычные задачи после провала пропускаются.
+// TestOnFail_MultipleFailures_RescueTailRuns — multiple failures: A fails (the
+// first failed does NOT break the loop), plain B SKIPPED, rescue C (onfail:[A])
+// runs, plain D after C is also SKIPPED. Confirms: the first failed doesn't
+// break the loop, the onfail tail still runs, plain tasks after a failure are
+// skipped.
 func TestOnFail_MultipleFailures_RescueTailRuns(t *testing.T) {
 	var bCalled, cCalled, dCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),       // A: падает
-		"core.file":    changedModule(&bCalled), // B: обычная после A → SKIPPED
-		"core.service": changedModule(&cCalled), // C: rescue по onfail:[A] → исполняется
-		"core.cmd":     changedModule(&dCalled), // D: обычная после C → SKIPPED
+		"core.exec":    failedModule(nil),       // A: fails
+		"core.file":    changedModule(&bCalled), // B: plain after A → SKIPPED
+		"core.service": changedModule(&cCalled), // C: rescue via onfail:[A] → runs
+		"core.cmd":     changedModule(&dCalled), // D: plain after C → SKIPPED
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -249,26 +250,27 @@ func TestOnFail_MultipleFailures_RescueTailRuns(t *testing.T) {
 	}
 }
 
-// TestOnFail_CancelOverFailedRun_Cancelled — центральный «не ложный SUCCESS»:
-// A падает (runFailed), rescue B (onfail:[A]) исполняется, во время отправки её
-// TaskEvent приходит CancelApply (onTask-hook, как в TestRun_CancelBetweenTasks).
-// Следующая итерация видит runCtx.Err() != nil → cancel-break: RunResult CANCELLED,
-// НЕ FAILED и НЕ зависший. Cancel прерывает цикл безусловно, перекрывая уже
-// зафиксированный FAILED (applyrunner.go: cancel-проверка в начале итерации
-// перезаписывает runStatus). Хвостовая plain-задача нужна, чтобы дать циклу ещё
-// одну итерацию — на ней и срабатывает break (она сама уже не исполняется).
+// TestOnFail_CancelOverFailedRun_Cancelled — the central "not a false SUCCESS"
+// case: A fails (runFailed), rescue B (onfail:[A]) runs, and while sending its
+// TaskEvent a CancelApply arrives (onTask hook, as in TestRun_CancelBetweenTasks).
+// The next iteration sees runCtx.Err() != nil → cancel-break: RunResult CANCELLED,
+// NOT FAILED and NOT hung. Cancel interrupts the loop unconditionally, overriding
+// the already-recorded FAILED (applyrunner.go: the cancel check at the start of
+// each iteration overwrites runStatus). The trailing plain task exists just to
+// give the loop one more iteration — that's where the break fires (it never runs
+// itself).
 func TestOnFail_CancelOverFailedRun_Cancelled(t *testing.T) {
 	var rescueCalled, tailCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),            // A: падает → runFailed
-		"core.service": changedModule(&rescueCalled), // B: rescue по onfail:[A], исполняется
-		"core.cmd":     changedModule(&tailCalled),   // tail: следующая итерация (не дойдёт)
+		"core.exec":    failedModule(nil),            // A: fails → runFailed
+		"core.service": changedModule(&rescueCalled), // B: rescue via onfail:[A], runs
+		"core.cmd":     changedModule(&tailCalled),   // tail: next iteration (never reached)
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// CancelApply приходит во время rescue-хвоста — дёргаем Cancel при отправке
-	// TaskEvent задачи B (симуляция CancelApply по EventStream, как в applyrunner_test).
+	// CancelApply arrives during the rescue tail — trigger Cancel when sending
+	// task B's TaskEvent (simulates CancelApply over EventStream, as in applyrunner_test).
 	sink.onTask = func(ev *keeperv1.TaskEvent) {
 		if ev.GetTaskIdx() == 1 {
 			r.Cancel(ev.GetApplyId())
@@ -292,7 +294,7 @@ func TestOnFail_CancelOverFailedRun_Cancelled(t *testing.T) {
 	if tailCalled {
 		t.Errorf("tail-задача исполнилась, хотя cancel прервал цикл до неё")
 	}
-	// Cancel сработал на итерации tail → событие tail не отправлено: ровно A + rescue.
+	// Cancel fired on the tail iteration → tail's event never sent: exactly A + rescue.
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d, want 2 (A + rescue, tail не дошёл — cancel-break)", len(sink.taskEvents))
 	}
@@ -307,16 +309,16 @@ func TestOnFail_CancelOverFailedRun_Cancelled(t *testing.T) {
 	}
 }
 
-// TestOnFail_RescueItselfFails_RunStaysFailed — провал rescue не «чинит» прогон:
-// A падает → B(onfail:[A]) исполняется и САМА возвращает FAILED → B = FAILED,
-// RunResult остаётся FAILED, последующая обычная C SKIPPED. runFailed уже выставлен
-// провалом A, провал B его не меняет (он уже терминально true).
+// TestOnFail_RescueItselfFails_RunStaysFailed — a failing rescue doesn't "fix"
+// the run: A fails → B(onfail:[A]) runs and ITSELF returns FAILED → B = FAILED,
+// RunResult stays FAILED, the following plain C is SKIPPED. runFailed is already
+// set by A's failure; B's failure doesn't change it (already terminally true).
 func TestOnFail_RescueItselfFails_RunStaysFailed(t *testing.T) {
 	var rescueCalled, plainCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),           // A: падает
-		"core.service": failedModule(&rescueCalled), // B: rescue по onfail:[A], тоже падает
-		"core.cmd":     changedModule(&plainCalled), // C: обычная после B
+		"core.exec":    failedModule(nil),           // A: fails
+		"core.service": failedModule(&rescueCalled), // B: rescue via onfail:[A], also fails
+		"core.cmd":     changedModule(&plainCalled), // C: plain after B
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -340,7 +342,7 @@ func TestOnFail_RescueItselfFails_RunStaysFailed(t *testing.T) {
 	}
 	want := []keeperv1.TaskStatus{
 		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // A
-		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // B rescue — исполнился И упал
+		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // B rescue — ran AND failed
 		keeperv1.TaskStatus_TASK_STATUS_SKIPPED, // C
 	}
 	if len(sink.taskEvents) != len(want) {
@@ -356,16 +358,16 @@ func TestOnFail_RescueItselfFails_RunStaysFailed(t *testing.T) {
 	}
 }
 
-// TestOnFail_RescueChain_RescueOfRescueRuns — onfail-цепочка (rescue на rescue):
-// A падает → B(onfail:[A]) исполняется и САМА падает → C(onfail:[B]) исполняется
-// (rescue rescue-а). Подтверждает композицию: register.failed задачи B (записанный
-// при её провале) активирует onfail задачи C, хотя B сама — onfail-задача.
+// TestOnFail_RescueChain_RescueOfRescueRuns — onfail chain (rescue of a rescue):
+// A fails → B(onfail:[A]) runs and ITSELF fails → C(onfail:[B]) runs (rescue of
+// the rescue). Confirms composition: register.failed recorded on B's failure
+// activates C's onfail, even though B is itself an onfail task.
 func TestOnFail_RescueChain_RescueOfRescueRuns(t *testing.T) {
 	var bCalled, cCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),       // A: падает
-		"core.service": failedModule(&bCalled),  // B: rescue по onfail:[A], падает
-		"core.cmd":     changedModule(&cCalled), // C: rescue по onfail:[B]
+		"core.exec":    failedModule(nil),       // A: fails
+		"core.service": failedModule(&bCalled),  // B: rescue via onfail:[A], fails
+		"core.cmd":     changedModule(&cCalled), // C: rescue via onfail:[B]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -389,8 +391,8 @@ func TestOnFail_RescueChain_RescueOfRescueRuns(t *testing.T) {
 	}
 	want := []keeperv1.TaskStatus{
 		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // A
-		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // B — исполнился И упал
-		keeperv1.TaskStatus_TASK_STATUS_CHANGED, // C — rescue rescue-а исполнился
+		keeperv1.TaskStatus_TASK_STATUS_FAILED,  // B — ran AND failed
+		keeperv1.TaskStatus_TASK_STATUS_CHANGED, // C — rescue of the rescue ran
 	}
 	if len(sink.taskEvents) != len(want) {
 		t.Fatalf("taskEvents = %d, want %d", len(sink.taskEvents), len(want))
@@ -405,17 +407,18 @@ func TestOnFail_RescueChain_RescueOfRescueRuns(t *testing.T) {
 	}
 }
 
-// TestOnFail_ForwardRef_Skips — forward-ref onfail (onfail на задачу ПОЗЖЕ по плану):
-// X(onfail:[Y]), где Y идёт ПОСЛЕ X. Soul применяет последовательно — на момент X
-// registerByIdx[Y] пуст, skipOnFail трактует отсутствующий источник как failed=false
-// → X молча SKIPPED (no-op). Поведение НАМЕРЕННОЕ (не баг): destiny/tasks.md фиксирует
-// onfail как backward-requisite. Регрессия закрепляет no-op, чтобы его случайно не
-// «починили» в forward-резолв (это потребовало бы двухпроходного прогона).
+// TestOnFail_ForwardRef_Skips — forward-ref onfail (onfail on a task LATER in the
+// plan): X(onfail:[Y]), where Y runs AFTER X. Soul applies sequentially — at the
+// time X runs, registerByIdx[Y] is empty, so skipOnFail treats the missing source
+// as failed=false → X is silently SKIPPED (no-op). This is INTENTIONAL, not a bug:
+// destiny/tasks.md documents onfail as a backward-requisite. The regression pins
+// down the no-op so it doesn't get accidentally "fixed" into a forward resolve
+// (which would require a two-pass run).
 func TestOnFail_ForwardRef_Skips(t *testing.T) {
 	var xCalled, yCalled bool
 	reg := mapRegistry{
-		"core.service": changedModule(&xCalled), // X: onfail на Y (позже) → SKIPPED
-		"core.exec":    failedModule(&yCalled),  // Y: падает, но уже ПОСЛЕ X
+		"core.service": changedModule(&xCalled), // X: onfail on Y (later) → SKIPPED
+		"core.exec":    failedModule(&yCalled),  // Y: fails, but AFTER X
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -423,7 +426,7 @@ func TestOnFail_ForwardRef_Skips(t *testing.T) {
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "onfail-forward-ref",
 		Tasks: []*keeperv1.RenderedTask{
-			{Name: "X", Module: "core.service.restarted", OnfailIdx: []int32{1}}, // onfail на idx 1 (Y, позже)
+			{Name: "X", Module: "core.service.restarted", OnfailIdx: []int32{1}}, // onfail on idx 1 (Y, later)
 			{Name: "Y", Module: "core.exec.run", Register: "Y"},
 		},
 	}, sink)
@@ -442,19 +445,19 @@ func TestOnFail_ForwardRef_Skips(t *testing.T) {
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Errorf("Y status = %v, want FAILED", got)
 	}
-	// Y упал → прогон FAILED; X — SKIPPED, не «спас» провал Y (он шёл раньше Y).
+	// Y failed → run FAILED; X — SKIPPED, didn't "rescue" Y's failure (it ran before Y).
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_FAILED {
 		t.Errorf("runResult = %v, want FAILED (Y упал, forward-ref X его не покрыл)", sink.runResult.GetStatus())
 	}
 }
 
-// TestOnFail_AndWhen_BothApplied — onfail-задача с when: gating-уется по AND:
-// источник упал (onfail сработал) НО when:false → SKIPPED. Подтверждает связку
-// requisites AND when (destiny/tasks.md §9).
+// TestOnFail_AndWhen_BothApplied — an onfail task with when: gated by AND:
+// source failed (onfail fires) BUT when:false → SKIPPED. Confirms the
+// requisites AND when combination (destiny/tasks.md §9).
 func TestOnFail_AndWhen_BothApplied(t *testing.T) {
 	var rescueCalled bool
 	reg := mapRegistry{
-		"core.exec":    failedModule(nil),            // A: падает → onfail сработал бы
+		"core.exec":    failedModule(nil),            // A: fails → onfail would fire
 		"core.service": changedModule(&rescueCalled), // rescue: onfail:[A] + when:false
 	}
 	sink := &recordingSink{}

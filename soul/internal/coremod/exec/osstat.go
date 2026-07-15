@@ -6,9 +6,9 @@ import (
 	"os"
 )
 
-// osStat — production-обёртка над os.Stat для StatFile. Возвращает (true, nil)
-// для существующего пути, (false, nil) для отсутствующего, (false, err) — для
-// прочих ошибок (permission denied и пр.).
+// osStat is the production wrapper over os.Stat for StatFile. Returns
+// (true, nil) if the path exists, (false, nil) if it doesn't, and
+// (false, err) for other errors (permission denied etc).
 func osStat(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if err == nil {

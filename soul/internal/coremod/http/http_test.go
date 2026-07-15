@@ -18,8 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeDoer — детерминированный HTTPDoer: возвращает заданное тело/статус для
-// любого запроса, записывает реально полученные метод и заголовки. Сети нет.
+// fakeDoer is a deterministic HTTPDoer: returns a fixed body/status for any
+// request, records the actually received method and headers. No network.
 type fakeDoer struct {
 	body       []byte
 	status     int
@@ -56,18 +56,18 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// newModule подменяет фабрику клиента на возврат единственного fakeDoer,
-// игнорируя opts (тесты, которым важно только тело/статус/маршрут вызова).
+// newModule swaps the client factory to always return a single fakeDoer,
+// ignoring opts (for tests that only care about body/status/call routing).
 func newModule(d *fakeDoer) *httpmod.Module {
 	m := httpmod.New()
 	m.NewClient = func(util.HTTPClientOpts) util.HTTPDoer { return d }
 	return m
 }
 
-// newModuleCapturing подменяет фабрику на возврат d и записывает HTTPClientOpts,
-// с которыми модуль её вызвал, в *got. Нужен тестам, проверяющим, что флаги
-// задачи (allow_private / allow_http / insecure_skip_verify) ортогонально
-// доезжают до построения клиента.
+// newModuleCapturing swaps the factory to return d and records the
+// HTTPClientOpts the module called it with into *got. Used by tests that
+// check task flags (allow_private / allow_http / insecure_skip_verify)
+// propagate independently into client construction.
 func newModuleCapturing(d *fakeDoer, got *util.HTTPClientOpts) *httpmod.Module {
 	m := httpmod.New()
 	m.NewClient = func(opts util.HTTPClientOpts) util.HTTPDoer {
@@ -190,7 +190,7 @@ func TestApply_GET_200_ReturnsRegister_ChangedFalse(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// changed=false конструктивно.
+	// changed=false by construction.
 	if ev.Changed {
 		t.Fatal("changed=true (read-probe обязан быть changed=false)")
 	}
@@ -211,7 +211,7 @@ func TestApply_GET_200_ReturnsRegister_ChangedFalse(t *testing.T) {
 	}
 }
 
-// --- status_codes mismatch → failed (но с output) ---
+// --- status_codes mismatch → failed (but with output) ---
 
 func TestApply_StatusMismatch_Fails_WithOutput(t *testing.T) {
 	d := &fakeDoer{body: []byte("error page"), status: 500}
@@ -231,7 +231,7 @@ func TestApply_StatusMismatch_Fails_WithOutput(t *testing.T) {
 	if !ev.Failed {
 		t.Fatal("failed=false при status 500 вне ожидаемого [200]")
 	}
-	// Output приложен для диагностики: фактический status/body.
+	// Output is attached for diagnostics: actual status/body.
 	if ev.Output == nil {
 		t.Fatal("output отсутствует при mismatch (нужен для диагностики)")
 	}
@@ -264,7 +264,7 @@ func TestApply_DefaultStatusCodes_200(t *testing.T) {
 	}
 }
 
-// --- HEAD: тело не читается ---
+// --- HEAD: body not read ---
 
 func TestApply_HEAD_NoBody(t *testing.T) {
 	d := &fakeDoer{body: []byte("should not be read"), status: 200}
@@ -292,7 +292,7 @@ func TestApply_HEAD_NoBody(t *testing.T) {
 	}
 }
 
-// --- headers: отправлены, в output только ключи (значения замаскированы) ---
+// --- headers: sent, output carries only keys (values masked) ---
 
 func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 	d := &fakeDoer{body: []byte("ok"), status: 200}
@@ -314,11 +314,11 @@ func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 	if ev.Failed {
 		t.Fatalf("failed=true: %s", ev.Message)
 	}
-	// Заголовок реально отправлен.
+	// Header actually sent.
 	if got := d.gotHeaders.Get("Authorization"); got != "Bearer super-secret-token" {
 		t.Fatalf("Authorization не отправлен: %q", got)
 	}
-	// В output — headers_keys (только имя), без значения.
+	// output carries headers_keys (name only), no value.
 	keys := ev.Output.Fields["headers_keys"].GetListValue()
 	if keys == nil || len(keys.Values) != 1 || keys.Values[0].GetStringValue() != "Authorization" {
 		t.Fatalf("headers_keys=%v want [Authorization]", keys)
@@ -326,7 +326,7 @@ func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 	if _, ok := ev.Output.Fields["headers"]; ok {
 		t.Fatal("сырой блок headers присутствует в output")
 	}
-	// Значение секрета не просочилось ни в одно поле output.
+	// Secret value didn't leak into any output field.
 	for k, v := range ev.Output.Fields {
 		if strings.Contains(v.GetStringValue(), "super-secret-token") {
 			t.Fatalf("значение заголовка просочилось в output[%q]", k)
@@ -337,7 +337,7 @@ func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
 // --- body cap/truncate ---
 
 func TestApply_BodyCap_Truncated(t *testing.T) {
-	// Тело заведомо больше cap (64 KiB).
+	// Body deliberately exceeds the cap (64 KiB).
 	big := strings.Repeat("a", 70*1024)
 	d := &fakeDoer{body: []byte(big), status: 200}
 	m := newModule(d)
@@ -375,7 +375,7 @@ func TestApply_BodyUnderCap_NotTruncated(t *testing.T) {
 	}
 }
 
-// --- body маскинг: vault-ref в теле маскируется обычным MaskSecrets ---
+// --- body masking: vault-ref in the body is masked by the usual MaskSecrets ---
 
 func TestApply_BodyMasked_VaultRef(t *testing.T) {
 	d := &fakeDoer{body: []byte("vault:secret/data/x"), status: 200}
@@ -391,7 +391,7 @@ func TestApply_BodyMasked_VaultRef(t *testing.T) {
 	}
 }
 
-// --- транспортная ошибка → failed ---
+// --- transport error → failed ---
 
 func TestApply_TransportError_Fails(t *testing.T) {
 	d := &fakeDoer{err: io.ErrUnexpectedEOF}
@@ -422,10 +422,11 @@ func TestApply_RejectsHTTPScheme_NoCall(t *testing.T) {
 	}
 }
 
-// --- SSRF opt-in: allow_private доезжает до фабрики как HTTPClientOpts.AllowPrivate ---
+// --- SSRF opt-in: allow_private reaches the factory as HTTPClientOpts.AllowPrivate ---
 
-// probe строит клиент per-call фабрикой NewClient под флаги задачи. Проверяем,
-// что allow_private ортогонально превращается в HTTPClientOpts.AllowPrivate.
+// probe builds a client per call via the NewClient factory, driven by task
+// flags. Checks that allow_private maps independently to
+// HTTPClientOpts.AllowPrivate.
 func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 	t.Run("default (no param) -> AllowPrivate=false", func(t *testing.T) {
 		var got util.HTTPClientOpts
@@ -463,7 +464,7 @@ func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 		if !got.AllowPrivate {
 			t.Fatal("AllowPrivate=false при allow_private:true")
 		}
-		// Прочие контуры не задеты (ортогональность).
+		// Other flags unaffected (orthogonality).
 		if got.AllowHTTPRedirect || got.InsecureSkipVerify {
 			t.Fatalf("allow_private задел чужой контур: %+v", got)
 		}
@@ -492,7 +493,7 @@ func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
 	})
 }
 
-// --- downgrade-защита: реальная redirect-цепочка https→http отвергается ---
+// --- downgrade protection: a real https→http redirect chain is rejected ---
 
 func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 	var httpHit bool
@@ -528,11 +529,11 @@ func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
 	}
 }
 
-// --- BUG-2: не-UTF8 / разрезанная руна не ломают structpb-сериализацию ---
+// --- BUG-2: non-UTF8 / split rune doesn't break structpb serialization ---
 
-// applyProbe вызывает stream.Send; для success-пути с не-UTF8 телом он раньше
-// возвращал грязную gRPC-ошибку из structpb.NewStruct. Теперь тело
-// санитизируется → чистый результат, без ошибки Apply.
+// applyProbe calls stream.Send; on the success path with a non-UTF8 body it
+// used to return a raw gRPC error from structpb.NewStruct. The body is now
+// sanitized → clean result, no Apply error.
 func TestApply_NonUTF8Body_Success_CleanResult(t *testing.T) {
 	d := &fakeDoer{body: []byte{0xff, 0xfe, 'o', 'k'}, status: 200}
 	m := newModule(d)
@@ -553,11 +554,11 @@ func TestApply_NonUTF8Body_Success_CleanResult(t *testing.T) {
 	}
 }
 
-// Многобайтная руна, разрезанная ровно на границе cap, должна откатываться до
-// последней полной руны → валидный UTF-8, truncated=true.
+// A multi-byte rune split exactly at the cap boundary must roll back to the
+// last complete rune → valid UTF-8, truncated=true.
 func TestApply_RuneSplitAtCap_RuneAware(t *testing.T) {
-	// 65535 ASCII-байт + 2-байтная руna 'é' (0xc3 0xa9) = 65537 байт. Срез
-	// [:65536] оставил бы первый байт 0xc3 (битый префикс) — раньше падало.
+	// 65535 ASCII bytes + a 2-byte rune 'é' (0xc3 0xa9) = 65537 bytes.
+	// Slicing [:65536] would leave the first byte 0xc3 (a broken prefix) — used to fail.
 	body := append([]byte(strings.Repeat("a", 64*1024-1)), 0xc3, 0xa9)
 	d := &fakeDoer{body: body, status: 200}
 	m := newModule(d)
@@ -579,14 +580,14 @@ func TestApply_RuneSplitAtCap_RuneAware(t *testing.T) {
 	if !ev.Output.Fields["truncated"].GetBoolValue() {
 		t.Fatal("truncated=false при усечении по cap")
 	}
-	// Откатили частичную руну → длина < cap, без последнего битого байта.
+	// Rolled back the partial rune → length < cap, no trailing broken byte.
 	if strings.HasSuffix(got, "\xc3") {
 		t.Fatal("частичная руна осталась в конце тела")
 	}
 }
 
-// mismatch-путь обязан ДОВОЗИТЬ output даже при не-UTF8 теле (раньше
-// structpb.NewStruct err → Output=nil, диагностика терялась молча).
+// The mismatch path must still deliver output even with a non-UTF8 body
+// (previously structpb.NewStruct err → Output=nil, diagnostics silently lost).
 func TestApply_StatusMismatch_NonUTF8Body_OutputDelivered(t *testing.T) {
 	d := &fakeDoer{body: []byte{0xff, 0xfe, 'e', 'r', 'r'}, status: 500}
 	m := newModule(d)
@@ -610,7 +611,7 @@ func TestApply_StatusMismatch_NonUTF8Body_OutputDelivered(t *testing.T) {
 	if ev.Output.Fields["status"].GetNumberValue() != 500 {
 		t.Fatalf("output.status=%v want 500", ev.Output.Fields["status"].GetNumberValue())
 	}
-	// changed=false на mismatch-failed (regression-guard).
+	// changed=false on mismatch-failed (regression guard).
 	if ev.Changed {
 		t.Fatal("changed=true на mismatch (read-probe обязан быть changed=false)")
 	}
@@ -619,7 +620,7 @@ func TestApply_StatusMismatch_NonUTF8Body_OutputDelivered(t *testing.T) {
 	}
 }
 
-// Тело РОВНО на границе 64KiB не усекается (off-by-one: читаем cap+1, len==cap).
+// A body exactly at the 64KiB boundary isn't truncated (off-by-one: read cap+1, len==cap).
 func TestApply_BodyExactlyAtCap_NotTruncated(t *testing.T) {
 	body := strings.Repeat("a", 64*1024)
 	d := &fakeDoer{body: []byte(body), status: 200}
@@ -640,9 +641,9 @@ func TestApply_BodyExactlyAtCap_NotTruncated(t *testing.T) {
 	}
 }
 
-// --- BUG-1: vault-ref-substring-маскинг в теле ---
+// --- BUG-1: vault-ref substring masking in body ---
 
-// vault-ref ВНУТРИ JSON-тела (не префикс всей строки) теперь маскируется.
+// A vault-ref INSIDE a JSON body (not a whole-string prefix) is now masked.
 func TestApply_BodyMasked_EmbeddedVaultRef(t *testing.T) {
 	d := &fakeDoer{body: []byte(`{"token":"vault:secret/data/x"}`), status: 200}
 	m := newModule(d)
@@ -660,7 +661,7 @@ func TestApply_BodyMasked_EmbeddedVaultRef(t *testing.T) {
 	}
 }
 
-// Тело без vault-ref не трогается.
+// A body without a vault-ref is left untouched.
 func TestApply_BodyNoVaultRef_Untouched(t *testing.T) {
 	d := &fakeDoer{body: []byte(`{"status":"ok","up":true}`), status: 200}
 	m := newModule(d)
@@ -675,8 +676,8 @@ func TestApply_BodyNoVaultRef_Untouched(t *testing.T) {
 	}
 }
 
-// Произвольный plaintext-секрет НЕ маскируется — документированное ограничение
-// (тело semi-trusted). Тест фиксирует факт, чтобы поведение было осознанным.
+// An arbitrary plaintext secret is NOT masked — a documented limitation
+// (body is semi-trusted). This test pins the behavior as intentional.
 func TestApply_BodyPlaintextSecret_NotMasked(t *testing.T) {
 	d := &fakeDoer{body: []byte(`{"password":"hunter2"}`), status: 200}
 	m := newModule(d)
@@ -691,7 +692,7 @@ func TestApply_BodyPlaintextSecret_NotMasked(t *testing.T) {
 	}
 }
 
-// --- покрытие (qa gaps) ---
+// --- coverage (qa gaps) ---
 
 func TestApply_EmptyBody_200(t *testing.T) {
 	d := &fakeDoer{body: []byte{}, status: 200}
@@ -731,7 +732,7 @@ func TestValidate_InvalidTimeout(t *testing.T) {
 	}
 }
 
-// Кастомный status_codes [200,204] реально матчит 204 в Apply (не только Validate).
+// Custom status_codes [200,204] actually matches 204 in Apply (not just Validate).
 func TestApply_CustomStatusCodes_Matches204(t *testing.T) {
 	d := &fakeDoer{status: 204}
 	m := newModule(d)
@@ -750,7 +751,7 @@ func TestApply_CustomStatusCodes_Matches204(t *testing.T) {
 	}
 }
 
-// status_codes [] → fallback [200] (зафиксировать поведение).
+// status_codes [] → fallback [200] (pin the behavior).
 func TestApply_EmptyStatusCodes_FallbackTo200(t *testing.T) {
 	d200 := &fakeDoer{status: 200}
 	s := &internaltest.ApplyStream{}
@@ -779,7 +780,7 @@ func TestApply_EmptyStatusCodes_FallbackTo200(t *testing.T) {
 	}
 }
 
-// headers_keys детерминированы (отсортированы) независимо от порядка вставки.
+// headers_keys are deterministic (sorted) regardless of insertion order.
 func TestApply_HeaderKeys_Sorted(t *testing.T) {
 	d := &fakeDoer{body: []byte("ok"), status: 200}
 	m := newModule(d)
@@ -807,7 +808,7 @@ func TestApply_HeaderKeys_Sorted(t *testing.T) {
 	}
 }
 
-// --- timeout: медленный сервер дольше timeout → failed, не виснет ---
+// --- timeout: a server slower than timeout → failed, doesn't hang ---
 
 func TestApply_Timeout_Fails(t *testing.T) {
 	release := make(chan struct{})

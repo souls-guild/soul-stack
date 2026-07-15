@@ -13,12 +13,13 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// seqModule — модуль с заранее заданной последовательностью исходов по номеру
-// попытки (1-based). attempts считает фактические вызовы Apply. outcome задаёт
-// исход i-й попытки; если попыток больше длины outcome — берётся последний.
+// seqModule — a module with a pre-set sequence of outcomes by attempt number
+// (1-based). attempts counts actual Apply calls. outcome sets the i-th
+// attempt's result; if more attempts occur than outcome has entries, the last
+// one is reused.
 type attemptOutcome struct {
 	failed  bool // failed=true → FAILED
-	changed bool // changed=true (при failed=false) → CHANGED, иначе OK
+	changed bool // changed=true (when failed=false) → CHANGED, otherwise OK
 }
 
 func seqModule(attempts *int32, seq []attemptOutcome) *fakeModule {
@@ -35,8 +36,8 @@ func seqModule(attempts *int32, seq []attemptOutcome) *fakeModule {
 	}
 }
 
-// TestRetry_NoUntil_SecondAttemptOK — 1-я попытка FAILED, 2-я OK → задача OK,
-// ровно 2 вызова Apply.
+// TestRetry_NoUntil_SecondAttemptOK — 1st attempt FAILED, 2nd OK → task OK,
+// exactly 2 Apply calls.
 func TestRetry_NoUntil_SecondAttemptOK(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{
@@ -60,13 +61,13 @@ func TestRetry_NoUntil_SecondAttemptOK(t *testing.T) {
 	if got := sink.taskEvents[0].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Errorf("status = %v, want OK", got)
 	}
-	// Один TaskEvent на task_idx — промежуточные попытки наружу не эмитятся.
+	// One TaskEvent per task_idx — intermediate attempts aren't emitted outward.
 	if len(sink.taskEvents) != 1 {
 		t.Errorf("taskEvents = %d, want 1 (промежуточные попытки не эмитятся)", len(sink.taskEvents))
 	}
 }
 
-// TestRetry_NoUntil_AllFail — все попытки FAILED → финал FAILED, count вызовов.
+// TestRetry_NoUntil_AllFail — all attempts FAILED → final FAILED, call count.
 func TestRetry_NoUntil_AllFail(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{failed: true}})}
@@ -93,9 +94,9 @@ func TestRetry_NoUntil_AllFail(t *testing.T) {
 	}
 }
 
-// timeoutThenOKModule — первые failUntil попыток блокируются до per-attempt timeout
-// (TIMED_OUT), последующие шлют OK немедленно. Для проверки «TIMED_OUT-попытка
-// ретраится».
+// timeoutThenOKModule — the first failUntil attempts block until the
+// per-attempt timeout (TIMED_OUT), later ones send OK immediately. Used to
+// verify that a TIMED_OUT attempt is retried.
 func timeoutThenOKModule(attempts *int32, failUntil int32) *fakeModule {
 	return &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -109,8 +110,8 @@ func timeoutThenOKModule(attempts *int32, failUntil int32) *fakeModule {
 	}
 }
 
-// TestRetry_TimedOutAttempt_Retries — попытка TIMED_OUT ретраится; первая
-// блокируется до timeout, вторая успевает → задача OK.
+// TestRetry_TimedOutAttempt_Retries — a TIMED_OUT attempt is retried; the
+// first blocks until timeout, the second succeeds → task OK.
 func TestRetry_TimedOutAttempt_Retries(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.cmd": timeoutThenOKModule(&attempts, 1)}
@@ -134,11 +135,11 @@ func TestRetry_TimedOutAttempt_Retries(t *testing.T) {
 	}
 }
 
-// TestRetry_AllTimedOut_FinalTimedOut — все попытки TIMED_OUT → финал TIMED_OUT
-// (НЕ схлопывается в FAILED).
+// TestRetry_AllTimedOut_FinalTimedOut — all attempts TIMED_OUT → final
+// TIMED_OUT (does NOT collapse into FAILED).
 func TestRetry_AllTimedOut_FinalTimedOut(t *testing.T) {
 	var attempts int32
-	reg := mapRegistry{"core.cmd": timeoutThenOKModule(&attempts, 100)} // всегда timeout
+	reg := mapRegistry{"core.cmd": timeoutThenOKModule(&attempts, 100)} // always times out
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
@@ -159,7 +160,7 @@ func TestRetry_AllTimedOut_FinalTimedOut(t *testing.T) {
 	}
 }
 
-// TestUntil_TrueFirstAttempt_Exits — until-true на 1-й попытке → выход, одна попытка.
+// TestUntil_TrueFirstAttempt_Exits — until-true on the 1st attempt → exits, one attempt.
 func TestUntil_TrueFirstAttempt_Exits(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{changed: true}})}
@@ -184,11 +185,11 @@ func TestUntil_TrueFirstAttempt_Exits(t *testing.T) {
 	}
 }
 
-// TestUntil_NeverTrue_Exhausted — until-false на всех попытках → FAILED
-// (until_exhausted), даже когда попытка OK.
+// TestUntil_NeverTrue_Exhausted — until-false on every attempt → FAILED
+// (until_exhausted), even when the attempt is OK.
 func TestUntil_NeverTrue_Exhausted(t *testing.T) {
 	var attempts int32
-	// Каждая попытка OK (changed=false) → until "register.self.changed" всегда false.
+	// Every attempt is OK (changed=false) → until "register.self.changed" is always false.
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{}})}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -215,8 +216,8 @@ func TestUntil_NeverTrue_Exhausted(t *testing.T) {
 	}
 }
 
-// TestUntil_TrueButFailed_FinalFailed — until-true, но попытка FAILED → финал FAILED
-// (until НЕ override-ит failed).
+// TestUntil_TrueButFailed_FinalFailed — until-true, but the attempt is FAILED
+// → final FAILED (until does NOT override failed).
 func TestUntil_TrueButFailed_FinalFailed(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{failed: true}})}
@@ -226,7 +227,7 @@ func TestUntil_TrueButFailed_FinalFailed(t *testing.T) {
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "until-true-failed",
 		Tasks: []*keeperv1.RenderedTask{
-			// until "true" труизм → выход на 1-й попытке, но статус failed остаётся.
+			// until "true" is a truism → exits on the 1st attempt, but the failed status remains.
 			{Name: "fails", Module: "core.exec.run", RetryCount: 5, RetryDelay: "1ms",
 				Until: "register.self.failed"},
 		},
@@ -242,7 +243,7 @@ func TestUntil_TrueButFailed_FinalFailed(t *testing.T) {
 	}
 }
 
-// TestUntil_TrueOnOK_OK — until-true и попытка OK → OK.
+// TestUntil_TrueOnOK_OK — until-true and the attempt is OK → OK.
 func TestUntil_TrueOnOK_OK(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{changed: true}})}
@@ -267,16 +268,17 @@ func TestUntil_TrueOnOK_OK(t *testing.T) {
 	}
 }
 
-// TestUntil_ChangedWhenError_PreservesCode — changed_when упал runtime-error-ом CEL,
-// при этом задан until:. runTask вернул терминальную ветку (selfRegister==nil) с кодом
-// flowcontrol.changed_when_error. until-eval НЕ должен запускаться (нет register.self)
-// и затирать исходный код на flowcontrol.until_error: одна попытка, FAILED, код
-// changed_when_error сохранён (nit-фикс until-ветки runTaskWithRetry).
+// TestUntil_ChangedWhenError_PreservesCode — changed_when failed with a CEL
+// runtime error, and until: is also set. runTask returned the terminal branch
+// (selfRegister==nil) with code flowcontrol.changed_when_error. until-eval must
+// NOT run (no register.self) and overwrite the original code with
+// flowcontrol.until_error: one attempt, FAILED, changed_when_error code
+// preserved (nit-fix for runTaskWithRetry's until branch).
 func TestUntil_ChangedWhenError_PreservesCode(t *testing.T) {
 	var attempts int32
-	// OK-исход → доходим до changed_when override; ссылка на несуществующее
-	// register.self-поле → runtime-error → changed_when_error. attempts считает
-	// фактические вызовы Apply (повтора быть не должно).
+	// OK outcome → we reach the changed_when override; a reference to a
+	// nonexistent register.self field → runtime error → changed_when_error.
+	// attempts counts actual Apply calls (there should be no retry).
 	reg := mapRegistry{"core.exec": &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 			atomic.AddInt32(&attempts, 1)
@@ -308,8 +310,9 @@ func TestUntil_ChangedWhenError_PreservesCode(t *testing.T) {
 	}
 }
 
-// TestRetry_FailedWhenFalse_SingleAttempt — failed_when:false (ignore_errors) делает
-// упавшую попытку OK → «не-FAILED исход» → выход на первой попытке (retry не сработал).
+// TestRetry_FailedWhenFalse_SingleAttempt — failed_when:false (ignore_errors)
+// turns a failed attempt into OK → a "non-FAILED outcome" → exits on the first
+// attempt (retry never triggers).
 func TestRetry_FailedWhenFalse_SingleAttempt(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": seqModule(&attempts, []attemptOutcome{{failed: true}})}
@@ -334,8 +337,8 @@ func TestRetry_FailedWhenFalse_SingleAttempt(t *testing.T) {
 	}
 }
 
-// TestRetry_CancelDuringDelay_NotBlocked — cancel во время delay → выход из петли,
-// задача CANCELLED, прогон не висит на полный delay.
+// TestRetry_CancelDuringDelay_NotBlocked — cancel during delay → exits the
+// loop, task CANCELLED, the run doesn't hang for the full delay.
 func TestRetry_CancelDuringDelay_NotBlocked(t *testing.T) {
 	var attempts int32
 	reg := mapRegistry{"core.exec": &fakeModule{
@@ -348,7 +351,7 @@ func TestRetry_CancelDuringDelay_NotBlocked(t *testing.T) {
 	r := NewApplyRunner(reg, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Отменяем прогон вскоре после старта — попадём в delay (он длинный: 30s).
+	// Cancel the run shortly after start — lands inside the delay (it's long: 30s).
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
@@ -377,14 +380,14 @@ func TestRetry_CancelDuringDelay_NotBlocked(t *testing.T) {
 	if sink.runResult.GetStatus() != keeperv1.RunStatus_RUN_STATUS_CANCELLED {
 		t.Errorf("runResult = %v, want CANCELLED", sink.runResult.GetStatus())
 	}
-	// Должна была пройти только одна попытка (delay прервался, до 2-й не дошло).
+	// Only one attempt should have run (delay was interrupted before the 2nd).
 	if got := atomic.LoadInt32(&attempts); got != 1 {
 		t.Errorf("attempts = %d, want 1 (cancel в первом delay)", got)
 	}
 }
 
-// TestRetry_ExhaustedTriggersOnfail — retries-exhausted FAILED триггерит onfail-задачу
-// (rescue), как обычный FAILED.
+// TestRetry_ExhaustedTriggersOnfail — retries-exhausted FAILED triggers the
+// onfail task (rescue), same as an ordinary FAILED.
 func TestRetry_ExhaustedTriggersOnfail(t *testing.T) {
 	var attempts, rescueCalled int32
 	reg := mapRegistry{
@@ -418,8 +421,8 @@ func TestRetry_ExhaustedTriggersOnfail(t *testing.T) {
 	}
 }
 
-// TestRetry_BackwardCompat_NoRetryNoUntil — retry_count пусто/1 + until пусто → одна
-// попытка, поведение как раньше.
+// TestRetry_BackwardCompat_NoRetryNoUntil — retry_count empty/1 + until empty
+// → one attempt, behaves as before.
 func TestRetry_BackwardCompat_NoRetryNoUntil(t *testing.T) {
 	for _, count := range []int32{0, 1} {
 		var attempts int32

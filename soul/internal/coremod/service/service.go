@@ -1,22 +1,23 @@
-// Package service реализует core-модуль `core.service` ([ADR-015]).
+// Package service implements the `core.service` core module ([ADR-015]).
 //
-// Состояния:
-//   - running:    сервис запущен. Опциональный param `enabled` (bool) одним
-//     шагом управляет автозапуском (true → enable, false → disable, опущено →
-//     не трогать) — параллель Ansible service state=started enabled=yes.
-//   - stopped:    сервис остановлен.
-//   - restarted:  безусловный restart (changed всегда true).
-//   - enabled:    автозапуск при загрузке системы (orthogonal to active state).
+// States:
+//   - running:   service is running. Optional param `enabled` (bool) also
+//     manages autostart in the same step (true → enable, false → disable,
+//     omitted → leave alone) — parallels Ansible's state=started enabled=yes.
+//   - stopped:   service is stopped.
+//   - restarted: unconditional restart (changed is always true).
+//   - enabled:   autostart on boot (orthogonal to active state).
 //
-// Backend выбирается из soulprint-факта init_system (primary, ADR-018(b)) —
-// он же источник CEL `soulprint.self.os.init_system`, поэтому модуль и предикаты
-// видят одну init-систему. При пустом/unknown факте — fallback на runtime-детект
-// systemd (`systemctl --version`) → openrc (`rc-service --version`) → sysvinit
-// (`service --version`), см. util.ResolveInitSystem. Логика идемпотентности —
-// через `is-active` / `is-enabled` (systemd) или эквиваленты OpenRC.
+// Backend is chosen from the soulprint init_system fact (primary, ADR-018(b));
+// the same source as CEL `soulprint.self.os.init_system`, so module and
+// predicates agree on one init system. An empty/unknown fact falls back to
+// runtime detection: systemd (`systemctl --version`) → openrc
+// (`rc-service --version`) → sysvinit (`service --version`), see
+// util.ResolveInitSystem. Idempotency via `is-active` / `is-enabled` (systemd)
+// or OpenRC equivalents.
 //
-// Факт инжектится Soul-агентом in-process через [Module.SetHostFacts]
-// (util.SoulprintAware, Вариант A) перед Apply.
+// The fact is injected in-process by the Soul agent via [Module.SetHostFacts]
+// (util.SoulprintAware, Variant A) before Apply.
 package service
 
 import (
@@ -36,44 +37,43 @@ const Name = "core.service"
 type Module struct {
 	Runner util.Runner
 
-	// facts — soulprint-снимок хоста, инжектится Soul-агентом перед Apply
-	// (SetHostFacts). Zero-value (init_system пуст) → Apply откатывается на
-	// runtime-детект (util.ResolveInitSystem). Конкурентных Apply на одном Soul
-	// нет (ADR-012(a)), отдельной синхронизации поля не требуется.
+	// facts is the soulprint host snapshot injected by the Soul agent before
+	// Apply (SetHostFacts). Zero-value (empty init_system) falls back to
+	// runtime detection (util.ResolveInitSystem). No concurrent Apply on one
+	// Soul (ADR-012(a)), so no synchronization needed.
 	facts util.HostFacts
 }
 
 func New() *Module { return &Module{Runner: util.OSRunner{}} }
 
-// SetHostFacts реализует util.SoulprintAware: ApplyRunner инжектит собранный
-// soulprint-факт хоста перед вызовом Apply (Вариант A, in-process).
+// SetHostFacts implements util.SoulprintAware: ApplyRunner injects the
+// collected soulprint host fact before calling Apply (Variant A, in-process).
 func (m *Module) SetHostFacts(f util.HostFacts) { m.facts = f }
 
-// Validate — known-state + required-param (name) делегированы в
-// shared/coremanifest/service.yaml (единый источник с soul-lint, убран дубль).
-// Тип-проверка опционального `enabled` (tri-bool: опущено/true/false) оставлена
-// поверх делегации: это ранний type-guard, который manifest-DSL не выражает
-// (проверка значения, не литерала), и контракт «non-bool enabled отвергается на
-// Validate, не молча» (см. service_test.go).
+// Validate delegates known-state + required-param (name) checks to
+// shared/coremanifest/service.yaml (shared source with soul-lint, dedup'd).
+// Type-checks the optional `enabled` tri-bool (omitted/true/false) on top of
+// delegation: this is an early type-guard the manifest-DSL can't express
+// (value check, not literal) — non-bool `enabled` must be rejected at
+// Validate, not silently ignored (see service_test.go).
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	if _, _, err := util.TriBoolParam(req.Params, "enabled"); err != nil {
 		errs = append(errs, err.Error())
 	}
-	// daemon_reload — closed-set enum (auto|always|never). Проверка значения,
-	// не литерала: manifest-DSL объявляет enum для UI/линтера, runtime-guard
-	// «неизвестное значение → ошибка валидации, не молча» делаем тут поверх
-	// делегации (симметрия с tri-bool `enabled`).
+	// daemon_reload is a closed-set enum (auto|always|never); manifest-DSL
+	// declares it for UI/linter, this runtime-guard rejects unknown values
+	// (symmetric with tri-bool `enabled`).
 	if _, err := daemonReloadMode(req.Params); err != nil {
 		errs = append(errs, err.Error())
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// daemonReloadMode извлекает и валидирует param `daemon_reload` (default auto).
-// Отсутствие/null → auto. Неизвестное строковое значение → ошибка (отвергается
-// на Validate). Применяется только к мутирующим states (running/restarted/
-// enabled); на stopped param игнорируется (manifest его там не объявляет).
+// daemonReloadMode extracts and validates param `daemon_reload` (default
+// auto). Absent/null → auto. An unknown string value errors (rejected at
+// Validate). Applies only to mutating states (running/restarted/enabled); on
+// stopped the param is ignored (manifest doesn't declare it there).
 func daemonReloadMode(params *structpb.Struct) (util.DaemonReloadMode, error) {
 	s, err := util.OptStringParam(params, "daemon_reload")
 	if err != nil {
@@ -89,17 +89,18 @@ func daemonReloadMode(params *structpb.Struct) (util.DaemonReloadMode, error) {
 	}
 }
 
-// PlanReadSafe объявляет, что core.service.Plan — pure-read (ADR-031 Scry):
-// читает is-active/is-enabled и НЕ мутирует хост (маркер для host-а, default-deny).
+// PlanReadSafe declares core.service.Plan as pure-read (ADR-031 Scry): reads
+// is-active/is-enabled and never mutates the host (marker for default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает активность/autostart юнита
-// (тот же ServiceActive/isEnabled, что в начале Apply) и шлёт PlanEvent.changed
-// — «Apply изменил бы сервис?». НЕ мутирует хост: ни start/stop/restart, ни
-// enable/disable.
+// Plan is a pure-read dry-run (ADR-031 Scry): reads unit activity/autostart
+// (same ServiceActive/isEnabled as the start of Apply) and reports whether
+// Apply would change the service. Never mutates the host: no start/stop/
+// restart, no enable/disable.
 //
-// restarted всегда drift=true: restart безусловно changed (Apply его не
-// идемпотентит — см. applyRestarted), поэтому dry-run честно сообщает «изменит».
+// restarted always reports drift=true: restart is unconditionally changed
+// (Apply doesn't idempotent it, see applyRestarted), so dry-run honestly
+// reports "will change".
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
@@ -119,26 +120,26 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 		if aerr != nil {
 			return util.PlanFailed(aerr.Error())
 		}
-		// drift: сервис активен (Apply остановил бы его).
+		// drift: service is active (Apply would stop it).
 		return util.SendPlanFinal(stream, active)
 	case "restarted":
-		// restart безусловно changed=true (applyRestarted) — dry-run сообщает то же.
+		// restart is unconditionally changed=true (applyRestarted) — dry-run matches.
 		return util.SendPlanFinal(stream, true)
 	case "enabled":
 		enabled, eerr := m.isEnabled(ctx, init, name)
 		if eerr != nil {
 			return util.PlanFailed(eerr.Error())
 		}
-		// drift: autostart выключен (Apply включил бы его).
+		// drift: autostart is disabled (Apply would enable it).
 		return util.SendPlanFinal(stream, !enabled)
 	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}
 }
 
-// planRunning — pure-read drift для state running: drift = сервис не активен ИЛИ
-// (управляем autostart-ом и текущий enabled != want). Те же ServiceActive/
-// isEnabled, что applyRunning, без start/enable/disable.
+// planRunning computes pure-read drift for state running: drift = service not
+// active OR (managing autostart and current enabled != want). Same
+// ServiceActive/isEnabled checks as applyRunning, without start/enable/disable.
 func (m *Module) planRunning(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.PlanEvent], init util.InitSystem, name string, req *pluginv1.PlanRequest) error {
 	wantEnabled, manageEnabled, err := util.TriBoolParam(req.Params, "enabled")
 	if err != nil {
@@ -169,7 +170,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// init-система: soulprint-факт primary, runtime-детект fallback (BUG-B).
+	// init system: soulprint fact is primary, runtime detection is fallback (BUG-B).
 	init := util.ResolveInitSystem(ctx, m.Runner, m.facts.InitSystem)
 	if init == util.InitSystemUnknown {
 		return util.SendFailed(stream, "no supported init system detected (systemd/openrc/sysv)")
@@ -189,16 +190,16 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// applyRunning гарантирует, что сервис запущен. Опциональный param `enabled`
-// (tri-state, ADR-015 параллель Ansible `state=started enabled=yes`):
+// applyRunning ensures the service is running. Optional param `enabled`
+// (tri-state, ADR-015, parallels Ansible `state=started enabled=yes`):
 //
-//	опущено   — autostart не трогаем (управляем только активностью);
-//	true      — дополнительно enable юнита (autostart при загрузке);
-//	false     — дополнительно disable юнита.
+//	omitted — leave autostart alone (manage activity only);
+//	true    — also enable the unit (autostart on boot);
+//	false   — also disable the unit.
 //
-// changed=true, если изменилась активность ИЛИ enabled-состояние. enable/disable
-// идемпотентны через isEnabled: повторный вызов на уже-в-нужном-состоянии юните
-// не помечает changed.
+// changed=true if activity OR enabled state changed. enable/disable are
+// idempotent via isEnabled: a repeat call on an already-correct unit doesn't
+// mark changed.
 func (m *Module) applyRunning(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string, req *pluginv1.ApplyRequest) error {
 	wantEnabled, manageEnabled, err := util.TriBoolParam(req.Params, "enabled")
 	if err != nil {
@@ -208,9 +209,9 @@ func (m *Module) applyRunning(ctx context.Context, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// daemon-reload ДО start/enable: после правки unit-файла без reload systemd
-	// стартовал бы со старым определением. reload не помечает шаг changed (см.
-	// EnsureDaemonReloaded), только диагностика в output.
+	// daemon-reload before start/enable: without it, systemd would start with a
+	// stale unit definition after an edit. Doesn't mark the step changed (see
+	// EnsureDaemonReloaded), just diagnostics in output.
 	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -262,15 +263,15 @@ func (m *Module) applyRestarted(ctx context.Context, stream grpc.ServerStreaming
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// daemon-reload ДО restart: без него systemd рестартует со старым unit-ом.
-	// reload не влияет на changed (restarted и так безусловно changed=true).
+	// daemon-reload before restart: without it, systemd restarts with the stale
+	// unit. Doesn't affect changed (restarted is already unconditionally true).
 	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// restarted — безусловно changed=true: пользователь явно попросил рестарт,
-	// например после core.file.present обновил конфиг и хочет, чтобы service
-	// перечитал. Идемпотентности тут быть не должно.
+	// restarted is unconditionally changed=true: the user explicitly asked for
+	// a restart, e.g. after core.file.present updated a config and wants the
+	// service to reread it. No idempotency here.
 	if err := m.restart(ctx, init, name); err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -286,8 +287,8 @@ func (m *Module) applyEnabled(ctx context.Context, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// daemon-reload ДО enable: новый/изменённый unit должен быть подхвачен
-	// systemd до создания enable-симлинков. reload не влияет на changed.
+	// daemon-reload before enable: a new/changed unit must be picked up by
+	// systemd before creating enable symlinks. Doesn't affect changed.
 	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -303,10 +304,9 @@ func (m *Module) applyEnabled(ctx context.Context, stream grpc.ServerStreamingSe
 	return util.SendFinal(stream, changed, output)
 }
 
-// ensureEnabled приводит autostart-состояние юнита к want (true = enable,
-// false = disable) идемпотентно: сперва читает isEnabled, действие выполняет
-// только при расхождении. Возвращает changed. Общая логика для state `enabled`
-// и для param `enabled` в state `running`.
+// ensureEnabled idempotently brings the unit's autostart state to want (true =
+// enable, false = disable): reads isEnabled first, acts only on drift. Returns
+// changed. Shared by state `enabled` and param `enabled` in state `running`.
 func (m *Module) ensureEnabled(ctx context.Context, init util.InitSystem, name string, want bool) (bool, error) {
 	enabled, err := m.isEnabled(ctx, init, name)
 	if err != nil {
@@ -343,7 +343,7 @@ func (m *Module) isEnabled(ctx context.Context, init util.InitSystem, name strin
 		}
 		return false, nil
 	case util.InitSystemSysV:
-		// chkconfig --list name → exit 0 если есть.
+		// chkconfig --list name → exit 0 if present.
 		r := m.Runner.Run(ctx, "chkconfig", "--list", name)
 		if r.Err != nil {
 			return false, fmt.Errorf("chkconfig: %v", r.Err)

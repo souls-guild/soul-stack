@@ -7,11 +7,11 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/git"
 )
 
-// TestGit_NotPlanReadSafe — core.git в MVP НЕ объявляет PlanReadSafe:
-// для state `pulled` drift «есть ли upstream-обновления?» требует `git fetch`,
-// которого Apply ДО мутации не делает (см. doc Plan). Host применит
-// default-deny (FAILED `plan.unsupported`) на dry_run — отдельный slice
-// (Slice B) добавит поддержку, либо введёт split на cloned/pulled state.
+// TestGit_NotPlanReadSafe — core.git does NOT declare PlanReadSafe in MVP:
+// for state `pulled`, the drift check "are there upstream updates?" needs
+// `git fetch`, which Apply doesn't run before mutating (see Plan's doc). The
+// host applies default-deny (FAILED `plan.unsupported`) on dry_run — a
+// separate slice (Slice B) will add support, or split into cloned/pulled state.
 func TestGit_NotPlanReadSafe(t *testing.T) {
 	m := git.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {

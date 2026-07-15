@@ -8,25 +8,25 @@ import (
 	"fmt"
 )
 
-// ErrSigilPubKeyFormat — sigil_pubkey.pem есть, но не парсится в
-// ed25519.PublicKey (не PEM / не SPKI / не ed25519-ключ). Trust-anchor битый —
-// явная ошибка, а не молчаливое выключение verify (иначе подменённый/пустой
-// файл тихо открыл бы fail-open).
+// ErrSigilPubKeyFormat — sigil_pubkey.pem exists but doesn't parse as an
+// ed25519.PublicKey (not PEM / not SPKI / not an ed25519 key). A broken
+// trust anchor is an explicit error, not a silent verify bypass (otherwise a
+// tampered-with or empty file would quietly open up fail-open).
 var ErrSigilPubKeyFormat = errors.New("seed: sigil_pubkey.pem is not a valid ed25519 SPKI public key")
 
-// ParseSigilPubKeys распознаёт НАБОР trust-anchor-ов Sigil из PEM-байт
-// [Material.SigilPubKeyPEM]. Файл sigil_pubkey.pem может нести несколько
-// PEM-блоков подряд (конкатенация) — multi-anchor для безразрывной ротации
-// ключа подписи (ADR-026(h), R3). Каждый блок — SPKI ed25519, как пишет
-// keeper-side sigil.Signer.PublicKeyPEM:
+// ParseSigilPubKeys parses the SET of Sigil trust anchors from the PEM bytes
+// in [Material.SigilPubKeyPEM]. sigil_pubkey.pem may carry several PEM
+// blocks back to back (concatenation) — multi-anchor for gapless signing-key
+// rotation (ADR-026(h), R3). Each block is SPKI ed25519, matching what
+// keeper-side sigil.Signer.PublicKeyPEM writes:
 //
-//   - пустой вход (Sigil выключен на Keeper) → (nil, nil): валидное состояние,
-//     набор якорей пуст, verify плагинов fail-closed по no_trust_anchor;
-//   - один блок → list длины 1 (обратная совместимость с single-anchor seed-ом);
-//   - N блоков → N ключей в порядке записи;
-//   - любой блок битый (не PEM / не-SPKI / RSA-ECDSA / лишний хвост) →
-//     (nil, ErrSigilPubKeyFormat): caller обязан отказать в старте, а не
-//     молча отключить verify (fail-closed на битом trust-anchor-е).
+//   - empty input (Sigil disabled on Keeper) → (nil, nil): a valid state,
+//     the anchor set is empty, plugin verify fail-closes on no_trust_anchor;
+//   - one block → a list of length 1 (backward compat with a single-anchor seed);
+//   - N blocks → N keys in write order;
+//   - any broken block (not PEM / not SPKI / RSA-ECDSA / trailing garbage) →
+//     (nil, ErrSigilPubKeyFormat): the caller must refuse to start, not
+//     silently disable verify (fail-closed on a broken trust anchor).
 func ParseSigilPubKeys(pemBytes []byte) ([]ed25519.PublicKey, error) {
 	if len(pemBytes) == 0 {
 		return nil, nil
@@ -37,8 +37,8 @@ func ParseSigilPubKeys(pemBytes []byte) ([]ed25519.PublicKey, error) {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
 		if block == nil {
-			// Нет ни одного блока вообще → битый вход. Уже распарсили хотя бы
-			// один, а хвост не PEM → тоже отказ (не молчаливое усечение набора).
+			// No block at all → broken input. Already parsed at least one, and
+			// the tail isn't PEM → also a rejection (not a silent set truncation).
 			if len(keys) == 0 {
 				return nil, fmt.Errorf("%w: not a PEM block", ErrSigilPubKeyFormat)
 			}
@@ -59,9 +59,9 @@ func ParseSigilPubKeys(pemBytes []byte) ([]ed25519.PublicKey, error) {
 	}
 }
 
-// hasNonSpace сообщает, есть ли в хвосте после pem.Decode значимые байты (не
-// пробелы/переводы строк). Хвост из пустых строк между/после PEM-блоков —
-// норма; непустой хвост = битый вход.
+// hasNonSpace reports whether the tail after pem.Decode has meaningful bytes
+// (not spaces/newlines). A tail of blank lines between/after PEM blocks is
+// normal; a non-blank tail means broken input.
 func hasNonSpace(b []byte) bool {
 	for _, c := range b {
 		switch c {

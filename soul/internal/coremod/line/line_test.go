@@ -36,7 +36,7 @@ func seedMode(t *testing.T, content string, mode os.FileMode) string {
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// WriteFile уважает umask — выставляем точный mode явно.
+	// WriteFile honors umask — set the exact mode explicitly.
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("seed chmod: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestValidate_AcceptsAbsentRegexpOnly(t *testing.T) {
 	}
 }
 
-// --- present: добавление новой строки ---
+// --- present: appending a new line ---
 
 func TestPresent_AppendsToExistingFile(t *testing.T) {
 	path := seed(t, "alpha\nbeta\n")
@@ -340,7 +340,7 @@ func TestAbsent_FileMissing_NoOp(t *testing.T) {
 	}
 }
 
-// --- идемпотентность ---
+// --- idempotency ---
 
 func TestIdempotency_Present(t *testing.T) {
 	path := seed(t, "alpha\n")
@@ -392,12 +392,12 @@ func TestIdempotency_PresentRegexp(t *testing.T) {
 	}
 }
 
-// --- атомарность записи / сохранение trailing newline ---
+// --- write atomicity / preserving trailing newline ---
 
 func TestPreservesNoTrailingNewline(t *testing.T) {
-	path := seed(t, "alpha\nbeta") // без финального \n
+	path := seed(t, "alpha\nbeta") // no final \n
 	_, _ = apply(t, "present", map[string]any{"path": path, "line": "gamma"})
-	// gamma добавлена в EOF; исходный файл без trailing NL → результат без NL.
+	// gamma is appended at EOF; source file has no trailing NL → result has none either.
 	if got := read(t, path); got != "alpha\nbeta\ngamma" {
 		t.Fatalf("content=%q", got)
 	}
@@ -410,7 +410,7 @@ func TestMissingPath_Fails(t *testing.T) {
 	}
 }
 
-// --- preserve mode/owner для in-place правки существующего файла (ADR-015) ---
+// --- preserve mode/owner for in-place edits of an existing file (ADR-015) ---
 
 func TestPresent_Edit_PreservesMode(t *testing.T) {
 	path := seedMode(t, "alpha\nbeta\n", 0o600)
@@ -457,12 +457,13 @@ func TestAbsent_Rewrite_PreservesMode(t *testing.T) {
 	}
 }
 
-// TestPresent_Edit_PreservesOwner проверяет, что rename не сбрасывает владельца:
-// preserve-ветка восстанавливает исходные uid/gid. Тест-среда обычно не root,
-// поэтому смена владельца на ЧУЖОЙ uid невозможна; здесь проверяем, что
-// owner/group файла после правки совпадают с исходными (chown на те же значения
-// разрешён владельцу). Кросс-owner override (явные owner/group на чужого
-// пользователя) требует root и здесь не покрывается.
+// TestPresent_Edit_PreservesOwner verifies that rename doesn't reset the
+// owner: the preserve branch restores the original uid/gid. The test
+// environment usually isn't root, so changing ownership to a DIFFERENT uid
+// isn't possible; instead we verify that the file's owner/group after the
+// edit match the original (chown to the same values is allowed for the
+// owner). Cross-owner override (explicit owner/group for another user)
+// requires root and isn't covered here.
 func TestPresent_Edit_PreservesOwner(t *testing.T) {
 	path := seedMode(t, "alpha\n", 0o644)
 	beforeUID, beforeGID := ownerOf(t, path)

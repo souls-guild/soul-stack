@@ -6,37 +6,39 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// EventStreamMetrics — набор Prometheus-collector-ов Soul-side EventStream-
-// клиента (Keeper↔Soul gRPC по ADR-002/ADR-012). Регистрируется helper-ом
-// поверх компонент-агностичного [obs.Registry] — тем же паттерном, что пилот
-// [keeper/internal/grpc.RegisterGRPCMetrics] (docs/observability.md §4.0).
+// EventStreamMetrics — Prometheus collectors for the Soul-side EventStream
+// client (Keeper↔Soul gRPC per ADR-002/ADR-012). Registered by a helper on
+// top of the component-agnostic [obs.Registry] — the same pattern as the
+// [keeper/internal/grpc.RegisterGRPCMetrics] pilot (docs/observability.md §4.0).
 //
-// Метрики живут здесь (soul/internal/grpc), а не в shared/obs: это connection-
-// state Soul-агента, не переиспользуется Keeper-ом (ADR-011: shared/ — поперечный
-// код). По ADR-011 soul НЕ импортирует keeper; инструментация — через
-// нейтральный shared/obs.
+// Metrics live here (soul/internal/grpc), not in shared/obs: this is Soul
+// agent connection state, not reused by the Keeper (ADR-011: shared/ is
+// cross-cutting code). Per ADR-011, soul does NOT import keeper;
+// instrumentation goes through the neutral shared/obs.
 //
-// Имена — ADR-024 §2.1: префикс soul_, snake_case, gauge мгновенного состояния
-// без _total, counter с _total. Labels — нет: connection-state Soul-агента
-// одномерен (один Keeper-стрим за раз), разрез по KID/session — в trace/log.
+// Names — ADR-024 §2.1: soul_ prefix, snake_case, gauge for instantaneous
+// state without _total, counter with _total. No labels: the Soul agent's
+// connection state is one-dimensional (one Keeper stream at a time); breakdown
+// by KID/session belongs in trace/log.
 type EventStreamMetrics struct {
-	// connected — 1, когда EventStream-сессия установлена (handshake завершён),
-	// 0 — при разрыве/реконнекте. Gauge мгновенного состояния: «есть ли у Soul
-	// живой канал к Keeper-у прямо сейчас».
+	// connected — 1 when the EventStream session is established (handshake
+	// done), 0 on disconnect/reconnect. Instantaneous-state gauge: "does Soul
+	// have a live channel to the Keeper right now".
 	connected prometheus.Gauge
 
-	// reconnects — счётчик попыток реконнекта (каждый Dial reconnect-loop-а
-	// после первого подключения). Рост — сигнал нестабильного канала /
-	// недоступности Keeper-кластера.
+	// reconnects — counter of reconnect attempts (each Dial in the
+	// reconnect loop after the first connection). Growth signals an unstable
+	// channel or an unreachable Keeper cluster.
 	reconnects prometheus.Counter
 }
 
-// RegisterEventStreamMetrics создаёт soul_eventstream_*-collectors и
-// регистрирует их в [obs.Registry]. Возвращает дескриптор для wire-up в
-// reconnect-loop cmd/soul.
+// RegisterEventStreamMetrics creates the soul_eventstream_* collectors and
+// registers them in [obs.Registry]. Returns a handle for wiring into the
+// cmd/soul reconnect loop.
 //
-// MustRegister: дубликат-регистрация — programmer error; падать сразу удобнее
-// ленивой инициализации (паттерн идентичен пилоту RegisterGRPCMetrics).
+// MustRegister: a duplicate registration is a programmer error; failing fast
+// is more convenient than lazy init (pattern identical to the
+// RegisterGRPCMetrics pilot).
 func RegisterEventStreamMetrics(reg *obs.Registry) *EventStreamMetrics {
 	m := &EventStreamMetrics{
 		connected: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -52,9 +54,9 @@ func RegisterEventStreamMetrics(reg *obs.Registry) *EventStreamMetrics {
 	return m
 }
 
-// SetConnected проставляет gauge connected (true → 1, false → 0).
-// nil-получатель — no-op: reconnect-loop может подниматься без obs-стека
-// (unit-тесты, metrics.enabled=false).
+// SetConnected sets the connected gauge (true → 1, false → 0).
+// nil receiver — no-op: the reconnect loop may run without the obs stack
+// (unit tests, metrics.enabled=false).
 func (m *EventStreamMetrics) SetConnected(connected bool) {
 	if m == nil {
 		return
@@ -66,7 +68,7 @@ func (m *EventStreamMetrics) SetConnected(connected bool) {
 	m.connected.Set(0)
 }
 
-// IncReconnects инкрементирует счётчик попыток реконнекта. nil-получатель — no-op.
+// IncReconnects increments the reconnect-attempt counter. nil receiver — no-op.
 func (m *EventStreamMetrics) IncReconnects() {
 	if m == nil {
 		return

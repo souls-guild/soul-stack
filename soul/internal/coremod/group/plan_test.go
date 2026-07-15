@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// planStream — fake stream для Plan, захватывает события.
+// planStream — a fake stream for Plan, captures events.
 type planStream struct {
 	grpc.ServerStreamingServer[pluginv1.PlanEvent]
 	events []*pluginv1.PlanEvent
@@ -27,8 +27,8 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// TestPlan_Present_Exists_Clean — Plan(present) для существующей группы:
-// changed=false, без мутаций.
+// TestPlan_Present_Exists_Clean — Plan(present) for an existing group:
+// changed=false, no mutations.
 func TestPlan_Present_Exists_Clean(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &group.Module{
@@ -52,8 +52,8 @@ func TestPlan_Present_Exists_Clean(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_Missing_Drift — Plan(present) для отсутствующей группы:
-// changed=true (Apply создал бы), без мутаций.
+// TestPlan_Present_Missing_Drift — Plan(present) for a missing group:
+// changed=true (Apply would create it), no mutations.
 func TestPlan_Present_Missing_Drift(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &group.Module{
@@ -77,8 +77,8 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Absent_Exists_Drift — Plan(absent) для существующей группы:
-// changed=true (Apply удалил бы), без мутаций.
+// TestPlan_Absent_Exists_Drift — Plan(absent) for an existing group:
+// changed=true (Apply would remove it), no mutations.
 func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &group.Module{
@@ -102,8 +102,8 @@ func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Absent_Missing_Clean — Plan(absent) для отсутствующей группы:
-// changed=false, без мутаций.
+// TestPlan_Absent_Missing_Clean — Plan(absent) for a missing group:
+// changed=false, no mutations.
 func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &group.Module{

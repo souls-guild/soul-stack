@@ -7,10 +7,10 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/exec"
 )
 
-// TestExec_NotPlanReadSafe — core.exec — verb-модуль, БЕЗ desired state.
-// Маркер module.PlanReadSafe НЕ реализован → host применит default-deny
-// (FAILED `plan.unsupported`) на dry_run. Это конструктивный отказ, а не
-// ложное «нет дрифта».
+// TestExec_NotPlanReadSafe — core.exec is a verb module, with NO desired
+// state. It doesn't implement the module.PlanReadSafe marker → the host
+// applies default-deny (FAILED `plan.unsupported`) on dry_run. This is a
+// deliberate rejection, not a false "no drift".
 func TestExec_NotPlanReadSafe(t *testing.T) {
 	m := exec.New()
 	if _, ok := any(m).(module.PlanReadSafe); ok {

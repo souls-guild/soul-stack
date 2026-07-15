@@ -15,8 +15,8 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// warningsOf извлекает список warnings из output последнего события (или nil,
-// если поля нет).
+// warningsOf extracts the warnings list from the last event's output (or nil
+// if the field is absent).
 func warningsOf(ev *pluginv1.ApplyEvent) []string {
 	if ev.Output == nil {
 		return nil
@@ -43,7 +43,7 @@ func anyWarningContains(ws []string, sub string) bool {
 
 // --- allow_http: Validate ---
 
-// По умолчанию http:// отвергается; с allow_http:true — принимается.
+// By default http:// is rejected; with allow_http:true it's accepted.
 func TestValidate_AllowHTTP_AcceptsHTTP(t *testing.T) {
 	m := httpmod.New()
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -58,7 +58,7 @@ func TestValidate_AllowHTTP_AcceptsHTTP(t *testing.T) {
 	}
 }
 
-// allow_http НЕ открывает file:// (ослабляет только https-only, не любую схему).
+// allow_http does NOT open up file:// (it only relaxes https-only, not any scheme).
 func TestValidate_AllowHTTP_StillRejectsFileScheme(t *testing.T) {
 	m := httpmod.New()
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -91,7 +91,7 @@ func TestValidate_RejectsNonBoolFlags(t *testing.T) {
 
 // --- allow_http: Apply ---
 
-// allow_http:true → http://-URL принят в Apply (вызов реально дошёл до клиента).
+// allow_http:true → an http:// URL is accepted in Apply (the call actually reached the client).
 func TestApply_AllowHTTP_HTTPAccepted(t *testing.T) {
 	d := &fakeDoer{body: []byte("ok"), status: 200}
 	m := newModule(d)
@@ -113,8 +113,8 @@ func TestApply_AllowHTTP_HTTPAccepted(t *testing.T) {
 	}
 }
 
-// allow_http:true → AllowHTTPRedirect доезжает до фабрики (downgrade-hop парно),
-// прочие контуры не задеты (ортогональность).
+// allow_http:true → AllowHTTPRedirect reaches the factory (downgrade-hop
+// paired), other guards are untouched (orthogonality).
 func TestApply_AllowHTTP_PropagatesRedirectOpt(t *testing.T) {
 	var got util.HTTPClientOpts
 	d := &fakeDoer{status: 200}
@@ -135,7 +135,7 @@ func TestApply_AllowHTTP_PropagatesRedirectOpt(t *testing.T) {
 	}
 }
 
-// --- insecure_skip_verify: Apply opts + реальная TLS-проверка ---
+// --- insecure_skip_verify: Apply opts + real TLS verification ---
 
 func TestApply_InsecureSkipVerify_PropagatesToClientOpts(t *testing.T) {
 	var got util.HTTPClientOpts
@@ -157,24 +157,25 @@ func TestApply_InsecureSkipVerify_PropagatesToClientOpts(t *testing.T) {
 	}
 }
 
-// Сквозной TLS-тест: probe к httptest-TLS-серверу с самоподписанным cert. Без
-// insecure_skip_verify — клиент через настоящую фабрику util.NewHTTPClient НЕ
-// доверяет cert → failed. С insecure_skip_verify:true — TLS не верифицируется →
-// ответ принят. Здесь фабрика НЕ подменяется (проверяем прод-путь построения).
+// End-to-end TLS test: probe against an httptest TLS server with a
+// self-signed cert. Without insecure_skip_verify — the client, via the real
+// util.NewHTTPClient factory, does NOT trust the cert → failed. With
+// insecure_skip_verify:true — TLS isn't verified → the response is accepted.
+// The factory is NOT substituted here (we're checking the production build path).
 func TestApply_InsecureSkipVerify_EndToEndTLS(t *testing.T) {
 	tlsSrv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer tlsSrv.Close()
-	// allow_private:true нужен, т.к. httptest слушает на 127.0.0.1 (SSRF-guard
-	// иначе заблокирует dial). Это изолирует именно TLS-контур.
+	// allow_private:true is needed since httptest listens on 127.0.0.1 (the
+	// SSRF guard would otherwise block the dial). This isolates the TLS guard specifically.
 	base := map[string]any{
 		"url":           tlsSrv.URL + "/health",
 		"allow_private": true,
 	}
 
 	t.Run("без insecure_skip_verify -> TLS не доверяет -> failed", func(t *testing.T) {
-		m := httpmod.New() // настоящая фабрика util.NewHTTPClient
+		m := httpmod.New() // real util.NewHTTPClient factory
 		stream := &internaltest.ApplyStream{}
 		_ = m.Apply(&pluginv1.ApplyRequest{
 			State:  "probe",
@@ -209,12 +210,12 @@ func TestApply_InsecureSkipVerify_EndToEndTLS(t *testing.T) {
 	})
 }
 
-// TestApply_OptOutTruthTable — полная истинностная таблица 2³=8 комбинаций
-// (allow_http × insecure_skip_verify × allow_private) → ожидаемый
-// util.HTTPClientOpts, фактически переданный в захватывающую фабрику. Регресс-гард
-// маппинга param→opts (allow_http → AllowHTTPRedirect, остальные именные).
-// URL всегда https:// (валиден при любом allow_http), чтобы каждая комбинация
-// доходила до построения клиента.
+// TestApply_OptOutTruthTable — the full truth table of 2³=8 combinations
+// (allow_http × insecure_skip_verify × allow_private) → the expected
+// util.HTTPClientOpts actually passed to the capturing factory. A regression
+// guard for the param→opts mapping (allow_http → AllowHTTPRedirect, others
+// map 1:1 by name). The URL is always https:// (valid for any allow_http),
+// so every combination reaches client construction.
 func TestApply_OptOutTruthTable(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		allowHTTP := i&1 != 0
@@ -252,7 +253,7 @@ func TestApply_OptOutTruthTable(t *testing.T) {
 	}
 }
 
-// --- комбинации флагов: все три ортогонально доезжают ---
+// --- flag combinations: all three propagate orthogonally ---
 
 func TestApply_AllFlags_PropagateOrthogonally(t *testing.T) {
 	var got util.HTTPClientOpts
@@ -273,7 +274,7 @@ func TestApply_AllFlags_PropagateOrthogonally(t *testing.T) {
 	}
 }
 
-// Дефолт (без флагов) → все контуры взведены (нулевой HTTPClientOpts).
+// Default (no flags) → all guards armed (zero-value HTTPClientOpts).
 func TestApply_NoFlags_SecureByDefault(t *testing.T) {
 	var got util.HTTPClientOpts
 	d := &fakeDoer{status: 200}
@@ -288,9 +289,9 @@ func TestApply_NoFlags_SecureByDefault(t *testing.T) {
 	}
 }
 
-// --- warnings при снятии guard ---
+// --- warnings when disabling a guard ---
 
-// Без флагов — никаких warnings (чистый output).
+// No flags — no warnings (clean output).
 func TestApply_NoFlags_NoWarnings(t *testing.T) {
 	d := &fakeDoer{status: 200}
 	m := newModule(d)
@@ -350,7 +351,7 @@ func TestApply_GuardWarnings(t *testing.T) {
 	}
 }
 
-// Warning несёт ТОЛЬКО host: ни query/path URL, ни значения headers не светятся.
+// A warning carries ONLY the host: neither the URL query/path nor header values leak.
 func TestApply_GuardWarning_NoURLPathNoHeaders(t *testing.T) {
 	d := &fakeDoer{status: 200}
 	m := newModule(d)
@@ -379,7 +380,7 @@ func TestApply_GuardWarning_NoURLPathNoHeaders(t *testing.T) {
 	}
 }
 
-// Несколько снятых guard-ов → несколько warnings разом.
+// Multiple disabled guards → multiple warnings at once.
 func TestApply_GuardWarnings_Multiple(t *testing.T) {
 	d := &fakeDoer{status: 200}
 	m := newModule(d)

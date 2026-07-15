@@ -1,24 +1,26 @@
-// Package errandrunner — Soul-side исполнитель Errand-запросов (ADR-033 §6).
+// Package errandrunner is the Soul-side executor for Errand requests (ADR-033 §6).
 //
-// Errand — pull-ad-hoc exec одиночного модуля на конкретном Soul через уже
-// доверенный mTLS EventStream-канал. От apply-цикла отличается контрактом:
+// Errand is a pull-based ad-hoc exec of a single module on a specific Soul over
+// the already-trusted mTLS EventStream channel. Its contract differs from the
+// apply cycle:
 //
-//   - НЕ мутирует incarnation.state (`state_changes` игнорируются);
-//   - один [keeperv1.ErrandRequest] → один [keeperv1.ErrandResult], без
-//     промежуточных TaskEvent / RunResult;
-//   - whitelist модулей: жёсткий список `core.cmd.shell` / `core.exec.run` +
-//     marker-интерфейс [sdkmodule.ErrandReadSafe] (см. [IsAllowed]);
-//   - stdout/stderr — captured из финального ApplyEvent.Output, cap 64 KiB на
-//     канал + secret-masking (defense-in-depth — Keeper-side делает то же при
-//     приёме результата, см. keeper/internal/errand/mask.go).
+//   - does NOT mutate incarnation.state (`state_changes` are ignored);
+//   - one [keeperv1.ErrandRequest] → one [keeperv1.ErrandResult], no
+//     intermediate TaskEvent / RunResult;
+//   - module whitelist: hardcoded `core.cmd.shell` / `core.exec.run` +
+//     marker interface [sdkmodule.ErrandReadSafe] (see [IsAllowed]);
+//   - stdout/stderr are captured from the final ApplyEvent.Output, capped at
+//     64 KiB per channel + secret-masking (defense-in-depth — Keeper-side
+//     does the same when receiving the result, see
+//     keeper/internal/errand/mask.go).
 //
-// Runner вызывает SoulModule.Apply того же [Registry], что и applyrunner
-// (shared core + plugin), но синтетическим ApplyRequest{state, params} без
-// flow-control/retry/onfail-обвязки apply-цикла: Errand — одиночный вызов.
+// Runner calls SoulModule.Apply on the same [Registry] as applyrunner (shared
+// core + plugin), but with a synthetic ApplyRequest{state, params}, skipping
+// the apply cycle's flow-control/retry/onfail wiring: Errand is a single call.
 //
-// Concurrency: одновременных Run-вызовов несколько — разрешено (Errand-ы не
-// сериализуются на Soul, в отличие от apply, ADR-012(a)). Runner stateless,
-// Registry / Logger / Metrics — read-only после конструктора.
+// Concurrency: multiple concurrent Run calls are allowed (Errands aren't
+// serialized on Soul, unlike apply, ADR-012(a)). Runner is stateless;
+// Registry / Logger / Metrics are read-only after construction.
 package errandrunner
 
 import (
@@ -37,34 +39,35 @@ import (
 	sdkmodule "github.com/souls-guild/soul-stack/sdk/module"
 )
 
-// Registry — узкий интерфейс над runtime.Registry (`Lookup` по голому имени
-// модуля без state-суффикса). Объявлен здесь, чтобы пакет не зависел от
-// `soul/internal/runtime` (избегаем циклов: runtime импортирует sdk/module,
-// errandrunner тоже, общая точка — sdk/module).
+// Registry is a narrow interface over runtime.Registry (`Lookup` by bare
+// module name, no state suffix). Declared here so the package doesn't depend
+// on `soul/internal/runtime` (avoids cycles: runtime imports sdk/module, so
+// does errandrunner — sdk/module is the shared point).
 type Registry interface {
 	Lookup(name string) (sdkmodule.SoulModule, bool)
 }
 
-// Runner — Soul-side исполнитель одного Errand. Иммутабелен после конструктора,
-// кроме active-map (errand_id → cancel-fn активной Run-горутины, slice E5).
+// Runner is the Soul-side executor of a single Errand. Immutable after
+// construction except the active map (errand_id → cancel-fn of the active
+// Run goroutine, slice E5).
 type Runner struct {
 	modules Registry
 	logger  *slog.Logger
 	metrics *Metrics
 
-	// active — map активных Run-горутин для cancel-flow (ADR-033 slice E5).
-	// Заполняется в начале Run, очищается defer-ом перед return. Параллельные
-	// Run-ы на одном errand_id невозможны (errand_id = ULID, гарантирована
-	// уникальность Keeper-ом); конкурентные Run разных errand_id допустимы
-	// (Errand-ы не сериализуются, ADR-033). mu — короткий read/write,
-	// отдельный RWMutex избыточен.
+	// active tracks running Run goroutines for cancel-flow (ADR-033 slice E5).
+	// Populated at the start of Run, cleared via defer before return. Parallel
+	// Runs on the same errand_id are impossible (errand_id is a ULID, Keeper
+	// guarantees uniqueness); concurrent Runs of different errand_ids are
+	// allowed (Errands aren't serialized, ADR-033). mu is short read/write; a
+	// separate RWMutex would be overkill.
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
 }
 
-// New собирает Runner. logger=nil → slog.Default(); metrics=nil → no-op
-// (nil-safe методы [Metrics]); modules обязателен (panic при nil — программная
-// ошибка wire-up-а, не runtime-данные).
+// New builds a Runner. logger=nil → slog.Default(); metrics=nil → no-op
+// (nil-safe [Metrics] methods); modules is required (panics on nil — a
+// wire-up bug, not runtime data).
 func New(modules Registry, logger *slog.Logger, metrics *Metrics) *Runner {
 	if modules == nil {
 		panic("errandrunner: modules registry is required")
@@ -80,14 +83,14 @@ func New(modules Registry, logger *slog.Logger, metrics *Metrics) *Runner {
 	}
 }
 
-// Cancel — slice E5: отменить активную Run-горутину по errand_id. Возвращает
-// true, если Run был зарегистрирован и cancel вызван; false — если Run уже
-// завершился или не существует (race с собственным терминалом — безопасный
-// no-op). После cancel-а Run-горутина увидит ctx.Err() (Canceled) и
-// возвращает ErrandResult{status: CANCELLED}.
+// Cancel is slice E5: cancels the active Run goroutine by errand_id. Returns
+// true if a Run was registered and cancel was invoked; false if the Run has
+// already finished or doesn't exist (a race with its own terminal — a safe
+// no-op). After cancel, the Run goroutine sees ctx.Err() (Canceled) and
+// returns ErrandResult{status: CANCELLED}.
 //
-// Паттерн идентичен [ApplyRunner.Cancel] — best-effort signal, без блокировки
-// на завершение Run-горутины.
+// Same pattern as [ApplyRunner.Cancel] — best-effort signal, doesn't block on
+// the Run goroutine finishing.
 func (r *Runner) Cancel(errandID string) bool {
 	r.mu.Lock()
 	cancel, ok := r.active[errandID]
@@ -99,11 +102,12 @@ func (r *Runner) Cancel(errandID string) bool {
 	return true
 }
 
-// registerActive регистрирует cancel-fn в active-map. Возвращает unregister-fn
-// (defer-friendly), которая удаляет запись из map. Если errand_id уже в map
-// (дубль ErrandRequest от Keeper-а — невозможно по протоколу, но defensive) —
-// предыдущая cancel-fn перезатирается; старая Run-горутина уже завершила
-// регистрацию, race разрешится через короткий мьютекс.
+// registerActive registers a cancel-fn in the active map. Returns an
+// unregister-fn (defer-friendly) that removes the entry. If errand_id is
+// already in the map (a duplicate ErrandRequest from Keeper — impossible by
+// protocol, but defensive), the previous cancel-fn gets overwritten; the old
+// Run goroutine already finished registering, the race resolves via the short
+// mutex.
 func (r *Runner) registerActive(errandID string, cancel context.CancelFunc) func() {
 	r.mu.Lock()
 	r.active[errandID] = cancel
@@ -115,23 +119,24 @@ func (r *Runner) registerActive(errandID string, cancel context.CancelFunc) func
 	}
 }
 
-// Run исполняет один Errand. Возвращает терминальный [keeperv1.ErrandResult] —
-// caller (eventstream-dispatcher) шлёт его обратно Keeper-у одним сообщением.
+// Run executes a single Errand. Returns a terminal [keeperv1.ErrandResult] —
+// the caller (eventstream dispatcher) sends it back to Keeper as one message.
 //
-// Контракт ADR-033:
-//  1. Whitelist-check ДО любых действий (defense-in-depth, Keeper тоже).
-//  2. Резолв модуля через тот же Registry, что и applyrunner.
-//  3. dry_run=true → mod.Plan(...) ТОЛЬКО для [sdkmodule.PlanReadSafe];
-//     иначе FAILED с `errand_dry_run_unsupported`.
+// ADR-033 contract:
+//  1. Whitelist check BEFORE any action (defense-in-depth, Keeper does too).
+//  2. Resolve the module through the same Registry as applyrunner.
+//  3. dry_run=true → mod.Plan(...) ONLY for [sdkmodule.PlanReadSafe];
+//     otherwise FAILED with `errand_dry_run_unsupported`.
 //  4. dry_run=false → mod.Apply(synthetic ApplyRequest).
-//  5. Output cap 64 KiB на канал stdout/stderr + masking через [MaskSecrets].
-//  6. state_changes игнорируются (Errand их не пишет).
+//  5. Output capped at 64 KiB per stdout/stderr channel + masking via
+//     [MaskSecrets].
+//  6. state_changes are ignored (Errand doesn't write them).
 //
-// Если ctx истёк по timeout_seconds — статус TIMED_OUT (а не FAILED).
+// If ctx expires via timeout_seconds — status is TIMED_OUT (not FAILED).
 func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1.ErrandResult {
 	started := time.Now()
 	if req == nil {
-		// defensive: dispatcher проверяет nil до Run, но Run — публичный API.
+		// defensive: dispatcher checks nil before Run, but Run is a public API.
 		return &keeperv1.ErrandResult{
 			Status:       keeperv1.ErrandStatus_ERRAND_STATUS_FAILED,
 			ErrorMessage: "errand: request is nil",
@@ -139,9 +144,9 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 	}
 	errandID := req.GetErrandId()
 
-	// Address split: `core.cmd.shell` → (`core.cmd`, `shell`). Без state-суффикса
-	// модуль не вызывается (whitelist опирается на полное имя). Registry
-	// принимает только `<namespace>.<name>` (см. coremod.Registry).
+	// Address split: `core.cmd.shell` → (`core.cmd`, `shell`). No state suffix
+	// means the module isn't called (whitelist relies on the full name).
+	// Registry only accepts `<namespace>.<name>` (see coremod.Registry).
 	modName, state, ok := splitModuleAddr(req.GetModule())
 	if !ok || state == "" {
 		return r.terminal(errandID, started,
@@ -152,9 +157,10 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 
 	mod, found := r.modules.Lookup(modName)
 	if !found {
-		// Несуществующий модуль трактуем как MODULE_NOT_ALLOWED: с точки зрения
-		// Errand-контура «недопущенный» (whitelist подразумевает существование).
-		// Аудит-маппинг тот же (errand.failed), статус-код различает причину.
+		// Treat a nonexistent module as MODULE_NOT_ALLOWED: from the Errand
+		// contour's perspective it's "not allowed" (whitelist implies
+		// existence). Same audit mapping (errand.failed), status code
+		// distinguishes the reason.
 		r.logger.Warn("errand: модуль не найден в Registry",
 			slog.String("errand_id", errandID),
 			slog.String("module", req.GetModule()))
@@ -166,10 +172,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 	}
 
 	if ok, reason := IsAllowed(req.GetModule(), mod); !ok {
-		// Whitelist-отказ — security-событие (попытка вызвать не-read-safe модуль
-		// через Errand). Warn-уровень: keeper validate тоже отвергает такие
-		// запросы, до Soul они доходят только при ранней-pre-validation сборке
-		// клиента или баге в keeper-side, что важно видеть в логах.
+		// Whitelist rejection is a security event (attempt to call a
+		// non-read-safe module via Errand). Warn level: keeper validate also
+		// rejects such requests; they only reach Soul on an early
+		// pre-validation client build or a keeper-side bug, worth seeing in
+		// logs.
 		r.logger.Warn("errand: whitelist reject",
 			slog.String("errand_id", errandID),
 			slog.String("module", req.GetModule()),
@@ -181,10 +188,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		)
 	}
 
-	// Dry-run валидация: только модули с [sdkmodule.PlanReadSafe]. У ADR-031 Plan
-	// — pure-read; для verb-модулей (cmd.shell/exec.run) Plan не PlanReadSafe,
-	// поэтому dry_run по shell/exec вернёт `errand_dry_run_unsupported`. Это
-	// конструктивное ограничение, а не баг (см. doc-комментарий core.cmd).
+	// Dry-run validation: only modules with [sdkmodule.PlanReadSafe]. ADR-031's
+	// Plan is pure-read; for verb modules (cmd.shell/exec.run) Plan isn't
+	// PlanReadSafe, so dry_run on shell/exec returns
+	// `errand_dry_run_unsupported`. Deliberate constraint, not a bug (see
+	// core.cmd's doc comment).
 	if req.GetDryRun() {
 		if _, planReadSafe := mod.(sdkmodule.PlanReadSafe); !planReadSafe {
 			r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_FAILED, started)
@@ -195,10 +203,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		}
 	}
 
-	// Timeout: applies к sub-ctx; истечение → TIMED_OUT (отличаем от FAILED).
-	// 0 → без своего таймаута (родительский ctx уже несёт ServerCap dispatch-а).
-	// Slice E5: cancel-flow — обёртка через WithCancel независимо от timeout-а,
-	// чтобы Cancel(errandID) мог отменить Run даже при timeout_seconds=0.
+	// Timeout applies to the sub-ctx; expiry → TIMED_OUT (distinct from
+	// FAILED). 0 → no timeout of its own (parent ctx already carries the
+	// dispatcher's ServerCap). Slice E5: cancel-flow wraps via WithCancel
+	// regardless of timeout, so Cancel(errandID) can cancel Run even at
+	// timeout_seconds=0.
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	if to := req.GetTimeoutSeconds(); to > 0 {
@@ -207,8 +216,8 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		defer timeoutCancel()
 	}
 
-	// Slice E5: регистрируем cancel-fn в active-map, чтобы external Cancel
-	// (CancelErrand от Keeper-а) мог отменить Run без обращения к runCtx.
+	// Slice E5: register the cancel-fn in the active map so an external Cancel
+	// (CancelErrand from Keeper) can cancel Run without touching runCtx.
 	unregister := r.registerActive(errandID, cancelRun)
 	defer unregister()
 
@@ -220,10 +229,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 
 	var modErr error
 	if req.GetDryRun() {
-		// PlanEvent от Plan-stream-а собирает отдельный collector (другой тип
-		// stream), но для Errand финал важен только в смысле «не упал» — Plan
-		// для read-safe модулей не пишет stdout/stderr/output (ADR-031: Plan
-		// шлёт только final PlanEvent.changed).
+		// PlanEvent from the Plan stream is collected by a separate collector
+		// (a different stream type), but for Errand the final only matters as
+		// "didn't fail" — Plan for read-safe modules doesn't write
+		// stdout/stderr/output (ADR-031: Plan only sends the final
+		// PlanEvent.changed).
 		planCollector := newPlanCollector(runCtx)
 		modErr = mod.Plan(&pluginv1.PlanRequest{State: state, Params: req.GetInput()}, planCollector)
 	} else {
@@ -231,7 +241,7 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 	}
 	durationMs := time.Since(started).Milliseconds()
 
-	// Финальный статус — по таймауту > отмене > ошибке модуля > событию модуля.
+	// Final status priority: timeout > cancel > module error > module event.
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_TIMED_OUT, started)
@@ -239,10 +249,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 			keeperv1.ErrandStatus_ERRAND_STATUS_TIMED_OUT,
 			"errand_timeout_exceeded")
 	case errors.Is(runCtx.Err(), context.Canceled):
-		// runCtx.Err()=Canceled означает либо внешний Cancel(errandID) (slice E5
-		// — оператор отменил через DELETE /v1/errands/{id}), либо отмена parent-
-		// ctx (shutdown демона). Семантически и то и другое — CANCELLED: Errand
-		// не дошёл до естественного терминала, оператор/процесс остановил его.
+		// runCtx.Err()=Canceled means either an external Cancel(errandID)
+		// (slice E5 — operator cancelled via DELETE /v1/errands/{id}), or the
+		// parent ctx was cancelled (daemon shutdown). Semantically both are
+		// CANCELLED: the Errand didn't reach a natural terminal, the
+		// operator/process stopped it.
 		r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_CANCELLED, started)
 		return r.buildResult(errandID, collector, durationMs,
 			keeperv1.ErrandStatus_ERRAND_STATUS_CANCELLED, "errand cancelled by operator")
@@ -266,10 +277,11 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS, "")
 }
 
-// buildResult собирает ErrandResult из выходов модуля: stdout/stderr/exit_code
-// извлекаются из ApplyEvent.Output (формат core.cmd/exec), остальные поля
-// Output остаются как структурный output (для будущих read-safe модулей).
-// Маскировка + cap идут здесь — на одном выходе, без дублирования.
+// buildResult assembles an ErrandResult from the module's output:
+// stdout/stderr/exit_code are extracted from ApplyEvent.Output (core.cmd/exec
+// format), the rest of Output stays as structured output (for future
+// read-safe modules). Masking + cap happen here, in one place, no
+// duplication.
 func (r *Runner) buildResult(errandID string, c *outputCollector, durationMs int64, status keeperv1.ErrandStatus, errMsg string) *keeperv1.ErrandResult {
 	stdout, stderr, exitCode, structured := c.extractFinal()
 
@@ -290,21 +302,22 @@ func (r *Runner) buildResult(errandID string, c *outputCollector, durationMs int
 	}
 	if (status == keeperv1.ErrandStatus_ERRAND_STATUS_FAILED ||
 		status == keeperv1.ErrandStatus_ERRAND_STATUS_TIMED_OUT) && stdoutTrunc {
-		// Эхо: оба флага видны на keeper-side mask+cap (defense-in-depth).
+		// Echo: both flags are visible via keeper-side mask+cap (defense-in-depth).
 	}
 	return res
 }
 
-// terminal — терминал без выхода модуля (early-fail на whitelist/dry_run/etc).
-// Метрика инкрементируется внутри.
+// terminal is a terminal result without module output (early-fail on
+// whitelist/dry_run/etc). The metric is incremented inside.
 func (r *Runner) terminal(errandID string, started time.Time, status keeperv1.ErrandStatus, msg string) *keeperv1.ErrandResult {
 	r.recordTerminal("", status, started)
 	return r.terminalNoMetric(errandID, started, status, msg)
 }
 
-// terminalNoMetric — терминал без метрик (caller уже её инкрементировал).
-// Разделён, чтобы early-reject (MODULE_NOT_ALLOWED, dry_run_unsupported)
-// записывал метрику с реальным module-label-ом, а не пустым.
+// terminalNoMetric is a terminal result without metrics (caller already
+// incremented it). Split out so early-reject (MODULE_NOT_ALLOWED,
+// dry_run_unsupported) records the metric with the real module label instead
+// of an empty one.
 func (r *Runner) terminalNoMetric(errandID string, started time.Time, status keeperv1.ErrandStatus, msg string) *keeperv1.ErrandResult {
 	return &keeperv1.ErrandResult{
 		ErrandId:     errandID,
@@ -319,9 +332,10 @@ func (r *Runner) recordTerminal(module string, status keeperv1.ErrandStatus, sta
 	r.metrics.ObserveDuration(module, time.Since(started).Seconds())
 }
 
-// maskedMessage — маска для error-message (модуль может вернуть текст с
-// vault-ref-ом или sensitive-ключом). Использует тот же mask-словарь, что
-// stdout/stderr через [MaskAndCapBytes], без cap-а: error_message — короткий.
+// maskedMessage masks an error message (a module might return text with a
+// vault ref or a sensitive key). Uses the same mask dictionary as
+// stdout/stderr via [MaskAndCapBytes], without capping: error_message is
+// short.
 func maskedMessage(s string) string {
 	if s == "" {
 		return ""
@@ -330,10 +344,11 @@ func maskedMessage(s string) string {
 	return masked
 }
 
-// splitModuleAddr — `<namespace>.<name>.<state>` → (`<namespace>.<name>`, state).
-// Симметрично runtime.splitModuleAddr (тот пакета не экспортирует — дублируем
-// 12 строк, чем тянуть зависимость на applyrunner). Для Errand state ОБЯЗАТЕЛЕН
-// (whitelist `core.cmd.shell` — полная форма): пустой state → ok=false.
+// splitModuleAddr splits `<namespace>.<name>.<state>` into
+// (`<namespace>.<name>`, state). Mirrors runtime.splitModuleAddr (unexported
+// there — duplicating 12 lines beats a dependency on applyrunner). For
+// Errand, state is REQUIRED (whitelist `core.cmd.shell` is the full form):
+// empty state → ok=false.
 func splitModuleAddr(s string) (name, state string, ok bool) {
 	if s == "" {
 		return "", "", false
@@ -351,10 +366,10 @@ func splitModuleAddr(s string) (name, state string, ok bool) {
 	return s[:idx], s[idx+1:], true
 }
 
-// planCollector — capture-only сервер PlanEvent для dry_run-ветки. ApplyEvent
-// и PlanEvent — разные типы, общий outputCollector не подходит. Plan для
-// read-safe модулей шлёт только final PlanEvent.changed (ADR-031), output не
-// заполняется.
+// planCollector is a capture-only PlanEvent server for the dry_run branch.
+// ApplyEvent and PlanEvent are different types, the shared outputCollector
+// doesn't fit. Plan for read-safe modules only sends the final
+// PlanEvent.changed (ADR-031), output isn't populated.
 type planCollector struct {
 	grpc.ServerStream
 	ctx    context.Context

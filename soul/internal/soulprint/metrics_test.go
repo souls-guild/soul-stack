@@ -71,8 +71,9 @@ func TestSoulprintMetrics_NilReceiver_NoOp(t *testing.T) {
 	m.ObserveCollectDuration(0.5)
 }
 
-// TestCollect_UpdatesMetrics — каждый Collect инкрементирует collections_total
-// (result=ok, т.к. сбор best-effort) и пишет collect_duration_seconds.
+// TestCollect_UpdatesMetrics — each Collect increments collections_total
+// (result=ok, since collection is best-effort) and records
+// collect_duration_seconds.
 func TestCollect_UpdatesMetrics(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterSoulprintMetrics(reg)

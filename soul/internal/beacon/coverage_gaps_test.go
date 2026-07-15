@@ -13,14 +13,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// TestSchedulerDropOnOverflow — drop-on-overflow через РЕАЛЬНЫЙ loop Vigil-а (qa
-// coverage_gap #3): буфер Portents заполнен, последующая смена State в loop-е
-// дропает событие + warn + soul_beacon_portents_dropped_total++; Vigil-горутина
-// не залипает (продолжает Check-и), паники нет.
+// TestSchedulerDropOnOverflow — drop-on-overflow through the REAL Vigil loop
+// (qa coverage_gap #3): the Portents buffer is full, a subsequent State
+// change in the loop drops the event + warn + soul_beacon_portents_dropped_total++;
+// the Vigil goroutine doesn't stick (keeps doing Checks), no panic.
 //
-// Отличие от TestEmit_DropIncrementsMetric (тот зовёт s.emit напрямую): здесь
-// дроп идёт по edge-triggered пути loop→emit при заполненном канале, и тест
-// утверждает живучесть горутины после дропа.
+// Differs from TestEmit_DropIncrementsMetric (which calls s.emit directly):
+// here the drop happens via the edge-triggered loop→emit path when the
+// channel is full, and the test asserts the goroutine survives the drop.
 func TestSchedulerDropOnOverflow(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterBeaconMetrics(reg)
@@ -29,7 +29,7 @@ func TestSchedulerDropOnOverflow(t *testing.T) {
 	s := NewScheduler(SchedulerConfig{
 		Registry:      regWith("core.beacon.x", fb),
 		SID:           "host.example",
-		PortentBuffer: 1, // ёмкость 1 — второй неслитый Portent дропается
+		PortentBuffer: 1, // capacity 1 — the second unbuffered Portent gets dropped
 		Metrics:       m,
 	})
 	mt := NewManualTicker()
@@ -41,58 +41,60 @@ func TestSchedulerDropOnOverflow(t *testing.T) {
 
 	s.Apply(ctx, []*keeperv1.VigilDef{vigil("v1", "core.beacon.x", "1s")})
 
-	// baseline (up) — без Portent.
+	// baseline (up) — no Portent.
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// 1-я смена up→down: emit занимает единственный слот буфера (НЕ дроп). Канал
-	// намеренно НЕ читаем — он остаётся полным.
+	// 1st transition up→down: emit takes the buffer's only slot (NOT a drop).
+	// The channel is deliberately NOT drained — it stays full.
 	fb.SetState("down")
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// 2-я смена down→up: буфер полон → emit уходит в drop-ветку (warn + метрика).
+	// 2nd transition down→up: buffer full → emit takes the drop branch (warn + metric).
 	fb.SetState("up")
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// 3-я смена up→down: горутина не залипла после дропа — Check снова вызывается
-	// (живучесть Vigil-а; буфер всё ещё полон, тоже дроп).
+	// 3rd transition up→down: the goroutine didn't stick after the drop — Check
+	// is called again (Vigil survives; buffer is still full, also dropped).
 	fb.SetState("down")
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// Барьер синхронизации: no-change тик (state остаётся down). emit на нём не
-	// зовётся, но чтобы консьюмнуть этот тик, горутина обязана вернуться в select
-	// — а значит emit предыдущего (3-го) тика гарантированно завершён. Без этого
-	// барьера scrape мог бы прочитать метрику до 2-го дропа (emit идёт ПОСЛЕ
-	// сигнала checked).
+	// Sync barrier: a no-change tick (state stays down). emit isn't called for
+	// it, but to consume this tick the goroutine must return to select — which
+	// guarantees the previous (3rd) tick's emit has completed. Without this
+	// barrier, scrape could read the metric before the 2nd drop (emit runs
+	// AFTER the checked signal).
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// Слитый слот — это ПЕРВЫЙ Portent (down). Две последующие смены дропнуты.
+	// The buffered slot is the FIRST Portent (down). The next two transitions are dropped.
 	first := expectPortent(t, s)
 	if first.GetBeaconName() != "v1" {
 		t.Fatalf("ожидали первый (неслитый) Portent v1, got %q", first.GetBeaconName())
 	}
 
 	body := obstest.Scrape(t, reg.Gatherer())
-	// Ровно два дропа (2-я и 3-я смены при полном буфере; 1-я смена слита в буфер).
+	// Exactly two drops (2nd and 3rd transitions while the buffer was full; the 1st was buffered).
 	if !strings.Contains(body, "soul_beacon_portents_dropped_total 2") {
 		t.Errorf("ожидали 2 дропа через loop; got=\n%s", body)
 	}
 }
 
-// TestSchedulerFileFlapMissingHash — edge-triggered flap появление/исчезновение
-// файла через scheduler (qa coverage_gap #6): реальный core.beacon.file_changed
-// под ManualTicker, переход "missing"↔hash на каждой смене даёт Portent.
+// TestSchedulerFileFlapMissingHash — edge-triggered flap of a file
+// appearing/disappearing via the scheduler (qa coverage_gap #6): real
+// core.beacon.file_changed under ManualTicker, each "missing"↔hash
+// transition produces a Portent.
 //
-// Последовательность: missing (baseline) → present (Portent) → удалён (Portent) →
-// present снова (Portent). Каждая смена State edge-triggered, дублей нет.
+// Sequence: missing (baseline) → present (Portent) → removed (Portent) →
+// present again (Portent). Every State transition is edge-triggered, no
+// duplicates.
 func TestSchedulerFileFlapMissingHash(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flap.conf")
-	// Файл изначально отсутствует — baseline State = "missing".
+	// The file is initially absent — baseline State = "missing".
 
 	reg := &Registry{beacons: map[string]Beacon{FileChangedName: NewFileChanged()}}
 	s := NewScheduler(SchedulerConfig{Registry: reg, SID: "host.example"})
@@ -111,11 +113,11 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 	}
 	s.Apply(ctx, []*keeperv1.VigilDef{def})
 
-	// baseline: missing — без Portent.
+	// baseline: missing — no Portent.
 	mt.Tick()
 	expectNoPortent(t, s)
 
-	// missing → present (создан): Portent с хешем в data.
+	// missing → present (created): Portent carries a hash in data.
 	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +130,7 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 		t.Error("present-Portent должен нести sha256 в data")
 	}
 
-	// present → missing (удалён): переход hash→"missing" — тоже смена State.
+	// present → missing (removed): the hash→"missing" transition is also a State change.
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 		t.Errorf("missing-Portent data.state = %q, want missing", ev.GetData().GetFields()["state"].GetStringValue())
 	}
 
-	// missing → present снова: edge-triggered поднимает Portent на каждой смене.
+	// missing → present again: edge-triggered raises a Portent on every transition.
 	if err := os.WriteFile(path, []byte("v2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestSchedulerFileFlapMissingHash(t *testing.T) {
 		t.Error("повторное появление должно дать Portent с sha256")
 	}
 
-	// Стабильное состояние (тот же файл) — без нового Portent (no-change guard).
+	// Stable state (same file) — no new Portent (no-change guard).
 	mt.Tick()
 	expectNoPortent(t, s)
 }

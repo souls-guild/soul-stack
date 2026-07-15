@@ -10,9 +10,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeBeacon — управляемое тело проверки: возвращает state, выставленный
-// SetState, и сигналит каждый Check через checked. Так тест синхронизируется с
-// Vigil-горутиной без time.Sleep.
+// fakeBeacon — a controllable check body: returns the state set via SetState
+// and signals each Check through checked. This lets the test synchronize with
+// the Vigil goroutine without time.Sleep.
 type fakeBeacon struct {
 	mu      sync.Mutex
 	state   State
@@ -45,7 +45,7 @@ func (f *fakeBeacon) SetErr(err error) {
 	f.mu.Unlock()
 }
 
-// regWith собирает реестр с одним fake-beacon под заданным адресом.
+// regWith builds a registry with a single fake-beacon under the given address.
 func regWith(name string, b Beacon) *Registry {
 	return &Registry{beacons: map[string]Beacon{name: b}}
 }
@@ -54,7 +54,7 @@ func vigil(name, check, interval string) *keeperv1.VigilDef {
 	return &keeperv1.VigilDef{Name: name, Check: check, Interval: interval}
 }
 
-// waitChecked ждёт один Check от fake-beacon (синхронизация с Vigil-горутиной).
+// waitChecked waits for one Check from fake-beacon (synchronizes with the Vigil goroutine).
 func waitChecked(t *testing.T, f *fakeBeacon) {
 	t.Helper()
 	select {
@@ -64,7 +64,7 @@ func waitChecked(t *testing.T, f *fakeBeacon) {
 	}
 }
 
-// expectNoPortent проверяет, что в канал не пришёл Portent за короткое окно.
+// expectNoPortent verifies no Portent arrived on the channel within a short window.
 func expectNoPortent(t *testing.T, s *Scheduler) {
 	t.Helper()
 	select {
@@ -74,7 +74,7 @@ func expectNoPortent(t *testing.T, s *Scheduler) {
 	}
 }
 
-// expectPortent ждёт ровно один Portent и возвращает его.
+// expectPortent waits for exactly one Portent and returns it.
 func expectPortent(t *testing.T, s *Scheduler) *keeperv1.PortentEvent {
 	t.Helper()
 	select {
@@ -94,7 +94,7 @@ func newTestScheduler(t *testing.T, reg *Registry) (*Scheduler, *ManualTicker) {
 	return s, mt
 }
 
-// TestBaselineNoPortent — первая проверка устанавливает baseline без Portent.
+// TestBaselineNoPortent — the first check establishes a baseline without a Portent.
 func TestBaselineNoPortent(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -105,12 +105,12 @@ func TestBaselineNoPortent(t *testing.T) {
 
 	mt.Tick()
 	waitChecked(t, fb)
-	expectNoPortent(t, s) // baseline — без Portent
+	expectNoPortent(t, s) // baseline — no Portent
 	s.Stop()
 }
 
-// TestEdgeTriggeredOnChange — смена state после baseline → ровно один Portent с
-// корректными полями.
+// TestEdgeTriggeredOnChange — a state change after baseline → exactly one
+// Portent with correct fields.
 func TestEdgeTriggeredOnChange(t *testing.T) {
 	fb := newFakeBeacon("up")
 	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
@@ -126,7 +126,7 @@ func TestEdgeTriggeredOnChange(t *testing.T) {
 	waitChecked(t, fb)
 	expectNoPortent(t, s)
 
-	// смена состояния
+	// state change
 	fb.SetState("down")
 	mt.Tick()
 	waitChecked(t, fb)
@@ -144,7 +144,7 @@ func TestEdgeTriggeredOnChange(t *testing.T) {
 	s.Stop()
 }
 
-// TestNoChangeNoPortent — совпадение state с last не эмитит Portent.
+// TestNoChangeNoPortent — state matching last doesn't emit a Portent.
 func TestNoChangeNoPortent(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -157,13 +157,13 @@ func TestNoChangeNoPortent(t *testing.T) {
 	waitChecked(t, fb)
 	expectNoPortent(t, s)
 
-	mt.Tick() // снова up — нет смены
+	mt.Tick() // still up — no change
 	waitChecked(t, fb)
 	expectNoPortent(t, s)
 	s.Stop()
 }
 
-// TestFlapEmitsTwice — up→down→up даёт два Portent (каждый edge).
+// TestFlapEmitsTwice — up→down→up produces two Portents (each edge).
 func TestFlapEmitsTwice(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -191,8 +191,9 @@ func TestFlapEmitsTwice(t *testing.T) {
 	s.Stop()
 }
 
-// TestCheckErrorNoBaselineNoPortent — ошибка Check не двигает baseline и не
-// эмитит Portent; после восстановления первая успешная проверка — снова baseline.
+// TestCheckErrorNoBaselineNoPortent — a Check error doesn't move the baseline
+// and doesn't emit a Portent; after recovery, the first successful check is a
+// new baseline.
 func TestCheckErrorNoBaselineNoPortent(t *testing.T) {
 	fb := newFakeBeacon("up")
 	fb.SetErr(context.DeadlineExceeded)
@@ -202,12 +203,12 @@ func TestCheckErrorNoBaselineNoPortent(t *testing.T) {
 
 	s.Apply(ctx, []*keeperv1.VigilDef{vigil("v1", "core.beacon.x", "1s")})
 
-	mt.Tick() // ошибка → ни baseline, ни Portent
+	mt.Tick() // error → neither baseline nor Portent
 	waitChecked(t, fb)
 	expectNoPortent(t, s)
 
-	// Восстановление: первая успешная проверка — baseline (без Portent), несмотря
-	// на то, что был тик с ошибкой.
+	// Recovery: the first successful check is a baseline (no Portent), despite
+	// the earlier tick having errored.
 	fb.SetErr(nil)
 	fb.SetState("down")
 	mt.Tick()
@@ -216,8 +217,8 @@ func TestCheckErrorNoBaselineNoPortent(t *testing.T) {
 	s.Stop()
 }
 
-// TestReplaceAllRemovesVigil — новый snapshot без прежнего Vigil останавливает
-// его (Check больше не вызывается).
+// TestReplaceAllRemovesVigil — a new snapshot without the previous Vigil stops
+// it (Check is no longer called).
 func TestReplaceAllRemovesVigil(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -228,10 +229,10 @@ func TestReplaceAllRemovesVigil(t *testing.T) {
 	mt.Tick()
 	waitChecked(t, fb)
 
-	// Пустой snapshot — Vigil остановлен и забыт.
+	// Empty snapshot — the Vigil is stopped and forgotten.
 	s.Apply(ctx, nil)
 
-	// Tick после остановки: горутины нет, Check не приходит.
+	// Tick after the stop: no goroutine, Check doesn't fire.
 	mt.Tick()
 	select {
 	case <-fb.checked:
@@ -241,9 +242,9 @@ func TestReplaceAllRemovesVigil(t *testing.T) {
 	s.Stop()
 }
 
-// TestReplaceAllSameDefKeepsBaseline — повторный snapshot с тем же определением
-// НЕ перезапускает Vigil: baseline сохраняется, реальная последующая смена
-// эмитит Portent (а не подавляется новым baseline).
+// TestReplaceAllSameDefKeepsBaseline — a repeat snapshot with the same
+// definition does NOT restart the Vigil: baseline is preserved, a real
+// subsequent change emits a Portent (rather than being suppressed by a fresh baseline).
 func TestReplaceAllSameDefKeepsBaseline(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -256,11 +257,11 @@ func TestReplaceAllSameDefKeepsBaseline(t *testing.T) {
 	waitChecked(t, fb)
 	expectNoPortent(t, s)
 
-	// Тот же snapshot снова — не должен сбросить baseline.
+	// The same snapshot again — must not reset the baseline.
 	s.Apply(ctx, []*keeperv1.VigilDef{vigil("v1", "core.beacon.x", "1s")})
 
-	// Смена состояния → Portent (если бы baseline сбросился, был бы новый baseline
-	// без события).
+	// State change → Portent (if the baseline had reset, this would be a new
+	// baseline with no event).
 	fb.SetState("down")
 	mt.Tick()
 	waitChecked(t, fb)
@@ -270,8 +271,8 @@ func TestReplaceAllSameDefKeepsBaseline(t *testing.T) {
 	s.Stop()
 }
 
-// TestUnknownCheckSkipped — Vigil с неизвестным check не запускается и не валит
-// scheduler (известный Vigil рядом работает).
+// TestUnknownCheckSkipped — a Vigil with an unknown check doesn't start and
+// doesn't crash the scheduler (a known Vigil alongside it still works).
 func TestUnknownCheckSkipped(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, mt := newTestScheduler(t, regWith("core.beacon.known", fb))
@@ -284,11 +285,11 @@ func TestUnknownCheckSkipped(t *testing.T) {
 	})
 
 	mt.Tick()
-	waitChecked(t, fb) // good работает
+	waitChecked(t, fb) // good is working
 	s.Stop()
 }
 
-// TestInvalidIntervalSkipped — Vigil с невалидным interval не запускается.
+// TestInvalidIntervalSkipped — a Vigil with an invalid interval doesn't start.
 func TestInvalidIntervalSkipped(t *testing.T) {
 	fb := newFakeBeacon("up")
 	s, _ := newTestScheduler(t, regWith("core.beacon.x", fb))
@@ -305,7 +306,7 @@ func TestInvalidIntervalSkipped(t *testing.T) {
 	s.Stop()
 }
 
-// TestNilSchedulerSafe — nil-receiver не паникует (тестовая обвязка без контура).
+// TestNilSchedulerSafe — nil-receiver doesn't panic (test harness without a live scheduler).
 func TestNilSchedulerSafe(t *testing.T) {
 	var s *Scheduler
 	s.Apply(context.Background(), nil)

@@ -32,7 +32,7 @@ func TestNDJSONSink_LineFraming(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("got %d lines, want 2: %q", len(lines), buf.String())
 	}
-	// Каждая строка — самостоятельный protojson (round-trip обоих сообщений).
+	// Each line is standalone protojson (round-trip of both messages).
 	ev := &keeperv1.TaskEvent{}
 	if err := protojson.Unmarshal([]byte(lines[0]), ev); err != nil {
 		t.Fatalf("unmarshal line 0: %v", err)

@@ -1,15 +1,15 @@
-// Package grpc — Soul-side gRPC-клиент Keeper-а.
+// Package grpc is the Soul-side gRPC client for Keeper.
 //
-// Состав:
-//   - [Client]: dial-цикл по списку endpoint-ов с приоритетами и spray-shuffle
-//     ([keeper.endpoints] из soul.yml). Один Client → одна попытка установить
-//     долгоживущий EventStream-стрим (ADR-002, ADR-012(a)).
-//   - [StreamSession]: handshake (Hello/HelloReply) + send/recv-loop поверх
-//     уже установленного bidi-стрима. Реализует runtime.EventSink.
+// Contents:
+//   - [Client]: dial loop over prioritized endpoints with spray-shuffle
+//     ([keeper.endpoints] in soul.yml). One Client makes one attempt to
+//     establish a long-lived EventStream (ADR-002, ADR-012(a)).
+//   - [StreamSession]: handshake (Hello/HelloReply) + send/recv loop over an
+//     established bidi stream. Implements runtime.EventSink.
 //
-// Reconnect — задача caller-а (`soul run`-loop в cmd/soul): при ошибке Dial
-// или Recv-loop он повторяет с backoff-ом. Это упрощает тестирование (каждый
-// шаг проверяется отдельно) и не размывает ответственность.
+// Reconnect is the caller's job (the `soul run` loop in cmd/soul): on a Dial
+// or Recv-loop error it retries with backoff. Keeps each step independently
+// testable and responsibilities clear.
 package grpc
 
 import (
@@ -36,69 +36,69 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tlsx"
 )
 
-// Endpoint — описание Keeper-а из soul.yml. Addr — EventStream-адрес
-// (`host:event_stream_port`, источник — SoulKeeperEndpoint.EventStreamAddr()).
-// Приоритет — нативный порядок failover ([docs/soul/connection.md]): сначала
-// пробуем priority 1, затем 2, внутри одного приоритета — случайный shuffle
-// (spray).
+// Endpoint describes a Keeper instance from soul.yml. Addr is the
+// EventStream address (`host:event_stream_port`, from
+// SoulKeeperEndpoint.EventStreamAddr()). Priority drives failover order
+// ([docs/soul/connection.md]): try priority 1 first, then 2; within a
+// priority, random shuffle (spray).
 type Endpoint struct {
 	Addr     string
 	Priority int
 }
 
-// ClientConfig — параметры Client.
+// ClientConfig — Client parameters.
 type ClientConfig struct {
-	// Endpoints — список Keeper-инстансов. Не пустой.
+	// Endpoints — Keeper instances. Must not be empty.
 	Endpoints []Endpoint
-	// SeedCert / SeedKey — клиентский SoulSeed (PEM-пути на диске).
+	// SeedCert / SeedKey — client SoulSeed (PEM paths on disk).
 	SeedCert string
 	SeedKey  string
-	// CAPath — CA-цепочка для верификации серверного cert-а Keeper-а.
+	// CAPath — CA chain to verify Keeper's server cert.
 	CAPath string
-	// HandshakeTimeout — окно одного dial + Hello/HelloReply.
+	// HandshakeTimeout — window for one dial + Hello/HelloReply.
 	HandshakeTimeout time.Duration
-	// SoulVersion — кладётся в Hello.soul_version для аудита.
+	// SoulVersion — put into Hello.soul_version for audit.
 	SoulVersion string
-	// SID — кладётся в Hello.sid_echo (authoritative — mTLS peer cert).
+	// SID — put into Hello.sid_echo (authoritative source is the mTLS peer cert).
 	SID string
-	// MaxRecvMsgSize — потолок размера входящего FromKeeper в байтах (прежде
-	// всего ApplyRequest с пачкой RenderedTask). Применяется как
-	// grpc.MaxCallRecvMsgSize, заменяя малый gRPC-дефолт (4 MiB). 0 →
-	// [config.DefaultMaxApplySizeMB] (8 MiB). Источник — soul.yml
+	// MaxRecvMsgSize — cap on incoming FromKeeper size in bytes (mainly
+	// ApplyRequest with a batch of RenderedTask). Applied as
+	// grpc.MaxCallRecvMsgSize, replacing the small gRPC default (4 MiB). 0 →
+	// [config.DefaultMaxApplySizeMB] (8 MiB). Source — soul.yml
 	// `keeper.max_apply_size_mb` (config.SoulKeeper.ResolvedMaxApplySize).
 	MaxRecvMsgSize int
-	// MaxAttempts — число попыток dialOne на ОДИН endpoint при retriable-ошибке
-	// (Unavailable/DeadlineExceeded/Internal/… см. isRetriablePerEndpoint),
-	// прежде чем spray-ить к следующему endpoint. Источник — soul.yml
-	// `keeper.retry.max_attempts`. 0 → [defaultMaxAttempts] (резолв в NewClient).
-	// Внешний reconnectLoop остаётся отдельным уровнем повтора между ПОЛНЫМИ
-	// проходами по fallback-list-у (ADR-002).
+	// MaxAttempts — dialOne retries against a SINGLE endpoint on a retriable
+	// error (Unavailable/DeadlineExceeded/Internal/… see isRetriablePerEndpoint)
+	// before spraying to the next endpoint. Source — soul.yml
+	// `keeper.retry.max_attempts`. 0 → [defaultMaxAttempts] (resolved in NewClient).
+	// The outer reconnectLoop is a separate retry layer between FULL passes
+	// over the fallback list (ADR-002).
 	MaxAttempts int
-	// InterAttemptDelay — пауза между попытками к одному endpoint-у. ПЛОСКАЯ
-	// (без экспоненциального роста — рост остаётся внешнему reconnectLoop).
-	// Источник — `keeper.retry.backoff.initial` (реюз, без новых конфиг-ключей).
-	// restart-required: значение фиксируется при сборке Client и НЕ перечитывается
-	// при hot-reload (в отличие от reconnect-backoff, который reconnectLoop берёт
-	// из store per-iteration) — смена `backoff.initial` для inter-attempt delay
-	// требует рестарта soul.
+	// InterAttemptDelay — pause between attempts against one endpoint. FLAT
+	// (no exponential growth — growth stays with the outer reconnectLoop).
+	// Source — `keeper.retry.backoff.initial` (reused, no new config keys).
+	// restart-required: fixed at Client construction and NOT re-read on
+	// hot-reload (unlike reconnect backoff, which reconnectLoop reads from the
+	// store per-iteration) — changing `backoff.initial` for inter-attempt
+	// delay requires a soul restart.
 	InterAttemptDelay time.Duration
-	// InterAttemptJitter — добавлять ли ±25% jitter к InterAttemptDelay.
-	// Источник — `keeper.retry.backoff.jitter`.
+	// InterAttemptJitter — whether to add ±25% jitter to InterAttemptDelay.
+	// Source — `keeper.retry.backoff.jitter`.
 	InterAttemptJitter bool
 }
 
-// defaultMaxAttempts — число попыток dialOne на endpoint при опущенном/нулевом
-// keeper.retry.max_attempts. Консервативное значение: одна повторная попытка
-// после первого retriable-сбоя, дальше spray + внешний reconnectLoop.
+// defaultMaxAttempts — dialOne retries per endpoint when
+// keeper.retry.max_attempts is omitted/zero. Conservative: one retry after
+// the first retriable failure, then spray + the outer reconnectLoop.
 const defaultMaxAttempts = 2
 
-// Client — менеджер EventStream-сессий.
+// Client — EventStream session manager.
 type Client struct {
 	cfg    ClientConfig
 	logger *slog.Logger
 }
 
-// NewClient собирает Client и валидирует обязательные поля.
+// NewClient builds a Client and validates required fields.
 func NewClient(cfg ClientConfig, logger *slog.Logger) (*Client, error) {
 	if len(cfg.Endpoints) == 0 {
 		return nil, errors.New("grpc: client: endpoints is empty")
@@ -124,25 +124,24 @@ func NewClient(cfg ClientConfig, logger *slog.Logger) (*Client, error) {
 	return &Client{cfg: cfg, logger: logger}, nil
 }
 
-// Dial устанавливает gRPC-соединение и открывает EventStream + handshake.
-// Возвращает StreamSession готовый к send/recv. На каждый endpoint — одна
-// попытка; первый успех — используется.
+// Dial establishes a gRPC connection and opens EventStream + handshake.
+// Returns a StreamSession ready for send/recv. One attempt per endpoint;
+// first success wins.
 //
-// При полном фейле возвращает агрегированную ошибку с подробностями каждого
-// endpoint-а — caller (run-loop) делает backoff и повторяет.
+// On total failure returns an aggregated error detailing each endpoint —
+// the caller (run-loop) backs off and retries.
 func (c *Client) Dial(ctx context.Context) (*StreamSession, error) {
 	return c.DialPriority(ctx, 0)
 }
 
-// DialPriority — попытка установить соединение, ограничив поиск endpoint-ами
-// с приоритетом строго меньше maxPriority. maxPriority=0 трактуется как
-// «без ограничения» (эквивалент Dial). Используется failback-loop-ом
-// для попытки вернуться на более предпочтительный приоритет ([docs/soul/connection.md
-// → Failback]).
+// DialPriority attempts a connection restricted to endpoints with priority
+// strictly less than maxPriority. maxPriority=0 means "unrestricted"
+// (equivalent to Dial). Used by the failback loop to try returning to a more
+// preferred priority ([docs/soul/connection.md → Failback]).
 //
-// Возвращает session и фактический priority выбранного endpoint-а через
-// StreamSession.Priority(); при maxPriority>0 успех = priority < maxPriority,
-// иначе error.
+// Returns the session and the chosen endpoint's actual priority via
+// StreamSession.Priority(); with maxPriority>0, success means
+// priority < maxPriority, otherwise error.
 func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSession, error) {
 	tlsCfg, err := tlsx.LoadClientTLS(tlsx.ClientConfig{
 		CertPath: c.cfg.SeedCert,
@@ -153,10 +152,10 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		return nil, fmt.Errorf("grpc: client: load mTLS: %w", err)
 	}
 
-	// gRPC keepalive: пингуем сервер каждые 30s после 10s idle, держим
-	// connection alive если канал не используется (PermitWithoutStream).
-	// Это покрывает ADR-012 «никакого app-level heartbeat» — gRPC сам
-	// детектит мёртвое соединение и закрывает stream.
+	// gRPC keepalive: ping the server every 30s after 10s idle, keep the
+	// connection alive even with no active stream (PermitWithoutStream).
+	// Covers ADR-012 "no app-level heartbeat" — gRPC itself detects a dead
+	// connection and closes the stream.
 	kp := keepalive.ClientParameters{
 		Time:                30 * time.Second,
 		Timeout:             10 * time.Second,
@@ -164,10 +163,10 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 	}
 
 	var dialErrs []string
-	// allLeaseHeld — все упавшие endpoint-ы вернули AlreadyExists (SID-lease ещё
-	// держит живой/не-истёкший holder, keeper/internal/grpc/eventstream.go).
-	// Спрашиваем итог только когда хоть один endpoint реально пробовался: при
-	// пустом dialErrs (нет подходящих endpoint-ов) флаг остаётся ложным.
+	// allLeaseHeld — every failed endpoint returned AlreadyExists (SID lease
+	// still held by a live/unexpired holder, keeper/internal/grpc/eventstream.go).
+	// Only meaningful once at least one endpoint was actually tried: with
+	// dialErrs empty (no matching endpoints) the flag stays false.
 	allLeaseHeld := true
 	tried := false
 	for _, ep := range orderedEndpoints(c.cfg.Endpoints) {
@@ -181,11 +180,11 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		creds := credentials.NewTLS(cfgForAddr)
 
 		tried = true
-		// Per-endpoint retry (keeper.retry.max_attempts): повторяем dialOne к ОДНОМУ
-		// endpoint-у при retriable-ошибке (transport-flake), прежде чем spray-ить к
-		// следующему. Non-retriable (lease-held / auth / invalid) — break сразу:
-		// повтор к тому же endpoint-у бессмыслен, нужен другой. Это уровень между
-		// одиночным dialOne и внешним reconnectLoop (ADR-002, docs/soul/connection.md).
+		// Per-endpoint retry (keeper.retry.max_attempts): retry dialOne against the SAME
+		// endpoint on a retriable error (transport flake) before spraying to the
+		// next one. Non-retriable (lease-held / auth / invalid) breaks immediately:
+		// retrying the same endpoint is pointless, we need a different one. This is
+		// the level between a single dialOne and the outer reconnectLoop (ADR-002, docs/soul/connection.md).
 		var err error
 		var sess *StreamSession
 		for attempt := 1; attempt <= c.cfg.MaxAttempts; attempt++ {
@@ -201,15 +200,15 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 				return sess, nil
 			}
 			if !isRetriablePerEndpoint(err) {
-				// ★ Регресс-guard (7af8e95): lease-held (AlreadyExists) — non-retriable,
-				// поэтому на каждый lease-held endpoint РОВНО один dialOne, allLeaseHeld
-				// копится по одной попытке на endpoint.
+				// ★ Regression guard (7af8e95): lease-held (AlreadyExists) is non-retriable,
+				// so each lease-held endpoint gets EXACTLY one dialOne; allLeaseHeld
+				// accumulates one attempt per endpoint.
 				break
 			}
 			if attempt < c.cfg.MaxAttempts {
-				// Debug, не Warn: промежуточный retry — ожидаемый шум; при больших
-				// fallback-list + сетевом шторме не должен заваливать Warn-лог.
-				// Итоговый «dial failed» (после исчерпания попыток) ниже — Warn.
+				// Debug, not Warn: an intermediate retry is expected noise; with a large
+				// fallback list plus a network storm this shouldn't flood the Warn log.
+				// The final "dial failed" (once attempts are exhausted) below is Warn.
 				c.logger.Debug("eventstream: dial failed, retrying same endpoint",
 					slog.String("addr", ep.Addr),
 					slog.Int("attempt", attempt),
@@ -217,16 +216,17 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 					slog.Any("error", err),
 				)
 				if !c.sleepInterAttempt(ctx) {
-					// ctx отменён во время паузы — выходим, итог отдаём ниже.
+					// ctx canceled during the pause — bail out, result returned below.
 					dialErrs = append(dialErrs, fmt.Sprintf("%s: %v", ep.Addr, ctx.Err()))
 					return nil, fmt.Errorf("grpc: client: all endpoints failed:\n  - %s", strings.Join(dialErrs, "\n  - "))
 				}
 			}
 		}
-		// spray: AlreadyExists на одном endpoint НЕ прерывает перебор — следующий
-		// endpoint мог уже перехватить lease после force-release. Флаг сбрасываем,
-		// как только хоть один фейл — НЕ AlreadyExists (тогда это transport-сбой,
-		// общий backoff-cap, не модест-cap lease-held ветки).
+		// spray: AlreadyExists on one endpoint does NOT stop iteration — the next
+		// endpoint may already have grabbed the lease after force-release. Clear
+		// the flag as soon as any failure is NOT AlreadyExists (then it's a
+		// transport failure — the general backoff cap, not the lease-held modest
+		// cap).
 		if !isAlreadyExists(err) {
 			allLeaseHeld = false
 		}
@@ -234,64 +234,65 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		dialErrs = append(dialErrs, fmt.Sprintf("%s: %v", ep.Addr, err))
 	}
 	if maxPriority > 0 && len(dialErrs) == 0 {
-		// Не нашли endpoint-ов с priority < maxPriority — это нормально, не
-		// ошибка failback-цикла; отличаем от случая «есть, но все упали».
+		// No endpoints with priority < maxPriority found — that's normal, not a
+		// failback-loop error; distinguish it from "some exist but all failed".
 		return nil, errNoHigherPriority
 	}
 	aggregated := fmt.Errorf("grpc: client: all endpoints failed:\n  - %s", strings.Join(dialErrs, "\n  - "))
 	if tried && allLeaseHeld {
-		// Все пробованные endpoint-ы отдали AlreadyExists — оборачиваем sentinel-ом
-		// errLeaseHeld, чтобы reconnect-loop применил модест-cap (быстрый возврат
-		// после истечения presence), не теряя диагностику в aggregated. status в
-		// per-endpoint обёртках уже стёрт (%v), поэтому сигнал несём через sentinel.
+		// Every tried endpoint returned AlreadyExists — wrap with the errLeaseHeld
+		// sentinel so reconnect-loop applies the modest cap (fast return after
+		// presence expiry) without losing diagnostics in aggregated. status in the
+		// per-endpoint wrappers is already erased (%v), so the signal travels via the sentinel.
 		return nil, fmt.Errorf("%w: %w", errLeaseHeld, aggregated)
 	}
 	return nil, aggregated
 }
 
-// errNoHigherPriority — sentinel-ошибка DialPriority: нет endpoint-ов с
-// priority < maxPriority. Используется failback-loop-ом, чтобы отличить
-// «некуда возвращаться» от «все попытки провалились».
+// errNoHigherPriority — DialPriority sentinel error: no endpoints with
+// priority < maxPriority. Used by the failback loop to distinguish "nothing
+// to return to" from "all attempts failed".
 var errNoHigherPriority = errors.New("grpc: client: no higher-priority endpoint")
 
-// IsNoHigherPriority — публичный selector над sentinel-ошибкой DialPriority.
+// IsNoHigherPriority is the public selector for DialPriority's sentinel error.
 func IsNoHigherPriority(err error) bool {
 	return errors.Is(err, errNoHigherPriority)
 }
 
-// errLeaseHeld — sentinel-ошибка Dial/DialPriority: ВСЕ пробованные endpoint-ы
-// отвергли handshake с gRPC AlreadyExists (SID-lease ещё держит живой/не-
-// истёкший holder, keeper/internal/grpc/eventstream.go::acquireSoulLease). Dial
-// удался на транспорте, но сессия отвергнута — soft-failure для целей backoff:
-// reconnect-loop применяет модест-cap вместо общего transport-cap, чтобы Soul
-// переподключился в пределах секунд после истечения presence (force-release),
-// а не долбил выживших keeper-ов и не ждал раздутый exponential-cap.
+// errLeaseHeld — Dial/DialPriority sentinel error: ALL tried endpoints
+// rejected the handshake with gRPC AlreadyExists (SID lease still held by a
+// live/unexpired holder, keeper/internal/grpc/eventstream.go::acquireSoulLease).
+// Dial succeeded at the transport level but the session was rejected — a
+// soft failure for backoff purposes: reconnect-loop applies a modest cap
+// instead of the general transport cap, so Soul reconnects within seconds of
+// presence expiry (force-release) instead of hammering surviving keepers or
+// waiting out an inflated exponential cap.
 var errLeaseHeld = errors.New("grpc: client: soul lease held by live keeper")
 
-// IsLeaseHeld — публичный selector над sentinel-ошибкой errLeaseHeld.
+// IsLeaseHeld is the public selector for the errLeaseHeld sentinel error.
 func IsLeaseHeld(err error) bool {
 	return errors.Is(err, errLeaseHeld)
 }
 
-// isAlreadyExists — true, если ошибка несёт gRPC-status codes.AlreadyExists
-// где-либо в chain (dialOne оборачивает recv-ошибку через %w, status сохраняется).
+// isAlreadyExists reports whether err carries gRPC status codes.AlreadyExists
+// anywhere in its chain (dialOne wraps the recv error via %w, status survives).
 func isAlreadyExists(err error) bool {
 	return status.Code(err) == codes.AlreadyExists
 }
 
-// isRetriablePerEndpoint решает, повторять ли dialOne к ТОМУ ЖЕ endpoint-у
-// (per-endpoint retry, keeper.retry.max_attempts) или сразу spray-ить к
-// следующему. Матрица нормативна (architect, docs/soul/connection.md):
+// isRetriablePerEndpoint decides whether to retry dialOne against the SAME
+// endpoint (per-endpoint retry, keeper.retry.max_attempts) or spray to the
+// next one right away. The matrix is normative (architect, docs/soul/connection.md):
 //
-//   - НЕ retriable (повтор к тому же endpoint бессмыслен → break, spray дальше):
-//     AlreadyExists (lease-held — другой keeper держит SID-lease),
-//     Unauthenticated / PermissionDenied (auth-проблема не самоисправится),
-//     InvalidArgument / FailedPrecondition / Unimplemented (контрактный отказ).
-//   - retriable (transient transport-flake — повтор может пройти):
-//     Unavailable / DeadlineExceeded / Internal / Unknown / Aborted, а также
-//     локальный handshake-timeout (не gRPC-status: dialOne отдаёт обычный
-//     fmt.Errorf, status.Code → codes.Unknown, попадает в default → retriable).
-//   - default (неклассифицированный код) → retriable, консервативно.
+//   - NOT retriable (retrying the same endpoint is pointless → break, spray on):
+//     AlreadyExists (lease-held — another keeper holds the SID lease),
+//     Unauthenticated / PermissionDenied (an auth problem won't self-heal),
+//     InvalidArgument / FailedPrecondition / Unimplemented (contract rejection).
+//   - retriable (transient transport flake — a retry may succeed):
+//     Unavailable / DeadlineExceeded / Internal / Unknown / Aborted, plus a
+//     local handshake timeout (not a gRPC status: dialOne returns a plain
+//     fmt.Errorf, status.Code → codes.Unknown, falls into default → retriable).
+//   - default (unclassified code) → retriable, conservatively.
 func isRetriablePerEndpoint(err error) bool {
 	switch status.Code(err) {
 	case codes.AlreadyExists,
@@ -303,15 +304,15 @@ func isRetriablePerEndpoint(err error) bool {
 		return false
 	default:
 		// Unavailable / DeadlineExceeded / Internal / Unknown / Aborted +
-		// handshake-timeout (codes.Unknown) + всё неклассифицированное.
+		// handshake timeout (codes.Unknown) + everything unclassified.
 		return true
 	}
 }
 
-// sleepInterAttempt выдерживает плоскую паузу InterAttemptDelay (±jitter) между
-// попытками к одному endpoint-у, прерываясь по ctx. Возвращает true, если пауза
-// выдержана, false — ctx отменён. Рост cap-а остаётся внешнему reconnectLoop —
-// здесь пауза плоская (reuse backoff.initial).
+// sleepInterAttempt waits out a flat InterAttemptDelay (±jitter) between
+// attempts against one endpoint, interruptible via ctx. Returns true if the
+// pause completed, false if ctx was canceled. Cap growth stays with the outer
+// reconnectLoop — here the pause is flat (reuses backoff.initial).
 func (c *Client) sleepInterAttempt(ctx context.Context) bool {
 	d := c.cfg.InterAttemptDelay
 	if c.cfg.InterAttemptJitter && d > 0 {
@@ -331,17 +332,18 @@ func (c *Client) sleepInterAttempt(ctx context.Context) bool {
 	}
 }
 
-// dialOne — одна попытка к одному endpoint-у. Stream живёт под собственным
-// session-ctx-ом (cancel в StreamSession.Close); handshake-timeout
-// накладывается локально через select-on-channel, иначе timeout-cancel убил
-// бы и долгоживущий стрим.
+// dialOne is a single attempt against one endpoint. The stream lives under
+// its own session ctx (canceled in StreamSession.Close); handshake timeout is
+// enforced locally via select-on-channel, otherwise a timeout-cancel would
+// also kill the long-lived stream.
 func (c *Client) dialOne(ctx context.Context, addr string, creds credentials.TransportCredentials, kp keepalive.ClientParameters) (*StreamSession, error) {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(creds),
 		grpc.WithKeepaliveParams(kp),
-		// recv-лимит входящего ApplyRequest (config.keeper.max_apply_size_mb).
-		// gRPC-дефолт recv (4 MiB) мал для крупного Destiny; send-лимит клиента
-		// не трогаем — Soul шлёт только мелкие FromSoul (TaskEvent/RunResult).
+		// recv limit for incoming ApplyRequest (config.keeper.max_apply_size_mb).
+		// The gRPC recv default (4 MiB) is too small for a large Destiny; leave
+		// the client's send limit alone — Soul only sends small FromSoul
+		// (TaskEvent/RunResult).
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(c.cfg.MaxRecvMsgSize)),
 	)
 	if err != nil {
@@ -362,9 +364,10 @@ func (c *Client) dialOne(ctx context.Context, addr string, creds credentials.Tra
 		hello := &keeperv1.Hello{
 			SidEcho:     c.cfg.SID,
 			SoulVersion: c.cfg.SoulVersion,
-			// Анонс фичей протокола (ADR-056 §S5): keeper персистит набор рядом с
-			// presence и сверяет ДО dispatch-а staged-сценария. Без "passage" этот
-			// Soul под N>1 Passage отвергается fail-closed, а не зависает.
+			// Protocol feature announcement (ADR-056 §S5): keeper persists the set
+			// alongside presence and checks it BEFORE dispatching a staged scenario.
+			// Without "passage", this Soul is rejected fail-closed under N>1 Passage
+			// instead of hanging.
 			Capabilities: config.SoulCapabilities(),
 		}
 		if err := stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_Hello{Hello: hello}}); err != nil {
@@ -408,16 +411,15 @@ func (c *Client) dialOne(ctx context.Context, addr string, creds credentials.Tra
 	}, nil
 }
 
-// orderedEndpoints возвращает endpoints, отсортированные по приоритету
-// (меньше → раньше), с in-priority shuffle (spray, ADR-002). Не мутирует
-// исходный slice.
+// orderedEndpoints returns endpoints sorted by priority (lower → earlier),
+// with in-priority shuffle (spray, ADR-002). Does not mutate the input slice.
 func orderedEndpoints(in []Endpoint) []Endpoint {
 	out := make([]Endpoint, len(in))
 	copy(out, in)
 	sort.SliceStable(out, func(i, j int) bool {
 		return normalizedPriority(out[i].Priority) < normalizedPriority(out[j].Priority)
 	})
-	// Spray: shuffle внутри каждой priority-группы.
+	// Spray: shuffle within each priority group.
 	for i := 0; i < len(out); {
 		j := i + 1
 		pi := normalizedPriority(out[i].Priority)
@@ -440,9 +442,9 @@ func normalizedPriority(p int) int {
 	return p
 }
 
-// hostFromAddr — host из `host:port` для SNI / hostname-verify.
-// Дубликат соседнего helper-а из internal/bootstrap; выносить в shared ради
-// 6 строк — overkill.
+// hostFromAddr extracts host from `host:port` for SNI / hostname verify.
+// Duplicates a sibling helper in internal/bootstrap; not worth hoisting into
+// shared for 6 lines.
 func hostFromAddr(s string) (string, bool) {
 	i := strings.LastIndex(s, ":")
 	if i <= 0 {
@@ -455,15 +457,15 @@ func hostFromAddr(s string) (string, bool) {
 	return host, true
 }
 
-// StreamSession — открытый bidi-стрим Keeper↔Soul с уже завершённым
-// handshake-ом. Реализует runtime.EventSink (SendTaskEvent / SendRunResult).
+// StreamSession is an open Keeper↔Soul bidi stream with the handshake
+// already complete. Implements runtime.EventSink (SendTaskEvent / SendRunResult).
 //
-// Concurrent Send-ы сериализуются внутренним writeMu: gRPC bidi-stream не
-// допускает concurrent Send без внешней синхронизации. В MVP большинство
-// Send-ов идёт из единственного writer-а (select-loop handleSession), но
-// Errand-горутина (ADR-033) — параллельный writer: апплай ещё может идти, а
-// Errand уже пришёл. writeMu закрывает гонку без перестройки архитектуры
-// «один writer».
+// Concurrent Sends are serialized by the internal writeMu: a gRPC bidi
+// stream doesn't allow concurrent Send without external synchronization. In
+// the MVP most Sends come from a single writer (the handleSession select
+// loop), but the Errand goroutine (ADR-033) is a parallel writer: apply may
+// still be running while an Errand arrives. writeMu closes that race without
+// restructuring the "one writer" architecture.
 type StreamSession struct {
 	conn       *grpc.ClientConn
 	stream     grpc.BidiStreamingClient[keeperv1.FromSoul, keeperv1.FromKeeper]
@@ -474,11 +476,11 @@ type StreamSession struct {
 	priority   int
 	logger     *slog.Logger
 
-	// writeMu сериализует Send (ApplyRunner.SendTaskEvent / SendRunResult,
+	// writeMu serializes Send (ApplyRunner.SendTaskEvent / SendRunResult,
 	// SendWardRoster, SendSoulprintReport, SendFromSoul, SendErrandResult).
-	// Read-loop (Recv) — отдельная горутина, мьютекс не нужен. Recv и Send
-	// gRPC bidi-stream-а параллелятся независимо (контракт google.golang.org/
-	// grpc).
+	// The read loop (Recv) is a separate goroutine, no mutex needed. Recv and
+	// Send on a gRPC bidi stream run concurrently by contract
+	// (google.golang.org/grpc).
 	writeMu sync.Mutex
 }
 
@@ -488,12 +490,13 @@ func (s *StreamSession) ServerTime() time.Time {
 	return s.serverTime
 }
 
-// Priority — приоритет endpoint-а, на котором установлена сессия (после
-// нормализации zero→1). 0 — сессия открыта без учёта приоритета (legacy-Dial).
+// Priority is the endpoint priority the session was established on (after
+// zero→1 normalization). 0 means the session was opened without priority
+// tracking (legacy Dial).
 func (s *StreamSession) Priority() int { return s.priority }
 
-// Recv возвращает следующее сообщение FromKeeper. io.EOF — нормальное
-// закрытие; любая другая ошибка — повод reconnect в caller-loop.
+// Recv returns the next FromKeeper message. io.EOF is a normal close; any
+// other error means the caller loop should reconnect.
 func (s *StreamSession) Recv() (*keeperv1.FromKeeper, error) {
 	msg, err := s.stream.Recv()
 	if errors.Is(err, io.EOF) {
@@ -502,35 +505,35 @@ func (s *StreamSession) Recv() (*keeperv1.FromKeeper, error) {
 	return msg, err
 }
 
-// SendTaskEvent отправляет TaskEvent в Keeper. Удовлетворяет runtime.EventSink.
+// SendTaskEvent sends a TaskEvent to Keeper. Satisfies runtime.EventSink.
 func (s *StreamSession) SendTaskEvent(ev *keeperv1.TaskEvent) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_TaskEvent{TaskEvent: ev}})
 }
 
-// SendRunResult отправляет RunResult. Удовлетворяет runtime.EventSink.
+// SendRunResult sends a RunResult. Satisfies runtime.EventSink.
 func (s *StreamSession) SendRunResult(r *keeperv1.RunResult) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_RunResult{RunResult: r}})
 }
 
-// SendFromSoul отправляет произвольный FromSoul на стрим. Нужен Augur-клиенту
-// (soul/internal/augur) для отсылки AugurRequest — он несёт payload, не
-// покрытый узкими Send*-хелперами. Сериализуется writeMu (concurrent Send из
-// apply-горутины и Errand-горутины безопасен).
+// SendFromSoul sends an arbitrary FromSoul on the stream. Needed by the
+// Augur client (soul/internal/augur) to send AugurRequest — its payload isn't
+// covered by the narrow Send* helpers. Serialized via writeMu (concurrent
+// Send from the apply goroutine and the Errand goroutine is safe).
 func (s *StreamSession) SendFromSoul(msg *keeperv1.FromSoul) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.stream.Send(msg)
 }
 
-// SendWardRoster шлёт снимок ведомых apply-прогонов (ReplaceAll, Soul-reconcile
-// ADR-027(g), S6). Вызывается caller-ом (handleSession) СРАЗУ после handshake и
-// ДО первого app-сообщения на каждом (re)connect-е: Keeper по нему терминалит
-// осиротевшие dispatched-строки SID-а. active=nil → WardRoster с пустым набором
-// (явная декларация «ничего не ведётся»).
+// SendWardRoster sends a snapshot of tracked apply runs (ReplaceAll,
+// Soul-reconcile ADR-027(g), S6). Called by the caller (handleSession) RIGHT
+// AFTER handshake and BEFORE the first app message on every (re)connect: Keeper
+// uses it to terminate orphaned dispatched rows for this SID. active=nil →
+// WardRoster with an empty set (an explicit "nothing is tracked" declaration).
 func (s *StreamSession) SendWardRoster(active []*keeperv1.ActiveApply) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -541,9 +544,9 @@ func (s *StreamSession) SendWardRoster(active []*keeperv1.ActiveApply) error {
 	})
 }
 
-// SendSoulprintReport — для будущего soulprint-collector-а (M2.3+).
-// Заложен симметрично с TaskEvent, на текущий момент cmd/soul его не зовёт.
-// `received_at` — Keeper-only поле (ADR-018), здесь не выставляется.
+// SendSoulprintReport is for the future soulprint collector (M2.3+).
+// Added symmetrically with TaskEvent; cmd/soul doesn't call it yet.
+// `received_at` is Keeper-only (ADR-018), not set here.
 func (s *StreamSession) SendSoulprintReport(rep *keeperv1.SoulprintReport) error {
 	if rep.GetCollectedAt() == nil {
 		rep.CollectedAt = timestamppb.Now()
@@ -553,26 +556,27 @@ func (s *StreamSession) SendSoulprintReport(rep *keeperv1.SoulprintReport) error
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_SoulprintReport{SoulprintReport: rep}})
 }
 
-// SendErrandResult шлёт финальный ErrandResult Keeper-у (ADR-033, slice E3).
-// Errand-горутина (recv-handler в cmd/soul) вызывает этот метод параллельно
-// apply-горутине, поэтому writeMu обязателен — concurrent Send в gRPC bidi-
-// stream рассогласовал бы протокол. Один ErrandRequest → один ErrandResult.
+// SendErrandResult sends the final ErrandResult to Keeper (ADR-033, slice E3).
+// The Errand goroutine (recv-handler in cmd/soul) calls this in parallel with
+// the apply goroutine, so writeMu is mandatory — concurrent Send on a gRPC
+// bidi stream would desync the protocol. One ErrandRequest → one ErrandResult.
 func (s *StreamSession) SendErrandResult(r *keeperv1.ErrandResult) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_ErrandResult{ErrandResult: r}})
 }
 
-// FetchModule открывает server-streaming fetch байтов SoulModule-плагина по
-// той же mTLS-ClientConn, что EventStream (ADR-065(a)): артефакт едет отдельным
-// HTTP/2-стримом и не душит control-plane. writeMu не нужен — это независимый
-// RPC, не Send в bidi-stream. Реализует coremod/module.Fetcher.
+// FetchModule opens a server-streaming fetch of a SoulModule plugin's bytes
+// over the same mTLS ClientConn as EventStream (ADR-065(a)): the artifact
+// travels on a separate HTTP/2 stream and doesn't choke the control plane.
+// writeMu isn't needed — this is an independent RPC, not a Send on the bidi
+// stream. Implements coremod/module.Fetcher.
 func (s *StreamSession) FetchModule(ctx context.Context, req *keeperv1.PluginFetchRequest) (grpc.ServerStreamingClient[keeperv1.PluginChunk], error) {
 	return keeperv1.NewKeeperClient(s.conn).FetchModule(ctx, req)
 }
 
-// Close корректно завершает сессию: CloseSend → cancel ctx → conn.Close.
-// Идемпотентен.
+// Close cleanly ends the session: CloseSend → cancel ctx → conn.Close.
+// Idempotent.
 func (s *StreamSession) Close() error {
 	if s.stream != nil {
 		_ = s.stream.CloseSend()

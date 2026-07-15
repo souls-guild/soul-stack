@@ -12,7 +12,7 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// captureSink — fake soulprintReportSink: запоминает отправленные отчёты.
+// captureSink — a fake soulprintReportSink that records sent reports.
 type captureSink struct {
 	reports []*keeperv1.SoulprintReport
 	err     error
@@ -61,8 +61,8 @@ func TestSoulprintPusher_PushOnce_SinkError(t *testing.T) {
 	}
 }
 
-// startTicker должен слать сигнал по interval; coalescing — не более одного
-// отложенного сигнала при незанятом приёмнике.
+// startTicker should signal every interval; coalescing means at most one
+// pending signal when the receiver is idle.
 func TestSoulprintPusher_StartTicker(t *testing.T) {
 	sp := soulprintPusher{interval: 5 * time.Millisecond}
 	tick := make(chan struct{}, 1)
@@ -83,8 +83,8 @@ func TestSoulprintPusher_StartTicker_StopsOnCancel(t *testing.T) {
 	stop := sp.startTicker(ctx, tick)
 	cancel()
 	stop()
-	// drain любой in-flight тик; после cancel новых быть не должно (best-effort
-	// проверка, что горутина завершается без deadlock).
+	// Drain any in-flight tick; no new ones should appear after cancel
+	// (best-effort check that the goroutine exits without deadlock).
 	select {
 	case <-tick:
 	default:

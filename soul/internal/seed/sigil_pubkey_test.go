@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// materialWithSigil — согласованный Material с заданным trust-anchor-ом Sigil.
+// materialWithSigil builds a consistent Material with the given Sigil trust anchor.
 func materialWithSigil(t *testing.T, ca, sigilPub string) *Material {
 	t.Helper()
 	cert, key := keypair(t)
@@ -18,8 +18,8 @@ func materialWithSigil(t *testing.T, ca, sigilPub string) *Material {
 	}
 }
 
-// TestWriteAndLoad_WithSigilPubKey: trust-anchor пишется в версию и читается
-// обратно (ADR-026, S2b). Симметрично TestWriteAndLoad_RoundTrip.
+// TestWriteAndLoad_WithSigilPubKey: trust anchor is written to a version and
+// read back (ADR-026, S2b). Symmetric with TestWriteAndLoad_RoundTrip.
 func TestWriteAndLoad_WithSigilPubKey(t *testing.T) {
 	dir := t.TempDir()
 	const pub = "-----BEGIN PUBLIC KEY-----\nSIGILPUB\n-----END PUBLIC KEY-----\n"
@@ -28,7 +28,7 @@ func TestWriteAndLoad_WithSigilPubKey(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// Файл sigil_pubkey.pem физически в активной версии.
+	// sigil_pubkey.pem file is physically present in the active version.
 	if _, err := os.Stat(filepath.Join(dir, "v1", SigilPubKeyFile)); err != nil {
 		t.Fatalf("stat %s: %v", SigilPubKeyFile, err)
 	}
@@ -42,8 +42,9 @@ func TestWriteAndLoad_WithSigilPubKey(t *testing.T) {
 	}
 }
 
-// TestWriteAndLoad_SigilDisabled: пустой trust-anchor (Sigil выключен) — файл
-// НЕ создаётся, Load даёт nil без ErrIncomplete. Это валидное состояние.
+// TestWriteAndLoad_SigilDisabled: an empty trust anchor (Sigil disabled) means
+// no file is created; Load returns nil without ErrIncomplete. This is a valid
+// state.
 func TestWriteAndLoad_SigilDisabled(t *testing.T) {
 	dir := t.TempDir()
 	m := validMaterial(t, "CA") // SigilPubKeyPEM == nil
@@ -64,8 +65,8 @@ func TestWriteAndLoad_SigilDisabled(t *testing.T) {
 	}
 }
 
-// TestWriteAndLoad_EmptySigilNotWritten: явный []byte("") эквивалентен nil —
-// файл не пишется (len == 0 проверяется в Write).
+// TestWriteAndLoad_EmptySigilNotWritten: an explicit []byte("") is equivalent
+// to nil — no file is written (Write checks len == 0).
 func TestWriteAndLoad_EmptySigilNotWritten(t *testing.T) {
 	dir := t.TempDir()
 	m := materialWithSigil(t, "CA", "")
@@ -77,17 +78,17 @@ func TestWriteAndLoad_EmptySigilNotWritten(t *testing.T) {
 	}
 }
 
-// TestRotation_SigilPubKeyPerVersion: trust-anchor переключается атомарно
-// вместе с версией. Ротация Sigil-выкл → Sigil-вкл и обратно отражается в Load.
+// TestRotation_SigilPubKeyPerVersion: trust anchor switches atomically with
+// the version. Rotating Sigil off → on and back is reflected in Load.
 func TestRotation_SigilPubKeyPerVersion(t *testing.T) {
 	dir := t.TempDir()
 	const pub1 = "PUB-V2\n"
 
-	// v1: Sigil выключен.
+	// v1: Sigil disabled.
 	if err := Write(dir, validMaterial(t, "ca1")); err != nil {
 		t.Fatalf("Write v1: %v", err)
 	}
-	// v2: Sigil включён (новый trust-anchor приехал в bootstrap-ротации).
+	// v2: Sigil enabled (new trust anchor arrived via bootstrap rotation).
 	if err := Write(dir, materialWithSigil(t, "ca2", pub1)); err != nil {
 		t.Fatalf("Write v2: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestRotation_SigilPubKeyPerVersion(t *testing.T) {
 		t.Fatalf("after v2 SigilPubKeyPEM = %q; want %q", got.SigilPubKeyPEM, pub1)
 	}
 
-	// v3: Sigil снова выключен — активная версия не должна тащить старый anchor.
+	// v3: Sigil disabled again — the active version must not carry the old anchor.
 	if err := Write(dir, validMaterial(t, "ca3")); err != nil {
 		t.Fatalf("Write v3: %v", err)
 	}
@@ -115,9 +116,9 @@ func TestRotation_SigilPubKeyPerVersion(t *testing.T) {
 	}
 }
 
-// TestWriteAndLoad_MultiPEMSigil: набор якорей (конкатенация нескольких
-// PEM-блоков, ADR-026(h) R3) пишется и читается как есть, и после round-trip-а
-// ParseSigilPubKeys восстанавливает все ключи в исходном порядке.
+// TestWriteAndLoad_MultiPEMSigil: a set of anchors (concatenated PEM blocks,
+// ADR-026(h) R3) is written and read back as-is, and after round-trip
+// ParseSigilPubKeys recovers all keys in their original order.
 func TestWriteAndLoad_MultiPEMSigil(t *testing.T) {
 	dir := t.TempDir()
 	pem1, want1 := ed25519PubPEM(t)
@@ -147,7 +148,7 @@ func TestWriteAndLoad_MultiPEMSigil(t *testing.T) {
 	}
 }
 
-// TestPathsIn_SigilPubKey: путь trust-anchor-а идёт через dir/current/.
+// TestPathsIn_SigilPubKey: the trust-anchor path goes through dir/current/.
 func TestPathsIn_SigilPubKey(t *testing.T) {
 	p := PathsIn("/var/lib/soul-stack/seed")
 	if p.SigilPubKey != "/var/lib/soul-stack/seed/current/sigil_pubkey.pem" {

@@ -10,10 +10,10 @@ import (
 	"strings"
 )
 
-// systemsource_darwin — best-effort сбор фактов на macOS (dev-машина).
-// Значения через sysctl / sw_vers; при недоступности утилит — zero-value.
-// Это не production-target (ADR-018: основная цель — Linux), поэтому покрытие
-// узкое и без жёсткой обработки ошибок.
+// systemsource_darwin is best-effort fact collection on macOS (dev machine).
+// Values come from sysctl / sw_vers; zero-value when the utilities are
+// unavailable. Not a production target (ADR-018: Linux is the primary goal),
+// so coverage is narrow and error handling is loose.
 
 func osVersion(ctx context.Context) string {
 	return strings.TrimSpace(runSysctlCmd(ctx, "sw_vers", "-productVersion"))
@@ -45,12 +45,12 @@ func memoryInfo(ctx context.Context) MemoryInfo {
 	return info
 }
 
-// runSysctl — `sysctl -n <key>`, "" при ошибке.
+// runSysctl runs `sysctl -n <key>`, "" on error.
 func runSysctl(ctx context.Context, key string) string {
 	return runSysctlCmd(ctx, "sysctl", "-n", key)
 }
 
-// runSysctlCmd — обёртка над одной командой; "" при любой ошибке запуска.
+// runSysctlCmd wraps a single command; "" on any launch error.
 func runSysctlCmd(ctx context.Context, name string, args ...string) string {
 	out, err := exec.CommandContext(ctx, name, args...).Output()
 	if err != nil {

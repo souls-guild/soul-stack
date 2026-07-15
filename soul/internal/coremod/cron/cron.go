@@ -1,16 +1,16 @@
-// Package cron реализует core-модуль `core.cron` ([ADR-015]).
+// Package cron implements the `core.cron` core module ([ADR-015]).
 //
-// Состояния:
-//   - present: job-файл `/etc/cron.d/<name>` существует с заданным расписанием
-//     и командой.
-//   - absent:  файл удалён.
+// States:
+//   - present: the job file `/etc/cron.d/<name>` exists with the given
+//     schedule and command.
+//   - absent:  file removed.
 //
-// MVP: только system-level `/etc/cron.d/<name>`, одно правило на файл.
-// User-crontab (`crontab -u user -l/-`) — отложен до реального запроса.
+// MVP: only system-level `/etc/cron.d/<name>`, one rule per file.
+// User crontab (`crontab -u user -l/-`) is deferred until a real request.
 //
-// Платформенная поддержка: Linux distros, где cron-daemon читает /etc/cron.d/.
-// На FreeBSD каталога нет — модуль не должен туда применяться (контролируется
-// `where:`-предикатом в scenario, не на стороне модуля).
+// Platform support: Linux distros where the cron daemon reads /etc/cron.d/.
+// FreeBSD has no such directory — the module shouldn't be applied there
+// (controlled by a `where:` predicate in the scenario, not by the module).
 package cron
 
 import (
@@ -29,33 +29,35 @@ import (
 
 const Name = "core.cron"
 
-// CronDir — каталог системных cron-job (фиксирован архитектурно; на minimal-
-// контейнерах его может не быть, тогда `present` сам создаст каталог).
+// CronDir — directory for system cron jobs (architecturally fixed; on
+// minimal containers it may not exist, in which case `present` creates it).
 const CronDir = "/etc/cron.d"
 
 type Module struct {
-	// Dir подменяется в unit-тестах на t.TempDir(), в проде — CronDir.
+	// Dir is substituted in unit tests with t.TempDir(); production uses CronDir.
 	Dir string
 }
 
 func New() *Module { return &Module{Dir: CronDir} }
 
-// Validate — known-state + per-state required-params (name; present →
-// schedule/command) делегированы в shared/coremanifest/cron.yaml (единый
-// источник с soul-lint). Валидность имени job ([A-Za-z0-9_-]) — императивная
-// проверка в Apply (validCronName), manifest-DSL её не выражает.
+// Validate — known-state + per-state required params (name; present →
+// schedule/command) are delegated to shared/coremanifest/cron.yaml (single
+// source shared with soul-lint). Job name validity ([A-Za-z0-9_-]) is an
+// imperative check in Apply (validCronName); the manifest DSL can't express it.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.cron.Plan — pure-read (ADR-031 Scry):
-// читает существующий job-файл и НЕ мутирует ФС (маркер для host-а, default-deny).
+// PlanReadSafe declares that core.cron.Plan is pure-read (ADR-031 Scry):
+// it reads the existing job file and does NOT mutate the filesystem (marker
+// for the host, default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее содержимое job-файла
-// `<Dir>/<name>` (тот же os.ReadFile, что в начале Apply) и шлёт PlanEvent.changed
-// — «Apply изменил бы файл?». НЕ мутирует ФС: ни MkdirAll, ни WriteFile, ни Remove.
+// Plan is a pure-read dry-run (ADR-031 Scry): reads the current contents of
+// the job file `<Dir>/<name>` (the same os.ReadFile as the start of Apply)
+// and sends PlanEvent.changed — "would Apply change the file?". Does NOT
+// mutate the filesystem: no MkdirAll, no WriteFile, no Remove.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	name, err := util.StringParam(req.Params, "name")
 	if err != nil {
@@ -75,8 +77,8 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	}
 }
 
-// planPresent — pure-read drift для state present: тот же сравнительный read,
-// что в applyPresent, без записи. drift = файла нет ИЛИ содержимое отличается.
+// planPresent — pure-read drift check for state present: the same comparison
+// read as applyPresent, without writing. drift = file missing OR content differs.
 func (m *Module) planPresent(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], req *pluginv1.PlanRequest, path string) error {
 	schedule, err := util.StringParam(req.Params, "schedule")
 	if err != nil {
@@ -105,8 +107,8 @@ func (m *Module) planPresent(stream grpc.ServerStreamingServer[pluginv1.PlanEven
 	}
 }
 
-// planAbsent — pure-read drift для state absent: drift = файл существует
-// (Apply удалил бы его).
+// planAbsent — pure-read drift check for state absent: drift = file exists
+// (Apply would remove it).
 func (m *Module) planAbsent(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], path string) error {
 	_, statErr := os.Stat(path)
 	if errors.Is(statErr, fs.ErrNotExist) {
@@ -174,9 +176,10 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("mkdir %s: %v", m.Dir, err))
 	}
-	// 0644: cron строго требует, чтобы /etc/cron.d/<file> был owned root и не
-	// был group/world-writable. WriteFile не меняет owner; на тестовых TempDir
-	// owner и так uid процесса — это нормально, прод-Soul бежит из-под root.
+	// 0644: cron strictly requires /etc/cron.d/<file> to be owned by root and
+	// not group/world-writable. WriteFile doesn't change the owner; on test
+	// TempDirs the owner is already the process uid, which is fine —
+	// production Soul runs as root.
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("write %s: %v", path, err))
 	}
@@ -209,9 +212,10 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 	})
 }
 
-// validCronName — cron-daemon игнорирует файлы с точками/спецсимволами в имени
-// (вплоть до полного skip каталога на debian-derivatives). Ограничиваем имя
-// строго [A-Za-z0-9_-] — это исключает path-injection и совместимо с run-parts.
+// validCronName — the cron daemon ignores files with dots/special chars in
+// the name (up to skipping the whole directory on debian-derivatives). We
+// restrict names strictly to [A-Za-z0-9_-] — this rules out path-injection
+// and is compatible with run-parts.
 func validCronName(name string) bool {
 	if name == "" {
 		return false

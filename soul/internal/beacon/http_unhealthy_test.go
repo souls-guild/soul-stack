@@ -12,8 +12,8 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
 
-// fakeDoer — детерминированный HTTPDoer: отдаёт заданный статус (тело-заглушку
-// beacon не читает), либо транспортную ошибку. Сети нет.
+// fakeDoer is a deterministic HTTPDoer: returns a given status (beacon
+// doesn't read the stub body), or a transport error. No network.
 type fakeDoer struct {
 	status int
 	err    error
@@ -34,9 +34,9 @@ func newHTTPUnhealthy(d *fakeDoer) *HTTPUnhealthy {
 	return &HTTPUnhealthy{NewClient: func(util.HTTPClientOpts) util.HTTPDoer { return d }}
 }
 
-// newHTTPUnhealthyCapturing использует прод-фабрику util.NewHTTPClient (реальный
-// dial / TLS), но захватывает переданные opts — регресс-гард маппинга
-// param→HTTPClientOpts на прод-пути построения клиента.
+// newHTTPUnhealthyCapturing uses the production util.NewHTTPClient factory
+// (real dial / TLS), but captures the passed opts — a regression guard for
+// param→HTTPClientOpts mapping on the production client-build path.
 func newHTTPUnhealthyCapturing(got *util.HTTPClientOpts) *HTTPUnhealthy {
 	return &HTTPUnhealthy{NewClient: func(opts util.HTTPClientOpts) util.HTTPDoer {
 		*got = opts
@@ -80,7 +80,7 @@ func TestHTTPUnhealthyBadStatus(t *testing.T) {
 }
 
 func TestHTTPUnhealthyCustomStatusCodes(t *testing.T) {
-	// 204 здоров при status_codes [200,204]; при дефолтном [200] был бы unhealthy.
+	// 204 is healthy given status_codes [200,204]; with the default [200] it'd be unhealthy.
 	b := newHTTPUnhealthy(&fakeDoer{status: 204})
 	state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"url":          "https://service.internal/ping",
@@ -95,7 +95,7 @@ func TestHTTPUnhealthyCustomStatusCodes(t *testing.T) {
 }
 
 func TestHTTPUnhealthyTransportError(t *testing.T) {
-	// Транспортная ошибка → unhealthy (status 0), а не ошибка Check.
+	// Transport error → unhealthy (status 0), not a Check error.
 	b := newHTTPUnhealthy(&fakeDoer{err: errors.New("connection refused")})
 	state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"url": "https://down.internal/healthz",
@@ -112,7 +112,7 @@ func TestHTTPUnhealthyTransportError(t *testing.T) {
 }
 
 func TestHTTPUnhealthyRejectsHTTP(t *testing.T) {
-	// https-only переиспользуется у core.http: http:// отвергается на Check.
+	// https-only is reused from core.http: http:// is rejected at Check.
 	b := newHTTPUnhealthy(&fakeDoer{status: 200})
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 		"url": "http://service.internal/healthz",
@@ -128,12 +128,12 @@ func TestHTTPUnhealthyMissingURL(t *testing.T) {
 	}
 }
 
-// --- opt-out-флаги (паттерн core.http): default secure, явный opt-out снимает контур ---
+// --- opt-out flags (core.http pattern): default secure, explicit opt-out lowers the contour ---
 
-// allow_http:true → http:// принят на Check (ValidateFetchURL пропускает),
-// и opt доезжает до фабрики как AllowHTTPRedirect (парность downgrade-hop).
-// Дозвон герметичный (fakeDoer) — проверяем валидацию схемы и маппинг param→opts,
-// а не реальный http-dial.
+// allow_http:true → http:// is accepted at Check (ValidateFetchURL lets it
+// through), and the opt reaches the factory as AllowHTTPRedirect (parity
+// with the downgrade hop). Dial is hermetic (fakeDoer) — we check scheme
+// validation and param→opts mapping, not a real http dial.
 func TestHTTPUnhealthyAllowHTTP(t *testing.T) {
 	var got util.HTTPClientOpts
 	b := &HTTPUnhealthy{NewClient: func(opts util.HTTPClientOpts) util.HTTPDoer {
@@ -158,11 +158,12 @@ func TestHTTPUnhealthyAllowHTTP(t *testing.T) {
 	}
 }
 
-// allow_private:true → реальный dial к loopback-серверу (127.0.0.1) проходит
-// SSRF-guard → healthy. Без флага тот же loopback блокируется на dial-фазе.
+// allow_private:true → a real dial to a loopback server (127.0.0.1) passes
+// the SSRF guard → healthy. Without the flag, the same loopback is blocked
+// at the dial phase.
 func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
-	// httptest.NewTLSServer слушает на 127.0.0.1 с самоподписанным cert — нужен
-	// и allow_private (loopback), и insecure_skip_verify (self-signed).
+	// httptest.NewTLSServer listens on 127.0.0.1 with a self-signed cert —
+	// needs both allow_private (loopback) and insecure_skip_verify (self-signed).
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -191,12 +192,12 @@ func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
 	})
 
 	t.Run("default -> SSRF-guard блокирует loopback -> unhealthy", func(t *testing.T) {
-		// Без allow_private dial в 127.0.0.1 отвергается netguard → транспортная
-		// ошибка → unhealthy (status 0), а не ошибка Check.
-		b := NewHTTPUnhealthy() // прод-фабрика, нулевые opts
+		// Without allow_private, dialing 127.0.0.1 is rejected by netguard →
+		// transport error → unhealthy (status 0), not a Check error.
+		b := NewHTTPUnhealthy() // production factory, zero opts
 		state, data, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 			"url":                  srv.URL + "/health",
-			"insecure_skip_verify": true, // изолируем именно SSRF-контур, не TLS
+			"insecure_skip_verify": true, // isolate the SSRF contour specifically, not TLS
 		}))
 		if err != nil {
 			t.Fatalf("Check при заблокированном dial не должен падать: %v", err)
@@ -210,9 +211,10 @@ func TestHTTPUnhealthyAllowPrivateLoopback(t *testing.T) {
 	})
 }
 
-// insecure_skip_verify:true → self-signed TLS-сервер принят (healthy). Без флага
-// тот же cert не проходит верификацию → транспортная ошибка → unhealthy. Здесь
-// фабрика прод (util.NewHTTPClient) — проверяем реальный TLS-контур.
+// insecure_skip_verify:true → self-signed TLS server accepted (healthy).
+// Without the flag, the same cert fails verification → transport error →
+// unhealthy. Factory here is production (util.NewHTTPClient) — checking the
+// real TLS contour.
 func TestHTTPUnhealthyInsecureSkipVerify(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -238,7 +240,7 @@ func TestHTTPUnhealthyInsecureSkipVerify(t *testing.T) {
 		b := NewHTTPUnhealthy()
 		state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
 			"url":           srv.URL + "/health",
-			"allow_private": true, // loopback пропущен, изолируем TLS-контур
+			"allow_private": true, // loopback allowed through, isolating the TLS contour
 		}))
 		if err != nil {
 			t.Fatalf("Check при невалидном TLS не должен падать: %v", err)
@@ -249,7 +251,7 @@ func TestHTTPUnhealthyInsecureSkipVerify(t *testing.T) {
 	})
 }
 
-// Дефолт (без opt-out-флагов) → нулевой HTTPClientOpts (secure-by-default).
+// Default (no opt-out flags) → zero HTTPClientOpts (secure-by-default).
 func TestHTTPUnhealthyDefaultSecure(t *testing.T) {
 	var got util.HTTPClientOpts
 	b := &HTTPUnhealthy{NewClient: func(opts util.HTTPClientOpts) util.HTTPDoer {
@@ -266,7 +268,7 @@ func TestHTTPUnhealthyDefaultSecure(t *testing.T) {
 	}
 }
 
-// Невалидный тип opt-out-флага (строка вместо bool) → ошибка Check.
+// Invalid opt-out flag type (string instead of bool) → Check error.
 func TestHTTPUnhealthyRejectsNonBoolFlag(t *testing.T) {
 	for _, flag := range []string{"allow_http", "insecure_skip_verify", "allow_private"} {
 		b := newHTTPUnhealthy(&fakeDoer{status: 200})

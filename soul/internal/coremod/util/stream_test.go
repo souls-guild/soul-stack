@@ -37,8 +37,8 @@ func TestSendFinal_NilOutput(t *testing.T) {
 	}
 }
 
-// Несериализуемое в structpb значение → SendFinal возвращает ошибку, событие
-// не отправляется.
+// A value that isn't structpb-serializable → SendFinal returns an error, no
+// event is sent.
 func TestSendFinal_UnserializableOutputErrors(t *testing.T) {
 	s := &internaltest.ApplyStream{}
 	bad := map[string]any{"fn": func() {}}

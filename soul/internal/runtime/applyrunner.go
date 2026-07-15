@@ -1,12 +1,12 @@
-// Package runtime — apply-цикл Soul-демона: получение ApplyRequest от
-// Keeper-а, диспетчер на Registry, агрегация ApplyEvent → TaskEvent,
-// финальный RunResult.
+// Package runtime — the Soul daemon's apply cycle: receives ApplyRequest from
+// Keeper, dispatches via Registry, aggregates ApplyEvent → TaskEvent, and
+// produces the final RunResult.
 //
-// Core-модули (ADR-015) вызываются in-process через
-// [inProcApplyStream] — адаптер `grpc.ServerStreamingServer[pluginv1.ApplyEvent]`
-// поверх Go-канала. Кастомные модули (ADR-020, soul-mod-*) поднимаются как
-// sub-process через [soul/internal/pluginhost] (M2.3+: пока wire-up
-// принимает Registry, не делая различий).
+// Core modules (ADR-015) run in-process through [inProcApplyStream] — an
+// adapter from `grpc.ServerStreamingServer[pluginv1.ApplyEvent]` over a Go
+// channel. Custom modules (ADR-020, soul-mod-*) run as a sub-process via
+// [soul/internal/pluginhost] (M2.3+: wire-up currently just takes a Registry,
+// no distinction yet).
 package runtime
 
 import (
@@ -33,110 +33,107 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// tracer для in-process span-ов apply-цикла. Берёт глобальный TracerProvider,
-// поднятый [obs.SetupOTel] в cmd/soul; при OTel disabled провайдер no-op —
-// span-ы бесплатны и код не ветвится (ADR-024 §1.2).
+// tracer for in-process apply-cycle spans. Uses the global TracerProvider set
+// up by [obs.SetupOTel] in cmd/soul; when OTel is disabled the provider is a
+// no-op, so spans are free and no branching is needed (ADR-024 §1.2).
 var tracer = otel.Tracer("soul/runtime")
 
-// Registry — узкий интерфейс над [coremod.Registry] / любым store-ом
-// модулей. Здесь только Lookup — это всё, что нужно apply-циклу.
+// Registry is a narrow interface over [coremod.Registry] or any module
+// store — only Lookup, which is all the apply cycle needs.
 type Registry interface {
 	Lookup(name string) (module.SoulModule, bool)
 }
 
-// EventSink — куда runtime шлёт сообщения для Keeper-а. Реализуется
-// EventStream-клиентом ([soul/internal/grpc.StreamSession]); в тестах —
-// fake-имплементация для проверки последовательности TaskEvent/RunResult.
+// EventSink is where runtime sends messages for Keeper. Implemented by the
+// EventStream client ([soul/internal/grpc.StreamSession]); tests use a fake
+// to verify the TaskEvent/RunResult sequence.
 type EventSink interface {
 	SendTaskEvent(*keeperv1.TaskEvent) error
 	SendRunResult(*keeperv1.RunResult) error
 }
 
-// ApplyRunner — состояние apply-цикла одного Soul-демона.
+// ApplyRunner holds the apply-cycle state of one Soul daemon.
 //
-// Concurrent-прогонов на одном демоне нет — ADR-012(a) гарантирует, что
-// Keeper не пошлёт второй ApplyRequest, пока не получен RunResult по
-// текущему. Тем не менее runner держит map активных apply_id → cancel,
-// чтобы CancelApply от Keeper-а мог адресно отменить in-flight прогон.
+// No concurrent runs on one daemon — ADR-012(a) guarantees Keeper won't send
+// a second ApplyRequest before the RunResult for the current one arrives.
+// Still, the runner keeps a map of active apply_id → cancel so a Keeper
+// CancelApply can target the in-flight run.
 type ApplyRunner struct {
 	registry Registry
 	metrics  *ApplyMetrics
 
-	// flowEngine — Soul-side sandboxed CEL-движок для flow-control-предикатов
-	// (when:/changed_when:/failed_when:, ADR-012(d)). Один на runner: env
-	// неизменен, compile-cache переиспользуется между задачами и прогонами
-	// (concurrent-прогонов нет, ADR-012(a)). Без vault-client: внешний доступ
-	// keeper-only, Soul-CEL чистый. flowEngineErr — ошибка сборки движка
-	// (программная несовместимость cel-go, «не должно случаться»); если ненулевая,
-	// [ApplyRunner.Run] завершает прогон internal-ошибкой, а не молча игнорирует
-	// предикаты.
+	// flowEngine is the Soul-side sandboxed CEL engine for flow-control
+	// predicates (when:/changed_when:/failed_when:, ADR-012(d)). One per
+	// runner: env is fixed, compile cache is reused across tasks and runs (no
+	// concurrent runs, ADR-012(a)). No vault-client — external access is
+	// keeper-only, Soul-side CEL is pure. flowEngineErr is set if engine
+	// construction fails (cel-go incompatibility, "should never happen"); if
+	// set, [ApplyRunner.Run] fails the run with an internal error instead of
+	// silently skipping predicates.
 	flowEngine    *cel.Engine
 	flowEngineErr error
 
-	// hostFacts — собранный Soul-агентом soulprint-снимок хоста (pkg-mgr /
-	// init-система), инжектится в core-модули перед Apply (Вариант A, ADR-018(b)).
-	// Заполняется один раз на старте через [ApplyRunner.SetHostFacts]; пустое
-	// значение безопасно — core-модули откатываются на runtime-детект. Только
-	// чтение в Run (после старта не меняется), доп. синхронизации не требует.
+	// hostFacts is the soulprint snapshot (pkg-mgr / init system) collected by
+	// the Soul agent, injected into core modules before Apply (Variant A,
+	// ADR-018(b)). Set once at startup via [ApplyRunner.SetHostFacts]; zero
+	// value is safe — core modules fall back to runtime detection. Read-only
+	// in Run (never changes after startup), no extra sync needed.
 	hostFacts util.HostFacts
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
 
-	// recentlyFinished — short-TTL in-memory набор apply_id, завершённых Run-ом
-	// в последние [recentlyFinishedTTL] секунд (Soul-reconcile, ADR-027(g), S6).
-	// Назначение — закрыть гонку «RunResult отправлен, но стрим порвался ДО того,
-	// как Run успел unregister-нуть apply_id из active»: на reconnect-е
-	// [ApplyRunner.ActiveSet] обязан всё ещё объявить этот apply ведомым, иначе
-	// Keeper-sweep ложно осиротил бы строку, для которой результат уже в полёте/
-	// доставлен. Запись живёт TTL после завершения Run и вычищается лениво в
-	// ActiveSet (set небольшой — один-в-полёте apply, ADR-012(a)).
+	// recentlyFinished — short-TTL set of apply_id finished by Run in the last
+	// [recentlyFinishedTTL] (Soul-reconcile, ADR-027(g), S6). Closes the race
+	// where RunResult was sent but the stream broke before unregister ran: on
+	// reconnect, [ApplyRunner.ActiveSet] must still report the apply as owned,
+	// or Keeper-sweep would orphan a row whose result is already in
+	// flight/delivered. Entries expire after TTL, swept lazily in ActiveSet
+	// (set stays tiny — one in-flight apply per Soul, ADR-012(a)).
 	//
-	// Переживает reconnect/failback-swap (кеш в ApplyRunner, один на процесс, как
-	// lastSeenAttempt), НО НЕ переживает рестарт процесса — это корректно: после
-	// рестарта in-flight apply физически нет, и его dispatched-строки ЗАКОННО
-	// сиротятся (пустой ActiveSet → Keeper терминалит их в orphaned).
+	// Survives reconnect/failback-swap (per-process cache) but not a process
+	// restart — correct, since after a restart nothing is really in flight and
+	// its dispatched rows legitimately orphan.
 	//
-	// Под тем же mu, что active/lastSeenAttempt: операции короткие, конкурентных
-	// apply на одном Soul нет (ADR-012(a)) — отдельный lock избыточен. nowFn —
-	// инъекция времени для детерминизма TTL-тестов (в проде time.Now).
+	// Guarded by the same mu as active/lastSeenAttempt (ops are short, no
+	// concurrent apply per Soul). nowFn injects time for deterministic TTL
+	// tests (time.Now in production).
 	recentlyFinished map[string]time.Time
 	nowFn            func() time.Time
 
-	// lastSeenAttempt — fencing-кеш Soul-guard-а (ADR-027(g), Phase 2): apply_id →
-	// максимальный attempt, уже принятый к исполнению. [ApplyRunner.AcceptAttempt]
-	// отвергает ApplyRequest с attempt < виденного — это отсекает stale-дубль,
-	// когда recovery-скан вернул протухший Ward в очередь, а его оригинальный
-	// apply ещё в полёте (пере-claim приедет с БОЛЬШИМ attempt и победит).
+	// lastSeenAttempt — Soul-guard fencing cache (ADR-027(g), Phase 2): apply_id
+	// → highest attempt accepted for execution. [ApplyRunner.AcceptAttempt]
+	// rejects an ApplyRequest with attempt < seen, filtering a stale duplicate
+	// when a recovery scan re-queues a stale Ward while the original
+	// (higher-attempt) apply is still in flight — the re-claim arrives with a
+	// higher attempt and wins.
 	//
-	// Кеш живёт в ApplyRunner (per-process), а не в StreamSession: он обязан
-	// ПЕРЕЖИВАТЬ reconnect/failback-swap стрима (cmd/soul пересоздаёт сессию,
-	// runner один на процесс) — иначе после reconnect-а Soul забыл бы виденные
-	// attempt-ы и пропустил бы stale-дубль. Рестарт Soul-процесса кеш обнуляет,
-	// но это безопасно: после рестарта in-flight apply физически нет (процесс,
-	// исполнявший его, мёртв), поэтому stale-дубль с меньшим attempt после
-	// рестарта невозможен — фенсить нечего.
+	// Lives per-process rather than per-StreamSession because it must survive
+	// stream reconnect/failback-swap; otherwise Soul would forget seen
+	// attempts and let a stale duplicate through. A process restart does clear
+	// it, but that's safe — nothing is in flight right after a restart, so
+	// there's no stale duplicate left to fence.
 	//
-	// Под тем же mu, что active: обе операции короткие, конкурентных apply на
-	// одном Soul нет (ADR-012(a)) — отдельный lock избыточен.
+	// Guarded by the same mu as active — short ops, no concurrent apply per
+	// Soul (ADR-012(a)).
 	lastSeenAttempt map[string]int32
 }
 
-// recentlyFinishedTTL — окно, в течение которого завершённый Run остаётся в
-// наборе [ApplyRunner.ActiveSet] (Soul-reconcile, ADR-027(g), S6). Должно с
-// запасом перекрывать окно «SendRunResult → unregister → reconnect → WardRoster»
-// (реально доли секунды), чтобы гонка «результат в полёте, стрим порвался до
-// cleanup» не дала ложного orphan. 30s — щедрый потолок: даже после нескольких
-// backoff-итераций reconnect-loop-а apply остаётся объявленным; излишне долгий
-// TTL лишь отсрочил бы законное сиротство dispatched-строки после реального
-// краха Soul (но крах = рестарт процесса, который набор и так обнуляет).
+// recentlyFinishedTTL — window a finished Run stays in [ApplyRunner.ActiveSet]
+// (Soul-reconcile, ADR-027(g), S6). Must comfortably cover "SendRunResult →
+// unregister → reconnect → WardRoster" (really sub-second) so the race
+// between an in-flight result and a broken stream doesn't produce a false
+// orphan. 30s is a generous ceiling: the apply stays declared even across a
+// few reconnect-loop backoff iterations; a longer TTL would just delay
+// legitimate orphaning after a real Soul crash (which restarts the process
+// and clears the set anyway).
 const recentlyFinishedTTL = 30 * time.Second
 
-// NewApplyRunner собирает runner с зарегистрированными модулями.
+// NewApplyRunner builds a runner with the registered modules.
 //
-// metrics — soul_apply_*-collectors (ADR-024); nil → инструментация выключена
-// (nil-safe методы [ApplyMetrics] — no-op): push-режим (soul apply) и unit-тесты
-// поднимаются без obs-стека.
+// metrics is the soul_apply_* collectors (ADR-024); nil disables
+// instrumentation ([ApplyMetrics] methods are nil-safe no-ops) — push mode
+// (soul apply) and unit tests run without the obs stack.
 func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
 	engine, err := cel.NewFlowControl()
 	return &ApplyRunner{
@@ -151,18 +148,18 @@ func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
 	}
 }
 
-// SetHostFacts задаёт soulprint-снимок хоста, который runner инжектит в
-// core-модули, реализующие [util.SoulprintAware] (core.pkg / core.service), перед
-// каждым Apply (Вариант A, ADR-018(b)). Вызывается из cmd/soul один раз на старте
-// после первого сбора soulprint; до вызова hostFacts пуст — модули детектят
-// backend в рантайме (fallback). Конкурентных Run на одном Soul нет (ADR-012(a)),
-// факт после старта не меняется — отдельная синхронизация не нужна.
+// SetHostFacts sets the host soulprint snapshot the runner injects into core
+// modules implementing [util.SoulprintAware] (core.pkg / core.service) before
+// each Apply (Variant A, ADR-018(b)). Called once from cmd/soul at startup
+// after the first soulprint collection; before that hostFacts is empty and
+// modules fall back to runtime backend detection. No concurrent Run per Soul
+// (ADR-012(a)) and the value never changes after startup, so no extra sync.
 func (r *ApplyRunner) SetHostFacts(f util.HostFacts) { r.hostFacts = f }
 
-// Cancel пытается отменить активный apply с указанным id. Возвращает true,
-// если apply был зарегистрирован и cancel вызван; false — если apply уже
-// завершился или не существует. После cancel-а Run-горутина увидит ctx.Err()
-// и завершит цикл, выслав RunResult со статусом CANCELLED.
+// Cancel attempts to cancel the active apply with the given id. Returns true
+// if the apply was registered and cancel was called; false if it already
+// finished or doesn't exist. After cancel, the Run goroutine observes
+// ctx.Err() and ends the cycle, sending a RunResult with status CANCELLED.
 func (r *ApplyRunner) Cancel(applyID string) bool {
 	r.mu.Lock()
 	cancel, ok := r.active[applyID]
@@ -174,27 +171,29 @@ func (r *ApplyRunner) Cancel(applyID string) bool {
 	return true
 }
 
-// AcceptAttempt — attempt-fencing-guard (ADR-027(g), Phase 2): решает, принимать
-// ли ApplyRequest по его (apply_id, attempt) к исполнению. Вызывается ПЕРЕД
-// [ApplyRunner.Run] на каждый входящий ApplyRequest.
+// AcceptAttempt is the attempt-fencing guard (ADR-027(g), Phase 2): decides
+// whether to accept an ApplyRequest by its (apply_id, attempt). Called BEFORE
+// [ApplyRunner.Run] for every incoming ApplyRequest.
 //
-// Правило:
-//   - attempt == 0 → принять и НЕ фенсить: 0 = старый Keeper без fencing-поля
-//     (apply.proto field 4 forward-compat, ADR-012(c) only-add). Кеш не трогаем,
-//     чтобы пустой attempt не «отравил» seen для последующих fencing-запросов.
-//   - attempt < seen[apply_id] → ОТВЕРГНУТЬ (вернуть false): это stale-дубль —
-//     протухший Ward, чей оригинальный (больший attempt) apply уже принят. Кеш
-//     не обновляем.
-//   - attempt >= seen[apply_id] → принять, seen[apply_id] = attempt. Равенство
-//     принимается (повторная доставка того же attempt — не stale; SID-lease уже
-//     отсекает истинный дубль того же epoch-а, фенсить по «==» было бы ложным
-//     отказом валидного re-deliver).
+// Rule:
+//   - attempt == 0 → accept, no fencing: 0 means an old Keeper without the
+//     fencing field (apply.proto field 4 forward-compat, ADR-012(c) only-add).
+//     Cache untouched, so an empty attempt doesn't poison seen for later
+//     fencing requests.
+//   - attempt < seen[apply_id] → REJECT (false): a stale duplicate — a stale
+//     Ward whose original (higher-attempt) apply was already accepted. Cache
+//     untouched.
+//   - attempt >= seen[apply_id] → accept, seen[apply_id] = attempt. Equality
+//     is accepted (a redelivery of the same attempt isn't stale; SID-lease
+//     already filters a true same-epoch duplicate — fencing on "==" would
+//     falsely reject a valid redeliver).
 //
-// Возврат true = исполнять (caller вызывает Run); false = молча дропнуть
-// (ADR-027 barrier-B1: отвергнутый дубль НЕ шлёт RunResult, барьер Keeper-а
-// закрывает оригинальный apply своим RunResult, runTimeout — нижняя страховка).
+// Returns true to execute (caller invokes Run); false to silently drop
+// (ADR-027 barrier-B1: a rejected duplicate sends no RunResult — Keeper's
+// barrier closes the original apply with its own RunResult, runTimeout is the
+// backstop).
 func (r *ApplyRunner) AcceptAttempt(applyID string, attempt int32) bool {
-	// attempt=0 (старый Keeper) — fencing выключен, исполняем без записи в кеш.
+	// attempt=0 (old Keeper) — fencing disabled, execute without caching.
 	if attempt == 0 {
 		return true
 	}
@@ -202,9 +201,9 @@ func (r *ApplyRunner) AcceptAttempt(applyID string, attempt int32) bool {
 	seen := r.lastSeenAttempt[applyID]
 	if attempt < seen {
 		r.mu.Unlock()
-		// B1 (ADR-027): отвергнутый stale-дубль НИЧЕГО не шлёт Keeper-у — debug-лог
-		// + метрика, RunResult не отправляется (барьер закроет оригинальный apply
-		// с большим attempt своим RunResult; runTimeout — нижняя страховка).
+		// B1 (ADR-027): a rejected stale duplicate sends NOTHING to Keeper — just
+		// a debug log + metric; no RunResult (the barrier closes the original
+		// apply with its own RunResult; runTimeout is the backstop).
 		r.metrics.ObserveFenced()
 		slog.Default().Debug("runtime: ApplyRequest отвергнут attempt-fencing-guard-ом (stale-дубль)",
 			slog.String("apply_id", applyID),
@@ -223,10 +222,11 @@ func (r *ApplyRunner) register(applyID string, cancel context.CancelFunc) {
 	r.mu.Unlock()
 }
 
-// unregister снимает apply из in-flight-набора active и переводит его в
-// recently-finished ring (Soul-reconcile, ADR-027(g), S6): apply_id остаётся
-// объявленным ещё [recentlyFinishedTTL] после завершения Run, чтобы reconnect в
-// окне «RunResult в полёте, стрим порвался до cleanup» не дал ложного orphan.
+// unregister removes the apply from the in-flight active set and moves it
+// into the recently-finished ring (Soul-reconcile, ADR-027(g), S6): the
+// apply_id stays declared for [recentlyFinishedTTL] after Run finishes, so a
+// reconnect racing "RunResult in flight, stream broke before cleanup" doesn't
+// produce a false orphan.
 func (r *ApplyRunner) unregister(applyID string) {
 	r.mu.Lock()
 	delete(r.active, applyID)
@@ -234,27 +234,28 @@ func (r *ApplyRunner) unregister(applyID string) {
 	r.mu.Unlock()
 }
 
-// ActiveSet — снимок ведомых Soul-ом apply-прогонов для [WardRoster] (R-B
-// транспорт, Soul-reconcile ADR-027(g), S6). Объединение трёх источников:
-//   - active — in-flight прогоны (Run ещё исполняется);
-//   - recentlyFinished — завершённые в последние [recentlyFinishedTTL] (анти-гонка
-//     «результат в полёте, стрим порвался до unregister»); протухшие вычищаются
-//     лениво здесь же;
-//   - lastSeenAttempt — apply_id с известным fencing-epoch (attempt-эхо). Этот
-//     слой даёт авторитетный attempt для записи; для in-flight/finished без него
-//     attempt=0 (старый Keeper без fencing либо ещё не виденный epoch).
+// ActiveSet snapshots the apply runs Soul currently owns, for [WardRoster]
+// (R-B transport, Soul-reconcile ADR-027(g), S6). Union of three sources:
+//   - active — in-flight runs (Run still executing);
+//   - recentlyFinished — finished in the last [recentlyFinishedTTL] (guards
+//     against "result in flight, stream broke before unregister"); stale
+//     entries are swept lazily here;
+//   - lastSeenAttempt — apply_id with a known fencing epoch (attempt echo).
+//     Gives the authoritative attempt for the record; in-flight/finished
+//     entries without one report attempt=0 (old Keeper without fencing, or
+//     epoch not yet seen).
 //
-// Возвращает по одной [keeperv1.ActiveApply] на apply_id (дедуп по объединению).
-// Пустой результат (nil) — явная декларация «ничего не ведётся»: caller шлёт
-// WardRoster с пустым active[], Keeper по нему терминалит все dispatched-строки
-// SID-а. Это правильно после рестарта (наборы пусты) и после штатного завершения
-// единственного прогона за пределами TTL.
+// Returns one [keeperv1.ActiveApply] per apply_id (deduped over the union).
+// A nil result explicitly declares "nothing owned": the caller sends a
+// WardRoster with empty active[], and Keeper terminates all of the SID's
+// dispatched rows on it. Correct both right after a restart (sets empty) and
+// after the sole run finishes and ages out of the TTL.
 func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := r.nowFn()
-	// Ленивая чистка протухших finished-записей (set мал — один-в-полёте apply).
+	// Lazy sweep of stale finished entries (set is tiny — one in-flight apply).
 	for id, at := range r.recentlyFinished {
 		if now.Sub(at) >= recentlyFinishedTTL {
 			delete(r.recentlyFinished, id)
@@ -274,9 +275,9 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 
 	out := make([]*keeperv1.ActiveApply, 0, len(ids))
 	for id := range ids {
-		// attempt-эхо: авторитетный epoch берём из lastSeenAttempt (последний
-		// принятый attempt). Нет записи (старый Keeper / attempt=0) → 0: Keeper
-		// epoch-guard трактует 0 как «без fencing» и не фенсит по нему.
+		// attempt echo: authoritative epoch comes from lastSeenAttempt (last
+		// accepted attempt). No entry (old Keeper / attempt=0) → 0: Keeper's
+		// epoch-guard treats 0 as "no fencing" and won't fence on it.
 		out = append(out, &keeperv1.ActiveApply{
 			ApplyId: id,
 			Attempt: r.lastSeenAttempt[id],
@@ -285,48 +286,48 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 	return out
 }
 
-// Run выполняет все tasks из req последовательно, шлёт TaskEvent для
-// каждой, затем RunResult с агрегированным статусом.
+// Run executes every task in req sequentially, sending a TaskEvent for each,
+// then a RunResult with the aggregated status.
 //
-// Gating перед Apply (ADR-012(d)): задача исполняется только при
-// `when && onchanges-satisfied && onfail-satisfied`. when:-предикат вычисляется
-// Soul-side sandboxed cel-go-движком ([ApplyRunner.evalWhen]) из
-// RenderedTask.flow_context + register предыдущих задач (по register-имени).
-// when:false ИЛИ onchanges не сработал ИЛИ onfail не сработал → SKIPPED
-// (mod.Apply не вызывается). changed_when/failed_when вычисляются Soul-side ПОСЛЕ
-// Apply ([ApplyRunner.runTask]): override changed/failed по результату
-// (changed_when сначала, failed_when потом).
+// Gating before Apply (ADR-012(d)): a task executes only when
+// `when && onchanges-satisfied && onfail-satisfied`. when: is evaluated by the
+// Soul-side sandboxed cel-go engine ([ApplyRunner.evalWhen]) from
+// RenderedTask.flow_context plus prior tasks' register (by register name).
+// when:false, or onchanges not satisfied, or onfail not satisfied → SKIPPED
+// (mod.Apply not called). changed_when/failed_when are evaluated Soul-side
+// AFTER Apply ([ApplyRunner.runTask]): they override changed/failed on the
+// result (changed_when first, then failed_when).
 //
-// Fail-stop с rescue (destiny/tasks.md §8): первая FAILED/TIMED_OUT задача
-// НЕОБРАТИМО помечает RunResult как FAILED, но цикл НЕ прерывается. После провала
-// все последующие ОБЫЧНЫЕ (не-onfail) задачи пропускаются (SKIPPED, Apply не
-// вызывается); отрабатывают ТОЛЬКО onfail-задачи, чей источник упал
-// (register.failed==true) — rescue/cleanup. onfail-задачи провал НЕ отменяют:
-// RunResult остаётся FAILED. В нормальном (без провалов) прогоне onfail-задачи
-// всегда SKIPPED. failed_when:false (ignore_errors) делает задачу OK — она НЕ
-// триггерит ни fail-stop, ни onfail.
+// Fail-stop with rescue (destiny/tasks.md §8): the first FAILED/TIMED_OUT task
+// marks RunResult FAILED IRREVERSIBLY, but the loop does not stop. After a
+// failure, subsequent ORDINARY (non-onfail) tasks are skipped (SKIPPED, Apply
+// not called); ONLY onfail tasks whose source failed (register.failed==true)
+// run — rescue/cleanup. onfail tasks never undo the failure: RunResult stays
+// FAILED. In a normal (no-failure) run, onfail tasks are always SKIPPED.
+// failed_when:false (ignore_errors) makes a task OK — it triggers neither
+// fail-stop nor onfail.
 //
-// Стратегия ошибок:
-//   - ошибка вычисления when: → TaskEvent.status=FAILED (runtime-error CEL —
-//     штатно по templating.md §10; compile-error — internal-расхождение
-//     keeper↔soul, defensive FAILED + warn); прогон помечается FAILED, rescue-хвост
-//     (onfail на эту задачу) отрабатывает, остальные tasks skip.
-//   - модуль не найден в Registry → TaskEvent.status=FAILED (как провал модуля:
-//     fail-stop с rescue), RunResult.status=FAILED.
-//   - SoulModule.Apply вернул error → TaskEvent.status=FAILED.
-//   - Apply прислал ApplyEvent.failed=true → TaskEvent.status=FAILED.
-//   - Apply прислал ApplyEvent.changed=true (failed=false) → CHANGED.
-//   - ctx был отменён до/во время задачи → RunResult.status=CANCELLED,
-//     текущая задача — TaskEvent.status=CANCELLED, остальные не выполняются
-//     (TaskEvent не шлётся). CancelApply прерывает цикл безусловно — это не
-//     fail-stop, rescue на отмену НЕ срабатывает.
-//   - иначе → OK.
+// Error strategy:
+//   - when: evaluation error → TaskEvent.status=FAILED (a runtime-error CEL is
+//     expected per templating.md §10; a compile-error is a keeper↔soul
+//     internal mismatch, defensive FAILED + warn); the run is marked FAILED,
+//     the rescue tail (onfail on this task) runs, remaining tasks skip.
+//   - module not found in Registry → TaskEvent.status=FAILED (treated as a
+//     module failure: fail-stop with rescue), RunResult.status=FAILED.
+//   - SoulModule.Apply returned an error → TaskEvent.status=FAILED.
+//   - Apply sent ApplyEvent.failed=true → TaskEvent.status=FAILED.
+//   - Apply sent ApplyEvent.changed=true (failed=false) → CHANGED.
+//   - ctx was cancelled before/during a task → RunResult.status=CANCELLED, the
+//     current task gets TaskEvent.status=CANCELLED, the rest don't run (no
+//     TaskEvent sent). CancelApply stops the loop unconditionally — this is
+//     not fail-stop, and rescue does not run on cancel.
+//   - otherwise → OK.
 //
-// state_changes пока не агрегируется (заполнится в M2.3+); поле
-// RunResult.state_changes остаётся nil.
+// state_changes isn't aggregated yet (lands in M2.3+); RunResult.state_changes
+// stays nil.
 //
-// Возврат — error только при I/O-ошибках Sink-а (stream порвался). Все
-// бизнес-ошибки задач уезжают через TaskEvent.error.
+// Returns an error only on Sink I/O failure (stream broke). All task-level
+// business errors travel through TaskEvent.error.
 func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink EventSink) error {
 	if req == nil {
 		return fmt.Errorf("runtime: ApplyRequest is nil")
@@ -334,36 +335,37 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	if sink == nil {
 		return fmt.Errorf("runtime: sink is nil")
 	}
-	// flow-control CEL-движок обязателен: when:-предикаты вычисляются Soul-side
-	// (ADR-012(d)). Ошибка его сборки — программная несовместимость cel-go (а не
-	// runtime-данные), завершаем прогон явной internal-ошибкой, а не игнорируем
-	// предикаты молча (это исказило бы gating: when:false-задача выполнилась бы).
+	// The flow-control CEL engine is mandatory: when: predicates are evaluated
+	// Soul-side (ADR-012(d)). A construction failure is a cel-go incompatibility
+	// (not runtime data), so we fail the run with an explicit internal error
+	// instead of silently ignoring predicates (that would corrupt gating — a
+	// when:false task would run).
 	if r.flowEngineErr != nil || r.flowEngine == nil {
 		return fmt.Errorf("runtime: flow-control CEL-движок недоступен: %w", r.flowEngineErr)
 	}
 
-	// Локальный ctx для прогона — нужен Cancel-у, чтобы прервать ровно этот
-	// apply, не убивая родительский ctx Soul-демона.
+	// Local ctx for this run — lets Cancel stop exactly this apply without
+	// killing the Soul daemon's parent ctx.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	applyID := req.GetApplyId()
-	// passage — индекс Passage staged-render (ADR-056). Эхается в КАЖДОМ
-	// TaskEvent/RunResult прогона как есть (0 для N=1 — БИТ-В-БИТ как до staged):
-	// keeper коррелирует терминал per-(apply_id, sid, passage) и накапливает
-	// register для render следующего Passage. Захватываем один раз — все события
-	// этого ApplyRequest относятся к одному Passage.
+	// passage — the staged-render Passage index (ADR-056). Echoed verbatim in
+	// EVERY TaskEvent/RunResult of this run (0 for N=1 — bit-for-bit as before
+	// staged rendering): Keeper correlates completion per (apply_id, sid,
+	// passage) and accumulates register for rendering the next Passage.
+	// Captured once — all events of this ApplyRequest belong to one Passage.
 	passage := req.GetPassage()
 	if applyID != "" {
 		r.register(applyID, cancel)
 		defer r.unregister(applyID)
 	}
 
-	// In-process span на весь прогон. apply_id — атрибут для фильтрации трейса
-	// (в metric-labels нельзя — cardinality, ADR-024 §2.2); секретов нет (params
-	// рендерятся Keeper-side и сюда как span-атрибуты не идут). sid в
-	// ApplyRequest не передаётся (authority — mTLS peer cert, ADR-012), поэтому
-	// разрез по хосту — на стороне Keeper-span-а. При OTel disabled tracer
-	// no-op — Start/End бесплатны.
+	// One in-process span for the whole run. apply_id is a span attribute for
+	// trace filtering (can't be a metric label — cardinality, ADR-024 §2.2); no
+	// secrets (params are rendered Keeper-side and never become span
+	// attributes here). sid isn't passed in ApplyRequest (authority is the
+	// mTLS peer cert, ADR-012), so per-host breakdown lives in Keeper's span.
+	// With OTel disabled the tracer is a no-op — Start/End are free.
 	runCtx, span := tracer.Start(runCtx, "apply.run",
 		trace.WithAttributes(attribute.String("apply_id", applyID)),
 	)
@@ -372,46 +374,48 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	start := time.Now()
 	defer func() { r.metrics.ObserveApplyDuration(time.Since(start).Seconds()) }()
 
-	// registerByIdx копит register-payload (TaskEvent.register_data) уже
-	// выполненных задач прогона ПО ИНДЕКСУ — нужен gating-у requisites
-	// (`onchanges:`): задача с onchanges_idx исполняется только если хотя бы у
-	// одного источника register.changed == true. Soul применяет задачи строго
-	// последовательно, поэтому к моменту gating источники (всегда раньше по
-	// плану) уже здесь.
+	// registerByIdx collects register payloads (TaskEvent.register_data) of
+	// already-run tasks BY INDEX — needed for requisite gating (`onchanges:`):
+	// a task with onchanges_idx runs only if at least one source has
+	// register.changed == true. Soul applies tasks strictly sequentially, so
+	// by gating time the sources (always earlier in the plan) are already here.
 	registerByIdx := make(map[int32]*structpb.Struct, len(req.GetTasks()))
 
-	// registerByName копит register-payload по register-ИМЕНИ (RenderedTask.register)
-	// — нужен flow-control-предикатам (when:/…), которые пишут `register.<name>.*`
-	// (ADR-012(d)). Параллелен registerByIdx (тот для onchanges-gating по индексам).
-	// Задача без register-имени в этот map не попадает (адресуется только своим idx).
+	// registerByName collects register payloads by register NAME
+	// (RenderedTask.register) — needed for flow-control predicates (when:/…),
+	// which reference `register.<name>.*` (ADR-012(d)). Parallel to
+	// registerByIdx (used for index-based onchanges gating). A task without a
+	// register name never enters this map (addressable only by its idx).
 	registerByName := make(map[string]any, len(req.GetTasks()))
 
 	runStatus := keeperv1.RunStatus_RUN_STATUS_SUCCESS
-	// runFailed — прогон уже провален (была FAILED/TIMED_OUT задача). После этого
-	// fail-stop НЕ делает немедленный break (как раньше): цикл продолжается, но
-	// ПРОПУСКАЕТ все последующие обычные задачи, исполняя ТОЛЬКО onfail-задачи,
-	// чьи источники упали (rescue/cleanup, destiny/tasks.md §8). RunResult при
-	// этом остаётся FAILED — onfail это компенсация, а не отмена провала.
+	// runFailed — the run has already failed (a FAILED/TIMED_OUT task occurred).
+	// Fail-stop no longer does an immediate break: the loop continues but
+	// SKIPS all subsequent ordinary tasks, running ONLY onfail tasks whose
+	// source failed (rescue/cleanup, destiny/tasks.md §8). RunResult still
+	// ends up FAILED — onfail compensates, it doesn't undo the failure.
 	runFailed := false
 	for idx, task := range req.GetTasks() {
-		// Cancel мог прийти между задачами — проверяем до запуска модуля.
+		// Cancel may have arrived between tasks — check before running the module.
 		if err := runCtx.Err(); err != nil {
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
 		}
 
-		// После провала прогона обычные (не-onfail) задачи не исполняются: они
-		// пропускаются БЕЗ вычисления when: (when упавшей-цепочки мог бы дать
-		// ложный новый FAILED). Исключение — onfail-задачи: для них gating
-		// (источник упал? + when/onchanges) считается ниже. Это и есть новая
-		// fail-stop-семантика: rescue-хвост отрабатывает, остальное skip.
+		// After a run failure, ordinary (non-onfail) tasks don't execute: they're
+		// skipped WITHOUT evaluating when: (when: on a failed chain could produce
+		// a spurious new FAILED). Exception — onfail tasks: gating for them
+		// (source failed? + when/onchanges) is computed below. This is the
+		// fail-stop semantics: the rescue tail runs, everything else skips.
 		//
-		// Терминал applier-register (aggregate_of) — ТОЖЕ исключение: он не исполняет
-		// модуль (синтетическая свёртка дочерних, побочных эффектов нет), а его
-		// register.<applier> ОБЯЗАН отражать реальный итог destiny даже при провале —
-		// иначе внешний onfail:[<applier>] / when: register.<applier>.failed разорвётся
-		// (failed-агрегат потерялся бы под generic-skipped). Эмитим агрегат СРАЗУ:
-		// дочерние раньше по плану и уже в registerByIdx (терминал последний в группе).
+		// The applier-register terminal (aggregate_of) is ALSO an exception: it
+		// runs no module (a synthetic fold of its children, no side effects), but
+		// its register.<applier> MUST reflect the real destiny outcome even on
+		// failure — otherwise an outer onfail:[<applier>] / when:
+		// register.<applier>.failed would break (the failed aggregate would be
+		// lost under a generic skipped). Emit the aggregate immediately: children
+		// are earlier in the plan and already in registerByIdx (the terminal is
+		// last in its group).
 		if runFailed && len(task.GetOnfailIdx()) == 0 {
 			var ev *keeperv1.TaskEvent
 			if agg := task.GetAggregateOf(); len(agg) > 0 {
@@ -435,18 +439,20 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			continue
 		}
 
-		// Gating: задача исполняется только при `when && onchanges-satisfied &&
-		// onfail-satisfied` (ADR-012(d)). Порядок — when ПЕРВЫМ:
-		//   - when:"" → true (безусловно); when:false → SKIPPED, Apply не вызывается;
-		//   - when:true, но onchanges/onfail не сработал → тоже SKIPPED.
-		// Оба пути дают одинаковый skipped-payload (changed=false — не триггерит
-		// onchanges последующих, как и onchanges-skip).
+		// Gating: a task runs only when `when && onchanges-satisfied &&
+		// onfail-satisfied` (ADR-012(d)). Order — when FIRST:
+		//   - when:"" → true (unconditional); when:false → SKIPPED, Apply not
+		//     called;
+		//   - when:true but onchanges/onfail not satisfied → also SKIPPED.
+		// Both paths produce the same skipped payload (changed=false — doesn't
+		// trigger onchanges downstream, same as an onchanges-skip).
 		when, whenErr := r.evalWhen(task, registerByName)
 		if whenErr != nil {
-			// Ошибка вычисления when: runtime-error CEL (например, register.x нет)
-			// → задача FAILED по таблице ошибок templating.md §10; compile-error на
-			// Soul = internal (Keeper пропустил невалидный предикат) → defensive
-			// FAILED + warn (предикат уже провалидирован на Keeper-е перед рендером).
+			// when: evaluation error: a runtime-error CEL (e.g. register.x missing)
+			// → task FAILED per the templating.md §10 error table; a compile-error
+			// on Soul is internal (Keeper let an invalid predicate through) →
+			// defensive FAILED + warn (the predicate was supposedly validated on
+			// Keeper before render).
 			r.logFlowControlError("when", task, whenErr)
 			ev := &keeperv1.TaskEvent{
 				ApplyId: applyID,
@@ -464,19 +470,19 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			r.metrics.ObserveTask(applyResultFailed)
-			// when-error = задача FAILED → fail-stop с rescue (как провал модуля):
-			// помечаем прогон проваленным, но не прерываем цикл — onfail-задачи на
-			// эту задачу отработают, остальные пропустятся (runFailed-ветка).
+			// when-error = task FAILED → fail-stop with rescue (same as a module
+			// failure): mark the run failed but don't break the loop — onfail tasks
+			// on this task will run, the rest skip (runFailed branch).
 			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
 			runFailed = true
 			continue
 		}
 
-		// when=false ЛИБО onchanges не сработал ЛИБО onfail не сработал → SKIPPED
-		// (mod.Apply не вызывается). onchanges фиксит restart-flap (restart только
-		// когда конфиг изменился); onfail — rescue-gating: onfail-задача в нормальном
-		// (без провалов) прогоне всегда SKIPPED, исполняется только при упавшем
-		// источнике (skipOnFail). Связка — AND (когда задано несколько requisite-ов).
+		// when=false, OR onchanges not satisfied, OR onfail not satisfied →
+		// SKIPPED (mod.Apply not called). onchanges prevents restart-flap
+		// (restart only when config changed); onfail is rescue-gating: an onfail
+		// task in a normal (no-failure) run is always SKIPPED, running only when
+		// its source failed (skipOnFail). Multiple requisites combine with AND.
 		if !when || skipOnChanges(task.GetOnchangesIdx(), registerByIdx) ||
 			skipOnFail(task.GetOnfailIdx(), registerByIdx) {
 			ev := skippedTaskEvent(applyID, int32(idx))
@@ -484,11 +490,11 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
-			// SKIPPED — терминальный не-успех-нейтральный исход; closed-enum
-			// soul_apply_tasks_total (ok/changed/failed) сводит его к ok (не fail).
+			// SKIPPED is a terminal, neutral (non-failure) outcome; the closed-enum
+			// soul_apply_tasks_total (ok/changed/failed) counts it as ok, not fail.
 			r.metrics.ObserveTask(taskResult(ev.GetStatus()))
-			// when ПЕРВЫМ в gating-цепочке: !when → reason=when, иначе skip
-			// вызван requisite-ом (onchanges/onfail не сработал).
+			// when is first in the gating chain: !when → reason=when, otherwise the
+			// skip was caused by a requisite (onchanges/onfail not satisfied).
 			if !when {
 				r.metrics.ObserveSkipped(skipReasonWhen)
 			} else {
@@ -498,11 +504,11 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		}
 
 		ev := r.runTaskWithRetry(runCtx, applyID, int32(idx), task, registerByName, req.GetDryRun())
-		// Если cancel случился внутри runTask (модуль уважает ctx), мы хотим
-		// одиночный TaskEvent со статусом CANCELLED и RunResult=CANCELLED.
-		// TaskError.code сохраняется как `apply.cancelled` для удобства фильтра
-		// в audit / логах — сам факт отмены уже несёт TaskStatus, но строковый
-		// код упрощает grep по audit_log без enum-resolution.
+		// If cancel happened inside runTask (module honors ctx), we want a single
+		// TaskEvent with status CANCELLED and RunResult=CANCELLED. TaskError.code
+		// is kept as `apply.cancelled` for filtering in audit/logs — TaskStatus
+		// already carries the cancellation fact, but the string code makes
+		// grepping audit_log easier without enum resolution.
 		if runCtx.Err() != nil {
 			ev.Status = keeperv1.TaskStatus_TASK_STATUS_CANCELLED
 			ev.Error = &keeperv1.TaskError{
@@ -514,42 +520,45 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
-			// Отменённая задача — терминальный не-успех; в closed enum
-			// soul_apply_tasks_total (ok/changed/failed) сводится к failed.
+			// A cancelled task is a terminal failure; the closed-enum
+			// soul_apply_tasks_total (ok/changed/failed) counts it as failed.
 			r.metrics.ObserveTask(applyResultFailed)
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
 		}
-		// Материализация applier-register (orchestration.md §2.1.1, Вариант B):
-		// терминальная core.noop.run с непустым aggregate_of несёт СВОДНЫЙ итог
-		// destiny-прогона applier-а. Её собственный ApplyEvent тривиален (noop →
-		// changed=false), поэтому register_data ПЕРЕЗАПИСываем агрегатом по дочерним
-		// задачам (OR changed/failed/timed_out). Дочерние — раньше по плану и в этом
-		// же ApplyRequest (терминал последний в группе), поэтому уже в registerByIdx.
-		// Override стоит ПОСЛЕ cancel-ветки (отменённая задача сохраняет CANCELLED) и
-		// ДО sendTaskEvent/recordRegister — и отправленный Keeper-у TaskEvent, и
-		// register для последующих gating-ей несут агрегат.
+		// Applier-register materialization (orchestration.md §2.1.1, Variant B): a
+		// terminal core.noop.run with a non-empty aggregate_of carries the
+		// SUMMARY outcome of the applier's destiny run. Its own ApplyEvent is
+		// trivial (noop → changed=false), so register_data is OVERWRITTEN with
+		// the aggregate over child tasks (OR of changed/failed/timed_out).
+		// Children are earlier in the plan and in this same ApplyRequest (the
+		// terminal is last in its group), so they're already in registerByIdx.
+		// The override happens AFTER the cancel branch (a cancelled task keeps
+		// CANCELLED) and BEFORE sendTaskEvent/recordRegister — both the TaskEvent
+		// sent to Keeper and the register used by later gating carry the
+		// aggregate.
 		if agg := task.GetAggregateOf(); len(agg) > 0 {
 			ev.RegisterData = aggregateRegisterData(agg, registerByIdx)
 		}
 		if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 			return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 		}
-		// register выполненной задачи доступен последующим: gating-у onchanges (по
-		// индексу) и flow-control-предикатам when:/… (по register-имени, ADR-012(d)).
+		// The finished task's register becomes available downstream: to onchanges
+		// gating (by index) and to flow-control predicates when:/… (by register
+		// name, ADR-012(d)).
 		recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
 		r.metrics.ObserveTask(taskResult(ev.GetStatus()))
 		if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_FAILED ||
 			ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
-			// fail-stop с rescue (destiny/tasks.md §8): провал фиксирует RunResult
-			// как FAILED НЕОБРАТИМО (onfail-задачи это cleanup, не отмена провала),
-			// но цикл НЕ прерывается. Последующие обычные задачи пропускаются
-			// (runFailed-ветка в начале итерации), отрабатывают только onfail-задачи,
-			// чьи источники упали. TIMED_OUT — частный случай failed: тоже триггерит
-			// rescue и тоже помечает прогон проваленным.
+			// Fail-stop with rescue (destiny/tasks.md §8): a failure marks
+			// RunResult FAILED irreversibly (onfail tasks are cleanup, not an undo),
+			// but the loop doesn't stop. Subsequent ordinary tasks are skipped
+			// (runFailed branch at the top of the loop); only onfail tasks whose
+			// source failed run. TIMED_OUT is a special case of failed: it also
+			// triggers rescue and marks the run failed.
 			if ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT {
-				// Таймаут считаем отдельной серией по ФИНАЛЬНОМУ исходу (после
-				// исчерпания retry), не на каждую попытку — soul_apply_task_timed_out_total.
+				// Count the timeout once, on the FINAL outcome (after retries are
+				// exhausted), not per attempt — soul_apply_task_timed_out_total.
 				r.metrics.ObserveTimedOut()
 			}
 			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
@@ -560,70 +569,79 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	return sink.SendRunResult(&keeperv1.RunResult{
 		ApplyId: applyID,
 		Status:  runStatus,
-		// attempt — эхо fencing-epoch запроса (ADR-027(g), gate-1): Keeper на
-		// приёме (correlateRunResult) сверит его с apply_runs.attempt и отвергнет
-		// результат устаревшей попытки. Soul возвращает значение как есть; 0 (старый
-		// Keeper без fencing) уезжает 0 → проверка актуальности деградирует штатно.
+		// attempt echoes the request's fencing epoch (ADR-027(g), gate-1): on
+		// receipt, Keeper (correlateRunResult) checks it against
+		// apply_runs.attempt and rejects a stale attempt's result. Soul returns
+		// the value as-is; 0 (old Keeper without fencing) stays 0 and the
+		// freshness check degrades gracefully.
 		Attempt: req.GetAttempt(),
-		// passage — эхо ApplyRequest.passage (ADR-056): barrier этого Passage ждёт
-		// терминал по (apply_id, sid, passage). 0 для N=1 — БИТ-В-БИТ как до staged.
+		// passage echoes ApplyRequest.passage (ADR-056): this Passage's barrier
+		// waits for completion by (apply_id, sid, passage). 0 for N=1 — bit-for-bit
+		// as before staged rendering.
 		Passage: passage,
 	})
 }
 
-// sendTaskEvent проставляет в TaskEvent эхо no_log из RenderedTask и шлёт его в
-// sink. Флаг едет на Keeper, чтобы тот подавил register_data/error.message в
-// долгоживущем audit для no_log-задач, не обращаясь к []RenderedTask (этот
-// TaskEvent мог прийти на другой Keeper-инстанс, ADR-002). Soul знает no_log из
-// плана прогона — исполняет задачу, не логируя её params/output.
+// sendTaskEvent stamps the TaskEvent with an echo of RenderedTask.no_log and
+// sends it to sink. The flag travels to Keeper so it can suppress
+// register_data/error.message in the long-lived audit log for no_log tasks,
+// without needing []RenderedTask (this TaskEvent might land on a different
+// Keeper instance, ADR-002). Soul knows no_log from the run plan — it
+// executes the task without logging its params/output.
 func sendTaskEvent(sink EventSink, ev *keeperv1.TaskEvent, task *keeperv1.RenderedTask, passage int32) error {
 	ev.NoLog = task.GetNoLog()
-	// Эхо ApplyRequest.passage (ADR-056): keeper коррелирует терминал per-
-	// (apply_id, sid, passage) и копит register для render следующего Passage.
-	// Единая точка проставления для всех TaskEvent прогона.
+	// Echoes ApplyRequest.passage (ADR-056): Keeper correlates completion per
+	// (apply_id, sid, passage) and accumulates register for rendering the next
+	// Passage. Single point where every TaskEvent of the run gets this set.
 	ev.Passage = passage
-	// Эхо RenderedTask.plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной
-	// индекс задачи по всему плану (все Passage). Keeper корелирует register
-	// именно по нему (apply_task_register.plan_index), НЕ по локальному
-	// TaskEvent.task_idx (позиция в ApplyRequest.tasks[] — она локальна для
-	// passage/host). N=1-прогон / старый Keeper без поля → plan_index=0=task_idx,
-	// поведение БИТ-В-БИТ. Единая точка проставления для всех TaskEvent прогона.
+	// Echoes RenderedTask.plan_index (ADR-056 §S1 fix Variant B): the GLOBAL
+	// task index across the whole plan (all Passages). Keeper correlates
+	// register by this (apply_task_register.plan_index), NOT by the local
+	// TaskEvent.task_idx (position in ApplyRequest.tasks[], local to
+	// passage/host). N=1 run / old Keeper without the field → plan_index=0=
+	// task_idx, bit-for-bit behavior. Single point where every TaskEvent of the
+	// run gets this set.
 	ev.PlanIndex = task.GetPlanIndex()
 	return sink.SendTaskEvent(ev)
 }
 
-// defaultRetryDelay — пауза между попытками, если retry_delay не задан/невалиден
-// (DSL-ядро retry.delay default, destiny/tasks.md §9).
+// defaultRetryDelay is the pause between attempts when retry_delay is unset or
+// invalid (DSL-core retry.delay default, destiny/tasks.md §9).
 const defaultRetryDelay = 5 * time.Second
 
-// runTaskWithRetry — обёртка над runTask, реализующая DSL-ядро retry:/until:
-// (destiny/tasks.md §9, Soul-side flow-control). Делает до retry_count попыток
-// runTask (каждая — «одна попытка → один TaskEvent», контракт runTask не меняется);
-// промежуточные попытки наружу НЕ эмитятся — caller получает TaskEvent ПОСЛЕДНЕЙ
-// попытки (контракт «один TaskEvent на task_idx» сохранён, attempts-счётчик не вводим).
+// runTaskWithRetry wraps runTask to implement the DSL-core retry:/until:
+// (destiny/tasks.md §9, Soul-side flow-control). Makes up to retry_count
+// attempts at runTask (each is "one attempt → one TaskEvent", runTask's
+// contract is unchanged); intermediate attempts are NOT emitted — the caller
+// gets the TaskEvent of the LAST attempt only (the "one TaskEvent per
+// task_idx" contract holds, no attempts counter is introduced).
 //
-// Семантика (per architect):
-//   - retry_count 0/1/пусто → одна попытка (обратная совместимость: без retry).
-//   - БЕЗ until: повтор пока попытка FAILED/TIMED_OUT; первый не-FAILED исход
-//     (OK/CHANGED) → выход; все исчерпаны → финальный статус ПОСЛЕДНЕЙ попытки как
-//     есть (FAILED или TIMED_OUT — TIMED_OUT НЕ схлопывается в FAILED). failed_when:
-//     false (ignore_errors) делает попытку OK → «не-FAILED исход» → выход на первой
-//     попытке (ignore_errors побеждает retry).
-//   - С until: until вычисляется ПОСЛЕ каждой попытки (после changed_when/failed_when
-//     override). until-true → выход, финальный статус = статус попытки КАК ЕСТЬ (until
-//     НЕ override-ит failed). until-false → delay → следующая попытка. Все попытки с
-//     until-false → задача FAILED (flowcontrol.until_exhausted), ДАЖЕ если попытка
-//     OK/CHANGED. На TIMED_OUT-попытке until НЕ вычисляется (таймаут = «неуспех,
-//     повторить если попытки остались»).
-//   - delay (retry_delay, default 5s) применяется ТОЛЬКО между попытками (не перед
-//     первой, не после последней); прерывается отменой прогона по runCtx.
-//   - cancel во время delay/попытки → выход из петли; CANCELLED-разбор делает caller
-//     (Run проверяет runCtx.Err() после возврата).
+// Semantics (per architect):
+//   - retry_count 0/1/empty → a single attempt (backward compatible: no retry).
+//   - WITHOUT until: retries while an attempt is FAILED/TIMED_OUT; the first
+//     non-FAILED outcome (OK/CHANGED) exits; once attempts are exhausted, the
+//     final status is the LAST attempt's as-is (FAILED or TIMED_OUT — TIMED_OUT
+//     is NOT collapsed into FAILED). failed_when:false (ignore_errors) makes an
+//     attempt OK → "non-FAILED outcome" → exits on the first attempt
+//     (ignore_errors wins over retry).
+//   - WITH until: until is evaluated AFTER each attempt (after the
+//     changed_when/failed_when override). until-true → exit, final status is
+//     the attempt's status AS-IS (until does NOT override failed). until-false
+//     → delay → next attempt. All attempts until-false → task FAILED
+//     (flowcontrol.until_exhausted), EVEN if the last attempt was OK/CHANGED.
+//     On a TIMED_OUT attempt, until is NOT evaluated (a timeout is "failure,
+//     retry if attempts remain").
+//   - delay (retry_delay, default 5s) applies ONLY between attempts (not
+//     before the first, not after the last); interruptible by run
+//     cancellation via runCtx.
+//   - cancel during delay/attempt → exits the loop; CANCELLED handling is done
+//     by the caller (Run checks runCtx.Err() after return).
 func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, idx int32, task *keeperv1.RenderedTask, registerByName map[string]any, dryRun bool) *keeperv1.TaskEvent {
-	// dry_run (Scry, ADR-031): pure-read Plan ВМЕСТО Apply. Retry/until не
-	// применяются — read детерминирован (ресурс либо расходится с желаемым, либо
-	// нет; повтор чтения смысла не имеет), а Apply на dry_run не вызывается вовсе.
-	// Поэтому dry_run обрабатывается одной попыткой planTask, минуя retry-петлю.
+	// dry_run (Scry, ADR-031): a pure-read Plan INSTEAD of Apply. Retry/until
+	// don't apply — a read is deterministic (the resource either matches the
+	// desired state or it doesn't; re-reading is pointless), and Apply is never
+	// called on dry_run. So dry_run is handled as a single planTask call,
+	// bypassing the retry loop.
 	if dryRun {
 		return r.planTask(runCtx, applyID, idx, task)
 	}
@@ -634,8 +652,8 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 	}
 	until := task.GetUntil()
 
-	// Fast-path: одна попытка без until → поведение в точности как раньше (runTask
-	// напрямую), без лишней delay-обвязки.
+	// Fast path: a single attempt with no until → behaves exactly as before
+	// (calls runTask directly), no delay machinery.
 	if maxAttempts == 1 && until == "" {
 		ev, _ := r.runTask(runCtx, applyID, idx, task, registerByName)
 		return ev
@@ -645,15 +663,15 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 
 	var ev *keeperv1.TaskEvent
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Попытки со второй — это retry (повтор после неуспеха/until-false).
-		// soul_apply_task_retries_total: считаем именно повторы, не первую попытку.
+		// Attempt 2+ is a retry (repeat after failure/until-false).
+		// soul_apply_task_retries_total counts retries, not the first attempt.
 		if attempt > 1 {
 			r.metrics.ObserveRetry()
 		}
 		var self map[string]any
 		ev, self = r.runTask(runCtx, applyID, idx, task, registerByName)
 
-		// Cancel во время попытки → немедленный выход; CANCELLED-разбор — в Run.
+		// Cancel during an attempt → exit immediately; CANCELLED handling is in Run.
 		if runCtx.Err() != nil {
 			return ev
 		}
@@ -662,42 +680,45 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 		timedOut := status == keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT
 
 		if until == "" {
-			// retry БЕЗ until: первый не-FAILED исход (OK/CHANGED) → выход.
-			// FAILED/TIMED_OUT → повтор, если попытки остались. На последней попытке
-			// возвращаем статус как есть (TIMED_OUT не схлопываем).
+			// retry WITHOUT until: the first non-FAILED outcome (OK/CHANGED) exits.
+			// FAILED/TIMED_OUT retries if attempts remain. On the last attempt we
+			// return the status as-is (TIMED_OUT isn't collapsed).
 			if status != keeperv1.TaskStatus_TASK_STATUS_FAILED && !timedOut {
 				return ev
 			}
 		} else if self == nil && !timedOut {
-			// Терминально-ошибочная НЕ-таймаут-ветка runTask (selfRegister==nil):
-			// bad address / module not found / flow-control compile-/runtime-error в
-			// changed_when/failed_when. ev уже несёт точный код причины
-			// (flowcontrol.changed_when_error / failed_when_error / …) и статус FAILED.
-			// until-eval тут не имеет смысла (нет register.self) и затёр бы исходный
-			// код на flowcontrol.until_error — возвращаем ev как есть, без повтора.
-			// TIMED_OUT (тоже self==nil) сюда НЕ попадает: таймаут = «неуспех, повторить
-			// если попытки остались» — он проваливается в общую ветку повтора ниже.
+			// A terminal-error, non-timeout branch of runTask (selfRegister==nil):
+			// bad address / module not found / flow-control compile-/runtime-error
+			// in changed_when/failed_when. ev already carries the precise cause
+			// code (flowcontrol.changed_when_error / failed_when_error / …) and
+			// status FAILED. until-eval makes no sense here (no register.self) and
+			// would overwrite the original code with flowcontrol.until_error — so
+			// we return ev as-is, no retry. TIMED_OUT (also self==nil) does NOT
+			// land here: a timeout is "failure, retry if attempts remain" and
+			// falls through to the general retry branch below.
 			return ev
 		} else if !timedOut {
-			// until (+retry): на TIMED_OUT-попытке until НЕ вычисляется — это «неуспех,
-			// повторить если попытки остались». Иначе until-eval ПОСЛЕ override.
+			// until (+retry): on a TIMED_OUT attempt until is NOT evaluated — that's
+			// "failure, retry if attempts remain". Otherwise evaluate until AFTER
+			// the override.
 			ok, err := r.evalUntil(until, task, registerByName, self)
 			if err != nil {
-				// Runtime-/compile-error CEL в until → задача FAILED (как when/
-				// changed_when/failed_when, templating.md §10). Терминально, без повтора.
+				// Runtime-/compile-error CEL in until → task FAILED (same as when/
+				// changed_when/failed_when, templating.md §10). Terminal, no retry.
 				r.logFlowControlError("until", task, err)
 				return flowControlErrorEvent(applyID, idx, "flowcontrol.until_error", task, until, err)
 			}
 			if ok {
-				// until-true → выход; финальный статус = статус попытки КАК ЕСТЬ
-				// (until НЕ override-ит failed: failed остаётся failed).
+				// until-true → exit; final status is the attempt's status AS-IS
+				// (until does NOT override failed: failed stays failed).
 				return ev
 			}
 		}
 
-		// Попытка неуспешна (или until-false): delay перед следующей, ТОЛЬКО если
-		// она будет (не после последней попытки). Delay interruptible по runCtx
-		// (taskCtx уже истёк через defer внутри runTask).
+		// The attempt failed (or until-false): delay before the next one, ONLY if
+		// there is a next one (not after the last attempt). Delay is
+		// interruptible via runCtx (taskCtx already expired via defer inside
+		// runTask).
 		if attempt < maxAttempts {
 			select {
 			case <-time.After(delay):
@@ -707,20 +728,22 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 		}
 	}
 
-	// Попытки исчерпаны. С until: until так и не стал truthy → FAILED
-	// (until_exhausted), ДАЖЕ если последняя попытка OK/CHANGED. Без until:
-	// финальный статус последней попытки уже терминальный FAILED/TIMED_OUT —
-	// возвращаем как есть (TIMED_OUT не схлопываем в FAILED).
+	// Attempts exhausted. With until: it never became truthy → FAILED
+	// (until_exhausted), EVEN if the last attempt was OK/CHANGED. Without
+	// until: the last attempt's final status is already terminal
+	// FAILED/TIMED_OUT — return it as-is (TIMED_OUT isn't collapsed into
+	// FAILED).
 	if until != "" {
 		return untilExhaustedEvent(applyID, idx, task, until, maxAttempts)
 	}
 	return ev
 }
 
-// parseRetryDelay парсит retry_delay тем же config.ParseDuration, что и timeout
-// (единая convention `duration` Soul Stack). Пусто/невалид/неположительная →
-// defaultRetryDelay (5s): defensive (формат провалидирован validateRetryField при
-// парсе destiny), без падения на служебной ошибке.
+// parseRetryDelay parses retry_delay with the same config.ParseDuration used
+// for timeout (the single Soul Stack `duration` convention). Empty/invalid/
+// non-positive → defaultRetryDelay (5s): defensive (format is validated by
+// validateRetryField when destiny is parsed), never fails on a housekeeping
+// error.
 func parseRetryDelay(task *keeperv1.RenderedTask) time.Duration {
 	rd := task.GetRetryDelay()
 	if rd == "" {
@@ -737,17 +760,19 @@ func parseRetryDelay(task *keeperv1.RenderedTask) time.Duration {
 	return d
 }
 
-// evalUntil вычисляет until-предикат той же sandboxed-песочницей и активацией, что
-// failed_when (flow_context + register.* предыдущих задач + register.self свежей
-// попытки с применёнными changed_when/failed_when). self — selfRegister от runTask
-// (nil на терминально-ошибочных ветках; туда until не доходит).
+// evalUntil evaluates the until predicate with the same sandbox and
+// activation as failed_when (flow_context + register.* of prior tasks +
+// register.self of the fresh attempt with changed_when/failed_when applied).
+// self is the selfRegister from runTask (nil on terminal-error branches;
+// until never reaches those).
 func (r *ApplyRunner) evalUntil(expr string, task *keeperv1.RenderedTask, registerByName map[string]any, self map[string]any) (bool, error) {
 	return r.evalFlowPredicate(expr, task, mergeRegisterSelf(registerByName, self))
 }
 
-// untilExhaustedEvent — TaskEvent для исчерпания retry-петли с until-false на всех
-// попытках: задача FAILED (flowcontrol.until_exhausted), даже если последняя попытка
-// была OK/CHANGED (until — обязательное условие успеха, destiny/tasks.md §9).
+// untilExhaustedEvent builds the TaskEvent for a retry loop that exhausted all
+// attempts with until-false: task FAILED (flowcontrol.until_exhausted), even
+// if the last attempt was OK/CHANGED (until is a mandatory success condition,
+// destiny/tasks.md §9).
 func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask, until string, attempts int) *keeperv1.TaskEvent {
 	ev := &keeperv1.TaskEvent{
 		ApplyId: applyID,
@@ -763,17 +788,18 @@ func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask,
 	return ev
 }
 
-// runTask диспетчит ОДНУ попытку задачи и собирает финальный TaskEvent.
-// Возвращает заполненный event без отправки в sink — отправляет caller, и
-// selfRegister — register.self ПОСЛЕДНЕЙ попытки (DSL-ядро changed/failed/timed_out
-// + output:-поля, с применёнными changed_when/failed_when override). selfRegister
-// нужен обёртке [ApplyRunner.runTaskWithRetry] для until-eval (он смотрит на
-// register.self после override). На терминально-ошибочных ветках (nil task / bad
-// address / module not found / timed_out / flow-control compile-error) selfRegister
-// = nil — until туда не доходит (retry-обёртка трактует TIMED_OUT/FAILED по статусу).
+// runTask dispatches ONE attempt of a task and builds the final TaskEvent.
+// Returns the filled event without sending to sink (the caller sends it), and
+// selfRegister — register.self of this attempt (DSL-core changed/failed/
+// timed_out + output: fields, with changed_when/failed_when override applied).
+// selfRegister is needed by [ApplyRunner.runTaskWithRetry] for until-eval (it
+// reads register.self after the override). On terminal-error branches (nil
+// task / bad address / module not found / timed_out / flow-control
+// compile-error) selfRegister is nil — until never reaches those (the retry
+// wrapper handles TIMED_OUT/FAILED by status instead).
 //
-// retry/until здесь НЕ обрабатываются — это «одна попытка → один TaskEvent» (контракт
-// не меняется); петлю накручивает runTaskWithRetry.
+// retry/until are NOT handled here — this is "one attempt → one TaskEvent"
+// (contract unchanged); runTaskWithRetry drives the loop.
 func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, task *keeperv1.RenderedTask, registerByName map[string]any) (*keeperv1.TaskEvent, map[string]any) {
 	ev := &keeperv1.TaskEvent{
 		ApplyId: applyID,
@@ -788,9 +814,9 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		return ev, nil
 	}
 
-	// `module:` приходит как `<namespace>.<module>.<state>` (например,
-	// "core.pkg.installed"). Plugin-вызов принимает `state` отдельно от
-	// имени, поэтому делим адрес.
+	// `module:` arrives as `<namespace>.<module>.<state>` (e.g.
+	// "core.pkg.installed"). The plugin call takes `state` separately from the
+	// name, so we split the address.
 	modName, state, ok := config.SplitModuleAddr(task.GetModule())
 	if !ok {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
@@ -813,26 +839,27 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		return ev, nil
 	}
 
-	// Per-task timeout (DSL-ядро timeout:, destiny/tasks.md §9): дочерний от ctx
-	// контекст с дедлайном на одну попытку Apply. taskCtx ДОЧЕРНИЙ от runCtx —
-	// при истечении его дедлайна runCtx.Err() остаётся nil, поэтому ветка cancel
-	// в Run (if runCtx.Err() != nil → CANCELLED) не срабатывает, а статус
-	// TIMED_OUT, выставленный ниже, сохраняется. Пусто timeout → лимита нет
-	// (только scenario-ceiling); общий per-task дефолт сознательно НЕ вводим —
-	// он сломал бы легитимно-долгие core.archive/core.url.
+	// Per-task timeout (DSL-core timeout:, destiny/tasks.md §9): a context
+	// child of ctx with a deadline for one Apply attempt. taskCtx is a CHILD of
+	// runCtx — when its deadline expires, runCtx.Err() stays nil, so the cancel
+	// branch in Run (if runCtx.Err() != nil → CANCELLED) doesn't fire and the
+	// TIMED_OUT status set below sticks. Empty timeout → no limit (only the
+	// scenario ceiling applies); we deliberately don't introduce a per-task
+	// default — it would break legitimately long-running core.archive/core.url.
 	//
-	// Парсер — config.ParseDuration (тот же, что keeper применяет при ПАРСЕ
-	// destiny: validateDurationField; и что core.url/Reaper используют). Это
-	// единственная convention `duration` Soul Stack: Go-формы + суффикс `<N>d`
-	// (docs/keeper/config.md → «Конвенции типов»). Голый time.ParseDuration не
-	// понимает `30d` — keeper принял бы такой timeout, а Soul тихо отбросил.
+	// Parser is config.ParseDuration, the same one Keeper uses when PARSING
+	// destiny (validateDurationField) and that core.url/Reaper use — the single
+	// Soul Stack `duration` convention: Go forms plus the `<N>d` suffix
+	// (docs/keeper/config.md → "Type conventions"). Plain time.ParseDuration
+	// doesn't understand `30d` — Keeper would accept such a timeout and Soul
+	// would silently drop it.
 	taskCtx := ctx
 	if to := task.GetTimeout(); to != "" {
 		switch d, err := config.ParseDuration(to); {
 		case err != nil:
-			// Невалидная duration-строка (defensive: Keeper уже валидировал при
-			// парсе destiny, «не должно случиться»). Трактуем как «не задан» + warn,
-			// а не падаем на служебной ошибке.
+			// Invalid duration string (defensive: Keeper already validated this
+			// when parsing destiny, "should never happen"). Treated as "not set" +
+			// warn, rather than failing on a housekeeping error.
 			slog.Default().Warn("runtime: невалидный task timeout, лимит не применён",
 				slog.String("task", task.GetName()),
 				slog.String("module", modName),
@@ -843,9 +870,9 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			taskCtx, cancel = context.WithTimeout(ctx, d)
 			defer cancel()
 		default:
-			// d <= 0 (`0s`, `-1s`): трактуем как «лимита нет», а НЕ как мгновенный
-			// дедлайн. WithTimeout(ctx, 0) истёк бы немедленно → ложный TIMED_OUT
-			// ещё до запуска модуля.
+			// d <= 0 (`0s`, `-1s`): treated as "no limit", NOT an instant deadline.
+			// WithTimeout(ctx, 0) would expire immediately → a false TIMED_OUT
+			// before the module even runs.
 			slog.Default().Warn("runtime: неположительный task timeout, лимит не применён",
 				slog.String("task", task.GetName()),
 				slog.String("module", modName),
@@ -853,11 +880,12 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		}
 	}
 
-	// Soulprint-инжект (Вариант A, ADR-018(b)): in-process core-модуль,
-	// реализующий util.SoulprintAware (core.pkg / core.service), получает собранный
-	// факт хоста ПЕРЕД Apply — это primary-источник выбора backend-а (pkg-mgr /
-	// init-система), единый с CEL `soulprint.self.os.*`. Out-of-process-плагины
-	// интерфейс не реализуют → факт не получают (зарезервировано на Вариант B).
+	// Soulprint injection (Variant A, ADR-018(b)): an in-process core module
+	// implementing util.SoulprintAware (core.pkg / core.service) receives the
+	// collected host facts BEFORE Apply — the primary source for backend
+	// selection (pkg-mgr / init system), consistent with CEL
+	// `soulprint.self.os.*`. Out-of-process plugins don't implement the
+	// interface, so they don't get the facts (reserved for Variant B).
 	if aware, ok := mod.(util.SoulprintAware); ok {
 		aware.SetHostFacts(r.hostFacts)
 	}
@@ -868,18 +896,19 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		Params: task.GetParams(),
 	}
 
-	// Apply-вызов блокирующий; модуль шлёт ApplyEvent в stream и возвращает
-	// nil или error. Финальный event — последний с changed/failed; раньше
-	// идут диагностические message-ы (мы их игнорируем — TaskEvent несёт
-	// финальный статус, прогресс в MVP не передаём).
+	// Apply is a blocking call; the module sends ApplyEvent(s) to the stream and
+	// returns nil or an error. The final event carries changed/failed; earlier
+	// ones are diagnostic messages (ignored — TaskEvent carries only the final
+	// status, MVP doesn't propagate progress).
 	applyErr := mod.Apply(pluginReq, stream)
 	stream.close()
 	last := stream.lastEvent()
 
-	// Per-task timeout истёк (taskCtx — дочерний дедлайн), а родительский ctx жив
-	// (отличаем timeout от CancelApply): задача — TIMED_OUT. Проверяем ДО разбора
-	// applyErr — модуль обычно возвращает ctx.Err() (DeadlineExceeded), и без
-	// этой ветки он маскировался бы под module.error.
+	// Per-task timeout expired (taskCtx's own deadline) while the parent ctx is
+	// still alive (distinguishing timeout from CancelApply): task is TIMED_OUT.
+	// Checked BEFORE inspecting applyErr — the module typically returns
+	// ctx.Err() (DeadlineExceeded), and without this branch it would masquerade
+	// as module.error.
 	if taskCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_TIMED_OUT
 		ev.Error = &keeperv1.TaskError{
@@ -891,10 +920,10 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		return ev, nil
 	}
 
-	// Базовый исход от модуля (changed/failed) до override flow-control-предикатами.
-	// Исходную ошибку модуля держим отдельно — её может перекрыть failed_when:false
-	// (ignore_errors), но в этом случае она НЕ теряется, а сохраняется в
-	// register.self.ignored_error (см. ниже).
+	// The module's base outcome (changed/failed) before flow-control predicate
+	// overrides. We keep the module's original error separate — failed_when:
+	// false (ignore_errors) can override it, but even then it isn't lost: it's
+	// preserved in register.self.ignored_error (see below).
 	var (
 		baseChanged bool
 		baseFailed  bool
@@ -909,10 +938,10 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			Message: applyErr.Error(),
 		}
 	case last == nil:
-		// Apply вернул nil, но не прислал ни одного события — модуль
-		// неисправен или это no-op (например, Plan-only). Считаем OK без
-		// changes; модули core MVP всегда шлют финальное событие, см.
-		// util.SendOK / SendChanged / SendFailed.
+		// Apply returned nil but sent no event at all — a broken module, or a
+		// no-op (e.g. Plan-only). Treated as OK with no changes; core MVP
+		// modules always send a final event, see util.SendOK / SendChanged /
+		// SendFailed.
 	case last.GetFailed():
 		baseFailed = true
 		moduleErr = &keeperv1.TaskError{
@@ -924,13 +953,14 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		baseChanged = true
 	}
 
-	// flow-control ПОСЛЕ Apply (ADR-012(d)): сначала changed_when (override
-	// changed), потом failed_when (override failed). Активация — flow_context +
-	// register.* (предыдущих задач) + register.self.* (СВЕЖИЙ результат: changed/
-	// failed/timed_out + output-поля). selfRegister строим из БАЗОВОГО исхода
-	// модуля — changed_when видит сырой changed, failed_when видит результат уже
-	// с применённым changed_when (см. порядок). timed_out здесь всегда false —
-	// ветка TIMED_OUT обработана выше и сюда не доходит.
+	// Flow-control AFTER Apply (ADR-012(d)): changed_when first (overrides
+	// changed), then failed_when (overrides failed). Activation is
+	// flow_context + register.* (prior tasks) + register.self.* (the FRESH
+	// result: changed/failed/timed_out + output fields). selfRegister is built
+	// from the module's BASE outcome — changed_when sees the raw changed,
+	// failed_when sees the result with changed_when already applied (order
+	// matters). timed_out is always false here — the TIMED_OUT branch was
+	// handled above and never reaches this point.
 	selfRegister := selfRegisterData(baseChanged, baseFailed, last)
 
 	changed := baseChanged
@@ -955,13 +985,13 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		selfRegister["failed"] = failed
 	}
 
-	// Финальный статус: failed имеет приоритет над changed (FAILED — отдельный
-	// терминал enum). changed_when определил changed, failed_when определил failed.
+	// Final status: failed takes priority over changed (FAILED is a distinct
+	// terminal). changed_when set changed, failed_when set failed.
 	switch {
 	case failed:
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
-		// Источник ошибки: если упал именно модуль — его TaskError; если failed
-		// искусственно поднят failed_when:true при OK-модуле — синтетическая ошибка.
+		// Error source: the module's own TaskError if it failed; a synthetic error
+		// if failed_when:true artificially raised failed on an OK module.
 		if moduleErr != nil {
 			ev.Error = moduleErr
 		} else {
@@ -977,29 +1007,30 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_OK
 	}
 
-	// register_data: финальный flow-control-исход (changed/failed после override)
-	// + output:-поля. Берём из selfRegister — там уже учтены changed_when/failed_when.
+	// register_data: the final flow-control outcome (changed/failed after
+	// override) + output: fields, taken from selfRegister (already reflects
+	// changed_when/failed_when).
 	ev.RegisterData = registerStruct(selfRegister)
 
-	// ignore_errors-аудит (ADR-012(d)): модуль упал, но failed_when:false
-	// перекрыл провал (итог OK/CHANGED). Исходную ошибку НЕ теряем — она уезжает
-	// в register.self.ignored_error (доступна последующим предикатам, уходит в
-	// audit через register_data). TaskEvent.error при этом остаётся пустым —
-	// контракт apply.proto: error заполнен только при FAILED/TIMED_OUT.
+	// ignore_errors audit (ADR-012(d)): the module failed but failed_when:false
+	// overrode it (outcome OK/CHANGED). The original error isn't lost — it goes
+	// into register.self.ignored_error (visible to later predicates, reaches
+	// audit via register_data). TaskEvent.error stays empty here — apply.proto
+	// contract: error is set only on FAILED/TIMED_OUT.
 	if !failed && moduleErr != nil {
 		ev.RegisterData.GetFields()["ignored_error"] = structpb.NewStringValue(moduleErr.GetMessage())
-		// until-eval (retry-обёртка) видит register.self той же формы, что и
-		// финальный register_data — кладём ignored_error и в selfRegister.
+		// until-eval (retry wrapper) sees register.self in the same shape as the
+		// final register_data — set ignored_error on selfRegister too.
 		selfRegister["ignored_error"] = moduleErr.GetMessage()
 	}
 	return ev, selfRegister
 }
 
-// selfRegisterData строит map register.self.* для flow-control-предикатов
-// changed_when/failed_when: DSL-ядро (changed/failed/timed_out) текущей задачи +
-// output:-поля из финального ApplyEvent. timed_out всегда false — TIMED_OUT
-// обработан в runTask раньше и в flow-control не попадает. Это форма cel-активации
-// (map[string]any), как registerByName, а не *structpb.Struct.
+// selfRegisterData builds the register.self.* map for changed_when/failed_when
+// predicates: this task's DSL-core (changed/failed/timed_out) + output: fields
+// from the final ApplyEvent. timed_out is always false — TIMED_OUT is handled
+// earlier in runTask and never reaches flow-control. This is the cel-activation
+// form (map[string]any), like registerByName, not *structpb.Struct.
 func selfRegisterData(changed, failed bool, last *pluginv1.ApplyEvent) map[string]any {
 	self := map[string]any{
 		"changed":   changed,
@@ -1014,9 +1045,9 @@ func selfRegisterData(changed, failed bool, last *pluginv1.ApplyEvent) map[strin
 	return self
 }
 
-// mergeRegisterSelf накладывает register.self (свежий результат текущей задачи) на
-// register-индекс предыдущих задач, не мутируя исходный map: changed_when/
-// failed_when читают register.<предыдущие>.* И register.self.*.
+// mergeRegisterSelf overlays register.self (this task's fresh result) onto the
+// register index of prior tasks, without mutating the source map: changed_when/
+// failed_when read both register.<prior>.* AND register.self.*.
 func mergeRegisterSelf(prev map[string]any, self map[string]any) map[string]any {
 	merged := make(map[string]any, len(prev)+1)
 	for k, v := range prev {
@@ -1026,17 +1057,17 @@ func mergeRegisterSelf(prev map[string]any, self map[string]any) map[string]any 
 	return merged
 }
 
-// registerStruct сериализует self-register-map (changed/failed/timed_out + output)
-// в *structpb.Struct для TaskEvent.register_data. skipped здесь всегда false —
-// дошедшая до runTask задача не пропущена. output-значения уже structpb-формы
-// (взяты из ApplyEvent.Output), пере-оборачиваем через NewValue.
+// registerStruct serializes the self-register map (changed/failed/timed_out +
+// output) into *structpb.Struct for TaskEvent.register_data. skipped is always
+// false here — a task that reached runTask wasn't skipped. output values are
+// already structpb-shaped (from ApplyEvent.Output); re-wrapped via NewValue.
 func registerStruct(self map[string]any) *structpb.Struct {
 	fields := make(map[string]*structpb.Value, len(self)+1)
 	for k, v := range self {
 		val, err := structpb.NewValue(v)
 		if err != nil {
-			// output-поле невыразимо в structpb (не должно случаться — оно само
-			// пришло из *structpb.Struct). Пропускаем, чтобы не ронять прогон.
+			// output field isn't structpb-representable (should never happen — it
+			// came from a *structpb.Struct already). Skip it rather than fail the run.
 			continue
 		}
 		fields[k] = val
@@ -1045,16 +1076,17 @@ func registerStruct(self map[string]any) *structpb.Struct {
 	return &structpb.Struct{Fields: fields}
 }
 
-// evalFlowPredicate вычисляет changed_when/failed_when sandboxed flow-control-
-// движком. Активация — flow_context (input/vars/essence/incarnation/self) + register
-// (предыдущие задачи + register.self свежего результата). Симметрично evalWhen.
+// evalFlowPredicate evaluates changed_when/failed_when with the sandboxed
+// flow-control engine. Activation is flow_context (input/vars/essence/
+// incarnation/self) + register (prior tasks + register.self of the fresh
+// result). Symmetric to evalWhen.
 func (r *ApplyRunner) evalFlowPredicate(expr string, task *keeperv1.RenderedTask, reg map[string]any) (bool, error) {
 	return r.flowEngine.EvalPredicate(expr, flowControlVars(task.GetFlowContext(), reg))
 }
 
-// flowControlErrorEvent — единый TaskEvent для runtime-/compile-error CEL в
-// changed_when/failed_when: задача FAILED (как when, templating.md §10). Симметрично
-// when-ветке в Run.
+// flowControlErrorEvent builds the common TaskEvent for a runtime-/compile-error
+// CEL in changed_when/failed_when: task FAILED (same as when, templating.md
+// §10). Symmetric to the when-branch in Run.
 func flowControlErrorEvent(applyID string, idx int32, code string, task *keeperv1.RenderedTask, expr string, err error) *keeperv1.TaskEvent {
 	ev := &keeperv1.TaskEvent{
 		ApplyId: applyID,
@@ -1070,17 +1102,19 @@ func flowControlErrorEvent(applyID string, idx int32, code string, task *keeperv
 	return ev
 }
 
-// evalWhen вычисляет flow-control-предикат `when:` (ADR-012(d)) Soul-side
-// sandboxed cel-go-движком. Пустой when → (true, nil) (безусловный запуск).
+// evalWhen evaluates the `when:` flow-control predicate (ADR-012(d)) with the
+// Soul-side sandboxed cel-go engine. Empty when → (true, nil) (unconditional).
 //
-// Активация строится из RenderedTask.flow_context (литеральный per-host снапшот
-// { input, vars, essence, incarnation, self }, собранный Keeper-ом на CEL-фазе) +
-// register (registerByName — payload предыдущих задач по register-имени, Soul
-// строит сам). soulprint биндится {self: flow_context.self} — каноническая форма
-// soulprint.self.<path>; soulprint.hosts/where недоступны (sandbox-изоляция).
+// Activation is built from RenderedTask.flow_context (a literal per-host
+// snapshot { input, vars, essence, incarnation, self } assembled by Keeper in
+// the CEL phase) + register (registerByName — prior tasks' payload by register
+// name, built by Soul itself). soulprint binds to {self: flow_context.self} —
+// the canonical soulprint.self.<path> form; soulprint.hosts/where are
+// unavailable (sandbox isolation).
 //
-// changed_when/failed_when вычисляются отдельно — ПОСЛЕ Apply, в [ApplyRunner.runTask]
-// (override changed/failed по результату); evalWhen — только gating ДО Apply.
+// changed_when/failed_when are evaluated separately, AFTER Apply, in
+// [ApplyRunner.runTask] (override changed/failed by result); evalWhen only
+// gates BEFORE Apply.
 func (r *ApplyRunner) evalWhen(task *keeperv1.RenderedTask, registerByName map[string]any) (bool, error) {
 	when := task.GetWhen()
 	if when == "" {
@@ -1089,10 +1123,11 @@ func (r *ApplyRunner) evalWhen(task *keeperv1.RenderedTask, registerByName map[s
 	return r.flowEngine.EvalPredicate(when, flowControlVars(task.GetFlowContext(), registerByName))
 }
 
-// flowControlVars строит cel.Vars из flow_context-снапшота и накопленного
-// registerByName. flow_context — данные от Keeper-а (input/vars/essence/
-// incarnation/self), register — результаты предыдущих задач (Soul строит).
-// nil/отсутствующие секции → пустые map (штатный CEL no-such-key, не паника).
+// flowControlVars builds cel.Vars from the flow_context snapshot and the
+// accumulated registerByName. flow_context is Keeper's data (input/vars/
+// essence/incarnation/self); register is prior tasks' results (built by
+// Soul). nil/missing sections → empty maps (a normal CEL no-such-key, not a
+// panic).
 func flowControlVars(flowCtx *structpb.Struct, registerByName map[string]any) cel.Vars {
 	fc := map[string]any{}
 	if flowCtx != nil {
@@ -1105,13 +1140,14 @@ func flowControlVars(flowCtx *structpb.Struct, registerByName map[string]any) ce
 		Incarnation:   flowSection(fc, "incarnation"),
 		SoulprintSelf: flowSection(fc, "self"),
 		Register:      registerByName,
-		// AllowHosts намеренно false (zero-value): flow-control-движок и так
-		// форсит изоляцию soulprint.hosts (NewFlowControl); дублируем намерение.
+		// AllowHosts is intentionally false (zero-value): the flow-control engine
+		// already forces soulprint.hosts isolation (NewFlowControl); this just
+		// restates the intent.
 	}
 }
 
-// flowSection извлекает секцию верхнего уровня flow_context как map[string]any.
-// Отсутствие/не-объект → пустой map (обращение к полю → штатный no-such-key).
+// flowSection extracts a top-level flow_context section as map[string]any.
+// Missing/non-object → empty map (field access becomes a normal no-such-key).
 func flowSection(fc map[string]any, key string) map[string]any {
 	if sec, ok := fc[key].(map[string]any); ok {
 		return sec
@@ -1119,11 +1155,12 @@ func flowSection(fc map[string]any, key string) map[string]any {
 	return map[string]any{}
 }
 
-// logFlowControlError логирует ошибку вычисления flow-control-предиката. Compile-/
-// unsupported-ошибка на Soul-е = internal (Keeper обязан был отсеять невалидный
-// предикат при валидации перед рендером) — warn-уровень, чтобы такое расхождение
-// keeper↔soul было видно в логах/OTel. Runtime-error CEL (register.x нет) —
-// штатная ошибка автора Destiny, тоже warn (задача всё равно станет FAILED).
+// logFlowControlError logs a flow-control predicate evaluation error. A
+// compile-/unsupported error on Soul is internal (Keeper should have rejected
+// an invalid predicate during pre-render validation) — logged at warn so the
+// keeper<->soul mismatch is visible in logs/OTel. A runtime-error CEL (e.g.
+// missing register.x) is a normal Destiny-author mistake, also warn (the task
+// becomes FAILED either way).
 func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTask, err error) {
 	var ce *cel.ErrCompile
 	var ue *cel.ErrUnsupported
@@ -1142,12 +1179,12 @@ func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTa
 		slog.Any("error", err))
 }
 
-// recordRegister копит register-payload завершённой/пропущенной задачи в оба
-// индекса: registerByIdx (по позиции, для onchanges-gating) и registerByName (по
-// register-имени, для flow-control-предикатов when:/…). Пустое name → в
-// registerByName не пишем (задача без register: адресуется только своим idx).
-// registerByName хранит payload как map[string]any (форма cel-активации), а не
-// *structpb.Struct: cel читает Go-данные через адаптер.
+// recordRegister accumulates a finished/skipped task's register payload into
+// both indexes: registerByIdx (by position, for onchanges gating) and
+// registerByName (by register name, for when:/… flow-control predicates).
+// Empty name → skip registerByName (a task without register: is addressable
+// only by its idx). registerByName stores the payload as map[string]any (the
+// cel-activation form), not *structpb.Struct — cel reads Go data via adapter.
 func recordRegister(byIdx map[int32]*structpb.Struct, byName map[string]any, idx int32, name string, data *structpb.Struct) {
 	byIdx[idx] = data
 	if name != "" {
@@ -1155,16 +1192,16 @@ func recordRegister(byIdx map[int32]*structpb.Struct, byName map[string]any, idx
 	}
 }
 
-// skipOnChanges решает, пропустить ли задачу по DSL-ядру `onchanges:`
-// (destiny/tasks.md §8). onchangesIdx — индексы задач-источников (резолвнутые
-// Keeper-ом register-имена, proto onchanges_idx); registerByIdx — register уже
-// выполненных задач прогона по индексу.
+// skipOnChanges decides whether to skip a task per the DSL-core `onchanges:`
+// (destiny/tasks.md §8). onchangesIdx is the source tasks' indexes (register
+// names resolved by Keeper, proto onchanges_idx); registerByIdx is the
+// register of already-run tasks in this run, by index.
 //
-// Семантика: пусто onchangesIdx → false (безусловный запуск). Иначе пропуск
-// (true), ЕСЛИ ни у одного источника register.changed != true. Хотя бы один
-// changed → false (выполнить). Отсутствующий в registerByIdx источник трактуется
-// как changed=false (источник не выполнялся — например, сам был пропущен): он не
-// «спасает» от пропуска, что согласовано с skipped ≠ changed.
+// Semantics: empty onchangesIdx → false (unconditional run). Otherwise skip
+// (true) UNLESS at least one source has register.changed == true — any
+// changed source → false (run). A source missing from registerByIdx is
+// treated as changed=false (it didn't run — e.g. was itself skipped): it
+// doesn't "rescue" from the skip, consistent with skipped != changed.
 func skipOnChanges(onchangesIdx []int32, registerByIdx map[int32]*structpb.Struct) bool {
 	if len(onchangesIdx) == 0 {
 		return false
@@ -1178,20 +1215,20 @@ func skipOnChanges(onchangesIdx []int32, registerByIdx map[int32]*structpb.Struc
 	return true
 }
 
-// skipOnFail решает, пропустить ли onfail-задачу по DSL-ядру `onfail:`
-// (destiny/tasks.md §8) — rescue-зеркало skipOnChanges, триггер register.failed
-// вместо register.changed. onfailIdx — индексы задач-источников (резолвнутые
-// Keeper-ом register-имена, proto onfail_idx); registerByIdx — register уже
-// выполненных задач прогона по индексу.
+// skipOnFail decides whether to skip an onfail task per the DSL-core `onfail:`
+// (destiny/tasks.md §8) — the rescue mirror of skipOnChanges, triggered by
+// register.failed instead of register.changed. onfailIdx is the source tasks'
+// indexes (register names resolved by Keeper, proto onfail_idx); registerByIdx
+// is the register of already-run tasks in this run, by index.
 //
-// Семантика: пусто onfailIdx → false (задача не-onfail, gating не применяется —
-// решение об исполнении принимают when/onchanges/runFailed-ветка). Иначе пропуск
-// (true), ЕСЛИ ни у одного источника register.failed != true. Хотя бы один failed
-// → false (выполнить rescue). register.failed охватывает и TIMED_OUT — он пишется
-// в register с failed==true (buildRegisterData), так что таймаут источника тоже
-// триггерит onfail. Отсутствующий в registerByIdx источник трактуется как
-// failed=false (источник не выполнялся — например, сам был пропущен): он не
-// «активирует» onfail, что согласовано со skipped ≠ failed.
+// Semantics: empty onfailIdx → false (not an onfail task — the when/onchanges/
+// runFailed branch decides execution instead). Otherwise skip (true) UNLESS at
+// least one source has register.failed == true — any failed source → false
+// (run the rescue). register.failed also covers TIMED_OUT (written to register
+// as failed==true by buildRegisterData), so a source's timeout also triggers
+// onfail. A source missing from registerByIdx is treated as failed=false (it
+// didn't run — e.g. was itself skipped): it doesn't "activate" onfail,
+// consistent with skipped != failed.
 func skipOnFail(onfailIdx []int32, registerByIdx map[int32]*structpb.Struct) bool {
 	if len(onfailIdx) == 0 {
 		return false
@@ -1205,10 +1242,11 @@ func skipOnFail(onfailIdx []int32, registerByIdx map[int32]*structpb.Struct) boo
 	return true
 }
 
-// skippedTaskEvent — единый TaskEvent для пропущенной задачи (gating when/
-// onchanges/onfail не пройден ЛИБО задача пропущена после провала прогона).
-// register_data несёт skipped=true, changed=false, failed=false — skipped-задача
-// не триггерит ни onchanges, ни onfail последующих (skipped ≠ changed/failed).
+// skippedTaskEvent builds the common TaskEvent for a skipped task (when/
+// onchanges/onfail gating failed, OR the task was skipped after a run
+// failure). register_data carries skipped=true, changed=false, failed=false —
+// a skipped task triggers neither downstream onchanges nor onfail (skipped !=
+// changed/failed).
 func skippedTaskEvent(applyID string, idx int32) *keeperv1.TaskEvent {
 	return &keeperv1.TaskEvent{
 		ApplyId:      applyID,
@@ -1218,13 +1256,15 @@ func skippedTaskEvent(applyID string, idx int32) *keeperv1.TaskEvent {
 	}
 }
 
-// buildRegisterData — собирает google.protobuf.Struct для TaskEvent.register_data
-// из финального ApplyEvent. В MVP-объёме это {changed, failed, timed_out,
-// skipped, output...}; полная схема — docs/destiny/tasks.md (register.<task>.*).
+// buildRegisterData assembles the google.protobuf.Struct for
+// TaskEvent.register_data from the final ApplyEvent. In MVP scope this is
+// {changed, failed, timed_out, skipped, output...}; full schema —
+// docs/destiny/tasks.md (register.<task>.*).
 //
-// skipped=true только у TASK_STATUS_SKIPPED (gating `onchanges:` не пропустил
-// задачу, mod.Apply не вызывался). skipped-задача несёт changed=false — она НЕ
-// триггерит onchanges последующих задач (skipped ≠ changed, destiny/tasks.md §8).
+// skipped=true only for TASK_STATUS_SKIPPED (when/onchanges/onfail gating
+// didn't let the task run, mod.Apply wasn't called). A skipped task carries
+// changed=false — it does NOT trigger downstream onchanges (skipped != changed,
+// destiny/tasks.md §8).
 func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *structpb.Struct {
 	changed := status == keeperv1.TaskStatus_TASK_STATUS_CHANGED
 	failed := status == keeperv1.TaskStatus_TASK_STATUS_FAILED ||
@@ -1246,28 +1286,31 @@ func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *s
 	return &structpb.Struct{Fields: fields}
 }
 
-// aggregateRegisterData строит register_data ТЕРМИНАЛЬНОЙ синтетической задачи
-// applier-register (core.noop.run с aggregate_of, материализация Вариант B,
-// orchestration.md §2.1.1) как сводный итог дочерних destiny-задач applier-а:
+// aggregateRegisterData builds register_data for the TERMINAL synthetic
+// applier-register task (core.noop.run with aggregate_of, Variant B
+// materialization, orchestration.md §2.1.1) as a summary of the applier's
+// child destiny tasks:
 //
 //	changed   = OR(registerByIdx[i].changed)
 //	failed    = OR(registerByIdx[i].failed)
 //	timed_out = OR(registerByIdx[i].timed_out)
 //
-// по ЛОКАЛЬНЫМ индексам aggregateOf (ремап global→local сделал Keeper, ToProtoTasks).
-// Это дублирует семантику register.<applier>: внешний onchanges:[<applier>] / when:
-// register.<applier>.changed резолвится по этому register_data. skipped — всегда
-// false (агрегат — реальный исход группы, не пропуск самой задачи).
+// over aggregateOf's LOCAL indexes (Keeper's ToProtoTasks did the
+// global→local remap). This mirrors register.<applier> semantics: an outer
+// onchanges:[<applier>] / when: register.<applier>.changed resolves against
+// this register_data. skipped is always false (the aggregate is the group's
+// real outcome, not the task itself being skipped).
 //
-// Отсутствующий в registerByIdx источник (sentinel-индекс -1 от ToProtoTasks:
-// дочерняя задача отфильтрована where: на этом хосте / уехала в другой Passage)
-// читается как nil → его changed/failed/timed_out=false (нулевой вклад в OR),
-// симметрично skipOnChanges/skipOnFail. Пустой aggregateOf сюда не доходит (caller
-// проверяет len>0); если бы дошёл — все OR=false (no-op applier без дочерних задач).
+// A source missing from registerByIdx (sentinel index -1 from ToProtoTasks: a
+// child task filtered out by where: on this host, or routed to a different
+// Passage) reads as nil → its changed/failed/timed_out=false (zero
+// contribution to the OR), symmetric to skipOnChanges/skipOnFail. An empty
+// aggregateOf never reaches here (the caller checks len>0); if it did, all OR
+// results would be false (a no-op applier with no children).
 //
-// output-поля дочерних задач НЕ проецируются (это OUT-OF-SCOPE: проброс
-// декларированного top-level output: destiny в register.<applier>.<поле> — отдельный
-// слайс). Только DSL-ядро changed/failed/timed_out/skipped.
+// Child tasks' output fields are NOT projected (out of scope — propagating a
+// declared top-level output: destiny into register.<applier>.<field> is a
+// separate slice). Only DSL-core changed/failed/timed_out/skipped.
 func aggregateRegisterData(aggregateOf []int32, registerByIdx map[int32]*structpb.Struct) *structpb.Struct {
 	var changed, failed, timedOut bool
 	for _, idx := range aggregateOf {
@@ -1291,13 +1334,12 @@ func aggregateRegisterData(aggregateOf []int32, registerByIdx map[int32]*structp
 	}}
 }
 
-// inProcApplyStream — реализация `grpc.ServerStreamingServer[pluginv1.ApplyEvent]`
-// для in-process вызова core-модулей. Эмулирует server-stream через slice;
-// SetTrailer/SendHeader — no-op (core-модули их не используют).
+// inProcApplyStream implements `grpc.ServerStreamingServer[pluginv1.ApplyEvent]`
+// for in-process core-module calls. Emulates a server-stream via a slice;
+// SetTrailer/SendHeader are no-ops (core modules don't use them).
 //
-// Сохраняет ВСЕ ApplyEvent-ы, но runtime смотрит только на финальный. В
-// логах/debug режиме можно вывести события из stream.events; в MVP это
-// просто буфер.
+// Keeps ALL ApplyEvents, but runtime only looks at the final one. Events in
+// stream.events could be dumped in logs/debug mode; in MVP it's just a buffer.
 type inProcApplyStream struct {
 	grpc.ServerStream
 	ctx     context.Context

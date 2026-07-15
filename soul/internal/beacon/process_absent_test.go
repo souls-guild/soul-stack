@@ -28,7 +28,7 @@ func TestProcessAbsentPresent(t *testing.T) {
 
 func TestProcessAbsentAbsent(t *testing.T) {
 	r := internaltest.NewRunner()
-	// pgrep exit 1 = совпадений нет.
+	// pgrep exit 1 = no matches.
 	r.On("pgrep nginx", util.Result{ExitCode: 1})
 
 	b := &ProcessAbsent{Runner: r}
@@ -43,7 +43,7 @@ func TestProcessAbsentAbsent(t *testing.T) {
 
 func TestProcessAbsentPgrepError(t *testing.T) {
 	r := internaltest.NewRunner()
-	// pgrep exit ≥2 — ошибка самого pgrep (битый паттерн) → ошибка Check.
+	// pgrep exit ≥2 — pgrep itself errored (bad pattern) → Check error.
 	r.On("pgrep [bad", util.Result{ExitCode: 2, Stderr: "invalid pattern"})
 
 	b := &ProcessAbsent{Runner: r}

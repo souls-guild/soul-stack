@@ -30,7 +30,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// tarEntry — описание одной записи tar для генератора.
+// tarEntry describes one tar entry for the generator.
 type tarEntry struct {
 	name     string
 	typeflag byte
@@ -39,7 +39,7 @@ type tarEntry struct {
 	linkname string
 }
 
-// makeTar собирает tar in-memory из записей.
+// makeTar builds a tar in-memory from entries.
 func makeTar(t *testing.T, entries []tarEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -69,7 +69,7 @@ func makeTar(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// gzipBytes оборачивает данные gzip-ом.
+// gzipBytes wraps data with gzip.
 func gzipBytes(t *testing.T, data []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -83,7 +83,7 @@ func gzipBytes(t *testing.T, data []byte) []byte {
 	return buf.Bytes()
 }
 
-// zipEntry — описание одной записи zip для генератора.
+// zipEntry describes one zip entry for the generator.
 type zipEntry struct {
 	name    string
 	mode    os.FileMode
@@ -91,7 +91,7 @@ type zipEntry struct {
 	symlink bool // body = target
 }
 
-// makeZip собирает zip in-memory из записей.
+// makeZip builds a zip in-memory from entries.
 func makeZip(t *testing.T, entries []zipEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -120,7 +120,7 @@ func makeZip(t *testing.T, entries []zipEntry) []byte {
 	return buf.Bytes()
 }
 
-// writeArchive пишет байты архива на диск и возвращает путь.
+// writeArchive writes archive bytes to disk and returns the path.
 func writeArchive(t *testing.T, dir, name string, data []byte) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -135,7 +135,7 @@ func sha(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// apply прогоняет Apply с заданными params и возвращает stream.
+// apply runs Apply with the given params and returns the stream.
 func apply(t *testing.T, params map[string]any) *internaltest.ApplyStream {
 	t.Helper()
 	m := archive.New()
@@ -171,7 +171,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// happy-path по каждому формату: распаковка реальных байтов, проверка файла.
+// happy-path per format: extract real bytes, verify the file.
 func TestApply_HappyPath_AllFormats(t *testing.T) {
 	tarBytes := makeTar(t, []tarEntry{
 		{name: "dir/", typeflag: tar.TypeDir, mode: 0o755},
@@ -224,10 +224,10 @@ func TestApply_HappyPath_AllFormats(t *testing.T) {
 	}
 }
 
-// bz2FixtureB64 — реальный tar.bz2 (записан `tar cjf`, единственная запись
-// dir/hello.txt = "bz2-content"). bzip2 в stdlib decompress-only, своего
-// энкодера нет — фикстура захардкожена, чтобы проверить именно ветку
-// bzip2-decompress на настоящем bzip2-потоке.
+// bz2FixtureB64 is a real tar.bz2 (written with `tar cjf`, single entry
+// dir/hello.txt = "bz2-content"). stdlib bzip2 is decompress-only, no
+// encoder — the fixture is hardcoded so the bzip2-decompress branch is
+// exercised against a real bzip2 stream.
 const bz2FixtureB64 = "QlpoOTFBWSZTWZVOi44AAD77kNIAAMBAA/+ACAB+ZZ7wBAABCCAAcjMjRoaaNAYIwg8oJU9U9CTygNMj1A0ekGTt8rslo4aIDnvCrOBgRqL1e3LDCspwmDreCKJpKyMmC5N+3U6LfZFNN79qhGzWXZtTjplkrc8fcDwrae6J+AICX4AVeKyE/F3JFOFCQlU6Ljg="
 
 func bz2Fixture(t *testing.T) []byte {
@@ -249,8 +249,8 @@ func TestApply_Idempotent(t *testing.T) {
 	if !first.Last().Changed {
 		t.Fatal("первая распаковка: Changed=false")
 	}
-	// портим извлечённый файл — повторный прогон не должен его трогать (no-op
-	// по marker), что и доказывает идемпотентность через marker, а не walk.
+	// corrupt the extracted file — a re-run must not touch it (no-op by
+	// marker), proving idempotency goes through the marker, not a walk.
 	if err := os.WriteFile(filepath.Join(dest, "f.txt"), []byte("touched"), 0o644); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
@@ -328,11 +328,11 @@ func TestApply_ZipSlip_FailFast(t *testing.T) {
 	if !strings.Contains(stream.Last().Message, "escapes dest") {
 		t.Fatalf("zip-slip: message=%q (ожидалось escapes dest)", stream.Last().Message)
 	}
-	// fail-fast: запись за пределы dest не создана.
+	// fail-fast: no entry created outside dest.
 	if _, err := os.Stat(filepath.Join(dir, "escape")); err == nil {
 		t.Fatal("zip-slip: файл вне dest всё-таки создан (clamp вместо fail-fast)")
 	}
-	// marker не записан — распаковка прервана целиком.
+	// marker not written — extraction aborted entirely.
 	if _, err := os.Stat(filepath.Join(dest, archive.MarkerFile)); err == nil {
 		t.Fatal("zip-slip: marker записан несмотря на провал")
 	}
@@ -351,9 +351,10 @@ func TestApply_ZipSlip_AbsolutePath_FailFast(t *testing.T) {
 	}
 }
 
-// zip-формат: path-traversal через `../` в zip-entry. Симметрично tar-кейсу,
-// но проверяет ветку extractZip отдельно (zip.File.Name резолвится тем же
-// resolveEntry, контракт fail-fast обязан выполняться в обеих ветках).
+// zip format: path traversal via `../` in a zip entry. Symmetric to the tar
+// case, but exercises the extractZip branch separately (zip.File.Name is
+// resolved by the same resolveEntry; the fail-fast contract must hold in
+// both branches).
 func TestApply_ZipSlip_Zip_FailFast(t *testing.T) {
 	dir := t.TempDir()
 	src := writeArchive(t, dir, "evil.zip", makeZip(t, []zipEntry{
@@ -377,7 +378,7 @@ func TestApply_ZipSlip_Zip_FailFast(t *testing.T) {
 	}
 }
 
-// zip-формат: абсолютный путь в zip-entry → fail-fast.
+// zip format: absolute path in a zip entry → fail-fast.
 func TestApply_ZipSlip_Zip_AbsolutePath_FailFast(t *testing.T) {
 	dir := t.TempDir()
 	src := writeArchive(t, dir, "abs.zip", makeZip(t, []zipEntry{
@@ -430,12 +431,12 @@ func TestApply_ZipBomb_MaxEntries(t *testing.T) {
 	}
 }
 
-// высокий compression-ratio (tar.gz из повторяющихся байт) отвергается
-// max_ratio-проверкой, даже если суммарный размер ниже max_size: классический
-// zip-bomb обходит size-лимит маленьким сжатым размером.
+// a high compression ratio (tar.gz of repeated bytes) is rejected by the
+// max_ratio check even if the total size is below max_size: a classic
+// zip-bomb evades the size limit with a small compressed size.
 func TestApply_ZipBomb_Ratio_TarGz(t *testing.T) {
 	dir := t.TempDir()
-	// 1 MiB одинаковых байт → gzip сожмёт в ~килобайты, ratio в сотни.
+	// 1 MiB of identical bytes → gzip compresses to ~kilobytes, ratio in the hundreds.
 	tarBytes := makeTar(t, []tarEntry{
 		{name: "bomb.txt", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("A", 1<<20)},
 	})
@@ -451,17 +452,17 @@ func TestApply_ZipBomb_Ratio_TarGz(t *testing.T) {
 	if !strings.Contains(stream.Last().Message, "max_ratio") {
 		t.Fatalf("max_ratio: message=%q (ожидалось max_ratio)", stream.Last().Message)
 	}
-	// fail-fast: marker не записан, распаковка прервана.
+	// fail-fast: marker not written, extraction aborted.
 	if _, err := os.Stat(filepath.Join(dir, "out", archive.MarkerFile)); err == nil {
 		t.Fatal("max_ratio: marker записан несмотря на провал")
 	}
 }
 
-// нормальный (низкосжимаемый) tar.gz проходит при дефолтном max_ratio:
-// случайно-подобное содержимое почти не сжимается, ratio ~1.
+// a normal (low-compressibility) tar.gz passes with the default max_ratio:
+// pseudo-random content barely compresses, ratio ~1.
 func TestApply_Ratio_NormalArchivePasses(t *testing.T) {
 	dir := t.TempDir()
-	// псевдослучайный контент: gzip почти не сожмёт, ratio близок к 1.
+	// pseudo-random content: gzip barely compresses it, ratio close to 1.
 	var sb strings.Builder
 	for i := 0; i < 4096; i++ {
 		sb.WriteByte(byte((i*2654435761 + 12345) % 251))
@@ -473,15 +474,15 @@ func TestApply_Ratio_NormalArchivePasses(t *testing.T) {
 	stream := apply(t, map[string]any{
 		"path": src,
 		"dest": filepath.Join(dir, "out"),
-		// дефолтный max_ratio=100 — нормальный архив укладывается.
+		// default max_ratio=100 — a normal archive fits within it.
 	})
 	if stream.Last().Failed {
 		t.Fatalf("нормальный архив отвергнут max_ratio: %s", stream.Last().Message)
 	}
 }
 
-// max_ratio=0 отключает проверку: высокоратио-бомба проходит (escape для
-// легитимных высокосжимаемых архивов под ответственность оператора).
+// max_ratio=0 disables the check: a high-ratio bomb passes (an escape hatch
+// for legitimately highly-compressible archives, on the operator's own risk).
 func TestApply_Ratio_Disabled(t *testing.T) {
 	dir := t.TempDir()
 	tarBytes := makeTar(t, []tarEntry{
@@ -498,8 +499,8 @@ func TestApply_Ratio_Disabled(t *testing.T) {
 	}
 }
 
-// zip с высоким compression-ratio: per-entry CompressedSize64/Uncompressed
-// учитывается, бомба ловится.
+// zip with a high compression ratio: per-entry CompressedSize64/Uncompressed
+// is accounted for, the bomb gets caught.
 func TestApply_ZipBomb_Ratio_Zip(t *testing.T) {
 	dir := t.TempDir()
 	src := writeArchive(t, dir, "bomb.zip", makeZip(t, []zipEntry{
@@ -518,9 +519,9 @@ func TestApply_ZipBomb_Ratio_Zip(t *testing.T) {
 	}
 }
 
-// голый tar (несжатый) НЕ проверяется по ratio даже при крошечном max_ratio:
-// compressed=0, формат не сжат — бомбой по ratio быть не может, max_size его
-// ограничивает.
+// a plain (uncompressed) tar is NOT ratio-checked even with a tiny max_ratio:
+// compressed=0, the format isn't compressed — it can't be a ratio bomb,
+// max_size bounds it instead.
 func TestApply_Ratio_PlainTarSkipped(t *testing.T) {
 	dir := t.TempDir()
 	tarBytes := makeTar(t, []tarEntry{
@@ -537,7 +538,7 @@ func TestApply_Ratio_PlainTarSkipped(t *testing.T) {
 	}
 }
 
-// отрицательный max_ratio — ошибка конфигурации.
+// negative max_ratio is a configuration error.
 func TestApply_Ratio_NegativeInvalid(t *testing.T) {
 	dir := t.TempDir()
 	tarBytes := makeTar(t, []tarEntry{{name: "f.txt", typeflag: tar.TypeReg, mode: 0o644, body: "x"}})
@@ -628,7 +629,7 @@ func TestApply_Devnode_Unsupported(t *testing.T) {
 
 func TestApply_SetuidBit_Masked(t *testing.T) {
 	dir := t.TempDir()
-	// mode с setuid(04000)+setgid(02000)+sticky(01000)+0777.
+	// mode with setuid(04000)+setgid(02000)+sticky(01000)+0777.
 	tarBytes := makeTar(t, []tarEntry{
 		{name: "suid", typeflag: tar.TypeReg, mode: 0o7777, body: "x"},
 	})
@@ -650,11 +651,12 @@ func TestApply_SetuidBit_Masked(t *testing.T) {
 	}
 }
 
-// write-through within-dest symlink: каталог subdir/ + symlink alias→subdir
-// (within-dest, легитимный сам по себе) + запись alias/file.txt «сквозь» него.
-// securejoin резолвит alias по уже лежащему на диске symlink-у → joined≠naive →
-// шаг падает с escapes dest. Фиксирует, что защита идёт по РЕЗОЛВНУТОМУ пути, а
-// не лексически: наивная замена securejoin на filepath.Join сломала бы этот тест.
+// write-through within-dest symlink: directory subdir/ + symlink alias→subdir
+// (within-dest, legitimate on its own) + a write to alias/file.txt "through"
+// it. securejoin resolves alias against the symlink already on disk →
+// joined≠naive → the step fails with escapes dest. Pins that the protection
+// works on the RESOLVED path, not lexically: naively swapping securejoin for
+// filepath.Join would break this test.
 func TestApply_WriteThroughWithinDestSymlink_Fails(t *testing.T) {
 	dir := t.TempDir()
 	tarBytes := makeTar(t, []tarEntry{
@@ -672,18 +674,20 @@ func TestApply_WriteThroughWithinDestSymlink_Fails(t *testing.T) {
 	if !strings.Contains(stream.Last().Message, "escapes dest") {
 		t.Fatalf("write-through symlink: message=%q (ожидалось escapes dest)", stream.Last().Message)
 	}
-	// файл «сквозь» symlink не материализован ни как alias/file.txt, ни в subdir.
+	// the file written "through" the symlink isn't materialized as either
+	// alias/file.txt or under subdir.
 	if _, err := os.Stat(filepath.Join(dest, "subdir", "file.txt")); err == nil {
 		t.Fatal("write-through symlink: файл создан в target-каталоге (защита обойдена)")
 	}
 }
 
-// граница max_size: сумма по нескольким файлам учитывается, ровно лимит проходит,
-// +1 байт → failed. Фиксирует хрупкий budget := maxSize-usedSize+1 в writeFileEntry.
+// max_size boundary: the sum across multiple files is tracked, exactly at
+// the limit passes, +1 byte → failed. Pins the fragile
+// budget := maxSize-usedSize+1 in writeFileEntry.
 func TestApply_MaxSize_Boundary(t *testing.T) {
-	const limit = 1024 // байт; голое число = байты
+	const limit = 1024 // bytes; bare number = bytes
 
-	// два файла суммарно ровно на лимите (600 + 424 = 1024) — проходит.
+	// two files summing exactly to the limit (600 + 424 = 1024) — passes.
 	t.Run("exact_limit_ok", func(t *testing.T) {
 		dir := t.TempDir()
 		tarBytes := makeTar(t, []tarEntry{
@@ -701,7 +705,7 @@ func TestApply_MaxSize_Boundary(t *testing.T) {
 		}
 	})
 
-	// сумма на байт больше лимита (600 + 425 = 1025) — failed.
+	// sum one byte over the limit (600 + 425 = 1025) — failed.
 	t.Run("over_by_one_fails", func(t *testing.T) {
 		dir := t.TempDir()
 		tarBytes := makeTar(t, []tarEntry{
@@ -723,7 +727,7 @@ func TestApply_MaxSize_Boundary(t *testing.T) {
 	})
 }
 
-// пустой архив (tar и zip): распаковка ok, marker пишется, повторный прогон no-op.
+// empty archive (tar and zip): extraction ok, marker written, re-run is a no-op.
 func TestApply_EmptyArchive(t *testing.T) {
 	cases := []struct {
 		name string

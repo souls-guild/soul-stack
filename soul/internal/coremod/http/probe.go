@@ -18,14 +18,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// applyProbe реализует verb `probe`: один GET/HEAD-запрос к url, ответ —
-// в register. Состояние хоста не меняется → changed=false всегда.
+// applyProbe implements verb `probe`: one GET/HEAD request to url, response
+// goes to register. Host state never changes → changed=false always.
 //
-// Контракт ошибок:
-//   - транспортная ошибка (DNS/TLS/timeout/заблокированный downgrade-редирект)
-//     → failed (output бессмысленен);
-//   - статус-код вне status_codes (default [200]) → failed, но с output:
-//     оператору нужны фактический status/body для диагностики.
+// Error contract:
+//   - transport error (DNS/TLS/timeout/blocked downgrade redirect)
+//     → failed (output is meaningless);
+//   - status code outside status_codes (default [200]) → failed, but with
+//     output: the operator needs the actual status/body for diagnosis.
 func (m *Module) applyProbe(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest) error {
 	rawURL, err := util.StringParam(req.Params, "url")
 	if err != nil {
@@ -73,9 +73,10 @@ func (m *Module) applyProbe(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// Клиент строится per-call под фактические opt-out-флаги задачи (три bool =
-	// 8 комбинаций; пред-собранные инстанции не масштабируются). Три контура
-	// ортогональны: allow_http не открывает SSRF (dial-guard живёт отдельно).
+	// The client is built per-call for the task's actual opt-out flags (three
+	// bools = 8 combinations; pre-built instances don't scale). The three
+	// controls are orthogonal: allow_http doesn't open up SSRF (the dial guard
+	// lives separately).
 	doer := m.NewClient(util.HTTPClientOpts{
 		AllowPrivate:       allowPrivate,
 		InsecureSkipVerify: insecureSkipVerify,
@@ -96,11 +97,12 @@ func (m *Module) applyProbe(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 		out["warnings"] = util.StringsToAny(w)
 	}
 
-	// status вне ожидаемого набора → failed (явный контракт), но output
-	// прикладываем: фактический status/body нужны для диагностики. Тело уже
-	// санитизировано (do → sanitizeBody), поэтому structpb.NewStruct не упадёт
-	// на не-UTF8; если всё же упадёт — не теряем диагностику молча, а пишем
-	// причину в message (раньше output просто пропадал → потеря данных).
+	// status outside the expected set → failed (explicit contract), but we
+	// still attach output: the actual status/body are needed for diagnosis.
+	// The body is already sanitized (do → sanitizeBody), so structpb.NewStruct
+	// shouldn't fail on non-UTF8; if it still does, don't lose the diagnostic
+	// silently — write the reason into message (previously output just
+	// vanished → data loss).
 	if !containsCode(wantCodes, status) {
 		ev := &pluginv1.ApplyEvent{
 			Failed:  true,
@@ -114,15 +116,16 @@ func (m *Module) applyProbe(stream grpc.ServerStreamingServer[pluginv1.ApplyEven
 		return stream.Send(ev)
 	}
 
-	// changed=false конструктивно — read-probe не меняет состояние хоста.
+	// changed=false by construction — a read-probe never changes host state.
 	return util.SendFinal(stream, false, out)
 }
 
-// do выполняет один read-only HTTP-запрос. HEAD не читает тело. Тело GET
-// читается с cap maxBodyBytes (защита от OOM): сверх лимита поток отбрасывается,
-// truncated=true. Возвращает status, тело (для GET), флаг усечения, длительность.
+// do performs a single read-only HTTP request. HEAD doesn't read the body.
+// GET's body is read with a maxBodyBytes cap (OOM protection): beyond the
+// limit the stream is dropped, truncated=true. Returns status, body (for
+// GET), truncation flag, duration.
 //
-// headers применяются к запросу, но НИКОГДА не логируются и не возвращаются
+// headers are applied to the request but NEVER logged or returned
 // (sensitive-by-construction, [ADR-010] §7.4).
 func (m *Module) do(
 	ctx context.Context, doer util.HTTPDoer, method, rawURL string, headers map[string]string, timeout time.Duration,
@@ -149,33 +152,33 @@ func (m *Module) do(
 		return resp.StatusCode, "", false, time.Since(start), nil
 	}
 
-	// Читаем не больше maxBodyBytes+1, чтобы отличить «ровно лимит» от «больше».
+	// Read at most maxBodyBytes+1, to distinguish "exactly the limit" from "more".
 	buf, rerr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	elapsed = time.Since(start)
 	if rerr != nil {
 		return 0, "", false, 0, fmt.Errorf("read body %s: %v", rawURL, rerr)
 	}
 	if len(buf) > maxBodyBytes {
-		// Усечение по жёсткому байтовому cap может разрезать многобайтную
-		// руну на границе — откатываем хвост до последней ПОЛНОЙ руны, чтобы
-		// частичная руна не попала в output (structpb отвергает invalid UTF-8).
+		// Truncating at a hard byte cap can cut a multi-byte rune at the
+		// boundary — trim back to the last COMPLETE rune so a partial rune
+		// never reaches output (structpb rejects invalid UTF-8).
 		return resp.StatusCode, sanitizeBody(trimPartialRune(buf[:maxBodyBytes])), true, elapsed, nil
 	}
 	return resp.StatusCode, sanitizeBody(buf), false, elapsed, nil
 }
 
-// trimPartialRune убирает с конца среза хвост, образующий неполную (разрезанную
-// на границе cap) UTF-8-руну. Полное и валидное тело возвращается без изменений;
-// если последний байт — оборванная многобайтная руна, она отбрасывается.
+// trimPartialRune strips a trailing tail that forms an incomplete (cut at the
+// cap boundary) UTF-8 rune. A full, valid body is returned unchanged; if the
+// last byte is a truncated multi-byte rune, it's dropped.
 func trimPartialRune(b []byte) []byte {
 	if len(b) == 0 {
 		return b
 	}
 	r, size := utf8.DecodeLastRune(b)
 	if r == utf8.RuneError && size <= 1 {
-		// Последняя руна невалидна/обрезана. Если это разрезанный многобайтный
-		// префикс (старший бит выставлен) — отбрасываем его, иначе это просто
-		// одиночный битый байт, который позже починит sanitizeBody.
+		// The last rune is invalid/truncated. If it's a cut multi-byte prefix
+		// (high bit set), drop it; otherwise it's just a single stray byte that
+		// sanitizeBody will fix up later.
 		if b[len(b)-1] >= 0x80 {
 			return b[:len(b)-1]
 		}
@@ -183,28 +186,30 @@ func trimPartialRune(b []byte) []byte {
 	return b
 }
 
-// sanitizeBody приводит тело ответа к валидному UTF-8: probe — read-only HTTP,
-// тело может оказаться бинарным или содержать битые байты, а structpb (output в
-// register) принимает только валидный UTF-8. Битые последовательности заменяются
-// на U+FFFD, чтобы probe возвращал чистый результат, а не ронял Apply gRPC-ошибкой.
+// sanitizeBody coerces the response body to valid UTF-8: probe is a
+// read-only HTTP call, the body may be binary or contain stray bytes, and
+// structpb (output in register) only accepts valid UTF-8. Bad sequences are
+// replaced with U+FFFD so probe returns a clean result instead of failing
+// Apply with a gRPC error.
 func sanitizeBody(b []byte) string {
 	return strings.ToValidUTF8(string(b), "�")
 }
 
-// buildOutput собирает register-output probe.
+// buildOutput assembles probe's register output.
 //
-// Маскинг тела (ОГРАНИЧЕНИЕ — читать перед использованием):
-// тело отдаётся как есть, sensitive-целиком оно НЕ считается — health-эндпоинт
-// штатно возвращает `{"status":"ok"}`, ради этого probe и нужен. Из тела
-// маскируются только vault-ref-подстроки (`vault:…` — маркер секрета проекта,
-// его утечка в register/логи/OTel реальна), включая случай, когда vault-ref —
-// не префикс, а значение внутри JSON (`{"token":"vault:secret/x"}`). Произвольные
-// plaintext-секреты (например `password: hunter2`) НЕ маскируются: тело
-// semi-trusted (ответ о здоровье сервиса), и оператор не должен класть в
-// probe-эндпоинт то, что не должно светиться.
+// Body masking (LIMITATION — read before relying on this):
+// the body is returned as-is; it's NOT treated as sensitive wholesale — a
+// health endpoint typically returns `{"status":"ok"}`, which is the whole
+// point of probe. Only vault-ref substrings are masked in the body
+// (`vault:…` — the project's secret marker; its leak into register/logs/OTel
+// is a real risk), including when the vault-ref isn't the whole value but
+// embedded in JSON (`{"token":"vault:secret/x"}`). Arbitrary plaintext
+// secrets (e.g. `password: hunter2`) are NOT masked: the body is
+// semi-trusted (a service health response), and the operator shouldn't put
+// anything sensitive behind a probe endpoint.
 //
-// headers — sensitive-by-construction: в output отдаются только КЛЮЧИ запрошенных
-// заголовков (значения исключены конструктивно, [ADR-010] §7.4).
+// headers are sensitive-by-construction: output only carries the KEYS of
+// requested headers (values are excluded by construction, [ADR-010] §7.4).
 func buildOutput(status int, body string, truncated bool, elapsed time.Duration, headers map[string]string) map[string]any {
 	out := map[string]any{
 		"status":     status,
@@ -219,28 +224,30 @@ func buildOutput(status int, body string, truncated bool, elapsed time.Duration,
 	return out
 }
 
-// vaultRefRe матчит vault-ref как ПОДСТРОКУ тела, а не только префикс всей
-// строки: `vault:` + последовательность непробельных байт без кавычек (граница
-// ref-а в JSON/YAML/тексте). Покрывает и whole-string-ref (`vault:secret/x`), и
-// ref внутри структуры (`{"token":"vault:secret/x"}`). Прочие секреты не ловятся
-// сознательно — см. buildOutput.
+// vaultRefRe matches a vault-ref as a SUBSTRING of the body, not just a
+// whole-string prefix: `vault:` + a run of non-whitespace, non-quote bytes
+// (the ref's boundary in JSON/YAML/text). Covers both a whole-string ref
+// (`vault:secret/x`) and a ref embedded in a structure
+// (`{"token":"vault:secret/x"}`). Other secrets are deliberately not caught
+// — see buildOutput.
 var vaultRefRe = regexp.MustCompile(`vault:[^\s"']+`)
 
-// maskedValue — placeholder vault-ref-а в теле. Совпадает с audit-маской, чтобы
-// register/логи/OTel были консистентны (audit.MaskSecrets маскирует whole-string
-// vault-ref тем же значением; здесь мы расширяем до substring внутри тела).
+// maskedValue is the vault-ref placeholder in the body. Matches the audit
+// mask so register/logs/OTel stay consistent (audit.MaskSecrets masks a
+// whole-string vault-ref with the same value; here we extend that to a
+// substring within the body).
 const maskedValue = "***MASKED***"
 
-// maskBody маскирует vault-ref-подстроки в теле ответа. Произвольные секреты не
-// трогает — ограничение задокументировано в buildOutput.
+// maskBody masks vault-ref substrings in the response body. Doesn't touch
+// arbitrary secrets — the limitation is documented in buildOutput.
 func maskBody(body string) string {
 	return vaultRefRe.ReplaceAllString(body, maskedValue)
 }
 
-// headerKeys возвращает отсортированный список ключей запрошенных заголовков
-// (детерминизм; значения НЕ включаются — sensitive-by-construction).
-// Тип []any, а не []string: structpb.NewStruct (SendFinal) принимает только
-// []any в качестве list-значения.
+// headerKeys returns a sorted list of requested header keys (deterministic;
+// values are NOT included — sensitive-by-construction).
+// Type []any, not []string: structpb.NewStruct (SendFinal) only accepts
+// []any as a list value.
 func headerKeys(headers map[string]string) []any {
 	keys := make([]string, 0, len(headers))
 	for k := range headers {
@@ -254,7 +261,7 @@ func headerKeys(headers map[string]string) []any {
 	return out
 }
 
-// containsCode — линейный поиск (status_codes — короткий список, типично 1–3).
+// containsCode does a linear search (status_codes is a short list, typically 1–3).
 func containsCode(codes []int64, status int) bool {
 	for _, c := range codes {
 		if c == int64(status) {

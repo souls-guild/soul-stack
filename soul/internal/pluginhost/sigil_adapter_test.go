@@ -7,12 +7,12 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeCache — минимальный sigilCache для unit-теста адаптера.
+// fakeCache is a minimal sigilCache for the adapter's unit test.
 type fakeCache map[string]*keeperv1.PluginSigil
 
 func (c fakeCache) Get(ns, name string) *keeperv1.PluginSigil { return c[ns+"."+name] }
 
-// TestSigilLookupAdapter_Maps — keeperv1.PluginSigil проецируется в
+// TestSigilLookupAdapter_Maps — keeperv1.PluginSigil is projected into
 // shared.SigilRecord byte/field-exact: ManifestRaw→Manifest, signature, hex, ref.
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	sig := &keeperv1.PluginSigil{
@@ -43,8 +43,8 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_AbsentIsNil — отсутствующий допуск → nil
-// (verify трактует как no_sigil, fail-closed).
+// TestSigilLookupAdapter_AbsentIsNil — a missing grant → nil
+// (verify treats it as no_sigil, fail-closed).
 func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 	a := NewSigilLookupAdapter(fakeCache{})
 	if rec := a.Get("core", "missing"); rec != nil {
@@ -52,7 +52,7 @@ func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_NilCache — nil-кеш не паникует, всегда отдаёт nil.
+// TestSigilLookupAdapter_NilCache — a nil cache doesn't panic, always returns nil.
 func TestSigilLookupAdapter_NilCache(t *testing.T) {
 	a := NewSigilLookupAdapter(nil)
 	if rec := a.Get("core", "git"); rec != nil {

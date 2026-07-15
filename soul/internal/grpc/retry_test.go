@@ -14,17 +14,17 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// codeHandler — handshake-handler, всегда отвергающий Hello заданным gRPC-кодом.
-// Моделирует keeper, отдающий non-retriable отказ (auth/contract).
+// codeHandler is a handshake handler that always rejects Hello with the given
+// gRPC code. Models a keeper returning a non-retriable failure (auth/contract).
 func codeHandler(code codes.Code, msg string) func(*keeperv1.Hello) (*keeperv1.HelloReply, error) {
 	return func(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
 		return nil, status.Errorf(code, "%s", msg)
 	}
 }
 
-// failThenOKHandler возвращает handler, отдающий `failCount` раз заданный
-// retriable-код, затем успешный HelloReply. Счётчик — на замыкании, по числу
-// вызовов handler-а (= числу dialOne к этому серверу).
+// failThenOKHandler returns a handler that returns the given retriable code
+// `failCount` times, then a successful HelloReply. Counter is closure-scoped,
+// tracking handler calls (= dialOne attempts to this server).
 func failThenOKHandler(code codes.Code, failCount int) func(*keeperv1.Hello) (*keeperv1.HelloReply, error) {
 	var calls int
 	return func(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
@@ -36,9 +36,9 @@ func failThenOKHandler(code codes.Code, failCount int) func(*keeperv1.Hello) (*k
 	}
 }
 
-// ★КРИТ регресс-guard (7af8e95): AlreadyExists (lease-held) — non-retriable.
-// dialOne РОВНО 1 раз на endpoint, spray немедленно к следующему. Churn (повтор
-// к занятому lease) не вернулся.
+// Regression guard (7af8e95): AlreadyExists (lease-held) is non-retriable —
+// dialOne fires EXACTLY once per endpoint, then sprays to the next. Churn
+// (retrying a held lease) must not return.
 func TestRetry_LeaseHeld_SingleDialOne_NoChurn(t *testing.T) {
 	leaseHeld := newMockEventStream(t, alreadyExistsHandler)
 	defer leaseHeld.stop()
@@ -55,7 +55,7 @@ func TestRetry_LeaseHeld_SingleDialOne_NoChurn(t *testing.T) {
 		CAPath:            leaseHeld.caPath,
 		HandshakeTimeout:  3 * time.Second,
 		SID:               "host.example",
-		MaxAttempts:       5, // даём запас: lease-held НЕ должен его жечь
+		MaxAttempts:       5, // headroom: lease-held must not burn attempts
 		InterAttemptDelay: 10 * time.Millisecond,
 	}, nil)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestRetry_LeaseHeld_SingleDialOne_NoChurn(t *testing.T) {
 	}
 }
 
-// ВСЕ endpoint-ы AlreadyExists → IsLeaseHeld (аккумулятор не сломан).
+// ALL endpoints AlreadyExists → IsLeaseHeld (accumulator not broken).
 func TestRetry_AllLeaseHeld_AccumulatorIntact(t *testing.T) {
 	a := newMockEventStream(t, alreadyExistsHandler)
 	defer a.stop()
@@ -105,7 +105,7 @@ func TestRetry_AllLeaseHeld_AccumulatorIntact(t *testing.T) {
 	if !IsLeaseHeld(err) {
 		t.Fatalf("Dial err=%v, want IsLeaseHeld (accumulator broken by retry-loop)", err)
 	}
-	// каждый endpoint опрошен ровно один раз (не MaxAttempts).
+	// each endpoint dialed exactly once (not MaxAttempts).
 	if n := a.dialCount(); n != 1 {
 		t.Errorf("endpoint a dialOne %d times, want 1", n)
 	}
@@ -114,7 +114,7 @@ func TestRetry_AllLeaseHeld_AccumulatorIntact(t *testing.T) {
 	}
 }
 
-// max_attempts=1 → ровно одна попытка на endpoint (до-фикс поведение).
+// max_attempts=1 → exactly one attempt per endpoint (pre-fix behavior).
 func TestRetry_MaxAttemptsOne_SingleAttempt(t *testing.T) {
 	srv := newMockEventStream(t, codeHandler(codes.Unavailable, "down"))
 	defer srv.stop()
@@ -141,7 +141,7 @@ func TestRetry_MaxAttemptsOne_SingleAttempt(t *testing.T) {
 	}
 }
 
-// Unavailable (maxAttempts-1) раз, затем успех → подключился.
+// Unavailable (maxAttempts-1) times, then success → connected.
 func TestRetry_RetriableThenSuccess(t *testing.T) {
 	const maxAttempts = 3
 	srv := newMockEventStream(t, failThenOKHandler(codes.Unavailable, maxAttempts-1))
@@ -170,13 +170,13 @@ func TestRetry_RetriableThenSuccess(t *testing.T) {
 	}
 }
 
-// max_attempts=0 (опущено) → резолв в 2 (NewClient), не 0/бесконечность.
+// max_attempts=0 (omitted) → resolves to 2 (NewClient), not 0/infinite.
 func TestRetry_ZeroResolvesToDefault(t *testing.T) {
 	cli, err := NewClient(ClientConfig{
 		Endpoints: []Endpoint{{Addr: "k:9443"}},
 		SeedCert:  "/c", SeedKey: "/k", CAPath: "/a",
 		SID: "host.example",
-		// MaxAttempts опущено → 0
+		// MaxAttempts omitted → 0
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -189,7 +189,7 @@ func TestRetry_ZeroResolvesToDefault(t *testing.T) {
 	}
 }
 
-// fail-fast: PermissionDenied / InvalidArgument → dialOne 1 раз, spray.
+// fail-fast: PermissionDenied / InvalidArgument → dialOne once, then spray.
 func TestRetry_NonRetriableFailFast(t *testing.T) {
 	cases := []struct {
 		name string
@@ -239,7 +239,7 @@ func TestRetry_NonRetriableFailFast(t *testing.T) {
 	}
 }
 
-// endpoint X отдаёт Unavailable maxAttempts раз → переход к Y (успех).
+// endpoint X returns Unavailable maxAttempts times → falls over to Y (success).
 func TestRetry_ExhaustsRetriableThenSpray(t *testing.T) {
 	const maxAttempts = 3
 	x := newMockEventStream(t, codeHandler(codes.Unavailable, "x-down"))
@@ -276,7 +276,7 @@ func TestRetry_ExhaustsRetriableThenSpray(t *testing.T) {
 	}
 }
 
-// failback (maxPriority>0) → errNoHigherPriority НЕ замаскирован.
+// failback (maxPriority>0) → errNoHigherPriority is NOT masked.
 func TestRetry_FailbackNoHigherPriority_NotMasked(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
@@ -298,13 +298,13 @@ func TestRetry_FailbackNoHigherPriority_NotMasked(t *testing.T) {
 	if !IsNoHigherPriority(err) {
 		t.Fatalf("DialPriority(maxPriority=2): err=%v, want IsNoHigherPriority (masked by retry-loop?)", err)
 	}
-	// retry-loop НЕ касается пропущенного endpoint-а: dialOne не вызывался вовсе.
+	// retry-loop never touches the skipped endpoint: dialOne wasn't called at all.
 	if n := srv.dialCount(); n != 0 {
 		t.Errorf("skipped endpoint dialOne %d times, want 0", n)
 	}
 }
 
-// между попытками к одному endpoint выдержана пауза ≈ initial, не tight-loop.
+// pause between attempts on the same endpoint is honored, not a tight loop.
 func TestRetry_InterAttemptDelayObserved(t *testing.T) {
 	const maxAttempts = 3
 	const delay = 80 * time.Millisecond
@@ -320,7 +320,7 @@ func TestRetry_InterAttemptDelayObserved(t *testing.T) {
 		SID:               "host.example",
 		MaxAttempts:       maxAttempts,
 		InterAttemptDelay: delay,
-		// jitter off — детерминированная нижняя граница.
+		// jitter off — deterministic lower bound.
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -331,7 +331,7 @@ func TestRetry_InterAttemptDelayObserved(t *testing.T) {
 	if err == nil {
 		t.Fatal("Dial: expected exhaustion error, got nil")
 	}
-	// maxAttempts попыток = (maxAttempts-1) пауз между ними.
+	// maxAttempts attempts = (maxAttempts-1) pauses between them.
 	wantMin := time.Duration(maxAttempts-1) * delay
 	if elapsed < wantMin {
 		t.Fatalf("elapsed %s < %s (tight-loop: inter-attempt delay not observed)", elapsed, wantMin)
@@ -341,7 +341,7 @@ func TestRetry_InterAttemptDelayObserved(t *testing.T) {
 	}
 }
 
-// --- ctx-cancel прерывает inter-attempt паузу (не висим всё окно) ---
+// --- ctx cancel interrupts the inter-attempt pause (doesn't block the full window) ---
 func TestRetry_CtxCancelInterruptsPause(t *testing.T) {
 	srv := newMockEventStream(t, codeHandler(codes.Unavailable, "down"))
 	defer srv.stop()
@@ -354,7 +354,7 @@ func TestRetry_CtxCancelInterruptsPause(t *testing.T) {
 		HandshakeTimeout:  3 * time.Second,
 		SID:               "host.example",
 		MaxAttempts:       10,
-		InterAttemptDelay: 10 * time.Second, // длинная пауза — отменим раньше
+		InterAttemptDelay: 10 * time.Second, // long pause — cancel fires first
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -374,14 +374,14 @@ func TestRetry_CtxCancelInterruptsPause(t *testing.T) {
 	}
 }
 
-// failover-latency bound на зависшем endpoint (handshake-timeout каждую попытку).
-// Endpoint с hang-handler сгорает по локальному handshake_timeout на КАЖДУЮ
-// попытку (handshake timeout → codes.Unknown → retriable). max_attempts=2 →
-// две полных handshake_timeout-паузы + одна inter-attempt пауза, затем spray на
-// живой endpoint. Пинует верхнюю границу failover-latency: ловит регресс
-// «handshake-timeout стал non-retriable» (тогда 1× вместо 2×) и «кто-то поднял
-// default max_attempts» (тогда >2× и dialCount>2). Сравнение относительное (к
-// handshake_timeout), допуски щедрые — тайминг не должен быть flaky.
+// failover-latency bound on a hung endpoint (handshake-timeout every attempt).
+// A hang-handler endpoint times out via local handshake_timeout on EVERY
+// attempt (handshake timeout → codes.Unknown → retriable). max_attempts=2 →
+// two full handshake_timeout pauses + one inter-attempt pause, then spray to
+// the live endpoint. Pins the upper bound of failover latency: catches
+// regressions where "handshake-timeout became non-retriable" (1x instead of
+// 2x) or "default max_attempts got bumped" (>2x, dialCount>2). Comparison is
+// relative to handshake_timeout with generous tolerance to avoid flakiness.
 func TestRetry_FailoverLatencyBound_HungEndpoint(t *testing.T) {
 	const hsTimeout = 120 * time.Millisecond
 	const interAttempt = 40 * time.Millisecond
@@ -419,37 +419,39 @@ func TestRetry_FailoverLatencyBound_HungEndpoint(t *testing.T) {
 	if sess.Priority() != 2 {
 		t.Errorf("session.Priority = %d, want 2 (sprayed past hung endpoint)", sess.Priority())
 	}
-	// hung endpoint опрошен РОВНО maxAttempts раз (handshake-timeout retriable,
-	// default не подняли).
+	// hung endpoint dialed EXACTLY maxAttempts times (handshake-timeout retriable,
+	// default not raised).
 	if n := hung.dialCount(); n != maxAttempts {
 		t.Fatalf("hung endpoint dialOne %d times, want %d (handshake-timeout retriable? default raised?)", n, maxAttempts)
 	}
-	// Нижняя граница: каждая попытка минимум висит handshake_timeout (handshake
-	// не отвечает) → maxAttempts handshake_timeout-ов. Без inter-attempt в
-	// нижней границе (jitter/планировщик), он лишь добавляет сверху.
+	// Lower bound: each attempt blocks at least handshake_timeout (handshake
+	// never responds) → maxAttempts handshake_timeouts. Inter-attempt delay is
+	// excluded from the lower bound (jitter/scheduler); it only adds on top.
 	wantMin := time.Duration(maxAttempts) * hsTimeout
 	if elapsed < wantMin {
 		t.Fatalf("elapsed %s < %s — hung endpoint не дожидался handshake_timeout каждую попытку", elapsed, wantMin)
 	}
-	// Верхняя граница: maxAttempts handshake_timeout-ов + (maxAttempts-1)
-	// inter-attempt пауз + живой handshake + накладные. Щедрый множитель ловит
-	// регресс «retry стал больше maxAttempts» / «handshake_timeout не действует».
+	// Upper bound: maxAttempts handshake_timeouts + (maxAttempts-1) inter-attempt
+	// pauses + one live handshake + overhead. Generous multiplier catches
+	// regressions where retry exceeds maxAttempts or handshake_timeout stops
+	// working.
 	wantMax := time.Duration(maxAttempts)*hsTimeout + time.Duration(maxAttempts-1)*interAttempt + 3*time.Second
 	if elapsed > wantMax {
 		t.Fatalf("elapsed %s > %s — failover-latency вышла за границу (лишние попытки / поднятый default / non-retriable)", elapsed, wantMax)
 	}
 }
 
-// ctx-cancel ВО ВРЕМЯ зависшего dialOne (не во время паузы).
-// dialOne висит на handshake (hang-handler), handshake_timeout большой (5s).
-// Отменяем ctx через ~150ms. sessCtx производен от ctx → его cancel закрывает
-// стрим → handshake-горутина в dialOne получает recv-ошибку и hsDone
-// срабатывает БЫСТРО (не по time.After(handshake_timeout)). Пинует неочевидную
-// механику: dialOne реагирует на отмену ctx через производный sessCtx, хотя
-// локальный select watch-ит time.After, не ctx напрямую. Регресс «sessCtx
-// перестал быть производным от ctx» / «handshake перестал прерываться разрывом»
-// сделает Dial зависшим на ~handshake_timeout. Отличается от
-// TestRetry_CtxCancelInterruptsPause: тот про inter-attempt паузу.
+// ctx cancel DURING a hung dialOne (not during the pause).
+// dialOne blocks on handshake (hang-handler), handshake_timeout is large (5s).
+// We cancel ctx after ~150ms. sessCtx derives from ctx → its cancel closes the
+// stream → the handshake goroutine in dialOne gets a recv error and hsDone
+// fires FAST (not via time.After(handshake_timeout)). Pins a non-obvious
+// mechanism: dialOne reacts to ctx cancellation through the derived sessCtx,
+// even though the local select watches time.After, not ctx directly. A
+// regression where sessCtx stops deriving from ctx, or handshake stops being
+// interrupted by the stream closing, would hang Dial for ~handshake_timeout.
+// Differs from TestRetry_CtxCancelInterruptsPause, which covers the
+// inter-attempt pause.
 func TestRetry_CtxCancelDuringDialOne(t *testing.T) {
 	const hsTimeout = 5 * time.Second
 	hung := newMockEventStreamCtx(t, hangHandler, nil)
@@ -463,7 +465,7 @@ func TestRetry_CtxCancelDuringDialOne(t *testing.T) {
 		HandshakeTimeout:  hsTimeout,
 		SID:               "host.example",
 		MaxAttempts:       10,
-		InterAttemptDelay: 10 * time.Second, // длинная пауза — отмена должна попасть в dialOne, не в неё
+		InterAttemptDelay: 10 * time.Second, // long pause — cancel must land inside dialOne, not here
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -479,23 +481,25 @@ func TestRetry_CtxCancelDuringDialOne(t *testing.T) {
 	if err == nil {
 		t.Fatal("Dial: expected error on ctx cancel during dialOne, got nil")
 	}
-	// Вернулись быстро — по разрыву стрима, не по handshake_timeout (5s) и не по
-	// inter-attempt паузе (10s). Допуск щедрый (1s), но на порядок ниже обоих.
+	// Returned fast via stream teardown, not handshake_timeout (5s) or the
+	// inter-attempt pause (10s). Tolerance is generous (1s) but an order of
+	// magnitude below both.
 	if elapsed > 1*time.Second {
 		t.Fatalf("Dial blocked %s — ctx cancel не прервал зависший dialOne (упал в handshake_timeout %s?)", elapsed, hsTimeout)
 	}
-	// dialOne пробовался ровно один раз — отмена попала в первую же попытку, до
-	// inter-attempt паузы / второго attempt-а.
+	// dialOne attempted exactly once — cancel landed on the first attempt,
+	// before the inter-attempt pause / second attempt.
 	if n := hung.dialCount(); n != 1 {
 		t.Errorf("hung endpoint dialOne %d times, want 1 (отмена попала в первую попытку)", n)
 	}
 }
 
-// mixed errors на одном endpoint: transient → AlreadyExists.
-// Единственный endpoint: attempt 1 = Unavailable (retriable, retry), attempt 2 =
-// AlreadyExists (non-retriable, break). dialCount==2. allLeaseHeld учитывает
-// ПОСЛЕДНЮЮ ошибку endpoint-а — она AlreadyExists → IsLeaseHeld==true (осознанный
-// дизайн «последняя ошибка endpoint-а решает аккумулятор», QA-observation).
+// mixed errors on one endpoint: transient → AlreadyExists.
+// Single endpoint: attempt 1 = Unavailable (retriable, retry), attempt 2 =
+// AlreadyExists (non-retriable, break). dialCount==2. allLeaseHeld considers
+// the endpoint's LAST error — AlreadyExists → IsLeaseHeld==true (deliberate
+// design: "the endpoint's last error decides the accumulator", per QA
+// observation).
 func TestRetry_MixedErrors_TransientThenLeaseHeld(t *testing.T) {
 	srv := newMockEventStream(t, seqHandler(codes.Unavailable, codes.AlreadyExists))
 	defer srv.stop()
@@ -507,7 +511,7 @@ func TestRetry_MixedErrors_TransientThenLeaseHeld(t *testing.T) {
 		CAPath:            srv.caPath,
 		HandshakeTimeout:  3 * time.Second,
 		SID:               "host.example",
-		MaxAttempts:       5, // запас: break после AlreadyExists, попытки не выжигаются
+		MaxAttempts:       5, // headroom: break after AlreadyExists, attempts aren't burned
 		InterAttemptDelay: 10 * time.Millisecond,
 	}, nil)
 	if err != nil {
@@ -517,21 +521,22 @@ func TestRetry_MixedErrors_TransientThenLeaseHeld(t *testing.T) {
 	if err == nil {
 		t.Fatal("Dial: expected error, got nil")
 	}
-	// Ровно 2 dialOne: transient ретраился, на 2-й попытке AlreadyExists → break
-	// (не дошли до 3..5).
+	// Exactly 2 dialOne calls: transient retried, 2nd attempt AlreadyExists → break
+	// (never reached 3..5).
 	if n := srv.dialCount(); n != 2 {
 		t.Fatalf("dialOne %d times, want EXACTLY 2 (transient retried, AlreadyExists broke before exhausting attempts)", n)
 	}
-	// Последняя ошибка endpoint-а — AlreadyExists, единственный endpoint → агрегат
-	// = lease-held (аккумулятор зависит от ПОСЛЕДНЕЙ ошибки).
+	// The endpoint's last error is AlreadyExists, single endpoint → aggregate
+	// = lease-held (accumulator depends on the LAST error).
 	if !IsLeaseHeld(err) {
 		t.Fatalf("Dial err=%v, want IsLeaseHeld (last error of endpoint = AlreadyExists, accumulator должен решить по ней)", err)
 	}
 }
 
-// AlreadyExists на первой же попытке → break сразу (dialCount==1).
-// Подтверждает контраст с предыдущим: без transient-преамбулы AlreadyExists ломает
-// retry-loop немедленно, без второй попытки. lease-held сохранён.
+// AlreadyExists on the very first attempt → break immediately (dialCount==1).
+// Confirms the contrast with the previous test: without a transient preamble,
+// AlreadyExists breaks the retry loop right away, no second attempt.
+// lease-held is preserved.
 func TestRetry_MixedErrors_LeaseHeldFirstAttempt(t *testing.T) {
 	srv := newMockEventStream(t, seqHandler(codes.AlreadyExists))
 	defer srv.stop()
@@ -561,14 +566,15 @@ func TestRetry_MixedErrors_LeaseHeldFirstAttempt(t *testing.T) {
 	}
 }
 
-// failback (maxPriority>0), higher-prio СУЩЕСТВУЕТ но retriable-падает.
-// Higher-prio endpoint (priority=1) отдаёт Unavailable (retriable) каждую
-// попытку → retry-loop отрабатывает max_attempts на нём, затем DialPriority
-// возвращает НАСТОЯЩИЙ агрегат «all endpoints failed», НЕ errNoHigherPriority
-// (TestRetry_FailbackNoHigherPriority_NotMasked покрывал только skipped-endpoint,
-// где dialOne не вызывался вовсе).
-// Регресс «падение higher-prio маскируется под NoHigherPriority» был бы тихим:
-// failback-loop счёл бы «возвращаться некуда» вместо «higher-prio временно лёг».
+// failback (maxPriority>0), higher-prio endpoint EXISTS but fails retriably.
+// The higher-prio endpoint (priority=1) returns Unavailable (retriable) on
+// every attempt → the retry loop exhausts max_attempts on it, then
+// DialPriority returns the REAL "all endpoints failed" aggregate, not
+// errNoHigherPriority (TestRetry_FailbackNoHigherPriority_NotMasked only
+// covered the skipped-endpoint case, where dialOne is never called).
+// A regression masking a higher-prio failure as NoHigherPriority would be
+// silent: the failback loop would conclude "nothing to fall back to" instead
+// of "higher-prio is temporarily down".
 func TestRetry_Failback_HigherPrioRetriableFails_NotMasked(t *testing.T) {
 	const maxAttempts = 3
 	higher := newMockEventStream(t, codeHandler(codes.Unavailable, "higher-down"))
@@ -587,26 +593,27 @@ func TestRetry_Failback_HigherPrioRetriableFails_NotMasked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	// maxPriority=2 → priority=1 endpoint в скоупе (1 < 2), но падает.
+	// maxPriority=2 → priority=1 endpoint is in scope (1 < 2), but fails.
 	_, err = cli.DialPriority(context.Background(), 2)
 	if err == nil {
 		t.Fatal("DialPriority: expected error (higher-prio retriable-down), got nil")
 	}
-	// НЕ замаскировано под NoHigherPriority: endpoint реально пробовался и упал.
+	// NOT masked as NoHigherPriority: the endpoint was actually tried and failed.
 	if IsNoHigherPriority(err) {
 		t.Fatalf("DialPriority err=%v classified NoHigherPriority — падение higher-prio замаскировано (failback счёл «некуда возвращаться»)", err)
 	}
-	// retry-loop отработал max_attempts на higher-prio (Unavailable retriable).
+	// retry loop exhausted max_attempts on higher-prio (Unavailable retriable).
 	if n := higher.dialCount(); n != maxAttempts {
 		t.Fatalf("higher-prio dialOne %d times, want %d (exhausted retriable in failback)", n, maxAttempts)
 	}
 }
 
-// failback (maxPriority>0), higher-prio lease-held → IsLeaseHeld не потерян.
-// Higher-prio endpoint отдаёт AlreadyExists → агрегат всё равно несёт lease-held
-// sentinel в failback-режиме (maxPriority>0 не глотает его в errNoHigherPriority).
-// Регресс «failback теряет lease-held sentinel» лишил бы reconnect-loop модест-
-// cap-а при попытке вернуться на занятый higher-prio.
+// failback (maxPriority>0), higher-prio lease-held → IsLeaseHeld not lost.
+// Higher-prio endpoint returns AlreadyExists → the aggregate still carries the
+// lease-held sentinel in failback mode (maxPriority>0 doesn't swallow it into
+// errNoHigherPriority). A regression where failback loses the lease-held
+// sentinel would strip the reconnect loop's backoff cap when it tries to fall
+// back to a held higher-prio endpoint.
 func TestRetry_Failback_HigherPrioLeaseHeld_SentinelKept(t *testing.T) {
 	higher := newMockEventStream(t, alreadyExistsHandler)
 	defer higher.stop()
@@ -618,7 +625,7 @@ func TestRetry_Failback_HigherPrioLeaseHeld_SentinelKept(t *testing.T) {
 		CAPath:            higher.caPath,
 		HandshakeTimeout:  3 * time.Second,
 		SID:               "host.example",
-		MaxAttempts:       5, // lease-held не должен жечь попытки
+		MaxAttempts:       5, // lease-held must not burn attempts
 		InterAttemptDelay: 10 * time.Millisecond,
 	}, nil)
 	if err != nil {
@@ -634,13 +641,13 @@ func TestRetry_Failback_HigherPrioLeaseHeld_SentinelKept(t *testing.T) {
 	if !IsLeaseHeld(err) {
 		t.Fatalf("DialPriority err=%v, want IsLeaseHeld (sentinel потерян в failback-режиме)", err)
 	}
-	// lease-held → ровно 1 dialOne (non-retriable), попытки не выжжены.
+	// lease-held → exactly 1 dialOne (non-retriable), attempts not burned.
 	if n := higher.dialCount(); n != 1 {
 		t.Fatalf("higher-prio dialOne %d times, want 1 (lease-held non-retriable)", n)
 	}
 }
 
-// --- unit: классификатор isRetriablePerEndpoint (матрица architect) ---
+// --- unit: isRetriablePerEndpoint classifier (architect's matrix) ---
 func TestIsRetriablePerEndpoint_Matrix(t *testing.T) {
 	t.Parallel()
 	nonRetriable := []codes.Code{
@@ -668,11 +675,11 @@ func TestIsRetriablePerEndpoint_Matrix(t *testing.T) {
 			t.Errorf("code %s classified non-retriable, want RETRIABLE", c)
 		}
 	}
-	// handshake-timeout — локальный fmt.Errorf (не gRPC-status) → codes.Unknown → retriable.
+	// handshake-timeout is a plain fmt.Errorf (not a gRPC status) → codes.Unknown → retriable.
 	if !isRetriablePerEndpoint(fmt.Errorf("handshake timeout 10s")) {
 		t.Error("handshake-timeout (plain error) classified non-retriable, want RETRIABLE")
 	}
-	// неклассифицированный кастомный wrap → retriable (консервативно).
+	// unclassified custom wrap → retriable (conservative default).
 	if !isRetriablePerEndpoint(errors.New("some transport flake")) {
 		t.Error("unclassified error classified non-retriable, want RETRIABLE (conservative)")
 	}

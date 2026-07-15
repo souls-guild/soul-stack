@@ -12,15 +12,17 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// Материализация applier-register (orchestration.md §2.1.1, Вариант B): терминальная
-// core.noop.run с непустым aggregate_of несёт СВОДНЫЙ итог дочерних destiny-задач.
-// Её register_data Soul строит НЕ из ApplyEvent (noop → changed=false), а агрегатом
-// (changed/failed/timed_out = OR по дочерним из registerByIdx). Тесты ниже —
-// Soul-side половина инварианта (keeper-side материализация — keeper/internal/render).
+// Applier-register materialization (orchestration.md §2.1.1, Option B): a
+// terminal core.noop.run with a non-empty aggregate_of carries the AGGREGATE
+// outcome of its child destiny tasks. Soul builds its register_data NOT from
+// ApplyEvent (noop → changed=false) but as an aggregate (changed/failed/
+// timed_out = OR over children from registerByIdx). Tests below are the
+// Soul-side half of the invariant (keeper-side materialization is
+// keeper/internal/render).
 
-// okNoopModule — core.noop-эмуляция: OK, changed=false, failed=false (как реальный
-// core.noop). Терминальная задача всё равно ВЫЗЫВАЕТ Apply, но её register_data
-// перезаписывается агрегатом.
+// okNoopModule — core.noop emulation: OK, changed=false, failed=false (like
+// the real core.noop). The terminal task still CALLS Apply, but its
+// register_data gets overwritten by the aggregate.
 func okNoopModule(called *bool) *fakeModule {
 	return &fakeModule{
 		applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -32,9 +34,10 @@ func okNoopModule(called *bool) *fakeModule {
 	}
 }
 
-// TestApplierRegister_AggregateChangedTrue — ★ guard (a): хотя бы одна дочерняя
-// changed → агрегат .changed=true. Терминальный core.noop сам changed=false, но
-// его register_data перезаписан агрегатом по дочерним [0,1].
+// TestApplierRegister_AggregateChangedTrue — guard (a): at least one child
+// changed → aggregate .changed=true. The terminal core.noop itself is
+// changed=false, but its register_data is overwritten by the aggregate over
+// children [0,1].
 func TestApplierRegister_AggregateChangedTrue(t *testing.T) {
 	var noopCalled bool
 	reg := mapRegistry{
@@ -51,7 +54,7 @@ func TestApplierRegister_AggregateChangedTrue(t *testing.T) {
 		Tasks: []*keeperv1.RenderedTask{
 			{Name: "child0", Module: "core.file.present"},                                                    // 0: changed
 			{Name: "child1", Module: "core.exec.run"},                                                        // 1: OK no-change
-			{Name: "applier-register r", Module: "core.noop.run", Register: "r", AggregateOf: []int32{0, 1}}, // 2: терминал
+			{Name: "applier-register r", Module: "core.noop.run", Register: "r", AggregateOf: []int32{0, 1}}, // 2: terminal
 		},
 	}, sink)
 	if err != nil {
@@ -61,7 +64,7 @@ func TestApplierRegister_AggregateChangedTrue(t *testing.T) {
 		t.Errorf("core.noop Apply не вызывался (терминал всё равно исполняется)")
 	}
 	term := sink.taskEvents[2]
-	// Статус терминала — OK (core.noop changed=false), агрегат живёт в register_data.
+	// Terminal status is OK (core.noop changed=false), the aggregate lives in register_data.
 	if got := term.GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_OK {
 		t.Errorf("терминал status = %v, want OK (core.noop тривиален; агрегат в register_data)", got)
 	}
@@ -80,8 +83,8 @@ func TestApplierRegister_AggregateChangedTrue(t *testing.T) {
 	}
 }
 
-// TestApplierRegister_AggregateChangedFalse — ★ guard (a) обратная сторона: все
-// дочерние no-op/OK → агрегат .changed=false (нет ложного changed от перезаписи).
+// TestApplierRegister_AggregateChangedFalse — guard (a) inverse: all children
+// no-op/OK → aggregate .changed=false (no false changed from the overwrite).
 func TestApplierRegister_AggregateChangedFalse(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": okOutputModule(nil), // child0/child1: OK changed=false
@@ -107,17 +110,18 @@ func TestApplierRegister_AggregateChangedFalse(t *testing.T) {
 	}
 }
 
-// TestApplierRegister_OnChangesResolvesAndReloads — ★ guard (b): внешняя задача
-// onchanges:[терминал] ИСПОЛНЯЕТСЯ при changed-агрегате (раньше — недостижимо, т.к.
-// register applier-а не материализовался: ErrOnChangesUnknownRegister на Keeper-е).
-// При changed=false — SKIPPED (reload только при изменении).
+// TestApplierRegister_OnChangesResolvesAndReloads — guard (b): an external
+// task onchanges:[terminal] RUNS when the aggregate is changed (previously
+// unreachable, since the applier's register never materialized:
+// ErrOnChangesUnknownRegister on Keeper). With changed=false — SKIPPED
+// (reload only on change).
 func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
-	// Случай 1: дочерняя changed → агрегат changed → reload исполняется.
+	// Case 1: child changed → aggregate changed → reload runs.
 	var reloadCalled bool
 	reg := mapRegistry{
 		"core.file":    changedModule(nil),           // child0: changed
-		"core.noop":    okNoopModule(nil),            // терминал
-		"core.service": changedModule(&reloadCalled), // reload onchanges:[терминал idx 1]
+		"core.noop":    okNoopModule(nil),            // terminal
+		"core.service": changedModule(&reloadCalled), // reload onchanges:[terminal idx 1]
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -127,7 +131,7 @@ func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
 		Tasks: []*keeperv1.RenderedTask{
 			{Name: "child0", Module: "core.file.present"},
 			{Name: "applier-register r", Module: "core.noop.run", Register: "r", AggregateOf: []int32{0}},
-			{Name: "reload", Module: "core.service.restarted", OnchangesIdx: []int32{1}}, // onchanges на терминал
+			{Name: "reload", Module: "core.service.restarted", OnchangesIdx: []int32{1}}, // onchanges on terminal
 		},
 	}, sink)
 	if err != nil {
@@ -140,12 +144,12 @@ func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
 		t.Errorf("reload status = %v, want CHANGED", got)
 	}
 
-	// Случай 2: дочерняя no-op → агрегат changed=false → reload SKIPPED (нет flap).
+	// Case 2: child no-op → aggregate changed=false → reload SKIPPED (no flap).
 	reloadCalled = false
 	reg2 := mapRegistry{
 		"core.exec":    okOutputModule(nil),          // child0: OK no-change
-		"core.noop":    okNoopModule(nil),            // терминал
-		"core.service": changedModule(&reloadCalled), // reload onchanges:[терминал]
+		"core.noop":    okNoopModule(nil),            // terminal
+		"core.service": changedModule(&reloadCalled), // reload onchanges:[terminal]
 	}
 	sink2 := &recordingSink{}
 	r2 := NewApplyRunner(reg2, nil)
@@ -168,14 +172,15 @@ func TestApplierRegister_OnChangesResolvesAndReloads(t *testing.T) {
 	}
 }
 
-// TestApplierRegister_AggregateFailedOR — ★ guard (c): .failed = OR(failed дочерних).
-// Одна дочерняя падает → агрегат .failed=true. Терминал идёт ПОСЛЕ провала — но он
-// onchanges-агрегат, а не обычная задача; проверяем, что register_data несёт OR-failed.
+// TestApplierRegister_AggregateFailedOR — guard (c): .failed = OR(children
+// failed). One child fails → aggregate .failed=true. The terminal runs AFTER
+// the failure — but it's an aggregate-of task, not an ordinary one; checks
+// that register_data carries OR-failed.
 func TestApplierRegister_AggregateFailedOR(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": okOutputModule(nil), // child0: OK
-		"core.file": failedModule(nil),   // child1: падает
-		"core.noop": okNoopModule(nil),   // терминал-агрегат
+		"core.file": failedModule(nil),   // child1: fails
+		"core.noop": okNoopModule(nil),   // aggregate terminal
 	}
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
@@ -191,9 +196,10 @@ func TestApplierRegister_AggregateFailedOR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// child1 упал → прогон FAILED, но терминал-агрегат (aggregate_of, без onfail_idx)
-	// — ИСКЛЮЧЕНИЕ из runFailed-skip: его register.<applier> обязан отражать реальный
-	// итог destiny, иначе внешний onfail:[<applier>] разорвётся. Агрегат .failed=true.
+	// child1 fails → the run is FAILED, but the aggregate terminal (aggregate_of,
+	// no onfail_idx) is an EXCEPTION to runFailed-skip: its register.<applier>
+	// must reflect the real destiny outcome, or an external onfail:[<applier>]
+	// would break. Aggregate .failed=true.
 	if got := sink.taskEvents[1].GetStatus(); got != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Fatalf("child1 status = %v, want FAILED", got)
 	}
@@ -203,8 +209,9 @@ func TestApplierRegister_AggregateFailedOR(t *testing.T) {
 	}
 }
 
-// TestAggregateRegisterData_OR — прямой юнит agg-функции: OR по changed/failed/
-// timed_out, sentinel/отсутствующий источник = нулевой вклад, skipped всегда false.
+// TestAggregateRegisterData_OR — direct unit test of the agg function: OR
+// over changed/failed/timed_out, sentinel/missing source = zero contribution,
+// skipped is always false.
 func TestAggregateRegisterData_OR(t *testing.T) {
 	rd := func(changed, failed, timedOut bool) *structpb.Struct {
 		return mustStruct(t, map[string]any{
@@ -217,8 +224,8 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 		2: rd(false, false, false), // no-op
 	}
 
-	// Все три + отсутствующий sentinel-индекс (-1): changed||failed||timed → все true
-	// кроме timed_out (ни один источник не timed_out).
+	// All three plus a missing sentinel index (-1): changed||failed||timed → all
+	// true except timed_out (no source is timed_out).
 	got := aggregateRegisterData([]int32{0, 1, 2, -1}, registerByIdx).GetFields()
 	if !got["changed"].GetBoolValue() {
 		t.Errorf(".changed = false, want true (idx 0 changed)")
@@ -233,15 +240,15 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 		t.Errorf(".skipped = true, want false (агрегат всегда не-skipped)")
 	}
 
-	// Пустой агрегат / все no-op → все false.
+	// Empty aggregate / all no-op → all false.
 	none := aggregateRegisterData([]int32{2}, registerByIdx).GetFields()
 	if none["changed"].GetBoolValue() || none["failed"].GetBoolValue() || none["timed_out"].GetBoolValue() {
 		t.Errorf("no-op агрегат = %v, want все false", none)
 	}
 
-	// timed_out источник → агрегат timed_out=true И failed=false (timed_out не failed
-	// в источнике registerByIdx — buildRegisterData ставит и failed=true при TIMED_OUT,
-	// но проверяем чистый timed_out-бит здесь).
+	// timed_out source → aggregate timed_out=true AND failed=false (timed_out
+	// isn't failed in the registerByIdx source — buildRegisterData also sets
+	// failed=true on TIMED_OUT, but here we check the pure timed_out bit).
 	registerByIdx[3] = rd(false, false, true)
 	timed := aggregateRegisterData([]int32{3}, registerByIdx).GetFields()
 	if !timed["timed_out"].GetBoolValue() {

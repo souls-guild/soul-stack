@@ -10,23 +10,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// ValidateAgainstManifest — runtime-валидация ValidateRequest против embed-
-// манифеста core-модуля (shared/coremanifest). Единый источник правды для
-// per-field-проверок: known-state и наличие required-параметров декларированы
-// в manifest.yaml модуля, а не захардкожены отдельно в каждом Module.Validate
-// (раньше это был дубль между линтером и runtime-кодом).
+// ValidateAgainstManifest — runtime validation of a ValidateRequest against a
+// core module's embedded manifest (shared/coremanifest). Single source of
+// truth for per-field checks: known states and required params are declared
+// in the module's manifest.yaml, not hardcoded separately in each
+// Module.Validate (previously duplicated between the linter and runtime code).
 //
-// `coreName` — каноническое имя core-модуля (`core.exec`, `core.file`).
-// Возвращает список ошибок (пустой = всё валидно). Тип-проверка значений в
-// runtime НЕ делается тут: её выполняют типизированные param-getter-ы в Apply
-// (StringParam/OptStringSliceParam/…) — это императивная per-field-проверка,
-// которую manifest-DSL не выражает. Cross-field-инварианты (если появятся у
-// модуля) добавляются в его Module.Validate поверх этого вызова.
+// `coreName` is the canonical core-module name (`core.exec`, `core.file`).
+// Returns a list of errors (empty = all valid). Runtime value type-checking
+// is NOT done here: typed param getters in Apply handle that
+// (StringParam/OptStringSliceParam/…) — imperative per-field checks the
+// manifest DSL can't express. Cross-field invariants (if a module needs them)
+// go into its own Module.Validate on top of this call.
 func ValidateAgainstManifest(coreName string, req *pluginv1.ValidateRequest) []string {
 	m, ok := coremanifest.Default().Lookup(coreName)
 	if !ok {
-		// Манифест core-модуля обязан существовать (баг сборки иначе); но в
-		// runtime не паникуем — отдаём диагностику как обычную ошибку валидации.
+		// A core module's manifest must exist (otherwise it's a build bug); but
+		// we don't panic at runtime — report it as a regular validation error.
 		return []string{fmt.Sprintf("internal: no manifest for %q", coreName)}
 	}
 	def, ok := m.Spec.States[req.State]

@@ -73,10 +73,10 @@ func TestPkgMgrInitSystem(t *testing.T) {
 		{"alpine", "alpine", "apk", "openrc"},
 		{"darwin", "macos", "brew", "launchd"},
 		{"arch", "arch", "pacman", "systemd"},
-		// family-fallback: неизвестный distro внутри известного семейства.
+		// family-fallback: an unknown distro within a known family.
 		{"debian", "raspbian", "apt", "systemd"},
 		{"rhel", "oraclelinux", "dnf", "systemd"},
-		// полностью нераспознанное → пустые значения (Keeper толерантен).
+		// fully unrecognized → empty values (Keeper tolerates this).
 		{"", "", "", ""},
 		{"plan9", "plan9", "", ""},
 	}

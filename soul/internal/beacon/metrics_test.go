@@ -15,7 +15,7 @@ func TestRegisterBeaconMetrics_RegistersFamily(t *testing.T) {
 	if m == nil {
 		t.Fatal("RegisterBeaconMetrics returned nil")
 	}
-	// Counter без первого Inc не публикуется — наблюдаем, затем проверяем family.
+	// A counter isn't published before its first Inc — observe, then check the family.
 	m.ObservePortentDropped()
 
 	body := obstest.Scrape(t, reg.Gatherer())
@@ -37,11 +37,11 @@ func TestRegisterBeaconMetrics_PanicsOnDoubleRegister(t *testing.T) {
 
 func TestBeaconMetrics_NilReceiver_NoOp(t *testing.T) {
 	var m *BeaconMetrics
-	m.ObservePortentDropped() // не должно паниковать
+	m.ObservePortentDropped() // must not panic
 }
 
-// TestEmit_DropIncrementsMetric — при переполнении буфера канала emit дропает
-// Portent и инкрементирует soul_beacon_portents_dropped_total.
+// TestEmit_DropIncrementsMetric — when the channel buffer overflows, emit
+// drops the Portent and increments soul_beacon_portents_dropped_total.
 func TestEmit_DropIncrementsMetric(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterBeaconMetrics(reg)
@@ -55,9 +55,9 @@ func TestEmit_DropIncrementsMetric(t *testing.T) {
 
 	def := vigil("v1", "core.beacon.file_changed", "1s")
 
-	// Первый emit занимает единственный слот буфера (не дропается).
+	// The first emit takes the buffer's only slot (not dropped).
 	s.emit(context.Background(), def, "changed", nil)
-	// Второй emit — буфер полон, select уходит в default → дроп + метрика.
+	// The second emit — the buffer is full, select falls into default → drop + metric.
 	s.emit(context.Background(), def, "changed", nil)
 
 	body := obstest.Scrape(t, reg.Gatherer())
@@ -66,8 +66,8 @@ func TestEmit_DropIncrementsMetric(t *testing.T) {
 	}
 }
 
-// TestEmit_NoDropNoMetric — при свободном буфере emit не дропает и метрику не
-// трогает (drop-ветка не сработала).
+// TestEmit_NoDropNoMetric — with a free buffer, emit doesn't drop and leaves
+// the metric untouched (the drop branch didn't fire).
 func TestEmit_NoDropNoMetric(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterBeaconMetrics(reg)

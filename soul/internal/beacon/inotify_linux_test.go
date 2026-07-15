@@ -12,14 +12,14 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// L0 unit-тесты core.beacon.inotify (Linux-only). Real inotify-fd на tmpdir —
-// под Linux это всегда доступно (даже без root), без testcontainers.
+// L0 unit tests for core.beacon.inotify (Linux-only). Real inotify fd on a
+// tmpdir — always available under Linux (even without root), no testcontainers.
 
 // TestInotify_QuietThenEvents — happy-path:
-//   - первый Check: lazy-init watch + return state="quiet" (буфер пуст).
-//   - touch файла в watched-каталоге → kernel шлёт IN_CREATE / IN_MODIFY.
-//   - второй Check: state="events", data.count > 0, data.events содержит
-//     запись с type="created".
+//   - first Check: lazy-init watch + return state="quiet" (buffer empty).
+//   - touch a file in the watched dir → kernel sends IN_CREATE / IN_MODIFY.
+//   - second Check: state="events", data.count > 0, data.events contains
+//     an entry with type="created".
 func TestInotify_QuietThenEvents(t *testing.T) {
 	dir := t.TempDir()
 
@@ -37,7 +37,7 @@ func TestInotify_QuietThenEvents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "x"), []byte("v"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Дать readLoop поднять событие. inotifyReadIdle = 100 ms.
+	// Let readLoop pick up the event. inotifyReadIdle = 100 ms.
 	waitForInotifyEvents(t, b, params, 2*time.Second)
 
 	state, data, err := b.Check(context.Background(), params)
@@ -63,8 +63,8 @@ func TestInotify_QuietThenEvents(t *testing.T) {
 	}
 }
 
-// TestInotify_FilterCreatedOnly — фильтр `events: ["created"]` отбрасывает
-// IN_MODIFY/IN_ATTRIB на kernel-уровне (mask), beacon видит только IN_CREATE.
+// TestInotify_FilterCreatedOnly — the `events: ["created"]` filter drops
+// IN_MODIFY/IN_ATTRIB at the kernel level (mask), the beacon only sees IN_CREATE.
 func TestInotify_FilterCreatedOnly(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "existing")
@@ -78,12 +78,12 @@ func TestInotify_FilterCreatedOnly(t *testing.T) {
 		"events": []any{"created"},
 	})
 
-	// Baseline-Check регистрирует watch (фильтр только на created).
+	// Baseline Check registers the watch (filter is created-only).
 	if _, _, err := b.Check(context.Background(), params); err != nil {
 		t.Fatalf("baseline Check: %v", err)
 	}
 
-	// IN_MODIFY (не в фильтре) — НЕ должен попасть в окно.
+	// IN_MODIFY (not in the filter) — should NOT land in the window.
 	if err := os.WriteFile(target, []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestInotify_FilterCreatedOnly(t *testing.T) {
 		t.Errorf("modify не в фильтре, но state=%q", state)
 	}
 
-	// IN_CREATE — должен попасть.
+	// IN_CREATE — should land.
 	if err := os.WriteFile(filepath.Join(dir, "new"), []byte("v"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +115,9 @@ func TestInotify_FilterCreatedOnly(t *testing.T) {
 	}
 }
 
-// TestInotify_MissingPath — путь не существует: inotify_add_watch вернёт
-// ENOENT, beacon — ошибку (scheduler пропустит тик, baseline не установится).
+// TestInotify_MissingPath — the path doesn't exist: inotify_add_watch
+// returns ENOENT, the beacon returns an error (scheduler skips the tick,
+// baseline never gets established).
 func TestInotify_MissingPath(t *testing.T) {
 	dir := t.TempDir()
 	absent := filepath.Join(dir, "does-not-exist")
@@ -128,8 +129,8 @@ func TestInotify_MissingPath(t *testing.T) {
 	}
 }
 
-// TestInotify_RecursiveRejected — recursive: true в MVP не поддерживается,
-// beacon отвергает на валидации params (раньше любого syscall-а).
+// TestInotify_RecursiveRejected — recursive: true isn't supported in the
+// MVP, the beacon rejects it at params validation (before any syscall).
 func TestInotify_RecursiveRejected(t *testing.T) {
 	b := NewInotify()
 	_, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{
@@ -141,7 +142,7 @@ func TestInotify_RecursiveRejected(t *testing.T) {
 	}
 }
 
-// TestInotify_MissingParam — отсутствие обязательного path → ошибка.
+// TestInotify_MissingParam — missing required path → error.
 func TestInotify_MissingParam(t *testing.T) {
 	b := NewInotify()
 	if _, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{})); err == nil {
@@ -149,9 +150,9 @@ func TestInotify_MissingParam(t *testing.T) {
 	}
 }
 
-// TestInotify_MultipleVigilsSeparateWatches — два Check-а с разными path
-// получают независимые watch-и (один InotifyBeacon на процесс, per-path
-// независимые kernel-fd). Изменение в dirA НЕ должно подняться в окне dirB.
+// TestInotify_MultipleVigilsSeparateWatches — two Checks with different
+// paths get independent watches (one InotifyBeacon per process, per-path
+// independent kernel fds). A change in dirA must NOT show up in dirB's window.
 func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 	dirA := t.TempDir()
 	dirB := t.TempDir()
@@ -160,7 +161,7 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 	paramsA := paramStruct(t, map[string]any{"path": dirA})
 	paramsB := paramStruct(t, map[string]any{"path": dirB})
 
-	// Регистрируем оба watch-а.
+	// Register both watches.
 	if _, _, err := b.Check(context.Background(), paramsA); err != nil {
 		t.Fatalf("baseline A: %v", err)
 	}
@@ -168,13 +169,13 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 		t.Fatalf("baseline B: %v", err)
 	}
 
-	// Событие только в A.
+	// Event only in A.
 	if err := os.WriteFile(filepath.Join(dirA, "x"), []byte("v"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	waitForInotifyEvents(t, b, paramsA, 2*time.Second)
 
-	// B должен оставаться quiet.
+	// B should stay quiet.
 	stateB, _, err := b.Check(context.Background(), paramsB)
 	if err != nil {
 		t.Fatalf("Check B: %v", err)
@@ -183,7 +184,7 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 		t.Errorf("watch B не должен видеть событие из A, state=%q", stateB)
 	}
 
-	// A должен поднять событие.
+	// A should pick up the event.
 	stateA, _, err := b.Check(context.Background(), paramsA)
 	if err != nil {
 		t.Fatalf("Check A: %v", err)
@@ -193,9 +194,10 @@ func TestInotify_MultipleVigilsSeparateWatches(t *testing.T) {
 	}
 }
 
-// TestInotify_RegistryAndDefault — beacon зарегистрирован в Default-реестре под
-// каноническим адресом из beaconaddr.Inotify. Гарантия инварианта «keeper-enum
-// == soul-registry == beaconaddr» (см. shared/beaconaddr/beaconaddr_test.go).
+// TestInotify_RegistryAndDefault — the beacon is registered in the Default
+// registry under the canonical address from beaconaddr.Inotify. Guards the
+// "keeper-enum == soul-registry == beaconaddr" invariant (see
+// shared/beaconaddr/beaconaddr_test.go).
 func TestInotify_RegistryAndDefault(t *testing.T) {
 	reg := Default()
 	b, ok := reg.Lookup(InotifyName)
@@ -207,10 +209,10 @@ func TestInotify_RegistryAndDefault(t *testing.T) {
 	}
 }
 
-// TestInotify_SchedulerEdgeTriggered — сквозной путь через scheduler: смена
-// quiet → events эмитит ровно один Portent с typed payload (V5-1 mapper) +
-// data-веткой (deprecation period). Параллель TestSchedulerWithRealFileBeacon
-// для file_changed.
+// TestInotify_SchedulerEdgeTriggered — end-to-end path through the
+// scheduler: quiet → events transition emits exactly one Portent with a
+// typed payload (V5-1 mapper) + the data branch (deprecation period).
+// Mirrors TestSchedulerWithRealFileBeacon for file_changed.
 func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 	dir := t.TempDir()
 
@@ -227,7 +229,7 @@ func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 	}
 	s.Apply(ctx, []*keeperv1.VigilDef{def})
 
-	// Baseline (первый тик) — без Portent.
+	// Baseline (first tick) — no Portent.
 	select {
 	case ev := <-s.Portents():
 		t.Fatalf("baseline не должен эмитить Portent, got %q", ev.GetBeaconName())
@@ -265,16 +267,17 @@ func TestInotify_SchedulerEdgeTriggered(t *testing.T) {
 	}
 }
 
-// waitForInotifyEvents выполняет polling-Check до появления events ИЛИ
-// timeout-а. Без сна перед Check kernel может не успеть доставить event-ы
-// (readLoop spinит с inotifyReadIdle=100ms между read-syscall-ами). Не
-// замусоривает основной тест-логикой sleep-ом.
+// waitForInotifyEvents polls Check until events show up OR timeout. Without
+// a sleep before Check, the kernel might not deliver events in time
+// (readLoop spins with inotifyReadIdle=100ms between read syscalls). Keeps
+// the sleep out of the main test logic.
 func waitForInotifyEvents(t *testing.T, b *InotifyBeacon, params interface{}, timeout time.Duration) {
 	t.Helper()
-	// peek-Check: получаем буфер БЕЗ flush? Текущий Check всегда flush-ит, так
-	// что peek-цикл портит окно теста. Вместо peek-а — пассивная пауза +
-	// доверие, что 200–500 ms достаточно для kernel+readLoop. На CI-машине под
-	// нагрузкой timeout может быть больше, поэтому ждём в несколько шагов.
+	// peek-Check: read the buffer WITHOUT flushing? The current Check always
+	// flushes, so a peek loop would corrupt the test window. Instead of a
+	// peek, we use a passive wait, trusting that 200-500 ms is enough for
+	// kernel+readLoop. On a loaded CI machine the timeout can be longer, so
+	// we wait in several steps.
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)
@@ -284,9 +287,9 @@ func waitForInotifyEvents(t *testing.T, b *InotifyBeacon, params interface{}, ti
 	}
 }
 
-// hasBufferedEvents — non-flushing peek в w.events. Используется только тестом
-// для синхронизации; в production-Check всегда flush. Доступ под общим lock-ом
-// beacon-а, чтобы не получить race с readLoop.
+// hasBufferedEvents — a non-flushing peek into w.events. Used only by the
+// test for synchronization; production Check always flushes. Access is under
+// the beacon's shared lock to avoid a race with readLoop.
 func hasBufferedEvents(b *InotifyBeacon) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

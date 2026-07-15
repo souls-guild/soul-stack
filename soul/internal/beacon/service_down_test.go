@@ -59,7 +59,7 @@ func TestServiceDownStopped(t *testing.T) {
 func TestServiceDownOpenRCStarted(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
-	// systemctl --version → fallback (не systemd) → детект уходит в OpenRC.
+	// systemctl --version → fallback (not systemd) → detection falls through to OpenRC.
 	r.On("rc-service --version", util.Result{ExitCode: 0})
 	r.On("rc-service redis status", util.Result{ExitCode: 0, Stdout: " * status: started"})
 
@@ -80,8 +80,8 @@ func TestServiceDownOpenRCStopped(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("rc-service --version", util.Result{ExitCode: 0})
-	// Регрессия: rc-service status даёт exit 0 и для остановленного сервиса,
-	// реальный статус — в stdout. exit 0 без "started" → "down".
+	// Regression: rc-service status returns exit 0 even for a stopped service —
+	// the real status is in stdout. exit 0 without "started" → "down".
 	r.On("rc-service redis status", util.Result{ExitCode: 0, Stdout: " * status: stopped"})
 
 	b := &ServiceDown{Runner: r}
@@ -98,14 +98,14 @@ func TestServiceDownOpenRCStopped(t *testing.T) {
 }
 
 func TestServiceDownNoInitSystem(t *testing.T) {
-	r := internaltest.NewRunner() // все --version → fallback 127 → InitSystemUnknown
+	r := internaltest.NewRunner() // all --version → fallback 127 → InitSystemUnknown
 	b := &ServiceDown{Runner: r}
 	state, _, err := b.Check(context.Background(), paramStruct(t, map[string]any{"service": "redis"}))
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	// Нет init-системы — сервис недоступен с точки зрения наблюдателя → "down",
-	// не ошибка (см. service_down.go).
+	// No init system — the service is unobservable → "down", not an error (see
+	// service_down.go).
 	if state != stateServiceDown {
 		t.Fatalf("state = %q, want down", state)
 	}

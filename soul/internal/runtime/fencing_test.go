@@ -15,8 +15,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// TestAcceptAttempt_FirstAttemptAccepted — первый ApplyRequest по apply_id
-// принимается и фиксирует seen (ADR-027(g)).
+// TestAcceptAttempt_FirstAttemptAccepted — the first ApplyRequest for an
+// apply_id is accepted and records seen (ADR-027(g)).
 func TestAcceptAttempt_FirstAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	if !r.AcceptAttempt("apply-1", 1) {
@@ -27,8 +27,9 @@ func TestAcceptAttempt_FirstAttemptAccepted(t *testing.T) {
 	}
 }
 
-// TestAcceptAttempt_HigherAttemptAccepted — пере-claim с бОльшим attempt
-// (recovery вернул Ward → ClaimNext инкрементил) принимается и сдвигает seen.
+// TestAcceptAttempt_HigherAttemptAccepted — a re-claim with a higher attempt
+// (recovery returned the Ward → ClaimNext incremented it) is accepted and
+// advances seen.
 func TestAcceptAttempt_HigherAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-1", 1)
@@ -40,9 +41,9 @@ func TestAcceptAttempt_HigherAttemptAccepted(t *testing.T) {
 	}
 }
 
-// TestAcceptAttempt_EqualAttemptAccepted — равный attempt принимается
-// (повторная доставка того же epoch — не stale; «==» фенсить нельзя, SID-lease
-// отсекает истинный дубль того же attempt).
+// TestAcceptAttempt_EqualAttemptAccepted — an equal attempt is accepted
+// (redelivery of the same epoch isn't stale; "==" can't be fenced, the
+// SID lease rejects true duplicates of the same attempt).
 func TestAcceptAttempt_EqualAttemptAccepted(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-1", 2)
@@ -51,37 +52,37 @@ func TestAcceptAttempt_EqualAttemptAccepted(t *testing.T) {
 	}
 }
 
-// TestAcceptAttempt_StaleRejected — attempt < seen отвергается (stale-дубль:
-// протухший Ward, чей apply ещё в полёте, а пере-claim с большим attempt уже
-// принят).
+// TestAcceptAttempt_StaleRejected — attempt < seen is rejected (stale
+// duplicate: an expired Ward whose apply is still in flight, while a
+// re-claim with a higher attempt has already been accepted).
 func TestAcceptAttempt_StaleRejected(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
-	r.AcceptAttempt("apply-1", 3) // оригинальный (больший) уже принят
+	r.AcceptAttempt("apply-1", 3) // original (higher) already accepted
 	if r.AcceptAttempt("apply-1", 1) {
 		t.Fatalf("AcceptAttempt(apply-1, 1) = true, want false (stale < seen=3)")
 	}
-	// seen НЕ откатился назад.
+	// seen did NOT roll back.
 	if got := r.lastSeenAttempt["apply-1"]; got != 3 {
 		t.Errorf("seen[apply-1] = %d, want 3 (stale не должен сдвигать seen)", got)
 	}
 }
 
-// TestAcceptAttempt_ZeroNeverFenced — attempt=0 (старый Keeper без fencing-поля,
-// forward-compat) всегда принимается и НЕ записывается в кеш, чтобы не «отравить»
-// seen для последующих fencing-запросов.
+// TestAcceptAttempt_ZeroNeverFenced — attempt=0 (an old Keeper without the
+// fencing field, forward-compat) is always accepted and NOT recorded in the
+// cache, so it doesn't "poison" seen for later fencing requests.
 func TestAcceptAttempt_ZeroNeverFenced(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
-	// Даже после виденного attempt=5 нулевой принимается (старый Keeper).
+	// Even after seeing attempt=5, zero is still accepted (old Keeper).
 	r.AcceptAttempt("apply-1", 5)
 	if !r.AcceptAttempt("apply-1", 0) {
 		t.Errorf("AcceptAttempt(apply-1, 0) = false, want true (старый Keeper не фенсится)")
 	}
-	// attempt=0 не сдвинул seen вниз.
+	// attempt=0 didn't move seen down.
 	if got := r.lastSeenAttempt["apply-1"]; got != 5 {
 		t.Errorf("seen[apply-1] = %d, want 5 (0 не пишется в кеш)", got)
 	}
 
-	// Чистый apply без виденного: 0 принят, кеш пуст (0 не пишется).
+	// Fresh apply with nothing seen yet: 0 is accepted, cache stays empty (0 isn't written).
 	if !r.AcceptAttempt("apply-fresh", 0) {
 		t.Errorf("AcceptAttempt(apply-fresh, 0) = false, want true")
 	}
@@ -90,27 +91,27 @@ func TestAcceptAttempt_ZeroNeverFenced(t *testing.T) {
 	}
 }
 
-// TestAcceptAttempt_PerApplyIDIsolation — кеш ведётся per apply_id: stale на
-// одном прогоне не влияет на другой.
+// TestAcceptAttempt_PerApplyIDIsolation — the cache is kept per apply_id:
+// staleness on one run doesn't affect another.
 func TestAcceptAttempt_PerApplyIDIsolation(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-a", 5)
-	// apply-b видит attempt=1 впервые — принимается (изоляция от apply-a).
+	// apply-b sees attempt=1 for the first time — accepted (isolated from apply-a).
 	if !r.AcceptAttempt("apply-b", 1) {
 		t.Errorf("AcceptAttempt(apply-b, 1) = false, want true (другой apply_id)")
 	}
 }
 
-// TestAcceptAttempt_RejectedIncrementsMetric — отвергнутый stale-дубль
-// инкрементирует soul_apply_fenced_total (B1: метрика — единственный наружный
-// след отказа).
+// TestAcceptAttempt_RejectedIncrementsMetric — a rejected stale duplicate
+// increments soul_apply_fenced_total (B1: the metric is the only external
+// trace of a rejection).
 func TestAcceptAttempt_RejectedIncrementsMetric(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterApplyMetrics(reg)
 	r := NewApplyRunner(mapRegistry{}, m)
 
 	r.AcceptAttempt("apply-1", 2)
-	// Два stale-дубля подряд → счётчик 2.
+	// Two stale duplicates in a row → counter reaches 2.
 	if r.AcceptAttempt("apply-1", 1) {
 		t.Fatal("первый stale принят, want отвергнут")
 	}
@@ -124,31 +125,32 @@ func TestAcceptAttempt_RejectedIncrementsMetric(t *testing.T) {
 	}
 }
 
-// TestAcceptAttempt_AcceptedDoesNotIncrementMetric — принятый (не-stale) запрос
-// НЕ трогает fenced-счётчик.
+// TestAcceptAttempt_AcceptedDoesNotIncrementMetric — an accepted (non-stale)
+// request does NOT touch the fenced counter.
 func TestAcceptAttempt_AcceptedDoesNotIncrementMetric(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterApplyMetrics(reg)
 	r := NewApplyRunner(mapRegistry{}, m)
 
 	r.AcceptAttempt("apply-1", 1)
-	r.AcceptAttempt("apply-1", 2) // больший — принят
-	r.AcceptAttempt("apply-2", 0) // старый Keeper — принят
+	r.AcceptAttempt("apply-1", 2) // higher — accepted
+	r.AcceptAttempt("apply-2", 0) // old Keeper — accepted
 
 	body := obstest.Scrape(t, reg.Gatherer())
-	// CounterVec/Counter без Inc не публикуется — fenced-серии в body быть не
-	// должно (или 0). Проверяем отсутствие положительного значения.
+	// A CounterVec/Counter without Inc isn't published — there should be no
+	// fenced series in body (or it's 0). Check for absence of a positive value.
 	if strings.Contains(body, "soul_apply_fenced_total 1") ||
 		strings.Contains(body, "soul_apply_fenced_total 2") {
 		t.Errorf("fenced-счётчик инкрементирован на принятых запросах; got=\n%s", body)
 	}
 }
 
-// TestAcceptAttempt_CachePersistsAcrossRunnerLifetime — кеш живёт в ApplyRunner
-// (per-process) и переживает reconnect-swap стрима: в cmd/soul при failback/
-// reconnect пересоздаётся StreamSession, но runner ОДИН на процесс. Эмулируем
-// swap прогоном двух разных sink-ов (≈ двух сессий) на одном runner — seen
-// сохраняется между ними, поэтому stale после «swap» отвергается.
+// TestAcceptAttempt_CachePersistsAcrossRunnerLifetime — the cache lives in
+// ApplyRunner (per-process) and survives a stream reconnect-swap: in
+// cmd/soul, failback/reconnect recreates the StreamSession, but there's ONE
+// runner per process. We emulate a swap by running two different sinks
+// (≈ two sessions) on one runner — seen persists between them, so a stale
+// attempt after a "swap" is rejected.
 func TestAcceptAttempt_CachePersistsAcrossRunnerLifetime(t *testing.T) {
 	reg := mapRegistry{
 		"core.pkg": &fakeModule{
@@ -159,7 +161,7 @@ func TestAcceptAttempt_CachePersistsAcrossRunnerLifetime(t *testing.T) {
 	}
 	r := NewApplyRunner(reg, nil)
 
-	// Сессия №1: принимаем attempt=2 и исполняем.
+	// Session #1: accept attempt=2 and execute.
 	if !r.AcceptAttempt("apply-x", 2) {
 		t.Fatal("attempt=2 на сессии №1 отвергнут")
 	}
@@ -172,16 +174,17 @@ func TestAcceptAttempt_CachePersistsAcrossRunnerLifetime(t *testing.T) {
 		t.Fatalf("Run сессии №1: %v", err)
 	}
 
-	// «reconnect-swap»: тот же runner, новая сессия (sink2). Прилетел stale
-	// attempt=1 (recovery вернул в очередь ещё-живой Ward; оригинал с attempt=2
-	// уже отработал). Кеш per-process помнит seen=2 → отвергаем.
+	// "reconnect-swap": same runner, new session (sink2). A stale attempt=1
+	// arrives (recovery re-queued a still-alive Ward; the original with
+	// attempt=2 already ran). The per-process cache remembers seen=2 → reject.
 	if r.AcceptAttempt("apply-x", 1) {
 		t.Fatal("stale attempt=1 после swap принят — кеш не пережил swap (баг)")
 	}
 }
 
-// TestAcceptAttempt_RaceOnGuardMap — конкурентные AcceptAttempt по разным и
-// одинаковым apply_id-ам не дают data race на lastSeenAttempt (-race).
+// TestAcceptAttempt_RaceOnGuardMap — concurrent AcceptAttempt calls across
+// different and identical apply_ids produce no data race on
+// lastSeenAttempt (-race).
 func TestAcceptAttempt_RaceOnGuardMap(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	var wg sync.WaitGroup
@@ -199,17 +202,18 @@ func TestAcceptAttempt_RaceOnGuardMap(t *testing.T) {
 	wg.Wait()
 }
 
-// TestAcceptAttempt_B1_NoSideChannelOnReject — B1-инвариант на уровне guard-а:
-// отвергнутый stale ничего не делает кроме метрики/лога — RunResult/TaskEvent НЕ
-// рождаются здесь (их шлёт только Run, который при отказе caller-ом не
-// вызывается). Проверяем, что отказ — чистый bool без записи в active-реестр
-// (нет зарегистрированного cancel, который мог бы намекнуть на запуск Run).
+// TestAcceptAttempt_B1_NoSideChannelOnReject — the B1 invariant at the guard
+// level: a rejected stale attempt does nothing besides the metric/log —
+// RunResult/TaskEvent are NOT produced here (only Run sends those, and the
+// caller doesn't invoke Run on rejection). Verifies rejection is a pure bool
+// with no write to the active registry (no registered cancel that would hint
+// Run was started).
 func TestAcceptAttempt_B1_NoSideChannelOnReject(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.AcceptAttempt("apply-1", 2)
-	_ = r.AcceptAttempt("apply-1", 1) // stale, отвергнут
+	_ = r.AcceptAttempt("apply-1", 1) // stale, rejected
 
-	// Отвергнутый запрос не запускал Run → не регистрировал cancel в active.
+	// A rejected request never started Run → never registered a cancel in active.
 	if r.Cancel("apply-1") {
 		t.Errorf("Cancel(apply-1) = true: отвергнутый stale не должен регистрировать active-apply")
 	}

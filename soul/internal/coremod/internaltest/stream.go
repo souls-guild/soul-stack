@@ -1,11 +1,11 @@
-// Package internaltest — общие test-helper-ы для unit-тестов core-модулей
-// Soul-стороны (pkg/file/service/user/group/…). Сам пакет НЕ имеет суффикса
-// _test, потому что test-файлы разных пакетов (pkg_test, file_test, …) не
-// могут импортировать xxx_test-пакеты друг друга.
+// Package internaltest — shared test helpers for unit tests of Soul-side
+// core modules (pkg/file/service/user/group/…). The package itself has no
+// _test suffix, because test files of different packages (pkg_test,
+// file_test, …) can't import each other's xxx_test packages.
 //
-// Содержимое — только тестовая инфраструктура, не используется в проде.
-// Файл попадает в production-сборку как dead-code, но никогда не
-// инстанцируется (нет init-ов, нет registry-сторон).
+// Contents are test infrastructure only, not used in production. The file
+// ends up in the production build as dead code, but is never instantiated
+// (no inits, no registry references).
 package internaltest
 
 import (
@@ -19,10 +19,10 @@ import (
 	"google.golang.org/grpc"
 )
 
-// ApplyStream — fake grpc.ServerStreamingServer[ApplyEvent] для unit-тестов.
-// Захватывает все Send-события в Events; единственное финальное событие
-// доступно как Last(). Ctx (опционально) — контекст прогона для модулей,
-// читающих stream.Context() (augur-клиент, FetchModule-транспорт core.module).
+// ApplyStream — fake grpc.ServerStreamingServer[ApplyEvent] for unit tests.
+// Captures all Send events in Events; the final event is available as
+// Last(). Ctx (optional) — run context for modules reading stream.Context()
+// (augur client, core.module's FetchModule transport).
 type ApplyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	Events []*pluginv1.ApplyEvent
@@ -41,7 +41,7 @@ func (s *ApplyStream) Context() context.Context {
 	return context.Background()
 }
 
-// Last — последнее отправленное событие; nil если ничего не было.
+// Last — the most recently sent event; nil if none.
 func (s *ApplyStream) Last() *pluginv1.ApplyEvent {
 	if len(s.Events) == 0 {
 		return nil
@@ -49,35 +49,35 @@ func (s *ApplyStream) Last() *pluginv1.ApplyEvent {
 	return s.Events[len(s.Events)-1]
 }
 
-// Runner — детерминированный fake util.Runner. Сборка ключа — name + " " +
-// args (через space). Команды без явной настройки возвращают Fallback.
+// Runner — deterministic fake util.Runner. The key is built as name + " " +
+// args (space-joined). Commands without explicit setup return Fallback.
 //
-// Каждому ключу можно прописать очередь ответов (через OnSeq) — последовательные
-// вызовы одной и той же команды получают разные результаты. Это нужно для
-// сценариев типа «pre-install: not installed; post-install: installed».
-// Когда очередь исчерпана, отдаётся последний элемент очереди (sticky).
-// Простой On — синтаксический сахар для одно-элементной очереди.
+// Each key can carry a response queue (via OnSeq) — successive calls to the
+// same command get different results. Needed for scenarios like
+// "pre-install: not installed; post-install: installed". Once the queue is
+// exhausted, the last element sticks. Plain On is sugar for a single-element
+// queue.
 type Runner struct {
 	Calls    []string
 	Results  map[string][]util.Result
 	Fallback util.Result
 }
 
-// NewRunner — конструктор с пустым Results и Fallback {ExitCode: 127}
-// (имитация «command not found», подходит как default для DetectPkgMgr,
-// DetectInitSystem-проверок).
+// NewRunner — constructor with empty Results and Fallback {ExitCode: 127}
+// (mimics "command not found", a sane default for DetectPkgMgr /
+// DetectInitSystem checks).
 func NewRunner() *Runner {
 	return &Runner{Results: map[string][]util.Result{}, Fallback: util.Result{ExitCode: 127}}
 }
 
-// On — fluent-настройка одного ответа на команду. Перезаписывает текущую очередь.
+// On — fluent single-response setup for a command. Overwrites the current queue.
 func (r *Runner) On(cmd string, res util.Result) *Runner {
 	r.Results[cmd] = []util.Result{res}
 	return r
 }
 
-// OnSeq — настраивает последовательность ответов на повторные вызовы команды.
-// Последний элемент после исчерпания остаётся sticky.
+// OnSeq — configures a response sequence for repeat calls of a command.
+// The last element sticks once the queue is exhausted.
 func (r *Runner) OnSeq(cmd string, results ...util.Result) *Runner {
 	r.Results[cmd] = append([]util.Result(nil), results...)
 	return r
@@ -87,10 +87,10 @@ func (r *Runner) Run(_ context.Context, name string, args ...string) util.Result
 	return r.dispatch(name, args)
 }
 
-// RunOpts — fake-вариант с поддержкой cwd/env: ключ обогащается префиксом
-// `[cwd=<dir>] ` и/или `[env=KEY=VAL,…] `, чтобы тест мог проверить, что
-// модуль действительно передал ожидаемые опции. Sorted-порядок env-ключей
-// обеспечивает детерминизм (map iteration в Go недетерминирован).
+// RunOpts — fake variant supporting cwd/env: the key is prefixed with
+// `[cwd=<dir>] ` and/or `[env=KEY=VAL,…] ` so a test can verify the module
+// actually passed the expected options. Sorted env keys keep this
+// deterministic (Go map iteration isn't).
 func (r *Runner) RunOpts(_ context.Context, opts util.RunOptions) util.Result {
 	var prefix string
 	if opts.Cwd != "" {
@@ -131,6 +131,6 @@ func (r *Runner) dispatch(name string, args []string) util.Result {
 	if len(seq) > 1 {
 		r.Results[key] = seq[1:]
 	}
-	// если seq.len==1 — оставляем последний sticky
+	// if seq.len==1 — keep the last one sticky
 	return res
 }

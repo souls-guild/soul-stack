@@ -90,7 +90,7 @@ func TestGenerateKeyAndCSR(t *testing.T) {
 	}
 }
 
-// --- end-to-end через mock Keeper Bootstrap-сервер ---
+// --- end-to-end via a mock Keeper Bootstrap server ---
 
 func TestRun_SuccessWritesSeed(t *testing.T) {
 	srv := newMockKeeper(t, nil)
@@ -133,8 +133,8 @@ func TestRun_SuccessWritesSeed(t *testing.T) {
 		t.Errorf("soul_version = %q", got.GetSoulVersion())
 	}
 
-	// seed.Load валидирует пару cert↔key через X509KeyPair — успех означает,
-	// что записанный cert согласован с приватным ключом Soul-а.
+	// seed.Load validates the cert↔key pair via X509KeyPair — success means the
+	// written cert is consistent with Soul's private key.
 	mat, err := seed.Load(cfg.SeedDir)
 	if err != nil {
 		t.Fatalf("seed.Load: %v", err)
@@ -167,7 +167,7 @@ func TestRun_FallsBackToSecondEndpoint(t *testing.T) {
 		Token:            "tok",
 		SeedDir:          t.TempDir(),
 		KeeperCA:         good.caPath,
-		Endpoints:        []string{"127.0.0.1:1", good.addr}, // первый — мёртвый порт
+		Endpoints:        []string{"127.0.0.1:1", good.addr}, // first is a dead port
 		HandshakeTimeout: 2 * time.Second,
 	}
 	res, err := Run(context.Background(), cfg)
@@ -240,7 +240,7 @@ func TestRun_BootstrapRPCError(t *testing.T) {
 	if !strings.Contains(err.Error(), "PermissionDenied") {
 		t.Errorf("error = %v; want to contain PermissionDenied", err)
 	}
-	// При неуспехе seed на диск не пишется (нет активной версии current).
+	// On failure, seed is not written to disk (no active current version).
 	if _, loadErr := seed.Load(cfg.SeedDir); loadErr == nil {
 		t.Error("seed written despite RPC failure")
 	}
@@ -268,8 +268,8 @@ func (m *mockKeeper) Bootstrap(ctx context.Context, req *keeperv1.BootstrapReque
 	if m.handler != nil {
 		return m.handler(req)
 	}
-	// Выпускаем НАСТОЯЩИЙ cert под public key из CSR Soul-а — иначе seed.Write
-	// отвергнет несогласованную пару cert↔key на X509-валидации.
+	// Issue a REAL cert under the public key from Soul's CSR — otherwise
+	// seed.Write would reject the mismatched cert↔key pair on X509 validation.
 	certPEM := m.issueCertFromCSR(req.GetCsrPem())
 	return &keeperv1.BootstrapReply{
 		CertificatePem: certPEM,
@@ -279,9 +279,9 @@ func (m *mockKeeper) Bootstrap(ctx context.Context, req *keeperv1.BootstrapReque
 	}, nil
 }
 
-// issueCertFromCSR парсит CSR, выпускает клиентский cert под его public key,
-// подписанный CA mock-а. Это даёт согласованную пару (cert + приватник Soul-а),
-// проходящую tls.X509KeyPair в seed.Write.
+// issueCertFromCSR parses the CSR, issues a client cert under its public key,
+// signed by the mock's CA. This gives a matching pair (cert + Soul's private
+// key) that passes tls.X509KeyPair in seed.Write.
 func (m *mockKeeper) issueCertFromCSR(csrPEM []byte) []byte {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
@@ -312,8 +312,8 @@ func (m *mockKeeper) stop() {
 	m.wg.Wait()
 }
 
-// newMockKeeper поднимает gRPC сервер с server-only TLS на :0 и
-// self-signed CA. Возвращает addr и путь к CA bundle (для cfg.KeeperCA).
+// newMockKeeper starts a gRPC server with server-only TLS on :0 and a
+// self-signed CA. Returns addr and the path to the CA bundle (for cfg.KeeperCA).
 func newMockKeeper(t *testing.T, handler func(*keeperv1.BootstrapRequest) (*keeperv1.BootstrapReply, error)) *mockKeeper {
 	t.Helper()
 
@@ -358,9 +358,9 @@ func newMockKeeper(t *testing.T, handler func(*keeperv1.BootstrapRequest) (*keep
 	return mk
 }
 
-// writeStandaloneCAForTest пишет любой валидный CA PEM в файл и возвращает
-// путь. Используется в тестах, где сервер недостижим, но Config.KeeperCA
-// требует валидный PEM (иначе LoadClientTLS вернёт ошибку до dial-а).
+// writeStandaloneCAForTest writes any valid CA PEM to a file and returns the
+// path. Used in tests where the server is unreachable but Config.KeeperCA
+// still needs a valid PEM (otherwise LoadClientTLS errors before dialing).
 func writeStandaloneCAForTest(t *testing.T) string {
 	t.Helper()
 	cert, _ := mustGenerateCA(t)

@@ -1,22 +1,23 @@
-// Package sigilcache — runtime-level in-memory кеш печатей доверия Sigil
-// (ADR-026) на Soul-стороне, slice S6a / S6c.
+// Package sigilcache — runtime-level in-memory cache of Sigil trust seals
+// (ADR-026) on the Soul side, slice S6a / S6c.
 //
-// Авторитетный источник active-набора — SigilSnapshot (ADR-026(h), Вариант A):
-// Keeper шлёт полный набор допусков по EventStream-у при подключении и на каждый
-// cluster-wide invalidate. Soul применяет его как ReplaceAll ([Cache.ReplaceAll]),
-// заменяя ВЕСЬ локальный набор. Допуск, отсутствующий в snapshot, забывается —
-// так срабатывает near-instant revoke (S6c): после revoke Архонтом доступ
-// закрывается без перезапуска Soul-а. Пустой snapshot = ни один плагин не
-// допущен. Verify против кеша — S6b (shared/pluginhost).
+// The authoritative source for the active set is SigilSnapshot (ADR-026(h),
+// Variant A): Keeper sends the full grant set over EventStream on connect and
+// on every cluster-wide invalidate. Soul applies it as ReplaceAll
+// ([Cache.ReplaceAll]), swapping out the ENTIRE local set. A grant missing
+// from the snapshot is forgotten — this is how near-instant revoke works
+// (S6c): after an Archon revokes access, it's cut off without restarting
+// Soul. An empty snapshot means no plugin is granted. Verify against the
+// cache is S6b (shared/pluginhost).
 //
-// Ключ — пара (namespace, name), НЕ ref: на пару допущен ровно один активный
-// Sigil (single-slot), его ref хранится внутри значения.
+// Key is the pair (namespace, name), NOT ref: exactly one active Sigil is
+// granted per pair (single-slot), its ref is stored inside the value.
 //
-// Кеш живёт на runtime-уровне Soul (создаётся при старте демона, вне
-// reconnect-loop) и НЕ пере-создаётся при переподключении стрима — допуски
-// переживают разрыв EventStream-а (следующая сессия первым делом получит свежий
-// snapshot и применит ReplaceAll). На диск НЕ персистится: stale-допуск на диске
-// был бы дырой в trust-модели.
+// The cache lives at Soul's runtime level (created at daemon startup, outside
+// the reconnect loop) and is NOT recreated on stream reconnect — grants
+// survive an EventStream break (the next session gets a fresh snapshot first
+// thing and applies ReplaceAll). NOT persisted to disk: a stale on-disk grant
+// would be a hole in the trust model.
 package sigilcache
 
 import (
@@ -25,35 +26,35 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// key — составной ключ кеша. namespace+name однозначно адресуют один активный
-// Sigil (single-slot per пара, см. doc пакета).
+// key — the cache's composite key. namespace+name uniquely address one
+// active Sigil (single-slot per pair, see package doc).
 type key struct {
 	namespace string
 	name      string
 }
 
-// Cache — потокобезопасный кеш Sigil-ов. Записи идёт recv-loop (один writer),
-// чтения — будущий verify (S6b); RWMutex покрывает оба сценария. Нулевое
-// значение не готово к использованию — создавать через New.
+// Cache — a thread-safe cache of Sigils. Writes come from the recv-loop
+// (single writer), reads come from verify (S6b, not yet wired up); RWMutex
+// covers both. The zero value is not ready for use — construct via New.
 type Cache struct {
 	mu    sync.RWMutex
 	items map[key]*keeperv1.PluginSigil
 }
 
-// New создаёт пустой кеш.
+// New creates an empty cache.
 func New() *Cache {
 	return &Cache{items: make(map[key]*keeperv1.PluginSigil)}
 }
 
-// ReplaceAll атомарно заменяет ВЕСЬ набор допусков переданным snapshot-ом
-// (ADR-026(h), Вариант A: SigilSnapshot — единственный источник истины,
-// применяется как ReplaceAll). Допуск, отсутствующий в snapshot, забывается —
-// это и есть near-instant revoke (S6c). Пустой/nil snapshot → пустой кеш (ни
-// один плагин не допущен).
+// ReplaceAll atomically replaces the ENTIRE grant set with the given
+// snapshot (ADR-026(h), Variant A: SigilSnapshot is the single source of
+// truth, applied as ReplaceAll). A grant missing from the snapshot is
+// forgotten — this is near-instant revoke (S6c). An empty/nil snapshot →
+// empty cache (no plugin granted).
 //
-// nil-элементы внутри snapshot пропускаются (битый payload не должен ронять
-// замену). Под единым Lock-ом: читатели verify-фазы (S6b) видят либо старый,
-// либо новый набор целиком, без промежуточного состояния.
+// nil elements inside the snapshot are skipped (a corrupt payload shouldn't
+// break the swap). Done under a single Lock: verify-phase readers (S6b) see
+// either the entire old set or the entire new one, never an in-between state.
 func (c *Cache) ReplaceAll(snapshot []*keeperv1.PluginSigil) {
 	next := make(map[key]*keeperv1.PluginSigil, len(snapshot))
 	for _, sig := range snapshot {
@@ -67,9 +68,9 @@ func (c *Cache) ReplaceAll(snapshot []*keeperv1.PluginSigil) {
 	c.mu.Unlock()
 }
 
-// Get возвращает активный Sigil для пары (namespace, name) или nil, если допуска
-// нет. Возвращается хранимый указатель — вызывающий не должен мутировать
-// PluginSigil (proto-сообщение read-only после приёма).
+// Get returns the active Sigil for the (namespace, name) pair, or nil if
+// there's no grant. Returns the stored pointer — callers must not mutate the
+// PluginSigil (proto message is read-only after receipt).
 func (c *Cache) Get(namespace, name string) *keeperv1.PluginSigil {
 	k := key{namespace: namespace, name: name}
 	c.mu.RLock()

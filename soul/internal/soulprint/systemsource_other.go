@@ -7,9 +7,10 @@ import (
 	"runtime"
 )
 
-// systemsource_other — fallback для платформ вне Linux/macOS (windows и пр.).
-// Сбор системных фактов не реализован (ADR-018: основная цель — Linux);
-// возвращаем zero-value, кроме count из runtime.NumCPU (всегда доступен).
+// systemsource_other is the fallback for platforms outside Linux/macOS
+// (windows, etc). System-fact collection isn't implemented (ADR-018's primary
+// target is Linux); returns zero-value except count from runtime.NumCPU
+// (always available).
 
 func osVersion(_ context.Context) string { return "" }
 

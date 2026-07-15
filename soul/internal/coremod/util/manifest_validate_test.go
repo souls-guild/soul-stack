@@ -23,8 +23,8 @@ func validateReq(t *testing.T, state string, params map[string]any) *pluginv1.Va
 	return req
 }
 
-// Валидный state со всеми required-параметрами → пустой список ошибок.
-// core.file.present требует path.
+// A valid state with all required params → empty error list.
+// core.file.present requires path.
 func TestValidateAgainstManifest_OK(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "present", map[string]any{
 		"path":    "/etc/x",
@@ -35,7 +35,7 @@ func TestValidateAgainstManifest_OK(t *testing.T) {
 	}
 }
 
-// Отсутствует required path → ровно одна ошибка про missing path.
+// Missing required path → exactly one error about missing path.
 func TestValidateAgainstManifest_MissingRequired(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "present", map[string]any{
 		"content": "y",
@@ -48,8 +48,8 @@ func TestValidateAgainstManifest_MissingRequired(t *testing.T) {
 	}
 }
 
-// core.file.rendered требует path И template — оба отсутствуют → две ошибки в
-// отсортированном порядке (path до template).
+// core.file.rendered requires path AND template — both missing → two errors
+// in sorted order (path before template).
 func TestValidateAgainstManifest_MultipleMissingSorted(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "rendered", nil))
 	if len(errs) != 2 {
@@ -63,7 +63,7 @@ func TestValidateAgainstManifest_MultipleMissingSorted(t *testing.T) {
 	}
 }
 
-// Неизвестный state → ошибка с перечнем допустимых.
+// Unknown state → error listing the valid ones.
 func TestValidateAgainstManifest_UnknownState(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "no-such-state", nil))
 	if len(errs) != 1 {
@@ -72,13 +72,13 @@ func TestValidateAgainstManifest_UnknownState(t *testing.T) {
 	if !strings.Contains(errs[0], "unknown state") {
 		t.Fatalf("err=%q want про unknown state", errs[0])
 	}
-	// Список допустимых упоминает существующие states.
+	// The valid-states list mentions the actual states.
 	if !strings.Contains(errs[0], "present") || !strings.Contains(errs[0], "absent") {
 		t.Fatalf("err=%q want перечень states", errs[0])
 	}
 }
 
-// Неизвестный core-модуль → internal-диагностика, без паники.
+// Unknown core module → internal diagnostic, no panic.
 func TestValidateAgainstManifest_UnknownModule(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.nonexistent", validateReq(t, "present", nil))
 	if len(errs) != 1 || !strings.Contains(errs[0], "no manifest") {
@@ -86,10 +86,10 @@ func TestValidateAgainstManifest_UnknownModule(t *testing.T) {
 	}
 }
 
-// Контракт paramPresent: явный null (Value с NullValue-Kind) трактуется как
-// ОТСУТСТВИЕ — симметрично Apply-time getter-ам (Opt*Param в params.go).
-// required-параметр со значением null обязан давать ошибку наличия уже на
-// этапе manifest-валидации (lint), а не падать позже в runtime.
+// paramPresent contract: an explicit null (a Value with NullValue-Kind) is
+// treated as ABSENT — symmetric with the Apply-time getters (Opt*Param in
+// params.go). A required param set to null must fail presence at
+// manifest-validation time (lint), not later at runtime.
 func TestValidateAgainstManifest_NullParamCountsAsAbsent(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "present", map[string]any{
 		"path": nil,
@@ -102,8 +102,8 @@ func TestValidateAgainstManifest_NullParamCountsAsAbsent(t *testing.T) {
 	}
 }
 
-// Optional-параметр со значением null — НЕ ошибка: его отсутствие допустимо.
-// path тут задан (required присутствует), content=null — опциональный.
+// An optional param set to null is NOT an error: absence is allowed.
+// path is set here (required present), content=null is the optional one.
 func TestValidateAgainstManifest_OptionalNullParamOK(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", validateReq(t, "present", map[string]any{
 		"path":    "/etc/x",
@@ -114,7 +114,7 @@ func TestValidateAgainstManifest_OptionalNullParamOK(t *testing.T) {
 	}
 }
 
-// nil Params для state с required → required-параметр считается отсутствующим.
+// nil Params for a state with required params → required param counts as absent.
 func TestValidateAgainstManifest_NilParams(t *testing.T) {
 	errs := util.ValidateAgainstManifest("core.file", &pluginv1.ValidateRequest{State: "present"})
 	if len(errs) != 1 || !strings.Contains(errs[0], "path") {

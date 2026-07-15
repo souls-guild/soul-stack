@@ -179,7 +179,7 @@ func TestApply_Onlyif_SkipsIfExitNonZero(t *testing.T) {
 
 func TestApply_PassesCwdAndEnv(t *testing.T) {
 	r := internaltest.NewRunner()
-	// envSlice сортирует: [A=1 B=2]
+	// envSlice sorts: [A=1 B=2]
 	r.Results["[cwd=/tmp] [env=A=1,B=2] mybin --flag"] = []util.Result{{ExitCode: 0, Stdout: "ok"}}
 	m := newModule(r, func(string) (bool, error) { return false, nil })
 

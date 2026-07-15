@@ -29,7 +29,7 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// assertNoMutatingSysctlCalls фейлит, если runner получил `-w` или mkdir/write.
+// assertNoMutatingSysctlCalls fails if the runner received `-w` or mkdir/write.
 func assertNoMutatingSysctlCalls(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	for _, c := range r.Calls {
@@ -39,8 +39,8 @@ func assertNoMutatingSysctlCalls(t *testing.T, r *internaltest.Runner) {
 	}
 }
 
-// TestPlan_RuntimeAndPersistMatch_Clean — runtime значение совпадает + persist
-// файл содержит ту же строку → drift=false, без мутаций.
+// TestPlan_RuntimeAndPersistMatch_Clean — runtime value matches + the persist
+// file contains the same line → drift=false, no mutations.
 func TestPlan_RuntimeAndPersistMatch_Clean(t *testing.T) {
 	dir := t.TempDir()
 	name := "net.ipv4.ip_forward"
@@ -74,7 +74,7 @@ func TestPlan_RuntimeAndPersistMatch_Clean(t *testing.T) {
 	}
 }
 
-// TestPlan_RuntimeDrift — runtime значение отличается → drift=true, без мутаций.
+// TestPlan_RuntimeDrift — runtime value differs → drift=true, no mutations.
 func TestPlan_RuntimeDrift(t *testing.T) {
 	dir := t.TempDir()
 	name := "net.ipv4.ip_forward"
@@ -98,7 +98,7 @@ func TestPlan_RuntimeDrift(t *testing.T) {
 	assertNoMutatingSysctlCalls(t, r)
 }
 
-// TestPlan_PersistMissing_Drift — runtime совпадает, persist-файла нет → drift.
+// TestPlan_PersistMissing_Drift — runtime matches, no persist file → drift.
 func TestPlan_PersistMissing_Drift(t *testing.T) {
 	dir := t.TempDir()
 	name := "net.ipv4.ip_forward"
@@ -119,7 +119,7 @@ func TestPlan_PersistMissing_Drift(t *testing.T) {
 	if got := stream.last(); got == nil || !got.GetChanged() {
 		t.Fatalf("changed=false, want true (persist missing)")
 	}
-	// Plan не должен создавать persist-файл.
+	// Plan must not create the persist file.
 	fname := "net-ipv4-ip_forward.conf"
 	if _, err := os.Stat(filepath.Join(dir, fname)); !os.IsNotExist(err) {
 		t.Fatalf("Plan создал persist-файл")
@@ -127,7 +127,7 @@ func TestPlan_PersistMissing_Drift(t *testing.T) {
 	assertNoMutatingSysctlCalls(t, r)
 }
 
-// TestPlan_PersistContentDrift — runtime совпадает, файл есть, но строка иная → drift.
+// TestPlan_PersistContentDrift — runtime matches, file exists but the line differs → drift.
 func TestPlan_PersistContentDrift(t *testing.T) {
 	dir := t.TempDir()
 	name := "net.ipv4.ip_forward"

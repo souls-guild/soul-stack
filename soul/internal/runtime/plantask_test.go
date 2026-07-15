@@ -11,9 +11,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// readSafeModule — мок SoulModule, ОБЪЯВЛЯЮЩИЙ read-safe-capability
-// (реализует module.PlanReadSafe). Фиксирует, вызывался ли Apply (для проверки
-// «на dry_run Apply физически не дёрнут»).
+// readSafeModule is a mock SoulModule that DECLARES the read-safe capability
+// (implements module.PlanReadSafe). Tracks whether Apply was called (to
+// verify that dry_run never physically triggers Apply).
 type readSafeModule struct {
 	planChanged bool
 	planErr     error
@@ -42,8 +42,9 @@ func dryRunTask(module string) *keeperv1.RenderedTask {
 	return &keeperv1.RenderedTask{Name: "t", Module: module}
 }
 
-// TestDryRun_CallsPlanNotApply — при dry_run=true для read-safe-модуля Soul
-// зовёт Plan, а Apply НЕ вызывается (read-only гарантия структурная).
+// TestDryRun_CallsPlanNotApply — with dry_run=true, Soul calls Plan for a
+// read-safe module and Apply is NOT called (the read-only guarantee is
+// structural).
 func TestDryRun_CallsPlanNotApply(t *testing.T) {
 	mod := &readSafeModule{planChanged: true}
 	reg := mapRegistry{"core.pkg": mod}
@@ -69,7 +70,7 @@ func TestDryRun_CallsPlanNotApply(t *testing.T) {
 	}
 }
 
-// TestDryRun_ChangedFalse_OK — PlanEvent.changed=false → задача OK (clean).
+// TestDryRun_ChangedFalse_OK — PlanEvent.changed=false → the task is OK (clean).
 func TestDryRun_ChangedFalse_OK(t *testing.T) {
 	mod := &readSafeModule{planChanged: false}
 	reg := mapRegistry{"core.pkg": mod}
@@ -91,9 +92,10 @@ func TestDryRun_ChangedFalse_OK(t *testing.T) {
 	}
 }
 
-// TestDryRun_DefaultDeny_NonReadSafe — модуль без read-safe-capability
-// (fakeModule на BaseModule) на dry_run → ЯВНЫЙ отказ (FAILED, plan.unsupported),
-// Apply НЕ вызван, и это НЕ false-clean (не OK/CHANGED=false).
+// TestDryRun_DefaultDeny_NonReadSafe — a module without the read-safe
+// capability (fakeModule on BaseModule) on dry_run → an EXPLICIT denial
+// (FAILED, plan.unsupported), Apply is NOT called, and this is NOT a
+// false-clean (not OK/CHANGED=false).
 func TestDryRun_DefaultDeny_NonReadSafe(t *testing.T) {
 	applyCalled := false
 	mod := &fakeModule{
@@ -125,8 +127,8 @@ func TestDryRun_DefaultDeny_NonReadSafe(t *testing.T) {
 	}
 }
 
-// TestDryRun_ModuleNotFound — неизвестный модуль на dry_run → FAILED
-// (module.not_found), не false-clean.
+// TestDryRun_ModuleNotFound — an unknown module on dry_run → FAILED
+// (module.not_found), not a false-clean.
 func TestDryRun_ModuleNotFound(t *testing.T) {
 	reg := mapRegistry{}
 	sink := &recordingSink{}
@@ -148,8 +150,8 @@ func TestDryRun_ModuleNotFound(t *testing.T) {
 	}
 }
 
-// TestDryRun_PlanError — read-safe-модуль вернул error из Plan → FAILED
-// (plan.error), Apply не вызван.
+// TestDryRun_PlanError — a read-safe module returned an error from Plan →
+// FAILED (plan.error), Apply is not called.
 func TestDryRun_PlanError(t *testing.T) {
 	mod := &readSafeModule{planErr: context.DeadlineExceeded}
 	reg := mapRegistry{"core.pkg": mod}

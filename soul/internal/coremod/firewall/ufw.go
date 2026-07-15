@@ -12,9 +12,9 @@ import (
 	"google.golang.org/grpc"
 )
 
-// applyUFW добавляет/удаляет одно ufw-правило. НИКОГДА не вызывает `ufw enable`
-// и не трогает `ufw default` — только `ufw allow/deny` и `ufw delete allow/deny`
-// для конкретного правила (инвариант безопасности, см. doc пакета).
+// applyUFW adds/removes a single ufw rule. NEVER calls `ufw enable` and never
+// touches `ufw default` — only `ufw allow/deny` and `ufw delete allow/deny`
+// for a specific rule (security invariant, see package doc).
 func (m *Module) applyUFW(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], state string, r rule) error {
 	status := m.Runner.Run(ctx, "ufw", "status")
 	if status.Err != nil {
@@ -51,17 +51,17 @@ func (m *Module) applyUFW(ctx context.Context, stream grpc.ServerStreamingServer
 	}
 }
 
-// ufwAddArgs строит аргументы для `ufw allow/deny ...`. ufw-формат:
+// ufwAddArgs builds arguments for `ufw allow/deny ...`. ufw format:
 //
 //	ufw allow proto tcp from 10.0.0.0/8 to any port 5432
-//	ufw allow 80/tcp                                    (без source)
+//	ufw allow 80/tcp                                    (no source)
 //
-// Мы всегда используем явную развёрнутую форму (proto/from/to any port), чтобы
-// add и parse были симметричны: краткая форма `80/tcp` в status показывается
-// иначе, чем `5432/tcp` с source.
+// We always use the explicit expanded form (proto/from/to any port) so add
+// and parse stay symmetric: the short form `80/tcp` shows up differently in
+// status than `5432/tcp` with a source.
 func ufwAddArgs(r rule) []string {
 	if r.source == "" {
-		// Без source — краткая форма, как её и печатает ufw status: "80/tcp".
+		// No source — short form, matching what ufw status prints: "80/tcp".
 		return []string{r.action, fmt.Sprintf("%d/%s", r.port, r.proto)}
 	}
 	return []string{
@@ -73,15 +73,15 @@ func ufwAddArgs(r rule) []string {
 	}
 }
 
-// ufwStatusRule — распарсенная строка `ufw status`.
+// ufwStatusRule is one parsed line of `ufw status`.
 type ufwStatusRule struct {
 	port   int
 	proto  string
 	action string // allow | deny
-	source string // "" для Anywhere
+	source string // "" for Anywhere
 }
 
-// ufwRulePresent сообщает, присутствует ли правило r в выводе `ufw status`.
+// ufwRulePresent reports whether rule r is present in `ufw status` output.
 func ufwRulePresent(statusOut string, r rule) bool {
 	for _, sr := range parseUFWStatus(statusOut) {
 		if sr.port == r.port && sr.proto == r.proto && sr.action == r.action && sourceMatch(sr.source, r.source) {
@@ -91,33 +91,33 @@ func ufwRulePresent(statusOut string, r rule) bool {
 	return false
 }
 
-// sourceMatch: пустой r.source (any) совпадает только с пустым sr.source
-// (Anywhere); иначе — точное строковое совпадение. Желаемый source уже
-// нормализован (normalizeSource), а ufw status печатает каноническую форму,
-// поэтому строки сравнимы напрямую.
+// sourceMatch: an empty r.source (any) matches only an empty sr.source
+// (Anywhere); otherwise exact string match. The desired source is already
+// normalized (normalizeSource), and ufw status prints the canonical form,
+// so the strings are directly comparable.
 func sourceMatch(got, want string) bool {
 	return got == want
 }
 
-// parseUFWStatus разбирает табличный вывод `ufw status`. Формат строки данных:
+// parseUFWStatus parses the tabular output of `ufw status`. Data line format:
 //
 //	To                         Action      From
 //	5432/tcp                   ALLOW       10.0.0.0/8
 //	80/tcp                     ALLOW       Anywhere
 //	22                         DENY        Anywhere
 //
-// Некоторые сборки ufw печатают в колонке Action направление-токен (`ALLOW IN`,
-// `DENY IN`, `ALLOW OUT`) даже в non-verbose-режиме:
+// Some ufw builds print a direction token in the Action column (`ALLOW IN`,
+// `DENY IN`, `ALLOW OUT`) even in non-verbose mode:
 //
 //	9100/tcp                   ALLOW IN    Anywhere
 //
-// В этом случае направление между action и source игнорируется, иначе `IN`
-// попало бы в source и сломало бы идемпотентность no-source-правил.
+// In that case the direction token between action and source is ignored,
+// otherwise `IN` would land in source and break idempotency for no-source rules.
 //
-// Игнорируются: заголовок ("To ... Action ... From"), разделитель ("--"),
-// строки про "(v6)" (IPv6-зеркало), служебная строка "Status: active".
+// Ignored: the header ("To ... Action ... From"), the separator ("--"), lines
+// with "(v6)" (IPv6 mirror), and the "Status: active" line.
 //
-// Парсинг хрупок между версиями ufw — покрыт unit-тестами на образцах.
+// Parsing is fragile across ufw versions — covered by unit tests on samples.
 func parseUFWStatus(out string) []ufwStatusRule {
 	var rules []ufwStatusRule
 	for _, line := range strings.Split(out, "\n") {
@@ -134,8 +134,8 @@ func parseUFWStatus(out string) []ufwStatusRule {
 		if strings.HasPrefix(line, "--") {
 			continue
 		}
-		// IPv6-зеркало правила (например "80/tcp (v6)") в MVP не сопоставляем —
-		// идемпотентность ведём по IPv4-строке.
+		// IPv6 mirror rules (e.g. "80/tcp (v6)") aren't matched in MVP —
+		// idempotency is tracked against the IPv4 line.
 		if strings.Contains(line, "(v6)") {
 			continue
 		}
@@ -151,8 +151,8 @@ func parseUFWStatus(out string) []ufwStatusRule {
 		if !ok {
 			continue
 		}
-		// source — первое поле после action; опциональный direction-токен
-		// (`IN`/`OUT`) между action и source пропускается.
+		// source is the first field after action; an optional direction token
+		// (`IN`/`OUT`) between action and source is skipped.
 		fromIdx := 2
 		if len(fields) > fromIdx && isUFWDirection(fields[fromIdx]) {
 			fromIdx++
@@ -169,8 +169,8 @@ func parseUFWStatus(out string) []ufwStatusRule {
 	return rules
 }
 
-// parseUFWPortProto разбирает "5432/tcp" → (5432,"tcp"). Голый порт "22" без
-// протокола трактуется как tcp (ufw default при отсутствии proto).
+// parseUFWPortProto parses "5432/tcp" → (5432,"tcp"). A bare port "22" with no
+// protocol is treated as tcp (ufw's default when proto is absent).
 func parseUFWPortProto(s string) (int, string, bool) {
 	proto := "tcp"
 	portStr := s
@@ -199,8 +199,8 @@ func actionFromUFW(s string) string {
 	}
 }
 
-// isUFWDirection распознаёт direction-токен колонки Action (`IN`/`OUT`),
-// который некоторые сборки ufw печатают после действия (`ALLOW IN`).
+// isUFWDirection recognizes the Action column's direction token (`IN`/`OUT`),
+// which some ufw builds print after the action (`ALLOW IN`).
 func isUFWDirection(s string) bool {
 	switch strings.ToUpper(s) {
 	case "IN", "OUT":

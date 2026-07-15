@@ -51,7 +51,7 @@ func TestDetectInitSystem(t *testing.T) {
 		t.Fatalf("DetectInitSystem=%q want openrc", got)
 	}
 
-	// Только `service --version` доступен → SysV.
+	// Only `service --version` available → SysV.
 	r3 := internaltest.NewRunner()
 	r3.Fallback = util.Result{ExitCode: 1}
 	r3.On("service --version", util.Result{ExitCode: 0})
@@ -59,7 +59,7 @@ func TestDetectInitSystem(t *testing.T) {
 		t.Fatalf("DetectInitSystem=%q want sysv", got)
 	}
 
-	// Ничего не доступно → Unknown.
+	// Nothing available → Unknown.
 	r4 := internaltest.NewRunner()
 	r4.Fallback = util.Result{ExitCode: 127}
 	if got := util.DetectInitSystem(context.Background(), r4); got != util.InitSystemUnknown {
@@ -67,12 +67,13 @@ func TestDetectInitSystem(t *testing.T) {
 	}
 }
 
-// TestResolvePkgMgr_FactPrimary — при непустом soulprint-факте резолв возвращает
-// факт и НЕ зовёт runtime-детект (Runner отдаёт fail на всё). Это BUG-B:
-// единый источник истины с CEL, без зависимости от наличия бинаря в PATH.
+// TestResolvePkgMgr_FactPrimary — with a non-empty soulprint fact, resolve
+// returns the fact and does NOT call runtime detection (Runner fails
+// everything). This is BUG-B: single source of truth with CEL, no dependency
+// on a binary being present in PATH.
 func TestResolvePkgMgr_FactPrimary(t *testing.T) {
 	r := internaltest.NewRunner()
-	r.Fallback = util.Result{ExitCode: 127} // любой `command -v`/`which` упадёт
+	r.Fallback = util.Result{ExitCode: 127} // any `command -v`/`which` fails
 	got := util.ResolvePkgMgr(context.Background(), r, util.PkgMgrApk)
 	if got != util.PkgMgrApk {
 		t.Fatalf("ResolvePkgMgr=%q want apk (из факта)", got)
@@ -82,7 +83,7 @@ func TestResolvePkgMgr_FactPrimary(t *testing.T) {
 	}
 }
 
-// TestResolvePkgMgr_FallbackOnEmpty — пустой/unknown факт → runtime-детект.
+// TestResolvePkgMgr_FallbackOnEmpty — empty/unknown fact → runtime detection.
 func TestResolvePkgMgr_FallbackOnEmpty(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -93,9 +94,10 @@ func TestResolvePkgMgr_FallbackOnEmpty(t *testing.T) {
 	}
 }
 
-// TestResolveInitSystem_FactPrimary — зеркало для init-системы: факт primary,
-// детект не вызывается. Это и есть alpine-сценарий BUG-B (soulprint=openrc, но
-// `rc-service --version` отсутствует — детект провалился бы).
+// TestResolveInitSystem_FactPrimary — mirrors the init-system case: fact
+// takes priority, detection isn't called. This is exactly the alpine BUG-B
+// scenario (soulprint=openrc, but `rc-service --version` is missing —
+// detection would have failed).
 func TestResolveInitSystem_FactPrimary(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 127}
@@ -108,7 +110,7 @@ func TestResolveInitSystem_FactPrimary(t *testing.T) {
 	}
 }
 
-// TestResolveInitSystem_FallbackOnEmpty — пустой факт → runtime-детект.
+// TestResolveInitSystem_FallbackOnEmpty — empty fact → runtime detection.
 func TestResolveInitSystem_FallbackOnEmpty(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}

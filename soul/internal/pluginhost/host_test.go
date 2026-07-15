@@ -15,8 +15,8 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// TestNewHostNilConfig — nil-конфиг даёт host с дефолтами ADR-020(d) и
-// Soul-host-овским DefaultSocketDir (отличается от Keeper-host).
+// TestNewHostNilConfig — nil config gives a host with ADR-020(d) defaults and
+// Soul-host's DefaultSocketDir (different from Keeper-host).
 func TestNewHostNilConfig(t *testing.T) {
 	h, err := NewHost(nil, nil, nil)
 	if err != nil {
@@ -36,8 +36,8 @@ func TestNewHostNilConfig(t *testing.T) {
 	}
 }
 
-// TestNewHostEmptyConfig — пустой (не nil) конфиг тоже падает на дефолтный
-// SocketDir, потому что cfg.SocketDir == "".
+// TestNewHostEmptyConfig — an empty (non-nil) config also falls back to the
+// default SocketDir, because cfg.SocketDir == "".
 func TestNewHostEmptyConfig(t *testing.T) {
 	h, err := NewHost(&config.PluginRuntime{}, nil, nil)
 	if err != nil {
@@ -51,8 +51,8 @@ func TestNewHostEmptyConfig(t *testing.T) {
 	}
 }
 
-// TestNewHostFullConfig — все поля заданы и переопределяют дефолты, capabilities
-// конвертируются в типизированный set.
+// TestNewHostFullConfig — all fields set and override the defaults,
+// capabilities get converted into a typed set.
 func TestNewHostFullConfig(t *testing.T) {
 	cfg := &config.PluginRuntime{
 		SocketDir:           "/tmp/custom-sock",
@@ -87,8 +87,8 @@ func TestNewHostFullConfig(t *testing.T) {
 	}
 }
 
-// TestNewHostBadStartupTimeout — невалидный startup_timeout → ошибка
-// конструктора (defense-in-depth повторная валидация duration).
+// TestNewHostBadStartupTimeout — invalid startup_timeout → constructor error
+// (defense-in-depth re-validation of the duration).
 func TestNewHostBadStartupTimeout(t *testing.T) {
 	_, err := NewHost(&config.PluginRuntime{StartupTimeout: "not-a-duration"}, nil, nil)
 	if err == nil {
@@ -96,7 +96,7 @@ func TestNewHostBadStartupTimeout(t *testing.T) {
 	}
 }
 
-// TestNewHostBadShutdownGrace — невалидный shutdown_grace → ошибка.
+// TestNewHostBadShutdownGrace — invalid shutdown_grace → error.
 func TestNewHostBadShutdownGrace(t *testing.T) {
 	_, err := NewHost(&config.PluginRuntime{ShutdownGrace: "12 parsecs"}, nil, nil)
 	if err == nil {
@@ -104,8 +104,8 @@ func TestNewHostBadShutdownGrace(t *testing.T) {
 	}
 }
 
-// TestNewHostUnknownCapability — неизвестная capability в allowed-списке →
-// ошибка (закрытый enum, host не должен молча игнорировать).
+// TestNewHostUnknownCapability — unknown capability in the allowed list →
+// error (closed enum, the host must not silently ignore it).
 func TestNewHostUnknownCapability(t *testing.T) {
 	_, err := NewHost(&config.PluginRuntime{AllowedCapabilities: []string{"summon_demons"}}, nil, nil)
 	if err == nil {
@@ -113,9 +113,9 @@ func TestNewHostUnknownCapability(t *testing.T) {
 	}
 }
 
-// TestSpawnRejectsKindMismatch — Spawn отвергает Discovered с manifest.kind !=
-// soul_module ещё до exec (защита от drift Discover-фильтра / ручной
-// конструкции Discovered). Покрывает errKindMismatch.
+// TestSpawnRejectsKindMismatch — Spawn rejects a Discovered with manifest.kind
+// != soul_module before exec even happens (guards against Discover-filter
+// drift / a manually constructed Discovered). Covers errKindMismatch.
 func TestSpawnRejectsKindMismatch(t *testing.T) {
 	h, err := NewHost(nil, nil, nil)
 	if err != nil {
@@ -139,8 +139,8 @@ func TestSpawnRejectsKindMismatch(t *testing.T) {
 	}
 }
 
-// TestDiscoverMissingRoot — несуществующий modulesRoot → fatal error от
-// sharedhost.Discover (ENOENT на ReadDir), а не пустой список.
+// TestDiscoverMissingRoot — nonexistent modulesRoot → fatal error from
+// sharedhost.Discover (ENOENT on ReadDir), not an empty list.
 func TestDiscoverMissingRoot(t *testing.T) {
 	_, _, err := Discover("/nonexistent/soul-stack/modules/root")
 	if err == nil {
@@ -148,16 +148,16 @@ func TestDiscoverMissingRoot(t *testing.T) {
 	}
 }
 
-// TestDiscoverFiltersNonSoulKind — Discover на каталоге с одним cloud_driver и
-// одним soul_module возвращает только soul_module; cloud-плагин уходит в
-// warnings (FilterByKinds-ветка Soul-host-а).
+// TestDiscoverFiltersNonSoulKind — Discover on a directory with one
+// cloud_driver and one soul_module returns only the soul_module; the cloud
+// plugin goes into warnings (Soul-host's FilterByKinds branch).
 func TestDiscoverFiltersNonSoulKind(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin host requires Unix sockets")
 	}
 	root := shortHostDir(t, "ss-mixedmods-")
 
-	// soul_module-плагин (echo) — должен пройти.
+	// soul_module plugin (echo) — should pass.
 	soulDir := filepath.Join(root, "wb-echo")
 	if err := os.Mkdir(soulDir, 0o755); err != nil {
 		t.Fatalf("mkdir soul: %v", err)
@@ -179,8 +179,8 @@ spec:
 		t.Fatalf("write soul manifest: %v", err)
 	}
 
-	// cloud_driver-плагин — должен быть отфильтрован в warnings. Бинарь —
-	// копия echo под cloud-именем, чтобы Discover нашёл исполняемый файл.
+	// cloud_driver plugin — should be filtered into warnings. The binary is a
+	// copy of echo under a cloud name, so Discover finds an executable file.
 	cloudDir := filepath.Join(root, "wb-aws")
 	if err := os.Mkdir(cloudDir, 0o755); err != nil {
 		t.Fatalf("mkdir cloud: %v", err)
@@ -220,9 +220,9 @@ side_effects: []
 	}
 }
 
-// TestSpawnBinaryNotFound — Discovered указывает на несуществующий бинарь;
-// Spawn падает (cmd.Start / integrity-gate) и не возвращает Plugin.
-// End-to-end error-путь Soul-обёртки через shared.Spawn.
+// TestSpawnBinaryNotFound — Discovered points at a nonexistent binary;
+// Spawn fails (cmd.Start / integrity-gate) and returns no Plugin.
+// End-to-end error path of the Soul wrapper through shared.Spawn.
 func TestSpawnBinaryNotFound(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin host requires Unix sockets")
@@ -243,14 +243,14 @@ func TestSpawnBinaryNotFound(t *testing.T) {
 	}
 }
 
-// TestSpawnDigestMismatchRejected — security-ветка integrity-gate end-to-end
-// (ADR-026, S6b):
-//   - первый Spawn: Sigil-verify проходит (валидный допуск), sidecar засилен;
-//   - бинарь плагина подменяется (имитация tamper в кеше host-а);
-//   - второй Spawn обязан отвергнуть запуск fail-closed: фактический digest
-//     бинаря больше не совпадает с допущенным хешем в Sigil → digest_mismatch.
+// TestSpawnDigestMismatchRejected — security branch of the integrity gate
+// end-to-end (ADR-026, S6b):
+//   - first Spawn: Sigil-verify passes (valid grant), sidecar sealed;
+//   - the plugin binary is swapped (simulates tampering in the host's cache);
+//   - the second Spawn must reject the run fail-closed: the binary's actual
+//     digest no longer matches the hash granted in Sigil → digest_mismatch.
 //
-// Это центральный security-инвариант: подмена бинаря не приводит к exec.
+// This is the central security invariant: swapping the binary must not lead to exec.
 func TestSpawnDigestMismatchRejected(t *testing.T) {
 	h, d, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
@@ -258,7 +258,7 @@ func TestSpawnDigestMismatchRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Первый запуск — Sigil-verify проходит, печать sidecar, нормальная работа.
+	// First run — Sigil-verify passes, sidecar sealed, normal operation.
 	p, err := h.Spawn(ctx, d)
 	if err != nil {
 		t.Fatalf("первый Spawn (verify+seal): %v", err)
@@ -272,10 +272,10 @@ func TestSpawnDigestMismatchRejected(t *testing.T) {
 		t.Fatalf("sidecar .sha256 не создан первым Spawn: %v", err)
 	}
 
-	// Подмена бинаря: дописываем мусор → digest перестаёт совпадать с допуском.
+	// Swap the binary: append garbage → digest no longer matches the grant.
 	tamperBinary(t, d.BinaryPath)
 
-	// Второй Spawn обязан отказать до exec — fail-closed по digest_mismatch.
+	// The second Spawn must refuse before exec — fail-closed on digest_mismatch.
 	_, err = h.Spawn(ctx, d)
 	if err == nil {
 		t.Fatal("SECURITY: Spawn запустил подменённый бинарь (digest mismatch не отвергнут)")
@@ -289,15 +289,15 @@ func TestSpawnDigestMismatchRejected(t *testing.T) {
 	}
 }
 
-// tamperBinary меняет содержимое бинаря плагина так, чтобы фактический digest
-// перестал совпадать с допущенным в Sigil (имитация tamper в кеше host-а).
+// tamperBinary changes the plugin binary's content so its actual digest no
+// longer matches what's granted in Sigil (simulates tampering in the host's cache).
 //
-// Подмена атомарная: новый контент пишется во временный файл рядом и
-// os.Rename'ом подставляется поверх старого пути. Прямое открытие
-// исполняемого файла на запись (O_WRONLY) на Linux даёт ETXTBSY, пока
-// предыдущий plugin-процесс ещё держит inode на exec — rename же создаёт
-// новый inode и не конфликтует с исполняемым старым (кросс-платформенно:
-// на macOS ETXTBSY-ограничения нет, rename корректен и там).
+// The swap is atomic: new content is written to a temp file alongside and
+// swapped over the old path via os.Rename. Opening the executable directly
+// for writing (O_WRONLY) gives ETXTBSY on Linux while a previous plugin
+// process still holds the inode for exec — rename instead creates a new inode
+// and doesn't conflict with the running old one (cross-platform: macOS has no
+// ETXTBSY restriction, rename works there too).
 func tamperBinary(t *testing.T, path string) {
 	t.Helper()
 	orig, err := os.ReadFile(path)

@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// PortClosedName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check).
+// PortClosedName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
 const PortClosedName = beaconaddr.PortClosed
 
 const (
@@ -21,32 +21,32 @@ const (
 	statePortClosed State = "closed"
 )
 
-// portClosedDefaultHost — целевой хост по умолчанию: локальный TCP-порт сервиса
-// (типичный случай — наблюдать, что локальный демон слушает свой порт).
+// portClosedDefaultHost is the default target host: the service's local TCP
+// port (the typical case is observing that a local daemon listens on its port).
 const portClosedDefaultHost = "127.0.0.1"
 
-// portClosedDefaultTimeout — таймаут одного TCP-dial. Короткий: beacon-проверка
-// должна укладываться в тик scheduler-а, висящий dial — это уже наблюдаемое
-// «недоступно».
+// portClosedDefaultTimeout is the timeout for a single TCP dial. Short: a
+// beacon check must fit within a scheduler tick — a hanging dial is itself
+// an observed "unavailable".
 const portClosedDefaultTimeout = 3 * time.Second
 
-// PortClosed — core-beacon наблюдения за доступностью TCP-порта (ADR-030).
-// Read-only: один TCP-dial, без отправки данных в сокет. State: "open" если
-// соединение установилось, "closed" если порт не принял (refused/timeout/host
-// недоступен) — с точки зрения наблюдателя порт закрыт, это событие интереса
-// (а не ошибка проверки).
+// PortClosed is a core-beacon observing TCP port availability (ADR-030).
+// Read-only: a single TCP dial, no data sent over the socket. State: "open"
+// if the connection succeeds, "closed" if the port refuses it
+// (refused/timeout/host unreachable) — from the observer's view the port is
+// closed, which is the event of interest, not a check error.
 //
 // Params:
-//   - `port` (int, required) — TCP-порт 1..65535;
-//   - `host` (string, optional, default "127.0.0.1") — целевой хост/IP;
-//   - `timeout` (string duration, optional, default "3s") — таймаут dial.
+//   - `port` (int, required) — TCP port 1..65535;
+//   - `host` (string, optional, default "127.0.0.1") — target host/IP;
+//   - `timeout` (string duration, optional, default "3s") — dial timeout.
 type PortClosed struct {
-	// Dial вынесен в поле для подмены в unit-тестах (детерминированный fake без
-	// реального сокета). В проде — net.Dialer.DialContext.
+	// Dial is a field so unit tests can substitute a deterministic fake with
+	// no real socket. Production uses net.Dialer.DialContext.
 	Dial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// NewPortClosed собирает beacon с production-dialer-ом (net.Dialer).
+// NewPortClosed builds a beacon with the production dialer (net.Dialer).
 func NewPortClosed() *PortClosed {
 	return &PortClosed{Dial: (&net.Dialer{}).DialContext}
 }
@@ -74,8 +74,8 @@ func (b *PortClosed) Check(ctx context.Context, params *structpb.Struct) (State,
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, derr := b.Dial(dialCtx, "tcp", address)
 	if derr != nil {
-		// refused/timeout/no-route — порт недоступен наблюдателю → "closed".
-		// Это валидное состояние, а не ошибка Check.
+		// refused/timeout/no-route — the port is unreachable to the observer →
+		// "closed". A valid state, not a Check error.
 		return statePortClosed, portData(host, port), nil
 	}
 	_ = conn.Close()
@@ -90,9 +90,9 @@ func portData(host string, port int) *structpb.Struct {
 	return s
 }
 
-// parseBeaconPort извлекает обязательный TCP-порт (1..65535). Принимает число
-// (proto-json маршалит числа во float64) или строку (на случай ${...}-
-// интерполяции, дающей строку) — паттерн core.firewall.parsePort.
+// parseBeaconPort extracts the required TCP port (1..65535). Accepts a number
+// (proto-json marshals numbers as float64) or a string (for ${...}
+// interpolation, which yields a string) — mirrors core.firewall.parsePort.
 func parseBeaconPort(params *structpb.Struct) (int, error) {
 	if n, ok, err := util.OptIntParam(params, "port"); err == nil && ok {
 		if n < 1 || n > 65535 {
@@ -117,9 +117,9 @@ func parseBeaconPort(params *structpb.Struct) (int, error) {
 	return n, nil
 }
 
-// optBeaconTimeout разбирает опциональный param timeout по convention `duration`
-// Soul Stack (shared/config — Go ParseDuration + суффикс `<N>d`). Пустой param →
-// def. Единый парсер для port_closed / http_unhealthy.
+// optBeaconTimeout parses the optional timeout param per the Soul Stack
+// `duration` convention (shared/config — Go ParseDuration + `<N>d` suffix).
+// Empty param → def. Shared parser for port_closed / http_unhealthy.
 func optBeaconTimeout(params *structpb.Struct, def time.Duration) (time.Duration, error) {
 	s, err := util.OptStringParam(params, "timeout")
 	if err != nil {

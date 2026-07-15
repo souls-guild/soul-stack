@@ -24,7 +24,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// aptInstalled — детект apt + dpkg-query вернувший installed.
+// aptInstalled — apt detected + dpkg-query reporting installed.
 func aptInstalled(name, version string) *internaltest.Runner {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -36,16 +36,16 @@ func aptInstalled(name, version string) *internaltest.Runner {
 	return r
 }
 
-// Ожидаемые формы apt-команд: install/remove/update теперь неинтерактивны
-// (`env DEBIAN_FRONTEND=noninteractive apt-get …`), а install несёт
-// Dpkg::Options force-confdef/force-confold — conffile-prompt («keep or
-// replace?») при re-apply больше невозможен, поэтому пустой stdin Soul-агента
-// не роняет задачу на EOF (live-баг Debian 12). Строки совпадают с тем, как
-// internaltest.Runner склеивает name+args через пробел.
+// Expected apt-command forms: install/remove/update are non-interactive
+// (`env DEBIAN_FRONTEND=noninteractive apt-get …`), and install carries
+// Dpkg::Options force-confdef/force-confold — conffile prompts ("keep or
+// replace?") on re-apply are no longer possible, so the Soul agent's empty
+// stdin doesn't hit EOF (live Debian 12 bug). Strings match how
+// internaltest.Runner joins name+args with spaces.
 const aptNonInteractive = "env DEBIAN_FRONTEND=noninteractive apt-get"
 
-// aptInstallCmd — ожидаемая install-команда (target = имя или `name=version`).
-// confold = сохранить наш отрендеренный conffile, confdef = дефолт для прочих.
+// aptInstallCmd — expected install command (target = name or `name=version`).
+// confold keeps our rendered conffile, confdef is the default for the rest.
 func aptInstallCmd(target string) string {
 	return aptNonInteractive + " install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold " + target
 }
@@ -92,7 +92,7 @@ func TestApply_Installed_AlreadyPresent(t *testing.T) {
 	if got := ev.Output.Fields["version"].GetStringValue(); got != "7:7.0.0-1" {
 		t.Fatalf("version=%q", got)
 	}
-	// Не должно быть вызова apt-get install.
+	// No apt-get install call expected.
 	for _, c := range r.Calls {
 		if strings.Contains(c, "apt-get install") {
 			t.Fatalf("unexpected install call: %q", c)
@@ -131,14 +131,12 @@ func TestApply_Installed_NotPresent_Installs(t *testing.T) {
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
 	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
-	// dpkg-query exits 1 — пакет не установлен.
+	// dpkg-query exits 1 — package not installed.
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
 	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
-	// Post-install: pacackge present.
-	// Перезаписываем dpkg-query результат. Здесь невозможно (map): поэтому
-	// fake-runner повторяет одинаковый ответ на повторные вызовы. Для теста
-	// «changed=true после install» этого достаточно — нам важен сам факт
-	// changed, версия после может быть пустой.
+	// Post-install: package present. Can't override dpkg-query's result here
+	// (map key), so fake-runner repeats the same response on repeat calls.
+	// Fine for this test — we only care that changed=true, not the version.
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -154,12 +152,12 @@ func TestApply_Installed_NotPresent_Installs(t *testing.T) {
 	}
 }
 
-// hasCall — был ли среди вызовов runner-а ровно такой (space-joined) аргумент-набор.
+// hasCall — whether the runner saw this exact (space-joined) call.
 func hasCall(r *internaltest.Runner, want string) bool {
 	return callIndex(r, want) >= 0
 }
 
-// callIndex — позиция первого ровно-совпадающего вызова в r.Calls; -1 если не было.
+// callIndex — index of the first exact-matching call in r.Calls; -1 if none.
 func callIndex(r *internaltest.Runner, want string) int {
 	for i, c := range r.Calls {
 		if c == want {
@@ -169,17 +167,17 @@ func callIndex(r *internaltest.Runner, want string) int {
 	return -1
 }
 
-// TestApply_Installed_NoVersion_InstallsWithoutPin — BUG-1: version пустой/не
-// задан → install БЕЗ =version-пина (latest available из репо), не `name=`.
-// Покрывает все четыре backend-а: рендер install-команды без пина.
+// TestApply_Installed_NoVersion_InstallsWithoutPin — BUG-1: empty/unset
+// version → install WITHOUT a version pin (latest available from repo), not
+// `name=`. Covers all four backends: install-command rendering without a pin.
 func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 	cases := []struct {
 		name    string
 		mgrCmd  string // command -v <mgrCmd>
-		refresh string // ожидаемая refresh-команда индекса репо ("" = mgr без refresh)
-		query   string // запрос «установлен ли пакет» (возвращает «не установлен»)
-		want    string // ожидаемая install-команда БЕЗ пина
-		notWant string // подстрока пина, которой быть НЕ должно
+		refresh string // expected repo-index refresh command ("" = mgr has no refresh)
+		query   string // "is package installed" query (returns "not installed")
+		want    string // expected install command WITHOUT a pin
+		notWant string // pin substring that must NOT appear
 	}{
 		{
 			name:    "apt",
@@ -220,12 +218,12 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 			if tc.refresh != "" {
 				r.On(tc.refresh, util.Result{ExitCode: 0})
 			}
-			r.On(tc.query, util.Result{ExitCode: 1}) // пакет не установлен
-			r.On(tc.want, util.Result{ExitCode: 0})  // install без пина
+			r.On(tc.query, util.Result{ExitCode: 1}) // package not installed
+			r.On(tc.want, util.Result{ExitCode: 0})  // install without a pin
 			m := &pkg.Module{Runner: r}
 
 			stream := &internaltest.ApplyStream{}
-			// version не передан вовсе (required:false на уровне контракта).
+			// version omitted entirely (required:false at the contract level).
 			if err := m.Apply(&pluginv1.ApplyRequest{
 				State:  "installed",
 				Params: mustStruct(t, map[string]any{"name": "redis-server"}),
@@ -240,8 +238,8 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 					t.Fatalf("install получил version-пин %q (хотя version не задан): %q", tc.notWant, c)
 				}
 			}
-			// refresh индекса репо (apt/apk) обязан предшествовать install;
-			// для dnf/yum refresh-команды нет (metadata auto-refresh).
+			// repo-index refresh (apt/apk) must precede install;
+			// dnf/yum have no refresh command (metadata auto-refresh).
 			if tc.refresh != "" {
 				ri, ii := callIndex(r, tc.refresh), callIndex(r, tc.want)
 				if ri < 0 {
@@ -255,8 +253,8 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 	}
 }
 
-// TestApply_Installed_EmptyVersion_InstallsWithoutPin — version передан пустой
-// строкой ("") трактуется идентично «не задан»: install без пина (BUG-1).
+// TestApply_Installed_EmptyVersion_InstallsWithoutPin — version passed as an
+// empty string ("") is treated the same as unset: install without a pin (BUG-1).
 func TestApply_Installed_EmptyVersion_InstallsWithoutPin(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -284,9 +282,9 @@ func TestApply_Installed_EmptyVersion_InstallsWithoutPin(t *testing.T) {
 }
 
 // TestApply_Installed_DistroNativeVersion_PinsExact — distro-native version
-// (epoch + revision, Debian-форма) пинуется как есть: `name=<version>` (apt).
-// BUG-1: pattern контракта теперь допускает такие строки, а модуль обязан
-// прокинуть их в install дословно.
+// (epoch + revision, Debian form) is pinned verbatim: `name=<version>` (apt).
+// BUG-1: the contract pattern now allows such strings, and the module must
+// pass them through to install unchanged.
 func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 	const ver = "5:7.0.15-1~deb12u7"
 	r := internaltest.NewRunner()
@@ -294,8 +292,8 @@ func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
 	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.OnSeq("dpkg-query -W -f=${Status} ${Version} redis-server",
-		util.Result{ExitCode: 1}, // до install — не установлен
-		util.Result{ExitCode: 0, Stdout: "install ok installed " + ver}, // после
+		util.Result{ExitCode: 1}, // before install — not installed
+		util.Result{ExitCode: 0, Stdout: "install ok installed " + ver}, // after
 	)
 	r.On(aptInstallCmd("redis-server="+ver), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
@@ -312,15 +310,16 @@ func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 	}
 }
 
-// TestApply_Apt_Install_NonInteractive_ConffileSafe — guard на live-баг Debian
-// 12: conffile-prompt («keep or replace?») при re-apply больше структурно
-// невозможен. Apply install обязан нести в одной команде: DEBIAN_FRONTEND=
-// noninteractive (debconf молчит) И оба Dpkg::Options force-confdef/force-confold
-// (dpkg не спрашивает про conffile, сохраняет наш отрендеренный). Без любого из
-// трёх пустой stdin Soul-агента упёрся бы в EOF и уронил install.
+// TestApply_Apt_Install_NonInteractive_ConffileSafe — guards the live Debian
+// 12 bug: conffile prompts ("keep or replace?") on re-apply are now
+// structurally impossible. Apply install must carry, in one command:
+// DEBIAN_FRONTEND=noninteractive (debconf stays quiet) AND both
+// Dpkg::Options force-confdef/force-confold (dpkg keeps our rendered
+// conffile without asking). Missing any of the three, the Soul agent's
+// empty stdin would hit EOF and fail the install.
 //
-// Проверяем фактический фрагмент захваченной команды (не helper-форму — иначе
-// тавтология): если рефактор уберёт неинтерактивность, тест поймает регресс.
+// Checks the actual captured command fragment (not the helper form — that
+// would be tautological): a refactor dropping non-interactivity gets caught.
 func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -359,11 +358,11 @@ func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
 	}
 }
 
-// TestApply_Apt_RemoveAndUpdate_NonInteractive — remove и update индекса тоже
-// идут с DEBIAN_FRONTEND=noninteractive (prerm-скрипты пакета и debconf при
-// обновлении не должны интерактивно спрашивать на пустом stdin).
+// TestApply_Apt_RemoveAndUpdate_NonInteractive — remove and index update also
+// run with DEBIAN_FRONTEND=noninteractive (package prerm scripts and debconf
+// during update must not prompt interactively on empty stdin).
 func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
-	// remove установленного пакета.
+	// remove an installed package.
 	r := aptInstalled("redis-server", "7:7.0.0-1")
 	r.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
@@ -376,7 +375,7 @@ func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
 	}
 	assertAptNonInteractive(t, r, "apt-get remove")
 
-	// update индекса (через install на отсутствующем пакете).
+	// index update (via install on an absent package).
 	r2 := internaltest.NewRunner()
 	r2.Fallback = util.Result{ExitCode: 1}
 	r2.On("command -v apt-get", util.Result{ExitCode: 0})
@@ -394,8 +393,8 @@ func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
 	assertAptNonInteractive(t, r2, "apt-get update")
 }
 
-// assertAptNonInteractive — фейлит, если apt-команда с данной подкомандой
-// вызвана БЕЗ DEBIAN_FRONTEND=noninteractive.
+// assertAptNonInteractive — fails if an apt command with this subcommand was
+// called WITHOUT DEBIAN_FRONTEND=noninteractive.
 func assertAptNonInteractive(t *testing.T, r *internaltest.Runner, subcmd string) {
 	t.Helper()
 	for _, c := range r.Calls {
@@ -405,7 +404,7 @@ func assertAptNonInteractive(t *testing.T, r *internaltest.Runner, subcmd string
 	}
 }
 
-// countCalls — сколько раз ровно такая команда встретилась в r.Calls.
+// countCalls — how many times this exact command appears in r.Calls.
 func countCalls(r *internaltest.Runner, want string) int {
 	n := 0
 	for _, c := range r.Calls {
@@ -416,9 +415,9 @@ func countCalls(r *internaltest.Runner, want string) int {
 	return n
 }
 
-// TestApply_Apt_RefreshBeforeInstall — фикс прод-бага: на свежей VM install без
-// предварительного `apt-get update` упирается в «Unable to locate package».
-// Проверяем, что update вызывается и предшествует install.
+// TestApply_Apt_RefreshBeforeInstall — fix for a prod bug: on a fresh VM,
+// install without a prior `apt-get update` hits "Unable to locate package".
+// Checks that update is called and precedes install.
 func TestApply_Apt_RefreshBeforeInstall(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -444,14 +443,14 @@ func TestApply_Apt_RefreshBeforeInstall(t *testing.T) {
 	}
 }
 
-// TestApply_Apk_RefreshBeforeInstall — apk-аналог: `apk update` перед `apk add`,
-// иначе на свежем образе пакет не находится.
+// TestApply_Apk_RefreshBeforeInstall — apk equivalent: `apk update` before
+// `apk add`, otherwise the package isn't found on a fresh image.
 func TestApply_Apk_RefreshBeforeInstall(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apk", util.Result{ExitCode: 0})
 	r.On("apk update", util.Result{ExitCode: 0})
-	r.On("apk info -e redis", util.Result{ExitCode: 1}) // не установлен
+	r.On("apk info -e redis", util.Result{ExitCode: 1}) // not installed
 	r.On("apk add --no-cache redis", util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
@@ -471,9 +470,9 @@ func TestApply_Apk_RefreshBeforeInstall(t *testing.T) {
 	}
 }
 
-// TestApply_Apt_RefreshOncePerProcess — refresh индекса выполняется один раз за
-// жизнь процесса (вариант (б)): один Module обслуживает несколько install-шагов
-// прогона, второй install НЕ должен повторять `apt-get update`.
+// TestApply_Apt_RefreshOncePerProcess — index refresh runs once per process
+// lifetime (option (b)): one Module serves multiple install steps in a run,
+// the second install must NOT repeat `apt-get update`.
 func TestApply_Apt_RefreshOncePerProcess(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -499,13 +498,13 @@ func TestApply_Apt_RefreshOncePerProcess(t *testing.T) {
 	}
 }
 
-// TestApply_Dnf_NoRefresh — dnf/yum auto-refresh metadata по expiration, явный
-// update НЕ добавляем; install при «не установлен» вызывается сразу.
+// TestApply_Dnf_NoRefresh — dnf/yum auto-refresh metadata on expiration, we
+// don't add an explicit update; install runs immediately when not installed.
 func TestApply_Dnf_NoRefresh(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v dnf", util.Result{ExitCode: 0})
-	r.On("rpm -q --qf %{VERSION} redis", util.Result{ExitCode: 1}) // не установлен
+	r.On("rpm -q --qf %{VERSION} redis", util.Result{ExitCode: 1}) // not installed
 	r.On("dnf install -y redis", util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
@@ -523,9 +522,9 @@ func TestApply_Dnf_NoRefresh(t *testing.T) {
 	}
 }
 
-// TestApply_Apt_RefreshFails_NoInstall — если `apt-get update` упал, install НЕ
-// выполняется и Apply возвращает failed (не пытаемся ставить по устаревшему
-// индексу). Флаг refresh-done при этом не ставится.
+// TestApply_Apt_RefreshFails_NoInstall — if `apt-get update` fails, install is
+// NOT run and Apply returns failed (we don't install against a stale index).
+// The refresh-done flag is not set in this case.
 func TestApply_Apt_RefreshFails_NoInstall(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -645,8 +644,8 @@ func TestApply_ApkInstalled(t *testing.T) {
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apk", util.Result{ExitCode: 0})
 	r.On("apk info -e redis", util.Result{ExitCode: 0, Stdout: "redis"})
-	// `apk info -ev <name>` → `<name>-<version>`; модуль срезает `redis-` префикс,
-	// в register.version попадает чистый номер (MINOR-C).
+	// `apk info -ev <name>` → `<name>-<version>`; the module strips the
+	// `redis-` prefix, register.version gets the bare number (MINOR-C).
 	r.On("apk info -ev redis", util.Result{ExitCode: 0, Stdout: "redis-7.0.0-r0\n"})
 	m := &pkg.Module{Runner: r}
 	stream := &internaltest.ApplyStream{}
@@ -664,12 +663,13 @@ func TestApply_ApkInstalled(t *testing.T) {
 	}
 }
 
-// TestApply_PkgMgrFromFact_NoDetect — BUG-B: soulprint-факт pkg_mgr=apk primary,
-// `command -v`/`which` не отвечают (fallback-детект провалился бы и модуль упал бы
-// «no supported package manager»). С фактом модуль идёт прямо в apk-ветку.
+// TestApply_PkgMgrFromFact_NoDetect — BUG-B: soulprint fact pkg_mgr=apk is
+// primary; `command -v`/`which` don't respond (fallback detection would fail
+// and the module would error "no supported package manager"). With the fact,
+// the module goes straight to the apk branch.
 func TestApply_PkgMgrFromFact_NoDetect(t *testing.T) {
 	r := internaltest.NewRunner()
-	r.Fallback = util.Result{ExitCode: 127} // ВСЕ detection-команды отсутствуют
+	r.Fallback = util.Result{ExitCode: 127} // ALL detection commands are absent
 	r.On("apk info -e redis", util.Result{ExitCode: 0, Stdout: "redis"})
 	r.On("apk info -ev redis", util.Result{ExitCode: 0, Stdout: "redis-7.0.0-r0\n"})
 	m := &pkg.Module{Runner: r}
@@ -696,16 +696,16 @@ func TestApply_PkgMgrFromFact_NoDetect(t *testing.T) {
 	}
 }
 
-// TestApply_PkgMgrFactEmpty_FallbackDetect — пустой факт → runtime-детект
-// (factless-хост: push-режим / старый Keeper без soulprint).
+// TestApply_PkgMgrFactEmpty_FallbackDetect — empty fact → runtime detection
+// (factless host: push mode / old Keeper without soulprint).
 func TestApply_PkgMgrFactEmpty_FallbackDetect(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
-	r.On("command -v apk", util.Result{ExitCode: 0}) // детект → apk
+	r.On("command -v apk", util.Result{ExitCode: 0}) // detect → apk
 	r.On("apk info -e redis", util.Result{ExitCode: 0, Stdout: "redis"})
 	r.On("apk info -ev redis", util.Result{ExitCode: 0, Stdout: "redis-7.0.0-r0\n"})
 	m := &pkg.Module{Runner: r}
-	// SetHostFacts не вызываем — facts пуст.
+	// SetHostFacts not called — facts stay empty.
 
 	stream := &internaltest.ApplyStream{}
 	if err := m.Apply(&pluginv1.ApplyRequest{
@@ -722,9 +722,9 @@ func TestApply_PkgMgrFactEmpty_FallbackDetect(t *testing.T) {
 	}
 }
 
-// TestApply_ApkVersion_NameWithDash — MINOR-C critical: имя apk-пакета может
-// содержать дефис (`py3-pip`); split по дефису дал бы неверную версию. Срез
-// известного `<name>-` префикса даёт корректный номер.
+// TestApply_ApkVersion_NameWithDash — MINOR-C critical: an apk package name
+// can contain a dash (`py3-pip`); splitting on dash would give a wrong
+// version. Stripping the known `<name>-` prefix gives the correct number.
 func TestApply_ApkVersion_NameWithDash(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -749,20 +749,20 @@ func TestApply_ApkVersion_NameWithDash(t *testing.T) {
 // state: latest
 // ---------------------------------------------------------------------------
 
-// TestApply_Latest_AllBackends — state latest по каждому backend-у: правильная
-// upgrade-команда, refresh-индекса для apt/apk перед ней, changed=true когда
-// версия изменилась (или пакета не было).
+// TestApply_Latest_AllBackends — state latest for each backend: correct
+// upgrade command, index refresh for apt/apk before it, changed=true when the
+// version changed (or the package was absent).
 func TestApply_Latest_AllBackends(t *testing.T) {
 	cases := []struct {
 		name       string
 		mgrCmd     string // command -v <mgrCmd>
-		refresh    string // refresh-команда индекса ("" = backend без refresh)
-		queryCmd   string // запрос версии
+		refresh    string // index refresh command ("" = backend has no refresh)
+		queryCmd   string // version query
 		preQuery   util.Result
 		postQuery  util.Result
-		upgrade    string // ожидаемая upgrade-команда
+		upgrade    string // expected upgrade command
 		wantChange bool
-		// дополнительный вызов для apk (apk info -v) при installed
+		// extra call for apk (apk info -v) when installed
 		extraOn  string
 		extraRes util.Result
 	}{
@@ -803,8 +803,8 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 			postQuery:  util.Result{ExitCode: 0, Stdout: "nginx"},
 			upgrade:    "apk add --upgrade nginx",
 			wantChange: true,
-			// apk info -ev вызывается дважды (до и после); версия меняется через
-			// OnSeq ниже (1.0.0-r0 → 1.2.0-r0 после среза имени) → changed=true.
+			// apk info -ev is called twice (before and after); version changes via
+			// OnSeq below (1.0.0-r0 → 1.2.0-r0 after name-stripping) → changed=true.
 			extraOn: "apk info -ev nginx",
 		},
 	}
@@ -819,7 +819,7 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 			r.OnSeq(tc.queryCmd, tc.preQuery, tc.postQuery)
 			r.On(tc.upgrade, util.Result{ExitCode: 0})
 			if tc.extraOn != "" {
-				// apk: версия меняется между pre/post запросом → changed=true.
+				// apk: version changes between pre/post query → changed=true.
 				r.OnSeq(tc.extraOn,
 					util.Result{ExitCode: 0, Stdout: "nginx-1.0.0-r0\n"},
 					util.Result{ExitCode: 0, Stdout: "nginx-1.2.0-r0\n"},
@@ -854,15 +854,15 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 	}
 }
 
-// TestApply_Latest_NotInstalled_Installs — latest при отсутствующем пакете
-// устанавливает его (changed=true, т.к. !beforeInstalled).
+// TestApply_Latest_NotInstalled_Installs — latest with an absent package
+// installs it (changed=true, since !beforeInstalled).
 func TestApply_Latest_NotInstalled_Installs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v dnf", util.Result{ExitCode: 0})
 	r.OnSeq("rpm -q --qf %{VERSION} nginx",
-		util.Result{ExitCode: 1},                  // до: не установлен
-		util.Result{ExitCode: 0, Stdout: "1.2.0"}, // после: установлен
+		util.Result{ExitCode: 1},                  // before: not installed
+		util.Result{ExitCode: 0, Stdout: "1.2.0"}, // after: installed
 	)
 	r.On("dnf install -y nginx", util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
@@ -879,8 +879,8 @@ func TestApply_Latest_NotInstalled_Installs(t *testing.T) {
 	}
 }
 
-// TestApply_Latest_NoChange — latest при уже-свежем пакете: установлен и версия
-// та же до и после upgrade → changed=false.
+// TestApply_Latest_NoChange — latest with an already up-to-date package:
+// installed and same version before/after upgrade → changed=false.
 func TestApply_Latest_NoChange(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -901,8 +901,8 @@ func TestApply_Latest_NoChange(t *testing.T) {
 	}
 }
 
-// TestApply_Latest_RefreshFails — провал refresh перед latest-upgrade →
-// failed, upgrade не выполняется.
+// TestApply_Latest_RefreshFails — refresh failure before latest upgrade →
+// failed, upgrade is not run.
 func TestApply_Latest_RefreshFails(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -928,7 +928,7 @@ func TestApply_Latest_RefreshFails(t *testing.T) {
 	}
 }
 
-// TestApply_Latest_UpgradeFails — сам upgrade вернул non-zero → failed.
+// TestApply_Latest_UpgradeFails — upgrade itself returns non-zero → failed.
 func TestApply_Latest_UpgradeFails(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -950,18 +950,19 @@ func TestApply_Latest_UpgradeFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// install с version-пином: dnf / yum / apk (apt уже покрыт)
+// install with a version pin: dnf / yum / apk (apt already covered)
 // ---------------------------------------------------------------------------
 
-// TestApply_Installed_VersionPin_RpmAndApk — рендер пина для dnf/yum (`name-ver`)
-// и apk (`name=ver`); apt-пин (`name=ver`) уже покрыт отдельным тестом.
+// TestApply_Installed_VersionPin_RpmAndApk — pin rendering for dnf/yum
+// (`name-ver`) and apk (`name=ver`); the apt pin (`name=ver`) is already
+// covered by a separate test.
 func TestApply_Installed_VersionPin_RpmAndApk(t *testing.T) {
 	cases := []struct {
 		name    string
 		mgrCmd  string
 		refresh string
 		preQ    string
-		want    string // install-команда с пином
+		want    string // install command with a pin
 	}{
 		{
 			name:   "dnf",
@@ -991,7 +992,7 @@ func TestApply_Installed_VersionPin_RpmAndApk(t *testing.T) {
 			if tc.refresh != "" {
 				r.On(tc.refresh, util.Result{ExitCode: 0})
 			}
-			r.On(tc.preQ, util.Result{ExitCode: 1}) // не установлен
+			r.On(tc.preQ, util.Result{ExitCode: 1}) // not installed
 			r.On(tc.want, util.Result{ExitCode: 0})
 			m := &pkg.Module{Runner: r}
 
@@ -1010,10 +1011,10 @@ func TestApply_Installed_VersionPin_RpmAndApk(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// state: absent по всем backend-ам (apt уже покрыт)
+// state: absent across all backends (apt already covered)
 // ---------------------------------------------------------------------------
 
-// TestApply_Absent_RpmAndApk — удаление установленного пакета через dnf/yum/apk.
+// TestApply_Absent_RpmAndApk — removing an installed package via dnf/yum/apk.
 func TestApply_Absent_RpmAndApk(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -1083,7 +1084,7 @@ func TestApply_Absent_RpmAndApk(t *testing.T) {
 	}
 }
 
-// TestApply_Absent_RemoveFails — remove вернул non-zero → failed.
+// TestApply_Absent_RemoveFails — remove returns non-zero → failed.
 func TestApply_Absent_RemoveFails(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
 	r.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 1, Stderr: "held package"})
@@ -1102,11 +1103,11 @@ func TestApply_Absent_RemoveFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// error-пути queryInstalled: Err (binary не запустился), а не non-zero exit
+// queryInstalled error paths: Err (binary failed to start), not non-zero exit
 // ---------------------------------------------------------------------------
 
-// TestApply_QueryError_PerBackend — если query-команда не запустилась (Err != nil),
-// queryInstalled возвращает ошибку, Apply → failed. По каждому backend-у.
+// TestApply_QueryError_PerBackend — if the query command fails to start
+// (Err != nil), queryInstalled returns an error, Apply → failed. Per backend.
 func TestApply_QueryError_PerBackend(t *testing.T) {
 	runErr := errors.New("fork/exec: permission denied")
 	cases := []struct {
@@ -1145,16 +1146,16 @@ func TestApply_QueryError_PerBackend(t *testing.T) {
 	}
 }
 
-// TestApply_Installed_PostInstallQueryError — install прошёл, но повторный
-// query (для возврата версии) упал с Err → Apply failed.
+// TestApply_Installed_PostInstallQueryError — install succeeded, but the
+// follow-up query (to return the version) fails with Err → Apply failed.
 func TestApply_Installed_PostInstallQueryError(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
 	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.OnSeq("dpkg-query -W -f=${Status} ${Version} redis-server",
-		util.Result{ExitCode: 1},                            // pre: не установлен
-		util.Result{Err: errors.New("dpkg-query vanished")}, // post: упал запуск
+		util.Result{ExitCode: 1},                            // pre: not installed
+		util.Result{Err: errors.New("dpkg-query vanished")}, // post: failed to start
 	)
 	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
@@ -1171,7 +1172,7 @@ func TestApply_Installed_PostInstallQueryError(t *testing.T) {
 	}
 }
 
-// TestApply_Absent_QueryError — query упал в absent-ветке → failed.
+// TestApply_Absent_QueryError — query fails in the absent branch → failed.
 func TestApply_Absent_QueryError(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -1191,13 +1192,13 @@ func TestApply_Absent_QueryError(t *testing.T) {
 	}
 }
 
-// TestApply_InstallCmdError — install-команда не запустилась (Err != nil) →
-// must возвращает ошибку, Apply failed. Покрывает Err-ветку must.
+// TestApply_InstallCmdError — install command fails to start (Err != nil) →
+// must returns an error, Apply failed. Covers the Err branch of must.
 func TestApply_InstallCmdError(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v dnf", util.Result{ExitCode: 0})
-	r.On("rpm -q --qf %{VERSION} redis", util.Result{ExitCode: 1}) // не установлен
+	r.On("rpm -q --qf %{VERSION} redis", util.Result{ExitCode: 1}) // not installed
 	r.On("dnf install -y redis", util.Result{Err: errors.New("exec format error")})
 	m := &pkg.Module{Runner: r}
 
@@ -1218,12 +1219,12 @@ func TestApply_InstallCmdError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// dpkg status parse: установлен, но Status != "install ok installed"
+// dpkg status parse: installed, but Status != "install ok installed"
 // ---------------------------------------------------------------------------
 
-// TestApply_DpkgStatus_RemovedButConfigFiles — dpkg-query exit 0, но Status
-// "deinstall ok config-files" → пакет считается НЕ установленным (для absent
-// это no-op). Покрывает not-installed-ветку parseDpkgStatus.
+// TestApply_DpkgStatus_RemovedButConfigFiles — dpkg-query exits 0, but Status
+// "deinstall ok config-files" → package considered NOT installed (a no-op for
+// absent). Covers the not-installed branch of parseDpkgStatus.
 func TestApply_DpkgStatus_RemovedButConfigFiles(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -1251,13 +1252,13 @@ func TestApply_DpkgStatus_RemovedButConfigFiles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// must: stderr с CR/LF и хвостовыми пробелами схлопывается в одну строку
-// (oneLine — \r и trailing-trim ветки)
+// must: stderr with CR/LF and trailing whitespace collapses to one line
+// (oneLine — \r and trailing-trim branches)
 // ---------------------------------------------------------------------------
 
-// TestApply_InstallFails_MultilineStderr — install non-zero с многострочным
-// stderr (\r\n + хвостовой пробел): message сводится в одну строку без
-// переводов строк и без хвостовых пробелов.
+// TestApply_InstallFails_MultilineStderr — install non-zero with multiline
+// stderr (\r\n + trailing space): message collapses to one line, no
+// newlines and no trailing whitespace.
 func TestApply_InstallFails_MultilineStderr(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -1292,11 +1293,11 @@ func TestApply_InstallFails_MultilineStderr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Apply: входная валидация и роутинг state
+// Apply: input validation and state routing
 // ---------------------------------------------------------------------------
 
-// TestApply_VersionWrongType_Fails — version передан числом, а не строкой →
-// OptStringParam ошибка → Apply failed (до detect-pkg-mgr).
+// TestApply_VersionWrongType_Fails — version passed as a number, not a
+// string → OptStringParam error → Apply failed (before detect-pkg-mgr).
 func TestApply_VersionWrongType_Fails(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &pkg.Module{Runner: r}
@@ -1310,14 +1311,14 @@ func TestApply_VersionWrongType_Fails(t *testing.T) {
 	if !stream.Last().Failed {
 		t.Fatal("failed=false, want true (version не строка)")
 	}
-	// detect-pkg-mgr не должен запускаться: ошибка раньше.
+	// detect-pkg-mgr must not run: the error happens earlier.
 	if len(r.Calls) != 0 {
 		t.Fatalf("команды не должны выполняться при ошибке параметра, calls=%v", r.Calls)
 	}
 }
 
-// TestApply_UnknownState_Fails — неизвестный state (прошедший detect) → failed
-// с упоминанием state. Покрывает default-ветку switch в Apply.
+// TestApply_UnknownState_Fails — unknown state (past detect) → failed,
+// mentioning the state. Covers the default branch of the switch in Apply.
 func TestApply_UnknownState_Fails(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -1339,12 +1340,12 @@ func TestApply_UnknownState_Fails(t *testing.T) {
 	}
 }
 
-// TestApply_DetectViaWhichFallback — `command -v` недоступен (exit !=0), но
-// `which apt-get` отрабатывает → backend всё равно определяется (fallback-ветка
-// DetectPkgMgr). Проверяем, что путь установки выбрал apt.
+// TestApply_DetectViaWhichFallback — `command -v` unavailable (exit != 0),
+// but `which apt-get` succeeds → backend still resolves (DetectPkgMgr
+// fallback branch). Checks the install path picked apt.
 func TestApply_DetectViaWhichFallback(t *testing.T) {
 	r := internaltest.NewRunner()
-	r.Fallback = util.Result{ExitCode: 1} // command -v <любой> → не найден
+	r.Fallback = util.Result{ExitCode: 1} // command -v <any> → not found
 	r.On("which apt-get", util.Result{ExitCode: 0})
 	r.On("dpkg-query -W -f=${Status} ${Version} redis", util.Result{ExitCode: 0, Stdout: "install ok installed 1.0"})
 	m := &pkg.Module{Runner: r}
@@ -1365,14 +1366,15 @@ func TestApply_DetectViaWhichFallback(t *testing.T) {
 	}
 }
 
-// TestApply_ApkInstalled_NoTrailingNewline — apk info -ev без хвостового \n:
-// firstLine отдаёт всю строку, parseApkVersion срезает имя → чистый номер (MINOR-C).
+// TestApply_ApkInstalled_NoTrailingNewline — apk info -ev without a trailing
+// \n: firstLine returns the whole line, parseApkVersion strips the name →
+// bare number (MINOR-C).
 func TestApply_ApkInstalled_NoTrailingNewline(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apk", util.Result{ExitCode: 0})
 	r.On("apk info -e redis", util.Result{ExitCode: 0, Stdout: "redis"})
-	r.On("apk info -ev redis", util.Result{ExitCode: 0, Stdout: "redis-7.0.0-r0"}) // без \n
+	r.On("apk info -ev redis", util.Result{ExitCode: 0, Stdout: "redis-7.0.0-r0"}) // no \n
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -1387,8 +1389,8 @@ func TestApply_ApkInstalled_NoTrailingNewline(t *testing.T) {
 	}
 }
 
-// TestPlan_Installed_AlreadyPresent_Clean — Plan(dry_run) для уже
-// установленного пакета без drift: changed=false, и НИ ОДНОЙ мутирующей команды
+// TestPlan_Installed_AlreadyPresent_Clean — Plan(dry_run) for an already
+// installed package with no drift: changed=false, and NO mutating commands
 // (install/remove/update) — pure-read (ADR-031 Scry).
 func TestPlan_Installed_AlreadyPresent_Clean(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
@@ -1407,8 +1409,8 @@ func TestPlan_Installed_AlreadyPresent_Clean(t *testing.T) {
 	assertNoMutatingPkgCalls(t, r)
 }
 
-// TestPlan_Installed_NotPresent_Drift — Plan для отсутствующего пакета:
-// changed=true (Apply установил бы), без мутаций.
+// TestPlan_Installed_NotPresent_Drift — Plan for an absent package:
+// changed=true (Apply would install it), no mutations.
 func TestPlan_Installed_NotPresent_Drift(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
@@ -1429,8 +1431,8 @@ func TestPlan_Installed_NotPresent_Drift(t *testing.T) {
 	assertNoMutatingPkgCalls(t, r)
 }
 
-// TestPlan_Absent_Present_Drift — Plan для state absent при установленном пакете:
-// changed=true (Apply удалил бы), без мутаций.
+// TestPlan_Absent_Present_Drift — Plan for state absent with an installed
+// package: changed=true (Apply would remove it), no mutations.
 func TestPlan_Absent_Present_Drift(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
 	m := &pkg.Module{Runner: r}
@@ -1448,8 +1450,9 @@ func TestPlan_Absent_Present_Drift(t *testing.T) {
 	assertNoMutatingPkgCalls(t, r)
 }
 
-// TestPlan_Latest_Unsupported — Plan для state latest возвращает явную ошибку
-// (drift «есть ли новее» не выводится из pure-read), а НЕ false-clean.
+// TestPlan_Latest_Unsupported — Plan for state latest returns an explicit
+// error ("is there a newer version" drift can't be derived from pure-read),
+// not a false-clean.
 func TestPlan_Latest_Unsupported(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
 	m := &pkg.Module{Runner: r}
@@ -1470,8 +1473,8 @@ func lastPlan(s *planStream) *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// assertNoMutatingPkgCalls — фейлит, если runner получил install/remove/del/add/
-// update команду (Plan обязан быть pure-read, ADR-031).
+// assertNoMutatingPkgCalls — fails if the runner received an
+// install/remove/del/add/update command (Plan must be pure-read, ADR-031).
 func assertNoMutatingPkgCalls(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	for _, c := range r.Calls {
@@ -1483,7 +1486,7 @@ func assertNoMutatingPkgCalls(t *testing.T, r *internaltest.Runner) {
 	}
 }
 
-// planStream — fake grpc.ServerStreamingServer[PlanEvent] для теста Plan.
+// planStream — fake grpc.ServerStreamingServer[PlanEvent] for the Plan test.
 type planStream struct {
 	grpc.ServerStreamingServer[pluginv1.PlanEvent]
 	events []*pluginv1.PlanEvent

@@ -12,7 +12,7 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// apply — прогон Apply на fake-runner; возвращает финальное событие.
+// apply runs Apply against a fake runner and returns the final event.
 func apply(t *testing.T, m *cmd.Module, params map[string]any) *pluginv1.ApplyEvent {
 	t.Helper()
 	stream := &internaltest.ApplyStream{}
@@ -61,8 +61,8 @@ func TestApply_MissingCmd_Failed(t *testing.T) {
 	}
 }
 
-// Неверный тип одного из опциональных параметров → failed (ветки извлечения
-// cwd/env/creates/unless/onlyif). env как строка вместо map.
+// Wrong type on an optional param → failed (extraction branches for
+// cwd/env/creates/unless/onlyif). env as a string instead of a map.
 func TestApply_BadEnvType_Failed(t *testing.T) {
 	m := newModule(internaltest.NewRunner(), func(string) (bool, error) { return false, nil })
 	ev := apply(t, m, map[string]any{
@@ -85,8 +85,8 @@ func TestApply_BadCwdType_Failed(t *testing.T) {
 	}
 }
 
-// Неверный тип guard-параметров (creates/unless/onlyif — все ожидают string).
-// Каждый должен дать failed на этапе извлечения, не доходя до shouldSkip.
+// Wrong type on guard params (creates/unless/onlyif all expect a string).
+// Each must fail during extraction, before reaching shouldSkip.
 func TestApply_BadGuardTypes_Failed(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -102,7 +102,7 @@ func TestApply_BadGuardTypes_Failed(t *testing.T) {
 			m := newModule(r, func(string) (bool, error) { return false, nil })
 			ev := apply(t, m, map[string]any{
 				"cmd":   "true",
-				c.param: float64(1), // не строка
+				c.param: float64(1), // not a string
 			})
 			if !ev.Failed {
 				t.Fatalf("%s неверного типа должен давать failed", c.param)
@@ -114,8 +114,8 @@ func TestApply_BadGuardTypes_Failed(t *testing.T) {
 	}
 }
 
-// env передаётся в процесс sh -c: RunOpts-ключ обогащается отсортированным
-// [env=...] префиксом, проверяем что модуль прокинул именно эти KEY=VAL.
+// env is passed into the sh -c process: the RunOpts key gets a sorted
+// [env=...] prefix; checks the module forwarded exactly these KEY=VAL pairs.
 func TestApply_EnvPassedToShell(t *testing.T) {
 	r := internaltest.NewRunner()
 	key := "[env=A=1,B=2] sh -c env"
@@ -134,8 +134,8 @@ func TestApply_EnvPassedToShell(t *testing.T) {
 	}
 }
 
-// stdout/stderr/exit_code из Result штатно прокидываются в output даже при
-// non-zero exit (exit-код не делает шаг failed — это решает changed_when выше).
+// stdout/stderr/exit_code from Result are always forwarded to output, even on
+// non-zero exit (exit code alone doesn't fail the step — changed_when decides that).
 func TestApply_OutputCarriesStdoutStderrExit(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c probe"] = []util.Result{{ExitCode: 2, Stdout: "out\n", Stderr: "err\n"}}
@@ -156,8 +156,8 @@ func TestApply_OutputCarriesStdoutStderrExit(t *testing.T) {
 	}
 }
 
-// Ошибка запуска самого процесса (sh не нашёлся / fork failed) — Result.Err != nil.
-// Это единственный путь, ведущий к failed из-за runner-а.
+// A launch error for the process itself (sh not found / fork failed) sets
+// Result.Err != nil. The only path leading to failed because of the runner.
 func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c true"] = []util.Result{{Err: os.ErrPermission}}
@@ -172,7 +172,7 @@ func TestApply_RunnerLaunchError_Failed(t *testing.T) {
 	}
 }
 
-// creates: файла нет → НЕ skip, команда выполняется.
+// creates: file doesn't exist → NOT skipped, command runs.
 func TestApply_Creates_NotExists_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c touch /tmp/x"] = []util.Result{{ExitCode: 0}}
@@ -184,7 +184,7 @@ func TestApply_Creates_NotExists_Runs(t *testing.T) {
 	}
 }
 
-// creates: stat вернул ошибку (не ErrNotExist) → failed, команда НЕ запускается.
+// creates: stat returned an error (not ErrNotExist) → failed, command does NOT run.
 func TestApply_Creates_StatError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := newModule(r, func(string) (bool, error) { return false, os.ErrPermission })
@@ -198,7 +198,7 @@ func TestApply_Creates_StatError_Failed(t *testing.T) {
 	}
 }
 
-// skipped-output: при creates+файл существует событие несёт skipped/reason/exit_code.
+// skipped output: with creates+file exists, the event carries skipped/reason/exit_code.
 func TestApply_Creates_SkipOutput(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := newModule(r, func(p string) (bool, error) { return p == "/tmp/m", nil })
@@ -221,7 +221,7 @@ func TestApply_Creates_SkipOutput(t *testing.T) {
 	}
 }
 
-// unless: команда-проверка exit 0 → условие истинно → skip.
+// unless: check command exits 0 → condition true → skip.
 func TestApply_Unless_True_Skips(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c test -f /tmp/m"] = []util.Result{{ExitCode: 0}}
@@ -234,7 +234,7 @@ func TestApply_Unless_True_Skips(t *testing.T) {
 	if ev.Output.Fields["reason"].GetStringValue() != "unless" {
 		t.Fatalf("reason=%q", ev.Output.Fields["reason"].GetStringValue())
 	}
-	// основная команда не должна запускаться (только unless-проверка)
+	// the main command must not run (only the unless check)
 	for _, c := range r.Calls {
 		if c == "sh -c make-it" {
 			t.Fatalf("основная команда запустилась вопреки unless: %v", r.Calls)
@@ -242,7 +242,7 @@ func TestApply_Unless_True_Skips(t *testing.T) {
 	}
 }
 
-// unless: exit != 0 → условие ложно → команда выполняется.
+// unless: exit != 0 → condition false → command runs.
 func TestApply_Unless_False_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c test -f /tmp/m"] = []util.Result{{ExitCode: 1}}
@@ -258,7 +258,7 @@ func TestApply_Unless_False_Runs(t *testing.T) {
 	}
 }
 
-// unless: ошибка запуска проверки → failed.
+// unless: check launch error → failed.
 func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c broken"] = []util.Result{{Err: os.ErrPermission}}
@@ -270,7 +270,7 @@ func TestApply_Unless_LaunchError_Failed(t *testing.T) {
 	}
 }
 
-// onlyif: exit != 0 → условие ложно → skip.
+// onlyif: exit != 0 → condition false → skip.
 func TestApply_Onlyif_False_Skips(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c which nginx"] = []util.Result{{ExitCode: 1}}
@@ -285,7 +285,7 @@ func TestApply_Onlyif_False_Skips(t *testing.T) {
 	}
 }
 
-// onlyif: exit 0 → условие истинно → команда выполняется.
+// onlyif: exit 0 → condition true → command runs.
 func TestApply_Onlyif_True_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c which nginx"] = []util.Result{{ExitCode: 0}}
@@ -298,7 +298,7 @@ func TestApply_Onlyif_True_Runs(t *testing.T) {
 	}
 }
 
-// onlyif: ошибка запуска проверки → failed.
+// onlyif: check launch error → failed.
 func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c broken"] = []util.Result{{Err: os.ErrPermission}}
@@ -310,15 +310,15 @@ func TestApply_Onlyif_LaunchError_Failed(t *testing.T) {
 	}
 }
 
-// Комбинация guard-ов: creates НЕ срабатывает, дальше unless НЕ срабатывает,
-// onlyif срабатывает (exit 0) → команда выполняется. Проверяет порядок и
-// сквозной проход через все три ветки shouldSkip без skip.
+// Guard combination: creates doesn't trigger, then unless doesn't trigger,
+// onlyif triggers (exit 0) → command runs. Checks ordering and a full
+// pass-through of all three shouldSkip branches without skipping.
 func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	r := internaltest.NewRunner()
-	r.Results["sh -c check-absent"] = []util.Result{{ExitCode: 1}}  // unless ложно
-	r.Results["sh -c check-present"] = []util.Result{{ExitCode: 0}} // onlyif истинно
+	r.Results["sh -c check-absent"] = []util.Result{{ExitCode: 1}}  // unless false
+	r.Results["sh -c check-present"] = []util.Result{{ExitCode: 0}} // onlyif true
 	r.Results["sh -c do-work"] = []util.Result{{ExitCode: 0, Stdout: "ok"}}
-	m := newModule(r, func(string) (bool, error) { return false, nil }) // creates: нет файла
+	m := newModule(r, func(string) (bool, error) { return false, nil }) // creates: no file
 
 	ev := apply(t, m, map[string]any{
 		"cmd":     "do-work",
@@ -334,7 +334,7 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 	}
 }
 
-// Plan — no-op stub, не должен падать и не шлёт событий.
+// Plan is a no-op stub: must not fail and must not send events.
 func TestPlan_NoOp(t *testing.T) {
 	m := cmd.New()
 	if err := m.Plan(&pluginv1.PlanRequest{}, nil); err != nil {
@@ -342,8 +342,8 @@ func TestPlan_NoOp(t *testing.T) {
 	}
 }
 
-// End-to-end через production New(): реальный sh -c исполняет shell-семантику
-// (pipe), и реальный fileExists (StatFile) для creates. Закрывает osstat.go.
+// End-to-end via production New(): a real sh -c executes shell semantics
+// (pipe), and real fileExists (StatFile) for creates. Covers osstat.go.
 func TestApply_Production_RealShell_Pipe(t *testing.T) {
 	m := cmd.New()
 	ev := apply(t, m, map[string]any{
@@ -352,7 +352,7 @@ func TestApply_Production_RealShell_Pipe(t *testing.T) {
 	if ev.Failed || !ev.Changed {
 		t.Fatalf("changed=%v failed=%v msg=%q", ev.Changed, ev.Failed, ev.Message)
 	}
-	// wc -l на 3 строках → "3" (с учётом возможных пробелов от wc).
+	// wc -l on 3 lines → "3" (allowing for wc's possible padding).
 	stdout := ev.Output.Fields["stdout"].GetStringValue()
 	if stdout == "" {
 		t.Fatal("ожидал непустой stdout от pipe")
@@ -362,8 +362,8 @@ func TestApply_Production_RealShell_Pipe(t *testing.T) {
 	}
 }
 
-// Production creates: файл реально существует → реальный fileExists вернёт true
-// → skip без запуска команды.
+// Production creates: file actually exists → real fileExists returns true →
+// skip without running the command.
 func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
@@ -386,8 +386,8 @@ func TestApply_Production_Creates_RealStat_Skips(t *testing.T) {
 	}
 }
 
-// Production creates: файла нет → реальный fileExists вернёт false → команда
-// выполняется (ветка ErrNotExist в fileExists).
+// Production creates: file doesn't exist → real fileExists returns false →
+// command runs (the ErrNotExist branch in fileExists).
 func TestApply_Production_Creates_Absent_Runs(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")

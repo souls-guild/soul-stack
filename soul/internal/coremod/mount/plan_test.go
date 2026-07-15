@@ -27,7 +27,7 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// assertNoMutatingMountCalls фейлит, если runner получил mount/umount.
+// assertNoMutatingMountCalls fails if the runner received a mount/umount call.
 func assertNoMutatingMountCalls(t *testing.T, r *internaltest.Runner) {
 	t.Helper()
 	for _, c := range r.Calls {
@@ -39,8 +39,8 @@ func assertNoMutatingMountCalls(t *testing.T, r *internaltest.Runner) {
 	}
 }
 
-// TestPlan_Present_AlreadyMountedInFstab_Clean — в fstab есть совпадающая строка
-// и findmnt сообщает mounted → drift=false, без мутаций.
+// TestPlan_Present_AlreadyMountedInFstab_Clean — fstab has a matching line and
+// findmnt reports mounted → drift=false, no mutations.
 func TestPlan_Present_AlreadyMountedInFstab_Clean(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -75,7 +75,7 @@ func TestPlan_Present_AlreadyMountedInFstab_Clean(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Present_NotInFstab_Drift — fstab пуст → drift, без мутаций.
+// TestPlan_Present_NotInFstab_Drift — empty fstab → drift, no mutations.
 func TestPlan_Present_NotInFstab_Drift(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -110,8 +110,8 @@ func TestPlan_Present_NotInFstab_Drift(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Present_InFstabButNotMounted_Drift — fstab совпадает, но findmnt
-// сообщает not-mounted → drift (Apply сделал бы mount).
+// TestPlan_Present_InFstabButNotMounted_Drift — fstab matches but findmnt
+// reports not-mounted → drift (Apply would mount it).
 func TestPlan_Present_InFstabButNotMounted_Drift(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -140,7 +140,7 @@ func TestPlan_Present_InFstabButNotMounted_Drift(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Mounted_NotMounted_Drift — state mounted при findmnt exit != 0 → drift.
+// TestPlan_Mounted_NotMounted_Drift — state mounted with findmnt exit != 0 → drift.
 func TestPlan_Mounted_NotMounted_Drift(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -169,7 +169,7 @@ func TestPlan_Mounted_NotMounted_Drift(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Unmounted_StillMounted_Drift — state unmounted при findmnt exit 0 → drift.
+// TestPlan_Unmounted_StillMounted_Drift — state unmounted with findmnt exit 0 → drift.
 func TestPlan_Unmounted_StillMounted_Drift(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -194,7 +194,7 @@ func TestPlan_Unmounted_StillMounted_Drift(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Absent_Mounted_Drift — Plan(absent), path смонтирован → drift.
+// TestPlan_Absent_Mounted_Drift — Plan(absent), path is mounted → drift.
 func TestPlan_Absent_Mounted_Drift(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")
@@ -219,7 +219,7 @@ func TestPlan_Absent_Mounted_Drift(t *testing.T) {
 	assertNoMutatingMountCalls(t, r)
 }
 
-// TestPlan_Absent_NotMountedNotInFstab_Clean — Plan(absent), нечего удалять → clean.
+// TestPlan_Absent_NotMountedNotInFstab_Clean — Plan(absent), nothing to remove → clean.
 func TestPlan_Absent_NotMountedNotInFstab_Clean(t *testing.T) {
 	dir := t.TempDir()
 	fstab := filepath.Join(dir, "fstab")

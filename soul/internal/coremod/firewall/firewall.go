@@ -1,30 +1,30 @@
-// Package firewall реализует core-модуль `core.firewall` ([ADR-015]) —
-// управление ОДНИМ правилом файрвола (аналог идеи ansible ufw/firewalld,
-// переработанный под безопасный декларативный MVP).
+// Package firewall implements the `core.firewall` core module ([ADR-015]) —
+// manages a SINGLE firewall rule (an ansible ufw/firewalld-inspired idea,
+// reworked into a safe declarative MVP).
 //
-// Состояния:
-//   - present: правило существует (порт/протокол/источник/действие).
-//   - absent:  правило удалено.
+// States:
+//   - present: the rule exists (port/protocol/source/action).
+//   - absent:  the rule is removed.
 //
-// Backend выбирается по util.DetectFirewall (по установленному управляющему
-// бинарю, НЕ по Soulprint). MVP: ufw и firewalld. iptables отложен.
+// Backend is selected via util.DetectFirewall (by which control binary is
+// installed, NOT by Soulprint). MVP: ufw and firewalld. iptables is deferred.
 //
-// Идемпотентность: парсим вывод `ufw status` / `firewall-cmd --list-...`. Если
-// правило уже присутствует (present) или отсутствует (absent) — changed=false.
+// Idempotency: parses `ufw status` / `firewall-cmd --list-...` output. If the
+// rule is already present (present) or absent (absent) — changed=false.
 //
-// КРИТИЧЕСКИЙ ИНВАРИАНТ БЕЗОПАСНОСТИ ([ADR-016] «безопасность на первом
-// месте»): модуль НИКОГДА не трогает default policy и НИКОГДА не делает
-// `ufw enable` / `systemctl start firewalld` / не включает файрвол целиком.
-// Включение файрвола с дефолтной deny-политикой на удалённом хосте мгновенно
-// отрезает SSH и теряет управление. Модуль работает ТОЛЬКО с конкретным
-// правилом (add/delete). Это проверяется unit-тестом (Apply не должен
-// генерировать ни одной enable/default-команды).
+// CRITICAL SECURITY INVARIANT ([ADR-016] "security first"): the module NEVER
+// touches the default policy and NEVER runs `ufw enable` /
+// `systemctl start firewalld` / never enables the firewall wholesale.
+// Enabling a firewall with a default-deny policy on a remote host instantly
+// cuts off SSH and loses control. The module works ONLY with a specific rule
+// (add/delete). Enforced by a unit test (Apply must not generate a single
+// enable/default command).
 //
-// Парсинг вывода CLI хрупок между версиями инструментов — покрыт строгими
-// unit-тестами на зафиксированных образцах вывода.
+// CLI output parsing is fragile across tool versions — covered by strict unit
+// tests against pinned output samples.
 //
-// [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
-// [ADR-016]: docs/adr/0016-parity-license.md#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack
+// [ADR-015]: docs/adr/0015-core-modules-mvp.md
+// [ADR-016]: docs/adr/0016-parity-license.md
 package firewall
 
 import (
@@ -41,13 +41,13 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name — каноническая верхушка адреса.
+// Name is the canonical address prefix.
 const Name = "core.firewall"
 
-// Module — реализация sdk/module.SoulModule для core.firewall.
+// Module implements sdk/module.SoulModule for core.firewall.
 //
-// Runner — точка подмены exec-вызовов в unit-тестах (детект + status-парсинг +
-// add/delete). Все обращения к ufw/firewall-cmd идут через него.
+// Runner is the seam for substituting exec calls in unit tests (detect +
+// status parsing + add/delete). All ufw/firewall-cmd calls go through it.
 type Module struct {
 	Runner util.Runner
 }
@@ -56,20 +56,21 @@ func New() *Module {
 	return &Module{Runner: util.OSRunner{}}
 }
 
-// rule — нормализованное правило файрвола.
+// rule is a normalized firewall rule.
 type rule struct {
 	port   int
 	proto  string // tcp | udp
-	source string // CIDR/IP или "" (any)
+	source string // CIDR/IP or "" (any)
 	action string // allow | deny
-	zone   string // firewalld-зона или "" (default zone)
+	zone   string // firewalld zone or "" (default zone)
 }
 
-// Validate НЕ делегирован целиком в util.ValidateAgainstManifest (в отличие от
-// core.exec): `port` принимается как int ИЛИ string (${...}-интерполяция),
-// проверяется диапазон 1..65535, proto/action — enum (tcp|udp / allow|deny),
-// source — CIDR/IPv4-форма с отказом на IPv6. Ни enum, ни числовые границы, ни
-// dual-type-required не выражаются manifest-DSL — оставляем ручную форму.
+// Validate is NOT fully delegated to util.ValidateAgainstManifest (unlike
+// core.exec): `port` accepts int OR string (${...} interpolation), range
+// 1..65535 is checked, proto/action are enums (tcp|udp / allow|deny), source
+// is a CIDR/IPv4 form that rejects IPv6. Neither enums, numeric bounds, nor
+// dual-type-required are expressible in the manifest DSL — kept as manual
+// validation.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
@@ -101,21 +102,22 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.firewall.Plan — pure-read (ADR-031 Scry):
-// читает `ufw status` / `firewall-cmd --list-...`, НЕ мутирует state файрвола
-// (маркер для host-а, default-deny).
+// PlanReadSafe declares core.firewall.Plan as pure-read (ADR-031 Scry): reads
+// `ufw status` / `firewall-cmd --list-...`, does NOT mutate firewall state
+// (marker for the host, default-deny).
 //
-// КРИТИЧНО: маркер совместим с инвариантом безопасности модуля — Plan не делает
-// и не может делать enable/default/start (см. doc файла). Все runner-вызовы
-// Plan-а — read-only (`ufw status` / `firewall-cmd --list-ports` /
-// `firewall-cmd --list-rich-rules`).
+// CRITICAL: this marker is consistent with the module's security invariant —
+// Plan doesn't and can't do enable/default/start (see the file's doc
+// comment). All of Plan's runner calls are read-only (`ufw status` /
+// `firewall-cmd --list-ports` / `firewall-cmd --list-rich-rules`).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее состояние правил
-// файрвола (тот же status/list, что в начале Apply) и шлёт PlanEvent.changed —
-// «Apply изменил бы правило?». НЕ мутирует: ни add/delete правил, ни reload.
+// Plan is a pure-read dry-run (ADR-031 Scry): reads the current firewall
+// rule state (the same status/list Apply starts with) and sends
+// PlanEvent.changed — "would Apply change the rule?" Does NOT mutate: no
+// rule add/delete, no reload.
 //
-// Backend выбирается через util.DetectFirewall (read-only).
+// Backend is selected via util.DetectFirewall (read-only).
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	ctx := stream.Context()
 	r, err := readRuleFromPlan(req)
@@ -150,8 +152,9 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	}
 }
 
-// planFromPresence маппит «правило присутствует?» и желаемый state в drift.
-// present + present-state → clean; absent + absent-state → clean; иначе drift.
+// planFromPresence maps "is the rule present?" and the desired state to
+// drift. present + present-state → clean; absent + absent-state → clean;
+// otherwise drift.
 func planFromPresence(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], state string, present bool) error {
 	switch state {
 	case "present":
@@ -163,7 +166,7 @@ func planFromPresence(stream grpc.ServerStreamingServer[pluginv1.PlanEvent], sta
 	}
 }
 
-// readRuleFromPlan — параллель readRule для PlanRequest.
+// readRuleFromPlan mirrors readRule for PlanRequest.
 func readRuleFromPlan(req *pluginv1.PlanRequest) (rule, error) {
 	var r rule
 	var err error
@@ -232,8 +235,8 @@ func readRule(req *pluginv1.ApplyRequest) (rule, error) {
 		if verr := validateSource(r.source); verr != nil {
 			return r, verr
 		}
-		// Нормализуем к канонической форме (как её печатают ufw/firewalld), чтобы
-		// записываемое и читаемое правило совпадали → идемпотентность.
+		// Normalize to the canonical form (as ufw/firewalld print it) so the
+		// written and read rule match → idempotency.
 		r.source = normalizeSource(r.source)
 	}
 	if r.zone, err = util.OptStringParam(req.Params, "zone"); err != nil {
@@ -242,8 +245,9 @@ func readRule(req *pluginv1.ApplyRequest) (rule, error) {
 	return r, nil
 }
 
-// parsePort принимает port как число (proto-json маршалит числа во float64) или
-// строку (на случай ${...}-интерполяции, дающей строку). Диапазон 1..65535.
+// parsePort accepts port as a number (proto-json marshals numbers as
+// float64) or a string (for ${...} interpolation, which yields a string).
+// Range 1..65535.
 func parsePort(params *structpb.Struct) (int, error) {
 	if n, ok, err := util.OptIntParam(params, "port"); err == nil && ok {
 		if n < 1 || n > 65535 {
@@ -300,10 +304,11 @@ func parseAction(params *structpb.Struct) (string, error) {
 	}
 }
 
-// validateSource принимает IPv4 CIDR (192.168.0.0/24) или одиночный IPv4
-// (10.0.0.1). IPv6-source отвергается: оба бэкенда MVP работают только с IPv4
-// (ufw-парсер пропускает v6-строки, firewalld жёстко family="ipv4"), и тихий
-// приём IPv6 приводит к зацикленному add (drift). Честный отказ на Validate.
+// validateSource accepts an IPv4 CIDR (192.168.0.0/24) or a single IPv4
+// (10.0.0.1). IPv6 sources are rejected: both MVP backends only work with
+// IPv4 (the ufw parser skips v6 strings, firewalld hardcodes family="ipv4"),
+// and silently accepting IPv6 would cause a looping add (drift). Honest
+// rejection at Validate.
 func validateSource(src string) error {
 	if ip, _, err := net.ParseCIDR(src); err == nil {
 		if ip.To4() == nil {
@@ -320,10 +325,11 @@ func validateSource(src string) error {
 	return fmt.Errorf("param %q: invalid CIDR or IP %q", "source", src)
 }
 
-// normalizeSource приводит source к канонической форме, симметричной выводу
-// ufw/firewalld: CIDR с host-битами схлопывается к адресу сети
-// (10.0.0.1/8 → 10.0.0.0/8), одиночный IP получает /32 (10.0.0.1 → 10.0.0.1/32).
-// Вызывать только после validateSource (вход уже валиден и IPv4).
+// normalizeSource brings source to the canonical form mirroring
+// ufw/firewalld's output: a CIDR with host bits collapses to the network
+// address (10.0.0.1/8 → 10.0.0.0/8), a single IP gets /32
+// (10.0.0.1 → 10.0.0.1/32). Call only after validateSource (input is already
+// valid and IPv4).
 func normalizeSource(src string) string {
 	if _, ipnet, err := net.ParseCIDR(src); err == nil {
 		return ipnet.String()
@@ -334,8 +340,8 @@ func normalizeSource(src string) string {
 	return src
 }
 
-// cmdError превращает Result в ошибку при сбое запуска или non-zero exit.
-// Возвращает nil, если команда отработала с exit 0.
+// cmdError turns a Result into an error on launch failure or non-zero exit.
+// Returns nil if the command exited 0.
 func cmdError(name string, args []string, res util.Result) error {
 	if res.Err != nil {
 		return fmt.Errorf("%s %v: %v", name, args, res.Err)
@@ -346,7 +352,7 @@ func cmdError(name string, args []string, res util.Result) error {
 	return nil
 }
 
-// finalRule собирает финальный ApplyEvent с changed и эхо-полями правила.
+// finalRule assembles the final ApplyEvent with changed and rule echo fields.
 func finalRule(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, backend string, r rule) error {
 	out := map[string]any{
 		"changed": changed,

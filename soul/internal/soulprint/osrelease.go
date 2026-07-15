@@ -2,7 +2,7 @@ package soulprint
 
 import "strings"
 
-// osRelease — разобранные поля /etc/os-release, нужные Soulprint-у.
+// osRelease holds the /etc/os-release fields Soulprint needs.
 type osRelease struct {
 	id              string // ID= (ubuntu / rocky / alpine)
 	idLike          string // ID_LIKE= (debian / "rhel centos fedora")
@@ -10,9 +10,9 @@ type osRelease struct {
 	versionCodename string // VERSION_CODENAME= (jammy)
 }
 
-// parseOSRelease разбирает содержимое /etc/os-release. Формат — KEY=VALUE
-// построчно, значения опционально в кавычках (man os-release). Неизвестные
-// ключи игнорируются. Парсит мягко: мусорная строка не роняет разбор.
+// parseOSRelease parses /etc/os-release content. Format is KEY=VALUE per
+// line, values optionally quoted (man os-release). Unknown keys are
+// ignored. Parses leniently: a garbage line doesn't break parsing.
 func parseOSRelease(content string) osRelease {
 	var r osRelease
 	for _, line := range strings.Split(content, "\n") {
@@ -36,9 +36,9 @@ func parseOSRelease(content string) osRelease {
 	return r
 }
 
-// family выводит OsFacts.family из ID / ID_LIKE. Сначала ID (точное семейство),
-// затем ID_LIKE (производные дистрибутивы — derivatives Ubuntu/Rocky наследуют
-// семейство родителя). Возвращает "" для нераспознанного — Keeper толерантен.
+// family derives OsFacts.family from ID / ID_LIKE. ID first (exact family),
+// then ID_LIKE (derivative distros — Ubuntu/Rocky derivatives inherit their
+// parent's family). Returns "" for unrecognized — Keeper tolerates it.
 func (r osRelease) family() string {
 	for _, c := range append([]string{r.id}, strings.Fields(r.idLike)...) {
 		switch c {
@@ -55,13 +55,14 @@ func (r osRelease) family() string {
 	return ""
 }
 
-// pkgMgrTable — маппинг (family, distro) → pkg_mgr/init_system (ADR-018,
-// docs/soul/soulprint.md). Источник истины — таблица в коде Soul-агента;
-// расширение покрытия = новая версия бинаря (сознательная цена централизации).
+// pkgMgrTable maps (family, distro) → pkg_mgr/init_system (ADR-018,
+// docs/soul/soulprint.md). Source of truth is this table in the Soul agent
+// code; extending coverage means a new binary version (a deliberate cost of
+// centralization).
 //
-// Ключ — pair{family, distro}. Если точного distro-совпадения нет, действует
-// family-fallback (см. pkgMgrInitSystem) — внутри семейства pkg-mgr и init
-// обычно совпадают.
+// Key is pair{family, distro}. With no exact distro match, family-fallback
+// applies (see pkgMgrInitSystem) — pkg-mgr and init usually agree within a
+// family.
 var pkgMgrTable = map[pair]pkgInit{
 	{"debian", "ubuntu"}:  {"apt", "systemd"},
 	{"debian", "debian"}:  {"apt", "systemd"},
@@ -74,9 +75,9 @@ var pkgMgrTable = map[pair]pkgInit{
 	{"arch", "arch"}:      {"pacman", "systemd"},
 }
 
-// familyDefaults — fallback по семейству, когда точного distro-ключа нет
-// (например, неизвестный debian-derivative). Внутри семейства pkg-mgr/init
-// одинаковы — это и есть основание для централизованной таблицы (ADR-018).
+// familyDefaults is the per-family fallback when there's no exact distro key
+// (e.g. an unknown debian derivative). pkg-mgr/init agree within a family —
+// the rationale for a centralized table (ADR-018).
 var familyDefaults = map[string]pkgInit{
 	"debian": {"apt", "systemd"},
 	"rhel":   {"dnf", "systemd"},
@@ -95,9 +96,9 @@ type pkgInit struct {
 	initSystem string
 }
 
-// pkgMgrInitSystem возвращает (pkg_mgr, init_system) для пары family+distro по
-// таблице ADR-018. Порядок поиска: точная пара → family-fallback → ("", "").
-// Пустые значения штатны (нераспознанная ОС) — Keeper толерантен.
+// pkgMgrInitSystem returns (pkg_mgr, init_system) for a family+distro pair per
+// the ADR-018 table. Lookup order: exact pair → family-fallback → ("", "").
+// Empty values are normal (unrecognized OS) — Keeper tolerates it.
 func pkgMgrInitSystem(family, distro string) (pkgMgr, initSystem string) {
 	if v, ok := pkgMgrTable[pair{family, distro}]; ok {
 		return v.pkgMgr, v.initSystem
@@ -108,7 +109,7 @@ func pkgMgrInitSystem(family, distro string) (pkgMgr, initSystem string) {
 	return "", ""
 }
 
-// unquote снимает обрамляющие одинарные/двойные кавычки (формат os-release).
+// unquote strips surrounding single/double quotes (os-release format).
 func unquote(s string) string {
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
 		return s[1 : len(s)-1]

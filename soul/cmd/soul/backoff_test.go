@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
-// Unit-тесты backoff-прогрессии reconnect-loop-а. Сам reconnectLoop требует
-// живого gRPC-клиента (integration, см. failback_integration_test.go); здесь
-// проверяем чистую арифметику nextDelay + инвариант leaseHeldBackoffCap, на
-// которых стоит различение lease-held (модест-cap) и transport (общий cap).
+// Unit tests for the reconnect-loop backoff progression. reconnectLoop itself
+// needs a live gRPC client (integration, see failback_integration_test.go);
+// here we test the pure nextDelay arithmetic + the leaseHeldBackoffCap
+// invariant that the lease-held (modest cap) vs transport (general cap)
+// distinction relies on.
 
 func TestNextDelay_DoublesUntilCap(t *testing.T) {
 	t.Parallel()
@@ -23,17 +24,18 @@ func TestNextDelay_DoublesUntilCap(t *testing.T) {
 	}
 }
 
-// TestLeaseHeldCap_ProgressionStaysModest — прогрессия с модест-cap (lease-held
-// ветка) НЕ улетает в десятки секунд: после краха keeper-а presence истекает за
-// ~30s, force-release освобождает lease — Soul переподключается в пределах cap-а,
-// а не общего transport-cap. Доказываем, что cap=leaseHeldBackoffCap держит
-// прогрессию в пределах нескольких секунд (recovery-latency сохранена).
+// TestLeaseHeldCap_ProgressionStaysModest — the modest-cap (lease-held branch)
+// progression must not run into tens of seconds: after a keeper crash,
+// presence expires in ~30s and force-release frees the lease, so Soul must
+// reconnect within the modest cap, not the general transport cap. Verifies
+// cap=leaseHeldBackoffCap keeps the progression within a few seconds
+// (preserves recovery latency).
 func TestLeaseHeldCap_ProgressionStaysModest(t *testing.T) {
 	t.Parallel()
 	if leaseHeldBackoffCap > 5*time.Second {
 		t.Fatalf("leaseHeldBackoffCap = %s, want ≤ 5s (recovery-latency требует модест-cap)", leaseHeldBackoffCap)
 	}
-	// initial=1s, удваиваем многократно — должно сходиться к cap, не выше.
+	// initial=1s, double repeatedly — should converge to cap, never above.
 	d := 1 * time.Second
 	for i := 0; i < 10; i++ {
 		d = nextDelay(d, leaseHeldBackoffCap)
@@ -46,14 +48,14 @@ func TestLeaseHeldCap_ProgressionStaysModest(t *testing.T) {
 	}
 }
 
-// TestLeaseHeldCap_ClampsAlreadyGrownDelay — если backoff уже вырос выше модест-
-// cap-а (transport-сбои до того, как keeper поднялся в lease-held режим), вход в
-// lease-held ветку клампит текущий delay к cap (та же арифметика, что в
-// reconnectLoop: `if delay > cap { delay = cap }`). Гарантирует, что переход
-// transport→lease-held не оставляет раздутую задержку.
+// TestLeaseHeldCap_ClampsAlreadyGrownDelay — if backoff already grew past the
+// modest cap (transport failures before keeper entered lease-held mode),
+// entering the lease-held branch clamps the current delay to cap (same
+// arithmetic as reconnectLoop's `if delay > cap { delay = cap }`). Ensures the
+// transport→lease-held transition doesn't leave an inflated delay.
 func TestLeaseHeldCap_ClampsAlreadyGrownDelay(t *testing.T) {
 	t.Parallel()
-	delay := 30 * time.Second // вырос на transport-сбоях до общего max
+	delay := 30 * time.Second // grew on transport failures up to the general max
 	cap := leaseHeldBackoffCap
 	if delay > cap {
 		delay = cap
@@ -63,9 +65,9 @@ func TestLeaseHeldCap_ClampsAlreadyGrownDelay(t *testing.T) {
 	}
 }
 
-// TestTransportCap_Unchanged — регресс-guard: общий transport-cap (default
-// keeper.retry.backoff.max=30s) не задет правкой lease-held ветки. Прогрессия
-// transport-backoff по-прежнему доходит до 30s.
+// TestTransportCap_Unchanged — regression guard: the general transport cap
+// (default keeper.retry.backoff.max=30s) is untouched by the lease-held branch
+// change. transport-backoff progression still reaches 30s.
 func TestTransportCap_Unchanged(t *testing.T) {
 	t.Parallel()
 	transportCap := 30 * time.Second

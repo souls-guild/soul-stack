@@ -8,7 +8,7 @@ import (
 )
 
 func TestPortClosedOpen(t *testing.T) {
-	// Реальный локальный listener — детерминированный «open» без sleep.
+	// A real local listener — deterministic "open" with no sleep.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -33,8 +33,8 @@ func TestPortClosedOpen(t *testing.T) {
 }
 
 func TestPortClosedRefused(t *testing.T) {
-	// Открываем и сразу закрываем listener: порт гарантированно свободен и
-	// dial получит refused — детерминированный «closed» без угадывания порта.
+	// Open and immediately close the listener: the port is guaranteed free
+	// and dial gets refused — deterministic "closed" without guessing a port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -53,7 +53,7 @@ func TestPortClosedRefused(t *testing.T) {
 }
 
 func TestPortClosedDialError(t *testing.T) {
-	// Fake dialer с ошибкой — closed без выхода в сеть (host недоступен).
+	// Fake dialer that errors — closed with no network access (host unreachable).
 	b := &PortClosed{Dial: func(context.Context, string, string) (net.Conn, error) {
 		return nil, errors.New("no route to host")
 	}}

@@ -108,8 +108,8 @@ func TestCompositeRegistry_CoreShadowsPlugin(t *testing.T) {
 }
 
 func TestRun_DispatchesToPluginViaComposite(t *testing.T) {
-	// Интеграция applyrunner ↔ pluginregistry: модуль wb.echo не в core,
-	// но есть в plugin-layer; ApplyRunner находит его через composite.
+	// Integration of applyrunner ↔ pluginregistry: module wb.echo isn't in
+	// core but is in the plugin layer; ApplyRunner finds it via composite.
 	d := makeDiscovered("wb", "echo")
 	spawner := &fakeSpawner{
 		makeSession: func() *fakeSession {
@@ -228,8 +228,8 @@ func TestPluginRegistry_ConcurrentLookupAndRescan(t *testing.T) {
 
 // --- helpers ---
 
-// writeSlot материализует валидный каталожный слот `<root>/<ns>-<name>/`
-// (manifest.yaml + исполняемый бинарь) — формат core.module.installed.
+// writeSlot materializes a valid directory slot `<root>/<ns>-<name>/`
+// (manifest.yaml + executable binary) — the core.module.installed format.
 func writeSlot(t *testing.T, root, namespace, name string) {
 	t.Helper()
 	dir := filepath.Join(root, namespace+"-"+name)
@@ -276,7 +276,7 @@ func (f *fakeSpawner) Spawn(ctx context.Context, d pluginhost.Discovered) (Plugi
 	return sess, nil
 }
 
-// fakeSession реализует PluginSession поверх in-memory списка ApplyEvent-ов.
+// fakeSession implements PluginSession over an in-memory list of ApplyEvents.
 type fakeSession struct {
 	events   []*pluginv1.ApplyEvent
 	applyErr error
@@ -316,9 +316,9 @@ func (c *fakeApplyClient) CloseSend() error             { return nil }
 func (c *fakeApplyClient) Context() context.Context     { return context.Background() }
 func (c *fakeApplyClient) SendMsg(any) error            { return nil }
 func (c *fakeApplyClient) RecvMsg(any) error {
-	// apply-cycle вызывает только Recv(); RecvMsg оставлен no-op для
-	// удовлетворения ClientStream-interface, копирование proto-сообщения
-	// (содержащего sync.Mutex protoimpl.MessageState) вызвало бы go vet.
+	// apply-cycle only calls Recv(); RecvMsg stays a no-op to satisfy the
+	// ClientStream interface — copying the proto message (which contains
+	// sync.Mutex protoimpl.MessageState) would trip go vet.
 	return nil
 }
 

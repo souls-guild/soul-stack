@@ -14,24 +14,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-// PluginSpawner — узкий контракт над pluginhost.Host, нужен Registry для
-// lazy-spawn-а sub-process плагинов. В продакшен-сборке реализуется *Host;
-// в тестах — fake, чтобы не поднимать реальные бинари.
+// PluginSpawner is a narrow contract over pluginhost.Host, used by Registry
+// to lazily spawn sub-process plugins. Implemented by *Host in production;
+// a fake in tests to avoid launching real binaries.
 type PluginSpawner interface {
 	Spawn(ctx context.Context, d pluginhost.Discovered) (PluginSession, error)
 }
 
-// PluginSession — узкий контракт над *pluginhost.Plugin для одного Apply-вызова.
-// Объявлен здесь, чтобы можно было подменить в тестах без зависимости от
-// сетевого подключения и subprocess-а.
+// PluginSession is a narrow contract over *pluginhost.Plugin for one Apply
+// call. Declared here so tests can substitute it without depending on a
+// network connection or a subprocess.
 type PluginSession interface {
 	Apply(ctx context.Context, req *pluginv1.ApplyRequest) (grpc.ServerStreamingClient[pluginv1.ApplyEvent], error)
 	Close() error
 }
 
-// PluginHostSpawner — обёртка над *pluginhost.Host, удовлетворяющая
-// PluginSpawner. Существует для адаптации типа: Host.Spawn возвращает
-// *pluginhost.Plugin, а Registry оперирует интерфейсом PluginSession.
+// PluginHostSpawner wraps *pluginhost.Host to satisfy PluginSpawner. Exists
+// to adapt the type: Host.Spawn returns *pluginhost.Plugin, while Registry
+// operates on the PluginSession interface.
 type PluginHostSpawner struct {
 	Host *pluginhost.Host
 }
@@ -44,14 +44,14 @@ func (s PluginHostSpawner) Spawn(ctx context.Context, d pluginhost.Discovered) (
 	return p, nil
 }
 
-// PluginRegistry — реализация Registry над custom-modules, найденными
-// pluginhost.Discover. Lookup возвращает обёртку pluginSoulModule, которая
-// на каждый Apply-вызов делает Spawn → Apply → Close (one-shot, ADR-020(d)).
+// PluginRegistry implements Registry over custom modules found by
+// pluginhost.Discover. Lookup returns a pluginSoulModule wrapper that does
+// Spawn → Apply → Close on every Apply call (one-shot, ADR-020(d)).
 //
-// Concurrency: mods защищена RWMutex — Rescan (hot-register из
-// core.module.installed, ADR-065(d)) конкурентен с Lookup идущего прогона.
-// Spawn-сессии независимы друг от друга — Host сам сериализует создание
-// сокетов через atomic-counter.
+// Concurrency: mods is guarded by an RWMutex — Rescan (hot-register from
+// core.module.installed, ADR-065(d)) runs concurrently with Lookup from an
+// in-flight run. Spawn sessions are independent of each other — Host itself
+// serializes socket creation via an atomic counter.
 type PluginRegistry struct {
 	spawner PluginSpawner
 	logger  *slog.Logger
@@ -60,11 +60,11 @@ type PluginRegistry struct {
 	mods map[string]pluginhost.Discovered
 }
 
-// NewPluginRegistry собирает registry. Имя ключа — `<namespace>.<name>`
-// (manifest.Address()) — совпадает с тем, что приходит в RenderedTask.module
-// до state-суффикса. Discovered с kind != soul_module пропускаются (defensive:
-// Soul-host Discover может вернуть и soul_beacon, ADR-030 V5-2 — их регистрирует
-// отдельный beacon-PluginRegistry).
+// NewPluginRegistry builds the registry. The key is `<namespace>.<name>`
+// (manifest.Address()) — matches what arrives in RenderedTask.module before
+// the state suffix. Discovered entries with kind != soul_module are skipped
+// (defensive: the Soul-host Discover can also return soul_beacon, ADR-030
+// V5-2 — those get registered by a separate beacon-PluginRegistry).
 func NewPluginRegistry(spawner PluginSpawner, discovered []pluginhost.Discovered, logger *slog.Logger) *PluginRegistry {
 	if logger == nil {
 		logger = slog.Default()
@@ -83,11 +83,11 @@ func indexSoulModules(discovered []pluginhost.Discovered) map[string]pluginhost.
 	return mods
 }
 
-// Rescan — hot-register (ADR-065(d)): повторный полный discover каталога
-// модулей и атомарная замена набора custom-модулей без рестарта демона.
-// Возвращает discovery-warnings для логирования caller-ом (тем же стилем, что
-// на старте). Beacon-реестр при Rescan НЕ пересобирается — MVP-ограничение
-// ADR-065, hot-reload soul_beacon — post-MVP.
+// Rescan is hot-register (ADR-065(d)): a full re-discover of the module
+// directory and an atomic swap of the custom-module set without restarting
+// the daemon. Returns discovery warnings for the caller to log (same style
+// as startup). The beacon registry is NOT rebuilt on Rescan — MVP
+// limitation per ADR-065; hot-reload for soul_beacon is post-MVP.
 func (r *PluginRegistry) Rescan(modulesRoot string) ([]string, error) {
 	discovered, warnings, err := pluginhost.Discover(modulesRoot)
 	if err != nil {
@@ -100,7 +100,7 @@ func (r *PluginRegistry) Rescan(modulesRoot string) ([]string, error) {
 	return warnings, nil
 }
 
-// Names возвращает список зарегистрированных custom-модулей.
+// Names returns the list of registered custom modules.
 func (r *PluginRegistry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -111,9 +111,9 @@ func (r *PluginRegistry) Names() []string {
 	return out
 }
 
-// Lookup возвращает обёртку SoulModule, которая делает one-shot spawn на
-// каждый Apply. Возвращаемая module.SoulModule реализует только Apply;
-// Validate/Plan возвращают BaseModule-defaults (apply-цикл MVP их не зовёт).
+// Lookup returns a SoulModule wrapper that does a one-shot spawn on every
+// Apply. The returned module.SoulModule implements only Apply; Validate/Plan
+// return BaseModule defaults (the MVP apply loop doesn't call them).
 func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
 	r.mu.RLock()
 	d, ok := r.mods[name]
@@ -128,10 +128,10 @@ func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
 	}, true
 }
 
-// pluginSoulModule — адаптер one-shot spawn-а под sdk/module.SoulModule.
-// Apply-вызов делает spawn → Apply (stream) → пробрасывает ApplyEvent-ы в
-// inProcApplyStream → Close. Любая ошибка stage-а превращается в error
-// для runner-а (тот превратит в TaskEvent.failed=true).
+// pluginSoulModule adapts one-shot spawning to sdk/module.SoulModule. An
+// Apply call does spawn → Apply (stream) → forwards ApplyEvents into the
+// caller's stream → Close. Any stage error becomes an error for the runner
+// (which turns it into TaskEvent.failed=true).
 type pluginSoulModule struct {
 	module.BaseModule
 	discovered pluginhost.Discovered
@@ -172,16 +172,16 @@ func (m *pluginSoulModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerS
 	}
 }
 
-// CompositeRegistry — Registry, проверяющий лукап последовательно по списку.
-// Используется для соединения core + plugin: core имеет приоритет, чтобы
-// custom-модуль с конфликтным именем (например, `core.pkg`) не подменил
-// статический core. Конфликты логируются в Names() через лог-вызов
-// конструктором cmd/soul.
+// CompositeRegistry is a Registry that checks lookups sequentially across a
+// list. Used to combine core + plugin: core takes priority so a custom
+// module with a conflicting name (e.g. `core.pkg`) can't shadow static core.
+// Conflicts are logged in Names() via a log call from the cmd/soul
+// constructor.
 type CompositeRegistry struct {
 	layers []Registry
 }
 
-// NewCompositeRegistry порядок-зависимый: первый layer проверяется первым.
+// NewCompositeRegistry is order-dependent: the first layer is checked first.
 func NewCompositeRegistry(layers ...Registry) *CompositeRegistry {
 	return &CompositeRegistry{layers: layers}
 }

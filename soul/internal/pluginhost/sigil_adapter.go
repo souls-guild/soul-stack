@@ -5,37 +5,37 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// sigilCache — поверхность чтения runtime-кеша Sigil-ов, нужная адаптеру.
-// Реализуется *sigilcache.Cache; сужение до интерфейса держит soul/internal/
-// pluginhost независимым от sigilcache-пакета напрямую (адаптер биндится в
-// cmd/soul при wire-up).
+// sigilCache is the read surface of the Sigil runtime cache that the adapter
+// needs. Implemented by *sigilcache.Cache; narrowing to an interface keeps
+// soul/internal/pluginhost independent of the sigilcache package directly
+// (the adapter is bound in cmd/soul at wire-up).
 type sigilCache interface {
 	Get(namespace, name string) *keeperv1.PluginSigil
 }
 
-// SigilLookupAdapter мостит runtime-кеш Sigil-ов Soul-а
-// (*sigilcache.Cache, ключ keeperv1.PluginSigil) к verify-контракту
-// shared/pluginhost.SigilLookup. Здесь — единственная точка маппинга
-// keeperv1.PluginSigil → shared.SigilRecord: shared НЕ тянет keeper-proto
-// (verify-DTO), proto-зависимость остаётся на Soul-стороне.
+// SigilLookupAdapter bridges Soul's Sigil runtime cache
+// (*sigilcache.Cache, keyed by keeperv1.PluginSigil) to the verify contract
+// shared/pluginhost.SigilLookup. This is the single mapping point
+// keeperv1.PluginSigil → shared.SigilRecord: shared does NOT pull in
+// keeper-proto (verify DTO), the proto dependency stays on the Soul side.
 type SigilLookupAdapter struct {
 	cache sigilCache
 }
 
-// NewSigilLookupAdapter оборачивает кеш в shared-совместимый SigilLookup.
-// nil-кеш → адаптер всегда возвращает nil-запись (verify fail-closed по
-// no_sigil): защита от nil-разыменования при неполном wire-up.
+// NewSigilLookupAdapter wraps the cache in a shared-compatible SigilLookup.
+// A nil cache → the adapter always returns a nil record (verify fails closed
+// on no_sigil): guards against nil dereference on incomplete wire-up.
 func NewSigilLookupAdapter(cache sigilCache) *SigilLookupAdapter {
 	return &SigilLookupAdapter{cache: cache}
 }
 
-// Get резолвит активный допуск по (namespace, name) и проецирует
-// keeperv1.PluginSigil в shared.SigilRecord. nil (допуск не доехал) → nil
-// (verify трактует как no_sigil).
+// Get resolves the active grant by (namespace, name) and projects
+// keeperv1.PluginSigil into shared.SigilRecord. nil (grant didn't arrive) →
+// nil (verify treats it as no_sigil).
 //
-// Manifest берётся из PluginSigil.Manifest — СЫРЫЕ байты manifest.yaml из
-// транспорта (M1), которые verify прогоняет через NormalizeManifestBytes
-// (S3↔S6-инвариант: не parsed-форма, не файл с диска).
+// Manifest comes from PluginSigil.Manifest — the RAW manifest.yaml bytes
+// from the transport (M1), which verify runs through NormalizeManifestBytes
+// (S3↔S6 invariant: not the parsed form, not a file from disk).
 func (a *SigilLookupAdapter) Get(namespace, name string) *sharedhost.SigilRecord {
 	if a.cache == nil {
 		return nil

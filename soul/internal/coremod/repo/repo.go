@@ -1,40 +1,37 @@
-// Package repo реализует core-модуль `core.repo` ([ADR-015]) — управление
-// пакетным репозиторием (apt/dnf/yum/apk; аналог идеи ansible
-// apt_repository/yum_repository, переработанный под безопасный декларативный
-// MVP).
+// Package repo implements the `core.repo` core module ([ADR-015]) — managing
+// a package repository (apt/dnf/yum/apk; inspired by Ansible's
+// apt_repository/yum_repository, reworked for a safe declarative MVP).
 //
-// Состояния:
-//   - present: репозиторий объявлен (файл-описание + GPG-ключ на месте).
-//   - absent:  описание репозитория удалено (ключ не трогаем — он может
-//     использоваться другими репозиториями).
+// States:
+//   - present: repository declared (description file + GPG key in place).
+//   - absent:  repository description removed (key is left alone — it may
+//     be shared with other repositories).
 //
-// Backend выбирается по util.DetectPkgMgr:
-//   - apt → /etc/apt/sources.list.d/<name>.list + ключ в
-//     /etc/apt/keyrings/<name>.gpg, на который .list ссылается через
-//     `signed-by=` (современный формат, НЕ apt-key — apt-key deprecated и
-//     добавляет ключ в общий trust store без привязки к репозиторию);
-//   - dnf/yum → /etc/yum.repos.d/<name>.repo (ini-формат);
-//   - apk → строка в /etc/apk/repositories.
+// Backend selected via util.DetectPkgMgr:
+//   - apt → /etc/apt/sources.list.d/<name>.list + key in
+//     /etc/apt/keyrings/<name>.gpg, referenced by the .list via `signed-by=`
+//     (modern form, NOT apt-key — deprecated, adds the key to the shared
+//     trust store with no per-repository scoping);
+//   - dnf/yum → /etc/yum.repos.d/<name>.repo (ini format);
+//   - apk → a line in /etc/apk/repositories.
 //
-// Идемпотентность: целевой файл существует, его содержимое побайтово совпадает
-// с желаемым и (для apt с gpg_key) ключ лежит на месте → changed=false.
+// Idempotency: target file exists, its content byte-matches the desired
+// one, and (for apt with gpg_key) the key is in place → changed=false.
 //
-// Запись файлов — через util.AtomicWritePreserving (preserve-by-default, как в
-// пилоте core.line: повторная запись существующего файла сохраняет его
-// mode/owner/group).
+// Files are written via util.AtomicWritePreserving (preserve-by-default, as
+// in the core.line pilot: rewriting an existing file keeps its mode/owner/group).
 //
-// Безопасность ([ADR-016] «безопасность на первом месте», подтверждено
-// пользователем):
-//   - gpg_check=false РАЗРЕШЁН (opt-out), но Apply возвращает обязательный
-//     warning в output — симметрично checksum-opt-out в core.url;
-//   - http:// в uri ДОПУСТИМ (легитимный кейс внутреннего зеркала, в отличие
-//     от core.url, где https-only), но с обязательным warning;
-//   - gpg_key критичен для supply-chain: если задан, ключ реально
-//     материализуется (apt) / прописывается как gpgkey (dnf/yum) и проверяется
-//     при idempotency.
+// Security ([ADR-016] "security first", confirmed with the user):
+//   - gpg_check=false is ALLOWED (opt-out), but Apply returns a mandatory
+//     warning in output — symmetric with the checksum opt-out in core.url;
+//   - http:// in uri is ALLOWED (legitimate internal-mirror case, unlike
+//     core.url which is https-only), but with a mandatory warning;
+//   - gpg_key is supply-chain critical: when set, the key is actually
+//     materialized (apt) / written as gpgkey (dnf/yum) and checked for
+//     idempotency.
 //
-// [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
-// [ADR-016]: docs/adr/0016-parity-license.md#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack
+// [ADR-015]: docs/adr/0015-core-modules-mvp.md
+// [ADR-016]: docs/adr/0016-parity-license.md
 package repo
 
 import (
@@ -52,11 +49,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name — каноническая верхушка адреса.
+// Name is the canonical address prefix.
 const Name = "core.repo"
 
-// Канонические каталоги backend-ов. Вынесены в поля Module для подмены в
-// unit-тестах поддельным rootfs (t.TempDir): модуль пишет абсолютные пути.
+// Canonical backend directories. Exposed as Module fields so unit tests can
+// swap in a fake rootfs (t.TempDir) — the module writes absolute paths.
 const (
 	defaultAptSourcesDir  = "/etc/apt/sources.list.d"
 	defaultAptKeyringsDir = "/etc/apt/keyrings"
@@ -64,11 +61,12 @@ const (
 	defaultApkReposFile   = "/etc/apk/repositories"
 )
 
-// Module — реализация sdk/module.SoulModule для core.repo.
+// Module implements sdk/module.SoulModule for core.repo.
 //
-// Runner нужен для util.DetectPkgMgr (определение backend-а). Каталоги вынесены
-// в поля для тестабельности (подмена на TempDir без записи в реальную систему).
-// LookupUser/LookupGroup — точки подмены preserve-логики util.AtomicWritePreserving.
+// Runner is used by util.DetectPkgMgr (backend detection). Directories are
+// fields for testability (swap to TempDir, no writes to the real filesystem).
+// LookupUser/LookupGroup are injection points for util.AtomicWritePreserving's
+// preserve logic.
 type Module struct {
 	Runner util.Runner
 
@@ -93,7 +91,7 @@ func New() *Module {
 	}
 }
 
-// repoParams — разобранные параметры одного Apply-вызова.
+// repoParams holds the parsed params of one Apply call.
 type repoParams struct {
 	name       string
 	uri        string
@@ -104,12 +102,12 @@ type repoParams struct {
 	enabled    bool
 }
 
-// Validate НЕ делегирован целиком в util.ValidateAgainstManifest (в отличие от
-// core.exec): сверх known-state + required у core.repo есть семантические
-// проверки, которые manifest-DSL не выражает — validateName (имя становится
-// именем файла, path-traversal недопустим) и validateURIScheme (только http/https).
-// Они критичны (security: запись вне целевого каталога / нелегитимная схема).
-// known-state/required дублируются с repo.yaml осознанно.
+// Validate is not fully delegated to util.ValidateAgainstManifest (unlike
+// core.exec): core.repo also runs semantic checks the manifest DSL can't
+// express — validateName (name becomes a filename, no path traversal) and
+// validateURIScheme (http/https only). Both are security-critical (writes
+// outside the target dir / illegitimate scheme). known-state/required
+// duplicate repo.yaml deliberately.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
@@ -125,7 +123,7 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		errs = append(errs, verr.Error())
 	}
 
-	// uri обязателен только для present: absent оперирует именем файла.
+	// uri is required only for present: absent operates on the filename alone.
 	if req.State == "present" {
 		uri, uerr := util.StringParam(req.Params, "uri")
 		if uerr != nil {
@@ -154,17 +152,16 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.repo.Plan — pure-read (ADR-031 Scry):
-// читает target-файл и (для apt) keyring, НЕ мутирует ФС (маркер для host-а,
-// default-deny).
+// PlanReadSafe declares core.repo.Plan as pure-read (ADR-031 Scry): reads the
+// target file and (for apt) the keyring, never mutates the filesystem.
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущий target-файл бэкенда
-// и сравнивает с желаемым содержимым (тот же сравнительный read, что в
-// applyAptPresent/applyYumPresent/applyApkPresent), плюс keyring (apt). НЕ
-// мутирует: ни MkdirAll, ни ensureFile/ensureKey.
+// Plan is a pure-read dry-run (ADR-031 Scry): reads the backend's current
+// target file and compares against desired content (the same comparison
+// applyAptPresent/applyYumPresent/applyApkPresent do), plus the keyring for
+// apt. Never mutates: no MkdirAll, no ensureFile/ensureKey.
 //
-// Backend выбирается через util.DetectPkgMgr (read-only вызов).
+// Backend is selected via util.DetectPkgMgr (read-only call).
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	ctx := stream.Context()
 	p, err := m.readParamsFromPlan(req)
@@ -191,8 +188,8 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	}
 }
 
-// readParamsFromPlan — extractor params для Plan (PlanRequest, не ApplyRequest).
-// Семантика 1:1 с readParams.
+// readParamsFromPlan extracts params for Plan (PlanRequest, not ApplyRequest).
+// Semantics match readParams 1:1.
 func (m *Module) readParamsFromPlan(req *pluginv1.PlanRequest) (repoParams, error) {
 	var p repoParams
 	var err error
@@ -225,7 +222,7 @@ func (m *Module) readParamsFromPlan(req *pluginv1.PlanRequest) (repoParams, erro
 	return p, nil
 }
 
-// planBoolDefault — параллель boolParamDefault для PlanRequest.
+// planBoolDefault mirrors boolParamDefault for PlanRequest.
 func planBoolDefault(req *pluginv1.PlanRequest, key string, def bool) (bool, error) {
 	if req.Params == nil || req.Params.Fields == nil {
 		return def, nil
@@ -324,7 +321,7 @@ func (m *Module) planAbsent(stream grpc.ServerStreamingServer[pluginv1.PlanEvent
 	}
 }
 
-// fileDrift — drift=true, если файла нет ИЛИ его содержимое != want.
+// fileDrift reports drift=true if the file is missing OR its content != want.
 func fileDrift(path string, want []byte) (bool, error) {
 	cur, existed, err := readFile(path)
 	if err != nil {
@@ -358,10 +355,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// readParams разбирает и нормализует параметры. gpg_check и enabled — default
-// true (как в дизайне): отсутствие ключа трактуется как «по умолчанию true»,
-// поэтому читаем явное наличие, а не голый OptBoolParam (он даёт false при
-// отсутствии).
+// readParams parses and normalizes params. gpg_check and enabled default to
+// true by design: a missing key means "true", so we check explicit presence
+// rather than plain OptBoolParam (which defaults to false when absent).
 func (m *Module) readParams(req *pluginv1.ApplyRequest) (repoParams, error) {
 	var p repoParams
 	var err error
@@ -396,10 +392,11 @@ func (m *Module) readParams(req *pluginv1.ApplyRequest) (repoParams, error) {
 	return p, nil
 }
 
-// boolParamDefault возвращает значение bool-параметра или def, если ключ
-// отсутствует/null. Нужен для gpg_check/enabled, у которых дефолт true (голый
-// OptBoolParam дал бы false на отсутствие). Наличие явного ключа определяется
-// до делегирования в OptBoolParam (тот сам не различает «нет ключа» и «false»).
+// boolParamDefault returns the bool param's value, or def if the key is
+// absent/null. Needed for gpg_check/enabled, whose default is true (plain
+// OptBoolParam would give false when absent). Explicit presence is checked
+// before delegating to OptBoolParam (which can't distinguish "absent" from
+// "false" on its own).
 func boolParamDefault(req *pluginv1.ApplyRequest, key string, def bool) (bool, error) {
 	if req.Params == nil || req.Params.Fields == nil {
 		return def, nil
@@ -414,9 +411,9 @@ func boolParamDefault(req *pluginv1.ApplyRequest, key string, def bool) (bool, e
 	return util.OptBoolParam(req.Params, key)
 }
 
-// validateName ограничивает name безопасным набором символов: имя становится
-// именем файла (sources.list.d/<name>.list и т.п.), поэтому слэши и
-// path-traversal недопустимы (security: запись вне целевого каталога).
+// validateName restricts name to a safe character set: it becomes a filename
+// (sources.list.d/<name>.list etc.), so slashes and path traversal are
+// disallowed (security: no writes outside the target directory).
 func validateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("param %q: must not be empty", "name")
@@ -435,8 +432,8 @@ func validateName(name string) error {
 	return nil
 }
 
-// validateURIScheme: http и https допустимы (http — внутреннее зеркало, по
-// дизайну). Любая другая схема (file://, ftp://, пустая) — ошибка.
+// validateURIScheme allows http and https (http is for internal mirrors, by
+// design). Any other scheme (file://, ftp://, empty) is an error.
 func validateURIScheme(uri string) error {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -450,7 +447,7 @@ func validateURIScheme(uri string) error {
 	}
 }
 
-// isHTTP сообщает, что uri использует незащищённую схему (для warning).
+// isHTTP reports whether uri uses the unencrypted scheme (for the warning).
 func isHTTP(uri string) bool {
 	u, err := url.Parse(uri)
 	return err == nil && strings.EqualFold(u.Scheme, "http")

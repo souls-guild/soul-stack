@@ -160,24 +160,24 @@ func TestOptIntSliceParam(t *testing.T) {
 		t.Fatalf("got=%v", got)
 	}
 
-	// Отсутствие ключа → nil без ошибки.
+	// Missing key → nil, no error.
 	if got, err := util.OptIntSliceParam(p, "missing"); err != nil || got != nil {
 		t.Fatalf("absent: got=%v err=%v", got, err)
 	}
 
-	// Дробное число → ошибка (целостность как в OptIntParam).
+	// Fractional number → error (integer-only, like OptIntParam).
 	pFrac := mustStruct(t, map[string]any{"status_codes": []any{200.5}})
 	if _, err := util.OptIntSliceParam(pFrac, "status_codes"); err == nil {
 		t.Fatal("OptIntSliceParam float: want error")
 	}
 
-	// Не-список → ошибка.
+	// Not a list → error.
 	pScalar := mustStruct(t, map[string]any{"status_codes": 200})
 	if _, err := util.OptIntSliceParam(pScalar, "status_codes"); err == nil {
 		t.Fatal("OptIntSliceParam scalar: want error")
 	}
 
-	// Строка в списке → ошибка.
+	// String inside the list → error.
 	pStr := mustStruct(t, map[string]any{"status_codes": []any{"200"}})
 	if _, err := util.OptIntSliceParam(pStr, "status_codes"); err == nil {
 		t.Fatal("OptIntSliceParam string element: want error")
@@ -233,7 +233,7 @@ func TestOptStringMapParam(t *testing.T) {
 		t.Fatalf("got=%v", got)
 	}
 
-	// Отсутствие ключа / null / nil params → nil без ошибки.
+	// Missing key / null / nil params → nil, no error.
 	if got, err := util.OptStringMapParam(p, "missing"); err != nil || got != nil {
 		t.Fatalf("absent: got=%v err=%v", got, err)
 	}
@@ -245,13 +245,13 @@ func TestOptStringMapParam(t *testing.T) {
 		t.Fatalf("null: got=%v err=%v", got, err)
 	}
 
-	// Не-объект → ошибка.
+	// Not an object → error.
 	pScalar := mustStruct(t, map[string]any{"env": "FOO=bar"})
 	if _, err := util.OptStringMapParam(pScalar, "env"); err == nil {
 		t.Fatal("OptStringMapParam scalar: want error")
 	}
 
-	// Non-string значение внутри map → ошибка с указанием ключа.
+	// Non-string value inside the map → error naming the key.
 	pMixed := mustStruct(t, map[string]any{"env": map[string]any{"FOO": float64(1)}})
 	err = nil
 	_, err = util.OptStringMapParam(pMixed, "env")
@@ -292,7 +292,7 @@ func TestOptStructMapParam(t *testing.T) {
 		t.Errorf("list=%v want []any{a,b}", got["list"])
 	}
 
-	// Отсутствие / null / nil → nil без ошибки.
+	// Missing / null / nil → nil, no error.
 	if got, err := util.OptStructMapParam(p, "missing"); err != nil || got != nil {
 		t.Fatalf("absent: got=%v err=%v", got, err)
 	}
@@ -304,7 +304,7 @@ func TestOptStructMapParam(t *testing.T) {
 		t.Fatalf("null: got=%v err=%v", got, err)
 	}
 
-	// Не-объект (список/скаляр) → ошибка.
+	// Not an object (list/scalar) → error.
 	pScalar := mustStruct(t, map[string]any{"vars": "x"})
 	if _, err := util.OptStructMapParam(pScalar, "vars"); err == nil {
 		t.Fatal("OptStructMapParam scalar: want error")
@@ -316,7 +316,7 @@ func TestOptStructMapParam(t *testing.T) {
 }
 
 func TestOptStringSliceParam_EdgeCases(t *testing.T) {
-	// nil params / отсутствие / null → nil без ошибки.
+	// nil params / missing / null → nil, no error.
 	if got, err := util.OptStringSliceParam(nil, "x"); err != nil || got != nil {
 		t.Fatalf("nil params: got=%v err=%v", got, err)
 	}
@@ -324,7 +324,7 @@ func TestOptStringSliceParam_EdgeCases(t *testing.T) {
 	if got, err := util.OptStringSliceParam(p, "groups"); err != nil || got != nil {
 		t.Fatalf("null: got=%v err=%v", got, err)
 	}
-	// Не-список → ошибка.
+	// Not a list → error.
 	pScalar := mustStruct(t, map[string]any{"groups": "wheel"})
 	if _, err := util.OptStringSliceParam(pScalar, "groups"); err == nil {
 		t.Fatal("OptStringSliceParam scalar: want error")
@@ -332,7 +332,7 @@ func TestOptStringSliceParam_EdgeCases(t *testing.T) {
 }
 
 func TestParamPresent(t *testing.T) {
-	// nil params / отсутствие ключа / явный null → отсутствует.
+	// nil params / missing key / explicit null → absent.
 	if util.ParamPresent(nil, "x") {
 		t.Fatal("ParamPresent(nil) = true")
 	}
@@ -343,7 +343,7 @@ func TestParamPresent(t *testing.T) {
 	if util.ParamPresent(p, "null") {
 		t.Fatal("ParamPresent явного null = true (должен трактоваться как отсутствие)")
 	}
-	// Ключ присутствует — даже с пустой строкой (ключевое отличие от пустоты).
+	// Key present — even with an empty string (the key distinction from emptiness).
 	if !util.ParamPresent(p, "content") {
 		t.Fatal("ParamPresent заданного ключа = false")
 	}

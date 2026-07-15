@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// readVersions возвращает отсортированный список номеров версий vN в каталоге.
+// readVersions returns the sorted list of vN version numbers in dir.
 func readVersions(t *testing.T, dir string) []int {
 	t.Helper()
 	ents, err := os.ReadDir(dir)
@@ -26,7 +26,7 @@ func readVersions(t *testing.T, dir string) []int {
 	return out
 }
 
-// assertCurrent проверяет, что current — относительный симлинк на want.
+// assertCurrent checks that current is a relative symlink to want.
 func assertCurrent(t *testing.T, dir, want string) {
 	t.Helper()
 	link := filepath.Join(dir, currentLink)
@@ -42,7 +42,7 @@ func assertCurrent(t *testing.T, dir, want string) {
 	}
 }
 
-// TestPathsIn: пути активной версии идут через dir/current/.
+// TestPathsIn: active-version paths go through dir/current/.
 func TestPathsIn(t *testing.T) {
 	p := PathsIn("/var/lib/soul-stack/seed")
 	if p.Cert != "/var/lib/soul-stack/seed/current/cert.pem" {
@@ -69,14 +69,14 @@ func TestLoad_EmptyDir(t *testing.T) {
 	}
 }
 
-// TestLoad_PartialVersion: current указывает на версию, где ca.pem отсутствует
-// (повреждённая версия) — Load даёт ErrIncomplete с упоминанием ca.pem.
+// TestLoad_PartialVersion: current points at a version missing ca.pem
+// (corrupted version) — Load returns ErrIncomplete mentioning ca.pem.
 func TestLoad_PartialVersion(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	// Удаляем ca.pem из активной версии.
+	// Remove ca.pem from the active version.
 	if err := os.Remove(filepath.Join(dir, "v1", CAFile)); err != nil {
 		t.Fatal(err)
 	}
@@ -89,14 +89,14 @@ func TestLoad_PartialVersion(t *testing.T) {
 	}
 }
 
-// TestLoad_Mismatched: на диске cert от одной пары, key от другой — Load даёт
-// ErrMismatched (отличается от ErrIncomplete).
+// TestLoad_Mismatched: cert on disk from one pair, key from another — Load
+// returns ErrMismatched (distinct from ErrIncomplete).
 func TestLoad_Mismatched(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	// Подменяем key.pem активной версии чужим (валидным самим по себе) ключом.
+	// Swap the active version's key.pem for an unrelated (individually valid) key.
 	_, otherKey := keypair(t)
 	keyPath := filepath.Join(dir, "v1", KeyFile)
 	if err := os.Chmod(keyPath, 0o600); err != nil {
@@ -114,7 +114,7 @@ func TestLoad_Mismatched(t *testing.T) {
 	}
 }
 
-// TestLoad_UnreadableCert покрывает не-NotExist I/O-ошибку чтения члена версии.
+// TestLoad_UnreadableCert covers a non-NotExist I/O error reading a version member.
 func TestLoad_UnreadableCert(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca")); err != nil {
@@ -160,8 +160,8 @@ func TestWrite_NilMaterial(t *testing.T) {
 	}
 }
 
-// TestWrite_MismatchedFailFast: несогласованная пара cert↔key отвергается до
-// любой записи на диск — vN+1 не создаётся.
+// TestWrite_MismatchedFailFast: a mismatched cert↔key pair is rejected before
+// any disk write — vN+1 is never created.
 func TestWrite_MismatchedFailFast(t *testing.T) {
 	dir := t.TempDir()
 	cert, _ := keypair(t)
@@ -170,7 +170,7 @@ func TestWrite_MismatchedFailFast(t *testing.T) {
 	if !errors.Is(err, ErrMismatched) {
 		t.Fatalf("Write несогласованной пары: %v; want ErrMismatched", err)
 	}
-	// Ни одной версии на диске.
+	// No version on disk.
 	if v := readVersions(t, dir); len(v) != 0 {
 		t.Fatalf("после fail-fast на диске есть версии %v; ждём пусто", v)
 	}
@@ -179,22 +179,22 @@ func TestWrite_MismatchedFailFast(t *testing.T) {
 	}
 }
 
-// TestWrite_FailFastKeepsOldCurrent: ротация несогласованной парой не трогает
-// существующую активную версию (crash-safety: сбой до swap оставляет старый
-// current).
+// TestWrite_FailFastKeepsOldCurrent: rotating with a mismatched pair doesn't
+// touch the existing active version (crash-safety: a failure before swap
+// leaves the old current in place).
 func TestWrite_FailFastKeepsOldCurrent(t *testing.T) {
 	dir := t.TempDir()
 	first := validMaterial(t, "ca1")
 	if err := Write(dir, first); err != nil {
 		t.Fatalf("first Write: %v", err)
 	}
-	// Ротация заведомо битой парой.
+	// Rotate with a deliberately broken pair.
 	cert, _ := keypair(t)
 	_, otherKey := keypair(t)
 	if err := Write(dir, &Material{CertPEM: cert, KeyPEM: otherKey, CAPEM: []byte("ca2")}); !errors.Is(err, ErrMismatched) {
 		t.Fatalf("rotation битой парой: %v; want ErrMismatched", err)
 	}
-	// current по-прежнему v1, и Load отдаёт старый материал.
+	// current is still v1, and Load returns the old material.
 	assertCurrent(t, dir, "v1")
 	got, err := Load(dir)
 	if err != nil {
@@ -203,13 +203,13 @@ func TestWrite_FailFastKeepsOldCurrent(t *testing.T) {
 	if string(got.CAPEM) != "ca1" {
 		t.Fatalf("после неудачной ротации Load вернул %q; ждём старый ca1", got.CAPEM)
 	}
-	// Битая версия v2 либо не создана, либо откатана — на диске только v1.
+	// The broken v2 version is either never created or rolled back — only v1 on disk.
 	if v := readVersions(t, dir); len(v) != 1 || v[0] != 1 {
 		t.Fatalf("versions = %v; ждём [1] (битая ротация ничего не оставила)", v)
 	}
 }
 
-// TestWrite_Modes: режимы файлов и каталогов.
+// TestWrite_Modes: file and directory modes.
 func TestWrite_Modes(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "seed")
@@ -246,7 +246,7 @@ func TestWrite_Modes(t *testing.T) {
 	}
 }
 
-// TestWrite_RelativeSymlink: current — относительный симлинк (`v1`, не абсолют).
+// TestWrite_RelativeSymlink: current is a relative symlink (`v1`, not absolute).
 func TestWrite_RelativeSymlink(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca")); err != nil {
@@ -255,7 +255,7 @@ func TestWrite_RelativeSymlink(t *testing.T) {
 	assertCurrent(t, dir, "v1")
 }
 
-// TestWrite_MkdirFails: на пути dir лежит обычный файл — MkdirAll падает.
+// TestWrite_MkdirFails: a regular file sits on dir's path — MkdirAll fails.
 func TestWrite_MkdirFails(t *testing.T) {
 	base := t.TempDir()
 	fileOnPath := filepath.Join(base, "occupied")
@@ -272,14 +272,14 @@ func TestWrite_MkdirFails(t *testing.T) {
 	}
 }
 
-// TestWrite_RotationOverwritesKeyMode: новая версия пишет key.pem заново с
-// 0o400 — старая версия с расслабленными правами не влияет на новую.
+// TestWrite_RotationOverwritesKeyMode: the new version writes key.pem fresh
+// with 0o400 — the old version's relaxed permissions don't affect it.
 func TestWrite_RotationOverwritesKeyMode(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca1")); err != nil {
 		t.Fatalf("first Write: %v", err)
 	}
-	// Расслабим права key.pem старой версии.
+	// Relax permissions on the old version's key.pem.
 	if err := os.Chmod(filepath.Join(dir, "v1", KeyFile), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -295,14 +295,15 @@ func TestWrite_RotationOverwritesKeyMode(t *testing.T) {
 	}
 }
 
-// TestWrite_DoesNotLeaveTempArtifacts: после Write в активной версии ровно три
-// PEM-файла, в самом dir нет .tmp-хвостов (ни от atomicWrite, ни от swap).
+// TestWrite_DoesNotLeaveTempArtifacts: after Write the active version has
+// exactly three PEM files, and dir has no leftover .tmp files (from
+// atomicWrite or swap).
 func TestWrite_DoesNotLeaveTempArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	// В dir: current + v1, без .tmp-.
+	// dir: current + v1, no .tmp files.
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +313,7 @@ func TestWrite_DoesNotLeaveTempArtifacts(t *testing.T) {
 			t.Errorf("остался temp в seed-dir: %s", e.Name())
 		}
 	}
-	// В версии — ровно три файла, без .tmp-.
+	// The version has exactly three files, no .tmp files.
 	vents, err := os.ReadDir(filepath.Join(dir, "v1"))
 	if err != nil {
 		t.Fatal(err)
@@ -334,9 +335,9 @@ func TestWrite_DoesNotLeaveTempArtifacts(t *testing.T) {
 	}
 }
 
-// TestWrite_VersionMkdirFails: seed-dir read-only после первого Write —
-// создание новой версии (mkdir verDir) падает, активная версия не тронута
-// (crash-safety: сбой до swap оставляет старый current).
+// TestWrite_VersionMkdirFails: seed-dir is read-only after the first Write —
+// creating a new version (mkdir verDir) fails, active version untouched
+// (crash-safety: a failure before swap leaves the old current in place).
 func TestWrite_VersionMkdirFails(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca1")); err != nil {
@@ -356,7 +357,7 @@ func TestWrite_VersionMkdirFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "mkdir") {
 		t.Fatalf("ждём mkdir-ошибку версии: %v", err)
 	}
-	// Crash-safety: вернём права и убедимся, что current всё ещё v1.
+	// Crash-safety: restore permissions and confirm current is still v1.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -370,15 +371,15 @@ func TestWrite_VersionMkdirFails(t *testing.T) {
 	}
 }
 
-// TestWrite_SwapFailsKeepsVersion: запись новой версии прошла, но swap-rename
-// падает (на месте current лежит непустой каталог) — материал v2 уже на диске,
-// но активной остаётся прежняя версия. Покрывает error-путь swapCurrent.
+// TestWrite_SwapFailsKeepsVersion: the new version is written but swap-rename
+// fails (current is a non-empty directory) — v2's material is already on
+// disk, but the previous version stays active. Covers swapCurrent's error path.
 func TestWrite_SwapFailsKeepsVersion(t *testing.T) {
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca1")); err != nil {
 		t.Fatalf("seed Write v1: %v", err)
 	}
-	// Заменяем симлинк current непустым каталогом — rename поверх него упадёт.
+	// Replace the current symlink with a non-empty directory — rename over it will fail.
 	link := filepath.Join(dir, currentLink)
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
@@ -396,19 +397,19 @@ func TestWrite_SwapFailsKeepsVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "swap") {
 		t.Fatalf("ждём swap-ошибку: %v", err)
 	}
-	// v2 записана на диск (запись прошла до swap), но current не переключён.
+	// v2 is written to disk (write happened before swap), but current wasn't switched.
 	if v := readVersions(t, dir); len(v) != 2 || v[1] != 2 {
 		t.Fatalf("versions = %v; ждём [1 2] (v2 записана, swap не дошёл)", v)
 	}
 }
 
-// TestWrite_KeyPEMNotInErrorText: ни на одном провале Write секретный материал
-// KeyPEM не попадает в текст ошибки (защита от утечки в логи). Проверяем на
-// двух достижимых провалах:
-//  1. рассинхрон пары (fail-fast X509, до записи) — KeyPEM в Material;
-//  2. провал swap-а после успешной записи key (KeyPEM уже на диске).
+// TestWrite_KeyPEMNotInErrorText: on no Write failure does the secret KeyPEM
+// material leak into the error text (log-leak protection). Covers two
+// reachable failures:
+//  1. mismatched pair (fail-fast X509, before write) — KeyPEM in Material;
+//  2. swap failure after key is already written (KeyPEM already on disk).
 func TestWrite_KeyPEMNotInErrorText(t *testing.T) {
-	// (1) Несогласованная пара — провал на X509-валидации.
+	// (1) Mismatched pair — fails X509 validation.
 	cert, _ := keypair(t)
 	_, otherKey := keypair(t)
 	if err := Write(t.TempDir(), &Material{CertPEM: cert, KeyPEM: otherKey, CAPEM: []byte("ca")}); err == nil {
@@ -417,7 +418,7 @@ func TestWrite_KeyPEMNotInErrorText(t *testing.T) {
 		t.Fatalf("приватный ключ утёк в текст ошибки X509-валидации: %v", err)
 	}
 
-	// (2) Провал swap-а: current занят непустым каталогом, key.pem уже записан.
+	// (2) Swap failure: current occupied by a non-empty directory, key.pem already written.
 	dir := t.TempDir()
 	if err := Write(dir, validMaterial(t, "ca1")); err != nil {
 		t.Fatalf("seed Write v1: %v", err)
@@ -442,14 +443,14 @@ func TestWrite_KeyPEMNotInErrorText(t *testing.T) {
 	}
 }
 
-// canStillRead сообщает, читается ли файл несмотря на права (root/особая FS).
+// canStillRead reports whether the file is readable despite permissions (root/special FS).
 func canStillRead(path string) bool {
 	_, err := os.ReadFile(path)
 	return err == nil
 }
 
-// canCreateVersion проверяет, можно ли создать подкаталог в dir несмотря на
-// права (root/особая FS игнорируют write-bit).
+// canCreateVersion checks whether a subdirectory can be created in dir despite
+// permissions (root/special FS ignore the write bit).
 func canCreateVersion(dir string) bool {
 	probe := filepath.Join(dir, ".probe-version")
 	if err := os.Mkdir(probe, 0o700); err != nil {

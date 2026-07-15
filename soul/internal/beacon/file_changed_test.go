@@ -26,13 +26,13 @@ func TestFileChangedHash(t *testing.T) {
 		t.Error("data.sha256 должно совпадать со state")
 	}
 
-	// Тот же контент → тот же хеш (idempotent).
+	// Same content → same hash (idempotent).
 	state2, _, _ := b.Check(context.Background(), paramStruct(t, map[string]any{"path": path}))
 	if state2 != state1 {
 		t.Fatalf("хеш неизменного файла поменялся: %q → %q", state1, state2)
 	}
 
-	// Изменение контента → другой хеш.
+	// Content change → different hash.
 	if err := os.WriteFile(path, []byte("beta"), 0o644); err != nil {
 		t.Fatal(err)
 	}

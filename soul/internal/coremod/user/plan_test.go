@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// planStream — fake stream для Plan.
+// planStream is a fake stream for Plan.
 type planStream struct {
 	grpc.ServerStreamingServer[pluginv1.PlanEvent]
 	events []*pluginv1.PlanEvent
@@ -27,8 +27,8 @@ func (s *planStream) last() *pluginv1.PlanEvent {
 	return s.events[len(s.events)-1]
 }
 
-// TestPlan_Present_Exists_Clean — Plan(present) для существующего пользователя:
-// changed=false, без мутаций.
+// TestPlan_Present_Exists_Clean — Plan(present) for an existing user:
+// changed=false, no mutations.
 func TestPlan_Present_Exists_Clean(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &user.Module{
@@ -52,8 +52,8 @@ func TestPlan_Present_Exists_Clean(t *testing.T) {
 	}
 }
 
-// TestPlan_Present_Missing_Drift — Plan(present) для отсутствующего пользователя:
-// changed=true (Apply создал бы), без мутаций.
+// TestPlan_Present_Missing_Drift — Plan(present) for a missing user:
+// changed=true (Apply would create it), no mutations.
 func TestPlan_Present_Missing_Drift(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &user.Module{
@@ -77,8 +77,8 @@ func TestPlan_Present_Missing_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Absent_Exists_Drift — Plan(absent) для существующего пользователя:
-// changed=true (Apply удалил бы), без мутаций.
+// TestPlan_Absent_Exists_Drift — Plan(absent) for an existing user:
+// changed=true (Apply would delete it), no mutations.
 func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &user.Module{
@@ -102,8 +102,8 @@ func TestPlan_Absent_Exists_Drift(t *testing.T) {
 	}
 }
 
-// TestPlan_Absent_Missing_Clean — Plan(absent) для отсутствующего пользователя:
-// changed=false, без мутаций.
+// TestPlan_Absent_Missing_Clean — Plan(absent) for a missing user:
+// changed=false, no mutations.
 func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	r := internaltest.NewRunner()
 	m := &user.Module{

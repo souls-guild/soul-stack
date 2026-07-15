@@ -2,24 +2,24 @@ package line
 
 import "fmt"
 
-// presentResult — итог редактирования для state present.
+// presentResult — the outcome of editing for state present.
 type presentResult struct {
 	lines    []string
 	changed  bool
-	matched  int    // сколько строк совпало с regexp (для warning/диагностики)
-	replaced int    // сколько фактически заменено/добавлено (0 или 1)
-	warning  string // непусто только при множественном regexp-совпадении
+	matched  int    // how many lines matched the regexp (for warning/diagnostics)
+	replaced int    // how many were actually replaced/added (0 or 1)
+	warning  string // non-empty only on multiple regexp matches
 }
 
-// presentEdit реализует семантику present над уже разбитыми строками.
-// Чистая функция: вход — текущие строки + параметры, выход — новые строки.
+// presentEdit implements present semantics over already-split lines.
+// Pure function: input is the current lines + params, output is new lines.
 //
-// С regexp: первая матчащая строка заменяется на line. Если она уже равна line
-// — no-op. При >1 совпадении меняется только первая, остальные не трогаются,
-// в warning сообщается, сколько ещё совпало.
+// With regexp: the first matching line is replaced with line. If it already
+// equals line — no-op. On >1 match, only the first is changed, the rest are
+// left alone; warning reports how many more matched.
 //
-// Без regexp: если line уже присутствует точно — no-op; иначе строка
-// добавляется по insertafter/insertbefore (литерал/EOF/BOF), default — EOF.
+// Without regexp: if line is already present verbatim — no-op; otherwise the
+// line is added per insertafter/insertbefore (literal/EOF/BOF), default EOF.
 func presentEdit(lines []string, p lineParams) presentResult {
 	if p.regexp != nil {
 		return presentRegexp(lines, p)
@@ -40,17 +40,17 @@ func presentRegexp(lines []string, p lineParams) presentResult {
 		}
 	}
 	if firstIdx == -1 {
-		// Ни одной матчащей строки. В урезанном MVP regexp описывает строку,
-		// которую заменяем; нет цели для замены → добавляем line (по правилам
-		// вставки). Это предсказуемо: «present» гарантирует наличие line.
+		// No matching line. In the pared-down MVP, regexp describes the line
+		// we're replacing; no target to replace → add line instead (per the
+		// insertion rules). This is predictable: "present" guarantees line exists.
 		return appendByPosition(lines, p)
 	}
 	if res.matched > 1 {
 		res.warning = fmt.Sprintf("regexp matched %d lines, replaced only the first (others left untouched)", res.matched)
 	}
 	if lines[firstIdx] == p.line {
-		// Первое совпадение уже равно целевой строке — замены нет. Но warning
-		// о множественном совпадении сохраняем как информативный сигнал.
+		// The first match already equals the target line — nothing to replace.
+		// But we keep the multiple-match warning as an informational signal.
 		res.changed = false
 		return res
 	}
@@ -67,7 +67,7 @@ func presentLiteral(lines []string, p lineParams) presentResult {
 	res := presentResult{lines: lines}
 	for _, l := range lines {
 		if l == p.line {
-			// Точная строка уже присутствует — no-op.
+			// Exact line is already present — no-op.
 			res.changed = false
 			res.matched = 1
 			return res
@@ -76,12 +76,12 @@ func presentLiteral(lines []string, p lineParams) presentResult {
 	return appendByPosition(lines, p)
 }
 
-// appendByPosition вставляет p.line согласно insertafter/insertbefore.
-// Допустимые значения: insertafter ∈ {"", "EOF", <литерал>}, insertbefore ∈
-// {"", "BOF", <литерал>}. Литерал ищется как точное совпадение строки: вставка
-// после/перед ПЕРВЫМ таким якорем. Якорь не найден → EOF (предсказуемый
-// fallback, как у ansible insertafter с несуществующим anchor). Default
-// (оба пусты) → EOF.
+// appendByPosition inserts p.line per insertafter/insertbefore.
+// Valid values: insertafter ∈ {"", "EOF", <literal>}, insertbefore ∈
+// {"", "BOF", <literal>}. A literal is matched as an exact line: inserts
+// after/before the FIRST such anchor. Anchor not found → EOF (predictable
+// fallback, same as ansible's insertafter with a nonexistent anchor). Default
+// (both empty) → EOF.
 func appendByPosition(lines []string, p lineParams) presentResult {
 	switch {
 	case p.insertBefore == "BOF":
@@ -93,7 +93,7 @@ func appendByPosition(lines []string, p lineParams) presentResult {
 		return inserted(append(cloneLines(lines), p.line))
 	case p.insertAfter == "" || p.insertAfter == "EOF":
 		return inserted(append(cloneLines(lines), p.line))
-	default: // insertafter — литерал
+	default: // insertafter is a literal
 		if idx := indexOf(lines, p.insertAfter); idx >= 0 {
 			return inserted(insertAt(lines, idx+1, p.line))
 		}
@@ -105,15 +105,15 @@ func inserted(lines []string) presentResult {
 	return presentResult{lines: lines, changed: true, replaced: 1}
 }
 
-// absentResult — итог редактирования для state absent.
+// absentResult — the outcome of editing for state absent.
 type absentResult struct {
 	lines   []string
 	changed bool
 	removed int
 }
 
-// absentEdit удаляет строки. С regexp — все матчащие; без regexp — все точные
-// совпадения p.line. Чистая функция.
+// absentEdit removes lines. With regexp — all matches; without regexp — all
+// exact matches of p.line. Pure function.
 func absentEdit(lines []string, p lineParams) absentResult {
 	kept := make([]string, 0, len(lines))
 	removed := 0

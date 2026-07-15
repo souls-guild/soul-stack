@@ -1,39 +1,39 @@
-// Package seed — версионная раскладка SoulSeed-материала на диске Soul-хоста.
+// Package seed lays out versioned SoulSeed material on disk for a Soul host.
 //
-// SoulSeed состоит из трёх обязательных PEM-файлов:
+// SoulSeed consists of three required PEM files:
 //
-//	cert.pem  — клиентский сертификат, выпущенный Vault PKI через Keeper Bootstrap.
-//	key.pem   — приватный ключ к cert.pem (mode 0o400, owner = soul-service-user).
-//	ca.pem    — CA-цепочка для верификации серверного сертификата Keeper-а.
+//	cert.pem  — client certificate issued by Vault PKI via Keeper Bootstrap.
+//	key.pem   — private key for cert.pem (mode 0o400, owner = soul-service-user).
+//	ca.pem    — CA chain to verify the Keeper's server certificate.
 //
-// и одного опционального trust-anchor-файла (ADR-026, slice S2b):
+// and one optional trust-anchor file (ADR-026, slice S2b):
 //
-//	sigil_pubkey.pem — PEM (SPKI) публичного ed25519-ключа подписи Sigil,
-//	    полученного в BootstrapReply. Им Soul верифицирует подпись допусков
-//	    плагинов (PluginSigil) в pull-режиме без нового bootstrap (slice S6).
-//	    ОПЦИОНАЛЕН: пустой pubkey (Sigil на Keeper-е не настроен) — валидное
-//	    состояние, файл не пишется и его отсутствие не делает версию неполной.
+//	sigil_pubkey.pem — PEM (SPKI) of the Sigil signing ed25519 public key,
+//	    received in BootstrapReply. Soul uses it to verify plugin grant
+//	    (PluginSigil) signatures in pull mode without a new bootstrap (slice S6).
+//	    OPTIONAL: an empty pubkey (Sigil not configured on Keeper) is valid —
+//	    the file is not written, and its absence doesn't make a version incomplete.
 //
-// Раскладка в `paths.seed` (директория 0o700):
+// Layout under `paths.seed` (directory 0o700):
 //
 //	paths.seed/
-//	  current -> vN        # относительный симлинк на активную версию
+//	  current -> vN        # relative symlink to the active version
 //	  v1/  cert.pem key.pem ca.pem [sigil_pubkey.pem]
 //	  v2/  cert.pem key.pem ca.pem [sigil_pubkey.pem]
 //	  ...
 //
-// Запись новой версии и переключение активной — атомарны (см. [Write]):
-// версия целиком пишется в `vN+1/`, после чего симлинк `current` атомарно
-// переставляется на неё. До переключения `current` указывает на прежнюю
-// версию, поэтому сбой на любом шаге до swap-а оставляет валидную старую
-// активную версию (crash-safety). sigil_pubkey.pem пишется в той же версии
-// до swap-а, поэтому trust-anchor переключается атомарно вместе с cert/key/ca
-// и переживает рестарт. Чтение прозрачно идёт через `current/` (см. [Load]).
-// Имена файлов фиксированные, не настраиваются.
+// Writing a new version and switching the active one are atomic (see [Write]):
+// the whole version is written to `vN+1/`, then the `current` symlink is
+// atomically repointed to it. Before the swap, `current` still points at the
+// previous version, so a failure at any earlier step leaves a valid old active
+// version in place (crash-safety). sigil_pubkey.pem is written into the same
+// version before the swap, so the trust-anchor switches atomically along with
+// cert/key/ca and survives a restart. Reads go transparently through
+// `current/` (see [Load]). File names are fixed, not configurable.
 //
-// Хард-кат M1: старый плоский формат (cert/key/ca прямо в `paths.seed`) НЕ
-// поддерживается. Отсутствие `current` → [ErrIncomplete] (оператор делает
-// `soul init` заново); авто-миграции нет.
+// Hard cut M1: the old flat format (cert/key/ca directly under `paths.seed`)
+// is NOT supported. Missing `current` → [ErrIncomplete] (operator re-runs
+// `soul init`); there is no auto-migration.
 package seed
 
 import (
@@ -46,51 +46,52 @@ import (
 	"strings"
 )
 
-// Имена файлов внутри версии. Меняются только синхронно с docs/soul/identity.md.
+// File names within a version. Change only in sync with docs/soul/identity.md.
 const (
 	CertFile = "cert.pem"
 	KeyFile  = "key.pem"
 	CAFile   = "ca.pem"
-	// SigilPubKeyFile — опциональный trust-anchor Sigil (ADR-026, S2b).
-	// Отсутствие файла = Sigil выключен, это валидное состояние.
+	// SigilPubKeyFile — optional Sigil trust-anchor (ADR-026, S2b).
+	// Missing file = Sigil disabled, a valid state.
 	SigilPubKeyFile = "sigil_pubkey.pem"
 
-	// currentLink — относительный симлинк на активную версию внутри paths.seed.
+	// currentLink — relative symlink to the active version within paths.seed.
 	currentLink = "current"
-	// versionPrefix — префикс каталогов версий (`v1`, `v2`, …).
+	// versionPrefix — prefix for version directories (`v1`, `v2`, …).
 	versionPrefix = "v"
 )
 
-// Material — содержимое SoulSeed в памяти.
+// Material — in-memory SoulSeed contents.
 type Material struct {
-	// CertPEM — клиентский cert, выпущенный Keeper-ом.
+	// CertPEM — client cert issued by the Keeper.
 	CertPEM []byte
-	// KeyPEM — приватный ключ к CertPEM. Никогда не покидает хост,
-	// при логировании не выводить.
+	// KeyPEM — private key for CertPEM. Never leaves the host,
+	// must not be logged.
 	KeyPEM []byte
-	// CAPEM — CA-цепочка Keeper-а (для верификации серверного cert-а).
+	// CAPEM — Keeper's CA chain (to verify the server cert).
 	CAPEM []byte
-	// SigilPubKeyPEM — опциональный trust-anchor Sigil (ADR-026, S2b): PEM
-	// (SPKI) публичного ed25519-ключа подписи допусков плагинов. nil/пусто =
-	// Sigil не настроен на Keeper-е; тогда файл sigil_pubkey.pem не пишется,
-	// и его отсутствие не делает версию неполной (verify плагинов выключен).
+	// SigilPubKeyPEM — optional Sigil trust-anchor (ADR-026, S2b): PEM (SPKI)
+	// of the plugin-grant signing ed25519 public key. nil/empty = Sigil not
+	// configured on the Keeper; then sigil_pubkey.pem isn't written, and its
+	// absence doesn't make the version incomplete (plugin verify disabled).
 	SigilPubKeyPEM []byte
 }
 
-// Paths — пути к файлам seed-а активной версии (внутри `dir/current/`).
+// Paths — file paths for the active seed version (under `dir/current/`).
 type Paths struct {
 	Cert string
 	Key  string
 	CA   string
-	// SigilPubKey — путь к опциональному trust-anchor-у Sigil. Файл по этому
-	// пути может отсутствовать (Sigil выключен) — caller обязан проверять
-	// существование, а не предполагать наличие.
+	// SigilPubKey — path to the optional Sigil trust-anchor. The file at this
+	// path may not exist (Sigil disabled) — callers must check existence,
+	// not assume presence.
 	SigilPubKey string
 }
 
-// PathsIn возвращает пути к файлам активной версии — внутри `dir/current/`.
-// Симлинк `current` прозрачен для open(2), tls-конфиг читает материал через
-// него, поэтому swap версии меняет источник без переинициализации путей.
+// PathsIn returns file paths for the active version, under `dir/current/`.
+// The `current` symlink is transparent to open(2); the tls config reads
+// material through it, so a version swap changes the source without
+// re-initializing paths.
 func PathsIn(dir string) Paths {
 	cur := filepath.Join(dir, currentLink)
 	return Paths{
@@ -101,26 +102,26 @@ func PathsIn(dir string) Paths {
 	}
 }
 
-// ErrIncomplete — Load на директории без активной версии (нет `current` или
-// в активной версии не хватает одного из трёх файлов). Runtime-условие
-// «ещё не делали soul init», а не «I/O сломан».
+// ErrIncomplete — Load on a directory with no active version (no `current`,
+// or the active version is missing one of the three files). A runtime
+// condition ("soul init hasn't run yet"), not an I/O failure.
 var ErrIncomplete = errors.New("seed: bootstrap not completed (no active version under paths.seed/current)")
 
-// ErrMismatched — на диске лежит несогласованная пара cert↔key (например,
-// частичная/повреждённая ротация мимо нашего атомарного swap-а). Отличается
-// от ErrIncomplete: «материал есть, но cert и key не образуют валидную пару»,
-// а не «материала нет».
+// ErrMismatched — cert↔key pair on disk doesn't match (e.g. a partial/
+// corrupted rotation that bypassed our atomic swap). Distinct from
+// ErrIncomplete: "material exists but cert and key don't form a valid pair",
+// not "material is missing".
 var ErrMismatched = errors.New("seed: cert.pem and key.pem do not form a valid pair")
 
-// Load читает активную версию через `dir/current/{cert,key,ca}.pem` плюс
-// опциональный `sigil_pubkey.pem`.
+// Load reads the active version from `dir/current/{cert,key,ca}.pem` plus
+// the optional `sigil_pubkey.pem`.
 //
-// Возвращает [ErrIncomplete] обёрнутым, если `current` отсутствует или в
-// активной версии нет одного из трёх ОБЯЗАТЕЛЬНЫХ файлов (cert/key/ca) — caller
-// печатает подсказку «run soul init». Отсутствие sigil_pubkey.pem — НЕ ошибка
-// (Sigil выключен): поле [Material.SigilPubKeyPEM] остаётся nil. После чтения
-// cert+key проверяются на согласованность через [tls.X509KeyPair]; рассинхрон →
-// [ErrMismatched] (без утечки key в текст).
+// Returns [ErrIncomplete] wrapped if `current` is missing or the active
+// version lacks one of the three REQUIRED files (cert/key/ca) — the caller
+// prints a "run soul init" hint. A missing sigil_pubkey.pem is NOT an error
+// (Sigil disabled): [Material.SigilPubKeyPEM] stays nil. After reading,
+// cert+key are checked for consistency via [tls.X509KeyPair]; a mismatch →
+// [ErrMismatched] (without leaking the key into the error text).
 func Load(dir string) (*Material, error) {
 	if dir == "" {
 		return nil, errors.New("seed: paths.seed is empty")
@@ -144,23 +145,23 @@ func Load(dir string) (*Material, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Опциональный trust-anchor Sigil: NotExist → nil (Sigil выключен), не
-	// ErrIncomplete. Прочая I/O-ошибка — фейл (файл есть, но не читается).
+	// Optional Sigil trust-anchor: NotExist → nil (Sigil disabled), not
+	// ErrIncomplete. Any other I/O error fails (file exists but unreadable).
 	sigilPub, err := readOptionalMember(p.SigilPubKey)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-		// Текст ошибки tls.X509KeyPair не содержит сам ключ — оборачиваем в
-		// статичный ErrMismatched, без %w на err, чтобы наверняка не протащить
-		// детали в логи.
+		// tls.X509KeyPair's error text doesn't contain the key itself, but we
+		// wrap in a static ErrMismatched (no %w on err) to be sure no details
+		// leak into logs.
 		return nil, ErrMismatched
 	}
 	return &Material{CertPEM: certPEM, KeyPEM: keyPEM, CAPEM: caPEM, SigilPubKeyPEM: sigilPub}, nil
 }
 
-// readMember читает один обязательный файл версии. NotExist → ErrIncomplete
-// (версия неполная), прочая I/O-ошибка оборачивается с именем файла.
+// readMember reads one required version file. NotExist → ErrIncomplete
+// (version incomplete); any other I/O error is wrapped with the file name.
 func readMember(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -172,9 +173,9 @@ func readMember(path string) ([]byte, error) {
 	return data, nil
 }
 
-// readOptionalMember читает опциональный файл версии. NotExist → (nil, nil):
-// отсутствие — валидное состояние (для sigil_pubkey.pem = Sigil выключен), а не
-// признак неполной версии. Прочая I/O-ошибка оборачивается с именем файла.
+// readOptionalMember reads an optional version file. NotExist → (nil, nil):
+// absence is valid (for sigil_pubkey.pem it means Sigil disabled), not a
+// sign of an incomplete version. Any other I/O error is wrapped with the file name.
 func readOptionalMember(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -186,25 +187,27 @@ func readOptionalMember(path string) ([]byte, error) {
 	return data, nil
 }
 
-// Write раскладывает Material в новую версию `dir/vN+1/` и атомарно
-// переставляет на неё симлинк `dir/current`.
+// Write lays out Material into a new version `dir/vN+1/` and atomically
+// repoints the `dir/current` symlink to it.
 //
-// Шаги:
-//  1. валидация пары cert↔key через [tls.X509KeyPair] — fail-fast ДО любой
-//     записи; несогласованную пару на диск не пишем (текст ошибки не содержит
-//     key-материал);
-//  2. вычисление следующей версии vN+1 (нет версий → v1);
-//  3. запись трёх обязательных файлов в `dir/vN+1/` (mode cert/ca = 0o644,
-//     key = 0o400) плюс опционального sigil_pubkey.pem (0o644), если
-//     SigilPubKeyPEM не пуст; fsync каждого файла и fsync самого каталога
-//     версии (crash-safety);
-//  4. атомарный swap: temp-симлинк → os.Rename поверх `current`, fsync `dir`;
-//  5. best-effort очистка версий старше предыдущей (хранится current + 1).
+// Steps:
+//  1. validate the cert↔key pair via [tls.X509KeyPair] — fail-fast BEFORE any
+//     write; a mismatched pair never hits disk (error text carries no key
+//     material);
+//  2. compute the next version vN+1 (no versions → v1);
+//  3. write the three required files into `dir/vN+1/` (mode cert/ca = 0o644,
+//     key = 0o400) plus the optional sigil_pubkey.pem (0o644) if
+//     SigilPubKeyPEM is non-empty; fsync each file and fsync the version
+//     directory itself (crash-safety);
+//  4. atomic swap: temp symlink → os.Rename over `current`, fsync `dir`;
+//  5. best-effort pruning of versions older than the previous one (keeps
+//     current + 1).
 //
-// До шага 4 `current` указывает на прежнюю версию — сбой на 1–3 оставляет
-// валидную старую активную версию. sigil_pubkey.pem попадает в ту же версию
-// vN+1, поэтому trust-anchor переключается атомарно вместе с cert/key/ca и
-// переживает рестарт (pull-режим verify в S6 без нового bootstrap).
+// Before step 4, `current` still points at the previous version — a failure
+// in steps 1-3 leaves a valid old active version in place. sigil_pubkey.pem
+// lands in the same vN+1 version, so the trust-anchor switches atomically
+// with cert/key/ca and survives a restart (S6 pull-mode verify without a new
+// bootstrap).
 func Write(dir string, m *Material) error {
 	if dir == "" {
 		return errors.New("seed: paths.seed is empty")
@@ -212,11 +215,11 @@ func Write(dir string, m *Material) error {
 	if m == nil {
 		return errors.New("seed: material is nil")
 	}
-	// (a) Валидация пары до любой записи. Ошибку не оборачиваем содержимым key.
+	// (a) Validate the pair before any write. Don't wrap the error with key contents.
 	if _, err := tls.X509KeyPair(m.CertPEM, m.KeyPEM); err != nil {
 		return ErrMismatched
 	}
-	// (b) Каталог seed-а + вычисление следующей версии.
+	// (b) Seed directory + compute the next version.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("seed: mkdir %s: %w", dir, err)
 	}
@@ -226,7 +229,7 @@ func Write(dir string, m *Material) error {
 	}
 	verName := versionPrefix + strconv.Itoa(next)
 	verDir := filepath.Join(dir, verName)
-	// (c) Запись всей версии в vN+1.
+	// (c) Write the whole version into vN+1.
 	if err := os.MkdirAll(verDir, 0o700); err != nil {
 		return fmt.Errorf("seed: mkdir %s: %w", verDir, err)
 	}
@@ -239,28 +242,28 @@ func Write(dir string, m *Material) error {
 	if err := atomicWrite(filepath.Join(verDir, CAFile), m.CAPEM, 0o644); err != nil {
 		return err
 	}
-	// Опциональный trust-anchor Sigil — только при наличии (Sigil настроен).
-	// Пустой → файл не создаём; Load трактует отсутствие как «Sigil выключен».
+	// Optional Sigil trust-anchor — only if present (Sigil configured).
+	// Empty → don't create the file; Load treats absence as "Sigil disabled".
 	if len(m.SigilPubKeyPEM) > 0 {
 		if err := atomicWrite(filepath.Join(verDir, SigilPubKeyFile), m.SigilPubKeyPEM, 0o644); err != nil {
 			return err
 		}
 	}
-	// (d) fsync каталога версии — без него rename-ы файлов внутри vN+1 могут не
-	// дойти до диска до crash-а, и версия окажется неполной (R1).
+	// (d) fsync the version directory — without it, renames of files inside
+	// vN+1 might not hit disk before a crash, leaving the version incomplete (R1).
 	if err := fsyncDir(verDir); err != nil {
 		return err
 	}
-	// (e) Атомарный swap симлинка current -> verName (относительный).
+	// (e) Atomic swap of the current symlink -> verName (relative).
 	if err := swapCurrent(dir, verName); err != nil {
 		return err
 	}
-	// (f) Best-effort очистка: ошибка не фейлит Write — версия уже активна.
+	// (f) Best-effort cleanup: an error here doesn't fail Write — the version is already active.
 	pruneOldVersions(dir, next)
 	return nil
 }
 
-// nextVersion возвращает max(существующие vN) + 1; нет версий → 1.
+// nextVersion returns max(existing vN) + 1; no versions → 1.
 func nextVersion(dir string) (int, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -275,7 +278,7 @@ func nextVersion(dir string) (int, error) {
 	return max + 1, nil
 }
 
-// parseVersion разбирает имя каталога версии `vN` в число N (N ≥ 1).
+// parseVersion parses a version directory name `vN` into N (N ≥ 1).
 func parseVersion(name string) (int, bool) {
 	if !strings.HasPrefix(name, versionPrefix) {
 		return 0, false
@@ -287,16 +290,16 @@ func parseVersion(name string) (int, bool) {
 	return n, true
 }
 
-// swapCurrent атомарно переставляет симлинк `dir/current` на target
-// (относительное имя версии внутри dir). Создаёт temp-симлинк рядом и
-// os.Rename-ит его поверх current (атомарно на POSIX), затем fsync-ит dir.
+// swapCurrent atomically repoints the `dir/current` symlink to target
+// (a version name relative to dir). Creates a temp symlink alongside it and
+// os.Renames it over current (atomic on POSIX), then fsyncs dir.
 func swapCurrent(dir, target string) error {
 	tmp, err := os.CreateTemp(dir, "."+currentLink+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("seed: create temp symlink in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	// CreateTemp создал обычный файл — нам нужен симлинк на его месте.
+	// CreateTemp made a regular file — we need a symlink in its place.
 	_ = tmp.Close()
 	if err := os.Remove(tmpName); err != nil {
 		return fmt.Errorf("seed: prepare temp symlink %s: %w", tmpName, err)
@@ -308,16 +311,16 @@ func swapCurrent(dir, target string) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("seed: swap %s -> %s: %w", currentLink, target, err)
 	}
-	// fsync каталога — фиксируем сам факт переименования симлинка (R1).
+	// fsync the directory — commits the symlink rename itself (R1).
 	if err := fsyncDir(dir); err != nil {
 		return err
 	}
 	return nil
 }
 
-// pruneOldVersions удаляет версии vK с K < current-1: храним активную и одну
-// предыдущую. Best-effort — ошибки игнорируются (вызывается после успешного
-// swap-а, активная версия уже на месте).
+// pruneOldVersions removes versions vK with K < current-1: keeps the active
+// version plus one previous. Best-effort — errors are ignored (called after
+// a successful swap, the active version is already in place).
 func pruneOldVersions(dir string, current int) {
 	keepFrom := current - 1
 	ents, err := os.ReadDir(dir)
@@ -333,9 +336,9 @@ func pruneOldVersions(dir string, current int) {
 	}
 }
 
-// fsyncDir открывает каталог и fsync-ит его, фиксируя метаданные (созданные/
-// переименованные внутри записи) на диск. Критично для crash-safety
-// version-dir + swap (R1).
+// fsyncDir opens the directory and fsyncs it, committing metadata (entries
+// created/renamed within it) to disk. Critical for version-dir + swap
+// crash-safety (R1).
 func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
@@ -351,9 +354,9 @@ func fsyncDir(dir string) error {
 	return nil
 }
 
-// atomicWrite пишет data в temp-файл рядом с path и переименовывает.
-// На POSIX rename атомарен внутри одной FS; temp-файл за пределы каталога не
-// уезжает (path фиксирован вызывающим).
+// atomicWrite writes data to a temp file next to path and renames it.
+// rename is atomic on POSIX within one filesystem; the temp file never
+// leaves the directory (path is fixed by the caller).
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -361,7 +364,7 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("seed: create temp for %s: %w", path, err)
 	}
 	tmpName := tmp.Name()
-	// На любой ошибке ниже временный файл должен исчезнуть.
+	// The temp file must be removed on any error below.
 	cleanup := func() { _ = os.Remove(tmpName) }
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()

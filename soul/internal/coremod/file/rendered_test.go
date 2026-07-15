@@ -12,8 +12,8 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// renderCtx собирает корень §3.2 ({vars, self, role, essence}) для тестов —
-// тот же контракт, что Keeper кладёт в params.render_context (setRenderContext).
+// renderCtx builds the §3.2 root ({vars, self, role, essence}) for tests —
+// the same contract Keeper puts into params.render_context (setRenderContext).
 func renderCtx(vars, self, essence map[string]any, role string) map[string]any {
 	if vars == nil {
 		vars = map[string]any{}
@@ -67,9 +67,9 @@ func TestApply_Rendered_CreatesFile(t *testing.T) {
 	}
 }
 
-// .self.* — стабильные факты хоста, доступны из корня §3.2. Регресс E2E BUG-A:
-// раньше vars подавался плоским корнем → `.self.network.primary_ip` падал
-// «map has no entry for key "self"».
+// .self.* are stable host facts, available from the §3.2 root. E2E regression
+// BUG-A: vars used to be handed in as a flat root → `.self.network.primary_ip`
+// failed with "map has no entry for key "self"".
 func TestApply_Rendered_SelfFact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "redis.conf")
@@ -100,7 +100,7 @@ func TestApply_Rendered_SelfFact(t *testing.T) {
 	}
 }
 
-// .role — declared-роль из spec (bootstrap-create), доступна корнем §3.2.
+// .role is the declared role from spec (bootstrap-create), available at the §3.2 root.
 func TestApply_Rendered_Role(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.conf")
@@ -126,7 +126,7 @@ func TestApply_Rendered_Role(t *testing.T) {
 	}
 }
 
-// .essence.* — собранный essence (read-only snapshot), доступен корнем §3.2.
+// .essence.* is the collected essence (read-only snapshot), available at the §3.2 root.
 func TestApply_Rendered_Essence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.conf")
@@ -205,7 +205,7 @@ func TestApply_Rendered_ChangeOnContentDiff(t *testing.T) {
 	}
 }
 
-// strict-mode: обращение к отсутствующей vars-переменной → ошибка рендера.
+// strict-mode: referencing a missing vars variable → render error.
 func TestApply_Rendered_MissingVarFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.conf")
@@ -217,7 +217,7 @@ func TestApply_Rendered_MissingVarFails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "hello {{ .vars.name }}\n",
-			"render_context":   renderCtx(map[string]any{}, nil, nil, ""), // .vars.name отсутствует
+			"render_context":   renderCtx(map[string]any{}, nil, nil, ""), // .vars.name missing
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -225,17 +225,18 @@ func TestApply_Rendered_MissingVarFails(t *testing.T) {
 	if !stream.Last().Failed {
 		t.Fatal("failed=false при отсутствующей переменной (ждём strict missingkey)")
 	}
-	// файл не должен быть создан при ошибке рендера
+	// file must not be created on render error
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("файл создан несмотря на ошибку рендера: %v", err)
 	}
 }
 
-// Регресс ровно того, что упало в E2E (BUG-A): шаблон обращается к .self, но в
-// корне self нет (Keeper не положил self в render_context) → strict-mode ошибка
-// «map has no entry for key "self"», а не молчаливый <no value>. Корень §3.2 без
-// self отсутствует у нас конструктивно (renderCtx всегда кладёт self), поэтому
-// эмулируем «битый Keeper» — render_context только с vars.
+// Regression for exactly what broke in E2E (BUG-A): the template references
+// .self, but self is missing from the root (Keeper didn't put self into
+// render_context) → strict-mode error "map has no entry for key "self"", not
+// a silent <no value>. A §3.2 root without self can't happen by construction
+// here (renderCtx always includes self), so this emulates a "broken Keeper" —
+// render_context with only vars.
 func TestApply_Rendered_SelfMissingInContextFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "redis.conf")
@@ -247,7 +248,7 @@ func TestApply_Rendered_SelfMissingInContextFails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "bind {{ .self.network.primary_ip }}\n",
-			// render_context без self — единственный ключ vars.
+			// render_context without self — vars is the only key.
 			"render_context": map[string]any{"vars": map[string]any{}},
 		}),
 	}, stream); err != nil {
@@ -261,8 +262,8 @@ func TestApply_Rendered_SelfMissingInContextFails(t *testing.T) {
 	}
 }
 
-// render_context вовсе не доставлен (handoff не настроен) → штатный failed,
-// не паника. Симметрично отсутствию template_content.
+// render_context isn't delivered at all (handoff not configured) → normal
+// failed, not a panic. Symmetric with a missing template_content.
 func TestApply_Rendered_MissingRenderContextFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.conf")
@@ -399,7 +400,7 @@ func TestApply_Rendered_MissingTemplateContentFails(t *testing.T) {
 	}
 }
 
-// Атомарная запись не должна оставлять временных .tmp-файлов после успеха.
+// Atomic write must not leave temp .tmp files behind after success.
 func TestApply_Rendered_NoTempLeftover(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.conf")

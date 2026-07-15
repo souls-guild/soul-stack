@@ -1,19 +1,20 @@
-// Package pkg реализует core-модуль `core.pkg` ([ADR-015]).
+// Package pkg implements the `core.pkg` core module ([ADR-015]).
 //
-// Состояния:
-//   - installed: пакет установлен (с опциональной версией).
-//   - absent:    пакет удалён.
-//   - latest:    пакет установлен и подтянут до новейшей версии репозитория.
+// States:
+//   - installed: package installed (optionally at a specific version).
+//   - absent:    package removed.
+//   - latest:    package installed and upgraded to the newest repository version.
 //
-// Backend-ы: apt (Debian/Ubuntu), dnf (RHEL ≥ 8), yum (RHEL ≤ 7), apk (Alpine).
-// apt-вызовы неинтерактивны и conffile-safe (см. aptGet/aptInstall): stdin
-// Soul-агента пуст, любой debconf/dpkg-промпт уронил бы задачу на EOF. rpm-based
-// (.rpmnew/.rpmsave вместо промпта) и apk неинтерактивны по умолчанию.
-// Backend выбирается из soulprint-факта pkg_mgr (primary, ADR-018(b)) — тот же
-// источник, что и CEL `soulprint.self.os.pkg_mgr`; при пустом/unknown факте —
-// fallback на runtime-детект (`command -v` / `which`), см. util.ResolvePkgMgr.
-// Факт инжектится Soul-агентом in-process через [Module.SetHostFacts]
-// (util.SoulprintAware, Вариант A) перед Apply.
+// Backends: apt (Debian/Ubuntu), dnf (RHEL >= 8), yum (RHEL <= 7), apk (Alpine).
+// apt calls are non-interactive and conffile-safe (see aptGet/aptInstall): the
+// Soul agent's stdin is empty, so any debconf/dpkg prompt would hit EOF and
+// fail the task. rpm-based backends (.rpmnew/.rpmsave instead of prompting)
+// and apk are non-interactive by default.
+// Backend is picked from the soulprint pkg_mgr fact (primary, ADR-018(b)) —
+// the same source as CEL `soulprint.self.os.pkg_mgr`; on empty/unknown fact,
+// falls back to runtime detection (`command -v` / `which`), see
+// util.ResolvePkgMgr. The fact is injected by the Soul agent in-process via
+// [Module.SetHostFacts] (util.SoulprintAware, Variant A) before Apply.
 package pkg
 
 import (
@@ -28,62 +29,65 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — каноническая верхушка адреса (core.<this>.<state>).
+// Name is the canonical address prefix (core.<this>.<state>).
 const Name = "core.pkg"
 
-// Module — реализация sdk/module.SoulModule. Runner подменяется в тестах;
-// в проде используется util.OSRunner{}.
+// Module implements sdk/module.SoulModule. Runner is swapped out in tests;
+// production uses util.OSRunner{}.
 //
-// Один и тот же инстанс переиспользуется на все install-шаги прогона (см.
-// coremod.Default), поэтому refresh индекса репозиториев (apt-get update /
-// apk update) делается один раз за жизнь процесса — поля indexMu/indexDone
-// ниже. Это вариант (б): дёшево при многих pkg-задачах, без бессмысленного
-// update перед каждым install.
+// The same instance is reused for all install steps in a run (see
+// coremod.Default), so refreshing the repository index (apt-get update /
+// apk update) happens once per process lifetime — see indexMu/indexDone
+// below. Option (b): cheap across many pkg tasks, no pointless update
+// before every install.
 type Module struct {
 	Runner util.Runner
 
-	// facts — soulprint-снимок хоста, инжектится Soul-агентом перед Apply
-	// (SetHostFacts). Zero-value (pkg_mgr пуст) → Apply откатывается на
-	// runtime-детект (util.ResolvePkgMgr). Конкурентных Apply на одном Soul нет
-	// (ADR-012(a)), отдельной синхронизации поля не требуется.
+	// facts is the soulprint host snapshot, injected by the Soul agent
+	// before Apply (SetHostFacts). Zero-value (empty pkg_mgr) → Apply falls
+	// back to runtime detection (util.ResolvePkgMgr). No concurrent Apply on
+	// one Soul (ADR-012(a)), so the field needs no extra synchronization.
 	facts util.HostFacts
 
 	indexMu   sync.Mutex
-	indexDone bool // индекс репозиториев уже успешно обновлён в этом процессе
+	indexDone bool // repository index already refreshed successfully this process
 }
 
-// New собирает Module с production-Runner. Используется при wire-up в
-// registry бинаря soul.
+// New builds a Module with the production Runner. Used when wiring up the
+// soul binary's registry.
 func New() *Module { return &Module{Runner: util.OSRunner{}} }
 
-// SetHostFacts реализует util.SoulprintAware: ApplyRunner инжектит собранный
-// soulprint-факт хоста перед вызовом Apply (Вариант A, in-process).
+// SetHostFacts implements util.SoulprintAware: ApplyRunner injects the
+// collected soulprint host fact before calling Apply (Variant A, in-process).
 func (m *Module) SetHostFacts(f util.HostFacts) { m.facts = f }
 
-// Validate — known-state + required-param проверки делегированы в
-// shared/coremanifest/pkg.yaml (единый источник с soul-lint). Cross-field-
-// инвариантов у core.pkg нет. Тип-проверка значений — в Apply-getters.
+// Validate delegates known-state + required-param checks to
+// shared/coremanifest/pkg.yaml (single source of truth shared with
+// soul-lint). core.pkg has no cross-field invariants; value type checks
+// happen in the Apply getters.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// PlanReadSafe объявляет, что core.pkg.Plan — pure-read (ADR-031 Scry):
-// читает текущее состояние пакета и НЕ мутирует хост. Маркер для host-а
-// (default-deny): без него Plan на dry_run не вызывался бы.
+// PlanReadSafe declares core.pkg.Plan as pure-read (ADR-031 Scry): it reads
+// the current package state and does NOT mutate the host. Marker for the
+// host's default-deny gate: without it, Plan would never run on dry_run.
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее состояние пакета
-// (тот же queryInstalled, что в начале Apply) и шлёт PlanEvent.changed —
-// «Apply изменил бы пакет?». НЕ мутирует хост: ни install/remove, ни
-// refreshIndex (apt-get update / apk update — это запись в индекс репозиториев).
+// Plan is a pure-read dry-run (ADR-031 Scry): reads current package state
+// (the same queryInstalled Apply uses at the start) and sends
+// PlanEvent.changed — "would Apply change the package?". Does NOT mutate the
+// host: no install/remove, no refreshIndex (apt-get update / apk update is a
+// write to the repository index).
 //
-// Поддержаны installed/absent — там drift полностью определяется чтением
-// queryInstalled (тот же read, что Apply делает до мутации). latest НЕ
-// поддержан Plan-ом: «есть ли новее в репозитории» требует read-а индекса,
-// которого Apply до мутации не делает (он refresh-ит индекс — запись), поэтому
-// pure-read-ответ из существующей read-логики не выводится. Возвращаем явный
-// failed-PlanEvent (не false-clean), drift latest — задача Slice B.
+// installed/absent are supported — drift there is fully determined by
+// queryInstalled (the same read Apply does before mutating). latest is NOT
+// supported by Plan: "is there a newer version in the repo?" requires
+// reading the index, which Apply doesn't do before mutating (it refreshes
+// the index — a write), so a pure-read answer can't be derived from
+// existing read logic. Returns an explicit failed PlanEvent (not
+// false-clean); latest drift is Slice B's job.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
@@ -107,11 +111,11 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 
 	switch req.State {
 	case "installed":
-		// drift: пакета нет ИЛИ закреплена версия и она расходится с текущей.
+		// drift: package missing OR a version is pinned and differs from current.
 		changed := !installed || (version != "" && curVer != version)
 		return util.SendPlanFinal(stream, changed)
 	case "absent":
-		// drift: пакет установлен (Apply удалил бы его).
+		// drift: package is installed (Apply would remove it).
 		return util.SendPlanFinal(stream, installed)
 	case "latest":
 		return util.PlanFailed("Plan(dry_run) для state latest не поддержан: проверка «есть ли новее» требует чтения индекса репозитория (Slice B)")
@@ -120,8 +124,8 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 	}
 }
 
-// Apply — основной путь. Идемпотентен: до install-команды проверяет, что
-// пакета нет (для installed) / есть (для absent).
+// Apply is the main path. Idempotent: before running install, checks that
+// the package is absent (for installed) / present (for absent).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
@@ -133,7 +137,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// pkg-mgr: soulprint-факт primary, runtime-детект fallback (BUG-B).
+	// pkg-mgr: soulprint fact is primary, runtime detection is fallback (BUG-B).
 	mgr := util.ResolvePkgMgr(ctx, m.Runner, m.facts.PkgMgr)
 	if mgr == util.PkgMgrUnknown {
 		return util.SendFailed(stream, "no supported package manager detected (apt/dnf/yum/apk)")
@@ -217,14 +221,14 @@ func (m *Module) applyLatest(ctx context.Context, stream grpc.ServerStreamingSer
 	})
 }
 
-// queryInstalled возвращает (installed, version, err). Версия — best-effort:
-// если pkg-mgr её не отдаёт компактно, возвращаем пустую строку (это не
-// меняет смысл флага installed).
+// queryInstalled returns (installed, version, err). Version is best-effort:
+// if the pkg mgr doesn't report it compactly, returns an empty string (this
+// doesn't change the meaning of the installed flag).
 func (m *Module) queryInstalled(ctx context.Context, mgr util.PkgMgr, name string) (bool, string, error) {
 	switch mgr {
 	case util.PkgMgrApt:
 		// dpkg-query -W -f='${Status} ${Version}' name → "install ok installed 1.2.3"
-		// exit 0 + поле Status начинается с "install ok installed".
+		// exit 0 + the Status field starts with "install ok installed".
 		r := m.Runner.Run(ctx, "dpkg-query", "-W", "-f=${Status} ${Version}", name)
 		if r.Err != nil {
 			return false, "", fmt.Errorf("dpkg-query: %v", r.Err)
@@ -234,7 +238,7 @@ func (m *Module) queryInstalled(ctx context.Context, mgr util.PkgMgr, name strin
 		}
 		return parseDpkgStatus(r.Stdout)
 	case util.PkgMgrDnf, util.PkgMgrYum:
-		// rpm -q --qf '%{VERSION}' name → версия (exit 0) или «package … is not installed» (exit 1).
+		// rpm -q --qf '%{VERSION}' name → version (exit 0) or "package … is not installed" (exit 1).
 		r := m.Runner.Run(ctx, "rpm", "-q", "--qf", "%{VERSION}", name)
 		if r.Err != nil {
 			return false, "", fmt.Errorf("rpm: %v", r.Err)
@@ -244,8 +248,8 @@ func (m *Module) queryInstalled(ctx context.Context, mgr util.PkgMgr, name strin
 		}
 		return true, r.Stdout, nil
 	case util.PkgMgrApk:
-		// apk info -e name → имя пакета (exit 0) или пусто (exit 0 тоже!).
-		// Поэтому используем `apk info -e name` и смотрим stdout.
+		// apk info -e name → package name (exit 0) or empty (also exit 0!).
+		// So we use `apk info -e name` and check stdout instead.
 		r := m.Runner.Run(ctx, "apk", "info", "-e", name)
 		if r.Err != nil {
 			return false, "", fmt.Errorf("apk: %v", r.Err)
@@ -253,12 +257,13 @@ func (m *Module) queryInstalled(ctx context.Context, mgr util.PkgMgr, name strin
 		if r.ExitCode != 0 || r.Stdout == "" {
 			return false, "", nil
 		}
-		// Версия — отдельным вызовом `apk info -ev` (--exact --verbose): для
-		// установленного пакета выводит ровно `<name>-<version>` одной строкой
-		// (например `nginx-1.26.3-r0`). MINOR-C: без `-e` apk печатает описание
-		// пакета («nginx: HTTP and reverse proxy server»), и version-поле
-		// register-а засорялось бы текстом вместо номера. parseApkVersion срезает
-		// `<name>-` префикс → чистый номер версии (`1.26.3-r0`).
+		// Version comes from a separate `apk info -ev` call (--exact
+		// --verbose): for an installed package it prints exactly
+		// `<name>-<version>` on one line (e.g. `nginx-1.26.3-r0`). MINOR-C:
+		// without `-e` apk prints the package description ("nginx: HTTP and
+		// reverse proxy server"), which would pollute the register's version
+		// field with text instead of a number. parseApkVersion strips the
+		// `<name>-` prefix → clean version number (`1.26.3-r0`).
 		v := m.Runner.Run(ctx, "apk", "info", "-ev", name)
 		return true, parseApkVersion(firstLine(v.Stdout), name), nil
 	}
@@ -295,20 +300,21 @@ func (m *Module) runInstall(ctx context.Context, mgr util.PkgMgr, name, version 
 	return fmt.Errorf("runInstall: unsupported pkg mgr %q", mgr)
 }
 
-// refreshIndex обновляет локальный индекс репозиториев перед install. На свежей
-// VM/контейнере (cloud-create) индекс apt/apk пустой или устаревший, и install
-// без update упирается в «Unable to locate package». Идея — Ansible
-// `apt: update_cache` (и аналог для apk).
+// refreshIndex updates the local repository index before install. On a
+// fresh VM/container (cloud-create) the apt/apk index is empty or stale,
+// and install without update hits "Unable to locate package". Modeled on
+// Ansible's `apt: update_cache` (and the apk equivalent).
 //
-// Refresh выполняется один раз за жизнь процесса (indexDone): один инстанс
-// Module обслуживает все pkg-задачи прогона, гонять update перед каждым install
-// бессмысленно дорого. Mutex защищает от конкурентных Apply-шагов; флаг ставится
-// только после успешного update, поэтому первый фейл не «съедает» попытку для
-// последующих шагов.
+// Refresh runs once per process lifetime (indexDone): one Module instance
+// serves all pkg tasks in a run, so running update before every install
+// would be pointlessly expensive. The mutex guards against concurrent
+// Apply steps; the flag is only set after a successful update, so a first
+// failure doesn't poison the attempt for later steps.
 //
-// dnf/yum НЕ refresh-атся: yum/dnf авто-обновляют metadata по expiration
-// (metadata_expire), а install сам подтягивает свежий индекс при необходимости —
-// явный update тут лишний и только замедляет шаг.
+// dnf/yum are NOT refreshed: yum/dnf auto-update metadata based on
+// expiration (metadata_expire), and install pulls a fresh index itself
+// when needed — an explicit update here is redundant and only slows the
+// step down.
 func (m *Module) refreshIndex(ctx context.Context, mgr util.PkgMgr) error {
 	switch mgr {
 	case util.PkgMgrApt, util.PkgMgrApk:
@@ -356,15 +362,15 @@ func (m *Module) runLatest(ctx context.Context, mgr util.PkgMgr, name string) er
 	}
 	switch mgr {
 	case util.PkgMgrApt:
-		// apt-get install --only-upgrade=yes name + install-if-missing семантика
-		// требует двух команд; делаем install-без-версии — apt установит свежую
-		// либо обновит существующую.
+		// apt-get install --only-upgrade=yes name + install-if-missing semantics
+		// would need two commands; instead we do install-without-version — apt
+		// installs fresh or upgrades the existing package.
 		return m.aptInstall(ctx, name)
 	case util.PkgMgrDnf:
 		return m.must(ctx, "dnf", "install", "-y", name)
 	case util.PkgMgrYum:
-		// yum update создаёт пакет, если его нет (поведение зависит от версии);
-		// надёжнее install.
+		// yum update may or may not install if missing (version-dependent
+		// behavior); install is more reliable.
 		return m.must(ctx, "yum", "install", "-y", name)
 	case util.PkgMgrApk:
 		return m.must(ctx, "apk", "add", "--upgrade", name)
@@ -372,32 +378,35 @@ func (m *Module) runLatest(ctx context.Context, mgr util.PkgMgr, name string) er
 	return fmt.Errorf("runLatest: unsupported pkg mgr %q", mgr)
 }
 
-// aptGet запускает apt-get в неинтерактивном режиме. Любой apt/dpkg-вызов на
-// управляемом хосте обязан быть batch-safe: stdin Soul-агента пуст, поэтому
-// интерактивный debconf/dpkg-промпт (выбор сервиса, conffile keep/replace и т.п.)
-// упёрся бы в «EOF on stdin» и уронил задачу. `DEBIAN_FRONTEND=noninteractive`
-// переводит debconf в noninteractive-режим (промптов нет, берутся дефолты).
+// aptGet runs apt-get in non-interactive mode. Any apt/dpkg call on a
+// managed host must be batch-safe: the Soul agent's stdin is empty, so an
+// interactive debconf/dpkg prompt (service selection, conffile
+// keep/replace, etc.) would hit "EOF on stdin" and fail the task.
+// `DEBIAN_FRONTEND=noninteractive` puts debconf into non-interactive mode
+// (no prompts, defaults are used).
 //
-// env передаётся через обёртку `env KEY=VAL apt-get …`, а НЕ через RunOptions.Env:
-// последнее — full-replace cmd.Env (см. util.OSRunner.RunOpts), что снесло бы
-// PATH/HOME и сломало запуск apt. Обёртка `env` добавляет одну переменную поверх
-// унаследованного окружения, ничего не теряя.
+// env is passed through the `env KEY=VAL apt-get …` wrapper, NOT via
+// RunOptions.Env: the latter is a full replace of cmd.Env (see
+// util.OSRunner.RunOpts), which would wipe PATH/HOME and break apt. The
+// `env` wrapper adds one variable on top of the inherited environment
+// without losing anything.
 func (m *Module) aptGet(ctx context.Context, args ...string) error {
 	full := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}, args...)
 	return m.must(ctx, "env", full...)
 }
 
-// aptInstall — apt-get install конкретного target-а (имя или `name=version`),
-// неинтерактивно и conffile-safe.
+// aptInstall runs apt-get install for a specific target (name or
+// `name=version`), non-interactively and conffile-safe.
 //
-// Dpkg::Options force-confdef + force-confold — ключ к re-apply-робастности:
-// наши сценарии рендерят conffile пакета (напр. redis-sentinel →
-// /etc/redis/sentinel.conf) ДО его установки, и при последующем apply dpkg
-// видит «изменённый оператором conffile» и в интерактиве спросил бы «keep or
-// replace?». force-confold = сохранить уже лежащий (наш отрендеренный) файл;
-// force-confdef = для остальных conffile взять дефолт мейнтейнера без вопроса.
-// Без этих флагов conffile-конфликт роняет install детерминированно при каждом
-// re-apply (файлы переживают destroy).
+// Dpkg::Options force-confdef + force-confold are key to re-apply
+// robustness: our scenarios render a package's conffile (e.g.
+// redis-sentinel → /etc/redis/sentinel.conf) BEFORE installing it, so on a
+// subsequent apply dpkg sees an "operator-modified conffile" and would
+// interactively ask "keep or replace?". force-confold = keep the file
+// already on disk (our rendered one); force-confdef = take the maintainer
+// default for any other conffile without asking. Without these flags, a
+// conffile conflict fails install deterministically on every re-apply
+// (files survive destroy).
 func (m *Module) aptInstall(ctx context.Context, target string) error {
 	return m.aptGet(ctx, "install", "-y",
 		"-o", "Dpkg::Options::=--force-confdef",
@@ -416,8 +425,8 @@ func (m *Module) must(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-// parseDpkgStatus — «install ok installed 1.2.3-1ubuntu1» → installed=true, ver=...
-// Любой другой Status (deinstall ok config-files, hold, etc) считаем как not installed.
+// parseDpkgStatus — "install ok installed 1.2.3-1ubuntu1" → installed=true, ver=...
+// Any other Status (deinstall ok config-files, hold, etc) is treated as not installed.
 func parseDpkgStatus(stdout string) (bool, string, error) {
 	stdout = oneLine(stdout)
 	const prefix = "install ok installed"
@@ -431,15 +440,16 @@ func parseDpkgStatus(stdout string) (bool, string, error) {
 	return true, rest, nil
 }
 
-// parseApkVersion извлекает чистый номер версии из строки `apk info -ev <name>`
-// (форма `<name>-<version>`, например `nginx-1.26.3-r0` → `1.26.3-r0`). Срезает
-// префикс `<name>-`: имя пакета известно точно (его передали в apk), а имена apk
-// дефис содержать могут (`py3-pip`), поэтому split по дефису ненадёжен — режем
-// именно известный префикс.
+// parseApkVersion extracts the clean version number from an
+// `apk info -ev <name>` line (form `<name>-<version>`, e.g.
+// `nginx-1.26.3-r0` → `1.26.3-r0`). Strips the `<name>-` prefix: the
+// package name is known exactly (it was passed to apk), and apk names can
+// contain hyphens (`py3-pip`), so splitting on hyphen is unreliable — we
+// cut exactly the known prefix.
 //
-// Defensive: если строка не начинается с `<name>-` (пустой вывод, неожиданный
-// формат) — возвращаем как есть, не теряя best-effort-значение (version поля
-// register-а не критичны, ADR-015 «best-effort»).
+// Defensive: if the string doesn't start with `<name>-` (empty output,
+// unexpected format), returns it as-is rather than losing the best-effort
+// value (register version fields aren't critical, ADR-015 "best-effort").
 func parseApkVersion(line, name string) string {
 	prefix := name + "-"
 	if rest, ok := strings.CutPrefix(line, prefix); ok {

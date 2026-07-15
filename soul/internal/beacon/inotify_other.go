@@ -10,21 +10,21 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// InotifyName — адрес core-beacon (`core.beacon.<name>`, VigilDef.check). На
-// non-Linux платформе сам beacon отдаёт ошибку, но адрес-константа доступна
-// для единого keeper-enum / soul-registry source-of-truth.
+// InotifyName is the core-beacon address (`core.beacon.<name>`, VigilDef.check).
+// On non-Linux platforms the beacon itself always errors, but the address
+// constant stays available for the unified keeper-enum / soul-registry
+// source-of-truth.
 const InotifyName = beaconaddr.Inotify
 
-// InotifyBeacon — stub-реализация на non-Linux платформах (V5-3, ADR-030
-// amendment 2026-05-26). Любой Check возвращает ошибку
-// "platform not supported": scheduler логирует и пропускает тик (baseline
-// не устанавливается, Portent не эмитится — ошибка проверки ≠ смена состояния
-// хоста). Сам реестр registry-у beacon-а доступен на всех платформах
-// (рассинхрон Default vs beaconaddr.All — программный баг сборки),
-// но Vigil на non-Linux работать не будет.
+// InotifyBeacon is the stub implementation on non-Linux platforms (V5-3,
+// ADR-030 amendment 2026-05-26). Any Check returns a "platform not
+// supported" error: the scheduler logs it and skips the tick (baseline isn't
+// set, no Portent is emitted — a check error != a host state change). The
+// beacon is registered on all platforms (a Default vs beaconaddr.All
+// mismatch would be a build bug), but Vigils won't actually run on non-Linux.
 type InotifyBeacon struct{}
 
-// NewInotify собирает stub-beacon. Никаких ресурсов не аллоцирует.
+// NewInotify builds the stub beacon. Allocates no resources.
 func NewInotify() *InotifyBeacon { return &InotifyBeacon{} }
 
 func (*InotifyBeacon) Check(_ context.Context, _ *structpb.Struct) (State, *structpb.Struct, error) {

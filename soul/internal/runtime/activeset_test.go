@@ -13,8 +13,8 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// activeIDs извлекает отсортированный список apply_id из набора ActiveSet —
-// удобно для проверки множества без зависимости от порядка (map-итерация).
+// activeIDs extracts a sorted list of apply_ids from an ActiveSet — useful for
+// order-independent set comparisons (map iteration).
 func activeIDs(set []*keeperv1.ActiveApply) []string {
 	out := make([]string, 0, len(set))
 	for _, a := range set {
@@ -24,7 +24,7 @@ func activeIDs(set []*keeperv1.ActiveApply) []string {
 	return out
 }
 
-// attemptOf находит attempt записи по apply_id (0, если записи нет).
+// attemptOf finds the attempt for an apply_id (0 if there's no record).
 func attemptOf(set []*keeperv1.ActiveApply, id string) int32 {
 	for _, a := range set {
 		if a.GetApplyId() == id {
@@ -34,8 +34,8 @@ func attemptOf(set []*keeperv1.ActiveApply, id string) int32 {
 	return 0
 }
 
-// TestActiveSet_Empty — свежий runner без прогонов даёт пустой (nil) набор:
-// явная декларация «ничего не ведётся» (после рестарта Soul-процесса).
+// TestActiveSet_Empty — a fresh runner with no runs yields an empty (nil) set:
+// an explicit "nothing in flight" (e.g. after a Soul process restart).
 func TestActiveSet_Empty(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	if got := r.ActiveSet(); len(got) != 0 {
@@ -43,8 +43,9 @@ func TestActiveSet_Empty(t *testing.T) {
 	}
 }
 
-// TestActiveSet_InFlight — apply в полёте (register без unregister) присутствует
-// в наборе. Эмулируем register напрямую (Run держит cancel в active до конца).
+// TestActiveSet_InFlight — an in-flight apply (register without unregister) is
+// present in the set. Emulates register directly (Run holds cancel in active
+// until it's done).
 func TestActiveSet_InFlight(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	_, cancel := context.WithCancel(context.Background())
@@ -57,17 +58,18 @@ func TestActiveSet_InFlight(t *testing.T) {
 	}
 }
 
-// TestActiveSet_RecentlyFinished — завершённый Run (unregister) остаётся в наборе
-// в пределах TTL: анти-гонка «RunResult в полёте, стрим порвался до cleanup».
+// TestActiveSet_RecentlyFinished — a finished Run (unregister) stays in the
+// set within TTL: anti-race for "RunResult in flight, stream broke before
+// cleanup".
 func TestActiveSet_RecentlyFinished(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.nowFn = func() time.Time { return base }
 
 	r.register("apply-done", func() {})
-	r.unregister("apply-done") // Run завершился → ушёл в recently-finished ring
+	r.unregister("apply-done") // Run finished → moved into the recently-finished ring
 
-	// active пуст, но ring держит apply_id в пределах TTL.
+	// active is empty, but the ring holds apply_id within TTL.
 	if _, ok := r.active["apply-done"]; ok {
 		t.Fatal("apply-done остался в active после unregister")
 	}
@@ -77,8 +79,8 @@ func TestActiveSet_RecentlyFinished(t *testing.T) {
 	}
 }
 
-// TestActiveSet_RingExpiresAfterTTL — запись ring выбывает из набора после TTL
-// (ленивая чистка в ActiveSet по nowFn).
+// TestActiveSet_RingExpiresAfterTTL — a ring entry drops out of the set after
+// TTL (lazy cleanup in ActiveSet via nowFn).
 func TestActiveSet_RingExpiresAfterTTL(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	now := base
@@ -88,33 +90,33 @@ func TestActiveSet_RingExpiresAfterTTL(t *testing.T) {
 	r.register("apply-done", func() {})
 	r.unregister("apply-done")
 
-	// Внутри TTL — присутствует.
+	// Within TTL — present.
 	now = base.Add(recentlyFinishedTTL - time.Second)
 	if got := activeIDs(r.ActiveSet()); len(got) != 1 {
 		t.Fatalf("ActiveSet() в пределах TTL = %v, want [apply-done]", got)
 	}
 
-	// На границе TTL (>=) — вычищен.
+	// At the TTL boundary (>=) — evicted.
 	now = base.Add(recentlyFinishedTTL)
 	if got := r.ActiveSet(); len(got) != 0 {
 		t.Fatalf("ActiveSet() после TTL = %v, want пусто (ring протух)", activeIDs(got))
 	}
-	// Ленивая чистка реально удалила запись из map.
+	// Lazy cleanup actually removed the entry from the map.
 	if _, ok := r.recentlyFinished["apply-done"]; ok {
 		t.Error("протухшая ring-запись не вычищена из recentlyFinished")
 	}
 }
 
-// TestActiveSet_UnionDedup — apply в полёте И в ring (повторный прогон того же
-// apply_id) даёт ОДНУ запись (дедуп по объединению).
+// TestActiveSet_UnionDedup — an apply both in-flight AND in the ring (rerun of
+// the same apply_id) yields exactly ONE entry (dedup on union).
 func TestActiveSet_UnionDedup(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	r := NewApplyRunner(mapRegistry{}, nil)
 	r.nowFn = func() time.Time { return base }
 
 	r.register("apply-x", func() {})
-	r.unregister("apply-x")          // в ring
-	r.register("apply-x", func() {}) // снова в полёте
+	r.unregister("apply-x")          // in the ring
+	r.register("apply-x", func() {}) // in flight again
 
 	got := activeIDs(r.ActiveSet())
 	if len(got) != 1 || got[0] != "apply-x" {
@@ -122,13 +124,13 @@ func TestActiveSet_UnionDedup(t *testing.T) {
 	}
 }
 
-// TestActiveSet_AttemptEcho — attempt в наборе берётся из lastSeenAttempt
-// (принятый fencing-epoch); без записи attempt=0 (старый Keeper).
+// TestActiveSet_AttemptEcho — attempt in the set comes from lastSeenAttempt
+// (the accepted fencing epoch); no record means attempt=0 (older Keeper).
 func TestActiveSet_AttemptEcho(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
-	r.AcceptAttempt("apply-fenced", 7) // зафиксировал epoch
+	r.AcceptAttempt("apply-fenced", 7) // recorded the epoch
 	r.register("apply-fenced", func() {})
-	r.register("apply-plain", func() {}) // без attempt
+	r.register("apply-plain", func() {}) // no attempt
 
 	set := r.ActiveSet()
 	if got := attemptOf(set, "apply-fenced"); got != 7 {
@@ -139,11 +141,11 @@ func TestActiveSet_AttemptEcho(t *testing.T) {
 	}
 }
 
-// TestActiveSet_SurvivesReconnect — ring живёт в ApplyRunner (per-process) и
-// переживает reconnect-swap стрима: после Run-а (полный прогон через Run, не
-// ручной register) apply_id остаётся в наборе и доступен следующей сессии для
-// WardRoster. Эмулируем «reconnect» вторым чтением ActiveSet (sink не меняет
-// состояние ring-а).
+// TestActiveSet_SurvivesReconnect — the ring lives in ApplyRunner (per
+// process) and survives a stream reconnect-swap: after a full Run (not a
+// manual register), apply_id stays in the set and is available to the next
+// session's WardRoster. Emulates "reconnect" via a second ActiveSet read (the
+// sink doesn't change the ring's state).
 func TestActiveSet_SurvivesReconnect(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	reg := mapRegistry{
@@ -167,7 +169,7 @@ func TestActiveSet_SurvivesReconnect(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// «reconnect»: тот же runner, новая сессия читает ActiveSet для WardRoster.
+	// "reconnect": same runner, a new session reads ActiveSet for WardRoster.
 	got := r.ActiveSet()
 	if ids := activeIDs(got); len(ids) != 1 || ids[0] != "apply-r" {
 		t.Fatalf("ActiveSet() после Run+reconnect = %v, want [apply-r] (ring пережил swap)", ids)
@@ -177,9 +179,10 @@ func TestActiveSet_SurvivesReconnect(t *testing.T) {
 	}
 }
 
-// TestActiveSet_RestartClearsSet — рестарт процесса = новый ApplyRunner: набор
-// пуст, его dispatched законно сиротятся (in-flight физически нет). Эмулируем
-// рестарт созданием нового runner-а — старый ring не наследуется.
+// TestActiveSet_RestartClearsSet — a process restart means a new ApplyRunner:
+// the set is empty, its dispatched work is legitimately orphaned (nothing is
+// physically in flight). Emulates restart by creating a new runner — the old
+// ring isn't inherited.
 func TestActiveSet_RestartClearsSet(t *testing.T) {
 	r1 := NewApplyRunner(mapRegistry{}, nil)
 	r1.register("apply-old", func() {})
@@ -188,15 +191,15 @@ func TestActiveSet_RestartClearsSet(t *testing.T) {
 		t.Fatal("предусловие: apply-old должен быть в ring r1")
 	}
 
-	// «Рестарт процесса» — новый runner, ничего не наследует.
+	// "Process restart" — new runner, nothing inherited.
 	r2 := NewApplyRunner(mapRegistry{}, nil)
 	if got := r2.ActiveSet(); len(got) != 0 {
 		t.Fatalf("ActiveSet() нового runner после «рестарта» = %v, want пусто", activeIDs(got))
 	}
 }
 
-// TestActiveSet_RaceWithRunLifecycle — конкурентные register/unregister/ActiveSet
-// не дают data race (-race) на active/recentlyFinished/lastSeenAttempt.
+// TestActiveSet_RaceWithRunLifecycle — concurrent register/unregister/ActiveSet
+// produce no data race (-race) on active/recentlyFinished/lastSeenAttempt.
 func TestActiveSet_RaceWithRunLifecycle(t *testing.T) {
 	r := NewApplyRunner(mapRegistry{}, nil)
 	var wg sync.WaitGroup

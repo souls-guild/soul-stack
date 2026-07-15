@@ -14,27 +14,29 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
 
-// planTask — диспетчер ОДНОЙ задачи в режиме dry_run (Scry, ADR-031): вызывает
-// SoulModule.Plan ВМЕСТО Apply и возвращает TaskEvent с машинным результатом
-// drift. mod.Apply здесь физически не вызывается — read-only гарантия
-// структурная, а не «модуль обещал» (см. Run / runTaskWithRetry).
+// planTask dispatches a SINGLE task in dry_run mode (Scry, ADR-031): calls
+// SoulModule.Plan INSTEAD of Apply and returns a TaskEvent with a
+// machine-readable drift result. mod.Apply is never physically called here —
+// the read-only guarantee is structural, not "the module promised" (see Run /
+// runTaskWithRetry).
 //
-// Default-deny (ADR-031, безопасность): Plan вызывается ТОЛЬКО для модулей,
-// объявивших read-safe-capability через [module.PlanReadSafe]. Модуль без неё
-// (custom-плагин на BaseModule / core-модуль без pure-read Plan) получает ЯВНЫЙ
-// отказ — FAILED с кодом `plan.unsupported`, а НЕ ложное «нет дрифта» (false
-// changed=false): неизвестный модуль никогда не выдаёт clean.
+// Default-deny (ADR-031, security): Plan is called ONLY for modules that
+// declare the read-safe capability via [module.PlanReadSafe]. A module without
+// it (a custom plugin on BaseModule / a core module without a pure-read Plan)
+// gets an EXPLICIT refusal — FAILED with code `plan.unsupported`, never a
+// false "no drift" (false changed=false): an unknown module never reports clean.
 //
-// Маппинг результата Plan → TaskEvent:
-//   - модуль не объявил capability → FAILED (plan.unsupported);
-//   - bad address / module not found → FAILED (как в runTask: terminal);
-//   - Plan вернул error → FAILED (plan.error);
-//   - финальный PlanEvent.changed == true → CHANGED (drift есть);
+// Plan result → TaskEvent mapping:
+//   - module didn't declare the capability → FAILED (plan.unsupported);
+//   - bad address / module not found → FAILED (same as runTask: terminal);
+//   - Plan returned an error → FAILED (plan.error);
+//   - final PlanEvent.changed == true → CHANGED (drift present);
 //   - changed == false → OK (clean).
 //
-// register_data несёт changed/failed по статусу (buildRegisterData) — drift
-// машиночитаем последующими шагами; output Plan в MVP не агрегируется. retry/
-// until/changed_when/failed_when к dry_run НЕ применяются (см. runTaskWithRetry).
+// register_data carries changed/failed derived from status (buildRegisterData)
+// — drift is machine-readable by later steps; Plan's output isn't aggregated
+// in the MVP. retry/until/changed_when/failed_when do NOT apply to dry_run
+// (see runTaskWithRetry).
 func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, task *keeperv1.RenderedTask) *keeperv1.TaskEvent {
 	ev := &keeperv1.TaskEvent{ApplyId: applyID, TaskIdx: idx}
 	if task == nil {
@@ -68,9 +70,9 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		return ev
 	}
 
-	// Default-deny: модуль без read-safe-capability на dry_run НЕ опрашивается.
-	// Возвращаем явный отказ (FAILED), а не false-clean — неизвестный модуль не
-	// должен выдавать «нет дрифта» (ADR-031).
+	// Default-deny: a module without the read-safe capability is NOT queried on
+	// dry_run. We return an explicit refusal (FAILED) rather than a false-clean
+	// — an unknown module must not report "no drift" (ADR-031).
 	if _, safe := mod.(module.PlanReadSafe); !safe {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
 		ev.Error = &keeperv1.TaskError{
@@ -82,8 +84,9 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		return ev
 	}
 
-	// Soulprint-инжект симметрично runTask: core-модуль выбирает backend по факту
-	// хоста ПЕРЕД read (тот же источник, что в Apply). Это чтение, хост не мутируется.
+	// Soulprint injection mirrors runTask: the core module picks its backend
+	// from the host fact BEFORE the read (same source as Apply). This is a
+	// read — the host isn't mutated.
 	if aware, ok := mod.(util.SoulprintAware); ok {
 		aware.SetHostFacts(r.hostFacts)
 	}
@@ -99,10 +102,11 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		return ev
 	}
 
-	// Ни одного PlanEvent при nil-error: read-safe-модуль ОБЯЗАН слать финальный
-	// PlanEvent с машинным changed (drift не определён иначе). Отсутствие события
-	// — баг такого модуля; трактуем как FAILED (plan.no_result), а НЕ как clean,
-	// чтобы misbehaving-модуль никогда не выдал ложное «нет дрифта» (ADR-031).
+	// No PlanEvent at all with a nil error: a read-safe module MUST send a
+	// final PlanEvent with a machine-readable changed (drift is otherwise
+	// undefined). A missing event is a bug in that module; we treat it as
+	// FAILED (plan.no_result), not clean, so a misbehaving module never
+	// reports a false "no drift" (ADR-031).
 	if last == nil {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_FAILED
 		ev.Error = &keeperv1.TaskError{
@@ -114,7 +118,7 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 		return ev
 	}
 
-	// changed → CHANGED (drift), иначе OK (clean).
+	// changed → CHANGED (drift), otherwise OK (clean).
 	if last.GetChanged() {
 		ev.Status = keeperv1.TaskStatus_TASK_STATUS_CHANGED
 	} else {
@@ -124,10 +128,11 @@ func (r *ApplyRunner) planTask(ctx context.Context, applyID string, idx int32, t
 	return ev
 }
 
-// inProcPlanStream — in-process реализация
-// `grpc.ServerStreamingServer[pluginv1.PlanEvent]` для вызова core-модулей на
-// dry_run, зеркало [inProcApplyStream]. Буферизует PlanEvent-ы; runtime читает
-// только финальный (машинный changed). SetTrailer/SendHeader — no-op.
+// inProcPlanStream is an in-process implementation of
+// `grpc.ServerStreamingServer[pluginv1.PlanEvent]` for calling core modules on
+// dry_run, a mirror of [inProcApplyStream]. Buffers PlanEvents; the runtime
+// only reads the final one (machine-readable changed). SetTrailer/SendHeader
+// are no-ops.
 type inProcPlanStream struct {
 	grpc.ServerStream
 	ctx     context.Context

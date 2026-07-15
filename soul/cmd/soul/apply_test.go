@@ -11,9 +11,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// runApplyWith гоняет runApply с заданным stdin, перехватывая stdout.
-// Возвращает (exitCode, stdout). --config указывает на несуществующий путь —
-// runApply должен деградировать к core-модулям (config опционален в push).
+// runApplyWith runs runApply with the given stdin, capturing stdout. Returns
+// (exitCode, stdout). --config points at a nonexistent path — runApply must
+// fall back to core modules only (config is optional in push mode).
 func runApplyWith(t *testing.T, stdin string) (int, string) {
 	t.Helper()
 
@@ -35,7 +35,7 @@ func runApplyWith(t *testing.T, stdin string) (int, string) {
 		_ = inW.Close()
 	}()
 
-	// Читаем stdout в фоне, чтобы writer не блокировался на полном pipe-буфере.
+	// Read stdout in the background so the writer doesn't block on a full pipe buffer.
 	outCh := make(chan string, 1)
 	go func() {
 		var sb strings.Builder
@@ -76,7 +76,7 @@ func ndjsonLines(s string) []string {
 }
 
 func TestRunApply_HappyPath(t *testing.T) {
-	// core.exec.run "true" — детерминированный no-op без сайд-эффектов.
+	// core.exec.run "true" — a deterministic no-op with no side effects.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: "push-1",
 		Tasks: []*keeperv1.RenderedTask{
