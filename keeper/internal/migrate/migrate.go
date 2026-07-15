@@ -1,7 +1,7 @@
-// Package migrate — apply embedded SQL-миграций из `keeper/migrations/`
-// поверх Postgres-а Keeper-а. Интеграция в `keeper/cmd/keeper/main.go`
-// (apply-on-startup) — M0.4.2; в M0.4.0 этот пакет вызывается ad-hoc
-// (smoke-test).
+// Package migrate applies embedded SQL migrations from `keeper/migrations/`
+// against the Keeper's Postgres. Integrated into `keeper/cmd/keeper/main.go`
+// (apply-on-startup) since M0.4.2; in M0.4.0 this package was invoked
+// ad-hoc (smoke test).
 package migrate
 
 import (
@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // регистрирует driver "pgx5"
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // registers driver "pgx5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 

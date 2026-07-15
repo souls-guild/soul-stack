@@ -17,14 +17,14 @@ import (
 
 // --- fakes ---
 
-// spawnFakeTx — pgx.Tx-stub для processOne/Run-тестов спавна.
-// Различает запросы по фрагменту SQL: HasLiveChild (EXISTS) → bool, voyage.Insert
-// (RETURNING created_at) → timestamp, AdvanceSchedule (Exec) → UPDATE 1,
-// InsertTargets (CopyFrom) → счётчик.
+// spawnFakeTx is a pgx.Tx stub for processOne/Run spawn tests.
+// Distinguishes queries by SQL fragment: HasLiveChild (EXISTS) → bool,
+// voyage.Insert (RETURNING created_at) → timestamp, AdvanceSchedule (Exec) →
+// UPDATE 1, InsertTargets (CopyFrom) → counter.
 type spawnFakeTx struct {
-	live bool // ответ HasLiveChild
+	live bool // HasLiveChild answer
 
-	dueRows []*cadence.Cadence // строки для SelectDueForUpdate (Query)
+	dueRows []*cadence.Cadence // rows for SelectDueForUpdate (Query)
 
 	execCalls    int // AdvanceSchedule
 	copyCalls    int // InsertTargets
@@ -33,7 +33,7 @@ type spawnFakeTx struct {
 	committed    bool
 	rolled       bool
 
-	voyageInsertArgs []any // позиционные args voyage.Insert (для late-binding-guard)
+	voyageInsertArgs []any // positional args of voyage.Insert (for the late-binding guard)
 
 	execErr error
 }
@@ -61,8 +61,8 @@ func (t *spawnFakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 }
 
 func (t *spawnFakeTx) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
-	// SelectDueForUpdate. Без подготовленных строк — поведение прежних тестов
-	// (processOne идёт мимо Query): сигналим ошибкой.
+	// SelectDueForUpdate. With no prepared rows — behavior of earlier tests
+	// (processOne bypasses Query): signal an error.
 	if t.dueRows == nil {
 		return nil, errors.New("spawnFakeTx: Query unused in processOne test")
 	}
@@ -110,10 +110,10 @@ type errScanRow struct{ err error }
 
 func (r errScanRow) Scan(_ ...any) error { return r.err }
 
-// dueRows — pgx.Rows-stub для SelectDueForUpdate: отдаёт заранее подготовленные
-// *cadence.Cadence через scanCadence-совместимый Scan (27 dest в порядке
-// scanCadence). Покрывает batch/fail-threshold-поля (нужны late-binding-тестам
-// спавна); остальные nullable — nil.
+// dueRows is a pgx.Rows stub for SelectDueForUpdate: yields pre-built
+// *cadence.Cadence via a scanCadence-compatible Scan (27 dest in scanCadence
+// order). Covers the batch/fail-threshold fields (needed by the spawn
+// late-binding tests); the rest are nullable — nil.
 type dueRows struct {
 	src []*cadence.Cadence
 	pos int
@@ -167,7 +167,7 @@ func (r *dueRows) Values() ([]any, error)                       { return nil, ni
 func (r *dueRows) RawValues() [][]byte                          { return nil }
 func (r *dueRows) Conn() *pgx.Conn                              { return nil }
 
-// stubResolver — резолвит в фиксированный snapshot (для scenario и command).
+// stubResolver resolves to a fixed snapshot (for both scenario and command).
 type stubResolver struct {
 	out []string
 	err error
@@ -207,8 +207,8 @@ func intervalScenarioCadence(policy cadence.OverlapPolicy) *cadence.Cadence {
 }
 
 func newSpawnerFor(tx *spawnFakeTx, res stubResolver, ad audit.Writer) *CadenceSpawner {
-	// processOne ходит через переданный tx напрямую; pool здесь не используется,
-	// но конструктор требует non-nil для Run-теста — ставим beginner-обёртку.
+	// processOne goes through the passed tx directly; pool isn't used here,
+	// but the constructor requires non-nil for the Run test — supply a beginner wrapper.
 	return newCadenceSpawnerFromBeginner(spawnOneBeginner{tx: tx}, res, res, ad, silentLogger())
 }
 
@@ -216,10 +216,10 @@ type spawnOneBeginner struct{ tx *spawnFakeTx }
 
 func (b spawnOneBeginner) Begin(context.Context) (pgx.Tx, error) { return b.tx, nil }
 
-// --- overlap policy: parallel — спавнит всегда (live игнор) ---
+// --- overlap policy: parallel — always spawns (live ignored) ---
 
 func TestProcessOne_Parallel_SpawnsIgnoringLive(t *testing.T) {
-	tx := &spawnFakeTx{live: true} // live есть, но parallel игнорирует
+	tx := &spawnFakeTx{live: true} // live child exists, but parallel ignores it
 	s := newSpawnerFor(tx, stubResolver{out: []string{"i1", "i2"}}, nil)
 	c := intervalScenarioCadence(cadence.OverlapPolicyParallel)
 
@@ -242,7 +242,7 @@ func TestProcessOne_Parallel_SpawnsIgnoringLive(t *testing.T) {
 	}
 }
 
-// --- skip: live есть → не спавнить, audit skipped, next_run сдвинут ---
+// --- skip: live child exists → don't spawn, audit skipped, next_run advances ---
 
 func TestProcessOne_Skip_LiveChild_SkipsButAdvances(t *testing.T) {
 	tx := &spawnFakeTx{live: true}
@@ -267,7 +267,7 @@ func TestProcessOne_Skip_LiveChild_SkipsButAdvances(t *testing.T) {
 	}
 }
 
-// --- skip без живого ребёнка → спавнит ---
+// --- skip with no live child → spawns ---
 
 func TestProcessOne_Skip_NoLiveChild_Spawns(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
@@ -286,16 +286,18 @@ func TestProcessOne_Skip_NoLiveChild_Spawns(t *testing.T) {
 	}
 }
 
-// voyageInsertFailThresholdIdx — позиция fail_threshold в voyage insertSQL (колонка
-// $19 → 0-indexed args[18]; см. voyage/crud.go insertSQL VALUES).
+// voyageInsertFailThresholdIdx is the position of fail_threshold in voyage
+// insertSQL (column $19 → 0-indexed args[18]; see voyage/crud.go insertSQL
+// VALUES).
 const voyageInsertFailThresholdIdx = 18
 
-// TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope — КЛЮЧЕВОЙ late-binding
-// сквозь conductor (ADR-043 amendment 2026-06-09, Cadence-recipe S3): cadence-рецепт
-// несёт fail_threshold_percent=30; spawn-scope резолвится в 10 единиц; спавнящийся
-// Voyage обязан получить АБСОЛЮТНЫЙ fail_threshold=ceil(10*30/100)=3 (резолв на
-// spawn-scope в BuildVoyage, НЕ на create-time). Проверяем позиционный voyage-insert
-// arg — порог реально доезжает до вставляемой строки Voyage.
+// TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope is the KEY
+// late-binding test across conductor (ADR-043 amendment 2026-06-09,
+// Cadence-recipe S3): the cadence recipe carries fail_threshold_percent=30;
+// the spawn scope resolves to 10 units; the spawned Voyage must get the
+// ABSOLUTE fail_threshold=ceil(10*30/100)=3 (resolved on the spawn scope in
+// BuildVoyage, NOT at create time). We check the positional voyage-insert
+// arg — the threshold actually reaches the inserted Voyage row.
 func TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
 	resolved := []string{"i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10"} // scope=10
@@ -303,7 +305,7 @@ func TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope(t *testing.T) {
 
 	c := intervalScenarioCadence(cadence.OverlapPolicyParallel)
 	pct := 30
-	c.FailThresholdPercent = &pct // percent-рецепт, абсолют неизвестен до спавна
+	c.FailThresholdPercent = &pct // percent recipe, the absolute is unknown until spawn
 
 	_, spawned, err := s.processOne(context.Background(), tx, c, time.Now())
 	if err != nil {
@@ -325,9 +327,10 @@ func TestProcessOne_FailThresholdPercent_ResolvedOnSpawnScope(t *testing.T) {
 	}
 }
 
-// TestProcessOne_FailThresholdPercent_DifferentSpawnScope — тот же рецепт-процент
-// при ДРУГОМ резолвнутом scope даёт другой абсолют (доказывает резолв на spawn-scope,
-// а не на фиксированном create-scope): 30% от 100 = 30.
+// TestProcessOne_FailThresholdPercent_DifferentSpawnScope — the same recipe
+// percent with a DIFFERENT resolved scope yields a different absolute
+// (proves the resolve happens on the spawn scope, not a fixed create-time
+// scope): 30% of 100 = 30.
 func TestProcessOne_FailThresholdPercent_DifferentSpawnScope(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
 	resolved := make([]string, 100)
@@ -349,7 +352,7 @@ func TestProcessOne_FailThresholdPercent_DifferentSpawnScope(t *testing.T) {
 	}
 }
 
-// --- queue: live есть → не спавнить И не двигать next_run (ждём) ---
+// --- queue: live child exists → don't spawn AND don't advance next_run (wait) ---
 
 func TestProcessOne_Queue_LiveChild_WaitsNoAdvance(t *testing.T) {
 	tx := &spawnFakeTx{live: true}
@@ -371,7 +374,7 @@ func TestProcessOne_Queue_LiveChild_WaitsNoAdvance(t *testing.T) {
 	}
 }
 
-// --- queue без живого ребёнка → спавнит ---
+// --- queue with no live child → spawns ---
 
 func TestProcessOne_Queue_NoLiveChild_Spawns(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
@@ -390,7 +393,7 @@ func TestProcessOne_Queue_NoLiveChild_Spawns(t *testing.T) {
 	}
 }
 
-// --- пустой резолв → не спавнит, но двигает расписание (не ошибка) ---
+// --- empty resolve → doesn't spawn, but advances the schedule (not an error) ---
 
 func TestProcessOne_EmptyScope_AdvancesNoSpawn(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
@@ -412,7 +415,7 @@ func TestProcessOne_EmptyScope_AdvancesNoSpawn(t *testing.T) {
 	}
 }
 
-// --- резолвер упал → ошибка пробрасывается (откат tx) ---
+// --- resolver failed → the error propagates (tx rollback) ---
 
 func TestProcessOne_ResolverError_Propagates(t *testing.T) {
 	tx := &spawnFakeTx{live: false}
@@ -425,7 +428,7 @@ func TestProcessOne_ResolverError_Propagates(t *testing.T) {
 	}
 }
 
-// --- audit: spawned-событие правильного типа/источника ---
+// --- audit: spawned event of the correct type/source ---
 
 func TestSpawner_Emit_SpawnedEvent(t *testing.T) {
 	ad := &spawnAudit{}
@@ -443,13 +446,13 @@ func TestSpawner_Emit_SpawnedEvent(t *testing.T) {
 	if ev.EventType != audit.EventCadenceSpawned {
 		t.Errorf("event_type = %q, want cadence.spawned", ev.EventType)
 	}
-	// source остаётся background после переезда Reaper→Conductor (ADR-048 §4:
-	// новый source `scheduler` НЕ вводится).
+	// source stays background after the Reaper→Conductor move (ADR-048 §4: a
+	// new `scheduler` source is NOT introduced).
 	if ev.Source != audit.SourceBackground {
 		t.Errorf("source = %q, want background", ev.Source)
 	}
-	// archon_aid у фонового спавна = NULL (нет оператора-инициатора). Авторство
-	// рецепта живёт в Voyage.started_by_aid, не тут.
+	// archon_aid for a background spawn = NULL (no initiating operator).
+	// Recipe authorship lives in Voyage.started_by_aid, not here.
 	if ev.ArchonAID != "" {
 		t.Errorf("archon_aid = %q, want \"\" (NULL для background)", ev.ArchonAID)
 	}
@@ -480,7 +483,7 @@ func TestSpawner_Emit_SkippedEvent(t *testing.T) {
 	}
 }
 
-// --- Run: nil resolvers / nil pool → ошибка (fail-closed) ---
+// --- Run: nil resolvers / nil pool → error (fail-closed) ---
 
 func TestSpawner_Run_NilResolvers(t *testing.T) {
 	s := newCadenceSpawnerFromBeginner(spawnOneBeginner{tx: &spawnFakeTx{}}, nil, nil, nil, silentLogger())

@@ -14,28 +14,29 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// cadenceTxBeginner — узкая поверхность для spawn-тика: открыть tx, в которой
-// due-cadences берутся FOR UPDATE SKIP LOCKED, спавнятся дочерние Voyage и
-// двигаются расписания — всё атомарно (ADR-046 §4, против задвоения при крэше).
-// Реальный *pgxpool.Pool удовлетворяет; unit-тесты подставляют fake-pool.
+// cadenceTxBeginner is the narrow surface for the spawn tick: open a tx in
+// which due cadences are selected FOR UPDATE SKIP LOCKED, child Voyages are
+// spawned and schedules advanced — all atomically (ADR-046 §4, against
+// double-spawn on crash). The real *pgxpool.Pool satisfies it; unit tests
+// substitute a fake pool.
 type cadenceTxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// CadenceSpawner — concrete-исполнитель due-cadence-спавна, которым ВЛАДЕЕТ
-// Conductor (ADR-048 §3, переезд из reaper без изменения логики). Реализует
-// [Spawner]. На каждом тике Conductor-лидера: SELECT due-cadences (enabled И
-// next_run_at <= NOW()) FOR UPDATE SKIP LOCKED → для каждой применить
-// overlap_policy → (если можно) Insert Voyage из рецепта + advance next_run_at/
-// last_run_at — ВСЁ в одной PG-tx. Single-executor через Conductor-лидера (Redis-
-// lease conductor:leader, ADR-006) + SKIP LOCKED дают ровно-один-спавн на тик без
-// гонки.
+// CadenceSpawner is the concrete executor of due-cadence spawning, OWNED by
+// Conductor (ADR-048 §3, moved from reaper without logic changes). Implements
+// [Spawner]. On each Conductor-leader tick: SELECT due cadences (enabled AND
+// next_run_at <= NOW()) FOR UPDATE SKIP LOCKED → for each, apply
+// overlap_policy → (if allowed) insert a Voyage from the recipe + advance
+// next_run_at/last_run_at — ALL in one PG tx. Single-executor via the
+// Conductor leader (Redis lease conductor:leader, ADR-006) + SKIP LOCKED give
+// exactly-one-spawn per tick without racing.
 //
-// Сигнатура Run совместима с [Spawner] (`(ctx, duration, batch) → (int64,
-// error)`). duration-аргумент в spawn НЕ используется (предикат — next_run_at <=
-// NOW() напрямую); batchSize ограничивает число расписаний за тик (anti-lavina
-// при долгом downtime). audit nil-safe; resolver-ы обязательны (без них спавн
-// невозможен — Run вернёт ошибку).
+// Run's signature is compatible with [Spawner] (`(ctx, duration, batch) →
+// (int64, error)`). The duration argument is NOT used in spawn (the predicate
+// is next_run_at <= NOW() directly); batchSize caps the number of schedules
+// per tick (anti-avalanche after long downtime). audit is nil-safe; resolvers
+// are required (without them spawn is impossible — Run returns an error).
 type CadenceSpawner struct {
 	pool      cadenceTxBeginner
 	scenarioR cadence.ScenarioResolver
@@ -44,8 +45,9 @@ type CadenceSpawner struct {
 	logger    *slog.Logger
 }
 
-// NewCadenceSpawner конструирует spawner. resolver-ы обязательны (production
-// wire-up — handlers-PG-resolver-ы через адаптер); audit nil-safe; logger nil-safe.
+// NewCadenceSpawner constructs a spawner. resolvers are required (production
+// wire-up uses handlers' PG resolvers via an adapter); audit is nil-safe;
+// logger is nil-safe.
 func NewCadenceSpawner(
 	pool *pgxpool.Pool,
 	scenarioR cadence.ScenarioResolver,
@@ -62,7 +64,7 @@ func NewCadenceSpawner(
 	}
 }
 
-// newCadenceSpawnerFromBeginner — внутренний конструктор для unit-тестов.
+// newCadenceSpawnerFromBeginner is an internal constructor for unit tests.
 func newCadenceSpawnerFromBeginner(
 	pool cadenceTxBeginner,
 	scenarioR cadence.ScenarioResolver,
@@ -73,23 +75,23 @@ func newCadenceSpawnerFromBeginner(
 	return &CadenceSpawner{pool: pool, scenarioR: scenarioR, commandR: commandR, audit: auditW, logger: logger}
 }
 
-// spawnedRecord — снимок одного результата тика для audit ПОСЛЕ commit-а (не
-// держим события под открытой tx; best-effort эмит после фиксации БД).
+// spawnedRecord is a snapshot of one tick's result for audit AFTER commit (we
+// don't hold events under an open tx; best-effort emit after the DB commit).
 type spawnedRecord struct {
 	cadenceID    string
-	voyageID     string // пусто для skip-записи
+	voyageID     string // empty for a skip record
 	scheduledFor time.Time
 	scopeSize    int
 	skipped      bool // true → skipped_overlap, false → spawned
 }
 
-// Run выполняет одну итерацию due-cadence-спавна. Возвращает число заспавненных
-// Voyage (skip/queue-tick-и в счётчик не идут — affected = «сколько прогонов
-// реально создано»). Вся работа над due-cadences — в одной tx: при крэше до
-// commit-а ничего не зафиксировано, на следующем тике строки снова due
-// (next_run_at не сдвинут) — задвоения нет.
+// Run performs one iteration of due-cadence spawning. Returns the number of
+// spawned Voyages (skip/queue ticks don't count — affected = "how many runs
+// were actually created"). All work on due cadences happens in one tx: on a
+// crash before commit nothing is persisted, on the next tick the rows are due
+// again (next_run_at not advanced) — no double-spawn.
 //
-// batchSize=0 → потолок по умолчанию ([defaultBatch]).
+// batchSize=0 → default cap ([defaultBatch]).
 func (s *CadenceSpawner) Run(ctx context.Context, _ time.Duration, batchSize int) (int64, error) {
 	if s.pool == nil {
 		return 0, fmt.Errorf("conductor.spawn_due_cadence: pool is nil")
@@ -125,9 +127,10 @@ func (s *CadenceSpawner) Run(ctx context.Context, _ time.Duration, batchSize int
 	for _, c := range due {
 		rec, didSpawn, perr := s.processOne(ctx, tx, c, now)
 		if perr != nil {
-			// Ошибка обработки одной due-cadence (резолв/спавн/advance) откатывает
-			// весь тик: атомарность важнее частичного прогресса (на следующем тике
-			// строки снова due, повторим целиком). Возвращаем без commit-а.
+			// An error processing one due cadence (resolve/spawn/advance) rolls
+			// back the whole tick: atomicity matters more than partial progress
+			// (on the next tick the rows are due again, we retry the whole
+			// batch). Return without committing.
 			return spawned, fmt.Errorf("conductor.spawn_due_cadence: cadence %s: %w", c.ID, perr)
 		}
 		if rec != nil {
@@ -143,25 +146,26 @@ func (s *CadenceSpawner) Run(ctx context.Context, _ time.Duration, batchSize int
 	}
 	committed = true
 
-	// Audit ПОСЛЕ commit-а (best-effort): ошибка эмита не отменяет уже
-	// зафиксированный спавн.
+	// Audit AFTER commit (best-effort): an emit error doesn't undo the
+	// already-committed spawn.
 	for i := range records {
 		s.emit(ctx, &records[i])
 	}
 	return spawned, nil
 }
 
-// processOne обрабатывает одну due-cadence в открытой tx: применяет overlap_policy,
-// при разрешении спавнит Voyage из рецепта + двигает расписание. Возвращает
-// (запись для audit | nil, спавн произошёл, ошибка).
+// processOne handles one due cadence in an open tx: applies overlap_policy,
+// and if allowed spawns a Voyage from the recipe + advances the schedule.
+// Returns (record for audit | nil, whether a spawn happened, error).
 //
-// Решения по overlap_policy (ADR-046 §5):
-//   - parallel — спавнить всегда (live-проверка не нужна).
-//   - skip     — live есть → НЕ спавнить, audit skipped_overlap, next_run_at всё
-//     равно пересчитывается (серия не залипает).
-//   - queue    — live есть → НЕ спавнить и next_run_at НЕ двигать: следующий тик
-//     попробует снова, как только предыдущий ребёнок терминал-ит (простая
-//     queue-семантика — «ждём завершения, ближайший due-тик подхватит»).
+// overlap_policy decisions (ADR-046 §5):
+//   - parallel — always spawn (no live check needed).
+//   - skip     — live child exists → do NOT spawn, audit skipped_overlap,
+//     next_run_at is still recalculated (the series doesn't stall).
+//   - queue    — live child exists → do NOT spawn and do NOT advance
+//     next_run_at: the next tick retries as soon as the previous child
+//     terminates (simple queue semantics — "wait for completion, the nearest
+//     due tick picks it up").
 func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.Cadence, now time.Time) (*spawnedRecord, bool, error) {
 	scheduledFor := now
 	if c.NextRunAt != nil {
@@ -176,13 +180,14 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		if live {
 			switch c.OverlapPolicy {
 			case cadence.OverlapPolicyQueue:
-				// queue: не двигаем next_run_at — оставляем строку due, следующий
-				// тик повторит проверку. Без audit (это не пропуск, а ожидание).
+				// queue: don't advance next_run_at — leave the row due, the next
+				// tick retries the check. No audit (this is waiting, not a skip).
 				return nil, false, nil
 			case cadence.OverlapPolicySkip:
-				// skip: спавн пропущен, но расписание двигаем (серия не залипает).
-				// Anchored к плановому слоту (scheduledFor), не к now — иначе skip-
-				// серия дрейфовала бы так же, как spawn-путь (ADR-046 §4).
+				// skip: spawn skipped, but the schedule advances (the series
+				// doesn't stall). Anchored to the planned slot (scheduledFor),
+				// not to now — otherwise the skip series would drift the same
+				// way as the spawn path (ADR-046 §4).
 				nextRun, nerr := cadence.NextRunAnchored(c, scheduledFor, now)
 				if nerr != nil {
 					return nil, false, nerr
@@ -199,24 +204,25 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		}
 	}
 
-	// Спавн разрешён (parallel, либо skip/queue без живого ребёнка).
+	// Spawn allowed (parallel, or skip/queue with no live child).
 	resolved, err := s.resolveScope(ctx, c)
 	if err != nil {
 		return nil, false, err
 	}
-	// Anchored к плановому слоту (scheduledFor = next_run_at до пересчёта), не к
-	// фактическому now: дрейф тика не накапливается в next_run_at, сетка слотов
-	// остаётся выровненной (ADR-046 §4, drift-free).
+	// Anchored to the planned slot (scheduledFor = next_run_at before
+	// recalculation), not to the actual now: tick drift doesn't accumulate in
+	// next_run_at, the slot grid stays aligned (ADR-046 §4, drift-free).
 	nextRun, nerr := cadence.NextRunAnchored(c, scheduledFor, now)
 	if nerr != nil {
 		return nil, false, nerr
 	}
 
 	if len(resolved) == 0 {
-		// Пустой резолв: спавнить нечего (нет живых хостов / инкарнаций под target).
-		// Не fail — двигаем расписание (last_run_at = now: тик отработан), без
-		// Voyage и без audit-spawned. Симметрично handler voyage_empty_target, но в
-		// фоне это норма, не ошибка оператора.
+		// Empty resolve: nothing to spawn (no live hosts / incarnations under
+		// target). Not a fail — advance the schedule (last_run_at = now: tick
+		// handled), no Voyage and no audit-spawned. Symmetric to the
+		// voyage_empty_target handler, but in the background this is normal,
+		// not an operator error.
 		if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, &now); aerr != nil {
 			return nil, false, aerr
 		}
@@ -247,21 +253,23 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 	}, true, nil
 }
 
-// resolveScope резолвит declarative-target рецепта Cadence в snapshot единиц через
-// scenario/command-resolver-ы (тонкая обёртка над cadence.ResolveScope для
-// доступа из conductor-пакета к unexported-резолву).
+// resolveScope resolves the Cadence recipe's declarative target into a
+// snapshot of units via the scenario/command resolvers (a thin wrapper over
+// cadence.ResolveScope for conductor-package access to the unexported
+// resolve).
 func (s *CadenceSpawner) resolveScope(ctx context.Context, c *cadence.Cadence) ([]string, error) {
 	return cadence.ResolveScope(ctx, c, s.scenarioR, s.commandR)
 }
 
-// emit пишет cadence.spawned либо cadence.skipped_overlap (ADR-046 §8). source =
-// background (ADR-048 §4: новый source `scheduler` НЕ вводится — `background`
-// семантически точен для фонового периодического keeper-правила без оператора-
-// инициатора, смена исполнителя Reaper→Conductor природу события не меняет).
-// archon_aid = NULL: у фонового спавна нет идентифицированного оператора-
-// инициатора (семантика SourceBackground). Это НЕ created_by_aid Cadence —
-// авторство рецепта живёт в Voyage.started_by_aid (см. cadence.BuildVoyage), а не
-// в audit-source. nil-safe.
+// emit writes cadence.spawned or cadence.skipped_overlap (ADR-046 §8). source
+// = background (ADR-048 §4: a new `scheduler` source is NOT introduced —
+// `background` is semantically accurate for a periodic background keeper rule
+// with no initiating operator; the Reaper→Conductor executor change doesn't
+// change the event's nature). archon_aid = NULL: a background spawn has no
+// identified initiating operator (SourceBackground semantics). This is NOT
+// the Cadence's created_by_aid — recipe authorship lives in
+// Voyage.started_by_aid (see cadence.BuildVoyage), not in audit source.
+// nil-safe.
 func (s *CadenceSpawner) emit(ctx context.Context, rec *spawnedRecord) {
 	if s.audit == nil {
 		return

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// writeMigrationFile кладёт `migrations/<NNN>_to_<MMM>.yml` в snapshot-dir.
+// writeMigrationFile puts `migrations/<NNN>_to_<MMM>.yml` into the snapshot dir.
 func writeMigrationFile(t *testing.T, dir string, from, to int, body string) {
 	t.Helper()
 	migDir := filepath.Join(dir, migrationsDir)
@@ -73,7 +73,7 @@ func TestLoadMigrationChain_FromEqualsTo_Empty(t *testing.T) {
 
 func TestLoadMigrationChain_MissingStep_ChainBroken(t *testing.T) {
 	dir := t.TempDir()
-	// Только первый шаг, второй (002_to_003) отсутствует.
+	// Only the first step; the second (002_to_003) is missing.
 	writeMigrationFile(t, dir, 1, 2, migOneToTwo)
 
 	l := NewServiceLoader(t.TempDir(), nil)

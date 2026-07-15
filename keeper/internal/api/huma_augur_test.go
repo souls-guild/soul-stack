@@ -1,18 +1,18 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2b разворота AUGUR-домена (omens + rites) ЦЕЛИКОМ на huma
-// full-typed (ADR-054 §Pattern, эталоны role/operator). omen create/delete + rite
-// create/delete — WRITE+AUDIT (вариант B, huma-audit-middleware; события
+// Guard tests for ROLLOUT BATCH 2b turning the AUGUR domain (omens + rites) WHOLESALE onto
+// huma full-typed (ADR-054 §Pattern, the role/operator references). omen create/delete + rite
+// create/delete — WRITE+AUDIT (variant B, huma-audit-middleware; events
 // omen.created/omen.revoked/rite.created/rite.revoked); omen list/get + rite list —
-// read (БЕЗ audit). Доказывают инварианты кластера поверх chi:
+// read (no audit). They prove the cluster invariants over chi:
 //
 //   - wire/golden: omen create 201 OmenView; omen list 200 envelope; omen get 200;
-//     omen delete 204 пустое; rite create 201 RiteView (allow byte-exact); rite list
+//     omen delete 204 empty; rite create 201 RiteView (allow byte-exact); rite list
 //     200 items[]; rite delete 204 (byte-exact);
 //   - unknown-field → 400; missing-required → 422; bad source_type enum → 422; bad
 //     pagination → 400; missing omen-query → 422; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут: полная huma-навеска пишет audit-event с НЕПУСТЫМ
-//     payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route: the full huma wiring writes an audit event with a NON-EMPTY
+//     payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -35,17 +35,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// augurAt — фиксированный created_at, который все augur-success-пути отдают
-// (детерминированный golden wire).
+// augurAt — a fixed created_at that all augur success paths return
+// (a deterministic golden wire).
 var augurAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// hAugurPool — узкий мок [augur.ServicePool] для huma-теста (Exec/QueryRow/Query).
-// Классифицирует SQL по подстроке и отдаёт детерминированный success-исход;
-// error-классификацию валидируют handlers/augur_test.go.
+// hAugurPool — a narrow mock of [augur.ServicePool] for the huma test (Exec/QueryRow/Query).
+// Classifies SQL by substring and returns a deterministic success outcome;
+// error classification is validated by handlers/augur_test.go.
 type hAugurPool struct {
 	omenDeleteRows int64
 	riteDeleteRows int64
-	omenGetMissing bool // GET/INSERT-rite-резолв omens WHERE name → ErrNoRows (404)
+	omenGetMissing bool // GET/INSERT-rite resolve of omens WHERE name → ErrNoRows (404)
 	omenListRows   [][]any
 	riteListRows   [][]any
 }
@@ -99,8 +99,8 @@ func hAugurItoa(n int64) string {
 	return "1"
 }
 
-// hAugurRow — staticRow для augur-колонок (string/time/int/int64/bool/[]byte +
-// nullable-указатели).
+// hAugurRow — a staticRow for augur columns (string/time/int/int64/bool/[]byte +
+// nullable pointers).
 type hAugurRow struct {
 	values []any
 	err    error
@@ -160,10 +160,9 @@ func (r *hAugurRows) Values() ([]any, error)                       { return nil,
 func (r *hAugurRows) RawValues() [][]byte                          { return nil }
 func (r *hAugurRows) Conn() *pgx.Conn                              { return nil }
 
-// humaAugurRouter собирает chi-роутер со ВСЕМИ augur-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(omen/rite.<action>) на каждой
-// группе + (для write) huma-audit-middleware вариант B + huma-операция. injectClaims
-// заменяет RequireJWT.
+// humaAugurRouter assembles a chi router with ALL augur routes via huma — the production
+// wiring from router.go: RequirePermission(omen/rite.<action>) on each group + (for write)
+// huma-audit-middleware variant B + a huma operation. injectClaims replaces RequireJWT.
 func humaAugurRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool *hAugurPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -324,7 +323,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnValidationFail(t *testing.T) {
 	}
 }
 
-// === OMEN LIST (READ-with-typed-query, БЕЗ audit) ===
+// === OMEN LIST (READ with typed query, no audit) ===
 
 func TestHumaOmen_List_GoldenWire(t *testing.T) {
 	pool := &hAugurPool{omenListRows: [][]any{
@@ -425,7 +424,7 @@ func TestHumaOmen_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === OMEN GET (READ-with-path, БЕЗ audit) ===
+// === OMEN GET (READ with path, no audit) ===
 
 func TestHumaOmen_Get_GoldenWire(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
@@ -582,7 +581,7 @@ func TestHumaAudit_RiteCreate_RecordsOnSuccess(t *testing.T) {
 	})
 }
 
-// === RITE LIST (READ-with-typed-query, обязательный omen=, БЕЗ audit) ===
+// === RITE LIST (READ with typed query, mandatory omen=, no audit) ===
 
 func TestHumaRite_List_GoldenWire(t *testing.T) {
 	pool := &hAugurPool{riteListRows: [][]any{
@@ -673,7 +672,7 @@ func TestHumaAudit_RiteDelete_NoAudit_OnBadID(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ augur-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL augur operations from FULL-TYPED Go types ===
 
 func TestHumaAugur_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaAugurSpecYAML()

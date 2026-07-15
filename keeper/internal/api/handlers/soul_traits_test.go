@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// doAssignTraits вызывает AssignTraitsTyped напрямую (handler-native) с заранее
-// собранным native input-ом (traits-значения произвольных типов — strict-JSON-
-// декод как у coven не нужен) и сериализует результат в recorder.
+// doAssignTraits calls AssignTraitsTyped directly (handler-native) with a
+// pre-built native input (trait values of arbitrary types — the strict-JSON
+// decode used by coven is not needed) and serializes the result into the recorder.
 func doAssignTraits(t *testing.T, h *SoulHandler, in SoulTraitsAssignInput, dryRunQuery bool) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestAssignTraits_Merge_Happy(t *testing.T) {
 	if !ok || len(keys) != 2 {
 		t.Fatalf("keys = %v, want 2-элементный массив", out["keys"])
 	}
-	// keys отсортированы детерминированно.
+	// keys are sorted deterministically.
 	if keys[0] != "namespace" || keys[1] != "tier" {
 		t.Errorf("keys = %v, want [namespace tier] (sorted)", keys)
 	}
@@ -64,7 +64,7 @@ func TestAssignTraits_Merge_Happy(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_DefaultMode_Merge — mode опущен → merge (дефолт).
+// TestAssignTraits_DefaultMode_Merge — mode omitted → merge (default).
 func TestAssignTraits_DefaultMode_Merge(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -175,7 +175,7 @@ func TestAssignTraits_BadMode_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_BadKey_422 — формат ключа enforce-ится (заглавная → 422 ДО БД).
+// TestAssignTraits_BadKey_422 — key format is enforced (uppercase → 422 BEFORE the DB).
 func TestAssignTraits_BadKey_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -192,7 +192,7 @@ func TestAssignTraits_BadKey_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_NestedValue_422 — вложенный объект/массив-в-массиве отвергается.
+// TestAssignTraits_NestedValue_422 — a nested object / array-in-array is rejected.
 func TestAssignTraits_NestedValue_422(t *testing.T) {
 	for _, v := range []any{
 		map[string]any{"nested": "obj"},
@@ -215,7 +215,7 @@ func TestAssignTraits_NestedValue_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_XOR_TraitsForRemove_422 — remove + traits → XOR-нарушение.
+// TestAssignTraits_XOR_TraitsForRemove_422 — remove + traits → XOR violation.
 func TestAssignTraits_XOR_TraitsForRemove_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{
@@ -228,7 +228,7 @@ func TestAssignTraits_XOR_TraitsForRemove_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_XOR_KeysForMerge_422 — merge + keys → XOR-нарушение.
+// TestAssignTraits_XOR_KeysForMerge_422 — merge + keys → XOR violation.
 func TestAssignTraits_XOR_KeysForMerge_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{
@@ -241,7 +241,7 @@ func TestAssignTraits_XOR_KeysForMerge_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_Remove_EmptyKeys_422 — remove без ключей бессмысленно → 422.
+// TestAssignTraits_Remove_EmptyKeys_422 — remove without keys is meaningless → 422.
 func TestAssignTraits_Remove_EmptyKeys_422(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{unrestricted: true}, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{
@@ -253,8 +253,8 @@ func TestAssignTraits_Remove_EmptyKeys_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_EmptySelector_422 — selector без критериев → 422 (тот же
-// гейт ErrBulkEmptySelector, что у coven).
+// TestAssignTraits_EmptySelector_422 — a selector without criteria → 422 (the same
+// ErrBulkEmptySelector gate as coven).
 func TestAssignTraits_EmptySelector_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -267,8 +267,8 @@ func TestAssignTraits_EmptySelector_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_AuditPayload_NoValues — GUARD секрет-гигиены: audit-payload
-// несёт keys, но НЕ trait-значения; source=api; scope_applied отражает scope.
+// TestAssignTraits_AuditPayload_NoValues — secret-hygiene GUARD: the audit payload
+// carries keys but NOT trait values; source=api; scope_applied reflects the scope.
 func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
@@ -292,21 +292,21 @@ func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 	if !ok || len(keys) != 1 || keys[0] != "namespace" {
 		t.Fatalf("audit keys = %v, want [namespace]", p["keys"])
 	}
-	// Значение НЕ должно протечь в payload (грубая проверка: ни одно значение не
-	// равно секрету).
+	// The value must NOT leak into the payload (coarse check: no value equals the
+	// secret).
 	raw, _ := json.Marshal(p)
 	if containsSubstr(string(raw), "secret-value") {
 		t.Errorf("audit payload содержит trait-ЗНАЧЕНИЕ: %s", raw)
 	}
 }
 
-// TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed — GUARD least-privilege
-// (гейт a): coven-scoped оператор (scope=dev) с selector=sids[prod-host] доходит
-// до bulk-слоя, но scope-предикат в WHERE даёт 0 хостов (fakeDB listCount=0) →
-// 200 + matched/changed=0, без UPDATE. trait-ключ scope-гейтом (b) НЕ проверяется
-// (он не scope-измерение) — единственная защита тут гейт (a) на хосты.
+// TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed — least-privilege GUARD
+// (gate a): a coven-scoped operator (scope=dev) with selector=sids[prod-host] reaches
+// the bulk layer, but the scope predicate in WHERE yields 0 hosts (fakeDB listCount=0) →
+// 200 + matched/changed=0, no UPDATE. The trait key is NOT checked by scope gate (b)
+// (it is not a scope dimension) — the only guard here is gate (a) on hosts.
 func TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed(t *testing.T) {
-	pool := &fakeSoulPool{listCount: 0} // scope-фильтр сделал matched=0.
+	pool := &fakeSoulPool{listCount: 0} // the scope filter made matched=0.
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}}, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{
 		Mode:     "merge",
@@ -325,8 +325,8 @@ func TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_ScoperNil_500 — без scoper-а bulk недоступен (500), least-
-// privilege не обходится (паритет coven).
+// TestAssignTraits_ScoperNil_500 — without a scoper, bulk is unavailable (500); least-
+// privilege cannot be bypassed (parity coven).
 func TestAssignTraits_ScoperNil_500(t *testing.T) {
 	h := NewSoulHandler(&fakeSoulPool{}, nil, nil, nil)
 	rec := doAssignTraits(t, h, SoulTraitsAssignInput{

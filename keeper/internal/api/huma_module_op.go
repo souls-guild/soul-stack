@@ -1,14 +1,14 @@
 package api
 
-// FULL-TYPED форма MODULE-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// ТИРАЖ-БАТЧ-2e (module целиком на huma по эталону catalog read-bare + form-prep
-// read-with-body): list — read-with-typed-query (errand_safe bool-фильтр), get —
-// read-with-path, form-prep — read-with-body (резолв SID-каталога, БЕЗ audit —
-// read-only-резолв, паттерн service.list). Go-типы — единственный источник правды.
+// FULL-TYPED form of the MODULE domain (code-first OpenAPI source, ADR-054 §Pattern).
+// ROLLOUT BATCH 2e (module entirely on huma, following catalog read-bare + form-prep
+// read-with-body): list — read-with-typed-query (errand_safe bool filter), get —
+// read-with-path, form-prep — read-with-body (SID-catalog resolve, no audit —
+// read-only resolve, service.list pattern). Go types are the single source of truth.
 //
-// MODULE — read-only-домен ЦЕЛИКОМ (audit НЕ навешивается ни на один роут): list/get —
-// каталог (RBAC service.list), form-prep — резолв SID под форму (RBAC incarnation.run,
-// read-only-резолв). MCP module-домена НЕТ (каталог не имеет MCP-tool-ов — проверено).
+// MODULE — a read-only domain ENTIRELY (audit is wired on no route): list/get —
+// catalog (RBAC service.list), form-prep — SID resolve for the form (RBAC incarnation.run,
+// read-only resolve). There is NO MCP for the module domain (the catalog has no MCP tools — verified).
 
 import (
 	"net/http"
@@ -18,25 +18,25 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === GET /v1/modules (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/modules (list) — READ with typed query (no audit) ===
 
-// moduleListInput — huma-input GET /v1/modules (FULL-TYPED typed-query). ErrandSafe —
-// bool-фильтр `?errand_safe=true` (legacy читал ровно строку "true"; huma bool-bind
-// принимает true/false/1/0 — расширение допустимое, домен фильтрует по флагу).
+// moduleListInput — huma input for GET /v1/modules (FULL-TYPED typed query). ErrandSafe —
+// bool filter `?errand_safe=true` (legacy read exactly the string "true"; huma bool-bind
+// accepts true/false/1/0 — an acceptable extension, the domain filters by the flag).
 type moduleListInput struct {
 	ErrandSafe bool `query:"errand_safe" doc:"только модули с хотя бы одним errand-safe state (для Run→Command whitelist)"`
 }
 
-// moduleListOutput — huma-output GET /v1/modules (FULL-TYPED). Body — typed 200-envelope
-// (handlers.ModuleCatalogReply: {items}). Wire-форма (items non-nil, kind core|plugin,
-// params/source/items вложенность) зафиксирована golden-JSON byte-exact-тестом.
+// moduleListOutput — huma output for GET /v1/modules (FULL-TYPED). Body — typed 200 envelope
+// (handlers.ModuleCatalogReply: {items}). The wire shape (items non-nil, kind core|plugin,
+// params/source/items nesting) is pinned by a golden-JSON byte-exact test.
 type moduleListOutput struct {
 	Body handlers.ModuleCatalogReply
 }
 
-// moduleListOperation — метаданные GET /v1/modules. Path = "/" относительно chi-группы
-// /v1/modules. DefaultStatus=200. READ-роут: audit НЕ навешан. Permission service.list.
-// Errors: 403 RBAC, 500 (сбой plugin-реестра).
+// moduleListOperation — metadata for GET /v1/modules. Path = "/" relative to the chi group
+// /v1/modules. DefaultStatus=200. READ route: audit not wired. Permission service.list.
+// Errors: 403 RBAC, 500 (plugin-registry failure).
 func moduleListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listModules",
@@ -50,22 +50,22 @@ func moduleListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/modules/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/modules/{name} (get) — READ with path (no audit) ===
 
-// moduleGetInput — huma-input GET /v1/modules/{name}. Name — path (полное имя без
-// state-суффикса: core.cmd / official.postgres-user).
+// moduleGetInput — huma input for GET /v1/modules/{name}. Name — path (full name without
+// the state suffix: core.cmd / official.postgres-user).
 type moduleGetInput struct {
 	Name string `path:"name" doc:"полное имя модуля без state-суффикса"`
 }
 
-// moduleGetOutput — huma-output GET /v1/modules/{name} (FULL-TYPED). Body — typed
-// 200-тело (handlers.ModuleCatalogItem).
+// moduleGetOutput — huma output for GET /v1/modules/{name} (FULL-TYPED). Body — typed
+// 200 body (handlers.ModuleCatalogItem).
 type moduleGetOutput struct {
 	Body handlers.ModuleCatalogItem
 }
 
-// moduleGetOperation — метаданные GET /v1/modules/{name}. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Permission service.list. Errors: 403, 404 (нет модуля), 500.
+// moduleGetOperation — metadata for GET /v1/modules/{name}. DefaultStatus=200. READ route:
+// audit not wired. Permission service.list. Errors: 403, 404 (no module), 500.
 func moduleGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getModule",
@@ -79,60 +79,60 @@ func moduleGetOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/modules/{name}/form-prep (form-prep) — READ-with-body (БЕЗ audit) ===
+// === POST /v1/modules/{name}/form-prep (form-prep) — READ with body (no audit) ===
 
-// moduleFormPrepInput — huma-input POST /v1/modules/{name}/form-prep. Name — path
-// (per-module контракт, при резолве не используется). Body — typed тело (source-
-// дискриминатор + опц. prefix).
+// moduleFormPrepInput — huma input for POST /v1/modules/{name}/form-prep. Name — path
+// (per-module contract, not used in resolve). Body — typed body (source discriminator
+// + optional prefix).
 type moduleFormPrepInput struct {
 	Name string `path:"name" doc:"полное имя модуля (per-module контракт, при резолве не используется)"`
 	Body ModuleFormPrepRequest
 }
 
-// ModuleFormPrepRequest — Go-форма тела POST /v1/modules/{name}/form-prep (code-first
-// источник схемы И валидации). Повторяет ModuleFormPrepRequest: source-дискриминатор
-// (ровно один из incarnation_hosts/choir; ПУСТОЙ/двойной → 422 в FormPrepTyped) + опц.
-// prefix-фильтр. additionalProperties:false (huma-дефолт) → unknown поле тела → 400. Имя
-// структуры = контрактное имя схемы (huma DefaultSchemaNamer; рукопись ModuleFormPrepRequest,
+// ModuleFormPrepRequest — Go form of the POST /v1/modules/{name}/form-prep body (code-first
+// source of schema AND validation). Mirrors ModuleFormPrepRequest: source discriminator
+// (exactly one of incarnation_hosts/choir; EMPTY/both → 422 in FormPrepTyped) + optional
+// prefix filter. additionalProperties:false (huma default) → unknown body field → 400. Struct
+// name = contract schema name (huma DefaultSchemaNamer; hand-written spec ModuleFormPrepRequest,
 // N4).
 type ModuleFormPrepRequest struct {
 	Source ModuleFormPrepSource `json:"source" required:"true" doc:"дискриминатор source-каталога (ровно один из incarnation_hosts/choir)"`
 	Prefix string               `json:"prefix,omitempty" doc:"префикс SID для автокомплита (LIKE prefix%)"`
 }
 
-// ModuleFormPrepSource — Go-форма source-дискриминатора (класс C input-only). Оба под-ключа
-// опц. (XOR-инвариант проверяет домен → 422), формат значений — доменная валидация. Имя
-// структуры = контрактное имя схемы (рукопись ModuleFormPrepSource, N4).
+// ModuleFormPrepSource — Go form of the source discriminator (class C input-only). Both
+// sub-keys optional (the domain checks the XOR invariant → 422), value format is domain
+// validation. Struct name = contract schema name (hand-written spec ModuleFormPrepSource, N4).
 type ModuleFormPrepSource struct {
 	IncarnationHosts string                     `json:"incarnation_hosts,omitempty" doc:"имя incarnation — live SID-ы её хостов"`
 	Choir            *ModuleFormPrepChoirSource `json:"choir,omitempty" doc:"координаты Choir-source (incarnation + имя Choir-а)"`
 }
 
-// ModuleFormPrepChoirSource — Go-форма Choir-source (incarnation + name; класс C input-only).
-// Имя структуры = контрактное имя схемы (рукопись ModuleFormPrepChoirSource, N4).
+// ModuleFormPrepChoirSource — Go form of the Choir source (incarnation + name; class C input-only).
+// Struct name = contract schema name (hand-written spec ModuleFormPrepChoirSource, N4).
 type ModuleFormPrepChoirSource struct {
 	Incarnation string `json:"incarnation" doc:"имя incarnation Choir-а"`
 	Name        string `json:"name" doc:"имя Choir-а"`
 }
 
-// ModuleFormPrepReply — native 200-тело POST /v1/modules/{name}/form-prep (flat). Форма 1:1 с
-// ModuleFormPrepReply (types.gen.go :2305): sids ([]string, оба поля required) + truncated.
-// Имя структуры = контрактное имя схемы (huma DefaultSchemaNamer → "ModuleFormPrepReply"). Wire-
-// форма зафиксирована golden-JSON byte-exact-тестом (huma_module_reply_test.go).
+// ModuleFormPrepReply — native 200 body of POST /v1/modules/{name}/form-prep (flat). Shape 1:1 with
+// ModuleFormPrepReply (types.gen.go :2305): sids ([]string, both fields required) + truncated.
+// Struct name = contract schema name (huma DefaultSchemaNamer → "ModuleFormPrepReply"). The wire
+// shape is pinned by a golden-JSON byte-exact test (huma_module_reply_test.go).
 type ModuleFormPrepReply struct {
 	Sids      []string `json:"sids"`
 	Truncated bool     `json:"truncated"`
 }
 
-// moduleFormPrepOutput — huma-output POST /v1/modules/{name}/form-prep (FULL-TYPED).
-// Body — huma-native 200-тело (ModuleFormPrepReply: {sids, truncated}).
+// moduleFormPrepOutput — huma output for POST /v1/modules/{name}/form-prep (FULL-TYPED).
+// Body — huma-native 200 body (ModuleFormPrepReply: {sids, truncated}).
 type moduleFormPrepOutput struct {
 	Body ModuleFormPrepReply
 }
 
-// moduleFormPrepOperation — метаданные POST /v1/modules/{name}/form-prep.
-// DefaultStatus=200. READ-роут (резолв, не мутация): audit НЕ навешан. Permission
-// incarnation.run. Errors: 400 unknown/malformed, 403 RBAC, 422 невалидный source, 500.
+// moduleFormPrepOperation — metadata for POST /v1/modules/{name}/form-prep.
+// DefaultStatus=200. READ route (resolve, not mutation): audit not wired. Permission
+// incarnation.run. Errors: 400 unknown/malformed, 403 RBAC, 422 invalid source, 500.
 func moduleFormPrepOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "moduleFormPrep",
@@ -146,9 +146,9 @@ func moduleFormPrepOperation() huma.Operation {
 	}
 }
 
-// toModuleFormPrepInput — конверт typed huma-body → NATIVE request module-домена
-// (handlers.FormPrepInput). huma-форма несёт value/pointer; handler-форма — плоская value
-// (handler.toFilter трактует пустую строку как «не задано», parity легаси-декода).
+// toModuleFormPrepInput — wrapper typed huma-body → NATIVE request of the module domain
+// (handlers.FormPrepInput). The huma form carries value/pointer; the handler form is flat value
+// (handler.toFilter treats an empty string as "unset", parity with the legacy decode).
 func toModuleFormPrepInput(b ModuleFormPrepRequest) handlers.FormPrepInput {
 	out := handlers.FormPrepInput{Prefix: b.Prefix}
 	out.Source.IncarnationHosts = b.Source.IncarnationHosts
@@ -161,9 +161,9 @@ func toModuleFormPrepInput(b ModuleFormPrepRequest) handlers.FormPrepInput {
 	return out
 }
 
-// newModuleFormPrepReply проецирует доменный handlers.FormPrepResult в native 200-тело
-// ModuleFormPrepReply (byte-exact passthrough формы). sids nil-ность сохраняется (handler
-// даёт non-nil отсортированный срез).
+// newModuleFormPrepReply projects the domain handlers.FormPrepResult into the native 200 body
+// ModuleFormPrepReply (byte-exact passthrough of the shape). sids nil-ness is preserved (the
+// handler yields a non-nil sorted slice).
 func newModuleFormPrepReply(r handlers.FormPrepResult) ModuleFormPrepReply {
 	return ModuleFormPrepReply{Sids: r.Sids, Truncated: r.Truncated}
 }

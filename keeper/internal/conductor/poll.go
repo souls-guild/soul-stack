@@ -8,34 +8,34 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 )
 
-// PollCorridor — снимок коридора адаптивного опроса (ADR-048 «Adaptive interval»,
-// профиль «Спокойный» 30s/60s/120s). Перечитывается на каждом resolve из свежего
-// config-снимка → hot-reload смены floor/ceiling/idle.
+// PollCorridor is a snapshot of the adaptive-poll corridor (ADR-048 "Adaptive
+// interval", "Calm" profile 30s/60s/120s). Re-read on every resolve from a
+// fresh config snapshot → hot-reload of floor/ceiling/idle changes.
 type PollCorridor struct {
 	Floor   time.Duration
 	Ceiling time.Duration
 	Idle    time.Duration
 }
 
-// MinPeriodFetcher читает агрегаты enabled-реестра Cadence из PG (см.
-// [cadence.SelectMinPeriod]). Вынесен в интерфейс ради unit-тестирования
-// [AdaptivePollInterval] без живого пула.
+// MinPeriodFetcher reads aggregates of the enabled Cadence registry from PG
+// (see [cadence.SelectMinPeriod]). Extracted as an interface for unit-testing
+// [AdaptivePollInterval] without a live pool.
 type MinPeriodFetcher interface {
 	SelectMinPeriod(ctx context.Context) (cadence.MinPeriod, error)
 }
 
-// AdaptivePollInterval вычисляет шаг опроса Conductor (ADR-048 «Adaptive
-// interval»): clamp(derivedMinPeriod, floor, ceiling); пустой enabled-реестр →
-// idle. Stateless by construction — derivedMinPeriod пересчитывается из PG на
-// каждом вызове, поэтому новый лидер после failover не несёт in-memory состояния
-// опроса (тот же реестр → тот же шаг).
+// AdaptivePollInterval computes the Conductor poll step (ADR-048 "Adaptive
+// interval"): clamp(derivedMinPeriod, floor, ceiling); empty enabled registry
+// → idle. Stateless by construction — derivedMinPeriod is recomputed from PG
+// on every call, so a new leader after failover carries no in-memory poll
+// state (same registry → same step).
 //
-// Ошибка fetch (PG-glitch) не роняет лидера: fallback на ceiling (нечастый край
-// коридора, не floor — чтобы не молотить PG в шторм) + warn. Следующий resolve
-// повторит запрос.
+// A fetch error (PG glitch) doesn't bring down the leader: falls back to
+// ceiling (the infrequent edge of the corridor, not floor — to avoid
+// hammering PG during an outage) + warn. The next resolve retries the query.
 //
-// corridor вычисляется лениво (closure) — на каждом resolve, чтобы видеть
-// hot-reload config-снимка.
+// corridor is computed lazily (closure) — on every resolve, to see config
+// snapshot hot-reloads.
 func AdaptivePollInterval(
 	ctx context.Context,
 	corridor func() PollCorridor,

@@ -1,80 +1,85 @@
-// Package applyrun — реестр apply-прогонов в Postgres (таблица `apply_runs`,
-// миграция 018) под M2.x scenario-runner.
+// Package applyrun — registry of apply runs in Postgres (table `apply_runs`,
+// migration 018) for the M2.x scenario-runner.
 //
-// Назначение — correlation `apply_id` ↔ incarnation/scenario: при получении
-// `RunResult` от Soul-а Keeper из proto не знает, к какой incarnation
-// относится прогон. scenario-runner пишет строку при dispatch-е
-// `ApplyRequest` ([Insert]); RunResult-handler читает её по `(apply_id, sid)`
-// ([SelectIncarnationByApplyID]) и коммитит state в нужную incarnation.
+// Purpose — correlate `apply_id` with an incarnation/scenario: when Keeper
+// receives a `RunResult` from a Soul, the proto alone doesn't say which
+// incarnation the run belongs to. scenario-runner writes a row when it
+// dispatches `ApplyRequest` ([Insert]); the RunResult handler looks it up by
+// `(apply_id, sid)` ([SelectIncarnationByApplyID]) and commits state to the
+// right incarnation.
 //
-// apply_id-model A (PM-decision): один `apply_id` на scenario, разный `sid`
-// на каждый хост fan-out-а → composite PK `(apply_id, sid)`.
+// apply_id model A (PM decision): one `apply_id` per scenario, a distinct
+// `sid` per fan-out host → composite PK `(apply_id, sid)`.
 package applyrun
 
 import "time"
 
-// Status — статус строки apply_runs. Closed enum (PM-decision 1),
-// совпадает с CHECK-constraint `apply_runs_status_valid` в миграции 018.
+// Status — apply_runs row status. Closed enum (PM decision 1), matches the
+// `apply_runs_status_valid` CHECK constraint from migration 018.
 type Status string
 
 const (
-	// StatusPlanned — задание Ward-claim ещё не захвачено Acolyte-ом
-	// (work-queue вход, ADR-027). scenario-runner пишет его на dispatch-е;
-	// Acolyte клеймит planned-задания через [ClaimNext]. Входит в [ValidStatus]
-	// с Phase 1.
+	// StatusPlanned — task not yet claimed by an Acolyte via Ward-claim
+	// (work-queue entry, ADR-027). scenario-runner writes it on dispatch;
+	// Acolyte claims planned tasks via [ClaimNext]. In [ValidStatus] since
+	// Phase 1.
 	StatusPlanned Status = "planned"
-	// StatusClaimed — Ward захвачен Acolyte-ом ([ClaimNext]), задание
-	// резолвится/рендерится just-in-time перед переходом в `dispatched` через
-	// [MarkDispatched] (ADR-027 amend). Входит в [ValidStatus] с Phase 1.
+	// StatusClaimed — Ward claimed by an Acolyte ([ClaimNext]); the task is
+	// resolved/rendered just-in-time before moving to `dispatched` via
+	// [MarkDispatched] (ADR-027 amend). In [ValidStatus] since Phase 1.
 	StatusClaimed Status = "claimed"
-	// StatusRunning — прогон стартован (строка вставлена на dispatch-е),
-	// терминального RunResult ещё нет. Vestigial после GATE-1 передизайна
-	// recovery (ADR-027 amend): Acolyte-флоу больше его не пишет (claimed →
-	// [StatusDispatched] → терминал), но значение остаётся валидным для
-	// wire-compat (старые/ad-hoc строки) — см. [ValidStatus].
+	// StatusRunning — run started (row inserted on dispatch), no terminal
+	// RunResult yet. Vestigial after the GATE-1 recovery redesign (ADR-027
+	// amend): the Acolyte flow no longer writes it (claimed →
+	// [StatusDispatched] → terminal), but the value stays valid for
+	// wire-compat (old/ad-hoc rows) — see [ValidStatus].
 	StatusRunning Status = "running"
-	// StatusDispatched — задание отдано Soul-у (фаза lifecycle, ADR-027 amend
-	// S2). claimed → dispatched отмечается АТОМАРНО ПЕРЕД SendApply
-	// ([MarkDispatched]) — deliver-once intent-маркер. Как только строка
-	// dispatched, recovery-reclaim её НЕ трогает (reclaim сужен до
-	// `status='claimed'`, S4): после отдачи прогон ведёт Soul, пере-claim =
-	// двойной apply. Терминал приходит на dispatched-строку через RunResult.
+	// StatusDispatched — task handed off to a Soul (lifecycle phase, ADR-027
+	// amend S2). claimed → dispatched is marked ATOMICALLY BEFORE SendApply
+	// ([MarkDispatched]) — a deliver-once intent marker. Once a row is
+	// dispatched, recovery-reclaim does NOT touch it (reclaim is scoped to
+	// `status='claimed'`, S4): after handoff the Soul owns the run, so a
+	// re-claim would mean a double apply. The terminal state arrives on a
+	// dispatched row via RunResult.
 	StatusDispatched Status = "dispatched"
-	// StatusSuccess — RunResult со status=SUCCESS.
+	// StatusSuccess — RunResult with status=SUCCESS.
 	StatusSuccess Status = "success"
-	// StatusFailed — RunResult со status=FAILED / ERROR_LOCKED.
+	// StatusFailed — RunResult with status=FAILED / ERROR_LOCKED.
 	StatusFailed Status = "failed"
-	// StatusCancelled — RunResult со status=CANCELLED.
+	// StatusCancelled — RunResult with status=CANCELLED.
 	StatusCancelled Status = "cancelled"
-	// StatusOrphaned — терминал Soul-reconcile (ADR-027(g), S6): строка осталась
-	// в `dispatched` после «Keeper и Soul оба мертвы после отдачи», а Soul на
-	// reconnect НЕ объявил этот apply_id в [WardRoster] (in-flight физически нет
-	// — например, Soul-процесс был перезапущен). RunResult по ней не придёт
-	// никогда — [OrphanDispatched] терминалит её в `orphaned`. Барьер
-	// классифицирует orphaned как терминальный не-успех (incarnation →
-	// error_locked). Добавлен миграцией 044.
+	// StatusOrphaned — Soul-reconcile terminal (ADR-027(g), S6): a row stayed
+	// in `dispatched` after "both Keeper and Soul died post-handoff", and on
+	// reconnect the Soul did NOT declare this apply_id in [WardRoster] (no
+	// in-flight run physically exists — e.g. the Soul process was restarted).
+	// No RunResult will ever arrive for it — [OrphanDispatched] terminalizes
+	// it to `orphaned`. The barrier classifies orphaned as a terminal
+	// non-success (incarnation → error_locked). Added by migration 044.
 	StatusOrphaned Status = "orphaned"
-	// StatusNoMatch — терминал «хосту ничего не досталось» (FINDING-01, вариант
-	// (б)). Acolyte-путь пишет planned-задание на КАЖДЫЙ roster-хост incarnation
-	// ДО per-host резолва `on:`/`where:` (резолв позже, при claim). Хост, у
-	// которого после `on:`/`where:` осталось 0 задач, закрывается в `no_match`
-	// (НЕ `success`): apply_runs больше не over-reports «успех там, где ничего не
-	// применялось». Барьер классифицирует no_match как ТЕРМИНАЛ и НЕ-провал
-	// (benign, как success): прогон, где целевые success + не-целевые no_match,
-	// ведёт incarnation в ready (НЕ error_locked). Несёт finished_at — подлежит
-	// retention-purge как прочие терминалы. Добавлен миграцией 045.
+	// StatusNoMatch — "host got nothing to do" terminal (FINDING-01, option
+	// (b)). The Acolyte path writes a planned task for EVERY roster host of an
+	// incarnation BEFORE per-host `on:`/`where:` resolution (resolution
+	// happens later, at claim time). A host left with 0 tasks after
+	// `on:`/`where:` closes as `no_match` (NOT `success`): apply_runs no
+	// longer over-reports "success" where nothing was actually applied. The
+	// barrier classifies no_match as a TERMINAL non-failure (benign, like
+	// success): a run with targeted successes + non-targeted no_match drives
+	// the incarnation to ready (NOT error_locked). Carries finished_at —
+	// subject to retention-purge like other terminals. Added by migration 045.
 	StatusNoMatch Status = "no_match"
 )
 
-// ValidStatus — проверка status, разрешённого CRUD-слою ([Insert] /
-// [UpdateStatus]). Соответствует полному множеству CHECK apply_runs_status_valid
-// после миграции 045 ([StatusNoMatch], FINDING-01 вариант (б); ранее 044 —
-// [StatusOrphaned], Soul-reconcile ADR-027(g)). [StatusPlanned] / [StatusClaimed] добавлены в Phase 1
-// (claim-логика, ADR-027): scenario-runner на dispatch-е пишет `planned`,
-// Acolyte клеймит в `claimed` ([ClaimNext]). [StatusDispatched] добавлен GATE-1
-// передизайном recovery (ADR-027 amend, S2): Acolyte переводит claimed →
-// dispatched ([MarkDispatched]) ПЕРЕД SendApply. [StatusRunning] остаётся
-// валидным (vestigial — Acolyte-флоу его не пишет, но wire-compat сохранён).
+// ValidStatus — checks a status allowed by the CRUD layer ([Insert] /
+// [UpdateStatus]). Matches the full set of the apply_runs_status_valid CHECK
+// after migration 045 ([StatusNoMatch], FINDING-01 option (b); earlier 044 —
+// [StatusOrphaned], Soul-reconcile ADR-027(g)). [StatusPlanned] /
+// [StatusClaimed] were added in Phase 1 (claim logic, ADR-027):
+// scenario-runner writes `planned` on dispatch, Acolyte claims into
+// `claimed` ([ClaimNext]). [StatusDispatched] was added by the GATE-1
+// recovery redesign (ADR-027 amend, S2): Acolyte moves claimed → dispatched
+// ([MarkDispatched]) BEFORE SendApply. [StatusRunning] stays valid
+// (vestigial — the Acolyte flow no longer writes it, but wire-compat is
+// preserved).
 func ValidStatus(s Status) bool {
 	switch s {
 	case StatusPlanned, StatusClaimed, StatusRunning, StatusDispatched, StatusSuccess, StatusFailed, StatusCancelled, StatusOrphaned, StatusNoMatch:
@@ -83,25 +88,26 @@ func ValidStatus(s Status) bool {
 	return false
 }
 
-// ApplyRun — runtime-представление строки реестра `apply_runs`.
+// ApplyRun — runtime representation of an `apply_runs` registry row.
 //
-// TaskIdx / ErrorSummary / FinishedAt / StartedByAID — nullable-колонки
-// (PM-decision 2/3): TaskIdx неизвестен на dispatch-е; FinishedAt/ErrorSummary
-// заполняются терминальным RunResult; StartedByAID — `NULL` для прогонов,
-// инициированных Soul-ом без identity Архонта.
+// TaskIdx / ErrorSummary / FinishedAt / StartedByAID — nullable columns
+// (PM decision 2/3): TaskIdx is unknown at dispatch time; FinishedAt/
+// ErrorSummary are filled by the terminal RunResult; StartedByAID is `NULL`
+// for runs initiated by a Soul without an Archon identity.
 //
-// ClaimByKID / ClaimAt / ClaimExpiresAt / Attempt — Ward-claim колонки
-// (ADR-027, миграция 025). Phase 0: добавлены в структуру для синхронности с
-// схемой (полное представление строки), но НИКЕМ не пишутся и не читаются —
-// CRUD-слой (Insert/SelectByApplyID) их не маппит. claim-логика, заполняющая
-// эти поля, — Phase 1.
+// ClaimByKID / ClaimAt / ClaimExpiresAt / Attempt — Ward-claim columns
+// (ADR-027, migration 025). Phase 0: added to the struct to stay in sync
+// with the schema (a full row representation), but nothing writes or reads
+// them yet — the CRUD layer (Insert/SelectByApplyID) doesn't map them. The
+// claim logic that fills these fields is Phase 1.
 //
-// Recipe — render-инструкция для just-in-time-рендера задания Acolyte-ом при
-// claim (ADR-027(c)(f), nullable-колонка recipe, миграция 029). nil для строк
-// старого пути Insert(running) — рецепт несёт только planned-задание под claim.
-// Парсится из/в jsonb через [UnmarshalRecipe] / [MarshalRecipe] на границе
-// CRUD-слоя (симметрично nullable-указателям TaskIdx / StartedByAID). Запись
-// рецепта на dispatch-е — Phase 1.4.2, чтение при claim — Phase 1.4.3.
+// Recipe — render instructions for the Acolyte's just-in-time task render at
+// claim time (ADR-027(c)(f), nullable recipe column, migration 029). nil for
+// rows from the old Insert(running) path — a recipe is only carried by a
+// planned task awaiting claim. Parsed from/to jsonb via [UnmarshalRecipe] /
+// [MarshalRecipe] at the CRUD layer boundary (symmetric with the nullable
+// TaskIdx / StartedByAID pointers). Writing the recipe on dispatch is Phase
+// 1.4.2, reading it at claim is Phase 1.4.3.
 type ApplyRun struct {
 	ApplyID         string `json:"apply_id"`
 	SID             string `json:"sid"`
@@ -110,11 +116,12 @@ type ApplyRun struct {
 	TaskIdx         *int   `json:"task_idx,omitempty"`
 	Status          Status `json:"status"`
 
-	// Passage — индекс Passage staged-render (ADR-056, S3): на один хост прогона
-	// приходится N строк apply_runs (по одной на Passage), составляющих PK
-	// (apply_id, sid, passage) после миграции 078. Zero-value 0 = единственный
-	// Passage — N=1-прогон (без register-зависимостей) пишет единственную строку
-	// passage=0, поведение БИТ-В-БИТ как до staged-render. Insert пишет это поле явно.
+	// Passage — Passage index for staged-render (ADR-056, S3): a run's single
+	// host maps to N apply_runs rows (one per Passage), forming the PK
+	// (apply_id, sid, passage) since migration 078. Zero-value 0 = single
+	// Passage — an N=1 run (no register dependencies) writes a single
+	// passage=0 row, behavior BIT-FOR-BIT identical to pre-staged-render.
+	// Insert writes this field explicitly.
 	Passage int `json:"passage"`
 
 	ErrorSummary *string    `json:"error_summary,omitempty"`
@@ -130,12 +137,13 @@ type ApplyRun struct {
 	Recipe *Recipe `json:"recipe,omitempty"`
 }
 
-// ActiveApply — одна запись набора ведомых Soul-ом apply-прогонов из WardRoster
-// (Soul-reconcile, ADR-027(g), S6). Доменный аналог proto-сообщения
-// keeperv1.ActiveApply; маппинг proto → домен делает gRPC-handler, чтобы CRUD-слой
-// (этот пакет) не зависел от proto-генерации (как и весь applyrun). [OrphanDispatched]
-// читает только ApplyID; Attempt сохранён для будущего epoch-разъезда (в MVP
-// присутствие apply_id в наборе защищает строку от orphan с любым attempt).
+// ActiveApply — one entry of the set of apply runs a Soul is tracking, from
+// WardRoster (Soul-reconcile, ADR-027(g), S6). Domain counterpart of the
+// keeperv1.ActiveApply proto message; the gRPC handler maps proto → domain so
+// the CRUD layer (this package) stays independent of proto generation (like
+// the rest of applyrun). [OrphanDispatched] only reads ApplyID; Attempt is
+// kept for a future epoch mismatch check (in MVP, presence of apply_id in
+// the set protects the row from orphaning regardless of attempt).
 type ActiveApply struct {
 	ApplyID string
 	Attempt int32

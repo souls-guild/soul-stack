@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// TestBuildAuditWhere_PayloadHerald — docker-free guard предиката истории
-// доставок (S2): фильтр payload_herald должен материализоваться как
-// `payload->>'herald' = $N` с значением в args. Ловит регресс, если имя
-// JSONB-ключа или оператор извлечения изменится.
+// TestBuildAuditWhere_PayloadHerald — docker-free guard for the delivery
+// history predicate (S2): the payload_herald filter must materialize as
+// `payload->>'herald' = $N` with the value in args. Catches a regression if
+// the JSONB key name or extraction operator changes.
 func TestBuildAuditWhere_PayloadHerald(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{PayloadHerald: "ops-slack"})
 	if !strings.Contains(where, "payload->>'herald' = $1") {
@@ -20,10 +20,11 @@ func TestBuildAuditWhere_PayloadHerald(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_PayloadVoyage — docker-free guard предиката visibility
-// Voyage detail (ADR-052 amend §k): фильтр payload_voyage материализуется как
-// `payload->>'voyage_id' = $N` с значением в args (параметризованный плейсхолдер,
-// НЕ конкатенация). Ловит регресс имени JSONB-ключа / оператора извлечения.
+// TestBuildAuditWhere_PayloadVoyage — docker-free guard for the Voyage detail
+// visibility predicate (ADR-052 amend §k): the payload_voyage filter
+// materializes as `payload->>'voyage_id' = $N` with the value in args
+// (parameterized placeholder, NOT concatenation). Catches a regression in the
+// JSONB key name / extraction operator.
 func TestBuildAuditWhere_PayloadVoyage(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{PayloadVoyage: "voy-77"})
 	if !strings.Contains(where, "payload->>'voyage_id' = $1") {
@@ -34,9 +35,10 @@ func TestBuildAuditWhere_PayloadVoyage(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_VoyageDeliveryCombo — voyage-секция: correlation_id +
-// multi-type herald.delivered/failed комбинируются через AND, плейсхолдеры
-// позиционно согласованы. correlation_id — case-insensitive substring (ILIKE).
+// TestBuildAuditWhere_VoyageDeliveryCombo — voyage section: correlation_id +
+// multi-type herald.delivered/failed combine via AND, placeholders stay
+// positionally consistent. correlation_id — case-insensitive substring
+// (ILIKE).
 func TestBuildAuditWhere_VoyageDeliveryCombo(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{
 		Types:         []string{"herald.delivered", "herald.failed"},
@@ -56,10 +58,10 @@ func TestBuildAuditWhere_VoyageDeliveryCombo(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_ArchonAID_ILIKE — фильтр archon_aid материализуется как
-// case-insensitive substring: предикат ILIKE с bind-параметром `%val%` (НЕ
-// строковая конкатенация в SQL — %-обёртка в значении args). Ловит регресс к
-// exact `=`-семантике поиска.
+// TestBuildAuditWhere_ArchonAID_ILIKE — the archon_aid filter materializes as
+// a case-insensitive substring: an ILIKE predicate with bind parameter
+// `%val%` (NOT string concatenation in SQL — the %-wrap is in the args
+// value). Catches a regression to exact `=` search semantics.
 func TestBuildAuditWhere_ArchonAID_ILIKE(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{ArchonAID: "Alice"})
 	if !strings.Contains(where, "archon_aid ILIKE $1") {
@@ -70,8 +72,8 @@ func TestBuildAuditWhere_ArchonAID_ILIKE(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_CorrelationID_ILIKE — фильтр correlation_id — ILIKE-
-// substring с %-обёрткой в bind-значении (параметризованный плейсхолдер).
+// TestBuildAuditWhere_CorrelationID_ILIKE — the correlation_id filter is an
+// ILIKE substring with a %-wrapped bind value (parameterized placeholder).
 func TestBuildAuditWhere_CorrelationID_ILIKE(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{CorrelationID: "abc"})
 	if !strings.Contains(where, "correlation_id ILIKE $1") {
@@ -82,9 +84,10 @@ func TestBuildAuditWhere_CorrelationID_ILIKE(t *testing.T) {
 	}
 }
 
-// TestLikeContains_EscapesWildcards — LIKE-метасимволы (`\`/`%`/`_`) во вводе
-// экранируются, чтобы ILIKE-поиск оставался литеральным (оператор ищет именно
-// символ `%`/`_`, а не wildcard). Защита от «`%` находит всё».
+// TestLikeContains_EscapesWildcards — LIKE metacharacters (`\`/`%`/`_`) in the
+// input are escaped so the ILIKE search stays literal (the operator searches
+// for the exact `%`/`_` character, not a wildcard). Guards against "`%`
+// matches everything".
 func TestLikeContains_EscapesWildcards(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"plain", "%plain%"},
@@ -98,7 +101,7 @@ func TestLikeContains_EscapesWildcards(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_NoFilter — пустой фильтр → без WHERE (полная лента).
+// TestBuildAuditWhere_NoFilter — empty filter → no WHERE (full feed).
 func TestBuildAuditWhere_NoFilter(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{})
 	if where != "" {
@@ -109,9 +112,9 @@ func TestBuildAuditWhere_NoFilter(t *testing.T) {
 	}
 }
 
-// TestBuildAuditWhere_AllFilters — все поля сразу: позиционные плейсхолдеры
-// инкрементятся монотонно, payload-фильтр встаёт между correlation_id и
-// временными границами.
+// TestBuildAuditWhere_AllFilters — all fields at once: positional
+// placeholders increment monotonically, the payload filter sits between
+// correlation_id and the time bounds.
 func TestBuildAuditWhere_AllFilters(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{
 		Types:         []string{"herald.delivered"},

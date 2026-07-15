@@ -9,7 +9,7 @@ import (
 	jwtv5 "github.com/golang-jwt/jwt/v5"
 )
 
-// testSigningKey — 32-байтовый ключ, минимум для HS256.
+// testSigningKey — 32-byte key, the minimum for HS256.
 var testSigningKey = bytes.Repeat([]byte{0xab}, 32)
 
 func TestNewIssuer_RejectsShortKey(t *testing.T) {
@@ -43,7 +43,7 @@ func TestNewIssuer_RejectsEmptyIssuer(t *testing.T) {
 	}
 }
 
-// TestIssue_ClaimsCorrect — decode результирующий JWT и проверить все поля.
+// TestIssue_ClaimsCorrect — decode the resulting JWT and check every field.
 func TestIssue_ClaimsCorrect(t *testing.T) {
 	const (
 		issuer = "keeper.test"
@@ -63,14 +63,14 @@ func TestIssue_ClaimsCorrect(t *testing.T) {
 	}
 	after := time.Now().UTC()
 
-	// Структура: header.payload.signature.
+	// Structure: header.payload.signature.
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
 		t.Fatalf("JWT must have 3 parts, got %d: %s", len(parts), tok)
 	}
 
-	// Декодируем claims через jwtv5 (тот же лагоритм). KeyFunc возвращает
-	// тот же signing key — иначе ParseWithClaims отбракует подпись.
+	// Decode claims via jwtv5 (same algorithm). KeyFunc returns the same
+	// signing key — otherwise ParseWithClaims rejects the signature.
 	parsed, err := jwtv5.ParseWithClaims(tok, &archonClaims{}, func(t *jwtv5.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwtv5.SigningMethodHMAC); !ok {
 			return nil, jwtv5.ErrTokenSignatureInvalid
@@ -135,8 +135,8 @@ func TestIssue_BootstrapInitial(t *testing.T) {
 	}
 }
 
-// TestIssue_Signature — токен подписан HS256 нашим ключом; чужой ключ
-// должен отбраковать подпись.
+// TestIssue_Signature — the token is signed HS256 with our key; a foreign
+// key must reject the signature.
 func TestIssue_Signature(t *testing.T) {
 	iss, err := NewIssuer(testSigningKey, "keeper.test")
 	if err != nil {
@@ -147,7 +147,7 @@ func TestIssue_Signature(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	// Чужой ключ → подпись невалидна.
+	// Foreign key → signature invalid.
 	otherKey := bytes.Repeat([]byte{0xcd}, 32)
 	_, err = jwtv5.ParseWithClaims(tok, &archonClaims{}, func(*jwtv5.Token) (interface{}, error) {
 		return otherKey, nil
@@ -156,7 +156,7 @@ func TestIssue_Signature(t *testing.T) {
 		t.Fatalf("ParseWithClaims with wrong key: expected error, got nil")
 	}
 
-	// Свой ключ → подпись валидна.
+	// Correct key → signature valid.
 	parsed, err := jwtv5.ParseWithClaims(tok, &archonClaims{}, func(*jwtv5.Token) (interface{}, error) {
 		return testSigningKey, nil
 	})

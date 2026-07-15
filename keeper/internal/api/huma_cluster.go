@@ -1,9 +1,9 @@
 package api
 
-// Регистрация и spec-dump CLUSTER-домена (GET /v1/cluster) на huma full-typed.
-// READ-роут БЕЗ audit (паттерн list/get). Доменная ClusterHandler.GetTyped
-// извлечена в handlers/cluster.go; здесь — тонкий конверт claims → GetTyped →
-// проекция reply в native wire-DTO.
+// Registration and spec-dump of the CLUSTER domain (GET /v1/cluster) on huma full-typed.
+// READ route, no audit (list/get pattern). The domain ClusterHandler.GetTyped is extracted
+// into handlers/cluster.go; here — a thin wrapper claims → GetTyped → projection of reply
+// into the native wire-DTO.
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// clusterInstanceEntry — native-элемент HA-списка (форма wire). kid + started_at
-// (optional, omitempty — nil при непрочитанной meta) + alive + is_reaper_leader.
+// clusterInstanceEntry — native element of the HA list (wire shape). kid + started_at
+// (optional, omitempty — nil when meta is unread) + alive + is_reaper_leader.
 type clusterInstanceEntry struct {
 	KID            string     `json:"kid"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
@@ -23,17 +23,17 @@ type clusterInstanceEntry struct {
 	IsReaperLeader bool       `json:"is_reaper_leader"`
 }
 
-// clusterReply — native 200-тело GET /v1/cluster. instances — всегда present
-// (non-nil slice → `[]`, не `null`); self_kid — KID текущего инстанса; self_health
-// — карта `postgres|redis|vault → "ok"|причина` (та же форма, что checks в /readyz).
+// clusterReply — native 200 body of GET /v1/cluster. instances — always present
+// (non-nil slice → `[]`, not `null`); self_kid — KID of the current instance; self_health
+// — map `postgres|redis|vault → "ok"|reason` (same shape as checks in /readyz).
 type clusterReply struct {
 	Instances  []clusterInstanceEntry `json:"instances"`
 	SelfKID    string                 `json:"self_kid"`
 	SelfHealth map[string]string      `json:"self_health"`
 }
 
-// newClusterReply проецирует доменный handlers.ClusterView в native wire-DTO.
-// instances принудительно non-nil ([] вместо null — стабильный wire для UI).
+// newClusterReply projects the domain handlers.ClusterView into the native wire-DTO.
+// instances forced non-nil ([] instead of null — stable wire for the UI).
 func newClusterReply(v handlers.ClusterView) clusterReply {
 	instances := make([]clusterInstanceEntry, 0, len(v.Instances))
 	for i := range v.Instances {
@@ -51,10 +51,10 @@ func newClusterReply(v handlers.ClusterView) clusterReply {
 	}
 }
 
-// registerHumaClusterGet монтирует GET /v1/cluster через huma (READ, БЕЗ audit).
-// clusterH nil → no-op (dev/тесты без cluster-wire-up: роут не монтируется).
-// RBAC soul.list — на группе. claims не используется handler-ом (view cluster-wide),
-// но пробрасывается для единообразия с прочими read-конвертами.
+// registerHumaClusterGet mounts GET /v1/cluster via huma (READ, no audit).
+// clusterH nil → no-op (dev/tests without cluster wire-up: the route is not mounted).
+// RBAC soul.list — on the group. claims is not used by the handler (cluster-wide view),
+// but is passed through for consistency with the other read wrappers.
 func registerHumaClusterGet(humaAPI huma.API, clusterH *handlers.ClusterHandler) {
 	if clusterH == nil {
 		return
@@ -68,9 +68,9 @@ func registerHumaClusterGet(humaAPI huma.API, clusterH *handlers.ClusterHandler)
 	})
 }
 
-// HumaClusterSpecYAML собирает OpenAPI-фрагмент GET /v1/cluster как YAML-строку без
-// монтирования на реальный router. Хук для spec-merge-таргета и guard-теста
-// (parity HumaSoulSpecYAML). Делегирует generic humaDumpSpec через тот же register.
+// HumaClusterSpecYAML assembles the OpenAPI fragment for GET /v1/cluster as a YAML string
+// without mounting on a real router. Hook for the spec-merge target and the guard test
+// (parity HumaSoulSpecYAML). Delegates to the generic humaDumpSpec via the same register.
 func HumaClusterSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		registerHumaClusterGet(api, handlers.ClusterSpecStub())

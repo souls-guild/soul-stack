@@ -1,23 +1,24 @@
-// Package auditotel — OTel-реализация [audit.Writer], публикующая
-// событие как standalone span.
+// Package auditotel is an OTel implementation of [audit.Writer] that
+// publishes the event as a standalone span.
 //
-// Используется multi-writer-ом ([keeper/internal/auditmulti]) как
-// **secondary** writer в dual-write-pipeline: PG — источник правды
-// (sync, обязательный), OTel — transient debugging (async, best-effort).
-// Поэтому Write всегда возвращает nil — ошибки экспортёра обрабатываются
-// OTel-SDK (BatchSpanProcessor) асинхронно, не блокируют write-path и не
-// влияют на consistency audit_log.
+// Used by the multi-writer ([keeper/internal/auditmulti]) as the
+// **secondary** writer in the dual-write pipeline: PG is the source of
+// truth (sync, required), OTel is transient debugging (async,
+// best-effort). That's why Write always returns nil — exporter errors are
+// handled by the OTel SDK (BatchSpanProcessor) asynchronously, they don't
+// block the write path or affect audit_log consistency.
 //
-// Span создаётся standalone (без parent) — audit-event фиксирует факт
-// «что произошло», не часть распределённой трассировки текущего request-а.
-// Trace в OTel-вьюере покажет один span с длительностью ~0 и набором
-// attributes. Это сознательный trade-off против ad-hoc-query-ев по
-// `audit_log` (Grafana → Tempo / Jaeger / другой OTel-backend).
+// The span is created standalone (no parent) — an audit event records the
+// fact "something happened", it's not part of the current request's
+// distributed trace. A trace in an OTel viewer will show one span with
+// ~0 duration and a set of attributes. This is a deliberate trade-off
+// against ad-hoc queries over `audit_log` (Grafana → Tempo / Jaeger / any
+// other OTel backend).
 //
-// ADR-022(f) фиксирует dual-write multi-writer-ом; этот пакет — secondary
-// half (Postgres half — `keeper/internal/auditpg`). Lifecycle экспортёра и
-// TracerProvider — на стороне `cmd/keeper` (M0.4.2), tracer передаётся в
-// [NewWriter] уже сконфигурированным.
+// ADR-022(f) fixes the dual-write multi-writer; this package is the
+// secondary half (the Postgres half is `keeper/internal/auditpg`).
+// Exporter and TracerProvider lifecycle live in `cmd/keeper` (M0.4.2); the
+// tracer is passed into [NewWriter] already configured.
 package auditotel
 
 import (
@@ -33,37 +34,39 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// otelWriter — [audit.Writer]-реализация поверх [trace.Tracer]. Один
-// экземпляр на Keeper-процесс; safe for concurrent use — tracer
-// потокобезопасен по контракту OTel.
+// otelWriter is an [audit.Writer] implementation on top of [trace.Tracer].
+// One instance per Keeper process; safe for concurrent use — the tracer
+// is thread-safe per the OTel contract.
 type otelWriter struct {
 	tracer trace.Tracer
 }
 
-// NewWriter оборачивает [trace.Tracer] в [audit.Writer]. Owner-ship
-// TracerProvider остаётся у caller-а: writer не shutdown-ит провайдер,
-// lifecycle — `cmd/keeper`.
+// NewWriter wraps a [trace.Tracer] into an [audit.Writer]. TracerProvider
+// ownership stays with the caller: the writer doesn't shut down the
+// provider — lifecycle is `cmd/keeper`.
 func NewWriter(tracer trace.Tracer) audit.Writer {
 	return &otelWriter{tracer: tracer}
 }
 
-// Write публикует event как standalone span. Контракт:
+// Write publishes event as a standalone span. Contract:
 //
-//   - event == nil → no-op, возврат nil без span-а.
-//   - event.EventType == "" → ранний возврат с slog.Warn (создавать span
-//     с пустым name бессмысленно — он непригоден в OTel-UI).
-//   - event.AuditID пуст → генерируется [audit.NewULID] (симметрия с
-//     pgxWriter; audit_id одинаков в PG и OTel при использовании внутри
-//     multi-writer-а).
+//   - event == nil → no-op, returns nil without a span.
+//   - event.EventType == "" → early return with slog.Warn (creating a
+//     span with an empty name is pointless — it's unusable in the OTel
+//     UI).
+//   - event.AuditID empty → generated via [audit.NewULID] (symmetric with
+//     pgxWriter; audit_id matches between PG and OTel when used inside
+//     the multi-writer).
 //   - Span name = string(event.EventType) (`<area>.<action>`).
-//   - Attributes по схеме `audit.*`: source, correlation_id, archon_aid,
-//     id; payload через [audit.MaskSecrets] раскладывается в плоские
-//     `audit.payload.<key>` (только top-level — вложенные maps/slices
-//     отдаются stringify через `fmt.Sprintf("%v", …)`).
-//   - End span с явным timestamp = event.CreatedAt (если zero — now).
-//   - Возврат nil **всегда** — secondary-writer в dual-write не блокирует
-//     primary; ошибки экспорта — async через BatchSpanProcessor, видны
-//     через OTel-внутренний log-handler.
+//   - Attributes follow the `audit.*` schema: source, correlation_id,
+//     archon_aid, id; payload is flattened via [audit.MaskSecrets] into
+//     `audit.payload.<key>` (top-level only — nested maps/slices are
+//     stringified via `fmt.Sprintf("%v", …)`).
+//   - End the span with an explicit timestamp = event.CreatedAt (now if
+//     zero).
+//   - Returns nil **always** — a secondary writer in dual-write must not
+//     block the primary; export errors are async via BatchSpanProcessor,
+//     visible through OTel's internal log handler.
 func (w *otelWriter) Write(_ context.Context, event *audit.Event) error {
 	if event == nil {
 		return nil
@@ -87,7 +90,7 @@ func (w *otelWriter) Write(_ context.Context, event *audit.Event) error {
 		endTime = time.Now().UTC()
 	}
 
-	// context.Background — span standalone, не привязан к request-у.
+	// context.Background — the span is standalone, not tied to a request.
 	_, span := w.tracer.Start(context.Background(), string(event.EventType))
 
 	attrs := make([]attribute.KeyValue, 0, 4+len(event.Payload))
@@ -114,19 +117,20 @@ func (w *otelWriter) Write(_ context.Context, event *audit.Event) error {
 	return nil
 }
 
-// payloadAttribute строит OTel-attribute из top-level payload-ключа.
-// Тип scalar-значения сохраняется (string/bool/intN/uintN/floatN); сложные
-// типы (map / slice) сериализуются в строку через `fmt.Sprintf("%v", …)`,
-// чтобы не уронить экспортёр на unsupported attribute-value. payload в
-// OTel — debugging-aid, нормативный канал данных — JSONB-колонка в PG.
+// payloadAttribute builds an OTel attribute from a top-level payload key.
+// Scalar value types are preserved (string/bool/intN/uintN/floatN);
+// complex types (map / slice) are serialized to a string via
+// `fmt.Sprintf("%v", …)` to avoid crashing the exporter on an unsupported
+// attribute value. payload in OTel is a debugging aid — the normative
+// data channel is the JSONB column in PG.
 //
-// Второй возврат — флаг «эмитить ли атрибут вообще»: для `nil`-значения
-// возвращается `(_, false)`, чтобы caller пропустил его в SetAttributes
-// (типовой OTel-pattern — отсутствие лучше пустой строки, путаемой с
-// сознательно установленным пустым значением).
+// The second return value flags whether to emit the attribute at all: for
+// a `nil` value it returns `(_, false)` so the caller skips it in
+// SetAttributes (a typical OTel pattern — absence beats an empty string,
+// which could be confused with a deliberately set empty value).
 //
-// uint64 > math.MaxInt64 сериализуется в строку: OTel attribute-int — это
-// int64, безболезненного downcast-а нет.
+// uint64 > math.MaxInt64 is serialized to a string: an OTel int attribute
+// is int64, there's no painless downcast.
 func payloadAttribute(key string, value any) (attribute.KeyValue, bool) {
 	akey := "audit.payload." + key
 	switch x := value.(type) {

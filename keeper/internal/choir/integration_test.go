@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD Choir/Voice через testcontainers-go (ADR-044, S-T2).
-// Паттерн совпадает с keeper/internal/incarnation/integration_test.go.
+// Integration tests for Choir/Voice CRUD via testcontainers-go (ADR-044, S-T2).
+// Pattern matches keeper/internal/incarnation/integration_test.go.
 
 package choir
 
@@ -111,8 +111,8 @@ func seedIncarnation(t *testing.T, name, creator string) {
 	}
 }
 
-// seedSoul вставляет Soul с заданным набором coven-меток (членство в инкарнациях
-// = incarnation.name в coven, ADR-008 / ADR-044 пункт 3).
+// seedSoul inserts a Soul with the given set of coven tags (membership in
+// incarnations = incarnation.name in coven, ADR-008 / ADR-044 item 3).
 func seedSoul(t *testing.T, sid string, coven ...string) {
 	t.Helper()
 	s := &soul.Soul{
@@ -247,7 +247,7 @@ func TestIntegration_DeleteChoir_CascadesVoices(t *testing.T) {
 	if err := DeleteChoir(ctx, integrationPool, "service-redis", "workers"); err != nil {
 		t.Fatalf("DeleteChoir: %v", err)
 	}
-	// Voice ушёл каскадом — повторный RemoveVoice не находит строки.
+	// Voice was removed by the cascade — a repeat RemoveVoice finds no row.
 	if err := RemoveVoice(ctx, integrationPool, "service-redis", "workers", "host-a.example.com"); !errors.Is(err, ErrVoiceNotFound) {
 		t.Errorf("RemoveVoice after cascade: want ErrVoiceNotFound, got %v", err)
 	}
@@ -261,7 +261,7 @@ func TestIntegration_DeleteChoir_NotFound(t *testing.T) {
 	}
 }
 
-// --- Voice CRUD + инвариант членства ---
+// --- Voice CRUD + membership invariant ---
 
 func TestIntegration_AddVoice_AndList(t *testing.T) {
 	resetAll(t)
@@ -336,14 +336,14 @@ func TestIntegration_AddVoice_ChoirNotFound(t *testing.T) {
 	}
 }
 
-// Инвариант ADR-044 пункт 3: Voice только для SID, который УЖЕ член инкарнации
-// (souls.coven содержит incarnation.name). SID есть в souls, но coven не несёт
-// инкарнацию → ErrNotMembers.
+// ADR-044 item 3 invariant: a Voice only for a SID that is ALREADY a member of
+// the incarnation (souls.coven contains incarnation.name). SID exists in
+// souls, but coven doesn't carry the incarnation → ErrNotMembers.
 func TestIntegration_AddVoice_NonMemberRejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
-	// host-x — член ДРУГОЙ инкарнации, не service-redis.
+	// host-x is a member of a DIFFERENT incarnation, not service-redis.
 	seedSoul(t, "host-x.example.com", "service-haproxy", "prod")
 	ctx := context.Background()
 
@@ -361,8 +361,9 @@ func TestIntegration_AddVoice_NonMemberRejected(t *testing.T) {
 	}
 }
 
-// SID вообще отсутствует в реестре souls → тоже ErrNotMembers (инвариант
-// строже, чем FK на souls — проверка членства идёт раньше INSERT-а).
+// SID absent from the souls registry entirely → also ErrNotMembers (the
+// invariant is stricter than the FK on souls — the membership check runs
+// before the INSERT).
 func TestIntegration_AddVoice_UnknownSIDRejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -378,15 +379,15 @@ func TestIntegration_AddVoice_UnknownSIDRejected(t *testing.T) {
 	}
 }
 
-// Мультиинкарнационность (ADR-044 пункт 3): один SID легально является Voice в
-// Choir-ах РАЗНЫХ инкарнаций (его coven несёт обе). PK (incarnation, choir, sid)
-// это поддерживает; глобального UNIQUE(sid) нет.
+// Multi-incarnation membership (ADR-044 item 3): one SID can legally be a
+// Voice in Choirs of DIFFERENT incarnations (its coven carries both). The PK
+// (incarnation, choir, sid) supports this; there is no global UNIQUE(sid).
 func TestIntegration_AddVoice_MultiIncarnation(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "service-redis", "archon-alice")
 	seedIncarnation(t, "service-haproxy", "archon-alice")
-	// host-a — член ОБЕИХ инкарнаций.
+	// host-a is a member of BOTH incarnations.
 	seedSoul(t, "host-a.example.com", "service-redis", "service-haproxy")
 	ctx := context.Background()
 
@@ -399,7 +400,7 @@ func TestIntegration_AddVoice_MultiIncarnation(t *testing.T) {
 	if err := AddVoice(ctx, integrationPool, &Voice{IncarnationName: "service-redis", ChoirName: "cache", SID: "host-a.example.com"}); err != nil {
 		t.Fatalf("AddVoice redis: %v", err)
 	}
-	// Тот же SID — Voice во ВТОРОЙ инкарнации: ок (не должно быть ErrVoiceExists).
+	// Same SID — a Voice in the SECOND incarnation: ok (must not be ErrVoiceExists).
 	if err := AddVoice(ctx, integrationPool, &Voice{IncarnationName: "service-haproxy", ChoirName: "frontends", SID: "host-a.example.com"}); err != nil {
 		t.Fatalf("AddVoice haproxy (multi-incarnation must be allowed): %v", err)
 	}

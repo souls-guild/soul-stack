@@ -1,15 +1,17 @@
-// Package bootstrap — логика `keeper init` (ADR-013).
+// Package bootstrap implements `keeper init` logic (ADR-013).
 //
-// Init под PG advisory lock проверяет «реестр operators пуст», вставляет
-// первого Архонта (`created_by_aid: NULL`), выпускает JWT (TTL
-// `auth.jwt.ttl_bootstrap`, claim `bootstrap_initial: true`, role
-// `cluster-admin`), пишет audit-event `operator.created` (source
-// `keeper_internal`, `archon_aid: NULL`) и сохраняет токен в файл с
-// `mode 0400`. Повторный вызов на непустом реестре → [ErrAlreadyInitialized].
+// Init, under a PG advisory lock, checks that the operators registry is
+// empty, inserts the first Archon (`created_by_aid: NULL`), issues a JWT
+// (TTL `auth.jwt.ttl_bootstrap`, claim `bootstrap_initial: true`, role
+// `cluster-admin`), writes an `operator.created` audit event (source
+// `keeper_internal`, `archon_aid: NULL`) and saves the token to a file
+// with `mode 0400`. A repeat call on a non-empty registry returns
+// [ErrAlreadyInitialized].
 //
-// Пакет не управляет lifecycle Postgres-пула / Vault-клиента / JWT-issuer-а
-// — caller (`keeper/cmd/keeper`) собирает зависимости и передаёт через
-// [Config]; bootstrap-логика чисто оркестрационная.
+// The package does not manage the lifecycle of the Postgres pool / Vault
+// client / JWT issuer — the caller (`keeper/cmd/keeper`) assembles the
+// dependencies and passes them via [Config]; bootstrap logic is purely
+// orchestrational.
 package bootstrap
 
 import (
@@ -29,146 +31,153 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// AdvisoryLockID — int64-литерал для PG advisory lock-а bootstrap-а.
-// Значение `0x534f554c` — ASCII `"SOUL"` (по одному байту на символ).
-// Все ноды Keeper-кластера видят один и тот же lock-namespace; даже при
-// одновременном запуске двух `keeper init` второй блокируется до COMMIT
-// первого, после чего видит непустой реестр и завершается с
+// AdvisoryLockID is the int64 literal for the bootstrap PG advisory lock.
+// The value `0x534f554c` is ASCII `"SOUL"` (one byte per character).
+// All Keeper cluster nodes see the same lock namespace; even if two
+// `keeper init` run concurrently, the second blocks until the first's
+// COMMIT, after which it sees a non-empty registry and fails with
 // [ErrAlreadyInitialized].
 const AdvisoryLockID int64 = 0x534f554c
 
-// BootstrapRoleClusterAdmin — единственная роль, выпускаемая первому
-// Архонту по ADR-013/rbac.md.
+// BootstrapRoleClusterAdmin is the only role issued to the first
+// Archon per ADR-013/rbac.md.
 const BootstrapRoleClusterAdmin = "cluster-admin"
 
-// vaultSigningKeyField — имя поля внутри Vault KV-secret, в котором лежит
-// signing-key JWT (base64-encoded). Совпадает с golden-форматом, который
-// засевают и интеграционные тесты, и `vault kv put`-команда в local-dev.
+// vaultSigningKeyField is the field name inside the Vault KV secret that
+// holds the JWT signing-key (base64-encoded). Matches the golden format
+// seeded by both the integration tests and the `vault kv put` command in
+// local-dev.
 const vaultSigningKeyField = "signing_key"
 
-// credentialFileMode — права на файл с JWT-токеном (read-only owner).
-// ADR-013(c): JWT не должен быть читаем другими пользователями.
+// credentialFileMode is the permission for the JWT token file (read-only
+// owner). ADR-013(c): the JWT must not be readable by other users.
 const credentialFileMode os.FileMode = 0o400
 
-// ErrAlreadyInitialized — есть хотя бы один НЕ-системный оператор
-// (`CountNonSystem > 0` под advisory lock). Caller маппит в exit-code 1.
+// ErrAlreadyInitialized means at least one non-system operator already
+// exists (`CountNonSystem > 0` under the advisory lock). The caller maps
+// this to exit code 1.
 var ErrAlreadyInitialized = errors.New("bootstrap: keeper already initialized (operators registry not empty)")
 
-// ErrSigningKeyMissing возвращается, если в Vault KV нет поля
-// `signing_key` либо оно пустое.
+// ErrSigningKeyMissing is returned when the Vault KV has no
+// `signing_key` field, or it is empty.
 var ErrSigningKeyMissing = errors.New("bootstrap: signing_key field missing or empty in Vault KV")
 
-// ErrAuditWriteFailed возвращается, если audit-write упал ПОСЛЕ
-// успешного COMMIT-а insert-а operator-а. Operator уже в БД, audit
-// потерян — caller должен предупредить администратора о необходимости
-// ручной сверки (manual reconciliation). Error содержит обёрнутый
-// оригинальный pgx-error для диагностики.
+// ErrAuditWriteFailed is returned when the audit write fails AFTER the
+// operator insert's COMMIT has succeeded. The operator is already in the
+// DB, the audit is lost — the caller should warn the administrator that
+// manual reconciliation is needed. The error wraps the original pgx
+// error for diagnostics.
 var ErrAuditWriteFailed = errors.New("bootstrap: audit write failed")
 
-// ErrTokenFileWriteFailed возвращается, если writeTokenFile упал
-// ПОСЛЕ COMMIT-а insert-а operator-а И успешного audit-write-а. То есть
-// БД консистентна, аудит на месте, но JWT-файл не сохранён.
+// ErrTokenFileWriteFailed is returned when writeTokenFile fails AFTER
+// both the operator insert's COMMIT and the audit write have succeeded.
+// I.e. the DB is consistent, the audit is in place, but the JWT file was
+// not saved.
 //
-// Стратегия recovery (PM-decision M0.5c review:b): caller печатает JWT
-// в stderr с предупреждением «токен скомпрометирован — ротировать ASAP».
-// Альтернатива (write до COMMIT через TempFile+Rename) отвергнута:
-// она не страхует от рантайм-проблем самого writeTokenFile (например,
-// permission на target dir определяется только в момент write).
+// Recovery strategy (PM-decision M0.5c review:b): the caller prints the
+// JWT to stderr with a warning "token compromised — rotate ASAP". The
+// alternative (write before COMMIT via TempFile+Rename) was rejected:
+// it doesn't guard against runtime issues in writeTokenFile itself
+// (e.g. permission on the target dir is only known at write time).
 //
-// Result.Token заполняется ТОЛЬКО при ErrTokenFileWriteFailed — в
-// happy-path токен в Result отсутствует (он в файле).
+// Result.Token is populated ONLY on ErrTokenFileWriteFailed — on the
+// happy path the token is absent from Result (it lives in the file).
 var ErrTokenFileWriteFailed = errors.New("bootstrap: token file write failed")
 
-// JWTIssuer — узкий интерфейс над `keeper/internal/jwt.Issuer`. Сужение
-// нужно для unit-тестов (без подгрузки signing-key и golang-jwt). Реальный
-// `*jwt.Issuer` удовлетворяет интерфейсу автоматически.
+// JWTIssuer is a narrow interface over `keeper/internal/jwt.Issuer`. The
+// narrowing is needed for unit tests (without loading a signing-key and
+// golang-jwt). The real `*jwt.Issuer` satisfies the interface
+// automatically.
 type JWTIssuer interface {
 	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
 }
 
-// Config — все зависимости, нужные Init. Заполняется в
-// `keeper/cmd/keeper`, не парсит keeper.yml сам.
+// Config holds all the dependencies Init needs. Populated in
+// `keeper/cmd/keeper`; does not parse keeper.yml itself.
 type Config struct {
-	// ArchonAID — AID нового Архонта (флаг `--archon`). Должен пройти
+	// ArchonAID is the AID of the new Archon (flag `--archon`). Must pass
 	// [operator.ValidAID].
 	ArchonAID string
 
-	// DisplayName — display_name в реестре. Если пуст — используется
-	// ArchonAID (PM-decision №5).
+	// DisplayName is the display_name in the registry. If empty,
+	// ArchonAID is used instead (PM-decision #5).
 	DisplayName string
 
-	// TTLBootstrap — TTL JWT-токена первого Архонта. Берётся из
+	// TTLBootstrap is the TTL of the first Archon's JWT token. Taken from
 	// `keeper.yml::auth.jwt.ttl_bootstrap` (default 720h).
 	TTLBootstrap time.Duration
 
-	// Pool — pgxpool.Pool с применёнными миграциями (003 + 004 уже
-	// поставили `operators` и FK).
+	// Pool is a pgxpool.Pool with migrations applied (003 + 004 already
+	// created `operators` and its FKs).
 	Pool *pgxpool.Pool
 
-	// VaultClient — для чтения signing-key. Обязателен (nil → ошибка
-	// в validateConfig). Unit-тесты, проверяющие логику без Vault,
-	// идут через интеграцию (integration_test.go) — без mock-Vault-а
-	// внутри пакета.
+	// VaultClient is used to read the signing-key. Required (nil → error
+	// in validateConfig). Unit tests that check logic without Vault go
+	// through integration (integration_test.go) — there is no mock Vault
+	// inside the package.
 	VaultClient *keepervault.Client
 
-	// SigningKeyRef — строка из `keeper.yml::auth.jwt.signing_key_ref`
-	// в форме `vault:<path>`. Парсится [parseVaultRef]. Пустая строка
-	// или некорректная форма → error.
+	// SigningKeyRef is the string from
+	// `keeper.yml::auth.jwt.signing_key_ref` in the form `vault:<path>`.
+	// Parsed by [parseVaultRef]. An empty string or malformed value is
+	// an error.
 	SigningKeyRef string
 
-	// IssuerFactory — фабрика JWT-issuer-а от signingKey. Тесты
-	// передают mock; keeper/cmd/keeper — реальный jwt.NewIssuer.
+	// IssuerFactory builds a JWT issuer from signingKey. Tests pass a
+	// mock; keeper/cmd/keeper passes the real jwt.NewIssuer.
 	IssuerFactory func(signingKey []byte) (JWTIssuer, error)
 
-	// AuditWriter — куда писать `operator.created`-event.
+	// AuditWriter is where the `operator.created` event is written.
 	AuditWriter audit.Writer
 
-	// CredentialOutput — путь к файлу, в который пишется JWT-токен.
-	// Пустая строка → fallback `/tmp/keeper-init-<aid>.token`.
+	// CredentialOutput is the path to the file the JWT token is written
+	// to. Empty string falls back to [defaultCredentialPath].
 	CredentialOutput string
 }
 
-// Result — возврат успешного Init. Используется caller-ом для финального
-// stdout-сообщения; токен в Result в логи НЕ выводится (исключение —
-// ErrTokenFileWriteFailed recovery, см. поле Token).
+// Result is the return value of a successful Init. Used by the caller
+// for the final stdout message; the token in Result is NOT logged
+// (exception: ErrTokenFileWriteFailed recovery, see the Token field).
 type Result struct {
-	// CredentialPath — куда фактически записан токен (после fallback).
+	// CredentialPath is where the token was actually written (after
+	// fallback).
 	CredentialPath string
 
-	// AuditID — ID соответствующей записи в audit_log.
+	// AuditID is the ID of the corresponding audit_log record.
 	AuditID string
 
-	// CorrelationID — ULID, привязанный к bootstrap-цепочке (для
-	// последующих связанных событий, если будут).
+	// CorrelationID is a ULID tied to the bootstrap chain (for any
+	// subsequent related events).
 	CorrelationID string
 
-	// Token — заполняется ТОЛЬКО при возврате error-а
-	// [ErrTokenFileWriteFailed] (recovery-path: caller печатает токен в
-	// stderr с предупреждением о ротации). В happy-path поле пустое —
-	// токен живёт в файле, в Result не дублируется, чтобы не утечь в
-	// логи случайно.
+	// Token is populated ONLY when returning the [ErrTokenFileWriteFailed]
+	// error (recovery path: the caller prints the token to stderr with a
+	// rotation warning). On the happy path the field is empty — the token
+	// lives in the file and isn't duplicated in Result to avoid an
+	// accidental log leak.
 	Token string
 }
 
-// Init выполняет bootstrap первого Архонта.
+// Init performs bootstrap of the first Archon.
 //
-// Последовательность:
-//  1. Валидация Config (минимум: ArchonAID, TTLBootstrap, Pool,
+// Sequence:
+//  1. Validate Config (minimum: ArchonAID, TTLBootstrap, Pool,
 //     SigningKeyRef, IssuerFactory, AuditWriter).
-//  2. Read signing-key из Vault KV (mount/path из SigningKeyRef).
-//  3. Создание JWT-issuer-а.
+//  2. Read signing-key from Vault KV (mount/path from SigningKeyRef).
+//  3. Build the JWT issuer.
 //  4. BEGIN tx → `pg_advisory_xact_lock(AdvisoryLockID)` →
-//     `CountNonSystem(operators)`; >0 → откат + [ErrAlreadyInitialized].
+//     `CountNonSystem(operators)`; >0 → rollback + [ErrAlreadyInitialized].
 //  5. Insert operator (created_by_aid=NULL).
 //  6. Issue JWT.
 //  7. COMMIT.
-//  8. Audit-event `operator.created` (после COMMIT — иначе можно
-//     записать audit о «фантомном» insert, который откатился).
-//  9. Save JWT в credentialOutput файл (mode 0400).
+//  8. Audit event `operator.created` (after COMMIT — otherwise we could
+//     record an audit for a "phantom" insert that got rolled back).
+//  9. Save the JWT to the credentialOutput file (mode 0400).
 //
-// Audit пишется ПОСЛЕ COMMIT-а: ошибка audit-writer-а не должна откатывать
-// successful insert (Архонт уже в БД, операторская истина источника). При
-// фейле audit Init возвращает error, но БД-state остаётся consistent.
+// The audit is written AFTER COMMIT: an audit-writer failure must not
+// roll back a successful insert (the Archon is already the source of
+// truth in the DB). If the audit write fails, Init returns an error, but
+// the DB state remains consistent.
 func Init(ctx context.Context, cfg Config) (*Result, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
@@ -178,8 +187,8 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: signing_key_ref: %w", err)
 	}
-	// path передаётся в logical-форме (`<mount>/<rel>`); Client сам
-	// strip-ает префикс. ReadKV терпит и relative.
+	// path is passed in logical form (`<mount>/<rel>`); Client strips
+	// the prefix itself. ReadKV also tolerates a relative form.
 	kv, err := cfg.VaultClient.ReadKV(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: read vault %q: %w", path, err)
@@ -198,22 +207,22 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		displayName = cfg.ArchonAID
 	}
 
-	// Транзакция держит advisory lock на всю длительность COMMIT-а.
-	// `pg_advisory_xact_lock` освобождается автоматически при COMMIT
-	// или ROLLBACK — defer Rollback корректен.
+	// The transaction holds the advisory lock for the entire duration up
+	// to COMMIT. `pg_advisory_xact_lock` is released automatically on
+	// COMMIT or ROLLBACK — defer Rollback is correct here.
 	tx, err := cfg.Pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: begin tx: %w", err)
 	}
-	// rollback-вызов после успешного Commit — no-op (pgx возвращает
-	// ErrTxClosed), потому глотаем.
+	// Calling rollback after a successful Commit is a no-op (pgx returns
+	// ErrTxClosed), so we discard the error.
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, AdvisoryLockID); err != nil {
 		return nil, fmt.Errorf("bootstrap: acquire advisory lock: %w", err)
 	}
 
-	// Только НЕ-системные: archon-system — FK-якорь, а не реальный Архонт (ADR-013 amendment 2026-07-01).
+	// Non-system only: archon-system is an FK anchor, not a real Archon (ADR-013 amendment 2026-07-01).
 	n, err := operator.CountNonSystem(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: count operators: %w", err)
@@ -227,21 +236,24 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		DisplayName: displayName,
 		AuthMethod:  operator.AuthMethodJWT,
 		CreatedVia:  operator.CreatedViaBootstrap,
-		// CreatedByAID = nil (первый bootstrap-Archon, ADR-013/014).
-		// Bootstrap-инвариант (ровно один) держится индексом
-		// `operators_first_archon_idx` на created_via='bootstrap' (миграция 085).
-		// CreatedAt zero → DEFAULT NOW() в БД.
+		// CreatedByAID = nil (first bootstrap Archon, ADR-013/014).
+		// The bootstrap invariant (exactly one) is enforced by the
+		// `operators_first_archon_idx` index on created_via='bootstrap'
+		// (migration 085).
+		// CreatedAt zero → DEFAULT NOW() in the DB.
 	}
 	if err := operator.Insert(ctx, tx, op); err != nil {
 		return nil, fmt.Errorf("bootstrap: insert operator: %w", err)
 	}
 
-	// Фикс BUG-1 (ADR-028(c)): membership-строка (cluster-admin, <aid>) пишется
-	// в rbac_role_operators в ТОЙ ЖЕ advisory-lock-транзакции, что и INSERT
-	// operator-а. Роль cluster-admin уже существует из seed-миграции 027 (E1).
-	// Без этой строки enforcer (резолвящий membership из БД) не нашёл бы ни одной
-	// роли у первого Архонта — JWT-claim `roles` авторитетом membership-а НЕ
-	// является. granted_by_aid = NULL — bootstrap-membership без инициатора.
+	// Fix for BUG-1 (ADR-028(c)): the membership row (cluster-admin, <aid>)
+	// is written to rbac_role_operators in the SAME advisory-lock
+	// transaction as the operator INSERT. The cluster-admin role already
+	// exists from seed migration 027 (E1). Without this row the enforcer
+	// (which resolves membership from the DB) would find no role for the
+	// first Archon — the JWT claim `roles` is NOT authoritative for
+	// membership. granted_by_aid = NULL — bootstrap membership has no
+	// initiator.
 	if err := rbac.GrantOperator(ctx, tx, BootstrapRoleClusterAdmin, cfg.ArchonAID, nil); err != nil {
 		return nil, fmt.Errorf("bootstrap: grant cluster-admin membership: %w", err)
 	}
@@ -260,10 +272,10 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("bootstrap: commit tx: %w", err)
 	}
 
-	// Audit-event пишется после COMMIT. ArchonAID на event — пуст (NULL
-	// в БД), per ADR-014(e): первый Архонт сам — субъект, а
-	// `archon_aid` — это инициатор; bootstrap инициирован "никем"
-	// (keeper_internal).
+	// The audit event is written after COMMIT. ArchonAID on the event is
+	// empty (NULL in the DB), per ADR-014(e): the first Archon is the
+	// subject itself, while `archon_aid` is the initiator; bootstrap is
+	// initiated by "nobody" (keeper_internal).
 	correlationID := audit.NewULID()
 	ev := &audit.Event{
 		AuditID:       audit.NewULID(),
@@ -283,12 +295,13 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 
 	credPath := cfg.CredentialOutput
 	if credPath == "" {
-		// Defensive guard (belt-and-suspenders): AID встраивается в имя
-		// файла bootstrap-<aid>.token. Новый charset (ADR-014 amendment)
-		// уже исключает `/`/`\`, но перед попаданием в путь повторно
-		// проверяем ValidAID + явный path-traversal-фильтр. Insert/audit
-		// уже committed — возвращаем токен в Result для recovery (caller
-		// выведет его в stderr).
+		// Defensive guard (belt-and-suspenders): the AID is embedded into
+		// the file name bootstrap-<aid>.token. The new charset (ADR-014
+		// amendment) already excludes `/`/`\`, but before it lands in a
+		// path we re-check ValidAID plus an explicit path-traversal
+		// filter. Insert/audit are already committed — we return the
+		// token in Result for recovery (the caller will print it to
+		// stderr).
 		if !operator.ValidAID(cfg.ArchonAID) || !safePathComponent(cfg.ArchonAID) {
 			return &Result{
 				AuditID:       ev.AuditID,
@@ -299,9 +312,10 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		credPath = defaultCredentialPath(cfg.ArchonAID)
 	}
 	if err := ensureCredentialDir(credPath); err != nil {
-		// Каталог не создан — операторская истина в БД, audit написан,
-		// но файл не сохранён. Включаем recovery-path: возвращаем токен
-		// в Result + ErrTokenFileWriteFailed.
+		// Directory not created — the operator's source of truth is in
+		// the DB, the audit is written, but the file was not saved.
+		// Trigger the recovery path: return the token in Result +
+		// ErrTokenFileWriteFailed.
 		return &Result{
 			CredentialPath: credPath,
 			AuditID:        ev.AuditID,
@@ -310,9 +324,9 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		}, fmt.Errorf("%w: %w", ErrTokenFileWriteFailed, err)
 	}
 	if err := writeTokenFile(credPath, token); err != nil {
-		// См. ErrTokenFileWriteFailed: insert + audit уже committed,
-		// файл потерян. Возвращаем токен в Result, чтобы caller вывел
-		// его в stderr с warning-ом про ротацию.
+		// See ErrTokenFileWriteFailed: insert + audit are already
+		// committed, the file is lost. Return the token in Result so
+		// the caller can print it to stderr with a rotation warning.
 		return &Result{
 			CredentialPath: credPath,
 			AuditID:        ev.AuditID,
@@ -353,16 +367,18 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-// extractSigningKey достаёт поле `signing_key` из Vault KV payload-а и
-// декодирует base64. Поведение:
+// extractSigningKey extracts the `signing_key` field from the Vault KV
+// payload and base64-decodes it. Behavior:
 //
-//   - значение типа `string`, валидный base64 → []byte;
-//   - значение типа `string`, НЕ base64 → как raw-bytes (fallback, чтобы
-//     dev-сценарий `vault kv put ... signing_key=raw-32-bytes` тоже работал);
-//   - значение типа `[]byte` → как есть;
-//   - отсутствует или пустое → [ErrSigningKeyMissing].
+//   - `string` value, valid base64 → []byte;
+//   - `string` value, NOT base64 → used as raw bytes (fallback so the
+//     dev scenario `vault kv put ... signing_key=raw-32-bytes` also
+//     works);
+//   - `[]byte` value → used as-is;
+//   - missing or empty → [ErrSigningKeyMissing].
 //
-// Минимальная длина (>= 32 байт для HS256) валидируется уже jwt.NewIssuer.
+// The minimum length (>= 32 bytes for HS256) is already validated by
+// jwt.NewIssuer.
 func extractSigningKey(kv map[string]any) ([]byte, error) {
 	raw, ok := kv[vaultSigningKeyField]
 	if !ok {
@@ -387,14 +403,14 @@ func extractSigningKey(kv map[string]any) ([]byte, error) {
 	}
 }
 
-// writeTokenFile создаёт/перезаписывает path-файл с правами 0400 и пишет
-// в него token + один `\n` (для совместимости с инструментами вроде
-// `cat | jwt decode`, которые ожидают line-terminated input).
+// writeTokenFile creates/overwrites the path file with 0400 permissions
+// and writes token + a trailing `\n` (for compatibility with tools like
+// `cat | jwt decode` that expect line-terminated input).
 //
-// Если файл уже существует, он сначала удаляется — открыть его O_WRONLY
-// после прошлого write нельзя (mode 0400 = read-only owner). os.Remove
-// игнорирует ErrNotExist; на permission-denied (например, /tmp/-file
-// принадлежит другому user-у) — возврат с понятным сообщением.
+// If the file already exists, it is removed first — it cannot be opened
+// O_WRONLY after a previous write (mode 0400 = read-only owner).
+// os.Remove ignores ErrNotExist; on permission-denied (e.g. a /tmp/ file
+// owned by another user) it returns a clear error message.
 func writeTokenFile(path, token string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove existing %s: %w", path, err)
@@ -403,11 +419,11 @@ func writeTokenFile(path, token string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close() //nolint:errcheck // ошибка writeTokenFile приходит через Sync/Write ниже
+	defer f.Close() //nolint:errcheck // writeTokenFile's error comes from Sync/Write below
 
-	// `O_CREATE` применяет mode только при создании; на старом umask
-	// итоговые права могут оказаться 0400 & ~umask. Явный Chmod держит
-	// инвариант 0400 независимо от umask процесса.
+	// `O_CREATE` applies mode only on creation; with a stale umask the
+	// resulting permissions could end up as 0400 & ~umask. An explicit
+	// Chmod keeps the 0400 invariant regardless of the process umask.
 	if err := f.Chmod(credentialFileMode); err != nil {
 		return fmt.Errorf("chmod %s: %w", path, err)
 	}
@@ -420,10 +436,11 @@ func writeTokenFile(path, token string) error {
 	return nil
 }
 
-// safePathComponent — последний барьер перед встраиванием AID в имя файла:
-// запрещает path-separator-ы и `..`. Дублирует гарантии ValidAID (новый
-// charset уже без `/`/`\`/`.`-в-начале), но не зависит от него на случай
-// будущего расширения формата AID. Возвращает false для пустой строки.
+// safePathComponent is the last barrier before embedding an AID into a
+// file name: it rejects path separators and `..`. Duplicates the
+// guarantees of ValidAID (the new charset already excludes
+// `/`/`\`/leading `.`), but does not rely on it in case the AID format
+// is extended later. Returns false for an empty string.
 func safePathComponent(s string) bool {
 	if s == "" || s == ".." {
 		return false
@@ -436,17 +453,19 @@ func safePathComponent(s string) bool {
 	return true
 }
 
-// defaultCredentialPath возвращает путь по умолчанию для JWT-файла.
+// defaultCredentialPath returns the default path for the JWT file.
 //
-// Приоритет (review M0.5c: уход от predictable world-readable `/tmp`):
+// Priority (review M0.5c: moving away from a predictable world-readable
+// `/tmp`):
 //  1. `os.UserCacheDir()` → `<cache>/keeper/bootstrap-<aid>.token`
 //     (Linux = `~/.cache/keeper/...`, macOS = `~/Library/Caches/keeper/...`).
-//  2. Fallback `/var/lib/keeper/bootstrap-<aid>.token` — для systemd-сервиса
-//     без `HOME` (User cache недоступен).
+//  2. Fallback `/var/lib/keeper/bootstrap-<aid>.token` — for a systemd
+//     service without `HOME` (User cache unavailable).
 //
-// Родительский каталог создаётся [ensureCredentialDir] с `mode 0700`,
-// если ещё не существует. AID входит в имя файла, чтобы при повторном
-// init с другим AID старый файл не перезаписывался незаметно.
+// The parent directory is created by [ensureCredentialDir] with
+// `mode 0700` if it doesn't already exist. The AID is part of the file
+// name so that a repeat init with a different AID doesn't silently
+// overwrite the old file.
 func defaultCredentialPath(aid string) string {
 	if dir, err := os.UserCacheDir(); err == nil && dir != "" {
 		return filepath.Join(dir, "keeper", "bootstrap-"+aid+".token")
@@ -454,9 +473,10 @@ func defaultCredentialPath(aid string) string {
 	return filepath.Join("/var/lib/keeper", "bootstrap-"+aid+".token")
 }
 
-// ensureCredentialDir создаёт родительский каталог `path` с `mode 0700`,
-// если его ещё нет. Существующий каталог не chmod-ит (могут быть mount /
-// custom-перм у оператора). Не-каталог по пути — error.
+// ensureCredentialDir creates the parent directory of `path` with
+// `mode 0700` if it doesn't already exist. It does not chmod an existing
+// directory (the operator may have a custom mount / permissions). A
+// non-directory at that path is an error.
 func ensureCredentialDir(path string) error {
 	dir := filepath.Dir(path)
 	if dir == "" || dir == "." || dir == "/" {

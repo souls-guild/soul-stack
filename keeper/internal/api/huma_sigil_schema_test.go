@@ -35,8 +35,8 @@ var sigilContractSchemas = []string{
 var sigilForbiddenSchemas = []string{
 	"SigilAllowHumaBody",
 	"SigilKeyIntroduceHumaBody",
-	// Контрактное имя — PluginSigilAllowRequest; SigilAllowRequest рукопись НЕ объявляет
-	// (страховка от ошибочного rename под имя из explore-карты).
+	// Contract name is PluginSigilAllowRequest; the spec does NOT declare SigilAllowRequest
+	// (guard against an erroneous rename to the name from the explore map).
 	"SigilAllowRequest",
 }
 

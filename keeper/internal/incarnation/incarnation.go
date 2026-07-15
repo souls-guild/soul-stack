@@ -1,8 +1,8 @@
-// Package incarnation — runtime-инстанс Service в Postgres под ADR-009.
+// Package incarnation — runtime instance of a Service in Postgres under ADR-009.
 //
-// M0.6c-1: типы + CRUD (Create / SelectByName / SelectAll / HistorySelectByName).
-// Scenario-execution / migrate-executor — следующие slice-ы (M0.6c-2/3),
-// блокированы Soul gRPC infrastructure (M2.x).
+// M0.6c-1: types + CRUD (Create / SelectByName / SelectAll / HistorySelectByName).
+// Scenario-execution / migrate-executor are the next slices (M0.6c-2/3),
+// blocked on Soul gRPC infrastructure (M2.x).
 package incarnation
 
 import (
@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-// Status — статус incarnation. MVP-enum: четыре базовых значения + DESTROYING
-// (S-D1, фаза teardown через scenario `destroy`) + DESTROY_FAILED (S-D2a,
-// терминал упавшего teardown-а) + DRIFT (ADR-031, Scry, информационный).
-// PROVISIONING — пост-MVP, появится в каталоге при имплементации фазы.
+// Status — incarnation status. MVP enum: four base values + DESTROYING
+// (S-D1, teardown phase via scenario `destroy`) + DESTROY_FAILED (S-D2a,
+// terminal for a failed teardown) + DRIFT (ADR-031, Scry, informational).
+// PROVISIONING is post-MVP, will appear once that phase is implemented.
 //
-// Совпадает с CHECK-constraint incarnation_status_valid (005 + 031 + 036 + 047).
+// Matches CHECK-constraint incarnation_status_valid (005 + 031 + 036 + 047).
 type Status string
 
 const (
@@ -24,53 +24,54 @@ const (
 	StatusErrorLocked     Status = "error_locked"
 	StatusMigrationFailed Status = "migration_failed"
 
-	// StatusDestroying — оператор инициировал destroy: запущен teardown
-	// (scenario `destroy`, S-D2b) с последующим DELETE строки (S-D3). Не
-	// терминальный для самой строки — при успехе строка удаляется, при фейле
-	// teardown переходит в destroy_failed (S-D2b). Из этого статуса другие
-	// операции (run / upgrade / повторный destroy) отвергаются.
+	// StatusDestroying — the operator initiated destroy: teardown is running
+	// (scenario `destroy`, S-D2b), followed by DELETE of the row (S-D3). Not
+	// terminal for the row itself — on success the row is deleted, on failure
+	// teardown moves to destroy_failed (S-D2b). Other operations (run / upgrade /
+	// repeat destroy) are rejected from this status.
 	StatusDestroying Status = "destroying"
 
-	// StatusDestroyFailed — teardown (scenario `destroy`) упал на хостах: инстанс
-	// НЕ удалён, state остался last known-good (teardown работает с хостами, не с
-	// jsonb-state). Терминал, требующий вмешательства оператора — из него (в
-	// S-D2b/S-D3) оператор сможет повторить destroy, force-снести или unlock в
-	// ready. Сам переход в этот статус выставляется teardown-исходом (S-D2b/S-D3);
-	// S-D2a вводит только само значение. Для обычного прогона отвергается
-	// fail-closed allow-list-ом scenario.lockRun (run.go).
+	// StatusDestroyFailed — teardown (scenario `destroy`) failed on the hosts: the
+	// instance is NOT deleted, state stays last known-good (teardown works with
+	// hosts, not jsonb-state). Terminal, requires operator intervention — from it
+	// (in S-D2b/S-D3) the operator can retry destroy, force-remove, or unlock to
+	// ready. The transition into this status is set by the teardown outcome
+	// (S-D2b/S-D3); S-D2a only introduces the value itself. Rejected for a normal
+	// run by the fail-closed allow-list in scenario.lockRun (run.go).
 	StatusDestroyFailed Status = "destroy_failed"
 
-	// StatusDrift — Scry-check обнаружил расхождение реальных состояний хостов
-	// с декларацией (ADR-031, on-demand-пилот). Информационный, НЕ блокирующий:
-	// remediation drift-а = обычный apply из `drift` → `ready` (allow-list
-	// scenario.lockRun принимает drift как стартовый статус, симметрично
-	// ready). Переход в drift выставляется check-drift-handler-ом по итогу
-	// сборки DriftReport (если есть hosts_drifted > 0); снятие — успешный apply
-	// (commitSuccess → ready).
+	// StatusDrift — a Scry check found a mismatch between actual host state and
+	// the declaration (ADR-031, on-demand pilot). Informational, NOT blocking:
+	// drift remediation = a normal apply from `drift` → `ready` (the allow-list
+	// in scenario.lockRun accepts drift as a starting status, symmetric to
+	// ready). The transition into drift is set by the check-drift handler once
+	// the DriftReport is assembled (if hosts_drifted > 0); cleared by a
+	// successful apply (commitSuccess → ready).
 	StatusDrift Status = "drift"
 )
 
-// NamePattern — каноническая форма имени incarnation: kebab-case, начинается
-// с букв/цифр, длина 1..63. То же, что CHECK incarnation_name_format в
-// миграции.
+// NamePattern — canonical form of an incarnation name: kebab-case, starts
+// with a letter/digit, length 1..63. Same as CHECK incarnation_name_format
+// in the migration.
 const NamePattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 
-// ReasonMaxLen — верхняя граница свободного текста подтверждения (reason) у
-// unlock / rerun-last. Единый источник для huma-тега maxLength и рантайм-
-// валидатора (UnlockTyped / RerunLastTyped 422-ят `len(reason) > ReasonMaxLen`).
-// Нижняя граница (непустота) — отдельная проверка `reason == ""`.
+// ReasonMaxLen — upper bound on the free-text confirmation reason for
+// unlock / rerun-last. Single source for the huma maxLength tag and the
+// runtime validator (UnlockTyped / RerunLastTyped 422 on
+// `len(reason) > ReasonMaxLen`). The lower bound (non-empty) is a separate
+// check `reason == ""`.
 const ReasonMaxLen = 500
 
 var nameRe = regexp.MustCompile(NamePattern)
 
-// ValidName проверяет соответствие name канонической форме.
+// ValidName reports whether name matches the canonical form.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// Incarnation — runtime-представление строки реестра `incarnation`.
+// Incarnation — runtime representation of an `incarnation` registry row.
 //
-// jsonb-поля (`Spec` / `State` / `StatusDetails`) — `map[string]any` для
-// freeform; типизация по conkrete service / scenario живёт в их manifest-ах,
-// не в этом слое.
+// jsonb fields (`Spec` / `State` / `StatusDetails`) are `map[string]any` for
+// freeform data; typing for a concrete service / scenario lives in their
+// manifests, not in this layer.
 type Incarnation struct {
 	Name               string         `json:"name"`
 	Service            string         `json:"service"`
@@ -84,53 +85,57 @@ type Incarnation struct {
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 
-	// Covens — declared environment-теги incarnation (ADR-008 amendment a,
-	// колонка incarnation.covens). Источник RBAC coven-scope incarnation-
-	// операций: effective scope = Covens ∪ {Name} (имя — корневая Coven-метка).
-	// Пустой массив для incarnation без env-тегов (DEFAULT '{}').
+	// Covens — declared environment tags of the incarnation (ADR-008 amendment
+	// a, column incarnation.covens). Source for the RBAC coven-scope of
+	// incarnation operations: effective scope = Covens ∪ {Name} (the name is
+	// the root Coven label). Empty array for an incarnation without env tags
+	// (DEFAULT '{}').
 	Covens []string `json:"covens"`
 
-	// CreatedScenario — имя стартового сценария, которым создана incarnation
-	// (механизм нескольких create-сценариев, Вариант A; колонка
-	// incarnation.created_scenario NULLABLE, миграции 089+090). Runtime-факт:
-	// оператор выбирает его при POST /v1/incarnations (поле `create_scenario`).
+	// CreatedScenario — name of the starting scenario that created the
+	// incarnation (multiple create-scenarios mechanism, Option A; column
+	// incarnation.created_scenario NULLABLE, migrations 089+090). Runtime fact:
+	// the operator picks it in POST /v1/incarnations (field `create_scenario`).
 	//
-	// nil = bare-инкарнация (NULL в БД): сервис без create-сценариев создаётся
-	// StatusReady БЕЗ прогона (миграция 090 сняла NOT NULL/DEFAULT). Непустой
-	// указатель — имя bootstrap-сценария. Pointer (не string) — чтобы НЕ путать
-	// «bare» с пустой строкой и не нормализовать молча в `create`.
+	// nil = bare incarnation (NULL in the DB): a service with no create
+	// scenarios is created as StatusReady WITHOUT a run (migration 090 dropped
+	// NOT NULL/DEFAULT). A non-nil pointer is the bootstrap scenario name.
+	// Pointer (not string) so "bare" is never confused with an empty string and
+	// never silently normalized in `create`.
 	CreatedScenario *string `json:"created_scenario,omitempty"`
 
-	// Traits — operator-set key-value метки incarnation (ADR-060 amend, R1,
-	// колонка incarnation.traits jsonb). Источник истины Trait-ов: задаётся
-	// оператором в incarnation.spec при create, проецируется МАТЕРИАЛИЗОВАННО в
-	// souls.traits хостов-членов через sync-hook (incarnation create + bind хоста
-	// через core.soul.registered). Значение полиморфно (scalar | list). Пустой
-	// map для incarnation без traits (DEFAULT '{}').
+	// Traits — operator-set key-value labels of the incarnation (ADR-060
+	// amend, R1, column incarnation.traits jsonb). Source of truth for traits:
+	// set by the operator in incarnation.spec at create, projected
+	// MATERIALIZED into member-host souls.traits via a sync hook (incarnation
+	// create + host bind via core.soul.registered). Value is polymorphic
+	// (scalar | list). Empty map for an incarnation without traits (DEFAULT
+	// '{}').
 	Traits map[string]any `json:"traits"`
 
-	// LastDriftCheckAt — время завершения последнего dry_run-прогона converge
-	// (ADR-031 Slice C, миграция 050). nil = ни разу не сканировали.
-	// Заполняется через [UpdateDriftScanResult] (Slice B on-demand + Slice C
-	// background).
+	// LastDriftCheckAt — completion time of the last dry_run converge run
+	// (ADR-031 Slice C, migration 050). nil = never scanned. Set via
+	// [UpdateDriftScanResult] (Slice B on-demand + Slice C background).
 	LastDriftCheckAt *time.Time `json:"last_drift_check_at,omitempty"`
 
-	// LastDriftSummary — typed counts-агрегат последнего DriftReport-а
+	// LastDriftSummary — typed counts aggregate of the last DriftReport
 	// ([DriftScanSummary]: `hosts_*` + `total_hosts` + `scanned_at`).
-	// nil = ни разу не сканировали (колонка NULL). Counts-only: полный
-	// DriftReport в БД не хранится (Slice C ограничен счётчиками, полный отчёт
-	// on-demand из Slice B возвращается прямо в response). Читается из колонки
-	// типизированно ([scanIncarnation]), на wire уходит typed-объектом.
+	// nil = never scanned (column NULL). Counts-only: the full DriftReport is
+	// not stored in the DB (Slice C is limited to counters, the full on-demand
+	// report from Slice B is returned directly in the response). Read from the
+	// column in typed form ([scanIncarnation]), goes on the wire as a typed
+	// object.
 	LastDriftSummary *DriftScanSummary `json:"last_drift_summary,omitempty"`
 
-	// ApplyingApplyID — apply_id текущего идущего прогона (ADR-068 §A1, колонка
-	// applying_apply_id, ADR-027 m-S1). Non-null ровно пока прогон идёт (пишется в
-	// lockRun, чистится на терминале); nil = прогон не идёт. Read-source линковки
-	// incarnation→live-run для SSE-подписки (UI не угадывает через /v1/runs).
+	// ApplyingApplyID — apply_id of the currently running run (ADR-068 §A1,
+	// column applying_apply_id, ADR-027 m-S1). Non-null exactly while a run is
+	// in progress (written in lockRun, cleared on terminal); nil = no run in
+	// progress. Read source for the incarnation→live-run link used by SSE
+	// subscription (the UI doesn't guess via /v1/runs).
 	ApplyingApplyID *string `json:"applying_apply_id,omitempty"`
 }
 
-// HistoryEntry — запись `state_history` (snapshot per-change, ADR-009 / ADR-019).
+// HistoryEntry — a `state_history` record (snapshot per change, ADR-009 / ADR-019).
 type HistoryEntry struct {
 	HistoryID    string         `json:"history_id"`
 	Scenario     string         `json:"scenario"`

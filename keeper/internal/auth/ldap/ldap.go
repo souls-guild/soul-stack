@@ -1,22 +1,23 @@
-// Package ldap — LDAP-аутентификация операторов (Archon) через search-bind +
-// group-search. ADR-058(c) (LDAP-часть принята).
+// Package ldap — LDAP authentication of operators (Archon) via search-bind +
+// group-search. ADR-058(c) (LDAP part accepted).
 //
 // Flow (ADR-058(c)):
-//  1. POST /auth/ldap/login {username, password} поверх HTTPS.
-//  2. connect по LDAPS или StartTLS (plaintext-LDAP запрещён конфигом).
-//  3. search-bind: service-account ищет user-DN по user_filter → re-bind
-//     этим DN + введённым паролем (проверка пароля).
+//  1. POST /auth/ldap/login {username, password} over HTTPS.
+//  2. connect via LDAPS or StartTLS (plaintext LDAP forbidden by config).
+//  3. search-bind: the service account looks up the user DN via user_filter →
+//     re-bind with that DN + the entered password (password check).
 //  4. group-search (group_filter) → []groups.
-//  5. вернуть auth.ExternalIdentity (Subject=user-DN, AID=derived из aid_attr,
-//     Groups=...) — маппинг на роли делает auth.Mapper выше по стеку.
+//  5. return auth.ExternalIdentity (Subject=user-DN, AID=derived from
+//     aid_attr, Groups=...) — role mapping is done by auth.Mapper higher up
+//     the stack.
 //
-// Безопасность (ADR-058(g), «безопасность на первом месте»):
-//   - TLS обязателен (ldaps:// либо StartTLS), иначе New отвергает конфиг;
-//   - username экранируется ldap.EscapeFilter перед подстановкой в фильтр
-//     (anti-injection);
-//   - любая причина отказа (bad bind, не та запись, IdP-ошибка) санитизируется
-//     в auth.ErrAuthFailed — наружу не утекает (anti-oracle); детали — только
-//     debug-лог без пароля/bind-creds.
+// Security (ADR-058(g), "security first"):
+//   - TLS is mandatory (ldaps:// or StartTLS), otherwise New rejects the config;
+//   - username is escaped with ldap.EscapeFilter before being substituted into
+//     the filter (anti-injection);
+//   - any failure reason (bad bind, wrong entry, IdP error) is sanitized into
+//     auth.ErrAuthFailed — nothing leaks outward (anti-oracle); details go
+//     only to the debug log, without password/bind creds.
 package ldap
 
 import (
@@ -34,60 +35,61 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
 )
 
-// BindMode — режим LDAP-bind (ADR-058(c), развилка №7). MVP — только search.
+// BindMode — the LDAP bind mode (ADR-058(c), decision #7). MVP — search only.
 type BindMode string
 
 const (
-	// BindModeSearch — service-account ищет user-DN, затем re-bind паролем
-	// пользователя. Единственный поддерживаемый режим стадии 1.
+	// BindModeSearch — the service account looks up the user DN, then
+	// re-binds with the user's password. The only mode stage 1 supports.
 	BindModeSearch BindMode = "search"
 )
 
-// defaultAIDAttr — атрибут LDAP, из которого выводится AID, если aid_attr не
-// задан (ADR-058: дефолт `uid`). uid выбран дефолтом, а не mail, потому что он
-// короче, стабильнее (mail может меняться/переназначаться) и почти всегда
-// присутствует в схеме person/inetOrgPerson.
+// defaultAIDAttr — the LDAP attribute AID is derived from when aid_attr is
+// not set (ADR-058: default `uid`). uid was chosen over mail because it's
+// shorter, more stable (mail can change/get reassigned), and is almost
+// always present in the person/inetOrgPerson schema.
 const defaultAIDAttr = "uid"
 
-// defaultGroupAttr — атрибут группы → имя для role-map по умолчанию.
+// defaultGroupAttr — default group attribute → name used for the role map.
 const defaultGroupAttr = "cn"
 
-// defaultTimeout — таймаут connect/bind/search по умолчанию.
+// defaultTimeout — default connect/bind/search timeout.
 const defaultTimeout = 10 * time.Second
 
-// Config — резолвнутая конфигурация LDAP-аутентификатора. Секреты
-// (BindPassword) уже резолвнуты из Vault на load-time (ADR-058(e)), сюда
-// приходят как plaintext-значения, НЕ как *_ref. TLSCA — резолвнутый CA-bundle.
+// Config — resolved configuration for the LDAP authenticator. Secrets
+// (BindPassword) are already resolved from Vault at load time (ADR-058(e))
+// and arrive here as plaintext values, NOT as *_ref. TLSCA is a resolved
+// CA bundle.
 type Config struct {
-	URL                string   // ldaps://host:636 | ldap://host:389 (последний только StartTLS)
-	StartTLS           bool     // StartTLS поверх ldap:// (взаимоискл. с ldaps://)
-	TLSCA              []byte   // резолвнутый CA-bundle для LDAPS (опц.)
+	URL                string   // ldaps://host:636 | ldap://host:389 (latter requires StartTLS)
+	StartTLS           bool     // StartTLS over ldap:// (mutually exclusive with ldaps://)
+	TLSCA              []byte   // resolved CA bundle for LDAPS (optional)
 	InsecureSkipVerify bool     // dev-only (semantic-WARN)
 	BindMode           BindMode // search (MVP)
-	BindDN             string   // service-account DN (search-режим)
-	BindPassword       string   // резолвнут из bind_password_ref (search-режим)
-	BaseDN             string   // корень поиска
+	BindDN             string   // service-account DN (search mode)
+	BindPassword       string   // resolved from bind_password_ref (search mode)
+	BaseDN             string   // search root
 	UserFilter         string   // (uid=%s) — %s = escaped username
 	GroupFilter        string   // (member=%s) — %s = escaped user-DN
-	GroupAttr          string   // атрибут группы → имя для role-map (дефолт cn)
-	AIDAttr            string   // атрибут → AID (дефолт uid)
-	TimeoutSeconds     int      // таймаут connect/bind/search (дефолт 10s)
+	GroupAttr          string   // group attribute → name for the role map (default cn)
+	AIDAttr            string   // attribute → AID (default uid)
+	TimeoutSeconds     int      // connect/bind/search timeout (default 10s)
 }
 
-// conn — узкое подмножество *ldapv3.Conn, нужное Authenticate. Интерфейс
-// позволяет unit-тестам подменять соединение fake-conn-ом без реального LDAP.
+// conn — narrow subset of *ldapv3.Conn needed by Authenticate. The interface
+// lets unit tests swap in a fake conn without a real LDAP server.
 type conn interface {
 	Bind(username, password string) error
 	Search(req *ldapv3.SearchRequest) (*ldapv3.SearchResult, error)
 	Close() error
 }
 
-// dialFunc — фабрика соединения. По умолчанию [dialLDAP] (реальный go-ldap);
-// тесты подменяют на fake. Возвращает уже TLS-защищённое соединение
-// (ldaps:// — TLS на dial; ldap://+StartTLS — StartTLS поднят внутри).
+// dialFunc — connection factory. Defaults to [dialLDAP] (real go-ldap);
+// tests swap in a fake. Returns an already TLS-protected connection
+// (ldaps:// — TLS at dial; ldap://+StartTLS — StartTLS is raised internally).
 type dialFunc func(ctx context.Context, cfg Config, tlsCfg *tls.Config) (conn, error)
 
-// Authenticator выполняет LDAP search-bind-аутентификацию (ADR-058(c)).
+// Authenticator performs LDAP search-bind authentication (ADR-058(c)).
 type Authenticator struct {
 	cfg    Config
 	tlsCfg *tls.Config
@@ -95,11 +97,12 @@ type Authenticator struct {
 	logger *slog.Logger
 }
 
-// New конструирует LDAP-аутентификатор из резолвнутого конфига.
+// New constructs an LDAP authenticator from a resolved config.
 //
-// Валидирует инварианты безопасности (TLS-required, ldaps-vs-StartTLS,
-// search ⇒ BindDN+BindPassword) — defense-in-depth поверх semantic-валидации
-// config-слоя (config может быть собран программно, минуя YAML-валидацию).
+// Validates security invariants (TLS required, ldaps-vs-StartTLS,
+// search ⇒ BindDN+BindPassword) — defense-in-depth on top of the config
+// layer's semantic validation (config can be built programmatically,
+// bypassing YAML validation).
 func New(cfg Config, logger *slog.Logger) (*Authenticator, error) {
 	isLDAPS := strings.HasPrefix(cfg.URL, "ldaps://")
 	isPlainLDAP := strings.HasPrefix(cfg.URL, "ldap://")
@@ -138,12 +141,12 @@ func New(cfg Config, logger *slog.Logger) (*Authenticator, error) {
 	return &Authenticator{cfg: cfg, tlsCfg: tlsCfg, dial: dialLDAP, logger: logger}, nil
 }
 
-// buildTLSConfig собирает *tls.Config: ServerName из host URL-а, RootCAs из
-// TLSCA (если задан), InsecureSkipVerify (dev-only).
+// buildTLSConfig assembles *tls.Config: ServerName from the URL's host,
+// RootCAs from TLSCA (if set), InsecureSkipVerify (dev-only).
 func buildTLSConfig(cfg Config) (*tls.Config, error) {
 	t := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // opt-out оператора (dev-only, semantic-WARN); default false
+		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // operator opt-out (dev-only, semantic-WARN); default false
 		ServerName:         hostFromURL(cfg.URL),
 	}
 	if len(cfg.TLSCA) > 0 {
@@ -156,7 +159,7 @@ func buildTLSConfig(cfg Config) (*tls.Config, error) {
 	return t, nil
 }
 
-// hostFromURL извлекает host (без схемы и порта) для tls.ServerName.
+// hostFromURL extracts the host (no scheme or port) for tls.ServerName.
 func hostFromURL(u string) string {
 	s := strings.TrimPrefix(strings.TrimPrefix(u, "ldaps://"), "ldap://")
 	if i := strings.IndexByte(s, ':'); i >= 0 {
@@ -168,16 +171,16 @@ func hostFromURL(u string) string {
 	return s
 }
 
-// Method реализует auth.Authenticator: возвращает "ldap" (ADR-058(a)).
+// Method implements auth.Authenticator: returns "ldap" (ADR-058(a)).
 func (a *Authenticator) Method() string { return "ldap" }
 
-// Authenticate выполняет search-bind + group-search и возвращает внешнюю
-// identity. Любая ошибка наружу — auth.ErrAuthFailed (anti-oracle); детали —
-// только debug-лог без пароля/bind-creds.
+// Authenticate performs search-bind + group-search and returns the external
+// identity. Any error outward is auth.ErrAuthFailed (anti-oracle); details go
+// only to the debug log, without password/bind creds.
 func (a *Authenticator) Authenticate(ctx context.Context, username, password string) (auth.ExternalIdentity, error) {
-	// Пустой пароль — частый источник «unauthenticated bind» (RFC 4513 §5.1.2):
-	// некоторые серверы трактуют bind с пустым паролем как анонимный успех.
-	// Отбиваем явно.
+	// An empty password is a common source of "unauthenticated bind" (RFC
+	// 4513 §5.1.2): some servers treat a bind with an empty password as an
+	// anonymous success. Reject explicitly.
 	if username == "" || password == "" {
 		return auth.ExternalIdentity{}, auth.ErrAuthFailed
 	}
@@ -189,7 +192,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, username, password str
 	}
 	defer func() { _ = c.Close() }()
 
-	// 1. bind service-account.
+	// 1. bind the service account.
 	if err := c.Bind(a.cfg.BindDN, a.cfg.BindPassword); err != nil {
 		a.debugFail("service bind", err)
 		return auth.ExternalIdentity{}, auth.ErrAuthFailed
@@ -201,7 +204,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, username, password str
 		BaseDN:       a.cfg.BaseDN,
 		Scope:        ldapv3.ScopeWholeSubtree,
 		DerefAliases: ldapv3.NeverDerefAliases,
-		SizeLimit:    2, // >1 → ambiguous, отбиваем
+		SizeLimit:    2, // >1 → ambiguous, reject
 		TimeLimit:    a.timeoutSeconds(),
 		Filter:       fmt.Sprintf(a.cfg.UserFilter, ldapv3.EscapeFilter(username)),
 		Attributes:   []string{aidAttr},
@@ -223,13 +226,13 @@ func (a *Authenticator) Authenticate(ctx context.Context, username, password str
 		return auth.ExternalIdentity{}, auth.ErrAuthFailed
 	}
 
-	// 3. re-bind как user-DN + введённый password (проверка пароля).
+	// 3. re-bind as user-DN + the entered password (password check).
 	if err := c.Bind(userDN, password); err != nil {
 		a.debugFail("user bind", err)
 		return auth.ExternalIdentity{}, auth.ErrAuthFailed
 	}
 
-	// 4. group-search (опционально — если group_filter задан).
+	// 4. group-search (optional — only if group_filter is set).
 	groups, err := a.searchGroups(c, userDN)
 	if err != nil {
 		a.debugFail("group search", err)
@@ -244,9 +247,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, username, password str
 	}, nil
 }
 
-// searchGroups ищет группы пользователя по group_filter (member=<userDN>) и
-// собирает имена по GroupAttr. Пустой group_filter → нет групп (Mapper отвергнет
-// по ErrNoRoleMapping).
+// searchGroups looks up the user's groups via group_filter (member=<userDN>)
+// and collects names via GroupAttr. Empty group_filter → no groups (Mapper
+// will reject with ErrNoRoleMapping).
 func (a *Authenticator) searchGroups(c conn, userDN string) ([]string, error) {
 	if a.cfg.GroupFilter == "" {
 		return nil, nil
@@ -294,16 +297,16 @@ func (a *Authenticator) timeoutSeconds() int {
 	return int(defaultTimeout / time.Second)
 }
 
-// debugFail логирует причину отказа на debug-уровне. НИКОГДА не логирует пароль
-// или bind-creds — только тег этапа и текст ошибки (go-ldap не кладёт пароли в
-// текст ошибки bind-а).
+// debugFail logs the failure reason at debug level. NEVER logs the password
+// or bind creds — only the stage tag and error text (go-ldap doesn't put
+// passwords into bind error text).
 func (a *Authenticator) debugFail(stage string, err error) {
 	a.logger.Debug("auth/ldap: authentication failed",
 		slog.String("stage", stage), slog.Any("error", err))
 }
 
-// dialLDAP — реальная фабрика соединения. Для ldaps:// — TLS на dial; для
-// ldap://+StartTLS — plain dial + StartTLS. Таймаут — из cfg.
+// dialLDAP — the real connection factory. For ldaps:// — TLS at dial; for
+// ldap://+StartTLS — plain dial + StartTLS. Timeout comes from cfg.
 func dialLDAP(_ context.Context, cfg Config, tlsCfg *tls.Config) (conn, error) {
 	timeout := defaultTimeout
 	if cfg.TimeoutSeconds > 0 {
@@ -333,8 +336,8 @@ func dialLDAP(_ context.Context, cfg Config, tlsCfg *tls.Config) (conn, error) {
 	return c, nil
 }
 
-// compile-time assertion: *Authenticator реализует auth.Authenticator.
+// compile-time assertion: *Authenticator implements auth.Authenticator.
 var _ auth.Authenticator = (*Authenticator)(nil)
 
-// compile-time assertion: *ldapv3.Conn удовлетворяет узкому conn-интерфейсу.
+// compile-time assertion: *ldapv3.Conn satisfies the narrow conn interface.
 var _ conn = (*ldapv3.Conn)(nil)

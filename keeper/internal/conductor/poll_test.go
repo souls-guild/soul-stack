@@ -28,27 +28,27 @@ func calmCorridor() PollCorridor {
 	}
 }
 
-// TestAdaptivePollInterval_Sets — clamp(derivedMinPeriod, floor, ceiling) для
-// наборов реестра в профиле «Спокойный» (ADR-048 «Adaptive interval»).
+// TestAdaptivePollInterval_Sets — clamp(derivedMinPeriod, floor, ceiling) for
+// registry sets in the "Calm" profile (ADR-048 "Adaptive interval").
 func TestAdaptivePollInterval_Sets(t *testing.T) {
 	tests := []struct {
 		name string
 		mp   cadence.MinPeriod
 		want time.Duration
 	}{
-		// «частое» (interval=30) → floor-bound 30s (derived 30 внутри коридора).
+		// "frequent" (interval=30) → floor-bound 30s (derived 30 within the corridor).
 		{"frequent interval 30 → floor-bound", cadence.MinPeriod{MinIntervalSeconds: iv(30)}, 30 * time.Second},
-		// частее floor (interval=10) → floor-clamp 30s (reject — Pass B).
+		// more frequent than floor (interval=10) → floor-clamp 30s (reject — Pass B).
 		{"interval 10 below floor → floor 30", cadence.MinPeriod{MinIntervalSeconds: iv(10)}, 30 * time.Second},
-		// «редкое» (interval=1h) → ceiling-cap 60s.
+		// "rare" (interval=1h) → ceiling-cap 60s.
 		{"rare interval 1h → ceiling-cap 60", cadence.MinPeriod{MinIntervalSeconds: iv(3600)}, 60 * time.Second},
 		// cron-only → derived 60s = ceiling.
 		{"cron only → 60", cadence.MinPeriod{HasCron: true}, 60 * time.Second},
-		// смешанное (interval=45 + cron) → 45s (внутри коридора).
+		// mixed (interval=45 + cron) → 45s (within the corridor).
 		{"mixed 45 + cron → 45", cadence.MinPeriod{MinIntervalSeconds: iv(45), HasCron: true}, 45 * time.Second},
-		// смешанное (interval=120 + cron) → min(120,60)=60 = ceiling.
+		// mixed (interval=120 + cron) → min(120,60)=60 = ceiling.
 		{"mixed 120 + cron → 60", cadence.MinPeriod{MinIntervalSeconds: iv(120), HasCron: true}, 60 * time.Second},
-		// пусто → idle 120s.
+		// empty → idle 120s.
 		{"empty registry → idle 120", cadence.MinPeriod{}, 120 * time.Second},
 	}
 	for _, tc := range tests {
@@ -61,8 +61,8 @@ func TestAdaptivePollInterval_Sets(t *testing.T) {
 	}
 }
 
-// TestAdaptivePollInterval_FetchError — ошибка SelectMinPeriod → fallback на
-// ceiling (нечастый край, не floor), лидер не падает.
+// TestAdaptivePollInterval_FetchError — SelectMinPeriod error → fallback to
+// ceiling (the infrequent edge, not floor), the leader doesn't crash.
 func TestAdaptivePollInterval_FetchError(t *testing.T) {
 	got := AdaptivePollInterval(
 		context.Background(),
@@ -75,9 +75,10 @@ func TestAdaptivePollInterval_FetchError(t *testing.T) {
 	}
 }
 
-// TestAdaptivePollInterval_HotReload — смена коридора в config-снимке (closure)
-// видна на следующем resolve без пересоздания IntervalFn. Реестр тот же
-// (interval=45), но смена ceiling/floor двигает результат.
+// TestAdaptivePollInterval_HotReload — a corridor change in the config
+// snapshot (closure) is visible on the next resolve without recreating
+// IntervalFn. Same registry (interval=45), but the ceiling/floor change
+// moves the result.
 func TestAdaptivePollInterval_HotReload(t *testing.T) {
 	cur := calmCorridor()
 	corridor := func() PollCorridor { return cur }
@@ -87,33 +88,33 @@ func TestAdaptivePollInterval_HotReload(t *testing.T) {
 		t.Fatalf("before reload = %v, want 45s", got)
 	}
 
-	// Hot-reload: сузили ceiling до 40s — derived 45 теперь > ceiling → cap 40.
+	// Hot-reload: narrowed ceiling to 40s — derived 45 is now > ceiling → cap 40.
 	cur = PollCorridor{Floor: 30 * time.Second, Ceiling: 40 * time.Second, Idle: 120 * time.Second}
 	if got := AdaptivePollInterval(context.Background(), corridor, fetcher, nil); got != 40*time.Second {
 		t.Errorf("after ceiling reload = %v, want 40s (cap)", got)
 	}
 
-	// Hot-reload: подняли floor до 50s — derived 45 теперь < floor → floor 50.
+	// Hot-reload: raised floor to 50s — derived 45 is now < floor → floor 50.
 	cur = PollCorridor{Floor: 50 * time.Second, Ceiling: 60 * time.Second, Idle: 120 * time.Second}
 	if got := AdaptivePollInterval(context.Background(), corridor, fetcher, nil); got != 50*time.Second {
 		t.Errorf("after floor reload = %v, want 50s (floor)", got)
 	}
 
-	// Hot-reload: idle 90s, реестр пуст → idle 90 (новое значение снимка).
+	// Hot-reload: idle 90s, empty registry → idle 90 (new snapshot value).
 	cur = PollCorridor{Floor: 30 * time.Second, Ceiling: 60 * time.Second, Idle: 90 * time.Second}
 	if got := AdaptivePollInterval(context.Background(), corridor, fakeFetcher{}, nil); got != 90*time.Second {
 		t.Errorf("after idle reload (empty registry) = %v, want 90s", got)
 	}
 }
 
-// TestAdaptivePollInterval_FailoverStateless — два независимых вызова над тем же
-// реестром дают идентичный шаг: IntervalFn stateless, новый лидер после failover
-// пересчитывает из PG, не неся in-memory состояния опроса.
+// TestAdaptivePollInterval_FailoverStateless — two independent calls over the
+// same registry give an identical step: IntervalFn is stateless, the new
+// leader after failover recomputes from PG, carrying no in-memory poll state.
 func TestAdaptivePollInterval_FailoverStateless(t *testing.T) {
 	fetcher := fakeFetcher{mp: cadence.MinPeriod{MinIntervalSeconds: iv(45), HasCron: true}}
-	// «Старый лидер».
+	// "Old leader".
 	a := AdaptivePollInterval(context.Background(), calmCorridor, fetcher, nil)
-	// «Новый лидер» после failover — тот же реестр, тот же config.
+	// "New leader" after failover — same registry, same config.
 	b := AdaptivePollInterval(context.Background(), calmCorridor, fetcher, nil)
 	if a != b {
 		t.Errorf("stateless нарушен: leader1=%v leader2=%v", a, b)

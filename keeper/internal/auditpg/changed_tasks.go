@@ -8,65 +8,69 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// ChangedTaskKey — идентификатор «эта задача на этом хосте изменилась»:
-// (sid, plan_index) одного прогона. Источник — журнал аудита (event_type
-// `task.executed` с `payload.status == TASK_STATUS_CHANGED`), НЕ отдельная
-// таблица: changed-факт уже фиксируется handler-ом TaskEvent (M2.4,
-// events_taskevent.go) на каждую (apply_id, sid, plan_index).
+// ChangedTaskKey — identifier of "this task changed on this host":
+// (sid, plan_index) for one run. Source — audit log (event_type
+// `task.executed` with `payload.status == TASK_STATUS_CHANGED`), NOT a
+// separate table: the changed-fact is already recorded by the TaskEvent handler
+// (M2.4, events_taskevent.go) for each (apply_id, sid, plan_index).
 //
-// PlanIndex — ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему плану прогона (по всем
-// Passage), = RenderedTask.Index (ADR-056 §S1 fix Variant B, T3-канал). Ключ
-// корреляции с планом в buildChangedTasks (scenario.state) идёт по
-// RenderedTask.Index — поэтому из payload берётся глобальный `plan_index`, а НЕ
-// локальный `task_idx` (под staged/per-host-where ≠ глобальному, указывал бы на
-// соседнюю задачу → mismatch в state_changes-whitelist (секрет-гигиена) + audit).
-// Старые audit-строки без `plan_index` → fallback на `task_idx` (N=1 совпадает).
+// PlanIndex — the GLOBAL cross-run task index across the whole run plan (across
+// all Passages), = RenderedTask.Index (ADR-056 §S1 fix Variant B, T3 channel).
+// The correlation key with the plan in buildChangedTasks (scenario.state) goes
+// by RenderedTask.Index — so the global `plan_index` is taken from payload, NOT
+// the local `task_idx` (under staged/per-host-where it can differ from the
+// global one, pointing at a neighboring task → mismatch in the state_changes
+// whitelist (secret hygiene) + audit). Old audit rows without `plan_index` →
+// fall back to `task_idx` (N=1 matches).
 //
-// Секрет-гигиена (T3): из audit_log берутся ТОЛЬКО (sid, plan_index) — адрес
-// факта, без payload-значений register_data/params/error. Метаданные задачи
-// (name/register/id/module) scenario-runner добирает из in-memory []RenderedTask,
-// не из журнала.
+// Secret hygiene (T3): only (sid, plan_index) are read from audit_log — the
+// address of the fact, without payload values register_data/params/error. Task
+// metadata (name/register/id/module) is fetched by the scenario-runner from the
+// in-memory []RenderedTask, not from the log.
 type ChangedTaskKey struct {
 	SID       string
 	PlanIndex int
 }
 
-// taskStatusChanged — строковое значение `payload.status` для CHANGED-задачи.
-// Handler TaskEvent (events_taskevent.go) кладёт статус как `Status().String()`,
-// то есть имя enum-константы keeperv1.TaskStatus_TASK_STATUS_CHANGED. Фильтруем
-// по этой строке (не по числу) — она в JSONB-payload как текст.
+// taskStatusChanged — `payload.status` string value for a CHANGED task.
+// The TaskEvent handler (events_taskevent.go) stores the status as
+// `Status().String()`, i.e. the enum constant name
+// keeperv1.TaskStatus_TASK_STATUS_CHANGED. We filter by this string (not by
+// number) — it's stored as text in the JSONB payload.
 const taskStatusChanged = "TASK_STATUS_CHANGED"
 
-// taskStatusFailed / taskStatusTimedOut — строковые значения `payload.status`
-// для FAILED-задачи (FAILED ∪ TIMED_OUT). TIMED_OUT — частный случай failed
-// (apply.proto: «является частным случаем failed»), поэтому onfail-gating
-// обязан считать оба «источник упал». Имена enum-констант keeperv1.TaskStatus.
+// taskStatusFailed / taskStatusTimedOut — `payload.status` string values for a
+// FAILED task (FAILED ∪ TIMED_OUT). TIMED_OUT is a special case of failed
+// (apply.proto: "is a special case of failed"), so onfail-gating must treat
+// both as "source failed". Names match the keeperv1.TaskStatus enum constants.
 const (
 	taskStatusFailed   = "TASK_STATUS_FAILED"
 	taskStatusTimedOut = "TASK_STATUS_TIMED_OUT"
 )
 
-// selectChangedTaskKeysSQL — выборка адресов CHANGED-задач прогона из журнала
-// аудита. Фильтр строго по индексируемым колонкам (correlation_id, event_type)
-// + JSONB-предикат на status; sid/plan_index достаются из payload как текст и
-// число (handler кладёт оба числами, JSONB ->> возвращает текстовую форму —
-// парсим в caller-е). Параметры — позиционные плейсхолдеры, без конкатенации
-// значений в SQL.
+// selectTaskKeysByStatusSQL — selects the addresses of a run's tasks in a given
+// status set from the audit log. Filter strictly on indexed columns
+// (correlation_id, event_type) + a JSONB predicate on status; sid/plan_index
+// are extracted from payload as text and number (the handler stores both as
+// numbers, JSONB ->> returns the text form — parsed by the caller). Parameters
+// are positional placeholders, no value concatenation into SQL.
 //
 // plan_index (ADR-056 §S1 fix Variant B, T3): COALESCE(plan_index, task_idx) —
-// приоритет глобальному сквозному индексу (= RenderedTask.Index, ключ корреляции
-// с планом). Старые audit-строки без `plan_index` (прогон до T3-фикса / старый
-// Soul) → fallback на локальный `task_idx`, для N=1 совпадающий с глобальным
-// (поведение БИТ-В-БИТ). COALESCE на JSONB-text-извлечениях: `payload->>'key'`
-// возвращает NULL при отсутствии ключа — берётся следующий аргумент.
+// prioritizes the global cross-run index (= RenderedTask.Index, the correlation
+// key with the plan). Old audit rows without `plan_index` (run predating the T3
+// fix / old Soul) → fall back to the local `task_idx`, which for N=1 matches
+// the global one (bit-for-bit behavior). COALESCE over JSONB text extraction:
+// `payload->>'key'` returns NULL when the key is absent — the next argument is
+// used.
 //
-// $1 = apply_id (correlation_id task.executed), $2 = event_type, $3 = набор
-// status-имён (`= ANY($3)`, текстовый массив). Фильтр требует наличие хотя бы
-// одного из (plan_index, task_idx): COALESCE обоих IS NOT NULL. NULLIF на sid не
-// нужен — handler всегда кладёт sid. DISTINCT не нужен: пара (sid, plan_index) в
-// task.executed уникальна на финальный статус задачи, но retry мог дать несколько
-// строк — дедуп делает caller (set). Один SQL обслуживает CHANGED- и FAILED-
-// выборки — различие лишь в наборе status-имён ($3).
+// $1 = apply_id (correlation_id of task.executed), $2 = event_type, $3 = the
+// set of status names (`= ANY($3)`, text array). The filter requires at least
+// one of (plan_index, task_idx) to be present: COALESCE of both IS NOT NULL.
+// NULLIF on sid isn't needed — the handler always sets sid. DISTINCT isn't
+// needed: the pair (sid, plan_index) is unique per task's final status in
+// task.executed, but a retry may produce multiple rows — dedup is done by the
+// caller (a set). One SQL query serves both the CHANGED and FAILED selections —
+// they differ only in the set of status names ($3).
 const selectTaskKeysByStatusSQL = `
 SELECT payload->>'sid' AS sid,
        COALESCE(payload->>'plan_index', payload->>'task_idx') AS plan_index
@@ -78,41 +82,43 @@ WHERE correlation_id = $1
   AND COALESCE(payload->>'plan_index', payload->>'task_idx') IS NOT NULL
 `
 
-// SelectChangedTaskKeys возвращает множество (sid, plan_index) задач прогона
-// `applyID`, терминал-ивших со статусом CHANGED (по журналу аудита). Источник —
-// `task.executed`-события с `payload.status == TASK_STATUS_CHANGED`; берутся
-// ТОЛЬКО адресные поля (sid, plan_index), payload-значения НЕ читаются (секрет-
-// гигиена T3).
+// SelectChangedTaskKeys returns the set of (sid, plan_index) for tasks of run
+// `applyID` that terminated with status CHANGED (per the audit log). Source —
+// `task.executed` events with `payload.status == TASK_STATUS_CHANGED`; ONLY
+// address fields (sid, plan_index) are read, payload values are NOT read
+// (secret hygiene T3).
 //
-// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс задачи (= RenderedTask.Index); под
-// staged/per-host-where он, а НЕ локальный task_idx, корелирует с планом в
-// scenario.buildChangedTasks (ключ ChangedTaskKey{sid, t.Index}). Старые
-// audit-строки без `plan_index` читаются с fallback на `task_idx` (COALESCE в
-// SQL), для N=1 совпадающий с глобальным.
+// plan_index — the GLOBAL cross-run task index (= RenderedTask.Index); under
+// staged/per-host-where it, not the local task_idx, correlates with the plan in
+// scenario.buildChangedTasks (key ChangedTaskKey{sid, t.Index}). Old audit rows
+// without `plan_index` are read with a fallback to `task_idx` (COALESCE in
+// SQL), which for N=1 matches the global one.
 //
-// Результат — set: дубль (apply_id, sid, plan_index) (retry перезаписал статус,
-// дав вторую task.executed-строку) схлопывается. Пустой результат — ни одна
-// задача не изменилась (или прогон без task.executed-следа). plan_index, не
-// распарсившийся в int (мусор в payload), пропускается без ошибки — это
-// деградация наблюдаемости, не повод валить финал прогона.
+// The result is a set: a duplicate (apply_id, sid, plan_index) (retry
+// overwrote the status, producing a second task.executed row) collapses. An
+// empty result means no task changed (or the run has no task.executed trace).
+// A plan_index that fails to parse as int (garbage in payload) is skipped
+// without error — that's an observability degradation, not a reason to fail
+// the run's outcome.
 func (r *Reader) SelectChangedTaskKeys(ctx context.Context, applyID string) (map[ChangedTaskKey]struct{}, error) {
 	return r.selectTaskKeysByStatus(ctx, applyID, []string{taskStatusChanged})
 }
 
-// SelectFailedTaskKeys возвращает множество (sid, plan_index) задач прогона
-// `applyID`, терминал-ивших со статусом FAILED либо TIMED_OUT (по журналу
-// аудита). Зеркало [SelectChangedTaskKeys] для onfail-rescue-gating (ADR-056 R3,
-// cross-passage): keeper резолвит `onfail:[A]` cross-passage по тому, упал ли A
-// на хосте. TIMED_OUT включён — apply.proto объявляет его частным случаем failed,
-// поэтому rescue обязан срабатывать и по timeout-источнику. Секрет-гигиена та же:
-// читаются ТОЛЬКО адресные поля (sid, plan_index).
+// SelectFailedTaskKeys returns the set of (sid, plan_index) for tasks of run
+// `applyID` that terminated with status FAILED or TIMED_OUT (per the audit
+// log). Mirrors [SelectChangedTaskKeys] for onfail-rescue-gating (ADR-056 R3,
+// cross-passage): keeper resolves cross-passage `onfail:[A]` by whether A
+// failed on the host. TIMED_OUT is included — apply.proto declares it a
+// special case of failed, so rescue must also trigger on a timeout source.
+// Same secret hygiene: ONLY address fields (sid, plan_index) are read.
 func (r *Reader) SelectFailedTaskKeys(ctx context.Context, applyID string) (map[ChangedTaskKey]struct{}, error) {
 	return r.selectTaskKeysByStatus(ctx, applyID, []string{taskStatusFailed, taskStatusTimedOut})
 }
 
-// selectTaskKeysByStatus — общая выборка (sid, plan_index) задач прогона по
-// набору terminal-статусов. statuses — имена enum-констант keeperv1.TaskStatus
-// (текст в payload). Дедуп через set; нечисловой plan_index пропускается.
+// selectTaskKeysByStatus — shared (sid, plan_index) selection for a run's
+// tasks by a set of terminal statuses. statuses are keeperv1.TaskStatus enum
+// constant names (text in payload). Dedup via a set; non-numeric plan_index is
+// skipped.
 func (r *Reader) selectTaskKeysByStatus(ctx context.Context, applyID string, statuses []string) (map[ChangedTaskKey]struct{}, error) {
 	rows, err := r.pool.Query(ctx, selectTaskKeysByStatusSQL,
 		applyID, string(audit.EventTaskExecuted), statuses)
@@ -132,8 +138,8 @@ func (r *Reader) selectTaskKeysByStatus(ctx context.Context, applyID string, sta
 		}
 		planIdx, perr := strconv.Atoi(planIdxStr)
 		if perr != nil {
-			// Нечисловой plan_index/task_idx в payload — не должен встречаться (handler
-			// кладёт proto-int). Пропускаем: финал прогона важнее одной мусорной строки.
+			// Non-numeric plan_index/task_idx in payload shouldn't happen (the handler
+			// stores a proto int). Skip: the run's outcome matters more than one bad row.
 			continue
 		}
 		out[ChangedTaskKey{SID: sid, PlanIndex: planIdx}] = struct{}{}

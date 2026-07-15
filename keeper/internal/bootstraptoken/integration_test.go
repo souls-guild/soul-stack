@@ -108,7 +108,7 @@ func TestIntegration_InsertAndBurn_HappyPath(t *testing.T) {
 		t.Errorf("burn id = %q, want %q", id, rec.TokenID)
 	}
 
-	// Повторный Burn — токен уже сожжён, должен дать ErrTokenInvalid.
+	// Second Burn — token already burned, should yield ErrTokenInvalid.
 	if _, err := Burn(ctx, integrationPool, tok.Hash(), "host1.example.com", "kid-1"); !errors.Is(err, ErrTokenInvalid) {
 		t.Errorf("second Burn err = %v, want ErrTokenInvalid", err)
 	}
@@ -149,12 +149,12 @@ func TestIntegration_Burn_RejectsWrongSID(t *testing.T) {
 	if _, err := Insert(ctx, integrationPool, "host1.example.com", tok.Hash(), 24*time.Hour, nil); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// Тот же hash, но другой SID — Burn должен отвергнуть.
+	// Same hash, different SID — Burn should reject.
 	_, err := Burn(ctx, integrationPool, tok.Hash(), "host2.example.com", "kid-1")
 	if !errors.Is(err, ErrTokenInvalid) {
 		t.Errorf("err = %v, want ErrTokenInvalid (cross-SID protection)", err)
 	}
-	// Токен должен остаться активным после неудачной попытки.
+	// Token must remain active after the failed attempt.
 	rec, err := SelectByHash(ctx, integrationPool, tok.Hash())
 	if err != nil {
 		t.Fatalf("SelectByHash: %v", err)
@@ -173,10 +173,10 @@ func TestIntegration_Burn_RejectsExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// Принудительно ставим expires_at в прошлое. CHECK
-	// `bootstrap_tokens_expires_after_created` требует expires_at > created_at,
-	// поэтому смещаем оба назад на сутки (expires_at остаётся минимум на
-	// миллисекунду позже created_at, что constraint допускает).
+	// Force expires_at into the past. The CHECK
+	// `bootstrap_tokens_expires_after_created` requires expires_at >
+	// created_at, so shift both back by a day (expires_at stays at least
+	// a millisecond after created_at, which the constraint allows).
 	_, err = integrationPool.Exec(ctx,
 		`UPDATE bootstrap_tokens
 		    SET created_at = NOW() - INTERVAL '1 hour',
@@ -205,7 +205,7 @@ func TestIntegration_CascadeOnSoulDelete(t *testing.T) {
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM souls WHERE sid = $1`, "host1.example.com"); err != nil {
 		t.Fatalf("DELETE soul: %v", err)
 	}
-	// CASCADE: токен должен исчезнуть.
+	// CASCADE: the token must disappear.
 	_, err := SelectByHash(ctx, integrationPool, tok.Hash())
 	if !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("err = %v, want ErrTokenNotFound after CASCADE", err)
@@ -213,8 +213,8 @@ func TestIntegration_CascadeOnSoulDelete(t *testing.T) {
 }
 
 func TestIntegration_BurnAllForSID(t *testing.T) {
-	// ADR-017 cascade: BurnAllForSID жжёт все ещё-активные токены SID
-	// и пишет SystemKIDCloudDestroy в used_by_kid.
+	// ADR-017 cascade: BurnAllForSID burns every still-active token of a
+	// SID and writes SystemKIDCloudDestroy into used_by_kid.
 	resetAll(t)
 	seedSoul(t, "host-burn.example.com")
 	ctx := context.Background()
@@ -240,7 +240,7 @@ func TestIntegration_BurnAllForSID(t *testing.T) {
 		t.Errorf("UsedByKID = %v, want %q", rec.UsedByKID, SystemKIDCloudDestroy)
 	}
 
-	// Повторный вызов — уже сожжённый токен не трогается (rows=0).
+	// Second call — the already-burned token is untouched (rows=0).
 	n2, err := BurnAllForSID(ctx, integrationPool, "host-burn.example.com", SystemKIDCloudDestroy)
 	if err != nil {
 		t.Fatalf("BurnAllForSID 2nd: %v", err)

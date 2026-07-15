@@ -262,9 +262,9 @@ type PushSummaryCountsView struct {
 	Total        *int
 }
 
-// PushRunListEntryView — ПЛОСКАЯ compact-строка push_runs (element PushRunListPage.Items),
-// handler-native (заменяет PushRunListEntry). Compact-форма: вырезаны тяжёлые поля
-// (`input` / `summary.hosts[]`), summary редуцирован до агрегированных summary_counts.
+// PushRunListEntryView is the FLAT compact push_runs row (element of PushRunListPage.Items),
+// handler-native (replaces PushRunListEntry). Compact shape: heavy fields are stripped
+// (`input` / `summary.hosts[]`), summary is reduced to aggregated summary_counts.
 type PushRunListEntryView struct {
 	ApplyID       string
 	CleanupStale  bool
@@ -278,9 +278,9 @@ type PushRunListEntryView struct {
 	SummaryCounts *PushSummaryCountsView
 }
 
-// PushRunListPage — доменный paged-результат GET /v1/push-runs (handler-native). Плоские
-// offset/limit/total + срез PushRunListEntryView; пакет api проецирует его в native-envelope
-// PushRunListReply (register-func huma_push.go).
+// PushRunListPage is the domain paged result of GET /v1/push-runs (handler-native). Flat
+// offset/limit/total + a slice of PushRunListEntryView; the api package projects it into the
+// native envelope PushRunListReply (register func huma_push.go).
 type PushRunListPage struct {
 	Items  []PushRunListEntryView
 	Offset int
@@ -288,11 +288,11 @@ type PushRunListPage struct {
 	Total  int
 }
 
-// rowToPushApplyResultView проецирует [pushorch.PushRunRow] в плоский view
-// GET /v1/push/{apply_id}. date-time: прежний wire был секундным (RFC3339 c усечением
-// до секунд), поэтому Truncate(Second) сохраняет байт-в-байт. Опциональные поля
-// (ssh_provider/input/started_by_aid/summary) — nil при пустом значении (паритет с
-// прежним omitempty).
+// rowToPushApplyResultView projects [pushorch.PushRunRow] into the flat view of
+// GET /v1/push/{apply_id}. date-time: the former wire was second-granularity (RFC3339 truncated
+// to seconds), so Truncate(Second) keeps it byte-for-byte. Optional fields
+// (ssh_provider/input/started_by_aid/summary) are nil when the value is empty (parity with the
+// former omitempty).
 func rowToPushApplyResultView(row *pushorch.PushRunRow) PushApplyResultView {
 	view := PushApplyResultView{
 		ApplyID:       row.ApplyID,
@@ -313,8 +313,8 @@ func rowToPushApplyResultView(row *pushorch.PushRunRow) PushApplyResultView {
 	return view
 }
 
-// ptrIfNotEmpty возвращает nil для пустой строки (паритет с json omitempty над
-// string), иначе указатель на значение.
+// ptrIfNotEmpty returns nil for an empty string (parity with json omitempty over
+// string), otherwise a pointer to the value.
 func ptrIfNotEmpty(s string) *string {
 	if s == "" {
 		return nil
@@ -322,8 +322,8 @@ func ptrIfNotEmpty(s string) *string {
 	return &s
 }
 
-// ptrMapIfNotEmpty возвращает nil для пустой/nil-карты (паритет с прежним
-// omitempty над map[string]any), иначе указатель на карту в wire-форме.
+// ptrMapIfNotEmpty returns nil for an empty/nil map (parity with the former
+// omitempty over map[string]any), otherwise a pointer to the map in wire shape.
 func ptrMapIfNotEmpty(m map[string]any) *map[string]interface{} {
 	if len(m) == 0 {
 		return nil
@@ -332,11 +332,11 @@ func ptrMapIfNotEmpty(m map[string]any) *map[string]interface{} {
 	return &out
 }
 
-// extractSummaryCounts вынимает success_count/fail_count/total из summary jsonb
-// в плоский [PushSummaryCountsView], возвращает nil, если ни одного поля нет (пусто
-// либо pending/running с {}). jsonb-числа приходят как float64 после json.Unmarshal —
-// приводим к int с floor-семантикой (orchestrator пишет всегда целые). Все поля —
-// *int, чтобы 0 (легитимный счётчик) отличался от «не было записи».
+// extractSummaryCounts pulls success_count/fail_count/total out of the summary jsonb
+// into a flat [PushSummaryCountsView], returning nil when no field is present (empty
+// or pending/running with {}). jsonb numbers arrive as float64 after json.Unmarshal —
+// we convert to int with floor semantics (the orchestrator always writes integers). All fields
+// are *int so 0 (a legitimate count) is distinct from "no record written".
 func extractSummaryCounts(summary map[string]any) *PushSummaryCountsView {
 	if len(summary) == 0 {
 		return nil
@@ -364,13 +364,13 @@ func extractSummaryCounts(summary map[string]any) *PushSummaryCountsView {
 	return &counts
 }
 
-// rowToPushRunListEntryView — граничный конвертер домен→view для list-эндпоинта
-// `GET /v1/push-runs` (UI-4). Мапит [pushorch.PushRunRow] в плоский [PushRunListEntryView],
-// сохраняя нативный time.Time. Compact-форма: вырезаны тяжёлые поля (`input` /
-// `summary.hosts[]`), summary редуцирован до агрегированных summary_counts
-// (extractSummaryCounts). date-time: прежний wire был секундным, поэтому Truncate(Second)
-// держит байт-в-байт. Опциональные поля — nil при пустом значении (паритет с прежним
-// omitempty). Полная запись — через `GET /v1/push/{apply_id}` (GetTyped).
+// rowToPushRunListEntryView is the boundary domain→view converter for the list endpoint
+// `GET /v1/push-runs` (UI-4). Maps [pushorch.PushRunRow] into the flat [PushRunListEntryView],
+// keeping the native time.Time. Compact shape: heavy fields are stripped (`input` /
+// `summary.hosts[]`), summary is reduced to aggregated summary_counts
+// (extractSummaryCounts). date-time: the former wire was second-granularity, so Truncate(Second)
+// keeps it byte-for-byte. Optional fields are nil when the value is empty (parity with the former
+// omitempty). Full record via `GET /v1/push/{apply_id}` (GetTyped).
 func rowToPushRunListEntryView(row *pushorch.PushRunRow) PushRunListEntryView {
 	entry := PushRunListEntryView{
 		ApplyID:       row.ApplyID,

@@ -13,15 +13,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// Pure unit-тесты — не требуют PG/Vault. Логика, целиком зависящая от
+// Pure unit tests — do not require PG/Vault. Logic that fully depends on
 // pgxpool.Pool / VaultClient.ReadKV (advisory lock, Insert, ReadKV
-// round-trip), покрывается integration_test.go под `//go:build integration`.
+// round-trip) is covered by integration_test.go under
+// `//go:build integration`.
 
-// Тесты ParseRef переехали в `keeper/internal/vault/parseref_test.go`
-// после выноса парсера в shared keeper-vault helper (M0.5d).
+// ParseRef tests moved to `keeper/internal/vault/parseref_test.go` after
+// the parser was extracted into the shared keeper-vault helper (M0.5d).
 
 func TestExtractSigningKey_Base64String(t *testing.T) {
-	raw := []byte("0123456789abcdef0123456789abcdef") // 32 байта
+	raw := []byte("0123456789abcdef0123456789abcdef") // 32 bytes
 	encoded := base64.StdEncoding.EncodeToString(raw)
 	got, err := extractSigningKey(map[string]any{"signing_key": encoded})
 	if err != nil {
@@ -33,8 +34,8 @@ func TestExtractSigningKey_Base64String(t *testing.T) {
 }
 
 func TestExtractSigningKey_NonBase64StringFallback(t *testing.T) {
-	// Если значение не base64 — отдаём raw-bytes (32 ASCII-байта).
-	raw := "0123456789abcdef0123456789abcdef!" // 33 байта, не base64-валидно
+	// If the value isn't base64 — return raw bytes (32 ASCII bytes).
+	raw := "0123456789abcdef0123456789abcdef!" // 33 bytes, not valid base64
 	got, err := extractSigningKey(map[string]any{"signing_key": raw})
 	if err != nil {
 		t.Fatalf("extractSigningKey: %v", err)
@@ -99,7 +100,7 @@ func TestWriteTokenFile_PermissionsAndContent(t *testing.T) {
 func TestWriteTokenFile_OverwritesAndChmodsBackTo0400(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token")
-	// Pre-create с 0644 — writeTokenFile должен явно chmod-нуть до 0400.
+	// Pre-create with 0644 — writeTokenFile must explicitly chmod to 0400.
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -118,10 +119,10 @@ func TestWriteTokenFile_OverwritesAndChmodsBackTo0400(t *testing.T) {
 
 func TestDefaultCredentialPath(t *testing.T) {
 	got := defaultCredentialPath("archon-alice")
-	// Уход от `/tmp/` (review M0.5c #2): должен идти либо через
-	// os.UserCacheDir() (→ оканчивается на `keeper/bootstrap-<aid>.token`),
-	// либо fallback `/var/lib/keeper/bootstrap-<aid>.token`. В обоих
-	// случаях префикс `/tmp/` не разрешён.
+	// Moving away from `/tmp/` (review M0.5c #2): must go either through
+	// os.UserCacheDir() (→ ending in `keeper/bootstrap-<aid>.token`), or
+	// the fallback `/var/lib/keeper/bootstrap-<aid>.token`. Neither case
+	// allows a `/tmp/` prefix.
 	if strings.HasPrefix(got, "/tmp/") {
 		t.Errorf("defaultCredentialPath = %q must not be under /tmp/ (world-readable predictable path)", got)
 	}
@@ -152,7 +153,7 @@ func TestEnsureCredentialDir_CreatesParent(t *testing.T) {
 func TestEnsureCredentialDir_ExistingDirOK(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "bootstrap.token")
-	// tmp уже существует — ensureCredentialDir не должен ошибаться.
+	// tmp already exists — ensureCredentialDir must not error.
 	if err := ensureCredentialDir(target); err != nil {
 		t.Errorf("ensureCredentialDir on existing dir: %v", err)
 	}
@@ -160,22 +161,22 @@ func TestEnsureCredentialDir_ExistingDirOK(t *testing.T) {
 
 func TestEnsureCredentialDir_FileNotDir(t *testing.T) {
 	tmp := t.TempDir()
-	// Создаём файл вместо каталога.
+	// Create a file instead of a directory.
 	filePath := filepath.Join(tmp, "not-a-dir")
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// path под filePath — ensureCredentialDir увидит filePath как "parent" и
-	// должен вернуть error (не каталог).
+	// path under filePath — ensureCredentialDir will see filePath as the
+	// "parent" and must return an error (not a directory).
 	target := filepath.Join(filePath, "bootstrap.token")
 	if err := ensureCredentialDir(target); err == nil {
 		t.Error("ensureCredentialDir: expected error when parent is a regular file")
 	}
 }
 
-// TestValidateConfig_RejectsBadInput — серия dry-runs validateConfig
-// без поднятия PG/Vault. Проверяет, что Init возвращает понятную ошибку
-// до любого сетевого вызова.
+// TestValidateConfig_RejectsBadInput is a series of validateConfig
+// dry-runs without spinning up PG/Vault. Verifies that Init returns a
+// clear error before any network call.
 func TestValidateConfig_RejectsBadInput(t *testing.T) {
 	tests := []struct {
 		name string
@@ -201,7 +202,7 @@ func TestValidateConfig_RejectsBadInput(t *testing.T) {
 	}
 }
 
-// fakeIssuer — JWTIssuer-mock для unit-тестов Init.
+// fakeIssuer is a JWTIssuer mock for Init unit tests.
 type fakeIssuer struct {
 	calls int
 	token string
@@ -213,12 +214,12 @@ func (f *fakeIssuer) Issue(_ string, _ []string, _ time.Duration, _ bool) (strin
 	return f.token, f.err
 }
 
-// TestValidateConfig_FailsOnNilPoolFirst — детерминированный порядок
-// проверок в validateConfig: после ArchonAID+TTL первой падает проверка
-// Pool. Дальнейшие nil-проверки (VaultClient/IssuerFactory/AuditWriter/
-// SigningKeyRef) требуют non-nil *pgxpool.Pool, который в unit-тесте без
-// поднятого Postgres сконструировать нельзя — это покрытие ушло в
-// integration_test.go.
+// TestValidateConfig_FailsOnNilPoolFirst locks in the deterministic order
+// of checks in validateConfig: after ArchonAID+TTL, the Pool check fails
+// first. The remaining nil checks (VaultClient/IssuerFactory/AuditWriter/
+// SigningKeyRef) require a non-nil *pgxpool.Pool, which cannot be
+// constructed in a unit test without a running Postgres — that coverage
+// lives in integration_test.go.
 func TestValidateConfig_FailsOnNilPoolFirst(t *testing.T) {
 	cfg := Config{
 		ArchonAID:    "archon-alice",
@@ -233,7 +234,7 @@ func TestValidateConfig_FailsOnNilPoolFirst(t *testing.T) {
 	}
 }
 
-// fakeAuditWriter — Writer-mock, захватывающий написанный event.
+// fakeAuditWriter is a Writer mock that captures the written event.
 type fakeAuditWriter struct {
 	events []*audit.Event
 	err    error

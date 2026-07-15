@@ -1,22 +1,24 @@
-// Package conductor — Conductor, leader-elected исполнитель Cadence-расписаний
-// (ADR-048). Дирижёр задаёт ритм исполнения: на каждом тике лидер спавнит
-// созревшие (due) Cadence в дочерние Voyage.
+// Package conductor implements Conductor, the leader-elected executor of
+// Cadence schedules (ADR-048). The conductor sets the execution rhythm: on
+// each tick, the leader spawns due Cadences into child Voyages.
 //
-// Conductor — keeper-side singleton-подсистема (не отдельный бинарь, как и
-// Reaper). Сидит на generic [leaderloop.Loop] со своим Redis-lease
-// [LeaseKey] = "conductor:leader" — независимым от reaper-lease: лидер Conductor
-// и лидер Reaper могут быть разными инстансами (ADR-048 §1). Свой tick-interval
-// (cadence_scheduler.interval, ~15–30s) не зависит от reaper.interval (1h):
-// scheduling-домен Cadence и cleanup-домен Reaper имеют разный естественный ритм.
+// Conductor is a keeper-side singleton subsystem (not a separate binary,
+// same as Reaper). It sits on the generic [leaderloop.Loop] with its own
+// Redis lease [LeaseKey] = "conductor:leader" — independent of the reaper
+// lease: the Conductor leader and the Reaper leader can be different
+// instances (ADR-048 §1). Its own tick interval (cadence_scheduler.interval,
+// ~15–30s) is independent of reaper.interval (1h): the Cadence scheduling
+// domain and the Reaper cleanup domain have different natural rhythms.
 //
-// Spawn-семантика (due-выборка FOR UPDATE SKIP LOCKED, три overlap_policy,
-// пересчёт next_run_at, single-executor в одной PG-tx) — в [Spawner],
-// concrete-реализация [CadenceSpawner] переехала сюда из reaper (C3, ADR-048 §3,
-// дословный перенос логики ADR-046 §4). Интерфейс оставлен для тестируемости
-// (fakeSpawner в тестах scheduler-а). C4 удалил reaper-исполнителя — Conductor
-// единственный исполнитель спавна; двойного/нулевого спавна нет
-// (switchover-безопасность: FOR UPDATE SKIP LOCKED + advance next_run_at в одной
-// tx страхуют любой транзиент при переключении исполнителя).
+// Spawn semantics (due selection FOR UPDATE SKIP LOCKED, three
+// overlap_policy values, next_run_at recalculation, single executor in one
+// PG tx) live in [Spawner]; the concrete implementation [CadenceSpawner]
+// moved here from reaper (C3, ADR-048 §3, verbatim carry-over of ADR-046 §4
+// logic). The interface is kept for testability (fakeSpawner in scheduler
+// tests). C4 removed the reaper executor — Conductor is the sole spawn
+// executor; there's no double/zero spawn (switchover safety: FOR UPDATE SKIP
+// LOCKED + advancing next_run_at in one tx cover any transient during
+// executor handover).
 package conductor
 
 import (
@@ -29,79 +31,86 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/redis"
 )
 
-// LeaseKey — Redis-ключ лидерства Conductor (ADR-048 §1). Отдельный от
-// "reaper:leader" — независимое лидерство двух фоновых подсистем кластера.
+// LeaseKey is the Redis leadership key for Conductor (ADR-048 §1). Separate
+// from "reaper:leader" — independent leadership for the cluster's two
+// background subsystems.
 const LeaseKey = "conductor:leader"
 
-// defaultBatch — потолок числа due-Cadence, спавнящихся за один тик, если
-// [Config.BatchFn] не задан. Anti-lavina при долгом downtime кластера:
-// накопившиеся due-расписания не лавинят флот одним тиком, остаток подберётся на
-// следующих тиках. Совпадает с историческим reaper-дефолтом spawn_due_cadence.
+// defaultBatch caps the number of due Cadences spawned per tick when
+// [Config.BatchFn] is unset. Anti-avalanche for long cluster downtime:
+// accumulated due schedules don't flood the souls in one tick, the rest are
+// picked up on subsequent ticks. Matches the historical reaper default for
+// spawn_due_cadence.
 const defaultBatch = 100
 
-// Spawner — узкая поверхность исполнителя due-cadence-спавна, которую дёргает
-// tick-callback Conductor. Сигнатура: `(ctx, duration, batchSize) →
-// (spawnedCount, error)`. duration-аргумент в spawn НЕ используется (предикат —
-// next_run_at <= NOW() напрямую) и передаётся нулевым; batchSize ограничивает
-// число расписаний за тик.
+// Spawner is the narrow surface of the due-cadence spawn executor invoked by
+// Conductor's tick callback. Signature: `(ctx, duration, batchSize) →
+// (spawnedCount, error)`. The duration argument is NOT used in spawn (the
+// predicate is next_run_at <= NOW() directly) and is passed as zero;
+// batchSize caps the number of schedules per tick.
 //
-// Production wire-up подаёт [*CadenceSpawner] (переехал в этот пакет, C3).
-// Интерфейс оставлен ради тестируемости: тесты scheduler-а подменяют
+// Production wire-up supplies [*CadenceSpawner] (moved into this package,
+// C3). The interface is kept for testability: scheduler tests substitute
 // fakeSpawner.
 type Spawner interface {
 	Run(ctx context.Context, _ time.Duration, batchSize int) (int64, error)
 }
 
-// Config — параметры Conductor-планировщика. Все поля, кроме [Config.BatchFn],
-// [Config.AcquireBackoff] и [Config.OnLeaseChange], обязательны: отсутствие —
-// программная ошибка caller-а (wire-up), [New] возвращает error.
+// Config holds the Conductor scheduler's parameters. All fields except
+// [Config.BatchFn], [Config.AcquireBackoff] and [Config.OnLeaseChange] are
+// required: a missing one is a caller (wire-up) programmer error, [New]
+// returns an error.
 type Config struct {
-	// Holder — идентификатор инстанса (KID) для lease-ключа и логов.
+	// Holder is the instance identifier (KID) for the lease key and logs.
 	Holder string
 
-	// Redis — клиент, через который захватывается lease.
+	// Redis is the client used to acquire the lease.
 	Redis *redis.Client
 
-	// Logger — slog-логгер.
+	// Logger is the slog logger.
 	Logger *slog.Logger
 
-	// Spawner — исполнитель due-cadence-спавна (см. [Spawner]).
+	// Spawner is the due-cadence spawn executor (see [Spawner]).
 	Spawner Spawner
 
-	// IntervalFn — интервал между тиками (hot-reload: перечитывается на каждом
-	// тике). Conductor-специфичный, независимый от reaper.interval (ADR-048 §2).
+	// IntervalFn is the interval between ticks (hot-reload: re-read on every
+	// tick). Conductor-specific, independent of reaper.interval (ADR-048 §2).
 	IntervalFn func() time.Duration
 
-	// LockTTLFn — TTL Redis-lease-ключа (hot-reload между re-acquire).
+	// LockTTLFn is the TTL of the Redis lease key (hot-reload between
+	// re-acquires).
 	LockTTLFn func() time.Duration
 
-	// BatchFn — потолок числа due-Cadence за тик (hot-reload). Nil или
-	// non-positive результат → [defaultBatch].
+	// BatchFn caps the number of due Cadences per tick (hot-reload). Nil or a
+	// non-positive result → [defaultBatch].
 	BatchFn func() int
 
-	// AcquireBackoff — пауза между попытками захвата lease. Zero → дефолт
-	// leaderloop-а.
+	// AcquireBackoff is the pause between lease-acquire attempts. Zero →
+	// leaderloop's default.
 	AcquireBackoff time.Duration
 
-	// OnLeaseChange — опциональный callback смены статуса лидерства (true при
-	// захвате, false при выходе из tick-loop-а). Nil — допустимо. Production
-	// wire-up подаёт [ConductorMetrics.SetLeaseHeld] (lease-Gauge, C5).
+	// OnLeaseChange is an optional callback for leadership status changes
+	// (true on acquire, false on exiting the tick loop). Nil is allowed.
+	// Production wire-up supplies [ConductorMetrics.SetLeaseHeld] (lease
+	// Gauge, C5).
 	OnLeaseChange func(held bool)
 
-	// Metrics — Prometheus-collectors тика спавна (executions / spawned /
-	// errors / duration). Nil допустим — [ConductorMetrics.ObserveSpawn] no-op-ит
-	// на nil-получателе (unit-тесты scheduler-а без obs-стека).
+	// Metrics are the Prometheus collectors for the spawn tick (executions /
+	// spawned / errors / duration). Nil is allowed —
+	// [ConductorMetrics.ObserveSpawn] no-ops on a nil receiver (scheduler
+	// unit tests without the obs stack).
 	Metrics *ConductorMetrics
 }
 
-// Scheduler — корневая структура Conductor. Один экземпляр на keeper-процесс.
-// Создаётся через [New], запускается через [Scheduler.Run].
+// Scheduler is Conductor's root struct. One instance per keeper process.
+// Created via [New], started via [Scheduler.Run].
 type Scheduler struct {
 	cfg Config
 }
 
-// New валидирует конфиг и возвращает Scheduler. На отсутствующие обязательные
-// поля — error: программная ошибка caller-а (wire-up), не runtime-условие.
+// New validates the config and returns a Scheduler. Missing required fields
+// return an error: a caller (wire-up) programmer error, not a runtime
+// condition.
 func New(cfg Config) (*Scheduler, error) {
 	if cfg.Holder == "" {
 		return nil, errors.New("conductor.New: Holder is required")
@@ -124,13 +133,13 @@ func New(cfg Config) (*Scheduler, error) {
 	return &Scheduler{cfg: cfg}, nil
 }
 
-// Run крутит leader-loop до отмены ctx. Лидерство, renewal, re-acquire и
-// graceful-shutdown делегированы generic [leaderloop.Loop]; Conductor — тонкий
-// потребитель: tick-callback зовёт [Spawner.Run] над свежими hot-reload-снимками
-// interval/lock_ttl/batch.
+// Run drives the leader loop until ctx is canceled. Leadership, renewal,
+// re-acquire and graceful shutdown are delegated to the generic
+// [leaderloop.Loop]; Conductor is a thin consumer: the tick callback calls
+// [Spawner.Run] over fresh hot-reload snapshots of interval/lock_ttl/batch.
 //
-// Возвращает nil на graceful-stop (ctx.Done) и обёрнутую error на fatal-условия
-// acquire-фазы.
+// Returns nil on graceful stop (ctx.Done) and a wrapped error on fatal
+// acquire-phase conditions.
 func (s *Scheduler) Run(ctx context.Context) error {
 	loop, err := leaderloop.New(leaderloop.Config{
 		LeaseKey:       LeaseKey,
@@ -144,17 +153,18 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		OnLeaseChange:  s.cfg.OnLeaseChange,
 	})
 	if err != nil {
-		// Обязательные поля проверены New-ом → здесь не должно падать.
-		// Прокидываем на случай рассинхрона контрактов.
+		// Required fields are validated by New → this shouldn't fail here.
+		// Propagated in case the contracts drift out of sync.
 		return err
 	}
 	return loop.Run(ctx)
 }
 
-// tick — tick-callback для leaderloop: спавнит due-cadence через [Spawner].
-// Ошибка спавна не роняет loop (best-effort фоновое правило, parity Reaper):
-// логируется warn-ом, следующий тик повторит (строки остались due — next_run_at
-// при ошибке spawn-tx не сдвигается, см. ADR-046 §4).
+// tick is the tick callback for leaderloop: spawns due cadences via
+// [Spawner]. A spawn error doesn't bring down the loop (best-effort
+// background rule, parity with Reaper): logged as a warning, the next tick
+// retries (the rows stay due — next_run_at isn't advanced on a spawn-tx
+// error, see ADR-046 §4).
 func (s *Scheduler) tick(ctx context.Context) {
 	batch := defaultBatch
 	if s.cfg.BatchFn != nil {
@@ -162,7 +172,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 			batch = b
 		}
 	}
-	// duration-аргумент в spawn не используется (предикат — next_run_at <= NOW()).
+	// The duration argument isn't used in spawn (the predicate is next_run_at <= NOW()).
 	start := time.Now()
 	spawned, err := s.cfg.Spawner.Run(ctx, 0, batch)
 	s.cfg.Metrics.ObserveSpawn(spawned, err, time.Since(start))

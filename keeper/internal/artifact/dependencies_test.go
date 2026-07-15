@@ -16,8 +16,8 @@ modules:
   - { name: wb.redis-failover, ref: v1.2.0 }
 `
 
-// TestListDependencies_ReadsManifest — happy-path: оба блока распарсены,
-// порядок сохранён, per-entry git override проброшен.
+// TestListDependencies_ReadsManifest — happy-path: both blocks parsed,
+// order preserved, per-entry git override passed through.
 func TestListDependencies_ReadsManifest(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, manifestWithDeps)
@@ -45,8 +45,8 @@ func TestListDependencies_ReadsManifest(t *testing.T) {
 	}
 }
 
-// TestListDependencies_NoBlocks — сервис без destiny/modules: оба слайса
-// non-nil (пустые), не nil (JSON `[]`, не null).
+// TestListDependencies_NoBlocks — a service without destiny/modules: both
+// slices are non-nil (empty), not nil (JSON `[]`, not null).
 func TestListDependencies_NoBlocks(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, validManifestV2)
@@ -63,7 +63,7 @@ func TestListDependencies_NoBlocks(t *testing.T) {
 	}
 }
 
-// TestListDependencies_MissingManifest — `service.yml` нет → error.
+// TestListDependencies_MissingManifest — no `service.yml` → error.
 func TestListDependencies_MissingManifest(t *testing.T) {
 	root := t.TempDir()
 	if _, err := ListDependencies(root, discardLogger()); err == nil {
@@ -71,8 +71,8 @@ func TestListDependencies_MissingManifest(t *testing.T) {
 	}
 }
 
-// TestListDependencies_BrokenManifest — невалидный манифест → error
-// (битый service.yml в репо; caller отдаёт 502).
+// TestListDependencies_BrokenManifest — invalid manifest → error
+// (broken service.yml in the repo; caller returns 502).
 func TestListDependencies_BrokenManifest(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, "name: 123\nstate_schema_version: oops\n")

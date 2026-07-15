@@ -21,9 +21,9 @@ func TestValidateGitScheme_Allowed(t *testing.T) {
 
 func TestValidateGitScheme_Rejected(t *testing.T) {
 	cases := []string{
-		"http://example.com/org/repo.git", // незашифрованный — не в allowlist
+		"http://example.com/org/repo.git", // unencrypted — not in the allowlist
 		"ftp://example.com/repo.git",
-		"/local/path/repo", // голый путь без схемы и без scp-формы
+		"/local/path/repo", // bare path, no scheme and no scp form
 		"javascript:alert(1)",
 	}
 	for _, url := range cases {
@@ -59,8 +59,8 @@ func TestValidateGitScheme_FileRequiresFlag(t *testing.T) {
 	}
 }
 
-// TestLoad_FileRejectedWithoutFlag проверяет, что Load отклоняет file://-URL,
-// когда флаг снят, ещё до git-операций (security review L2).
+// TestLoad_FileRejectedWithoutFlag checks that Load rejects a file:// URL
+// when the flag is unset, before any git operations (security review L2).
 func TestLoad_FileRejectedWithoutFlag(t *testing.T) {
 	tr := newTestRepo(t)
 	loader := newLoader(t)

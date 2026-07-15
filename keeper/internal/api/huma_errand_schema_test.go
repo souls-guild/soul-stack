@@ -1,19 +1,19 @@
-// Доказательный гейт выравнивания имён ERRAND-схем под committed-рукопись (тираж-батч
-// N3, по эталону huma_operator_schema_test.go / huma_herald_schema_test.go). Собирает
-// агрегированную huma-спеку (HumaFullSpecYAML) и проверяет, что схемы errand-домена
-// названы ТОЧНО как контракт (docs/keeper/openapi.yaml).
+// A proof gate aligning the ERRAND schema names to the committed hand-written spec (rollout
+// batch N3, following the huma_operator_schema_test.go / huma_herald_schema_test.go reference).
+// Assembles the aggregated huma spec (HumaFullSpecYAML) and checks that the errand-domain
+// schemas are named EXACTLY as the contract (docs/keeper/openapi.yaml).
 //
-// МЕХАНИЗМЫ для errand (сверены с рукописью):
-//   - REQUEST-RENAME: НЕ применяется. list/get/cancel — query/path-only роуты БЕЗ тела
-//     запроса; huma-input-структур с Body нет → переименовывать нечего, технических
-//     *HumaBody-имён в спеке быть не может.
-//   - ENUM-ALIAS: НЕ применяется. Рукопись НЕ объявляет standalone ErrandStatus в
-//     components/schemas — статус инлайнится в ErrandResult (`type: string` + enum).
-//   - ENVELOPE: уже named oapi-тип (ErrandListReply — генерёная struct, НЕ generic
-//     PagedResponse) → DefaultSchemaNamer даёт контрактное имя сам; alias-механизм не
-//     нужен. Здесь лишь СВЕРЯЕМ форму: 4-поля-offset с plain `integer` (рукопись несёт
-//     `type: integer` БЕЗ format → format-agnostic assert; ErrandListReply на Go-int
-//     → huma эмитит int64). items.$ref на контрактный ErrandResult.
+// MECHANISMS for errand (reconciled with the hand-written spec):
+//   - REQUEST-RENAME: NOT applied. list/get/cancel — query/path-only routes with NO request
+//     body; there are no huma-input structs with a Body → nothing to rename, there can be no
+//     technical *HumaBody names in the spec.
+//   - ENUM-ALIAS: NOT applied. The hand-written spec does NOT declare a standalone ErrandStatus in
+//     components/schemas — the status is inlined into ErrandResult (`type: string` + enum).
+//   - ENVELOPE: already a named oapi type (ErrandListReply — a generated struct, NOT a generic
+//     PagedResponse) → DefaultSchemaNamer produces the contract name itself; the alias mechanism is
+//     not needed. Here we only VERIFY the shape: 4-field-offset with a plain `integer` (the hand-written
+//     spec carries `type: integer` WITHOUT format → a format-agnostic assert; ErrandListReply on a Go int
+//     → huma emits int64). items.$ref to the contract ErrandResult.
 package api
 
 import (
@@ -22,19 +22,19 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// errandContractSchemas — envelope/element-имена errand-домена ровно как в committed-
-// рукописи. Все обязаны присутствовать в собранной спеке.
+// errandContractSchemas — envelope/element names of the errand domain exactly as in the
+// committed hand-written spec. All must be present in the assembled spec.
 var errandContractSchemas = []string{
 	"ErrandListReply",
 	"ErrandResult",
-	// Class C доэмиссия: ErrandAccepted (202-тело async-escalation exec / errand-get
-	// running) маршалится через json.RawMessage → НЕ типизирован ссылающимся huma-полем
-	// → схема не эмитилась. Pre-seed schema-builder (huma_errand_accepted.go) кладёт её.
+	// Class C late emission: ErrandAccepted (202 body of async-escalation exec / errand-get
+	// running) is marshaled via json.RawMessage → NOT typed by any referencing huma field
+	// → the schema was not emitted. A pre-seed schema-builder (huma_errand_accepted.go) adds it.
 	"ErrandAccepted",
 }
 
-// TestSchemaNames_Errand — гейт N3. Контрактные имена envelope/element присутствуют.
-// (forbidden-набор пуст: у errand нет request-тел → технических *HumaBody-имён не бывает.)
+// TestSchemaNames_Errand — gate N3. The contract envelope/element names are present.
+// (the forbidden set is empty: errand has no request bodies → no technical *HumaBody names.)
 func TestSchemaNames_Errand(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range errandContractSchemas {
@@ -44,10 +44,10 @@ func TestSchemaNames_Errand(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_ErrandEnvelope — гейт N3 (ENVELOPE). ErrandListReply несёт КОНТРАКТНУЮ
-// 4-поля-offset форму (items/offset/limit/total; items.$ref на ErrandResult). Format-
-// agnostic: рукопись объявляет offset/limit/total как plain `integer` без явного int32.
-// Мутация (item-only / cursor-поля / неверный $ref) краснит.
+// TestSchemaNames_ErrandEnvelope — gate N3 (ENVELOPE). ErrandListReply carries the CONTRACT
+// 4-field-offset shape (items/offset/limit/total; items.$ref to ErrandResult). Format-
+// agnostic: the hand-written spec declares offset/limit/total as a plain `integer` without an explicit int32.
+// A mutation (item-only / cursor fields / a wrong $ref) turns it red.
 func TestSchemaNames_ErrandEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -62,10 +62,10 @@ func TestSchemaNames_ErrandEnvelope(t *testing.T) {
 	assertOffsetEnvelopeNoFormat(t, schemas, "ErrandListReply", "ErrandResult")
 }
 
-// TestSchemaNames_ErrandAccepted — гейт Class C (доэмиссия 202-тела). ErrandAccepted
-// присутствует в спеке с контрактной формой (рукопись :7363): errand_id + status
-// (enum [running]); required:[errand_id, status]. Мутация (убрать registerErrandAccepted →
-// схема исчезает, dual-status 202 без типизированного тела) краснит.
+// TestSchemaNames_ErrandAccepted — gate Class C (late emission of the 202 body). ErrandAccepted
+// is present in the spec with the contract shape (hand-written spec :7363): errand_id + status
+// (enum [running]); required:[errand_id, status]. A mutation (remove registerErrandAccepted →
+// the schema disappears, a dual-status 202 without a typed body) turns it red.
 func TestSchemaNames_ErrandAccepted(t *testing.T) {
 	_, doc := loadFullSpecDoc(t)
 	comp, _ := doc["components"].(map[string]any)
@@ -78,7 +78,7 @@ func TestSchemaNames_ErrandAccepted(t *testing.T) {
 	assertRequiredExactly(t, acc, "ErrandAccepted", "errand_id", "status")
 	assertProps(t, acc, "ErrandAccepted", "errand_id", "status")
 
-	// status — string-enum ровно [running] (контракт :7372).
+	// status — a string enum of exactly [running] (contract :7372).
 	props, _ := acc["properties"].(map[string]any)
 	status, _ := props["status"].(map[string]any)
 	if status == nil {

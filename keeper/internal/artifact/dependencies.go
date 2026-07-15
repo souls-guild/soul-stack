@@ -11,42 +11,45 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// ServiceDependencies — проекция git-зависимостей одного снапшота Service-репо
-// для UI Service Detail (`GET /v1/services/{name}/dependencies`): задекларированные
-// в `service.yml` destiny-кирпичики и custom-модули, каждый со своим git-ref-ом
-// (ADR-007: версия = git tag/branch). Источник — top-level блоки `destiny:` /
-// `modules:` манифеста (shared/config.ServiceManifest); content самих
-// destiny/модулей НЕ грузится — оператору в Detail нужны только `{name, ref}`
-// (что и под каким тегом тянет сервис).
+// ServiceDependencies — projection of one Service-repo snapshot's git
+// dependencies for the UI Service Detail (`GET /v1/services/{name}/dependencies`):
+// the destiny building blocks and custom modules declared in `service.yml`,
+// each with its own git ref (ADR-007: version = git tag/branch). Source —
+// the manifest's top-level `destiny:` / `modules:` blocks (shared/config.ServiceManifest);
+// destiny/module content itself is NOT loaded — the operator's Detail view
+// only needs `{name, ref}` (what the service pulls, under which tag).
 //
-// Имена JSON-полей совпадают с UI-API (`ServiceDependenciesReply`); оба слайса
-// non-nil после [ListDependencies] (сервис без зависимостей валиден → пустые
-// массивы, не null — parity со [StateSchemaInfo.Migrations] / [ListScenarios]).
+// JSON field names match the UI API (`ServiceDependenciesReply`); both slices
+// are non-nil after [ListDependencies] (a service without dependencies is
+// valid → empty arrays, not null — parity with [StateSchemaInfo.Migrations] /
+// [ListScenarios]).
 type ServiceDependencies struct {
 	Destiny []Dependency `json:"destiny"`
 	Modules []Dependency `json:"modules"`
 }
 
-// Dependency — одна запись `destiny[]` / `modules[]` манифеста (metadata-only):
-// `name` (kebab-case destiny / двухуровневый `<namespace>.<module>`), `ref`
-// (git tag или branch, ADR-007) и опц. `git` (per-entry override полного URL,
-// поддержан только для destiny[] — для modules[] всегда пуст по контракту
-// config.validateDependencyRef).
+// Dependency — one entry of the manifest's `destiny[]` / `modules[]` (metadata-only):
+// `name` (kebab-case destiny / two-level `<namespace>.<module>`), `ref`
+// (git tag or branch, ADR-007), and optional `git` (per-entry full-URL
+// override, supported only for destiny[] — always empty for modules[] per
+// the config.validateDependencyRef contract).
 type Dependency struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref"`
 	Git  string `json:"git,omitempty"`
 }
 
-// ListDependencies собирает [ServiceDependencies] из материализованного снапшота
-// service-репо (serviceRoot — абсолютный путь, обычно [ServiceArtifact.LocalDir]).
+// ListDependencies assembles [ServiceDependencies] from a materialized
+// service-repo snapshot (serviceRoot — absolute path, usually
+// [ServiceArtifact.LocalDir]).
 //
-// Парсит `service.yml` нормативным [config.LoadServiceManifestFromBytes];
-// error-диагностика == битый манифест в репо → ошибка выше (caller отдаёт 502),
-// parity со [ListStateSchema]. Сами блоки `destiny:` / `modules:` опциональны:
-// отсутствуют → пустые слайсы (сервис без зависимостей валиден). Логгер
-// опционален (nil → slog.Default); сейчас не используется (чтение манифеста —
-// без partial-success), но сигнатура симметрична [ListStateSchema] / [ListScenarios].
+// Parses `service.yml` via the normative [config.LoadServiceManifestFromBytes];
+// error-level diagnostics == a broken manifest in the repo → error propagates
+// up (caller returns 502), parity with [ListStateSchema]. The `destiny:` /
+// `modules:` blocks themselves are optional: absent → empty slices (a service
+// without dependencies is valid). Logger is optional (nil → slog.Default);
+// unused for now (reading the manifest has no partial-success path), but the
+// signature stays symmetric with [ListStateSchema] / [ListScenarios].
 func ListDependencies(serviceRoot string, logger *slog.Logger) (*ServiceDependencies, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -74,8 +77,8 @@ func ListDependencies(serviceRoot string, logger *slog.Logger) (*ServiceDependen
 	}, nil
 }
 
-// toDependencies проецирует []config.DependencyRef в []Dependency (non-nil
-// результат — пустой манифест-блок отдаётся как `[]`, не null).
+// toDependencies projects []config.DependencyRef into []Dependency (non-nil
+// result — an empty manifest block is returned as `[]`, not null).
 func toDependencies(refs []config.DependencyRef) []Dependency {
 	out := make([]Dependency, 0, len(refs))
 	for _, r := range refs {

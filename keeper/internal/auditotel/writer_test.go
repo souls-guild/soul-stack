@@ -14,8 +14,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newTestWriter возвращает (writer, in-memory-recorder). Recorder
-// захватывает закрытые span-ы для проверки attributes и timestamp-а.
+// newTestWriter returns (writer, in-memory recorder). The recorder
+// captures ended spans for checking attributes and the timestamp.
 func newTestWriter(t *testing.T) (audit.Writer, *tracetest.SpanRecorder) {
 	t.Helper()
 	rec := tracetest.NewSpanRecorder()
@@ -162,9 +162,9 @@ func TestOtelWriter_NilEventReturnsNilNoSpan(t *testing.T) {
 	}
 }
 
-// TestOtelWriter_EmptyEventTypeSkipped — обсервация obs-7 qa.C.
-// Пустой EventType непригоден как span name; writer должен лог-варнить
-// и возвращать nil без создания span-а.
+// TestOtelWriter_EmptyEventTypeSkipped — observation obs-7 qa.C.
+// An empty EventType is unusable as a span name; the writer should log a
+// warning and return nil without creating a span.
 func TestOtelWriter_EmptyEventTypeSkipped(t *testing.T) {
 	w, rec := newTestWriter(t)
 	ev := &audit.Event{
@@ -181,9 +181,9 @@ func TestOtelWriter_EmptyEventTypeSkipped(t *testing.T) {
 }
 
 // TestOtelWriter_NilPayloadValue_AttrOmitted — review.C M-5.
-// Значение nil в payload должно приводить к опущенному атрибуту, не к
-// пустой строке. Это типовой OTel-pattern и снимает неоднозначность
-// «не задано» vs «явно пустая строка».
+// A nil value in payload should result in an omitted attribute, not an
+// empty string. This is a typical OTel pattern and removes the ambiguity
+// of "not set" vs "explicitly empty string".
 func TestOtelWriter_NilPayloadValue_AttrOmitted(t *testing.T) {
 	w, rec := newTestWriter(t)
 	ev := &audit.Event{
@@ -211,9 +211,9 @@ func TestOtelWriter_NilPayloadValue_AttrOmitted(t *testing.T) {
 }
 
 // TestOtelWriter_IntegerWidths_InPayloadAttribute — review.C M-4.
-// Проверяет, что все integer-ширины (int8/int16/int32/int64/uint/uint8/
-// uint16/uint32/uint64) попадают как Int64-attribute, кроме uint64 >
-// math.MaxInt64 (там — String fallback).
+// Checks that all integer widths (int8/int16/int32/int64/uint/uint8/
+// uint16/uint32/uint64) land as an Int64 attribute, except uint64 >
+// math.MaxInt64 (String fallback there).
 func TestOtelWriter_IntegerWidths_InPayloadAttribute(t *testing.T) {
 	w, rec := newTestWriter(t)
 	ev := &audit.Event{
@@ -269,8 +269,8 @@ func TestOtelWriter_IntegerWidths_InPayloadAttribute(t *testing.T) {
 		}
 	}
 
-	// uint64 > MaxInt64 → string-fallback (потеря точности int64
-	// неприемлема).
+	// uint64 > MaxInt64 → string fallback (int64 precision loss is
+	// unacceptable).
 	if v, ok := findAttr(attrs, "audit.payload.u64hi"); !ok || v.Type() != attribute.STRING {
 		t.Errorf("audit.payload.u64hi type = %v (ok=%v), want STRING fallback", v.Type(), ok)
 	}

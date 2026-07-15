@@ -19,7 +19,7 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// newTestRedis — клиент к свежему miniredis-у. Cleanup автоматический.
+// newTestRedis — client to a fresh miniredis. Cleanup is automatic.
 func newTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -31,13 +31,13 @@ func newTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	return c, mr
 }
 
-// tickCounter — атомарный счётчик вызовов tick-callback-а.
+// tickCounter — atomic counter of tick-callback invocations.
 type tickCounter struct{ n atomic.Int64 }
 
 func (c *tickCounter) tick(context.Context) { c.n.Add(1) }
 func (c *tickCounter) count() int64         { return c.n.Load() }
 
-// waitFor крутит cond() до timeout-а; на провал — t.Fatal.
+// waitFor polls cond() until timeout; on failure calls t.Fatal.
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -94,8 +94,8 @@ func TestNew_ValidatesConfig(t *testing.T) {
 	}
 }
 
-// TestRun_AcquiresLeaseAndTicks — acquire lease → tick вызывается по interval,
-// lease реально захвачен в Redis под Holder-ом.
+// TestRun_AcquiresLeaseAndTicks — acquire lease → tick is called on
+// interval, lease is actually held in Redis under Holder.
 func TestRun_AcquiresLeaseAndTicks(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	var tc tickCounter
@@ -111,12 +111,12 @@ func TestRun_AcquiresLeaseAndTicks(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- loop.Run(ctx) }()
 
-	// Ключ захвачен под нашим holder-ом.
+	// Key is held under our holder.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		v, _ := mr.Get(cfg.LeaseKey)
 		return v == cfg.Holder
 	})
-	// Immediate-tick при acquire + последующие тики по interval.
+	// Immediate tick at acquire + subsequent ticks on interval.
 	waitFor(t, 500*time.Millisecond, func() bool { return tc.count() >= 2 })
 
 	cancel()
@@ -125,8 +125,8 @@ func TestRun_AcquiresLeaseAndTicks(t *testing.T) {
 	}
 }
 
-// TestRun_LeaseLost_StopsTickAndReacquires — потеря lease прекращает tick,
-// после освобождения ключа loop пере-захватывает и tick возобновляется.
+// TestRun_LeaseLost_StopsTickAndReacquires — lease loss stops the tick;
+// once the key is freed, the loop re-acquires and ticking resumes.
 func TestRun_LeaseLost_StopsTickAndReacquires(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	var tc tickCounter
@@ -149,19 +149,19 @@ func TestRun_LeaseLost_StopsTickAndReacquires(t *testing.T) {
 	})
 	callsBefore := tc.count()
 
-	// «Воруем» lease: подменяем значение → следующий Renew вернёт ErrLeaseLost,
-	// tick-loop остановится.
+	// "Steal" the lease: overwrite the value → the next Renew returns
+	// ErrLeaseLost, the tick-loop stops.
 	mr.Set(cfg.LeaseKey, "intruder")
-	// renewEvery = lock_ttl/3 = 100ms; ждём, чтобы Renew поймал потерю.
+	// renewEvery = lock_ttl/3 = 100ms; wait for Renew to catch the loss.
 	time.Sleep(250 * time.Millisecond)
 
-	// Освобождаем ключ — loop должен пере-захватить.
+	// Free the key — the loop should re-acquire.
 	mr.Del(cfg.LeaseKey)
 	waitFor(t, 2*time.Second, func() bool {
 		v, _ := mr.Get(cfg.LeaseKey)
 		return v == cfg.Holder
 	})
-	// Новые тики после re-acquire.
+	// New ticks after re-acquire.
 	waitFor(t, 500*time.Millisecond, func() bool { return tc.count() > callsBefore })
 
 	cancel()
@@ -170,8 +170,8 @@ func TestRun_LeaseLost_StopsTickAndReacquires(t *testing.T) {
 	}
 }
 
-// TestRun_TwoInstances_OnlyHolderTicks — один lease на двоих: tick зовётся
-// только у держателя, второй крутится в acquire-backoff и не тикает.
+// TestRun_TwoInstances_OnlyHolderTicks — one lease shared by two: tick is
+// only called on the holder, the other spins in acquire-backoff without ticking.
 func TestRun_TwoInstances_OnlyHolderTicks(t *testing.T) {
 	rc, mr := newTestRedis(t)
 
@@ -199,7 +199,7 @@ func TestRun_TwoInstances_OnlyHolderTicks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Стартуем winner первым, даём захватить lease, затем loser.
+	// Start winner first, let it acquire the lease, then loser.
 	wDone := make(chan error, 1)
 	go func() { wDone <- winner.Run(ctx) }()
 	waitFor(t, 500*time.Millisecond, func() bool {
@@ -209,12 +209,12 @@ func TestRun_TwoInstances_OnlyHolderTicks(t *testing.T) {
 	lDone := make(chan error, 1)
 	go func() { lDone <- loser.Run(ctx) }()
 
-	// Winner накапливает тики; loser должен оставаться на нуле.
+	// Winner accumulates ticks; loser must stay at zero.
 	waitFor(t, 500*time.Millisecond, func() bool { return winnerTicks.count() >= 3 })
 	if got := loserTicks.count(); got != 0 {
 		t.Errorf("loser ticked %d times while not holding lease; want 0", got)
 	}
-	// Ключ всё ещё у winner-а.
+	// Key is still held by winner.
 	if v, _ := mr.Get(winnerCfg.LeaseKey); v != "keeper-winner" {
 		t.Errorf("lease holder = %q; want keeper-winner", v)
 	}
@@ -224,8 +224,8 @@ func TestRun_TwoInstances_OnlyHolderTicks(t *testing.T) {
 	<-lDone
 }
 
-// TestRun_HotReloadInterval — IntervalFn возвращает новое значение → следующий
-// тик планируется по новому интервалу. Проверяем учащение темпа тиков.
+// TestRun_HotReloadInterval — IntervalFn returns a new value → the next tick
+// is scheduled with the new interval. Verifies the tick rate speeds up.
 func TestRun_HotReloadInterval(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	var tc tickCounter
@@ -250,19 +250,19 @@ func TestRun_HotReloadInterval(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- loop.Run(ctx) }()
 
-	// На медленном интервале (200ms) за ~250ms ожидаем мало тиков
+	// On the slow interval (200ms) over ~250ms we expect few ticks
 	// (immediate + ~1).
 	time.Sleep(250 * time.Millisecond)
 	slow := tc.count()
 
-	// Ускоряем интервал.
+	// Speed up the interval.
 	mu.Lock()
 	interval = 20 * time.Millisecond
 	mu.Unlock()
 
-	// Через следующий (старый) тик loop перечитает IntervalFn и пересоздаст
-	// ticker — после этого тики пойдут часто. За 400ms на 20ms-интервале их
-	// должно прибавиться заметно больше, чем на медленном.
+	// On the next (old) tick the loop re-reads IntervalFn and recreates the
+	// ticker — after that, ticks fire frequently. Over 400ms at a 20ms
+	// interval, the count should grow noticeably more than on the slow one.
 	waitFor(t, 1500*time.Millisecond, func() bool {
 		return tc.count()-slow >= 5
 	})
@@ -273,8 +273,8 @@ func TestRun_HotReloadInterval(t *testing.T) {
 	}
 }
 
-// TestRun_GracefulShutdown_ReleasesLease — ctx.Done → tick прекращается и
-// lease освобождается (ключ удалён из Redis).
+// TestRun_GracefulShutdown_ReleasesLease — ctx.Done → tick stops and the
+// lease is released (key removed from Redis).
 func TestRun_GracefulShutdown_ReleasesLease(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	var tc tickCounter
@@ -304,14 +304,15 @@ func TestRun_GracefulShutdown_ReleasesLease(t *testing.T) {
 		t.Fatal("Run did not return within 2s of cancel — leak")
 	}
 
-	// После graceful-shutdown ключ освобождён (lease Release на ctx-выходе).
+	// After graceful shutdown the key is freed (lease Release on ctx-exit).
 	if v, _ := mr.Get(cfg.LeaseKey); v != "" {
 		t.Errorf("lease key still held after graceful shutdown: %q", v)
 	}
 }
 
-// TestRun_LeaseFailover_OtherInstanceAcquires — держатель «умирает» (его ctx
-// отменён, lease освобождён) → другой инстанс захватывает lease и начинает тикать.
+// TestRun_LeaseFailover_OtherInstanceAcquires — the holder "dies" (its ctx
+// is cancelled, lease released) → another instance acquires the lease and
+// starts ticking.
 func TestRun_LeaseFailover_OtherInstanceAcquires(t *testing.T) {
 	rc, mr := newTestRedis(t)
 
@@ -347,7 +348,7 @@ func TestRun_LeaseFailover_OtherInstanceAcquires(t *testing.T) {
 		return v == "keeper-a"
 	})
 
-	// b стартует, упирается в backoff (a держит lease).
+	// b starts, gets stuck in backoff (a holds the lease).
 	bDone := make(chan error, 1)
 	go func() { bDone <- b.Run(bCtx) }()
 	time.Sleep(100 * time.Millisecond)
@@ -355,11 +356,11 @@ func TestRun_LeaseFailover_OtherInstanceAcquires(t *testing.T) {
 		t.Errorf("b ticked %d times while a is leader; want 0", got)
 	}
 
-	// «Убиваем» a: graceful-shutdown освобождает lease.
+	// "Kill" a: graceful shutdown releases the lease.
 	aCancel()
 	<-aDone
 
-	// b должен подхватить lease и начать тикать.
+	// b should pick up the lease and start ticking.
 	waitFor(t, 2*time.Second, func() bool {
 		v, _ := mr.Get(bCfg.LeaseKey)
 		return v == "keeper-b"
@@ -370,8 +371,8 @@ func TestRun_LeaseFailover_OtherInstanceAcquires(t *testing.T) {
 	<-bDone
 }
 
-// TestRun_OnLeaseChange_Callback — опциональный callback вызывается true на
-// захвате lease и false на выходе (graceful shutdown).
+// TestRun_OnLeaseChange_Callback — the optional callback is called true on
+// lease acquire and false on exit (graceful shutdown).
 func TestRun_OnLeaseChange_Callback(t *testing.T) {
 	rc, mr := newTestRedis(t)
 
@@ -418,7 +419,7 @@ func TestRun_OnLeaseChange_Callback(t *testing.T) {
 	}
 }
 
-// TestRun_OnLeaseChange_NilIsSafe — nil callback не должен паниковать.
+// TestRun_OnLeaseChange_NilIsSafe — nil callback must not panic.
 func TestRun_OnLeaseChange_NilIsSafe(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	cfg := baseConfig(rc)
@@ -435,8 +436,9 @@ func TestRun_OnLeaseChange_NilIsSafe(t *testing.T) {
 	}
 }
 
-// TestRun_AcquireConflict_DoesNotOverwrite — внешний holder держит lease;
-// loop крутится в backoff и не перезаписывает чужой ключ, tick не зовётся.
+// TestRun_AcquireConflict_DoesNotOverwrite — an external holder holds the
+// lease; the loop spins in backoff and doesn't overwrite the foreign key,
+// tick is not called.
 func TestRun_AcquireConflict_DoesNotOverwrite(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	mr.Set("test:leader", "external-leader")

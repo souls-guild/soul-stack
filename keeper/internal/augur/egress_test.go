@@ -9,9 +9,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// SSRF-guard-логика (классификатор IP, guardedDialContext, redirect-downgrade,
-// https-only) живёт и тестируется в shared/netguard. Здесь — только augur-обёртка
-// validateEndpoint и проводка SSRF-guard в брокерный клиент.
+// The SSRF-guard logic (IP classifier, guardedDialContext, redirect-downgrade,
+// https-only) lives and is tested in shared/netguard. What's here is only the
+// augur wrapper validateEndpoint and wiring the SSRF guard into the broker
+// client.
 
 func TestValidateEndpoint(t *testing.T) {
 	cases := []struct {
@@ -40,7 +41,7 @@ func TestValidateEndpoint(t *testing.T) {
 	}
 }
 
-// blockResolver — резолвер, возвращающий заданный набор IP для любого host-а.
+// blockResolver — a resolver that returns a fixed set of IPs for any host.
 type blockResolver struct{ addrs []string }
 
 func (r blockResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr, error) {
@@ -53,8 +54,9 @@ func (r blockResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr, 
 
 var _ netguard.Resolver = blockResolver{}
 
-// TestNewEgressClient_GuardWiring — брокерный клиент несёт SSRF-guard на dial-фазе
-// (DialContext выставлен), redirect-downgrade-защиту и общий таймаут запроса.
+// TestNewEgressClient_GuardWiring — the broker client carries an SSRF guard
+// at the dial phase (DialContext is set), redirect-downgrade protection, and
+// the overall request timeout.
 func TestNewEgressClient_GuardWiring(t *testing.T) {
 	c := newEgressClient(blockResolver{addrs: []string{"8.8.8.8"}})
 
@@ -72,7 +74,7 @@ func TestNewEgressClient_GuardWiring(t *testing.T) {
 		t.Errorf("client.Timeout = %v, want %v", c.Timeout, egressRequestTimeout)
 	}
 
-	// Guard реально работает: host, резолвящийся в metadata, не дойдёт до dial.
+	// The guard actually works: a host resolving to metadata never reaches dial.
 	bad := newEgressClient(blockResolver{addrs: []string{"169.254.169.254"}})
 	badTr := bad.Transport.(*http.Transport)
 	if _, err := badTr.DialContext(context.Background(), "tcp", "evil.example:443"); err == nil {

@@ -12,16 +12,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 )
 
-// --- CRIT-1: account-takeover guard (ADR-058(d) revocation-инвариант усилен) ---
+// --- CRIT-1: account-takeover guard (ADR-058(d) revocation invariant hardened) ---
 
-// TestMapper_CRIT1_RejectsExistingOperatorOfOtherMethod — существующий оператор
-// под ДРУГИМ auth_method (bootstrap `jwt`, cluster-admin) НЕ может быть присвоен
-// federated-логином с совпавшим derived-AID: отказ ErrAuthFailed, JWT не
-// выпускается (Map не возвращает MappedOperator), роли не реконсилируются.
+// TestMapper_CRIT1_RejectsExistingOperatorOfOtherMethod — an existing
+// operator under a DIFFERENT auth_method (bootstrap `jwt`, cluster-admin)
+// CANNOT be hijacked by a federated login with a matching derived AID:
+// rejected with ErrAuthFailed, no JWT is issued (Map returns no
+// MappedOperator), roles are not reconciled.
 //
-// Это ядро account-takeover-фикса: без проверки auth_method любой, кто
-// контролирует внешний IdP, мог бы выпустить себе uid=archon-alice и присвоить
-// сессию bootstrap-админа archon-alice.
+// This is the core of the account-takeover fix: without the auth_method
+// check, anyone controlling the external IdP could mint themselves
+// uid=archon-alice and take over the bootstrap admin archon-alice's session.
 func TestMapper_CRIT1_RejectsExistingOperatorOfOtherMethod(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -41,7 +42,7 @@ func TestMapper_CRIT1_RejectsExistingOperatorOfOtherMethod(t *testing.T) {
 				AuthMethod: tc.authMethod, CreatedVia: tc.createdVia,
 			}}
 			aw := &fakeAudit{}
-			// LDAP-mapper: обслуживает ТОЛЬКО auth_method=ldap.
+			// LDAP mapper: serves ONLY auth_method=ldap.
 			m := newMapper(db, aw, map[string][]string{"ops": {"cluster-admin"}})
 
 			got, err := m.Map(context.Background(), ExternalIdentity{
@@ -63,9 +64,9 @@ func TestMapper_CRIT1_RejectsExistingOperatorOfOtherMethod(t *testing.T) {
 	}
 }
 
-// TestMapper_CRIT1_AllowsSameMethodOperator — оператор, заведённый ТЕМ ЖЕ
-// federated-методом (auth_method=ldap), логинится нормально (контр-кейс к
-// CRIT-1: проверка не ломает легитимный путь).
+// TestMapper_CRIT1_AllowsSameMethodOperator — an operator created by THE
+// SAME federated method (auth_method=ldap) logs in normally (counter-case to
+// CRIT-1: the check doesn't break the legitimate path).
 func TestMapper_CRIT1_AllowsSameMethodOperator(t *testing.T) {
 	db := &fakeMapperDB{existing: &operator.Operator{
 		AID: "archon-alice", DisplayName: "alice",
@@ -86,8 +87,8 @@ func TestMapper_CRIT1_AllowsSameMethodOperator(t *testing.T) {
 
 // --- HIGH-1: scoped role-revoke reconcile (fulfilling ADR-058d) ---
 
-// reconcileTx — fake auth.Txer + pgx.Tx, маршрутизирующий Query/Exec в
-// reconcileDB. Считает Commit/Rollback. Делает grant/revoke наблюдаемыми.
+// reconcileTx — fake auth.Txer + pgx.Tx, routing Query/Exec into
+// reconcileDB. Tracks Commit/Rollback. Makes grant/revoke observable.
 type reconcileTx struct {
 	db        *reconcileDB
 	committed bool
@@ -123,13 +124,13 @@ func (t *reconcileTx) Prepare(context.Context, string, string) (*pgconn.Statemen
 func (t *reconcileTx) Conn() *pgx.Conn { return nil }
 
 // reconcileDB — fake operator.ExecQueryRower: SelectByAID → existing,
-// DirectRolesOf (Query) → currentRoles, Exec захватывает grant/revoke по SQL.
+// DirectRolesOf (Query) → currentRoles, Exec captures grant/revoke by SQL.
 type reconcileDB struct {
 	existing     *operator.Operator
-	currentRoles []string // прямой membership для DirectRolesOf
+	currentRoles []string // direct membership for DirectRolesOf
 
-	granted []string // role_name из INSERT rbac_role_operators
-	revoked []string // role_name из DELETE rbac_role_operators
+	granted []string // role_name from INSERT rbac_role_operators
+	revoked []string // role_name from DELETE rbac_role_operators
 }
 
 func (d *reconcileDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -137,7 +138,7 @@ func (d *reconcileDB) Exec(_ context.Context, sql string, args ...any) (pgconn.C
 	case strings.Contains(sql, "DELETE FROM rbac_role_operators"):
 		// deleteRoleOperatorSQL: ($1 role_name, $2 aid)
 		d.revoked = append(d.revoked, toStr(args[0]))
-		// RowsAffected=1, чтобы RevokeOperator не вернул ErrRoleOperatorNotFound.
+		// RowsAffected=1 so RevokeOperator doesn't return ErrRoleOperatorNotFound.
 		return pgconn.NewCommandTag("DELETE 1"), nil
 	case strings.Contains(sql, "rbac_role_operators"):
 		// insertRoleOperatorSQL: ($1 role_name, $2 aid, $3 granted_by)
@@ -157,7 +158,7 @@ func (d *reconcileDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 	return nil, errors.New("reconcileDB.Query: unexpected sql")
 }
 
-// directRoleRows — pgx.Rows для DirectRolesOf (одна колонка role_name).
+// directRoleRows — pgx.Rows for DirectRolesOf (single role_name column).
 type directRoleRows struct {
 	names []string
 	idx   int
@@ -182,24 +183,24 @@ func (r *directRoleRows) Values() ([]any, error)                       { return 
 func (r *directRoleRows) RawValues() [][]byte                          { return nil }
 func (r *directRoleRows) Conn() *pgx.Conn                              { return nil }
 
-// TestMapper_HIGH1_ScopedRoleRevoke — пользователь был [cluster-admin] (из
-// группы), сменил группы → теперь маппится в [operator]: cluster-admin СНЯТ,
-// operator выдан. Роль, выданная ВНЕ group_role_map (Synod/ручная — здесь
-// `manual-extra`), СОХРАНЕНА (вне managed-домена mapper-а).
+// TestMapper_HIGH1_ScopedRoleRevoke — the user was [cluster-admin] (from a
+// group), changed groups → now maps to [operator]: cluster-admin is REVOKED,
+// operator is granted. A role granted OUTSIDE group_role_map (Synod/manual —
+// here `manual-extra`) is PRESERVED (outside the mapper's managed domain).
 func TestMapper_HIGH1_ScopedRoleRevoke(t *testing.T) {
 	db := &reconcileDB{
 		existing: &operator.Operator{
 			AID: "archon-bob", DisplayName: "bob",
 			AuthMethod: operator.AuthMethodLDAP, CreatedVia: operator.CreatedViaLDAP,
 		},
-		// Текущий прямой membership: managed cluster-admin (уходит) + managed
-		// operator (приходит — уже был? нет, его в current нет) + manual-extra (вне домена).
+		// Current direct membership: managed cluster-admin (leaving) + managed
+		// operator (incoming — already present? no, absent from current) + manual-extra (outside the domain).
 		currentRoles: []string{"cluster-admin", "manual-extra"},
 	}
 	tx := &reconcileTx{db: db}
 
-	// group_role_map управляет доменом {cluster-admin, operator}. manual-extra
-	// в значениях карты НЕ упомянут → mapper им не управляет.
+	// group_role_map owns the domain {cluster-admin, operator}. manual-extra
+	// is NOT mentioned in the map's values → the mapper doesn't own it.
 	m := NewMapper(MapperConfig{
 		Method:       operator.AuthMethodLDAP,
 		GroupRoleMap: map[string][]string{"admins": {"cluster-admin"}, "ops": {"operator"}},
@@ -208,7 +209,7 @@ func TestMapper_HIGH1_ScopedRoleRevoke(t *testing.T) {
 		Audit:        &fakeAudit{},
 	})
 
-	// Новые группы пользователя: только ops → want=[operator].
+	// The user's new groups: only ops → want=[operator].
 	got, err := m.Map(context.Background(), ExternalIdentity{
 		AID: "archon-bob", Groups: []string{"ops"},
 	})
@@ -222,23 +223,23 @@ func TestMapper_HIGH1_ScopedRoleRevoke(t *testing.T) {
 		t.Errorf("reconcile transaction must commit")
 	}
 
-	// cluster-admin (managed, ушёл из групп) — СНЯТ.
+	// cluster-admin (managed, left the groups) — REVOKED.
 	if !contains(db.revoked, "cluster-admin") {
 		t.Errorf("cluster-admin must be revoked (managed role no longer in groups); revoked=%v", db.revoked)
 	}
-	// manual-extra (вне managed-домена) — НЕ тронут.
+	// manual-extra (outside the managed domain) — NOT touched.
 	if contains(db.revoked, "manual-extra") {
 		t.Errorf("manual-extra is outside group_role_map domain and must NOT be revoked; revoked=%v", db.revoked)
 	}
-	// operator (новый из групп) — выдан.
+	// operator (new from groups) — granted.
 	if !contains(db.granted, "operator") {
 		t.Errorf("operator must be granted (new from groups); granted=%v", db.granted)
 	}
 }
 
-// TestMapper_HIGH1_NoChurnWhenGroupsStable — группы не менялись: роль уже есть в
-// прямом membership → НЕ выдаётся повторно, и НЕ снимается (идемпотентность,
-// нет лишних мутаций).
+// TestMapper_HIGH1_NoChurnWhenGroupsStable — groups didn't change: the role
+// is already in direct membership → NOT re-granted, and NOT revoked
+// (idempotency, no spurious mutations).
 func TestMapper_HIGH1_NoChurnWhenGroupsStable(t *testing.T) {
 	db := &reconcileDB{
 		existing: &operator.Operator{

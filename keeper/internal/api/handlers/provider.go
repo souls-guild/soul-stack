@@ -14,23 +14,23 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// ProviderHandler — endpoints CRUD реестра Cloud-Provider-ов (`providers`,
-// ADR-017, docs/keeper/cloud.md). Тонкая обёртка над [provider.Service]: тот
-// же service зовёт MCP-tool-handler (один источник правды REST↔MCP).
+// ProviderHandler — CRUD endpoints for the Cloud-Provider registry (`providers`,
+// ADR-017, docs/keeper/cloud.md). A thin wrapper over [provider.Service]: the same
+// service is called by the MCP tool handler (single source of truth REST↔MCP).
 //
-// RBAC-проверка — в middleware (router.go); handler маппит доменные ошибки в
-// RFC 7807 (*Typed → *problemError). HTTP обслуживает huma full-typed; пакет
-// api строит wire-DTO из плоских доменных view-ов (ProviderView).
+// RBAC checks — in middleware (router.go); the handler maps domain errors to
+// RFC 7807 (*Typed → *problemError). HTTP is served by huma full-typed; package
+// api builds the wire-DTO from the flat domain views (ProviderView).
 //
-// Секрет-гигиена: `credentials_ref` отдаётся как ПУТЬ (`vault:<path>`); сами
-// credentials НЕ резолвятся и НЕ возвращаются.
+// Secret hygiene: `credentials_ref` is returned as a PATH (`vault:<path>`); the
+// credentials themselves are NOT resolved and NOT returned.
 type ProviderHandler struct {
 	svc    *provider.Service
 	logger *slog.Logger
 }
 
-// NewProviderHandler создаёт handler. svc обязателен (panic при nil —
-// единственная точка misconfiguration).
+// NewProviderHandler creates a handler. svc is mandatory (panic on nil —
+// the single misconfiguration point).
 func NewProviderHandler(svc *provider.Service, logger *slog.Logger) *ProviderHandler {
 	if svc == nil {
 		panic("handlers.NewProviderHandler: provider.Service is nil")
@@ -41,30 +41,30 @@ func NewProviderHandler(svc *provider.Service, logger *slog.Logger) *ProviderHan
 	return &ProviderHandler{svc: svc, logger: logger}
 }
 
-// ProviderSpecStub — непустая заглушка для генерации huma-OpenAPI-фрагмента
-// (svc nil — handler никогда не исполняется в spec-режиме; parity
+// ProviderSpecStub — a non-empty stub for generating the huma-OpenAPI fragment
+// (svc nil — the handler never executes in spec mode; parity with
 // PushProviderSpecStub).
 func ProviderSpecStub() *ProviderHandler {
 	return &ProviderHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ProviderCreateInput — NATIVE request-форма POST /v1/providers (handler-native).
+// ProviderCreateInput — NATIVE request form of POST /v1/providers (handler-native).
 type ProviderCreateInput struct {
 	Name           string
 	Type           string
 	Region         string
 	CredentialsRef string
-	// Credentials — опц. plaintext cloud-credentials (dual-mode, ADR-064); XOR с
-	// CredentialsRef. Service материализует их в Vault, plaintext не персистится.
+	// Credentials — optional plaintext cloud credentials (dual-mode, ADR-064); XOR with
+	// CredentialsRef. The service materializes them into Vault; plaintext is not persisted.
 	Credentials map[string]any
-	// FQDNSuffix — опц. суффикс FQDN VM (self-onboard Вариант T, ADR-017(h)).
-	// Пусто/nil → self-onboard недоступен для провайдера.
+	// FQDNSuffix — optional VM FQDN suffix (self-onboard Variant T, ADR-017(h)).
+	// Empty/nil → self-onboard is unavailable for the provider.
 	FQDNSuffix *string
 }
 
-// ProviderView — ПЛОСКАЯ wire-форма Provider-а (Create-201 / Get-200 / list-element).
-// created_at — наносекундный time-wire; created_by_aid — опц. указатель (NULL у
-// записей, переживших удаление оператора).
+// ProviderView — FLAT wire form of a Provider (Create-201 / Get-200 / list element).
+// created_at — nanosecond time-wire; created_by_aid — an optional pointer (NULL for
+// rows that outlived the operator's deletion).
 type ProviderView struct {
 	Name           string
 	Type           string
@@ -75,7 +75,7 @@ type ProviderView struct {
 	CreatedByAID   *string
 }
 
-// ProviderListPage — доменный paged-результат GET /v1/providers (handler-native).
+// ProviderListPage — domain paged result of GET /v1/providers (handler-native).
 type ProviderListPage struct {
 	Items  []ProviderView
 	Offset int
@@ -95,8 +95,8 @@ func toProviderView(p *provider.Provider) ProviderView {
 	}
 }
 
-// ProviderWriteReply — результат CreateTyped: 201-тело + audit-поля.
-// credentials_ref в audit пишется как ПУТЬ (не секрет; vault:<path>).
+// ProviderWriteReply — result of CreateTyped: 201 body + audit fields.
+// credentials_ref is written to audit as a PATH (not a secret; vault:<path>).
 type ProviderWriteReply struct {
 	Body           ProviderView
 	Name           string
@@ -104,11 +104,11 @@ type ProviderWriteReply struct {
 	Region         string
 	CredentialsRef string
 	FQDNSuffix     *string
-	// SecretWritten — keeper записал plaintext-credentials в Vault (ADR-064 audit).
+	// SecretWritten — keeper wrote plaintext credentials to Vault (ADR-064 audit).
 	SecretWritten bool
 }
 
-// AuditPayload собирает audit-payload create-роута Provider-а.
+// AuditPayload assembles the audit payload of the Provider create route.
 func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"name":            r.Name,
@@ -119,19 +119,19 @@ func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	if r.FQDNSuffix != nil {
 		p["fqdn_suffix"] = *r.FQDNSuffix
 	}
-	// plaintext_ingested — маркер записи credentials keeper-ом (ADR-064), без plaintext.
+	// plaintext_ingested — marker that keeper wrote credentials (ADR-064), without plaintext.
 	if r.SecretWritten {
 		p["plaintext_ingested"] = true
 	}
 	return p
 }
 
-// ProviderDeleteReply — результат DeleteTyped (audit-поля; HTTP-ответ 204).
+// ProviderDeleteReply — result of DeleteTyped (audit fields; HTTP response 204).
 type ProviderDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload delete-роута.
+// AuditPayload assembles the audit payload of the delete route.
 func (r ProviderDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }

@@ -8,15 +8,15 @@ import (
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
 )
 
-// PGStore — тонкий adapter поверх cert-CRUD функций (keeper/internal/cert),
-// нужный модулю `core.cert.registered`. Существует, чтобы модуль зависел от
-// узкого интерфейса [Store], а не от свободных функций пакета (тестирование +
-// явный контракт). Симметрично coremod/choir.PGStore / coremod/soul.PGStore.
+// PGStore is a thin adapter over the cert CRUD functions (keeper/internal/cert),
+// needed by the `core.cert.registered` module. It exists so the module depends on
+// the narrow [Store] interface rather than free package functions (testing +
+// explicit contract). Mirrors coremod/choir.PGStore / coremod/soul.PGStore.
 type PGStore struct {
 	Pool *pgxpool.Pool
 }
 
-// NewPGStore — wire-helper для daemon-а.
+// NewPGStore is a wire helper for the daemon.
 func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{Pool: pool}
 }

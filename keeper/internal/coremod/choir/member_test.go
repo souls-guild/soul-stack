@@ -13,8 +13,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeStore — детерминированный in-memory Store для unit-тестов модуля.
-// Захватывает вызовы AddVoice/RemoveVoice для assert-ов на side-effect-ы.
+// fakeStore is a deterministic in-memory Store for the module's unit tests.
+// Captures AddVoice/RemoveVoice calls to assert on side effects.
 type fakeStore struct {
 	addErr    error
 	removeErr error
@@ -317,7 +317,7 @@ func TestApply_InvalidChoirName_Fails(t *testing.T) {
 	m := coremodchoir.New(&fakeStore{})
 	stream := internaltest.NewApplyStream()
 	p := baseParams()
-	p["choir"] = "Masters" // не kebab/snake, начинается с заглавной
+	p["choir"] = "Masters" // not kebab/snake, starts with uppercase
 	if err := m.Apply(&pluginv1.ApplyRequest{State: "present", Params: mustStruct(t, p)}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

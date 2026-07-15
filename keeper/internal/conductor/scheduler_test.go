@@ -41,8 +41,8 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatalf("condition not met within %v", timeout)
 }
 
-// fakeSpawner — мок [Spawner]: считает вызовы и фиксирует батч/интервал,
-// с которыми его дёрнул tick. Возвращает заданное число заспавненных Voyage.
+// fakeSpawner is a mock [Spawner]: counts calls and records the batch/interval
+// tick invoked it with. Returns a preset number of spawned Voyages.
 type fakeSpawner struct {
 	calls     atomic.Int64
 	lastBatch atomic.Int64
@@ -98,8 +98,9 @@ func TestNew_ValidatesConfig(t *testing.T) {
 	}
 }
 
-// TestRun_AcquiresLeaseAndSpawns — Conductor захватывает свой lease и на тике
-// зовёт Spawner (due-cadence спавнятся). Lease лежит под ключом conductor:leader.
+// TestRun_AcquiresLeaseAndSpawns — Conductor acquires its lease and on tick
+// calls Spawner (due cadences get spawned). The lease sits under the
+// conductor:leader key.
 func TestRun_AcquiresLeaseAndSpawns(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	sp := &fakeSpawner{spawned: 2}
@@ -114,7 +115,7 @@ func TestRun_AcquiresLeaseAndSpawns(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- sch.Run(ctx) }()
 
-	// Свой lease-ключ (НЕ reaper:leader) — захвачен под нашим holder-ом.
+	// Own lease key (NOT reaper:leader) — acquired under our holder.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		v, _ := mr.Get(LeaseKey)
 		return v == cfg.Holder
@@ -123,7 +124,7 @@ func TestRun_AcquiresLeaseAndSpawns(t *testing.T) {
 		t.Errorf("conductor занял reaper:leader=%q; должен быть свой ключ conductor:leader", v)
 	}
 
-	// Immediate-spawn при acquire + последующие тики по interval.
+	// Immediate spawn on acquire + subsequent ticks per interval.
 	waitFor(t, 500*time.Millisecond, func() bool { return sp.calls.Load() >= 2 })
 
 	cancel()
@@ -132,8 +133,8 @@ func TestRun_AcquiresLeaseAndSpawns(t *testing.T) {
 	}
 }
 
-// TestLeaseKey_NotReaper — фиксируем инвариант: lease-ключ Conductor отделён
-// от reaper-lease (независимое лидерство, ADR-048 §1).
+// TestLeaseKey_NotReaper pins the invariant: Conductor's lease key is
+// separate from the reaper lease (independent leadership, ADR-048 §1).
 func TestLeaseKey_NotReaper(t *testing.T) {
 	if LeaseKey != "conductor:leader" {
 		t.Errorf("LeaseKey = %q; want conductor:leader", LeaseKey)
@@ -143,8 +144,8 @@ func TestLeaseKey_NotReaper(t *testing.T) {
 	}
 }
 
-// TestRun_TwoInstances_OnlyLeaderSpawns — два conductor-инстанса на один lease:
-// Spawner зовётся только у держателя (single-executor спавна).
+// TestRun_TwoInstances_OnlyLeaderSpawns — two conductor instances on one
+// lease: Spawner is called only on the holder (single-executor spawn).
 func TestRun_TwoInstances_OnlyLeaderSpawns(t *testing.T) {
 	rc, mr := newTestRedis(t)
 
@@ -190,8 +191,8 @@ func TestRun_TwoInstances_OnlyLeaderSpawns(t *testing.T) {
 	<-lDone
 }
 
-// TestRun_PassesBatchSize — tick передаёт Spawner batch из BatchFn (anti-lavina
-// потолок числа due-cadence за тик).
+// TestRun_PassesBatchSize — tick passes Spawner the batch from BatchFn
+// (anti-avalanche cap on the number of due cadences per tick).
 func TestRun_PassesBatchSize(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	sp := &fakeSpawner{}
@@ -216,8 +217,8 @@ func TestRun_PassesBatchSize(t *testing.T) {
 	<-done
 }
 
-// TestRun_SpawnerError_DoesNotCrash — ошибка Spawner.Run не роняет loop: тики
-// продолжаются (best-effort фоновое правило).
+// TestRun_SpawnerError_DoesNotCrash — a Spawner.Run error doesn't bring down
+// the loop: ticks continue (best-effort background rule).
 func TestRun_SpawnerError_DoesNotCrash(t *testing.T) {
 	rc, _ := newTestRedis(t)
 	sp := &fakeSpawner{err: errors.New("boom")}
@@ -232,7 +233,7 @@ func TestRun_SpawnerError_DoesNotCrash(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- sch.Run(ctx) }()
 
-	// Несколько тиков, несмотря на ошибки на каждом.
+	// Several ticks despite an error on each one.
 	waitFor(t, 1*time.Second, func() bool { return sp.calls.Load() >= 3 })
 
 	cancel()
@@ -241,8 +242,8 @@ func TestRun_SpawnerError_DoesNotCrash(t *testing.T) {
 	}
 }
 
-// TestRun_GracefulShutdown — ctx.Done → Spawner перестаёт зваться и lease
-// освобождён (ключ удалён из Redis).
+// TestRun_GracefulShutdown — ctx.Done → Spawner stops being called and the
+// lease is released (key removed from Redis).
 func TestRun_GracefulShutdown(t *testing.T) {
 	rc, mr := newTestRedis(t)
 	sp := &fakeSpawner{}

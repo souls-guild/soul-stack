@@ -1,21 +1,22 @@
-// Package cadence — реестр Cadence-расписаний в Postgres (таблица `cadences`,
-// миграция 066) под ADR-046.
+// Package cadence — Cadence schedule registry in Postgres (table `cadences`,
+// migration 066) per ADR-046.
 //
-// Cadence — расписание, которое по времени спавнит обычный Voyage-прогон. Cadence
-// живёт независимо от прогонов: по наступлении времени спавнит НОВЫЙ Voyage
-// (Insert в `voyages`/`voyage_targets` с back-link `cadence_id`), Voyage-инвариант
-// «один Voyage = один прогон» сохранён (новые строки, не воскрешение). Отношение
-// «родитель Cadence → дети Voyage» (one-to-many). Cadence хранит «рецепт» прогона
-// (то же множество, что VoyageCreateRequest, ADR-043) + правило повторения
-// ([ScheduleKind] interval XOR cron) + политику наложения ([OverlapPolicy]).
+// Cadence is a schedule that spawns a regular Voyage run on a timer. It lives
+// independently of runs: when due, it spawns a NEW Voyage (Insert into
+// `voyages`/`voyage_targets` with back-link `cadence_id`), preserving the
+// Voyage invariant "one Voyage = one run" (new rows, not resurrection).
+// Relationship is "parent Cadence → child Voyages" (one-to-many). Cadence
+// stores the run "recipe" (same field set as VoyageCreateRequest, ADR-043) +
+// a repeat rule ([ScheduleKind] interval XOR cron) + an overlap policy
+// ([OverlapPolicy]).
 //
-// Package scope (S1): read/write CRUD против PG + валидация. Scheduler-trigger
-// (Reaper-правило spawn_due_cadence, action `spawn`), пересчёт next_run_at
-// (interval/cron) и overlap_policy-исполнение — S2/S3, живут отдельно. API
-// `/v1/cadences` — S4, UI — S5.
+// Package scope (S1): read/write CRUD against PG + validation. The scheduler
+// trigger (Reaper rule spawn_due_cadence, action `spawn`), next_run_at
+// recalculation (interval/cron), and overlap_policy execution are S2/S3,
+// living elsewhere. API `/v1/cadences` is S4, UI is S5.
 //
-// Стиль — parity `keeper/internal/voyage` (тот же CRUD-паттерн insertSQL/
-// selectColumns/scan, sentinel-ошибки, enum-константы + Valid-проверки).
+// Style mirrors `keeper/internal/voyage` (same CRUD pattern: insertSQL/
+// selectColumns/scan, sentinel errors, enum constants + Valid checks).
 package cadence
 
 import (
@@ -24,118 +25,124 @@ import (
 	"time"
 )
 
-// ScheduleKind — вид правила повторения. Closed enum, совпадает с CHECK
-// `cadences_schedule_kind_valid` миграции 066.
+// ScheduleKind is the repeat rule variant. Closed enum, matches CHECK
+// `cadences_schedule_kind_valid` from migration 066.
 type ScheduleKind string
 
 const (
-	// ScheduleKindInterval — повторение каждые N секунд. Требует непустой
-	// IntervalSeconds, CronExpr должен быть пуст (CHECK
+	// ScheduleKindInterval repeats every N seconds. Requires non-empty
+	// IntervalSeconds; CronExpr must be empty (CHECK
 	// `cadences_schedule_consistency`).
 	ScheduleKindInterval ScheduleKind = "interval"
-	// ScheduleKindCron — повторение по стандартному 5-полевому cron-выражению.
-	// Требует непустой CronExpr, IntervalSeconds должен быть пуст. Парсинг cron и
-	// пересчёт next_run_at — S2 (на S1 строка хранится as-is).
+	// ScheduleKindCron repeats on a standard 5-field cron expression.
+	// Requires non-empty CronExpr; IntervalSeconds must be empty. Cron
+	// parsing and next_run_at recalculation are S2 (S1 stores the string
+	// as-is).
 	ScheduleKindCron ScheduleKind = "cron"
 )
 
-// OverlapPolicy — поведение, когда время следующего спавна наступило, а
-// предыдущий порождённый Voyage ещё не терминален. Closed enum, совпадает с
-// CHECK `cadences_overlap_policy_valid` миграции 066. Исполнение политик — S3.
+// OverlapPolicy is the behavior when the next spawn is due but the
+// previously spawned Voyage is not yet terminal. Closed enum, matches CHECK
+// `cadences_overlap_policy_valid` from migration 066. Policy execution is S3.
 type OverlapPolicy string
 
 const (
-	// OverlapPolicySkip — спавн пропускается (next_run_at всё равно
-	// пересчитывается); защита от накопления при периоде короче длительности
-	// прогона.
+	// OverlapPolicySkip skips the spawn (next_run_at is still
+	// recalculated); guards against pile-up when the period is shorter
+	// than the run duration.
 	OverlapPolicySkip OverlapPolicy = "skip"
-	// OverlapPolicyQueue — спавн откладывается до терминала предыдущего ребёнка
-	// (строгая последовательность без потери запусков).
+	// OverlapPolicyQueue defers the spawn until the previous child goes
+	// terminal (strict sequencing without dropping runs).
 	OverlapPolicyQueue OverlapPolicy = "queue"
-	// OverlapPolicyParallel — спавн происходит независимо от состояния предыдущих
-	// (наложенные прогоны допустимы; лимит — на Voyage/Acolyte-слое).
+	// OverlapPolicyParallel spawns regardless of previous state
+	// (overlapping runs are allowed; limits live at the Voyage/Acolyte
+	// layer).
 	OverlapPolicyParallel OverlapPolicy = "parallel"
 )
 
-// Kind — режим спавнимого Voyage-прогона. Совпадает по значениям с voyage.Kind /
-// CHECK `cadences_kind_valid` миграции 066. Дублируется здесь (а не импортируется
-// из voyage), чтобы cadence-валидация не зависела от voyage-пакета: на S1 рецепт
-// проверяется локально, спавн (voyage.Insert) — забота scheduler-а S2.
+// Kind is the spawned Voyage run mode. Matches voyage.Kind values / CHECK
+// `cadences_kind_valid` from migration 066. Duplicated here (not imported
+// from voyage) so cadence validation doesn't depend on the voyage package:
+// S1 validates the recipe locally, spawning (voyage.Insert) is the S2
+// scheduler's job.
 type Kind string
 
 const (
-	// KindScenario — спавнить Voyage применения named scenario к набору
-	// инкарнаций. Требует непустой ScenarioName.
+	// KindScenario spawns a Voyage applying a named scenario to a set of
+	// incarnations. Requires non-empty ScenarioName.
 	KindScenario Kind = "scenario"
-	// KindCommand — спавнить Voyage выполнения whitelisted-модуля на наборе
-	// хостов. Требует непустой Module.
+	// KindCommand spawns a Voyage running a whitelisted module across a
+	// set of hosts. Requires non-empty Module.
 	KindCommand Kind = "command"
 )
 
-// BatchMode — режим батчинга рецепта (parity voyage.BatchMode). Closed enum,
-// совпадает с CHECK `cadences_batch_mode_valid` миграции 066. NULL ⇒ barrier
-// (резолв оркестратором при спавне, S2).
+// BatchMode is the recipe's batching mode (parity voyage.BatchMode). Closed
+// enum, matches CHECK `cadences_batch_mode_valid` from migration 066. NULL ⇒
+// barrier (resolved by the orchestrator at spawn time, S2).
 type BatchMode string
 
 const (
-	// BatchModeBarrier — последовательные Leg-и с барьером между пачками.
+	// BatchModeBarrier runs sequential Legs with a barrier between batches.
 	BatchModeBarrier BatchMode = "barrier"
-	// BatchModeWindow — полное скользящее окно (ширина = concurrency).
+	// BatchModeWindow is a full sliding window (width = concurrency).
 	BatchModeWindow BatchMode = "window"
 )
 
-// OnFailure — политика перехода при провале (parity voyage.OnFailure). Совпадает
-// с CHECK `cadences_on_failure_valid` миграции 066.
+// OnFailure is the transition policy on failure (parity voyage.OnFailure).
+// Matches CHECK `cadences_on_failure_valid` from migration 066.
 type OnFailure string
 
 const (
-	// OnFailureContinue — провал учитывается, остальные Leg-и продолжают.
+	// OnFailureContinue records the failure; the remaining Legs continue.
 	OnFailureContinue OnFailure = "continue"
-	// OnFailureAbort — провал → остановка перехода к следующему Leg.
+	// OnFailureAbort stops advancing to the next Leg on failure.
 	OnFailureAbort OnFailure = "abort"
 )
 
-// Cadence — runtime-представление строки `cadences`. Полная проекция: рецепт
-// прогона + правило повторения + политика наложения + расчётные тайминги.
+// Cadence is the runtime representation of a `cadences` row. Full
+// projection: run recipe + repeat rule + overlap policy + computed timings.
 //
-// Nullable-поля рецепта — указатели/raw-bytes (резолвятся оркестратором при
-// спавне, не CRUD-ом). IntervalSeconds/CronExpr взаимоисключающи по ScheduleKind
-// (CHECK `cadences_schedule_consistency`); ScenarioName/Module — по Kind (CHECK
-// `cadences_kind_payload_consistency`).
+// Nullable recipe fields are pointers/raw bytes (resolved by the
+// orchestrator at spawn time, not by CRUD). IntervalSeconds/CronExpr are
+// mutually exclusive per ScheduleKind (CHECK
+// `cadences_schedule_consistency`); ScenarioName/Module are mutually
+// exclusive per Kind (CHECK `cadences_kind_payload_consistency`).
 type Cadence struct {
 	ID      string
 	Name    string
 	Enabled bool
 
-	// Правило повторения.
+	// Repeat rule.
 	ScheduleKind    ScheduleKind
-	IntervalSeconds *int    // для ScheduleKindInterval; nil для cron.
-	CronExpr        *string // для ScheduleKindCron; nil для interval.
+	IntervalSeconds *int    // for ScheduleKindInterval; nil for cron.
+	CronExpr        *string // for ScheduleKindCron; nil for interval.
 	OverlapPolicy   OverlapPolicy
 
-	// Рецепт прогона (то же множество, что VoyageCreateRequest, ADR-043).
+	// Run recipe (same field set as VoyageCreateRequest, ADR-043).
 	Kind          Kind
 	ScenarioName  *string
 	Module        *string
-	Target        json.RawMessage // выбор из RBAC-скоупа создателя (NOT NULL)
-	Input         []byte          // jsonb (caller сериализует input один раз)
-	BatchMode     *BatchMode      // nil ⇒ barrier (резолв при спавне).
-	BatchSize     *int            // XOR с BatchPercent (handler-инвариант).
-	BatchPercent  *int            // % от scope; nil ⇒ задан BatchSize / весь прогон одним Leg.
+	Target        json.RawMessage // selection from the creator's RBAC scope (NOT NULL)
+	Input         []byte          // jsonb (caller serializes input once)
+	BatchMode     *BatchMode      // nil ⇒ barrier (resolved at spawn time).
+	BatchSize     *int            // XOR with BatchPercent (handler invariant).
+	BatchPercent  *int            // % of scope; nil ⇒ BatchSize is set / whole run is one Leg.
 	Concurrency   *int
-	FailThreshold *int // порог абсолютного числа провалов → стоп; nil ⇒ без порога.
-	// FailThresholdPercent — порог провалов в процентах от spawn-scope (XOR с
-	// FailThreshold, handler-инвариант). Хранится колонкой (в отличие от Voyage, где
-	// max_failures="N%" резолвится в абсолют на create-scope) потому, что у Cadence
-	// scope неизвестен на создании — резолвится при спавне на len(resolved) в
-	// BuildVoyage, симметрично BatchPercent. nil ⇒ задан FailThreshold / без порога.
+	FailThreshold *int // absolute failure count threshold → stop; nil ⇒ no threshold.
+	// FailThresholdPercent is the failure threshold as a percent of spawn
+	// scope (XOR with FailThreshold, handler invariant). Stored as a
+	// column (unlike Voyage, where max_failures="N%" resolves to an
+	// absolute at create-scope) because Cadence scope is unknown at
+	// creation — it resolves at spawn time against len(resolved) in
+	// BuildVoyage, symmetric with BatchPercent. nil ⇒ FailThreshold is
+	// set / no threshold.
 	FailThresholdPercent *int
-	InterBatchInterval   *time.Duration // пауза между Leg-ами (barrier).
-	InterUnitInterval    *time.Duration // per-unit пауза в window.
-	RequireAlive         *bool          // presence-фильтр живых на резолве scope; nil ⇒ false.
+	InterBatchInterval   *time.Duration // pause between Legs (barrier).
+	InterUnitInterval    *time.Duration // per-unit pause in window.
+	RequireAlive         *bool          // liveness presence filter at scope resolution; nil ⇒ false.
 	OnFailure            *OnFailure
 
-	// Расчётные тайминги (scheduler — S2; на S1 CRUD пишет/читает as-is).
+	// Computed timings (scheduler is S2; S1 CRUD reads/writes as-is).
 	NextRunAt *time.Time
 	LastRunAt *time.Time
 
@@ -144,16 +151,17 @@ type Cadence struct {
 	UpdatedAt    time.Time
 }
 
-// Sentinel-ошибки CRUD-слоя (parity voyage).
-//   - ErrCadenceNotFound — нет строки по запрошенному id.
-//   - ErrCadenceExists   — UNIQUE по PK (id): повторный Insert одного ULID
-//     (программная ошибка caller-а).
+// Sentinel errors for the CRUD layer (parity voyage).
+//   - ErrCadenceNotFound — no row for the requested id.
+//   - ErrCadenceExists   — UNIQUE on PK (id): repeat Insert of the same ULID
+//     (caller programming error).
 var (
 	ErrCadenceNotFound = errors.New("cadence: not found")
 	ErrCadenceExists   = errors.New("cadence: id already exists")
 )
 
-// ValidScheduleKind сообщает, входит ли вид в [ScheduleKind]-enum.
+// ValidScheduleKind reports whether the kind is a member of the
+// [ScheduleKind] enum.
 func ValidScheduleKind(k ScheduleKind) bool {
 	switch k {
 	case ScheduleKindInterval, ScheduleKindCron:
@@ -162,7 +170,8 @@ func ValidScheduleKind(k ScheduleKind) bool {
 	return false
 }
 
-// ValidOverlapPolicy сообщает, входит ли политика в [OverlapPolicy]-enum.
+// ValidOverlapPolicy reports whether the policy is a member of the
+// [OverlapPolicy] enum.
 func ValidOverlapPolicy(p OverlapPolicy) bool {
 	switch p {
 	case OverlapPolicySkip, OverlapPolicyQueue, OverlapPolicyParallel:
@@ -171,7 +180,7 @@ func ValidOverlapPolicy(p OverlapPolicy) bool {
 	return false
 }
 
-// ValidKind сообщает, входит ли kind в [Kind]-enum.
+// ValidKind reports whether kind is a member of the [Kind] enum.
 func ValidKind(k Kind) bool {
 	switch k {
 	case KindScenario, KindCommand:
@@ -180,7 +189,8 @@ func ValidKind(k Kind) bool {
 	return false
 }
 
-// ValidBatchMode сообщает, входит ли режим в [BatchMode]-enum.
+// ValidBatchMode reports whether the mode is a member of the [BatchMode]
+// enum.
 func ValidBatchMode(m BatchMode) bool {
 	switch m {
 	case BatchModeBarrier, BatchModeWindow:
@@ -189,7 +199,7 @@ func ValidBatchMode(m BatchMode) bool {
 	return false
 }
 
-// ValidOnFailure — парная проверка для [OnFailure].
+// ValidOnFailure is the matching check for [OnFailure].
 func ValidOnFailure(p OnFailure) bool {
 	switch p {
 	case OnFailureContinue, OnFailureAbort:

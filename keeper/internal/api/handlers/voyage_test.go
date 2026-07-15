@@ -27,25 +27,25 @@ import (
 
 // --- fakes ---
 
-// fakeVoyageStore — мок [VoyageStore]. Минимальный SQL-роутер по подстрокам
-// (parity fakeErrandRunStore). Считает Insert/InsertTargets/cancel-UPDATE-вызовы.
+// fakeVoyageStore is a mock [VoyageStore]. A minimal SQL router by substrings
+// (parity fakeErrandRunStore). Counts Insert/InsertTargets/cancel-UPDATE calls.
 type fakeVoyageStore struct {
 	mu               sync.Mutex
 	insertCalls      int
-	insertTargets    int   // число строк, прочитанных CopyFrom-ом (InsertTargets, S-med-3)
-	insertArgs       []any // последние аргументы INSERT INTO voyages (для batch_mode-проверок)
-	copyBatchIndexes []int // batch_index каждой вставленной единицы (col #3 CopyFrom)
-	committed        bool  // tx.Commit вызван (cap-reject не должен коммитить)
-	cancelUpdateRows int64 // RowsAffected возврат cancel-UPDATE (default 1)
+	insertTargets    int   // rows read by CopyFrom (InsertTargets, S-med-3)
+	insertArgs       []any // last INSERT INTO voyages args (for batch_mode checks)
+	copyBatchIndexes []int // batch_index of each inserted unit (col #3 CopyFrom)
+	committed        bool  // tx.Commit called (cap-reject must not commit)
+	cancelUpdateRows int64 // RowsAffected returned by cancel-UPDATE (default 1)
 	insertErr        error
 	selectByID       func(id string) pgx.Row
 	listRows         func() (pgx.Rows, error)
 	listCount        int
 	targetsRows      func() (pgx.Rows, error)
-	// notify-путь (ephemeral-Tiding, ADR-052(g)): heraldExists делает
-	// SelectHeraldByName-existence-check «зелёным» (иначе notify падает 422 до
-	// insert); insertTidings считает вставленные ephemeral-правила;
-	// insertTidingErr имитирует сбой INSERT INTO tidings (rollback-инвариант).
+	// notify path (ephemeral Tiding, ADR-052(g)): heraldExists makes the
+	// SelectHeraldByName existence-check "green" (otherwise notify fails 422 before
+	// insert); insertTidings counts inserted ephemeral rules;
+	// insertTidingErr simulates an INSERT INTO tidings failure (rollback invariant).
 	heraldExists    bool
 	insertTidings   int
 	insertTidingErr error
@@ -89,7 +89,7 @@ func (f *fakeVoyageStore) QueryRow(_ context.Context, sql string, args ...any) p
 	case strings.Contains(sql, "FROM heralds\nWHERE name = $1"):
 		// notify existence-check: heralds(name,type,config,secret_ref,enabled,
 		// created_at,updated_at,created_by_aid). heraldExists=false → ErrNoRows
-		// (→ 422 в prepareNotify).
+		// (→ 422 in prepareNotify).
 		if !f.heraldExists {
 			return voyageErrRow{err: pgx.ErrNoRows}
 		}
@@ -125,9 +125,9 @@ func (f *fakeVoyageStore) Query(_ context.Context, sql string, _ ...any) (pgx.Ro
 	return &emptyRows{}, nil
 }
 
-// CopyFrom на самом store не вызывается (InsertTargets ходит через tx,
-// fakeVoyageTx.CopyFrom), но требуется для удовлетворения VoyageStore-интерфейса
-// (ExecQueryRower теперь несёт CopyFrom, S-med-3).
+// CopyFrom is not called on the store itself (InsertTargets goes through tx,
+// fakeVoyageTx.CopyFrom), but is required to satisfy the VoyageStore interface
+// (ExecQueryRower now carries CopyFrom, S-med-3).
 func (f *fakeVoyageStore) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
 	return 0, errors.New("fakeVoyageStore.CopyFrom: unexpected (targets go through tx)")
 }
@@ -136,7 +136,7 @@ func (f *fakeVoyageStore) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, e
 	return &fakeVoyageTx{store: f}, nil
 }
 
-// fakeVoyageTx — pgx.Tx-обёртка, маршрутизирующая Exec/QueryRow обратно в store.
+// fakeVoyageTx is a pgx.Tx wrapper routing Exec/QueryRow back into the store.
 type fakeVoyageTx struct{ store *fakeVoyageStore }
 
 func (t *fakeVoyageTx) Begin(ctx context.Context) (pgx.Tx, error) { return t, nil }
@@ -151,9 +151,9 @@ func (t *fakeVoyageTx) Commit(context.Context) error {
 }
 func (t *fakeVoyageTx) Rollback(context.Context) error { return nil }
 
-// CopyFrom перехватывает batch-вставку voyage_targets (InsertTargets, S-med-3):
-// прокручивает источник, считает строки в store.insertTargets, имитирует
-// store.insertErr как сбой COPY.
+// CopyFrom intercepts the batch insert of voyage_targets (InsertTargets, S-med-3):
+// walks the source, counts rows into store.insertTargets, and simulates
+// store.insertErr as a COPY failure.
 func (t *fakeVoyageTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, src pgx.CopyFromSource) (int64, error) {
 	n := 0
 	var batchIndexes []int
@@ -195,7 +195,7 @@ func (t *fakeVoyageTx) QueryRow(ctx context.Context, sql string, args ...any) pg
 }
 func (t *fakeVoyageTx) Conn() *pgx.Conn { return nil }
 
-// voyageErrRow / voyageScalarRow — минимальные Row-реализации.
+// voyageErrRow / voyageScalarRow are minimal Row implementations.
 type voyageErrRow struct{ err error }
 
 func (r voyageErrRow) Scan(...any) error { return r.err }
@@ -214,8 +214,8 @@ func (r voyageScalarRow) Scan(dest ...any) error {
 	return nil
 }
 
-// voyageFullRow — Row под voyage.scanVoyage (25 колонок строго в порядке
-// selectColumns). nil-значения в vals → NULL.
+// voyageFullRow is a Row for voyage.scanVoyage (25 columns strictly in
+// selectColumns order). nil values in vals → NULL.
 type voyageFullRow struct {
 	vals []any
 }
@@ -278,8 +278,8 @@ func (r voyageFullRow) Scan(dest ...any) error {
 	return nil
 }
 
-// voyageRowVals собирает 31-колоночный набор под scanVoyage для kind/status
-// (26 базовых + 4 S-W3/S-W4: batch_percent/fail_threshold/inter_unit/require_alive
+// voyageRowVals assembles the 31-column set for scanVoyage given kind/status
+// (26 base + 4 S-W3/S-W4: batch_percent/fail_threshold/inter_unit/require_alive
 // + cadence_id back-link ADR-046).
 func voyageRowVals(id string, kind voyage.Kind, status voyage.Status) []any {
 	var scenario, module any
@@ -302,7 +302,7 @@ func voyageRowVals(id string, kind voyage.Kind, status voyage.Status) []any {
 		resolved,         // target_resolved
 		[]byte(`{}`),     // target_origin
 		nil,              // batch_size **int
-		50,               // concurrency (как **int via *int? scanVoyage uses *int via &batchSize) -> see below
+		50,               // concurrency (as **int via *int? scanVoyage uses *int via &batchSize) -> see below
 		nil,              // batch_mode **string
 		false,            // dry_run
 		nil,              // schedule_at **time.Time
@@ -324,7 +324,7 @@ func voyageRowVals(id string, kind voyage.Kind, status voyage.Status) []any {
 		nil,              // fail_threshold **int
 		nil,              // inter_unit_interval **float64
 		nil,              // require_alive **bool
-		nil,              // cadence_id **string (back-link ADR-046; ручной прогон = NULL)
+		nil,              // cadence_id **string (back-link ADR-046; manual run = NULL)
 	}
 }
 
@@ -347,15 +347,15 @@ func (f *fakeVoyageCommandResolver) ResolveSIDs(context.Context, VoyageCommandFi
 	return f.out, f.err
 }
 
-// ResolveSIDsInScope — scoper=nil путь createCommand тут не используется (helper-ы
-// передают nil-scoper → cluster-wide ResolveSIDs). Реализация для satisfy
-// интерфейса: возвращает out как есть (scope не применяется).
+// ResolveSIDsInScope — the scoper=nil createCommand path is not used here (helpers
+// pass a nil scoper → cluster-wide ResolveSIDs). Implementation only to satisfy the
+// interface: returns out as-is (scope is not applied).
 func (f *fakeVoyageCommandResolver) ResolveSIDsInScope(context.Context, VoyageCommandFilter, soulpurview.Scope) (ScopedSIDs, error) {
 	return ScopedSIDs{SIDs: f.out}, f.err
 }
 
-// captureCommandResolver — фиксирует последний переданный фильтр (проверка
-// проброса require_alive, S-W4).
+// captureCommandResolver records the last filter passed (checks that
+// require_alive is propagated, S-W4).
 type captureCommandResolver struct {
 	out        []string
 	err        error
@@ -372,15 +372,15 @@ func (f *captureCommandResolver) ResolveSIDsInScope(_ context.Context, filter Vo
 	return ScopedSIDs{SIDs: f.out}, f.err
 }
 
-// scopedCommandResolver — фейк ScopedSIDs-резолвера для guard-тестов гибрид-
-// семантики ADR-047 S4 (403-явный-чужой / урезание / 422-пустое). lastScope
-// фиксирует переданный scope; scoped — фиксированный результат InScope-резолва.
+// scopedCommandResolver is a fake ScopedSIDs resolver for guard tests of the ADR-047
+// S4 hybrid semantics (403-explicit-foreign / trimming / 422-empty). lastScope
+// records the scope passed; scoped is the fixed result of the InScope resolve.
 type scopedCommandResolver struct {
 	scoped     ScopedSIDs
 	err        error
 	lastFilter VoyageCommandFilter
 	lastScope  soulpurview.Scope
-	calledIn   bool // ResolveSIDsInScope вызван (а не cluster-wide ResolveSIDs)
+	calledIn   bool // ResolveSIDsInScope was called (not cluster-wide ResolveSIDs)
 }
 
 func (f *scopedCommandResolver) ResolveSIDs(_ context.Context, filter VoyageCommandFilter) ([]string, error) {
@@ -395,9 +395,9 @@ func (f *scopedCommandResolver) ResolveSIDsInScope(_ context.Context, filter Voy
 	return f.scoped, f.err
 }
 
-// recordingScoper — [PurviewResolver] фейк, фиксирующий (resource, action), для
-// которых резолвили Purview (guard на точку резолва — soul.list, не errand.run).
-// fakeScoper уже объявлен в soul_test.go (coven/regex/unrestricted-форма).
+// recordingScoper is a [PurviewResolver] fake that records the (resource, action)
+// for which Purview was resolved (guards the resolve point — soul.list, not errand.run).
+// fakeScoper is already declared in soul_test.go (coven/regex/unrestricted form).
 type recordingScoper struct {
 	pv               rbac.Purview
 	resource, action string
@@ -408,10 +408,10 @@ func (s *recordingScoper) ResolvePurview(_, resource, action string) rbac.Purvie
 	return s.pv
 }
 
-// fakeVoyageEnforcer — мок [middleware.PermissionChecker]. allow — множество
-// "<resource>.<action>" разрешённых для archon-alice; всё прочее → deny.
-// revoked → Check всегда возвращает [rbac.ErrOperatorRevoked] (парити с
-// ревокнутым Архонтом: ни одно право не держится ни в каком scope).
+// fakeVoyageEnforcer is a mock [middleware.PermissionChecker]. allow is the set of
+// "<resource>.<action>" allowed for archon-alice; everything else → deny.
+// revoked → Check always returns [rbac.ErrOperatorRevoked] (parity with a
+// revoked Archon: no permission holds in any scope).
 type fakeVoyageEnforcer struct {
 	allow   map[string]bool
 	revoked bool
@@ -452,26 +452,26 @@ func itoa64(n int64) string {
 // --- helpers ---
 
 func newVoyageHandler(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker) *VoyageHandler {
-	// maxScope=0 / maxBatchSize=0 → безлимит: существующие тесты не упираются в cap.
-	// scoper=nil → command-резолв cluster-wide (backcompat существующих тестов).
+	// maxScope=0 / maxBatchSize=0 → unlimited: existing tests do not hit the cap.
+	// scoper=nil → cluster-wide command resolve (backcompat of existing tests).
 	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, 0, 0, nil)
 }
 
-// newVoyageHandlerScoped — вариант со scoper (гибрид-guard-тесты ADR-047 S4).
-// command-резолв идёт через ResolveSIDsInScope (target ∩ Purview).
+// newVoyageHandlerScoped is the variant with a scoper (ADR-047 S4 hybrid guard tests).
+// Command resolve goes through ResolveSIDsInScope (target ∩ Purview).
 func newVoyageHandlerScoped(store *fakeVoyageStore, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, scoper PurviewResolver) *VoyageHandler {
 	return NewVoyageHandler(store, &fakeVoyageScenarioResolver{}, cmd, nil /*incReader*/, enf, scoper, nil, nil /*tidingInvalidator*/, 0, 0, nil)
 }
 
-// newVoyageHandlerCap — вариант с явным maxScope (DoS-guard S-med-3 тесты).
-// maxScope=0 → безлимит; >0 → cap, превышение даёт 422 voyage_scope_too_large.
+// newVoyageHandlerCap is the variant with an explicit maxScope (DoS-guard S-med-3 tests).
+// maxScope=0 → unlimited; >0 → cap, exceeding it yields 422 voyage_scope_too_large.
 func newVoyageHandlerCap(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, maxScope int) *VoyageHandler {
 	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, maxScope, 0, nil)
 }
 
-// newVoyageHandlerBatchCap — вариант с явным maxBatchSize (DoS-guard S-W4 тесты).
-// maxBatchSize=0 → без предела; >0 → cap, превышение даёт 422
-// voyage_batch_size_too_large. maxScope=0 (не мешает batch-cap тестам).
+// newVoyageHandlerBatchCap is the variant with an explicit maxBatchSize (DoS-guard S-W4 tests).
+// maxBatchSize=0 → no limit; >0 → cap, exceeding it yields 422
+// voyage_batch_size_too_large. maxScope=0 (does not interfere with batch-cap tests).
 func newVoyageHandlerBatchCap(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf apimiddleware.PermissionChecker, maxBatchSize int) *VoyageHandler {
 	return NewVoyageHandler(store, sc, cmd, nil /*incReader=nil → bare-check only*/, enf, nil /*scoper*/, nil, nil /*tidingInvalidator*/, 0, maxBatchSize, nil)
 }
@@ -552,7 +552,7 @@ func TestVoyageCreate_Command_OK(t *testing.T) {
 
 func TestVoyageCreate_ScenarioRBACDenied(t *testing.T) {
 	store := &fakeVoyageStore{}
-	// errand.run разрешён, incarnation.run — нет.
+	// errand.run allowed, incarnation.run not.
 	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, &fakeVoyageCommandResolver{}, enf)
 
@@ -570,7 +570,7 @@ func TestVoyageCreate_ScenarioRBACDenied(t *testing.T) {
 
 func TestVoyageCreate_CommandRBACDenied(t *testing.T) {
 	store := &fakeVoyageStore{}
-	// incarnation.run разрешён, errand.run — нет.
+	// incarnation.run allowed, errand.run not.
 	enf := &fakeVoyageEnforcer{allow: map[string]bool{"incarnation.run": true}}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, enf)
 
@@ -602,11 +602,11 @@ func TestVoyageCreate_EmptyTarget422(t *testing.T) {
 	}
 }
 
-// S-med-1: command-target, заданный ТОЛЬКО через where (нет sids/coven), молча
-// резолвился на весь флот (where в MVP не вычисляется). Теперь — 422 до резолва.
+// S-med-1: a command target given ONLY via where (no sids/coven) silently
+// resolved to all hosts (where is not evaluated in the MVP). Now — 422 before resolve.
 func TestVoyageCreate_CommandWhereOnly422(t *testing.T) {
 	store := &fakeVoyageStore{}
-	// Резолвер вернул бы весь флот — но guard обязан сработать ДО резолва/insert.
+	// The resolver would return all hosts — but the guard must fire BEFORE resolve/insert.
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a", "host-b"}}, allowAll())
 
 	rec := httptest.NewRecorder()
@@ -624,7 +624,7 @@ func TestVoyageCreate_CommandWhereOnly422(t *testing.T) {
 	}
 }
 
-// command с sids проходит (scope сужен явными SID-ами).
+// command with sids passes (scope narrowed by explicit SIDs).
 func TestVoyageCreate_CommandSIDsOK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())
@@ -638,7 +638,7 @@ func TestVoyageCreate_CommandSIDsOK(t *testing.T) {
 	}
 }
 
-// command с coven проходит (scope сужен coven-меткой).
+// command with coven passes (scope narrowed by a coven label).
 func TestVoyageCreate_CommandCovenOK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a", "host-b"}}, allowAll())
@@ -652,7 +652,7 @@ func TestVoyageCreate_CommandCovenOK(t *testing.T) {
 	}
 }
 
-// command с coven+where проходит: where — дополнение, scope уже сужен coven.
+// command with coven+where passes: where is additive, scope is already narrowed by coven.
 func TestVoyageCreate_CommandCovenAndWhereOK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())
@@ -666,10 +666,10 @@ func TestVoyageCreate_CommandCovenAndWhereOK(t *testing.T) {
 	}
 }
 
-// --- ADR-047 S4: гибрид target ∩ Purview для command-пути ---
+// --- ADR-047 S4: hybrid target ∩ Purview for the command path ---
 
-// Ветка 1 (anti-escalation): scoped-Архонт назвал явный чужой SID (DeniedExplicit
-// непуст) → 403, прогон НЕ создан.
+// Branch 1 (anti-escalation): a scoped Archon named an explicit foreign SID (DeniedExplicit
+// non-empty) → 403, run NOT created.
 func TestVoyageCreate_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{
@@ -694,11 +694,11 @@ func TestVoyageCreate_CommandScoped_ExplicitForeignSID_403(t *testing.T) {
 	}
 }
 
-// Ветка 2 (урезание): широкий target coven=[A,B], scope coven=A → резолвится
-// только подмножество A (НЕ весь A∪B), 202, без отказа.
+// Branch 2 (trimming): a wide target coven=[A,B], scope coven=A → only the A
+// subset resolves (NOT the whole A∪B), 202, no rejection.
 func TestVoyageCreate_CommandScoped_WideTarget_Trimmed202(t *testing.T) {
 	store := &fakeVoyageStore{}
-	// Резолвер вернул урезанное подмножество (только A-хосты), DeniedExplicit пуст.
+	// The resolver returned the trimmed subset (only A hosts), DeniedExplicit empty.
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"a1.example.com", "a2.example.com"}}}
 	scoper := fakeScoper{covens: []string{"coven-a"}}
 	h := newVoyageHandlerScoped(store, cmd, allowAll(), scoper)
@@ -722,11 +722,11 @@ func TestVoyageCreate_CommandScoped_WideTarget_Trimmed202(t *testing.T) {
 	}
 }
 
-// Ветка 3 (пустое пересечение): широкий target урезан в ноль → 422
-// voyage_empty_target (не 403 — это не эскалация, а валидный запрос без цели).
+// Branch 3 (empty intersection): a wide target trimmed to zero → 422
+// voyage_empty_target (not 403 — this is not escalation but a valid request with no target).
 func TestVoyageCreate_CommandScoped_EmptyIntersection_422(t *testing.T) {
 	store := &fakeVoyageStore{}
-	cmd := &scopedCommandResolver{scoped: ScopedSIDs{}} // ни SIDs, ни DeniedExplicit
+	cmd := &scopedCommandResolver{scoped: ScopedSIDs{}} // neither SIDs nor DeniedExplicit
 	scoper := fakeScoper{covens: []string{"coven-a"}}
 	h := newVoyageHandlerScoped(store, cmd, allowAll(), scoper)
 
@@ -745,8 +745,8 @@ func TestVoyageCreate_CommandScoped_EmptyIntersection_422(t *testing.T) {
 	}
 }
 
-// Backcompat: Unrestricted scope (cluster-admin) → полный резолв через
-// ResolveSIDsInScope (scope.Unrestricted=true), 202, ничего не урезано.
+// Backcompat: Unrestricted scope (cluster-admin) → full resolve through
+// ResolveSIDsInScope (scope.Unrestricted=true), 202, nothing trimmed.
 func TestVoyageCreate_CommandScoped_Unrestricted_FullResolve202(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"h1", "h2", "h3"}}}
@@ -770,8 +770,8 @@ func TestVoyageCreate_CommandScoped_Unrestricted_FullResolve202(t *testing.T) {
 	}
 }
 
-// scoper резолвит Purview для (errand, run) — scope command-таргета берётся из
-// селектора самого права errand.run (ADR-047 S4 delegation), не из soul.list.
+// The scoper resolves Purview for (errand, run) — the command target scope comes
+// from the selector of the errand.run permission itself (ADR-047 S4 delegation), not soul.list.
 func TestVoyageCreate_CommandScoped_ResolvesErrandRunPurview(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"h1"}}}
@@ -790,8 +790,8 @@ func TestVoyageCreate_CommandScoped_ResolvesErrandRunPurview(t *testing.T) {
 	}
 }
 
-// Existence-gate: scoper вернул пустой Purview (нет errand.run) → 403 до резолва
-// (scoped-роль с правом на другое не запускает command).
+// Existence-gate: the scoper returned an empty Purview (no errand.run) → 403 before resolve
+// (a scoped role with a permission for something else does not launch a command).
 func TestVoyageCreate_CommandScoped_NoErrandRun_403(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"h1"}}}
@@ -810,16 +810,16 @@ func TestVoyageCreate_CommandScoped_NoErrandRun_403(t *testing.T) {
 	}
 }
 
-// Guard (ADR-047 S4 парити revoked-семантики): REVOKED-Архонт со scoped-ролью
-// идёт command-путём (scoper!=nil). ResolvePurview даёт Empty (revoke слит с
-// no-perm), но классификатор внутри ветки Empty обязан вернуть
-// TypeOperatorRevokedToken (401), НЕ generic 403 — парити со scenario-путём и
-// scoper==nil-веткой. Мутация фикса на «всегда 403» ловится проверкой
-// типа problem.
+// Guard (ADR-047 S4 parity of revoked semantics): a REVOKED Archon with a scoped role
+// takes the command path (scoper!=nil). ResolvePurview yields Empty (revoke merges with
+// no-perm), but the classifier inside the Empty branch must return
+// TypeOperatorRevokedToken (401), NOT a generic 403 — parity with the scenario path and
+// the scoper==nil branch. Mutating the fix to "always 403" is caught by the problem-type
+// check.
 func TestVoyageCreate_CommandScoped_Revoked_RevokedTokenNotGeneric403(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := &scopedCommandResolver{scoped: ScopedSIDs{SIDs: []string{"h1"}}}
-	scoper := fakeScoper{empty: true}         // ревокнутый → Purview{} → Scope.Empty
+	scoper := fakeScoper{empty: true}         // revoked → Purview{} → Scope.Empty
 	enf := &fakeVoyageEnforcer{revoked: true} // Check → ErrOperatorRevoked
 	h := newVoyageHandlerScoped(store, cmd, enf, scoper)
 
@@ -879,8 +879,8 @@ func TestVoyageCreate_BadJSON400(t *testing.T) {
 
 // --- tests: batch_mode (S-W1) ---
 
-// batch_mode=window для kind=command: 202, batch_mode='window' уходит в Insert,
-// batch_index=0 у всех единиц (плоский прогон, ADR-043 amendment §7).
+// batch_mode=window for kind=command: 202, batch_mode='window' goes into Insert,
+// batch_index=0 for all units (flat run, ADR-043 amendment §7).
 func TestVoyageCreate_Command_WindowOK(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a", "host-b", "host-c"}}, allowAll())
@@ -892,7 +892,7 @@ func TestVoyageCreate_Command_WindowOK(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
-	// batch_mode arg (10-й позиционный, index 9 в insertSQL) = 'window'.
+	// batch_mode arg (10th positional, index 9 in insertSQL) = 'window'.
 	store.mu.Lock()
 	bm := store.insertArgs[9]
 	idxs := append([]int(nil), store.copyBatchIndexes...)
@@ -910,8 +910,8 @@ func TestVoyageCreate_Command_WindowOK(t *testing.T) {
 	}
 }
 
-// batch_mode=window + явный batch_size → 422 (ADR-043 amendment §1: batch_size не
-// используется в window).
+// batch_mode=window + explicit batch_size → 422 (ADR-043 amendment §1: batch_size is
+// not used in window).
 func TestVoyageCreate_WindowWithBatchSize422(t *testing.T) {
 	store := &fakeVoyageStore{}
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())

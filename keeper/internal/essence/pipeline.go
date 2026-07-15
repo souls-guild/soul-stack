@@ -12,15 +12,14 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// Resolve собирает effective essence-map для одного хоста по precedence
+// Resolve assembles the effective essence map for one host by precedence
 // (PM-decision 1):
 //
 //	essence/_default.yaml < essence/os/<family>.yaml < essence/coven/<c1>.yaml < essence/coven/<c2>.yaml... < IncarnationSpec
 //
-// Coven-слои применяются в порядке сортировки имён (детерминизм при нескольких
-// covens). Отсутствие любого файла-слоя — не ошибка (PM-decision 3): слой
-// пропускается. Ошибкой считаются только реальные сбои чтения и невалидный
-// YAML.
+// Coven layers apply in name-sorted order (determinism across multiple
+// covens). A missing layer file is not an error (PM-decision 3): the layer
+// is skipped. Only actual read failures and invalid YAML are errors.
 func (r *Resolver) Resolve(in ResolveInput) (map[string]any, error) {
 	result := make(map[string]any)
 
@@ -60,9 +59,9 @@ func (r *Resolver) Resolve(in ResolveInput) (map[string]any, error) {
 	return result, nil
 }
 
-// readLayer читает и парсит YAML-слой по relative-path внутри serviceDir.
-// Отсутствие файла → (nil, nil): слой пропускается вызывающим. Путь
-// резолвится через securejoin (выход за пределы serviceDir исключён).
+// readLayer reads and parses a YAML layer by its relative path inside
+// serviceDir. Missing file → (nil, nil): the caller skips the layer. The
+// path is resolved via securejoin (escaping serviceDir is excluded).
 func (r *Resolver) readLayer(serviceDir, rel string) (map[string]any, error) {
 	full, err := securejoin.SecureJoin(serviceDir, rel)
 	if err != nil {

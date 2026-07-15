@@ -1,22 +1,25 @@
-// Package cloudinit — рендер cloud-init userdata для VM, создаваемых
+// Package cloudinit renders cloud-init userdata for VMs created by
 // `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat).
 //
-// Userdata содержит ТОЛЬКО soul-инициализацию: установка `soul`-бинаря через
-// pinned-CA HTTPS-curl, конфиг `soul.yml` с `keeper.endpoints` (host:port LB),
-// embedded PEM CA Keeper-а и systemd-unit `soul.service`. Per-VM bootstrap-
-// токен НЕ запекается в userdata: cloud-provider API хранит userdata в plaintext
-// metadata, доступной процессам VM (security floor). Per-VM-токен выписывается
-// в `applyCreated` после Create и кладётся в register-output задачи; доставка
-// на VM — отдельный шаг scenario (типично `keeper.push` через SSH-провайдер).
+// Userdata carries ONLY soul bootstrap: installing the `soul` binary via
+// pinned-CA HTTPS curl, the `soul.yml` config with `keeper.endpoints`
+// (host:port LB), the embedded Keeper CA PEM, and the `soul.service`
+// systemd unit. The per-VM bootstrap token is NOT baked into userdata:
+// cloud-provider APIs store userdata in plaintext metadata accessible to
+// VM processes (security floor). The per-VM token is issued in
+// `applyCreated` after Create and put into the task's register output;
+// delivery to the VM is a separate scenario step (typically `keeper.push`
+// via an SSH provider).
 //
-// CA Keeper-а резолвится из Vault по `tls_ca_ref` (вызов `ReadKV` поля `ca`).
-// CA — публичный материал, но единый источник правды в Vault нужен для
-// ротации без правок keeper.yml.
+// The Keeper CA is resolved from Vault via `tls_ca_ref` (calls `ReadKV` for
+// the `ca` field). The CA is public material, but a single source of truth
+// in Vault is needed for rotation without touching keeper.yml.
 //
-// Сам install-blueprint (write_files + runcmd, пути/права) вынесен в shared
-// [keeper/internal/soulinstall] (ADR-063 amendment 2026-06-30): этот пакет —
-// config-резолвер (Vault) + тонкая обёртка над `soulinstall.RenderCloudInitYAML`.
-// Внешний контракт (Config/Resolver/GenerateUserdata) сохранён.
+// The install blueprint itself (write_files + runcmd, paths/perms) lives in
+// shared [keeper/internal/soulinstall] (ADR-063 amendment 2026-06-30): this
+// package is just the config resolver (Vault) plus a thin wrapper over
+// `soulinstall.RenderCloudInitYAML`. The external contract
+// (Config/Resolver/GenerateUserdata) is preserved.
 package cloudinit
 
 import (
@@ -29,56 +32,59 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Значения SoulBinaryCA — какой trust-store использует curl при скачивании
-// soul-бинаря. Re-export из soulinstall (единый словарь для обоих рендереров);
-// сохраняются как публичный API пакета для существующих вызовов/тестов.
+// SoulBinaryCA values select which trust store curl uses when downloading
+// the soul binary. Re-exported from soulinstall (shared vocabulary for both
+// renderers); kept as this package's public API for existing callers/tests.
 const (
-	// SoulBinaryCAKeeper — pin на PEM-CA Keeper-а (`curl --cacert keeper-ca.pem`).
+	// SoulBinaryCAKeeper pins to the Keeper CA PEM (`curl --cacert keeper-ca.pem`).
 	SoulBinaryCAKeeper = soulinstall.SoulBinaryCAKeeper
-	// SoulBinaryCASystem — OS-trust bundle (`curl` без `--cacert`); для artifact-
-	// хостов с публичным CA (например, Nexus за GlobalSign).
+	// SoulBinaryCASystem uses the OS trust bundle (`curl` without `--cacert`);
+	// for artifact hosts with a public CA (e.g. Nexus behind GlobalSign).
 	SoulBinaryCASystem = soulinstall.SoulBinaryCASystem
 )
 
-// Config — резолвленные параметры рендера userdata. Создаётся из
-// [shared/config.KeeperCloudInit] + [keepervault.Client] на каждом
-// GenerateUserdata-вызове (hot-reload-friendly: каждый apply подхватывает
-// текущий config.Store snapshot).
+// Config holds resolved userdata-render parameters. Built from
+// [shared/config.KeeperCloudInit] + [keepervault.Client] on every
+// GenerateUserdata call (hot-reload-friendly: each apply picks up the
+// current config.Store snapshot).
 type Config struct {
-	// BootstrapEndpoint — `host:port` LB Keeper-а (Bootstrap-RPC listener).
-	// host идёт в soul.yml keeper.endpoints[0].host, port — в bootstrap_port.
+	// BootstrapEndpoint is the Keeper LB `host:port` (Bootstrap RPC listener).
+	// host goes into soul.yml keeper.endpoints[0].host, port into bootstrap_port.
 	BootstrapEndpoint string
 
-	// EventStreamPort — TCP-порт EventStream-фазы (mTLS) того же host-а;
-	// soul.yml event_stream_port. 0 → порт bootstrap_endpoint (back-compat,
-	// single-port LB). 6-я стена ADR-063.
+	// EventStreamPort is the TCP port of the EventStream phase (mTLS) on the
+	// same host; soul.yml event_stream_port. 0 → falls back to the
+	// bootstrap_endpoint port (back-compat, single-port LB). ADR-063 wall 6.
 	EventStreamPort int
 
-	// TLSCAPem — PEM-encoded CA Keeper-а (содержимое `ca`-поля из Vault KV).
-	// Запекается в userdata под `write_files: /etc/soul/tls/keeper-ca.pem`,
-	// затем curl --cacert использует его при скачивании soul-бинаря.
+	// TLSCAPem is the PEM-encoded Keeper CA (contents of the `ca` field from
+	// Vault KV). Baked into userdata under
+	// `write_files: /etc/soul/tls/keeper-ca.pem`, then used by curl --cacert
+	// when downloading the soul binary.
 	TLSCAPem string
 
-	// SoulBinaryURL — HTTPS URL для скачивания `soul`-бинаря. Plain http
-	// отвергается (security: только над TLS, независимо от SoulBinaryCA).
+	// SoulBinaryURL is the HTTPS URL to download the `soul` binary from.
+	// Plain http is rejected (security: TLS-only, regardless of SoulBinaryCA).
 	SoulBinaryURL string
 
-	// SoulBinaryCA — trust-store для curl при скачивании бинаря:
-	// SoulBinaryCAKeeper (default/пусто) → `--cacert keeper-ca.pem`;
-	// SoulBinaryCASystem → системный bundle (без `--cacert`, для публичных CA).
-	// Ослабляет ТОЛЬКО верификацию cert artifact-хоста; Bootstrap-канал и
-	// SHA256-verify бинаря не затрагиваются.
+	// SoulBinaryCA selects the curl trust store when downloading the binary:
+	// SoulBinaryCAKeeper (default/empty) → `--cacert keeper-ca.pem`;
+	// SoulBinaryCASystem → the system bundle (no `--cacert`, for public CAs).
+	// Weakens ONLY the artifact host's cert verification; the Bootstrap
+	// channel and the binary's SHA256 verify are unaffected.
 	SoulBinaryCA string
 
-	// SoulVersion — опц. строка, попадает в userdata как комментарий-метка
-	// (для диагностики). Sig-verify бинаря отложен (ADR-017(h) amendment).
+	// SoulVersion is an optional string that ends up in userdata as a
+	// comment tag (for diagnostics). Binary sig-verify is deferred
+	// (ADR-017(h) amendment).
 	SoulVersion string
 }
 
-// Blueprint собирает [soulinstall.Blueprint] из Config — ЕДИНСТВЕННАЯ точка
-// маппинга cloudinit.Config → shared blueprint. Экспортирована, чтобы install-
-// путь (core.bootstrap.delivered) собирал blueprint тем же маппером, а не
-// дублировал список полей: новое поле Blueprint не потеряется молча в install.
+// Blueprint builds a [soulinstall.Blueprint] from Config — the ONLY mapping
+// point from cloudinit.Config to the shared blueprint. Exported so the
+// install path (core.bootstrap.delivered) builds its blueprint with the
+// same mapper instead of duplicating the field list: a new Blueprint field
+// can't silently go missing in install.
 func (c Config) Blueprint() soulinstall.Blueprint {
 	return soulinstall.Blueprint{
 		BootstrapEndpoint: c.BootstrapEndpoint,
@@ -90,30 +96,31 @@ func (c Config) Blueprint() soulinstall.Blueprint {
 	}
 }
 
-// Validate проверяет, что Config заполнен достаточно для рендера. Делегирует
-// в [soulinstall.Blueprint.Validate] (единый набор проверок для обоих путей).
+// Validate checks that Config is filled in enough to render. Delegates to
+// [soulinstall.Blueprint.Validate] (one set of checks shared by both paths).
 func (c Config) Validate() error {
 	return c.Blueprint().Validate()
 }
 
-// GenerateUserdata рендерит cloud-config YAML. Идемпотентна: на тех же входах
-// даёт байт-идентичный вывод. Тонкая обёртка над
-// [soulinstall.RenderCloudInitYAML] (install-blueprint вынесен в shared).
+// GenerateUserdata renders cloud-config YAML. Idempotent: same inputs give
+// a byte-identical output. A thin wrapper over
+// [soulinstall.RenderCloudInitYAML] (install blueprint lives in shared).
 //
-// Безопасность: вывод проверяется на отсутствие подстроки `bootstrap_token` /
-// `vault:` (security floor) — внутри soulinstall-рендера.
+// Security: the output is checked for absence of the `bootstrap_token` /
+// `vault:` substrings (security floor) — inside the soulinstall renderer.
 func GenerateUserdata(cfg Config) (string, error) {
 	return soulinstall.RenderCloudInitYAML(cfg.Blueprint())
 }
 
-// GenerateUserdataSelfOnboard рендерит cloud-config YAML для self-onboard
-// «Вариант T» (ADR-017(h) amendment): userdata несёт map FQDN→plain-token и фазу
-// `soul init` (токен по hostname). Keeper предсказывает FQDN каждой VM ДО create
-// и передаёт сюда токены. Токены попадают в userdata (тест-стенд) — security-guard
-// `bootstrap_token` снят внутри soulinstall для этого режима (см. Blueprint.SelfOnboardTokens).
+// GenerateUserdataSelfOnboard renders cloud-config YAML for the self-onboard
+// "Variant T" (ADR-017(h) amendment): userdata carries an FQDN→plain-token
+// map and a `soul init` phase (token looked up by hostname). Keeper predicts
+// each VM's FQDN BEFORE create and passes the tokens in here. Tokens do end
+// up in userdata (test stand) — the `bootstrap_token` security guard is
+// lifted inside soulinstall for this mode (see Blueprint.SelfOnboardTokens).
 //
-// tokens пуст → ошибка (self-onboard без токенов бессмыслен; caller обязан
-// передать непустой map). vault-ref-floor остаётся активен и здесь.
+// Empty tokens → error (self-onboard with no tokens is meaningless; the
+// caller must pass a non-empty map). The vault-ref floor still applies here.
 func GenerateUserdataSelfOnboard(cfg Config, tokens map[string]string) (string, error) {
 	if len(tokens) == 0 {
 		return "", errors.New("cloud_init: self-onboard requires non-empty FQDN→token map")
@@ -123,33 +130,35 @@ func GenerateUserdataSelfOnboard(cfg Config, tokens map[string]string) (string, 
 	return soulinstall.RenderCloudInitYAML(bp)
 }
 
-// Resolver резолвит [config.KeeperCloudInit] в [Config] с подгрузкой PEM CA
-// из Vault. Создаётся одним экземпляром в daemon и переиспользуется на каждый
-// GenerateUserdata-вызов; собственного state не несёт (vault-client читает
-// snapshot KV каждый раз — ротация CA подхватывается без рестарта).
+// Resolver resolves a [config.KeeperCloudInit] into a [Config], loading the
+// CA PEM from Vault. Created as a single instance in the daemon and reused
+// for every GenerateUserdata call; carries no state of its own (the vault
+// client reads a KV snapshot each time — CA rotation applies without a
+// restart).
 type Resolver struct {
 	Vault VaultReader
 }
 
-// VaultReader — узкое подмножество [keepervault.Client], нужное для резолва
-// CA-PEM. Симметрично keeper/internal/coremod/vault.VaultReader: упрощает
-// unit-тесты (fake без поднятия HTTP).
+// VaultReader is the narrow slice of [keepervault.Client] needed to resolve
+// the CA PEM. Mirrors keeper/internal/coremod/vault.VaultReader: simplifies
+// unit tests (a fake, no HTTP needed).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// NewResolver — wire-helper. nil vc допустим в тестовых сборках; реальный
-// Resolve тогда вернёт явную ошибку.
+// NewResolver is a wire helper. nil vc is fine in test builds; a real
+// Resolve call then returns an explicit error.
 func NewResolver(vc VaultReader) *Resolver {
 	return &Resolver{Vault: vc}
 }
 
-// Resolve превращает config-блок keeper.yml в готовый к рендеру [Config]:
-// разбирает vault-ref TLSCARef и читает поле `ca` из KV.
+// Resolve turns the keeper.yml config block into a render-ready [Config]:
+// parses the TLSCARef vault-ref and reads the `ca` field from KV.
 //
-// Возвращает ошибку с маскированным vault-ref-ом (как cloud-resolver), чтобы
-// при провале чтения путь к секрету не утекал наружу — резолв ВСЕХ vault-ref-ов
-// (включая публичный CA) идёт через keeper-vault-клиент, аккуратность одинаковая.
+// Returns an error with the vault-ref masked (like the cloud resolver), so a
+// failed read doesn't leak the secret's path — resolving ANY vault-ref
+// (including the public CA) goes through the keeper vault client, same care
+// either way.
 func (r *Resolver) Resolve(ctx context.Context, cfg *config.KeeperCloudInit) (Config, error) {
 	if cfg == nil {
 		return Config{}, errors.New("cloud_init: keeper.yml block is missing (set keeper.cloud_init.* to use generate_userdata)")

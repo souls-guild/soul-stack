@@ -39,10 +39,10 @@ func TestBrokerVault_MapToStruct(t *testing.T) {
 	}
 }
 
-// TestBrokerVault_SecretNotInError — на сбой кодирования значение секрета не
-// должно попасть в текст ошибки (только path, который не секрет).
+// TestBrokerVault_SecretNotInError — on an encoding failure, the secret
+// value must not land in the error text (only path, which isn't secret).
 func TestBrokerVault_SecretNotInError(t *testing.T) {
-	// Канал в map не сериализуется в Struct → NewStruct вернёт ошибку.
+	// A channel in the map doesn't serialize into Struct → NewStruct returns an error.
 	kv := &fakeKV{data: map[string]any{"bad": make(chan int)}}
 	_, err := BrokerVault(context.Background(), kv, "secret/keeper/db")
 	if err == nil {

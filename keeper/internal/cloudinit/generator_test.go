@@ -55,11 +55,11 @@ func TestGenerateUserdata_EmbedsTLSCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateUserdata: %v", err)
 	}
-	// PEM-блок должен попасть в YAML под write_files c indentation.
+	// The PEM block must land in the YAML under write_files, indented.
 	if !strings.Contains(out, "-----BEGIN CERTIFICATE-----") || !strings.Contains(out, "-----END CERTIFICATE-----") {
 		t.Errorf("PEM block not present in output")
 	}
-	// Каждая строка PEM сдвинута indentation-prefix-ом (6 пробелов под `content: |`).
+	// Each PEM line is shifted by the indentation prefix (6 spaces under `content: |`).
 	for _, line := range strings.Split(testCAPem, "\n") {
 		want := "      " + line
 		if !strings.Contains(out, want) {
@@ -89,7 +89,7 @@ func TestGenerateUserdata_ValidYAML(t *testing.T) {
 		t.Fatalf("GenerateUserdata: %v", err)
 	}
 	// cloud-config — `#cloud-config` header + YAML mapping. yaml.Unmarshal
-	// игнорирует comment-header, парсит остаток.
+	// ignores the comment header and parses the rest.
 	var v map[string]any
 	if err := yaml.Unmarshal([]byte(out), &v); err != nil {
 		t.Fatalf("rendered userdata is not valid YAML: %v\noutput:\n%s", err, out)
@@ -129,7 +129,7 @@ func TestGenerateUserdata_Validate_Errors(t *testing.T) {
 	}
 }
 
-// fakeVault — стаб VaultReader для unit-тестов Resolver.
+// fakeVault is a stub VaultReader for Resolver unit tests.
 type fakeVault struct {
 	kv  map[string]any
 	err error
@@ -161,9 +161,10 @@ func TestResolver_HappyPath(t *testing.T) {
 	}
 }
 
-// TestResolver_EventStreamPort — keeper.yml::cloud_init.event_stream_port
-// доезжает через Resolve до Config и в userdata-soul.yml (6-я стена ADR-063:
-// без него оба порта soul.yml выводились из bootstrap_endpoint).
+// TestResolver_EventStreamPort checks that
+// keeper.yml::cloud_init.event_stream_port makes it through Resolve into
+// Config and into userdata's soul.yml (ADR-063 wall 6: without it, both
+// soul.yml ports were derived from bootstrap_endpoint).
 func TestResolver_EventStreamPort(t *testing.T) {
 	r := cloudinit.NewResolver(&fakeVault{kv: map[string]any{"ca": testCAPem}})
 	cfg, err := r.Resolve(context.Background(), &config.KeeperCloudInit{
@@ -205,7 +206,7 @@ func TestResolver_VaultError_Masked(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from vault read")
 	}
-	// Не утекает внутренняя ошибка Vault (содержит путь к секрету).
+	// Vault's internal error must not leak (it contains the secret's path).
 	if strings.Contains(err.Error(), "secret/keeper/ca not found") {
 		t.Errorf("vault internal error leaked: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestResolver_MissingCAField(t *testing.T) {
 	}
 }
 
-// Guard (a): soul_binary_ca=keeper / пусто → binary-curl пинится на keeper-CA.
+// Guard (a): soul_binary_ca=keeper / empty → binary curl pins to keeper CA.
 func TestGenerateUserdata_BinaryCA_Keeper_Pinned(t *testing.T) {
 	for _, ca := range []string{"", "keeper"} {
 		t.Run("ca="+ca, func(t *testing.T) {
@@ -245,7 +246,7 @@ func TestGenerateUserdata_BinaryCA_Keeper_Pinned(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GenerateUserdata: %v", err)
 			}
-			// curl для бинаря несёт --cacert на keeper-ca.pem.
+			// The binary's curl carries --cacert pointing at keeper-ca.pem.
 			binaryCurl := curlLineForBinary(t, out)
 			if !strings.Contains(binaryCurl, "--cacert /etc/soul/tls/keeper-ca.pem") {
 				t.Errorf("binary curl must pin keeper-CA in keeper mode, got: %q", binaryCurl)
@@ -254,8 +255,8 @@ func TestGenerateUserdata_BinaryCA_Keeper_Pinned(t *testing.T) {
 	}
 }
 
-// Guard (b): soul_binary_ca=system → binary-curl БЕЗ --cacert, но keeper-ca.pem /
-// soul.yml write_files остаются (Bootstrap-канал пинится на keeper-CA всегда).
+// Guard (b): soul_binary_ca=system → binary curl WITHOUT --cacert, but
+// keeper-ca.pem / soul.yml write_files stay (Bootstrap channel always pins to keeper CA).
 func TestGenerateUserdata_BinaryCA_System_NoCacert(t *testing.T) {
 	cfg := validConfig()
 	cfg.SoulBinaryCA = "system"
@@ -267,7 +268,7 @@ func TestGenerateUserdata_BinaryCA_System_NoCacert(t *testing.T) {
 	if strings.Contains(binaryCurl, "--cacert") {
 		t.Errorf("binary curl must NOT use --cacert in system mode, got: %q", binaryCurl)
 	}
-	// Bootstrap-канал пинится независимо от soul_binary_ca: CA + soul.yml на месте.
+	// Bootstrap channel pins regardless of soul_binary_ca: CA + soul.yml stay in place.
 	for _, want := range []string{
 		"/etc/soul/tls/keeper-ca.pem",
 		"-----BEGIN CERTIFICATE-----",
@@ -280,7 +281,7 @@ func TestGenerateUserdata_BinaryCA_System_NoCacert(t *testing.T) {
 	}
 }
 
-// Guard (c): невалидное значение soul_binary_ca → Validate error.
+// Guard (c): invalid soul_binary_ca value → Validate error.
 func TestGenerateUserdata_BinaryCA_Invalid(t *testing.T) {
 	cfg := validConfig()
 	cfg.SoulBinaryCA = "insecure"
@@ -290,7 +291,7 @@ func TestGenerateUserdata_BinaryCA_Invalid(t *testing.T) {
 	}
 }
 
-// Guard (d): plain http:// URL отвергается при ЛЮБОМ ca-режиме (security floor).
+// Guard (d): plain http:// URL rejected in ANY ca mode (security floor).
 func TestGenerateUserdata_BinaryCA_HTTPRejectedAnyMode(t *testing.T) {
 	for _, ca := range []string{"", "keeper", "system"} {
 		t.Run("ca="+ca, func(t *testing.T) {
@@ -305,8 +306,8 @@ func TestGenerateUserdata_BinaryCA_HTTPRejectedAnyMode(t *testing.T) {
 	}
 }
 
-// curlLineForBinary возвращает строку runcmd с curl, скачивающим soul-бинарь
-// (содержит SoulBinaryURL). Изолирует assert от curl-строк других шагов.
+// curlLineForBinary returns the runcmd curl line downloading the soul
+// binary (contains SoulBinaryURL). Isolates the assert from other steps' curl lines.
 func curlLineForBinary(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -318,7 +319,7 @@ func curlLineForBinary(t *testing.T, out string) string {
 	return ""
 }
 
-// Идемпотентность: тот же config → тот же байт-выход.
+// Idempotency: same config → same byte output.
 func TestGenerateUserdata_Deterministic(t *testing.T) {
 	cfg := validConfig()
 	out1, err := cloudinit.GenerateUserdata(cfg)

@@ -1,25 +1,27 @@
-// Package choir — реестр Choir/Voice в Postgres (таблицы `incarnation_choirs` +
-// `incarnation_choir_voices`, 060_create_choirs.up.sql) под ADR-044.
+// Package choir — Choir/Voice registry in Postgres (tables `incarnation_choirs`
+// + `incarnation_choir_voices`, 060_create_choirs.up.sql) per ADR-044.
 //
-// Choir — именованная топология хостов ВНУТРИ инкарнации (declared-«партия
-// хора»); Voice — членство конкретного SID в конкретном Choir-е. Три РАЗНЫХ
-// слоя (ADR-044 пункт 1): membership = `souls.coven[]`, coven = стабильные теги
-// (ADR-008), Choir = позиция хоста внутри инкарнации. Choir не схлопывается ни с
-// membership, ни с coven.
+// Choir — a named host topology WITHIN an incarnation (a declared "choir
+// part"); Voice — membership of a specific SID in a specific Choir. Three
+// DISTINCT layers (ADR-044 item 1): membership = `souls.coven[]`, coven =
+// stable tags (ADR-008), Choir = host position within an incarnation. Choir
+// does not collapse into either membership or coven.
 //
-// Источник правды declared-топологии — эти таблицы, НЕ `incarnation.state`
-// (state коммитится только под cross-host barrier, ADR-044 пункт 4). `voice.role`
-// поглощает declared-роль `incarnation.spec.hosts[].role` (ADR-044 пункт 2).
+// Source of truth for the declared topology is these tables, NOT
+// `incarnation.state` (state is committed only under a cross-host barrier,
+// ADR-044 item 4). `voice.role` subsumes the declared role
+// `incarnation.spec.hosts[].role` (ADR-044 item 2).
 //
-// Инвариант членства (ADR-044 пункт 3): Voice создаётся только для SID, который
-// УЖЕ член этой инкарнации — его `souls.coven[]` содержит `incarnation.name`.
-// Один SID легально является Voice в Choir-ах РАЗНЫХ инкарнаций (PK включает
-// incarnation_name; глобального UNIQUE(sid) нет).
+// Membership invariant (ADR-044 item 3): a Voice is created only for a SID
+// that is ALREADY a member of this incarnation — its `souls.coven[]` contains
+// `incarnation.name`. One SID can legally be a Voice in Choirs of DIFFERENT
+// incarnations (the PK includes incarnation_name; there is no global
+// UNIQUE(sid)).
 //
-// Package scope (S-T2): транзакционный CRUD Choir/Voice по паттерну
-// `incarnation/hosts.go` (SELECT FOR UPDATE → mutate → commit; валидация
-// членства). API-эндпоинты / RBAC / audit — S-T3; резолвер `choirs[]` в
-// soulprint — S-T4.
+// Package scope (S-T2): transactional Choir/Voice CRUD following the
+// `incarnation/hosts.go` pattern (SELECT FOR UPDATE → mutate → commit;
+// membership validation). API endpoints / RBAC / audit — S-T3; the
+// `choirs[]` resolver in soulprint — S-T4.
 package choir
 
 import (
@@ -29,20 +31,20 @@ import (
 	"time"
 )
 
-// choirNamePattern — формат имени Choir, совпадает с CHECK
-// `incarnation_choirs_name_format` миграции 060_create_choirs.up.sql (kebab/snake, начинается с
-// буквы).
+// choirNamePattern — Choir name format, matches the CHECK
+// `incarnation_choirs_name_format` in migration 060_create_choirs.up.sql
+// (kebab/snake, starts with a letter).
 var choirNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
-// ValidChoirName сообщает, соответствует ли имя [choirNamePattern].
+// ValidChoirName reports whether name matches [choirNamePattern].
 func ValidChoirName(name string) bool {
 	return choirNamePattern.MatchString(name)
 }
 
-// Choir — runtime-представление строки `incarnation_choirs`. MinSize/MaxSize —
-// опциональные лимиты размера партии (declared под typed-input S-T1; на S-T2
-// хранятся, кардинальность Voice-ов на уровне CRUD мягко не форсируется —
-// валидация min/max применяется в S-T1 typed-input-слое).
+// Choir — runtime representation of an `incarnation_choirs` row. MinSize/MaxSize
+// are optional part-size limits (declared under the typed-input S-T1; at S-T2
+// they are merely stored — Voice cardinality isn't softly enforced at the CRUD
+// level, min/max validation happens in the S-T1 typed-input layer).
 type Choir struct {
 	IncarnationName string
 	ChoirName       string
@@ -53,9 +55,10 @@ type Choir struct {
 	CreatedByAID    *string
 }
 
-// Voice — runtime-представление строки `incarnation_choir_voices` (членство SID
-// в Choir-е). Role — поглощённая declared-роль (ADR-044 пункт 2, nullable);
-// Position — порядковый индекс внутри партии (nullable, напр. seed-узел).
+// Voice — runtime representation of an `incarnation_choir_voices` row (a SID's
+// membership in a Choir). Role — the subsumed declared role (ADR-044 item 2,
+// nullable); Position — ordinal index within the part (nullable, e.g. a seed
+// node).
 type Voice struct {
 	IncarnationName string
 	ChoirName       string
@@ -66,14 +69,14 @@ type Voice struct {
 	AddedByAID      *string
 }
 
-// Sentinel-ошибки CRUD-слоя.
-//   - ErrIncarnationNotFound — нет строки incarnation по имени (404).
-//   - ErrChoirNotFound       — нет Choir по паре (incarnation_name, choir_name).
-//   - ErrChoirExists         — Choir с таким именем уже есть в инкарнации (409).
-//   - ErrVoiceNotFound       — нет Voice по тройке PK (для RemoveVoice).
-//   - ErrVoiceExists         — Voice для этого SID в этом Choir-е уже есть (409).
-//   - ErrInvalidChoirName    — choir_name не матчит [choirNamePattern].
-//   - ErrInvalidSizeBounds   — min_size > max_size (или ≤ 0) при создании.
+// Sentinel errors of the CRUD layer.
+//   - ErrIncarnationNotFound — no incarnation row by that name (404).
+//   - ErrChoirNotFound       — no Choir for the (incarnation_name, choir_name) pair.
+//   - ErrChoirExists         — a Choir with that name already exists in the incarnation (409).
+//   - ErrVoiceNotFound       — no Voice for the PK triple (for RemoveVoice).
+//   - ErrVoiceExists         — a Voice for this SID already exists in this Choir (409).
+//   - ErrInvalidChoirName    — choir_name doesn't match [choirNamePattern].
+//   - ErrInvalidSizeBounds   — min_size > max_size (or ≤ 0) at creation.
 var (
 	ErrIncarnationNotFound = errors.New("choir: incarnation not found")
 	ErrChoirNotFound       = errors.New("choir: choir not found")
@@ -84,14 +87,16 @@ var (
 	ErrInvalidSizeBounds   = errors.New("choir: invalid min/max size bounds")
 )
 
-// ErrNotMembers — переданные SID-ы НЕ являются членами инкарнации (их
-// `souls.coven[]` не содержит `incarnation.name`). Инвариант ADR-044 пункт 3.
-// Handler-сторона (S-T3) маппит в 422; нарушившие SID-ы — в .Missing.
+// ErrNotMembers — the given SIDs are NOT members of the incarnation (their
+// `souls.coven[]` doesn't contain `incarnation.name`). ADR-044 item 3
+// invariant. The handler side (S-T3) maps this to 422; offending SIDs go into
+// .Missing.
 //
-// Missing включает как SID-ы, которых нет в реестре `souls` вовсе, так и SID-ы,
-// которые есть, но не члены данной инкарнации — для оператора разница не
-// существенна (в обоих случаях Voice создавать нельзя), а отдельные классы
-// усложнили бы контракт без пользы.
+// Missing includes both SIDs absent from the `souls` registry entirely and
+// SIDs that exist but aren't members of this incarnation — for the operator
+// the distinction doesn't matter (a Voice can't be created either way), and
+// splitting them into separate classes would complicate the contract for no
+// benefit.
 type ErrNotMembers struct {
 	Incarnation string
 	Missing     []string

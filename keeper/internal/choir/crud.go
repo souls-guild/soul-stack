@@ -10,24 +10,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PG-коды (parity incarnation/voyage).
+// PG codes (parity incarnation/voyage).
 const (
 	pgErrCodeUniqueViolation     = "23505"
 	pgErrCodeForeignKeyViolation = "23503"
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool для read-операций и для
-// работы внутри транзакции (pgx.Tx удовлетворяет тот же интерфейс). Симметрично
-// incarnation.ExecQueryRower.
+// ExecQueryRower — a narrow subset of pgxpool.Pool for read operations and for
+// working inside a transaction (pgx.Tx satisfies the same interface).
+// Symmetric to incarnation.ExecQueryRower.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// TxBeginner — узкое подмножество pgxpool.Pool для транзакционных операций
-// (FOR UPDATE → проверка → mutate → commit). Симметрично incarnation.TxBeginner.
+// TxBeginner — a narrow subset of pgxpool.Pool for transactional operations
+// (FOR UPDATE → check → mutate → commit). Symmetric to incarnation.TxBeginner.
 type TxBeginner interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
@@ -51,17 +51,18 @@ INSERT INTO incarnation_choirs (
 RETURNING created_at
 `
 
-// CreateChoir создаёт новый Choir в инкарнации. choir_name валидируется на
-// формат (parity CHECK миграции 060_create_choirs.up.sql) ещё до похода в БД; min/max — sane-bounds.
-// Транзакция не нужна — единичный INSERT; FK на incarnation(name) гарантирует,
-// что инкарнация существует (FK-violation → [ErrIncarnationNotFound]),
-// UNIQUE по PK → [ErrChoirExists].
+// CreateChoir creates a new Choir in the incarnation. choir_name is validated
+// against the format (parity with the CHECK in migration
+// 060_create_choirs.up.sql) before hitting the DB; min/max get a sane-bounds
+// check. No transaction needed — a single INSERT; the FK on incarnation(name)
+// guarantees the incarnation exists (FK violation → [ErrIncarnationNotFound]),
+// UNIQUE on the PK → [ErrChoirExists].
 //
-// Возврат:
-//   - [ErrInvalidChoirName]    — choir_name не матчит формат.
-//   - [ErrInvalidSizeBounds]   — min/max ≤ 0 или min > max.
-//   - [ErrIncarnationNotFound] — incarnation_name не существует (FK-violation).
-//   - [ErrChoirExists]         — Choir уже есть (UNIQUE по PK).
+// Returns:
+//   - [ErrInvalidChoirName]    — choir_name doesn't match the format.
+//   - [ErrInvalidSizeBounds]   — min/max ≤ 0 or min > max.
+//   - [ErrIncarnationNotFound] — incarnation_name doesn't exist (FK violation).
+//   - [ErrChoirExists]         — Choir already exists (UNIQUE on PK).
 func CreateChoir(ctx context.Context, db ExecQueryRower, c *Choir) error {
 	if c == nil {
 		return fmt.Errorf("choir: nil choir")
@@ -97,10 +98,10 @@ func mapChoirInsertError(err error) error {
 		case pgErrCodeUniqueViolation:
 			return ErrChoirExists
 		case pgErrCodeForeignKeyViolation:
-			// Единственный FK, который может «не найти» цель при INSERT-е Choir-а с
-			// валидным created_by_aid — это incarnation(name). created_by_aid имеет
-			// ON DELETE SET NULL, но при INSERT-е несуществующего AID тоже даст FK-
-			// violation; различаем по имени constraint.
+			// The only FK that can "miss" its target when inserting a Choir with a
+			// valid created_by_aid is incarnation(name). created_by_aid has
+			// ON DELETE SET NULL, but inserting a nonexistent AID also produces an
+			// FK violation; disambiguate by constraint name.
 			if pgErr.ConstraintName == "incarnation_choirs_incarnation_fk" {
 				return ErrIncarnationNotFound
 			}
@@ -119,7 +120,7 @@ FROM incarnation_choirs
 WHERE incarnation_name = $1 AND choir_name = $2
 `
 
-// GetChoir читает Choir по паре PK. [ErrChoirNotFound] при отсутствии.
+// GetChoir reads a Choir by its PK pair. [ErrChoirNotFound] if absent.
 func GetChoir(ctx context.Context, db ExecQueryRower, incarnation, choirName string) (*Choir, error) {
 	if incarnation == "" || choirName == "" {
 		return nil, fmt.Errorf("choir: empty incarnation_name or choir_name")
@@ -142,9 +143,9 @@ WHERE incarnation_name = $1
 ORDER BY choir_name
 `
 
-// ListChoirs возвращает все Choir-ы инкарнации в порядке имени. Пустой список —
-// не ошибка (инкарнация без Choir-ов либо несуществующая: разграничение —
-// забота caller-а через SelectByName, S-T3 handler).
+// ListChoirs returns all Choirs of the incarnation ordered by name. An empty
+// list is not an error (an incarnation with no Choirs, or a nonexistent one —
+// disambiguating is the caller's job via SelectByName, S-T3 handler).
 func ListChoirs(ctx context.Context, db ExecQueryRower, incarnation string) ([]*Choir, error) {
 	if incarnation == "" {
 		return nil, fmt.Errorf("choir: empty incarnation_name")
@@ -174,9 +175,9 @@ DELETE FROM incarnation_choirs
 WHERE incarnation_name = $1 AND choir_name = $2
 `
 
-// DeleteChoir удаляет Choir (и каскадом его Voice-ы — ON DELETE CASCADE на
-// incarnation_choir_voices). [ErrChoirNotFound] если строки не было (RowsAffected
-// == 0) — защита от тихого no-op на опечатке имени.
+// DeleteChoir deletes a Choir (cascading its Voices — ON DELETE CASCADE on
+// incarnation_choir_voices). [ErrChoirNotFound] if the row didn't exist
+// (RowsAffected == 0) — guards against a silent no-op on a typo'd name.
 func DeleteChoir(ctx context.Context, db ExecQueryRower, incarnation, choirName string) error {
 	if incarnation == "" || choirName == "" {
 		return fmt.Errorf("choir: empty incarnation_name or choir_name")
@@ -208,21 +209,22 @@ INSERT INTO incarnation_choir_voices (
 RETURNING added_at
 `
 
-// AddVoice добавляет Voice (членство SID в Choir-е) атомарно. Транзакция:
-// SELECT … FOR UPDATE на строке Choir-а (сериализует конкурентные AddVoice /
-// DeleteChoir) → валидация инварианта членства (SID уже член инкарнации:
-// `souls.coven[]` содержит `incarnation_name`, ADR-044 пункт 3) → INSERT voice →
-// commit.
+// AddVoice adds a Voice (a SID's membership in a Choir) atomically.
+// Transaction: SELECT … FOR UPDATE on the Choir row (serializes concurrent
+// AddVoice / DeleteChoir) → membership invariant validation (SID is already a
+// member of the incarnation: `souls.coven[]` contains `incarnation_name`,
+// ADR-044 item 3) → INSERT voice → commit.
 //
-// Инвариант членства проверяется явным SELECT-ом (FK на souls покрывает только
-// существование SID в реестре, но НЕ членство в этой инкарнации). SID, который
-// есть в souls, но не несёт incarnation в coven — отклоняется [ErrNotMembers].
+// The membership invariant is checked with an explicit SELECT (the FK on
+// souls only covers the SID's existence in the registry, NOT membership in
+// this incarnation). A SID that exists in souls but doesn't carry the
+// incarnation in its coven is rejected with [ErrNotMembers].
 //
-// Возврат:
-//   - [ErrChoirNotFound]  — Choir не существует (нет строки под FOR UPDATE).
-//   - [ErrNotMembers]     — SID не член инкарнации (нет в souls ИЛИ coven не
-//     содержит incarnation_name).
-//   - [ErrVoiceExists]    — Voice для этого SID в этом Choir-е уже есть.
+// Returns:
+//   - [ErrChoirNotFound]  — Choir doesn't exist (no row under FOR UPDATE).
+//   - [ErrNotMembers]     — SID is not a member of the incarnation (absent
+//     from souls, OR coven doesn't contain incarnation_name).
+//   - [ErrVoiceExists]    — a Voice for this SID already exists in this Choir.
 func AddVoice(ctx context.Context, pool TxBeginner, v *Voice) error {
 	if v == nil {
 		return fmt.Errorf("choir: nil voice")
@@ -240,8 +242,8 @@ func AddVoice(ctx context.Context, pool TxBeginner, v *Voice) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Lock строки Choir-а: гарантирует, что Choir существует на момент INSERT-а и
-	// не будет удалён конкурентным DeleteChoir-ом между проверкой и записью.
+	// Lock the Choir row: guarantees the Choir exists at INSERT time and won't
+	// be removed by a concurrent DeleteChoir between the check and the write.
 	var dummy int
 	if err := tx.QueryRow(ctx, selectChoirForUpdateSQL, v.IncarnationName, v.ChoirName).Scan(&dummy); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -278,8 +280,9 @@ func mapVoiceInsertError(err error) error {
 		case pgErrCodeUniqueViolation:
 			return ErrVoiceExists
 		case pgErrCodeForeignKeyViolation:
-			// sid_fk и choir_fk проверены раньше (membership + FOR UPDATE); сюда
-			// FK-violation попадёт разве что от added_by_aid с несуществующим AID.
+			// sid_fk and choir_fk were already checked earlier (membership + FOR
+			// UPDATE); an FK violation here can only come from added_by_aid with a
+			// nonexistent AID.
 			return fmt.Errorf("choir: FK violation on %s: %w", pgErr.ConstraintName, err)
 		case pgErrCodeCheckViolation:
 			return fmt.Errorf("choir: CHECK violation on %s: %w", pgErr.ConstraintName, err)
@@ -293,8 +296,9 @@ DELETE FROM incarnation_choir_voices
 WHERE incarnation_name = $1 AND choir_name = $2 AND sid = $3
 `
 
-// RemoveVoice удаляет Voice по тройке PK. [ErrVoiceNotFound] при RowsAffected==0
-// (защита от тихого no-op на опечатке). Не требует транзакции — единичный DELETE.
+// RemoveVoice deletes a Voice by its PK triple. [ErrVoiceNotFound] on
+// RowsAffected==0 (guards against a silent no-op on a typo). No transaction
+// needed — a single DELETE.
 func RemoveVoice(ctx context.Context, db ExecQueryRower, incarnation, choirName, sid string) error {
 	if incarnation == "" || choirName == "" || sid == "" {
 		return fmt.Errorf("choir: empty incarnation_name, choir_name or sid")
@@ -316,8 +320,8 @@ WHERE incarnation_name = $1 AND choir_name = $2
 ORDER BY position NULLS LAST, sid
 `
 
-// ListVoices возвращает Voice-ы Choir-а, упорядоченные по position (NULL — в
-// конец), затем по sid. Пустой список — не ошибка (Choir без Voice-ов).
+// ListVoices returns the Voices of a Choir, ordered by position (NULL last),
+// then by sid. An empty list is not an error (a Choir with no Voices).
 func ListVoices(ctx context.Context, db ExecQueryRower, incarnation, choirName string) ([]*Voice, error) {
 	if incarnation == "" || choirName == "" {
 		return nil, fmt.Errorf("choir: empty incarnation_name or choir_name")
@@ -343,7 +347,7 @@ func ListVoices(ctx context.Context, db ExecQueryRower, incarnation, choirName s
 }
 
 // ---------------------------------------------------------------------------
-// Инвариант членства + helpers
+// Membership invariant + helpers
 // ---------------------------------------------------------------------------
 
 const membershipSQL = `
@@ -351,19 +355,21 @@ SELECT sid FROM souls
 WHERE sid = ANY($1) AND $2 = ANY(coven)
 `
 
-// validateMembership проверяет инвариант ADR-044 пункт 3: каждый SID уже член
-// инкарнации (его `souls.coven[]` содержит incarnation). Строже, чем
-// incarnation.validateSoulsExist (та проверяет лишь существование SID в souls):
-// тут требуется именно членство в ЭТОЙ инкарнации. Один batch-SELECT с
-// предикатом `$incarnation = ANY(coven)` — не per-SID round-trip.
+// validateMembership checks the ADR-044 item 3 invariant: every SID is
+// already a member of the incarnation (its `souls.coven[]` contains
+// incarnation). Stricter than incarnation.validateSoulsExist (which only
+// checks the SID exists in souls): here membership in THIS incarnation is
+// required specifically. A single batch SELECT with the
+// `$incarnation = ANY(coven)` predicate — not a per-SID round-trip.
 //
-// Missing (в порядке первого вхождения, стабильно для тестов) включает SID-ы,
-// которых нет в souls вовсе, И SID-ы, которые есть, но не члены инкарнации.
+// Missing (in first-occurrence order, stable for tests) includes SIDs absent
+// from souls entirely, AND SIDs that exist but aren't members of the
+// incarnation.
 func validateMembership(ctx context.Context, db ExecQueryRower, incarnation string, sids []string) error {
 	if len(sids) == 0 {
 		return nil
 	}
-	// Dedup + сохранение порядка первого вхождения для Missing.
+	// Dedup + preserve first-occurrence order for Missing.
 	seen := make(map[string]struct{}, len(sids))
 	uniq := make([]string, 0, len(sids))
 	for _, sid := range sids {
@@ -404,8 +410,9 @@ func validateMembership(ctx context.Context, db ExecQueryRower, incarnation stri
 	return nil
 }
 
-// validateSizeBounds — sane-bounds на min/max при создании Choir-а (parity
-// CHECK-ов миграции 060_create_choirs.up.sql; даём типизированную ошибку до похода в БД).
+// validateSizeBounds — sane-bounds check on min/max at Choir creation (parity
+// with the CHECK constraints in migration 060_create_choirs.up.sql; gives a
+// typed error before hitting the DB).
 func validateSizeBounds(minSize, maxSize *int) error {
 	if minSize != nil && *minSize <= 0 {
 		return fmt.Errorf("%w: min_size must be > 0, got %d", ErrInvalidSizeBounds, *minSize)
@@ -451,7 +458,7 @@ func scanVoice(row pgx.Row) (*Voice, error) {
 	return &v, nil
 }
 
-// nullStr / nullInt — *T → any для pgx-биндинга (nil → SQL NULL).
+// nullStr / nullInt — *T → any for pgx binding (nil → SQL NULL).
 func nullStr(s *string) any {
 	if s == nil {
 		return nil

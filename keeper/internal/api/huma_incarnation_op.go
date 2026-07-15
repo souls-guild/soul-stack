@@ -1,19 +1,19 @@
 package api
 
-// FULL-TYPED форма INCARNATION-домена (code-first источник OpenAPI, ADR-054 §Pattern,
-// батч-2g). Go-типы — единственный источник правды: huma строит из них JSON Schema
-// OpenAPI-фрагмента, валидацию входа (required/enum/additionalProperties:false ЧЕСТНЫЙ)
-// и typed-output. MIXED домен — ДВА класса audit:
+// FULL-TYPED form of the INCARNATION domain (code-first OpenAPI source, ADR-054 §Pattern,
+// batch 2g). Go types are the single source of truth: huma builds from them the JSON Schema
+// of the OpenAPI fragment, input validation (required/enum/additionalProperties:false HONEST)
+// and typed output. MIXED domain — TWO classes of audit:
 //
-//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): huma-audit-middleware пишет
-//     event СНАРУЖИ (вариант B). registerHuma*-func кладёт payload через
-//     SetHumaAuditPayload из *Typed-reply.AuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): audit пишет
-//     САМ handler ВНУТРИ *Typed; audit-middleware НЕ навешан (newHumaCadenceAPI).
+//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): huma-audit-middleware writes the
+//     event OUTSIDE (variant B). The registerHuma* func sets the payload via
+//     SetHumaAuditPayload from the *Typed reply.AuditPayload.
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): the handler ITSELF
+//     writes audit INSIDE *Typed; audit-middleware is not wired (newHumaCadenceAPI).
 //
-// Все incarnation-huma-op несут ПОЛНЫЙ путь /{name}[/...] относительно группы
-// /v1/incarnations (chi.Route("/{name}") СНЯТ — иначе sibling-затенение → 405, как
-// блокер батча-2f cadence). Сосуществует с choir-mount (батч-2f) на той же группе.
+// All incarnation huma ops carry the FULL path /{name}[/...] relative to the group
+// /v1/incarnations (chi.Route("/{name}") REMOVED — otherwise sibling-shadowing → 405, the
+// blocker of batch 2f cadence). Coexists with the choir-mount (batch 2f) on the same group.
 
 import (
 	"net/http"
@@ -25,39 +25,38 @@ import (
 
 // === POST /v1/incarnations (create) — MIDDLEWARE-AUDIT incarnation.created (202+body) ===
 
-// incCreateInput — huma-input POST /v1/incarnations (FULL-TYPED). Body — typed тело.
+// incCreateInput — huma input for POST /v1/incarnations (FULL-TYPED). Body — typed body.
 type incCreateInput struct {
 	Body IncarnationCreateRequest
 }
 
-// IncarnationCreateRequest — Go-форма тела POST /v1/incarnations. name/service
-// required; covens/input опциональны. Формат name/service/coven — доменная валидация
-// (422 в CreateTyped). additionalProperties:false (huma-дефолт) → unknown поле → 400.
-// Имя структуры = контрактное имя схемы в OpenAPI (huma DefaultSchemaNamer берёт
-// reflect.Type.Name() напрямую) — выровнено под committed-рукопись (T4b pilot).
+// IncarnationCreateRequest — Go form of the POST /v1/incarnations body. name/service
+// required; covens/input optional. Format of name/service/coven — domain validation
+// (422 in CreateTyped). additionalProperties:false (huma default) → unknown field → 400.
+// Struct name = contract schema name in OpenAPI (huma DefaultSchemaNamer takes
+// reflect.Type.Name() directly) — aligned to the committed hand-written spec (T4b pilot).
 type IncarnationCreateRequest struct {
 	Name    string         `json:"name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"имя нового instance (kebab-case), корневая Coven-метка"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"имя сервиса из реестра (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment-теги (ADR-008 amendment a)"`
 	Input   map[string]any `json:"input,omitempty" doc:"input для выбранного create-сценария"`
-	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): map ключ →
-	// scalar | list of scalars. Кладутся в incarnation.traits (источник истины) и
-	// материализованно проецируются в souls.traits хостов-членов. Формат/значение
-	// валидирует домен (вложенный объект/массив → 422). Day-2 замена — PUT
-	// .../traits.
+	// Traits — operator-set trait labels of the incarnation (ADR-060 amend R1): map key →
+	// scalar | list of scalars. Stored in incarnation.traits (source of truth) and
+	// materialized into souls.traits of member hosts. Format/value is validated by the domain
+	// (nested object/array → 422). Operational replacement — PUT .../traits.
 	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait-метки (ключ → scalar|list of scalars), ADR-060"`
-	// CreateScenario — выбор стартового сценария (механизм нескольких create-
-	// сценариев). Опц. Контракт пустого выбора (Фаза 2, union убран): сервис
-	// предлагает create-сценарии (scenario с `create: true`) + пусто → 422
-	// create_scenario_required; сервис без них + пусто → bare-инкарнация (ready без
-	// прогона, created_scenario=NULL). Авто-create по дефолтному `create` больше
-	// нет. Непустое имя обязано входить в create-набор сервиса, иначе 422; выбор
-	// сохраняется в incarnation.created_scenario (rerun-last использует его на create-пути).
+	// CreateScenario — choice of the start scenario (mechanism of multiple create scenarios).
+	// Optional. Empty-choice contract (Phase 2, union removed): a service offering create
+	// scenarios (scenario with `create: true`) + empty → 422 create_scenario_required; a
+	// service without them + empty → bare incarnation (ready without a run, created_scenario=
+	// NULL). Auto-create by the default `create` is gone. A non-empty name must belong to the
+	// service's create set, otherwise 422; the choice is saved in incarnation.created_scenario
+	// (rerun-last uses it on the create path).
 	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"имя стартового сценария (механизм нескольких create, scenario с create:true). Пусто: сервис предлагает create-сценарии → 422 create_scenario_required; сервис без них → bare-инкарнация (ready без прогона)"`
 }
 
-// incCreateOutput — huma-output POST /v1/incarnations (FULL-TYPED). Status=202;
-// Body — native 202-тело (IncarnationCreateReply: incarnation + опц. apply_id).
+// incCreateOutput — huma output for POST /v1/incarnations (FULL-TYPED). Status=202;
+// Body — native 202 body (IncarnationCreateReply: incarnation + optional apply_id).
 type incCreateOutput struct {
 	Status int `json:"-"`
 	Body   IncarnationCreateReply
@@ -76,13 +75,13 @@ func incCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/incarnations (list) — READ with typed query (no audit) ===
 
-// incListInput — huma-input GET /v1/incarnations (FULL-TYPED typed-query). offset/limit
-// — int32 с default; диапазон enforce-ит CheckPageBounds в ListTyped → 400 (parity
-// ParsePage). Остальные фильтры string/enum (422-валидацию ведёт ListTyped). state-
-// фильтры `state.<field>` huma как typed-параметры НЕ биндит (динамические ключи) —
-// caller передаёт их из исходного query (см. registerHumaIncarnationList).
+// incListInput — huma input for GET /v1/incarnations (FULL-TYPED typed query). offset/limit
+// — int32 with default; the range is enforced by CheckPageBounds in ListTyped → 400 (parity
+// ParsePage). The other filters are string/enum (422 validation done by ListTyped). state
+// filters `state.<field>` huma does NOT bind as typed parameters (dynamic keys) — the caller
+// passes them from the original query (see registerHumaIncarnationList).
 type incListInput struct {
 	Offset  int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
 	Limit   int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
@@ -93,12 +92,12 @@ type incListInput struct {
 	SortDir string `query:"sort_dir" doc:"направление сортировки (asc/desc)"`
 }
 
-// incListOutput — huma-output GET /v1/incarnations (FULL-TYPED). Body — TAGGED native
-// envelope incarnationListReply (items.$ref на native IncarnationGetReply с json-тегами:
-// snake_case-wire). Прежде Body был handlers.IncarnationListReply (= PagedResponse[
-// IncarnationGetView]) — untagged View → PascalCase-wire (контракт-баг #7). Register-func
-// проецирует reply.Items через newIncarnationGetReply. Схема OpenAPI не меняется (та же
-// alias-цель incarnationListReply).
+// incListOutput — huma output for GET /v1/incarnations (FULL-TYPED). Body — TAGGED native
+// envelope incarnationListReply (items.$ref to native IncarnationGetReply with json tags:
+// snake_case wire). Previously Body was handlers.IncarnationListReply (= PagedResponse[
+// IncarnationGetView]) — untagged View → PascalCase wire (contract bug #7). The register func
+// projects reply.Items through newIncarnationGetReply. The OpenAPI schema is unchanged (same
+// alias target incarnationListReply).
 type incListOutput struct {
 	Body incarnationListReply
 }
@@ -116,15 +115,15 @@ func incListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/incarnations/{name} (get) — READ with path (no audit) ===
 
-// incGetInput — huma-input GET /v1/incarnations/{name}. Name — path.
+// incGetInput — huma input for GET /v1/incarnations/{name}. Name — path.
 type incGetInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
 }
 
-// incGetOutput — huma-output GET /v1/incarnations/{name} (FULL-TYPED). Body — полный
-// native IncarnationGetReply (byte-exact с legacy GET {name}).
+// incGetOutput — huma output for GET /v1/incarnations/{name} (FULL-TYPED). Body — full
+// native IncarnationGetReply (byte-exact with legacy GET {name}).
 type incGetOutput struct {
 	Body IncarnationGetReply
 }
@@ -142,10 +141,10 @@ func incGetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/history (history) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/incarnations/{name}/history (history) — READ with typed query (no audit) ===
 
-// incHistoryInput — huma-input GET /v1/incarnations/{name}/history. Name — path;
-// apply_id — опц. ULID-фильтр (bad → 400 в HistoryTyped); offset/limit — int32 с
+// incHistoryInput — huma input for GET /v1/incarnations/{name}/history. Name — path;
+// apply_id — optional ULID filter (bad → 400 in HistoryTyped); offset/limit — int32 with
 // default (out-of-range → 400).
 type incHistoryInput struct {
 	Name    string `path:"name" doc:"имя инкарнации"`

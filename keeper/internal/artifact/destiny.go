@@ -12,59 +12,60 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// destinyManifestFile / destinyTasksFile / destinyTasksDir — каноническая
-// раскладка destiny-репо (docs/destiny): корневой манифест + каталог задач
-// (точка входа `tasks/main.yml`, include-соседи `tasks/<sub>.yml`).
+// destinyManifestFile / destinyTasksFile / destinyTasksDir — the canonical
+// layout of a destiny repo (docs/destiny): root manifest + tasks directory
+// (entry point `tasks/main.yml`, include neighbors `tasks/<sub>.yml`).
 const (
 	destinyManifestFile = "destiny.yml"
 	destinyTasksFile    = "tasks/main.yml"
 	destinyTasksDir     = "tasks"
-	// destinyVarsFile — destiny-локалы рядом с манифестом (docs/destiny/vars.md).
-	// Опционален: его отсутствие — не ошибка (destiny без локалов).
+	// destinyVarsFile — destiny locals next to the manifest (docs/destiny/vars.md).
+	// Optional: its absence is not an error (destiny without locals).
 	destinyVarsFile = "vars.yml"
 )
 
-// DestinyRef — координаты destiny-репозитория для загрузки. Симметрично
-// [ServiceRef]: Git резолвится из `default_destiny_source` (подстановка `{name}`),
-// Ref — git tag/branch из `service.yml → destiny[]` по name (ADR-007).
+// DestinyRef — coordinates of a destiny repository to load. Symmetric to
+// [ServiceRef]: Git is resolved from `default_destiny_source` (`{name}`
+// substitution), Ref is a git tag/branch from `service.yml → destiny[]` by
+// name (ADR-007).
 type DestinyRef struct {
 	Name string
 	Git  string
 	Ref  string
 }
 
-// DestinyArtifact — материализованный immutable-снапшот destiny-репозитория.
+// DestinyArtifact — a materialized immutable snapshot of a destiny repository.
 //
-// Manifest — распарсенный `destiny.yml` (несёт `input:`-контракт для изоляции
-// apply.input, ADR-009). Tasks — распарсенный `tasks/main.yml` (плоский список
-// задач DSL-ядра). Render-проход destiny рендерит именно Tasks в своём
-// изолированном CEL-env.
+// Manifest — the parsed `destiny.yml` (carries the `input:` contract for
+// apply.input isolation, ADR-009). Tasks — the parsed `tasks/main.yml` (a
+// flat list of DSL-core tasks). The destiny render pass renders exactly
+// Tasks in its own isolated CEL env.
 type DestinyArtifact struct {
 	Ref      DestinyRef
 	SHA1     string
 	LocalDir string
 	Manifest *config.DestinyManifest
 	Tasks    []config.Task
-	// Vars — RAW destiny-локалы из `vars.yml` (docs/destiny/vars.md), без
-	// схемо-валидации (vars не типизированы). nil, если файла нет. CEL-выражения
-	// `${ … }` в значениях резолвятся в render-фазе, не здесь.
+	// Vars — RAW destiny locals from `vars.yml` (docs/destiny/vars.md), without
+	// schema validation (vars are untyped). nil if the file is absent. CEL
+	// expressions `${ … }` in values are resolved in the render phase, not here.
 	Vars map[string]any
 }
 
-// DestinyLoader загружает destiny-репозитории в кеш под cacheRoot и парсит их
-// `destiny.yml` + `tasks/main.yml`. Безопасен для конкурентного использования
-// (per-destiny Mutex, как [ServiceLoader]).
+// DestinyLoader loads destiny repositories into the cache under cacheRoot and
+// parses their `destiny.yml` + `tasks/main.yml`. Safe for concurrent use
+// (per-destiny Mutex, like [ServiceLoader]).
 type DestinyLoader struct {
 	snap snapshotter
 }
 
-// NewDestinyLoader создаёт загрузчик destiny с корнем кеша cacheRoot.
+// NewDestinyLoader creates a destiny loader with cache root cacheRoot.
 func NewDestinyLoader(cacheRoot string, logger *slog.Logger) *DestinyLoader {
 	return &DestinyLoader{snap: newSnapshotter(cacheRoot, logger)}
 }
 
-// Load материализует immutable-снапшот destiny на commit-е, в который
-// резолвится ref, парсит `destiny.yml` (манифест) и `tasks/main.yml` (задачи).
+// Load materializes an immutable destiny snapshot at the commit ref resolves
+// to, and parses `destiny.yml` (manifest) and `tasks/main.yml` (tasks).
 func (l *DestinyLoader) Load(ctx context.Context, ref DestinyRef) (*DestinyArtifact, error) {
 	sha1, dir, err := l.snap.snapshot(ctx, ref.Name, ref.Git, ref.Ref, "destiny")
 	if err != nil {

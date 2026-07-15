@@ -46,33 +46,33 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// auditedRoute — декларация audit-покрытия одного write-роута. events — множество
-// event-типов, ОДИН из которых роут пишет на успехе (>1 — kind-зависимый выбор, как
-// voyage scenario/command). Привязка к константам audit.Event* связывает реестр с
-// per-domain *_RecordsOnSuccess-тестами (те доказывают, что эти event-ы реально
-// пишутся). note — пояснение к нетривиальным (self-audit / kind-зависимым) случаям.
+// auditedRoute — declaration of audit coverage for one write route. events — the set of
+// event types, ONE of which the route writes on success (>1 — kind-dependent choice, as in
+// voyage scenario/command). Binding to the audit.Event* constants ties the registry to the
+// per-domain *_RecordsOnSuccess tests (which prove those events are actually written).
+// note — explanation for the non-trivial (self-audit / kind-dependent) cases.
 type auditedRoute struct {
 	events []audit.EventType
 	note   string
 }
 
-// auditedWriteRoutes — write-роуты, КАЖДЫЙ из которых обязан писать audit-event на
-// успехе. Источник — router.go (топология buildRouter); добавление write-роута без
-// строки тут краснит тест.
+// auditedWriteRoutes — write routes, EACH of which must write an audit event on success.
+// Source — router.go (buildRouter topology); adding a write route without a line here
+// goes red.
 //
-// Класс A (middleware-audit, вариант B ADR-054): audit пишет humaAuditMiddleware,
-// навешанный newHuma<Domain>API(evt). Класс B (self-audit): audit пишет сам handler
-// внутри *Typed (newHumaCadenceAPI, без middleware). Для guard-полноты они
-// неразличимы — оба обязаны emit-ить и оба здесь.
+// Class A (middleware-audit, ADR-054 variant B): audit is written by humaAuditMiddleware
+// wired by newHuma<Domain>API(evt). Class B (self-audit): audit is written by the handler
+// itself inside *Typed (newHumaCadenceAPI, no middleware). For guard completeness they are
+// indistinguishable — both must emit and both are here.
 var auditedWriteRoutes = map[route]auditedRoute{
 	// operators (middleware-audit).
 	{http.MethodPost, "/v1/operators"}:                   {events: []audit.EventType{audit.EventOperatorCreated}},
 	{http.MethodPost, "/v1/operators/{aid}/revoke"}:      {events: []audit.EventType{audit.EventOperatorRevoked}},
 	{http.MethodPost, "/v1/operators/{aid}/issue-token"}: {events: []audit.EventType{audit.EventOperatorTokenIssued}},
 
-	// auth (self-audit внутри handler-а: login пишет operator.login после выпуска
-	// JWT, ВНЕ /v1, без middleware-audit-навески — ADR-058). provision (operator.
-	// provisioned) пишет Mapper, не endpoint — у этого роута одно login-событие.
+	// auth (self-audit inside the handler: login writes operator.login after issuing the
+	// JWT, OUTSIDE /v1, with no middleware-audit wiring — ADR-058). provision (operator.
+	// provisioned) is written by the Mapper, not the endpoint — this route has one login event.
 	{http.MethodPost, "/auth/ldap/login"}: {events: []audit.EventType{audit.EventOperatorLogin}, note: "self-audit: handler пишет operator.login после выпуска JWT (ADR-058, вне /v1)"},
 
 	// roles (middleware-audit).
@@ -91,8 +91,8 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/synods/{name}/roles"}:               {events: []audit.EventType{audit.EventSynodRoleGranted}},
 	{http.MethodDelete, "/v1/synods/{name}/roles/{role_name}"}: {events: []audit.EventType{audit.EventSynodRoleRevoked}},
 
-	// incarnations — MIXED audit-класс (middleware create/run/unlock/upgrade +
-	// self-audit rerun/check-drift/destroy/update-hosts), все обязаны emit-ить.
+	// incarnations — MIXED audit class (middleware create/run/unlock/upgrade +
+	// self-audit rerun/check-drift/destroy/update-hosts), all must emit.
 	{http.MethodPost, "/v1/incarnations"}:                             {events: []audit.EventType{audit.EventIncarnationCreated}},
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
 	{http.MethodPost, "/v1/incarnations/{name}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
@@ -104,7 +104,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPut, "/v1/incarnations/{name}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler пишет внутри SetTraitsTyped"},
 	{http.MethodPost, "/v1/incarnations/{name}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit после ReadKV"},
 
-	// choir (self-audit внутри *Typed через writeAuditCtx).
+	// choir (self-audit inside *Typed via writeAuditCtx).
 	{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        {events: []audit.EventType{audit.EventChoirCreated}, note: "self-audit"},
 	{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}"}:              {events: []audit.EventType{audit.EventChoirDeleted}, note: "self-audit"},
 	{http.MethodPost, "/v1/incarnations/{name}/choirs/{choir}/voices"}:         {events: []audit.EventType{audit.EventChoirVoiceAdded}, note: "self-audit"},
@@ -132,7 +132,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPatch, "/v1/services/{name}"}:  {events: []audit.EventType{audit.EventServiceUpdated}},
 	{http.MethodDelete, "/v1/services/{name}"}: {events: []audit.EventType{audit.EventServiceDeregistered}},
 
-	// provisioning-policy (middleware-audit; PUT мутирующий, GET — read). ADR-058 Часть B.
+	// provisioning-policy (middleware-audit; PUT mutating, GET — read). ADR-058 Part B.
 	{http.MethodPut, "/v1/provisioning-policy"}: {events: []audit.EventType{audit.EventProvisioningPolicyChanged}},
 
 	// augur (middleware-audit).
@@ -147,7 +147,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/decrees"}:          {events: []audit.EventType{audit.EventDecreeCreated}},
 	{http.MethodDelete, "/v1/decrees/{name}"}: {events: []audit.EventType{audit.EventDecreeDeleted}},
 
-	// push (middleware-audit; apply мутирующий, GET — read).
+	// push (middleware-audit; apply mutating, GET — read).
 	{http.MethodPost, "/v1/push/apply"}: {events: []audit.EventType{audit.EventPushApplied}},
 
 	// push-providers (middleware-audit).
@@ -155,8 +155,8 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPut, "/v1/push-providers/{name}"}:    {events: []audit.EventType{audit.EventPushProviderUpdated}},
 	{http.MethodDelete, "/v1/push-providers/{name}"}: {events: []audit.EventType{audit.EventPushProviderDeleted}},
 
-	// providers + profiles — Cloud CRUD (middleware-audit, ADR-017). Без update
-	// (Provider/Profile иммутабельны).
+	// providers + profiles — Cloud CRUD (middleware-audit, ADR-017). No update
+	// (Provider/Profile are immutable).
 	{http.MethodPost, "/v1/providers"}:          {events: []audit.EventType{audit.EventProviderCreated}},
 	{http.MethodDelete, "/v1/providers/{name}"}: {events: []audit.EventType{audit.EventProviderDeleted}},
 	{http.MethodPost, "/v1/profiles"}:           {events: []audit.EventType{audit.EventProfileCreated}},
@@ -170,18 +170,18 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPut, "/v1/tidings/{name}"}:    {events: []audit.EventType{audit.EventTidingUpdated}},
 	{http.MethodDelete, "/v1/tidings/{name}"}: {events: []audit.EventType{audit.EventTidingDeleted}},
 
-	// errands (cancel — middleware-audit; POST exec живёт под /v1/souls/{sid}/exec).
+	// errands (cancel — middleware-audit; POST exec lives under /v1/souls/{sid}/exec).
 	{http.MethodDelete, "/v1/errands/{errand_id}"}: {events: []audit.EventType{audit.EventTypeErrandCancelled}},
 
-	// voyages — KIND-зависимый self-audit (RBAC-by-kind, ADR-043 §6): create пишет
-	// scenario_run.started ИЛИ command_run.invoked по kind рецепта; cancel —
-	// scenario_run.cancelled ИЛИ command_run.cancelled. preview — read-like (см.
+	// voyages — KIND-dependent self-audit (RBAC-by-kind, ADR-043 §6): create writes
+	// scenario_run.started OR command_run.invoked by recipe kind; cancel —
+	// scenario_run.cancelled OR command_run.cancelled. preview — read-like (see
 	// writeRoutesNoAudit).
 	{http.MethodPost, "/v1/voyages"}:        {events: []audit.EventType{audit.EventScenarioRunStarted, audit.EventCommandRunInvoked}, note: "self-audit, kind-зависимый: scenario→started / command→invoked"},
 	{http.MethodDelete, "/v1/voyages/{id}"}: {events: []audit.EventType{audit.EventScenarioRunCancelled, audit.EventCommandRunCancelled}, note: "self-audit, kind-зависимый: scenario/command cancelled"},
 
-	// cadences — self-audit внутри *Typed. enable/disable пишут cadence.updated
-	// (toggle через update-event, отдельных enabled/disabled-event нет).
+	// cadences — self-audit inside *Typed. enable/disable write cadence.updated
+	// (toggle via update-event; no separate enabled/disabled events).
 	{http.MethodPost, "/v1/cadences"}:              {events: []audit.EventType{audit.EventCadenceCreated}, note: "self-audit: handler пишет внутри CreateTyped (kind-permission внутри handler, ADR-046 §7)"},
 	{http.MethodPatch, "/v1/cadences/{id}"}:        {events: []audit.EventType{audit.EventCadenceUpdated}, note: "self-audit"},
 	{http.MethodDelete, "/v1/cadences/{id}"}:       {events: []audit.EventType{audit.EventCadenceDeleted}, note: "self-audit"},
@@ -189,33 +189,33 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/cadences/{id}/disable"}: {events: []audit.EventType{audit.EventCadenceUpdated}, note: "self-audit: enable/disable пишут cadence.updated (toggle)"},
 }
 
-// writeRoutesNoAudit — ОСОЗНАННЫЕ исключения: write-роуты, которым audit НЕ положен,
-// каждый с обоснованием ПОЧЕМУ (иначе исключение = дыра, а не решение). Пусто = «нет
-// write-роута без audit»; любое добавление сюда — явное архитектурное решение под ревью.
+// writeRoutesNoAudit — DELIBERATE exceptions: write routes that get NO audit, each with
+// a rationale WHY (otherwise an exception = a hole, not a decision). Empty = "no write
+// route without audit"; any addition here is an explicit architectural decision under review.
 var writeRoutesNoAudit = map[route]string{
-	// POST /v1/voyages/preview — dry-resolve scope БЕЗ создания Voyage и БЕЗ мутации
-	// состояния (ADR-043 amendment §4). POST по HTTP-методу, но read-like по семантике
-	// (ничего не меняет) → audit не пишется намеренно (паритет GET-read). Это
-	// ЕДИНСТВЕННЫЙ write-метод-без-мутации в API; держим явно, чтобы guard не требовал
-	// от него audit-event, которого по дизайну нет.
+	// POST /v1/voyages/preview — dry-resolve scope WITHOUT creating a Voyage and WITHOUT
+	// mutating state (ADR-043 amendment §4). POST by HTTP method, but read-like by semantics
+	// (changes nothing) → audit deliberately not written (parity with GET-read). This is the
+	// ONLY write-method-without-mutation in the API; kept explicit so the guard does not
+	// demand an audit event it has none of by design.
 	{http.MethodPost, "/v1/voyages/preview"}: "ADR-043 amendment §4: dry-resolve scope без создания Voyage и без мутации состояния — read-like POST, audit намеренно не пишется (паритет GET-read)",
 
-	// POST /v1/modules/{name}/form-prep — резолвер source-каталогов UI-формы модуля
-	// (ADR-045 S3): по incarnation_hosts/choir отдаёт живые SID-ы для автокомплита
-	// формы Run→Command. POST по HTTP-методу (несёт тело-фильтр), но read-only-резолв
-	// по семантике — ничего не мутирует (router.go: «Без audit, паттерн soul.list /
-	// service.list»). audit намеренно не пишется.
+	// POST /v1/modules/{name}/form-prep — resolver of source catalogs for a module's UI
+	// form (ADR-045 S3): from incarnation_hosts/choir it returns live SIDs for autocomplete
+	// of the Run→Command form. POST by HTTP method (carries a filter body), but a read-only
+	// resolve by semantics — mutates nothing (router.go: "no audit, soul.list / service.list
+	// pattern"). audit deliberately not written.
 	{http.MethodPost, "/v1/modules/{name}/form-prep"}: "ADR-045 S3: read-only-резолв source-каталогов UI-формы (живые SID-ы), без мутации состояния — audit намеренно не пишется (паттерн soul.list/service.list)",
 
 	// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
-	// pre-fill UI-формы сценария из incarnation.state (docs/input.md). POST по
-	// HTTP-методу (несёт опц. тело-ref), но read-only-резолв по семантике —
-	// читает state одной инкарнации, ничего не мутирует. Permission
-	// incarnation.get (паттерн read). audit намеренно не пишется.
+	// pre-fill of the scenario UI form from incarnation.state (docs/input.md). POST by
+	// HTTP method (carries an optional body-ref), but a read-only resolve by semantics —
+	// reads the state of a single incarnation, mutates nothing. Permission
+	// incarnation.get (read pattern). audit deliberately not written.
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill формы из incarnation.state (docs/input.md): read-only-резолв одной инкарнации, без мутации — audit намеренно не пишется (паттерн get/module.form-prep)",
 }
 
-// writeMethods — HTTP-методы, считающиеся мутирующими для guard-а.
+// writeMethods — HTTP methods considered mutating by the guard.
 var writeMethods = map[string]struct{}{
 	http.MethodPost:   {},
 	http.MethodPut:    {},
@@ -223,23 +223,23 @@ var writeMethods = map[string]struct{}{
 	http.MethodDelete: {},
 }
 
-// TestAuditCompleteness_AllWriteRoutesCovered — агрегатный declarative guard.
+// TestAuditCompleteness_AllWriteRoutesCovered — aggregate declarative guard.
 //
-// Берёт ПОЛНОЕ множество write-роутов из buildFullOpenAPISpec (все домены, вкл.
-// opt-in) и утверждает: каждый write-роут либо в auditedWriteRoutes (обязан писать
-// audit, event подтверждается per-domain *_RecordsOnSuccess), либо в writeRoutesNoAudit
-// (осознанное исключение с обоснованием). Любой write-роут вне обоих множеств = новый
-// write-роут без явного решения по audit → краснит (рецидив S6 не пройдёт молча).
+// Takes the FULL set of write routes from buildFullOpenAPISpec (all domains, incl.
+// opt-in) and asserts: every write route is either in auditedWriteRoutes (must write
+// audit, event confirmed by per-domain *_RecordsOnSuccess) or in writeRoutesNoAudit
+// (a deliberate exception with a rationale). Any write route outside both sets = a new
+// write route with no explicit audit decision → goes red (an S6 recurrence won't slip by).
 //
-// Заодно ловит обратный дрейф: запись в реестре, которой больше нет соответствующего
-// write-роута в спеке (устаревшая декларация — реестр должен зеркалить топологию).
+// Also catches the reverse drift: a registry entry with no matching write route in the
+// spec (a stale declaration — the registry must mirror the topology).
 func TestAuditCompleteness_AllWriteRoutesCovered(t *testing.T) {
 	spec, err := buildFullOpenAPISpec()
 	if err != nil {
 		t.Fatalf("buildFullOpenAPISpec: %v", err)
 	}
 
-	// Полное множество write-роутов спеки.
+	// Full set of the spec's write routes.
 	specWrites := map[route]struct{}{}
 	for path, item := range spec.Paths {
 		for method := range pathItemOps(item) {
@@ -253,7 +253,7 @@ func TestAuditCompleteness_AllWriteRoutesCovered(t *testing.T) {
 		t.Fatal("в собранной спеке нет ни одного write-роута — спека пуста или write-методы не распознаны?")
 	}
 
-	// (1) Каждый write-роут спеки покрыт ровно одним из двух реестров.
+	// (1) Every write route in the spec is covered by exactly one of the two registries.
 	var uncovered []string
 	for r := range specWrites {
 		ar, audited := auditedWriteRoutes[r]
@@ -275,7 +275,7 @@ func TestAuditCompleteness_AllWriteRoutesCovered(t *testing.T) {
 			len(uncovered), strings.Join(uncovered, "\n  "))
 	}
 
-	// (2) Обратный дрейф: декларация в реестре без реального write-роута в спеке.
+	// (2) Reverse drift: a registry declaration with no real write route in the spec.
 	var stale []string
 	for r := range auditedWriteRoutes {
 		if _, ok := specWrites[r]; !ok {

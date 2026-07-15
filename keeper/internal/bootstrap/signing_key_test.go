@@ -9,9 +9,9 @@ import (
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// Unit-тесты LoadSigningKey покрывают входную валидацию (vc/ref), не
-// требуя реального Vault. Happy path + bad-payload-сценарии (ReadKV
-// roundtrip, ErrSigningKeyMissing) живут в integration_test.go под
+// LoadSigningKey unit tests cover input validation (vc/ref) without
+// requiring a real Vault. The happy path + bad-payload scenarios (ReadKV
+// roundtrip, ErrSigningKeyMissing) live in integration_test.go under
 // `//go:build integration`.
 
 func TestLoadSigningKey_NilVault(t *testing.T) {
@@ -25,11 +25,11 @@ func TestLoadSigningKey_NilVault(t *testing.T) {
 }
 
 func TestLoadSigningKey_EmptyRef(t *testing.T) {
-	// Не-nil vault — конструировать нельзя без реального Addr; для
-	// проверки empty-ref передаём nil — но порядок проверок в
-	// LoadSigningKey: сначала vc, потом ref. Чтобы покрыть empty-ref-
-	// ветку, нужен non-nil vc-плейсхолдер. zero-value *keepervault.Client
-	// корректен — обращений к нему до проверки ref нет.
+	// A non-nil vault client cannot be constructed without a real Addr;
+	// to test the empty-ref case we'd pass nil — but LoadSigningKey checks
+	// vc first, then ref. To exercise the empty-ref branch we need a
+	// non-nil vc placeholder. A zero-value *keepervault.Client is fine —
+	// nothing touches it before the ref check.
 	vc := &keepervault.Client{}
 	_, err := LoadSigningKey(context.Background(), vc, "")
 	if err == nil {

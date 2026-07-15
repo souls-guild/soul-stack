@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// fakeCloser — io.Closer-заглушка, фиксирующая факт Close (для проверки
-// graceful-стопа Summons-подписки в Shutdown).
+// fakeCloser is an io.Closer stub that records whether Close was called (to
+// verify graceful stop of the Summons subscription in Shutdown).
 type fakeCloser struct{ closed atomic.Bool }
 
 func (f *fakeCloser) Close() error {
@@ -50,8 +50,8 @@ func TestNewPool_DefaultPollInterval(t *testing.T) {
 	}
 }
 
-// TestPool_StartsNWorkers — пул поднимает ровно N воркеров (по приросту
-// goroutine-count относительно baseline).
+// TestPool_StartsNWorkers checks that the pool starts exactly N workers (by
+// the goroutine-count increase relative to baseline).
 func TestPool_StartsNWorkers(t *testing.T) {
 	const n = 4
 	p, err := NewPool(Config{Workers: n, PollInterval: time.Hour}, Deps{Logger: testLogger()})
@@ -63,7 +63,7 @@ func TestPool_StartsNWorkers(t *testing.T) {
 	before := runtime.NumGoroutine()
 	p.Start(ctx)
 
-	// Дать воркерам встать на select.
+	// Let the workers settle into select.
 	waitFor(t, func() bool { return runtime.NumGoroutine() >= before+n })
 
 	cancel()
@@ -71,11 +71,12 @@ func TestPool_StartsNWorkers(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 
-	// После Shutdown прирост goroutine от пула должен схлопнуться.
+	// After Shutdown, the pool's goroutine increase should collapse.
 	waitFor(t, func() bool { return runtime.NumGoroutine() <= before })
 }
 
-// TestPool_ClaimCalledOnTick — claim-callback вызывается на poll-tick-е.
+// TestPool_ClaimCalledOnTick checks that the claim-callback is invoked on a
+// poll-tick.
 func TestPool_ClaimCalledOnTick(t *testing.T) {
 	p, err := NewPool(Config{Workers: 1, PollInterval: 5 * time.Millisecond}, Deps{Logger: testLogger()})
 	if err != nil {
@@ -99,9 +100,10 @@ func TestPool_ClaimCalledOnTick(t *testing.T) {
 	}
 }
 
-// TestPool_ClaimCalledOnNotify — Summons-wake будит воркер раньше poll-tick-а.
+// TestPool_ClaimCalledOnNotify checks that Summons-wake wakes the worker
+// ahead of the poll-tick.
 func TestPool_ClaimCalledOnNotify(t *testing.T) {
-	// Длинный poll-interval: если claim вызвался, это из-за Notify, не из-за тика.
+	// Long poll-interval: if claim fired, it's because of Notify, not the tick.
 	p, err := NewPool(Config{Workers: 1, PollInterval: time.Hour}, Deps{Logger: testLogger()})
 	if err != nil {
 		t.Fatal(err)
@@ -125,10 +127,11 @@ func TestPool_ClaimCalledOnNotify(t *testing.T) {
 	}
 }
 
-// TestPool_SummonsWakesPool — Summons-сигнал от подписчика дёргает Notify,
-// что будит воркер и приводит к claim раньше poll-tick-а.
+// TestPool_SummonsWakesPool checks that a Summons signal from the subscriber
+// triggers Notify, waking the worker and causing a claim ahead of the
+// poll-tick.
 func TestPool_SummonsWakesPool(t *testing.T) {
-	// Длинный poll-interval: если claim вызвался — это от Summons-wake, не тика.
+	// Long poll-interval: if claim fired, it's from Summons-wake, not the tick.
 	var (
 		mu     sync.Mutex
 		onSig  func()
@@ -158,7 +161,7 @@ func TestPool_SummonsWakesPool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.Start(ctx)
 
-	// Эмулируем Redis-сигнал: подписчик дёргает переданный ему callback.
+	// Emulate a Redis signal: the subscriber invokes the callback it was given.
 	mu.Lock()
 	sig := onSig
 	mu.Unlock()
@@ -178,8 +181,8 @@ func TestPool_SummonsWakesPool(t *testing.T) {
 	}
 }
 
-// TestPool_SummonsSubscribeFailure — сбой подписки не роняет старт пула:
-// пул работает на poll-fallback-е.
+// TestPool_SummonsSubscribeFailure checks that a subscription failure doesn't
+// break pool startup: the pool runs on poll-fallback.
 func TestPool_SummonsSubscribeFailure(t *testing.T) {
 	subscribe := func(context.Context, func()) (io.Closer, error) {
 		return nil, errors.New("redis down")
@@ -202,7 +205,7 @@ func TestPool_SummonsSubscribeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.Start(ctx)
 
-	// Несмотря на провал подписки, poll-fallback крутит claim.
+	// Despite the subscription failing, poll-fallback keeps claiming.
 	waitFor(t, func() bool { return calls.Load() >= 2 })
 
 	cancel()
@@ -211,8 +214,9 @@ func TestPool_SummonsSubscribeFailure(t *testing.T) {
 	}
 }
 
-// TestPool_NoSummonsSubscriber — без Deps.Summons пул стартует и крутит claim
-// на poll-fallback-е; Shutdown без подписки чистый.
+// TestPool_NoSummonsSubscriber checks that without Deps.Summons the pool
+// starts and claims on poll-fallback; Shutdown without a subscription is
+// clean.
 func TestPool_NoSummonsSubscriber(t *testing.T) {
 	p, err := NewPool(Config{Workers: 1, PollInterval: 5 * time.Millisecond}, Deps{Logger: testLogger()})
 	if err != nil {
@@ -232,7 +236,8 @@ func TestPool_NoSummonsSubscriber(t *testing.T) {
 	}
 }
 
-// TestPool_DefaultClaimNoop — без SetClaim пул крутится без паники (no-op claim).
+// TestPool_DefaultClaimNoop checks that without SetClaim the pool runs
+// without panicking (no-op claim).
 func TestPool_DefaultClaimNoop(t *testing.T) {
 	p, err := NewPool(Config{Workers: 2, PollInterval: time.Millisecond}, Deps{Logger: testLogger()})
 	if err != nil {
@@ -247,7 +252,8 @@ func TestPool_DefaultClaimNoop(t *testing.T) {
 	}
 }
 
-// TestPool_ClaimErrorDoesNotStop — ошибка claim-callback-а не роняет воркер.
+// TestPool_ClaimErrorDoesNotStop checks that a claim-callback error doesn't
+// bring down the worker.
 func TestPool_ClaimErrorDoesNotStop(t *testing.T) {
 	p, err := NewPool(Config{Workers: 1, PollInterval: 5 * time.Millisecond}, Deps{Logger: testLogger()})
 	if err != nil {
@@ -263,7 +269,7 @@ func TestPool_ClaimErrorDoesNotStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.Start(ctx)
 
-	// Несколько тиков несмотря на постоянную ошибку — воркер жив.
+	// Several ticks despite the persistent error — the worker is alive.
 	waitFor(t, func() bool { return calls.Load() >= 3 })
 
 	cancel()
@@ -272,8 +278,8 @@ func TestPool_ClaimErrorDoesNotStop(t *testing.T) {
 	}
 }
 
-// TestPool_ShutdownGraceful — Shutdown завершается без leak-warn на чистом
-// ctx-cancel (воркеры выходят быстро).
+// TestPool_ShutdownGraceful checks that Shutdown completes without a
+// leak-warning on a clean ctx-cancel (workers exit fast).
 func TestPool_ShutdownGraceful(t *testing.T) {
 	p, err := NewPool(Config{Workers: 3, PollInterval: 10 * time.Millisecond}, Deps{Logger: testLogger()})
 	if err != nil {
@@ -295,9 +301,9 @@ func TestPool_ShutdownGraceful(t *testing.T) {
 	}
 }
 
-// TestPool_DrainStopsNewClaims — после drain-сигнала (Shutdown) пул перестаёт
-// входить в новые claim-тики. Считаем claim-и: фиксируем число на момент
-// Shutdown, ждём и убеждаемся, что новых не прибавилось.
+// TestPool_DrainStopsNewClaims checks that after the drain signal (Shutdown)
+// the pool stops entering new claim ticks. Counts claims: records the count
+// at Shutdown time, waits, and verifies no new ones were added.
 func TestPool_DrainStopsNewClaims(t *testing.T) {
 	p, err := NewPool(
 		Config{Workers: 2, PollInterval: 5 * time.Millisecond, DrainGrace: time.Second},
@@ -317,25 +323,25 @@ func TestPool_DrainStopsNewClaims(t *testing.T) {
 	defer cancel()
 	p.Start(ctx)
 
-	// Дать пулу натикать claim-ов.
+	// Let the pool tick out a few claims.
 	waitFor(t, func() bool { return calls.Load() >= 3 })
 
-	// Drain через Shutdown: воркеры должны выйти из loop-а, новых тиков нет.
+	// Drain via Shutdown: workers should exit the loop, no new ticks.
 	if err := p.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	after := calls.Load()
 
-	// После drain — никаких новых claim-ов, сколько бы ни прошло poll-интервалов.
+	// After drain — no new claims, no matter how many poll intervals pass.
 	time.Sleep(50 * time.Millisecond)
 	if got := calls.Load(); got != after {
 		t.Fatalf("claims continued after drain: %d → %d", after, got)
 	}
 }
 
-// TestPool_DrainWaitsInflightWithinGrace — уже идущий in-flight claim
-// доводится до конца в пределах grace (его ctx НЕ отменяется), Shutdown
-// возвращает nil.
+// TestPool_DrainWaitsInflightWithinGrace checks that an already in-flight
+// claim runs to completion within grace (its ctx is NOT cancelled), and
+// Shutdown returns nil.
 func TestPool_DrainWaitsInflightWithinGrace(t *testing.T) {
 	p, err := NewPool(
 		Config{Workers: 1, PollInterval: time.Millisecond, DrainGrace: 2 * time.Second},
@@ -355,8 +361,8 @@ func TestPool_DrainWaitsInflightWithinGrace(t *testing.T) {
 		case entered <- struct{}{}:
 		default:
 		}
-		// In-flight держим ~100ms — короче grace. Сигнализируем, если ctx
-		// внезапно отменили (drain не должен этого делать в пределах grace).
+		// Hold in-flight for ~100ms — shorter than grace. Signal if ctx got
+		// cancelled unexpectedly (drain shouldn't do that within grace).
 		select {
 		case <-time.After(100 * time.Millisecond):
 			finished.Store(true)
@@ -370,7 +376,7 @@ func TestPool_DrainWaitsInflightWithinGrace(t *testing.T) {
 	defer cancel()
 	p.Start(ctx)
 
-	<-entered // дождались, что воркер вошёл в claim (in-flight)
+	<-entered // wait until the worker entered claim (in-flight)
 
 	start := time.Now()
 	if err := p.Shutdown(context.Background()); err != nil {
@@ -387,11 +393,12 @@ func TestPool_DrainWaitsInflightWithinGrace(t *testing.T) {
 	}
 }
 
-// TestPool_DrainGraceExceededAbortsInflight — in-flight, не уложившийся в grace,
-// прерывается отменой claim-ctx. Имитация «claim, который не завершит работу
-// сам»: callback возвращается ТОЛЬКО по ctx.Done. Проверяем, что claim получил
-// отменённый ctx (= не «доеден» силой: callback сам решает, что делать с Ward —
-// здесь он просто выходит, ничего не коммитя).
+// TestPool_DrainGraceExceededAbortsInflight checks that an in-flight claim
+// that doesn't finish within grace is aborted by cancelling claim-ctx.
+// Simulates a "claim that won't finish on its own": the callback returns
+// ONLY on ctx.Done. Verifies that claim received a cancelled ctx (it isn't
+// forcibly killed — the callback decides what to do with the Ward itself;
+// here it just returns, without committing anything).
 func TestPool_DrainGraceExceededAbortsInflight(t *testing.T) {
 	p, err := NewPool(
 		Config{Workers: 1, PollInterval: time.Millisecond, DrainGrace: 50 * time.Millisecond},
@@ -410,9 +417,9 @@ func TestPool_DrainGraceExceededAbortsInflight(t *testing.T) {
 		case entered <- struct{}{}:
 		default:
 		}
-		// Бесконечный in-flight: завершаемся ТОЛЬКО по отмене ctx (grace-abort).
-		// Если бы пул не отменил ctx, callback не вышел бы и Shutdown завис бы —
-		// сам факт возврата Shutdown доказывает, что claimCtx отменён.
+		// Infinite in-flight: only returns on ctx cancel (grace-abort). If the
+		// pool didn't cancel ctx, the callback would never return and Shutdown
+		// would hang — Shutdown returning at all proves claimCtx was cancelled.
 		<-cctx.Done()
 		sawCancel.Store(true)
 		return cctx.Err()
@@ -425,7 +432,7 @@ func TestPool_DrainGraceExceededAbortsInflight(t *testing.T) {
 	<-entered
 
 	start := time.Now()
-	// Shutdown-ctx с запасом: даём grace истечь и claimCancel сработать.
+	// Shutdown-ctx with headroom: let grace expire and claimCancel fire.
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer shutCancel()
 	_ = p.Shutdown(shutCtx)
@@ -433,13 +440,13 @@ func TestPool_DrainGraceExceededAbortsInflight(t *testing.T) {
 	if !sawCancel.Load() {
 		t.Fatal("in-flight claim was not aborted by ctx after grace exceeded")
 	}
-	// Shutdown не вернулся раньше grace-окна.
+	// Shutdown didn't return before the grace window elapsed.
 	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
 		t.Fatalf("shutdown returned before grace window elapsed (%v)", elapsed)
 	}
 }
 
-// waitFor поллит cond до true или фейлит по таймауту.
+// waitFor polls cond until true or fails on timeout.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

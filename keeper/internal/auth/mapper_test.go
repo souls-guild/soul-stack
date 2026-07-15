@@ -14,15 +14,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeMapperDB — in-memory operator.ExecQueryRower для unit-тестов Mapper-а.
-// Различает SELECT (QueryRow по operators) от INSERT/GRANT (Exec) по SQL-тексту.
+// fakeMapperDB — in-memory operator.ExecQueryRower for Mapper unit tests.
+// Distinguishes SELECT (QueryRow over operators) from INSERT/GRANT (Exec) by SQL text.
 type fakeMapperDB struct {
-	// existing — оператор, который вернёт SelectByAID; nil → ErrOperatorNotFound.
+	// existing — the operator SelectByAID will return; nil → ErrOperatorNotFound.
 	existing *operator.Operator
 	selErr   error
 
-	inserts []*insertCapture // захваченные INSERT operators
-	grants  int              // число rbac.GrantOperator
+	inserts []*insertCapture // captured INSERT operators
+	grants  int              // count of rbac.GrantOperator calls
 	execErr error
 }
 
@@ -67,7 +67,7 @@ func toStr(v any) string {
 	return ""
 }
 
-// fakeOperatorRow — pgx.Row, отдающий поля Operator-а в порядке selectOperatorByAIDSQL.
+// fakeOperatorRow — a pgx.Row emitting Operator fields in selectOperatorByAIDSQL order.
 type fakeOperatorRow struct {
 	op  *operator.Operator
 	err error
@@ -80,7 +80,7 @@ func (r *fakeOperatorRow) Scan(dest ...any) error {
 	if r.op == nil {
 		return pgx.ErrNoRows
 	}
-	// порядок: aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
+	// order: aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 	createdVia := r.op.CreatedVia
 	if createdVia == "" {
 		createdVia = operator.CreatedViaUser
@@ -96,7 +96,7 @@ func (r *fakeOperatorRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakeAudit — in-memory audit.Writer, копит записанные события.
+// fakeAudit — in-memory audit.Writer, accumulates recorded events.
 type fakeAudit struct {
 	events []*audit.Event
 }
@@ -119,9 +119,9 @@ func newMapper(db operator.ExecQueryRower, aw audit.Writer, grm map[string][]str
 	return NewMapper(MapperConfig{Method: operator.AuthMethodLDAP, GroupRoleMap: grm, DB: db, Audit: aw})
 }
 
-// TestMapper_HappyProvision — юзер в группе → auto-provision (Insert вызван с
-// auth_method=ldap), роли из групп, JWT-вызова тут нет (он в endpoint).
-// Provisioned=true, audit operator.provisioned записан.
+// TestMapper_HappyProvision — user in a group → auto-provision (Insert called
+// with auth_method=ldap), roles from groups, no JWT call here (that's in the
+// endpoint). Provisioned=true, operator.provisioned audit recorded.
 func TestMapper_HappyProvision(t *testing.T) {
 	db := &fakeMapperDB{existing: nil} // SelectByAID → not found
 	aw := &fakeAudit{}
@@ -144,10 +144,10 @@ func TestMapper_HappyProvision(t *testing.T) {
 	if db.inserts[0].authMethod != string(operator.AuthMethodLDAP) {
 		t.Errorf("Insert auth_method = %q, want ldap", db.inserts[0].authMethod)
 	}
-	// ADR-058(d): federated-provision пишет created_by_aid=NULL (нет
-	// оператора-инициатора) + created_via='ldap'. Раньше тут стоял
-	// reserved-AID archon-system из-за старого bootstrap-индекса; индекс
-	// перенесён на created_via='bootstrap' (миграция 085), NULL легален.
+	// ADR-058(d): federated provisioning writes created_by_aid=NULL (no
+	// initiating operator) + created_via='ldap'. This used to hold the
+	// reserved AID archon-system because of the old bootstrap index; the
+	// index moved to created_via='bootstrap' (migration 085), NULL is legal now.
 	if db.inserts[0].createdBy != nil {
 		t.Errorf("Insert created_by_aid = %v, want nil (federated, no initiator)", db.inserts[0].createdBy)
 	}
@@ -165,15 +165,15 @@ func TestMapper_HappyProvision(t *testing.T) {
 	}
 }
 
-// TestMapper_TwoFederatedProvisionsBothNullCreatedBy — ADR-058(d) guard (кейс 3):
-// два разных federated-оператора провижинятся подряд, оба с created_by_aid=NULL.
-// До ADR-058(d) это было невозможно: partial unique index `operators_first_archon_idx`
-// держался на `created_by_aid IS NULL` → второй NULL ловился как UNIQUE-violation.
-// После переноса индекса на created_via='bootstrap' (миграция 085) NULL у
-// created_by_aid легален для federated-строк — оба provision формируют
-// created_by_aid=nil + created_via=ldap.
+// TestMapper_TwoFederatedProvisionsBothNullCreatedBy — ADR-058(d) guard (case 3):
+// two different federated operators are provisioned back to back, both with
+// created_by_aid=NULL. Before ADR-058(d) this was impossible: the partial
+// unique index `operators_first_archon_idx` was keyed on `created_by_aid IS
+// NULL` → the second NULL would trip a UNIQUE violation. After moving the
+// index to created_via='bootstrap' (migration 085), NULL is legal for
+// federated rows — both provisions produce created_by_aid=nil + created_via=ldap.
 func TestMapper_TwoFederatedProvisionsBothNullCreatedBy(t *testing.T) {
-	db := &fakeMapperDB{existing: nil} // оба SELECT → not found → provision
+	db := &fakeMapperDB{existing: nil} // both SELECTs → not found → provision
 	aw := &fakeAudit{}
 	m := newMapper(db, aw, map[string][]string{"ops": {"read-only"}})
 
@@ -199,8 +199,8 @@ func TestMapper_TwoFederatedProvisionsBothNullCreatedBy(t *testing.T) {
 	}
 }
 
-// TestMapper_NoRoleMappingDoesNotProvision — вне-групп юзер → ErrNoRoleMapping,
-// оператор НЕ создан (Insert НЕ вызван).
+// TestMapper_NoRoleMappingDoesNotProvision — an ungrouped user →
+// ErrNoRoleMapping, no operator is created (Insert NOT called).
 func TestMapper_NoRoleMappingDoesNotProvision(t *testing.T) {
 	db := &fakeMapperDB{existing: nil}
 	aw := &fakeAudit{}
@@ -208,7 +208,7 @@ func TestMapper_NoRoleMappingDoesNotProvision(t *testing.T) {
 
 	_, err := m.Map(context.Background(), ExternalIdentity{
 		AID:    "bob",
-		Groups: []string{"interns"}, // не пересекает group_role_map
+		Groups: []string{"interns"}, // doesn't intersect group_role_map
 	})
 	if !errors.Is(err, ErrNoRoleMapping) {
 		t.Fatalf("expected ErrNoRoleMapping, got %v", err)
@@ -221,8 +221,8 @@ func TestMapper_NoRoleMappingDoesNotProvision(t *testing.T) {
 	}
 }
 
-// TestMapper_RevokedRejected — SelectByAID вернул revoked-оператора →
-// ErrOperatorRevoked, Insert НЕ вызван.
+// TestMapper_RevokedRejected — SelectByAID returns a revoked operator →
+// ErrOperatorRevoked, Insert NOT called.
 func TestMapper_RevokedRejected(t *testing.T) {
 	revoked := time.Now()
 	db := &fakeMapperDB{existing: &operator.Operator{
@@ -241,8 +241,8 @@ func TestMapper_RevokedRejected(t *testing.T) {
 	}
 }
 
-// TestMapper_ExistingActiveNoInsert — существующий активный оператор →
-// Provisioned=false, Insert НЕ вызван, роли из group_role_map.
+// TestMapper_ExistingActiveNoInsert — an existing active operator →
+// Provisioned=false, Insert NOT called, roles from group_role_map.
 func TestMapper_ExistingActiveNoInsert(t *testing.T) {
 	db := &fakeMapperDB{existing: &operator.Operator{
 		AID: "dave", DisplayName: "dave", AuthMethod: operator.AuthMethodLDAP,
@@ -268,8 +268,8 @@ func TestMapper_ExistingActiveNoInsert(t *testing.T) {
 	}
 }
 
-// TestMapper_InvalidAIDIsOpaque — невалидный AID → ErrAuthFailed (anti-oracle),
-// без утечки причины.
+// TestMapper_InvalidAIDIsOpaque — an invalid AID → ErrAuthFailed (anti-oracle),
+// no leak of the cause.
 func TestMapper_InvalidAIDIsOpaque(t *testing.T) {
 	db := &fakeMapperDB{}
 	m := newMapper(db, &fakeAudit{}, map[string][]string{"ops": {"cluster-admin"}})
@@ -279,8 +279,8 @@ func TestMapper_InvalidAIDIsOpaque(t *testing.T) {
 	}
 }
 
-// TestMapper_RolesDedupSorted — несколько групп с пересекающимися ролями →
-// дедуп + стабильный порядок.
+// TestMapper_RolesDedupSorted — several groups with overlapping roles →
+// deduped + stable order.
 func TestMapper_RolesDedupSorted(t *testing.T) {
 	db := &fakeMapperDB{existing: &operator.Operator{AID: "eve", DisplayName: "eve", AuthMethod: operator.AuthMethodLDAP}}
 	m := newMapper(db, &fakeAudit{}, map[string][]string{
@@ -302,10 +302,10 @@ func TestMapper_RolesDedupSorted(t *testing.T) {
 	}
 }
 
-// TestMapper_OIDCProvisionStampsOIDC — ADR-058 стадия 2 guard: mapper с
-// Method=oidc провижинит оператора с auth_method=oidc И created_via=oidc
-// (источник атрибутируется методом, не хардкодом ldap). Доказывает generalize
-// mapper-а под оба метода.
+// TestMapper_OIDCProvisionStampsOIDC — ADR-058 stage 2 guard: a mapper with
+// Method=oidc provisions an operator with auth_method=oidc AND created_via=oidc
+// (the source is attributed by method, not hardcoded to ldap). Proves the
+// mapper generalizes across both methods.
 func TestMapper_OIDCProvisionStampsOIDC(t *testing.T) {
 	db := &fakeMapperDB{existing: nil} // not found → provision
 	aw := &fakeAudit{}
@@ -334,8 +334,9 @@ func TestMapper_OIDCProvisionStampsOIDC(t *testing.T) {
 	}
 }
 
-// TestMapper_EmptyMethodRejected — defense-in-depth guard: mapper без явного
-// Method не должен молча создавать оператора (ErrAuthFailed, Insert не вызван).
+// TestMapper_EmptyMethodRejected — defense-in-depth guard: a mapper without
+// an explicit Method must not silently create an operator (ErrAuthFailed,
+// Insert not called).
 func TestMapper_EmptyMethodRejected(t *testing.T) {
 	db := &fakeMapperDB{existing: nil}
 	m := NewMapper(MapperConfig{GroupRoleMap: map[string][]string{"ops": {"cluster-admin"}}, DB: db, Audit: &fakeAudit{}})

@@ -7,11 +7,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// buildProtoRequest конвертирует DispatchRequest + errand_id в ErrandRequest.
-// input → google.protobuf.Struct через structpb.NewStruct (json-совместимая
-// сериализация map[string]any). Ошибка только на нерепрезентабельных
-// типах (chan/func), которых в API-payload-е быть не должно (HTTP-decode
-// даёт чистый JSON-набор).
+// buildProtoRequest converts DispatchRequest + errand_id into ErrandRequest.
+// input → google.protobuf.Struct via structpb.NewStruct (JSON-compatible
+// serialization of map[string]any). Errors only on non-representable
+// types (chan/func), which should never appear in an API payload (HTTP
+// decode yields plain JSON).
 func buildProtoRequest(errandID string, req DispatchRequest) (*keeperv1.ErrandRequest, error) {
 	var inputStruct *structpb.Struct
 	if len(req.Input) > 0 {
@@ -30,9 +30,9 @@ func buildProtoRequest(errandID string, req DispatchRequest) (*keeperv1.ErrandRe
 	}, nil
 }
 
-// StatusFromProto маппит proto ErrandStatus → строковый Status, использующийся
-// в БД и DispatchResult. UNSPECIFIED → StatusFailed (defensive: финальный
-// ErrandResult с UNSPECIFIED — нарушение контракта Soul-а, трактуем как fail).
+// StatusFromProto maps proto ErrandStatus → the string Status used in
+// the DB and DispatchResult. UNSPECIFIED → StatusFailed (defensive: a final
+// ErrandResult with UNSPECIFIED violates the Soul contract, treated as fail).
 func StatusFromProto(s keeperv1.ErrandStatus) Status {
 	switch s {
 	case keeperv1.ErrandStatus_ERRAND_STATUS_RUNNING:

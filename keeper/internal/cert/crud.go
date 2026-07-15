@@ -11,22 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя.
+// Sentinel errors of the CRUD layer.
 var (
-	// ErrActiveExists — попытка вставить второй active-материал для той же
-	// (incarnation, kind) (partial unique `warrant_active_by_incarnation_kind_idx`).
-	// Caller обязан сначала Supersede старый, потом Insert новый — в одной tx.
+	// ErrActiveExists — attempt to insert a second active material for the
+	// same (incarnation, kind) (partial unique
+	// `warrant_active_by_incarnation_kind_idx`). Caller must first Supersede
+	// the old one, then Insert the new — in one tx.
 	ErrActiveExists = errors.New("cert: active warrant for (incarnation, kind) already exists (call SupersedeActive first)")
 
-	// ErrFingerprintCollision — fingerprint уже в реестре. Де-факто невозможно
-	// (SHA-256 публичного ключа уникален); constraint держим явно.
+	// ErrFingerprintCollision — fingerprint already exists in the registry.
+	// De facto impossible (SHA-256 of a public key is unique); constraint
+	// kept explicit.
 	ErrFingerprintCollision = errors.New("cert: fingerprint already exists in registry")
 
-	// ErrIncarnationNotFound — INSERT ссылается на отсутствующую инкарнацию
+	// ErrIncarnationNotFound — INSERT references a nonexistent incarnation
 	// (FK `warrant_incarnation_fk`).
 	ErrIncarnationNotFound = errors.New("cert: target incarnation not found")
 
-	// ErrNotFound — Select не нашёл строку.
+	// ErrNotFound — Select found no row.
 	ErrNotFound = errors.New("cert: warrant not found")
 )
 
@@ -36,9 +38,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool (симметрия
-// soulseed.ExecQueryRower): unit-тесты через fake без PG, production — pool/
-// Conn/Tx.
+// ExecQueryRower — narrow subset of pgxpool.Pool (symmetric to
+// soulseed.ExecQueryRower): unit tests via fake without PG, production —
+// pool/Conn/Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -51,8 +53,8 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// TxBeginner — узкое подмножество pgxpool.Pool для транзакционных операций
-// (supersede старого active + insert нового в одной tx). Симметрично
+// TxBeginner — narrow subset of pgxpool.Pool for transactional operations
+// (supersede old active + insert new in one tx). Symmetric to
 // choir.TxBeginner / incarnation.TxBeginner.
 type TxBeginner interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
@@ -81,23 +83,23 @@ FROM warrant
 WHERE incarnation_id = $1 AND kind = $2 AND status = 'active'
 `
 
-// supersedeActiveSQL переводит active-строку данной (incarnation, kind) в
-// superseded. При нормальном инварианте затронет ровно одну строку (либо ноль).
+// supersedeActiveSQL moves the active row for a given (incarnation, kind) to
+// superseded. Under the normal invariant affects exactly one row (or zero).
 const supersedeActiveSQL = `
 UPDATE warrant
 SET status = 'superseded'
 WHERE incarnation_id = $1 AND kind = $2 AND status = 'active'
 `
 
-// Insert вписывает новую строку Warrant. Для active-status ОБЯЗАТЕЛЬНО внутри
-// той же tx, что [SupersedeActive] предыдущего active (иначе partial unique
-// нарушится между supersede и insert).
+// Insert writes a new Warrant row. For active status MUST run inside the
+// same tx as [SupersedeActive] of the previous active (otherwise the partial
+// unique constraint breaks between supersede and insert).
 //
-// Pre-conditions: IncarnationID/VaultRef/SerialNumber непустые; Kind валиден;
-// Fingerprint — 64 lower-hex; NotAfter не zero.
+// Pre-conditions: IncarnationID/VaultRef/SerialNumber non-empty; Kind valid;
+// Fingerprint is 64 lower-hex; NotAfter is not zero.
 //
-// Возврат: [ErrActiveExists] / [ErrFingerprintCollision] на UNIQUE,
-// [ErrIncarnationNotFound] на FK.
+// Returns: [ErrActiveExists] / [ErrFingerprintCollision] on UNIQUE,
+// [ErrIncarnationNotFound] on FK.
 func Insert(ctx context.Context, db ExecQueryRower, w *Warrant) error {
 	if w == nil {
 		return fmt.Errorf("cert: nil warrant")
@@ -163,10 +165,11 @@ func mapInsertError(err error) error {
 			case "warrant_active_by_incarnation_kind_idx":
 				return fmt.Errorf("%w (constraint %s): %w", ErrActiveExists, pgErr.ConstraintName, err)
 			}
-			// fingerprint не UNIQUE в схеме (в отличие от soul_seeds): у cert/key/ca
-			// одной инкарнации fingerprint-ы разные, но глобальной уникальности не
-			// требуем (сервисные серты разных инкарнаций теоретически независимы).
-			// Ветка оставлена для forward-compat, если добавим UNIQUE-индекс.
+			// fingerprint is not UNIQUE in the schema (unlike soul_seeds):
+			// cert/key/ca of one incarnation have different fingerprints,
+			// but global uniqueness is not required (service certs of
+			// different incarnations are theoretically independent). Branch
+			// kept for forward-compat if a UNIQUE index is added.
 			return fmt.Errorf("cert: unique violation on %s: %w", pgErr.ConstraintName, err)
 		case pgErrCodeForeignKeyViolation:
 			if pgErr.ConstraintName == "warrant_incarnation_fk" {
@@ -180,7 +183,7 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("cert: insert: %w", err)
 }
 
-// SelectActive возвращает active-строку для (incarnation, kind), либо
+// SelectActive returns the active row for (incarnation, kind), or
 // [ErrNotFound].
 func SelectActive(ctx context.Context, db ExecQueryRower, incarnationID string, kind Kind) (*Warrant, error) {
 	row := db.QueryRow(ctx, selectActiveSQL, incarnationID, string(kind))
@@ -194,9 +197,9 @@ func SelectActive(ctx context.Context, db ExecQueryRower, incarnationID string, 
 	return w, nil
 }
 
-// SupersedeActive переводит active-строку данной (incarnation, kind) в
-// superseded. No-op (rows=0), если active нет (первый выпуск). Должна
-// вызываться внутри той же tx, что [Insert] нового active.
+// SupersedeActive moves the active row for a given (incarnation, kind) to
+// superseded. No-op (rows=0) if there is no active (first issuance). Must be
+// called inside the same tx as [Insert] of the new active.
 func SupersedeActive(ctx context.Context, db ExecQueryRower, incarnationID string, kind Kind) error {
 	if incarnationID == "" {
 		return fmt.Errorf("cert: incarnation_id is empty")
@@ -210,20 +213,23 @@ func SupersedeActive(ctx context.Context, db ExecQueryRower, incarnationID strin
 	return nil
 }
 
-// markStatusSQL — точечная смена статуса строки по cert_id (CAS by expected
-// current status). WHERE status=$3 — оптимистичный барьер: перевод rotating
-// (single-winner) и failed делается только из ожидаемого предыдущего статуса.
+// markStatusSQL — point status change of a row by cert_id (CAS by expected
+// current status). WHERE status=$3 — optimistic barrier: transition to
+// rotating (single-winner) and failed is done only from the expected
+// previous status.
 const markStatusSQL = `
 UPDATE warrant
 SET status = $2
 WHERE cert_id = $1 AND status = $3
 `
 
-// MarkStatus атомарно меняет статус строки cert_id с from на to (CAS). Возвращает
-// число затронутых строк: 0 = cert_id не существует ИЛИ уже не в статусе from
-// (гонку проиграли — другой тик/инстанс перехватил). Используется:
-//   - переход active/failed → rotating (single-winner-барьер начала ротации);
-//   - переход rotating → failed (цепаль упала после захвата).
+// MarkStatus atomically changes the status of row cert_id from `from` to
+// `to` (CAS). Returns the number of affected rows: 0 = cert_id does not
+// exist OR is no longer in status from (lost the race — another
+// tick/instance grabbed it). Used for:
+//   - transition active/failed → rotating (single-winner barrier at the
+//     start of rotation);
+//   - transition rotating → failed (the chain failed after acquisition).
 func MarkStatus(ctx context.Context, db ExecQueryRower, certID string, from, to Status) (int64, error) {
 	if certID == "" {
 		return 0, fmt.Errorf("cert: cert_id is empty")
@@ -274,7 +280,7 @@ func scanWarrant(row pgx.Row) (*Warrant, error) {
 	return &w, nil
 }
 
-// ptrArg разворачивает *string в nil-able arg для pgx (nil → NULL).
+// ptrArg unwraps *string into a nil-able arg for pgx (nil → NULL).
 func ptrArg(p *string) any {
 	if p == nil {
 		return nil
@@ -282,8 +288,8 @@ func ptrArg(p *string) any {
 	return *p
 }
 
-// durationArg разворачивает *time.Duration в INTERVAL-arg (nil → NULL). pgx
-// маппит time.Duration в PG INTERVAL нативно.
+// durationArg unwraps *time.Duration into an INTERVAL arg (nil → NULL). pgx
+// maps time.Duration to PG INTERVAL natively.
 func durationArg(p *time.Duration) any {
 	if p == nil {
 		return nil
@@ -291,14 +297,15 @@ func durationArg(p *time.Duration) any {
 	return *p
 }
 
-// RegisterActive атомарно регистрирует новый active-материал для (incarnation,
-// kind): supersede предыдущего active (если был) + insert нового — в одной tx,
-// чтобы partial unique `warrant_active_by_incarnation_kind_idx` не нарушался
-// между supersede и insert. Мутирует w (CertID/IssuedAt после insert).
+// RegisterActive atomically registers new active material for (incarnation,
+// kind): supersede the previous active (if any) + insert the new one — in
+// one tx, so the partial unique `warrant_active_by_incarnation_kind_idx`
+// isn't violated between supersede and insert. Mutates w (CertID/IssuedAt
+// after insert).
 //
-// Используется keeper-side core-модулем `core.cert.registered` (E1,
-// coremod/cert) и Reaper-правилом `rotate_due_certs` (при ротации новый серт
-// вписывается тем же путём внутри своей tx).
+// Used by the keeper-side core module `core.cert.registered` (E1,
+// coremod/cert) and the Reaper rule `rotate_due_certs` (on rotation the new
+// cert is written the same way inside its own tx).
 func RegisterActive(ctx context.Context, pool TxBeginner, w *Warrant) error {
 	if w == nil {
 		return fmt.Errorf("cert: nil warrant")

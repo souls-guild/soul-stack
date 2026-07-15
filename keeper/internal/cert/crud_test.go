@@ -240,8 +240,8 @@ func TestSupersedeActive_RejectsEmptyIncarnation(t *testing.T) {
 
 // --- MarkStatus (CAS) ---
 
-// TestMarkStatus_ActiveToRotating_HappyPath — успешный захват single-winner:
-// active→rotating затрагивает ровно 1 строку.
+// TestMarkStatus_ActiveToRotating_HappyPath — successful single-winner
+// acquisition: active→rotating affects exactly 1 row.
 func TestMarkStatus_ActiveToRotating_HappyPath(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1")}
 	n, err := MarkStatus(context.Background(), f, "cert-1", StatusActive, StatusRotating)
@@ -257,9 +257,10 @@ func TestMarkStatus_ActiveToRotating_HappyPath(t *testing.T) {
 	}
 }
 
-// TestMarkStatus_LostCASReturnsZero — проигравший гонку получает 0 (строка уже
-// не в статусе from — другой тик/инстанс перехватил). Это опора single-winner-
-// и idempotency-guard-ов: второй захват rotating не проходит.
+// TestMarkStatus_LostCASReturnsZero — the loser of the race gets 0 (the row
+// is no longer in status from — another tick/instance grabbed it). This
+// backs the single-winner and idempotency guards: a second rotating
+// acquisition does not go through.
 func TestMarkStatus_LostCASReturnsZero(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
 	n, err := MarkStatus(context.Background(), f, "cert-1", StatusActive, StatusRotating)

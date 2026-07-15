@@ -8,50 +8,55 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// ConductorMetrics — набор Prometheus-collector-ов Conductor (ADR-048 §5,
-// dashboard «лидер жив, спавн идёт по графику»). Parity reaper-метрик
-// (keeper/internal/reaper/metrics.go), имена из словаря Soul Stack —
+// ConductorMetrics is the set of Conductor Prometheus collectors (ADR-048 §5,
+// dashboard "leader alive, spawn on schedule"). Parity with reaper metrics
+// (keeper/internal/reaper/metrics.go), names from the Soul Stack dictionary —
 // `keeper_conductor_*`.
 //
-// Регистрируется отдельно через [RegisterConductorMetrics] только в ветке
-// поднятого Conductor (cardinality-safe: при default-OFF без Redis или явном
-// `cadence_scheduler.enabled: false` collectors не публикуются вовсе) — wire-up
-// делает keeper/cmd/keeper/daemon.go строго там, где поднимается [Scheduler].
+// Registered separately via [RegisterConductorMetrics] only on the branch
+// where Conductor is actually started (cardinality-safe: with default-OFF
+// without Redis, or explicit `cadence_scheduler.enabled: false`, collectors
+// aren't published at all) — wire-up is done by keeper/cmd/keeper/daemon.go
+// exactly where [Scheduler] is started.
 //
-// Collector живёт рядом с подсистемой (docs/observability.md §4.0): метрики
-// keeper-specific, их место в conductor-пакете, а не в shared/obs.
+// The collector lives next to its subsystem (docs/observability.md §4.0):
+// keeper-specific metrics belong in the conductor package, not shared/obs.
 type ConductorMetrics struct {
-	// LeaseHeld — 1 если этот Keeper-инстанс держит Redis-lease conductor:leader,
-	// 0 иначе. Gauge без label-ов: cluster-wide invariant
-	// `sum(keeper_conductor_lease_held) == 1` (при ровно одном лидере). Лидер
-	// Conductor независим от лидера Reaper (отдельный lease, ADR-048 §1) —
-	// держатели могут различаться. Per-`kid` label избыточен: дублирует
-	// Prometheus-метку `instance` target-а.
+	// LeaseHeld is 1 if this Keeper instance holds the Redis lease
+	// conductor:leader, 0 otherwise. Gauge with no labels: cluster-wide
+	// invariant `sum(keeper_conductor_lease_held) == 1` (with exactly one
+	// leader). The Conductor leader is independent of the Reaper leader
+	// (separate lease, ADR-048 §1) — holders may differ. A per-`kid` label
+	// would be redundant: it duplicates the target's Prometheus `instance`
+	// label.
 	LeaseHeld prometheus.Gauge
 
-	// SpawnExecutions — счётчик тиков спавна (увеличивается на каждый тик лидера,
-	// независимо от того, нашлись ли due-расписания). Сравнение со
-	// [SpawnedTotal] показывает «эффективность»: много тиков при нулевом спавне =
-	// расписаний нет или все skip/queue.
+	// SpawnExecutions counts spawn ticks (incremented on every leader tick,
+	// regardless of whether any due schedules were found). Comparing with
+	// [SpawnedTotal] shows "efficiency": many ticks with zero spawns means no
+	// schedules are due, or all are skip/queue.
 	SpawnExecutions prometheus.Counter
 
-	// SpawnedTotal — total заспавненных Voyage (skip/queue-тики не считаются —
-	// affected = «сколько прогонов реально создано», parity CadenceSpawner.Run).
+	// SpawnedTotal is the total of spawned Voyages (skip/queue ticks don't
+	// count — affected = "how many runs were actually created", parity with
+	// CadenceSpawner.Run).
 	SpawnedTotal prometheus.Counter
 
-	// SpawnErrors — счётчик ошибок тика спавна (Spawner.Run вернул error).
-	// Отдельно от [SpawnExecutions], чтобы алертилось без знания histogram-а.
+	// SpawnErrors counts spawn-tick errors (Spawner.Run returned an error).
+	// Separate from [SpawnExecutions] so it can be alerted on without knowing
+	// the histogram.
 	SpawnErrors prometheus.Counter
 
-	// SpawnDuration — длительность вызова Spawner.Run в секундах. Buckets parity
-	// reaper-rule-duration: типичный спавн-тик — единицы-десятки ms (SELECT due +
-	// per-row insert), верх 30s отсекает аномальный долгий тик в отдельный
-	// bucket, а не в `+Inf`.
+	// SpawnDuration is the duration of a Spawner.Run call in seconds. Buckets
+	// are parity with reaper-rule-duration: a typical spawn tick is single-
+	// to-tens of ms (SELECT due + per-row insert); the 30s top bucket catches
+	// an anomalously long tick separately, instead of `+Inf`.
 	SpawnDuration prometheus.Histogram
 }
 
-// RegisterConductorMetrics создаёт collectors и регистрирует их в Registry-е.
-// MustRegister: дубликат-регистрация — programmer error (вызывали дважды).
+// RegisterConductorMetrics creates the collectors and registers them in the
+// Registry. MustRegister: duplicate registration is a programmer error
+// (called twice).
 func RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics {
 	m := &ConductorMetrics{
 		LeaseHeld: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -80,9 +85,9 @@ func RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics {
 	return m
 }
 
-// ObserveSpawn — единый helper для записи метрик одного тика спавна. nil-safe
-// (Conductor может быть инициализирован без observability — тесты). Caller не
-// проверяет nil на каждом тике.
+// ObserveSpawn is the single helper for recording metrics of one spawn tick.
+// nil-safe (Conductor can be initialized without observability — tests). The
+// caller doesn't need to check nil on every tick.
 func (m *ConductorMetrics) ObserveSpawn(spawned int64, err error, dur time.Duration) {
 	if m == nil {
 		return
@@ -98,8 +103,9 @@ func (m *ConductorMetrics) ObserveSpawn(spawned int64, err error, dur time.Durat
 	}
 }
 
-// SetLeaseHeld — nil-safe запись Gauge лидерства. Подключается через
-// [Config.OnLeaseChange] (parity reaper SetLeaseHeld через OnLeaseChange).
+// SetLeaseHeld is a nil-safe write to the leadership Gauge. Wired via
+// [Config.OnLeaseChange] (parity with reaper's SetLeaseHeld via
+// OnLeaseChange).
 func (m *ConductorMetrics) SetLeaseHeld(held bool) {
 	if m == nil {
 		return

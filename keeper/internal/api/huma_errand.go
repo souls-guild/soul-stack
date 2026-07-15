@@ -1,15 +1,15 @@
 package api
 
-// Регистрация и spec-dump ERRAND-домена (list + get + cancel) на huma full-typed,
-// handler-native (T5d-2c-full: 0 legacy-генерата в errand-файлах). list — read-with-typed-query
-// (started_after date-time→400, offset/limit→400, status enum, sid/module string/array),
-// get — read-with-path (200 ErrandResult / 202 running), cancel — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; event errand.cancelled). list/get строят native wire-DTO
-// (ErrandResult/ErrandListReply, huma_errand_reply.go) НАПРЯМУЮ из плоских доменных
-// view-ов handler-а (ErrandResultView/ErrandListPage), конвертеров legacy-генерата→native нет.
-// Mutating POST /v1/souls/{sid}/exec обслуживает SOUL-домен (huma_soul.go, ExecTyped) —
-// вне этого батча. MCP errand-tools зовут errand.Dispatcher/Store напрямую, мимо handler
-// — (w,r)-оболочки list/get/cancel сняты.
+// Registration and spec-dump of the ERRAND domain (list + get + cancel) on huma full-typed,
+// handler-native (T5d-2c-full: 0 legacy generator in the errand files). list — read with typed
+// query (started_after date-time→400, offset/limit→400, status enum, sid/module string/array),
+// get — read with path (200 ErrandResult / 202 running), cancel — WRITE+AUDIT (variant B,
+// huma-audit-middleware; event errand.cancelled). list/get build the native wire-DTO
+// (ErrandResult/ErrandListReply, huma_errand_reply.go) DIRECTLY from the handler's flat domain
+// views (ErrandResultView/ErrandListPage); there are no legacy-generator→native converters.
+// The mutating POST /v1/souls/{sid}/exec is served by the SOUL domain (huma_soul.go, ExecTyped) —
+// outside this batch. MCP errand-tools call errand.Dispatcher/Store directly, bypassing the
+// handler — the (w,r) wrappers for list/get/cancel are removed.
 
 import (
 	"context"
@@ -25,10 +25,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaErrandList монтирует GET /v1/errands через huma (READ-with-typed-query,
-// БЕЗ audit). errandH nil → no-op. Handler: typed-query → ListTyped → typed envelope-
-// output. RBAC errand.list — на группе. CheckPageBounds → 400 на out-of-range (на этом
-// блокере ловили — диапазон enforce-ит ДОМЕН, не huma-min/max).
+// registerHumaErrandList mounts GET /v1/errands via huma (READ with typed query, no
+// audit). errandH nil → no-op. Handler: typed-query → ListTyped → typed envelope output.
+// RBAC errand.list — on the group. CheckPageBounds → 400 on out-of-range (a known
+// blocker — the range is enforced by the DOMAIN, not huma min/max).
 func registerHumaErrandList(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	if errandH == nil {
 		return
@@ -49,10 +49,10 @@ func registerHumaErrandList(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	})
 }
 
-// registerHumaErrandGet монтирует GET /v1/errands/{errand_id} через huma (READ-with-
-// path, БЕЗ audit). errandH nil → no-op. Handler: GetTyped → 200 терминал ErrandResult
-// либо 202 running ErrandAccepted (двойной success-код, Body пред-маршалится в
-// json.RawMessage, Status override). RBAC errand.list — на группе.
+// registerHumaErrandGet mounts GET /v1/errands/{errand_id} via huma (READ with path, no
+// audit). errandH nil → no-op. Handler: GetTyped → 200 terminal ErrandResult or 202
+// running ErrandAccepted (dual success code, Body pre-marshaled into json.RawMessage,
+// Status override). RBAC errand.list — on the group.
 func registerHumaErrandGet(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	if errandH == nil {
 		return
@@ -77,11 +77,11 @@ func registerHumaErrandGet(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	})
 }
 
-// registerHumaErrandCancel монтирует DELETE /v1/errands/{errand_id} через huma
-// (WRITE+AUDIT вариант B — event errand.cancelled). errandH nil → no-op. Handler:
-// claims → CancelTyped → audit-payload на huma-ctx (SetHumaAuditPayload) → пустой
-// 204-output. dispatcher также пишет свой audit-event внутри Cancel (single source of
-// truth для archon_aid + payload); middleware-event здесь — security navigation-trail.
+// registerHumaErrandCancel mounts DELETE /v1/errands/{errand_id} via huma (WRITE+AUDIT
+// variant B — event errand.cancelled). errandH nil → no-op. Handler: claims →
+// CancelTyped → audit payload on the huma ctx (SetHumaAuditPayload) → empty 204 output.
+// The dispatcher also writes its own audit event inside Cancel (single source of truth
+// for archon_aid + payload); the middleware event here is a security navigation-trail.
 func registerHumaErrandCancel(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 	if errandH == nil {
 		return
@@ -100,14 +100,14 @@ func registerHumaErrandCancel(humaAPI huma.API, errandH *handlers.ErrandHandler)
 	})
 }
 
-// === проекция доменных view-ов handler-а → native wire-DTO (handler-native: граница
-// api↔handlers строит wire-тело из плоских доменных полей; oapi-генерёные типы не
-// участвуют). ===
+// === projection of the handler's domain views → native wire-DTO (handler-native: the
+// api↔handlers boundary builds the wire body from flat domain fields; oapi-generated types
+// are not involved). ===
 
-// newErrandResult проецирует плоский handlers.ErrandResultView в native ErrandResult
-// (200-тело errand-get-терминал / element list-а). Указатели/таймстампы пробрасываются
-// как есть — handler уже усёк date-time до секунды в проекции из errand.Row (byte-exact
-// с прежним legacy-генерата).
+// newErrandResult projects the flat handlers.ErrandResultView into a native ErrandResult
+// (200 body of errand-get-terminal / a list element). Pointers/timestamps pass through
+// as-is — the handler already truncated date-time to the second in the projection from
+// errand.Row (byte-exact with the former legacy generator).
 func newErrandResult(v handlers.ErrandResultView) ErrandResult {
 	return ErrandResult{
 		DurationMs:      v.DurationMs,
@@ -128,9 +128,10 @@ func newErrandResult(v handlers.ErrandResultView) ErrandResult {
 	}
 }
 
-// newErrandListReply проецирует доменный handlers.ErrandListPage в native envelope
-// ErrandListReply. Items: nil → nil, иначе non-nil срез (handler делает make([]…, 0, n),
-// поэтому на success Items всегда non-nil [] — byte-exact с прежним legacy-генерата).
+// newErrandListReply projects the domain handlers.ErrandListPage into the native envelope
+// ErrandListReply. Items: nil → nil, otherwise a non-nil slice (the handler does
+// make([]…, 0, n), so on success Items is always a non-nil [] — byte-exact with the former
+// legacy generator).
 func newErrandListReply(p handlers.ErrandListPage) ErrandListReply {
 	var items []ErrandResult
 	if p.Items != nil {
@@ -142,30 +143,29 @@ func newErrandListReply(p handlers.ErrandListPage) ErrandListReply {
 	return ErrandListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// ErrandAccepted — native 202-тело errand-get-running (errand_id + status). Форма 1:1 с
-// прежним ErrandAccepted; на wire сериализуется register-func-ом get-роута через
-// json.RawMessage (errandGetOutput.Body). Схема в components/schemas эмитится отдельным
-// schema-builder pre-seed (errandAccepted, huma_errand_accepted.go) — этот тип в
-// spec-emission НЕ участвует, только в wire-сериализации 202-тела.
+// ErrandAccepted — native 202 body of errand-get-running (errand_id + status). Shape 1:1
+// with the former ErrandAccepted; on the wire it is serialized by the get route's register
+// function via json.RawMessage (errandGetOutput.Body). The schema in components/schemas is
+// emitted by a separate schema-builder pre-seed (errandAccepted, huma_errand_accepted.go) —
+// this type does NOT take part in spec emission, only in the wire serialization of the 202 body.
 type ErrandAccepted struct {
 	ErrandID string `json:"errand_id"`
 	Status   string `json:"status"`
 }
 
-// newErrandAccepted проецирует плоский handlers.ErrandAcceptedView в native 202-тело.
+// newErrandAccepted projects the flat handlers.ErrandAcceptedView into the native 202 body.
 func newErrandAccepted(v handlers.ErrandAcceptedView) ErrandAccepted {
 	return ErrandAccepted{ErrandID: v.ErrandID, Status: v.Status}
 }
 
-// errandMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// errandMissingClaims — a defensive response when claims are missing from ctx (unreachable:
+// RequireJWT puts claims in before huma). problem+json (parity roleMissingClaims).
 func errandMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// errandProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
-// roleProblem).
+// errandProblem delivers a *Typed-function error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; non-problem → 500 (parity roleProblem).
 func errandProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -173,17 +173,17 @@ func errandProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaErrandAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Единственный write-
-// роут errand (cancel) монтируется на СВОЕЙ chi-группе с event-типом errand.cancelled.
+// newHumaErrandAPI assembles a huma.API over a chi group with the huma-audit-middleware
+// (variant B) under the given event type (parity newHumaRoleAPI). The single write route
+// of errand (cancel) is mounted on its OWN chi group with the event type errand.cancelled.
 func newHumaErrandAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaErrandSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma errand-роутов
-// (list/get/cancel) как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те
-// же register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaErrandSpecYAML assembles the OpenAPI fragment of ALL errand routes migrated to huma
+// (list/get/cancel) as a YAML string, WITHOUT mounting on a real router. A hook for the
+// rollout's spec merge target and a guard test. Delegates to the generic [humaDumpSpec]
+// through the same register functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaErrandSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ErrandSpecStub()

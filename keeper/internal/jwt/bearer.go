@@ -2,18 +2,18 @@ package jwt
 
 import "strings"
 
-// ParseBearerToken парсит заголовок `Authorization: Bearer <token>` по
+// ParseBearerToken parses the `Authorization: Bearer <token>` header per
 // RFC 6750 §2.1 / RFC 7230 §3.2.3:
 //
-//   - scheme сравнивается case-insensitive (`Bearer` == `bearer` == `BEARER`);
-//   - разделитель — OWS (SP / HTAB), не только SP;
-//   - возвращает (token, true) при успехе; (\"\", false) для пустого header-а,
-//     неизвестного scheme или одиночного `Bearer` без token-part.
+//   - scheme comparison is case-insensitive (`Bearer` == `bearer` == `BEARER`);
+//   - separator is OWS (SP / HTAB), not just SP;
+//   - returns (token, true) on success; ("", false) for an empty header,
+//     an unknown scheme, or a bare `Bearer` without a token part.
 //
-// Используется HTTP-middleware Operator API
-// ([keeper/internal/api/middleware.RequireJWT]) и MCP HTTP-listener-ом
-// ([keeper/internal/mcp]) — оба парсят один и тот же header в одинаковой
-// форме, отдельных правил не нужно.
+// Used by the Operator API HTTP middleware
+// ([keeper/internal/api/middleware.RequireJWT]) and the MCP HTTP listener
+// ([keeper/internal/mcp]) — both parse the same header in the same form,
+// so no separate rules are needed.
 func ParseBearerToken(header string) (string, bool) {
 	const scheme = "bearer"
 	if header == "" {

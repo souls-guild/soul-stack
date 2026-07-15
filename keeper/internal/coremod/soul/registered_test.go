@@ -15,8 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// fakeStore — детерминированный in-memory Store для unit-тестов модуля.
-// Захватывает все вызовы для assert-ов на side-effect-ы.
+// fakeStore is a deterministic in-memory Store for the module's unit tests.
+// Captures every call to assert on side effects.
 type fakeStore struct {
 	byID         map[string]*keepersoul.Soul
 	insertCalls  int
@@ -28,9 +28,9 @@ type fakeStore struct {
 	insertErr    error
 	selectErr    error
 
-	// Факты soulprint для барьера refresh_soulprint (модель fakePresence):
-	// factsBySID — SID с уже записанным typed soulprint; factsAfter —
-	// sid → с какого SoulsWithSoulprint-вызова facts «появляются в PG».
+	// Soulprint facts for the refresh_soulprint barrier (fakePresence model):
+	// factsBySID — SIDs that already have typed soulprint recorded; factsAfter —
+	// sid → which SoulsWithSoulprint call the facts start "appearing in PG" on.
 	factsBySID map[string]struct{}
 	factsAfter map[string]int
 	factsCalls int
@@ -71,7 +71,7 @@ func (s *fakeStore) SelectBySID(_ context.Context, sid string) (*keepersoul.Soul
 	if !ok {
 		return nil, keepersoul.ErrSoulNotFound
 	}
-	// Защитная копия, чтобы тест не мутировал внутренний state случайно.
+	// Defensive copy so the test doesn't accidentally mutate internal state.
 	cp := *v
 	cp.Coven = append([]string(nil), v.Coven...)
 	return &cp, nil
@@ -198,9 +198,9 @@ func TestApply_CreatesSoulWhenAbsent_Append(t *testing.T) {
 	}
 }
 
-// TestApply_RefreshSoulprint_OutputTrue — ★ ADR-061 §S3 (оживление). refresh_soulprint:
-// true → output.refreshed == true (заглушка false снята): scenario-runner пере-резолвит
-// roster перед следующим Passage. Ловит регресс «хардкод refreshed:false».
+// TestApply_RefreshSoulprint_OutputTrue — ADR-061 §S3 (revival). refresh_soulprint:
+// true → output.refreshed == true (the false stub is removed): the scenario runner
+// re-resolves the roster before the next Passage. Catches a hardcoded refreshed:false regression.
 func TestApply_RefreshSoulprint_OutputTrue(t *testing.T) {
 	fs := newFakeStore()
 	m := coremodsoul.New(fs)
@@ -221,8 +221,8 @@ func TestApply_RefreshSoulprint_OutputTrue(t *testing.T) {
 	}
 }
 
-// TestApply_NoRefreshSoulprint_OutputFalse — без refresh_soulprint → refreshed:false
-// (поведение до ADR-061 не меняется: re-resolve не запрашивается).
+// TestApply_NoRefreshSoulprint_OutputFalse — without refresh_soulprint → refreshed:false
+// (behavior before ADR-061 is unchanged: no re-resolve requested).
 func TestApply_NoRefreshSoulprint_OutputFalse(t *testing.T) {
 	fs := newFakeStore()
 	m := coremodsoul.New(fs)
@@ -403,7 +403,7 @@ func TestApply_InvalidCoven(t *testing.T) {
 		State: "registered",
 		Params: mustStruct(t, map[string]any{
 			"sid":   "h1.example.com",
-			"coven": []any{"prod", "a_b"}, // a_b — не kebab-case
+			"coven": []any{"prod", "a_b"}, // a_b is not kebab-case
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)

@@ -1,11 +1,11 @@
-// Package jwt — issuer JWT-токенов для Archon-операторов.
+// Package jwt — JWT issuer for Archon operators.
 //
-// MVP (ADR-014): HS256 (HMAC-SHA256), signing key из Vault KV
+// MVP (ADR-014): HS256 (HMAC-SHA256), signing key from Vault KV
 // `secret/keeper/jwt-signing-key`. Claims: `iss`/`sub`/`iat`/`exp`/`roles` +
-// `bootstrap_initial` (только у первого Архонта по ADR-013).
+// `bootstrap_initial` (only for the first Archon per ADR-013).
 //
-// Verify-сторона не реализуется здесь — это middleware Operator API (M0.6).
-// Post-MVP: RS256 / ED25519 + signing key через Vault transit.
+// The verify side isn't implemented here — that's the Operator API
+// middleware (M0.6). Post-MVP: RS256 / ED25519 + signing key via Vault transit.
 package jwt
 
 import (
@@ -16,33 +16,33 @@ import (
 	jwtv5 "github.com/golang-jwt/jwt/v5"
 )
 
-// minSigningKeyBytes — минимальная длина HMAC ключа для HS256. RFC 7518 §3.2:
-// «A key of the same size as the hash output … or larger MUST be used».
-// SHA-256 → 32 байта.
+// minSigningKeyBytes — minimum HMAC key length for HS256. RFC 7518 §3.2:
+// "A key of the same size as the hash output … or larger MUST be used".
+// SHA-256 → 32 bytes.
 const minSigningKeyBytes = 32
 
-// archonClaims — расширение jwtv5.RegisteredClaims с проектными полями.
+// archonClaims — jwtv5.RegisteredClaims extended with project fields.
 //
-// `roles` — массив имён RBAC-ролей (cluster-admin / read-only / ...).
-// `bootstrap_initial` — true только у первого Архонта (ADR-013).
+// `roles` — array of RBAC role names (cluster-admin / read-only / ...).
+// `bootstrap_initial` — true only for the first Archon (ADR-013).
 type archonClaims struct {
 	Roles            []string `json:"roles"`
 	BootstrapInitial bool     `json:"bootstrap_initial,omitempty"`
 	jwtv5.RegisteredClaims
 }
 
-// Issuer выпускает JWT-токены для Archon-операторов.
+// Issuer issues JWTs for Archon operators.
 //
-// Поля приватные; конструктор валидирует длину ключа.
+// Fields are private; the constructor validates key length.
 type Issuer struct {
 	signingKey []byte
 	issuer     string
 }
 
-// NewIssuer создаёт issuer. signingKey должен быть >= 32 байт (HS256
-// требует ключ не короче хэша).
+// NewIssuer creates an issuer. signingKey must be >= 32 bytes (HS256
+// requires a key no shorter than the hash).
 //
-// issuer — значение для claim `iss` (например, "keeper.example.com" из
+// issuer — value for the `iss` claim (e.g. "keeper.example.com" from
 // `keeper.yml::auth.jwt.issuer`).
 func NewIssuer(signingKey []byte, issuer string) (*Issuer, error) {
 	if len(signingKey) < minSigningKeyBytes {
@@ -54,13 +54,13 @@ func NewIssuer(signingKey []byte, issuer string) (*Issuer, error) {
 	return &Issuer{signingKey: signingKey, issuer: issuer}, nil
 }
 
-// Issue выпускает HS256-подписанный JWT для archon-а.
+// Issue issues an HS256-signed JWT for an archon.
 //
-// aid — Archon ID (e.g. "archon-alice"), идёт в claim `sub`.
-// roles — массив RBAC-ролей, claim `roles`.
-// ttl — время жизни токена, влияет на `exp` (now + ttl).
-// bootstrapInitial — true только у первого Архонта (ADR-013, claim
-// `bootstrap_initial`; для остальных операторов поле omit-ится).
+// aid — Archon ID (e.g. "archon-alice"), goes into the `sub` claim.
+// roles — array of RBAC roles, `roles` claim.
+// ttl — token lifetime, drives `exp` (now + ttl).
+// bootstrapInitial — true only for the first Archon (ADR-013, `bootstrap_initial`
+// claim; omitted for all other operators).
 func (i *Issuer) Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error) {
 	if aid == "" {
 		return "", errors.New("jwt: aid is empty")

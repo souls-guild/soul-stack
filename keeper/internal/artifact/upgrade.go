@@ -1,14 +1,14 @@
 package artifact
 
-// ResolveUpgradeScenario выбирает upgrade-сценарий для перехода `fromVersion → to`
-// (ADR-0068 §5): возвращает slug первого upgrade-сценария, чей `from:` содержит
-// fromVersion. `upgrades` уже отсортирован по имени ([listFromDir]) — при нескольких
-// совпадениях берётся первый по имени (детерминированно).
+// ResolveUpgradeScenario picks the upgrade scenario for the `fromVersion → to`
+// transition (ADR-0068 §5): returns the slug of the first upgrade scenario whose
+// `from:` contains fromVersion. `upgrades` is already sorted by name ([listFromDir])
+// — on multiple matches the first by name wins (deterministic).
 //
-// Пустой fromVersion или отсутствие совпадения → ("", false): апгрейд идёт legacy-
-// веткой (смена пина + state-миграции + drift, §5), а не падает — это осознанный
-// fail-open (§5 ★: undeclared-переход не 422, чтобы патч-апгрейды не ломались).
-// Upgrade-сценарий без `from:` (пустой FromVersions) не матчит ничего.
+// Empty fromVersion or no match → ("", false): the upgrade takes the legacy path
+// (pin change + state migrations + drift, §5) instead of failing — a deliberate
+// fail-open (§5 ★: an undeclared transition is not a 422, so patch upgrades don't
+// break). An upgrade scenario without `from:` (empty FromVersions) matches nothing.
 func ResolveUpgradeScenario(upgrades []Scenario, fromVersion string) (slug string, found bool) {
 	if fromVersion == "" {
 		return "", false

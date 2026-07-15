@@ -1,11 +1,11 @@
 package api
 
-// Регистрация и spec-dump PUSH-PROVIDER-домена на huma full-typed (ТИРАЖ-БАТЧ-2b по
-// эталонам role/operator, ADR-054 §Pattern). create/update/delete — WRITE+AUDIT
-// (вариант B, huma-audit-middleware; события push-provider.created/.updated/.deleted);
-// list/get — read (БЕЗ audit). Доменные *Typed-функции (handlers/pushprovider.go)
-// извлечены из (w,r); старый (w,r) — тонкая strict-оболочка (MCP push-provider-tools
-// зовут pushprovider.Service напрямую, мимо handler — извлечение не затрагивает).
+// Registration and spec-dump of the PUSH-PROVIDER domain on huma full-typed (ROLLOUT BATCH 2b,
+// following role/operator, ADR-054 §Pattern). create/update/delete — WRITE+AUDIT
+// (variant B, huma-audit-middleware; events push-provider.created/.updated/.deleted);
+// list/get — read (no audit). The domain *Typed functions (handlers/pushprovider.go) are
+// extracted from (w,r); the old (w,r) is a thin strict wrapper (MCP push-provider tools call
+// pushprovider.Service directly, bypassing the handler — the extraction does not affect them).
 
 import (
 	"context"
@@ -20,13 +20,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// === проекция доменных view-ов handler-а push-provider → native wire-DTO (handler-native:
-// граница api↔handlers строит wire-тело из плоских доменных полей; oapi-генерёные типы не
-// участвуют). ===
+// === projection of the push-provider handler's domain views → native wire-DTO (handler-native:
+// the api↔handlers boundary builds the wire body from flat domain fields; oapi-generated types
+// do not participate). ===
 
-// newPushProvider проецирует плоский handlers.PushProviderView в native PushProvider
-// (Create-201 / Get-200 / Update-200 / list-element). params normalized handler-ом nil→{};
-// created_at/updated_at — наносекундный time-wire; updated_by_aid — опц. указатель.
+// newPushProvider projects the flat handlers.PushProviderView into the native PushProvider
+// (Create-201 / Get-200 / Update-200 / list element). params normalized by the handler nil→{};
+// created_at/updated_at — nanosecond time-wire; updated_by_aid — optional pointer.
 func newPushProvider(v handlers.PushProviderView) PushProvider {
 	return PushProvider{
 		CreatedAt:    v.CreatedAt,
@@ -38,9 +38,9 @@ func newPushProvider(v handlers.PushProviderView) PushProvider {
 	}
 }
 
-// newPushProviderListReply проецирует доменный handlers.PushProviderListPage в native
-// envelope PushProviderListReply. Items: nil → nil, иначе non-nil срез (handler делает
-// make([]…, 0, n), поэтому на success Items всегда non-nil [] — byte-exact с прежним legacy-генерата).
+// newPushProviderListReply projects the domain handlers.PushProviderListPage into the native
+// envelope PushProviderListReply. Items: nil → nil, otherwise a non-nil slice (the handler does
+// make([]…, 0, n), so on success Items is always non-nil [] — byte-exact with the former legacy generator).
 func newPushProviderListReply(p handlers.PushProviderListPage) PushProviderListReply {
 	var items []PushProvider
 	if p.Items != nil {
@@ -52,9 +52,9 @@ func newPushProviderListReply(p handlers.PushProviderListPage) PushProviderListR
 	return PushProviderListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// registerHumaPushProviderCreate монтирует POST /v1/push-providers через huma
-// (WRITE+AUDIT вариант B — event push-provider.created). pushProviderH nil → no-op.
-// Handler: claims → CreateTyped → audit-payload на huma-ctx → 201 typed output.
+// registerHumaPushProviderCreate mounts POST /v1/push-providers via huma
+// (WRITE+AUDIT variant B — event push-provider.created). pushProviderH nil → no-op.
+// Handler: claims → CreateTyped → audit-payload on huma ctx → 201 typed output.
 func registerHumaPushProviderCreate(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
@@ -78,9 +78,9 @@ func registerHumaPushProviderCreate(humaAPI huma.API, pushProviderH *handlers.Pu
 	})
 }
 
-// registerHumaPushProviderList монтирует GET /v1/push-providers через huma (READ-with-
-// typed-query, БЕЗ audit). pushProviderH nil → no-op. Handler: typed-query →
-// ListTyped → typed envelope-output. RBAC push-provider.list — на группе.
+// registerHumaPushProviderList mounts GET /v1/push-providers via huma (READ with typed query,
+// no audit). pushProviderH nil → no-op. Handler: typed query → ListTyped → typed envelope
+// output. RBAC push-provider.list — on the group.
 func registerHumaPushProviderList(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
@@ -94,9 +94,9 @@ func registerHumaPushProviderList(humaAPI huma.API, pushProviderH *handlers.Push
 	})
 }
 
-// registerHumaPushProviderGet монтирует GET /v1/push-providers/{name} через huma
-// (READ-with-path, БЕЗ audit). pushProviderH nil → no-op. Handler: GetTyped(name) →
-// typed output (404/422 через problem). RBAC push-provider.read — на группе.
+// registerHumaPushProviderGet mounts GET /v1/push-providers/{name} via huma
+// (READ with path, no audit). pushProviderH nil → no-op. Handler: GetTyped(name) →
+// typed output (404/422 via problem). RBAC push-provider.read — on the group.
 func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
@@ -110,9 +110,9 @@ func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushP
 	})
 }
 
-// registerHumaPushProviderUpdate монтирует PUT /v1/push-providers/{name} через huma
-// (WRITE+AUDIT вариант B — event push-provider.updated). pushProviderH nil → no-op.
-// Handler: claims → UpdateTyped (replace params) → audit-payload → 200 С ТЕЛОМ.
+// registerHumaPushProviderUpdate mounts PUT /v1/push-providers/{name} via huma
+// (WRITE+AUDIT variant B — event push-provider.updated). pushProviderH nil → no-op.
+// Handler: claims → UpdateTyped (replace params) → audit-payload → 200 WITH BODY.
 func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
@@ -131,9 +131,9 @@ func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.Pu
 	})
 }
 
-// registerHumaPushProviderDelete монтирует DELETE /v1/push-providers/{name} через huma
-// (WRITE+AUDIT вариант B — event push-provider.deleted). pushProviderH nil → no-op.
-// Handler: DeleteTyped → audit-payload → пустой 204-output.
+// registerHumaPushProviderDelete mounts DELETE /v1/push-providers/{name} via huma
+// (WRITE+AUDIT variant B — event push-provider.deleted). pushProviderH nil → no-op.
+// Handler: DeleteTyped → audit-payload → empty 204 output.
 func registerHumaPushProviderDelete(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
@@ -148,15 +148,14 @@ func registerHumaPushProviderDelete(humaAPI huma.API, pushProviderH *handlers.Pu
 	})
 }
 
-// pushProviderMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// pushProviderMissingClaims — defensive response when claims are absent in ctx (unreachable:
+// RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func pushProviderMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// pushProviderProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
-// roleProblem).
+// pushProviderProblem delivers a *Typed function's error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; non-problem → 500 (parity roleProblem).
 func pushProviderProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -164,18 +163,17 @@ func pushProviderProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaPushProviderAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// push-provider (create/update/delete) монтируется на СВОЕЙ chi-группе с собственным
-// event-типом.
+// newHumaPushProviderAPI assembles a huma.API over a chi group with huma-audit-middleware
+// (variant B) for the given event type (parity newHumaRoleAPI). Each push-provider write route
+// (create/update/delete) is mounted on ITS OWN chi group with its own event type.
 func newHumaPushProviderAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaPushProviderSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma
-// push-provider-роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те
-// же register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaPushProviderSpecYAML assembles the OpenAPI fragment of ALL huma-migrated push-provider
+// routes as a YAML string, WITHOUT mounting on a real router. Hook for the rollout spec-merge
+// target and the guard test. Delegates to the generic [humaDumpSpec] via the same register
+// functions (single register path). Returns a 3.1.0 spec (huma default).
 func HumaPushProviderSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.PushProviderSpecStub()

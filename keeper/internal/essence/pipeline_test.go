@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// writeLayers материализует слои в tmp service-dir по РЕАЛЬНОЙ раскладке
-// (docs/service/manifest.md): ключ — relative-path внутри `essence/`
-// (`_default.yaml`, `os/<family>.yaml`, `coven/<метка>.yaml`), значение —
-// содержимое YAML. Файлы кладутся под `<dir>/essence/<rel>` — резолвер обязан
-// читать из поддиректории essence/, а не из корня сервиса (BUG 2).
+// writeLayers materializes layers in a tmp service-dir following the REAL
+// layout (docs/service/manifest.md): key — relative path inside `essence/`
+// (`_default.yaml`, `os/<family>.yaml`, `coven/<label>.yaml`), value — YAML
+// content. Files are placed under `<dir>/essence/<rel>` — the resolver must
+// read from the essence/ subdirectory, not the service root (BUG 2).
 func writeLayers(t *testing.T, layers map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,17 +27,18 @@ func writeLayers(t *testing.T, layers map[string]string) string {
 	return dir
 }
 
-// TestResolve_ReadsFromEssenceSubdir — регрессия BUG 2: резолвер обязан читать
-// слои из `<ServiceDir>/essence/`, НЕ из корня снапшота. Кладём _default.yaml в
-// ОБА места с разным содержимым; ожидаем значение из essence/ (root-файл
-// игнорируется). До фикса резолвер читал root и тест бы провалился.
+// TestResolve_ReadsFromEssenceSubdir — regression for BUG 2: the resolver
+// must read layers from `<ServiceDir>/essence/`, NOT from the snapshot root.
+// We place _default.yaml in BOTH locations with different content; we expect
+// the value from essence/ (the root file is ignored). Before the fix the
+// resolver read root and this test would fail.
 func TestResolve_ReadsFromEssenceSubdir(t *testing.T) {
 	dir := t.TempDir()
-	// Корень сервиса — НЕ источник essence: значение-ловушка.
+	// Service root is NOT an essence source: this is a trap value.
 	if err := os.WriteFile(filepath.Join(dir, "_default.yaml"), []byte("key: ROOT_TRAP\n"), 0o644); err != nil {
 		t.Fatalf("write root trap: %v", err)
 	}
-	// Реальная раскладка — essence/_default.yaml.
+	// Real layout is essence/_default.yaml.
 	if err := os.MkdirAll(filepath.Join(dir, "essence"), 0o755); err != nil {
 		t.Fatalf("mkdir essence: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestResolve_FourLayerPrecedence(t *testing.T) {
 	}
 
 	want := map[string]any{
-		"key":          "spec", // самый сильный слой
+		"key":          "spec", // the strongest layer
 		"only_default": uint64(1),
 		"only_os":      uint64(2),
 		"only_coven":   uint64(3),
@@ -103,7 +104,7 @@ func TestResolve_DeepMergeMaps(t *testing.T) {
 	}
 	want := map[string]any{
 		"maxmemory":  "200mb", // override
-		"appendonly": true,    // сохранён из default
+		"appendonly": true,    // preserved from default
 		"bind":       "0.0.0.0",
 	}
 	if !reflect.DeepEqual(redis, want) {
@@ -161,13 +162,13 @@ func TestResolve_MultipleCovensDeterministicOrder(t *testing.T) {
 	})
 
 	r := NewResolver(nil)
-	// Передаём covens в обратном порядке — результат должен зависеть от
-	// сортировки имён, не от порядка во входе.
+	// Pass covens in reverse order — the result must depend on name sorting,
+	// not on input order.
 	got, err := r.Resolve(ResolveInput{ServiceDir: dir, Covens: []string{"zzz", "aaa"}})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// zzz сортируется после aaa → zzz wins.
+	// zzz sorts after aaa → zzz wins.
 	if got["tier"] != "zzz" {
 		t.Fatalf("ожидался zzz (последний по сортировке), got=%#v", got["tier"])
 	}
@@ -177,14 +178,14 @@ func TestResolve_MultipleCovensDeterministicOrder(t *testing.T) {
 }
 
 func TestResolve_MissingLayersOK(t *testing.T) {
-	// Нет ни одного файла-слоя, есть только spec.
+	// No layer files at all, only spec.
 	dir := writeLayers(t, map[string]string{})
 
 	r := NewResolver(nil)
 	got, err := r.Resolve(ResolveInput{
 		ServiceDir:      dir,
-		OSFamily:        "debian",           // os/debian.yaml нет
-		Covens:          []string{"absent"}, // coven/absent.yaml нет
+		OSFamily:        "debian",           // os/debian.yaml absent
+		Covens:          []string{"absent"}, // coven/absent.yaml absent
 		IncarnationSpec: map[string]any{"only": "spec"},
 	})
 	if err != nil {
@@ -209,7 +210,7 @@ func TestResolve_EmptyEverything(t *testing.T) {
 }
 
 func TestResolve_EmptyDefaultFile(t *testing.T) {
-	// Пустой _default.yaml (yaml.Unmarshal → nil map) не должен ломать merge.
+	// Empty _default.yaml (yaml.Unmarshal → nil map) must not break the merge.
 	dir := writeLayers(t, map[string]string{
 		"_default.yaml":  "",
 		"os/debian.yaml": "key: os\n",
@@ -250,8 +251,9 @@ func TestResolve_EmptyOSFamilySkipsOSLayer(t *testing.T) {
 }
 
 func TestResolve_SecureJoinClampsTraversal(t *testing.T) {
-	// Файл вне serviceDir не должен читаться: securejoin клампит `..` к корню,
-	// итоговый путь несуществующий → слой пропускается без ошибки.
+	// A file outside serviceDir must not be read: securejoin clamps `..` to
+	// the root, so the resulting path doesn't exist → the layer is skipped
+	// without error.
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "secret.yaml"), []byte("leaked: true\n"), 0o644); err != nil {
 		t.Fatalf("write secret: %v", err)
@@ -275,8 +277,8 @@ func TestResolve_SecureJoinClampsTraversal(t *testing.T) {
 }
 
 func TestResolve_DoesNotMutateIncarnationSpecNested(t *testing.T) {
-	// Spec оператора хранится в БД отдельно (architecture.md): Resolve не должен
-	// мутировать переданный IncarnationSpec.
+	// The operator's spec is stored separately in the DB (architecture.md):
+	// Resolve must not mutate the passed-in IncarnationSpec.
 	dir := writeLayers(t, map[string]string{
 		"_default.yaml": "redis:\n  maxmemory: 100mb\n  bind: 127.0.0.1\n",
 	})

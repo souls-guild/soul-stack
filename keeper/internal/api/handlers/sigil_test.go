@@ -13,7 +13,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// fakeSigilStore — узкий мок [sigil.Store] для unit-тестов SigilHandler-а.
+// fakeSigilStore — narrow mock of [sigil.Store] for SigilHandler unit tests.
 type fakeSigilStore struct {
 	inserted   *sigil.Sigil
 	insertErr  error
@@ -37,7 +37,7 @@ func (s *fakeSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) {
 	return s.listResult, nil
 }
 
-// fakeSigilSlots — мок [sigil.SlotReader].
+// fakeSigilSlots — mock of [sigil.SlotReader].
 type fakeSigilSlots struct {
 	slot      *pluginhost.SlotContents
 	err       error
@@ -53,8 +53,8 @@ func (f fakeSigilSlots) SlotCommitSHA(string, string) (string, error) {
 	if f.commitErr != nil {
 		return "", f.commitErr
 	}
-	// Дефолт: успешный слот несёт синтетический commit_sha (A1-S4 — current-
-	// target). Пустой commit оставляем только при явном задании.
+	// Default: a successful slot carries a synthetic commit_sha (A1-S4 — current-
+	// target). An empty commit is kept only when explicitly set.
 	if f.commit == "" && f.slot != nil {
 		return "0123456789abcdef0123456789abcdef01234567", nil
 	}
@@ -161,13 +161,13 @@ func TestSigilHandler_List_200_NoSignatureNoManifest(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].SHA256 != "deadbeef" {
 		t.Fatalf("items = %+v", page.Items)
 	}
-	// Доменная проекция (SigilView) НЕ несёт signature/manifest-полей — крипто-
-	// материал/крупный JSONB не покидают service-границу (guard на регресс).
+	// The domain projection (SigilView) does NOT carry signature/manifest fields —
+	// crypto material / large JSONB do not leave the service boundary (regression guard).
 	it := page.Items[0]
 	if it.Namespace != "cloud" || it.Name != "hetzner" || it.Ref != "v1.0.0" {
 		t.Errorf("item key = %+v", it)
 	}
-	// Активная запись: RevokedAt nil → native-тип опустит revoked_at (omitempty).
+	// Active record: RevokedAt nil → the native type omits revoked_at (omitempty).
 	if it.RevokedAt != nil {
 		t.Errorf("активная запись не должна нести revoked_at: %v", it.RevokedAt)
 	}
@@ -179,7 +179,7 @@ func TestSigilHandler_List_200_EmptyNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
-	// non-nil [] (не nil): native проекция сериализует как `[]`, не null.
+	// non-nil [] (not nil): the native projection serializes as `[]`, not null.
 	if page.Items == nil {
 		t.Errorf("пустой список должен быть non-nil [], получен nil")
 	}

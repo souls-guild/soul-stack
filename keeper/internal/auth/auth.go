@@ -1,17 +1,17 @@
-// Package auth — федеративная аутентификация операторов (Archon) поверх
-// внешних identity-провайдеров (LDAP / OAuth2-OIDC). ADR-058 (accepted,
-// стадии 1 LDAP + 2 OIDC реализованы и доведены end-to-end).
+// Package auth — federated authentication of operators (Archon) on top of
+// external identity providers (LDAP / OAuth2-OIDC). ADR-058 (accepted,
+// stage 1 LDAP + stage 2 OIDC implemented and completed end-to-end).
 //
-// Модель (ADR-058): внешний IdP аутентифицирует человека-Архонта, Keeper
-// ВАЛИДИРУЕТ результат, МАППИТ внешнюю identity на реестр operators(aid) +
-// RBAC-роли и выпускает ВНУТРЕННИЙ JWT существующим jwt.Issuer (ADR-014).
-// Вся остальная система (auth-middleware, RBAC, MCP, OpenAPI) остаётся
-// JWT-based и НЕ меняется.
+// Model (ADR-058): the external IdP authenticates the human Archon, Keeper
+// VALIDATES the result, MAPS the external identity onto the operators(aid)
+// registry + RBAC roles, and issues an INTERNAL JWT via the existing
+// jwt.Issuer (ADR-014). The rest of the system (auth middleware, RBAC, MCP,
+// OpenAPI) stays JWT-based and is unchanged.
 //
-// Состав пакета: контракты Authenticator/Mapper + ExternalIdentity/MappedOperator
-// (этот файл), DBMapper-реализация маппинга на operators+роли (mapper.go),
-// конкретные аутентификаторы — подпакеты ldap/ и oidc/ (сетевые вызовы,
-// go-ldap/go-oidc/oauth2). Endpoint-слой — keeper/internal/api/huma_{auth,oidc}.go.
+// Package contents: Authenticator/Mapper contracts + ExternalIdentity/MappedOperator
+// (this file), the DBMapper implementation mapping onto operators+roles
+// (mapper.go), concrete authenticators — subpackages ldap/ and oidc/ (network
+// calls, go-ldap/go-oidc/oauth2). Endpoint layer — keeper/internal/api/huma_{auth,oidc}.go.
 package auth
 
 import (
@@ -19,19 +19,20 @@ import (
 	"errors"
 )
 
-// ExternalIdentity — результат успешной внешней аутентификации (LDAP-bind
-// либо OIDC id_token), ещё ДО маппинга на operators(aid). Чистый снимок того,
-// что отдал внешний IdP, без проектных решений (AID/роли назначает Mapper).
+// ExternalIdentity — result of a successful external authentication (LDAP
+// bind or OIDC id_token), before mapping onto operators(aid). A plain
+// snapshot of what the external IdP returned, with no project decisions
+// applied yet (AID/roles are assigned by Mapper).
 //
-// Subject — стабильный идентификатор у IdP (OIDC `sub` либо LDAP user-DN).
-// AID — derived проектный идентификатор оператора (operators.aid), выведенный
-// Authenticator-ом из сконфигурированного атрибута/claim (LDAP `aid_attr`,
-// дефолт `uid`; OIDC `aid_claim`). Отделён от Subject, потому что Subject —
-// сырой идентификатор IdP (user-DN), а AID — это то, под чем оператор живёт в
-// реестре и в JWT.sub. Mapper берёт AID именно отсюда.
-// Email / Username — опц. человеко-читаемые поля.
-// Groups — членство во внешних группах (источник role-mapping).
-// Claims — сырые дополнительные claims/атрибуты (для расширяемого маппинга).
+// Subject — stable identifier at the IdP (OIDC `sub` or LDAP user DN).
+// AID — derived project operator identifier (operators.aid), extracted by the
+// Authenticator from the configured attribute/claim (LDAP `aid_attr`, default
+// `uid`; OIDC `aid_claim`). Kept separate from Subject because Subject is the
+// IdP's raw identifier (user DN), while AID is what the operator is known as
+// in the registry and in JWT.sub. Mapper takes AID from here.
+// Email / Username — optional human-readable fields.
+// Groups — external group membership (source for role mapping).
+// Claims — raw additional claims/attributes (for extensible mapping).
 type ExternalIdentity struct {
 	Subject  string
 	AID      string
@@ -41,59 +42,65 @@ type ExternalIdentity struct {
 	Claims   map[string]any
 }
 
-// MappedOperator — внешняя identity, отображённая на проектный субъект
-// авторизации: AID реестра operators + RBAC-роли. Это то, из чего jwt.Issuer
-// выпускает внутренний токен (claims sub=AID, roles=Roles по ADR-014).
+// MappedOperator — an external identity mapped onto the project's
+// authorization subject: an operators-registry AID + RBAC roles. This is what
+// jwt.Issuer issues the internal token from (claims sub=AID, roles=Roles per
+// ADR-014).
 //
-// Provisioned=true означает, что Mapper создал НОВУЮ строку operators
-// (auto-provision, развилка ADR-058(g) №1); false — оператор уже существовал.
+// Provisioned=true means Mapper created a NEW operators row (auto-provision,
+// ADR-058(g) decision #1); false means the operator already existed.
 type MappedOperator struct {
 	AID         string
 	Roles       []string
 	Provisioned bool
 }
 
-// Authenticator — общий контракт способа федеративной аутентификации.
-// Реализации: ldap.Authenticator (bind) и oidc.Authenticator (code-flow).
-// Возвращает ТОЛЬКО факт «кто это у внешнего IdP» — маппинг на AID и выпуск
-// JWT делаются выше по стеку (Mapper + jwt.Issuer), чтобы способ аутентификации
-// не знал о реестре operators и RBAC.
+// Authenticator — common contract for a federated authentication method.
+// Implementations: ldap.Authenticator (bind) and oidc.Authenticator (code
+// flow). Returns ONLY the fact of "who this is at the external IdP" —
+// mapping to AID and issuing the JWT happen higher up the stack (Mapper +
+// jwt.Issuer), so the authentication method itself stays unaware of the
+// operators registry and RBAC.
 type Authenticator interface {
-	// Method — значение auth_method (operator.AuthMethod) для аудита/строки
-	// operators: "ldap" | "oidc" (ADR-058(a)).
+	// Method — the auth_method value (operator.AuthMethod) for audit / the
+	// operators row: "ldap" | "oidc" (ADR-058(a)).
 	Method() string
 }
 
-// Mapper отображает внешнюю identity на operators(aid) + роли (ADR-058(d)).
-// Инкапсулирует развилки provisioning (auto-provision vs pre-register, №1)
-// и источника ролей (внешние группы vs реестр, №2) — обе ждут решения
-// пользователя, поэтому здесь только контракт.
+// Mapper maps an external identity onto operators(aid) + roles (ADR-058(d)).
+// Encapsulates the provisioning decision (auto-provision vs pre-register,
+// #1) and the role-source decision (external groups vs registry, #2) — both
+// await a user decision, so only the contract lives here.
 type Mapper interface {
-	// Map преобразует ExternalIdentity в MappedOperator либо возвращает ошибку
-	// (оператор revoked / не найден при pre-register / нет роли-маппинга и т.п.).
+	// Map converts ExternalIdentity into MappedOperator, or returns an error
+	// (operator revoked / not found under pre-register / no role mapping,
+	// etc).
 	Map(ctx context.Context, ext ExternalIdentity) (MappedOperator, error)
 }
 
-// Сентинел-ошибки федеративной аутентификации. Публичный HTTP-detail для них
-// классифицируется отдельно (как jwt.ClassifyVerifyErr, ADR-014): наружу не
-// должны утекать причины (anti-oracle), это уточняется на этапе имплементации.
+// Sentinel errors for federated authentication. Their public HTTP detail is
+// classified separately (like jwt.ClassifyVerifyErr, ADR-014): the cause
+// must not leak outward (anti-oracle); refined at implementation time.
 var (
-	// ErrAuthFailed — внешняя аутентификация не прошла (bad credentials,
-	// невалидный id_token, IdP отверг).
+	// ErrAuthFailed — external authentication did not succeed (bad
+	// credentials, invalid id_token, IdP rejected).
 	ErrAuthFailed = errors.New("auth: external authentication failed")
-	// ErrOperatorRevoked — внешняя identity маппится на revoked-оператора;
-	// federated-login revoked-оператора запрещён (ADR-058(d) revocation-инвариант).
+	// ErrOperatorRevoked — the external identity maps to a revoked operator;
+	// federated login for a revoked operator is forbidden (ADR-058(d)
+	// revocation invariant).
 	ErrOperatorRevoked = errors.New("auth: operator revoked")
-	// ErrOperatorNotProvisioned — pre-register-режим, оператор заранее не заведён.
+	// ErrOperatorNotProvisioned — pre-register mode, operator was not
+	// registered in advance.
 	ErrOperatorNotProvisioned = errors.New("auth: operator not pre-registered")
-	// ErrNoRoleMapping — у внешней identity нет ни одной маппящейся роли.
+	// ErrNoRoleMapping — the external identity has no role that maps.
 	ErrNoRoleMapping = errors.New("auth: no role mapping for external identity")
-	// ErrProvisioningDisabled — политика provisioning_allowed_methods запретила
-	// СОЗДАНИЕ оператора этим методом (ADR-058 Часть B). Возвращается Mapper-ом из
-	// ветки provision (новый оператор НЕ создаётся), ТОЛЬКО на создании —
-	// существующий оператор логинится независимо от политики. НЕ auth-failure
-	// пользователя, а policy: endpoint маппит её в осмысленный 403, а не в
-	// санитизированный 401 (anti-oracle к policy неприменим — факт «метод выключен»
-	// не утечка чужих credentials).
+	// ErrProvisioningDisabled — the provisioning_allowed_methods policy
+	// forbids CREATING an operator via this method (ADR-058 Part B).
+	// Returned by Mapper from the provision branch (no new operator is
+	// created), ONLY on creation — an existing operator can still log in
+	// regardless of policy. Not a user auth failure but a policy outcome:
+	// the endpoint maps it to a meaningful 403 rather than a sanitized 401
+	// (anti-oracle doesn't apply to policy — the fact "method disabled" is
+	// not a leak of someone else's credentials).
 	ErrProvisioningDisabled = errors.New("auth: operator provisioning is disabled for this method by policy")
 )

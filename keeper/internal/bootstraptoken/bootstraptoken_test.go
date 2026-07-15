@@ -42,17 +42,11 @@ func TestPlainToken_HashMatchesSHA256(t *testing.T) {
 }
 
 func TestPlainToken_StringDoesNotLeakPlain(t *testing.T) {
-	// Защита от случайного fmt.Print(tok). Go рендерит обычную struct
-	// `{v: <plain>}` — это утечка. Если потребуется логировать структуру,
-	// она должна вернуть `<redacted>` через метод String() (post-MVP).
-	// Сейчас тест фиксирует ожидание: plain в форматированном выводе НЕ
-	// должен повторяться через String-метод (его нет → дефолтный реп.
-	// печатает `{v:...}`, что технически утечка, но это известный факт;
-	// меняем поведение позже без поломки тестов потребителей).
-	//
-	// Сейчас контракт: caller обязан использовать .Reveal() явно — этот
-	// тест документирует контракт. Если зафиксируем .String() для масочки,
-	// тест станет строгим.
+	// PlainToken has no String() method, so this doesn't actually test
+	// redaction — Go's default struct format still leaks `{v:...}` via
+	// fmt.Print(tok) (see the PlainToken doc comment). The real contract
+	// under test: callers must use .Reveal() explicitly. Tighten this test
+	// if a redacting String() is added later (post-MVP).
 	tok, err := Generate()
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -82,9 +76,9 @@ func TestValidHashFormat(t *testing.T) {
 		"",
 		strings.Repeat("a", 63),
 		strings.Repeat("a", 65),
-		strings.Repeat("g", 64), // 'g' — не hex.
-		strings.Repeat("A", 64), // uppercase — отвергаем (CHECK ловит).
-		"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456 8", // пробел.
+		strings.Repeat("g", 64), // 'g' is not hex.
+		strings.Repeat("A", 64), // uppercase — rejected (CHECK catches it).
+		"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456 8", // space.
 	}
 	for _, s := range good {
 		if !ValidHashFormat(s) {

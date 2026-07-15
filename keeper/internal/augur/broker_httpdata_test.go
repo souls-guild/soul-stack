@@ -56,7 +56,7 @@ func TestCredentialFromKV(t *testing.T) {
 	if c.username != "u" || c.password != "p" {
 		t.Errorf("basic failed: %+v", c)
 	}
-	// нестроковые значения игнорируются
+	// non-string values are ignored
 	c = credentialFromKV(map[string]any{"token": 123})
 	if c.bearer != "" {
 		t.Errorf("нестроковый token не должен попасть в bearer: %+v", c)
@@ -80,7 +80,7 @@ func TestResolveCredential_Empty(t *testing.T) {
 	}
 }
 
-// limitDoer отдаёт тело больше лимита для проверки io.LimitReader-обреза.
+// limitDoer returns a body larger than the limit to test the io.LimitReader cutoff.
 type limitDoer struct{ body string }
 
 func (d limitDoer) Do(_ *http.Request) (*http.Response, error) {

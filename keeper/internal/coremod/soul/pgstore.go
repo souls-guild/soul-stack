@@ -6,17 +6,17 @@ import (
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// PGStore — тонкий adapter поверх keeper/internal/soul функций, нужный модулю
-// `core.soul.registered`. Существует, чтобы модуль зависел от узкого
-// интерфейса [Store], а не от свободных функций пакета (тестирование +
-// явный контракт).
+// PGStore is a thin adapter over the keeper/internal/soul functions needed by
+// the `core.soul.registered` module. It exists so the module depends on the narrow
+// [Store] interface rather than free package functions (testing +
+// explicit contract).
 //
-// DB-поле — любой ExecQueryRower (pgxpool.Pool / pgx.Conn / pgx.Tx).
+// DB is any ExecQueryRower (pgxpool.Pool / pgx.Conn / pgx.Tx).
 type PGStore struct {
 	DB keepersoul.ExecQueryRower
 }
 
-// NewPGStore — wire-helper для main.go: соединяет модуль с реальным
+// NewPGStore is a wire helper for main.go: connects the module to a real
 // pgxpool.Pool.
 func NewPGStore(db keepersoul.ExecQueryRower) *PGStore {
 	return &PGStore{DB: db}

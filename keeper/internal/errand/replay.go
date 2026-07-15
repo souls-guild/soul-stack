@@ -8,37 +8,37 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// orphanGraceDuration — на сколько разрешается просрочить running-Errand-у
-// этого keeper-инстанса до того, как Replay переведёт его в timed_out.
-// Параметр выводится из server-cap × 5 (ADR-033 server-cap 300s × 5 = 25 мин)
-// — заведомо больше любого реального TimeoutSec пользователя (потолок 300s),
-// плюс запас на drift времени и slow-recovery. Значение per-Replay-вызов,
-// не constants-пакетная (caller вправе подкрутить через ReplayOptions).
+// orphanGraceDuration is how long a running Errand of this keeper instance
+// may be overdue before Replay marks it timed_out. Derived from
+// server-cap × 5 (ADR-033 server-cap 300s × 5 = 25 min) — well above any
+// real user TimeoutSec (300s ceiling), plus slack for time drift and slow
+// recovery. This is a per-Replay-call value, not a package constant
+// (callers may override via ReplayOptions).
 const orphanGraceDuration = 25 * time.Minute
 
-// ReplayOptions — параметры однократного recovery-scan-а при старте keeper-а.
-// Все поля опциональны; нулевое значение — sensible default.
+// ReplayOptions holds the parameters for the one-shot recovery scan at
+// keeper startup. All fields are optional; the zero value is a sensible default.
 type ReplayOptions struct {
-	// Grace — на сколько running-Errand этого KID должен быть «просрочен»,
-	// чтобы Replay перевёл его в timed_out. nil/0 → [orphanGraceDuration].
-	// Симметрично pushorch.purge_orphan_push_runs (ADR-027(b)).
+	// Grace is how "overdue" a running Errand of this KID must be before
+	// Replay marks it timed_out. nil/0 → [orphanGraceDuration]. Symmetric
+	// with pushorch.purge_orphan_push_runs (ADR-027(b)).
 	Grace time.Duration
 
-	// Reason — пометка в error_message переведённых строк. Опциональна;
-	// дефолт — "keeper restart: orphan running errand".
+	// Reason is the error_message tag on transitioned rows. Optional;
+	// defaults to "keeper restart: orphan running errand".
 	Reason string
 }
 
-// Replay переводит «осиротевшие» running-Errand-ы текущего keeper-инстанса
-// в timed_out. Источник осиротевших — рестарт процесса: каждая running-
-// строка с started_by_kid=self и started_at < now-grace точно не дождётся
-// ErrandResult-а (background-горутина умерла вместе с процессом).
+// Replay transitions "orphaned" running Errands of the current keeper
+// instance to timed_out. Orphans come from process restart: any running row
+// with started_by_kid=self and started_at < now-grace will never see its
+// ErrandResult (the background goroutine died with the process).
 //
-// Вызов — однократный в setupErrandDispatcher после Store.Insert/Reaper-
-// зависимостей, ДО старта HTTP-слушателя (чтобы reaper-purge_old_errands
-// и старые running-строки не конкурировали с новыми Dispatch).
+// Called once from setupErrandDispatcher after Store.Insert/Reaper deps are
+// wired, BEFORE the HTTP listener starts (so reaper-purge_old_errands and
+// stale running rows don't race new Dispatch calls).
 //
-// Возвращает число переведённых строк (для лога).
+// Returns the number of transitioned rows (for logging).
 func (d *Dispatcher) Replay(ctx context.Context, opts ReplayOptions) (int, error) {
 	grace := opts.Grace
 	if grace <= 0 {
@@ -62,10 +62,10 @@ func (d *Dispatcher) Replay(ctx context.Context, opts ReplayOptions) (int, error
 		slog.Int("count", len(ids)),
 		slog.Duration("grace", grace))
 
-	// Audit-events: одно `errand.timed_out` на каждую осиротевшую строку.
-	// archon_aid в payload не кладём (orphan-purge — keeper-internal путь,
-	// инициатора-Архонта на этом write-path-е больше нет; sourceSoulGRPC —
-	// тот же канал, что live-timed_out-handler).
+	// Audit events: one `errand.timed_out` per orphaned row. No archon_aid
+	// in the payload (orphan-purge is a keeper-internal path, there's no
+	// initiating Archon on this write path; SourceSoulGRPC matches the
+	// live-timed_out handler's channel).
 	if d.deps.Audit != nil {
 		for _, id := range ids {
 			payload := map[string]any{

@@ -37,7 +37,7 @@ func TestSubscribePublishReceive(t *testing.T) {
 
 func TestPublishNoSubscribers(t *testing.T) {
 	b := newTestBus()
-	// Не должно паниковать или блокироваться.
+	// Must not panic or block.
 	b.Publish(Event{ApplyID: "no-one", Kind: KindApplyStarted})
 }
 
@@ -110,7 +110,7 @@ func TestLateSubscriberMissesEarlierEvents(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	// А вот следующий Publish — получит.
+	// But the next Publish will be received.
 	b.Publish(Event{ApplyID: "apply-Y", Kind: KindApplyCompleted})
 	select {
 	case ev := <-ch:
@@ -132,7 +132,7 @@ func TestUnsubscribeOnCtxCancel(t *testing.T) {
 	}
 	cancel()
 
-	// Ждём пока goroutine сделает unsubscribe.
+	// Wait for the goroutine to unsubscribe.
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if b.Subscribers("apply-Z") == 0 {
@@ -144,8 +144,8 @@ func TestUnsubscribeOnCtxCancel(t *testing.T) {
 		t.Fatalf("Subscribers after cancel = %d, want 0", got)
 	}
 
-	// Канал НЕ закрывается (вариант A done-канала): инвариант — Publish
-	// после cancel ничего не доставляет (subscriber снят, done закрыт).
+	// The channel is NOT closed (variant A done-channel): the invariant is —
+	// Publish after cancel delivers nothing (subscriber removed, done closed).
 	b.Publish(Event{ApplyID: "apply-Z", Kind: KindTaskExecuted})
 	select {
 	case ev := <-ch:
@@ -161,15 +161,15 @@ func TestBufferOverflowDropsOldest(t *testing.T) {
 
 	ch := b.Subscribe(ctx, "apply-overflow")
 
-	// Заливаем SubscriberBufferSize+10 событий без чтения. Должно
-	// сохраниться ровно SubscriberBufferSize самых свежих.
+	// Flood SubscriberBufferSize+10 events without reading. Exactly
+	// SubscriberBufferSize newest ones should survive.
 	total := SubscriberBufferSize + 10
 	for i := 0; i < total; i++ {
 		b.Publish(Event{ApplyID: "apply-overflow", Kind: KindTaskExecuted, Payload: i})
 	}
 
-	// Вычитываем всё, что есть, без блокировки. Должно получиться
-	// SubscriberBufferSize событий, и последнее — i=total-1 (newest сохранён).
+	// Drain everything available, non-blocking. Should end up with
+	// SubscriberBufferSize events, and the last one — i=total-1 (newest kept).
 	var got []Event
 drain:
 	for {
@@ -219,8 +219,8 @@ func TestConcurrentPublishAndSubscribe(t *testing.T) {
 			for {
 				select {
 				case _, ok := <-ch:
-					// ch не закрывается (вариант A) — ветка !ok недостижима,
-					// оставлена как defensive. Выход — строго по ctx.Done().
+					// ch is never closed (variant A) — the !ok branch is unreachable,
+					// kept as defensive. Exit strictly via ctx.Done().
 					if !ok {
 						return
 					}
@@ -245,15 +245,15 @@ func TestConcurrentPublishAndSubscribe(t *testing.T) {
 	}
 	wgP.Wait()
 
-	// Даём reader-ам время выпить очередь.
+	// Give the readers time to drain the queue.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	wgR.Wait()
 
 	want := int64(applyIDs * subsPerID * pubPerID)
 	if received.Load() != want {
-		// При drop-oldest under load цифры могут различаться; но 50 событий
-		// при буфере 64 — гарантированно без потерь.
+		// Under drop-oldest load the numbers could differ; but 50 events
+		// with a buffer of 64 is guaranteed lossless.
 		t.Errorf("received = %d, want %d (publish=%d, subs=%d, ids=%d)",
 			received.Load(), want, pubPerID, subsPerID, applyIDs)
 	}
@@ -282,8 +282,8 @@ func TestPublishStampsAtIfZero(t *testing.T) {
 	}
 }
 
-// TestNewBusWithRedis_NilRedisFallsBackToLocal — redis=nil / kid="" не
-// должны включать cluster-mode и не должны менять local-поведение.
+// TestNewBusWithRedis_NilRedisFallsBackToLocal — redis=nil / kid="" must
+// not enable cluster-mode and must not change local behavior.
 func TestNewBusWithRedis_NilRedisFallsBackToLocal(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	cases := []struct {
@@ -299,7 +299,7 @@ func TestNewBusWithRedis_NilRedisFallsBackToLocal(t *testing.T) {
 			if b.clusterEnabled() {
 				t.Errorf("clusterEnabled = true, want false (redis=nil)")
 			}
-			// Smoke: local publish/subscribe работает.
+			// Smoke: local publish/subscribe works.
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ch := b.Subscribe(ctx, "apply-local")

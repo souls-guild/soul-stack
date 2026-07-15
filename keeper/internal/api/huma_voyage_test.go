@@ -1,13 +1,13 @@
 package api
 
-// Guard-тесты VOYAGE на huma, FULL-TYPED форма WRITE-SELF-AUDIT (батч-2f, ADR-054).
-// create/cancel пишут audit ВНУТРИ handler-а (CreateTyped→emitCreated / CancelTyped→
-// emitCancelled), БЕЗ audit-middleware. preview — read-like dry-resolve БЕЗ audit.
-// list/get — read (БЕЗ audit). Guard-ы доказывают: wire 202/200, S6-SELF-AUDIT (handler
-// РЕАЛЬНО пишет event с непустым payload на 2xx), NoAudit на preview/422/403/404, 400 на
+// VOYAGE guard tests on huma, FULL-TYPED WRITE-SELF-AUDIT form (batch-2f, ADR-054).
+// create/cancel write audit INSIDE the handler (CreateTyped→emitCreated / CancelTyped→
+// emitCancelled), without audit-middleware. preview — read-like dry-resolve without audit.
+// list/get — read (no audit). Guards prove: wire 202/200, S6-SELF-AUDIT (handler
+// ACTUALLY writes an event with a non-empty payload on 2xx), NoAudit on preview/422/403/404, 400 on
 // list BadOffset/BadLimit (CheckPageBounds), golden-JSON byte-exact, RBAC-by-kind→403.
-// command-kind покрывает create/cancel/preview (bare-check errand.run, scoper=nil →
-// cluster-wide резолв; не требует БД-scope incReader).
+// command-kind covers create/cancel/preview (bare-check errand.run, scoper=nil →
+// cluster-wide resolve; does not need a DB-scope incReader).
 
 import (
 	"context"
@@ -31,9 +31,9 @@ import (
 
 const voyageTestID = "01HZ0000000000000000000000"
 
-// fakeVoyageStore — минимальный мок handlers.VoyageStore для api-package huma-guard-ов.
-// Обслуживает INSERT INTO voyages (RETURNING created_at), INSERT INTO voyage_targets,
-// selectByID (cancel), cancel-UPDATE, COUNT (list). Targets вставляются через tx.CopyFrom.
+// fakeVoyageStore — minimal mock of handlers.VoyageStore for the api-package huma guards.
+// Serves INSERT INTO voyages (RETURNING created_at), INSERT INTO voyage_targets,
+// selectByID (cancel), cancel-UPDATE, COUNT (list). Targets are inserted via tx.CopyFrom.
 type fakeVoyageStore struct {
 	insertCalls int
 	selectByID  func(id string) pgx.Row
@@ -103,7 +103,7 @@ func (t *fakeVoyageTx) QueryRow(ctx context.Context, sql string, args ...any) pg
 }
 func (t *fakeVoyageTx) Conn() *pgx.Conn { return nil }
 
-// fakeVoyageCmdResolver — command-резолвер: всегда отдаёт фиксированный SID-набор
+// fakeVoyageCmdResolver — command resolver: always returns a fixed SID set
 // (scoper=nil → cluster-wide ResolveSIDs).
 type fakeVoyageCmdResolver struct{ sids []string }
 
@@ -114,24 +114,24 @@ func (r fakeVoyageCmdResolver) ResolveSIDsInScope(context.Context, handlers.Voya
 	return handlers.ScopedSIDs{SIDs: r.sids}, nil
 }
 
-// fakeVoyageScenResolver — scenario-резолвер. По умолчанию (zero) отдаёт пустой набор
-// (command-guard-ы его не дёргают, но non-nil нужен для CreateTyped-конфиг-чека). С
-// заполненным incarnations[] обслуживает scenario-kind create (resolveScenarioScopeErr).
+// fakeVoyageScenResolver — scenario resolver. By default (zero) returns an empty set
+// (command guards do not call it, but non-nil is needed for the CreateTyped config check). With
+// incarnations[] filled it serves scenario-kind create (resolveScenarioScopeErr).
 type fakeVoyageScenResolver struct{ incarnations []string }
 
 func (r fakeVoyageScenResolver) ResolveIncarnations(context.Context, handlers.VoyageScenarioFilter) ([]string, error) {
 	return r.incarnations, nil
 }
 
-// voyageCancelRow — pgx.Row под voyage.scanVoyage для cancel selectByID (точный порядок
-// 31 dest, parity scanVoyage в keeper/internal/voyage/crud.go). Минимальный command-kind
-// pending-прогон (cancellable: status=pending не terminal/running). Поля по индексам:
-// #0 voyage_id, #1 kind, #16 status — критичны для CancelTyped (читает v.Kind/v.Status);
-// прочие — zero/nil (рассинхрон со scanVoyage сломал бы guard → переборка count).
+// voyageCancelRow — pgx.Row for voyage.scanVoyage for cancel selectByID (exact order of
+// 31 dest, parity with scanVoyage in keeper/internal/voyage/crud.go). Minimal command-kind
+// pending run (cancellable: status=pending, not terminal/running). Fields by index:
+// #0 voyage_id, #1 kind, #16 status — critical for CancelTyped (reads v.Kind/v.Status);
+// the rest — zero/nil (a mismatch with scanVoyage would break the guard → recount).
 type voyageCancelRow struct {
 	id     string
 	status string
-	// kind — "command" (default, zero=пусто → нормализуем) или "scenario".
+	// kind — "command" (default, zero=empty → normalized) or "scenario".
 	kind string
 }
 
@@ -177,15 +177,15 @@ func (r voyageCancelRow) Scan(dest ...any) error {
 	return nil
 }
 
-// humaVoyageRouter монтирует voyage huma-роуты ровно по навеске router.go. enforcer/
-// auditW параметризованы; store/резолверы под кейс. scoper=nil (cluster-wide command).
+// humaVoyageRouter mounts the voyage huma routes exactly per the router.go wiring. enforcer/
+// auditW are parameterized; store/resolvers per case. scoper=nil (cluster-wide command).
 func humaVoyageRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *fakeVoyageStore, cmd handlers.VoyageCommandResolver) *chi.Mux {
 	return humaVoyageRouterScen(t, enforcer, auditW, store, cmd, fakeVoyageScenResolver{})
 }
 
-// humaVoyageRouterScen — вариант humaVoyageRouter с настраиваемым scenario-резолвером
-// (scenario-kind create/cancel: резолвер отдаёт incarnations[], incReader=nil →
-// per-incarnation scope-check пропущен после bare-check incarnation.run).
+// humaVoyageRouterScen — variant of humaVoyageRouter with a configurable scenario resolver
+// (scenario-kind create/cancel: the resolver returns incarnations[], incReader=nil →
+// per-incarnation scope-check skipped after bare-check incarnation.run).
 func humaVoyageRouterScen(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *fakeVoyageStore, cmd handlers.VoyageCommandResolver, scen handlers.VoyageScenarioResolver) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -246,7 +246,7 @@ func TestHumaVoyage_Create_WireAndAudit(t *testing.T) {
 	if reply.VoyageID == "" || reply.Kind != "command" || reply.ScopeSize != 1 {
 		t.Errorf("reply = %+v, want kind=command scope_size=1", reply)
 	}
-	// S6-SELF-AUDIT: command_run.invoked пишет emitCreated ВНУТРИ CreateTyped.
+	// S6-SELF-AUDIT: command_run.invoked writes emitCreated INSIDE CreateTyped.
 	assertSelfAudit(t, auditCap, audit.EventCommandRunInvoked, "voyage_id")
 }
 
@@ -278,7 +278,7 @@ func TestHumaVoyage_Create_MissingTarget_422_NoAudit(t *testing.T) {
 
 func TestHumaVoyage_Create_RBACDeny_403_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	// strictDenyAll → bare-check errand.run внутри resolveCommandScopeErr денит → 403.
+	// strictDenyAll → bare-check errand.run inside resolveCommandScopeErr denies → 403.
 	r := humaVoyageRouter(t, strictDenyAll{}, auditCap, &fakeVoyageStore{}, fakeVoyageCmdResolver{sids: []string{"x"}})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/voyages", strings.NewReader(voyageCmdBody))
@@ -425,7 +425,7 @@ func TestHumaVoyage_Cancel_WireAndAudit(t *testing.T) {
 	if reply.VoyageID != voyageTestID || reply.Status != "cancelled" {
 		t.Errorf("cancel reply = %+v, want voyage_id=%s status=cancelled", reply, voyageTestID)
 	}
-	// S6-SELF-AUDIT: command_run.cancelled пишет emitCancelled ВНУТРИ CancelTyped.
+	// S6-SELF-AUDIT: command_run.cancelled writes emitCancelled INSIDE CancelTyped.
 	assertSelfAudit(t, auditCap, audit.EventCommandRunCancelled, "voyage_id")
 }
 
@@ -456,14 +456,14 @@ func TestHumaVoyage_Cancel_BadID_422(t *testing.T) {
 	}
 }
 
-// --- scenario-kind (create + cancel) — симметрия с command-kind ---
+// --- scenario-kind (create + cancel) — symmetry with command-kind ---
 
 const voyageScenBody = `{"kind":"scenario","scenario_name":"deploy","target":{"incarnations":["web-prod"]}}`
 
 // TestHumaVoyage_Create_Scenario_WireAndAudit — scenario-kind create 202 + scope_size
-// (резолвер отдаёт 1 инкарнацию) + S6-SELF-AUDIT scenario_run.started ВНУТРИ
-// createScenarioTyped (emitCreated). Симметрия с command-kind (EventCommandRunInvoked):
-// обе ветки kind на мигрируемом huma-слое инспектируются.
+// (resolver returns 1 incarnation) + S6-SELF-AUDIT scenario_run.started INSIDE
+// createScenarioTyped (emitCreated). Symmetry with command-kind (EventCommandRunInvoked):
+// both kind branches on the migrated huma layer are inspected.
 func TestHumaVoyage_Create_Scenario_WireAndAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	store := &fakeVoyageStore{}
@@ -491,8 +491,8 @@ func TestHumaVoyage_Create_Scenario_WireAndAudit(t *testing.T) {
 }
 
 // TestHumaVoyage_Cancel_Scenario_WireAndAudit — scenario-kind cancel 202 + S6-SELF-AUDIT
-// scenario_run.cancelled ВНУТРИ CancelTyped (emitCancelled). Симметрия с command-kind
-// (EventCommandRunCancelled): обе cancel-ветки kind на huma-слое инспектируются.
+// scenario_run.cancelled INSIDE CancelTyped (emitCancelled). Symmetry with command-kind
+// (EventCommandRunCancelled): both cancel kind branches on the huma layer are inspected.
 func TestHumaVoyage_Cancel_Scenario_WireAndAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	store := &fakeVoyageStore{selectByID: func(id string) pgx.Row {
@@ -520,9 +520,9 @@ func TestHumaVoyage_Cancel_Scenario_WireAndAudit(t *testing.T) {
 // --- GOLDEN byte-exact (202 create + 202 cancel) ---
 
 // TestHumaVoyage_Create_GoldenWire — GOLDEN-JSON byte-exact 202-reply create (command-
-// kind). voyage_id недетерминирован (ULID) → нормализуется в плейсхолдер; прочие ключи/
-// набор/отсутствие $schema фиксированы. voyage — единственный домен с MCP-через-httptest,
-// где 202-body byte-exact критичен (рассинхрон wire ловится здесь).
+// kind). voyage_id is non-deterministic (ULID) → normalized to a placeholder; the other keys/
+// set/absence of $schema are fixed. voyage is the only domain with MCP-via-httptest,
+// where the 202-body byte-exact matters (wire mismatch is caught here).
 func TestHumaVoyage_Create_GoldenWire(t *testing.T) {
 	store := &fakeVoyageStore{}
 	cmd := fakeVoyageCmdResolver{sids: []string{"node-1.example.com"}}
@@ -542,8 +542,8 @@ func TestHumaVoyage_Create_GoldenWire(t *testing.T) {
 }
 
 // TestHumaVoyage_Cancel_GoldenWire — GOLDEN-JSON byte-exact 202-reply cancel. voyage_id
-// фиксирован (path-{id} → детерминирован). Фиксирует набор ключей (voyage_id/status) и
-// отсутствие $schema/лишних полей.
+// is fixed (path-{id} → deterministic). Pins the key set (voyage_id/status) and
+// the absence of $schema/extra fields.
 func TestHumaVoyage_Cancel_GoldenWire(t *testing.T) {
 	store := &fakeVoyageStore{selectByID: func(id string) pgx.Row {
 		return voyageCancelRow{id: id, status: "pending"}
@@ -563,9 +563,9 @@ func TestHumaVoyage_Cancel_GoldenWire(t *testing.T) {
 	}
 }
 
-// normalizeVoyageID заменяет недетерминированный voyage_id (ULID) и location-хвост на
-// плейсхолдер "ULID" и переливает через map → sorted-marshal (golden byte-exact;
-// плейсхолдер без спец-символов — json.Marshal не HTML-эскейпит).
+// normalizeVoyageID replaces the non-deterministic voyage_id (ULID) and the location tail with
+// the placeholder "ULID" and re-pours through a map → sorted-marshal (golden byte-exact;
+// the placeholder has no special chars — json.Marshal does not HTML-escape).
 func normalizeVoyageID(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any

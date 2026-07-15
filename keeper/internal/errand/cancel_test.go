@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// TestCancel_Happy — Errand в status=running, lease=self → SendCancelErrand
-// вызван, ошибки нет.
+// TestCancel_Happy — Errand at status=running, lease=self → SendCancelErrand
+// is called, no error.
 func TestCancel_Happy(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
@@ -17,7 +17,7 @@ func TestCancel_Happy(t *testing.T) {
 
 	d := buildTestDispatcher(store, bus, ob, ob, lease, time.Second)
 
-	// Подготовка: вставим running-строку.
+	// Setup: insert a running row.
 	row := Row{
 		ErrandID:     "ERR1",
 		SID:          "host.test",
@@ -43,7 +43,7 @@ func TestCancel_Happy(t *testing.T) {
 	}
 }
 
-// TestCancel_NotFound — row отсутствует → ErrNotFound.
+// TestCancel_NotFound — row doesn't exist → ErrNotFound.
 func TestCancel_NotFound(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
@@ -57,7 +57,7 @@ func TestCancel_NotFound(t *testing.T) {
 	}
 }
 
-// TestCancel_TerminalStatus — row уже success/failed/timed_out/cancelled →
+// TestCancel_TerminalStatus — row already success/failed/timed_out/cancelled →
 // ErrErrandTerminal.
 func TestCancel_TerminalStatus(t *testing.T) {
 	for _, term := range []Status{StatusSuccess, StatusFailed, StatusTimedOut, StatusCancelled, StatusModuleNotAllowed} {
@@ -94,7 +94,7 @@ func TestCancel_TerminalStatus(t *testing.T) {
 	}
 }
 
-// TestCancel_EmptyErrandID — ErrEmptyErrandID до lookup-а.
+// TestCancel_EmptyErrandID — ErrEmptyErrandID before lookup.
 func TestCancel_EmptyErrandID(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
@@ -133,13 +133,13 @@ func TestCancel_RemoteHolder(t *testing.T) {
 	if err := d.Cancel(context.Background(), CancelRequest{ErrandID: "ERR-REMOTE", RequestedBy: "archon-alice"}); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	// SendCancelErrand или PublishCancelErrand — оба в одном слайсе fakeOutbound.cancelled.
+	// SendCancelErrand or PublishCancelErrand — both land in the same fakeOutbound.cancelled slice.
 	if len(ob.cancelled) != 1 || ob.cancelled[0] != "ERR-REMOTE" {
 		t.Fatalf("ob.cancelled = %v, want [ERR-REMOTE]", ob.cancelled)
 	}
 }
 
-// TestCancel_SoulNotConnected — lease holder пуст → ErrSoulNotConnected.
+// TestCancel_SoulNotConnected — lease holder empty → ErrSoulNotConnected.
 func TestCancel_SoulNotConnected(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()

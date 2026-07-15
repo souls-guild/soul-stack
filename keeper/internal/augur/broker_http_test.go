@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// recordingDoer — fake HTTPDoer: фиксирует исходящий запрос и отдаёт заготовленный
-// ответ. Не ходит в сеть. validateEndpoint брокера проходит на валидном
-// https-публичном endpoint-е; сам HTTP-вызов перехватывается здесь.
+// recordingDoer — fake HTTPDoer: records the outgoing request and returns a
+// canned response. Never touches the network. The broker's validateEndpoint
+// runs against a valid public https endpoint; the HTTP call itself is
+// intercepted here.
 type recordingDoer struct {
 	gotReq     *http.Request
 	gotAuth    string
@@ -35,7 +36,7 @@ func (d *recordingDoer) Do(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// staticKV — fake KVReader: один секрет для auth_ref-credential-резолва.
+// staticKV — fake KVReader: a single secret for auth_ref credential resolution.
 type staticKV struct {
 	data map[string]any
 	err  error

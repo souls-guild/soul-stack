@@ -1,18 +1,18 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2a разворота OPERATOR-домена ЦЕЛИКОМ на huma full-typed
-// (ADR-054 §Pattern, 5 эталонов). Все operator-роуты на huma: create/revoke/
-// issue-token — WRITE+AUDIT (вариант B, huma-audit-middleware); list — read-with-
-// typed-query (БЕЗ audit); get — read-with-path (БЕЗ audit). Доказывают инварианты
-// кластера поверх chi:
+// Guard tests for ROLLOUT BATCH 2a turning the OPERATOR domain WHOLESALE onto huma full-typed
+// (ADR-054 §Pattern, 5 references). ALL operator routes on huma: create/revoke/
+// issue-token — WRITE+AUDIT (variant B, huma-audit-middleware); list — read with typed
+// query (no audit); get — read with path (no audit). They prove the cluster invariants
+// over chi:
 //
 //   - wire/golden: create 201 OperatorCreateReply; list 200 envelope items[]; get 200
-//     Operator; revoke 204 пустое; issue-token 200 IssueTokenReply (byte-exact);
+//     Operator; revoke 204 empty; issue-token 200 IssueTokenReply (byte-exact);
 //   - unknown-field → 400; missing-required → 422; bad auth_method enum → 422; bad
-//     revoked bool → 400 (query-эталон); RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут (create/revoke/issue-token): полная huma-навеска
-//     (RequirePermission + humaAuditMiddleware + huma-handler) пишет audit-event с
-//     НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//     revoked bool → 400 (the query reference); RBAC-deny → 403;
+//   - S6-GUARD on EVERY write route (create/revoke/issue-token): the full huma wiring
+//     (RequirePermission + humaAuditMiddleware + huma handler) writes an audit event with a
+//     NON-EMPTY payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -34,16 +34,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// opCreatedAt — фиксированный created_at, который SelectByAID отдаёт во всех
-// operator-success-путях (детерминированный golden wire).
+// opCreatedAt — a fixed created_at that SelectByAID returns in all operator success
+// paths (a deterministic golden wire).
 var opCreatedAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// opPool — узкий мок [handlers.OperatorPool] для всех operator-success-путей huma-
-// теста. Покрывает 2xx (S6-guard: audit на успехе). Exec INSERT/UPDATE → OK;
-// QueryRow COUNT → 1; QueryRow SELECT operator → активный archon-bob (NULL
-// created_by_aid → bootstrap_initial=true); Query lock-admins → пусто (target не
-// admin → revoke не lockout-ит). Конкретные сценарии не варьируются — error-
-// классификацию валидируют handlers/operator_test.go.
+// opPool — a narrow mock of [handlers.OperatorPool] for all operator success paths of the
+// huma test. Covers 2xx (S6-guard: audit on success). Exec INSERT/UPDATE → OK;
+// QueryRow COUNT → 1; QueryRow SELECT operator → an active archon-bob (NULL
+// created_by_aid → bootstrap_initial=true); Query lock-admins → empty (target is not an
+// admin → revoke does not lock out). Concrete scenarios are not varied — error
+// classification is validated by handlers/operator_test.go.
 type opPool struct{}
 
 func (opPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -55,7 +55,7 @@ func (opPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		return opIntRow{n: 1}
 	case strings.Contains(sql, "SELECT aid, display_name"):
 		// active archon-bob, created_by_aid NULL (bootstrap_initial=true),
-		// created_via='bootstrap' (ADR-058(d)), revoked_at NULL, metadata пусто.
+		// created_via='bootstrap' (ADR-058(d)), revoked_at NULL, metadata empty.
 		return opStaticRow{values: []any{
 			"archon-bob", "Bob", "jwt", opCreatedAt,
 			nil, "bootstrap", nil, []byte("{}"),
@@ -67,9 +67,9 @@ func (opPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FROM synod_operators"),
 		strings.Contains(sql, "FROM rbac_role_operators"):
-		return &opAdminRows{}, nil // пусто → target не cluster-admin → revoke ok
+		return &opAdminRows{}, nil // empty → target is not cluster-admin → revoke ok
 	case strings.Contains(sql, "FROM operators"):
-		return &opListRows{}, nil // одна строка archon-bob
+		return &opListRows{}, nil // a single archon-bob row
 	}
 	return &opAdminRows{}, nil
 }
@@ -77,7 +77,7 @@ func (opPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return opTx{}, nil
 }
 
-// opTx проксирует Exec/Query на opPool; Commit/Rollback no-op.
+// opTx proxies Exec/Query to opPool; Commit/Rollback no-op.
 type opTx struct{ pgx.Tx }
 
 func (opTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -96,8 +96,8 @@ type opIntRow struct{ n int }
 
 func (r opIntRow) Scan(dest ...any) error { *dest[0].(*int) = r.n; return nil }
 
-// opStaticRow — row SELECT operator (8 колонок: aid/display_name/auth_method/
-// created_at/created_by_aid/created_via/revoked_at/metadata). nil-значения → NULL.
+// opStaticRow — a SELECT operator row (8 columns: aid/display_name/auth_method/
+// created_at/created_by_aid/created_via/revoked_at/metadata). nil values → NULL.
 type opStaticRow struct {
 	values []any
 	err    error
@@ -139,7 +139,7 @@ func (r opStaticRow) Scan(dest ...any) error {
 	return nil
 }
 
-// opAdminRows — пустой результат lock-admins Query (target не admin).
+// opAdminRows — an empty lock-admins Query result (target is not an admin).
 type opAdminRows struct{}
 
 func (r *opAdminRows) Next() bool                                   { return false }
@@ -152,7 +152,7 @@ func (r *opAdminRows) Values() ([]any, error)                       { return nil
 func (r *opAdminRows) RawValues() [][]byte                          { return nil }
 func (r *opAdminRows) Conn() *pgx.Conn                              { return nil }
 
-// opListRows — один row List operators (archon-bob, active, NULL created_by_aid).
+// opListRows — a single List operators row (archon-bob, active, NULL created_by_aid).
 type opListRows struct{ done bool }
 
 func (r *opListRows) Next() bool {
@@ -176,7 +176,7 @@ func (r *opListRows) Values() ([]any, error)                       { return nil,
 func (r *opListRows) RawValues() [][]byte                          { return nil }
 func (r *opListRows) Conn() *pgx.Conn                              { return nil }
 
-// opIssuer — JWTIssuer-mock: фиксированный токен (детерминированный golden jwt).
+// opIssuer — a JWTIssuer mock: a fixed token (a deterministic golden jwt).
 type opIssuer struct{}
 
 func (opIssuer) Issue(aid string, _ []string, _ time.Duration, _ bool) (string, error) {
@@ -188,15 +188,15 @@ type opRBAC struct{}
 
 func (opRBAC) RolesOf(string) []string { return nil }
 
-// humaOperatorRouter собирает chi-роутер со ВСЕМИ operator-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(operator.<action>) на каждой
-// группе + (для write) huma-audit-middleware вариант B + huma-операция.
-// injectClaims заменяет RequireJWT.
+// humaOperatorRouter assembles a chi router with ALL operator routes via huma — the
+// production wiring from router.go: RequirePermission(operator.<action>) on each group +
+// (for write) huma-audit-middleware variant B + a huma operation.
+// injectClaims replaces RequireJWT.
 func humaOperatorRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer) *chi.Mux {
 	return humaOperatorRouterWithPool(t, enforcer, auditW, opPool{})
 }
 
-// opCapturePool — opPool + перехват SQL/args list-SELECT (для guard-а bind ?q=).
+// opCapturePool — opPool + intercepts the SQL/args of the list SELECT (for the ?q= bind guard).
 type opCapturePool struct {
 	opPool
 	listSQL  string
@@ -210,8 +210,8 @@ func (p *opCapturePool) Query(ctx context.Context, sql string, args ...any) (pgx
 	return p.opPool.Query(ctx, sql, args...)
 }
 
-// humaOperatorRouterWithPool — humaOperatorRouter с инъекцией OperatorPool (guard-ы,
-// которым нужно перехватить SQL/args доменного запроса).
+// humaOperatorRouterWithPool — humaOperatorRouter with an injected OperatorPool (for guards
+// that need to intercept the SQL/args of the domain query).
 func humaOperatorRouterWithPool(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool handlers.OperatorPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -329,7 +329,7 @@ func TestHumaAudit_OperatorCreate_NoAudit_OnRBACDeny(t *testing.T) {
 	}
 }
 
-// === LIST (READ, query-tier, БЕЗ audit) ===
+// === LIST (READ, query-tier, no audit) ===
 
 func TestHumaOperator_List_GoldenWire(t *testing.T) {
 	r := humaOperatorRouter(t, strictAllowAll{}, nil)
@@ -350,9 +350,9 @@ func TestHumaOperator_List_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaOperator_List_Q_BindsToFilter — guard: ?q=<val> биндится в
-// operatorListInput.Q и доходит до SQL как ILIKE-предикат по display_name/aid с
-// экранированным (%→\%) аргументом.
+// TestHumaOperator_List_Q_BindsToFilter — guard: ?q=<val> binds into
+// operatorListInput.Q and reaches SQL as an ILIKE predicate over display_name/aid with
+// an escaped (%→\%) argument.
 func TestHumaOperator_List_Q_BindsToFilter(t *testing.T) {
 	pool := &opCapturePool{}
 	r := humaOperatorRouterWithPool(t, strictAllowAll{}, nil, pool)
@@ -399,10 +399,10 @@ func TestHumaOperator_List_BadRevoked_400(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
 
-// TestHumaOperator_List_BadOffset_400 — КОНТРАКТ-инвариант границ (решение A, parity
-// audit OutOfRangePagination): offset<0 → 400 (sharedapi.CheckPageBounds в ListTyped),
-// а НЕ 200 с битым envelope и НЕ huma-422 (huma typed-int НЕ несёт schema-minimum).
-// Должно совпадать с легаси ParsePage (offset<0 → 400), иначе wire-change.
+// TestHumaOperator_List_BadOffset_400 — the CONTRACT bounds invariant (decision A, parity
+// audit OutOfRangePagination): offset<0 → 400 (sharedapi.CheckPageBounds in ListTyped),
+// and NOT 200 with a broken envelope and NOT huma-422 (a huma typed-int does NOT carry a schema-minimum).
+// Must match the legacy ParsePage (offset<0 → 400), otherwise a wire-change.
 func TestHumaOperator_List_BadOffset_400(t *testing.T) {
 	r := humaOperatorRouter(t, strictAllowAll{}, nil)
 	rec := httptest.NewRecorder()
@@ -414,10 +414,10 @@ func TestHumaOperator_List_BadOffset_400(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
 
-// TestHumaOperator_List_BadLimit_400 — out-of-range limit (0 и 1001) → 400
-// (sharedapi.CheckPageBounds: limit∈[1,1000]), parity audit OutOfRangePagination и
-// легаси ParsePage. Раньше huma-путь молча отдавал 200 с битой пагинацией (минуя
-// CheckPageBounds) — этот guard ловит регресс.
+// TestHumaOperator_List_BadLimit_400 — out-of-range limit (0 and 1001) → 400
+// (sharedapi.CheckPageBounds: limit∈[1,1000]), parity audit OutOfRangePagination and
+// the legacy ParsePage. The huma path used to silently return 200 with broken pagination
+// (bypassing CheckPageBounds) — this guard catches the regression.
 func TestHumaOperator_List_BadLimit_400(t *testing.T) {
 	r := humaOperatorRouter(t, strictAllowAll{}, nil)
 	for _, c := range []string{
@@ -459,7 +459,7 @@ func TestHumaOperator_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === GET (READ, path, БЕЗ audit) ===
+// === GET (READ, path, no audit) ===
 
 func TestHumaOperator_Get_GoldenWire(t *testing.T) {
 	r := humaOperatorRouter(t, strictAllowAll{}, nil)
@@ -544,7 +544,7 @@ func TestHumaAudit_OperatorRevoke_NoAudit_OnBadAID(t *testing.T) {
 	}
 }
 
-// === ISSUE-TOKEN (WRITE+AUDIT operator.token-issued, 200 С ТЕЛОМ) ===
+// === ISSUE-TOKEN (WRITE+AUDIT operator.token-issued, 200 WITH BODY) ===
 
 func TestHumaOperator_IssueToken_GoldenWire(t *testing.T) {
 	r := humaOperatorRouter(t, strictAllowAll{}, nil)
@@ -558,7 +558,7 @@ func TestHumaOperator_IssueToken_GoldenWire(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
-	// expires_at — now+TTL (нестабильно), сторожим набор остальных полей.
+	// expires_at — now+TTL (unstable), we guard the set of the remaining fields.
 	if m["aid"] != "archon-bob" {
 		t.Errorf("aid = %v, want archon-bob", m["aid"])
 	}
@@ -596,7 +596,7 @@ func TestHumaAudit_OperatorIssueToken_NoAudit_OnBadAID(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ operator-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL operator operations from FULL-TYPED Go types ===
 
 func TestHumaOperator_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaOperatorSpecYAML()
@@ -614,8 +614,8 @@ func TestHumaOperator_OpenAPIFragment_3_1(t *testing.T) {
 			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
 		}
 	}
-	// list-query auth_method multi-value НЕ нужен (single string), но explode-
-	// артефактов RawBody-моста быть не должно.
+	// list-query auth_method multi-value is NOT needed (single string), but there
+	// must be no explode artifacts of the RawBody bridge.
 	if strings.Contains(frag, "octet-stream") {
 		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
 	}

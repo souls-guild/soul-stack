@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// leakMarker — распознаваемый паттерн внутри signing-key. Если значение
-// ключа когда-либо попадёт в текст ошибки (например, через случайный `%v`
-// на []byte при правке), этот маркер всплывёт в err.Error() и тест упадёт.
-// Длина ключа >= 32 байт (HS256-минимум), чтобы конструкторы не отбраковали
-// его раньше по длине.
+// leakMarker — a recognizable pattern inside the signing key. If the key
+// value ever ends up in an error message (e.g. via a stray `%v` on []byte
+// during a future edit), this marker will surface in err.Error() and fail
+// the test. Key length is >= 32 bytes (HS256 minimum) so constructors
+// don't reject it on length first.
 var leakMarkerKey = []byte("SIGNKEY-MUST-NOT-LEAK-0123456789abcdef")
 
 // assertNoKeyLeak — общий помощник: ошибка не должна содержать ни маркер,

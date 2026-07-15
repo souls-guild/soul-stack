@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона (OpenAPI/MCP, отдельный слайс)
-// маппит на HTTP-коды:
+// Sentinel errors of the CRUD layer. The handler side (OpenAPI/MCP, a
+// separate slice) maps them to HTTP codes:
 //   - ErrOmenAlreadyExists → 409.
 //   - ErrOmenNotFound      → 404.
 //   - ErrRiteNotFound      → 404.
@@ -27,9 +27,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у. Симметрично
-// provider/incarnation: unit-тесты ходят через fake без подъёма PG, production
-// даёт реальный pool / Conn / Tx.
+// ExecQueryRower — the narrow pgxpool.Pool subset the CRUD layer needs.
+// Symmetric with provider/incarnation: unit tests go through a fake without
+// standing up PG, production supplies a real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -59,16 +59,16 @@ FROM omens
 WHERE name = $1
 `
 
-// InsertOmen вставляет новый Omen.
+// InsertOmen inserts a new Omen.
 //
-// Pre-conditions (service-валидация):
-//   - o.Name соответствует [NamePattern];
+// Pre-conditions (service validation):
+//   - o.Name matches [NamePattern];
 //   - o.SourceType ∈ closed enum;
-//   - o.Endpoint непустой;
-//   - o.AuthRef — корректный vault-ref ([ValidAuthRef]).
+//   - o.Endpoint is non-empty;
+//   - o.AuthRef is a valid vault-ref ([ValidAuthRef]).
 //
-// Возврат: [ErrOmenAlreadyExists] на UNIQUE по PK; wrapped fmt.Errorf на
-// FK-/CHECK-violation.
+// Returns: [ErrOmenAlreadyExists] on a UNIQUE violation on the PK; wrapped
+// fmt.Errorf on an FK/CHECK violation.
 func InsertOmen(ctx context.Context, db ExecQueryRower, o *Omen) error {
 	if o == nil {
 		return fmt.Errorf("augur: nil omen")
@@ -116,7 +116,7 @@ func mapOmenInsertError(err error) error {
 	return fmt.Errorf("augur: insert omen: %w", err)
 }
 
-// SelectOmenByName читает Omen по PK. [ErrOmenNotFound] при pgx.ErrNoRows.
+// SelectOmenByName reads an Omen by PK. [ErrOmenNotFound] on pgx.ErrNoRows.
 func SelectOmenByName(ctx context.Context, db ExecQueryRower, name string) (*Omen, error) {
 	return scanOmen(db.QueryRow(ctx, omenSelectByNameSQL, name))
 }
@@ -139,10 +139,11 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 	return &o, nil
 }
 
-// SelectAllOmens возвращает страницу Omen-ов и общее количество.
+// SelectAllOmens returns a page of Omens and the total count.
 //
-// Сортировка — `created_at DESC, name ASC` (как provider.SelectAll). Total и
-// items — двумя запросами вне общей транзакции (eventually consistent).
+// Sort order is `created_at DESC, name ASC` (like provider.SelectAll). Total
+// and items come from two queries outside a shared transaction (eventually
+// consistent).
 func SelectAllOmens(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Omen, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("augur: offset must be >= 0, got %d", offset)
@@ -180,8 +181,8 @@ OFFSET $1 LIMIT $2`
 	return out, total, nil
 }
 
-// DeleteOmen удаляет Omen по PK. Все его Rite-ы уходят каскадом (ON DELETE
-// CASCADE, augur.md §9). [ErrOmenNotFound] если строки не было.
+// DeleteOmen deletes an Omen by PK. All its Rites cascade away (ON DELETE
+// CASCADE, augur.md §9). [ErrOmenNotFound] if the row didn't exist.
 func DeleteOmen(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, "DELETE FROM omens WHERE name = $1", name)
 	if err != nil {
@@ -203,18 +204,19 @@ RETURNING id, created_at
 
 const riteColumns = `id, omen, coven, sid, allow, delegate, token_ttl, token_num_uses, created_by_aid, created_at`
 
-// InsertRite вставляет новый Rite. Перед записью резолвит Omen (тем же db) для
-// service-валидации, которую БД-CHECK не покрывает:
-//   - allow-shape по source_type Omen-а ([ValidateAllow]);
-//   - token-поля только при delegate=true И source_type=vault
-//     ([ValidateTokenFields] — вторая половина инварианта, ⇒vault через join);
-//   - формат token_ttl ([config.ParseDuration] внутри ValidateTokenFields).
+// InsertRite inserts a new Rite. Before writing, it resolves the Omen
+// (through the same db) for service validation that the DB CHECK can't
+// cover:
+//   - allow shape by the Omen's source_type ([ValidateAllow]);
+//   - token fields only when delegate=true AND source_type=vault
+//     ([ValidateTokenFields] — the other half of the invariant, ⇒vault via join);
+//   - token_ttl format ([config.ParseDuration] inside ValidateTokenFields).
 //
-// XOR-инвариант субъекта проверяется и здесь ([ValidateSubjectXOR]), и БД-CHECK
-// rites_subject_xor — defence in depth.
+// The subject XOR invariant is checked both here ([ValidateSubjectXOR]) and
+// by the DB CHECK rites_subject_xor — defence in depth.
 //
-// Возврат: [ErrOmenNotFound] если Omen не существует; wrapped fmt.Errorf на
-// FK-/CHECK-violation.
+// Returns: [ErrOmenNotFound] if the Omen doesn't exist; wrapped fmt.Errorf on
+// an FK/CHECK violation.
 func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 	if r == nil {
 		return fmt.Errorf("augur: nil rite")
@@ -228,7 +230,7 @@ func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 
 	omen, err := SelectOmenByName(ctx, db, r.Omen)
 	if err != nil {
-		return err // ErrOmenNotFound или обёрнутая scan-ошибка
+		return err // ErrOmenNotFound or a wrapped scan error
 	}
 	if err := ValidateAllow(omen.SourceType, r.Allow); err != nil {
 		return err
@@ -326,8 +328,8 @@ func collectRites(rows pgx.Rows) ([]*Rite, error) {
 	return out, nil
 }
 
-// SelectRitesByOmen возвращает все Rite-ы одного Omen-а (authorization §6,
-// CRUD list-by-omen). Сортировка `created_at DESC, id ASC`.
+// SelectRitesByOmen returns all Rites for one Omen (authorization §6, CRUD
+// list-by-omen). Sort order `created_at DESC, id ASC`.
 func SelectRitesByOmen(ctx context.Context, db ExecQueryRower, omen string) ([]*Rite, error) {
 	const sql = `SELECT ` + riteColumns + `
 FROM rites
@@ -340,10 +342,11 @@ ORDER BY created_at DESC, id ASC`
 	return collectRites(rows)
 }
 
-// SelectRitesBySubject возвращает Rite-ы, матчащие субъект запроса: sid-Rite-ы с
-// rites.sid == sid ИЛИ coven-Rite-ы с rites.coven ∈ covens (authorization §6).
-// Пустой covens допустим (тогда только sid-Rite-ы). Используется при резолве
-// AugurRequest в отдельном слайсе. Сортировка `created_at DESC, id ASC`.
+// SelectRitesBySubject returns Rites matching the request subject: sid-Rites
+// with rites.sid == sid OR coven-Rites with rites.coven ∈ covens
+// (authorization §6). An empty covens is fine (then only sid-Rites match).
+// Used when resolving AugurRequest in a separate slice. Sort order
+// `created_at DESC, id ASC`.
 func SelectRitesBySubject(ctx context.Context, db ExecQueryRower, sid string, covens []string) ([]*Rite, error) {
 	const sql = `SELECT ` + riteColumns + `
 FROM rites
@@ -356,8 +359,8 @@ ORDER BY created_at DESC, id ASC`
 	return collectRites(rows)
 }
 
-// DeleteRite удаляет Rite по суррогатному PK. [ErrRiteNotFound] если строки не
-// было.
+// DeleteRite deletes a Rite by its surrogate PK. [ErrRiteNotFound] if the
+// row didn't exist.
 func DeleteRite(ctx context.Context, db ExecQueryRower, id int64) error {
 	tag, err := db.Exec(ctx, "DELETE FROM rites WHERE id = $1", id)
 	if err != nil {

@@ -83,7 +83,7 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 		StateHistoryEntry{ApplyID: apply, ChangedByAID: nil, CreatedAt: ts, HistoryID: "h1", Scenario: "migration", StateAfter: nil, StateBefore: nil},
 		`{"apply_id":"01J0APPLYULID","created_at":"2026-06-14T12:34:56.789012345Z","history_id":"h1","scenario":"migration","state_after":null,"state_before":null}`)
 
-	// --- IncarnationGetReply: все категории (date-time + []-vs-null + omitempty + nullable) ---
+	// --- IncarnationGetReply: all categories (date-time + []-vs-null + omitempty + nullable) ---
 	driftN := DriftScanSummary{HostsClean: 5, ScannedAt: ts2, TotalHosts: 5}
 	goldenIncarnationWire(t, "GetReply/full",
 		IncarnationGetReply{

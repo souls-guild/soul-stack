@@ -9,50 +9,52 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TaskExecution — per-host итог одной задачи прогона, восстановленный из журнала
-// аудита (`task.executed`, NIM-37). Источник — то же событие, что уже пишет
-// events_taskevent.go на каждую (apply_id, sid, plan_index): статус, register_data
-// (output) и error. Эндпоинт /tasks джойнит это с планом (apply_run_plan) по
-// plan_index → адрес хоста внутри задачи.
+// TaskExecution — per-host outcome of one run's task, reconstructed from the
+// audit log (`task.executed`, NIM-37). Source — the same event already
+// written by events_taskevent.go for each (apply_id, sid, plan_index):
+// status, register_data (output), and error. The /tasks endpoint joins this
+// with the plan (apply_run_plan) via plan_index → host address within the
+// task.
 //
-// Секрет-гигиена: register_data/error.message уже прошли MaskSecrets на write-path-е
-// (auditpg-writer), а no_log-задачи их вовсе не несут (BuildTaskExecutedPayload
-// подавляет) — reader отдаёт то, что записано, без дополнительного маскинга.
+// Secret hygiene: register_data/error.message already went through
+// MaskSecrets on the write path (auditpg-writer), and no_log tasks don't
+// carry them at all (BuildTaskExecutedPayload suppresses them) — the reader
+// returns what was written, with no additional masking.
 type TaskExecution struct {
 	SID string
 
-	// PlanIndex — ГЛОБАЛЬНЫЙ сквозной индекс задачи (= RenderedTask.Index); ключ
-	// джойна с планом. COALESCE(plan_index, task_idx): старые строки без
-	// plan_index → fallback на task_idx (N=1 совпадает).
+	// PlanIndex — the GLOBAL cross-run task index (= RenderedTask.Index); the
+	// join key with the plan. COALESCE(plan_index, task_idx): old rows without
+	// plan_index → fall back to task_idx (N=1 matches).
 	PlanIndex int
 
-	// Status — строковое имя terminal-статуса (keeperv1.TaskStatus.String(),
-	// например "TASK_STATUS_CHANGED").
+	// Status — the terminal status string name (keeperv1.TaskStatus.String(),
+	// e.g. "TASK_STATUS_CHANGED").
 	Status string
 
-	// Output — распарсенный register_data (JSON-объект). nil, если register_data
-	// отсутствует (задача без register:), подавлен (no_log) или не распарсился.
+	// Output — parsed register_data (JSON object). nil if register_data is
+	// absent (task without register:), suppressed (no_log), or failed to parse.
 	Output map[string]any
 
-	// Error — заполнен только на FAILED/TIMED_OUT (nil иначе). Message для
-	// no_log-задачи пуст (подавлен на write-path-е).
+	// Error — set only on FAILED/TIMED_OUT (nil otherwise). Message is empty
+	// for a no_log task (suppressed on the write path).
 	Error *TaskExecutionError
 }
 
-// TaskExecutionError — error-часть task.executed (code/module/message).
+// TaskExecutionError — the error part of task.executed (code/module/message).
 type TaskExecutionError struct {
 	Code    string
 	Module  string
 	Message string
 }
 
-// selectTaskExecutionsSQL — все task.executed прогона с адресными полями (sid,
-// plan_index), статусом, register_data и error. Фильтр по индексируемым колонкам
-// (correlation_id, event_type); JSONB-поля извлекаются как текст. ORDER BY
-// created_at ASC: при retry (несколько строк на задачу-хост) более поздняя
-// перезаписывает раннюю в свёртке caller-а (последний результат побеждает).
+// selectTaskExecutionsSQL — all task.executed of a run with address fields
+// (sid, plan_index), status, register_data, and error. Filter on indexed
+// columns (correlation_id, event_type); JSONB fields are extracted as text.
+// ORDER BY created_at ASC: on retry (several rows per task-host), the later
+// one overwrites the earlier in the caller's aggregation (last result wins).
 //
-// $1 = apply_id (correlation_id task.executed), $2 = event_type.
+// $1 = apply_id (correlation_id of task.executed), $2 = event_type.
 const selectTaskExecutionsSQL = `
 SELECT payload->>'sid'                                      AS sid,
        COALESCE(payload->>'plan_index', payload->>'task_idx') AS plan_index,
@@ -70,11 +72,12 @@ WHERE correlation_id = $1
 ORDER BY created_at ASC
 `
 
-// SelectTaskExecutions возвращает per-host итоги задач прогона `applyID` из журнала
-// аудита (`task.executed`): статус, output (register_data) и error на каждую
-// (sid, plan_index). Порядок — по времени (retry-строки идут позже); дедуп/выбор
-// последнего результата делает caller (эндпоинт /tasks) при группировке по
-// (plan_index, sid). Пустой результат — прогон без task.executed-следа.
+// SelectTaskExecutions returns per-host outcomes for run `applyID`'s tasks
+// from the audit log (`task.executed`): status, output (register_data), and
+// error for each (sid, plan_index). Order is by time (retry rows come
+// later); dedup/picking the last result is done by the caller (the /tasks
+// endpoint) when grouping by (plan_index, sid). An empty result means the run
+// has no task.executed trace.
 func (r *Reader) SelectTaskExecutions(ctx context.Context, applyID string) ([]TaskExecution, error) {
 	rows, err := r.pool.Query(ctx, selectTaskExecutionsSQL, applyID, string(audit.EventTaskExecuted))
 	if err != nil {
@@ -99,8 +102,8 @@ func (r *Reader) SelectTaskExecutions(ctx context.Context, applyID string) ([]Ta
 		}
 		planIdx, perr := strconv.Atoi(planIdxStr)
 		if perr != nil {
-			// Нечисловой plan_index/task_idx (мусор в payload) — пропускаем: одна
-			// битая строка не должна ронять весь ответ /tasks.
+			// Non-numeric plan_index/task_idx (garbage in payload) — skip: one bad
+			// row shouldn't fail the whole /tasks response.
 			continue
 		}
 		te := TaskExecution{SID: sid, PlanIndex: planIdx}

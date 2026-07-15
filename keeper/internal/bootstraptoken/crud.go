@@ -11,16 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона маппит:
+// Sentinel errors for the CRUD layer. The handler side maps them:
 //
-//   - ErrTokenActiveExists  → 409 conflict (на SID уже висит активный токен,
-//     по partial unique `bootstrap_tokens_active_by_sid_idx`). Оператор должен
-//     отозвать старый или дождаться TTL.
-//   - ErrTokenInvalid       → 403 forbidden — токен не существует, истёк
-//     или уже сожжён. Возвращается из [Burn]; намеренно не различает
-//     причину (защита от user-enum-атак — все три случая отдаются с одной
-//     ошибкой).
-//   - ErrTokenSoulNotFound  → 404 на Insert при отсутствии SID в souls.
+//   - ErrTokenActiveExists  → 409 conflict (SID already has an active
+//     token, per the partial unique `bootstrap_tokens_active_by_sid_idx`).
+//     The operator must revoke the old one or wait for TTL.
+//   - ErrTokenInvalid       → 403 forbidden — token doesn't exist, expired,
+//     or already burned. Returned from [Burn]; deliberately doesn't
+//     distinguish the reason (protects against user-enum attacks — all
+//     three cases return the same error).
+//   - ErrTokenSoulNotFound  → 404 on Insert when the SID isn't in souls.
 var (
 	ErrTokenActiveExists = errors.New("bootstraptoken: active token for SID already exists")
 	ErrTokenInvalid      = errors.New("bootstraptoken: token invalid (not found, expired, or already used)")
@@ -34,8 +34,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество интерфейса pgxpool.Pool, нужное
-// CRUD-у. Симметрично [operator.ExecQueryRower] / [soul.ExecQueryRower].
+// ExecQueryRower is the narrow subset of the pgxpool.Pool interface the
+// CRUD layer needs. Symmetric with [operator.ExecQueryRower] /
+// [soul.ExecQueryRower].
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -61,16 +62,17 @@ FROM bootstrap_tokens
 WHERE token_hash = $1
 `
 
-// burnSQL — race-safe UPDATE «сжигания» токена. WHERE-conjunction
-// гарантирует, что одновременное двойное предъявление даст один UPDATE
-// и один промах. RETURNING token_id — для аудита и проверки rows-affected
-// одной round-trip-ой.
+// burnSQL is the race-safe UPDATE that "burns" a token. The WHERE
+// conjunction guarantees that a concurrent double presentation yields one
+// UPDATE and one miss. RETURNING token_id is for audit and to check
+// rows-affected in a single round trip.
 //
-// Параметры:
+// Parameters:
 //
-//	$1 — token_hash от предъявленного plain-токена.
-//	$2 — sid из BootstrapRequest (защита от подмены SID при том же хеше).
-//	$3 — kid Keeper-инстанса, обрабатывающего запрос.
+//	$1 — token_hash of the presented plain token.
+//	$2 — sid from BootstrapRequest (guards against SID substitution under
+//	     the same hash).
+//	$3 — kid of the Keeper instance handling the request.
 const burnSQL = `
 UPDATE bootstrap_tokens
 SET used_at     = NOW(),
@@ -82,18 +84,19 @@ WHERE token_hash = $1
 RETURNING token_id
 `
 
-// Insert вписывает новый bootstrap-token (выписка оператором). Возвращает
-// созданный [Record] с заполненными TokenID и CreatedAt.
+// Insert writes a new bootstrap token (operator issuance). Returns the
+// created [Record] with TokenID and CreatedAt populated.
 //
 // Pre-conditions:
-//   - sid — валидный SID в реестре souls (FK проверяется PG);
+//   - sid — a valid SID in the souls registry (FK checked by PG);
 //   - tokenHash — SHA-256 hex (64 lower-hex);
 //   - ttl > 0 (expires_at = NOW() + ttl).
 //
-// Возврат:
-//   - [ErrTokenActiveExists] на UNIQUE по partial-index `_active_by_sid`.
-//   - [ErrTokenSoulNotFound] на FK-violation по `bootstrap_tokens_sid_fk`.
-//   - wrapped fmt.Errorf на прочие pg-ошибки.
+// Returns:
+//   - [ErrTokenActiveExists] on UNIQUE violation of the `_active_by_sid`
+//     partial index.
+//   - [ErrTokenSoulNotFound] on FK violation of `bootstrap_tokens_sid_fk`.
+//   - a wrapped fmt.Errorf for other pg errors.
 func Insert(ctx context.Context, db ExecQueryRower, sid, tokenHash string, ttl time.Duration, createdByAID *string) (*Record, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("bootstraptoken: sid is empty")
@@ -129,9 +132,10 @@ func mapInsertError(err error) error {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case pgErrCodeUniqueViolation:
-			// partial unique index `_active_by_sid` или `_token_hash`.
-			// Differentiate by constraint name для UX-handler-а: hash-collision
-			// (де-факто невозможно) vs «уже выписан активный для этого SID».
+			// partial unique index `_active_by_sid` or `_token_hash`.
+			// Differentiate by constraint name for the UX handler:
+			// hash collision (de facto impossible) vs "active token
+			// already issued for this SID".
 			if pgErr.ConstraintName == "bootstrap_tokens_token_hash_idx" {
 				return fmt.Errorf("bootstraptoken: token_hash collision (constraint %s): %w",
 					pgErr.ConstraintName, err)
@@ -151,12 +155,12 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("bootstraptoken: insert: %w", err)
 }
 
-// SelectByHash читает Record по token_hash. [ErrTokenNotFound] при
+// SelectByHash reads a Record by token_hash. Returns [ErrTokenNotFound] on
 // pgx.ErrNoRows.
 //
-// Используется gRPC Bootstrap-handler-ом до Burn-а — чтобы достать SID
-// и payload для audit-event-а, **если** caller предъявил валидный SID.
-// Сам Burn по-прежнему атомарный (через WHERE-clause).
+// Used by the gRPC Bootstrap handler before Burn — to get the SID and
+// payload for the audit event, **if** the caller presented a valid SID.
+// Burn itself remains atomic (via the WHERE clause).
 func SelectByHash(ctx context.Context, db ExecQueryRower, tokenHash string) (*Record, error) {
 	if !ValidHashFormat(tokenHash) {
 		return nil, errInvalidHash
@@ -194,22 +198,24 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	return &rec, nil
 }
 
-// Burn — race-safe сжигание токена в момент предъявления Soul-ом в
-// `Bootstrap`-RPC. ОБЯЗАТЕЛЬНО выполнять внутри транзакции вместе с
-// `soul.UpdateStatus` (pending → connected) и `soulseed.Insert` — caller
-// (gRPC handler) держит этот инвариант.
+// Burn race-safely burns a token when a Soul presents it to the
+// `Bootstrap` RPC. MUST run inside the same transaction as
+// `soul.UpdateStatus` (pending → connected) and `soulseed.Insert` — the
+// caller (gRPC handler) is responsible for that invariant.
 //
-// Параметры:
-//   - tokenHash — SHA-256 hex от plain-токена, предъявленного клиентом.
-//   - claimedSID — SID из BootstrapRequest.sid (защита от подмены SID
-//     при том же хеше — атакующий не сможет «угнать» токен под чужой SID).
-//   - usedByKID — KID Keeper-инстанса, обрабатывающего запрос.
+// Parameters:
+//   - tokenHash — SHA-256 hex of the plain token presented by the client.
+//   - claimedSID — SID from BootstrapRequest.sid (guards against SID
+//     substitution under the same hash — an attacker can't "hijack" a
+//     token onto someone else's SID).
+//   - usedByKID — KID of the Keeper instance handling the request.
 //
-// Возврат:
-//   - tokenID — UUID сожжённой записи (для audit-payload-а).
-//   - [ErrTokenInvalid] — токен не существует, истёк, уже использован, или
-//     SID не совпадает. Намеренно не различает причину (anti-enum).
-//   - wrapped fmt.Errorf на прочие pg-ошибки.
+// Returns:
+//   - tokenID — UUID of the burned record (for the audit payload).
+//   - [ErrTokenInvalid] — token doesn't exist, expired, already used, or
+//     the SID doesn't match. Deliberately doesn't distinguish the reason
+//     (anti-enum).
+//   - a wrapped fmt.Errorf for other pg errors.
 func Burn(ctx context.Context, db ExecQueryRower, tokenHash, claimedSID, usedByKID string) (string, error) {
 	if !ValidHashFormat(tokenHash) {
 		return "", errInvalidHash
@@ -232,22 +238,22 @@ func Burn(ctx context.Context, db ExecQueryRower, tokenHash, claimedSID, usedByK
 	return tokenID, nil
 }
 
-// SystemKIDCloudDestroy — спец-значение `used_by_kid` для записей,
-// «сожжённых» cascade-обработчиком `core.cloud.provisioned destroyed`
-// (ADR-017): хост удалён вместе с VM, реального предъявления токена
-// не было, оператор-Архонт здесь тоже не при чём, поэтому пишем системный
-// маркер. Формат отличается от валидного `kid` (kebab-case `keeper-XXX`):
-// `system-cloud-destroy` явно не может коллидировать с реальным KID-ом,
-// audit-handler фильтрует по этому префиксу.
+// SystemKIDCloudDestroy is the special `used_by_kid` value for records
+// "burned" by the `core.cloud.provisioned destroyed` cascade handler
+// (ADR-017): the host was deleted along with the VM, no real token
+// presentation happened, and no Archon operator was involved either, so
+// we record a system marker instead. The format differs from a valid
+// `kid` (kebab-case `keeper-XXX`): `system-cloud-destroy` can't collide
+// with a real KID, and the audit handler filters on this prefix.
 const SystemKIDCloudDestroy = "system-cloud-destroy"
 
-// burnAllForSIDSQL — cascade-сжигание всех ещё-не-использованных токенов
-// данного SID. В отличие от [Burn], НЕ проверяет expires_at > NOW():
-// в момент cloud-destroy любой ещё активный токен теряет смысл (хост
-// не существует), даже если он истёк секунду назад — Reaper всё равно
-// удалит запись по purge_used_tokens. Здесь нам важно зафиксировать
-// факт «погашен в момент cloud-destroy», чтобы анти-replay-инвариант
-// держался без race с TTL-границей.
+// burnAllForSIDSQL cascade-burns every not-yet-used token for a given SID.
+// Unlike [Burn], it does NOT check expires_at > NOW(): at cloud-destroy
+// time any still-active token is moot (the host no longer exists), even
+// if it expired a second ago — the Reaper will delete the record via
+// purge_used_tokens anyway. What matters here is recording the fact
+// "burned at cloud-destroy time", so the anti-replay invariant holds
+// without racing the TTL boundary.
 const burnAllForSIDSQL = `
 UPDATE bootstrap_tokens
 SET used_at     = NOW(),
@@ -256,15 +262,15 @@ WHERE sid     = $1
   AND used_at IS NULL
 `
 
-// BurnAllForSID — cascade-сжигание всех ещё-не-использованных bootstrap-токенов
-// данного SID. Используется keeper-side core-модулем `core.cloud.provisioned
-// destroyed` (ADR-017 cascade) внутри общей PG-транзакции вместе с
-// `soul.UpdateStatus(destroyed)` и `soulseed`-cascade-update-ом.
+// BurnAllForSID cascade-burns every not-yet-used bootstrap token for a
+// given SID. Used by the keeper-side `core.cloud.provisioned destroyed`
+// core module (ADR-017 cascade) within the same PG transaction as
+// `soul.UpdateStatus(destroyed)` and the `soulseed` cascade update.
 //
-// `usedByKID` — KID или спец-маркер (см. [SystemKIDCloudDestroy]).
+// `usedByKID` is a KID or a special marker (see [SystemKIDCloudDestroy]).
 //
-// Возвращает количество затронутых строк (0 = у SID не было активных токенов,
-// нормальный случай для долго работавшего Soul-а).
+// Returns the number of affected rows (0 = the SID had no active tokens,
+// the normal case for a long-running Soul).
 func BurnAllForSID(ctx context.Context, db ExecQueryRower, sid, usedByKID string) (int64, error) {
 	if sid == "" {
 		return 0, fmt.Errorf("bootstraptoken: sid is empty")
@@ -279,22 +285,22 @@ func BurnAllForSID(ctx context.Context, db ExecQueryRower, sid, usedByKID string
 	return tag.RowsAffected(), nil
 }
 
-// SystemKIDForceReissue — спец-значение `used_by_kid` для токена,
-// инвалидированного оператором при `issue-token?force=true` (новый токен
-// выписывается взамен ещё-активного). Реального предъявления токена Soul-ом
-// не было — фиксируем системный маркер, чтобы audit отличал force-reissue
-// от настоящего Burn-а в Bootstrap-RPC. Формат отличается от валидного KID
-// (`keeper-XXX`) — коллизии исключены.
+// SystemKIDForceReissue is the special `used_by_kid` value for a token
+// invalidated by the operator via `issue-token?force=true` (a new token
+// is issued in place of a still-active one). No real presentation by a
+// Soul happened — we record a system marker so audit can distinguish
+// force-reissue from a genuine Burn in the Bootstrap RPC. The format
+// differs from a valid KID (`keeper-XXX`) — collisions are excluded.
 const SystemKIDForceReissue = "system-force-reissue"
 
-// expireActiveBySIDSQL — инвалидация ещё-активного токена SID при
-// force-reissue. Ставит `used_at = NOW()`, что одновременно (1) делает
-// токен непригодным для Burn-а (WHERE `used_at IS NULL` больше не пройдёт)
-// и (2) освобождает partial-unique-slot `bootstrap_tokens_active_by_sid_idx`
-// (`WHERE used_at IS NULL`) для последующего Insert нового токена.
+// expireActiveBySIDSQL invalidates a SID's still-active token on
+// force-reissue. Sets `used_at = NOW()`, which both (1) makes the token
+// ineligible for Burn (the WHERE `used_at IS NULL` no longer matches) and
+// (2) frees the partial-unique slot `bootstrap_tokens_active_by_sid_idx`
+// (`WHERE used_at IS NULL`) for the subsequent Insert of a new token.
 //
-// Только set `expires_at = NOW()` НЕ годится: запись осталась бы с
-// `used_at IS NULL` и продолжала бы держать unique-slot.
+// Just setting `expires_at = NOW()` would NOT work: the record would
+// still have `used_at IS NULL` and keep holding the unique slot.
 const expireActiveBySIDSQL = `
 UPDATE bootstrap_tokens
 SET used_at     = NOW(),
@@ -304,16 +310,16 @@ WHERE sid     = $1
 RETURNING token_id
 `
 
-// ExpireActiveBySID инвалидирует активный (ещё-неиспользованный) токен SID
-// и возвращает его token_id. Используется Operator API при
-// `issue-token?force=true` внутри той же транзакции, что и Insert нового
-// токена (caller держит инвариант атомарности).
+// ExpireActiveBySID invalidates a SID's active (not-yet-used) token and
+// returns its token_id. Used by the Operator API for
+// `issue-token?force=true` within the same transaction as the Insert of
+// the new token (the caller is responsible for the atomicity invariant).
 //
-// `usedByKID` — спец-маркер (см. [SystemKIDForceReissue]).
+// `usedByKID` is a special marker (see [SystemKIDForceReissue]).
 //
-// Возвращает (tokenID, true, nil), если активный токен был и инвалидирован;
-// ("", false, nil), если активного токена не было (force на чистом SID —
-// нормально, просто Insert); error на pg-сбое.
+// Returns (tokenID, true, nil) if an active token existed and was
+// invalidated; ("", false, nil) if there was no active token (force on a
+// clean SID is normal — just an Insert); an error on pg failure.
 func ExpireActiveBySID(ctx context.Context, db ExecQueryRower, sid, usedByKID string) (string, bool, error) {
 	if sid == "" {
 		return "", false, fmt.Errorf("bootstraptoken: sid is empty")
@@ -332,10 +338,10 @@ func ExpireActiveBySID(ctx context.Context, db ExecQueryRower, sid, usedByKID st
 	return tokenID, true, nil
 }
 
-// DeleteByTokenID удаляет запись по PK. Используется Reaper-ом по правилу
-// `purge_used_tokens` (см. ADR-022 / docs/keeper/reaper.md).
+// DeleteByTokenID deletes a record by PK. Used by the Reaper for the
+// `purge_used_tokens` rule (see ADR-022 / docs/keeper/reaper.md).
 //
-// Возвращает [ErrTokenNotFound], если записи с таким token_id нет.
+// Returns [ErrTokenNotFound] if no record with that token_id exists.
 func DeleteByTokenID(ctx context.Context, db ExecQueryRower, tokenID string) error {
 	tag, err := db.Exec(ctx, `DELETE FROM bootstrap_tokens WHERE token_id = $1`, tokenID)
 	if err != nil {

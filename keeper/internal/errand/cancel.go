@@ -8,35 +8,38 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// CancelRequest — вход [Dispatcher.Cancel]. SID не указывается — dispatcher
-// читает строку errand-а по ID и берёт SID оттуда.
+// CancelRequest is the input to [Dispatcher.Cancel]. SID is not given —
+// the dispatcher reads the errand row by ID and takes SID from there.
 type CancelRequest struct {
 	ErrandID    string
-	RequestedBy string // archon AID инициатора (для audit).
+	RequestedBy string // archon AID of the initiator (for audit).
 }
 
-// Cancel — slice E5 ADR-033: отменить in-flight Errand. Семантика — best-effort
-// signal: Keeper отправляет CancelErrand в EventStream-канал Soul-а
-// (local/remote по holder-у lease-а), Soul-side errandrunner отменяет ctx
-// активной Run-горутины → она возвращает ErrandResult{status: CANCELLED}
-// через тот же EventStream, и applybus-receiver (events_errand.go) уже сам
-// переводит строку errands в status='cancelled' через MarkTerminal.
+// Cancel is slice E5 ADR-033: cancel an in-flight Errand. Semantics are a
+// best-effort signal: Keeper sends CancelErrand on the Soul's EventStream
+// channel (local/remote by lease holder), the Soul-side errandrunner cancels
+// the ctx of the active Run goroutine → it returns ErrandResult{status:
+// CANCELLED} over the same EventStream, and the applybus-receiver
+// (events_errand.go) transitions the errands row to status='cancelled' via
+// MarkTerminal on its own.
 //
-// Cancel НЕ блокируется и НЕ ждёт ErrandResult: HTTP-handler отдаёт 204
-// сразу. Финальный статус оператор увидит через GET /v1/errands/{id} (poll).
-// Если Soul не отвечает за полный TimeoutSec (300s max) — purge_old_errands
-// или sweep-on-restart переведут строку в timed_out по обычному пути.
+// Cancel does NOT block and does NOT wait for ErrandResult: the HTTP handler
+// returns 204 immediately. The operator sees the final status via
+// GET /v1/errands/{id} (poll). If the Soul doesn't respond within the full
+// TimeoutSec (300s max), purge_old_errands or sweep-on-restart move the row
+// to timed_out via the usual path.
 //
-// Шаги:
-//  1. Lookup row по errand_id → 404 если нет.
-//  2. Check status='running' → 409 (ErrErrandTerminal) если уже терминал.
+// Steps:
+//  1. Lookup row by errand_id → 404 if none.
+//  2. Check status='running' → 409 (ErrErrandTerminal) if already terminal.
 //  3. Resolve holder lease, send CancelErrand local/remote.
-//  4. Write audit `errand.cancelled` (event_type зафиксирован, см. event_types.go).
+//  4. Write audit `errand.cancelled` (event_type fixed, see event_types.go).
 //
-// Audit пишется СРАЗУ при успешной отправке CancelErrand — даже если Soul
-// проигнорирует (race с собственным завершением). Это намеренно: audit
-// фиксирует «оператор инициировал cancel», не «Soul действительно отменил».
-// Финальный исход видно по GET (status=cancelled/success/failed/timed_out).
+// Audit is written IMMEDIATELY on successful CancelErrand send — even if the
+// Soul ends up ignoring it (race with its own completion). Intentional:
+// audit records "the operator initiated cancel", not "the Soul actually
+// cancelled". The final outcome shows up via GET
+// (status=cancelled/success/failed/timed_out).
 func (d *Dispatcher) Cancel(ctx context.Context, req CancelRequest) error {
 	if req.ErrandID == "" {
 		return ErrEmptyErrandID
@@ -47,9 +50,9 @@ func (d *Dispatcher) Cancel(ctx context.Context, req CancelRequest) error {
 		return fmt.Errorf("errand: cancel get: %w", err)
 	}
 	if row.Status != StatusRunning {
-		// Terminal Errand — отменять нечего. Идемпотентно: дубль cancel того же
-		// errand_id после успешной отмены тоже придёт сюда (status=cancelled),
-		// 409 — корректный ответ (а не «ok, уже cancelled»).
+		// Terminal Errand — nothing to cancel. Idempotent: a duplicate cancel
+		// of the same errand_id after a successful cancel also lands here
+		// (status=cancelled); 409 is the correct response (not "ok, already cancelled").
 		return fmt.Errorf("%w: status=%s", ErrErrandTerminal, row.Status)
 	}
 
@@ -61,10 +64,11 @@ func (d *Dispatcher) Cancel(ctx context.Context, req CancelRequest) error {
 	return nil
 }
 
-// sendCancel выбирает путь доставки CancelErrand: local (Outbound.SendCancelErrand)
-// либо remote (Publisher.PublishCancelErrand) по holder-у lease-а.
-// Алгоритм идентичен [Dispatcher.send] (для ErrandRequest); вынесен отдельной
-// функцией, чтобы Cancel не вызывал buildProtoRequest (другой proto-тип).
+// sendCancel picks the CancelErrand delivery path: local
+// (Outbound.SendCancelErrand) or remote (Publisher.PublishCancelErrand) by
+// lease holder. Algorithm mirrors [Dispatcher.send] (for ErrandRequest);
+// factored out separately so Cancel doesn't call buildProtoRequest (a
+// different proto type).
 func (d *Dispatcher) sendCancel(ctx context.Context, sid, errandID string) error {
 	if d.deps.LeaseLookup == nil || d.deps.Publisher == nil {
 		if err := d.deps.Outbound.SendCancelErrand(ctx, sid, errandID); err != nil {
@@ -112,14 +116,14 @@ func (d *Dispatcher) sendCancel(ctx context.Context, sid, errandID string) error
 	return nil
 }
 
-// writeCancelInitiated пишет audit-event `errand.cancelled` от инициатора-Архонта
-// (source=api). Терминальный `errand.cancelled` от applybus-receiver-а (Soul
-// прислал ErrandResult{CANCELLED}) тоже пишется в writeTerminal — для UI это
-// будут два разных события: «оператор отменил» + «Soul подтвердил отмену».
-// Compromise vs дубля: разные source (api vs soul_grpc), correlation_id
-// одинаковый — UI группирует по нему.
+// writeCancelInitiated writes an audit event `errand.cancelled` from the
+// initiating Archon (source=api). The terminal `errand.cancelled` from the
+// applybus-receiver (Soul sent ErrandResult{CANCELLED}) is also written by
+// writeTerminal — for the UI these are two distinct events: "operator
+// cancelled" + "Soul confirmed cancel". Compromise vs. dup: different
+// source (api vs soul_grpc), same correlation_id — UI groups by it.
 //
-// Если audit-writer nil (тестовая сборка) — drop.
+// nil audit-writer (test build) → drop.
 func (d *Dispatcher) writeCancelInitiated(ctx context.Context, errandID, sid, module, aid string) {
 	if d.deps.Audit == nil {
 		return

@@ -1,16 +1,16 @@
 package essence
 
-// mergeInto применяет слой over поверх base деструктивно (мутирует base) и
-// возвращает результат. Семантика deep-merge (PM-decision 2):
+// mergeInto applies layer over on top of base destructively (mutates base)
+// and returns the result. Deep-merge semantics (PM-decision 2):
 //
-//   - map + map  → рекурсивный merge (later override earlier);
-//   - всё прочее → over заменяет значение целиком (скаляры и списки — replace,
-//     НЕ append).
+//   - map + map  → recursive merge (later overrides earlier);
+//   - everything else → over replaces the value wholesale (scalars and
+//     lists are replaced, NOT appended).
 //
-// base всегда — наш собственный аккумулятор (создаётся в pipeline), поэтому
-// мутация безопасна; значения из over не разделяются по ссылке с входными
-// слоями только на верхнем уровне map'ов — вложенные map'ы пере-используются,
-// что приемлемо, так как слои после merge не читаются повторно.
+// base is always our own accumulator (created in pipeline), so mutating it
+// is safe; values from over are not shared by reference with the input
+// layers only at the top level of maps — nested maps are reused as-is,
+// which is fine since layers are never read again after merging.
 func mergeInto(base, over map[string]any) map[string]any {
 	if base == nil {
 		base = make(map[string]any, len(over))

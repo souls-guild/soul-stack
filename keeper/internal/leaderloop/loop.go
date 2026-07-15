@@ -1,25 +1,26 @@
-// Package leaderloop — generic Redis-lease leader-loop для фоновых
-// singleton-задач Keeper-кластера (ADR-006(d)).
+// Package leaderloop — generic Redis-lease leader-loop for background
+// singleton tasks of the Keeper cluster (ADR-006(d)).
 //
-// Это вынесенный из Reaper-runner-а универсальный каркас лидерства: захват
-// Redis-lease → renewal-goroutine → периодический tick-callback у держателя →
-// re-acquire при потере lease. Один и тот же loop переиспользуется HA-задачами
-// (Reaper, Conductor-cadence-scheduler), которые отличаются только tick-логикой.
+// This is a generic leadership scaffold extracted from the Reaper runner:
+// acquire Redis lease → renewal goroutine → periodic tick-callback on the
+// holder → re-acquire on lease loss. The same loop is reused by HA tasks
+// (Reaper, Conductor cadence scheduler) that differ only in tick logic.
 //
-// Алгоритм (lease-семантика — точная копия исходного Reaper-runner-а):
+// Algorithm (lease semantics — exact copy of the original Reaper runner):
 //
-//   - A: периодический tick через `time.Ticker` с интервалом из [Config.IntervalFn]
-//     (hot-reload: интервал перечитывается на каждом тике).
-//   - B: Redis-lease держится только пока крутится [Loop.Run]. На graceful-shutdown
-//     (ctx.Done) lease освобождается через Release.
-//   - C: TTL продлевается отдельной goroutine с шагом `lock_ttl/3`. Долгий tick
-//     не даёт ключу истечь — Renew не блокируется tick-callback-ом.
-//   - D: потеря lease (ErrLeaseLost) — сигнал tick-loop-у остановиться; затем loop
-//     возвращается к acquire-фазе (re-acquire лидерства).
-//   - E: ctx.Done — Release, выход с nil.
+//   - A: periodic tick via `time.Ticker` with interval from [Config.IntervalFn]
+//     (hot-reload: interval is re-read on every tick).
+//   - B: Redis lease is held only while [Loop.Run] is running. On graceful
+//     shutdown (ctx.Done) the lease is released via Release.
+//   - C: TTL is renewed by a separate goroutine every `lock_ttl/3`. A long
+//     tick doesn't let the key expire — Renew is not blocked by the
+//     tick-callback.
+//   - D: lease loss (ErrLeaseLost) signals the tick-loop to stop; the loop
+//     then returns to the acquire phase (re-acquire leadership).
+//   - E: ctx.Done — Release, exit with nil.
 //
-// lease-примитив (Acquire / Renew / Release / CAS-fencing) — в
-// [keeper/internal/redis]; этот пакет лишь оркестрирует его жизненный цикл.
+// Lease primitive (Acquire / Renew / Release / CAS-fencing) lives in
+// [keeper/internal/redis]; this package only orchestrates its lifecycle.
 package leaderloop
 
 import (
@@ -32,62 +33,64 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/redis"
 )
 
-// defaultAcquireBackoff — пауза между попытками Acquire при конфликте лидерства,
-// если [Config.AcquireBackoff] не задан. Совпадает с историческим дефолтом
-// Reaper-а: крупно достаточно, чтобы не флудить Redis, мелко достаточно, чтобы
-// failover при падении лидера происходил в пределах нескольких секунд.
+// defaultAcquireBackoff is the pause between Acquire attempts on leadership
+// conflict when [Config.AcquireBackoff] is unset. Matches the historical
+// Reaper default: large enough to not flood Redis, small enough that
+// failover on leader death happens within a few seconds.
 const defaultAcquireBackoff = 5 * time.Second
 
-// Config — параметры leader-loop-а. Все поля, кроме [Config.AcquireBackoff] и
-// [Config.OnLeaseChange], обязательны: отсутствие — программная ошибка caller-а,
-// [New] возвращает error.
+// Config — leader-loop parameters. All fields except [Config.AcquireBackoff]
+// and [Config.OnLeaseChange] are required: missing ones are a caller
+// programming error, [New] returns an error.
 type Config struct {
-	// LeaseKey — Redis-ключ лидерства. Один singleton-loop = один уникальный
-	// ключ в кластере (например, "reaper:leader").
+	// LeaseKey — Redis leadership key. One singleton loop = one unique key
+	// in the cluster (e.g. "reaper:leader").
 	LeaseKey string
 
-	// Holder — идентификатор инстанса (KID), записывается в lease-ключ для
-	// человекочитаемых логов и различения смен лидерства.
+	// Holder — instance identifier (KID), written into the lease key for
+	// human-readable logs and distinguishing leadership changes.
 	Holder string
 
-	// Redis — клиент, через который захватывается lease.
+	// Redis — client used to acquire the lease.
 	Redis *redis.Client
 
-	// Logger — slog-логгер. Структурированные поля: `key`, `holder`.
+	// Logger — slog logger. Structured fields: `key`, `holder`.
 	Logger *slog.Logger
 
-	// IntervalFn — интервал между тиками. Вызывается на каждом тике, что даёт
-	// hot-reload: вернул новое значение → следующий тик планируется по нему.
+	// IntervalFn — interval between ticks. Called on every tick, which gives
+	// hot-reload: returns a new value → the next tick is scheduled with it.
 	IntervalFn func() time.Duration
 
-	// LockTTLFn — TTL Redis-lease-ключа. Вызывается на каждой acquire-итерации
-	// (hot-reload между re-acquire). renew-интервал выводится как `lock_ttl/3`.
+	// LockTTLFn — TTL of the Redis lease key. Called on every acquire
+	// iteration (hot-reload between re-acquires). Renew interval is derived
+	// as `lock_ttl/3`.
 	LockTTLFn func() time.Duration
 
-	// Tick — callback, исполняемый у держателя lease по interval (и один раз
-	// сразу после acquire, не дожидаясь первого тика). Выполняется синхронно
-	// в loop-goroutine: следующий тик не начнётся, пока текущий не вернётся.
+	// Tick — callback executed by the lease holder on every interval (plus
+	// once right after acquire, without waiting for the first tick). Runs
+	// synchronously in the loop goroutine: the next tick won't start until
+	// the current one returns.
 	Tick func(ctx context.Context)
 
-	// AcquireBackoff — пауза между попытками Acquire при конфликте лидерства.
-	// Zero-value → [defaultAcquireBackoff].
+	// AcquireBackoff — pause between Acquire attempts on leadership conflict.
+	// Zero value → [defaultAcquireBackoff].
 	AcquireBackoff time.Duration
 
-	// OnLeaseChange — опциональный callback смены статуса лидерства: true при
-	// захвате lease, false при выходе из tick-loop-а (ctx.Done или lease-loss).
-	// Nil — допустимо (no-op). Используется для метрики lease_held.
+	// OnLeaseChange — optional callback for leadership status changes: true
+	// on lease acquire, false on exit from the tick-loop (ctx.Done or
+	// lease-loss). Nil is fine (no-op). Used for the lease_held metric.
 	OnLeaseChange func(held bool)
 }
 
-// Loop — корневая структура leader-loop-а. Один экземпляр на одну фоновую
-// задачу. Создаётся через [New], запускается через [Loop.Run].
+// Loop — root structure of the leader-loop. One instance per background
+// task. Created via [New], started via [Loop.Run].
 type Loop struct {
 	cfg            Config
 	acquireBackoff time.Duration
 }
 
-// New валидирует конфиг и возвращает Loop. На отсутствующие обязательные поля —
-// error: программная ошибка caller-а (wire-up), не runtime-условие.
+// New validates the config and returns a Loop. Missing required fields
+// return an error: a caller wire-up bug, not a runtime condition.
 func New(cfg Config) (*Loop, error) {
 	if cfg.LeaseKey == "" {
 		return nil, errors.New("leaderloop.New: LeaseKey is required")
@@ -117,18 +120,18 @@ func New(cfg Config) (*Loop, error) {
 	return &Loop{cfg: cfg, acquireBackoff: backoff}, nil
 }
 
-// Run крутит loop до отмены ctx. Возвращает nil на graceful-stop (ctx.Done) и
-// обёрнутую error на fatal-условия acquire-фазы.
+// Run drives the loop until ctx is cancelled. Returns nil on graceful stop
+// (ctx.Done) and a wrapped error on fatal acquire-phase conditions.
 //
-// Алгоритм:
+// Algorithm:
 //
-//  1. Каждые `acquireBackoff` пытаемся захватить lease, пока не получится или ctx.Done.
-//  2. На успехе поднимаем renewal-goroutine (Renew каждый `lock_ttl/3`).
-//  3. tick-loop по `time.Ticker(interval)`; первый Tick — сразу при acquire.
-//  4. На ErrLeaseLost от renewal — gracefully выходим из tick-loop, делаем
-//     Release только если вышли не через lease-loss (при loss ключ уже не наш),
-//     возвращаемся к шагу 1 (re-acquire).
-//  5. На ctx.Done — Release, выход.
+//  1. Every `acquireBackoff` try to acquire the lease, until it succeeds or ctx.Done.
+//  2. On success, start the renewal goroutine (Renew every `lock_ttl/3`).
+//  3. Tick-loop via `time.Ticker(interval)`; first Tick fires right at acquire.
+//  4. On ErrLeaseLost from renewal — gracefully exit the tick-loop, do
+//     Release only if we exited NOT via lease-loss (on loss the key is
+//     already not ours), go back to step 1 (re-acquire).
+//  5. On ctx.Done — Release, exit.
 func (l *Loop) Run(ctx context.Context) error {
 	for {
 		select {
@@ -139,8 +142,9 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		lease, lockTTL, err := l.acquireWithBackoff(ctx)
 		if err != nil {
-			// acquireWithBackoff возвращает не-nil error только на отмену ctx
-			// или программную ошибку Acquire-вызова (последние отлажены New-ом).
+			// acquireWithBackoff returns a non-nil error only on ctx
+			// cancellation or a programming error in the Acquire call (the
+			// latter are caught by New).
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil
 			}
@@ -155,24 +159,25 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.setLeaseHeld(true)
 
 		renewEvery := lockTTL / 3
-		// Защита от panic в time.NewTicker при невменяемо коротком lockTTL
-		// (<3ms). Дешёвая, закрывает класс ошибок.
+		// Guards against panic in time.NewTicker on an absurdly short
+		// lockTTL (<3ms). Cheap, closes off a class of bugs.
 		if renewEvery < time.Millisecond {
 			renewEvery = time.Millisecond
 		}
 		lostCh := l.startRenewal(ctx, lease, renewEvery)
 		viaLost := l.tickLoop(ctx, lostCh)
-		// Любой выход из tickLoop — мы больше не лидер. Сбрасываем статус
-		// немедленно, не дожидаясь Release-call-а.
+		// Any exit from tickLoop means we're no longer leader. Reset the
+		// status immediately, without waiting for the Release call.
 		l.setLeaseHeld(false)
 
-		// Cleanup. renewal-goroutine закрывает lostCh сама (на ctx.Done либо
-		// ErrLeaseLost). Release делаем только если вышли НЕ через lostCh:
-		// при ErrLeaseLost ключ заведомо уже не наш — Release был бы лишним
-		// round-trip-ом с гарантированным CAS-0.
+		// Cleanup. The renewal goroutine closes lostCh itself (on ctx.Done
+		// or ErrLeaseLost). Release only if we exited NOT via lostCh: on
+		// ErrLeaseLost the key is already not ours — Release would be a
+		// wasted round-trip with a guaranteed CAS-0.
 		if !viaLost {
-			// WithoutCancel: сохраняем trace-baggage, не наследуем cancel
-			// teardown-пути (Release должен пройти и при отменённом parent-ctx).
+			// WithoutCancel: keep trace baggage, don't inherit the cancel
+			// from the teardown path (Release must go through even with a
+			// cancelled parent ctx).
 			relCtx, relCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 			if relErr := lease.Release(relCtx); relErr != nil {
 				l.cfg.Logger.Warn("leaderloop: lease release failed",
@@ -192,12 +197,13 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 }
 
-// acquireWithBackoff пытается захватить lease, ретраит на ErrLeaseTaken с
-// постоянной паузой `acquireBackoff`. На отмену ctx возвращает (nil, 0, ctx.Err()).
+// acquireWithBackoff tries to acquire the lease, retrying on ErrLeaseTaken
+// with a constant `acquireBackoff` pause. On ctx cancellation returns
+// (nil, 0, ctx.Err()).
 //
-// Возвращает также effective `lock_ttl` (через LockTTLFn) — caller использует
-// его для renew-интервала. Чтение именно здесь, чтобы между re-acquire-итерациями
-// hot-reload TTL подхватывался.
+// Also returns the effective `lock_ttl` (via LockTTLFn) — the caller uses it
+// for the renew interval. Read right here so hot-reloaded TTL is picked up
+// between re-acquire iterations.
 func (l *Loop) acquireWithBackoff(ctx context.Context) (*redis.Lease, time.Duration, error) {
 	for {
 		lockTTL := l.cfg.LockTTLFn()
@@ -207,7 +213,7 @@ func (l *Loop) acquireWithBackoff(ctx context.Context) (*redis.Lease, time.Durat
 			return lease, lockTTL, nil
 		}
 		if errors.Is(err, redis.ErrLeaseTaken) {
-			// Нормальный сценарий: ждём backoff, пробуем снова.
+			// Normal scenario: wait out the backoff, try again.
 			select {
 			case <-ctx.Done():
 				return nil, 0, ctx.Err()
@@ -215,9 +221,9 @@ func (l *Loop) acquireWithBackoff(ctx context.Context) (*redis.Lease, time.Durat
 				continue
 			}
 		}
-		// Сетевая/валидационная ошибка Acquire — логируем и тоже ждём.
-		// Недоступность Redis не должна ронять процесс: фоновая задача
-		// отрабатывает best-effort.
+		// Network/validation error from Acquire — log it and wait too.
+		// Redis unavailability shouldn't crash the process: the background
+		// task runs best-effort.
 		l.cfg.Logger.Warn("leaderloop: acquire failed, will retry",
 			slog.String("key", l.cfg.LeaseKey),
 			slog.Duration("backoff", l.acquireBackoff),
@@ -231,10 +237,10 @@ func (l *Loop) acquireWithBackoff(ctx context.Context) (*redis.Lease, time.Durat
 	}
 }
 
-// startRenewal поднимает goroutine, продлевающую TTL ключа каждые `renewEvery`.
-// На ErrLeaseLost закрывает возвращаемый канал — tick-loop читает его, чтобы
-// выйти gracefully. На ctx.Done — тоже закрывает (без различий: tick должен
-// прекратиться вне зависимости от причины).
+// startRenewal starts a goroutine that renews the key's TTL every
+// `renewEvery`. On ErrLeaseLost it closes the returned channel — the
+// tick-loop reads it to exit gracefully. On ctx.Done it also closes it (no
+// distinction: tick must stop regardless of the reason).
 func (l *Loop) startRenewal(ctx context.Context, lease *redis.Lease, renewEvery time.Duration) <-chan struct{} {
 	lost := make(chan struct{})
 	go func() {
@@ -253,9 +259,10 @@ func (l *Loop) startRenewal(ctx context.Context, lease *redis.Lease, renewEvery 
 						)
 						return
 					}
-					// Сетевая ошибка Renew — продолжаем (следующий tick попробует
-					// снова). Если Redis-down достаточно долго, ключ истечёт и
-					// Renew вернёт ErrLeaseLost на одном из последующих tick-ов.
+					// Network error from Renew — keep going (the next tick
+					// will retry). If Redis stays down long enough, the key
+					// will expire and Renew will return ErrLeaseLost on one
+					// of the following ticks.
 					l.cfg.Logger.Warn("leaderloop: renew failed",
 						slog.String("key", lease.Key()),
 						slog.Any("error", err),
@@ -267,20 +274,21 @@ func (l *Loop) startRenewal(ctx context.Context, lease *redis.Lease, renewEvery 
 	return lost
 }
 
-// tickLoop крутит главный Ticker, пока ctx не отменится или lostCh не закроется
-// (lease потерян). Первый Tick — сразу при acquire (не дожидаясь первого тика).
+// tickLoop drives the main Ticker until ctx is cancelled or lostCh closes
+// (lease lost). The first Tick fires right at acquire (without waiting for
+// the first tick).
 //
-// Возвращает true, если вышли через lostCh (lease-loss), false на ctx.Done.
-// Caller использует это, чтобы решить, делать ли Release.
+// Returns true if we exited via lostCh (lease-loss), false on ctx.Done.
+// The caller uses this to decide whether to call Release.
 func (l *Loop) tickLoop(ctx context.Context, lostCh <-chan struct{}) bool {
-	// Hot-reload интервала: каждый тик перечитываем IntervalFn и пересоздаём
-	// Ticker при изменении. На стабильном интервале Reset не вызывается.
+	// Interval hot-reload: re-read IntervalFn on every tick and recreate the
+	// Ticker if it changed. Reset is not called when the interval is stable.
 	interval := l.cfg.IntervalFn()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
-	// Первый прогон — сразу при acquire (smoke-видимость работы + «подмести
-	// накопившееся сразу после рестарта/failover-а»).
+	// First run happens right at acquire (smoke-visibility of activity +
+	// "sweep up whatever piled up right after a restart/failover").
 	l.cfg.Tick(ctx)
 
 	for {
@@ -303,7 +311,7 @@ func (l *Loop) tickLoop(ctx context.Context, lostCh <-chan struct{}) bool {
 	}
 }
 
-// setLeaseHeld — nil-safe вызов OnLeaseChange.
+// setLeaseHeld is a nil-safe call to OnLeaseChange.
 func (l *Loop) setLeaseHeld(held bool) {
 	if l.cfg.OnLeaseChange != nil {
 		l.cfg.OnLeaseChange(held)

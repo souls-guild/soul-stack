@@ -7,13 +7,14 @@ import (
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// LoadSigningKey читает JWT signing-key из Vault KV по `vault:<mount>/<path>`-
-// ссылке. Вынесено из Init, чтобы переиспользовать в `keeper run` (HTTP
-// JWT verifier) без дублирования parseVaultRef / extractSigningKey.
+// LoadSigningKey reads the JWT signing-key from Vault KV via a
+// `vault:<mount>/<path>` reference. Extracted out of Init so it can be
+// reused in `keeper run` (HTTP JWT verifier) without duplicating
+// parseVaultRef / extractSigningKey.
 //
-// signingKeyRef — `auth.jwt.signing_key_ref` из keeper.yml. Возвращает
-// raw signing-key bytes (декодированный base64 если KV содержит base64,
-// raw — иначе; см. extractSigningKey).
+// signingKeyRef is `auth.jwt.signing_key_ref` from keeper.yml. Returns
+// raw signing-key bytes (base64-decoded if the KV value is base64,
+// raw otherwise; see extractSigningKey).
 func LoadSigningKey(ctx context.Context, vc *keepervault.Client, signingKeyRef string) ([]byte, error) {
 	if vc == nil {
 		return nil, fmt.Errorf("bootstrap: vault client is nil")

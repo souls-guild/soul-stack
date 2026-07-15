@@ -8,14 +8,15 @@ import (
 	"sync"
 )
 
-// snapshotter — общая git→снапшот-механика, переиспользуемая
-// [ServiceLoader] и [DestinyLoader]: per-имя Mutex сериализует git-операции над
-// одним рабочим клоном (разные артефакты идут параллельно), а materialize
-// атомарно экспортирует дерево commit-а в immutable-снапшот под cacheRoot.
+// snapshotter — the shared git→snapshot machinery reused by [ServiceLoader]
+// and [DestinyLoader]: a per-name Mutex serializes git operations over one
+// working clone (different artifacts proceed in parallel), and materialize
+// atomically exports a commit's tree into an immutable snapshot under
+// cacheRoot.
 //
-// Контракт безопасности — общий: схема git-URL валидируется через
-// [validateGitScheme] (file:// только под SOUL_STACK_ALLOW_FILE_REPOS), имя —
-// через [newCacheLayout] (kebab-case, защита cache-пути).
+// Security contract is shared: the git URL scheme is validated via
+// [validateGitScheme] (file:// only under SOUL_STACK_ALLOW_FILE_REPOS), the
+// name via [newCacheLayout] (kebab-case, cache-path guard).
 type snapshotter struct {
 	cacheRoot string
 	logger    *slog.Logger
@@ -35,7 +36,7 @@ func newSnapshotter(cacheRoot string, logger *slog.Logger) snapshotter {
 	}
 }
 
-// lockFor возвращает (создавая при необходимости) Mutex для имени артефакта.
+// lockFor returns (creating if needed) the Mutex for an artifact name.
 func (s *snapshotter) lockFor(name string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -47,13 +48,13 @@ func (s *snapshotter) lockFor(name string) *sync.Mutex {
 	return m
 }
 
-// snapshot материализует immutable-снапшот репозитория gitURL на commit-е, в
-// который резолвится ref, и возвращает (sha1, путь снапшота). kind — метка
-// артефакта для лог-сообщений ("сервиса"/"destiny").
+// snapshot materializes an immutable snapshot of the gitURL repository at
+// the commit ref resolves to, and returns (sha1, snapshot path). kind — an
+// artifact label for log messages ("сервиса"/"destiny").
 //
-// Алгоритм (PM-decisions): открыть/клонировать рабочий клон → fetch → resolve
-// ref в sha1. Если снапшот для sha1 уже есть — переиспользовать (immutable);
-// иначе checkout → export дерева в staging → атомарный rename в кеш.
+// Algorithm (PM decisions): open/clone the working clone → fetch → resolve
+// ref to sha1. If a snapshot for sha1 already exists — reuse it (immutable);
+// otherwise checkout → export the tree to staging → atomic rename into the cache.
 func (s *snapshotter) snapshot(ctx context.Context, name, gitURL, ref, kind string) (sha1, dir string, err error) {
 	if gitURL == "" {
 		return "", "", fmt.Errorf("artifact: git URL пуст для %s %q", kind, name)
@@ -103,14 +104,15 @@ func (s *snapshotter) snapshot(ctx context.Context, name, gitURL, ref, kind stri
 	return sha1, layout.snapshotDir(sha1), nil
 }
 
-// materialize выполняет checkout sha1 в рабочем клоне, экспортирует дерево в
-// staging-каталог и атомарно переименовывает его в финальный снапшот.
+// materialize checks out sha1 in the working clone, exports the tree to a
+// staging directory, and atomically renames it into the final snapshot.
 //
-// Атомарность (PM-decision): export идёт в `_tmp-*`, и только полностью готовое
-// дерево rename-ится в `<sha1>`. Прерывание оставляет лишь `_tmp-*`, но не
-// частичный снапшот. На гонке (другой инстанс успел создать `<sha1>` между
-// проверкой и rename) os.Rename на непустой каталог вернёт ошибку — трактуем её
-// как «снапшот уже есть» и оставляем чужой результат.
+// Atomicity (PM decision): export goes into `_tmp-*`, and only the fully
+// ready tree gets renamed to `<sha1>`. An interruption leaves only `_tmp-*`
+// behind, never a partial snapshot. On a race (another instance created
+// `<sha1>` between the check and the rename), os.Rename onto a non-empty
+// directory returns an error — we treat that as "snapshot already exists"
+// and keep the other instance's result.
 func (s *snapshotter) materialize(layout cacheLayout, repo *gitRepo, sha1 string) error {
 	if err := checkout(repo, sha1); err != nil {
 		return err
@@ -119,7 +121,7 @@ func (s *snapshotter) materialize(layout cacheLayout, repo *gitRepo, sha1 string
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging) // no-op после успешного rename
+	defer os.RemoveAll(staging) // no-op after a successful rename
 
 	if err := exportTree(layout.workDir(), staging); err != nil {
 		return err

@@ -6,14 +6,15 @@ import (
 	"testing"
 )
 
-// TestClassifyVerifyErr — покрытие каждой ветки switch в ClassifyVerifyErr.
-// Источник правды — verifier.go: классификатор различает только expired и
-// invalid-issuer; всё остальное (malformed, bad-signature, not-yet-valid,
-// произвольная ошибка) by design сводится к одному generic-detail
-// «invalid token» — это защита от oracle-attacks через различение причин 401.
+// TestClassifyVerifyErr — covers every branch of the switch in
+// ClassifyVerifyErr. Source of truth is verifier.go: the classifier only
+// distinguishes expired and invalid-issuer; everything else (malformed,
+// bad-signature, not-yet-valid, arbitrary error) collapses by design into
+// one generic detail "invalid token" — a defense against oracle attacks via
+// distinguishing 401 causes.
 //
-// Ошибки-sentinel проверяются и напрямую, и в обёрнутом виде
-// (fmt.Errorf("%w: …")), потому что Verify возвращает их именно обёрнутыми.
+// Sentinel errors are checked both directly and wrapped
+// (fmt.Errorf("%w: …")), because Verify returns them wrapped.
 func TestClassifyVerifyErr(t *testing.T) {
 	cases := []struct {
 		name string
@@ -72,10 +73,10 @@ func TestClassifyVerifyErr(t *testing.T) {
 	}
 }
 
-// TestClassifyVerifyErr_NeverLeaksRawError — гарантия из docstring
-// ClassifyVerifyErr: detail НИКОГДА не содержит raw err.Error()
-// (внутреннее сообщение golang-jwt — oracle-поверхность). Проверяем на
-// ошибке с распознаваемым маркером в обёртке.
+// TestClassifyVerifyErr_NeverLeaksRawError — the guarantee from
+// ClassifyVerifyErr's docstring: detail NEVER contains the raw err.Error()
+// (golang-jwt's internal message is an oracle surface). Checked against
+// an error with a recognizable marker in its wrapper.
 func TestClassifyVerifyErr_NeverLeaksRawError(t *testing.T) {
 	marker := "INTERNAL-PARSER-PATH-MUST-NOT-LEAK"
 	err := fmt.Errorf("%w: %s", ErrInvalidToken, marker)
@@ -86,7 +87,7 @@ func TestClassifyVerifyErr_NeverLeaksRawError(t *testing.T) {
 	if got != publicDetailInvalidToken {
 		t.Fatalf("detail = %q, want %q", got, publicDetailInvalidToken)
 	}
-	// Дополнительная проверка инварианта: маркер не должен всплыть в detail.
+	// Extra invariant check: the marker must not surface in detail.
 	if got == err.Error() {
 		t.Errorf("detail совпал с raw err.Error() — утечка внутреннего сообщения")
 	}

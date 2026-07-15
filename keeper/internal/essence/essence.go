@@ -1,55 +1,56 @@
-// Package essence собирает effective essence сервиса для конкретного хоста по
-// иерархии слоёв (см. architecture.md → «Essence: pipeline сборки»):
+// Package essence assembles the effective essence of a service for a
+// specific host through a layer hierarchy (see architecture.md → "Essence:
+// assembly pipeline"):
 //
-//	essence/_default.yaml → essence/os/<family>.yaml → essence/coven/<метка>.yaml... → incarnation.spec.essence
+//	essence/_default.yaml → essence/os/<family>.yaml → essence/coven/<label>.yaml... → incarnation.spec.essence
 //
-// Реализован convention-based порядок (без `_stack.yaml`): essence
-// role-agnostic (ADR-008 — ступени role/<Y>.yaml нет). Каждый следующий слой
-// deep-merge-ится поверх предыдущего: maps сливаются рекурсивно, скаляры и
-// списки заменяются целиком (later wins).
+// Convention-based ordering (no `_stack.yaml`): essence is role-agnostic
+// (ADR-008 — no role/<Y>.yaml step). Each next layer is deep-merged over the
+// previous one: maps merge recursively, scalars and lists are replaced
+// wholesale (later wins).
 package essence
 
 import "log/slog"
 
-// Имена слоёв essence в service-репозитории. Все пути — относительно
-// `<ServiceDir>/essence/` по документированной конвенции (docs/service/manifest.md,
-// architecture.md → «Раскладка репозитория»): essence лежит в поддиректории
-// сервиса, НЕ в его корне.
+// Essence layer names in the service repository. All paths are relative to
+// `<ServiceDir>/essence/` per the documented convention (docs/service/manifest.md,
+// architecture.md → "Repository layout"): essence lives in a subdirectory of
+// the service, NOT at its root.
 const (
-	// essenceDir — корневой каталог essence внутри снапшота сервиса.
+	// essenceDir — essence root directory inside the service snapshot.
 	essenceDir = "essence"
-	// defaultFile — baseline-слой, общий для всех incarnation
-	// (`essence/_default.yaml`). Отсутствие файла допустимо (пустая база).
+	// defaultFile — baseline layer shared by all incarnations
+	// (`essence/_default.yaml`). Missing file is fine (empty base).
 	defaultFile = essenceDir + "/_default.yaml"
-	// osDir — каталог per-OS overlay'ев (`essence/os/debian.yaml`,
+	// osDir — per-OS overlay directory (`essence/os/debian.yaml`,
 	// `essence/os/rhel.yaml`).
 	osDir = essenceDir + "/os"
-	// covenDir — каталог per-coven overlay'ев (`essence/coven/<метка>.yaml`).
+	// covenDir — per-coven overlay directory (`essence/coven/<label>.yaml`).
 	covenDir = essenceDir + "/coven"
 )
 
-// ResolveInput — вход для сборки essence одного хоста.
+// ResolveInput — input for assembling one host's essence.
 type ResolveInput struct {
-	// ServiceDir — корень снапшота сервиса (artifact.ServiceArtifact.LocalDir).
+	// ServiceDir — service snapshot root (artifact.ServiceArtifact.LocalDir).
 	ServiceDir string
-	// OSFamily — `soulprint.self.os.family` хоста (например, "debian"). Пустая
-	// строка → os-слой пропускается.
+	// OSFamily — host's `soulprint.self.os.family` (e.g. "debian"). Empty
+	// string → the os layer is skipped.
 	OSFamily string
-	// Covens — Coven-метки хоста (souls.coven[]). Слои применяются в порядке
-	// сортировки имён для детерминизма.
+	// Covens — host's Coven labels (souls.coven[]). Layers apply in
+	// name-sorted order for determinism.
 	Covens []string
-	// IncarnationSpec — `incarnation.spec.essence`, override оператора (самый
-	// сильный слой). Может быть nil.
+	// IncarnationSpec — `incarnation.spec.essence`, the operator override
+	// (the strongest layer). May be nil.
 	IncarnationSpec map[string]any
 }
 
-// Resolver собирает essence-map по слоям. Без внутреннего состояния, безопасен
-// для конкурентного использования.
+// Resolver assembles the essence map from layers. Stateless, safe for
+// concurrent use.
 type Resolver struct {
 	logger *slog.Logger
 }
 
-// NewResolver создаёт Resolver. Если logger nil, используется slog.Default.
+// NewResolver creates a Resolver. If logger is nil, slog.Default is used.
 func NewResolver(logger *slog.Logger) *Resolver {
 	if logger == nil {
 		logger = slog.Default()

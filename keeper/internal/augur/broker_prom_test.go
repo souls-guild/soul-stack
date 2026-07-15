@@ -21,14 +21,14 @@ func TestBrokerPrometheus_OK_InlineData(t *testing.T) {
 	if s.GetFields()["status"].GetStringValue() != "success" {
 		t.Errorf("inline_data status not carried: %v", s.AsMap())
 	}
-	// promQL ушёл как query-параметр (не склейкой).
+	// promQL went out as a query param (not concatenation).
 	if got := doer.gotReq.URL.Query().Get("query"); got != "up" {
 		t.Errorf("query param = %q, want up", got)
 	}
 	if !strings.HasSuffix(doer.gotReq.URL.Path, promQueryPath) {
 		t.Errorf("path = %q, want suffix %q", doer.gotReq.URL.Path, promQueryPath)
 	}
-	// credential ушёл как Bearer.
+	// credential went out as Bearer.
 	if doer.gotAuth != "Bearer tkn-123" {
 		t.Errorf("Authorization = %q, want Bearer tkn-123", doer.gotAuth)
 	}
@@ -46,8 +46,8 @@ func TestBrokerPrometheus_BasicAuth(t *testing.T) {
 	}
 }
 
-// TestBrokerPrometheus_HTTPEndpointDenied — http:// endpoint отвергается до
-// запроса (SSRF/downgrade guard).
+// TestBrokerPrometheus_HTTPEndpointDenied — an http:// endpoint is rejected
+// before the request (SSRF/downgrade guard).
 func TestBrokerPrometheus_HTTPEndpointDenied(t *testing.T) {
 	doer := &recordingDoer{respBody: `{}`}
 	kv := staticKV{data: map[string]any{}}
@@ -60,8 +60,8 @@ func TestBrokerPrometheus_HTTPEndpointDenied(t *testing.T) {
 	}
 }
 
-// TestBrokerPrometheus_MetadataLiteralDenied — литеральный metadata-IP в endpoint
-// отвергается validateEndpoint до запроса.
+// TestBrokerPrometheus_MetadataLiteralDenied — a literal metadata IP in
+// endpoint is rejected by validateEndpoint before the request.
 func TestBrokerPrometheus_MetadataLiteralDenied(t *testing.T) {
 	doer := &recordingDoer{respBody: `{}`}
 	kv := staticKV{data: map[string]any{}}
@@ -74,7 +74,7 @@ func TestBrokerPrometheus_MetadataLiteralDenied(t *testing.T) {
 	}
 }
 
-// TestBrokerPrometheus_Non2xx_NoBodyLeak — не-2xx → ошибка без тела ответа.
+// TestBrokerPrometheus_Non2xx_NoBodyLeak — non-2xx → error without the response body.
 func TestBrokerPrometheus_Non2xx_NoBodyLeak(t *testing.T) {
 	doer := &recordingDoer{respStatus: http.StatusForbidden, respBody: "secret-internal-detail"}
 	kv := staticKV{data: map[string]any{}}
@@ -87,8 +87,8 @@ func TestBrokerPrometheus_Non2xx_NoBodyLeak(t *testing.T) {
 	}
 }
 
-// TestBrokerPrometheus_CredentialNotInError — сбой запроса не раскрывает
-// credential в тексте ошибки.
+// TestBrokerPrometheus_CredentialNotInError — a request failure doesn't leak
+// the credential into the error text.
 func TestBrokerPrometheus_CredentialNotInError(t *testing.T) {
 	doer := &recordingDoer{err: errors.New("dial fail")}
 	kv := staticKV{data: map[string]any{"token": "super-secret-token"}}

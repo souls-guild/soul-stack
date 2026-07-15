@@ -2,10 +2,10 @@ package jwt
 
 import "testing"
 
-// TestParseBearerToken — таблица граничных случаев парсера заголовка
-// `Authorization`. Ассерты — по фактическому поведению bearer.go:
-// scheme case-insensitive (strings.EqualFold), разделитель — SP или HTAB
-// (strings.IndexAny(" \t")), token-часть проходит TrimSpace.
+// TestParseBearerToken — table of edge cases for the `Authorization`
+// header parser. Assertions follow bearer.go's actual behavior:
+// scheme is case-insensitive (strings.EqualFold), separator is SP or HTAB
+// (strings.IndexAny(" \t")), the token part goes through TrimSpace.
 func TestParseBearerToken(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -106,11 +106,11 @@ func TestParseBearerToken(t *testing.T) {
 	}
 }
 
-// TestParseBearerToken_InternalSpacesPreserved — TrimSpace режет только
-// ведущие/хвостовые пробелы token-части; внутренние сохраняются. JWT
-// внутренних пробелов не содержит, но фиксируем фактическое поведение:
-// парсер не «чинит» такой токен, а отдаёт его как есть для дальнейшего
-// отказа на стороне Verify.
+// TestParseBearerToken_InternalSpacesPreserved — TrimSpace only trims
+// leading/trailing spaces of the token part; internal ones are kept. A JWT
+// never contains internal spaces, but this pins the actual behavior:
+// the parser doesn't "fix" such a token, it returns it as-is for Verify
+// to reject downstream.
 func TestParseBearerToken_InternalSpacesPreserved(t *testing.T) {
 	gotTok, gotOK := ParseBearerToken("Bearer  abc def  ")
 	if !gotOK {

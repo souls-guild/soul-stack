@@ -1,20 +1,20 @@
 //go:build integration
 
-// Integration-тесты для pgxWriter через testcontainers-go.
+// Integration tests for pgxWriter via testcontainers-go.
 //
-// Поднимают postgres:16-alpine на эфемерном порту, применяют миграции из
-// keeper/migrations/, гоняют write+read round-trip. Один контейнер
-// per-package (TestMain) — поднятие postgres-а ~3-5 сек, иначе суммарно
-// дороже.
+// Spins up postgres:16-alpine on an ephemeral port, applies migrations from
+// keeper/migrations/, runs a write+read round-trip. One container per package
+// (TestMain) — starting postgres takes ~3-5s, otherwise it would add up to
+// more overall.
 //
-// Запуск:
+// Run:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/auditpg/
 //
-// Требует docker (testcontainers использует docker-sock). Если docker
-// недоступен — TestMain делает t.Skip-эквивалент (os.Exit(0) с лог-ом).
+// Requires docker (testcontainers uses the docker socket). If docker is
+// unavailable — TestMain does a t.Skip-equivalent (os.Exit(0) with a log).
 package auditpg
 
 import (
@@ -35,24 +35,24 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// integrationPool — общий pool на пакет, инициализируется в TestMain.
-// Тесты делают TRUNCATE audit_log перед запуском (см. resetAuditLog) — это
-// дешевле, чем поднимать контейнер на каждый Test*.
+// integrationPool — shared pool for the package, initialized in TestMain.
+// Tests TRUNCATE audit_log before running (see resetAuditLog) — cheaper than
+// spinning up a container per Test*.
 var integrationPool *pgxpool.Pool
 
-// TestMain делегирует setup/teardown в run(), потому что os.Exit
-// обходит defer-ы — context, контейнер и pool остались бы висеть.
+// TestMain delegates setup/teardown to run(), because os.Exit bypasses
+// defers — the context, container, and pool would otherwise leak.
 func TestMain(m *testing.M) {
 	os.Exit(run(m))
 }
 
-// run поднимает Postgres-контейнер, применяет миграции, отдаёт m.Run().
-// Возвращает exit-code; defer-ы внутри функции корректно отрабатывают,
-// потому что os.Exit вызывается уже в TestMain поверх возвращённого кода.
+// run starts a Postgres container, applies migrations, and hands off to
+// m.Run(). Returns the exit code; defers inside the function run correctly
+// because os.Exit is called only in TestMain, on top of the returned code.
 //
-// SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true делает testcontainers
-// обязательным (CI-режим): любой setup-fail → log.Fatalf. Без флага
-// (локальный режим) — тесты skip-ятся при недоступном docker.
+// SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true makes testcontainers mandatory
+// (CI mode): any setup failure → log.Fatalf. Without the flag (local mode) —
+// tests are skipped when docker is unavailable.
 func run(m *testing.M) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -72,7 +72,7 @@ func run(m *testing.M) int {
 		return 0
 	}
 	defer func() {
-		// Отдельный ctx — основной может быть отменён выходом теста.
+		// Separate ctx — the main one may be canceled by the test exiting.
 		termCtx, termCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer termCancel()
 		_ = ctr.Terminate(termCtx)
@@ -97,11 +97,11 @@ func run(m *testing.M) int {
 	defer pool.Close()
 	integrationPool = pool
 
-	// Seed bootstrap-Archon-а: с миграцией 004 на audit_log.archon_aid
-	// навешан FK на operators(aid). Tests ниже пишут события с
-	// `archon_aid: archon-alice` — без seed-а INSERT упадёт по FK.
-	// `created_by_aid IS NULL` означает «это bootstrap», что
-	// соответствует роли archon-alice в RBAC-примерах (rbac.md).
+	// Seed the bootstrap Archon: migration 004 adds an FK from
+	// audit_log.archon_aid to operators(aid). Tests below write events with
+	// `archon_aid: archon-alice` — without the seed the INSERT would fail the
+	// FK. `created_by_aid IS NULL` means "this is bootstrap", matching the
+	// archon-alice role in the RBAC examples (rbac.md).
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO operators (aid, display_name, auth_method)
 		VALUES ('archon-alice', 'Alice (test bootstrap)', 'jwt')
@@ -113,8 +113,8 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// resetAuditLog — TRUNCATE между тестами, чтобы один тест не видел записи
-// другого. Дешевле re-create-контейнера.
+// resetAuditLog — TRUNCATE between tests so one test doesn't see another's
+// rows. Cheaper than re-creating the container.
 func resetAuditLog(t *testing.T) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(), `TRUNCATE TABLE audit_log`)
@@ -187,16 +187,17 @@ func TestIntegration_PGXWriter_RoundTrip(t *testing.T) {
 	if payload["path"] != "/etc/keeper.yml" {
 		t.Errorf("payload.path = %v", payload["path"])
 	}
-	// JSON-numbers через json.Unmarshal → float64; явный cast.
+	// JSON numbers via json.Unmarshal → float64; explicit cast.
 	if rev, ok := payload["rev"].(float64); !ok || rev != 42 {
 		t.Errorf("payload.rev = %v (%T), want 42", payload["rev"], payload["rev"])
 	}
 }
 
-// TestIntegration_Reader_ArchonAID_ILIKE — runtime-доказательство ILIKE-семантики
-// поиска по archon_aid: частичная подстрока в ДРУГОМ регистре («ALIC») находит
-// запись `archon-alice`. Exact-`=` (прежнее поведение) её бы не нашёл. Параллельно
-// — что несовпадающая подстрока («bob») не даёт ложных срабатываний.
+// TestIntegration_Reader_ArchonAID_ILIKE — runtime proof of ILIKE search
+// semantics on archon_aid: a partial substring in a DIFFERENT case ("ALIC")
+// finds the `archon-alice` record. Exact `=` (the old behavior) would not have
+// found it. Also checks that a non-matching substring ("bob") produces no
+// false positives.
 func TestIntegration_Reader_ArchonAID_ILIKE(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -204,7 +205,7 @@ func TestIntegration_Reader_ArchonAID_ILIKE(t *testing.T) {
 	w := NewWriter(integrationPool)
 	reader := NewReader(integrationPool)
 
-	// archon-alice — единственный seed-нутый FK-валидный AID (см. run()).
+	// archon-alice — the only seeded FK-valid AID (see run()).
 	if err := w.Write(ctx, &audit.Event{
 		EventType:     audit.EventConfigReloadSucceeded,
 		Source:        audit.SourceAPI,
@@ -215,7 +216,8 @@ func TestIntegration_Reader_ArchonAID_ILIKE(t *testing.T) {
 		t.Fatalf("seed write: %v", err)
 	}
 
-	// Подстрока в другом регистре — должна найти (case-insensitive substring).
+	// Substring in a different case — should still match (case-insensitive
+	// substring).
 	for _, q := range []string{"ALIC", "alice", "archon-", "ALICE"} {
 		rows, total, err := reader.List(ctx, ListFilter{ArchonAID: q}, 0, 50)
 		if err != nil {
@@ -229,7 +231,7 @@ func TestIntegration_Reader_ArchonAID_ILIKE(t *testing.T) {
 		}
 	}
 
-	// Несовпадающая подстрока — пусто (нет ложных срабатываний).
+	// Non-matching substring — empty (no false positives).
 	_, total, err := reader.List(ctx, ListFilter{ArchonAID: "bob"}, 0, 50)
 	if err != nil {
 		t.Fatalf("List(ArchonAID=bob): %v", err)
@@ -292,7 +294,7 @@ func TestIntegration_PGXWriter_NullableFields(t *testing.T) {
 		AuditID:   auditID,
 		EventType: audit.EventConfigReloadSucceeded,
 		Source:    audit.SourceSignal,
-		// ArchonAID, CorrelationID — пусты; должны лечь NULL.
+		// ArchonAID, CorrelationID — empty; should land as NULL.
 	}
 	if err := w.Write(ctx, ev); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -316,18 +318,18 @@ func TestIntegration_PGXWriter_NullableFields(t *testing.T) {
 	}
 }
 
-// TestIntegration_Reader_DeliveryHistory_Filters — guard read-пути доставок
-// уведомлений (ADR-052, переработка разовых уведомлений S2). Фронт-секция
-// «Уведомления» на странице прогона и история канала читают терминалы доставки
-// (herald.delivered/herald.failed) через GET /v1/audit:
+// TestIntegration_Reader_DeliveryHistory_Filters — guard for the read path of
+// notification deliveries (ADR-052, one-off notification rework S2). The
+// "Notifications" section on the run page and the channel history read
+// delivery terminals (herald.delivered/herald.failed) via GET /v1/audit:
 //
-//   - voyage-секция: correlation_id=<voyage_id> + type=herald.delivered/failed
-//     → события доставки ИМЕННО этого прогона;
-//   - история канала: payload_herald=<herald-name> → все доставки канала
-//     (фильтр по payload->>'herald', добавлен в S2).
+//   - voyage section: correlation_id=<voyage_id> + type=herald.delivered/failed
+//     → delivery events for EXACTLY this run;
+//   - channel history: payload_herald=<herald-name> → all deliveries of the
+//     channel (filter on payload->>'herald', added in S2).
 //
-// Сидим терминалы двух прогонов в два канала, проверяем оба фильтра в изоляции
-// и их пересечение.
+// Seeds terminals of two runs into two channels, checks both filters in
+// isolation and their intersection.
 func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -338,9 +340,10 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 	voyageA := audit.NewULID()
 	voyageB := audit.NewULID()
 
-	// Терминалы доставки: correlation_id = voyage_id (как пишет worker.emitAudit),
-	// payload.herald = имя канала. Перекрёстно: оба канала в обоих прогонах +
-	// failed-терминал, плюс «посторонние» события (другой type) — фильтр их режет.
+	// Delivery terminals: correlation_id = voyage_id (as written by
+	// worker.emitAudit), payload.herald = channel name. Cross-matrixed: both
+	// channels in both runs + a failed terminal, plus "unrelated" events
+	// (different type) — the filter cuts those out.
 	seed := []struct {
 		et       audit.EventType
 		voyage   string
@@ -372,7 +375,7 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 			t.Fatalf("seed write (%s/%s/%s): %v", s.et, s.voyage, s.herald, err)
 		}
 	}
-	// Посторонний шум — не доставка, не должен попадать ни под один фильтр.
+	// Unrelated noise — not a delivery, must not match either filter.
 	if err := w.Write(ctx, &audit.Event{
 		EventType:     audit.EventConfigReloadSucceeded,
 		Source:        audit.SourceAPI,
@@ -384,8 +387,9 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 
 	deliveryTypes := []string{string(audit.EventHeraldDelivered), string(audit.EventHeraldFailed)}
 
-	// (1) voyage-секция: доставки прогона A — оба терминала A (delivered ops-slack
-	// + failed ops-pager), но НЕ доставки B и НЕ config-шум прогона A.
+	// (1) voyage section: deliveries of run A — both A terminals (delivered
+	// ops-slack + failed ops-pager), but NOT B's deliveries and NOT run A's
+	// config noise.
 	rowsA, totalA, err := reader.List(ctx, ListFilter{
 		Types:         deliveryTypes,
 		CorrelationID: voyageA,
@@ -405,7 +409,8 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 		}
 	}
 
-	// (2) история канала ops-slack: все доставки канала (прогоны A и B), без ops-pager.
+	// (2) ops-slack channel history: all deliveries of the channel (runs A and
+	// B), excluding ops-pager.
 	rowsCh, totalCh, err := reader.List(ctx, ListFilter{
 		Types:         deliveryTypes,
 		PayloadHerald: "ops-slack",
@@ -422,7 +427,8 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 		}
 	}
 
-	// (3) пересечение voyage_id ∩ herald: одна конкретная доставка в B канала ops-pager.
+	// (3) intersection of voyage_id ∩ herald: one specific delivery in B on
+	// channel ops-pager.
 	rowsX, totalX, err := reader.List(ctx, ListFilter{
 		Types:         deliveryTypes,
 		CorrelationID: voyageB,
@@ -439,21 +445,23 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 	}
 }
 
-// TestIntegration_Reader_ChangedTaskKeys — guard read-пути свёртки changed-задач
-// (T3): SelectChangedTaskKeys читает (sid, plan_index) задач прогона, терминал-
-// ивших CHANGED, СТРОГО из `task.executed`-событий со `status == TASK_STATUS_CHANGED`.
-// Проверяем:
-//   - фильтр по correlation_id (apply_id) + event_type + status (другие прогоны /
-//     статусы / типы не попадают);
-//   - дедуп пары (sid, plan_index) (retry дал две task.executed-строки одной задачи);
-//   - backward-compat: строки БЕЗ plan_index (старый Soul / прогон до T3) читаются
-//     с fallback на task_idx (COALESCE в SQL);
-//   - секрет-гигиена: register_data/error-значения payload НЕ влияют на ключи
-//     (берутся только sid + plan_index).
+// TestIntegration_Reader_ChangedTaskKeys — guard for the read path of the
+// changed-task aggregation (T3): SelectChangedTaskKeys reads (sid, plan_index)
+// for a run's tasks that terminated CHANGED, STRICTLY from `task.executed`
+// events with `status == TASK_STATUS_CHANGED`. Checks:
+//   - filter by correlation_id (apply_id) + event_type + status (other runs /
+//     statuses / types are excluded);
+//   - dedup of the (sid, plan_index) pair (retry produced two task.executed
+//     rows for one task);
+//   - backward-compat: rows WITHOUT plan_index (old Soul / pre-T3 run) are read
+//     with a fallback to task_idx (COALESCE in SQL);
+//   - secret hygiene: register_data/error payload values do NOT affect the
+//     keys (only sid + plan_index are read).
 //
-// Этот сид специально кладёт ТОЛЬКО task_idx (без plan_index) — проверяет
-// fallback-ветку. Приоритет plan_index над task_idx под staged/per-host (plan_idx
-// ≠ task_idx) проверяет TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority.
+// This seed deliberately sets ONLY task_idx (no plan_index) — exercises the
+// fallback branch. Priority of plan_index over task_idx under
+// staged/per-host (plan_idx ≠ task_idx) is checked by
+// TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority.
 func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -464,9 +472,9 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	applyA := audit.NewULID()
 	applyB := audit.NewULID()
 
-	// task.executed-события прогона A: смесь статусов; CHANGED на (a,0),(b,0),(a,1);
-	// retry: (a,0) записан дважды (дедуп). + OK-задача (не changed) + FAILED.
-	// register_data — секрет-shaped payload, не должен утечь в ключи.
+	// task.executed events for run A: mixed statuses; CHANGED on (a,0),(b,0),(a,1);
+	// retry: (a,0) is written twice (dedup). + an OK task (not changed) + FAILED.
+	// register_data is a secret-shaped payload and must not leak into the keys.
 	type te struct {
 		apply  string
 		sid    string
@@ -475,12 +483,12 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	}
 	seed := []te{
 		{applyA, "a.local", 0, "TASK_STATUS_CHANGED"},
-		{applyA, "a.local", 0, "TASK_STATUS_CHANGED"}, // retry → дубль, дедуп
+		{applyA, "a.local", 0, "TASK_STATUS_CHANGED"}, // retry → duplicate, dedup
 		{applyA, "b.local", 0, "TASK_STATUS_CHANGED"},
 		{applyA, "a.local", 1, "TASK_STATUS_CHANGED"},
-		{applyA, "a.local", 2, "TASK_STATUS_OK"},      // не changed
-		{applyA, "b.local", 1, "TASK_STATUS_FAILED"},  // не changed
-		{applyB, "z.local", 0, "TASK_STATUS_CHANGED"}, // другой прогон
+		{applyA, "a.local", 2, "TASK_STATUS_OK"},      // not changed
+		{applyA, "b.local", 1, "TASK_STATUS_FAILED"},  // not changed
+		{applyB, "z.local", 0, "TASK_STATUS_CHANGED"}, // a different run
 	}
 	for _, s := range seed {
 		ev := &audit.Event{
@@ -490,7 +498,7 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 			Payload: map[string]any{
 				"sid":      s.sid,
 				"apply_id": s.apply,
-				// БЕЗ plan_index — backward-compat: чтение fallback-ит на task_idx.
+				// WITHOUT plan_index — backward-compat: read falls back to task_idx.
 				"task_idx":      s.idx,
 				"status":        s.status,
 				"register_data": map[string]any{"password": "should-not-leak-into-key"},
@@ -500,7 +508,7 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 			t.Fatalf("seed write: %v", err)
 		}
 	}
-	// Посторонний шум: run.completed того же apply_id — не task.executed, режется.
+	// Unrelated noise: run.completed with the same apply_id — not task.executed, filtered out.
 	if err := w.Write(ctx, &audit.Event{
 		EventType:     audit.EventRunCompleted,
 		Source:        audit.SourceSoulGRPC,
@@ -515,8 +523,9 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 		t.Fatalf("SelectChangedTaskKeys: %v", err)
 	}
 
-	// Ожидаем РОВНО {(a,0),(b,0),(a,1)} — дедуп схлопнул дубль (a,0); OK/FAILED
-	// и прогон B исключены. plan_index взят fallback-ом из task_idx.
+	// Expect EXACTLY {(a,0),(b,0),(a,1)} — dedup collapsed the (a,0) duplicate;
+	// OK/FAILED and run B are excluded. plan_index comes from the task_idx
+	// fallback.
 	want := map[ChangedTaskKey]struct{}{
 		{SID: "a.local", PlanIndex: 0}: {},
 		{SID: "b.local", PlanIndex: 0}: {},
@@ -530,22 +539,23 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 			t.Errorf("missing expected key %+v", k)
 		}
 	}
-	// Прогон B не должен присутствовать.
+	// Run B must not be present.
 	if _, ok := keys[ChangedTaskKey{SID: "z.local", PlanIndex: 0}]; ok {
 		t.Error("cross-apply leak: applyB key in applyA result")
 	}
 }
 
-// TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority — T3 GUARD (read-путь):
-// под staged/per-host-where ГЛОБАЛЬНЫЙ plan_index ≠ ЛОКАЛЬНОМУ task_idx; свёртка
-// CHANGED-задач ОБЯЗАНА брать plan_index (ключ корреляции с RenderedTask.Index),
-// а НЕ task_idx — иначе ключ указал бы на соседнюю задачу (mismatch в
-// state_changes-whitelist + audit changed_tasks).
+// TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority — T3 GUARD (read
+// path): under staged/per-host-where the GLOBAL plan_index ≠ the LOCAL
+// task_idx; the CHANGED-task aggregation MUST use plan_index (the correlation
+// key with RenderedTask.Index), NOT task_idx — otherwise the key would point
+// at a neighboring task (mismatch in the state_changes whitelist + audit
+// changed_tasks).
 //
-// Сид: одна CHANGED-задача с plan_index=7, task_idx=2 (имитация второго Passage,
-// где локальная позиция 2 соответствует глобальному плану 7). Ожидаем ключ
-// (sid, 7) — глобальный; РЕВЕРС-инвариант: (sid, 2) (локальный task_idx) в
-// результате присутствовать НЕ должен.
+// Seed: one CHANGED task with plan_index=7, task_idx=2 (simulating a second
+// Passage, where local position 2 corresponds to global plan position 7).
+// Expect key (sid, 7) — the global one; reverse invariant: (sid, 2) (the local
+// task_idx) must NOT be present in the result.
 func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -562,8 +572,8 @@ func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
 		Payload: map[string]any{
 			"sid":      "h.local",
 			"apply_id": applyID,
-			// staged/per-host: локальная позиция 2 в своём Passage ≠ глобальному
-			// сквозному индексу 7 по всему плану.
+			// staged/per-host: local position 2 within its Passage ≠ the global
+			// cross-run index 7 across the whole plan.
 			"task_idx":   2,
 			"plan_index": 7,
 			"status":     "TASK_STATUS_CHANGED",
@@ -578,12 +588,12 @@ func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
 		t.Fatalf("SelectChangedTaskKeys: %v", err)
 	}
 
-	// Ключ — ГЛОБАЛЬНЫЙ plan_index (7), а не локальный task_idx (2).
+	// The key is the GLOBAL plan_index (7), not the local task_idx (2).
 	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 7}]; !ok {
 		t.Errorf("ожидался ключ (h.local, plan_index=7) — свёртка ДОЛЖНА брать глобальный plan_index; keys=%+v", keys)
 	}
-	// РЕВЕРС: локальный task_idx (2) НЕ должен стать ключом — иначе корреляция с
-	// планом указала бы на соседнюю задачу (T3-баг).
+	// REVERSE: the local task_idx (2) must NOT become a key — otherwise the
+	// correlation with the plan would point at a neighboring task (T3 bug).
 	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 2}]; ok {
 		t.Errorf("ключ (h.local, 2) присутствует — свёртка взяла ЛОКАЛЬНЫЙ task_idx вместо plan_index (T3-регресс); keys=%+v", keys)
 	}
@@ -592,17 +602,20 @@ func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
 	}
 }
 
-// TestIntegration_Reader_PayloadVoyage_Filter — guard read-пути visibility Voyage
-// detail (ADR-052 amend §k): per-incarnation события incarnation.run_completed
-// несут correlation_id=apply_id (РАЗНЫЙ у каждой инкарнации), а voyage_id лежит в
-// payload. Voyage detail собирает run-события вояжа фильтром payload_voyage
-// (payload->>'voyage_id'). Проверяем:
-//   - фильтр возвращает ВСЕ per-incarnation run-события данного voyage_id
-//     (несмотря на разные apply_id/correlation_id);
-//   - НЕ возвращает run-события чужого вояжа;
-//   - НЕ возвращает события без voyage_id (прямой путь create/rerun/destroy);
-//   - параметризация: значение фильтра уходит позиционным плейсхолдером, а не
-//     конкатенацией (косвенно — поиск по литералу с кавычками не матчит).
+// TestIntegration_Reader_PayloadVoyage_Filter — guard for the read path of
+// Voyage detail visibility (ADR-052 amend §k): per-incarnation
+// incarnation.run_completed events carry correlation_id=apply_id (DIFFERENT
+// for each incarnation), while voyage_id lives in payload. Voyage detail
+// collects a voyage's run events via the payload_voyage filter
+// (payload->>'voyage_id'). Checks:
+//   - the filter returns ALL per-incarnation run events for a given voyage_id
+//     (despite different apply_id/correlation_id);
+//   - does NOT return run events of a different voyage;
+//   - does NOT return events without voyage_id (direct create/rerun/destroy
+//     path);
+//   - parameterization: the filter value goes through a positional
+//     placeholder, not concatenation (indirectly — a search with a quoted
+//     literal doesn't match).
 func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -613,18 +626,19 @@ func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 	voyageA := audit.NewULID()
 	voyageB := audit.NewULID()
 
-	// run-события вояжа A: ДВЕ инкарнации, у каждой свой apply_id (correlation_id),
-	// общий voyage_id в payload. + run-событие вояжа B + событие БЕЗ voyage_id
-	// (прямой путь, минующий Voyage) — оба должны быть отрезаны фильтром A.
+	// Run events for voyage A: TWO incarnations, each with its own apply_id
+	// (correlation_id), sharing voyage_id in payload. + a run event for voyage B
+	// + an event WITHOUT voyage_id (direct path bypassing Voyage) — both must be
+	// cut off by filter A.
 	seed := []struct {
-		voyage      string // "" → без voyage_id в payload (прямой путь)
+		voyage      string // "" → no voyage_id in payload (direct path)
 		incarnation string
 		status      string
 	}{
 		{voyageA, "redis-a", "success"},
 		{voyageA, "redis-b", "failed"},
 		{voyageB, "redis-c", "success"},
-		{"", "redis-direct", "success"}, // create-путь: voyage_id нет
+		{"", "redis-direct", "success"}, // create path: no voyage_id
 	}
 	for _, s := range seed {
 		payload := map[string]any{
@@ -648,8 +662,9 @@ func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 		}
 	}
 
-	// Фильтр по вояжу A: РОВНО два per-incarnation события (redis-a + redis-b),
-	// несмотря на разные correlation_id; ни B, ни прямой путь.
+	// Filter by voyage A: EXACTLY two per-incarnation events (redis-a +
+	// redis-b), despite different correlation_id; neither B nor the direct
+	// path.
 	rowsA, totalA, err := reader.List(ctx, ListFilter{PayloadVoyage: voyageA}, 0, 50)
 	if err != nil {
 		t.Fatalf("List voyageA: %v", err)
@@ -669,7 +684,7 @@ func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 		}
 	}
 
-	// Фильтр по вояжу B: ровно одно событие (redis-c), не утекает A / прямой путь.
+	// Filter by voyage B: exactly one event (redis-c), no leak from A / direct path.
 	_, totalB, err := reader.List(ctx, ListFilter{PayloadVoyage: voyageB}, 0, 50)
 	if err != nil {
 		t.Fatalf("List voyageB: %v", err)
@@ -678,7 +693,7 @@ func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 		t.Errorf("voyageB run-events total = %d, want 1", totalB)
 	}
 
-	// Несуществующий voyage_id → пусто (события без voyage_id под фильтр не падают).
+	// Nonexistent voyage_id → empty (events without voyage_id don't match the filter).
 	_, totalNone, err := reader.List(ctx, ListFilter{PayloadVoyage: "voy-does-not-exist"}, 0, 50)
 	if err != nil {
 		t.Fatalf("List voyage none: %v", err)

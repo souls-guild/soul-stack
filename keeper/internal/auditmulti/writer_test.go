@@ -14,15 +14,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// mockWriter — тестовый [audit.Writer] с конфигурируемой задержкой и
-// возвращаемой ошибкой. Захватывает количество вызовов через atomic.
+// mockWriter — test [audit.Writer] with configurable delay and returned
+// error. Tracks call count via atomic.
 type mockWriter struct {
 	mu      sync.Mutex
 	calls   int32
 	err     error
 	delay   time.Duration
 	events  []*audit.Event
-	onWrite func() // optional hook, вызывается из Write до возврата
+	onWrite func() // optional hook, called from Write before it returns
 }
 
 func (m *mockWriter) Write(_ context.Context, ev *audit.Event) error {
@@ -52,8 +52,8 @@ func newEvent() *audit.Event {
 	}
 }
 
-// captureLogger возвращает (logger, buf) — slog с in-memory выводом для
-// проверки warning-сообщений.
+// captureLogger returns (logger, buf) — slog with in-memory output for
+// asserting on warning messages.
 func captureLogger() (*slog.Logger, *bytes.Buffer) {
 	buf := &bytes.Buffer{}
 	handler := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
@@ -124,7 +124,7 @@ func TestMulti_PrimaryFailSecondarySuccess(t *testing.T) {
 	if prim.Calls() != 1 {
 		t.Errorf("primary calls = %d, want 1", prim.Calls())
 	}
-	// PM-decision: secondary НЕ запускается при primary-fail.
+	// PM decision: secondary is NOT started on primary failure.
 	if sec.Calls() != 0 {
 		t.Errorf("secondary calls = %d, want 0 (primary-fail must skip secondary)", sec.Calls())
 	}
@@ -147,14 +147,14 @@ func TestMulti_PrimaryFailSecondaryFail(t *testing.T) {
 
 func TestMulti_ShutdownDrain(t *testing.T) {
 	prim := &mockWriter{}
-	// Secondary с delay-ем: Close должен дождаться завершения.
+	// Secondary with a delay: Close must wait for it to finish.
 	sec := &mockWriter{delay: 50 * time.Millisecond}
 	w := New(prim, []audit.Writer{sec}, WithShutdownDrain(500*time.Millisecond))
 
 	if err := w.Write(context.Background(), newEvent()); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	// Close сразу после Write — secondary goroutine ещё в delay-е.
+	// Close right after Write — secondary goroutine is still delaying.
 	start := time.Now()
 	if err := w.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -170,7 +170,7 @@ func TestMulti_ShutdownDrain(t *testing.T) {
 
 func TestMulti_ShutdownDrainTimeout(t *testing.T) {
 	prim := &mockWriter{}
-	// Secondary с delay-ем больше, чем drain — таймаут.
+	// Secondary delay longer than drain — timeout.
 	sec := &mockWriter{delay: 200 * time.Millisecond}
 	logger, buf := captureLogger()
 	w := New(prim, []audit.Writer{sec},
@@ -188,7 +188,7 @@ func TestMulti_ShutdownDrainTimeout(t *testing.T) {
 	if !strings.Contains(buf.String(), "shutdown drain timed out") {
 		t.Errorf("expected timeout warning in logs, got: %q", buf.String())
 	}
-	// Дождёмся завершения secondary, чтобы goroutine не утекла.
+	// Wait for the secondary to finish so the goroutine doesn't leak.
 	time.Sleep(250 * time.Millisecond)
 }
 
@@ -206,13 +206,13 @@ func TestMulti_NoSecondariesPassThrough(t *testing.T) {
 }
 
 func TestMulti_DeepCopyPayloadForSecondary(t *testing.T) {
-	// Secondary получает копию event-а; мутация в secondary не должна
-	// влиять на исходный payload caller-а.
+	// Secondary receives a copy of the event; mutating it in the
+	// secondary must not affect the caller's original payload.
 	prim := &mockWriter{}
 	done := make(chan struct{})
 	sec := &mockWriter{}
 	sec.onWrite = func() {
-		// мутируем последний полученный event
+		// mutate the last received event
 		sec.mu.Lock()
 		ev := sec.events[len(sec.events)-1]
 		ev.Payload["mutated_by_secondary"] = true
@@ -268,11 +268,11 @@ func TestMulti_NilPrimary_PanicsInNew(t *testing.T) {
 	_ = New(nil, nil)
 }
 
-// TestMulti_ConcurrentCloseAndWrite_NoRace — race detector должен оставаться
-// чистым при гонке Close vs Write. Без mutex-а вокруг
-// `select <-closed / wg.Add` тест с большой вероятностью провалится в
-// `-race` через «WaitGroup is reused before previous Wait has returned»
-// или через дочерний Write после возврата Close.
+// TestMulti_ConcurrentCloseAndWrite_NoRace — the race detector must stay
+// clean under a Close vs Write race. Without a mutex around
+// `select <-closed / wg.Add`, this test would likely fail under `-race`
+// with "WaitGroup is reused before previous Wait has returned" or via a
+// child Write after Close has returned.
 func TestMulti_ConcurrentCloseAndWrite_NoRace(t *testing.T) {
 	prim := &mockWriter{}
 	sec := &mockWriter{}
@@ -287,32 +287,33 @@ func TestMulti_ConcurrentCloseAndWrite_NoRace(t *testing.T) {
 			_ = w.Write(context.Background(), newEvent())
 		}()
 	}
-	// Close посредине вала Write-ов — попадает в race-window между
-	// `select <-closed` и `wg.Add(1)` без mutex-а.
+	// Close in the middle of a burst of Writes — hits the race window
+	// between `select <-closed` and `wg.Add(1)` without a mutex.
 	closeErr := w.Close(context.Background())
 	wg.Wait()
-	// drain 2s > задержки в mockWriter (0) → таймаута быть не должно.
+	// drain 2s > mockWriter delay (0) → there should be no timeout.
 	if closeErr != nil {
 		t.Fatalf("Close: %v", closeErr)
 	}
-	// После Close дополнительный Write должен пойти только в primary.
+	// After Close, an additional Write should go to primary only.
 	if err := w.Write(context.Background(), newEvent()); err != nil {
 		t.Fatalf("Write after Close: %v", err)
 	}
-	// sec.Calls() мог быть от 0 до n включительно — все варианты ok,
-	// проверяем только инвариант: вызовов не больше, чем primary видел
-	// до Close (n + 1 post-Close).
+	// sec.Calls() could be anywhere from 0 to n inclusive — all values
+	// are fine; we only check the invariant that calls never exceed what
+	// primary saw before Close (n + 1 post-Close).
 	if got := sec.Calls(); got > int32(n) {
 		t.Errorf("secondary calls = %d, want ≤ %d (post-Close write must skip secondary)", got, n)
 	}
 }
 
-// TestMulti_ContextDetach_SecondaryGetsDetachedContext — caller отменяет
-// ctx сразу после Write; secondary должен получить не-cancelled ctx.
+// TestMulti_ContextDetach_SecondaryGetsDetachedContext — the caller
+// cancels ctx right after Write; the secondary must receive a
+// non-cancelled ctx.
 func TestMulti_ContextDetach_SecondaryGetsDetachedContext(t *testing.T) {
 	prim := &mockWriter{}
 	gotCtx := make(chan context.Context, 1)
-	// kontextCapturingWriter инлайн — захватывает ctx и сразу возвращает.
+	// ctxCapturingWriter captures ctx and returns right away (defined below).
 	sec := &ctxCapturingWriter{ch: gotCtx}
 
 	w := New(prim, []audit.Writer{sec})
@@ -322,7 +323,7 @@ func TestMulti_ContextDetach_SecondaryGetsDetachedContext(t *testing.T) {
 	if err := w.Write(ctx, newEvent()); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	cancel() // caller-ctx отменён сразу после Write — типовой HTTP-handler.
+	cancel() // caller ctx cancelled right after Write — typical HTTP handler.
 
 	select {
 	case received := <-gotCtx:
@@ -339,7 +340,7 @@ type ctxCapturingWriter struct {
 }
 
 func (c *ctxCapturingWriter) Write(ctx context.Context, _ *audit.Event) error {
-	// Небольшая задержка, чтобы caller успел сделать cancel ДО Write-а.
+	// Small delay so the caller has time to cancel before this Write runs.
 	time.Sleep(20 * time.Millisecond)
 	c.ch <- ctx
 	return nil
@@ -373,8 +374,8 @@ func TestMulti_CloseIdempotent(t *testing.T) {
 	if err := w.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	// После Close — Write всё ещё работает в primary, но secondary не
-	// запускается.
+	// After Close — Write still works against primary, but secondary is
+	// not started.
 	if err := w.Write(context.Background(), newEvent()); err != nil {
 		t.Fatalf("Write after Close: %v", err)
 	}

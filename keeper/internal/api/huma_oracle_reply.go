@@ -1,30 +1,30 @@
 package api
 
-// HUMA-NATIVE wire-DTO ORACLE-домена (vigils + decrees; handler-native T5d-2c).
-// Reply/output Body huma-операций oracle — native Go-struct в пакете api, БЕЗ legacy-генерата.
-// Handler (handlers/oracle.go) возвращает доменные result-ы с плоскими полями;
-// register-func (huma_oracle.go) проецирует их В ЭТИ типы напрямую (newVigilView /
-// newDecreeView / newVigilListReply / newDecreeListReply) — конвертеров legacy-генерата → native
-// больше нет.
+// HUMA-NATIVE wire-DTO of the ORACLE domain (vigils + decrees; handler-native T5d-2c).
+// Reply/output Body of huma oracle operations — native Go structs in package api, no legacy generator.
+// Handler (handlers/oracle.go) returns domain results with flat fields;
+// register-func (huma_oracle.go) projects them directly INTO THESE types (newVigilView /
+// newDecreeView / newVigilListReply / newDecreeListReply) — no more legacy-generator → native
+// converters.
 //
-// ИНВАРИАНТЫ (★ wire byte-exact + ★ имя схемы стабильно): имя EXPORTED-struct =
-// контрактное (VigilView / DecreeView / VigilListReply / DecreeListReply) → huma
-// DefaultSchemaNamer даёт ту же схему; форма (json-теги/omitempty/json.RawMessage-
-// nil→`null`/time.Time-wire/FIELD-ORDER под oapi byte-order) побайтово та же —
-// golden byte-exact пинит huma_oracle_reply_test.go. params/action_input —
-// json.RawMessage byte-passthrough (ADR-051 категория D).
+// INVARIANTS (★ wire byte-exact + ★ schema name is stable): the EXPORTED-struct name =
+// the contract (VigilView / DecreeView / VigilListReply / DecreeListReply) → huma
+// DefaultSchemaNamer yields the same schema; the shape (json tags/omitempty/json.RawMessage
+// nil→`null`/time.Time wire/FIELD-ORDER under oapi byte-order) is byte-for-byte the same —
+// golden byte-exact pins it in huma_oracle_reply_test.go. params/action_input —
+// json.RawMessage byte-passthrough (ADR-051 category D).
 //
-// ENVELOPE. VigilListReply/DecreeListReply — НЕ generic alias PagedResponse[X], а
-// конкретные reply-типы; element-поле Items → native ([]VigilView/[]DecreeView),
-// форма items/offset/limit/total 1:1.
+// ENVELOPE. VigilListReply/DecreeListReply are NOT a generic alias PagedResponse[X] but
+// concrete reply types; the Items element field → native ([]VigilView/[]DecreeView),
+// the items/offset/limit/total shape 1:1.
 
-// OUTPUT-PATTERN ИМЁН (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). name ← oracle.NamePattern (kebab, Vigil/Decree);
-// on_beacon — FK на Vigil-имя тем же oracle.NamePattern; incarnation_name ←
-// oracle.IncarnationPattern (тот же const, что INPUT decree.create incarnation_name). Формат
-// для клиент-кодогена; pattern не влияет на json.Marshal (golden byte-exact цел). Output-типы
-// не шарятся с request-Body (create — отдельные *Request) → input-422-риска нет. coven НЕ
-// тегируется: вне coven-скоупа этого батча (Soul*/Incarnation* View), отдельный домен.
+// OUTPUT NAME-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). name ← oracle.NamePattern (kebab, Vigil/Decree);
+// on_beacon — FK to a Vigil name by the same oracle.NamePattern; incarnation_name ←
+// oracle.IncarnationPattern (same const as INPUT decree.create incarnation_name). Format
+// for client codegen; the pattern does not affect json.Marshal (golden byte-exact intact). Output types
+// are not shared with the request Body (create — separate *Request) → no input-422 risk. coven is NOT
+// tagged: outside this batch's coven scope (Soul*/Incarnation* View), a separate domain.
 
 import (
 	"encoding/json"
@@ -33,12 +33,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежним legacy-генерата) ===
+// === top-level reply-DTO (shape 1:1 with the former legacy generator) ===
 
-// VigilView — native проекция записи реестра vigils (форма 1:1 с прежним VigilView).
-// coven/created_by_aid/sid — `*[]string`/`*string` С omitempty (nil → ключ опущен);
-// params — json.RawMessage БЕЗ omitempty (nil → `null`); created_at/updated_at —
-// наносекундный time-wire.
+// VigilView — native projection of a vigils registry record (shape 1:1 with the former VigilView).
+// coven/created_by_aid/sid — `*[]string`/`*string` WITH omitempty (nil → key omitted);
+// params — json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at —
+// nanosecond time-wire.
 type VigilView struct {
 	Check        string          `json:"check"`
 	Coven        *[]string       `json:"coven,omitempty"`
@@ -52,9 +52,9 @@ type VigilView struct {
 	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
-// DecreeView — native проекция записи реестра decrees (форма 1:1 с прежним DecreeView).
-// coven/created_by_aid/sid/where — С omitempty (nil → ключ опущен); action_input —
-// json.RawMessage БЕЗ omitempty (nil → `null`); created_at/updated_at — наносекундный
+// DecreeView — native projection of a decrees registry record (shape 1:1 with the former DecreeView).
+// coven/created_by_aid/sid/where — WITH omitempty (nil → key omitted); action_input —
+// json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at — nanosecond
 // time-wire.
 type DecreeView struct {
 	ActionInput     json.RawMessage `json:"action_input"`
@@ -66,15 +66,15 @@ type DecreeView struct {
 	Enabled         bool            `json:"enabled"`
 	IncarnationName string          `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← oracle.IncarnationPattern
 	Name            string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"`                     // ← oracle.NamePattern
-	OnBeacon        string          `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"`                // ← oracle.NamePattern (FK на Vigil-имя)
+	OnBeacon        string          `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"`                // ← oracle.NamePattern (FK to a Vigil name)
 	SID             *string         `json:"sid,omitempty"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 	Where           *string         `json:"where,omitempty"`
 }
 
-// === envelope reply-DTO (element-поле → native, форма 1:1) ===
+// === envelope reply-DTO (element field → native, shape 1:1) ===
 
-// VigilListReply — native 200-envelope GET /v1/vigils (форма 1:1 с прежним VigilListReply).
+// VigilListReply — native 200-envelope GET /v1/vigils (shape 1:1 with the former VigilListReply).
 // items — []VigilView (native element); offset/limit/total — int32.
 type VigilListReply struct {
 	Items  []VigilView `json:"items"`
@@ -83,7 +83,7 @@ type VigilListReply struct {
 	Total  int32       `json:"total"`
 }
 
-// DecreeListReply — native 200-envelope GET /v1/decrees (форма 1:1 с прежним DecreeListReply).
+// DecreeListReply — native 200-envelope GET /v1/decrees (shape 1:1 with the former DecreeListReply).
 type DecreeListReply struct {
 	Items  []DecreeView `json:"items"`
 	Limit  int32        `json:"limit"`
@@ -91,9 +91,9 @@ type DecreeListReply struct {
 	Total  int32        `json:"total"`
 }
 
-// === проекция доменных result-ов handler-а → native wire-DTO ===
+// === projection of domain handler results → native wire-DTO ===
 
-// newVigilView проецирует доменный handlers.VigilView (плоские поля) в native VigilView.
+// newVigilView projects the domain handlers.VigilView (flat fields) into a native VigilView.
 func newVigilView(v handlers.VigilView) VigilView {
 	return VigilView{
 		Check:        v.Check,
@@ -109,7 +109,7 @@ func newVigilView(v handlers.VigilView) VigilView {
 	}
 }
 
-// newDecreeView проецирует доменный handlers.DecreeView в native DecreeView.
+// newDecreeView projects the domain handlers.DecreeView into a native DecreeView.
 func newDecreeView(d handlers.DecreeView) DecreeView {
 	return DecreeView{
 		ActionInput:     d.ActionInput,
@@ -128,7 +128,7 @@ func newDecreeView(d handlers.DecreeView) DecreeView {
 	}
 }
 
-// newVigilListReply проецирует доменный handlers.VigilListPage в native envelope
+// newVigilListReply projects the domain handlers.VigilListPage into a native envelope
 // VigilListReply (items non-nil [], offset/limit/total int32).
 func newVigilListReply(p handlers.VigilListPage) VigilListReply {
 	items := make([]VigilView, 0, len(p.Items))
@@ -138,7 +138,7 @@ func newVigilListReply(p handlers.VigilListPage) VigilListReply {
 	return VigilListReply{Items: items, Limit: int32(p.Limit), Offset: int32(p.Offset), Total: int32(p.Total)}
 }
 
-// newDecreeListReply проецирует доменный handlers.DecreeListPage в native envelope
+// newDecreeListReply projects the domain handlers.DecreeListPage into a native envelope
 // DecreeListReply.
 func newDecreeListReply(p handlers.DecreeListPage) DecreeListReply {
 	items := make([]DecreeView, 0, len(p.Items))

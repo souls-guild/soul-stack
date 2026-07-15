@@ -106,31 +106,31 @@ func TestValidateTokenFields(t *testing.T) {
 	p := func(s string) *string { return &s }
 	n := func(i int) *int { return &i }
 
-	// нет token-полей — всегда ok, независимо от src/delegate.
+	// no token fields — always ok, regardless of src/delegate.
 	if err := ValidateTokenFields(SourcePrometheus, mk(false, nil, nil)); err != nil {
 		t.Errorf("no token fields: %v", err)
 	}
-	// vault + delegate + валидный ttl/uses — ok.
+	// vault + delegate + valid ttl/uses — ok.
 	if err := ValidateTokenFields(SourceVault, mk(true, p("5m"), n(3))); err != nil {
 		t.Errorf("vault delegate happy: %v", err)
 	}
-	// token-поля без delegate — fail.
+	// token fields without delegate — fail.
 	if err := ValidateTokenFields(SourceVault, mk(false, p("5m"), nil)); err == nil {
 		t.Error("token without delegate accepted")
 	}
-	// token-поля + delegate, но не vault — fail.
+	// token fields + delegate, but not vault — fail.
 	if err := ValidateTokenFields(SourcePrometheus, mk(true, p("5m"), nil)); err == nil {
 		t.Error("token on prometheus accepted")
 	}
-	// плохой ttl-формат — fail.
+	// bad ttl format — fail.
 	if err := ValidateTokenFields(SourceVault, mk(true, p("5banana"), nil)); err == nil {
 		t.Error("bad ttl accepted")
 	}
-	// отрицательный num_uses — fail.
+	// negative num_uses — fail.
 	if err := ValidateTokenFields(SourceVault, mk(true, nil, n(-1))); err == nil {
 		t.Error("negative num_uses accepted")
 	}
-	// num_uses без ttl — ok (только uses).
+	// num_uses without ttl — ok (uses only).
 	if err := ValidateTokenFields(SourceVault, mk(true, nil, n(5))); err != nil {
 		t.Errorf("uses-only: %v", err)
 	}

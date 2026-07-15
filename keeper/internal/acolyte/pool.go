@@ -1,21 +1,22 @@
-// Пакет acolyte — пул воркеров исполнения apply на Keeper-инстансе
-// (ADR-027, Acolyte). Заменяет одиночную run-goroutine инстанса-владельца:
-// каждый Acolyte периодически опрашивает очередь planned-заданий и атомарно
-// клеймит их (Ward) через `FOR UPDATE SKIP LOCKED`. Любой инстанс через свой
-// пул подхватывает любое задание → исполнение распределено по кластеру.
+// Package acolyte is a pool of apply-execution workers on a Keeper instance
+// (ADR-027, Acolyte). Replaces the single run-goroutine of the owning instance:
+// each Acolyte periodically polls the planned-task queue and atomically claims
+// them (Ward) via `FOR UPDATE SKIP LOCKED`. Any instance's pool can pick up any
+// task → execution is distributed across the cluster.
 //
-// Пул claim-agnostic: он лишь периодически дёргает инъектированный claim-callback
-// (по умолчанию no-op), не зная про applyrun/scenario. Реальный claim/render/
-// dispatch живёт в [scenario.ClaimRunner], который wire-up (setupAcolyte, slice
-// 1.4.4) подключает через [Pool.SetClaim].
+// The pool is claim-agnostic: it only periodically invokes an injected
+// claim-callback (no-op by default), unaware of applyrun/scenario. The actual
+// claim/render/dispatch lives in [scenario.ClaimRunner], wired up (setupAcolyte,
+// slice 1.4.4) via [Pool.SetClaim].
 //
-// Lifecycle построен по образцу keeper/internal/reaper/runner.go и
-// keeper/internal/scenario/runner.go: graceful-shutdown через
-// [sync.WaitGroup] + ctx-cancel. Останов двухстадийный (graceful-drain пула Acolyte,
-// ADR-027 Phase 2): сперва drain-сигнал «больше не claim-ить» гасит loop, давая
-// уже идущим in-flight-claim-ам добежать в пределах grace; не уложившиеся —
-// прерываются отменой claim-ctx, их Ward остаётся в БД (claimed/running) и
-// подбирается recovery-сканом (ADR-027(i)) — НЕ форсится commit/rollback.
+// Lifecycle follows the pattern of keeper/internal/reaper/runner.go and
+// keeper/internal/scenario/runner.go: graceful shutdown via [sync.WaitGroup] +
+// ctx-cancel. Stop is two-staged (graceful drain of the Acolyte pool, ADR-027
+// Phase 2): a drain signal ("stop claiming") first stops the loop, letting
+// already in-flight claims finish within grace; those that don't make it are
+// aborted by cancelling claim-ctx — their Ward stays in the DB (claimed/running)
+// and is picked up by the recovery scan (ADR-027(i)), with no forced
+// commit/rollback.
 package acolyte
 
 import (
@@ -28,132 +29,142 @@ import (
 	"time"
 )
 
-// defaultPollInterval — период poll-tick-а воркера при опущенном
-// cfg.PollInterval. Acolyte всё равно периодически сканирует planned-задания,
-// поэтому poll — fallback к Summons-сигналу (ADR-027(a)): даже при потере
-// pub/sub-сигнала задание подхватится на ближайшем тике. Значение умеренное:
-// достаточно частое, чтобы failover после смерти владельца происходил в
-// пределах единиц секунд, и достаточно редкое, чтобы не флудить PG пустыми
-// claim-запросами на простаивающем кластере.
+// defaultPollInterval is the worker's poll-tick period when cfg.PollInterval
+// is unset. Acolyte periodically scans planned tasks regardless, so polling is
+// a fallback to the Summons signal (ADR-027(a)): even if a pub/sub signal is
+// lost, a task is picked up on the next tick. The value is moderate: frequent
+// enough that failover after an owner dies happens within seconds, and rare
+// enough not to flood PG with empty claim requests on an idle cluster.
 const defaultPollInterval = 2 * time.Second
 
-// defaultDrainGrace — окно graceful-drain пула Acolyte (ADR-027 Phase 2)
-// при опущенном cfg.DrainGrace. От сигнала «больше не claim-ить» до жёсткой
-// отмены claim-ctx у не успевших in-flight-воркеров. Значение умеренное:
-// достаточно, чтобы уже начатый claim (render → MarkDispatched → SendApply)
-// добежал до конца на здоровом PG/Soul, и не настолько большое, чтобы тормозить
-// SIGTERM-выход узла на зависшем in-flight (его claim переживёт рестарт —
-// останется в БД, lease истечёт → подберёт recovery-скан, ADR-027(i)).
+// defaultDrainGrace is the Acolyte pool's graceful-drain window (ADR-027
+// Phase 2) when cfg.DrainGrace is unset: from the "stop claiming" signal to
+// the hard cancel of claim-ctx for workers still in flight. The value is
+// moderate: enough for an already-started claim (render → MarkDispatched →
+// SendApply) to finish on a healthy PG/Soul, yet not so large that it stalls
+// SIGTERM shutdown on a stuck in-flight claim (it survives the restart — stays
+// in the DB, its lease expires, and the recovery scan picks it up, ADR-027(i)).
 const defaultDrainGrace = 5 * time.Second
 
-// hardStopTimeout — добавочная граница ожидания выхода воркеров ПОСЛЕ отмены
-// claim-ctx (когда grace уже исчерпан). Прерванный по ctx claim разматывает
-// стек быстро; этот запас лишь страхует от warn про leak на медленном unwind-е.
+// hardStopTimeout is an extra bound on waiting for workers to exit AFTER
+// claim-ctx is cancelled (once grace is exhausted). A ctx-aborted claim
+// unwinds quickly; this margin just guards against a false leak warning on a
+// slow unwind.
 const hardStopTimeout = 5 * time.Second
 
-// ClaimFunc — DI-шов под claim-логику. Вызывается воркером на каждом poll-tick-е
-// (и на Summons-wake). По умолчанию [noopClaim] — пул крутится вхолостую, пока
-// caller не подключит реальный захват Ward. Wire-up (setupAcolyte, slice 1.4.4)
-// задаёт сюда [scenario.ClaimRunner.Claim] (ClaimNext→RenderForHost→
-// MarkDispatched→SendApply). Возвращаемая ошибка логируется воркером и не останавливает
-// loop: сбой одного тика (например, временная недоступность PG) не роняет пул.
+// ClaimFunc is the DI seam for claim logic. Called by the worker on every
+// poll-tick (and on Summons-wake). Defaults to [noopClaim] — the pool idles
+// until the caller wires up a real Ward claim. Wire-up (setupAcolyte, slice
+// 1.4.4) sets this to [scenario.ClaimRunner.Claim] (ClaimNext→RenderForHost→
+// MarkDispatched→SendApply). A returned error is logged by the worker and does
+// not stop the loop: one tick failing (e.g. a transient PG outage) doesn't
+// bring down the pool.
 type ClaimFunc func(ctx context.Context) error
 
-// noopClaim — дефолтный claim-callback, пока caller не подключит реальный через
-// [Pool.SetClaim] (setupAcolyte, slice 1.4.4).
+// noopClaim is the default claim-callback until the caller wires up a real
+// one via [Pool.SetClaim] (setupAcolyte, slice 1.4.4).
 func noopClaim(context.Context) error { return nil }
 
-// SummonsSubscriber — DI-шов под Redis-подписку на Summons-сигнал (ADR-027(a),
-// slice 1.3). Поднимает подписку на топик `apply:summons`, вызывая onSignal на
-// каждый полученный сигнал; возвращает io.Closer для graceful-стопа подписки.
+// SummonsSubscriber is the DI seam for the Redis subscription to the Summons
+// signal (ADR-027(a), slice 1.3). Opens a subscription on the `apply:summons`
+// topic, calling onSignal for every received signal; returns an io.Closer for
+// a graceful subscription stop.
 //
-// Абстракция (а не прямой импорт keeper/internal/redis) держит acolyte
-// независимым от Redis-клиента: daemon на старте связывает её с
-// redis.SubscribeSummons (callback = pool.Notify). Если подписчик не задан
-// (Redis выключен или Acolytes>0 без кластер-режима) — пул работает на чистом
-// poll-fallback-е, потеря Summons-ускорения задание не теряет.
+// The abstraction (instead of importing keeper/internal/redis directly) keeps
+// acolyte independent of the Redis client: the daemon wires it to
+// redis.SubscribeSummons at startup (callback = pool.Notify). If no subscriber
+// is set (Redis disabled, or Acolytes>0 without cluster mode) the pool runs on
+// pure poll-fallback — losing Summons acceleration, not tasks.
 type SummonsSubscriber func(ctx context.Context, onSignal func()) (io.Closer, error)
 
-// Config — параметры пула. Заполняется из keeper.yml на старте (setupAcolyte:
-// Workers ← `acolytes`, PollInterval ← `acolyte_poll_interval`,
+// Config holds the pool's parameters. Populated from keeper.yml at startup
+// (setupAcolyte: Workers ← `acolytes`, PollInterval ← `acolyte_poll_interval`,
 // DrainGrace ← `acolyte_drain_grace`).
 type Config struct {
-	// Workers — число воркеров пула (`keeper.acolytes`). Caller поднимает Pool
-	// только при Workers > 0 (feature-flag, см. setupAcolyte); конструктор
-	// требует положительное значение и иначе возвращает ошибку.
+	// Workers is the pool's worker count (`keeper.acolytes`). The caller only
+	// starts a Pool when Workers > 0 (feature flag, see setupAcolyte); the
+	// constructor requires a positive value and errors otherwise.
 	Workers int
 
-	// PollInterval — период poll-tick-а воркера (`keeper.acolyte_poll_interval`).
-	// Zero-value → [defaultPollInterval].
+	// PollInterval is the worker's poll-tick period
+	// (`keeper.acolyte_poll_interval`). Zero-value → [defaultPollInterval].
 	PollInterval time.Duration
 
-	// DrainGrace — окно graceful-drain в [Pool.Shutdown] (`keeper.acolyte_drain_grace`).
-	// От сигнала «больше не claim-ить» до жёсткой отмены claim-ctx у не успевших
-	// in-flight-воркеров. Zero-value → [defaultDrainGrace].
+	// DrainGrace is the graceful-drain window in [Pool.Shutdown]
+	// (`keeper.acolyte_drain_grace`): from the "stop claiming" signal to the
+	// hard cancel of claim-ctx for workers still in flight. Zero-value →
+	// [defaultDrainGrace].
 	DrainGrace time.Duration
 }
 
-// Deps — внешние зависимости пула. Logger обязателен; Claim инъектируется
-// сеттером [Pool.SetClaim] после конструирования (slice 1.4), по умолчанию
-// no-op — пул собирается и стартует независимо от готовности claim-логики.
+// Deps holds the pool's external dependencies. Logger is required; Claim is
+// injected via the [Pool.SetClaim] setter after construction (slice 1.4),
+// defaulting to no-op — the pool builds and starts independent of the claim
+// logic's readiness.
 //
-// Summons — опциональный подписчик на Redis-сигнал planned-заданий (slice 1.3).
-// nil → пул работает на poll-fallback-е без Summons-ускорения (Redis выключен).
+// Summons is an optional subscriber to the Redis signal for planned tasks
+// (slice 1.3). nil → the pool runs on poll-fallback without Summons
+// acceleration (Redis disabled).
 type Deps struct {
 	Logger  *slog.Logger
 	Summons SummonsSubscriber
 }
 
-// Pool — пул из N Acolyte-воркеров. Один экземпляр на keeper-процесс.
+// Pool is a pool of N Acolyte workers. One instance per keeper process.
 type Pool struct {
 	cfg    Config
 	logger *slog.Logger
 
-	// claim — захват Ward на тике. Защищён mu: SetClaim может быть вызван до
-	// Start, но читается воркерами на каждом тике; mu снимает гонку.
+	// claim performs the Ward claim on each tick. Guarded by mu: SetClaim may
+	// be called before Start, but is read by workers on every tick; mu removes
+	// the race.
 	mu    sync.Mutex
 	claim ClaimFunc
 
-	// wake — буферизованный канал «появились planned-задания» (Summons-wake,
-	// ADR-027(a)). [Pool.Notify] кладёт сигнал не блокируясь; воркер на нём
-	// просыпается раньше следующего poll-tick-а. Redis pub/sub, питающий этот
-	// канал, — slice 1.3: подписка на топик `apply:summons` поднимается в
-	// [Pool.Start] и дёргает [Pool.Notify].
+	// wake is a buffered "planned tasks appeared" channel (Summons-wake,
+	// ADR-027(a)). [Pool.Notify] posts to it non-blocking; a worker wakes on it
+	// ahead of the next poll-tick. The Redis pub/sub feeding this channel is
+	// slice 1.3: the subscription on `apply:summons` is opened in [Pool.Start]
+	// and calls [Pool.Notify].
 	wake chan struct{}
 
-	// summons — DI-подписчик на Summons-сигнал; nil → только poll-fallback.
-	// summonsCloser — handle активной подписки (закрывается в Shutdown).
+	// summons is the DI subscriber for the Summons signal; nil → poll-fallback
+	// only. summonsCloser is the handle of the active subscription (closed in
+	// Shutdown).
 	summons       SummonsSubscriber
 	summonsCloser io.Closer
 
-	// drain — drain-сигнал «больше не claim-ить» (graceful-drain пула Acolyte, ADR-027 Phase 2,
-	// graceful-drain). Закрывается единожды [Pool.beginDrain] на Shutdown-е;
-	// воркер, увидев его в select, выходит из loop-а БЕЗ запуска нового тика.
-	// Уже идущий in-flight-тик при этом НЕ прерывается — он добегает до конца
-	// (или до отмены claimCtx по истечении grace).
+	// drain is the "stop claiming" signal (Acolyte pool graceful drain,
+	// ADR-027 Phase 2). Closed once by [Pool.beginDrain] on Shutdown; a worker
+	// that sees it in select exits the loop WITHOUT starting a new tick. An
+	// already in-flight tick is NOT aborted by this — it runs to completion
+	// (or until claimCtx is cancelled once grace expires).
 	drain     chan struct{}
 	drainOnce sync.Once
 
-	// claimCtx/claimCancel — ctx, под которым выполняется claim-callback
-	// (НЕ worker-lifecycle-ctx). Разводит две стадии остановки: drain гасит
-	// loop (новых claim-ов нет), а claimCancel прерывает уже идущий claim
-	// только по истечении grace. Прерванный claim оставляет Ward в БД как есть
-	// (claimed/running) — lease истечёт, задание подберёт recovery (ADR-027(i)),
-	// двойного исполнения нет (fencing, ADR-027(g)). Инициализируются в Start.
+	// claimCtx/claimCancel is the ctx the claim-callback runs under (NOT the
+	// worker-lifecycle ctx). Separates the two stop stages: drain stops the
+	// loop (no new claims), while claimCancel aborts an already-running claim
+	// only once grace expires. An aborted claim leaves its Ward in the DB as-is
+	// (claimed/running) — the lease expires, recovery picks up the task
+	// (ADR-027(i)), fencing rules out double execution (ADR-027(g)).
+	// Initialized in Start.
 	claimCtx    context.Context
 	claimCancel context.CancelFunc
 
-	// inflight — число воркеров, прямо сейчас исполняющих claim-callback.
-	// На момент истечения grace в Shutdown его значение = число in-flight,
-	// которые будут прерваны отменой claimCtx (для лога drain-итога).
+	// inflight is the number of workers currently executing the
+	// claim-callback. At the moment grace expires in Shutdown, its value is
+	// the number of in-flight claims about to be aborted by claimCtx (used for
+	// the drain-outcome log).
 	inflight atomic.Int64
 
 	wg sync.WaitGroup
 }
 
-// NewPool проверяет cfg/deps и возвращает пул. На некорректные параметры —
-// ошибка: это программная ошибка caller-а (setupAcolyte), не runtime-условие.
-// Claim по умолчанию no-op; реальный захват подключается [Pool.SetClaim].
+// NewPool validates cfg/deps and returns a pool. Invalid parameters return an
+// error: that's a caller programming error (setupAcolyte), not a runtime
+// condition. Claim defaults to no-op; the real claim is wired up via
+// [Pool.SetClaim].
 func NewPool(cfg Config, deps Deps) (*Pool, error) {
 	if cfg.Workers <= 0 {
 		return nil, errors.New("acolyte.NewPool: Workers must be > 0")
@@ -172,15 +183,15 @@ func NewPool(cfg Config, deps Deps) (*Pool, error) {
 		logger:  deps.Logger,
 		claim:   noopClaim,
 		summons: deps.Summons,
-		// Буфер 1: коалесцируем всплеск Summons-сигналов в один wake —
-		// воркеру достаточно одного «проснись и проверь очередь».
+		// Buffer of 1: coalesce a burst of Summons signals into one wake —
+		// the worker only needs a single "wake up and check the queue".
 		wake:  make(chan struct{}, 1),
 		drain: make(chan struct{}),
 	}, nil
 }
 
-// SetClaim инъектирует claim-callback (slice 1.4 — applyrun.ClaimNext).
-// Безопасно вызывать до Start; nil-callback игнорируется (остаётся no-op).
+// SetClaim injects the claim-callback (slice 1.4 — applyrun.ClaimNext). Safe
+// to call before Start; a nil callback is ignored (stays no-op).
 func (p *Pool) SetClaim(fn ClaimFunc) {
 	if fn == nil {
 		return
@@ -190,10 +201,10 @@ func (p *Pool) SetClaim(fn ClaimFunc) {
 	p.mu.Unlock()
 }
 
-// Notify будит воркеров: «появились planned-задания» (Summons-wake). Не
-// блокируется — при уже-взведённом сигнале лишний Notify коалесцируется.
-// Питается Redis pub/sub-подписчиком (slice 1.3); пока — точка вызова для
-// будущего wire-up-а.
+// Notify wakes workers: "planned tasks appeared" (Summons-wake). Non-blocking
+// — an extra Notify coalesces with an already-pending signal. Fed by the
+// Redis pub/sub subscriber (slice 1.3); for now, a call site for future
+// wire-up.
 func (p *Pool) Notify() {
 	select {
 	case p.wake <- struct{}{}:
@@ -201,19 +212,22 @@ func (p *Pool) Notify() {
 	}
 }
 
-// Start запускает cfg.Workers воркеров и сразу возвращается (async). Воркеры
-// крутятся, пока ctx не отменится; завершение дожидается [Pool.Shutdown].
+// Start launches cfg.Workers workers and returns immediately (async). Workers
+// keep running until ctx is cancelled; wait for completion via
+// [Pool.Shutdown].
 //
-// Если задан Summons-подписчик (Deps.Summons), Start поднимает подписку на
-// `apply:summons` с callback = [Pool.Notify]: пришедший сигнал будит воркеров
-// раньше poll-tick-а. Сбой подписки best-effort — логируется warn-ом, пул
-// продолжает работать на poll-fallback-е (потеря Summons-ускорения не теряет
-// задание). Подписка живёт под переданным ctx и закрывается в [Pool.Shutdown].
+// If a Summons subscriber is set (Deps.Summons), Start opens a subscription
+// on `apply:summons` with callback = [Pool.Notify]: an incoming signal wakes
+// workers ahead of the poll-tick. Subscription failure is best-effort — logged
+// as a warning, and the pool keeps running on poll-fallback (losing Summons
+// acceleration doesn't lose tasks). The subscription lives under the passed
+// ctx and is closed in [Pool.Shutdown].
 func (p *Pool) Start(ctx context.Context) {
-	// claimCtx — производный от Start-ctx ctx исполнения claim-callback-а.
-	// Worker-lifecycle крутится под исходным ctx; claimCtx отменяется отдельно
-	// (Shutdown по истечении grace), чтобы graceful-drain мог дать in-flight-у
-	// добежать ДО жёсткой отмены, а не рубить его одновременно с loop-ом.
+	// claimCtx is the claim-callback's execution ctx, derived from the
+	// Start-ctx. The worker lifecycle runs under the original ctx; claimCtx is
+	// cancelled separately (by Shutdown once grace expires), so graceful-drain
+	// can let an in-flight claim finish BEFORE the hard cancel, instead of
+	// cutting it off together with the loop.
 	p.claimCtx, p.claimCancel = context.WithCancel(ctx)
 
 	if p.summons != nil {
@@ -238,36 +252,38 @@ func (p *Pool) Start(ctx context.Context) {
 	)
 }
 
-// beginDrain единожды закрывает drain-канал (drain-сигнал «больше не
-// claim-ить») и будит воркеров, заблокированных на poll-tick-ожидании, чтобы
-// они сразу увидели drain и вышли из loop-а. Идемпотентна (sync.Once): повторный
-// Shutdown / гонка не паникуют на двойном close.
+// beginDrain closes the drain channel ("stop claiming" signal) exactly once
+// and wakes workers blocked waiting on a poll-tick, so they see drain right
+// away and exit the loop. Idempotent (sync.Once): a repeated Shutdown / race
+// won't panic on a double close.
 func (p *Pool) beginDrain() {
 	p.drainOnce.Do(func() {
 		close(p.drain)
-		// Разбудить воркеров, висящих в select на poll-tick: на следующем
-		// проходе они увидят закрытый drain и выйдут. Notify не блокируется.
+		// Wake workers blocked in select on a poll-tick: on the next pass
+		// they'll see drain closed and exit. Notify is non-blocking.
 		p.Notify()
 	})
 }
 
-// Shutdown выполняет graceful-drain пула Acolyte (ADR-027 Phase 2):
+// Shutdown performs a graceful drain of the Acolyte pool (ADR-027 Phase 2):
 //
-//  1. Закрывает Summons-подписку (новые wake-сигналы бессмысленны).
-//  2. beginDrain — воркеры перестают входить в НОВЫЕ claim-тики; уже идущий
-//     in-flight-тик НЕ прерывается.
-//  3. Ждёт выхода воркеров в пределах grace (cfg.DrainGrace либо более ранний
-//     дедлайн переданного ctx). In-flight-тик, уложившийся в grace, завершается
-//     штатно (claimed→dispatched или терминал — как обычный claim).
-//  4. По истечении grace — claimCancel: прерывает claim-callback не успевших
-//     in-flight-воркеров по ctx. Прерванный ДО отметки dispatched claim оставляет
-//     свой Ward в БД КАК ЕСТЬ (claimed, attempt/lease не трогаются) — НЕ форсит
-//     commit/rollback: lease истечёт, задание подберёт recovery-скан (ADR-027(i)),
-//     fencing исключает двойное исполнение (ADR-027(g)). Затем добор выхода в
-//     пределах [hardStopTimeout].
+//  1. Closes the Summons subscription (new wake signals would be pointless).
+//  2. beginDrain — workers stop entering NEW claim ticks; an already
+//     in-flight tick is NOT aborted.
+//  3. Waits for workers to exit within grace (cfg.DrainGrace, or the passed
+//     ctx's deadline if earlier). An in-flight tick that finishes within
+//     grace completes normally (claimed→dispatched or terminal — like any
+//     claim).
+//  4. Once grace expires — claimCancel: aborts the claim-callback of workers
+//     still in flight via ctx. A claim aborted BEFORE reaching dispatched
+//     leaves its Ward in the DB AS-IS (claimed, attempt/lease untouched) — no
+//     forced commit/rollback: the lease expires, the recovery scan picks up
+//     the task (ADR-027(i)), fencing rules out double execution (ADR-027(g)).
+//     Then waits a bit more, within [hardStopTimeout].
 //
-// Возвращает ctx.Err(), если переданный ctx истёк раньше штатного завершения
-// (drain не уложился в окно). Лог-итог: сколько in-flight прервано по grace.
+// Returns ctx.Err() if the passed ctx expired before normal completion (drain
+// didn't fit the window). Logs the outcome: how many in-flight claims were
+// aborted by grace.
 func (p *Pool) Shutdown(ctx context.Context) error {
 	if p.summonsCloser != nil {
 		if err := p.summonsCloser.Close(); err != nil {
@@ -284,20 +300,20 @@ func (p *Pool) Shutdown(ctx context.Context) error {
 		close(done)
 	}()
 
-	// Окно grace: минимум из cfg.DrainGrace и дедлайна переданного ctx.
+	// Grace window: min of cfg.DrainGrace and the passed ctx's deadline.
 	grace := time.NewTimer(p.cfg.DrainGrace)
 	defer grace.Stop()
 
 	select {
 	case <-done:
-		// Все воркеры вышли в пределах grace — in-flight добежал штатно.
+		// All workers exited within grace — in-flight finished normally.
 		p.logger.Info("acolyte: pool drained gracefully")
 		return nil
 	case <-grace.C:
-		// grace исчерпан — прерываем не успевший in-flight по claimCtx.
+		// grace exhausted — abort the remaining in-flight claim via claimCtx.
 	case <-ctx.Done():
-		// Переданный ctx (15s shutdown-таймаут daemon-а) истёк раньше grace —
-		// тоже переходим к жёсткой отмене.
+		// The passed ctx (daemon's 15s shutdown timeout) expired before grace
+		// — also proceed to the hard cancel.
 	}
 
 	interrupted := p.inflight.Load()
@@ -322,16 +338,16 @@ func (p *Pool) Shutdown(ctx context.Context) error {
 	}
 }
 
-// worker — poll-tick loop одного Acolyte-а. На каждом тике (или Summons-wake)
-// дёргает claim-callback. Выход — по ctx.Done (жёсткая отмена) ИЛИ по drain
-// (drain: больше не claim-ить).
+// worker is one Acolyte's poll-tick loop. On every tick (or Summons-wake) it
+// invokes the claim-callback. Exits on ctx.Done (hard cancel) OR on drain
+// (stop claiming).
 //
-// Граф остановки двухстадийный: drain гасит loop (новые тики не стартуют), но
-// уже идущий [Pool.tick] добегает до конца — его прерывает только claimCtx,
-// отменяемый Shutdown-ом по истечении grace. Поэтому drain проверяется и в
-// основном select (не входить в новый тик), и отдельной проверкой ПЕРЕД самим
-// tick (canStartTick): между пробуждением по wake/poll и запуском claim drain
-// мог уже взвестись.
+// The stop sequence is two-staged: drain stops the loop (no new ticks start),
+// but an already running [Pool.tick] runs to completion — only claimCtx,
+// cancelled by Shutdown once grace expires, can abort it. That's why drain is
+// checked both in the main select (don't enter a new tick) and separately
+// right before the tick itself (canStartTick): drain may have fired between
+// the wake/poll wakeup and the claim starting.
 func (p *Pool) worker(ctx context.Context, id int) {
 	defer p.wg.Done()
 
@@ -343,15 +359,16 @@ func (p *Pool) worker(ctx context.Context, id int) {
 		case <-ctx.Done():
 			return
 		case <-p.drain:
-			// Drain: новых claim-ов не начинаем, выходим из loop-а.
+			// Drain: don't start new claims, exit the loop.
 			return
 		case <-t.C:
 			if p.canStartTick() {
 				p.tick(p.claimCtx, id)
 			}
 		case <-p.wake:
-			// Summons-wake (в т.ч. beginDrain дёргает Notify): проверяем drain
-			// перед запуском тика — на drain-wake тик не стартуем, идём на выход.
+			// Summons-wake (beginDrain also triggers Notify): check drain
+			// before starting a tick — on a drain-wake we don't start a tick,
+			// we head for the exit.
 			if p.canStartTick() {
 				p.tick(p.claimCtx, id)
 			}
@@ -359,9 +376,9 @@ func (p *Pool) worker(ctx context.Context, id int) {
 	}
 }
 
-// canStartTick сообщает, можно ли начинать новый claim-тик: false, если drain
-// уже взведён. Закрывает гонку «проснулись по wake, но между select и tick
-// встал drain».
+// canStartTick reports whether a new claim tick may start: false if drain has
+// already fired. Closes the race of "woke up on wake, but drain landed
+// between select and tick".
 func (p *Pool) canStartTick() bool {
 	select {
 	case <-p.drain:
@@ -371,10 +388,11 @@ func (p *Pool) canStartTick() bool {
 	}
 }
 
-// tick выполняет один проход claim под claimCtx. Ошибка claim-callback-а
-// логируется и НЕ останавливает воркер (best-effort: сбой одного тика не роняет
-// пул). Инкремент/декремент inflight оборачивает вызов: на момент истечения
-// grace в Shutdown его значение = число in-flight, прерываемых отменой claimCtx.
+// tick runs one claim pass under claimCtx. A claim-callback error is logged
+// and does NOT stop the worker (best-effort: one tick failing doesn't bring
+// down the pool). The call is wrapped by an inflight increment/decrement: at
+// the moment grace expires in Shutdown, its value is the number of in-flight
+// claims about to be aborted by claimCtx.
 func (p *Pool) tick(ctx context.Context, id int) {
 	p.mu.Lock()
 	claim := p.claim
@@ -385,8 +403,9 @@ func (p *Pool) tick(ctx context.Context, id int) {
 	p.inflight.Add(-1)
 
 	if err != nil {
-		// ctx.Canceled — норма на жёсткой отмене drain-grace (claimCtx отменён):
-		// in-flight прерван штатно, Ward остаётся в БД для recovery, не шумим.
+		// ctx.Canceled is expected on a hard drain-grace cancel (claimCtx
+		// cancelled): the in-flight claim was aborted normally, the Ward stays
+		// in the DB for recovery — don't log noise.
 		if errors.Is(err, context.Canceled) {
 			return
 		}

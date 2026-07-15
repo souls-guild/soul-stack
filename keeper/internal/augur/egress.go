@@ -1,13 +1,15 @@
 package augur
 
-// SSRF egress-guard для брокера prom/elk (augur.md §4.1 / §7 / §9 — endpoint из
-// БД-записи Omen НЕдоверенный ввод, Keeper делает по нему исходящий HTTP).
+// SSRF egress guard for the prom/elk brokers (augur.md §4.1 / §7 / §9 —
+// endpoint from an Omen DB row is UNtrusted input, Keeper issues outbound
+// HTTP against it).
 //
-// Общая SSRF-guard-логика (resolve-then-check-then-dial по фактическому IP,
-// rebind-safe; CheckRedirect-downgrade-защита; https-only; классификатор
-// заблокированных IP) вынесена в shared/netguard и переиспользуется core-HTTP-
-// модулями Soul-а (core.url / core.http). Здесь остаётся augur-специфика:
-// таймауты брокерного запроса, body-limit и конструктор клиента поверх netguard.
+// The shared SSRF-guard logic (resolve-then-check-then-dial against the
+// actual IP, rebind-safe; CheckRedirect downgrade protection; https-only; the
+// blocked-IP classifier) lives in shared/netguard and is reused by Soul's
+// core HTTP modules (core.url / core.http). What remains here is augur
+// specifics: broker request timeouts, the body limit, and the client
+// constructor on top of netguard.
 
 import (
 	"net"
@@ -17,42 +19,42 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// maxEgressRedirects — жёсткий лимит редиректов для брокерного HTTP-фетча. Каждый
-// hop проверяется на https и по фактическому IP (см. netguard); лимит защищает
-// от бесконечной цепочки.
+// maxEgressRedirects — a hard redirect limit for a broker HTTP fetch. Every
+// hop is checked for https and against its actual IP (see netguard); the
+// limit guards against an endless chain.
 const maxEgressRedirects = 10
 
-// egressDialTimeout — таймаут установления TCP-соединения. Совпадает с
+// egressDialTimeout — TCP connection-establishment timeout. Matches
 // http.DefaultTransport.
 const egressDialTimeout = 30 * time.Second
 
-// egressRequestTimeout — общий таймаут одного брокерного HTTP-запроса (dial +
-// TLS + чтение лимитированного тела). endpoint НЕдоверен — медленный/висящий
-// внешний хост не должен держать горутину обработки бесконечно.
+// egressRequestTimeout — overall timeout for one broker HTTP request (dial +
+// TLS + reading the size-limited body). endpoint is UNtrusted — a slow/hung
+// external host must not hold the handling goroutine forever.
 const egressRequestTimeout = 15 * time.Second
 
-// maxResponseBytes — лимит размера тела ответа внешней системы (10 MiB). Защита
-// от raw-DoS: НЕдоверенный endpoint не должен заставить Keeper аллоцировать
-// произвольный объём. Тело читается через io.LimitReader на эту границу;
-// превышение → ошибка (см. broker_http.go).
+// maxResponseBytes — size limit for an external system's response body
+// (10 MiB). Protects against raw DoS: an UNtrusted endpoint must not force
+// Keeper to allocate an arbitrary amount. The body is read through
+// io.LimitReader at this boundary; exceeding it → error (see broker_http.go).
 const maxResponseBytes = 10 << 20
 
-// validateEndpoint — проверка endpoint-а Omen-а перед HTTP-запросом (https-only +
-// непустой host + литеральный IP в block-list, быстрый отказ до сборки клиента).
-// Делегирует в shared/netguard; обёртка сохраняет augur-имя для брокеров
-// (broker_prom/broker_elk).
+// validateEndpoint checks an Omen's endpoint before an HTTP request
+// (https-only + non-empty host + literal IP against the block-list, a fast
+// rejection before building the client). Delegates to shared/netguard; the
+// wrapper keeps the augur-facing name for the brokers (broker_prom/broker_elk).
 func validateEndpoint(rawURL string) error {
 	return netguard.ValidateEndpoint(rawURL)
 }
 
-// newEgressClient возвращает *http.Client для брокерного HTTP к НЕдоверенному
-// endpoint-у: системный TLS trust store (никакого InsecureSkipVerify), общий
-// таймаут запроса, redirect-downgrade-защита + лимит и SSRF-guard на dial-фазе
-// по фактическому IP (rebind-safe, deny metadata/loopback/private) — всё из
-// shared/netguard.
+// newEgressClient returns an *http.Client for broker HTTP against an
+// UNtrusted endpoint: the system TLS trust store (no InsecureSkipVerify),
+// the overall request timeout, redirect-downgrade protection + limit, and
+// an SSRF guard at the dial phase against the actual IP (rebind-safe, deny
+// metadata/loopback/private) — all from shared/netguard.
 //
-// resolver инжектируется для тестируемости guard-а; в проде передаётся
-// netguard.DefaultResolver (см. NewEgressClient).
+// resolver is injected for the guard's testability; production passes
+// netguard.DefaultResolver (see NewEgressClient).
 func newEgressClient(resolver netguard.Resolver) *http.Client {
 	dialer := &net.Dialer{Timeout: egressDialTimeout}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -64,9 +66,10 @@ func newEgressClient(resolver netguard.Resolver) *http.Client {
 	}
 }
 
-// NewEgressClient — production SSRF-guarded *http.Client для брокерного HTTP к
-// НЕдоверенному endpoint-у Omen-а (prom/elk). Системный DNS-резолвер; реализует
-// [HTTPDoer]. grpc-handler создаёт один экземпляр и передаёт в брокеры.
+// NewEgressClient — a production SSRF-guarded *http.Client for broker HTTP
+// against an Omen's UNtrusted endpoint (prom/elk). Uses the system DNS
+// resolver; implements [HTTPDoer]. The grpc handler creates one instance and
+// passes it to the brokers.
 func NewEgressClient() *http.Client {
 	return newEgressClient(netguard.DefaultResolver)
 }

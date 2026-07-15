@@ -1,21 +1,21 @@
-// Package handlers — HTTP-handler-ы Operator API (M0.6b).
+// Package handlers — HTTP handlers for the Operator API (M0.6b).
 //
-// M0.7: бизнес-логика вынесена в [operator.Service]; handler-ы — тонкая
-// HTTP-обёртка (декодирование request → service-call → encoding 4xx/2xx).
-// Тот же service вызывается MCP-tool-handler-ом (keeper/internal/mcp), что
-// гарантирует один источник правды для трёх endpoint-ов (PM-decision
-// M0.7 #6, ТЗ delegation.md).
+// M0.7: business logic moved into [operator.Service]; the handlers are a thin
+// HTTP wrapper (decode request → service call → encode 4xx/2xx). The same
+// service is called by the MCP tool handler (keeper/internal/mcp), which
+// guarantees a single source of truth for the three endpoints (PM decision
+// M0.7 #6, delegation.md spec).
 //
-// T5d (handler-native PILOT): домен operator полностью отвязан от legacy-генерата.
-// *Typed-функции принимают NATIVE request-типы (огранизованы huma-input-ом в
-// пакете api) и возвращают доменные result-ы с ПЛОСКИМИ wire-полями — НЕ
-// legacy-генерата-Body. Native wire-DTO (схему OpenAPI) строит пакет api из этих полей
-// (register-func huma_operator.go), oapi-генерёные типы в operator-домене не
-// участвуют. (w,r)-оболочки сняты: HTTP обслуживает huma full-typed, MCP зовёт
-// operator.Service напрямую (мимо handler).
+// T5d (handler-native PILOT): the operator domain is fully decoupled from the legacy
+// generator. *Typed functions take NATIVE request types (assembled by the huma-input in
+// package api) and return domain results with FLAT wire fields — NOT a legacy generator
+// Body. The native wire-DTO (the OpenAPI schema) is built by package api from those fields
+// (register func huma_operator.go); oapi-generated types play no part in the operator
+// domain. The (w,r) wrappers are gone: HTTP is served by huma full-typed, MCP calls
+// operator.Service directly (bypassing the handler).
 //
-// RBAC-проверка делается в middleware (см. api/router.go и
-// api/middleware/rbac.go), handler выполняет только маппинг ошибок в
+// RBAC checks happen in middleware (see api/router.go and
+// api/middleware/rbac.go); the handler only maps errors to
 // RFC 7807.
 package handlers
 
@@ -38,69 +38,69 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// OperatorDB — узкий интерфейс над pgxpool.Pool, который нужен handler-у
-// для не-транзакционных endpoint-ов.
+// OperatorDB — narrow interface over pgxpool.Pool needed by the handler for the
+// non-transactional endpoints.
 type OperatorDB = operator.ExecQueryRower
 
-// OperatorPool — расширение [OperatorDB] с BeginTx, нужное Revoke-handler-у
-// для атомарной self-lockout-проверки.
+// OperatorPool — extends [OperatorDB] with BeginTx, needed by the Revoke handler for the
+// atomic self-lockout check.
 type OperatorPool interface {
 	OperatorDB
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// JWTIssuer — узкий интерфейс над `*keeper/internal/jwt.Issuer`.
-// Сужение нужно для unit-тестов (mock без подгрузки signing-key).
+// JWTIssuer — narrow interface over `*keeper/internal/jwt.Issuer`.
+// The narrowing is for unit tests (mock without loading a signing key).
 type JWTIssuer interface {
 	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
 }
 
-// RBACSource — узкая поверхность rbac-сервиса для handler-side helper-ов.
-// Нужен только RolesOf (передаётся в operator.Service для выпуска JWT);
-// lockout-probe берёт admin-set из БД (Slice 3), не из in-memory снимка.
+// RBACSource — narrow surface of the rbac service for handler-side helpers.
+// Only RolesOf is needed (passed to operator.Service for JWT issuance); the
+// lockout probe takes the admin set from the DB (Slice 3), not from an in-memory snapshot.
 type RBACSource interface {
 	RolesOf(aid string) []string
 }
 
-// ProvisioningGate — узкая поверхность политики provisioning_allowed_methods
-// (ADR-058 Часть B): гейтит ветку СОЗДАНИЯ оператора. Реализуется
-// *serviceregistry.Holder; объявлена локально, чтобы handlers не тянул
-// serviceregistry. nil → гейт выключен (политика не сконфигурирована /
-// тесты, back-compat — CreateTyped пропускает).
+// ProvisioningGate — narrow surface of the provisioning_allowed_methods policy
+// (ADR-058 Part B): gates the operator CREATE branch. Implemented by
+// *serviceregistry.Holder; declared locally so handlers doesn't pull in
+// serviceregistry. nil → gate off (policy not configured / tests, back-compat —
+// CreateTyped lets it through).
 type ProvisioningGate interface {
 	ProvisioningMethodAllowed(method string) bool
 }
 
-// OperatorHandler — три endpoint-а Operator API. Делегирует бизнес-логику
-// в [operator.Service].
+// OperatorHandler — the three Operator API endpoints. Delegates business logic to
+// [operator.Service].
 //
-// Все зависимости immutable; safe for concurrent use, потому что не
-// держит состояния между запросами.
+// All dependencies are immutable; safe for concurrent use, since it holds no state
+// between requests.
 type OperatorHandler struct {
 	svc    *operator.Service
 	logger *slog.Logger
 
-	// gate — политика provisioning_allowed_methods (ADR-058 Часть B), гейтит
-	// CreateTyped (метод "user"). nil → гейт выключен (back-compat). Инжектится
-	// через [SetProvisioningGate] late-binding-ом: Holder в `keeper run`
-	// поднимается отдельным setup-шагом, конструктор сигнатуру не меняет.
+	// gate — the provisioning_allowed_methods policy (ADR-058 Part B), gates CreateTyped
+	// (method "user"). nil → gate off (back-compat). Injected via [SetProvisioningGate]
+	// late-binding: the Holder in `keeper run` comes up as a separate setup step, the
+	// constructor signature does not change.
 	gate ProvisioningGate
 }
 
-// SetProvisioningGate late-binding-ом подключает политику provisioning_allowed_methods
-// (ADR-058 Часть B). nil — снять гейт (back-compat: создание любым методом).
-// Вызывается из `keeper run` после подъёма serviceregistry.Holder. Идемпотентен;
-// потокобезопасность не требуется — вызов до старта HTTP-сервера.
+// SetProvisioningGate late-binds the provisioning_allowed_methods policy (ADR-058 Part
+// B). nil — remove the gate (back-compat: create by any method). Called from `keeper run`
+// after serviceregistry.Holder comes up. Idempotent; no thread-safety needed — called
+// before the HTTP server starts.
 func (h *OperatorHandler) SetProvisioningGate(gate ProvisioningGate) {
 	h.gate = gate
 }
 
-// NewOperatorHandler создаёт handler. ttlDefault — TTL JWT-токенов.
-// Внутри собирает [operator.Service] (один на handler).
+// NewOperatorHandler creates a handler. ttlDefault — TTL of JWT tokens. Internally it
+// assembles [operator.Service] (one per handler).
 //
-// Сохраняем старую сигнатуру (pool / issuer / rbacSrc / ttlDefault / logger)
-// для бинарной совместимости с keeper/cmd/keeper wire-up и unit-тестами
-// (handlers/operator_test.go) — service-объект создаётся скрыто.
+// The old signature (pool / issuer / rbacSrc / ttlDefault / logger) is kept for binary
+// compatibility with the keeper/cmd/keeper wire-up and unit tests
+// (handlers/operator_test.go) — the service object is created behind the scenes.
 func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource, ttlDefault time.Duration, logger *slog.Logger) *OperatorHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -113,47 +113,47 @@ func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource,
 		Logger:     logger,
 	})
 	if err != nil {
-		// Single point of misconfiguration — caller (NewServer) уже
-		// валидирует non-nil deps; реальный path сюда не должен
-		// дойти, но panic-ить здесь хуже, чем зафиксировать в логах.
+		// Single point of misconfiguration — the caller (NewServer) already
+		// validates non-nil deps; the real path should not reach here, but
+		// panicking here beats a silent misconfiguration.
 		panic(fmt.Sprintf("handlers.NewOperatorHandler: %v", err))
 	}
 	return &OperatorHandler{svc: svc, logger: logger}
 }
 
-// Service возвращает inner [operator.Service]. Используется wire-up-ом MCP-
-// сервера в keeper/cmd/keeper, чтобы переиспользовать тот же экземпляр
-// (single source of truth, см. delegation.md PM-decision #6).
+// Service returns the inner [operator.Service]. Used by the MCP server wire-up in
+// keeper/cmd/keeper to reuse the same instance (single source of truth, see
+// delegation.md PM decision #6).
 func (h *OperatorHandler) Service() *operator.Service { return h.svc }
 
-// OperatorSpecStub — непустой *OperatorHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaOperatorSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [RoleSpecStub]).
+// OperatorSpecStub — a non-empty *OperatorHandler stub for generating the huma-OpenAPI
+// fragment (HumaOperatorSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op nil check. svc nil — the handler never
+// executes in spec mode (parity with [RoleSpecStub]).
 func OperatorSpecStub() *OperatorHandler {
 	return &OperatorHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// maxDisplayNameLen — верхняя граница `display_name` Архонта. Пустой
-// display_name легитимен (service подставит AID); слишком длинный — мусор/DoS
-// в UI-списках. 200 символов — с запасом для «Имя Фамилия (команда)».
+// maxDisplayNameLen — upper bound on an Archon's `display_name`. An empty
+// display_name is legitimate (the service substitutes the AID); an overly long one is
+// junk/DoS in UI lists. 200 chars — ample for "First Last (team)".
 const maxDisplayNameLen = 200
 
-// OperatorCreateInput — NATIVE request-форма POST /v1/operators (handler-native
-// PILOT T5d). Заменяет OperatorCreateRequest: huma-input (пакет api) биндит
-// и валидирует тело по этим полям, затем зовёт CreateTyped. Roles — плоский
-// []string (huma omitempty: пустой/опущенный → nil → «без roles», parity легаси).
+// OperatorCreateInput — NATIVE request form of POST /v1/operators (handler-native
+// PILOT T5d). Replaces OperatorCreateRequest: the huma-input (package api) binds and
+// validates the body against these fields, then calls CreateTyped. Roles — a flat
+// []string (huma omitempty: empty/omitted → nil → "no roles", legacy parity).
 type OperatorCreateInput struct {
 	AID         string
 	DisplayName string
 	Roles       []string
 }
 
-// OperatorCreateReply — извлечённый результат [OperatorHandler.CreateTyped]
-// (handler-native PILOT). Несёт ПЛОСКИЕ wire-поля 201-тела (api строит из них
-// native-схему OperatorCreateReply) + audit-payload-поля (выставляются
-// middleware: huma-вариант B). GrantedRoles служит обоим: wire-полю roles
-// (omitempty) и audit-payload.
+// OperatorCreateReply — extracted result of [OperatorHandler.CreateTyped]
+// (handler-native PILOT). Carries the FLAT wire fields of the 201 body (api builds the
+// native OperatorCreateReply schema from them) + audit-payload fields (set by the
+// middleware: huma variant B). GrantedRoles serves both: the roles wire field (omitempty)
+// and the audit payload.
 type OperatorCreateReply struct {
 	AID          string
 	DisplayName  string
@@ -164,10 +164,10 @@ type OperatorCreateReply struct {
 	GrantedRoles []string
 }
 
-// CreateTyped — доменная функция POST /v1/operators (handler-native PILOT):
-// бизнес-логика без http.ResponseWriter/*http.Request. claims и req приходят
-// аргументами; ошибки — *problemError (доставляются huma-обёрткой через
-// [AsProblemDetails]), успех — [OperatorCreateReply] (плоские wire-поля + audit).
+// CreateTyped — domain function for POST /v1/operators (handler-native PILOT):
+// business logic without http.ResponseWriter/*http.Request. claims and req arrive as
+// arguments; errors — *problemError (delivered by the huma wrapper via
+// [AsProblemDetails]), success — [OperatorCreateReply] (flat wire fields + audit).
 func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req OperatorCreateInput) (OperatorCreateReply, error) {
 	var zero OperatorCreateReply
 	if req.AID == "" {
@@ -177,17 +177,17 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'aid' must match "+operator.AIDPattern)}
 	}
-	// display_name опционален (пустой → service подставит AID); ограничиваем
-	// только верхнюю длину, чтобы не пускать мусор в реестр / UI.
+	// display_name is optional (empty → the service substitutes the AID); we bound only
+	// the upper length, to keep junk out of the registry / UI.
 	if len(req.DisplayName) > maxDisplayNameLen {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			fmt.Sprintf("field 'display_name' must be at most %d characters", maxDisplayNameLen))}
 	}
 
-	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): создание
-	// оператора через Operator API — метод "user" (created_via=user). gate==nil →
-	// пропускаем (политика не сконфигурирована, back-compat). bootstrap-путь
-	// (`keeper init`) сюда НЕ заходит — он не вызывает CreateTyped.
+	// provisioning_allowed_methods policy gate (ADR-058 Part B): creating an operator via
+	// the Operator API is the "user" method (created_via=user). gate==nil → let it through
+	// (policy not configured, back-compat). The bootstrap path (`keeper init`) does NOT
+	// come here — it does not call CreateTyped.
 	if h.gate != nil && !h.gate.ProvisioningMethodAllowed("user") {
 		return zero, &problemError{problem.New(problem.TypeProvisioningMethodDisabled, "",
 			"operator provisioning via 'user' method is disabled by policy")}
@@ -204,17 +204,17 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		case errors.Is(err, operator.ErrOperatorAlreadyExists):
 			return zero, &problemError{problem.New(problem.TypeOperatorExists, "",
 				"operator with this AID already exists")}
-		// roles[]: несуществующая роль — validation-failed (422) с указанием,
-		// какая именно роль не найдена. Atomic create+grant уже откатил tx —
-		// оператор НЕ создан.
+		// roles[]: a non-existent role — validation-failed (422) naming which role
+		// was not found. The atomic create+grant already rolled the tx back —
+		// the operator is NOT created.
 		case errors.Is(err, rbac.ErrRoleNotFound):
 			return zero, &problemError{problem.New(problem.TypeRoleNotFound, "", err.Error())}
-		// FK-violation на role-grant aid → operator не существует. На пути
-		// create+grant это означало бы рассинхрон INSERT/grant в одной tx —
-		// невозможно по конструкции, но защищаемся явным маппингом 404.
+		// FK violation on role-grant aid → the operator does not exist. On the
+		// create+grant path this would mean an INSERT/grant desync in one tx —
+		// impossible by construction, but we guard with an explicit 404 mapping.
 		case errors.Is(err, rbac.ErrOperatorNotFound):
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", err.Error())}
-		// invalid role name из pre-валидации — validation-failed.
+		// invalid role name from pre-validation — validation-failed.
 		case strings.Contains(err.Error(), "invalid role name"):
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 		}
@@ -237,8 +237,8 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 	}, nil
 }
 
-// AuditPayload собирает audit-payload create-роута (parity легаси SetAuditPayload).
-// ЕДИНЫЙ источник для huma-варианта B (единообразно с OperatorRevokeReply/
+// AuditPayload assembles the audit payload of the create route (parity with legacy
+// SetAuditPayload). The SINGLE source for huma variant B (uniform with OperatorRevokeReply/
 // OperatorIssueTokenReply.AuditPayload()).
 func (r OperatorCreateReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{
@@ -253,15 +253,15 @@ func (r OperatorCreateReply) AuditPayload() middleware.AuditPayload {
 	return p
 }
 
-// OperatorRevokeReply — извлечённый результат [OperatorHandler.RevokeTyped]
-// (handler-native PILOT). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// OperatorRevokeReply — extracted result of [OperatorHandler.RevokeTyped]
+// (handler-native PILOT). Carries audit fields (the HTTP response is an empty 204 body).
 type OperatorRevokeReply struct {
 	AID    string
 	Reason string
 }
 
-// AuditPayload собирает audit-payload revoke-роута (parity легаси: aid +
-// опц. reason). Источник для huma-варианта B.
+// AuditPayload assembles the audit payload of the revoke route (parity with legacy: aid +
+// optional reason). Source for huma variant B.
 func (r OperatorRevokeReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{"aid": r.AID}
 	if r.Reason != "" {
@@ -270,9 +270,9 @@ func (r OperatorRevokeReply) AuditPayload() middleware.AuditPayload {
 	return p
 }
 
-// RevokeTyped — доменная функция POST /v1/operators/{aid}/revoke (handler-native
-// PILOT): валидация path-AID + svc.Revoke + sentinel→problem. Ошибки —
-// *problemError; успех — [OperatorRevokeReply] (audit-поля).
+// RevokeTyped — domain function for POST /v1/operators/{aid}/revoke (handler-native
+// PILOT): path-AID validation + svc.Revoke + sentinel→problem. Errors — *problemError;
+// success — [OperatorRevokeReply] (audit fields).
 func (h *OperatorHandler) RevokeTyped(ctx context.Context, claims *jwt.Claims, targetAID, reason string) (OperatorRevokeReply, error) {
 	var zero OperatorRevokeReply
 	if !operator.ValidAID(targetAID) {
@@ -309,17 +309,17 @@ func (h *OperatorHandler) RevokeTyped(ctx context.Context, claims *jwt.Claims, t
 	return OperatorRevokeReply{AID: targetAID, Reason: reason}, nil
 }
 
-// OperatorIssueTokenReply — извлечённый результат [OperatorHandler.IssueTokenTyped]
-// (handler-native PILOT). Несёт ПЛОСКИЕ wire-поля 200-тела (api строит native-
-// схему IssueTokenReply) + audit-поля.
+// OperatorIssueTokenReply — extracted result of [OperatorHandler.IssueTokenTyped]
+// (handler-native PILOT). Carries the FLAT wire fields of the 200 body (api builds the
+// native IssueTokenReply schema) + audit fields.
 type OperatorIssueTokenReply struct {
 	AID       string
 	JWT       string
 	ExpiresAt time.Time
 }
 
-// AuditPayload собирает audit-payload issue-token-роута (parity легаси: aid +
-// expires_at RFC3339). БЕЗ самого JWT (SENSITIVE). Источник для huma-B.
+// AuditPayload assembles the audit payload of the issue-token route (parity with legacy:
+// aid + expires_at RFC3339). WITHOUT the JWT itself (SENSITIVE). Source for huma variant B.
 func (r OperatorIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"aid":        r.AID,
@@ -327,9 +327,9 @@ func (r OperatorIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// IssueTokenTyped — доменная функция POST /v1/operators/{aid}/issue-token
-// (handler-native PILOT): валидация path-AID + svc.IssueToken + sentinel→problem.
-// Ошибки — *problemError; успех — [OperatorIssueTokenReply] (wire-поля + audit).
+// IssueTokenTyped — domain function for POST /v1/operators/{aid}/issue-token
+// (handler-native PILOT): path-AID validation + svc.IssueToken + sentinel→problem.
+// Errors — *problemError; success — [OperatorIssueTokenReply] (wire fields + audit).
 func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, targetAID string) (OperatorIssueTokenReply, error) {
 	var zero OperatorIssueTokenReply
 	if !operator.ValidAID(targetAID) {
@@ -365,17 +365,17 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 	}, nil
 }
 
-// OperatorView — ПЛОСКАЯ wire-форма Operator-а (list-item / get-200), handler-
-// native PILOT (заменяет Operator-алиас). Nullable-поля отражают NULL в БД:
-// created_by_aid (NULL у bootstrap/system/federated — ADR-058(d) легализовал
-// NULL для не-bootstrap-строк), revoked_at (NULL у активного). bootstrap_initial —
-// derived-флаг `op.IsBootstrap()` (created_via='bootstrap') для UI: отдельной
-// колонки в БД нет, единственность первого Архонта гарантирует partial unique
-// index `WHERE created_via='bootstrap'` (ADR-013/ADR-014 amendment 2026-06-23,
-// миграция 085). Признак перенесён с прежнего `created_by_aid IS NULL` —
-// иначе federated/system-операторы с NULL-родителем давали ложный bootstrap-флаг.
-// Пакет api проецирует OperatorView → native-схему Operator (register-func),
-// wire-форма (UTC + Truncate(Second) на date-time) фиксируется здесь.
+// OperatorView — FLAT wire form of an Operator (list-item / get-200), handler-native
+// PILOT (replaces the Operator alias). Nullable fields mirror NULL in the DB:
+// created_by_aid (NULL for bootstrap/system/federated — ADR-058(d) legalized NULL for
+// non-bootstrap rows), revoked_at (NULL for an active one). bootstrap_initial — a derived
+// flag `op.IsBootstrap()` (created_via='bootstrap') for the UI: there is no separate DB
+// column; uniqueness of the first Archon is guaranteed by the partial unique index
+// `WHERE created_via='bootstrap'` (ADR-013/ADR-014 amendment 2026-06-23, migration 085).
+// The flag was moved off the former `created_by_aid IS NULL` — otherwise federated/system
+// operators with a NULL parent gave a false bootstrap flag. Package api projects
+// OperatorView → the native Operator schema (register func); the wire form (UTC +
+// Truncate(Second) on date-time) is pinned here.
 type OperatorView struct {
 	AID              string
 	AuthMethod       string
@@ -406,9 +406,9 @@ func toOperatorView(op *operator.Operator) OperatorView {
 	return out
 }
 
-// OperatorListPage — доменный paged-результат GET /v1/operators (handler-native
-// PILOT). Плоские offset/limit/total + срез OperatorView; пакет api проецирует
-// его в native-envelope (PagedResponse[api.Operator] → схема OperatorListReply).
+// OperatorListPage — domain paged result of GET /v1/operators (handler-native PILOT).
+// Flat offset/limit/total + a slice of OperatorView; package api projects it into the
+// native envelope (PagedResponse[api.Operator] → the OperatorListReply schema).
 type OperatorListPage struct {
 	Items  []OperatorView
 	Offset int
@@ -416,18 +416,17 @@ type OperatorListPage struct {
 	Total  int
 }
 
-// ListTyped — доменная функция GET /v1/operators (handler-native PILOT, read-
-// with-typed-query, БЕЗ audit). filter/offset/limit приходят уже
-// провалидированными (huma-bind: auth_method enum→422, revoked bool→400,
-// pagination int32; диапазон offset/limit enforce-ит этот слой через
-// CheckPageBounds). Ошибка чтения → *problemError (500).
+// ListTyped — domain function for GET /v1/operators (handler-native PILOT, read with
+// typed query, no audit). filter/offset/limit arrive already validated (huma-bind:
+// auth_method enum→422, revoked bool→400, pagination int32; the offset/limit range is
+// enforced by this layer via CheckPageBounds). A read error → *problemError (500).
 func (h *OperatorHandler) ListTyped(ctx context.Context, filter operator.ListFilter, offset, limit int) (OperatorListPage, error) {
 	var zero OperatorListPage
 
-	// Диапазон пагинации (offset≥0, limit∈[1,1000]) — ЕДИНЫЙ источник границ
-	// sharedapi.CheckPageBounds (тот же, что у ParsePage). Out-of-range → 400
-	// TypeMalformedRequest (контракт-инвариант: huma typed-int НЕ несёт schema-
-	// minimum/maximum, иначе вернул бы 422 — wire-change против легаси/strict 400).
+	// Pagination range (offset≥0, limit∈[1,1000]) — the SINGLE source of bounds
+	// sharedapi.CheckPageBounds (same as ParsePage). Out-of-range → 400
+	// TypeMalformedRequest (contract invariant: a huma typed-int carries NO schema
+	// minimum/maximum, otherwise it would return 422 — a wire change vs legacy/strict 400).
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
 	}
@@ -448,9 +447,9 @@ func (h *OperatorHandler) ListTyped(ctx context.Context, filter operator.ListFil
 	return OperatorListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetTyped — доменная функция GET /v1/operators/{aid} (handler-native PILOT,
-// READ-вариант без audit): валидация path-AID + svc.Get + sentinel→problem
-// (404/500). Ошибки — *problemError; успех — [OperatorView] (200-тело).
+// GetTyped — domain function for GET /v1/operators/{aid} (handler-native PILOT,
+// READ variant without audit): path-AID validation + svc.Get + sentinel→problem
+// (404/500). Errors — *problemError; success — [OperatorView] (200 body).
 func (h *OperatorHandler) GetTyped(ctx context.Context, targetAID string) (OperatorView, error) {
 	var zero OperatorView
 	if !operator.ValidAID(targetAID) {

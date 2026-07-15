@@ -105,17 +105,17 @@ var voyageNotifyConsumers = []string{
 	"CadenceCreateRequest", // N4
 }
 
-// TestSchemaNames_VoyageNested — гейт NESTED-выравнивания. Доказывает:
-//   - ровно ОДНА VoyageTarget и ОДНА VoyageNotify в агрегатор-спеке (ключ схемы уникален —
-//     присутствие именно контрактного имени проверяет TestSchemaNames_Voyage; здесь —
-//     ССЫЛКИ на него от всех потребителей);
-//   - input(voyage+cadence) И output(voyage) ссылаются на VoyageTarget; input(voyage+
-//     cadence) ссылается на VoyageNotify;
-//   - технические имена (Voyage/CadenceTargetHumaBody, …) отсутствуют (voyageForbidden-
-//     Schemas в TestSchemaNames_Voyage);
-//   - форма VoyageTarget/VoyageNotify сверена с рукописью (required-набор).
+// TestSchemaNames_VoyageNested — gate for NESTED alignment. Proves:
+//   - exactly ONE VoyageTarget and ONE VoyageNotify in the aggregator spec (schema key is
+//     unique — presence of the contract name itself is checked by TestSchemaNames_Voyage;
+//     here — the REFERENCES to it from all consumers);
+//   - input(voyage+cadence) AND output(voyage) reference VoyageTarget; input(voyage+cadence)
+//     references VoyageNotify;
+//   - technical names (Voyage/CadenceTargetHumaBody, …) are absent (voyageForbiddenSchemas in
+//     TestSchemaNames_Voyage);
+//   - VoyageTarget/VoyageNotify shape verified against the hand-written spec (required set).
 //
-// Мутация (рассыпать target на per-домен тип / убрать alias / сменить required-набор) краснит.
+// A mutation (split target into a per-domain type / drop the alias / change the required set) turns it red.
 func TestSchemaNames_VoyageNested(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -131,20 +131,20 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	const targetRef = "#/components/schemas/VoyageTarget"
 	const notifyRef = "#/components/schemas/VoyageNotify"
 
-	// (1) VoyageTarget — потребители ссылаются на единую схему.
+	// (1) VoyageTarget — consumers reference the single schema.
 	for _, name := range voyageTargetConsumers {
 		if got := propRef(t, schemas, name, "target"); got != targetRef {
 			t.Errorf("%s.target → %q, ожидался %q (target не сведён на единую VoyageTarget)", name, got, targetRef)
 		}
 	}
-	// (2) VoyageNotify — input-потребители ссылаются на единую схему (notify — массив).
+	// (2) VoyageNotify — input consumers reference the single schema (notify is an array).
 	for _, name := range voyageNotifyConsumers {
 		if got := propItemsRef(t, schemas, name, "notify"); got != notifyRef {
 			t.Errorf("%s.notify[] → %q, ожидался %q (notify не сведён на единую VoyageNotify)", name, got, notifyRef)
 		}
 	}
 
-	// (3) Форма VoyageTarget сверена с рукописью (:7455 — required НЕТ; 5 optional-полей).
+	// (3) VoyageTarget shape verified against the hand-written spec (:7455 — no required; 5 optional fields).
 	tgt, _ := schemas["VoyageTarget"].(map[string]any)
 	if tgt == nil {
 		t.Fatal("VoyageTarget отсутствует в components.schemas")
@@ -154,7 +154,7 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	}
 	assertProps(t, tgt, "VoyageTarget", "incarnations", "service", "sids", "where", "coven")
 
-	// (4) Форма VoyageNotify сверена с рукописью (:7612 — required:[herald]).
+	// (4) VoyageNotify shape verified against the hand-written spec (:7612 — required:[herald]).
 	ntf, _ := schemas["VoyageNotify"].(map[string]any)
 	if ntf == nil {
 		t.Fatal("VoyageNotify отсутствует в components.schemas")
@@ -163,7 +163,7 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	assertProps(t, ntf, "VoyageNotify", "herald", "on", "only_failures", "only_changes", "annotations", "projection")
 }
 
-// propRef достаёт $ref у скалярного поля name схемы schemaName (target: {$ref: …}).
+// propRef extracts $ref from a scalar field of schema schemaName (target: {$ref: …}).
 func propRef(t *testing.T, schemas map[string]any, schemaName, field string) string {
 	t.Helper()
 	prop := schemaProp(t, schemas, schemaName, field)
@@ -171,7 +171,7 @@ func propRef(t *testing.T, schemas map[string]any, schemaName, field string) str
 	return ref
 }
 
-// propItemsRef достаёт $ref у элементов массива-поля field (notify: {items: {$ref: …}}).
+// propItemsRef extracts $ref from the elements of the array field `field` (notify: {items: {$ref: …}}).
 func propItemsRef(t *testing.T, schemas map[string]any, schemaName, field string) string {
 	t.Helper()
 	prop := schemaProp(t, schemas, schemaName, field)
@@ -184,7 +184,7 @@ func propItemsRef(t *testing.T, schemas map[string]any, schemaName, field string
 	return ref
 }
 
-// schemaProp достаёт map поля field из properties схемы schemaName.
+// schemaProp extracts the map of field `field` from the properties of schema schemaName.
 func schemaProp(t *testing.T, schemas map[string]any, schemaName, field string) map[string]any {
 	t.Helper()
 	sch, _ := schemas[schemaName].(map[string]any)
@@ -199,7 +199,7 @@ func schemaProp(t *testing.T, schemas map[string]any, schemaName, field string) 
 	return prop
 }
 
-// assertProps проверяет, что в properties схемы присутствует ровно ожидаемый набор полей.
+// assertProps checks that the schema's properties contain exactly the expected set of fields.
 func assertProps(t *testing.T, sch map[string]any, name string, want ...string) {
 	t.Helper()
 	props, _ := sch["properties"].(map[string]any)
@@ -213,7 +213,7 @@ func assertProps(t *testing.T, sch map[string]any, name string, want ...string) 
 	}
 }
 
-// assertRequiredExactly проверяет, что required схемы — ровно ожидаемый набор.
+// assertRequiredExactly checks that the schema's required is exactly the expected set.
 func assertRequiredExactly(t *testing.T, sch map[string]any, name string, want ...string) {
 	t.Helper()
 	raw, _ := sch["required"].([]any)

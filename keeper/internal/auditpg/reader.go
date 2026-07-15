@@ -13,61 +13,63 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// queryRower — узкое подмножество pgxpool.Pool, нужное Reader-у. Сужение
-// позволяет unit-тестировать List через fake без поднятия Postgres-а;
-// pgxpool.Pool/pgx.Conn/pgx.Tx удовлетворяют автоматически.
+// queryRower — narrow subset of pgxpool.Pool needed by Reader. The narrowing
+// lets List be unit-tested via a fake without spinning up Postgres;
+// pgxpool.Pool/pgx.Conn/pgx.Tx satisfy it automatically.
 type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// Reader — read-side обёртка над `audit_log`. Concurrent-safe; собственного
-// состояния не держит. Симметрично errand.Store / operator.SelectByAID:
-// pool владеет caller, Reader — узкий клиент.
+// Reader — read-side wrapper over `audit_log`. Concurrent-safe; holds no
+// state of its own. Symmetric with errand.Store / operator.SelectByAID: the
+// pool is owned by the caller, Reader is a narrow client.
 type Reader struct {
 	pool queryRower
 }
 
-// NewReader конструирует Reader; pool обязателен (paник caller-а — NewServer
-// уже валидирует non-nil).
+// NewReader constructs a Reader; pool is required (caller panic — NewServer
+// already validates non-nil).
 func NewReader(pool queryRower) *Reader {
 	return &Reader{pool: pool}
 }
 
-// ListFilter — параметры `GET /v1/audit`. Пустые поля = «без фильтра»;
-// multi-value Types/Sources фильтруются через `IN (…)`. StartedAfter /
-// StartedBefore — UTC, zero-time = без фильтра.
+// ListFilter — parameters for `GET /v1/audit`. Empty fields = "no filter";
+// multi-value Types/Sources are filtered via `IN (…)`. StartedAfter /
+// StartedBefore — UTC, zero-time = no filter.
 //
-// Multi-value по convention `?type=X&type=Y` парсится handler-ом из
-// `url.Values.Get`-эквивалентного multi-getter-а (см. handler).
+// Multi-value by convention `?type=X&type=Y` is parsed by the handler from a
+// `url.Values.Get`-equivalent multi-getter (see handler).
 type ListFilter struct {
 	Types   []string
 	Sources []string
 	// ArchonAID / CorrelationID — case-insensitive substring (ILIKE `%val%`):
-	// оператор ищет по части AID/correlation_id в любом регистре. LIKE-метасимволы
-	// во вводе экранируются (поиск литеральный). Пусто = без фильтра.
+	// the operator searches by a part of the AID/correlation_id in any case.
+	// LIKE metacharacters in the input are escaped (search stays literal).
+	// Empty = no filter.
 	ArchonAID     string
 	CorrelationID string
-	// PayloadHerald — exact-match по строковому полю `herald` в JSONB-payload
-	// (`payload->>'herald'`). Для истории доставок одного Herald-канала
-	// (события herald.delivered/herald.failed несут `payload.herald`). Пусто =
-	// без фильтра.
+	// PayloadHerald — exact match on the string field `herald` in the JSONB
+	// payload (`payload->>'herald'`). For the delivery history of one Herald
+	// channel (herald.delivered/herald.failed events carry `payload.herald`).
+	// Empty = no filter.
 	PayloadHerald string
-	// PayloadVoyage — exact-match по строковому полю `voyage_id` в JSONB-payload
-	// (`payload->>'voyage_id'`). Для Voyage detail: per-incarnation события
-	// incarnation.run_completed несут correlation_id=apply_id (per-incarnation,
-	// не voyage_id), поэтому фильтрация по correlation_id не собирает run-события
-	// вояжа — нужен payload-фильтр по voyage_id (ADR-052 amend §k). Пусто =
-	// без фильтра.
+	// PayloadVoyage — exact match on the string field `voyage_id` in the JSONB
+	// payload (`payload->>'voyage_id'`). For Voyage detail: per-incarnation
+	// incarnation.run_completed events carry correlation_id=apply_id
+	// (per-incarnation, not voyage_id), so filtering by correlation_id doesn't
+	// collect a voyage's run events — a payload filter on voyage_id is needed
+	// (ADR-052 amend §k). Empty = no filter.
 	PayloadVoyage string
 	StartedAfter  time.Time
 	StartedBefore time.Time
 }
 
-// Row — read-проекция строки `audit_log`. Соответствует колонкам таблицы
-// (миграция 001_create_audit_log.up.sql). Payload — распакованный JSONB.
-// keeper_kid в схеме отсутствует (ADR-022 / 001_-миграция не несёт колонки);
-// если поле понадобится — отдельная миграция + расширение Row.
+// Row — read-projection of an `audit_log` row. Matches the table columns
+// (migration 001_create_audit_log.up.sql). Payload — unpacked JSONB.
+// keeper_kid is absent from the schema (ADR-022 / the 001_ migration doesn't
+// carry the column); if the field is ever needed — a separate migration +
+// Row extension.
 type Row struct {
 	AuditID       string
 	CreatedAt     time.Time
@@ -78,12 +80,12 @@ type Row struct {
 	Payload       map[string]any
 }
 
-// List возвращает страницу строк под фильтром, отсортированную по created_at
-// DESC (свежие сверху, паритет push_runs/incarnations/errands). total —
-// COUNT(*) под тем же фильтром без LIMIT/OFFSET (для UI-пагинации).
+// List returns a page of rows under the filter, sorted by created_at DESC
+// (newest first, parity with push_runs/incarnations/errands). total —
+// COUNT(*) under the same filter without LIMIT/OFFSET (for UI pagination).
 //
-// Read-only; в audit_log сам факт чтения НЕ пишется (избегаем рекурсии:
-// каждый GET /v1/audit удваивал бы таблицу).
+// Read-only; the read itself is NOT written to audit_log (avoids recursion:
+// every GET /v1/audit would otherwise double the table).
 func (r *Reader) List(ctx context.Context, f ListFilter, offset, limit int) ([]*Row, int, error) {
 	whereSQL, args := buildAuditWhere(f)
 
@@ -118,9 +120,9 @@ LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 	return out, total, nil
 }
 
-// buildAuditWhere собирает WHERE-предикат под ListFilter. Multi-value поля
-// разворачиваются в `IN ($a,$b,…)`. Параметры пишутся инкрементально в args;
-// плейсхолдеры $N — позиционные.
+// buildAuditWhere assembles the WHERE predicate from ListFilter. Multi-value
+// fields expand into `IN ($a,$b,…)`. Parameters are appended to args
+// incrementally; placeholders $N are positional.
 func buildAuditWhere(f ListFilter) (string, []any) {
 	var (
 		conds []string
@@ -169,19 +171,20 @@ func buildAuditWhere(f ListFilter) (string, []any) {
 	return out, args
 }
 
-// likeContains оборачивает пользовательскую строку в `%…%` для ILIKE-поиска
-// «вхождение подстроки». LIKE-метасимволы (`\`/`%`/`_`) во вводе экранируются,
-// чтобы поиск оставался литеральным: оператор, набравший `%` или `_`, ищет именно
-// этот символ, а не wildcard (значение уходит bind-параметром, SQL-инъекция и так
-// исключена на уровне pgx — здесь только семантика поиска). Escape-char —
-// дефолтный `\`, отдельный ESCAPE-clause не нужен.
+// likeContains wraps a user string in `%…%` for an ILIKE "substring
+// contains" search. LIKE metacharacters (`\`/`%`/`_`) in the input are
+// escaped so the search stays literal: an operator typing `%` or `_` searches
+// for that exact character, not a wildcard (the value goes through a bind
+// parameter — SQL injection is already excluded at the pgx level; this is
+// only about search semantics). Escape char — the default `\`, no separate
+// ESCAPE clause needed.
 func likeContains(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return "%" + r.Replace(s) + "%"
 }
 
-// placeholders добавляет values в args и возвращает строку плейсхолдеров
-// "$n,$n+1,…". Хелпер для `IN (…)`-предикатов с multi-value-фильтрами.
+// placeholders appends values to args and returns the placeholder string
+// "$n,$n+1,…". Helper for `IN (…)` predicates with multi-value filters.
 func placeholders(args *[]any, values []any) string {
 	out := ""
 	for i, v := range values {
@@ -194,9 +197,9 @@ func placeholders(args *[]any, values []any) string {
 	return out
 }
 
-// anyOfStrings — конверсия []string → []any для placeholders. Слой адаптации
-// между closed-typed filter-полями (типизированный []string у caller-а) и
-// pgx-args (variadic any).
+// anyOfStrings — []string → []any conversion for placeholders. Adaptation
+// layer between the closed-typed filter fields (caller's typed []string) and
+// pgx args (variadic any).
 func anyOfStrings(s []string) []any {
 	out := make([]any, len(s))
 	for i, v := range s {
@@ -205,7 +208,7 @@ func anyOfStrings(s []string) []any {
 	return out
 }
 
-// scanAuditRow распаковывает один SELECT-row в *Row. Симметрично
+// scanAuditRow unpacks one SELECT row into *Row. Symmetric with
 // errand.scanRow / operator.scanOperator.
 func scanAuditRow(r pgx.Rows) (*Row, error) {
 	var (

@@ -9,39 +9,42 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TargetRecipe — declarative-target рецепта Cadence, хранится в jsonb-колонке
-// `target` как есть (та же форма, что POST /v1/voyages target — ADR-046 §3).
-// Резолвится в snapshot единиц при спавне (Reaper-правило spawn_due_cadence).
+// TargetRecipe is the declarative target of the Cadence recipe, stored as-is
+// in the jsonb column `target` (same shape as POST /v1/voyages target —
+// ADR-046 §3). Resolved into a unit snapshot at spawn time (Reaper rule
+// spawn_due_cadence).
 //
-// Поля по kind: scenario читает Incarnations/Service/Coven; command —
-// SIDs/Where/Coven. Нерелевантные для kind поля игнорируются резолвером.
+// Fields by kind: scenario reads Incarnations/Service/Coven; command reads
+// SIDs/Where/Coven. Fields not relevant to the kind are ignored by the resolver.
 type TargetRecipe struct {
-	// scenario-режим:
+	// scenario mode:
 	Incarnations []string `json:"incarnations,omitempty"`
 	Service      string   `json:"service,omitempty"`
-	// command-режим:
+	// command mode:
 	SIDs  []string `json:"sids,omitempty"`
 	Where string   `json:"where,omitempty"`
-	// общий env-тег incarnation / coven-метка хоста:
+	// shared incarnation env tag / host coven label:
 	Coven []string `json:"coven,omitempty"`
 }
 
-// ScenarioResolver — резолв scenario-target Cadence → snapshot ИМЁН инкарнаций
-// (parity handlers.VoyageScenarioResolver). Спавн-путь пере-резолвит target
-// just-in-time (snapshot фиксируется на момент спавна, не создания Cadence).
+// ScenarioResolver resolves a Cadence scenario-target into a snapshot of
+// incarnation NAMES (parity handlers.VoyageScenarioResolver). The spawn path
+// re-resolves the target just-in-time (the snapshot is fixed at spawn time,
+// not at Cadence creation).
 type ScenarioResolver interface {
 	ResolveIncarnations(ctx context.Context, incarnations []string, service, coven string) ([]string, error)
 }
 
-// CommandResolver — резолв command-target Cadence → snapshot SID-ов (parity
-// handlers.VoyageCommandResolver). requireAlive — presence-фильтр живых.
+// CommandResolver resolves a Cadence command-target into a snapshot of SIDs
+// (parity handlers.VoyageCommandResolver). requireAlive is the alive-presence
+// filter.
 type CommandResolver interface {
 	ResolveSIDs(ctx context.Context, sids, covens []string, where string, requireAlive bool) ([]string, error)
 }
 
-// effectiveBatchSize резолвит эффективный размер пачки (parity handler
+// effectiveBatchSize resolves the effective batch size (parity handler
 // effectiveBatchSize, ADR-043 amendment §2): batch_percent → ceil(scope*pct/100),
-// clamp [1, scope]; иначе batch_size как есть (nil = весь прогон одним Leg).
+// clamp [1, scope]; otherwise batch_size as-is (nil = the whole run in one Leg).
 func effectiveBatchSize(batchSize, batchPercent *int, scope int) *int {
 	if batchPercent == nil || scope <= 0 {
 		return batchSize
@@ -56,14 +59,14 @@ func effectiveBatchSize(batchSize, batchPercent *int, scope int) *int {
 	return &eff
 }
 
-// effectiveFailThreshold резолвит порог провалов на spawn-scope (ADR-043 amendment
-// 2026-06-09, Cadence-recipe S3). Зеркало effectiveBatchSize: percent →
-// ceil(scope*pct/100), clamp [1, scope]; иначе абсолютный threshold как есть (nil ⇒
-// без порога). Резолв происходит ЗДЕСЬ, а не на create-time Cadence: scope Cadence
-// (len(resolved)) известен лишь при спавне — отличие от Voyage, где
-// resolveMaxFailuresPercent резолвит percent в абсолют ещё на create (там scope
-// уже резолвнут). Спавнящийся Voyage получает уже абсолютный FailThreshold
-// (у Voyage нет колонки percent).
+// effectiveFailThreshold resolves the fail threshold at spawn-scope (ADR-043
+// amendment 2026-06-09, Cadence-recipe S3). Mirrors effectiveBatchSize: percent →
+// ceil(scope*pct/100), clamp [1, scope]; otherwise the absolute threshold as-is
+// (nil ⇒ no threshold). The resolve happens HERE, not at Cadence create-time: the
+// Cadence scope (len(resolved)) is only known at spawn time — unlike Voyage, where
+// resolveMaxFailuresPercent resolves percent to absolute already at create (there
+// the scope is already resolved). The spawned Voyage receives an already-absolute
+// FailThreshold (Voyage has no percent column).
 func effectiveFailThreshold(failThreshold, failThresholdPercent *int, scope int) *int {
 	if failThresholdPercent == nil || scope <= 0 {
 		return failThreshold
@@ -78,8 +81,9 @@ func effectiveFailThreshold(failThreshold, failThresholdPercent *int, scope int)
 	return &eff
 }
 
-// batchIndexFor — 0-based индекс Leg-а i-й единицы (chunk по batch_size). window →
-// 0 у всех (плоский прогон, нет Leg-ов); barrier с nil/<=0 batch_size → один Leg.
+// batchIndexFor is the 0-based Leg index of the i-th unit (chunk by batch_size).
+// window → 0 for all (a flat run, no Legs); barrier with nil/<=0 batch_size →
+// a single Leg.
 func batchIndexFor(i int, batchSize *int, mode voyage.BatchMode) int {
 	if mode == voyage.BatchModeWindow || batchSize == nil || *batchSize <= 0 {
 		return 0
@@ -87,8 +91,9 @@ func batchIndexFor(i int, batchSize *int, mode voyage.BatchMode) int {
 	return i / *batchSize
 }
 
-// totalBatches — число Leg-ов. window → 1 (одна волна-окно); barrier без
-// batch_size → 1 Leg = весь прогон; barrier с batch_size → ceil(n/bs).
+// totalBatches is the number of Legs. window → 1 (a single window-wave);
+// barrier without batch_size → 1 Leg = the whole run; barrier with batch_size
+// → ceil(n/bs).
 func totalBatches(n int, batchSize *int, mode voyage.BatchMode) int {
 	if n == 0 {
 		return 0
@@ -100,13 +105,13 @@ func totalBatches(n int, batchSize *int, mode voyage.BatchMode) int {
 	return (n + bs - 1) / bs
 }
 
-// BuildVoyage собирает Voyage-row + targets-snapshot из рецепта Cadence и
-// резолвнутого набора единиц (имена инкарнаций для scenario / SID-ы для command).
-// voyageID — caller-сгенерированный ULID; cadenceID проставляется как back-link
-// (ADR-046 §2). batch_mode пишется только при window (barrier ⇒ NULL,
-// forward-compat, parity handler.buildVoyageRow).
+// BuildVoyage assembles a Voyage row + targets-snapshot from the Cadence
+// recipe and the resolved unit set (incarnation names for scenario / SIDs for
+// command). voyageID is a caller-generated ULID; cadenceID is set as a
+// back-link (ADR-046 §2). batch_mode is written only for window (barrier ⇒
+// NULL, forward-compat, parity handler.buildVoyageRow).
 //
-// startedByAID = created_by_aid Cadence (спавн от имени создателя, ADR-046 §7).
+// startedByAID = Cadence's created_by_aid (spawn on behalf of the creator, ADR-046 §7).
 func BuildVoyage(c *Cadence, voyageID string, resolved []string) (*voyage.Voyage, []voyage.VoyageTarget) {
 	mode := voyage.BatchMode(voyage.BatchModeBarrier)
 	if c.BatchMode != nil {
@@ -129,7 +134,7 @@ func BuildVoyage(c *Cadence, voyageID string, resolved []string) (*voyage.Voyage
 		}
 	}
 
-	resolvedJSON, _ := json.Marshal(resolved) // []string всегда сериализуется
+	resolvedJSON, _ := json.Marshal(resolved) // []string always marshals
 
 	v := &voyage.Voyage{
 		VoyageID:       voyageID,
@@ -153,8 +158,8 @@ func BuildVoyage(c *Cadence, voyageID string, resolved []string) (*voyage.Voyage
 	if mode == voyage.BatchModeWindow {
 		bm := mode
 		v.BatchMode = &bm
-		// window: batch_size/batch_percent не используются (ширина окна =
-		// concurrency), inter_unit_interval — per-unit пауза.
+		// window: batch_size/batch_percent are unused (window width =
+		// concurrency), inter_unit_interval is the per-unit pause.
 		v.InterUnitInterval = c.InterUnitInterval
 	} else {
 		v.BatchSize = effBatch
@@ -164,11 +169,11 @@ func BuildVoyage(c *Cadence, voyageID string, resolved []string) (*voyage.Voyage
 	return v, targets
 }
 
-// ResolveScope резолвит declarative-target рецепта Cadence в snapshot единиц
-// (имена инкарнаций для scenario / SID-ы для command) через переданные
-// resolver-ы. Пустой результат — не ошибка (caller трактует как «нет целей,
-// спавнить нечего», parity handler voyage_empty_target — но в spawn-пути это
-// мягкий skip, не 422).
+// ResolveScope resolves the declarative target of the Cadence recipe into a
+// unit snapshot (incarnation names for scenario / SIDs for command) via the
+// passed-in resolvers. An empty result is not an error (the caller treats it
+// as "no targets, nothing to spawn", parity handler voyage_empty_target — but
+// on the spawn path it's a soft skip, not a 422).
 func ResolveScope(ctx context.Context, c *Cadence, sr ScenarioResolver, cr CommandResolver) ([]string, error) {
 	var recipe TargetRecipe
 	if len(c.Target) > 0 {
@@ -192,6 +197,7 @@ func ResolveScope(ctx context.Context, c *Cadence, sr ScenarioResolver, cr Comma
 
 func deref(b *bool) bool { return b != nil && *b }
 
-// NewVoyageID генерит ULID для спавнутого Voyage (parity handler.buildVoyageRow).
-// Var (не функция-обёртка) для подмены в unit-тестах spawn-правила.
+// NewVoyageID generates a ULID for the spawned Voyage (parity
+// handler.buildVoyageRow). A var (not a wrapper function) so it can be
+// swapped in spawn-rule unit tests.
 var NewVoyageID = audit.NewULID

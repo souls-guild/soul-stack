@@ -1,10 +1,10 @@
 package augur
 
-// ELK-broker MVP-1 (delegate=false, augur.md §2.1 / §6): по уже РАЗРЕШЁННОМУ
-// запросу ([Resolve] вернул Decision{Allowed:true}) Keeper сам делает read-only
-// search в Elasticsearch-индекс Omen-а и заворачивает JSON-ответ в
-// google.protobuf.Struct для AugurReply.inline_data. На Soul внешний credential
-// не попадает.
+// ELK broker MVP-1 (delegate=false, augur.md §2.1 / §6): for an already
+// ALLOWED request ([Resolve] returned Decision{Allowed:true}), Keeper itself
+// runs a read-only search against the Omen's Elasticsearch index and wraps
+// the JSON response in google.protobuf.Struct for AugurReply.inline_data. The
+// external credential never reaches Soul.
 
 import (
 	"context"
@@ -16,22 +16,23 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// elkSearchSuffix — read-only search-endpoint Elasticsearch. Брокер делает
-// GET <endpoint>/<index>/_search (read-only); index-write / admin-API не
-// используются.
+// elkSearchSuffix — the read-only Elasticsearch search endpoint. The broker
+// does GET <endpoint>/<index>/_search (read-only); index-write / admin API
+// are never used.
 const elkSearchSuffix = "/_search"
 
-// BrokerELK делает read-only search по разрешённому индексу Omen-а и возвращает
-// JSON-ответ как Struct (augur.md §5.3, объект «как есть»).
+// BrokerELK runs a read-only search against an Omen's allowed index and
+// returns the JSON response as Struct (augur.md §5.3, verbatim object).
 //
-// index (decision.Query) уже прошёл exact-match против Rite.allow.indices в
-// Resolve — здесь не переавторизуется. endpoint — НЕдоверенный ввод из БД:
-// validateEndpoint (https-only + литеральный IP в block-list) + SSRF-guard на
-// dial-фазе клиента закрывают egress-вектор.
+// index (decision.Query) already passed an exact match against
+// Rite.allow.indices in Resolve — not re-authorized here. endpoint is
+// UNtrusted input from the DB: validateEndpoint (https-only + literal-IP
+// block-list) plus the client's dial-phase SSRF guard close the egress
+// vector.
 //
-// credential читается из Omen.AuthRef (Vault) и навешивается на запрос; на Soul
-// не уходит. Сбой → error (AugurReply{ERROR}); ни credential, ни тело ответа в
-// текст ошибки НЕ попадают.
+// credential is read from Omen.AuthRef (Vault) and attached to the request;
+// it never reaches Soul. Failure → error (AugurReply{ERROR}); neither the
+// credential nor the response body ever lands in the error text.
 func BrokerELK(ctx context.Context, kv KVReader, doer HTTPDoer, endpoint, authRef, index string) (*structpb.Struct, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
@@ -55,9 +56,10 @@ func BrokerELK(ctx context.Context, kv KVReader, doer HTTPDoer, endpoint, authRe
 	return doJSONStruct(doer, req)
 }
 
-// buildELKURL собирает URL search: <endpoint>/<index>/_search. index экранируется
-// через url.PathEscape (НЕдоверенное значение из allow-list; path-injection через
-// `../` / лишний слэш исключён). Trailing slash endpoint-а нормализуется.
+// buildELKURL builds the search URL: <endpoint>/<index>/_search. index is
+// escaped via url.PathEscape (an UNtrusted value from the allow-list;
+// path-injection via `../` / a stray slash is excluded). A trailing slash on
+// endpoint is normalized away.
 func buildELKURL(endpoint, index string) (string, error) {
 	base := strings.TrimRight(endpoint, "/")
 	target := base + "/" + url.PathEscape(index) + elkSearchSuffix

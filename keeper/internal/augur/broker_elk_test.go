@@ -77,8 +77,8 @@ func TestBuildELKURL_PathEscape(t *testing.T) {
 	}
 }
 
-// TestBuildELKURL_NoPathInjection — слэши в index экранируются (нельзя дотянуться
-// до admin-API через `../`).
+// TestBuildELKURL_NoPathInjection — slashes in index are escaped (can't reach
+// the admin API via `../`).
 func TestBuildELKURL_NoPathInjection(t *testing.T) {
 	got, err := buildELKURL("https://elk.example.com:9200", "../_cluster/health")
 	if err != nil {

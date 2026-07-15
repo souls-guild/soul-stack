@@ -16,8 +16,8 @@ func TestMaskAndCapBytes_NoMask(t *testing.T) {
 }
 
 func TestMaskAndCapBytes_VaultRefMasked(t *testing.T) {
-	// vault-ref в строке маскируется целиком (shared/audit.MaskSecrets,
-	// vaultRefRe ловит `vault:<mount>/`).
+	// vault-ref inside a string is masked whole (shared/audit.MaskSecrets,
+	// vaultRefRe matches `vault:<mount>/`).
 	in := "error: bad creds at vault:secret/db-prod/conn"
 	s, _ := MaskAndCapBytes(in)
 	if strings.Contains(s, "vault:secret/") {

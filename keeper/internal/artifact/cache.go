@@ -7,18 +7,19 @@ import (
 	"regexp"
 )
 
-// reCacheName ограничивает имя сервиса безопасным набором символов для
-// файлового сегмента кеша. Совпадает с canonical kebab-case из
-// `shared/config` (reServiceName), но проверяется здесь самостоятельно: имя
-// приходит из ServiceRef ещё до парсинга `service.yml`, поэтому полагаться на
-// валидацию манифеста нельзя. Защита от `..`/`/` в первом сегменте cache-пути.
+// reCacheName restricts the service name to a safe character set for the
+// cache path's file segment. Matches the canonical kebab-case from
+// `shared/config` (reServiceName), but is checked here independently: the
+// name comes from ServiceRef before `service.yml` is even parsed, so we
+// can't rely on manifest validation. Guards against `..`/`/` in the first
+// segment of the cache path.
 var reCacheName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// cacheLayout инкапсулирует раскладку кеша одного сервиса под cacheRoot:
+// cacheLayout encapsulates one service's cache layout under cacheRoot:
 //
-//	<cacheRoot>/<name>/_work/        — рабочий клон (fetch+checkout сюда)
-//	<cacheRoot>/<name>/<sha1>/       — immutable-снапшот дерева на commit-е
-//	<cacheRoot>/<name>/_tmp-*/       — staging для атомарного rename снапшота
+//	<cacheRoot>/<name>/_work/        — working clone (fetch+checkout target)
+//	<cacheRoot>/<name>/<sha1>/       — immutable tree snapshot at a commit
+//	<cacheRoot>/<name>/_tmp-*/       — staging for atomic snapshot rename
 type cacheLayout struct {
 	root string
 	name string
@@ -31,18 +32,18 @@ func newCacheLayout(root, name string) (cacheLayout, error) {
 	return cacheLayout{root: root, name: name}, nil
 }
 
-// serviceDir — каталог сервиса (`<cacheRoot>/<name>`).
+// serviceDir — the service's directory (`<cacheRoot>/<name>`).
 func (c cacheLayout) serviceDir() string { return filepath.Join(c.root, c.name) }
 
-// workDir — рабочий клон сервиса.
+// workDir — the service's working clone.
 func (c cacheLayout) workDir() string { return filepath.Join(c.serviceDir(), "_work") }
 
-// snapshotDir — immutable-снапшот дерева на конкретном sha1.
+// snapshotDir — immutable tree snapshot at a specific sha1.
 func (c cacheLayout) snapshotDir(sha1 string) string {
 	return filepath.Join(c.serviceDir(), sha1)
 }
 
-// ensureServiceDir создаёт каталог сервиса (рекурсивно), если его нет.
+// ensureServiceDir creates the service directory (recursively) if missing.
 func (c cacheLayout) ensureServiceDir() error {
 	if err := os.MkdirAll(c.serviceDir(), 0o755); err != nil {
 		return fmt.Errorf("artifact: создание cache-каталога %s: %w", c.serviceDir(), err)
@@ -50,15 +51,15 @@ func (c cacheLayout) ensureServiceDir() error {
 	return nil
 }
 
-// snapshotExists сообщает, материализован ли снапшот для sha1.
+// snapshotExists reports whether the snapshot for sha1 is materialized.
 func (c cacheLayout) snapshotExists(sha1 string) bool {
 	info, err := os.Stat(c.snapshotDir(sha1))
 	return err == nil && info.IsDir()
 }
 
-// newStagingDir создаёт пустой временный каталог под serviceDir для staging-а
-// снапшота. Лежит на той же файловой системе, что и snapshotDir, — это условие
-// атомарного os.Rename.
+// newStagingDir creates an empty temp directory under serviceDir for
+// snapshot staging. Lives on the same filesystem as snapshotDir — a
+// requirement for atomic os.Rename.
 func (c cacheLayout) newStagingDir() (string, error) {
 	dir, err := os.MkdirTemp(c.serviceDir(), "_tmp-")
 	if err != nil {

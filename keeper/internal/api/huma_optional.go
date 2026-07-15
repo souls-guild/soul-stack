@@ -1,22 +1,22 @@
 package api
 
-// Optional[T] — generic presence-обёртка для JSON-полей с PATCH-presence-семантикой
-// (ADR-054 §Pattern третий tier). Различает ТРИ состояния входного поля, которые
-// `*T` схлопывает в два (nil-указатель не отличает «ключа не было» от «ключ = null»):
+// Optional[T] — a generic presence wrapper for JSON fields with PATCH-presence semantics
+// (ADR-054 §Pattern, third tier). Distinguishes the THREE states of an input field that
+// `*T` collapses into two (a nil pointer does not tell "the key was absent" from "key = null"):
 //
-//   - omitted   — ключа физически нет в теле → UnmarshalJSON НЕ вызывается → Set=false;
+//   - omitted   — the key is physically absent from the body → UnmarshalJSON is NOT called → Set=false;
 //   - explicit null — `"field": null` → Set=true, Null=true (Value — zero-value);
 //   - value     — `"field": <v>` → Set=true, Null=false, Value=<v>.
 //
-// Это ЭТАЛОН tier-а для редких PATCH-полей, где явный сброс (null) отличается от
-// «не трогать» (omitted). Заменяет ОТВЕРГНУТЫЙ RawBody []byte-мост: тот тащил в
-// OpenAPI-фрагмент artifact `application/octet-stream` (huma на поле RawBody []byte
-// генерит octet-stream requestBody), ломавший web-codegen при мерже. Optional[T]
-// несёт presence В ТИПЕ → requestBody остаётся чистым application/json.
+// This is the REFERENCE tier for rare PATCH fields where an explicit reset (null) differs from
+// "leave alone" (omitted). It replaces the REJECTED RawBody []byte bridge: that one dragged an
+// `application/octet-stream` artifact into the OpenAPI fragment (huma on a RawBody []byte field
+// generates an octet-stream requestBody), which broke web-codegen on merge. Optional[T]
+// carries presence IN THE TYPE → the requestBody stays clean application/json.
 //
-// Прочие PATCH (cadence/service/synod/incarnation-hosts) presence НЕ детектят —
-// им хватает read-modify-write `*T omitempty` (nil = не трогать, без явного сброса).
-// Не плодить Optional[T] там, где сброса в семантике поля нет.
+// Other PATCH bodies (cadence/service/synod/incarnation-hosts) do NOT detect presence —
+// read-modify-write `*T omitempty` is enough for them (nil = leave alone, no explicit reset).
+// Do not proliferate Optional[T] where the field's semantics have no reset.
 
 import (
 	"encoding/json"
@@ -25,21 +25,21 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// Optional обёртывает значение типа T, неся флаг присутствия (Set) и флаг явного
-// null (Null) — для трёхзначной PATCH-presence-семантики. Zero-value Optional[T]
-// (Set=false) означает «поле в теле отсутствовало».
+// Optional wraps a value of type T, carrying a presence flag (Set) and an explicit-null
+// flag (Null) — for three-valued PATCH-presence semantics. A zero-value Optional[T]
+// (Set=false) means "the field was absent from the body".
 type Optional[T any] struct {
-	// Set — ключ физически присутствовал в JSON-теле (вкл. значение null).
+	// Set — the key was physically present in the JSON body (incl. a null value).
 	Set bool
-	// Null — ключ присутствовал со значением null (Set обязан быть true).
+	// Null — the key was present with a null value (Set must be true).
 	Null bool
-	// Value — декодированное значение при Set && !Null; иначе zero-value T.
+	// Value — the decoded value when Set && !Null; otherwise the zero-value T.
 	Value T
 }
 
-// UnmarshalJSON реализует json.Unmarshaler. Вызывается стандартным декодером ТОЛЬКО
-// когда ключ физически есть в теле (omitted → метод не вызван → Set остаётся false,
-// zero-value). `null` → Null=true, Value=zero. Иначе — unmarshal в Value.
+// UnmarshalJSON implements json.Unmarshaler. The standard decoder calls it ONLY
+// when the key is physically present in the body (omitted → the method is not called → Set stays false,
+// zero-value). `null` → Null=true, Value=zero. Otherwise — unmarshal into Value.
 func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		o.Set = true
@@ -49,8 +49,8 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	if err := json.Unmarshal(data, &o.Value); err != nil {
-		// presence-флаги ставим только в success-ветках: при ошибке парса
-		// Optional остаётся неустановленным (нет грязного Set=true на провале).
+		// set the presence flags only in the success branches: on a parse error the
+		// Optional stays unset (no dirty Set=true on failure).
 		return err
 	}
 	o.Set = true

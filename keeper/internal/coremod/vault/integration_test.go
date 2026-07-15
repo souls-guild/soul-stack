@@ -1,10 +1,10 @@
 //go:build integration
 
-// Integration-тесты `core.vault.kv-read` через testcontainers-go
-// (hashicorp/vault dev-mode). End-to-end: модуль вызывается с настоящим
-// vault.Client поверх testcontainer-Vault-а, проверяется чтение KV v2.
+// Integration tests for `core.vault.kv-read` via testcontainers-go
+// (hashicorp/vault dev-mode). End-to-end: the module is called against a real
+// vault.Client over a testcontainer Vault, verifying the KV v2 read.
 //
-// Паттерн совпадает с keeper/internal/vault/integration_test.go.
+// Mirrors the pattern in keeper/internal/vault/integration_test.go.
 
 package vault_test
 

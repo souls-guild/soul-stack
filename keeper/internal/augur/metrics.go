@@ -10,55 +10,60 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// tracer для in-process span-ов Augur-брокера. Берёт глобальный TracerProvider,
-// поднятый [obs.SetupOTel] в main; при OTel disabled провайдер no-op — span-ы
-// бесплатны и код не ветвится (ADR-024 §1.2). Используется gRPC-handler-ом
-// (events_augur.go) вокруг резолва + fetch-а AugurRequest через [Tracer].
+// tracer for the Augur broker's in-process spans. Takes the global
+// TracerProvider set up by [obs.SetupOTel] in main; when OTel is disabled the
+// provider is a no-op — spans are free and the code doesn't branch (ADR-024
+// §1.2). Used by the gRPC handler (events_augur.go) around resolving + fetching
+// AugurRequest via [Tracer].
 var tracer = otel.Tracer("keeper/augur")
 
-// Tracer отдаёт пакетный OTel-tracer Augur-брокера для caller-а в другом пакете
-// (grpc-handler), чтобы span обработки AugurRequest был привязан к одному
-// instrumentation scope `keeper/augur`. Сам handler живёт в keeper/internal/grpc,
-// но span — про Augur-семантику, поэтому tracer объявлен здесь.
+// Tracer hands out the Augur broker's package-level OTel tracer to a caller
+// in another package (grpc handler), so the AugurRequest-handling span is
+// tied to a single instrumentation scope `keeper/augur`. The handler itself
+// lives in keeper/internal/grpc, but the span is about Augur semantics, so
+// the tracer is declared here.
 func Tracer() trace.Tracer { return tracer }
 
-// SpanName — имя in-process span-а обработки AugurRequest (резолв + fetch).
-// Вынесено константой: handler стартует span этим именем, тест сверяет его.
+// SpanName — the name of the in-process span for handling AugurRequest
+// (resolve + fetch). Pulled out as a constant: the handler starts the span
+// with this name, and the test checks it.
 const SpanName = "augur.request"
 
-// BrokerMetrics — набор Prometheus-collector-ов Augur-брокера (ADR-025,
-// обработка AugurRequest от Soul-а в EventStream-е). Регистрируется отдельным
-// helper-ом поверх компонент-агностичного [obs.Registry] (ADR-024 §4.0):
-// registry-core не знает про конкретные метрики, а keeper_augur_*-метрики —
-// частность брокера.
+// BrokerMetrics — the Augur broker's set of Prometheus collectors (ADR-025,
+// handling AugurRequest from Soul over the EventStream). Registered by a
+// separate helper on top of the component-agnostic [obs.Registry] (ADR-024
+// §4.0): the registry core knows nothing about specific metrics, and
+// keeper_augur_*-metrics are the broker's own concern.
 //
-// Метрики живут здесь (keeper/internal/augur), а не в shared/obs, потому что
-// привязаны к keeper-внутреннему брокеру AugurRequest и не переиспользуются
-// Soul-ом (ADR-011: shared/ — действительно поперечный код; Augur — Keeper-side).
+// The metrics live here (keeper/internal/augur), not in shared/obs, because
+// they're tied to the keeper-internal AugurRequest broker and aren't reused
+// by Soul (ADR-011: shared/ is genuinely cross-cutting code; Augur is
+// Keeper-side).
 //
-// БЕЗОПАСНОСТЬ + кардинальность (ADR-024 §2.2, инвариант augur.md §8): в label-ы
-// НЕ кладём omen_name, query, sid, apply_id, request_id, ни тем более значение
-// секрета. Разрез — только closed-enum: `source` (тип внешней системы
-// vault/prometheus/elk) и `decision` (исход ok/denied/error). Кто именно и что
-// запрашивал — уходит в audit-log/trace, не в метрику.
+// SECURITY + cardinality (ADR-024 §2.2, invariant augur.md §8): labels never
+// carry omen_name, query, sid, apply_id, request_id, let alone a secret
+// value. The only split is a closed enum: `source` (external system type
+// vault/prometheus/elk) and `decision` (outcome ok/denied/error). Who
+// requested what goes to the audit log/trace, not the metric.
 //
-// Имена — Prometheus convention (snake_case, _total для counter, _seconds для
-// histogram длительности; ADR-024 §2.1).
+// Names follow Prometheus convention (snake_case, _total for a counter,
+// _seconds for a duration histogram; ADR-024 §2.1).
 type BrokerMetrics struct {
-	// fetchTotal — счётчик обработанных AugurRequest-ов, разрезанный по
-	// `source` (тип Omen-а) и `decision` (исход):
-	//   - ok     — доступ разрешён И fetch успешен (AugurReply{OK});
-	//   - denied — резолв отклонил доступ (AugurReply{DENIED});
-	//   - error  — инфраструктурный сбой (резолв упал / fetch упал /
-	//     concurrency-limit), AugurReply{ERROR}.
-	// source для denied/error может быть unknown, когда тип ещё не определён
-	// (Omen не найден / семафор переполнен до резолва) — см. [SourceUnknown].
+	// fetchTotal — a counter of handled AugurRequests, split by `source`
+	// (Omen type) and `decision` (outcome):
+	//   - ok     — access allowed AND fetch succeeded (AugurReply{OK});
+	//   - denied — resolve rejected access (AugurReply{DENIED});
+	//   - error  — infrastructure failure (resolve failed / fetch failed /
+	//     concurrency limit), AugurReply{ERROR}.
+	// source for denied/error can be unknown when the type isn't determined
+	// yet (Omen not found / semaphore full before resolve) — see [SourceUnknown].
 	fetchTotal *prometheus.CounterVec
 
-	// fetchDuration — длительность обработки одного AugurRequest в секундах
-	// (резолв + fetch), разрезанная по `source`. Histogram отвечает на «сколько
-	// длится брокинг по типу системы» (vault-KV дёшев, prom/elk — внешний HTTP);
-	// разрез по decision не нужен — для p99 хватает per-source серии.
+	// fetchDuration — duration of handling one AugurRequest in seconds
+	// (resolve + fetch), split by `source`. The histogram answers "how long
+	// does brokering take per system type" (vault-KV is cheap, prom/elk is
+	// external HTTP); no split by decision — a per-source series is enough
+	// for p99.
 	fetchDuration *prometheus.HistogramVec
 }
 

@@ -1,8 +1,8 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO SERVICE-домена (handler-native T5d).
-// service больше НЕ зависит от legacy-генерата (0 legacy-генерата в service-файлах), поэтому golden сверяет
-// json native-значения с ЗАФИКСИРОВАННОЙ строкой-эталоном. Покрыты обе указательных/
-// слайс-ветки: omitempty (created_by_aid/refresh/updated_by_aid/schema/git/is_default),
-// nil-vs-empty слайс (items/refs/migrations/destiny/modules) и enum GitRefType.
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the SERVICE domain (handler-native T5d).
+// service no longer depends on the legacy generator (0 legacy generator in service files), so golden
+// verifies the native JSON values against a PINNED reference string. Both pointer/slice branches are
+// covered: omitempty (created_by_aid/refresh/updated_by_aid/schema/git/is_default), nil-vs-empty
+// slice (items/refs/migrations/destiny/modules) and the GitRefType enum.
 package api
 
 import (
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// goldenServiceWire сверяет json.Marshal(native) байт-в-байт с зафиксированным эталоном.
+// goldenServiceWire compares json.Marshal(native) byte-for-byte with the pinned reference.
 func goldenServiceWire(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -32,7 +32,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 	gitURL := "https://git.example/redis-dep.git"
 	schemaMap := map[string]interface{}{"type": "object"}
 
-	// --- ServiceView: created_by_aid/refresh/updated_by_aid omitempty (обе ветки) ---
+	// --- ServiceView: created_by_aid/refresh/updated_by_aid omitempty (both branches) ---
 	goldenServiceWire(t, "ServiceView/full",
 		ServiceView{CreatedAt: ts, CreatedByAID: &aid, Git: "https://git/r.git", Name: "redis", Ref: "v2.0.0", Refresh: &refresh, UpdatedAt: ts2, UpdatedByAID: &aid},
 		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","git":"https://git/r.git","name":"redis","ref":"v2.0.0","refresh":"5m","updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}`)
@@ -40,7 +40,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 		ServiceView{CreatedAt: ts, CreatedByAID: nil, Git: "https://git/r.git", Name: "redis", Ref: "main", Refresh: nil, UpdatedAt: ts2, UpdatedByAID: nil},
 		`{"created_at":"2026-06-14T12:34:56.789012345Z","git":"https://git/r.git","name":"redis","ref":"main","updated_at":"2026-06-13T01:02:03.456789012Z"}`)
 
-	// --- ServiceListReply: items наполнен / пустой массив / nil ---
+	// --- ServiceListReply: items populated / empty array / nil ---
 	sv := ServiceView{CreatedAt: ts, Git: "g", Name: "redis", Ref: "v1", UpdatedAt: ts}
 	goldenServiceWire(t, "ServiceListReply/items",
 		ServiceListReply{Items: []ServiceView{sv}},
@@ -60,7 +60,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 		GitRef{Commit: "def456", IsDefault: &isDefault, Name: "main", Type: GitRefType("branch")},
 		`{"commit":"def456","is_default":true,"name":"main","type":"branch"}`)
 
-	// --- ServiceRefsListReply: refs наполнен / nil ---
+	// --- ServiceRefsListReply: refs populated / nil ---
 	goldenServiceWire(t, "ServiceRefsListReply/full",
 		ServiceRefsListReply{Refs: []GitRef{{Commit: "abc", Name: "v1", Type: GitRefType("tag")}}, Service: "redis"},
 		`{"refs":[{"commit":"abc","name":"v1","type":"tag"}],"service":"redis"}`)
@@ -73,7 +73,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 		StateSchemaMigration{From: 1, Path: "migrations/001_to_002.yml", To: 2},
 		`{"from":1,"path":"migrations/001_to_002.yml","to":2}`)
 
-	// --- ServiceStateSchemaReply: schema omitempty (обе ветки) + migrations nil/непуст ---
+	// --- ServiceStateSchemaReply: schema omitempty (both branches) + migrations nil/non-empty ---
 	goldenServiceWire(t, "ServiceStateSchemaReply/full",
 		ServiceStateSchemaReply{Migrations: []StateSchemaMigration{{From: 1, Path: "p", To: 2}}, Ref: "v2", Schema: &schemaMap, Service: "redis", StateSchemaVersion: 2},
 		`{"migrations":[{"from":1,"path":"p","to":2}],"ref":"v2","schema":{"type":"object"},"service":"redis","state_schema_version":2}`)
@@ -81,7 +81,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 		ServiceStateSchemaReply{Migrations: nil, Ref: "v1", Schema: nil, Service: "redis", StateSchemaVersion: 1},
 		`{"migrations":null,"ref":"v1","service":"redis","state_schema_version":1}`)
 
-	// --- ServiceDependency (nested): git omitempty (обе ветки) ---
+	// --- ServiceDependency (nested): git omitempty (both branches) ---
 	goldenServiceWire(t, "ServiceDependency/with_git",
 		ServiceDependency{Git: &gitURL, Name: "redis", Ref: "v2.0.0"},
 		`{"git":"https://git.example/redis-dep.git","name":"redis","ref":"v2.0.0"}`)
@@ -89,7 +89,7 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 		ServiceDependency{Git: nil, Name: "wb.failover", Ref: "main"},
 		`{"name":"wb.failover","ref":"main"}`)
 
-	// --- ServiceDependenciesReply: destiny/modules наполнены / nil ---
+	// --- ServiceDependenciesReply: destiny/modules populated / nil ---
 	goldenServiceWire(t, "ServiceDependenciesReply/full",
 		ServiceDependenciesReply{Destiny: []ServiceDependency{{Name: "redis", Ref: "v2"}}, Modules: []ServiceDependency{{Git: &gitURL, Name: "wb.x", Ref: "main"}}, Ref: "v1", Service: "redis"},
 		`{"destiny":[{"name":"redis","ref":"v2"}],"modules":[{"git":"https://git.example/redis-dep.git","name":"wb.x","ref":"main"}],"ref":"v1","service":"redis"}`)

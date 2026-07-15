@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 )
 
-// fakeProviderReader — стаб ProviderReader: возвращает заранее заданный
-// Provider или ошибку.
+// fakeProviderReader is a ProviderReader stub: returns a preset
+// Provider or error.
 type fakeProviderReader struct {
 	p   *provider.Provider
 	err error
@@ -27,8 +27,8 @@ func (r *fakeProviderReader) SelectByName(_ context.Context, name string) (*prov
 	return r.p, nil
 }
 
-// fakeProfileReader — стаб ProfileReader: возвращает заранее заданный Profile
-// или ошибку. Симметрично fakeProviderReader.
+// fakeProfileReader is a ProfileReader stub: returns a preset Profile
+// or error. Mirrors fakeProviderReader.
 type fakeProfileReader struct {
 	p   *profile.Profile
 	err error
@@ -44,7 +44,7 @@ func (r *fakeProfileReader) SelectByName(_ context.Context, name string) (*profi
 	return r.p, nil
 }
 
-// fakeVault — стаб VaultReader: маппит logical-path в payload секрета.
+// fakeVault is a VaultReader stub: maps a logical path to a secret payload.
 type fakeVault struct {
 	byPath map[string]map[string]any
 	err    error
@@ -82,14 +82,14 @@ func TestCredentialsResolver_Resolve_OK(t *testing.T) {
 	if got.Driver != "aws" {
 		t.Errorf("Driver = %q, want aws (Provider.Type)", got.Driver)
 	}
-	// credentials_ref резолвится через ParseRef → logical-path без `vault:`.
+	// credentials_ref resolves via ParseRef → logical path without `vault:`.
 	if vlt.lastPath != "secret/cloud/aws-prod" {
 		t.Errorf("vault path = %q, want secret/cloud/aws-prod", vlt.lastPath)
 	}
 	if got.Credentials["access_key_id"] != "AKIA..." {
 		t.Errorf("access_key_id leaked/lost: %v", got.Credentials["access_key_id"])
 	}
-	// region добавлен из Provider-реестра в credentials-map.
+	// region is added from the Provider registry into the credentials map.
 	if got.Credentials["region"] != "eu-west-1" {
 		t.Errorf("region = %v, want eu-west-1 (from Provider registry)", got.Credentials["region"])
 	}
@@ -145,8 +145,8 @@ func TestCredentialsResolver_VaultError(t *testing.T) {
 	}
 }
 
-// TestCredentialsResolver_ResolveProfile_OK — Вариант A: ResolveProfile читает
-// Profile по имени и возвращает его params (VM-spec для драйвера).
+// TestCredentialsResolver_ResolveProfile_OK — Option A: ResolveProfile reads
+// a Profile by name and returns its params (VM spec for the driver).
 func TestCredentialsResolver_ResolveProfile_OK(t *testing.T) {
 	prof := &fakeProfileReader{p: &profile.Profile{
 		Name:     "redis-small",
@@ -167,8 +167,8 @@ func TestCredentialsResolver_ResolveProfile_OK(t *testing.T) {
 	}
 }
 
-// TestCredentialsResolver_ResolveProfile_NotFound — имя не в реестре → ошибка
-// (caller отдаёт SendFailed, не nil-panic).
+// TestCredentialsResolver_ResolveProfile_NotFound — name not in the registry →
+// error (caller returns SendFailed, not a nil-panic).
 func TestCredentialsResolver_ResolveProfile_NotFound(t *testing.T) {
 	prof := &fakeProfileReader{err: profile.ErrProfileNotFound}
 	r := coremodcloud.NewCredentialsResolverPG(&fakeProviderReader{}, prof, &fakeVault{})

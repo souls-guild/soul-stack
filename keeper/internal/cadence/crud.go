@@ -13,16 +13,16 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pgutil"
 )
 
-// PG-коды (parity voyage/crud.go).
+// PG error codes (parity voyage/crud.go).
 const (
 	pgErrCodeUniqueViolation     = "23505"
 	pgErrCodeForeignKeyViolation = "23503"
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у (parity
-// voyage.ExecQueryRower минус CopyFrom: у cadences нет batch-вставки единиц).
-// unit-тесты ходят через fake, production даёт реальный pool/Conn/Tx.
+// ExecQueryRower is the narrow subset of pgxpool.Pool the CRUD needs (parity
+// voyage.ExecQueryRower minus CopyFrom: cadences has no batch unit insert).
+// Unit tests go through a fake; production supplies a real pool/Conn/Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -36,15 +36,15 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// validate — общая проверка рецепта/расписания Cadence (Insert + Update). Чистая
-// функция от полей, без PG. Инварианты:
-//   - непустые ID / Name / CreatedByAID; валидные enum-ы (schedule_kind /
+// validate is the common Cadence recipe/schedule check (Insert + Update). A
+// pure function of the fields, no PG. Invariants:
+//   - non-empty ID / Name / CreatedByAID; valid enums (schedule_kind /
 //     overlap_policy / kind / batch_mode / on_failure);
-//   - schedule_kind ↔ interval/cron XOR (interval ⇒ только interval_seconds>0;
-//     cron ⇒ только непустой cron_expr) — parity CHECK
-//     `cadences_schedule_consistency`, но «дружелюбная» ошибка до PG;
+//   - schedule_kind ↔ interval/cron XOR (interval ⇒ only interval_seconds>0;
+//     cron ⇒ only non-empty cron_expr) — parity CHECK
+//     `cadences_schedule_consistency`, but a "friendly" error ahead of PG;
 //   - kind ↔ scenario_name/module (parity voyage.Insert);
-//   - непустой Target; sane-bounds batch_size/percent/concurrency/fail_threshold.
+//   - non-empty Target; sane bounds on batch_size/percent/concurrency/fail_threshold.
 func validate(c *Cadence) error {
 	if c == nil {
 		return fmt.Errorf("cadence: nil cadence")
@@ -79,8 +79,9 @@ func validate(c *Cadence) error {
 		if c.IntervalSeconds != nil {
 			return fmt.Errorf("cadence: schedule_kind=cron не должен нести interval_seconds")
 		}
-		// Битый cron отвергаем здесь, до PG: CHECK-инвариант миграции 066 не парсит
-		// cron-грамматику, а scheduler-у (NextRun) нужен валидный expr (ADR-046 §2).
+		// Reject a broken cron here, ahead of PG: the migration 066 CHECK
+		// invariant doesn't parse cron grammar, and the scheduler (NextRun)
+		// needs a valid expr (ADR-046 §2).
 		if _, err := ParseCron(*c.CronExpr); err != nil {
 			return err
 		}
@@ -137,17 +138,18 @@ func validate(c *Cadence) error {
 	return nil
 }
 
-// ValidateIntervalFloor проверяет нижний предел периода interval-Cadence
-// (floor-лимит, ADR-046 Pass B): `interval_seconds >= floorSeconds`. Источник
-// floorSeconds — тот же config `cadence_scheduler.poll_floor`, что у адаптивного
-// опроса Conductor (единый минимум, не хардкод 30 в двух местах), прокидывается
-// write-path-handler-ом. floorSeconds <= 0 → проверка выключена (библиотечный
-// Insert/Update и unit/integration-тесты, которым нужно вставить суб-floor строку
-// для clamp-проверки, floor не задают). cron-Cadence (interval_seconds == NULL) и
-// не-interval schedule_kind — не затрагиваются (cron-гранулярность минута ≥ floor).
+// ValidateIntervalFloor checks the lower bound on an interval-Cadence period
+// (floor limit, ADR-046 Pass B): `interval_seconds >= floorSeconds`.
+// floorSeconds comes from the same `cadence_scheduler.poll_floor` config as
+// Conductor's adaptive polling (a single minimum, not a 30 hardcoded in two
+// places), passed in by the write-path handler. floorSeconds <= 0 → check
+// disabled (the library Insert/Update and unit/integration tests that need
+// to insert a sub-floor row for clamp testing don't set a floor).
+// cron-Cadence (interval_seconds == NULL) and non-interval schedule_kind are
+// unaffected (cron granularity of a minute ≥ floor).
 //
-// Возвращает голую `cadence: …`-ошибку (как [validate]): handler маппит её в 422
-// тем же путём, что прочие validate-ошибки рецепта.
+// Returns a plain `cadence: …` error (like [validate]): the handler maps it
+// to 422 the same way as other recipe validate errors.
 func ValidateIntervalFloor(c *Cadence, floorSeconds int) error {
 	if floorSeconds <= 0 || c == nil {
 		return nil
@@ -163,12 +165,12 @@ func ValidateIntervalFloor(c *Cadence, floorSeconds int) error {
 	return nil
 }
 
-// recipeArgs распаковывает рецепт/расписание Cadence в позиционные SQL-аргументы
-// для INSERT/UPDATE. nullable-поля → nil-интерфейс (NULL в БД); INTERVAL —
-// text-литералом через pgutil.Interval (parity voyage). Возвращает 23 значения в
-// порядке колонок начиная с `name` до `last_run_at`. id (PK) и created_by_aid
-// (фиксирован, в UPDATE не пишется) caller добавляет отдельно: Insert — оба,
-// Update — только id.
+// recipeArgs unpacks the Cadence recipe/schedule into positional SQL
+// arguments for INSERT/UPDATE. Nullable fields → nil interface (NULL in the
+// DB); INTERVAL is a text literal via pgutil.Interval (parity voyage).
+// Returns 23 values in column order from `name` through `last_run_at`. id
+// (PK) and created_by_aid (fixed, not written on UPDATE) are added
+// separately by the caller: Insert adds both, Update only id.
 func recipeArgs(c *Cadence) []any {
 	input := c.Input
 	if len(input) == 0 {
@@ -278,10 +280,11 @@ INSERT INTO cadences (
 RETURNING created_at, updated_at
 `
 
-// Insert вставляет новую Cadence. id (ULID) — генерация caller-а (API-handler
-// S4), CRUD только проверяет непустоту и диспатчит UNIQUE-violation в
-// [ErrCadenceExists]. Прогоняет [validate] до SQL. Input пустой → CRUD подставит
-// `{}` (parity DEFAULT). created_at/updated_at читаются из RETURNING.
+// Insert inserts a new Cadence. id (ULID) is generated by the caller
+// (API handler S4); CRUD only checks non-emptiness and dispatches a UNIQUE
+// violation to [ErrCadenceExists]. Runs [validate] before SQL. Empty Input →
+// CRUD substitutes `{}` (parity DEFAULT). created_at/updated_at are read
+// from RETURNING.
 func Insert(ctx context.Context, db ExecQueryRower, c *Cadence) error {
 	if err := validate(c); err != nil {
 		return err
@@ -329,7 +332,7 @@ FROM cadences
 WHERE id = $1
 `
 
-// Get читает Cadence по PK. [ErrCadenceNotFound] при отсутствии.
+// Get reads a Cadence by PK. [ErrCadenceNotFound] if absent.
 func Get(ctx context.Context, db ExecQueryRower, id string) (*Cadence, error) {
 	if id == "" {
 		return nil, fmt.Errorf("cadence: empty id")
@@ -345,9 +348,10 @@ func Get(ctx context.Context, db ExecQueryRower, id string) (*Cadence, error) {
 	return c, nil
 }
 
-// scanCadence — общий scan строки `cadences` в *Cadence. Используется Get и List
-// (через rows.Next). Nullable-колонки биндим через указатели; target/input —
-// jsonb-bytes; INTERVAL приходит float-секундами (EXTRACT EPOCH) → time.Duration.
+// scanCadence is the common scan of a `cadences` row into *Cadence. Used by
+// Get and List (via rows.Next). Nullable columns bind through pointers;
+// target/input are jsonb bytes; INTERVAL arrives as float seconds (EXTRACT
+// EPOCH) → time.Duration.
 func scanCadence(row pgx.Row) (*Cadence, error) {
 	var (
 		c                    Cadence
@@ -432,8 +436,9 @@ func scanCadence(row pgx.Row) (*Cadence, error) {
 	return &c, nil
 }
 
-// ListFilter — фильтры [List]. EnabledOnly — только enabled-расписания (false →
-// без фильтра по enabled); Kind — exact (пустая строка — без фильтра).
+// ListFilter holds the [List] filters. EnabledOnly restricts to enabled
+// schedules (false → no enabled filter); Kind is exact match (empty string →
+// no filter).
 type ListFilter struct {
 	EnabledOnly bool
 	Kind        Kind
@@ -452,10 +457,10 @@ WHERE (NOT $1::bool OR enabled)
   AND ($2::text IS NULL OR kind = $2)
 `
 
-// List возвращает страницу Cadence-ов: фильтры по enabled и kind (exact).
-// Сортировка — `created_at DESC`. Total — общее число строк под фильтром
-// (отдельный COUNT). limit/offset не валидируются — caller прогнал через
-// page-парсер (parity voyage.List).
+// List returns a page of Cadences: filters by enabled and kind (exact).
+// Sorted by `created_at DESC`. Total is the row count under the filter
+// (separate COUNT). limit/offset are not validated — the caller has already
+// run them through the page parser (parity voyage.List).
 func List(ctx context.Context, db ExecQueryRower, filter ListFilter, offset, limit int) ([]*Cadence, int, error) {
 	var kindArg any
 	if filter.Kind != "" {
@@ -517,10 +522,10 @@ WHERE id = $1
 RETURNING created_at, updated_at
 `
 
-// Update переписывает Cadence целиком (full-replace, parity рецепт-полей Insert).
-// Прогоняет [validate]. created_by_aid не меняется (владелец фиксирован).
-// [ErrCadenceNotFound] если строки нет (0 строк RETURNING). created_at/updated_at
-// перечитываются.
+// Update fully rewrites a Cadence (full-replace, parity Insert's recipe
+// fields). Runs [validate]. created_by_aid doesn't change (owner is fixed).
+// [ErrCadenceNotFound] if the row is missing (0 rows RETURNING).
+// created_at/updated_at are re-read.
 func Update(ctx context.Context, db ExecQueryRower, c *Cadence) error {
 	if err := validate(c); err != nil {
 		return err
@@ -544,8 +549,8 @@ UPDATE cadences SET
 WHERE id = $1
 `
 
-// SetEnabled переключает enabled-флаг (пауза/возобновление расписания) без полной
-// перезаписи рецепта. [ErrCadenceNotFound] если строки нет (0 строк).
+// SetEnabled toggles the enabled flag (pause/resume the schedule) without a
+// full recipe rewrite. [ErrCadenceNotFound] if the row is missing (0 rows).
 func SetEnabled(ctx context.Context, db ExecQueryRower, id string, enabled bool) error {
 	if id == "" {
 		return fmt.Errorf("cadence: empty id")
@@ -568,15 +573,16 @@ FOR UPDATE SKIP LOCKED
 LIMIT $1
 `
 
-// SelectDueForUpdate читает due-расписания (enabled И next_run_at <= NOW()) под
-// FOR UPDATE SKIP LOCKED — основа spawn-tx Reaper-правила spawn_due_cadence
-// (ADR-046 §4). SKIP LOCKED отдаёт single-executor-семантику даже если несколько
-// Keeper-инстансов случайно вошли в spawn одновременно (хотя нормально спавнит
-// только Reaper-лидер): строка, залоченная одной tx, пропускается другой.
+// SelectDueForUpdate reads due schedules (enabled AND next_run_at <= NOW())
+// under FOR UPDATE SKIP LOCKED — the basis of the Reaper rule
+// spawn_due_cadence spawn-tx (ADR-046 §4). SKIP LOCKED gives single-executor
+// semantics even if several Keeper instances happen to enter spawn at once
+// (though normally only the Reaper leader spawns): a row locked by one tx is
+// skipped by another.
 //
-// db ОБЯЗАН быть pgx.Tx (FOR UPDATE-лок держится до конца транзакции, в которой
-// идёт спавн + advance расписания). limit — потолок числа расписаний за один тик
-// (batch-guard против лавины при долгом downtime).
+// db MUST be a pgx.Tx (the FOR UPDATE lock is held until the end of the
+// transaction that does the spawn + schedule advance). limit caps the number
+// of schedules per tick (batch guard against a storm after long downtime).
 func SelectDueForUpdate(ctx context.Context, db ExecQueryRower, limit int) ([]*Cadence, error) {
 	rows, err := db.Query(ctx, selectDueForUpdateSQL, limit)
 	if err != nil {
@@ -598,52 +604,57 @@ func SelectDueForUpdate(ctx context.Context, db ExecQueryRower, limit int) ([]*C
 	return out, nil
 }
 
-// cronGranularity — фиксированный вклад cron-правил в derivedMinPeriod. cron-
-// расписания имеют interval_seconds = NULL (в MIN не попадают), но cron-
-// гранулярность — минута: чтобы не промахнуться мимо ближайшего cron-слота,
-// при наличии хоть одного enabled cron-правила Conductor опрашивается не реже
-// раза в минуту (ADR-048 «Adaptive interval»).
+// cronGranularity is the fixed contribution of cron rules to
+// derivedMinPeriod. cron schedules have interval_seconds = NULL (excluded
+// from MIN), but cron granularity is a minute: to not miss the nearest cron
+// slot, Conductor polls at least once a minute whenever at least one enabled
+// cron rule exists (ADR-048 "Adaptive interval").
 const cronGranularity = 60 * time.Second
 
-// MinPeriod — сырой результат [SelectMinPeriod]: агрегаты по enabled-реестру,
-// из которых вызывающий выводит derivedMinPeriod (см. [DerivedMinPeriod]).
+// MinPeriod is the raw result of [SelectMinPeriod]: aggregates over the
+// enabled registry, from which the caller derives derivedMinPeriod (see
+// [DerivedMinPeriod]).
 type MinPeriod struct {
-	// MinIntervalSeconds — MIN(interval_seconds) по enabled interval-правилам.
-	// nil, если ни одного enabled interval-правила нет (все cron или реестр пуст).
+	// MinIntervalSeconds is MIN(interval_seconds) over enabled interval
+	// rules. nil if there's no enabled interval rule (all cron, or the
+	// registry is empty).
 	MinIntervalSeconds *int
-	// HasCron — есть ли хоть одно enabled cron-правило (вклад cronGranularity).
+	// HasCron reports whether at least one enabled cron rule exists
+	// (contributes cronGranularity).
 	HasCron bool
 }
 
-// Empty сообщает, что enabled-реестр пуст: ни interval-, ни cron-правил. В этом
-// случае derivedMinPeriod не определён, и Conductor опрашивается с poll_idle
-// (ADR-048 idle-вариант (a): тот же MIN-запрос несёт сигнал «пусто», нового
-// Redis-канала нет).
+// Empty reports that the enabled registry is empty: no interval and no cron
+// rules. In this case derivedMinPeriod is undefined, and Conductor polls at
+// poll_idle (ADR-048 idle variant (a): the same MIN query carries the
+// "empty" signal, no new Redis channel).
 func (p MinPeriod) Empty() bool {
 	return p.MinIntervalSeconds == nil && !p.HasCron
 }
 
-// DerivedMinPeriod вычисляет derivedMinPeriod (ADR-048): минимальный «нужный»
-// шаг опроса по enabled-реестру. ok=false → реестр пуст (вызывающий берёт
-// poll_idle). Иначе:
-//   - p = MIN(interval_seconds), если есть enabled interval-правила;
-//   - при наличии enabled cron-правила — p = min(p, 60s) (cron-гранулярность
-//     минута; если interval-правил нет — p = 60s).
+// DerivedMinPeriod computes derivedMinPeriod (ADR-048): the minimum
+// "needed" poll step over the enabled registry. ok=false → registry is
+// empty (caller falls back to poll_idle). Otherwise:
+//   - p = MIN(interval_seconds), if there are enabled interval rules;
+//   - if an enabled cron rule exists — p = min(p, 60s) (cron granularity is
+//     a minute; if there are no interval rules — p = 60s).
 //
-// Floor (interval_seconds ≥ 30) тут НЕ применяется — это clamp-нижняя-граница
-// опроса (см. [Clamp]) и отдельная валидация создания (Pass B / ADR-046).
+// The floor (interval_seconds ≥ 30) is NOT applied here — that's the poll
+// clamp lower bound (see [Clamp]) and a separate creation-time validation
+// (Pass B / ADR-046).
 func (p MinPeriod) DerivedMinPeriod() (d time.Duration, ok bool) {
 	if p.Empty() {
 		return 0, false
 	}
 	if p.MinIntervalSeconds == nil {
-		// Только cron-правила (interval_seconds NULL не попадают в MIN): шаг —
-		// cron-гранулярность (минута).
+		// Only cron rules (interval_seconds NULL is excluded from MIN): the
+		// step is cron granularity (a minute).
 		return cronGranularity, true
 	}
 	d = time.Duration(*p.MinIntervalSeconds) * time.Second
 	if p.HasCron && cronGranularity < d {
-		// Есть и interval-, и cron-правила: берём более частый из двух.
+		// Both interval and cron rules exist: take the more frequent of
+		// the two.
 		d = cronGranularity
 	}
 	return d, true
@@ -655,15 +666,17 @@ FROM cadences
 WHERE enabled
 `
 
-// SelectMinPeriod агрегирует enabled-реестр для адаптивного шага опроса Conductor
-// (ADR-048 «Adaptive interval»): MIN(interval_seconds) по enabled interval-
-// правилам + флаг наличия enabled cron-правил. Один лёгкий aggregate-SELECT без
-// FOR UPDATE — летит только с Conductor-лидера в IntervalFn (не-лидеры IntervalFn
-// не зовут), лишней нагрузки на PG нет.
+// SelectMinPeriod aggregates the enabled registry for Conductor's adaptive
+// poll step (ADR-048 "Adaptive interval"): MIN(interval_seconds) over
+// enabled interval rules + a flag for enabled cron rules. A single light
+// aggregate SELECT without FOR UPDATE — only called from the Conductor
+// leader's IntervalFn (non-leaders don't call IntervalFn), so no extra load
+// on PG.
 //
-// Пустой реестр (нет enabled-строк): MIN → NULL, bool_or → NULL; обе сводятся к
-// «пусто» ([MinPeriod.Empty]). Stateless by construction — новый Conductor-лидер
-// после failover пересчитывает шаг из PG, не неся in-memory состояния опроса.
+// Empty registry (no enabled rows): MIN → NULL, bool_or → NULL; both reduce
+// to "empty" ([MinPeriod.Empty]). Stateless by construction — a new
+// Conductor leader after failover recomputes the step from PG, carrying no
+// in-memory poll state.
 func SelectMinPeriod(ctx context.Context, db ExecQueryRower) (MinPeriod, error) {
 	var (
 		minIv   *int
@@ -679,13 +692,14 @@ func SelectMinPeriod(ctx context.Context, db ExecQueryRower) (MinPeriod, error) 
 	return mp, nil
 }
 
-// Clamp ограничивает шаг опроса коридором [floor, ceiling] (профиль «Спокойный»:
-// 30s/60s, ADR-048). Floor-clamp — defence-in-depth backstop на случай, если
-// суб-floor строка обошла write-path floor-reject и DB-CHECK (Pass B их отвергает,
-// но clamp всё равно держит опрос не ниже floor): derivedMinPeriod < floor
-// (например interval=10 при floor=30) опрашивается раз в 30s. Ceiling-cap не даёт
-// редким расписаниям (interval=1h) растягивать опрос настолько, что
-// NextRunAnchored missed-slot становится единственной страховкой.
+// Clamp bounds the poll step to the [floor, ceiling] corridor ("Calm"
+// profile: 30s/60s, ADR-048). The floor clamp is a defence-in-depth backstop
+// in case a sub-floor row bypassed the write-path floor reject and the
+// DB CHECK (Pass B rejects those, but clamp still keeps polling no lower
+// than floor): derivedMinPeriod < floor (e.g. interval=10 with floor=30)
+// polls every 30s. The ceiling cap stops rare schedules (interval=1h) from
+// stretching the poll interval so far that NextRunAnchored's missed-slot
+// handling becomes the only safety net.
 func Clamp(d, floor, ceiling time.Duration) time.Duration {
 	if d < floor {
 		return floor
@@ -704,11 +718,12 @@ UPDATE cadences SET
 WHERE id = $1
 `
 
-// AdvanceSchedule двигает расписание после due-обработки: пересчитанный
-// next_run_at + last_run_at (момент спавна; nil для overlap-skip без спавна —
-// caller передаёт NextRun-результат как next, но last_run может остаться прежним).
-// Вызывается в той же spawn-tx, что Insert порождённого Voyage (атомарность
-// против задвоения, ADR-046 §4). [ErrCadenceNotFound] при 0 строк.
+// AdvanceSchedule advances the schedule after due processing: recalculated
+// next_run_at + last_run_at (spawn moment; nil for an overlap-skip with no
+// spawn — the caller passes the NextRun result as next, but last_run may
+// stay unchanged). Called in the same spawn-tx as the spawned Voyage's
+// Insert (atomicity against double-spawn, ADR-046 §4). [ErrCadenceNotFound]
+// on 0 rows.
 func AdvanceSchedule(ctx context.Context, db ExecQueryRower, id string, nextRunAt time.Time, lastRunAt *time.Time) error {
 	if id == "" {
 		return fmt.Errorf("cadence: empty id")
@@ -735,11 +750,11 @@ SELECT EXISTS(
 )
 `
 
-// HasLiveChild сообщает, есть ли у Cadence НЕтерминальный порождённый Voyage
-// (pending/scheduled/running) — overlap-проверка для skip/queue-политик (ADR-046
-// §5). Терминальный набор совпадает с voyage.IsTerminal. Вызывается в spawn-tx
-// (та же транзакция, что Insert/AdvanceSchedule), поэтому видит свежесозданные в
-// этом тике строки и не задваивает спавн.
+// HasLiveChild reports whether the Cadence has a non-terminal spawned
+// Voyage (pending/scheduled/running) — the overlap check for skip/queue
+// policies (ADR-046 §5). The terminal set matches voyage.IsTerminal. Called
+// within the spawn-tx (same transaction as Insert/AdvanceSchedule), so it
+// sees rows freshly created in this tick and doesn't double-spawn.
 func HasLiveChild(ctx context.Context, db ExecQueryRower, cadenceID string) (bool, error) {
 	if cadenceID == "" {
 		return false, fmt.Errorf("cadence: empty cadence_id")
@@ -753,9 +768,9 @@ func HasLiveChild(ctx context.Context, db ExecQueryRower, cadenceID string) (boo
 
 const deleteSQL = `DELETE FROM cadences WHERE id = $1`
 
-// Delete снимает расписание. Порождённые Voyage остаются (FK
-// voyages.cadence_id ON DELETE SET NULL — дети-сироты, ADR-046 §9).
-// [ErrCadenceNotFound] если строки нет (0 строк).
+// Delete removes the schedule. Spawned Voyages remain (FK
+// voyages.cadence_id ON DELETE SET NULL — orphaned children, ADR-046 §9).
+// [ErrCadenceNotFound] if the row is missing (0 rows).
 func Delete(ctx context.Context, db ExecQueryRower, id string) error {
 	if id == "" {
 		return fmt.Errorf("cadence: empty id")

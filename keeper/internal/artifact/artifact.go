@@ -1,38 +1,38 @@
-// Package artifact загружает git-артефакты Service-репозиториев на Keeper-сторону:
-// клонирует/обновляет репозиторий, материализует immutable-снапшот по git-ref
-// (ADR-007: ref = tag или branch, semver-range запрещён) и парсит корневой
-// `service.yml` через нормативный `shared/config`-парсер.
+// Package artifact loads git artifacts of Service repositories on the Keeper
+// side: clones/updates the repository, materializes an immutable snapshot at
+// a git ref (ADR-007: ref = tag or branch, semver ranges forbidden), and
+// parses the root `service.yml` via the normative `shared/config` parser.
 //
-// Снапшоты кешируются по `<cacheRoot>/<name>/<sha1>/`, где `sha1` — резолв ref
-// в commit-hash. Тег immutable по своей природе; ветка резолвится в текущий tip
-// при каждом [ServiceLoader.Load] (PM-decision: всегда fetch + checkout,
-// throttle — отдельный slice). Снапшот не содержит `.git` — это чистое дерево
-// файлов сервиса.
+// Snapshots are cached at `<cacheRoot>/<name>/<sha1>/`, where `sha1` is ref
+// resolved to a commit hash. A tag is immutable by nature; a branch resolves
+// to its current tip on every [ServiceLoader.Load] (PM decision: always
+// fetch + checkout, throttling is a separate slice). A snapshot contains no
+// `.git` — it's a clean tree of the service's files.
 //
-// Транспорт — pure Go (go-git): поддержаны `file://` (local-dev + тесты),
-// `https://` и `ssh://`/`scp`-форма (auth через SSH-agent, Vault-auth —
-// post-MVP). Зона по architect-recon slice .a.
+// Transport is pure Go (go-git): supports `file://` (local-dev + tests),
+// `https://`, and `ssh://`/scp form (auth via SSH-agent, Vault auth is
+// post-MVP). Zone per architect-recon slice .a.
 package artifact
 
 import "github.com/souls-guild/soul-stack/shared/config"
 
-// ServiceRef — координаты Service-репозитория для загрузки.
+// ServiceRef — coordinates of a Service repository to load.
 //
-// Name — kebab-case имя сервиса (совпадает с `service.yml → name`), используется
-// как первый сегмент cache-пути. Git — URL репозитория (`file://`/`https://`/
-// `ssh://`). Ref — git tag или branch (ADR-007); пустой Ref трактуется как
-// `HEAD` репозитория по умолчанию.
+// Name — kebab-case service name (matches `service.yml → name`), used as the
+// first segment of the cache path. Git — repository URL (`file://`/`https://`/
+// `ssh://`). Ref — git tag or branch (ADR-007); an empty Ref is treated as
+// the repository's default `HEAD`.
 type ServiceRef struct {
 	Name string
 	Git  string
 	Ref  string
 }
 
-// ServiceArtifact — материализованный immutable-снапшот Service-репозитория на
-// конкретном commit-е.
+// ServiceArtifact — a materialized immutable snapshot of a Service repository
+// at a specific commit.
 //
-// LocalDir указывает на каталог снапшота (`<cacheRoot>/<name>/<sha1>`), готовый
-// к чтению через [ServiceLoader.ReadFile]. Manifest — распарсенный корневой
+// LocalDir points to the snapshot directory (`<cacheRoot>/<name>/<sha1>`),
+// ready to be read via [ServiceLoader.ReadFile]. Manifest — the parsed root
 // `service.yml`.
 type ServiceArtifact struct {
 	Ref      ServiceRef

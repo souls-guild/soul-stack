@@ -1,10 +1,10 @@
 //go:build integration
 
-// Integration-тесты `core.soul.registered` через testcontainers-go
-// (postgres:16-alpine). End-to-end: модуль вызывается с PGStore поверх
-// реального pgxpool, проверяется side-effect в souls (coven и status).
+// Integration tests for `core.soul.registered` via testcontainers-go
+// (postgres:16-alpine). End-to-end: the module is called with a PGStore over
+// a real pgxpool, verifying the side effect in souls (coven and status).
 //
-// Паттерн совпадает с keeper/internal/soul/integration_test.go.
+// Mirrors the pattern in keeper/internal/soul/integration_test.go.
 
 package soul_test
 
@@ -133,7 +133,7 @@ func TestIntegration_Apply_Append_UnionWithExisting(t *testing.T) {
 	resetSouls(t)
 	ctx := context.Background()
 
-	// Сидируем существующего Soul с одной меткой.
+	// Seed an existing Soul with one tag.
 	if err := keepersoul.Insert(ctx, integrationPool, &keepersoul.Soul{
 		SID:    "host-append.example.com",
 		Status: keepersoul.StatusConnected,
@@ -255,7 +255,7 @@ func TestIntegration_Apply_Idempotent(t *testing.T) {
 
 	m := coremodsoul.New(coremodsoul.NewPGStore(integrationPool))
 
-	// Первый прогон: changed=false (set уже совпадает).
+	// First run: changed=false (set already matches).
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: "registered",

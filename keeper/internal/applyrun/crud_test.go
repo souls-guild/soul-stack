@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub для unit-тестов. Захватывает последний SQL и
-// аргументы, отдаёт настраиваемый Row / CommandTag. Паттерн совпадает с
+// fakeDB — ExecQueryRower stub for unit tests. Captures the last SQL and
+// args, returns a configurable Row / CommandTag. Pattern matches
 // keeper/internal/incarnation/crud_test.go.
 type fakeDB struct {
 	execCalls  int
@@ -360,7 +360,7 @@ func TestUpdateStatus_WithErrorSummary(t *testing.T) {
 }
 
 func TestUpdateStatus_NotFound(t *testing.T) {
-	// UPDATE 0 строк + probe → ErrNoRows (строки нет вовсе) → ErrApplyRunNotFound.
+	// UPDATE 0 rows + probe → ErrNoRows (row doesn't exist at all) → ErrApplyRunNotFound.
 	f := &fakeDB{
 		execTag:    pgconn.NewCommandTag("UPDATE 0"),
 		execTagSet: true,
@@ -374,8 +374,8 @@ func TestUpdateStatus_NotFound(t *testing.T) {
 	}
 }
 
-// Append-only single-winner (ADR-027(j)): SQL несёт guard исходного статуса,
-// терминал не перезаписывается терминалом.
+// Append-only single-winner (ADR-027(j)): the SQL carries a source-status
+// guard, a terminal is not overwritten by another terminal.
 func TestUpdateStatus_AppendOnlyGuardInSQL(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
 	if err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil); err != nil {
@@ -386,8 +386,9 @@ func TestUpdateStatus_AppendOnlyGuardInSQL(t *testing.T) {
 	}
 }
 
-// dispatched → терминал проходит (UPDATE 1): после MarkDispatched строка к
-// приходу RunResult именно dispatched, и терминал обязан коммититься из неё.
+// dispatched → terminal goes through (UPDATE 1): after MarkDispatched a row
+// is exactly dispatched by the time RunResult arrives, and the terminal
+// must commit from that state.
 func TestUpdateStatus_DispatchedToTerminal_OK(t *testing.T) {
 	for _, term := range []Status{StatusSuccess, StatusFailed, StatusCancelled} {
 		f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
@@ -403,7 +404,8 @@ func TestUpdateStatus_DispatchedToTerminal_OK(t *testing.T) {
 	}
 }
 
-// Не-терминал → терминал: переход проходит (UPDATE 1), probe не дёргается.
+// Non-terminal → terminal: the transition goes through (UPDATE 1), probe is
+// not triggered.
 func TestUpdateStatus_NonTerminalToTerminal_OK(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
 	if err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil); err != nil {
@@ -414,8 +416,9 @@ func TestUpdateStatus_NonTerminalToTerminal_OK(t *testing.T) {
 	}
 }
 
-// Терминал → терминал: UPDATE 0 строк (guard отсёк), probe видит терминальный
-// статус → ErrApplyRunAlreadyTerminal (no-op, первый победил, НЕ ошибка).
+// Terminal → terminal: UPDATE 0 rows (guard blocked it), probe sees a
+// terminal status → ErrApplyRunAlreadyTerminal (no-op, first one won, NOT an
+// error).
 func TestUpdateStatus_TerminalToTerminal_AlreadyTerminal(t *testing.T) {
 	for _, st := range []string{"success", "failed", "cancelled"} {
 		f := &fakeDB{
@@ -459,8 +462,8 @@ func TestUpdateStatus_RejectsInvalidStatus(t *testing.T) {
 
 func TestRecordTaskFailure_HappyPath(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	// taskIdx=2 (локальный), planIndex=7 (глобальный) различны — фиксируем, что
-	// оба едут как отдельные аргументы (ADR-056 §S1 fix Variant B).
+	// taskIdx=2 (local), planIndex=7 (global) differ — pins down that both
+	// travel as separate arguments (ADR-056 §S1 fix Variant B).
 	err := RecordTaskFailure(context.Background(), f, "a", "s", 0, 2, 7, "task 7 core.pkg.installed: E: Version not found")
 	if err != nil {
 		t.Fatalf("RecordTaskFailure: %v", err)
@@ -648,9 +651,9 @@ func TestRequestCancel_HappyPath(t *testing.T) {
 	if !strings.Contains(f.execSQL, "cancel_requested = true") {
 		t.Errorf("SQL must set cancel_requested: %q", f.execSQL)
 	}
-	// Нетерминальные строки (planned/claimed/running) — ADR-027 cutover: Cancel в
-	// planned/claimed-окне должен достигать строки, а терминальные исключены
-	// (Cancel завершённого прогона — no-op).
+	// Non-terminal rows (planned/claimed/running) — ADR-027 cutover: a Cancel
+	// in the planned/claimed window must reach the row, terminal rows are
+	// excluded (Cancel on a finished run is a no-op).
 	if !strings.Contains(f.execSQL, "status IN ('planned', 'claimed', 'running')") {
 		t.Errorf("SQL must filter status IN (planned,claimed,running): %q", f.execSQL)
 	}
@@ -680,10 +683,10 @@ func TestRequestCancel_RejectsEmptyApplyID(t *testing.T) {
 	}
 }
 
-// TestRequestCancel_PGError — сбой PG-апдейта флага оборачивается в ошибку
-// (RequestCancel — единственный write-путь cluster-wide Cancel; caller
-// Runner.RequestCancel пробрасывает её наверх в admin-API). affected при
-// ошибке не несёт смысла — caller обязан смотреть на err первым.
+// TestRequestCancel_PGError — a PG update failure on the flag is wrapped
+// into an error (RequestCancel is the only write path for cluster-wide
+// Cancel; caller Runner.RequestCancel propagates it up to the admin API).
+// affected is meaningless on error — the caller must check err first.
 func TestRequestCancel_PGError(t *testing.T) {
 	boom := errors.New("connection reset by peer")
 	f := &fakeDB{execErr: boom}
@@ -701,8 +704,9 @@ func TestRequestCancel_PGError(t *testing.T) {
 
 // --- SelectCancelRequested --------------------------------------------
 
-// TestSelectCancelRequested_True — Acolyte перед SendApply читает свежий флаг;
-// true → apply не отправляется (claim переводит задание в cancelled).
+// TestSelectCancelRequested_True — the Acolyte reads the fresh flag before
+// SendApply; true → the apply is not sent (claim moves the task to
+// cancelled).
 func TestSelectCancelRequested_True(t *testing.T) {
 	f := &fakeDB{queryRowFunc: func(string) pgx.Row {
 		return staticRow{values: []any{true}}
@@ -748,8 +752,8 @@ func TestSelectCancelRequested_NotFound(t *testing.T) {
 // --- ValidStatus ------------------------------------------------------
 
 func TestValidStatus(t *testing.T) {
-	// Phase 1 (ADR-027): planned/claimed теперь валидны для CRUD-слоя;
-	// старые running/success/failed/cancelled сохранены.
+	// Phase 1 (ADR-027): planned/claimed are now valid for the CRUD layer;
+	// the old running/success/failed/cancelled are preserved.
 	good := []Status{
 		StatusPlanned, StatusClaimed,
 		StatusRunning, StatusSuccess, StatusFailed, StatusCancelled,
@@ -767,7 +771,7 @@ func TestValidStatus(t *testing.T) {
 	}
 }
 
-// --- ClaimNext (валидация + форма запроса, без БД) --------------------
+// --- ClaimNext (validation + query shape, no DB) --------------------
 
 func TestClaimNext_Validation(t *testing.T) {
 	f := &fakeDB{}
@@ -822,7 +826,7 @@ func TestClaimNext_QueryShape(t *testing.T) {
 	}
 }
 
-// --- MarkDispatched (валидация + guard-форма, без БД) -----------------
+// --- MarkDispatched (validation + guard shape, no DB) -----------------
 
 func TestMarkDispatched_Validation(t *testing.T) {
 	f := &fakeDB{}
@@ -838,7 +842,7 @@ func TestMarkDispatched_Validation(t *testing.T) {
 }
 
 func TestMarkDispatched_GuardFilter(t *testing.T) {
-	// Exec затронул строку → ok, без добор-SELECT-а.
+	// Exec touched the row → ok, no probe SELECT needed.
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
 	if err := MarkDispatched(context.Background(), f, "a", "s"); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
@@ -855,7 +859,7 @@ func TestMarkDispatched_GuardFilter(t *testing.T) {
 }
 
 func TestMarkDispatched_ZeroRows_NotFound(t *testing.T) {
-	// Exec затронул 0 строк + добор-SELECT даёт ErrNoRows → ErrApplyRunNotFound.
+	// Exec touched 0 rows + the probe SELECT returns ErrNoRows → ErrApplyRunNotFound.
 	f := &fakeDB{
 		execTag:    pgconn.NewCommandTag("UPDATE 0"),
 		execTagSet: true,
@@ -869,7 +873,7 @@ func TestMarkDispatched_ZeroRows_NotFound(t *testing.T) {
 }
 
 func TestMarkDispatched_ZeroRows_NotClaimed(t *testing.T) {
-	// Exec затронул 0 строк + добор-SELECT нашёл строку в dispatched → NotClaimed.
+	// Exec touched 0 rows + the probe SELECT found the row in dispatched → NotClaimed.
 	f := &fakeDB{
 		execTag:    pgconn.NewCommandTag("UPDATE 0"),
 		execTagSet: true,

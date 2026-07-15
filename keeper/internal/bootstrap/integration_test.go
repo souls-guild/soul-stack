@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration-тесты bootstrap.Init через testcontainers-go (PG + Vault).
+// Integration tests for bootstrap.Init via testcontainers-go (PG + Vault).
 //
-// Запуск:
+// Run:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/bootstrap/
 //
-// Один Postgres + один Vault per-package в TestMain — поднятие
-// контейнеров занимает 3-5 секунд каждый, иначе тесты получаются
-// прохибитивно медленными.
+// One Postgres + one Vault per package in TestMain — spinning up
+// containers takes 3-5 seconds each, otherwise tests would be
+// prohibitively slow.
 
 package bootstrap
 
@@ -49,8 +49,9 @@ const (
 	integrationVaultImage = "hashicorp/vault:1.18"
 	integrationPGImage    = "postgres:16-alpine"
 
-	// integrationSigningKey — 32-байтовый ключ для HS256, общий между
-	// Issuer-фабрикой и Verify-парсером в тестах. Base64-форма для Vault.
+	// integrationSigningKey is a 32-byte key for HS256, shared between
+	// the Issuer factory and the Verify parser in tests. Base64 form for
+	// Vault.
 	integrationSigningKey = "0123456789abcdef0123456789abcdef"
 
 	integrationIssuer = "keeper.integration"
@@ -59,7 +60,7 @@ const (
 var (
 	integrationPool     *pgxpool.Pool
 	integrationVaultC   *keepervault.Client
-	integrationVaultAPI *vaultapi.Client // для write-операций в тестах (наш Client read-only)
+	integrationVaultAPI *vaultapi.Client // for write operations in tests (our Client is read-only)
 	integrationKVPath   = "secret/keeper/jwt-signing-key"
 )
 
@@ -153,10 +154,11 @@ func run(m *testing.M) int {
 func resetState(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	// TRUNCATE operators CASCADE каскадно truncate-ит и rbac_roles (FK
-	// created_by_aid → operators), снося seed-роль cluster-admin. В проде она
-	// живёт за счёт миграции 027; в тестах после wipe ре-сидим её идемпотентно,
-	// чтобы keeper init (rbac.GrantOperator cluster-admin) нашёл роль.
+	// TRUNCATE operators CASCADE also truncates rbac_roles (FK
+	// created_by_aid → operators), wiping out the seeded cluster-admin
+	// role. In production it's kept alive by migration 027; in tests we
+	// idempotently re-seed it after the wipe so that keeper init
+	// (rbac.GrantOperator cluster-admin) can find the role.
 	if _, err := integrationPool.Exec(ctx,
 		`TRUNCATE TABLE operators, audit_log CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE: %v", err)
@@ -173,8 +175,8 @@ func resetState(t *testing.T) {
 	}
 }
 
-// seedSystemOperator восстанавливает archon-system (миграция 086), который
-// resetState сносит через TRUNCATE, — воспроизводит чистую БД после миграций.
+// seedSystemOperator restores archon-system (migration 086), which
+// resetState wipes via TRUNCATE — reproducing a clean DB post-migrations.
 func seedSystemOperator(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -222,7 +224,7 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 		t.Errorf("CorrelationID empty")
 	}
 
-	// Проверка operators.
+	// Check operators.
 	var (
 		aid          string
 		displayName  string
@@ -242,13 +244,14 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 	if createdByAID != nil {
 		t.Errorf("created_by_aid = %v, want NULL (bootstrap)", *createdByAID)
 	}
-	// ADR-058(d) guard (кейс 1): первый Архонт пишется с created_via='bootstrap'
-	// (новый bootstrap-инвариант перенесён на это поле, миграция 085).
+	// ADR-058(d) guard (case 1): the first Archon is written with
+	// created_via='bootstrap' (the bootstrap invariant now lives on this
+	// field, migration 085).
 	if createdVia != "bootstrap" {
 		t.Errorf("created_via = %q, want \"bootstrap\"", createdVia)
 	}
 
-	// Проверка audit_log.
+	// Check audit_log.
 	var (
 		eventType    string
 		source       string
@@ -291,7 +294,7 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 		t.Errorf("payload.auth_method = %v", payload["auth_method"])
 	}
 
-	// Проверка JWT-файла.
+	// Check the JWT file.
 	info, err := os.Stat(credPath)
 	if err != nil {
 		t.Fatalf("Stat credPath: %v", err)
@@ -307,7 +310,7 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 	if len(tokenStr) == 0 {
 		t.Fatal("token file empty")
 	}
-	// Декод JWT и проверка claims.
+	// Decode the JWT and check claims.
 	parsed, err := jwtv5.Parse(tokenStr, func(_ *jwtv5.Token) (interface{}, error) {
 		return []byte(integrationSigningKey), nil
 	}, jwtv5.WithLeeway(2*time.Second))
@@ -336,17 +339,20 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_Init_Concurrent — coverage gap (qa): реальная гонка двух
-// и более `keeper init` (HA-кластер, ADR-002/ADR-013). Существующие тесты
-// проверяют только ПОСЛЕДОВАТЕЛЬНЫЙ повтор (Init#1 завершён → Init#2). Здесь
-// N goroutine стартуют bootstrap ОДНОВРЕМЕННО на одной чистой БД.
+// TestIntegration_Init_Concurrent covers a coverage gap (qa): a real race
+// between two or more `keeper init` (HA cluster, ADR-002/ADR-013).
+// Existing tests only check a SEQUENTIAL repeat (Init#1 finishes →
+// Init#2). Here N goroutines start bootstrap SIMULTANEOUSLY against one
+// clean DB.
 //
-// Инвариант (ADR-013): `pg_advisory_xact_lock` сериализует транзакции, а
-// partial unique index `operators_first_archon_idx` (на `created_by_aid IS
-// NULL`) — последний рубеж на уровне БД. Ровно ОДНА goroutine должна успеть,
-// остальные — получить ErrAlreadyInitialized (advisory lock освободился после
-// COMMIT-а победителя, проигравшие видят непустой реестр). В итоге в
-// operators — ровно одна строка первого Архонта (`created_by_aid IS NULL`).
+// Invariant (ADR-013): `pg_advisory_xact_lock` serializes the
+// transactions, and the partial unique index `operators_first_archon_idx`
+// (on `created_via = 'bootstrap'`, ADR-058(d)/migration 085) is the last
+// line of defense at the DB level. Exactly ONE goroutine should succeed,
+// the rest get ErrAlreadyInitialized (the advisory lock is released after
+// the winner's COMMIT, the losers then see a non-empty registry). The end
+// result: operators has exactly one row for the first Archon
+// (`created_via = 'bootstrap'`).
 func TestIntegration_Init_Concurrent(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -355,7 +361,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 	const concurrency = 8
 
 	var (
-		start     sync.WaitGroup // барьер: все goroutine стартуют Init одновременно
+		start     sync.WaitGroup // barrier: all goroutines start Init simultaneously
 		done      sync.WaitGroup
 		succeeded atomic.Int64
 		errs      = make([]error, concurrency)
@@ -367,11 +373,11 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 		go func(idx int) {
 			defer done.Done()
 			cfg := Config{
-				// AID у каждого свой — без advisory lock-а попытка вставить
-				// второго bootstrap-оператора упёрлась бы в partial unique
-				// index, а не в PK по AID. Так тест проверяет именно
-				// bootstrap-инвариант «ровно один created_by_aid IS NULL»,
-				// а не банальную PK-коллизию.
+				// Each goroutine gets its own AID — without the advisory
+				// lock, inserting a second bootstrap operator would hit the
+				// partial unique index rather than the AID PK. This way the
+				// test checks the actual bootstrap invariant ("exactly one
+				// created_via = 'bootstrap'"), not a trivial PK collision.
 				ArchonAID:        fmt.Sprintf("archon-race-%d", idx),
 				TTLBootstrap:     time.Hour,
 				Pool:             integrationPool,
@@ -381,7 +387,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 				AuditWriter:      writer,
 				CredentialOutput: filepath.Join(t.TempDir(), "k.token"),
 			}
-			start.Wait() // ждём общий старт — максимизируем фактическую гонку
+			start.Wait() // wait for the common start — maximize the actual race
 			_, err := Init(ctx, cfg)
 			if err == nil {
 				succeeded.Add(1)
@@ -390,7 +396,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 		}(i)
 	}
 
-	start.Done() // отпускаем барьер — все Init стартуют ~одновременно
+	start.Done() // release the barrier — all Init calls start ~simultaneously
 	done.Wait()
 
 	if got := succeeded.Load(); got != 1 {
@@ -398,14 +404,15 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 	}
 	for idx, err := range errs {
 		if err == nil {
-			continue // победитель
+			continue // winner
 		}
 		if !errors.Is(err, ErrAlreadyInitialized) {
 			t.Errorf("goroutine #%d: err = %v, want ErrAlreadyInitialized", idx, err)
 		}
 	}
 
-	// В operators ровно одна строка, и она — первый Архонт (created_by_aid IS NULL).
+	// operators holds exactly one row, and it is the first Archon
+	// (created_via = 'bootstrap').
 	var (
 		total      int64
 		bootstrapN int64
@@ -416,10 +423,10 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 	if total != 1 {
 		t.Errorf("operators count = %d, want 1 (только победитель гонки)", total)
 	}
-	// ADR-058(d): bootstrap-инвариант перенесён с `created_by_aid IS NULL` на
-	// `created_via = 'bootstrap'` (миграция 085). Под нагрузкой гонки индекс
-	// `operators_first_archon_idx` (теперь на created_via='bootstrap') пропустил
-	// ровно одного победителя.
+	// ADR-058(d): the bootstrap invariant moved from `created_by_aid IS
+	// NULL` to `created_via = 'bootstrap'` (migration 085). Under race
+	// load, the `operators_first_archon_idx` index (now on
+	// created_via='bootstrap') let exactly one winner through.
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM operators WHERE created_via = 'bootstrap'`).Scan(&bootstrapN); err != nil {
 		t.Fatalf("count bootstrap operators: %v", err)
@@ -457,7 +464,7 @@ func TestIntegration_Init_AlreadyInitialized(t *testing.T) {
 	if !errors.Is(err, ErrAlreadyInitialized) {
 		t.Errorf("err = %v, want ErrAlreadyInitialized", err)
 	}
-	// Проверка: в operators по-прежнему один Архонт.
+	// Check: operators still has exactly one Archon.
 	var n int64
 	_ = integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM operators`).Scan(&n)
 	if n != 1 {
@@ -465,9 +472,9 @@ func TestIntegration_Init_AlreadyInitialized(t *testing.T) {
 	}
 }
 
-// TestIntegration_Init_DisplayNameDefaultsToAID проверяет PM-decision
-// M0.5c №5: при пустом DisplayName в Config — в operators.display_name
-// записывается ArchonAID.
+// TestIntegration_Init_DisplayNameDefaultsToAID verifies PM-decision
+// M0.5c #5: when Config.DisplayName is empty, operators.display_name is
+// set to ArchonAID.
 func TestIntegration_Init_DisplayNameDefaultsToAID(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -477,7 +484,7 @@ func TestIntegration_Init_DisplayNameDefaultsToAID(t *testing.T) {
 	const aid = "archon-default-name"
 	_, err := Init(ctx, Config{
 		ArchonAID:        aid,
-		DisplayName:      "", // пустой → должен fallback на AID
+		DisplayName:      "", // empty → should fall back to AID
 		TTLBootstrap:     time.Hour,
 		Pool:             integrationPool,
 		VaultClient:      integrationVaultC,
@@ -500,11 +507,11 @@ func TestIntegration_Init_DisplayNameDefaultsToAID(t *testing.T) {
 	}
 }
 
-// TestIntegration_Init_AuditWriteFailsAfterCommit — coverage gap
-// (qa M0.5c): после COMMIT-а insert-а operator-а audit-write падает →
-// БД консистентна (operator в реестре), Init возвращает
-// ErrAuditWriteFailed, JWT-файл НЕ создан (caller через main.go увидит
-// sentinel и выдаст warning про manual reconciliation).
+// TestIntegration_Init_AuditWriteFailsAfterCommit covers a coverage gap
+// (qa M0.5c): after the operator insert's COMMIT, the audit write fails
+// → the DB is consistent (operator in the registry), Init returns
+// ErrAuditWriteFailed, and the JWT file is NOT created (the caller sees
+// the sentinel via main.go and issues a manual-reconciliation warning).
 func TestIntegration_Init_AuditWriteFailsAfterCommit(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -534,7 +541,7 @@ func TestIntegration_Init_AuditWriteFailsAfterCommit(t *testing.T) {
 		t.Errorf("Result = %+v, want nil on ErrAuditWriteFailed", res)
 	}
 
-	// operator закоммичен — реестр имеет одну запись.
+	// operator is committed — the registry has one record.
 	var n int64
 	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM operators`).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
@@ -543,15 +550,16 @@ func TestIntegration_Init_AuditWriteFailsAfterCommit(t *testing.T) {
 		t.Errorf("operators count = %d, want 1 (committed before audit-fail)", n)
 	}
 
-	// JWT-файл НЕ должен быть создан — writeTokenFile вызывается ПОСЛЕ
-	// audit-write.
+	// The JWT file must NOT be created — writeTokenFile is called AFTER
+	// the audit write.
 	if _, statErr := os.Stat(credPath); statErr == nil {
 		t.Errorf("credPath %q exists; expected NOT to be created on audit-fail", credPath)
 	} else if !os.IsNotExist(statErr) {
 		t.Errorf("Stat credPath: unexpected err %v (want IsNotExist)", statErr)
 	}
 
-	// audit_log пуст (writer симулировал отказ — ничего не записал).
+	// audit_log is empty (the writer simulated a failure — nothing was
+	// written).
 	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_log`).Scan(&n); err != nil {
 		t.Fatalf("count audit_log: %v", err)
 	}
@@ -578,7 +586,7 @@ func TestIntegration_Init_VaultPathMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing vault path, got nil")
 	}
-	// operators остался пуст.
+	// operators remains empty.
 	var n int64
 	_ = integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM operators`).Scan(&n)
 	if n != 0 {
@@ -586,11 +594,11 @@ func TestIntegration_Init_VaultPathMissing(t *testing.T) {
 	}
 }
 
-// TestIntegration_Init_GrantsClusterAdminMembership — фикс BUG-1 (ADR-028(c)),
-// слой БД. После keeper init в rbac_role_operators существует ровно одна
-// membership-строка (cluster-admin, <aid>) с granted_by_aid IS NULL
-// (bootstrap-membership). Роль cluster-admin приходит из seed-миграции 027,
-// init пишет ТОЛЬКО membership.
+// TestIntegration_Init_GrantsClusterAdminMembership covers the BUG-1 fix
+// (ADR-028(c)) at the DB layer. After keeper init, rbac_role_operators
+// has exactly one membership row (cluster-admin, <aid>) with
+// granted_by_aid IS NULL (bootstrap membership). The cluster-admin role
+// comes from seed migration 027; init writes ONLY the membership.
 func TestIntegration_Init_GrantsClusterAdminMembership(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -611,7 +619,7 @@ func TestIntegration_Init_GrantsClusterAdminMembership(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Seed-роль cluster-admin существует (builtin=true) с permission `*`.
+	// The seeded cluster-admin role exists (builtin=true) with permission `*`.
 	var builtin bool
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT builtin FROM rbac_roles WHERE name = 'cluster-admin'`).Scan(&builtin); err != nil {
@@ -629,7 +637,7 @@ func TestIntegration_Init_GrantsClusterAdminMembership(t *testing.T) {
 		t.Errorf("cluster-admin permission = %q, want *", perm)
 	}
 
-	// Membership-строка (cluster-admin, archon-alice) с granted_by_aid IS NULL.
+	// Membership row (cluster-admin, archon-alice) with granted_by_aid IS NULL.
 	var (
 		roleName    string
 		grantedBy   *string
@@ -655,14 +663,15 @@ func TestIntegration_Init_GrantsClusterAdminMembership(t *testing.T) {
 	}
 }
 
-// TestIntegration_InitThenCheck_BUG1Closed — КЛЮЧЕВОЙ e2e-тест, доказывающий
-// закрытие BUG-1. Раньше этот путь был заблокирован: enforcer резолвил
-// membership из keeper.yml, куда keeper init ничего не писал → bootstrap-Архонт
-// получал 403 на первой же operator-операции.
+// TestIntegration_InitThenCheck_BUG1Closed is the KEY e2e test proving
+// the BUG-1 fix. This path used to be blocked: the enforcer resolved
+// membership from keeper.yml, which keeper init never wrote to → the
+// bootstrap Archon got a 403 on its very first operator operation.
 //
-// Теперь: init пишет membership в rbac_role_operators (БД), enforcer строит
-// снимок ИЗ ТОЙ ЖЕ БД через rbac.NewHolder(PoolSource) → Check на operator.create
-// для выпущенного AID проходит (не ErrPermissionDenied). Чужой AID — отвергается.
+// Now: init writes membership to rbac_role_operators (DB), the enforcer
+// builds its snapshot FROM THAT SAME DB via rbac.NewHolder(PoolSource) →
+// Check on operator.create for the issued AID succeeds (no
+// ErrPermissionDenied). A foreign AID is rejected.
 func TestIntegration_InitThenCheck_BUG1Closed(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -683,36 +692,37 @@ func TestIntegration_InitThenCheck_BUG1Closed(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Enforcer-снимок строится ИЗ БД — ровно так, как `keeper run` собирает
-	// rbac.Holder. Длинный TTL: на e2e перечит не нужен, проверяем initial-build.
+	// The enforcer snapshot is built FROM the DB — exactly like `keeper
+	// run` assembles rbac.Holder. Long TTL: no refresh needed for this
+	// e2e test, we're checking the initial build.
 	holder, err := rbac.NewHolder(ctx, rbac.PoolSource{DB: integrationPool}, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("rbac.NewHolder from DB: %v", err)
 	}
 
-	// Фикс BUG-1: bootstrap-Архонт проходит реальный permission Check (не 403).
+	// BUG-1 fix: the bootstrap Archon passes a real permission Check (not 403).
 	if err := holder.Check(aid, "operator", "create", nil); err != nil {
 		t.Errorf("BUG-1: bootstrap-Архонт %q должен проходить operator.create, got: %v", aid, err)
 	}
-	// cluster-admin = `*` → проходит и любую другую операцию.
+	// cluster-admin = `*` → also passes any other operation.
 	if err := holder.Check(aid, "incarnation", "destroy", nil); err != nil {
 		t.Errorf("cluster-admin должен проходить incarnation.destroy: %v", err)
 	}
-	// Чужой AID без membership-а — отвергается (default deny).
+	// A foreign AID without membership is rejected (default deny).
 	if err := holder.Check("archon-ghost", "operator", "create", nil); err == nil {
 		t.Errorf("archon-ghost без membership-а должен быть denied, got nil")
 	}
 
-	// ClusterAdmins из БД-снимка — ровно bootstrap-Архонт (нужно operator-service
-	// для self-lockout-инварианта).
+	// ClusterAdmins from the DB snapshot is exactly the bootstrap Archon
+	// (needed by operator-service for the self-lockout invariant).
 	admins := holder.ClusterAdmins()
 	if len(admins) != 1 || admins[0] != aid {
 		t.Errorf("ClusterAdmins = %v, want [%s]", admins, aid)
 	}
 }
 
-// TestIntegration_LoadSnapshot_FromInit — repository-слой: LoadSnapshot читает
-// то, что записали seed-миграция + keeper init.
+// TestIntegration_LoadSnapshot_FromInit is a repository-layer test:
+// LoadSnapshot reads what the seed migration + keeper init wrote.
 func TestIntegration_LoadSnapshot_FromInit(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -753,8 +763,8 @@ func TestIntegration_LoadSnapshot_FromInit(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoadSigningKey_HappyPath — coverage gap qa.M0.6a #10:
-// happy round-trip против реального Vault.
+// TestIntegration_LoadSigningKey_HappyPath covers coverage gap qa.M0.6a
+// #10: a happy-path round-trip against a real Vault.
 func TestIntegration_LoadSigningKey_HappyPath(t *testing.T) {
 	got, err := LoadSigningKey(context.Background(), integrationVaultC, "vault:"+integrationKVPath)
 	if err != nil {
@@ -765,8 +775,8 @@ func TestIntegration_LoadSigningKey_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoadSigningKey_BadPayload — KV есть, но без поля
-// `signing_key` → ErrSigningKeyMissing.
+// TestIntegration_LoadSigningKey_BadPayload — the KV exists but without
+// the `signing_key` field → ErrSigningKeyMissing.
 func TestIntegration_LoadSigningKey_BadPayload(t *testing.T) {
 	ctx := context.Background()
 	if _, err := integrationVaultAPI.KVv2("secret").Put(ctx, "keeper/no-signing-key", map[string]any{
@@ -780,20 +790,24 @@ func TestIntegration_LoadSigningKey_BadPayload(t *testing.T) {
 	}
 }
 
-// TestIntegration_Init_GrantsRealRBACAccess — e2e «keeper init → реальный RBAC
-// Check + self-lockout-инвариант» (HIGH coverage-gap qa, decisions.md 259/267).
-// До этого теста ни один прогон не проверял, что первый Архонт ФАКТИЧЕСКИ
-// получает `*` через БД-membership (rbac_role_operators) и проходит реальный
-// enforcer Check — JWT-claim `roles` авторитетом НЕ является (модель-C).
-// Именно этот пробел маскировал BUG-1 (Init не писал membership → enforcer
-// видел 0 ролей у первого Архонта → cluster залочен от рождения).
+// TestIntegration_Init_GrantsRealRBACAccess is an e2e test for "keeper
+// init → real RBAC Check + self-lockout invariant" (HIGH coverage gap qa,
+// decisions.md 259/267). Before this test, no run verified that the
+// first Archon ACTUALLY gets `*` via DB membership (rbac_role_operators)
+// and passes a real enforcer Check — the JWT claim `roles` is NOT
+// authoritative (model C). This exact gap masked BUG-1 (Init didn't
+// write membership → the enforcer saw 0 roles for the first Archon → the
+// cluster was locked out from birth).
 //
-// Тест прогоняет полную цепочку:
-//  1. Init создаёт первого Архонта → membership (cluster-admin, aid) в БД.
-//  2. LoadSnapshot → NewEnforcerFromSnapshot → Check на произвольный permission
-//     (role.create) РАЗРЕШЁН — первый Архонт реально держит `*` через membership.
-//  3. Self-lockout-инвариант: revoke последнего `*`-оператора (его membership в
-//     cluster-admin) → ErrWouldLockOutCluster, membership остаётся (tx откат).
+// The test runs the full chain:
+//  1. Init creates the first Archon → membership (cluster-admin, aid) in
+//     the DB.
+//  2. LoadSnapshot → NewEnforcerFromSnapshot → Check on an arbitrary
+//     permission (role.create) is ALLOWED — the first Archon genuinely
+//     holds `*` via membership.
+//  3. Self-lockout invariant: revoking the last `*` operator (their
+//     cluster-admin membership) → ErrWouldLockOutCluster, membership
+//     remains (tx rolled back).
 func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -813,9 +827,10 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Шаг 2: реальный enforcer поверх БД-снимка. Membership пишет Init — если бы
-	// он его не записал (BUG-1), snapshot не дал бы первому Архонту ни одной роли
-	// и Check вернул бы ErrPermissionDenied.
+	// Step 2: a real enforcer on top of the DB snapshot. Init writes the
+	// membership — if it hadn't (BUG-1), the snapshot would give the
+	// first Archon no roles and Check would return
+	// ErrPermissionDenied.
 	snap, err := rbac.LoadSnapshot(ctx, integrationPool)
 	if err != nil {
 		t.Fatalf("LoadSnapshot: %v", err)
@@ -834,7 +849,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		}
 	}
 
-	// Шаг 3: self-lockout-инвариант — нельзя ревокнуть последнего `*`-оператора.
+	// Step 3: self-lockout invariant — cannot revoke the last `*` operator.
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: integrationPool})
 	if err != nil {
 		t.Fatalf("rbac.NewService: %v", err)
@@ -846,7 +861,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		t.Fatalf("revoke последнего админа: err = %v, want ErrWouldLockOutCluster", err)
 	}
 
-	// Membership уцелел (tx откатилась) — первый Архонт всё ещё admin.
+	// Membership survived (tx rolled back) — the first Archon is still admin.
 	var n int64
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM rbac_role_operators WHERE role_name = $1 AND aid = $2`,
@@ -858,7 +873,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 	}
 }
 
-// Guard (ADR-013 amendment 2026-07-01): bootstrap проходит на чистой БД, где присутствует archon-system.
+// Guard (ADR-013 amendment 2026-07-01): bootstrap succeeds on a clean DB where archon-system is present.
 func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
 	resetState(t)
 	seedSystemOperator(t)
@@ -883,7 +898,7 @@ func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
 		t.Errorf("CredentialPath empty")
 	}
 
-	// В реестре — archon-system (system) + archon-alice (bootstrap).
+	// The registry holds archon-system (system) + archon-alice (bootstrap).
 	var (
 		total     int64
 		nonSystem int64
@@ -903,7 +918,7 @@ func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
 	}
 }
 
-// Как только появляется реальный (не-системный) Архонт, повторный Init → ErrAlreadyInitialized.
+// Once a real (non-system) Archon exists, a repeat Init returns ErrAlreadyInitialized.
 func TestIntegration_Init_AlreadyInitialized_WithSystemArchon(t *testing.T) {
 	resetState(t)
 	seedSystemOperator(t)
@@ -937,7 +952,7 @@ func TestIntegration_Init_AlreadyInitialized_WithSystemArchon(t *testing.T) {
 	}
 }
 
-// Restart-guard (ADR-013(d)): на БД только с archon-system CountNonSystem=0 → «реестр пуст».
+// Restart-guard (ADR-013(d)): on a DB with only archon-system, CountNonSystem=0 → "registry empty".
 func TestIntegration_CountNonSystem_IgnoresSystemArchon(t *testing.T) {
 	resetState(t)
 	seedSystemOperator(t)

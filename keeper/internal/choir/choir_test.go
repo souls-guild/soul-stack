@@ -18,11 +18,11 @@ func TestValidChoirName(t *testing.T) {
 		{"frontends-01", true},
 		{"", false},
 		{"Redis", false},     // uppercase
-		{"1node", false},     // ведущая цифра
-		{"-leading", false},  // ведущий дефис
-		{"_leading", false},  // ведущий underscore
-		{"has space", false}, // пробел
-		{"dot.name", false},  // точка вне формата
+		{"1node", false},     // leading digit
+		{"-leading", false},  // leading hyphen
+		{"_leading", false},  // leading underscore
+		{"has space", false}, // space
+		{"dot.name", false},  // dot outside format
 	}
 	for _, tc := range cases {
 		if got := ValidChoirName(tc.name); got != tc.ok {
@@ -63,7 +63,7 @@ func TestErrNotMembers_Error(t *testing.T) {
 	if got == "" {
 		t.Fatal("ErrNotMembers.Error() empty")
 	}
-	// Должно нести имя инкарнации и список SID-ов.
+	// Must carry the incarnation name and the list of SIDs.
 	for _, frag := range []string{"service-redis", "a", "b"} {
 		if !strings.Contains(got, frag) {
 			t.Errorf("Error() %q missing %q", got, frag)

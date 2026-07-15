@@ -18,20 +18,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона маппит:
+// Sentinel errors of the CRUD layer. The handler side maps:
 //   - ErrIncarnationAlreadyExists → 409 incarnation-already-exists.
 //   - ErrIncarnationNotFound      → 404 not-found.
-//   - ErrIncarnationNotLocked     → 409 incarnation-locked (unlock возможен
-//     из error_locked / migration_failed / destroy_failed; applying/ready/
-//     destroying → отказ).
-//   - ErrIncarnationBusy          → 409 (upgrade отклонён: идёт прогон,
-//     status=applying).
-//   - ErrIncarnationLocked        → 409 (upgrade отклонён: статус
-//     error_locked / migration_failed — требуется unlock).
-//   - ErrDowngradeUnsupported     → 409 (target schema-версия ниже текущей;
+//   - ErrIncarnationNotLocked     → 409 incarnation-locked (unlock is possible
+//     from error_locked / migration_failed / destroy_failed; applying/ready/
+//     destroying → rejected).
+//   - ErrIncarnationBusy          → 409 (upgrade rejected: a run is in
+//     progress, status=applying).
+//   - ErrIncarnationLocked        → 409 (upgrade rejected: status is
+//     error_locked / migration_failed — unlock required).
+//   - ErrDowngradeUnsupported     → 409 (target schema version below current;
 //     ADR-019 forward-only).
-//   - ErrSchemaVersionMismatch    → 409 (текущая schema-версия не совпала с
-//     цепочкой: кто-то проапгрейдил между resolve и FOR UPDATE).
+//   - ErrSchemaVersionMismatch    → 409 (current schema version didn't match
+//     the chain: someone upgraded between resolve and FOR UPDATE).
 var (
 	ErrIncarnationAlreadyExists = errors.New("incarnation: name already exists")
 	ErrIncarnationNotFound      = errors.New("incarnation: name not found")

@@ -14,102 +14,107 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// ProvisioningGate — узкая поверхность проверки политики provisioning_allowed_methods
-// (ADR-058 Часть B). Реализуется *serviceregistry.Holder; объявлена интерфейсом,
-// чтобы auth-пакет не тянул serviceregistry и тестировался с fake-гейтом.
-// ProvisioningMethodAllowed("ldap") отвечает, разрешено ли СОЗДАВАТЬ federated-
-// оператора (auto-provision). nil-gate трактуется вызывающим как «пропускать»
-// (back-compat: политика не сконфигурирована).
+// ProvisioningGate — narrow surface for checking the provisioning_allowed_methods
+// policy (ADR-058 Part B). Implemented by *serviceregistry.Holder; declared as
+// an interface so the auth package doesn't pull in serviceregistry and can be
+// tested with a fake gate. ProvisioningMethodAllowed("ldap") answers whether
+// CREATING a federated operator (auto-provision) is allowed. A nil gate is
+// treated by the caller as "allow" (back-compat: policy not configured).
 type ProvisioningGate interface {
 	ProvisioningMethodAllowed(method string) bool
 }
 
-// Txer — узкая фабрика транзакций (подмножество pgxpool.Pool), нужная для
-// атомарной реконсиляции ролей. *pgxpool.Pool удовлетворяет автоматически.
-// Объявлена интерфейсом, чтобы auth-пакет не тянул pgxpool в зависимости.
+// Txer — narrow transaction factory (subset of pgxpool.Pool) needed for
+// atomic role reconciliation. *pgxpool.Pool satisfies it automatically.
+// Declared as an interface so the auth package doesn't pull pgxpool into its
+// dependencies.
 type Txer interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// MapperConfig — зависимости [DBMapper].
+// MapperConfig — [DBMapper] dependencies.
 type MapperConfig struct {
-	// Method — федеративный метод этого mapper-а (ADR-058(a)): operator.AuthMethodLDAP
-	// либо operator.AuthMethodOIDC. Определяет, какой `auth_method`/`created_via`
-	// пишется в строку при auto-provision и какой метод проверяется в
-	// ProvisioningGate. Один [DBMapper] обслуживает один метод (LDAP-mapper и
-	// OIDC-mapper конструируются отдельно daemon-ом с одинаковой логикой). Пустое
-	// значение → провижининг отвергается ([ErrAuthFailed], defense-in-depth: mapper
-	// без явного метода не должен молча создавать оператора неизвестного источника).
+	// Method — this mapper's federated method (ADR-058(a)): operator.AuthMethodLDAP
+	// or operator.AuthMethodOIDC. Determines which `auth_method`/`created_via`
+	// gets written to the row on auto-provision and which method is checked
+	// against ProvisioningGate. One [DBMapper] serves one method (the LDAP
+	// mapper and OIDC mapper are constructed separately by the daemon with the
+	// same logic). Empty value → provisioning is rejected ([ErrAuthFailed],
+	// defense-in-depth: a mapper without an explicit method must not silently
+	// create an operator of unknown origin).
 	Method operator.AuthMethod
 
-	// GroupRoleMap — внешняя группа → RBAC-роли (config auth.{ldap,oidc}.group_role_map).
-	// Источник ролей federated-оператора (ADR-058(d), развилка №2: роли из групп).
+	// GroupRoleMap — external group → RBAC roles (config auth.{ldap,oidc}.group_role_map).
+	// Role source for a federated operator (ADR-058(d), decision #2: roles from groups).
 	GroupRoleMap map[string][]string
 
-	// DB — write/read-поверхность реестра operators + rbac_role_operators.
-	// Реальный pgxpool.Pool удовлетворяет интерфейсу.
+	// DB — read/write surface for the operators + rbac_role_operators registry.
+	// A real pgxpool.Pool satisfies the interface.
 	DB operator.ExecQueryRower
 
-	// Tx — фабрика транзакций для атомарной реконсиляции ролей (HIGH-1,
-	// ADR-058(d)): grant новых + scoped-revoke ушедших выполняются в ОДНОЙ
-	// транзакции, иначе сбой между grant и revoke оставил бы membership
-	// рассогласованным. Реальный *pgxpool.Pool удовлетворяет (BeginTx).
+	// Tx — transaction factory for atomic role reconciliation (HIGH-1,
+	// ADR-058(d)): granting new roles + scoped-revoking departed ones run in
+	// ONE transaction, otherwise a failure between grant and revoke would
+	// leave membership inconsistent. A real *pgxpool.Pool satisfies it
+	// (BeginTx).
 	//
-	// nil → fallback на не-транзакционный grant-only-путь поверх DB (back-compat
-	// для unit-тестов с fake-DB без BeginTx): реконсиляция-revoke тогда не
-	// выполняется, но существующий guard «grant из групп» сохраняется. daemon
-	// всегда выставляет Tx (d.pool), поэтому в проде реконсиляция атомарна.
+	// nil → falls back to a non-transactional grant-only path over DB
+	// (back-compat for unit tests with a fake DB lacking BeginTx): revoke
+	// reconciliation is then skipped, but the existing "grant from groups"
+	// guard still holds. The daemon always sets Tx (d.pool), so reconciliation
+	// is atomic in production.
 	Tx Txer
 
-	// Audit — куда писать `operator.provisioned` (login пишет endpoint).
+	// Audit — where to write `operator.provisioned` (login is written by the endpoint).
 	Audit audit.Writer
 
-	// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
-	// гейтит ТОЛЬКО ветку provision (auto-create нового federated-оператора).
-	// nil → гейт выключен (политика не сконфигурирована, back-compat). Existing-
-	// оператор (case err==nil в Map) гейт НЕ задействует — логинится независимо
-	// от политики.
+	// ProvisioningGate — the provisioning_allowed_methods policy (ADR-058
+	// Part B): gates ONLY the provision branch (auto-creating a new federated
+	// operator). nil → gate disabled (policy not configured, back-compat). An
+	// existing operator (the err==nil case in Map) does NOT go through the
+	// gate — it logs in regardless of policy.
 	ProvisioningGate ProvisioningGate
 
-	// Logger — debug-трасса (без секретов).
+	// Logger — debug trace (no secrets).
 	Logger *slog.Logger
 }
 
-// DBMapper отображает внешнюю identity (LDAP либо OIDC) на operators(aid) + роли
-// (ADR-058(d)). Реализует [Mapper]. Логика для обоих методов одинакова; различает
-// их только cfg.Method (записывается в auth_method/created_via, проверяется
-// ProvisioningGate-ом).
+// DBMapper maps an external identity (LDAP or OIDC) onto operators(aid) +
+// roles (ADR-058(d)). Implements [Mapper]. The logic is identical for both
+// methods; only cfg.Method tells them apart (written to auth_method/created_via,
+// checked against ProvisioningGate).
 //
-// Решения стадии 1 (ADR-058):
-//   - provisioning — auto-provision по группам (развилка №1): первый логин
-//     создаёт оператора, ЕСЛИ есть пересечение групп с group_role_map; вне
-//     групп — отказ ([ErrNoRoleMapping]), оператор НЕ создаётся;
-//   - источник ролей — внешние группы (развилка №2): и для нового, и для
-//     существующего оператора роли вычисляются из group_role_map, а не из
-//     реестра. Membership синхронизируется в rbac_role_operators (авторитет
-//     RBAC — таблица, не JWT-claim, ADR-028(c));
-//   - revoked-инвариант: federated-login revoked-оператора запрещён
+// Stage 1 decisions (ADR-058):
+//   - provisioning — auto-provision by groups (decision #1): the first login
+//     creates the operator IF its groups intersect group_role_map; outside
+//     the mapped groups — reject ([ErrNoRoleMapping]), no operator is created;
+//   - role source — external groups (decision #2): for both new and existing
+//     operators, roles are computed from group_role_map, not from the
+//     registry. Membership is synced into rbac_role_operators (RBAC's
+//     authority is the table, not the JWT claim, ADR-028(c));
+//   - revoked invariant: federated login for a revoked operator is forbidden
 //     ([ErrOperatorRevoked]).
 //
-// audit `operator.provisioned` пишет DBMapper (факт создания строки);
-// `operator.login` пишет endpoint (одно событие на успешный логин) — разделение,
-// чтобы login-событие не задваивалось.
+// DBMapper writes the `operator.provisioned` audit event (the row-creation
+// fact); the endpoint writes `operator.login` (one event per successful
+// login) — kept separate so the login event isn't duplicated.
 type DBMapper struct {
 	cfg MapperConfig
-	// managedRoles — объединение values(group_role_map): домен ролей, которым
-	// УПРАВЛЯЕТ этот federated-mapper (HIGH-1, ADR-058(d)). Реконсиляция-revoke
-	// трогает ТОЛЬКО роли из этого набора — роли, выданные Synod/вручную/иным
-	// путём вне group_role_map, не снимаются. Считается один раз в NewMapper.
+	// managedRoles — union of values(group_role_map): the domain of roles this
+	// federated mapper OWNS (HIGH-1, ADR-058(d)). Revoke reconciliation
+	// touches ONLY roles from this set — roles granted via Synod/manually/by
+	// any other path outside group_role_map are never revoked. Computed once
+	// in NewMapper.
 	managedRoles map[string]struct{}
 }
 
-// NewMapper конструирует DBMapper.
+// NewMapper constructs a DBMapper.
 func NewMapper(cfg MapperConfig) *DBMapper {
 	return &DBMapper{cfg: cfg, managedRoles: managedRoleSet(cfg.GroupRoleMap)}
 }
 
-// managedRoleSet собирает множество всех ролей, упомянутых в значениях
-// group_role_map — домен, которым управляет federated-реконсиляция (HIGH-1).
+// managedRoleSet collects the set of all roles mentioned in group_role_map's
+// values — the domain federated reconciliation owns (HIGH-1).
 func managedRoleSet(grm map[string][]string) map[string]struct{} {
 	set := make(map[string]struct{})
 	for _, roles := range grm {
@@ -120,15 +125,16 @@ func managedRoleSet(grm map[string][]string) map[string]struct{} {
 	return set
 }
 
-// Map реализует [Mapper]: ext → MappedOperator либо sentinel-ошибка.
+// Map implements [Mapper]: ext → MappedOperator or a sentinel error.
 //
-// AID берётся из ext.AID (Authenticator выводит его из cfg.AIDAttr, дефолт
-// `uid`, см. ldap.Authenticator). Невалидный AID → [ErrAuthFailed]
-// (anti-oracle: наружу не утекает причина).
+// AID comes from ext.AID (Authenticator derives it from cfg.AIDAttr, default
+// `uid`, see ldap.Authenticator). An invalid AID → [ErrAuthFailed]
+// (anti-oracle: the cause doesn't leak outward).
 func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperator, error) {
 	if m.cfg.Method == "" {
-		// Defense-in-depth: mapper без явного метода не должен молча создавать
-		// оператора неизвестного источника. daemon всегда выставляет Method.
+		// Defense-in-depth: a mapper without an explicit method must not
+		// silently create an operator of unknown origin. The daemon always
+		// sets Method.
 		return MappedOperator{}, ErrAuthFailed
 	}
 	aid := ext.AID
@@ -142,7 +148,7 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 
 	roles := m.rolesForGroups(ext.Groups)
 	if len(roles) == 0 {
-		// Вне группового маппинга — отказ, оператор НЕ создаётся (ADR-058(d)).
+		// Outside the group mapping — reject, no operator is created (ADR-058(d)).
 		return MappedOperator{}, ErrNoRoleMapping
 	}
 
@@ -152,17 +158,19 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 		if op.IsRevoked() {
 			return MappedOperator{}, ErrOperatorRevoked
 		}
-		// CRIT-1 (account-takeover, ADR-058(d) revocation-инвариант усилен):
-		// federated-путь обслуживает ТОЛЬКО операторов, заведённых ЭТИМ же
-		// federated-методом. Если existing-оператор живёт под другим auth_method
-		// (bootstrap/system `jwt`, mTLS, ИЛИ другой federated-метод), отказываем —
-		// иначе любой, кто контролирует внешний IdP, мог бы выпустить себе валидную
-		// derived-AID, совпавшую с AID привилегированного оператора (например,
-		// bootstrap cluster-admin), и присвоить его сессию. ErrAuthFailed
-		// (anti-oracle: наружу 401 без причины — не раскрываем, что AID существует
-		// под другим методом). Bootstrap (`auth_method=jwt`) и `archon-system`/
-		// system-операторы тем самым защищены автоматически: их auth_method ∉
-		// {ldap,oidc}, federated-mapper их не примет.
+		// CRIT-1 (account takeover, ADR-058(d) revocation invariant
+		// hardened): the federated path serves ONLY operators created by
+		// THIS SAME federated method. If the existing operator lives under
+		// a different auth_method (bootstrap/system `jwt`, mTLS, OR another
+		// federated method), reject — otherwise anyone controlling the
+		// external IdP could mint themselves a valid derived AID that
+		// collides with a privileged operator's AID (e.g. the bootstrap
+		// cluster-admin) and take over their session. ErrAuthFailed
+		// (anti-oracle: a bare 401 outward — we don't reveal that the AID
+		// exists under a different method). Bootstrap (`auth_method=jwt`)
+		// and `archon-system`/system operators are thereby protected
+		// automatically: their auth_method ∉ {ldap,oidc}, so the federated
+		// mapper never accepts them.
 		if op.AuthMethod != m.cfg.Method {
 			if m.cfg.Logger != nil {
 				m.cfg.Logger.Warn("auth/mapper: federated login rejected — AID belongs to a different auth_method",
@@ -171,17 +179,17 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 			}
 			return MappedOperator{}, ErrAuthFailed
 		}
-		// Существующий активный оператор того же метода: роли — из групп
-		// (источник ролей = группы, развилка №2). Membership реконсилируем
-		// (grant новых + scoped-revoke ушедших, HIGH-1), чтобы внешняя смена
-		// групп отражалась в RBAC при следующем логине.
+		// Existing active operator of the same method: roles come from
+		// groups (role source = groups, decision #2). Membership is
+		// reconciled (grant new + scoped-revoke departed, HIGH-1) so an
+		// external group change is reflected in RBAC on the next login.
 		if err := m.reconcileRoles(ctx, aid, roles); err != nil {
 			return MappedOperator{}, err
 		}
 		return MappedOperator{AID: aid, Roles: roles, Provisioned: false}, nil
 
 	case errors.Is(err, operator.ErrOperatorNotFound):
-		// Auto-provision (развилка №1): юзер в группе → создаём оператора.
+		// Auto-provision (decision #1): user is in a mapped group → create the operator.
 		return m.provision(ctx, aid, ext, roles)
 
 	default:
@@ -189,19 +197,20 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 	}
 }
 
-// provision создаёт нового federated-оператора (auth_method=cfg.Method) + membership
-// + audit `operator.provisioned`.
+// provision creates a new federated operator (auth_method=cfg.Method) +
+// membership + the `operator.provisioned` audit event.
 //
 // created_via=string(cfg.Method) (ldap|oidc), created_by_aid=NULL (ADR-058(d)):
-// federated-login инициирован внешним IdP, оператора-инициатора нет. NULL у
-// created_by_aid теперь легален для не-bootstrap-строк — bootstrap-инвариант
-// перенесён на created_via='bootstrap' (миграция 085), поэтому отдельный
-// reserved-AID-маркер больше не нужен. Источник атрибутируется самим created_via.
+// federated login is initiated by the external IdP, there is no initiating
+// operator. NULL created_by_aid is now legal for non-bootstrap rows — the
+// bootstrap invariant moved to created_via='bootstrap' (migration 085), so a
+// separate reserved-AID marker is no longer needed. The source is attributed
+// by created_via itself.
 func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdentity, roles []string) (MappedOperator, error) {
 	method := string(m.cfg.Method)
-	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): ТОЛЬКО на
-	// создании. ДО Insert — оператор не должен появиться при запрещённом методе.
-	// gate==nil → пропускаем (политика не сконфигурирована, back-compat).
+	// provisioning_allowed_methods policy gate (ADR-058 Part B): ONLY on
+	// creation. BEFORE Insert — the operator must not appear when the method
+	// is forbidden. gate==nil → skip (policy not configured, back-compat).
 	if m.cfg.ProvisioningGate != nil && !m.cfg.ProvisioningGate.ProvisioningMethodAllowed(method) {
 		return MappedOperator{}, ErrProvisioningDisabled
 	}
@@ -210,8 +219,8 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	if displayName == "" {
 		displayName = aid
 	}
-	// created_via — строка того же домена, что и auth_method (ldap|oidc); enum
-	// CreatedVia — alias на string, значения совпадают (ADR-058(d)).
+	// created_via is a string in the same domain as auth_method (ldap|oidc);
+	// the CreatedVia enum is a string alias, values match (ADR-058(d)).
 	op := &operator.Operator{
 		AID:          aid,
 		DisplayName:  displayName,
@@ -223,15 +232,15 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	if err := operator.Insert(ctx, m.cfg.DB, op); err != nil {
 		return MappedOperator{}, fmt.Errorf("auth/mapper: provision insert: %w", err)
 	}
-	// Свежесозданный оператор: ролей ещё нет, реконсилировать-revoke нечего —
-	// grant-only поверх DB (та же транзакционность снаружи не нужна, federated-
-	// provision редок).
+	// Freshly created operator: no roles yet, nothing to revoke-reconcile —
+	// grant-only over DB (the same transactionality isn't needed here,
+	// federated provisioning is rare).
 	if err := m.grantRoles(ctx, m.cfg.DB, aid, roles); err != nil {
 		return MappedOperator{}, err
 	}
 
-	// audit `operator.provisioned` (без секретов: пароль/bind-creds не приходят
-	// в ext, группы — не секрет).
+	// `operator.provisioned` audit (no secrets: password/bind creds never end
+	// up in ext, groups aren't secret).
 	ev := &audit.Event{
 		AuditID:   audit.NewULID(),
 		EventType: audit.EventOperatorProvisioned,
@@ -246,8 +255,8 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 		},
 	}
 	if err := m.cfg.Audit.Write(ctx, ev); err != nil {
-		// Оператор уже создан; audit потерян. Не проваливаем логин (operator —
-		// истина источника), но логируем для ручной сверки.
+		// Operator already created; audit lost. Don't fail the login
+		// (operator is the source of truth), but log for manual reconciliation.
 		if m.cfg.Logger != nil {
 			m.cfg.Logger.Error("auth/mapper: provision audit write failed (operator created, audit lost)",
 				slog.String("aid", aid), slog.Any("error", err))
@@ -256,22 +265,25 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	return MappedOperator{AID: aid, Roles: roles, Provisioned: true}, nil
 }
 
-// reconcileRoles приводит ПРЯМОЙ membership оператора (rbac_role_operators) к
-// набору `want` (роли из текущих групп пользователя) — grant новых + scoped-
-// revoke ушедших (HIGH-1, реализация ADR-058(d) «роли = внешние группы»).
+// reconcileRoles brings the operator's DIRECT membership (rbac_role_operators)
+// to the `want` set (roles from the user's current groups) — grant new +
+// scoped-revoke departed (HIGH-1, implements ADR-058(d) "roles = external
+// groups").
 //
-// Scope revoke (КРИТИЧНО): снимаются ТОЛЬКО роли из домена, которым управляет
-// этот mapper (m.managedRoles = объединение values(group_role_map)). Роли,
-// выданные Synod / вручную / иным путём ВНЕ group_role_map, НЕ трогаются —
-// federated-реконсиляция владеет лишь своим доменом.
+// Scope of revoke (CRITICAL): ONLY roles from the domain this mapper owns
+// are revoked (m.managedRoles = union of values(group_role_map)). Roles
+// granted via Synod / manually / any other path OUTSIDE group_role_map are
+// left untouched — federated reconciliation owns only its own domain.
 //
-// Алгоритм: revoke = (текущий прямой membership ∩ managedRoles) \ want;
-// grant = want \ текущий. Обе мутации — в ОДНОЙ транзакции (Tx-фабрика):
-// сбой между grant и revoke не должен оставить membership рассогласованным.
+// Algorithm: revoke = (current direct membership ∩ managedRoles) \ want;
+// grant = want \ current. Both mutations run in ONE transaction (Tx
+// factory): a failure between grant and revoke must not leave membership
+// inconsistent.
 //
-// Tx==nil (unit-тест с fake-DB без BeginTx) → fallback на grant-only поверх DB
-// (back-compat): revoke не выполняется, но grant из групп сохраняется. daemon
-// всегда выставляет Tx, поэтому в проде реконсиляция атомарна и со снятием.
+// Tx==nil (unit test with a fake DB lacking BeginTx) → falls back to
+// grant-only over DB (back-compat): revoke is skipped, but grant from groups
+// still holds. The daemon always sets Tx, so reconciliation is atomic and
+// revokes in production.
 func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string) error {
 	for _, role := range want {
 		if !rbac.ValidRoleName(role) {
@@ -280,8 +292,8 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 	}
 
 	if m.cfg.Tx == nil {
-		// Back-compat без транзакции: только grant (revoke требует чтения текущего
-		// membership + атомарности с grant — без Tx не гарантируем).
+		// Back-compat without a transaction: only grant (revoke requires reading
+		// current membership + atomicity with grant — not guaranteed without Tx).
 		return m.grantRoles(ctx, m.cfg.DB, aid, want)
 	}
 
@@ -289,7 +301,7 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 	if err != nil {
 		return fmt.Errorf("auth/mapper: begin reconcile tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }() // no-op после Commit
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 
 	current, err := rbac.DirectRolesOf(ctx, tx, aid)
 	if err != nil {
@@ -305,16 +317,16 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 		currentSet[r] = struct{}{}
 	}
 
-	// Revoke: текущие роли в managed-домене, которых больше нет в want.
+	// Revoke: current roles in the managed domain that are no longer in want.
 	for _, role := range current {
 		if _, managed := m.managedRoles[role]; !managed {
-			continue // вне group_role_map-домена — не наша зона (Synod/ручная)
+			continue // outside the group_role_map domain — not our zone (Synod/manual)
 		}
 		if _, keep := wantSet[role]; keep {
 			continue
 		}
 		if err := rbac.RevokeOperator(ctx, tx, role, aid); err != nil {
-			// Пары может уже не быть (гонка с ручным revoke) — это ок, не валим.
+			// The pairing may already be gone (race with a manual revoke) — that's fine, don't fail.
 			if errors.Is(err, rbac.ErrRoleOperatorNotFound) {
 				continue
 			}
@@ -322,7 +334,7 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 		}
 	}
 
-	// Grant: роли из want, которых ещё нет (идемпотентно, но пропускаем уже-есть).
+	// Grant: roles from want that aren't present yet (idempotent, but skip existing).
 	for _, role := range want {
 		if _, have := currentSet[role]; have {
 			continue
@@ -338,10 +350,10 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 	return nil
 }
 
-// grantRoles делает идемпотентный grant каждой роли поверх db (pool ИЛИ tx).
-// granted_by_aid = nil (federated-membership без оператора-инициатора).
-// Используется provision-путём (свежий оператор) и Tx==nil-fallback-ом
-// reconcileRoles. Невалидное имя роли — ошибка конфигурации.
+// grantRoles idempotently grants each role over db (pool OR tx).
+// granted_by_aid = nil (federated membership has no initiating operator).
+// Used by the provision path (fresh operator) and reconcileRoles's Tx==nil
+// fallback. An invalid role name is a configuration error.
 func (m *DBMapper) grantRoles(ctx context.Context, db operator.ExecQueryRower, aid string, roles []string) error {
 	for _, role := range roles {
 		if !rbac.ValidRoleName(role) {
@@ -354,8 +366,8 @@ func (m *DBMapper) grantRoles(ctx context.Context, db operator.ExecQueryRower, a
 	return nil
 }
 
-// rolesForGroups пересекает группы пользователя с group_role_map и собирает
-// дедуплицированный, стабильно отсортированный набор ролей.
+// rolesForGroups intersects the user's groups with group_role_map and
+// collects a deduplicated, stably sorted set of roles.
 func (m *DBMapper) rolesForGroups(groups []string) []string {
 	if len(m.cfg.GroupRoleMap) == 0 || len(groups) == 0 {
 		return nil
@@ -377,5 +389,5 @@ func (m *DBMapper) rolesForGroups(groups []string) []string {
 	return out
 }
 
-// compile-time assertion: *DBMapper реализует Mapper.
+// compile-time assertion: *DBMapper implements Mapper.
 var _ Mapper = (*DBMapper)(nil)

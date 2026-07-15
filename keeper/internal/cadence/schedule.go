@@ -7,19 +7,19 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// cronParser — стандартный 5-полевой cron-парсер (minute hour dom month dow), без
-// поля секунд и без descriptor-ов (@every/@daily). ADR-046 §3 фиксирует
-// «стандартный 5-полевой cron». Парсер stateless и потокобезопасен — держим один
-// package-level экземпляр (parity подхода robfig: ParseStandard под капотом — тот
-// же набор опций).
+// cronParser is the standard 5-field cron parser (minute hour dom month dow),
+// without a seconds field and without descriptors (@every/@daily). ADR-046 §3
+// fixes "standard 5-field cron". The parser is stateless and thread-safe — we
+// keep one package-level instance (parity with robfig's approach:
+// ParseStandard uses the same option set under the hood).
 var cronParser = cron.NewParser(
 	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 )
 
-// ParseCron разбирает 5-полевое cron-выражение в [cron.Schedule]. Используется
-// валидацией (отвергнуть битый cron до PG) и [NextRun] (пересчёт next_run_at).
-// Все расчёты ведутся в UTC (ADR-046: timezone cron — UTC, tz-aware — отложено
-// post-MVP); вызывающий обязан передавать UTC-время в Schedule.Next.
+// ParseCron parses a 5-field cron expression into a [cron.Schedule]. Used by
+// validation (reject a broken cron ahead of PG) and by [NextRun] (recompute
+// next_run_at). All calculations run in UTC (ADR-046: cron timezone is UTC,
+// tz-aware is deferred post-MVP); the caller must pass UTC time to Schedule.Next.
 func ParseCron(expr string) (cron.Schedule, error) {
 	sched, err := cronParser.Parse(expr)
 	if err != nil {
@@ -28,18 +28,19 @@ func ParseCron(expr string) (cron.Schedule, error) {
 	return sched, nil
 }
 
-// NextRun — low-level примитив: один шаг расписания от точки `from`. Базис для
-// [NextRunAnchored] (drift-free пересчёт next_run_at) и для валидации. Спавн-путь
-// (Conductor) использует НЕ NextRun напрямую, а [NextRunAnchored] (anchored к
-// плановому слоту, ADR-046 §4) — иначе дрейф тика накапливался бы в next_run_at.
+// NextRun is a low-level primitive: a single schedule step from point `from`.
+// The basis for [NextRunAnchored] (drift-free recompute of next_run_at) and for
+// validation. The spawn path (Conductor) does NOT use NextRun directly, but
+// [NextRunAnchored] (anchored to the planned slot, ADR-046 §4) — otherwise
+// ticker drift would accumulate in next_run_at.
 //
-//   - ScheduleKindInterval → from + interval_seconds (ровно один период от from).
-//   - ScheduleKindCron → следующий cron-момент строго после `from`, в UTC.
+//   - ScheduleKindInterval → from + interval_seconds (exactly one period from from).
+//   - ScheduleKindCron → the next cron moment strictly after `from`, in UTC.
 //
-// from нормализуется к UTC (cron-парсер чувствителен к локали времени; ADR-046
-// фиксирует UTC). Возвращает ошибку только для cron с битым/непарсящимся
-// cron_expr — на практике validate отвергает такой Cadence ещё до Insert/Update,
-// поэтому в spawn-пути ошибка означала бы рассинхрон БД и валидации.
+// from is normalized to UTC (the cron parser is sensitive to time locale;
+// ADR-046 fixes UTC). Returns an error only for cron with a broken/unparsable
+// cron_expr — in practice validate rejects such a Cadence before Insert/Update,
+// so on the spawn path an error would mean a DB/validation desync.
 func NextRun(c *Cadence, from time.Time) (time.Time, error) {
 	from = from.UTC()
 	switch c.ScheduleKind {
@@ -62,27 +63,29 @@ func NextRun(c *Cadence, from time.Time) (time.Time, error) {
 	}
 }
 
-// NextRunAnchored вычисляет следующий слот спавна, anchored к ПЛАНОВОМУ моменту
-// (scheduledFor — `next_run_at` до пересчёта), а не к фактическому `now`, и
-// возвращает первый слот сетки СТРОГО `> now`. Drift-free пересчёт ADR-046 §4:
-// дрейф тикера (тик приходит на now ≈ scheduledFor+ε) не накапливается в
-// next_run_at, поэтому сетка слотов остаётся выровненной и тикер не промахивается
-// мимо неё.
+// NextRunAnchored computes the next spawn slot, anchored to the PLANNED
+// moment (scheduledFor — `next_run_at` before recompute) rather than the
+// actual `now`, and returns the first grid slot STRICTLY `> now`. Drift-free
+// recompute per ADR-046 §4: ticker drift (a tick arrives at now ≈
+// scheduledFor+ε) doesn't accumulate in next_run_at, so the slot grid stays
+// aligned and the ticker doesn't drift past it.
 //
-//	interval: next = scheduledFor + interval; затем грид-скип пропущенных слотов
-//	          (for next <= now { next += interval }) — после downtime один catch-up
-//	          спавн за текущий due, дальше выровнено. Loop — арифметика, НЕ спавн на
-//	          каждый пропущенный слот (anti-storm).
-//	cron:     next = first cron-момент после scheduledFor; затем итеративно
-//	          (for next <= now { next = NextRun(c, next) }) до первого будущего —
-//	          монотонно сходится.
+//	interval: next = scheduledFor + interval; then grid-skip past missed slots
+//	          (for next <= now { next += interval }) — after downtime, one
+//	          catch-up spawn for the current due slot, then aligned. The loop is
+//	          arithmetic, NOT a spawn for every missed slot (anti-storm).
+//	cron:     next = first cron moment after scheduledFor; then iteratively
+//	          (for next <= now { next = NextRun(c, next) }) until the first
+//	          future slot — converges monotonically.
 //
-// Граница СТРОГО `> now` (не `>=`): если after-loop next == now, тот же тик с тем
-// же now на следующей итерации scheduler-а снова счёл бы строку due → задвоение.
-// Поэтому условие loop-а `next <= now` гарантированно выталкивает результат за now.
+// The boundary is STRICTLY `> now` (not `>=`): if after the loop next == now,
+// the same tick with the same now on the scheduler's next iteration would
+// again consider the row due → double-spawn. So the loop condition
+// `next <= now` guarantees the result is pushed past now.
 //
-// Построено ПОВЕРХ low-level [NextRun] (один шаг от точки) — без дублирования
-// cron-парсинга. Ошибку возвращает только при битом cron_expr (как [NextRun]).
+// Built ON TOP OF the low-level [NextRun] (a single step from a point) —
+// without duplicating cron parsing. Returns an error only for a broken
+// cron_expr (like [NextRun]).
 func NextRunAnchored(c *Cadence, scheduledFor, now time.Time) (time.Time, error) {
 	scheduledFor = scheduledFor.UTC()
 	now = now.UTC()
@@ -103,10 +106,11 @@ func NextRunAnchored(c *Cadence, scheduledFor, now time.Time) (time.Time, error)
 		if err != nil {
 			return time.Time{}, err
 		}
-		// robfig Schedule.Next возвращает zero-time, если будущего слота нет в его
-		// горизонте (~5 лет): напр. "0 0 30 2 *" (30 февраля). Тогда next=zero,
-		// !next.After(now) навсегда true, NextRun(c, zero) снова zero → бесконечный
-		// цикл под PG-lock (заклинит conductor-tx). Отсекаем zero как ошибку.
+		// robfig Schedule.Next returns zero-time if there's no future slot within
+		// its horizon (~5 years): e.g. "0 0 30 2 *" (February 30). Then next=zero,
+		// !next.After(now) is forever true, NextRun(c, zero) is zero again → an
+		// infinite loop under the PG lock (wedges the conductor-tx). We reject
+		// zero as an error.
 		if next.IsZero() {
 			return time.Time{}, fmt.Errorf("cadence: cron %q не даёт будущего слота", *c.CronExpr)
 		}

@@ -1,11 +1,11 @@
 package api
 
-// Регистрация и spec-dump SIGIL-KEY-домена (/v1/sigil/keys) на huma full-typed
-// (ТИРАЖ-БАТЧ-2a по эталонам role, ADR-054 §Pattern). introduce/set-primary/retire —
-// WRITE+AUDIT (вариант B, huma-audit-middleware; события sigil.key-introduced /
-// sigil.key-primary-set / sigil.key-retired). list — read-bare (БЕЗ audit). Доменные
-// *Typed-функции (handlers/sigil_key.go) извлечены из (w,r); старый (w,r) — тонкая
-// strict-оболочка (MCP sigil-key-tools зовут sigil.KeyService напрямую, мимо handler).
+// Registration and spec-dump of the SIGIL-KEY domain (/v1/sigil/keys) on huma full-typed
+// (ROLLOUT BATCH 2a after the role reference, ADR-054 §Pattern). introduce/set-primary/retire —
+// WRITE+AUDIT (variant B, huma-audit-middleware; events sigil.key-introduced /
+// sigil.key-primary-set / sigil.key-retired). list — read-bare (no audit). Domain
+// *Typed functions (handlers/sigil_key.go) extracted from (w,r); the old (w,r) — a thin
+// strict wrapper (MCP sigil-key-tools call sigil.KeyService directly, bypassing the handler).
 
 import (
 	"context"
@@ -20,9 +20,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaSigilKeyIntroduce монтирует POST /v1/sigil/keys через huma (WRITE+AUDIT
-// вариант B — event sigil.key-introduced). sigilKeyH nil → no-op. Handler: claims →
-// IntroduceTyped → audit-payload на huma-ctx → 201 typed output. Приватник НЕ в ответе.
+// registerHumaSigilKeyIntroduce mounts POST /v1/sigil/keys through huma (WRITE+AUDIT
+// variant B — event sigil.key-introduced). sigilKeyH nil → no-op. Handler: claims →
+// IntroduceTyped → audit-payload on the huma ctx → 201 typed output. Private key NOT in the response.
 func registerHumaSigilKeyIntroduce(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHandler) {
 	if sigilKeyH == nil {
 		return
@@ -38,16 +38,16 @@ func registerHumaSigilKeyIntroduce(humaAPI huma.API, sigilKeyH *handlers.SigilKe
 			return nil, sigilKeyProblem(err)
 		}
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
-		// Проекция доменного reply.View (SigilKeyIntroduceView, Status — plain string)
-		// в native SigilKeyIntroduceReply (Status — native enum). Json-теги совпадают →
-		// wire-байты идентичны легаси writeJSON (golden фиксирует).
+		// Projection of the domain reply.View (SigilKeyIntroduceView, Status — plain string)
+		// into native SigilKeyIntroduceReply (Status — native enum). Json tags match →
+		// wire bytes identical to the legacy writeJSON (golden pins it).
 		return &sigilKeyIntroduceOutput{Status: 201, Body: newSigilKeyIntroduceReply(reply.View)}, nil
 	})
 }
 
-// registerHumaSigilKeyList монтирует GET /v1/sigil/keys через huma (READ-bare, БЕЗ
+// registerHumaSigilKeyList mounts GET /v1/sigil/keys through huma (READ-bare, no
 // audit). sigilKeyH nil → no-op. Handler: ListTyped → typed output. RBAC
-// sigil.key-list — на группе.
+// sigil.key-list — on the group.
 func registerHumaSigilKeyList(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHandler) {
 	if sigilKeyH == nil {
 		return
@@ -61,9 +61,9 @@ func registerHumaSigilKeyList(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHand
 	})
 }
 
-// registerHumaSigilKeySetPrimary монтирует POST /v1/sigil/keys/{key_id}/primary через
-// huma (WRITE+AUDIT вариант B — event sigil.key-primary-set). sigilKeyH nil → no-op.
-// Handler: claims → SetPrimaryTyped(key_id) → audit-payload → пустой 204-output.
+// registerHumaSigilKeySetPrimary mounts POST /v1/sigil/keys/{key_id}/primary through
+// huma (WRITE+AUDIT variant B — event sigil.key-primary-set). sigilKeyH nil → no-op.
+// Handler: claims → SetPrimaryTyped(key_id) → audit-payload → empty 204 output.
 func registerHumaSigilKeySetPrimary(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHandler) {
 	if sigilKeyH == nil {
 		return
@@ -82,9 +82,9 @@ func registerHumaSigilKeySetPrimary(humaAPI huma.API, sigilKeyH *handlers.SigilK
 	})
 }
 
-// registerHumaSigilKeyRetire монтирует DELETE /v1/sigil/keys/{key_id} через huma
-// (WRITE+AUDIT вариант B — event sigil.key-retired). sigilKeyH nil → no-op. Handler:
-// claims → RetireTyped(key_id) → audit-payload → пустой 204-output.
+// registerHumaSigilKeyRetire mounts DELETE /v1/sigil/keys/{key_id} through huma
+// (WRITE+AUDIT variant B — event sigil.key-retired). sigilKeyH nil → no-op. Handler:
+// claims → RetireTyped(key_id) → audit-payload → empty 204 output.
 func registerHumaSigilKeyRetire(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHandler) {
 	if sigilKeyH == nil {
 		return
@@ -103,14 +103,14 @@ func registerHumaSigilKeyRetire(humaAPI huma.API, sigilKeyH *handlers.SigilKeyHa
 	})
 }
 
-// sigilKeyMissingClaims — defensive-ответ при отсутствии claims (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// sigilKeyMissingClaims — defensive reply when claims are missing (unreachable:
+// RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func sigilKeyMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// sigilKeyProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// sigilKeyProblem delivers a *Typed-function error through huma as problem+json.
+// Domain *handlers.problemError → humaProblemError; non-problem → 500 (parity
 // roleProblem).
 func sigilKeyProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -119,18 +119,18 @@ func sigilKeyProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaSigilKeyAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// sigil-key (introduce/set-primary/retire) монтируется на СВОЕЙ chi-группе с
-// собственным event-типом.
+// newHumaSigilKeyAPI builds a huma.API over a chi group with huma-audit-middleware
+// (variant B) for the given event type (parity newHumaRoleAPI). Each sigil-key write
+// route (introduce/set-primary/retire) is mounted on ITS OWN chi group with
+// its own event type.
 func newHumaSigilKeyAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaSigilKeySpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma sigil-key-
-// роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-
-// таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaSigilKeySpecYAML assembles the OpenAPI fragment of ALL sigil-key routes migrated to huma
+// as a YAML string, without mounting on a real router. Hook for the rollout spec-merge
+// target and guard test. Delegates to the generic [humaDumpSpec] through the same
+// register functions (single register path). Returns a 3.1.0 spec (huma default).
 func HumaSigilKeySpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.SigilKeySpecStub()

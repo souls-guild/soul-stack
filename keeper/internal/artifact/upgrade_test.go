@@ -2,9 +2,9 @@ package artifact
 
 import "testing"
 
-// TestResolveUpgradeScenario — резолв found/legacy по `from:` (ADR-0068 §5).
-// upgrades уже отсортирован по имени (как отдаёт listFromDir), поэтому при
-// нескольких совпадениях ожидается первый по имени.
+// TestResolveUpgradeScenario — found/legacy resolution by `from:` (ADR-0068 §5).
+// upgrades is already sorted by name (as listFromDir returns it), so on multiple
+// matches the first by name is expected.
 func TestResolveUpgradeScenario(t *testing.T) {
 	upgrades := []Scenario{
 		{Name: "v2", FromVersions: []string{"v1.0.0", "v1.2.0"}},
@@ -34,7 +34,7 @@ func TestResolveUpgradeScenario(t *testing.T) {
 			wantFound:   false,
 		},
 		{
-			// v1.0.0 объявлен и в v2, и в v3 → детерминированно первый по имени (v2).
+			// v1.0.0 is declared in both v2 and v3 → deterministically first by name (v2).
 			name:        "multiple-matches-first-by-name",
 			upgrades:    upgrades,
 			fromVersion: "v1.0.0",
@@ -49,7 +49,7 @@ func TestResolveUpgradeScenario(t *testing.T) {
 			wantFound:   false,
 		},
 		{
-			// Единственный upgrade без from: (пустой FromVersions) не матчит ничего.
+			// The only upgrade without from: (empty FromVersions) matches nothing.
 			name:        "upgrade-without-from-never-matches",
 			upgrades:    []Scenario{{Name: "v4_noop", FromVersions: nil}},
 			fromVersion: "v1.0.0",

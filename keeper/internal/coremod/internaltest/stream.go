@@ -1,10 +1,10 @@
-// Package internaltest — общие test-helper-ы для unit-тестов keeper-side
-// core-модулей (`core.soul.registered`, `core.cloud.provisioned`,
-// `core.vault.kv-read`). Сам пакет без суффикса _test, потому что test-файлы
-// разных модульных пакетов не могут импортировать xxx_test друг друга.
+// Package internaltest holds shared test helpers for keeper-side unit tests of
+// core modules (`core.soul.registered`, `core.cloud.provisioned`,
+// `core.vault.kv-read`). The package itself has no _test suffix because test files
+// of different module packages can't import each other's xxx_test.
 //
-// Содержимое — только тестовая инфраструктура, в production-сборку попадает
-// как dead-code (нет init-ов, нет registry-сторон). Симметрично
+// Content is test infrastructure only; it ends up as dead code in the
+// production build (no init funcs, no registry side effects). Mirrors
 // soul/internal/coremod/internaltest/stream.go.
 package internaltest
 
@@ -16,19 +16,19 @@ import (
 )
 
 // ApplyStream — fake grpc.ServerStreamingServer[ApplyEvent].
-// Захватывает все Send-события в Events; финальное событие — Last().
+// Captures every Send event in Events; the final event is Last().
 type ApplyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	Ctx    context.Context
 	Events []*pluginv1.ApplyEvent
 }
 
-// NewApplyStream — с background-контекстом.
+// NewApplyStream uses a background context.
 func NewApplyStream() *ApplyStream {
 	return &ApplyStream{Ctx: context.Background()}
 }
 
-// NewApplyStreamCtx — с переданным контекстом (для cancel-тестов).
+// NewApplyStreamCtx uses the given context (for cancellation tests).
 func NewApplyStreamCtx(ctx context.Context) *ApplyStream {
 	return &ApplyStream{Ctx: ctx}
 }
@@ -45,7 +45,7 @@ func (s *ApplyStream) Context() context.Context {
 	return s.Ctx
 }
 
-// Last — последнее отправленное событие; nil если ничего не было.
+// Last is the last sent event; nil if nothing was sent.
 func (s *ApplyStream) Last() *pluginv1.ApplyEvent {
 	if len(s.Events) == 0 {
 		return nil

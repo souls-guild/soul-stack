@@ -8,7 +8,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 )
 
-// fakeGate — управляемый ProvisioningGate: разрешает методы из allowed.
+// fakeGate — a controllable ProvisioningGate: allows methods from allowed.
 type fakeGate struct {
 	allowed map[string]bool
 }
@@ -25,12 +25,13 @@ func newOIDCMapperWithGate(db operator.ExecQueryRower, grm map[string][]string, 
 	return NewMapper(MapperConfig{Method: operator.AuthMethodOIDC, GroupRoleMap: grm, DB: db, Audit: &fakeAudit{}, ProvisioningGate: gate})
 }
 
-// TestMapper_OIDCDisabled_ProvisionRejected — ADR-058 стадия 2: политика без
-// oidc → auto-provision НОВОГО OIDC-оператора отвергнут (ErrProvisioningDisabled),
-// строка operators НЕ создаётся. Гейт проверяет именно метод "oidc" (а не ldap).
+// TestMapper_OIDCDisabled_ProvisionRejected — ADR-058 stage 2: a policy
+// without oidc → auto-provisioning a NEW OIDC operator is rejected
+// (ErrProvisioningDisabled), no operators row is created. The gate checks
+// specifically the "oidc" method (not ldap).
 func TestMapper_OIDCDisabled_ProvisionRejected(t *testing.T) {
 	db := &fakeMapperDB{existing: nil}
-	gate := fakeGate{allowed: map[string]bool{"user": true, "ldap": true}} // oidc запрещён
+	gate := fakeGate{allowed: map[string]bool{"user": true, "ldap": true}} // oidc forbidden
 	m := newOIDCMapperWithGate(db, map[string][]string{"ops": {"cluster-admin"}}, gate)
 
 	_, err := m.Map(context.Background(), ExternalIdentity{AID: "newbie", Username: "newbie", Groups: []string{"ops"}})
@@ -42,8 +43,8 @@ func TestMapper_OIDCDisabled_ProvisionRejected(t *testing.T) {
 	}
 }
 
-// TestMapper_OIDCAllowed_ProvisionSucceeds — позитив: oidc∈methods → provision
-// проходит, оператор создаётся.
+// TestMapper_OIDCAllowed_ProvisionSucceeds — positive case: oidc∈methods →
+// provision succeeds, the operator is created.
 func TestMapper_OIDCAllowed_ProvisionSucceeds(t *testing.T) {
 	db := &fakeMapperDB{existing: nil}
 	gate := fakeGate{allowed: map[string]bool{"oidc": true}}
@@ -58,12 +59,12 @@ func TestMapper_OIDCAllowed_ProvisionSucceeds(t *testing.T) {
 	}
 }
 
-// TestMapper_LdapDisabled_ProvisionRejected — B5 кейс 2: политика без ldap →
-// auto-provision НОВОГО federated-оператора отвергнут (ErrProvisioningDisabled),
-// строка operators НЕ создаётся (Insert не вызван).
+// TestMapper_LdapDisabled_ProvisionRejected — B5 case 2: a policy without
+// ldap → auto-provisioning a NEW federated operator is rejected
+// (ErrProvisioningDisabled), no operators row is created (Insert not called).
 func TestMapper_LdapDisabled_ProvisionRejected(t *testing.T) {
-	db := &fakeMapperDB{existing: nil}                                     // SelectByAID → not found → ветка provision
-	gate := fakeGate{allowed: map[string]bool{"user": true, "oidc": true}} // ldap запрещён
+	db := &fakeMapperDB{existing: nil}                                     // SelectByAID → not found → provision branch
+	gate := fakeGate{allowed: map[string]bool{"user": true, "oidc": true}} // ldap forbidden
 	m := newMapperWithGate(db, map[string][]string{"ops": {"cluster-admin"}}, gate)
 
 	_, err := m.Map(context.Background(), ExternalIdentity{
@@ -82,8 +83,8 @@ func TestMapper_LdapDisabled_ProvisionRejected(t *testing.T) {
 	}
 }
 
-// TestMapper_LdapAllowed_ProvisionSucceeds — позитив: ldap∈methods → provision
-// проходит, оператор создаётся.
+// TestMapper_LdapAllowed_ProvisionSucceeds — positive case: ldap∈methods →
+// provision succeeds, the operator is created.
 func TestMapper_LdapAllowed_ProvisionSucceeds(t *testing.T) {
 	db := &fakeMapperDB{existing: nil}
 	gate := fakeGate{allowed: map[string]bool{"ldap": true}}
@@ -105,10 +106,10 @@ func TestMapper_LdapAllowed_ProvisionSucceeds(t *testing.T) {
 	}
 }
 
-// TestMapper_ExistingLoginNotGated_WhenLdapDisabled — ★ B5 кейс 3 (КРИТИЧНЫЙ
-// инвариант «гейт только на создании»): СУЩЕСТВУЮЩИЙ federated-оператор логинится
-// УСПЕШНО даже при политике без ldap. case err==nil в Map НЕ задействует gate —
-// гейтится только ветка provision (создание).
+// TestMapper_ExistingLoginNotGated_WhenLdapDisabled — ★ B5 case 3 (CRITICAL
+// invariant "gate only on creation"): an EXISTING federated operator logs in
+// SUCCESSFULLY even under a policy without ldap. The err==nil case in Map
+// does NOT engage the gate — only the provision (creation) branch is gated.
 func TestMapper_ExistingLoginNotGated_WhenLdapDisabled(t *testing.T) {
 	existing := &operator.Operator{
 		AID:         "dave",
@@ -116,8 +117,8 @@ func TestMapper_ExistingLoginNotGated_WhenLdapDisabled(t *testing.T) {
 		AuthMethod:  operator.AuthMethodLDAP,
 		CreatedVia:  operator.CreatedViaLDAP,
 	}
-	db := &fakeMapperDB{existing: existing}                  // SelectByAID → активный оператор
-	gate := fakeGate{allowed: map[string]bool{"user": true}} // ldap ЗАПРЕЩЁН политикой
+	db := &fakeMapperDB{existing: existing}                  // SelectByAID → active operator
+	gate := fakeGate{allowed: map[string]bool{"user": true}} // ldap FORBIDDEN by policy
 	m := newMapperWithGate(db, map[string][]string{"ops": {"cluster-admin"}}, gate)
 
 	got, err := m.Map(context.Background(), ExternalIdentity{AID: "dave", Groups: []string{"ops"}})
