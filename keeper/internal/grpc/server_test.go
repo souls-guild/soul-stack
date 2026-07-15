@@ -30,11 +30,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeTxBeginner — заглушка для unit-сборки сервера. Begin не должен
-// вызываться в server-startup-тестах (только Bootstrap-RPC дёргает Tx).
-// QueryRow возвращает ErrNoRows: pre-check трактует это как невалидный токен
-// (anti-enum PermissionDenied), что устраивает Bootstrap-RPC-тесты, в которых
-// валидный токен не нужен.
+// fakeTxBeginner — a stub for unit-testing server assembly. Begin
+// shouldn't be called in server-startup tests (only the Bootstrap RPC
+// touches Tx). QueryRow returns ErrNoRows: the pre-check treats this as an
+// invalid token (anti-enum PermissionDenied), which suits the Bootstrap RPC
+// tests that don't need a valid token.
 type fakeTxBeginner struct{}
 
 func (fakeTxBeginner) Begin(_ context.Context) (pgx.Tx, error) {
@@ -53,7 +53,7 @@ func (fakeTxBeginner) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, er
 	return nil, nil
 }
 
-// scanErrRow — pgx.Row, всегда возвращающий заданную ошибку из Scan.
+// scanErrRow — a pgx.Row that always returns the given error from Scan.
 type scanErrRow struct{ err error }
 
 func (r scanErrRow) Scan(_ ...any) error { return r.err }
@@ -113,9 +113,9 @@ func TestNewBootstrapServer_MissingTLSFiles(t *testing.T) {
 	}
 }
 
-// TestBootstrapServer_StartShutdown поднимает gRPC-сервер на эфемерном
-// порту, делает Ping через TLS-клиент и убеждается, что graceful
-// shutdown по ctx.Done() возвращает nil.
+// TestBootstrapServer_StartShutdown brings up a gRPC server on an
+// ephemeral port, does a Ping via a TLS client, and confirms that
+// a graceful shutdown on ctx.Done() returns nil.
 func TestBootstrapServer_StartShutdown(t *testing.T) {
 	dir := t.TempDir()
 	cp, kp := mustSelfSigned(t, dir)
@@ -134,7 +134,7 @@ func TestBootstrapServer_StartShutdown(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 
-	// Дождаться, пока listener забиндится.
+	// Wait until the listener binds.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if a := srv.Addr(); a != "" && a != cfg.Addr {
@@ -146,7 +146,7 @@ func TestBootstrapServer_StartShutdown(t *testing.T) {
 		t.Fatalf("Addr not updated to actual listener: %q", srv.Addr())
 	}
 
-	// Smoke: TLS dial с InsecureSkipVerify (тестовый self-signed cert).
+	// Smoke: TLS dial with InsecureSkipVerify (test self-signed cert).
 	conn, err := grpclib.NewClient(
 		srv.Addr(),
 		grpclib.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13})),
@@ -177,8 +177,9 @@ func TestBootstrapServer_StartShutdown(t *testing.T) {
 	}
 }
 
-// TestBootstrapServer_RejectsPlaintextClient — без TLS клиент не должен
-// проходить handshake (Ping вернёт ошибку до dial timeout).
+// TestBootstrapServer_RejectsPlaintextClient — a client without TLS
+// shouldn't pass the handshake (Ping returns an error before the dial
+// timeout).
 func TestBootstrapServer_RejectsPlaintextClient(t *testing.T) {
 	dir := t.TempDir()
 	cp, kp := mustSelfSigned(t, dir)
@@ -221,9 +222,9 @@ func TestBootstrapServer_RejectsPlaintextClient(t *testing.T) {
 	}
 }
 
-// fakeValidDeps — non-nil-deps только для проверки validate-фазы и
-// сборки сервера. Реальные Pool/Vault не используются — Bootstrap-RPC в
-// этих тестах не вызывается (только Ping).
+// fakeValidDeps — non-nil deps only for exercising the validate phase and
+// server assembly. Real Pool/Vault aren't used — the Bootstrap RPC isn't
+// called in these tests (only Ping).
 func fakeValidDeps() BootstrapDeps {
 	return BootstrapDeps{
 		Pool:        fakeTxBeginner{},
@@ -249,8 +250,8 @@ func discardLogger(_ *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// mustSelfSigned — копия helper-а из shared/tlsx (тестовый, не экспорт);
-// генерит ECDSA-cert + key в указанной директории.
+// mustSelfSigned — a copy of the helper from shared/tlsx (test-only, not
+// exported); generates an ECDSA cert + key in the given directory.
 func mustSelfSigned(t *testing.T, dir string) (certPath, keyPath string) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

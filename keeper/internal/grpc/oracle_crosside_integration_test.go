@@ -1,29 +1,33 @@
 //go:build integration
 
-// Cross-side integration (qa coverage_gap #1, главный пробел beacons-пилота):
-// ШОВ Soul-producer (PortentEvent) ↔ Keeper-consumer (Oracle handler) через
-// committed proto keeperv1.PortentEvent, доведённый до apply_runs(planned) на
-// ЖИВОМ PG.
+// Cross-side integration (qa coverage_gap #1, the main gap in the beacons
+// pilot): the SEAM between the Soul producer (PortentEvent) and the Keeper
+// consumer (Oracle handler) via the committed proto keeperv1.PortentEvent,
+// carried all the way to apply_runs(planned) on a LIVE PG.
 //
-// Существующие тесты утверждали звенья по отдельности: scheduler_test —
-// producer-сторону (scheduler.emit → PortentEvent с beacon_name/sid/collected_at/
-// data), events_oracle_test — consumer-сторону на fake-DB + fakeEnqueuer.
-// Шов «Portent реально доезжает до apply_runs через реальный резолв ServiceRef из
-// incarnation» в одной системе на живом PG не был утверждён. Здесь Portent
-// (committed proto, та же форма, что эмитит Soul-scheduler) проходит через
-// РЕАЛЬНЫЙ eventStreamHandler.handlePortentEvent + РЕАЛЬНЫЙ oracle-CRUD (decrees/
-// souls/oracle_fires) + РЕАЛЬНЫЙ резолв incarnation→ServiceRef + РЕАЛЬНЫЙ
-// applyrun.InsertPlanned.
+// Existing tests asserted each link separately: scheduler_test — the
+// producer side (scheduler.emit → PortentEvent with
+// beacon_name/sid/collected_at/data), events_oracle_test — the consumer
+// side against a fake DB + fakeEnqueuer. The seam "Portent actually makes
+// it to apply_runs through a real ServiceRef resolve from the
+// incarnation" hadn't been asserted end-to-end on live PG. Here, a
+// Portent (committed proto, the same shape the Soul scheduler emits)
+// goes through the REAL eventStreamHandler.handlePortentEvent + REAL
+// oracle CRUD (decrees/souls/oracle_fires) + REAL
+// incarnation→ServiceRef resolve + REAL applyrun.InsertPlanned.
 //
-// ФОРМА ШВА: in-process integration, а НЕ полный 2-бинарный e2e.
-//   - Producer-бинарь (soul-демон) импортировать нельзя: scheduler живёт в
-//     soul/internal/beacon — internal-пакет ДРУГОГО go-модуля (`soul/`),
-//     недоступен из keeper-модуля по правилам Go internal + изоляции ADR-011.
-//   - Поэтому Portent строится из committed proto keeperv1.PortentEvent ровно в
-//     той форме, что фиксируют producer-тесты scheduler-а (beacon_name + data +
-//     collected_at + sid), и подаётся в реальный Keeper-handler. Шов через
-//     committed contract утверждён; полный 2-бинарный e2e (soul-демон +
-//     keeper по реальному gRPC/mTLS) покрыт прод-smoke (docs/local-setup.md).
+// SHAPE OF THE SEAM: in-process integration, NOT a full 2-binary e2e.
+//   - The producer binary (the soul daemon) can't be imported: the
+//     scheduler lives in soul/internal/beacon — an internal package of a
+//     DIFFERENT go module (`soul/`), unreachable from the keeper module
+//     under Go's internal rules + ADR-011 isolation.
+//   - So the Portent is built from the committed proto
+//     keeperv1.PortentEvent, in exactly the shape the scheduler's
+//     producer tests pin down (beacon_name + data + collected_at + sid),
+//     and fed into a real Keeper handler. The seam through the committed
+//     contract is asserted here; the full 2-binary e2e (soul daemon +
+//     keeper over real gRPC/mTLS) is covered by prod smoke
+//     (docs/local-setup.md).
 
 package grpc
 
@@ -46,9 +50,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// resetOracleCrossSide чистит таблицы, задействованные cross-side-тестом:
-// onboarding-набор (souls/operators) + apply/oracle-реестры. grpc-пакетный
-// resetAll не трогает apply_runs/incarnation/decrees/oracle_fires.
+// resetOracleCrossSide clears the tables used by the cross-side test:
+// the onboarding set (souls/operators) + apply/oracle registries. The
+// grpc package's resetAll doesn't touch
+// apply_runs/incarnation/decrees/oracle_fires.
 func resetOracleCrossSide(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -58,11 +63,12 @@ func resetOracleCrossSide(t *testing.T) {
 	}
 }
 
-// liveOracleEnqueuer — реализация [ScenarioEnqueuer] поверх живого PG, точная
-// калька cmd/keeper/oracle_enqueuer.go (его нельзя импортировать — package main):
-// SelectByName(incarnation) → Resolve(service) с ref override = ServiceVersion →
-// InsertPlanned(Recipe). Утверждает РЕАЛЬНЫЙ consumer-шов до apply_runs(planned)
-// (а не fakeEnqueuer, который шов обрывает).
+// liveOracleEnqueuer — a [ScenarioEnqueuer] implementation over live PG, an
+// exact copy of cmd/keeper/oracle_enqueuer.go (it can't be imported —
+// package main): SelectByName(incarnation) → Resolve(service) with a ref
+// override = ServiceVersion → InsertPlanned(Recipe). Asserts the REAL
+// consumer seam all the way to apply_runs(planned) (unlike fakeEnqueuer,
+// which cuts the seam short).
 type liveOracleEnqueuer struct {
 	resolver incarnation.ServiceResolver
 }
@@ -76,7 +82,7 @@ func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueSce
 	if !ok {
 		return "", fmt.Errorf("liveOracleEnqueuer: resolver не знает сервис %q", inc.Service)
 	}
-	ref.Ref = inc.ServiceVersion // катим развёрнутой версией (калька enqueuer-а)
+	ref.Ref = inc.ServiceVersion // roll out with the deployed version (mirrors the enqueuer)
 
 	applyID := audit.NewULID()
 	if err := applyrun.InsertPlanned(ctx, integrationPool, &applyrun.ApplyRun{
@@ -84,7 +90,7 @@ func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueSce
 		SID:             req.SubjectSID,
 		IncarnationName: inc.Name,
 		Scenario:        req.ScenarioName,
-		StartedByAID:    nil, // Soul-инициированная реакция без identity Архонта
+		StartedByAID:    nil, // Soul-initiated reaction, no Archon identity
 		Recipe: &applyrun.Recipe{
 			ServiceRef:   ref,
 			ScenarioName: req.ScenarioName,
@@ -97,10 +103,11 @@ func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueSce
 	return applyID, nil
 }
 
-// fixedResolver — стаб [incarnation.ServiceResolver]: один сервис → фиксированные
-// git-координаты. Резолв ServiceRef из реестра сервисов — не предмет этого шва
-// (он утверждён в incarnation-тестах); здесь важно, что handler довёл
-// incarnation.Service → Recipe.ServiceRef с правильным ref override.
+// fixedResolver — a stub [incarnation.ServiceResolver]: one service →
+// fixed git coordinates. Resolving a ServiceRef from the service registry
+// isn't what this seam is about (it's asserted in the incarnation tests);
+// what matters here is that the handler carried
+// incarnation.Service → Recipe.ServiceRef with the correct ref override.
 type fixedResolver struct {
 	service string
 	ref     artifact.ServiceRef
@@ -113,9 +120,9 @@ func (r fixedResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 	return r.ref, true
 }
 
-// newCrossSideHandler — handler поверх живого PG с реальным oracle-deps
-// (DB=integrationPool, where-CEL, live enqueuer, recordingAudit) и
-// зарегистрированными keeper_oracle_*-метриками.
+// newCrossSideHandler — a handler over live PG with real oracle deps
+// (DB=integrationPool, where-CEL, live enqueuer, recordingAudit) and
+// registered keeper_oracle_* metrics.
 func newCrossSideHandler(t *testing.T, resolver incarnation.ServiceResolver) (*eventStreamHandler, *recordingAudit) {
 	t.Helper()
 	where, err := oracle.NewWhereEvaluator()
@@ -141,16 +148,17 @@ func newCrossSideHandler(t *testing.T, resolver incarnation.ServiceResolver) (*e
 	return newEventStreamHandler(deps, discardIntegrationLogger()), aw
 }
 
-// soulSchedulerPortent строит PortentEvent ровно в форме producer-а Soul-scheduler-а
-// (soul/internal/beacon/scheduler.go:emit): beacon_name + data(Struct) +
-// collected_at + sid. Это committed proto-контракт Soul→Keeper; форма
-// зафиксирована producer-тестами scheduler-а (TestEdgeTriggeredOnChange).
+// soulSchedulerPortent builds a PortentEvent in exactly the shape produced
+// by the Soul scheduler (soul/internal/beacon/scheduler.go:emit):
+// beacon_name + data(Struct) + collected_at + sid. This is the committed
+// Soul→Keeper proto contract; the shape is pinned by the scheduler's
+// producer tests (TestEdgeTriggeredOnChange).
 func soulSchedulerPortent(t *testing.T, beacon, sid string, data map[string]any) *keeperv1.PortentEvent {
 	t.Helper()
 	ev := &keeperv1.PortentEvent{
 		BeaconName:  beacon,
 		CollectedAt: timestamppb.New(time.Now().UTC()),
-		Sid:         sid, // echo (авторитет — mTLS peer cert, handler берёт его отдельно)
+		Sid:         sid, // echo (authority is the mTLS peer cert, the handler reads it separately)
 	}
 	if data != nil {
 		s, err := structpb.NewStruct(data)
@@ -162,17 +170,19 @@ func soulSchedulerPortent(t *testing.T, beacon, sid string, data map[string]any)
 	return ev
 }
 
-// TestIntegration_OracleCrossSide_PortentToPlannedApplyRun — СКВОЗНОЙ Soul→Keeper:
+// TestIntegration_OracleCrossSide_PortentToPlannedApplyRun — END-TO-END
+// Soul→Keeper:
 //
-//	Soul producer эмитит PortentEvent (committed proto) → Keeper consumer
-//	  handlePortentEvent на живом PG:
-//	    SelectDecreesByBeacon (реальный decree) → covens из souls-registry →
-//	    SubjectMatches → membership → where-CEL → cooldown → EnqueueScenario
-//	    (live: SelectByName(incarnation) → Resolve → InsertPlanned) →
-//	    RecordFire → audit oracle.fired
-//	→ ASSERT: apply_runs row(planned) с Recipe.ServiceRef.Ref == inc.ServiceVersion
-//	  + Recipe.Input проброшен (vault-ref как есть) + audit oracle.fired записан
-//	  на живом PG + oracle_fires-cooldown зафиксирован.
+//	The Soul producer emits a PortentEvent (committed proto) → the Keeper
+//	  consumer's handlePortentEvent on live PG:
+//	    SelectDecreesByBeacon (a real decree) → covens from the
+//	    souls registry → SubjectMatches → membership → where-CEL →
+//	    cooldown → EnqueueScenario (live: SelectByName(incarnation) →
+//	    Resolve → InsertPlanned) → RecordFire → audit oracle.fired
+//	→ ASSERT: an apply_runs row(planned) with
+//	  Recipe.ServiceRef.Ref == inc.ServiceVersion + Recipe.Input carried
+//	  through (vault-ref as-is) + audit oracle.fired recorded on live PG +
+//	  the oracle_fires cooldown recorded.
 func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
@@ -222,16 +232,16 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	resolver := fixedResolver{
 		service: svcName,
 		ref: artifact.ServiceRef{
-			Name: svcName, Git: "file:///srv/services/nginx", Ref: "main", // Ref должен переопределиться на svcVer
+			Name: svcName, Git: "file:///srv/services/nginx", Ref: "main", // Ref should get overridden to svcVer
 		},
 	}
 	h, aw := newCrossSideHandler(t, resolver)
 
-	// --- act: Soul-producer эмитит Portent → Keeper-consumer обрабатывает. ---
+	// --- act: the Soul producer emits a Portent → the Keeper consumer handles it. ---
 	portent := soulSchedulerPortent(t, "svc-down", sid, map[string]any{"severity": "critical"})
 	h.handlePortentEvent(ctx, sid, "session-x", portent)
 
-	// --- assert: apply_runs row(planned) с правильным Recipe. ---
+	// --- assert: an apply_runs row(planned) with the correct Recipe. ---
 	var (
 		status     string
 		recipeJSON []byte
@@ -260,20 +270,21 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	if recipe == nil {
 		t.Fatal("planned-задание без recipe")
 	}
-	// ServiceRef резолвится ИЗ incarnation: Name из resolver-а, Ref переопределён
-	// на inc.ServiceVersion (а не tip-ом ветки `main`).
+	// ServiceRef is resolved FROM the incarnation: Name comes from the
+	// resolver, Ref is overridden to inc.ServiceVersion (not the tip of
+	// the `main` branch).
 	if recipe.ServiceRef.Name != svcName {
 		t.Errorf("Recipe.ServiceRef.Name = %q, want %q", recipe.ServiceRef.Name, svcName)
 	}
 	if recipe.ServiceRef.Ref != svcVer {
 		t.Errorf("Recipe.ServiceRef.Ref = %q, want %q (развёрнутая версия incarnation)", recipe.ServiceRef.Ref, svcVer)
 	}
-	// Input (action_input Decree-а) проброшен как есть.
+	// Input (the Decree's action_input) is carried through as-is.
 	if recipe.Input["unit"] != "nginx" || recipe.Input["graceful"] != true {
 		t.Errorf("Recipe.Input не проброшен: %+v", recipe.Input)
 	}
 
-	// --- assert: audit oracle.fired записан на живом PG (через recordingAudit). ---
+	// --- assert: audit oracle.fired recorded on live PG (via recordingAudit). ---
 	var firedPayloadInc bool
 	var firedCorrelation string
 	for _, e := range aw.snapshot() {
@@ -292,7 +303,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Error("ожидали audit oracle.fired")
 	}
 
-	// --- assert: cooldown зафиксирован (oracle_fires) под correlation = apply_id. ---
+	// --- assert: the cooldown is recorded (oracle_fires) under correlation = apply_id. ---
 	_, hasFired, err := oracle.LastFiredAt(ctx, integrationPool, "restart-web", sid)
 	if err != nil {
 		t.Fatalf("LastFiredAt: %v", err)
@@ -301,7 +312,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Error("после успешной реакции oracle_fires-cooldown должен быть записан")
 	}
 
-	// correlation_id audit-а = apply_id поставленного прогона.
+	// The audit's correlation_id = apply_id of the run that was queued.
 	var applyID string
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT apply_id FROM apply_runs WHERE sid = $1`, sid).Scan(&applyID); err != nil {
@@ -312,11 +323,12 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 	}
 }
 
-// TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun — fail-closed на
-// живом PG: Decree таргетит incarnation, которой нет в реестре → live enqueuer
-// возвращает ошибку → handler НЕ пишет fire/audit и apply_runs не создаётся.
-// Дополняет cross-side-шов отрицательным концом (consumer корректно гасит
-// реакцию при недоставимом таргете).
+// TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun —
+// fail-closed on live PG: a Decree targets an incarnation that's not in
+// the registry → the live enqueuer returns an error → the handler does
+// NOT write fire/audit and no apply_runs row is created. Completes the
+// cross-side seam with its negative case (the consumer correctly
+// suppresses the reaction when the target is unreachable).
 func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
@@ -330,8 +342,9 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 		t.Fatalf("operator.Insert: %v", err)
 	}
 	creator := aid
-	// Хост В coven `ghost-app` (membership пройдёт), но incarnation `ghost-app`
-	// НЕ создана → SelectByName fail → enqueuer error.
+	// The host is in coven `ghost-app` (membership will pass), but the
+	// incarnation `ghost-app` is NOT created → SelectByName fails →
+	// enqueuer error.
 	if err := soul.Insert(ctx, integrationPool, &soul.Soul{
 		SID: sid, Transport: soul.TransportAgent, Status: soul.StatusConnected,
 		Coven: []string{"ghost-app"}, CreatedByAID: &creator,
@@ -358,7 +371,7 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 	h.handlePortentEvent(ctx, sid, "session-y",
 		soulSchedulerPortent(t, "svc-down", sid, nil))
 
-	// apply_runs не создан.
+	// apply_runs is not created.
 	var cnt int
 	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM apply_runs`).Scan(&cnt); err != nil {
 		t.Fatalf("count apply_runs: %v", err)
@@ -366,13 +379,15 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 	if cnt != 0 {
 		t.Errorf("enqueue-fail (incarnation not found): apply_runs должен быть пуст, got %d", cnt)
 	}
-	// audit oracle.fired НЕ пишется (реакция погашена до fire).
+	// audit oracle.fired is NOT written (the reaction is suppressed before
+	// fire).
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
 			t.Error("enqueue-fail: audit oracle.fired НЕ должен писаться")
 		}
 	}
-	// cooldown НЕ зафиксирован (ложный cooldown заблокировал бы будущие реакции).
+	// The cooldown is NOT recorded (a false cooldown would block future
+	// reactions).
 	if _, hasFired, _ := oracle.LastFiredAt(ctx, integrationPool, "restart-ghost", sid); hasFired {
 		t.Error("enqueue-fail: oracle_fires-cooldown НЕ должен писаться")
 	}
@@ -380,9 +395,9 @@ func TestIntegration_OracleCrossSide_IncarnationNotFoundNoApplyRun(t *testing.T)
 
 // --- V5-1 typed PortentPayload integration (ADR-030 amendment 2026-05-26) ---
 
-// seedV5TypedFixture сеет минимальный набор (operator + soul + incarnation +
-// vigil + decree) под V5-1 typed-payload-тесты. where_cel — параметр (typed
-// или legacy access). Возвращает (sid, decree-name).
+// seedV5TypedFixture seeds a minimal set (operator + soul + incarnation +
+// vigil + decree) for the V5-1 typed-payload tests. where_cel is a
+// parameter (typed or legacy access). Returns (sid, decree name).
 func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL string) (string, string) {
 	t.Helper()
 	const (
@@ -429,7 +444,7 @@ func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL
 	return sid, "react-v5"
 }
 
-// resolverV5 — общий фиксированный resolver для V5-тестов (nginx-svc).
+// resolverV5 — a shared fixed resolver for the V5 tests (nginx-svc).
 func resolverV5() incarnation.ServiceResolver {
 	return fixedResolver{
 		service: "nginx-svc",
@@ -437,7 +452,8 @@ func resolverV5() incarnation.ServiceResolver {
 	}
 }
 
-// assertApplyPlannedV5 — apply_runs с указанным SID создан и в статусе planned.
+// assertApplyPlannedV5 — an apply_runs row for the given SID is created
+// and in the planned status.
 func assertApplyPlannedV5(t *testing.T, ctx context.Context, sid string) {
 	t.Helper()
 	var cnt int
@@ -462,9 +478,10 @@ func assertApplyNotPlannedV5(t *testing.T, ctx context.Context, sid string) {
 	}
 }
 
-// TestIntegration_OracleV5_TypedPayloadDualWriteFires — Soul-side dual-write
-// (data + typed file_changed) + Decree where-CEL читает typed payload
-// `event.file_changed.path.startsWith("/etc/")` → fire+enqueue на живом PG.
+// TestIntegration_OracleV5_TypedPayloadDualWriteFires — Soul-side
+// dual-write (data + typed file_changed) + a Decree where-CEL reading the
+// typed payload `event.file_changed.path.startsWith("/etc/")` →
+// fire+enqueue on live PG.
 func TestIntegration_OracleV5_TypedPayloadDualWriteFires(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
@@ -494,7 +511,7 @@ func TestIntegration_OracleV5_TypedPayloadDualWriteFires(t *testing.T) {
 
 	assertApplyPlannedV5(t, ctx, sid)
 
-	// audit oracle.fired записан.
+	// audit oracle.fired is recorded.
 	var fired bool
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired && e.Payload["decree"] == decree {
@@ -506,9 +523,10 @@ func TestIntegration_OracleV5_TypedPayloadDualWriteFires(t *testing.T) {
 	}
 }
 
-// TestIntegration_OracleV5_LegacyOnlyStillFires — обратная совместимость:
-// Soul-side шлёт ТОЛЬКО legacy data (без typed payload) → Decree `event.data.*`
-// должен матчить (handler собирает legacy-ветку в активацию).
+// TestIntegration_OracleV5_LegacyOnlyStillFires — backward compatibility:
+// the Soul side sends ONLY legacy data (no typed payload) → the Decree
+// `event.data.*` must still match (the handler folds the legacy branch
+// into the activation).
 func TestIntegration_OracleV5_LegacyOnlyStillFires(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
@@ -517,7 +535,7 @@ func TestIntegration_OracleV5_LegacyOnlyStillFires(t *testing.T) {
 		`event.data.path == "/etc/passwd"`)
 
 	h, _ := newCrossSideHandler(t, resolverV5())
-	// Legacy-only Portent: только data, без typed payload.
+	// Legacy-only Portent: data only, no typed payload.
 	portent := soulSchedulerPortent(t, "watch-v5", sid, map[string]any{
 		"path": "/etc/passwd", "sha256": "deadbeef",
 	})
@@ -526,9 +544,9 @@ func TestIntegration_OracleV5_LegacyOnlyStillFires(t *testing.T) {
 	assertApplyPlannedV5(t, ctx, sid)
 }
 
-// TestIntegration_OracleV5_TypedOnlyMatches — Soul-side шлёт ТОЛЬКО typed
-// (без legacy data, симуляция S5-final post-hard-cut) → Decree
-// `event.service_down.service == "nginx"` должен матчить.
+// TestIntegration_OracleV5_TypedOnlyMatches — the Soul side sends ONLY
+// typed (no legacy data, simulating S5-final post-hard-cut) → the Decree
+// `event.service_down.service == "nginx"` must match.
 func TestIntegration_OracleV5_TypedOnlyMatches(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
@@ -552,13 +570,14 @@ func TestIntegration_OracleV5_TypedOnlyMatches(t *testing.T) {
 }
 
 // TestIntegration_OracleV5_TypeMismatchNoFire — type-mismatch fail-safe:
-// Decree ожидает file_changed, Soul шлёт service_down → where-CEL
-// `event.file_changed.path` даёт no-such-key → default-deny → apply_runs пуст.
+// the Decree expects file_changed, the Soul sends service_down →
+// where-CEL's `event.file_changed.path` yields a no-such-key →
+// default-deny → apply_runs stays empty.
 func TestIntegration_OracleV5_TypeMismatchNoFire(t *testing.T) {
 	resetOracleCrossSide(t)
 	ctx := context.Background()
 	sid, _ := seedV5TypedFixture(t, ctx,
-		"core.beacon.service_down", // Vigil наблюдает service_down
+		"core.beacon.service_down", // the Vigil watches service_down
 		`event.file_changed.path.startsWith("/etc/")`)
 
 	h, _ := newCrossSideHandler(t, resolverV5())

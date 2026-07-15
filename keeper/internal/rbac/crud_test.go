@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TestMapRoleError — маппинг pgx-ошибок в sentinel-ы пакета.
+// TestMapRoleError — mapping of pgx errors to the package's sentinels.
 func TestMapRoleError(t *testing.T) {
 	t.Run("unique→ErrRoleAlreadyExists", func(t *testing.T) {
 		pgErr := &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "rbac_roles_pkey"}
@@ -16,7 +16,7 @@ func TestMapRoleError(t *testing.T) {
 		if !errors.Is(got, ErrRoleAlreadyExists) {
 			t.Fatalf("err = %v, want errors.Is ErrRoleAlreadyExists", got)
 		}
-		// Оригинал доступен через errors.Is (multi-wrap).
+		// The original is reachable via errors.Is (multi-wrap).
 		if !errors.Is(got, pgErr) {
 			t.Errorf("original PgError lost in wrap: %v", got)
 		}
@@ -31,7 +31,7 @@ func TestMapRoleError(t *testing.T) {
 		if !errors.Is(got, pgErr) {
 			t.Errorf("original PgError lost: %v", got)
 		}
-		// Имя constraint-а — в сообщении для диагностики.
+		// The constraint name is in the message for diagnostics.
 		if want := "rbac_roles_created_by_aid_fk"; !strings.Contains(got.Error(), want) {
 			t.Errorf("err = %q, want substring %q", got.Error(), want)
 		}
@@ -49,8 +49,8 @@ func TestMapRoleError(t *testing.T) {
 	})
 }
 
-// TestMapGrantError — grant-membership маппит FK-violation в
-// ErrOperatorNotFound, прочее — в generic wrap.
+// TestMapGrantError — grant-membership maps an FK violation to
+// ErrOperatorNotFound, everything else to a generic wrap.
 func TestMapGrantError(t *testing.T) {
 	t.Run("fk→ErrOperatorNotFound", func(t *testing.T) {
 		pgErr := &pgconn.PgError{Code: pgErrCodeForeignKeyViolation, ConstraintName: "rbac_role_operators_aid_fk"}
@@ -67,8 +67,8 @@ func TestMapGrantError(t *testing.T) {
 	})
 
 	t.Run("unique→not ErrOperatorNotFound", func(t *testing.T) {
-		// 23505 в grant-пути недостижим (ON CONFLICT DO NOTHING), но маппер
-		// не должен его ошибочно записать в ErrOperatorNotFound.
+		// 23505 is unreachable on the grant path (ON CONFLICT DO NOTHING),
+		// but the mapper must not mistakenly map it to ErrOperatorNotFound.
 		pgErr := &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "rbac_role_operators_pkey"}
 		got := mapGrantError(pgErr)
 		if errors.Is(got, ErrOperatorNotFound) {
@@ -88,8 +88,8 @@ func TestMapGrantError(t *testing.T) {
 	})
 }
 
-// TestRoleGivesWildcard — exclusion-логика над набором permission-строк
-// (фейковый источник, без БД): даёт ли роль `*`.
+// TestRoleGivesWildcard — exclusion logic over a set of permission strings
+// (fake source, no DB): whether the role grants `*`.
 func TestRoleGivesWildcard(t *testing.T) {
 	cases := []struct {
 		name string
@@ -111,9 +111,9 @@ func TestRoleGivesWildcard(t *testing.T) {
 	}
 }
 
-// TestCreateRole_ValidationBeforeTx — битое имя / битый permission ловятся
-// валидацией ДО любого обращения к БД (db не вызывается). Используем nil-db:
-// если бы валидация пропустила, nil.Exec паникнул бы.
+// TestCreateRole_ValidationBeforeTx — a bad name / bad permission is caught
+// by validation BEFORE any DB access (db is never called). We use a nil db:
+// if validation let it through, nil.Exec would panic.
 func TestCreateRole_Validation(t *testing.T) {
 	t.Run("bad-name", func(t *testing.T) {
 		err := CreateRole(t.Context(), nil, "Bad_Name", "", nil, nil, nil)
@@ -133,9 +133,9 @@ func TestCreateRole_Validation(t *testing.T) {
 			t.Errorf("err = %v, want 'invalid permission'", err)
 		}
 	})
-	// ADR-047 S1: битый default_scope ловится валидацией ДО БД (db=nil).
+	// ADR-047 S1: a bad default_scope is caught by validation BEFORE the DB (db=nil).
 	t.Run("bad-default-scope", func(t *testing.T) {
-		bad := "coven" // нет '=' → parseSelector ошибка
+		bad := "coven" // no '=' → parseSelector error
 		err := CreateRole(t.Context(), nil, "ok-role", "", nil, nil, &bad)
 		if err == nil {
 			t.Fatal("CreateRole with bad default_scope: want error, got nil")
@@ -144,8 +144,8 @@ func TestCreateRole_Validation(t *testing.T) {
 			t.Errorf("err = %v, want 'default_scope'", err)
 		}
 	})
-	// Пустой default_scope валиден (= NULL = роль без scope-ограничения):
-	// ParseDefaultScope("") → (nil, nil), не ошибка.
+	// An empty default_scope is valid (= NULL = role with no scope
+	// restriction): ParseDefaultScope("") → (nil, nil), not an error.
 	t.Run("empty-default-scope-ok", func(t *testing.T) {
 		sel, err := ParseDefaultScope("")
 		if err != nil {

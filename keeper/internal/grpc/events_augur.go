@@ -18,21 +18,21 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// AugurDeps — wire-up зависимости handler-а `AugurRequest` через EventStream
-// (ADR-025, augur.md). Брокер (delegate=false, MVP-1): авторизационный резолв +
-// чтение Vault KV + отправка AugurReply обратно по тому же стриму.
+// AugurDeps — wire-up dependencies for the `AugurRequest` handler over EventStream
+// (ADR-025, augur.md). Broker (delegate=false, MVP-1): authorization resolve +
+// Vault KV read + sending the AugurReply back on the same stream.
 //
-// Все поля обязательны:
-//   - DB — реестр omens/rites + souls (резолв Omen / Rite / covens по SID);
-//   - Vault — Keeper-side ReadKV (vault-broker + чтение prom/elk-credential по
+// All fields are required:
+//   - DB — omens/rites + souls registry (resolves Omen / Rite / covens by SID);
+//   - Vault — Keeper-side ReadKV (vault broker + reads prom/elk credentials via
 //     Omen.AuthRef);
-//   - Egress — SSRF-guarded HTTP-клиент для prom/elk-брокеров (исходящий HTTP к
-//     НЕдоверенному endpoint-у Omen-а, [augur.NewEgressClient]);
+//   - Egress — SSRF-guarded HTTP client for prom/elk brokers (outbound HTTP to
+//     the UNtrusted Omen endpoint, [augur.NewEgressClient]);
 //   - AuditWriter — `augur.fetch_brokered` / `augur.access_denied`;
-//   - Outbound — Send `AugurReply` обратно в стрим Soul-а.
+//   - Outbound — sends the `AugurReply` back on the Soul's stream.
 //
-// nil-AugurDeps (handler не wired up) → handler логирует warn и игнорирует
-// запрос (минимально-инвазивный fallback на сборках без Augur).
+// nil AugurDeps (handler not wired up) → the handler logs a warning and
+// ignores the request (minimally-invasive fallback for builds without Augur).
 type AugurDeps struct {
 	DB          augurDB
 	Vault       augur.KVReader
@@ -40,16 +40,16 @@ type AugurDeps struct {
 	AuditWriter audit.Writer
 	Outbound    *Outbound
 
-	// Metrics — keeper_augur_*-дескриптор (ADR-024). Опционален: nil →
-	// инструментация выключена (nil-safe [augur.BrokerMetrics.ObserveFetch] —
-	// no-op), как Metrics в [EventStreamDeps]. Регистрируется в daemon
-	// `setupMetricsRegistry`, инжектится здесь же при wire-up брокера.
+	// Metrics — keeper_augur_* descriptor (ADR-024). Optional: nil →
+	// instrumentation disabled (nil-safe [augur.BrokerMetrics.ObserveFetch] —
+	// no-op), same as Metrics in [EventStreamDeps]. Registered in the daemon's
+	// `setupMetricsRegistry`, injected here when the broker is wired up.
 	Metrics *augur.BrokerMetrics
 }
 
-// augurDB — совмещённая поверхность PG, нужная резолву: omens/rites CRUD-ридеры
-// (augur.ExecQueryRower) + souls-ридер (soul.ExecQueryRower) для резолва covens
-// по SID из авторитетного registry. *pgxpool.Pool удовлетворяет обоим.
+// augurDB — the combined PG surface the resolve needs: omens/rites CRUD readers
+// (augur.ExecQueryRower) + a souls reader (soul.ExecQueryRower) for resolving covens
+// by SID from the authoritative registry. *pgxpool.Pool satisfies both.
 type augurDB interface {
 	augur.ExecQueryRower
 	soul.ExecQueryRower
@@ -74,9 +74,10 @@ func (d *AugurDeps) validate() error {
 	return nil
 }
 
-// augurOmenReader / augurRiteReader / augurCovenReader — адаптеры реестров под
-// узкие reader-интерфейсы [augur.Resolve]. Изолируют enforcement от конкретного
-// pool-а и держат covens-резолв на авторитетном souls.coven[] (НЕ из payload).
+// augurOmenReader / augurRiteReader / augurCovenReader — registry adapters for
+// the narrow reader interfaces of [augur.Resolve]. They isolate enforcement from
+// a concrete pool and keep covens resolution on the authoritative souls.coven[]
+// (NOT from the payload).
 type augurOmenReader struct{ db augur.ExecQueryRower }
 
 func (r augurOmenReader) OmenByName(ctx context.Context, name string) (*augur.Omen, error) {
@@ -102,34 +103,37 @@ func (r augurCovenReader) CovensBySID(ctx context.Context, sid string) ([]string
 	return s.Coven, nil
 }
 
-// handleAugurRequest — обработчик payload-а [keeperv1.AugurRequest] (ADR-025).
+// handleAugurRequest — handler for the [keeperv1.AugurRequest] payload (ADR-025).
 //
-// SID берётся из mTLS peer cert сессии (передан caller-ом), НЕ из
-// AugurRequest — авторитет идентичности Soul-а это сертификат (ADR-012(i)).
+// SID comes from the session's mTLS peer cert (passed by the caller), NOT from
+// AugurRequest — the authority for a Soul's identity is the certificate (ADR-012(i)).
 //
-// Запускается в ОТДЕЛЬНОЙ горутине из [dispatch]: fetch (vault/prom/elk) может
-// занять время, а receive-loop не должен блокироваться на нём (другие
-// FromSoul-ы того же стрима — TaskEvent / RunResult — продолжают приниматься).
-// Отмена по ctx.Done() стрима наследуется горутиной.
+// Runs in its OWN goroutine spawned from [dispatch]: the fetch (vault/prom/elk)
+// may take time, and the receive loop must not block on it (other FromSoul
+// messages on the same stream — TaskEvent / RunResult — keep being received).
+// Cancellation via the stream's ctx.Done() is inherited by the goroutine.
 //
-// DoS-guard: спавн горутины проходит через global-семафор augurSem (лимит
-// параллельных Augur-обработок поверх ВСЕХ стримов). Non-blocking acquire:
-// переполнение → AugurReply{ERROR}, без нового спавна (НЕдоверенный Soul-flood
-// AugurRequest-ов не исчерпает горутины/соединения Keeper-а). Семафор
-// освобождается в processAugurRequest по любому исходу.
+// DoS guard: spawning the goroutine goes through the global augurSem semaphore
+// (a limit on concurrent Augur processing across ALL streams). Non-blocking
+// acquire: on overflow → AugurReply{ERROR}, no new goroutine spawned (an
+// UNtrusted Soul flooding AugurRequests can't exhaust the Keeper's
+// goroutines/connections). The semaphore is released in processAugurRequest
+// on every outcome.
 //
-// Поток (брокер, delegate=false):
-//  1. augur.Resolve (enforcement) — covens из registry, Rite на Omen,
-//     query ∈ allow EXACT-match по форме source_type.
+// Flow (broker, delegate=false):
+//  1. augur.Resolve (enforcement) — covens from the registry, a Rite on the
+//     Omen, query ∈ allow via EXACT match on the source_type's shape.
 //  2. denied → AugurReply{DENIED} + audit `augur.access_denied`.
-//  3. allowed → broker по source_type (vault ReadKV / prom HTTP / elk HTTP) →
+//  3. allowed → broker dispatch by source_type (vault ReadKV / prom HTTP / elk HTTP) →
 //     inline_data Struct.
-//  4. fetch-сбой → AugurReply{ERROR} (audit не пишем — доступ был разрешён,
-//     но fetch не состоялся; это операционный сбой, не security-событие).
+//  4. fetch failure → AugurReply{ERROR} (no audit written — access was granted,
+//     but the fetch didn't happen; this is an operational failure, not a
+//     security event).
 //  5. ok → AugurReply{OK, inline_data} + audit `augur.fetch_brokered`.
 //
-// Секрет/credential НЕ логируется и НЕ попадает в audit: пишутся omen + query +
-// request_id, не значение (augur.md §8). Reply — через Outbound.SendAugurReply.
+// Secrets/credentials are NEVER logged and NEVER go into the audit: only omen +
+// query + request_id are written, never the value (augur.md §8). Reply goes out
+// via Outbound.SendAugurReply.
 func (h *eventStreamHandler) handleAugurRequest(ctx context.Context, sid, sessionID string, req *keeperv1.AugurRequest) {
 	deps := h.deps.Augur
 	if deps == nil {
@@ -143,22 +147,22 @@ func (h *eventStreamHandler) handleAugurRequest(ctx context.Context, sid, sessio
 		return
 	}
 
-	// Non-blocking acquire: при переполнении не спавним горутину, а сразу шлём
-	// ERROR из receive-loop-а (дёшево, без блокировки). nil-семафор (лимит
-	// выключен) — старое поведение: спавним всегда.
+	// Non-blocking acquire: on overflow, don't spawn a goroutine — send
+	// ERROR straight from the receive loop (cheap, no blocking). A nil
+	// semaphore (limit disabled) → the old behavior: always spawn.
 	if h.augurSem != nil {
 		select {
 		case h.augurSem <- struct{}{}:
-			// слот занят — освобождаем в processAugurRequest.
+			// Slot acquired — released in processAugurRequest.
 		default:
 			h.logger.Warn("eventstream: augur concurrency limit reached — rejecting request",
 				slog.String("sid", sid),
 				slog.String("session_id", sessionID),
 				slog.String("request_id", req.GetRequestId()),
 			)
-			// Отбой до резолва — source ещё неизвестен (тип Omen-а не прочитан),
-			// исход error (Soul получает AugurReply{ERROR}). Длительность ~0:
-			// обработка не стартовала.
+			// Rejected before resolve — source is not yet known (the Omen's type
+			// hasn't been read), outcome is error (the Soul gets AugurReply{ERROR}).
+			// Duration ~0: processing never started.
 			deps.Metrics.ObserveFetch(augur.SourceUnknown, augur.DecisionError, 0)
 			h.sendAugurError(ctx, sid, req.GetRequestId(), "augur busy: concurrency limit reached")
 			return
@@ -172,9 +176,9 @@ func (h *eventStreamHandler) handleAugurRequest(ctx context.Context, sid, sessio
 	go h.processAugurRequest(ctx, sid, sessionID, req)
 }
 
-// processAugurRequest — тело обработки (вынесено в отдельную функцию ради
-// читаемости горутины). Reply отправляется по любому исходу (OK/DENIED/ERROR);
-// status_UNSPECIFIED Soul трактует как DENIED (default-deny на той стороне).
+// processAugurRequest — the processing body (split into its own function for
+// goroutine readability). A reply is sent on every outcome (OK/DENIED/ERROR);
+// the Soul treats status_UNSPECIFIED as DENIED (default-deny on that side).
 func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessionID string, req *keeperv1.AugurRequest) {
 	deps := h.deps.Augur
 	omenName := req.GetOmenName()
@@ -182,16 +186,18 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 	requestID := req.GetRequestId()
 	applyID := req.GetApplyId()
 
-	// In-process span на обработку AugurRequest (резолв + fetch). Атрибуты БЕЗ
-	// секретов и без cardinality-blow-up (augur.md §8, ADR-024 §2.2): sid —
-	// идентичность субъекта (уже в логах/audit), source_type/decision — closed-
-	// enum, заполняются по ходу. omen_name / query / значение секрета в span НЕ
-	// кладём. При OTel disabled tracer no-op — Start/End бесплатны.
+	// In-process span for AugurRequest processing (resolve + fetch). Attributes
+	// carry NO secrets and no cardinality blow-up (augur.md §8, ADR-024 §2.2):
+	// sid is the subject identity (already in logs/audit), source_type/decision
+	// are a closed enum, filled in as we go. omen_name / query / the secret value
+	// never go into the span. With OTel disabled the tracer is a no-op —
+	// Start/End are free.
 	ctx, span := augur.Tracer().Start(ctx, augur.SpanName,
 		trace.WithAttributes(attribute.String("sid", sid)),
 	)
-	// Метрика и span-статус фиксируются один раз на любом выходе. source/decision
-	// заполняются по ходу: до резолва source неизвестен (Omen-тип не прочитан).
+	// The metric and span status are recorded once on any exit path.
+	// source/decision are filled in as we go: before resolve, source is
+	// unknown (the Omen's type hasn't been read).
 	started := time.Now()
 	source := augur.SourceUnknown
 	decisionLabel := augur.DecisionError
@@ -214,8 +220,9 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 		sid, omenName, query,
 	)
 	if err != nil {
-		// Инфраструктурный сбой резолва (PG недоступен) — ERROR, не DENIED.
-		// Причину наружу не раскрываем (может нести детали реестра); лог — да.
+		// An infrastructure failure during resolve (PG unavailable) — ERROR, not
+		// DENIED. We don't expose the reason externally (it may carry registry
+		// details); logging it is fine.
 		h.logger.Warn("eventstream: augur resolve failed",
 			slog.String("sid", sid),
 			slog.String("session_id", sessionID),
@@ -228,8 +235,8 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 
 	if !decision.Allowed {
 		decisionLabel = augur.DecisionDenied
-		// При denied Omen мог не существовать (denied до его чтения) — тогда
-		// source остаётся unknown; иначе берём тип найденного Omen-а.
+		// On denied, the Omen may not have existed (denied before it was read) —
+		// then source stays unknown; otherwise we take the found Omen's type.
 		if decision.Omen != nil {
 			source = string(decision.Omen.SourceType)
 		}
@@ -248,21 +255,22 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 		return
 	}
 
-	// Доступ разрешён — тип Omen-а известен. source фиксируется здесь, чтобы
-	// fetch-сбой ниже учёлся с правильным source (а не unknown).
+	// Access granted — the Omen's type is known. source is set here so a
+	// fetch failure below is recorded with the right source (not unknown).
 	source = string(decision.Omen.SourceType)
 
-	// Брокер по source_type. decision.Query — каноническое значение fetch-а:
-	// vault — нормализованный logical-path; prom/elk — promQL/index «как есть»
-	// (уже прошли exact-match в Resolve). endpoint/auth_ref берутся из
-	// decision.Omen (НЕдоверенный endpoint защищён SSRF-guard-ом внутри брокера).
+	// Broker dispatch by source_type. decision.Query is the canonical fetch
+	// value: vault — a normalized logical path; prom/elk — promQL/index
+	// "as-is" (already passed exact-match in Resolve). endpoint/auth_ref come
+	// from decision.Omen (the UNtrusted endpoint is protected by an SSRF
+	// guard inside the broker).
 	inline, err := h.brokerFetch(ctx, deps, decision)
 	if err != nil {
-		// Доступ был разрешён, но fetch не состоялся (внешняя система недоступна
-		// / SSRF-guard отверг endpoint / путь исчез) — операционный ERROR, не
-		// security-deny. Аудит не пишем (нечего фиксировать как «прочитано»);
-		// секрет/credential/тело ответа в ошибку не попадают (см. broker_*.go).
-		// Soul-у — обобщённая диагностика.
+		// Access was granted, but the fetch failed (external system down /
+		// SSRF guard rejected the endpoint / the path disappeared) — an
+		// operational ERROR, not a security deny. No audit written (nothing to
+		// record as "read"); secrets/credentials/response bodies never end up
+		// in the error (see broker_*.go). The Soul gets a generic diagnostic.
 		h.logger.Warn("eventstream: augur broker fetch failed",
 			slog.String("sid", sid),
 			slog.String("session_id", sessionID),
@@ -289,29 +297,30 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 	)
 }
 
-// brokerFetch диспетчит fetch по source_type разрешённого Omen-а (delegate=false,
-// augur.md §6 таблица ветвления). vault — ReadKV (Slice B); prometheus / elk —
-// SSRF-guarded HTTP к Omen.Endpoint (Slice C). Возвращает inline_data Struct или
-// операционную ошибку (caller → AugurReply{ERROR}); ни секрет, ни credential, ни
-// тело внешнего ответа в ошибку не попадают.
+// brokerFetch dispatches the fetch by the allowed Omen's source_type
+// (delegate=false, augur.md §6 branch table). vault — ReadKV (Slice B);
+// prometheus / elk — SSRF-guarded HTTP to Omen.Endpoint (Slice C). Returns an
+// inline_data Struct or an operational error (caller → AugurReply{ERROR});
+// neither the secret, the credential, nor the external response body ever
+// end up in the error.
 func (h *eventStreamHandler) brokerFetch(ctx context.Context, deps *AugurDeps, decision *augur.Decision) (*structpb.Struct, error) {
 	omen := decision.Omen
 	switch omen.SourceType {
 	case augur.SourceVault:
-		// decision.Query — нормализованный logical-path (прошёл ParseRef в Resolve).
+		// decision.Query — normalized logical path (passed through ParseRef in Resolve).
 		return augur.BrokerVault(ctx, deps.Vault, decision.Query)
 	case augur.SourcePrometheus:
 		return augur.BrokerPrometheus(ctx, deps.Vault, deps.Egress, omen.Endpoint, omen.AuthRef, decision.Query)
 	case augur.SourceELK:
 		return augur.BrokerELK(ctx, deps.Vault, deps.Egress, omen.Endpoint, omen.AuthRef, decision.Query)
 	default:
-		// Resolve уже отсёк unknown source_type (denied), сюда попасть нельзя без
-		// рассинхрона switch-ей — fail-safe.
+		// Resolve already filters out unknown source_type (denied); reaching here
+		// would mean the switches are out of sync — fail-safe.
 		return nil, fmt.Errorf("grpc: augur unsupported source_type %q", omen.SourceType)
 	}
 }
 
-// sendAugurError — отправка AugurReply{ERROR} с обобщённой диагностикой.
+// sendAugurError — sends an AugurReply{ERROR} with a generic diagnostic.
 func (h *eventStreamHandler) sendAugurError(ctx context.Context, sid, requestID, reason string) {
 	h.sendAugurReply(ctx, sid, &keeperv1.AugurReply{
 		RequestId: requestID,
@@ -320,9 +329,10 @@ func (h *eventStreamHandler) sendAugurError(ctx context.Context, sid, requestID,
 	})
 }
 
-// sendAugurReply — отправка reply по тому же стриму через Outbound. Сбой Send-а
-// логируется warn-ом (стрим мог закрыться); Soul по таймауту своего ожидания
-// перезапросит или провалит шаг — default-deny на той стороне защищает.
+// sendAugurReply — sends the reply on the same stream via Outbound. A Send
+// failure is logged as a warning (the stream may have closed); the Soul will
+// either retry on its own wait timeout or fail the step — default-deny on
+// that side protects it.
 func (h *eventStreamHandler) sendAugurReply(ctx context.Context, sid string, reply *keeperv1.AugurReply) {
 	if err := h.deps.Augur.Outbound.SendAugurReply(ctx, sid, reply); err != nil {
 		h.logger.Warn("eventstream: augur reply send failed",
@@ -333,13 +343,14 @@ func (h *eventStreamHandler) sendAugurReply(ctx context.Context, sid string, rep
 	}
 }
 
-// auditAugur пишет augur-событие. Секрет-значение НЕ кладётся (augur.md §8):
-// только omen + query + request_id + sid; reason — только для denied. query —
-// это vault-логический путь (адрес записи, не значение секрета); augur.md §8
-// разрешает логировать путь. MaskSecrets внутри Writer-а ловит лишь литералы с
-// префиксом `vault:`, bare-path он НЕ маскирует — и это ОК: путь не секрет.
-// Best-effort: fail audit-а не отменяет уже отправленный reply (паттерн
-// идентичен прочим event-handler-ам).
+// auditAugur writes an augur event. The secret value is NEVER included
+// (augur.md §8): only omen + query + request_id + sid; reason is set only for
+// denied. query is the vault logical path (a record address, not the secret
+// value); augur.md §8 allows logging the path. MaskSecrets inside the Writer
+// only catches literals with a `vault:` prefix — it does NOT mask a bare
+// path, and that's fine: a path isn't a secret. Best-effort: an audit
+// failure doesn't undo the already-sent reply (same pattern as the other
+// event handlers).
 func (h *eventStreamHandler) auditAugur(ctx context.Context, evt audit.EventType, sid, omen, query, requestID, applyID, reason string) {
 	payload := map[string]any{
 		"sid":        sid,

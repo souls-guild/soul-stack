@@ -5,16 +5,18 @@ import (
 	"testing"
 )
 
-// ADR-047 S2a — regex-ключ селектора: матчит по SID/имени хоста (RE2).
-// TDD-first: тесты фиксируют контракт ДО реализации (red), затем зеленеют.
+// ADR-047 S2a — the regex selector key: matches SID/hostname (RE2).
+// TDD-first: tests pin down the contract BEFORE the implementation (red),
+// then go green.
 //
-// Граница S2a: regex добавляется в грамматику селектора + Purview.Regexes +
-// учитывается в Matches (host-context) и least-privilege subset (string-equality
-// fail-closed). РЕАЛЬНОЕ применение к list-видимости/target-пересечению — S3/S4.
+// S2a boundary: regex is added to the selector grammar + Purview.Regexes +
+// accounted for in Matches (host-context) and the least-privilege subset
+// (string-equality fail-closed). REAL application to list-visibility/target
+// intersection is S3/S4.
 
-// --- Парсинг quoted regex-значения ---
+// --- Parsing a quoted regex value ---
 
-// regex='^web-' парсится в Selector{regex:[^web-]} (значение без кавычек).
+// regex='^web-' parses into Selector{regex:[^web-]} (value without quotes).
 func TestParseSelector_Regex_Simple(t *testing.T) {
 	p, err := ParsePermission("incarnation.run on regex='^web-'")
 	if err != nil {
@@ -26,8 +28,8 @@ func TestParseSelector_Regex_Simple(t *testing.T) {
 	}
 }
 
-// Запятая ВНУТРИ regex ({1,3}) не рвёт значение — quoted-форма защищает от
-// `,`-разделителя value-list.
+// A comma INSIDE the regex ({1,3}) doesn't split the value — the quoted form
+// protects against the `,` value-list separator.
 func TestParseSelector_Regex_CommaInsideQuotes(t *testing.T) {
 	p, err := ParsePermission("incarnation.run on regex='^a{1,3}$'")
 	if err != nil {
@@ -39,12 +41,12 @@ func TestParseSelector_Regex_CommaInsideQuotes(t *testing.T) {
 	}
 }
 
-// Битый regex → ошибка load (parseSelector валидирует regexp.Compile).
+// A broken regex → load error (parseSelector validates via regexp.Compile).
 func TestParseSelector_Regex_BrokenRejected(t *testing.T) {
 	cases := []string{
-		"incarnation.run on regex='^web-['",    // незакрытый класс
-		"incarnation.run on regex='(unclosed'", // незакрытая группа
-		"incarnation.run on regex='*'",         // нет операнда у квантора
+		"incarnation.run on regex='^web-['",    // unclosed character class
+		"incarnation.run on regex='(unclosed'", // unclosed group
+		"incarnation.run on regex='*'",         // no operand for the quantifier
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -59,8 +61,9 @@ func TestParseSelector_Regex_BrokenRejected(t *testing.T) {
 	}
 }
 
-// Незакавыченное regex-значение запрещено: regex без кавычек неотличимо от
-// exact-value и спецсимволы не пройдут reSelValue — требуем quoted-форму явно.
+// An unquoted regex value is forbidden: an unquoted regex is indistinguishable
+// from an exact value, and special characters won't pass reSelValue — we
+// require the quoted form explicitly.
 func TestParseSelector_Regex_RequiresQuotes(t *testing.T) {
 	_, err := ParsePermission("incarnation.run on regex=^web-")
 	if err == nil {
@@ -68,7 +71,7 @@ func TestParseSelector_Regex_RequiresQuotes(t *testing.T) {
 	}
 }
 
-// Слишком длинный regex отвергается на load (ReDoS-cap длины строки).
+// An overly long regex is rejected at load (a ReDoS length cap).
 func TestParseSelector_Regex_LengthCapped(t *testing.T) {
 	long := strings.Repeat("a", maxRegexLen+1)
 	_, err := ParsePermission("incarnation.run on regex='" + long + "'")
@@ -80,7 +83,7 @@ func TestParseSelector_Regex_LengthCapped(t *testing.T) {
 	}
 }
 
-// Пустой regex (regex=”) отвергается.
+// An empty regex value (regex set to an empty string) is rejected.
 func TestParseSelector_Regex_EmptyRejected(t *testing.T) {
 	_, err := ParsePermission("incarnation.run on regex=''")
 	if err == nil {
@@ -88,7 +91,7 @@ func TestParseSelector_Regex_EmptyRejected(t *testing.T) {
 	}
 }
 
-// --- Matches с host/sid context ---
+// --- Matches with host/sid context ---
 
 // permission incarnation.run on regex='^web-' + context{host: web-01} → match.
 func TestMatches_Regex_HostContext(t *testing.T) {
@@ -104,7 +107,7 @@ func TestMatches_Regex_HostContext(t *testing.T) {
 	}
 }
 
-// regex также матчит по ключу sid в context-е (часть эндпоинтов кладёт sid).
+// regex also matches via the sid key in the context (some endpoints put sid there).
 func TestMatches_Regex_SidContext(t *testing.T) {
 	p, err := ParsePermission("incarnation.run on regex='^web-'")
 	if err != nil {
@@ -115,7 +118,8 @@ func TestMatches_Regex_SidContext(t *testing.T) {
 	}
 }
 
-// regex-ключ без host/sid в context → no match (как exact-ключ без своего ключа).
+// A regex key without host/sid in the context → no match (like an exact key
+// missing its own key).
 func TestMatches_Regex_NoHostKeyDeny(t *testing.T) {
 	p, err := ParsePermission("incarnation.run on regex='^web-'")
 	if err != nil {
@@ -131,7 +135,7 @@ func TestMatches_Regex_NoHostKeyDeny(t *testing.T) {
 
 // --- Purview.Regexes ---
 
-// ResolvePurview с regex-permission заполняет Purview.Regexes.
+// ResolvePurview with a regex permission populates Purview.Regexes.
 func TestResolvePurview_Regex(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "web-ops", operators: []string{"archon-a"},
@@ -146,7 +150,7 @@ func TestResolvePurview_Regex(t *testing.T) {
 	}
 }
 
-// default_scope=regex наследуется bare-permission-ом (S1+S2a вместе).
+// default_scope=regex is inherited by a bare permission (S1+S2a together).
 func TestResolvePurview_Regex_DefaultScopeInherited(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "web-ops", operators: []string{"archon-a"},
@@ -169,7 +173,7 @@ func TestSubset_Regex_StringEquality(t *testing.T) {
 		name        string
 		callerRaws  []string
 		grantedRaws []string
-		wantHeld    bool // true → ErrPermissionNotHeld (выдача запрещена)
+		wantHeld    bool // true → ErrPermissionNotHeld (grant forbidden)
 	}{
 		{
 			name:        "идентичный regex → выдача ок",

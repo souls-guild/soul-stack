@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// findEff — ищет EffectivePermission по (resource, action) в результате
-// PermissionsOf. Удобный для табличных проверок.
+// findEff looks up an EffectivePermission by (resource, action) in the
+// PermissionsOf result. Handy for table-driven checks.
 func findEff(perms []EffectivePermission, resource, action string) (EffectivePermission, bool) {
 	for _, p := range perms {
 		if p.Resource == resource && p.Action == action {
@@ -35,7 +35,7 @@ func TestPermissionsOf_TwoBarePermissions(t *testing.T) {
 	if _, ok := findEff(perms, "soul", "list"); !ok {
 		t.Errorf("soul.list отсутствует: %+v", perms)
 	}
-	// bare-permission без default_scope роли → unrestricted, без scope-меток.
+	// A bare permission with no role default_scope is unrestricted, no scope labels.
 	for _, p := range perms {
 		if p.Wildcard {
 			t.Errorf("%s.%s не должен быть wildcard", p.Resource, p.Action)
@@ -74,7 +74,7 @@ func TestPermissionsOf_UnknownAID_Empty(t *testing.T) {
 }
 
 func TestPermissionsOf_Dedup(t *testing.T) {
-	// Две роли с одинаковым правом → один effective-permission.
+	// Two roles with the same right → one effective permission.
 	e := mustEnforcer(t,
 		fixtureRole{name: "a", operators: []string{"archon-dup"}, permissions: []string{"soul.list"}},
 		fixtureRole{name: "b", operators: []string{"archon-dup"}, permissions: []string{"soul.list", "incarnation.run"}},
@@ -96,8 +96,8 @@ func TestPermissionsOf_Dedup(t *testing.T) {
 }
 
 func TestPermissionsOf_ScopeIncluded(t *testing.T) {
-	// Роль с default_scope=coven=prod + bare incarnation.run → в effective-
-	// permission scope несёт covens=[prod], НЕ unrestricted.
+	// Role with default_scope=coven=prod + bare incarnation.run → the
+	// effective-permission scope carries covens=[prod], NOT unrestricted.
 	e := mustEnforcer(t, fixtureRole{
 		name:         "prod-runner",
 		operators:    []string{"archon-prod"},
@@ -121,18 +121,19 @@ func TestPermissionsOf_ScopeIncluded(t *testing.T) {
 	}
 }
 
-// TestPermissionsOf_Revoked_Empty (ADR-047 G1) — ревокнутый Архонт получает
-// пустой список прав на `GET /v1/me/permissions` независимо от ролей. Это
-// зеркало revoked-shortcut в Check/ResolvePurview: до фикса PermissionsOf имел
-// раннюю ветку `IsWildcard → [{Wildcard:true}]` ПЕРЕД revoked-проверкой, поэтому
-// revoked cluster-admin (`*`) видел свой бывший wildcard-маркер. Guard ловит
-// регресс этого revoked-shortcut для wildcard И scoped операторов.
+// TestPermissionsOf_Revoked_Empty (ADR-047 G1) — a revoked Archon gets an
+// empty rights list from `GET /v1/me/permissions` regardless of roles. This
+// mirrors the revoked-shortcut in Check/ResolvePurview: before the fix,
+// PermissionsOf had an early `IsWildcard → [{Wildcard:true}]` branch BEFORE
+// the revoked check, so a revoked cluster-admin (`*`) still saw its former
+// wildcard marker. This guard catches a regression of that revoked-shortcut
+// for both wildcard and scoped operators.
 func TestPermissionsOf_Revoked_Empty(t *testing.T) {
 	cases := []struct {
 		name        string
 		permissions []string
-		// defaultScope — ненулевой для scoped-кейса (право ограничено coven-scope,
-		// но revoked всё равно режет до пустоты).
+		// defaultScope is non-empty for the scoped case (the right is
+		// restricted to a coven scope, but revoked still cuts it to empty).
 		defaultScope string
 	}{
 		{name: "wildcard", permissions: []string{"*"}},
@@ -159,9 +160,9 @@ func TestPermissionsOf_Revoked_Empty(t *testing.T) {
 	}
 }
 
-// TestPermissionsOf_NotRevoked_HappyPath — контроль: те же роли БЕЗ revoked
-// отдают реальные права (фикс revoked-ветки не сломал happy-path). Wildcard →
-// маркер, scoped → реальный scope.
+// TestPermissionsOf_NotRevoked_HappyPath is the control: the same roles
+// WITHOUT revoked yield real rights (the revoked-branch fix didn't break the
+// happy path). Wildcard → marker, scoped → real scope.
 func TestPermissionsOf_NotRevoked_HappyPath(t *testing.T) {
 	t.Run("wildcard", func(t *testing.T) {
 		e := mustEnforcer(t, fixtureRole{
@@ -192,7 +193,7 @@ func TestPermissionsOf_NotRevoked_HappyPath(t *testing.T) {
 }
 
 func TestPermissionsOf_DeterministicOrder(t *testing.T) {
-	// Стабильный порядок — UI/тестам нужна детерминированность (как каталог).
+	// Stable order — UI/tests need determinism (like the catalog).
 	e := mustEnforcer(t, fixtureRole{
 		name:        "ops",
 		operators:   []string{"archon-ops"},

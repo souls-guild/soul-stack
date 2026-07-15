@@ -8,24 +8,25 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// maxSoulprintExprLen — верхняя граница длины soulprint-CEL-предиката селектора
-// (ADR-047 S2b). Параллель [maxRegexLen]: cap длины — дешёвая страховка против
-// раздутых выражений в снимке (compile-cost/память на load). CEL-go не
-// подвержен catastrophic backtracking, ограничение — про объём, не про ReDoS.
+// maxSoulprintExprLen is the upper bound on the length of a selector's
+// soulprint CEL predicate (ADR-047 S2b). Parallels [maxRegexLen]: the length
+// cap is cheap insurance against bloated expressions in the snapshot
+// (compile cost/memory on load). CEL-go isn't subject to catastrophic
+// backtracking, so this limits size, not ReDoS.
 const maxSoulprintExprLen = 512
 
-// soulprintEngine — общий валидатор/eval-движок soulprint-предикатов RBAC-
-// селектора. Sandbox-режим [cel.NewFlowControl]: объявлен `soulprint.self.*`
-// (ADR-018 каноническая форма), запрещены vault()/now()/register/state
-// (scope-предикат = чистая функция от фактов хоста), а soulprint.hosts/
-// soulprint.where отсекаются изоляцией allowHosts=false. Движок потокобезопасен
-// (compile-cache под RWMutex) и переиспользуется всеми Check/load — НЕ
-// дублируем CEL-движок проекта.
+// soulprintEngine is the shared validator/eval engine for RBAC selector
+// soulprint predicates. Sandbox mode [cel.NewFlowControl]: `soulprint.self.*`
+// is declared (ADR-018 canonical form), vault()/now()/register/state are
+// forbidden (a scope predicate must be a pure function of host facts), and
+// soulprint.hosts/soulprint.where are cut off by the allowHosts=false
+// isolation. The engine is thread-safe (compile cache under RWMutex) and
+// reused by every Check/load — we don't duplicate the project's CEL engine.
 //
-// Собирается лениво один раз: конструктор [cel.NewFlowControl] не зависит от
-// рантайма (ошибка только при программной несовместимости cel-go), но строить
-// его в init() значит платить на каждый импорт пакета; ленивая сборка под
-// sync.Once дешевле.
+// Built lazily, once: the [cel.NewFlowControl] constructor doesn't depend on
+// runtime state (it only errors on a cel-go build incompatibility), but
+// building it in init() would mean paying the cost on every package import;
+// lazy construction under sync.Once is cheaper.
 var (
 	soulprintEngineOnce sync.Once
 	soulprintEngineInst *cel.Engine
@@ -39,14 +40,15 @@ func soulprintEngine() (*cel.Engine, error) {
 	return soulprintEngineInst, soulprintEngineErr
 }
 
-// validateSoulprintExpr компилирует soulprint-CEL на load снимка (ADR-047 S2b).
-// Fatal — только compile-фаза: синтаксис, неизвестный корень (register/state/
-// vault/now), host-аксессор (soulprint.hosts → isolation-error). Runtime-no-such-
-// key (предикат ссылается на факт, которого нет в ПУСТЫХ фактах валидации) —
-// НЕ ошибка load (на реальном хосте факт будет): eval против пустого
-// SoulprintSelf даёт [cel.ErrEval], его проглатываем. Так битый CEL фейлит load
-// (как битый regex / unknown-permission), а валидный — нет, без подачи фейковых
-// фактов.
+// validateSoulprintExpr compiles a soulprint CEL predicate at snapshot load
+// time (ADR-047 S2b). Only the compile phase is fatal: syntax, an unknown
+// root (register/state/vault/now), a host accessor (soulprint.hosts →
+// isolation error). A runtime no-such-key (the predicate references a fact
+// absent from the EMPTY validation facts) is NOT a load error (the fact will
+// exist on a real host): eval against an empty SoulprintSelf yields
+// [cel.ErrEval], which we swallow. This way a broken CEL predicate fails load
+// (like a broken regex / unknown permission), while a valid one doesn't —
+// without feeding it fake facts.
 func validateSoulprintExpr(expr string) error {
 	e, err := soulprintEngine()
 	if err != nil {
@@ -61,29 +63,32 @@ func validateSoulprintExpr(expr string) error {
 	if errors.As(evalErr, &ce) || errors.As(evalErr, &ue) {
 		return evalErr
 	}
-	// [cel.ErrEval] на пустых фактах (no-such-key, не-bool на отсутствующем
-	// ключе) — ожидаемо, выражение синтаксически валидно.
+	// [cel.ErrEval] on empty facts (no-such-key, non-bool on a missing key) is
+	// expected — the expression is syntactically valid.
 	var ee *cel.ErrEval
 	if errors.As(evalErr, &ee) {
 		return nil
 	}
-	// Прочее (теоретически недостижимо) — fail-closed: load фейлится.
+	// Anything else (theoretically unreachable) — fail-closed: load fails.
 	return evalErr
 }
 
-// EvalSoulprintExpr вычисляет soulprint-предикат против фактов хоста
-// (`soulprint.self.*`, ADR-018). Готов под слайсы S3/S4 (list-видимость/target):
-// резолвер list/target подаёт реальные SoulprintFacts хоста.
+// EvalSoulprintExpr evaluates a soulprint predicate against host facts
+// (`soulprint.self.*`, ADR-018). Ready for the S3/S4 slices (list
+// visibility/target): the list/target resolver feeds in the host's real
+// SoulprintFacts.
 //
-// Возврат:
-//   - (true, nil)  — предикат истинен (хост в scope);
-//   - (false, nil) — ложен ЛИБО факт отсутствует (no-such-key → default-deny:
-//     отсутствие нужного факта = «не в scope», не ошибка);
-//   - (false, err) — compile-ошибка (битый предикат; в норме отсеян на load).
+// Returns:
+//   - (true, nil)  — the predicate is true (host is in scope);
+//   - (false, nil) — false, OR the fact is missing (no-such-key →
+//     default-deny: a missing fact means "not in scope", not an error);
+//   - (false, err) — compile error (broken predicate; normally caught at
+//     load time).
 //
-// Семантика «runtime-no-match = (false, nil)» симметрична oracle.WhereEvaluator
-// и flow-control-предикатам: недоверенный/неполный facts-снимок не должен
-// ронять резолвер, отсутствие факта трактуется как «не сматчило».
+// The "runtime no-match = (false, nil)" semantics mirror
+// oracle.WhereEvaluator and the flow-control predicates: an untrusted/
+// incomplete facts snapshot must not crash the resolver — a missing fact is
+// treated as "didn't match".
 func EvalSoulprintExpr(expr string, facts map[string]any) (bool, error) {
 	e, err := soulprintEngine()
 	if err != nil {

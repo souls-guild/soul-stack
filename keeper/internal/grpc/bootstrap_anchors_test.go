@@ -8,9 +8,10 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// mutableAnchorSource — TrustAnchorSource с атомарно-сменяемым набором (модель
-// daemon.trustAnchorHolder): SetAnchors подменяет набор, AnchorSetPEM читает
-// текущий. Для теста «bootstrap-reply из живого источника» (R3-S7, architect af7d).
+// mutableAnchorSource — a TrustAnchorSource with an atomically swappable set
+// (models daemon.trustAnchorHolder): SetAnchors replaces the set, AnchorSetPEM
+// reads the current one. For the "bootstrap reply from a live source" test
+// (R3-S7, architect af7d).
 type mutableAnchorSource struct {
 	pems atomic.Pointer[[]string]
 }
@@ -23,10 +24,10 @@ func (s *mutableAnchorSource) AnchorSetPEM() []string {
 	return nil
 }
 
-// TestBootstrap_ApplySigilAnchors_LiveSource — gate-фикс R3-S7: reply читает
-// набор якорей ЖИВЫМ при каждом формировании, а не снимок старта. После
-// SetAnchors следующий reply несёт НОВЫЙ набор (старый Soul между bootstrap и
-// connect получает актуальные якоря — safety для Retire).
+// TestBootstrap_ApplySigilAnchors_LiveSource — gate fix R3-S7: the reply reads
+// the anchor set LIVE every time it's built, not a startup snapshot. After
+// SetAnchors, the next reply carries the NEW set (a Soul between bootstrap and
+// connect gets the current anchors — safety for Retire).
 func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 	src := &mutableAnchorSource{}
 	src.SetAnchors([]string{"PEM-A", "PEM-B"})
@@ -36,7 +37,7 @@ func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	// Reply №1 — стартовый набор.
+	// Reply #1 — the starting set.
 	r1 := &keeperv1.BootstrapReply{}
 	h.applySigilAnchors(r1)
 	if got := r1.GetSigilPubkeyPemSet(); len(got) != 2 || got[0] != "PEM-A" || got[1] != "PEM-B" {
@@ -46,10 +47,10 @@ func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 		t.Errorf("reply1 single = %q, want PEM-A (первый якорь)", r1.GetSigilPubkeyPem())
 	}
 
-	// Ротация: набор сменился (старый PEM-A выведен, добавлены C/D).
+	// Rotation: the set changed (old PEM-A retired, C/D added).
 	src.SetAnchors([]string{"PEM-C", "PEM-D"})
 
-	// Reply №2 — НОВЫЙ набор (а не снимок старта).
+	// Reply #2 — the NEW set (not a startup snapshot).
 	r2 := &keeperv1.BootstrapReply{}
 	h.applySigilAnchors(r2)
 	if got := r2.GetSigilPubkeyPemSet(); len(got) != 2 || got[0] != "PEM-C" || got[1] != "PEM-D" {
@@ -60,8 +61,8 @@ func TestBootstrap_ApplySigilAnchors_LiveSource(t *testing.T) {
 	}
 }
 
-// TestBootstrap_ApplySigilAnchors_Disabled — source nil / пустой набор → оба
-// Sigil-поля reply остаются пустыми (Sigil выключен, bootstrap обратносовместим).
+// TestBootstrap_ApplySigilAnchors_Disabled — nil source / empty set → both
+// Sigil reply fields stay empty (Sigil disabled, bootstrap stays backward-compatible).
 func TestBootstrap_ApplySigilAnchors_Disabled(t *testing.T) {
 	// nil source.
 	h := &bootstrapHandler{deps: BootstrapDeps{}, logger: slog.New(slog.DiscardHandler)}
@@ -71,7 +72,7 @@ func TestBootstrap_ApplySigilAnchors_Disabled(t *testing.T) {
 		t.Errorf("nil source: single=%q set=%v, want empty", r.GetSigilPubkeyPem(), r.GetSigilPubkeyPemSet())
 	}
 
-	// Пустой набор.
+	// Empty set.
 	src := &mutableAnchorSource{}
 	src.SetAnchors(nil)
 	h2 := &bootstrapHandler{deps: BootstrapDeps{SigilAnchorSource: src}, logger: slog.New(slog.DiscardHandler)}

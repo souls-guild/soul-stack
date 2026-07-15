@@ -11,7 +11,7 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// captureAudit — собирает audit-event-ы для проверки в тестах.
+// captureAudit collects audit events for verification in tests.
 type captureAudit struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -67,8 +67,8 @@ func TestNewOutbound_Validation(t *testing.T) {
 	}
 }
 
-// newOutboundForTest — короткий helper для тестов, не требующих
-// cluster-routing-а (Redis=nil → single-instance fallback).
+// newOutboundForTest — a short helper for tests that don't need
+// cluster routing (Redis=nil → single-instance fallback).
 func newOutboundForTest(t *testing.T, m *StreamManager, a audit.Writer) *Outbound {
 	t.Helper()
 	ob, err := NewOutbound(OutboundDeps{
@@ -198,7 +198,7 @@ func TestOutbound_SendSeedRotationReply_NoAuditFromOutbound(t *testing.T) {
 	if got := msg.GetSeedRotationReply(); got == nil {
 		t.Fatalf("payload = %T, want SeedRotationReply", msg.GetPayload())
 	}
-	// Outbound сам audit-event для rotation НЕ пишет (это делает handler).
+	// Outbound itself does NOT write an audit event for rotation (the handler does).
 	if evs := ca.snapshot(); len(evs) != 0 {
 		t.Errorf("audit = %+v, want empty", evs)
 	}
@@ -235,15 +235,17 @@ func TestOutbound_SendSigilSnapshot_HappyPath(t *testing.T) {
 	if snap.GetSigils()[0].GetName() != "template" || snap.GetSigils()[1].GetName() != "hetzner" {
 		t.Errorf("snapshot order/identity = %+v", snap.GetSigils())
 	}
-	// Outbound — чистая «трубопроводная» функция: audit для раздачи snapshot-а
-	// не пишется (он зафиксирован на plugin.allow/plugin.revoke).
+	// Outbound is a pure "pipe" function: no audit is written for
+	// distributing the snapshot (it's already recorded on
+	// plugin.allow/plugin.revoke).
 	if evs := ca.snapshot(); len(evs) != 0 {
 		t.Errorf("audit = %+v, want empty", evs)
 	}
 }
 
-// TestOutbound_SendSigilSnapshot_Empty — пустой/nil snapshot валиден и шлётся как
-// факт «ни один плагин не допущен» (ReplaceAll на Soul-е стирает старый набор).
+// TestOutbound_SendSigilSnapshot_Empty — an empty/nil snapshot is valid and
+// is sent as the fact "no plugin is granted" (ReplaceAll on the Soul clears
+// the old set).
 func TestOutbound_SendSigilSnapshot_Empty(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	out := m.Register("sid")

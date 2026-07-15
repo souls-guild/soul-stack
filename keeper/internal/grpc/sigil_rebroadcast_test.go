@@ -10,8 +10,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TestSigilRecordsToProto_MapsManifestRaw — конвертация набора в транспорт
-// берёт byte-exact ManifestRaw (канон verify, M1), а НЕ JSONB-проекцию Manifest.
+// TestSigilRecordsToProto_MapsManifestRaw — converting the set to the wire
+// format takes byte-exact ManifestRaw (the verify canon, M1), NOT the
+// JSONB Manifest projection.
 func TestSigilRecordsToProto_MapsManifestRaw(t *testing.T) {
 	recs := []*sigil.Sigil{{
 		Namespace:   "core",
@@ -62,8 +63,8 @@ func TestStreamManager_SIDs(t *testing.T) {
 	_ = chB
 }
 
-// TestOutbound_RebroadcastSigils_AllLocalStreams — полный active-набор уходит
-// каждому локально подключённому Soul-у ОДНИМ SigilSnapshot (ReplaceAll, S6c).
+// TestOutbound_RebroadcastSigils_AllLocalStreams — the full active set goes
+// out to every locally connected Soul as ONE SigilSnapshot (ReplaceAll, S6c).
 func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	outA := m.Register("sid-a")
@@ -93,7 +94,7 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 		default:
 			t.Fatalf("%s: ожидался один SigilSnapshot, канал пуст", name)
 		}
-		// Больше ничего в канале быть не должно — ровно один snapshot на стрим.
+		// There should be nothing else in the channel — exactly one snapshot per stream.
 		select {
 		case extra := <-out:
 			t.Fatalf("%s: лишнее сообщение после snapshot: %T", name, extra.GetPayload())
@@ -102,9 +103,9 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 	}
 }
 
-// TestOutbound_RebroadcastSigils_EmptySet — пустой набор шлётся как пустой
-// SigilSnapshot (ReplaceAll стирает кеш на Soul-е, near-instant revoke); каждый
-// локальный Soul считается delivered.
+// TestOutbound_RebroadcastSigils_EmptySet — an empty set is sent as an
+// empty SigilSnapshot (ReplaceAll clears the cache on the Soul, near-instant
+// revoke); every local Soul counts as delivered.
 func TestOutbound_RebroadcastSigils_EmptySet(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	out := m.Register("sid-a")
@@ -128,8 +129,8 @@ func TestOutbound_RebroadcastSigils_EmptySet(t *testing.T) {
 	}
 }
 
-// TestOutbound_RebroadcastSigils_NoStreams — без подключённых Soul-ов раздача
-// безопасна (никому слать).
+// TestOutbound_RebroadcastSigils_NoStreams — with no connected Souls,
+// distribution is safe (nobody to send to).
 func TestOutbound_RebroadcastSigils_NoStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})

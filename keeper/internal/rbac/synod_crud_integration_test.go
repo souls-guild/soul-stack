@@ -1,21 +1,22 @@
 //go:build integration
 
-// CRUD + security e2e Synod-Service (ADR-049, эпик Synod S3). Замыкает на
-// уровне Service+enforcer то, что synod_security_integration_test.go (S2)
-// тестировал на уровне функций subset/self-lockout-ядра:
-//   - CRUD happy-path: CreateSynod → AddOperator → GrantRole → архон получил
-//     permissions через группу (enforcer.Check на свежем снимке);
-//   - escalation e2e: оператор с synod.grant-role/add-operator БЕЗ `*` НЕ может
-//     ни выдать группе `*`-роль, ни ввести себя в `*`-группу (subset 403);
-//   - lockout e2e: delete/remove-operator/revoke-role последнего `*`-пути через
-//     группу → 409 (ErrWouldLockOutCluster), tx откатывается;
-//   - revoked-архон, каскады, 404, 409-дубль/builtin.
+// CRUD + security e2e for Synod-Service (ADR-049, Synod epic S3). Closes, at
+// the Service+enforcer level, what synod_security_integration_test.go (S2)
+// tested at the subset/self-lockout-core function level:
+//   - CRUD happy-path: CreateSynod → AddOperator → GrantRole → archon gets
+//     permissions through the group (enforcer.Check on a fresh snapshot);
+//   - escalation e2e: an operator holding synod.grant-role/add-operator
+//     WITHOUT `*` can neither grant the group a `*`-role nor add itself to a
+//     `*`-group (subset 403);
+//   - lockout e2e: delete/remove-operator/revoke-role of the last `*`-path
+//     through a group → 409 (ErrWouldLockOutCluster), tx rolls back;
+//   - revoked archon, cascades, 404, 409-duplicate/builtin.
 //
-// Делит контейнер / resetRBAC / seedOperator / insertRole / insertRoleScoped /
+// Shares container / resetRBAC / seedOperator / insertRole / insertRoleScoped /
 // newService / membershipCount / roleExists + seedSynod / addToSynod /
-// containsAID (synod_security_integration_test.go) — тот же пакет rbac.
+// containsAID (synod_security_integration_test.go) — same rbac package.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/rbac/
 
@@ -27,7 +28,7 @@ import (
 	"testing"
 )
 
-// synodExists — есть ли группа name в synods.
+// synodExists reports whether group name exists in synods.
 func synodExists(t *testing.T, name string) bool {
 	t.Helper()
 	var n int
@@ -38,7 +39,7 @@ func synodExists(t *testing.T, name string) bool {
 	return n > 0
 }
 
-// synodOperatorCount — число членов группы (synod_operators).
+// synodOperatorCount returns the number of group members (synod_operators).
 func synodOperatorCount(t *testing.T, name string) int {
 	t.Helper()
 	var n int
@@ -49,7 +50,7 @@ func synodOperatorCount(t *testing.T, name string) int {
 	return n
 }
 
-// synodRoleCount — число ролей в bundle группы (synod_roles).
+// synodRoleCount returns the number of roles in the group's bundle (synod_roles).
 func synodRoleCount(t *testing.T, name string) int {
 	t.Helper()
 	var n int
@@ -60,8 +61,9 @@ func synodRoleCount(t *testing.T, name string) int {
 	return n
 }
 
-// effectiveCheck строит свежий enforcer-снимок из БД и проверяет право архона.
-// Доказывает сквозную цепочку «Synod-CRUD → snapshot-сборка union → Check».
+// effectiveCheck builds a fresh enforcer snapshot from the DB and checks an
+// archon's permission. Proves the end-to-end chain "Synod CRUD → snapshot
+// union build → Check".
 func effectiveCheck(t *testing.T, aid, resource, action string, ctxMap map[string]string) error {
 	t.Helper()
 	snap, err := LoadSnapshot(context.Background(), integrationPool)
@@ -76,12 +78,13 @@ func effectiveCheck(t *testing.T, aid, resource, action string, ctxMap map[strin
 }
 
 // ============================================================
-// CRUD HAPPY-PATH — сквозная цепочка с enforcer.Check
+// CRUD HAPPY-PATH — end-to-end chain with enforcer.Check
 // ============================================================
 
-// CreateSynod → GrantRole → AddOperator: архон получает permission роли группы.
-// Через cluster-admin caller (имеет `*`) — subset проходит. enforcer.Check на
-// свежем снимке подтверждает, что union прямые ∪ Synod даёт право члену.
+// CreateSynod → GrantRole → AddOperator: archon gets the group role's
+// permission. Via a cluster-admin caller (holds `*`) — subset passes.
+// enforcer.Check on a fresh snapshot confirms the union direct ∪ Synod grants
+// the member the permission.
 func TestIntegration_SynodCRUD_HappyPath_EffectivePermission(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -90,44 +93,44 @@ func TestIntegration_SynodCRUD_HappyPath_EffectivePermission(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", admin, nil); err != nil {
 		t.Fatalf("grant admin→cluster-admin: %v", err)
 	}
-	// member — целевой архон без прямых ролей.
+	// member — target archon with no direct roles.
 	member := "archon-member"
 	a := admin
 	seedOperator(t, member, &a)
 	insertRole(t, "deployer", "incarnation.run", "soul.list")
 	s := newService(t)
 
-	// 1. Создать группу.
+	// 1. Create the group.
 	if err := s.CreateSynod(ctx, CreateSynodInput{Name: "ops-team", Description: "ops", CallerAID: admin}); err != nil {
 		t.Fatalf("CreateSynod: %v", err)
 	}
 	if !synodExists(t, "ops-team") {
 		t.Fatal("группа не создана")
 	}
-	// 2. Бандлить роль (cluster-admin держит её права через `*` → subset ok).
+	// 2. Bundle the role (cluster-admin holds its permissions via `*` → subset ok).
 	if err := s.GrantRole(ctx, GrantRoleInput{SynodName: "ops-team", RoleName: "deployer", CallerAID: admin}); err != nil {
 		t.Fatalf("GrantRole: %v", err)
 	}
-	// 3. Добавить члена.
+	// 3. Add the member.
 	if err := s.AddOperator(ctx, AddOperatorInput{SynodName: "ops-team", AID: member, CallerAID: admin}); err != nil {
 		t.Fatalf("AddOperator: %v", err)
 	}
 
-	// До этого момента член права incarnation.run не имел — теперь имеет ЧЕРЕЗ
-	// группу (snapshot-union). Проверяем через enforcer.Check.
+	// Until now the member had no incarnation.run permission — now it has it
+	// THROUGH the group (snapshot union). Verify via enforcer.Check.
 	if err := effectiveCheck(t, member, "incarnation", "run", nil); err != nil {
 		t.Errorf("Check(member, incarnation.run) = %v, want nil (право через Synod)", err)
 	}
 	if err := effectiveCheck(t, member, "soul", "list", nil); err != nil {
 		t.Errorf("Check(member, soul.list) = %v, want nil (право через Synod)", err)
 	}
-	// Право, которого роль НЕ даёт — deny.
+	// A permission the role does NOT grant — deny.
 	if err := effectiveCheck(t, member, "operator", "create", nil); err == nil {
 		t.Error("Check(member, operator.create) = nil, want deny (роль такого права не даёт)")
 	}
 }
 
-// List отдаёт развёрнутый bundle и членов.
+// List returns the expanded bundle and members.
 func TestIntegration_SynodCRUD_List(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -173,7 +176,7 @@ func TestIntegration_SynodCRUD_List(t *testing.T) {
 	}
 }
 
-// Идемпотентность: повторные GrantRole/AddOperator — no-op, не ошибка.
+// Idempotency: repeated GrantRole/AddOperator calls are no-ops, not errors.
 func TestIntegration_SynodCRUD_Idempotent(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -208,12 +211,12 @@ func TestIntegration_SynodCRUD_Idempotent(t *testing.T) {
 }
 
 // ============================================================
-// ESCALATION e2e — subset на grant-role / add-operator (ADR-049(f))
+// ESCALATION e2e — subset on grant-role / add-operator (ADR-049(f))
 // ============================================================
 
-// GrantRole-escalation: sub держит synod.grant-role (+create/add) БЕЗ `*`, не
-// может бандлить `*`-роль в группу → subset 403. Иначе: собрал группу с `*`,
-// привязал себя — поднялся до cluster-admin.
+// GrantRole-escalation: sub holds synod.grant-role (+create/add) WITHOUT `*`
+// and cannot bundle a `*`-role into a group → subset 403. Otherwise: build a
+// group with `*`, add yourself — you've escalated to cluster-admin.
 func TestIntegration_SynodEscalation_GrantWildcardRole_Denied(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -228,14 +231,14 @@ func TestIntegration_SynodEscalation_GrantWildcardRole_Denied(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "synod-managers", sub, &alice); err != nil {
 		t.Fatalf("grant sub→synod-managers: %v", err)
 	}
-	// Существует мощная роль с `*` (создана админом).
+	// A powerful role with `*` exists (created by the admin).
 	insertRole(t, "super", "*")
 	s := newService(t)
 
 	if err := s.CreateSynod(ctx, CreateSynodInput{Name: "trap", CallerAID: sub}); err != nil {
 		t.Fatalf("CreateSynod (sub вправе): %v", err)
 	}
-	// sub бандлит `*`-роль → subset обязан запретить (sub `*` не держит).
+	// sub bundles the `*`-role → subset must deny it (sub doesn't hold `*`).
 	err := s.GrantRole(ctx, GrantRoleInput{SynodName: "trap", RoleName: "super", CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld (sub не держит `*`)", err)
@@ -245,9 +248,9 @@ func TestIntegration_SynodEscalation_GrantWildcardRole_Denied(t *testing.T) {
 	}
 }
 
-// GrantRole-escalation, scoped: sub держит incarnation.run on coven=prod (через
-// прямую scoped-роль), бандлит роль с incarnation.run on coven=staging → вне
-// его scope → 403. И bundle роли В scope=prod → ok.
+// GrantRole-escalation, scoped: sub holds incarnation.run on coven=prod (via a
+// direct scoped role) and bundles a role with incarnation.run on
+// coven=staging → outside its scope → 403. Bundling a role IN scope=prod → ok.
 func TestIntegration_SynodEscalation_GrantScopedRole(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -258,7 +261,7 @@ func TestIntegration_SynodEscalation_GrantScopedRole(t *testing.T) {
 	}
 	seedOperator(t, "archon-sub", &alice)
 	sub := "archon-sub"
-	// sub: synod-managers + incarnation.run ограниченный scope=coven=prod.
+	// sub: synod-managers + incarnation.run restricted to scope=coven=prod.
 	insertRole(t, "synod-managers", "synod.create", "synod.grant-role")
 	insertRoleScoped(t, "prod-runner", "coven=prod", "incarnation.run")
 	if err := GrantOperator(ctx, integrationPool, "synod-managers", sub, &alice); err != nil {
@@ -267,7 +270,7 @@ func TestIntegration_SynodEscalation_GrantScopedRole(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "prod-runner", sub, &alice); err != nil {
 		t.Fatalf("grant sub→prod-runner: %v", err)
 	}
-	// Роли для bundle: одна вне scope (staging), одна в scope (prod).
+	// Roles for the bundle: one outside scope (staging), one in scope (prod).
 	insertRole(t, "staging-run", "incarnation.run on coven=staging")
 	insertRole(t, "prod-run", "incarnation.run on coven=prod")
 	s := newService(t)
@@ -275,20 +278,20 @@ func TestIntegration_SynodEscalation_GrantScopedRole(t *testing.T) {
 		t.Fatalf("CreateSynod: %v", err)
 	}
 
-	// staging вне scope=prod → отказ.
+	// staging is outside scope=prod → denied.
 	err := s.GrantRole(ctx, GrantRoleInput{SynodName: "g", RoleName: "staging-run", CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld (staging вне scope=prod)", err)
 	}
-	// prod в scope → ок.
+	// prod is in scope → ok.
 	if err := s.GrantRole(ctx, GrantRoleInput{SynodName: "g", RoleName: "prod-run", CallerAID: sub}); err != nil {
 		t.Fatalf("GrantRole (prod в scope): %v", err)
 	}
 }
 
-// AddOperator-escalation: sub держит synod.add-operator БЕЗ `*`, но cluster-admin
-// собрал группу с `*`-ролью. sub НЕ может ввести себя/другого в эту группу →
-// subset 403 (член получил бы `*`).
+// AddOperator-escalation: sub holds synod.add-operator WITHOUT `*`, but
+// cluster-admin has built a group with a `*`-role. sub CANNOT add
+// itself/another into this group → subset 403 (the member would get `*`).
 func TestIntegration_SynodEscalation_AddToWildcardGroup_Denied(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -303,12 +306,12 @@ func TestIntegration_SynodEscalation_AddToWildcardGroup_Denied(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "adder", sub, &alice); err != nil {
 		t.Fatalf("grant sub→adder: %v", err)
 	}
-	// Группа с `*`-ролью, собранная админом напрямую.
+	// A group with a `*`-role, built directly by the admin.
 	insertRole(t, "super", "*")
 	seedSynod(t, "powerful", "super")
 	s := newService(t)
 
-	// sub вводит себя в `*`-группу → subset обязан запретить.
+	// sub adds itself to the `*`-group → subset must deny it.
 	err := s.AddOperator(ctx, AddOperatorInput{SynodName: "powerful", AID: sub, CallerAID: sub})
 	if !errors.Is(err, ErrPermissionNotHeld) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld (член получил бы `*`)", err)
@@ -318,7 +321,8 @@ func TestIntegration_SynodEscalation_AddToWildcardGroup_Denied(t *testing.T) {
 	}
 }
 
-// AddOperator-OK: caller держит все права bundle группы напрямую → может вводить.
+// AddOperator-OK: caller holds all of the group bundle's permissions
+// directly → can add members.
 func TestIntegration_SynodEscalation_AddOwnedBundle_OK(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -329,7 +333,7 @@ func TestIntegration_SynodEscalation_AddOwnedBundle_OK(t *testing.T) {
 	}
 	seedOperator(t, "archon-sub", &alice)
 	sub := "archon-sub"
-	// sub держит add-operator + soul.list (ровно то, что бандлит группа).
+	// sub holds add-operator + soul.list (exactly what the group bundles).
 	insertRole(t, "adder", "synod.add-operator", "soul.list")
 	if err := GrantOperator(ctx, integrationPool, "adder", sub, &alice); err != nil {
 		t.Fatalf("grant sub→adder: %v", err)
@@ -351,7 +355,7 @@ func TestIntegration_SynodEscalation_AddOwnedBundle_OK(t *testing.T) {
 // SELF-LOCKOUT e2e — delete / remove-operator / revoke-role (ADR-049(f))
 // ============================================================
 
-// DeleteSynod: единственный путь к `*` — через группу. Удаление группы → lockout.
+// DeleteSynod: the only path to `*` is through the group. Deleting the group → lockout.
 func TestIntegration_SynodLockout_Delete_LastAdminViaGroup_Locked(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-grpadmin", nil)
@@ -369,7 +373,7 @@ func TestIntegration_SynodLockout_Delete_LastAdminViaGroup_Locked(t *testing.T) 
 	}
 }
 
-// DeleteSynod-OK: есть второй admin напрямую → удаление группы не лочит.
+// DeleteSynod-OK: a second admin exists directly → deleting the group doesn't lock out.
 func TestIntegration_SynodLockout_Delete_SurvivorDirect_OK(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -377,7 +381,7 @@ func TestIntegration_SynodLockout_Delete_SurvivorDirect_OK(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// bob — admin ТОЛЬКО через группу.
+	// bob — admin ONLY through the group.
 	alice := "archon-alice"
 	seedOperator(t, "archon-bob", &alice)
 	insertRole(t, "grp-admin-role", "*")
@@ -385,7 +389,7 @@ func TestIntegration_SynodLockout_Delete_SurvivorDirect_OK(t *testing.T) {
 	addToSynod(t, "admins-grp", "archon-bob")
 	s := newService(t)
 
-	// Удалить группу — alice остаётся admin напрямую → ok.
+	// Delete the group — alice remains admin directly → ok.
 	if err := s.DeleteSynod(ctx, "admins-grp"); err != nil {
 		t.Fatalf("DeleteSynod (выживший admin напрямую): %v", err)
 	}
@@ -394,8 +398,8 @@ func TestIntegration_SynodLockout_Delete_SurvivorDirect_OK(t *testing.T) {
 	}
 }
 
-// RemoveOperator: член держит `*` ТОЛЬКО через эту группу и он единственный
-// admin → снятие его из группы лочит.
+// RemoveOperator: the member holds `*` ONLY through this group and is the
+// sole admin → removing it from the group locks out.
 func TestIntegration_SynodLockout_RemoveOperator_LastAdmin_Locked(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-grpadmin", nil)
@@ -413,7 +417,7 @@ func TestIntegration_SynodLockout_RemoveOperator_LastAdmin_Locked(t *testing.T) 
 	}
 }
 
-// RemoveOperator-OK: член держит `*` ещё и напрямую → снятие из группы не лочит.
+// RemoveOperator-OK: the member also holds `*` directly → removing it from the group doesn't lock out.
 func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -433,7 +437,7 @@ func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 	if synodOperatorCount(t, "admins-grp") != 0 {
 		t.Error("член не снят")
 	}
-	// admin остаётся через прямой путь.
+	// admin remains through the direct path.
 	admins, err := LockEffectiveClusterAdmins(ctx, beginRoTx(t))
 	if err != nil {
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
@@ -443,8 +447,8 @@ func TestIntegration_SynodLockout_RemoveOperator_AlsoDirect_OK(t *testing.T) {
 	}
 }
 
-// RevokeRole: единственная `*`-роль группы снимается → её члены-admin осиротеют →
-// lockout.
+// RevokeRole: the group's only `*`-role is revoked → its admin members become
+// orphaned → lockout.
 func TestIntegration_SynodLockout_RevokeRole_LastWildcard_Locked(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-grpadmin", nil)
@@ -462,7 +466,7 @@ func TestIntegration_SynodLockout_RevokeRole_LastWildcard_Locked(t *testing.T) {
 	}
 }
 
-// RevokeRole-OK: снимаемая роль не даёт `*` → self-lockout неприменим.
+// RevokeRole-OK: the revoked role doesn't grant `*` → self-lockout doesn't apply.
 func TestIntegration_SynodLockout_RevokeRole_NonWildcard_OK(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -483,11 +487,12 @@ func TestIntegration_SynodLockout_RevokeRole_NonWildcard_OK(t *testing.T) {
 }
 
 // ============================================================
-// REVOKED / КАСКАДЫ / 404 / 409
+// REVOKED / CASCADES / 404 / 409
 // ============================================================
 
-// Revoked-член: ревокнутый архон прав группы НЕ получает (snapshot фильтрует
-// revoked). enforcer.Check деньит даже право, бандленное его группой.
+// Revoked member: a revoked archon does NOT get group permissions (snapshot
+// filters out revoked). enforcer.Check denies even a permission bundled by
+// its group.
 func TestIntegration_SynodRevokedMember_NoEffectivePermission(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -514,14 +519,14 @@ func TestIntegration_SynodRevokedMember_NoEffectivePermission(t *testing.T) {
 		t.Fatalf("revoke member: %v", err)
 	}
 
-	// Snapshot держит revoked-проекцию → Check деньит revoked AID независимо
-	// от ролей (прямых/групповых).
+	// The snapshot carries a revoked projection → Check denies a revoked AID
+	// regardless of roles (direct or group).
 	if err := effectiveCheck(t, member, "incarnation", "run", nil); err == nil {
 		t.Error("Check(revoked member, incarnation.run) = nil, want deny")
 	}
 }
 
-// Каскад: DeleteSynod сносит и synod_operators, и synod_roles группы.
+// Cascade: DeleteSynod tears down both the group's synod_operators and synod_roles.
 func TestIntegration_SynodCascade_DeleteClearsMembershipAndBundle(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -556,9 +561,10 @@ func TestIntegration_SynodCascade_DeleteClearsMembershipAndBundle(t *testing.T) 
 	}
 }
 
-// Каскад role.delete: удаление роли снимает её из bundle всех групп (synod_roles
-// FK ON DELETE CASCADE). DeleteRole с self-lockout-guard уже Synod-aware (S2);
-// здесь проверяем сам каскад на не-`*` роли.
+// Cascade role.delete: deleting a role removes it from the bundle of every
+// group (synod_roles FK ON DELETE CASCADE). DeleteRole's self-lockout guard
+// is already Synod-aware (S2); here we verify the cascade itself on a
+// non-`*` role.
 func TestIntegration_SynodCascade_RoleDeleteRemovesFromBundle(t *testing.T) {
 	resetRBAC(t)
 	insertRole(t, "viewer", "soul.list")
@@ -573,7 +579,7 @@ func TestIntegration_SynodCascade_RoleDeleteRemovesFromBundle(t *testing.T) {
 	}
 }
 
-// 404: мутации над несуществующей группой.
+// 404: mutations on a nonexistent group.
 func TestIntegration_Synod404_UnknownSynod(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -596,7 +602,7 @@ func TestIntegration_Synod404_UnknownSynod(t *testing.T) {
 	}
 }
 
-// 404: remove-operator/revoke-role над несуществующей парой.
+// 404: remove-operator/revoke-role on a nonexistent pair.
 func TestIntegration_Synod404_UnknownPair(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -612,7 +618,7 @@ func TestIntegration_Synod404_UnknownPair(t *testing.T) {
 	}
 }
 
-// 404: grant-role над несуществующей ролью (FK → ErrRoleNotFound).
+// 404: grant-role on a nonexistent role (FK → ErrRoleNotFound).
 func TestIntegration_Synod404_GrantUnknownRole(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -629,7 +635,7 @@ func TestIntegration_Synod404_GrantUnknownRole(t *testing.T) {
 	}
 }
 
-// 404: add-operator над несуществующим AID (FK → ErrOperatorNotFound).
+// 404: add-operator on a nonexistent AID (FK → ErrOperatorNotFound).
 func TestIntegration_Synod404_AddUnknownOperator(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -646,7 +652,7 @@ func TestIntegration_Synod404_AddUnknownOperator(t *testing.T) {
 	}
 }
 
-// 409: дубль create.
+// 409: duplicate create.
 func TestIntegration_Synod409_DuplicateCreate(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -664,7 +670,7 @@ func TestIntegration_Synod409_DuplicateCreate(t *testing.T) {
 	}
 }
 
-// 409: builtin-группу удалять нельзя.
+// 409: a builtin group cannot be deleted.
 func TestIntegration_Synod409_DeleteBuiltin(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -682,7 +688,7 @@ func TestIntegration_Synod409_DeleteBuiltin(t *testing.T) {
 	}
 }
 
-// 422: невалидное имя группы.
+// 422: invalid group name.
 func TestIntegration_Synod422_InvalidName(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()

@@ -6,16 +6,17 @@ import (
 	"testing"
 )
 
-// fixtureRole — плоская форма роли для фикстур этого пакета: имя, привязанные
-// AID-ы, permission-строки. snapshotOf собирает из неё [Snapshot] (источник
-// enforcer-а после hard-cut-а config-RBAC, ADR-028(g)). Внутри пакета rbac
-// нельзя использовать rbactest (циклический импорт), поэтому хелпер локальный.
+// fixtureRole is the flat role shape for this package's fixtures: name,
+// bound AIDs, permission strings. snapshotOf assembles a [Snapshot] from it
+// (the enforcer's source after the config-RBAC hard cut, ADR-028(g)). The
+// rbac package can't use rbactest (import cycle), hence this local helper.
 type fixtureRole struct {
 	name        string
 	operators   []string
 	permissions []string
-	// defaultScope — role default_scope-строка (ADR-047 S1); пустая = NULL
-	// (измерение НЕ введено). Синтаксис как у per-perm-селектора: `coven=v1,v2`.
+	// defaultScope is the role default_scope string (ADR-047 S1); empty = NULL
+	// (dimension NOT introduced). Same syntax as a per-permission selector:
+	// `coven=v1,v2`.
 	defaultScope string
 }
 
@@ -139,14 +140,15 @@ func TestEnforcer_Check_SelectorDeny(t *testing.T) {
 	if err := e.Check("archon-db", "incarnation", "create", map[string]string{"service": "postgres"}); err == nil {
 		t.Errorf("service=postgres should NOT match selector service=redis")
 	}
-	// Контекст без `service` → deny (permission с селектором требует ключ).
+	// Context without `service` → deny (a permission with a selector
+	// requires the key).
 	if err := e.Check("archon-db", "incarnation", "create", nil); err == nil {
 		t.Errorf("nil context should NOT match selector permission")
 	}
 }
 
 func TestEnforcer_Check_MultipleRolesOR(t *testing.T) {
-	// Один AID в двух ролях: union permissions.
+	// One AID in two roles: union of permissions.
 	snap := snapshotOf(
 		fixtureRole{name: "a", operators: []string{"archon-x"}, permissions: []string{"operator.create"}},
 		fixtureRole{name: "b", operators: []string{"archon-x"}, permissions: []string{"soul.list"}},

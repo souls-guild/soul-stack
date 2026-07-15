@@ -5,16 +5,17 @@ import (
 	"testing"
 )
 
-// ADR-047 amendment / ADR-060 п.7 slice 1 — trait-ключ селектора: exact
-// `key:value`-match по incarnation.traits. Параллель state (S2c) / soulprint
-// (S2b), но НЕ CEL-предикат, а точное равенство (как coven): Selector["trait"]
-// несёт нормализованную строку `key:value`, реальный match — incarnation-list/get
-// резолвер (slice 1 п.7). Matches fail-closed (map[string]string-context не несёт
-// nested traits). Семантика slice 1 — OR-измерение Purview.
+// ADR-047 amendment / ADR-060 item 7 slice 1 — trait selector key: exact
+// `key:value` match against incarnation.traits. Parallels state (S2c) /
+// soulprint (S2b), but is NOT a CEL predicate — exact equality (like coven):
+// Selector["trait"] carries the normalized `key:value` string, the actual
+// match happens in the incarnation-list/get resolver (slice 1 item 7).
+// Matches fail-closed (the map[string]string context carries no nested
+// traits). Slice 1 semantics — an OR dimension of Purview.
 
-// --- Парсинг key:value ---
+// --- Parsing key:value ---
 
-// trait=owner:alice парсится в Selector{trait:["owner:alice"]}.
+// trait=owner:alice parses into Selector{trait:["owner:alice"]}.
 func TestParseSelector_Trait_Simple(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on trait=owner:alice`)
 	if err != nil {
@@ -26,7 +27,7 @@ func TestParseSelector_Trait_Simple(t *testing.T) {
 	}
 }
 
-// Точечные/дефисные/подчёркивающие символы в обеих половинах допустимы (reSelValue).
+// Dots/hyphens/underscores are allowed in both halves (reSelValue).
 func TestParseSelector_Trait_DottedValues(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on trait=namespace:dba-ns_01.x`)
 	if err != nil {
@@ -37,7 +38,7 @@ func TestParseSelector_Trait_DottedValues(t *testing.T) {
 	}
 }
 
-// Без `:` — отказ (форма обязана быть key:value).
+// Without `:` — rejected (the form must be key:value).
 func TestParseSelector_Trait_MissingColonRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on trait=owner`)
 	if err == nil {
@@ -45,7 +46,7 @@ func TestParseSelector_Trait_MissingColonRejected(t *testing.T) {
 	}
 }
 
-// Больше одной `:` — отказ (ровно один разделитель).
+// More than one `:` — rejected (exactly one separator).
 func TestParseSelector_Trait_MultipleColonsRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on trait=owner:a:b`)
 	if err == nil {
@@ -53,7 +54,7 @@ func TestParseSelector_Trait_MultipleColonsRejected(t *testing.T) {
 	}
 }
 
-// Пустой ключ / пустое значение — отказ.
+// Empty key / empty value — rejected.
 func TestParseSelector_Trait_EmptyHalvesRejected(t *testing.T) {
 	cases := []string{
 		`incarnation.run on trait=:alice`,
@@ -69,7 +70,7 @@ func TestParseSelector_Trait_EmptyHalvesRejected(t *testing.T) {
 	}
 }
 
-// Недопустимые символы (пробел) в значении — отказ (scalar-only, reSelValue).
+// Invalid characters (space) in the value — rejected (scalar-only, reSelValue).
 func TestParseSelector_Trait_BadCharsRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on trait=owner:al ice`)
 	if err == nil {
@@ -77,10 +78,11 @@ func TestParseSelector_Trait_BadCharsRejected(t *testing.T) {
 	}
 }
 
-// --- Matches: fail-closed без traits в context ---
+// --- Matches: fail-closed without traits in context ---
 
-// Текущий map[string]string-context не несёт nested traits → trait-измерение
-// fail-closed deny (резолвер incarnation-list/get подаст реальный match).
+// The current map[string]string context carries no nested traits → the
+// trait dimension fail-closed denies (the incarnation-list/get resolver
+// supplies the real match).
 func TestMatches_Trait_FailClosedWithoutTraits(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on trait=owner:alice`)
 	if err != nil {
@@ -96,7 +98,7 @@ func TestMatches_Trait_FailClosedWithoutTraits(t *testing.T) {
 
 // --- Purview.TraitExprs ---
 
-// ResolvePurview с trait-permission заполняет Purview.TraitExprs.
+// ResolvePurview with a trait permission populates Purview.TraitExprs.
 func TestResolvePurview_Trait(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "alice-ops", operators: []string{"archon-a"},
@@ -111,7 +113,7 @@ func TestResolvePurview_Trait(t *testing.T) {
 	}
 }
 
-// default_scope=trait наследуется bare-permission-ом (S1 + trait вместе).
+// default_scope=trait is inherited by a bare permission (S1 + trait together).
 func TestResolvePurview_Trait_DefaultScopeInherited(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "alice-ops", operators: []string{"archon-a"},
@@ -127,8 +129,9 @@ func TestResolvePurview_Trait_DefaultScopeInherited(t *testing.T) {
 	}
 }
 
-// trait-only Purview даёт HoldsAction=true (gate видит scoped-роль с одним
-// trait-измерением — иначе оператор получил бы 403 на собственный список).
+// A trait-only Purview gives HoldsAction=true (the gate sees a scoped role
+// with a single trait dimension — otherwise the operator would get a 403 on
+// its own list).
 func TestHoldsAction_TraitOnly(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "alice-ops", operators: []string{"archon-a"},
@@ -139,7 +142,7 @@ func TestHoldsAction_TraitOnly(t *testing.T) {
 	}
 }
 
-// --- subset: trait = string-equality fail-closed (escalation-guard) ---
+// --- subset: trait = string-equality fail-closed (escalation guard) ---
 
 func TestSubset_Trait_StringEquality(t *testing.T) {
 	alice := `incarnation.run on trait=owner:alice`
@@ -149,7 +152,7 @@ func TestSubset_Trait_StringEquality(t *testing.T) {
 		name        string
 		callerRaws  []string
 		grantedRaws []string
-		wantHeld    bool // true → ErrPermissionNotHeld (выдача запрещена)
+		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
 			name:        "идентичная trait-пара → выдача ок",

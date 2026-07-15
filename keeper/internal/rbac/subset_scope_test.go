@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mustScope парсит default_scope-строку в селектор (nil при пустой строке).
+// mustScope parses a default_scope string into a selector (nil for an empty string).
 func mustScope(t *testing.T, raw string) map[string][]string {
 	t.Helper()
 	sc, err := ParseDefaultScope(raw)
@@ -15,26 +15,28 @@ func mustScope(t *testing.T, raw string) map[string][]string {
 	return sc
 }
 
-// TestSubset_DefaultScope_Escalation — least-privilege subset-check С учётом
-// role default_scope обеих сторон (ADR-047 S1, security-fix privilege-escalation).
+// TestSubset_DefaultScope_Escalation is the least-privilege subset check
+// WITH role default_scope on both sides (ADR-047 S1, security fix for
+// privilege escalation).
 //
-// Дыра: subset сравнивал СЫРЫЕ permission-строки без применения default_scope.
-// Caller с ролью default_scope=coven=prod + bare `incarnation.run` имеет
-// эффективный scope = prod, но при выдаче `incarnation.run on coven=staging`
-// сырая bare-perm (Selector==nil) покрывала ЛЮБОЙ coven → грант на staging
-// проходил (эскалация). Фикс: сравниваются ЭФФЕКТИВНЫЕ (resource,action,coven)-
-// точки — bare-perm caller-а наследует его default_scope, bare-perm гранящейся
-// роли — её default_scope.
+// The hole: subset used to compare RAW permission strings without applying
+// default_scope. A caller with a role default_scope=coven=prod + bare
+// `incarnation.run` has an effective scope of prod, but when granting
+// `incarnation.run on coven=staging`, the raw bare perm (Selector==nil)
+// covered ANY coven → the grant to staging would go through (escalation).
+// Fix: compare EFFECTIVE (resource,action,coven) points instead — the
+// caller's bare perm inherits its default_scope, and the granted role's bare
+// perm inherits its own default_scope.
 func TestSubset_DefaultScope_Escalation(t *testing.T) {
 	tests := []struct {
 		name string
-		// caller: его permissions + default_scope роли, через которую они выданы.
+		// caller: its permissions + the default_scope of the role granting them.
 		callerRaws  []string
 		callerScope string
-		// granted: permissions гранящейся роли + её default_scope.
+		// granted: the granted role's permissions + its default_scope.
 		grantedRaws  []string
 		grantedScope string
-		wantHeld     bool // true → ErrPermissionNotHeld (выдача запрещена)
+		wantHeld     bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
 			name:         "ЭСКАЛАЦИЯ: caller scope=prod + bare → выдать coven=staging запрещено",

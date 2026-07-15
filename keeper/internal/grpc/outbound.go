@@ -17,36 +17,36 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// tracer для in-process span-ов EventStream-подсистемы. Берёт глобальный
-// TracerProvider, поднятый [obs.SetupOTel] в main; при OTel disabled
-// провайдер no-op — span-ы бесплатны и код не ветвится (ADR-024 §1.2).
+// tracer for in-process spans of the EventStream subsystem. Uses the global
+// TracerProvider set up by [obs.SetupOTel] in main; when OTel is disabled the
+// provider is no-op — spans are free and the code doesn't need to branch (ADR-024 §1.2).
 var tracer = otel.Tracer("keeper/grpc")
 
-// Outbound — public Keeper-side API для отправки сообщений в EventStream
+// Outbound — public Keeper-side API for sending messages into the EventStream
 // (Keeper → Soul, M2.5 + cluster-mode pub/sub routing).
 //
-// Реализация делегирует enqueue в [StreamManager] и пишет audit-event для
-// дiagnostic-наблюдаемости (`apply.dispatched` / `apply.cancelled`;
-// seed-rotation отдельно через [eventstream_seedrotation.go], потому что
-// сам выпуск seed-а — keeper-internal операция, а не просто отправка).
+// The implementation delegates enqueue to [StreamManager] and writes an audit
+// event for diagnostic observability (`apply.dispatched` / `apply.cancelled`;
+// seed rotation goes through [eventstream_seedrotation.go] separately, since
+// issuing a seed is a keeper-internal operation, not just a send).
 //
-// Cluster-mode routing: если локальный StreamManager не держит SID,
-// Outbound проверяет Redis-lease holder (`soul:<sid>:lock`). holder !=
-// self → publish FromKeeper в Redis pub/sub-канал
-// `outbound:<sid>`, Keeper-holder получает через подписку и
-// форвардит в свой стрим. holder == "" → ErrSoulNotConnected.
-// holder == self без локального стрима → lease inconsistency (стрим
-// закрылся, lease ещё не освободился) — лог + ErrSoulNotConnected.
+// Cluster-mode routing: if the local StreamManager doesn't hold the SID,
+// Outbound checks the Redis lease holder (`soul:<sid>:lock`). holder !=
+// self → publish FromKeeper to the Redis pub/sub channel
+// `outbound:<sid>`; the holder Keeper receives it via subscription and
+// forwards it into its own stream. holder == "" → ErrSoulNotConnected.
+// holder == self with no local stream → lease inconsistency (the stream
+// closed but the lease hasn't been released yet) — log + ErrSoulNotConnected.
 //
-// При nil-Redis (single-instance / dev-сборка) routing деградирует
-// до per-instance: nil lookup → сразу ErrSoulNotConnected.
+// With nil Redis (single-instance / dev build) routing degrades to
+// per-instance: nil lookup → immediate ErrSoulNotConnected.
 //
-// Caller-ы:
-//   - scenario-runner (post-M2.5) — `SendApply` после Keeper-side рендера
-//     destiny;
-//   - Operator API / admin-flow — `SendCancel` на active apply_id;
-//   - seedrotation-handler внутри пакета — `SendSeedRotationReply` после
-//     успешной выдачи нового cert.
+// Callers:
+//   - scenario-runner (post-M2.5) — `SendApply` after Keeper-side destiny
+//     rendering;
+//   - Operator API / admin flow — `SendCancel` on an active apply_id;
+//   - seedrotation-handler within the package — `SendSeedRotationReply` after
+//     successfully issuing a new cert.
 type Outbound struct {
 	manager     *StreamManager
 	auditWriter audit.Writer
@@ -57,34 +57,34 @@ type Outbound struct {
 	metrics *GRPCMetrics
 }
 
-// OutboundDeps — конструкторские параметры [NewOutbound]. Manager /
-// AuditWriter / Logger обязательны; Redis + KID — для cluster-mode
-// routing-а (nil-Redis допустим, single-instance fallback).
+// OutboundDeps — constructor parameters for [NewOutbound]. Manager /
+// AuditWriter / Logger are required; Redis + KID are for cluster-mode
+// routing (nil Redis is allowed, single-instance fallback).
 type OutboundDeps struct {
 	Manager     *StreamManager
 	AuditWriter audit.Writer
 	Logger      *slog.Logger
 
-	// Redis — клиент для проверки SoulLease holder-а и публикации в
-	// pub/sub-канал. nil → cluster-mode routing выключен (lookup на
-	// текущем Keeper-е — единственный путь).
+	// Redis — client for checking the SoulLease holder and publishing to
+	// the pub/sub channel. nil → cluster-mode routing is disabled (lookup
+	// on the current Keeper is the only path).
 	Redis *keeperredis.Client
-	// KID — идентификатор Keeper-инстанса. Обязателен если Redis != nil
-	// (без него невозможны self-фильтрация и определение "это наш
-	// lease"). Пустая строка при nil-Redis допустима.
+	// KID — Keeper instance identifier. Required if Redis != nil (without
+	// it, self-filtering and determining "is this our lease" are
+	// impossible). An empty string is fine when Redis is nil.
 	KID string
 
-	// Metrics — keeper_grpc_*-collectors (ADR-024). nil → dispatch-метрика
-	// выключена (nil-safe методы [GRPCMetrics] — no-op). Должен быть тем же
-	// дескриптором, что в [EventStreamDeps.Metrics] (один Registry).
+	// Metrics — keeper_grpc_* collectors (ADR-024). nil → dispatch metrics
+	// are disabled ([GRPCMetrics] methods are nil-safe no-ops). Should be
+	// the same descriptor as [EventStreamDeps.Metrics] (one Registry).
 	Metrics *GRPCMetrics
 }
 
-// NewOutbound собирает Outbound над зарегистрированным [StreamManager].
+// NewOutbound assembles an Outbound over a registered [StreamManager].
 //
-// auditWriter обязателен — Keeper-side операции (apply-dispatch, cancel)
-// фиксируются в `audit_log` как факт. logger обязателен. Redis +
-// KID — опциональны (nil → cluster-routing отключён).
+// auditWriter is required — Keeper-side operations (apply-dispatch, cancel)
+// are recorded as facts in `audit_log`. logger is required. Redis +
+// KID are optional (nil → cluster routing is disabled).
 func NewOutbound(deps OutboundDeps) (*Outbound, error) {
 	if deps.Manager == nil {
 		return nil, errors.New("grpc: Outbound manager is required")
@@ -108,14 +108,15 @@ func NewOutbound(deps OutboundDeps) (*Outbound, error) {
 	}, nil
 }
 
-// SendApply кладёт `ApplyRequest` в outbound-channel целевого SID.
+// SendApply puts an `ApplyRequest` on the target SID's outbound channel.
 //
-// PM-decision M2.5(2): thread-safe lookup через RWMutex, не блокируется
-// на recv (per-entry chan имеет буфер размером [outboundBufferSize]).
-// PM-decision M2.5(1): на полный буфер → drop+log → [ErrOutboundQueueFull].
+// PM-decision M2.5(2): thread-safe lookup via RWMutex, doesn't block on
+// recv (per-entry chan has a buffer sized [outboundBufferSize]).
+// PM-decision M2.5(1): on a full buffer → drop+log → [ErrOutboundQueueFull].
 //
-// Audit `apply.dispatched` пишется ТОЛЬКО при успешном enqueue/publish.
-// При fail-е caller (scenario-runner) сам решает, что писать как `run.completed`.
+// The `apply.dispatched` audit event is written ONLY on successful
+// enqueue/publish. On failure, the caller (scenario-runner) decides what to
+// write as `run.completed`.
 func (o *Outbound) SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error {
 	if req == nil {
 		return errors.New("grpc: ApplyRequest is nil")
@@ -124,10 +125,10 @@ func (o *Outbound) SendApply(ctx context.Context, sid string, req *keeperv1.Appl
 		Payload: &keeperv1.FromKeeper_ApplyRequest{ApplyRequest: req},
 	}
 
-	// In-process span на единицу dispatch-а (не на весь long-lived стрим).
-	// sid / apply_id — атрибуты для фильтрации трейса (в metric-labels их
-	// нельзя — cardinality, ADR-024 §2.2); секретов нет. При OTel disabled
-	// tracer no-op — Start/End бесплатны.
+	// In-process span per dispatch unit (not for the whole long-lived stream).
+	// sid / apply_id are attributes for trace filtering (can't go in
+	// metric labels — cardinality, ADR-024 §2.2); no secrets involved. With
+	// OTel disabled the tracer is a no-op — Start/End are free.
 	ctx, span := tracer.Start(ctx, "grpc.apply_dispatch",
 		trace.WithAttributes(
 			attribute.String("sid", sid),
@@ -136,13 +137,13 @@ func (o *Outbound) SendApply(ctx context.Context, sid string, req *keeperv1.Appl
 	)
 	defer span.End()
 
-	// Инжект trace-context span-а grpc.apply_dispatch в ApplyRequest, чтобы
-	// Soul поднял apply.run как child (сквозная трасса оператор → Keeper → Soul,
-	// ADR-024). Propagator — глобальный composite TraceContext из obs.SetupOTel.
-	// req мутируется намеренно: он формируется per-dispatch, общего владельца нет.
-	// В cluster-mode req сериализуется в Redis as-is (deliver → PublishOutbound),
-	// поэтому trace_context уезжает внутри protobuf-байтов автоматически — отдельной
-	// обработки на pub/sub-пути не требуется.
+	// Inject the grpc.apply_dispatch span's trace context into ApplyRequest so
+	// Soul raises apply.run as its child (end-to-end trace operator → Keeper →
+	// Soul, ADR-024). Propagator is the global composite TraceContext from
+	// obs.SetupOTel. req is mutated intentionally: it's built per-dispatch with
+	// no shared owner. In cluster-mode req is serialized to Redis as-is
+	// (deliver → PublishOutbound), so trace_context travels inside the
+	// protobuf bytes automatically — no extra handling needed on the pub/sub path.
 	carrier := propagation.MapCarrier{}
 	otel.GetTextMapPropagator().Inject(ctx, carrier)
 	req.TraceContext = carrier["traceparent"]
@@ -165,8 +166,8 @@ func (o *Outbound) SendApply(ctx context.Context, sid string, req *keeperv1.Appl
 			"tasks_count": len(req.GetTasks()),
 		},
 	}); err != nil {
-		// Сообщение уже доставлено — fail audit-а не отменяет dispatch
-		// (паттерн идентичен Bootstrap-handler-у).
+		// The message is already delivered — an audit failure doesn't undo
+		// the dispatch (same pattern as the Bootstrap handler).
 		o.logger.Warn("outbound: audit apply.dispatched failed (message enqueued)",
 			slog.String("sid", sid),
 			slog.String("apply_id", req.GetApplyId()),
@@ -176,17 +177,18 @@ func (o *Outbound) SendApply(ctx context.Context, sid string, req *keeperv1.Appl
 	return nil
 }
 
-// SendErrand кладёт `ErrandRequest` в outbound-channel целевого SID.
+// SendErrand puts an `ErrandRequest` on the target SID's outbound channel.
 //
-// LOCAL-ONLY вариант: caller (`errand.Dispatcher`) уже принял решение по
-// holder-у lease-а (`ReadSoulLeaseHolder`) и зовёт SendErrand только когда
-// holder == self. Поэтому здесь cluster-pub/sub-fallback тот же, что у
-// [SendApply] (на случай race-у lease-смены между ReadHolder и Send): если
-// локального стрима не оказалось, deliver сам пробросит в Redis. Caller
-// получит [ErrSoulNotConnected] при полной неудаче.
+// LOCAL-ONLY variant: the caller (`errand.Dispatcher`) has already decided
+// on the lease holder (`ReadSoulLeaseHolder`) and calls SendErrand only when
+// holder == self. So the cluster pub/sub fallback here is the same as
+// [SendApply] (in case of a lease-change race between ReadHolder and Send):
+// if there's no local stream, deliver forwards to Redis itself. The caller
+// gets [ErrSoulNotConnected] on total failure.
 //
-// Audit-event пишет dispatcher (`errand.invoked`/`completed`/…) — это
-// чисто «трубопроводная» функция, как [SendSeedRotationReply] / [SendAugurReply].
+// The audit event is written by the dispatcher (`errand.invoked`/`completed`/…)
+// — this is purely a "pipe" function, like [SendSeedRotationReply] /
+// [SendAugurReply].
 func (o *Outbound) SendErrand(ctx context.Context, sid string, req *keeperv1.ErrandRequest) error {
 	if req == nil {
 		return errors.New("grpc: ErrandRequest is nil")
@@ -197,15 +199,16 @@ func (o *Outbound) SendErrand(ctx context.Context, sid string, req *keeperv1.Err
 	return o.deliver(ctx, sid, msg, "errand", req.GetErrandId())
 }
 
-// PublishErrand — REMOTE-ONLY путь Errand-dispatch-а (cross-keeper).
-// Используется `errand.Dispatcher` когда holder lease — НЕ наш KID:
-// publish прямо в `outbound:<sid>`, holder-Keeper форвардит в свой стрим.
+// PublishErrand — REMOTE-ONLY path for errand dispatch (cross-keeper).
+// Used by `errand.Dispatcher` when the lease holder is NOT our KID:
+// publishes straight to `outbound:<sid>`, and the holder Keeper forwards it
+// into its own stream.
 //
-// Отдельная функция от SendErrand: чтобы Dispatcher мог явно выбрать
-// remote-путь без round-trip-а «попробуем local → fallback на Redis»
-// (это делает deliver, но dispatcher хочет короче — local-стрима тут
-// быть не должно по lease-семантике). При ошибке publish-а / 0
-// subscribers вернёт [ErrSoulNotConnected].
+// A separate function from SendErrand: so the Dispatcher can explicitly
+// choose the remote path without the "try local → fallback to Redis"
+// round-trip (that's what deliver does, but the dispatcher wants it
+// shorter — a local stream shouldn't exist here per lease semantics). On a
+// publish error / 0 subscribers, returns [ErrSoulNotConnected].
 func (o *Outbound) PublishErrand(ctx context.Context, sid string, req *keeperv1.ErrandRequest) error {
 	if req == nil {
 		return errors.New("grpc: ErrandRequest is nil")
@@ -235,15 +238,17 @@ func (o *Outbound) PublishErrand(ctx context.Context, sid string, req *keeperv1.
 	return nil
 }
 
-// SendCancelErrand кладёт `CancelErrand` в outbound-channel целевого SID
-// (ADR-033, slice E5).
+// SendCancelErrand puts a `CancelErrand` on the target SID's outbound
+// channel (ADR-033, slice E5).
 //
-// LOCAL-ONLY вариант: симметрично [SendErrand], caller (`errand.Dispatcher`)
-// уже принял решение по holder-у lease-а — здесь deliver сам пробросит в Redis
-// pub/sub на случай race-у lease-смены. При полной неудаче — [ErrSoulNotConnected].
+// LOCAL-ONLY variant: symmetric to [SendErrand], the caller
+// (`errand.Dispatcher`) has already decided on the lease holder — deliver
+// forwards to Redis pub/sub itself in case of a lease-change race. On total
+// failure — [ErrSoulNotConnected].
 //
-// Audit-event пишет dispatcher (`errand.cancelled` — отдельный event-type, с
-// инициатором AID); это «трубопроводная» функция без audit, паттерн [SendErrand].
+// The audit event is written by the dispatcher (`errand.cancelled` — a
+// separate event type, with the initiating AID); this is a "pipe" function
+// with no audit of its own, same pattern as [SendErrand].
 func (o *Outbound) SendCancelErrand(ctx context.Context, sid, errandID string) error {
 	if errandID == "" {
 		return errors.New("grpc: CancelErrand errandID is empty")
@@ -256,11 +261,12 @@ func (o *Outbound) SendCancelErrand(ctx context.Context, sid, errandID string) e
 	return o.deliver(ctx, sid, msg, "errand-cancel", errandID)
 }
 
-// PublishCancelErrand — REMOTE-ONLY путь cancel-а (cross-keeper, ADR-033
-// slice E5). Используется `errand.Dispatcher` когда holder lease — НЕ наш KID:
-// publish прямо в `outbound:<sid>`, holder-Keeper форвардит в свой стрим.
+// PublishCancelErrand — REMOTE-ONLY path for cancel (cross-keeper, ADR-033
+// slice E5). Used by `errand.Dispatcher` when the lease holder is NOT our
+// KID: publishes straight to `outbound:<sid>`, and the holder Keeper
+// forwards it into its own stream.
 //
-// Паттерн идентичен [PublishErrand]: 0 subscribers → [ErrSoulNotConnected].
+// Same pattern as [PublishErrand]: 0 subscribers → [ErrSoulNotConnected].
 func (o *Outbound) PublishCancelErrand(ctx context.Context, sid, errandID string) error {
 	if errandID == "" {
 		return errors.New("grpc: CancelErrand errandID is empty")
@@ -292,11 +298,12 @@ func (o *Outbound) PublishCancelErrand(ctx context.Context, sid, errandID string
 	return nil
 }
 
-// SendCancel кладёт `CancelApply` в outbound-channel.
+// SendCancel puts a `CancelApply` on the outbound channel.
 //
-// PM-decision M2.5(3): best-effort signal — Keeper не отслеживает active
-// apply_id Soul-side. Soul-side ApplyRunner проверяет ctx.Done()/cancel-
-// channel и шлёт `RunResult` со `status: CANCELLED` в ответ.
+// PM-decision M2.5(3): best-effort signal — Keeper doesn't track the
+// active apply_id on the Soul side. The Soul-side ApplyRunner checks
+// ctx.Done()/the cancel channel and sends back a `RunResult` with
+// `status: CANCELLED`.
 func (o *Outbound) SendCancel(ctx context.Context, sid string, applyID, reason string) error {
 	if applyID == "" {
 		return errors.New("grpc: CancelApply applyID is empty")
@@ -330,11 +337,12 @@ func (o *Outbound) SendCancel(ctx context.Context, sid string, applyID, reason s
 	return nil
 }
 
-// SendSeedRotationReply кладёт `SeedRotationReply` в outbound-channel.
+// SendSeedRotationReply puts a `SeedRotationReply` on the outbound channel.
 //
-// Audit для seed-rotation пишется отдельно в [handleSeedRotationRequest]
-// (`soul.seed-rotated`) — Outbound сам не пишет audit для этого канала,
-// чтобы не дублировать корреляцию. Чистая «трубопроводная» функция.
+// The audit event for seed rotation is written separately in
+// [handleSeedRotationRequest] (`soul.seed-rotated`) — Outbound itself
+// doesn't write audit for this channel, to avoid duplicating correlation.
+// A pure "pipe" function.
 func (o *Outbound) SendSeedRotationReply(ctx context.Context, sid string, reply *keeperv1.SeedRotationReply) error {
 	if reply == nil {
 		return errors.New("grpc: SeedRotationReply is nil")
@@ -345,11 +353,12 @@ func (o *Outbound) SendSeedRotationReply(ctx context.Context, sid string, reply 
 	return o.deliver(ctx, sid, msg, "seed-rotation-reply", "")
 }
 
-// SendAugurReply кладёт `AugurReply` в outbound-channel целевого SID (ADR-025,
-// augur.md §5). Чисто «трубопроводная» функция — audit (`augur.fetch_brokered`
-// / `augur.access_denied`) пишет сам augur-handler (см. [handleAugurRequest]),
-// потому что решение allow/deny и факт чтения известны там, а не на уровне
-// отправки. Паттерн идентичен [SendSeedRotationReply].
+// SendAugurReply puts an `AugurReply` on the target SID's outbound channel
+// (ADR-025, augur.md §5). Purely a "pipe" function — the audit
+// (`augur.fetch_brokered` / `augur.access_denied`) is written by the augur
+// handler itself (see [handleAugurRequest]), because the allow/deny
+// decision and the fact of the read are known there, not at the send
+// level. Same pattern as [SendSeedRotationReply].
 func (o *Outbound) SendAugurReply(ctx context.Context, sid string, reply *keeperv1.AugurReply) error {
 	if reply == nil {
 		return errors.New("grpc: AugurReply is nil")
@@ -360,18 +369,18 @@ func (o *Outbound) SendAugurReply(ctx context.Context, sid string, reply *keeper
 	return o.deliver(ctx, sid, msg, "augur-reply", reply.GetRequestId())
 }
 
-// SendSigilSnapshot кладёт `SigilSnapshot` (полный active-набор) в
-// outbound-channel целевого SID (ADR-026(h), Вариант A).
+// SendSigilSnapshot puts a `SigilSnapshot` (the full active set) on the
+// target SID's outbound channel (ADR-026(h), Option A).
 //
-// Snapshot — единственный авторитетный источник active-набора на Soul-е:
-// применяется как ReplaceAll, отсутствующий в наборе допуск Soul забывает
-// (near-instant revoke, S6c). Чисто «трубопроводная» функция — audit не пишется
-// (выдача/отзыв допуска уже зафиксированы в `audit_log` на `plugin.allow`/
-// `plugin.revoke`; раздача — лишь репликация состояния, паттерн идентичен
-// [SendSeedRotationReply]).
+// The snapshot is the sole authoritative source of the active set on the
+// Soul: it's applied as ReplaceAll, and a grant missing from the set is
+// forgotten by the Soul (near-instant revoke, S6c). Purely a "pipe"
+// function — no audit is written (grant/revoke are already recorded in
+// `audit_log` under `plugin.allow`/`plugin.revoke`; distribution is just
+// state replication, same pattern as [SendSeedRotationReply]).
 //
-// nil-sigils допустимы (пустой snapshot = «ни один плагин не допущен» — валидное
-// состояние, его и надо донести Soul-у, чтобы он стёр старый набор).
+// nil sigils are allowed (an empty snapshot = "no plugin is granted" — a
+// valid state that needs to reach the Soul so it clears its old set).
 func (o *Outbound) SendSigilSnapshot(ctx context.Context, sid string, sigils []*keeperv1.PluginSigil) error {
 	msg := &keeperv1.FromKeeper{
 		Payload: &keeperv1.FromKeeper_SigilSnapshot{
@@ -381,27 +390,30 @@ func (o *Outbound) SendSigilSnapshot(ctx context.Context, sid string, sigils []*
 	return o.deliver(ctx, sid, msg, "sigil-snapshot", "")
 }
 
-// RebroadcastSigils раздаёт переданный active-набор печатей доверия каждому
-// Soul-у, чей EventStream висит ЛОКАЛЬНО на этом Keeper-инстансе (ADR-026(h),
-// S6c), ОДНИМ [keeperv1.SigilSnapshot] на стрим (ReplaceAll).
+// RebroadcastSigils distributes the given active set of trust seals to
+// every Soul whose EventStream is held LOCALLY on this Keeper instance
+// (ADR-026(h), S6c), as ONE [keeperv1.SigilSnapshot] per stream (ReplaceAll).
 //
-// Вызывается по cluster-wide invalidate-сигналу (`sigil:invalidate`): после
-// allow/revoke на любой ноде каждая нода re-broadcast-ит свежий набор своим
-// подключённым Soul-ам. Так закрывается near-instant revoke: Soul ReplaceAll-ом
-// забывает отозванный допуск, не дожидаясь reconnect-а.
+// Called on a cluster-wide invalidate signal (`sigil:invalidate`): after an
+// allow/revoke on any node, every node re-broadcasts the fresh set to its
+// connected Souls. This is how near-instant revoke works: the Soul forgets
+// the revoked grant via ReplaceAll without waiting for a reconnect.
 //
-// Только локальные стримы (StreamManager.SIDs): cluster-fanout обеспечивает сам
-// pub/sub — каждая нода раздаёт СВОИМ Soul-ам. Cluster-mode pub/sub-форвардинг
-// через `outbound:<sid>` здесь НЕ задействуется (раздачей чужих Soul-ов
-// занимается их собственная нода по тому же invalidate-сигналу).
+// Local streams only (StreamManager.SIDs): cluster fanout is handled by
+// pub/sub itself — each node distributes to ITS OWN Souls. Cluster-mode
+// pub/sub forwarding via `outbound:<sid>` is NOT used here (distributing to
+// other nodes' Souls is that node's own job, driven by the same invalidate
+// signal).
 //
-// Устойчиво к per-stream сбоям: drop одного Soul-а (полный буфер / закрытый
-// стрим) логируется и НЕ прерывает раздачу остальным — на следующем reconnect-е
-// этот Soul возьмёт свежий snapshot connect-time. Возвращает число Soul-ов,
-// которым snapshot ушёл успешно (для метрики/лога caller-а).
+// Resilient to per-stream failures: dropping one Soul (full buffer / closed
+// stream) is logged and does NOT interrupt distribution to the rest — that
+// Soul will pick up a fresh connect-time snapshot on its next reconnect.
+// Returns the number of Souls the snapshot was delivered to successfully
+// (for the caller's metric/log).
 //
-// sigils — полный active-набор; пустой набор тоже шлётся как факт (snapshot с
-// пустым sigils[] = ни один допуск не активен → Soul стирает кеш, S6c).
+// sigils is the full active set; an empty set is also sent as a fact (a
+// snapshot with empty sigils[] means no grant is active → the Soul clears
+// its cache, S6c).
 func (o *Outbound) RebroadcastSigils(ctx context.Context, sigils []*keeperv1.PluginSigil) int {
 	sids := o.manager.SIDs()
 	delivered := 0
@@ -423,19 +435,22 @@ func (o *Outbound) RebroadcastSigils(ctx context.Context, sigils []*keeperv1.Plu
 	return delivered
 }
 
-// SendSigilTrustAnchors кладёт `SigilTrustAnchors` (полный набор trust-anchor-ов
-// подписи Sigil) в outbound-channel целевого SID (ADR-026(h), R3-S6).
+// SendSigilTrustAnchors puts `SigilTrustAnchors` (the full set of Sigil
+// signature trust anchors) on the target SID's outbound channel
+// (ADR-026(h), R3-S6).
 //
-// Семантика ReplaceAll: набор — единственный авторитетный источник якорей на
-// Soul-е, применяется как полная замена holder-а ([pluginhost.AnchorSet.SetAnchors]).
-// Якорь вне нового набора Soul «забывает» (retired-ключ перестаёт верифицировать).
-// Чисто «трубопроводная» функция — audit не пишется (ротация ключей зафиксирована
-// в `audit_log` на rotation-handler-е S7; раздача — лишь репликация набора,
-// паттерн идентичен [SendSigilSnapshot]).
+// ReplaceAll semantics: the set is the sole authoritative source of anchors
+// on the Soul, applied as a full replacement of the holder
+// ([pluginhost.AnchorSet.SetAnchors]). An anchor outside the new set is
+// "forgotten" by the Soul (the retired key stops verifying). Purely a
+// "pipe" function — no audit is written (key rotation is recorded in
+// `audit_log` by the S7 rotation handler; distribution is just set
+// replication, same pattern as [SendSigilSnapshot]).
 //
-// nil/пустой pubkeyPEM допустим (пустой набор = «Sigil выключен / якорей нет» —
-// валидное состояние; Soul fail-closed по no_trust_anchor защитит). Best-effort
-// раздача по локальным стримам — в [RebroadcastTrustAnchors].
+// A nil/empty pubkeyPEM is allowed (an empty set = "Sigil disabled / no
+// anchors" — a valid state; the Soul's no_trust_anchor fail-closed behavior
+// protects it). Best-effort distribution across local streams is in
+// [RebroadcastTrustAnchors].
 func (o *Outbound) SendSigilTrustAnchors(ctx context.Context, sid string, pubkeyPEM []string) error {
 	msg := &keeperv1.FromKeeper{
 		Payload: &keeperv1.FromKeeper_SigilTrustAnchors{
@@ -445,24 +460,28 @@ func (o *Outbound) SendSigilTrustAnchors(ctx context.Context, sid string, pubkey
 	return o.deliver(ctx, sid, msg, "sigil-trust-anchors", "")
 }
 
-// RebroadcastTrustAnchors раздаёт переданный набор trust-anchor-ов каждому Soul-у,
-// чей EventStream висит ЛОКАЛЬНО на этом Keeper-инстансе (ADR-026(h), R3-S6),
-// одним [keeperv1.SigilTrustAnchors] на стрим (ReplaceAll).
+// RebroadcastTrustAnchors distributes the given set of trust anchors to
+// every Soul whose EventStream is held LOCALLY on this Keeper instance
+// (ADR-026(h), R3-S6), as one [keeperv1.SigilTrustAnchors] per stream
+// (ReplaceAll).
 //
-// Вызывается по cluster-wide сигналу `sigil:anchors-changed` (после ротации ключей
-// подписи на любой ноде каждая нода re-broadcast-ит свежий набор своим Soul-ам) и
-// daemon-watcher-ом «keeper Signer hot-reload». Cluster-fanout обеспечивает сам
-// pub/sub — каждая нода раздаёт СВОИМ Soul-ам, чужих не трогает (cluster-mode
-// pub/sub-форвардинг через `outbound:<sid>` здесь НЕ задействуется — паттерн
-// идентичен [RebroadcastSigils]).
+// Called on the cluster-wide `sigil:anchors-changed` signal (after a
+// signing-key rotation on any node, every node re-broadcasts the fresh set
+// to its Souls) and by the "keeper Signer hot-reload" daemon watcher.
+// Cluster fanout is handled by pub/sub itself — each node distributes to
+// ITS OWN Souls and leaves others alone (cluster-mode pub/sub forwarding
+// via `outbound:<sid>` is NOT used here — same pattern as
+// [RebroadcastSigils]).
 //
-// Устойчиво к per-stream сбоям: drop одного Soul-а (полный буфер / закрытый стрим)
-// логируется и НЕ прерывает раздачу остальным — на следующем reconnect-е этот Soul
-// возьмёт свежий набор connect-time. Возвращает число Soul-ов, которым набор ушёл
-// успешно (для метрики/лога caller-а).
+// Resilient to per-stream failures: dropping one Soul (full buffer / closed
+// stream) is logged and does NOT interrupt distribution to the rest — that
+// Soul will pick up a fresh connect-time set on its next reconnect. Returns
+// the number of Souls the set was delivered to successfully (for the
+// caller's metric/log).
 //
-// pubkeyPEM — полный набор якорей; пустой набор тоже шлётся как факт (пустой =
-// «Sigil выключен / якорей нет» → Soul стирает holder, fail-closed verify).
+// pubkeyPEM is the full set of anchors; an empty set is also sent as a fact
+// (empty = "Sigil disabled / no anchors" → the Soul clears its holder,
+// fail-closed verify).
 func (o *Outbound) RebroadcastTrustAnchors(ctx context.Context, pubkeyPEM []string) int {
 	sids := o.manager.SIDs()
 	delivered := 0
@@ -484,20 +503,20 @@ func (o *Outbound) RebroadcastTrustAnchors(ctx context.Context, pubkeyPEM []stri
 	return delivered
 }
 
-// deliver — общая логика доставки FromKeeper по трём путям:
+// deliver — the common logic for delivering FromKeeper across three paths:
 //
-//  1. Локальный StreamManager держит SID → enqueue (выйти на полный
-//     буфер → ErrOutboundQueueFull).
-//  2. Cluster-mode: Redis-lease holder != self → publish в pub/sub-канал
-//     `outbound:<sid>`. Subscribers=0 → лог + ErrSoulNotConnected
-//     (никто не слушает — Soul реконнектится).
-//  3. Cluster-mode inconsistency: holder == self, но локального стрима
-//     нет → лог warn + ErrSoulNotConnected (lease ещё не освободился
-//     после disconnect-а).
-//  4. Никто не держит → ErrSoulNotConnected.
+//  1. The local StreamManager holds the SID → enqueue (full buffer →
+//     ErrOutboundQueueFull).
+//  2. Cluster-mode: Redis lease holder != self → publish to the pub/sub
+//     channel `outbound:<sid>`. Subscribers=0 → log + ErrSoulNotConnected
+//     (nobody's listening — the Soul will reconnect).
+//  3. Cluster-mode inconsistency: holder == self but there's no local
+//     stream → log warn + ErrSoulNotConnected (the lease hasn't been
+//     released yet after a disconnect).
+//  4. Nobody holds it → ErrSoulNotConnected.
 //
-// kind / applyID — для логов и диагностики (apply_id может быть пуст
-// для seed-rotation-reply).
+// kind / applyID are for logs and diagnostics (apply_id can be empty for
+// seed-rotation-reply).
 func (o *Outbound) deliver(ctx context.Context, sid string, msg *keeperv1.FromKeeper, kind, applyID string) error {
 	if entry := o.manager.lookup(sid); entry != nil {
 		if !entry.send(msg) {
@@ -528,9 +547,10 @@ func (o *Outbound) deliver(ctx context.Context, sid string, msg *keeperv1.FromKe
 		return fmt.Errorf("%w: %s", ErrSoulNotConnected, sid)
 	}
 	if holder == o.kid {
-		// Lease наш, но стрима локально нет — disconnect между Recv и
-		// lease.Release. Caller получит NotConnected; на следующем
-		// reconnect-е Soul возьмёт lease у нас же или у другого Keeper-а.
+		// The lease is ours, but there's no local stream — a disconnect
+		// happened between Recv and lease.Release. The caller gets
+		// NotConnected; on the next reconnect the Soul will take the lease
+		// either from us again or from another Keeper.
 		o.logger.Warn("outbound: local lease without active stream",
 			slog.String("sid", sid),
 			slog.String("kid", o.kid),
@@ -550,9 +570,10 @@ func (o *Outbound) deliver(ctx context.Context, sid string, msg *keeperv1.FromKe
 		return fmt.Errorf("%w: %s", ErrSoulNotConnected, sid)
 	}
 	if n == 0 {
-		// Holder есть в lease, но не подписан на канал — race с Unregister-ом
-		// на той стороне (стрим закрылся, lease ещё жив TTL/3..TTL секунд).
-		// Семантика та же что у NotConnected.
+		// A holder exists in the lease but isn't subscribed to the channel —
+		// a race with Unregister on that side (the stream closed, the lease
+		// is still alive for TTL/3..TTL seconds). Same semantics as
+		// NotConnected.
 		o.logger.Warn("outbound: pub/sub publish reached zero subscribers",
 			slog.String("sid", sid),
 			slog.String("holder_kid", holder),

@@ -22,9 +22,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// errBeginner — BootstrapPool, у которого Begin всегда падает. QueryRow
-// отдаёт валидный активный токен, чтобы pre-check прошёл и handler дошёл до
-// транзакции (и проксировал её ошибку как Internal).
+// errBeginner — a BootstrapPool whose Begin always fails. QueryRow
+// returns a valid active token so the pre-check passes and the handler
+// reaches the transaction (and proxies its error as Internal).
 type errBeginner struct{ err error }
 
 func (e errBeginner) Begin(_ context.Context) (pgx.Tx, error) {
@@ -43,9 +43,9 @@ func (e errBeginner) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, err
 	return nil, nil
 }
 
-// activeTokenRow — pgx.Row, имитирующий строку bootstrap_tokens с активным
-// (не сожжённым, не истёкшим) токеном для заданного SID. Колонки —
-// в порядке selectByHashSQL: token_id, sid, token_hash, created_at,
+// activeTokenRow — a pgx.Row simulating a bootstrap_tokens row with an active
+// (not burned, not expired) token for a given SID. Columns are in
+// selectByHashSQL order: token_id, sid, token_hash, created_at,
 // expires_at, used_at, used_by_kid, created_by_aid.
 type activeTokenRow struct{ sid string }
 
@@ -55,16 +55,16 @@ func (r activeTokenRow) Scan(dest ...any) error {
 	*(dest[2].(*string)) = "0000000000000000000000000000000000000000000000000000000000000000"
 	*(dest[3].(*time.Time)) = time.Now().UTC().Add(-time.Minute)
 	*(dest[4].(*time.Time)) = time.Now().UTC().Add(time.Hour)
-	// used_at / used_by_kid / created_by_aid — nil-pointer-цели (активный токен).
+	// used_at / used_by_kid / created_by_aid — nil-pointer targets (active token).
 	*(dest[5].(**time.Time)) = nil
 	*(dest[6].(**string)) = nil
 	*(dest[7].(**string)) = nil
 	return nil
 }
 
-// vaultPoolFake — BootstrapPool с настраиваемым pre-check-результатом.
-// notFound=true → QueryRow отдаёт ErrNoRows (мусорный токен), early-reject.
-// Begin не вызывается в early-reject-тестах.
+// vaultPoolFake — a BootstrapPool with a configurable pre-check result.
+// notFound=true → QueryRow returns ErrNoRows (junk token), early-reject.
+// Begin is not called in early-reject tests.
 type vaultPoolFake struct{ notFound bool }
 
 func (p vaultPoolFake) Begin(_ context.Context) (pgx.Tx, error) {
@@ -86,7 +86,7 @@ func (p vaultPoolFake) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, e
 	return nil, nil
 }
 
-// signerStub — CSRSigner, возвращающий заранее заданный результат / ошибку.
+// signerStub — a CSRSigner that returns a predetermined result / error.
 type signerStub struct {
 	res *keepervault.SignedCertificate
 	err error
@@ -96,8 +96,8 @@ func (s signerStub) SignCSR(_ context.Context, _, _, _ string) (*keepervault.Sig
 	return s.res, s.err
 }
 
-// countingSigner — CSRSigner со счётчиком вызовов. Для проверки M3:
-// early-reject мусорного токена НЕ должен дёргать Vault (calls == 0).
+// countingSigner — a CSRSigner with a call counter. For verifying M3:
+// early-rejecting a junk token must NOT touch Vault (calls == 0).
 type countingSigner struct {
 	calls int
 	res   *keepervault.SignedCertificate
@@ -125,8 +125,8 @@ func TestBootstrap_InvalidSID(t *testing.T) {
 	}
 }
 
-// TestBootstrap_ReservedSID — Soul с зарезервированным sid (keeper) отклоняется
-// до Vault/DB: reject синтетики прогона на bootstrap (NIM-36).
+// TestBootstrap_ReservedSID — a Soul with a reserved sid (keeper) is rejected
+// before Vault/DB: reject run synthetics at bootstrap (NIM-36).
 func TestBootstrap_ReservedSID(t *testing.T) {
 	h := newBootstrapHandler(BootstrapDeps{
 		Pool: fakeTxBeginner{}, VaultClient: fakeSigner{}, AuditWriter: nopAudit{},
@@ -211,8 +211,8 @@ func TestBootstrap_VaultErr_TransientUnavailable(t *testing.T) {
 	}
 }
 
-// TestBootstrap_VaultBadCert — Vault вернул не-PEM «cert». Должна
-// сложиться Internal.
+// TestBootstrap_VaultBadCert — Vault returned a non-PEM "cert". Should
+// result in Internal.
 func TestBootstrap_VaultBadCert(t *testing.T) {
 	h := newBootstrapHandler(BootstrapDeps{
 		Pool: vaultPoolFake{notFound: false},
@@ -234,8 +234,8 @@ func TestBootstrap_VaultBadCert(t *testing.T) {
 	}
 }
 
-// TestBootstrap_TxErr_AfterValidCert — Vault выдал реальный cert,
-// транзакция падает на Begin → ожидаем Internal.
+// TestBootstrap_TxErr_AfterValidCert — Vault issued a real cert,
+// the transaction fails on Begin → expect Internal.
 func TestBootstrap_TxErr_AfterValidCert(t *testing.T) {
 	certPEM := makeFakeCertPEM(t)
 	h := newBootstrapHandler(BootstrapDeps{
@@ -258,10 +258,10 @@ func TestBootstrap_TxErr_AfterValidCert(t *testing.T) {
 	}
 }
 
-// TestBootstrap_CSRCommonNameMismatch — CSR с CN ≠ запрашиваемый SID
-// отвергается InvalidArgument ДО Vault SignCSR (defense-in-depth, crypto).
-// countingSigner.calls обязан остаться 0: невалидный CN не должен триггерить
-// PKI-round-trip.
+// TestBootstrap_CSRCommonNameMismatch — a CSR with CN ≠ the requested SID
+// is rejected with InvalidArgument BEFORE Vault SignCSR (defense-in-depth, crypto).
+// countingSigner.calls must stay 0: an invalid CN must not trigger a
+// PKI round trip.
 func TestBootstrap_CSRCommonNameMismatch(t *testing.T) {
 	signer := &countingSigner{}
 	h := newBootstrapHandler(BootstrapDeps{
@@ -274,8 +274,8 @@ func TestBootstrap_CSRCommonNameMismatch(t *testing.T) {
 	_, err := h.Bootstrap(context.Background(), &keeperv1.BootstrapRequest{
 		Sid:            "host.example.com",
 		BootstrapToken: "tok",
-		// CSR подписан под ЧУЖОЙ CN — атакующий просит cert на host.example.com,
-		// но кладёт CSR с CN=evil.example.com.
+		// CSR is signed under a DIFFERENT CN — the attacker requests a cert for
+		// host.example.com but supplies a CSR with CN=evil.example.com.
 		CsrPem: makeCSRPEM(t, "evil.example.com"),
 	})
 	if got := status.Code(err); got != codes.InvalidArgument {
@@ -286,8 +286,8 @@ func TestBootstrap_CSRCommonNameMismatch(t *testing.T) {
 	}
 }
 
-// TestBootstrap_CSREmptyCommonName — CSR с пустым CN (нет Subject.CommonName)
-// тоже отвергается InvalidArgument ДО Vault, не считается совпадением с SID.
+// TestBootstrap_CSREmptyCommonName — a CSR with an empty CN (no Subject.CommonName)
+// is also rejected with InvalidArgument BEFORE Vault; it does not count as matching the SID.
 func TestBootstrap_CSREmptyCommonName(t *testing.T) {
 	signer := &countingSigner{}
 	h := newBootstrapHandler(BootstrapDeps{
@@ -310,8 +310,8 @@ func TestBootstrap_CSREmptyCommonName(t *testing.T) {
 	}
 }
 
-// TestBootstrap_CSRMalformedPEM — мусорный (не-PEM) csr_pem отвергается
-// InvalidArgument ДО Vault: парсинг CSR падает на pem.Decode.
+// TestBootstrap_CSRMalformedPEM — a junk (non-PEM) csr_pem is rejected
+// with InvalidArgument BEFORE Vault: CSR parsing fails at pem.Decode.
 func TestBootstrap_CSRMalformedPEM(t *testing.T) {
 	signer := &countingSigner{}
 	h := newBootstrapHandler(BootstrapDeps{
@@ -334,8 +334,8 @@ func TestBootstrap_CSRMalformedPEM(t *testing.T) {
 	}
 }
 
-// TestBootstrap_EarlyReject_NoVaultCall — M3: мусорный (несуществующий)
-// токен отвергается ДО Vault-sign-а. countingSigner.calls обязан остаться 0.
+// TestBootstrap_EarlyReject_NoVaultCall — M3: a junk (nonexistent)
+// token is rejected BEFORE Vault-sign. countingSigner.calls must stay 0.
 func TestBootstrap_EarlyReject_NoVaultCall(t *testing.T) {
 	signer := &countingSigner{}
 	h := newBootstrapHandler(BootstrapDeps{
@@ -348,8 +348,8 @@ func TestBootstrap_EarlyReject_NoVaultCall(t *testing.T) {
 	_, err := h.Bootstrap(context.Background(), &keeperv1.BootstrapRequest{
 		Sid:            "host.example.com",
 		BootstrapToken: "garbage-token",
-		// Валидный CSR с правильным CN — чтобы тест проверял именно token-precheck,
-		// а не CSR-валидацию (которая стоит раньше).
+		// A valid CSR with the correct CN — so the test exercises the
+		// token pre-check specifically, not CSR validation (which runs earlier).
 		CsrPem: makeCSRPEM(t, "host.example.com"),
 	})
 	if got := status.Code(err); got != codes.PermissionDenied {
@@ -360,13 +360,13 @@ func TestBootstrap_EarlyReject_NoVaultCall(t *testing.T) {
 	}
 }
 
-// TestBootstrap_EarlyReject_WrongSID — токен существует и активен, но SID в
-// запросе не совпадает с привязкой токена → anti-enum PermissionDenied и
-// никакого Vault-вызова.
+// TestBootstrap_EarlyReject_WrongSID — the token exists and is active, but the
+// SID in the request doesn't match the token's binding → anti-enum PermissionDenied
+// and no Vault call.
 func TestBootstrap_EarlyReject_WrongSID(t *testing.T) {
 	signer := &countingSigner{}
 	h := newBootstrapHandler(BootstrapDeps{
-		// activeTokenRow привязан к host.example.com; запрос придёт с другим SID.
+		// activeTokenRow is bound to host.example.com; the request comes with a different SID.
 		Pool:        vaultPoolFake{notFound: false},
 		VaultClient: signer,
 		AuditWriter: nopAudit{},
@@ -376,9 +376,9 @@ func TestBootstrap_EarlyReject_WrongSID(t *testing.T) {
 	_, err := h.Bootstrap(context.Background(), &keeperv1.BootstrapRequest{
 		Sid:            "other.example.com",
 		BootstrapToken: "tok",
-		// CSR-CN совпадает с запрошенным SID (other.example.com) — CSR-валидация
-		// проходит, отказ приходит из token-precheck (токен привязан к
-		// host.example.com), что и проверяет тест.
+		// CSR-CN matches the requested SID (other.example.com) — CSR validation
+		// passes; the rejection comes from the token pre-check (the token is bound
+		// to host.example.com), which is exactly what the test verifies.
 		CsrPem: makeCSRPEM(t, "other.example.com"),
 	})
 	if got := status.Code(err); got != codes.PermissionDenied {
@@ -389,8 +389,8 @@ func TestBootstrap_EarlyReject_WrongSID(t *testing.T) {
 	}
 }
 
-// TestBootstrap_Ping — Ping реализован независимо от Bootstrap, должен
-// проходить даже без рабочих deps.
+// TestBootstrap_Ping — Ping is implemented independently of Bootstrap; it
+// must pass even without working deps.
 func TestBootstrap_Ping(t *testing.T) {
 	h := newBootstrapHandler(BootstrapDeps{KID: "kid-x"}, discardLogger(t))
 	reply, err := h.Ping(context.Background(), &keeperv1.PingRequest{})
@@ -430,13 +430,13 @@ func pemBlock(t *testing.T, typ string, body []byte) []byte {
 	return []byte(b.String())
 }
 
-// blockToWriter — io.Writer-обёртка над strings.Builder для pem.Encode.
+// blockToWriter — an io.Writer wrapper over strings.Builder for pem.Encode.
 type blockToWriter struct{ b *strings.Builder }
 
 func (w *blockToWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
 
-// makeFakeCertPEM генерит self-signed RSA-cert и возвращает PEM. Используется
-// в тесте transaction-фейл-после-Vault: x509.ParseCertificate должна пройти.
+// makeFakeCertPEM generates a self-signed RSA cert and returns its PEM. Used
+// by the transaction-fails-after-Vault test: x509.ParseCertificate must succeed.
 func makeFakeCertPEM(t *testing.T) []byte {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -460,10 +460,10 @@ func makeFakeCertPEM(t *testing.T) []byte {
 
 func bigIntOne() *big.Int { return big.NewInt(1) }
 
-// makeCSRPEM генерит валидный RSA-CSR с заданным CommonName и возвращает PEM.
-// Пустой cn → CSR без Subject.CommonName (для теста empty-CN-reject). Подпись
-// настоящая (x509.CreateCertificateRequest), парсинг в validateCSRCommonName
-// проходит, проверяется именно CN.
+// makeCSRPEM generates a valid RSA CSR with the given CommonName and returns its PEM.
+// Empty cn → a CSR without Subject.CommonName (for the empty-CN-reject test). The
+// signature is real (x509.CreateCertificateRequest); parsing in validateCSRCommonName
+// succeeds, and it's specifically the CN that gets checked.
 func makeCSRPEM(t *testing.T, cn string) []byte {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)

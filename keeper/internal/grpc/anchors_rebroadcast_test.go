@@ -7,8 +7,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TestOutbound_RebroadcastTrustAnchors_AllLocalStreams — набор PEM-якорей уходит
-// каждому локально подключённому Soul-у ОДНИМ SigilTrustAnchors (ReplaceAll, R3-S6).
+// TestOutbound_RebroadcastTrustAnchors_AllLocalStreams — the PEM anchor set goes
+// out to every locally connected Soul as ONE SigilTrustAnchors (ReplaceAll, R3-S6).
 func TestOutbound_RebroadcastTrustAnchors_AllLocalStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	outA := m.Register("sid-a")
@@ -46,8 +46,8 @@ func TestOutbound_RebroadcastTrustAnchors_AllLocalStreams(t *testing.T) {
 	}
 }
 
-// TestOutbound_RebroadcastTrustAnchors_EmptySet — пустой набор шлётся как пустой
-// SigilTrustAnchors (Soul стирает holder, near-instant retire).
+// TestOutbound_RebroadcastTrustAnchors_EmptySet — an empty set is sent as an empty
+// SigilTrustAnchors (Soul clears its holder, near-instant retire).
 func TestOutbound_RebroadcastTrustAnchors_EmptySet(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	out := m.Register("sid-a")
@@ -71,8 +71,8 @@ func TestOutbound_RebroadcastTrustAnchors_EmptySet(t *testing.T) {
 	}
 }
 
-// TestOutbound_RebroadcastTrustAnchors_NoStreams — без подключённых Soul-ов
-// раздача безопасна (никому слать).
+// TestOutbound_RebroadcastTrustAnchors_NoStreams — with no Souls connected,
+// the broadcast is safe (nothing to send to).
 func TestOutbound_RebroadcastTrustAnchors_NoStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})
@@ -81,8 +81,8 @@ func TestOutbound_RebroadcastTrustAnchors_NoStreams(t *testing.T) {
 	}
 }
 
-// TestOutbound_SendSigilTrustAnchors_DeliversToLocalStream — единичная отправка
-// набора локальному стриму.
+// TestOutbound_SendSigilTrustAnchors_DeliversToLocalStream — a single send of
+// the set to a local stream.
 func TestOutbound_SendSigilTrustAnchors_DeliversToLocalStream(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	out := m.Register("sid-a")

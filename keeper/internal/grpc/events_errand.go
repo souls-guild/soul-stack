@@ -9,31 +9,31 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// handleErrandResult — обработчик payload-а [keeperv1.ErrandResult]
-// (ADR-033, slice E2). Симметричен handleRunResult, но БЕЗ
-// state_changes / apply_runs / incarnation-commit-а: Errand НЕ мутирует
-// incarnation.state (ADR-033 §4).
+// handleErrandResult — handler for the [keeperv1.ErrandResult] payload
+// (ADR-033, slice E2). Symmetric to handleRunResult, but WITHOUT
+// state_changes / apply_runs / an incarnation commit: an Errand does NOT
+// mutate incarnation.state (ADR-033 §4).
 //
-// Обязанности:
+// Responsibilities:
 //
-//  1. Нормализовать stdout/stderr/output через secret-masking + cap 64 KiB
-//     (defense-in-depth: Soul-side errand-runner делает то же, но keeper —
-//     write-path для журналов/audit).
-//  2. Опубликовать ResultEvent в applybus с kind=KindErrand* (terminal-
-//     mapping по статусу) → Dispatcher.waitForResult / SSE-subscriber
-//     (если позже подключим UI-стрим) получат событие.
+//  1. Normalize stdout/stderr/output via secret masking + a 64 KiB cap
+//     (defense-in-depth: the Soul-side errand runner does the same, but the
+//     keeper is the write path for logs/audit).
+//  2. Publish a ResultEvent to applybus with kind=KindErrand* (terminal
+//     mapping by status) → Dispatcher.waitForResult / SSE subscribers
+//     (if we wire up a UI stream later) receive the event.
 //
-// Audit-events `errand.completed`/`errand.failed`/`errand.timed_out` пишет
-// Dispatcher из waitForResult — он же владеет инициатором (StartedByAID) и
-// корреляцией. Здесь, в gRPC-handler-е, информации об инициаторе нет
-// (proto несёт только errand_id), писать audit преждевременно — получится
-// событие без archon_aid.
+// The `errand.completed`/`errand.failed`/`errand.timed_out` audit events are
+// written by the Dispatcher from waitForResult — it owns the initiator
+// (StartedByAID) and the correlation. Here, in the gRPC handler, there's no
+// initiator information (the proto only carries errand_id), so writing audit
+// here would be premature — it'd produce an event without archon_aid.
 //
-// ApplyBus=nil (dev-сборка без applybus) → drop (диагностика в логах).
-// Аналогично handleRunResult — handler не валит стрим из-за best-effort
-// pub/sub-канала.
+// ApplyBus=nil (dev build without applybus) → drop (diagnostics in the logs).
+// Same as handleRunResult — the handler doesn't fail the stream over a
+// best-effort pub/sub channel.
 func (h *eventStreamHandler) handleErrandResult(ctx context.Context, sid, sessionID string, ev *keeperv1.ErrandResult) {
-	_ = ctx // ctx используется только для audit, который здесь не пишется.
+	_ = ctx // ctx is only used for audit, which isn't written here.
 	if ev == nil {
 		h.logger.Warn("eventstream: ErrandResult payload is nil",
 			slog.String("sid", sid), slog.String("session_id", sessionID))
@@ -55,12 +55,12 @@ func (h *eventStreamHandler) handleErrandResult(ctx context.Context, sid, sessio
 	status := errand.StatusFromProto(ev.GetStatus())
 	kind := errandKindFromStatus(status)
 
-	// Secret-masking + cap. Soul-side errand-runner делает то же, но
-	// keeper — write-path для журналов/audit/SSE: дублируем как защиту
-	// от случайного proto-bypass-а или ранней-pre-cap-сборки клиента.
+	// Secret masking + cap. The Soul-side errand runner does the same, but
+	// the keeper is the write path for logs/audit/SSE: we duplicate it as a
+	// safeguard against an accidental proto bypass or an older pre-cap client build.
 	stdoutMasked, stdoutTrunc := errand.MaskAndCapBytes(ev.GetStdout())
 	stderrMasked, stderrTrunc := errand.MaskAndCapBytes(ev.GetStderr())
-	// Эхо: если Soul уже отрезал — флаг с обеих сторон выставляем.
+	// Echo: if the Soul already truncated, we set the flag from both sides.
 	if ev.GetStdoutTruncated() {
 		stdoutTrunc = true
 	}
@@ -96,9 +96,9 @@ func (h *eventStreamHandler) handleErrandResult(ctx context.Context, sid, sessio
 	})
 }
 
-// errandKindFromStatus — терминальный EventKind для applybus-publish-а.
-// Несвязные с терминалом статусы (RUNNING) сюда попадать не должны (Soul
-// шлёт ErrandResult только финально); defensive default — failed.
+// errandKindFromStatus — the terminal EventKind for the applybus publish.
+// Non-terminal statuses (RUNNING) should never reach here (the Soul only
+// sends ErrandResult at the end); defensive default is failed.
 func errandKindFromStatus(s errand.Status) applybus.EventKind {
 	switch s {
 	case errand.StatusSuccess:

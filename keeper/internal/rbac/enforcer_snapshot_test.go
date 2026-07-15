@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// Тест-кейсы Enforcer-от-БД-снимка (ADR-028(d)). Симметричны config-based
-// TestEnforcer_* в enforcer_test.go — источник сменён на Snapshot, матчинг
-// тот же. Доказывают, что переход config→БД не меняет семантику Check.
+// Test cases for the Enforcer-from-DB-snapshot path (ADR-028(d)). Mirror the
+// config-based TestEnforcer_* in enforcer_test.go — the source changed to
+// Snapshot, matching semantics stay the same. Prove that the config→DB
+// switch doesn't change Check's semantics.
 
 func TestEnforcerFromSnapshot_NilSnapshot(t *testing.T) {
 	e, err := NewEnforcerFromSnapshot(nil)
@@ -182,9 +183,9 @@ func TestEnforcerFromSnapshot_HasWildcard(t *testing.T) {
 	}
 }
 
-// TestCheck_RevokedAID_Denied — ADR-014 Amendment 2026-05-27: ревокнутый AID
-// получает ErrOperatorRevoked даже при наличии `*`-роли. Проверка идёт ПЕРЕД
-// permission-логикой — иначе bare `*` пропустил бы revoked AID.
+// TestCheck_RevokedAID_Denied — ADR-014 Amendment 2026-05-27: a revoked AID
+// gets ErrOperatorRevoked even with a `*` role. The check runs BEFORE
+// permission logic — otherwise a bare `*` would let a revoked AID through.
 func TestCheck_RevokedAID_Denied(t *testing.T) {
 	revokedAt := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
 	snap := &Snapshot{
@@ -200,16 +201,16 @@ func TestCheck_RevokedAID_Denied(t *testing.T) {
 	if !errors.Is(err, ErrOperatorRevoked) {
 		t.Fatalf("Check(revoked AID): %v, want ErrOperatorRevoked", err)
 	}
-	// errors.Is(ErrPermissionDenied) НЕ должен сработать — revoke семантически
-	// не «нет прав», а «не доверенный токен» (parity с expired).
+	// errors.Is(ErrPermissionDenied) must NOT match — a revoke semantically
+	// means "untrusted token", not "no rights" (parity with expired).
 	if errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("Check(revoked AID): %v неожиданно совпал с ErrPermissionDenied", err)
 	}
 }
 
-// TestCheck_RevokedAID_DeniedEvenWithoutRoles — revoked AID без ролей всё
-// равно даёт ErrOperatorRevoked (а не ErrPermissionDenied «no roles»):
-// revoke-проверка идёт ДО проверки наличия ролей.
+// TestCheck_RevokedAID_DeniedEvenWithoutRoles — a revoked AID with no roles
+// still gets ErrOperatorRevoked (not ErrPermissionDenied "no roles"): the
+// revoke check runs BEFORE the roles check.
 func TestCheck_RevokedAID_DeniedEvenWithoutRoles(t *testing.T) {
 	snap := &Snapshot{
 		Roles:   map[string][]string{},
@@ -222,9 +223,9 @@ func TestCheck_RevokedAID_DeniedEvenWithoutRoles(t *testing.T) {
 	}
 }
 
-// TestCheck_ActiveAIDNotAffectedByRevokedMap — активный AID, чьего ID нет в
-// Revoked, проходит как раньше; revoke-проекция не нарушает существующую
-// семантику.
+// TestCheck_ActiveAIDNotAffectedByRevokedMap — an active AID whose ID isn't
+// in Revoked passes as before; the revoke projection doesn't break existing
+// semantics.
 func TestCheck_ActiveAIDNotAffectedByRevokedMap(t *testing.T) {
 	snap := &Snapshot{
 		Roles:      map[string][]string{"admin": {"*"}},
@@ -237,8 +238,9 @@ func TestCheck_ActiveAIDNotAffectedByRevokedMap(t *testing.T) {
 	}
 }
 
-// TestEnforcerFromSnapshot_DanglingMembership — membership на роль вне каталога
-// игнорируется (защита от рассинхрона; FK в норме это исключает).
+// TestEnforcerFromSnapshot_DanglingMembership — membership pointing to a role
+// outside the catalog is ignored (desync protection; the FK normally rules
+// this out).
 func TestEnforcerFromSnapshot_DanglingMembership(t *testing.T) {
 	snap := &Snapshot{
 		Roles:      map[string][]string{"cluster-admin": {"*"}},

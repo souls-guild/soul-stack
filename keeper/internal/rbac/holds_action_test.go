@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
-// HoldsAction (ADR-047 §г amendment 2026-06-04) — existence-gate read-эндпоинтов.
-// Тесты доказывают: gate видит ВСЕ четыре измерения Purview как «существование
-// права», bare/`*` → true, no-permission → false, Deny → false (forward-compat
-// S2+). Это другой вопрос, чем scope-aware Check: gate не оперирует контекстом.
+// HoldsAction (ADR-047 §d amendment 2026-06-04) is the existence gate for
+// read endpoints. These tests prove: the gate sees ALL four Purview
+// dimensions as "right exists", bare/`*` → true, no-permission → false,
+// Deny → false (forward-compat S2+). This is a different question than
+// scope-aware Check: the gate doesn't operate on context.
 
 func TestHoldsAction_BarePermission_True(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
@@ -28,8 +29,8 @@ func TestHoldsAction_Wildcard_True(t *testing.T) {
 	}
 }
 
-// Existence держится по КАЖДОМУ измерению Purview по отдельности —
-// scoped-оператор любого вида проходит gate (сужение делает handler).
+// Existence holds for EACH Purview dimension independently — a scoped
+// operator of any kind passes the gate (narrowing is done by the handler).
 func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 	cases := []struct {
 		name string
@@ -49,11 +50,12 @@ func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 			if !e.HoldsAction("archon-s", "soul", "list") {
 				t.Errorf("%s-scoped %q: HoldsAction = false, want true (existence видит измерение)", tc.name, tc.perm)
 			}
-			// Контрольный инвариант: scope-aware Check с nil-контекстом для
-			// scoped-permission даёт deny — ровно тот ложный deny, ради
-			// которого введён HoldsAction. Если этот assert когда-нибудь
-			// упадёт (Check начнёт пускать scoped при nil-контексте), gate
-			// можно будет упростить — но пока он именно зачем нужен.
+			// Control invariant: scope-aware Check with a nil context for
+			// a scoped permission gives a deny — exactly the false deny
+			// HoldsAction was introduced for. If this assert ever fails
+			// (Check starts letting scoped permissions through with a nil
+			// context), the gate could be simplified — but that's exactly
+			// why it exists today.
 			if err := e.Check("archon-s", "soul", "list", nil); err == nil {
 				t.Errorf("%s-scoped: Check(nil) = nil, ожидался ложный deny (обоснование HoldsAction)", tc.name)
 			}
@@ -61,11 +63,12 @@ func TestHoldsAction_ScopedEachDimension_True(t *testing.T) {
 	}
 }
 
-// TestHoldsAction_Revoked_False (ADR-047 G1) — прямой guard на revoked-gap:
-// ревокнутый Архонт с активной ролью любого измерения НЕ держит действие через
-// gate. Существование права не «перевешивает» revoked — иначе RequireAction
-// пустил бы revoked-оператора к read-souls. Зеркало revoked-shortcut в Check
-// (enforcer.go), проведённое через ResolvePurview→Deny→false.
+// TestHoldsAction_Revoked_False (ADR-047 G1) is a direct guard on the
+// revoked gap: a revoked Archon with an active role of any dimension does
+// NOT hold the action through the gate. Existence of the right doesn't
+// "outweigh" revoked — otherwise RequireAction would let a revoked operator
+// read souls. Mirrors the revoked shortcut in Check (enforcer.go), threaded
+// through ResolvePurview→Deny→false.
 func TestHoldsAction_Revoked_False(t *testing.T) {
 	cases := []struct {
 		name string
@@ -89,7 +92,8 @@ func TestHoldsAction_Revoked_False(t *testing.T) {
 			if e.HoldsAction("archon-fired", "soul", "list") {
 				t.Errorf("revoked AID с %q: HoldsAction = true, want false (revoked отрезается до scope)", tc.perm)
 			}
-			// Контроль: тот же AID БЕЗ revoked держит действие — изоляция эффекта revoked.
+			// Control: the same AID WITHOUT revoked holds the action —
+			// isolates the revoked effect.
 			snap.Revoked = nil
 			eOK, err := NewEnforcerFromSnapshot(snap)
 			if err != nil {
@@ -103,7 +107,8 @@ func TestHoldsAction_Revoked_False(t *testing.T) {
 }
 
 func TestHoldsAction_NoPermission_False(t *testing.T) {
-	// Оператор с правом на ДРУГОЙ resource.action — для (soul, list) Purview пуст.
+	// Operator with a permission for a DIFFERENT resource.action — for
+	// (soul, list) the Purview is empty.
 	e := mustEnforcer(t, fixtureRole{
 		name: "other", operators: []string{"archon-a"}, permissions: []string{"operator.create"},
 	})
@@ -121,21 +126,22 @@ func TestHoldsAction_UnknownAID_False(t *testing.T) {
 	}
 }
 
-// Deny=true → false (forward-compat S2+). ResolvePurview в coven-MVP Deny
-// никогда не выставляет, поэтому конструируем Purview напрямую и проверяем,
-// что флаг учитывается: existence не должно «перевешивать» явный scope-deny.
+// Deny=true → false (forward-compat S2+). ResolvePurview never sets Deny in
+// the coven MVP, so we construct Purview directly and verify the flag is
+// honored: existence must not "outweigh" an explicit scope deny.
 func TestHoldsAction_Deny_False(t *testing.T) {
-	// Проверка идёт на уровне самого предиката HoldsAction: при Deny=true
-	// результат false независимо от заполненных измерений. У HoldsAction нет
-	// инъекции Purview (он зовёт ResolvePurview, а тот в coven-MVP Deny не
-	// выставляет), поэтому вызываем напрямую вынесенную [holdsFromPurview] —
-	// тот же источник правды, что и тело HoldsAction (guard на forward-compat-
-	// ветку `if p.Deny { return false }`, без дубликата формулы).
+	// The check happens at the level of the HoldsAction predicate itself:
+	// with Deny=true the result is false regardless of populated dimensions.
+	// HoldsAction has no way to inject a Purview (it calls ResolvePurview,
+	// which never sets Deny in the coven MVP), so we call the extracted
+	// [holdsFromPurview] directly — the same source of truth as HoldsAction's
+	// body (a guard on the forward-compat `if p.Deny { return false }`
+	// branch, without duplicating the formula).
 	denied := Purview{Deny: true, Unrestricted: true, Covens: []string{"prod"}}
 	if holdsFromPurview(denied) {
 		t.Errorf("Purview{Deny:true,...}: holds = true, want false (forward-compat S2+)")
 	}
-	// И обратное — без Deny те же заполненные измерения дают true.
+	// And the converse — without Deny, the same populated dimensions give true.
 	allowed := Purview{Covens: []string{"prod"}}
 	if !holdsFromPurview(allowed) {
 		t.Errorf("Purview{Covens:[prod]}: holds = false, want true")

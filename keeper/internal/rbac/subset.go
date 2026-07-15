@@ -5,47 +5,52 @@ import (
 	"fmt"
 )
 
-// ErrPermissionNotHeld — least-privilege-нарушение (subset-check): caller
-// пытается выдать через роль permission, которым НЕ обладает сам (создать роль
-// с таким правом / добавить его в роль / привязать роль с таким правом).
+// ErrPermissionNotHeld signals a least-privilege violation (subset check):
+// the caller is trying to grant, via a role, a permission it does NOT hold
+// itself (create a role with that permission / add it to a role / bind a
+// role that has it).
 //
-// Защита от вертикальной эскалации: оператор с `role.create` +
-// `role.grant-operator`, но без `*`, не должен создать роль с `permissions:
-// ["*"]` и стать эффективным cluster-admin. Инвариант — «нельзя выдать право,
-// которого не имеешь сам» (rbac.md → § Инвариант least-privilege).
+// Guards against vertical escalation: an operator with `role.create` +
+// `role.grant-operator` but without `*` must not be able to create a role
+// with `permissions: ["*"]` and become an effective cluster-admin. Invariant:
+// "you cannot grant a permission you don't hold yourself" (rbac.md → §
+// least-privilege invariant).
 //
-// ОТДЕЛЬНЫЙ sentinel от [ErrPermissionDenied]: тот — «нет права на саму
-// операцию» (проверяется middleware/tool ДО Service); этот — «операция
-// разрешена, но её содержимое превышает права caller-а» (проверяется внутри
-// Service). Transport маппит оба в forbidden/403, но смысловое различие важно
-// для логов и тестов.
+// A SEPARATE sentinel from [ErrPermissionDenied]: that one means "no
+// permission for the operation itself" (checked by middleware/tool BEFORE
+// Service); this one means "the operation is allowed, but its content
+// exceeds the caller's rights" (checked inside Service). Transport maps both
+// to forbidden/403, but the distinction matters for logs and tests.
 var ErrPermissionNotHeld = fmt.Errorf("rbac: caller may not grant a permission it does not hold (least-privilege)")
 
-// selectAIDPermissionsSQL — permission-строки активного оператора (revoked_at
-// IS NULL) через все его роли, ВМЕСТЕ с default_scope роли (ADR-047 S1): bare-
-// perm caller-а наследует scope своей роли, иначе least-privilege сравнивает
-// сырьё и bare со scope=prod ложно покрывает любой coven (privilege-escalation).
-// Read-only (без FOR UPDATE): subset-check — authorization-gate, а НЕ
-// consistency-инвариант, как self-lockout; same-tx-read под READ COMMITTED видит
-// committed-состояние и строго свежее enforcer-снимка ([PermissionChecker.Check]).
-// Без FOR UPDATE гейт не добавляет новых row-lock-ов и не трогает
-// детерминированный lock-порядок self-lockout-ядра (роль → permissions →
-// operators) — нет deadlock-риска между конкурентными мутациями.
+// selectAIDPermissionsSQL selects the active operator's permission strings
+// (revoked_at IS NULL) across all their roles, TOGETHER WITH each role's
+// default_scope (ADR-047 S1): the caller's bare permission inherits its
+// role's scope; otherwise least-privilege would compare raw values and a
+// bare perm with scope=prod would falsely cover any coven (privilege
+// escalation). Read-only (no FOR UPDATE): a subset check is an
+// authorization gate, not a consistency invariant like self-lockout;
+// same-tx read under READ COMMITTED sees committed state that's strictly
+// fresher than the enforcer snapshot ([PermissionChecker.Check]). Without
+// FOR UPDATE the gate adds no new row locks and doesn't touch the
+// deterministic lock order of the self-lockout core (role → permissions →
+// operators) — no deadlock risk against concurrent mutations.
 //
-// Маркер `SELECT rp.permission` уникален среди RBAC-запросов (self-lockout-ядро
-// и lockRole селектят `ro.aid`/`builtin`) — fake-pool-ы тестов классифицируют
-// caller-perms-запрос по нему без коллизии.
+// The `SELECT rp.permission` marker is unique among RBAC queries (the
+// self-lockout core and lockRole select `ro.aid`/`builtin`) — test fake
+// pools classify the caller-perms query by it without collision.
 //
-// Synod (ADR-049(f)): эффективные права caller-а = прямые ∪ через Synod. Вторая
-// ветка UNION разворачивает роли через все Synod-ы caller-а (synod_operators ⋈
-// synod_roles) — без неё least-privilege недосчитывает права, пришедшие через
-// группу: оператор, чьё право X держится ТОЛЬКО через Synod, ложно получил бы
-// deny на выдачу X (escalation-via-group — обратная сторона: НЕ-видение своих
-// прав), а его эффективный scope не наследовался бы от роли группы. UNION (не
-// UNION ALL) схлопывает дубль `(permission, default_scope)` роли, пришедшей и
-// напрямую, и через Synod — союз множеств, как в snapshot-сборке. Обе ветки
-// фильтруют по `o.revoked_at IS NULL` — revoked caller прав не держит ни одним
-// путём.
+// Synod (ADR-049(f)): the caller's effective rights are direct ∪ via Synod.
+// The second UNION branch expands roles through all of the caller's Synods
+// (synod_operators ⋈ synod_roles) — without it, least-privilege would
+// undercount rights that arrive via a group: an operator whose right X is
+// held ONLY through a Synod would falsely be denied when granting X
+// (escalation-via-group's flip side: failing to see one's own rights), and
+// its effective scope wouldn't inherit from the group's role. UNION (not
+// UNION ALL) collapses the duplicate `(permission, default_scope)` pair for
+// a role reached both directly and via Synod — a set union, same as in
+// snapshot assembly. Both branches filter on `o.revoked_at IS NULL` — a
+// revoked caller holds no rights through either path.
 const selectAIDPermissionsSQL = `
 SELECT rp.permission, r.default_scope
 FROM rbac_role_permissions rp
@@ -63,16 +68,16 @@ JOIN operators o ON o.aid = so.aid
 WHERE so.aid = $1 AND o.revoked_at IS NULL
 `
 
-// assertCallerMayGrant — least-privilege-гейт Service-мутаций: проверяет, что
-// caller вправе выдать КАЖДУЮ permission из required (см. [assertCallerCovers]).
-// Вызывается ВНУТРИ tx мутации (CreateRole / UpdateRolePermissions /
-// GrantOperator), до записи.
+// assertCallerMayGrant is the least-privilege gate for Service mutations: it
+// checks that the caller may grant EVERY permission in required (see
+// [assertCallerCovers]). Called INSIDE the mutation tx (CreateRole /
+// UpdateRolePermissions / GrantOperator), before the write.
 //
-// Пустой required → no-op без обращения к БД (нечего проверять — роль без новых
-// прав / без прав вообще). callerAID == "" недопустим при непустом required:
-// transport всегда несёт caller-а (claims.Subject); пустой caller с правами на
-// выдачу — это misconfiguration, отказываем ([ErrPermissionNotHeld]) вместо
-// «тихо разрешить».
+// Empty required → no-op, no DB round-trip (nothing to check — a role with
+// no new permissions, or none at all). callerAID == "" is not allowed when
+// required is non-empty: transport always carries a caller (claims.Subject);
+// an empty caller with grant rights is a misconfiguration — we deny
+// ([ErrPermissionNotHeld]) instead of silently allowing it.
 func (s *Service) assertCallerMayGrant(ctx context.Context, db ExecQueryRower, callerAID string, required []Permission) error {
 	if len(required) == 0 {
 		return nil
@@ -87,15 +92,17 @@ func (s *Service) assertCallerMayGrant(ctx context.Context, db ExecQueryRower, c
 	return assertCallerCovers(callerPerms, required)
 }
 
-// requiredPermissions разворачивает гранящиеся permission-строки в ЭФФЕКТИВНЫЕ
-// permissions под default_scope роли (ADR-047 S1): bare-perm выдаваемой роли
-// наследует её scope, иначе least-privilege сравнил бы сырьё (bare покрывает
-// любой coven → caller со scope=prod выдал бы роль scope=staging).
+// requiredPermissions expands the granted permission strings into EFFECTIVE
+// permissions under the role's default_scope (ADR-047 S1): a bare permission
+// on the role being granted inherits its scope; otherwise least-privilege
+// would compare raw values (a bare perm covers any coven → a caller with
+// scope=prod could grant a role with scope=staging).
 //
-// rawScope — RAW default_scope гранящейся роли (nil = NULL = роль без scope,
-// bare остаётся unrestricted). Строки уже провалидированы [ParsePermission] в
-// Service-методе ДО tx; повторный parse тут не должен падать, но ошибку
-// пробрасываем (defensive против рассинхрона), не маскируя под subset.
+// rawScope is the RAW default_scope of the role being granted (nil = NULL =
+// role has no scope, bare stays unrestricted). The strings are already
+// validated by [ParsePermission] in the Service method BEFORE the tx;
+// re-parsing here shouldn't fail, but we propagate the error anyway
+// (defensive against drift) rather than masking it as a subset failure.
 func requiredPermissions(rawPerms []string, rawScope *string) ([]Permission, error) {
 	if len(rawPerms) == 0 {
 		return nil, nil
@@ -119,10 +126,11 @@ func requiredPermissions(rawPerms []string, rawScope *string) ([]Permission, err
 	return effectivePermissions(perms, scope), nil
 }
 
-// addedPermissions возвращает permissions из newPerms, которых нет в oldPerms
-// (множество добавляемых). UpdateRolePermissions ограничивает least-privilege
-// только их: удаление прав не эскалация (см. [Service.UpdateRolePermissions]).
-// Порядок newPerms сохраняется; дубли в newPerms схлопываются.
+// addedPermissions returns the permissions in newPerms that aren't in
+// oldPerms (the set being added). UpdateRolePermissions restricts
+// least-privilege to just these: removing permissions isn't escalation (see
+// [Service.UpdateRolePermissions]). Preserves newPerms order; duplicates in
+// newPerms are collapsed.
 func addedPermissions(oldPerms, newPerms []string) []string {
 	old := make(map[string]struct{}, len(oldPerms))
 	for _, p := range oldPerms {
@@ -143,16 +151,18 @@ func addedPermissions(oldPerms, newPerms []string) []string {
 	return added
 }
 
-// callerPermissions читает ЭФФЕКТИВНЫЕ permissions caller-а: каждая строка
-// парсится через [ParsePermission], затем bare-perm (Selector==nil) наследует
-// default_scope своей роли через [effectivePermissions] (ADR-047 S1) — ровно
-// как [Enforcer.ResolvePurview]. Без этого least-privilege сравнивал бы сырьё:
-// bare со scope=prod покрыл бы любой coven (privilege-escalation).
+// callerPermissions reads the caller's EFFECTIVE permissions: each string is
+// parsed via [ParsePermission], then a bare permission (Selector==nil)
+// inherits its role's default_scope via [effectivePermissions] (ADR-047 S1)
+// — exactly like [Enforcer.ResolvePurview]. Without this, least-privilege
+// would compare raw values: a bare perm with scope=prod would cover any
+// coven (privilege escalation).
 //
-// Невалидная permission/default_scope в БД (рассинхрон версий) → ошибка:
-// subset-check не должен «проглотить» битое право и случайно разрешить выдачу.
-// Активный оператор без ролей → пустой набор (default deny). default_scope NULL
-// (scope==nil) → bare остаётся unrestricted (backcompat, исключение №2).
+// An invalid permission/default_scope in the DB (version drift) is an
+// error: a subset check must not silently swallow a malformed permission
+// and accidentally allow a grant. An active operator with no roles → empty
+// set (default deny). default_scope NULL (scope==nil) → bare stays
+// unrestricted (backcompat, exception #2).
 func callerPermissions(ctx context.Context, db ExecQueryRower, callerAID string) ([]Permission, error) {
 	rows, err := db.Query(ctx, selectAIDPermissionsSQL, callerAID)
 	if err != nil {
@@ -188,21 +198,23 @@ func callerPermissions(ctx context.Context, db ExecQueryRower, callerAID string)
 	return out, nil
 }
 
-// effectivePermissions разворачивает bare-permissions (Selector==nil) под
-// default_scope роли — ровно так же, как [Enforcer.ResolvePurview] резолвит
-// эффективный селектор (ADR-047 S1): `eff = p.Selector; if nil → scope`.
-// Единый источник правила «bare наследует default_scope»; subset-check
-// сравнивает ЭФФЕКТИВНЫЕ права обеих сторон, а не сырьё (иначе bare-perm со
-// scope=prod ложно покрывает любой coven → privilege-escalation).
+// effectivePermissions expands bare permissions (Selector==nil) under a
+// role's default_scope — exactly how [Enforcer.ResolvePurview] resolves the
+// effective selector (ADR-047 S1): `eff = p.Selector; if nil → scope`. The
+// single source of the "bare inherits default_scope" rule; the subset check
+// compares EFFECTIVE rights on both sides, not raw ones (otherwise a bare
+// perm with scope=prod would falsely cover any coven → privilege
+// escalation).
 //
-// scope==nil (роль без default_scope, NULL) — bare остаётся bare (unrestricted):
-// caller без scope вправе выдать любой селектор (backcompat, исключение №2
-// ADR-047). `*`-permission и per-perm-селектор не трогаются (scope их не
-// переопределяет — симметрия с ResolvePurview).
+// scope==nil (role has no default_scope, NULL) — bare stays bare
+// (unrestricted): a caller with no scope may grant any selector (backcompat,
+// exception #2 from ADR-047). `*` permissions and per-permission selectors
+// are left untouched (scope doesn't override them — symmetric with
+// ResolvePurview).
 //
-// Возвращает новый slice (вход не мутируется): bare-perm с непустым scope
-// заменяется копией с Selector=scope. Холодный путь (subset-check на мутации) —
-// аллокация допустима.
+// Returns a new slice (input isn't mutated): a bare perm with a non-empty
+// scope is replaced by a copy with Selector=scope. Cold path (subset check
+// on mutations) — the allocation is acceptable.
 func effectivePermissions(perms []Permission, scope map[string][]string) []Permission {
 	if scope == nil {
 		return perms
@@ -217,24 +229,26 @@ func effectivePermissions(perms []Permission, scope map[string][]string) []Permi
 	return out
 }
 
-// assertCallerCovers проверяет, что КАЖДАЯ required-permission покрыта
-// эффективным набором caller-а (least-privilege subset-check). Любая
-// непокрытая → [ErrPermissionNotHeld] (caller выдаёт право, которого не имеет).
+// assertCallerCovers checks that EVERY required permission is covered by the
+// caller's effective set (least-privilege subset check). Any uncovered one →
+// [ErrPermissionNotHeld] (caller is granting a permission it doesn't hold).
 //
-// Обе стороны должны быть УЖЕ эффективными (bare развёрнут под default_scope
-// своей роли через [effectivePermissions]) — иначе bare со scope=prod ложно
-// покрывает любой coven (privilege-escalation, ADR-047 S1).
+// Both sides must ALREADY be effective (bare expanded under its role's
+// default_scope via [effectivePermissions]) — otherwise a bare perm with
+// scope=prod would falsely cover any coven (privilege escalation, ADR-047
+// S1).
 //
-// Семантика покрытия — существующая implication из [Permission.Matches] (НЕ
-// изобретаем новую): caller «имеет» required, если хотя бы одна его permission
-// Matches (resource, action) с required-селектором как context-ом. `*` у
-// caller-а покрывает всё (IsWildcard → Matches=true).
+// Coverage semantics reuse the existing implication from
+// [Permission.Matches] (we don't invent a new one): the caller "holds"
+// required if at least one of its permissions Matches (resource, action)
+// with the required selector as context. A caller's `*` covers everything
+// (IsWildcard → Matches=true).
 //
-// required-`*` (caller выдаёт full-wildcard) покрывается ТОЛЬКО caller-овским
-// `*`: bare `*` как (resource, action) не матчит ни одну non-wildcard
-// permission caller-а — значит suboperator не может выдать `*`.
+// A required `*` (caller grants a full wildcard) is covered ONLY by the
+// caller's own `*`: a bare `*` as (resource, action) doesn't match any
+// non-wildcard caller permission — so a suboperator can't grant `*`.
 //
-// callerPerms резолвится один раз вызывающим — не на каждую required-permission.
+// callerPerms is resolved once by the caller, not per required permission.
 func assertCallerCovers(callerPerms, required []Permission) error {
 	for _, req := range required {
 		if !callerHolds(callerPerms, req) {
@@ -244,8 +258,9 @@ func assertCallerCovers(callerPerms, required []Permission) error {
 	return nil
 }
 
-// permString — диагностическая форма permission для error-сообщений subset-а
-// (не нормативный сериализатор; только для логов/тестов least-privilege-отказа).
+// permString is a diagnostic rendering of a permission for subset error
+// messages (not a canonical serializer; only for logs/tests of
+// least-privilege denials).
 func permString(p Permission) string {
 	if p.IsWildcard {
 		return "*"
@@ -263,21 +278,22 @@ func permString(p Permission) string {
 	return s
 }
 
-// callerHolds — true, если эффективный набор caller-а покрывает required.
+// callerHolds reports whether the caller's effective set covers req.
 //
-// required-`*` (IsWildcard): покрывается ТОЛЬКО caller-овским `*`. Прямой
-// проход по Matches-у тут не годится — Matches(resource, action) требует
-// конкретные resource/action, а у `*` их нет. Поэтому wildcard-required
-// обрабатывается явной веткой: ищем `*` в наборе caller-а.
+// required `*` (IsWildcard): covered ONLY by the caller's own `*`. Going
+// through Matches directly doesn't work here — Matches(resource, action)
+// needs concrete resource/action, which `*` doesn't have. So a wildcard
+// required is handled by an explicit branch: look for `*` in the caller's
+// set.
 //
-// non-wildcard required: проверяем КАЖДУЮ (ключ, значение)-комбинацию
-// селектора отдельно. `x on coven=prod,stage` означает «prod ИЛИ stage» —
-// выдача такой permission конферит ОБА значения, поэтому caller обязан
-// покрывать каждое. Если caller имеет лишь `x on coven=prod`, выдать
-// `coven=prod,stage` нельзя (эскалация на stage). Для каждой такой
-// (resource, action, {ключ: значение})-точки спрашиваем caller-permissions
-// через их родной [Permission.Matches]; required покрыт, только если покрыты
-// все точки.
+// non-wildcard required: check EVERY (key, value) combination of the
+// selector separately. `x on coven=prod,stage` means "prod OR stage" —
+// granting such a permission confers BOTH values, so the caller must cover
+// each one. If the caller only has `x on coven=prod`, it can't grant
+// `coven=prod,stage` (escalation onto stage). For each such (resource,
+// action, {key: value}) point, we ask the caller's permissions via their
+// native [Permission.Matches]; required is covered only if every point is
+// covered.
 func callerHolds(callerPerms []Permission, req Permission) bool {
 	if req.IsWildcard {
 		for _, cp := range callerPerms {
@@ -288,21 +304,22 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 		return false
 	}
 
-	// Без селектора — одна точка с nil-context-ом.
+	// No selector — a single point with nil context.
 	if len(req.Selector) == 0 {
 		return matchesAny(callerPerms, req.Resource, req.Action, nil)
 	}
 
-	// С селектором — каждая (ключ, значение)-точка должна быть покрыта.
+	// With a selector — every (key, value) point must be covered.
 	for key, values := range req.Selector {
 		if key == "regex" {
-			// ADR-047 S2a: regex-subset = string-equality fail-closed. Покрытие
-			// одного regex другим («^web- ⊇ ^web-prod-?») статически неразрешимо
-			// в общем случае → MVP: caller вправе выдать ТОЛЬКО идентичный
-			// паттерн (есть в его эффективном regex-наборе) ЛИБО имеет более
-			// широкое право (`*` / bare без regex-селектора этого resource.action).
-			// Через Matches идти НЕЛЬЗЯ: regex-строка как host-контекст ложно
-			// сматчилась бы с caller-regex (^web-prod- матчит ^web-).
+			// ADR-047 S2a: regex subset = string-equality, fail-closed. Whether
+			// one regex covers another ("^web- ⊇ ^web-prod-?") is statically
+			// undecidable in general → MVP: the caller may grant ONLY an
+			// identical pattern (present in its effective regex set) OR holds a
+			// broader right (`*` / bare with no regex selector on this
+			// resource.action). Going through Matches is NOT an option: a regex
+			// string used as a host context would falsely match the caller's
+			// regex (^web-prod- matches ^web-).
 			for _, pat := range values {
 				if !callerHoldsRegex(callerPerms, req.Resource, req.Action, pat) {
 					return false
@@ -311,12 +328,12 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 			continue
 		}
 		if key == "soulprint" {
-			// ADR-047 S2b: soulprint-subset = string-equality fail-closed.
-			// Покрытие одного CEL-предиката другим (логический containment)
-			// статически неразрешимо → MVP: caller вправе выдать ТОЛЬКО
-			// идентичный предикат (есть в его эффективном soulprint-наборе) ЛИБО
-			// имеет более широкое право (`*` / bare без soulprint-селектора
-			// этого resource.action). Симметрично regex-ветке.
+			// ADR-047 S2b: soulprint subset = string-equality, fail-closed.
+			// Whether one CEL predicate covers another (logical containment) is
+			// statically undecidable → MVP: the caller may grant ONLY an
+			// identical predicate (present in its effective soulprint set) OR
+			// holds a broader right (`*` / bare with no soulprint selector on
+			// this resource.action). Symmetric with the regex branch.
 			for _, expr := range values {
 				if !callerHoldsSoulprint(callerPerms, req.Resource, req.Action, expr) {
 					return false
@@ -325,12 +342,12 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 			continue
 		}
 		if key == "state" {
-			// ADR-047 S2c: state-subset = string-equality fail-closed.
-			// Покрытие одного state-CEL-предиката другим (логический containment)
-			// статически неразрешимо → MVP: caller вправе выдать ТОЛЬКО идентичный
-			// предикат (есть в его эффективном state-наборе) ЛИБО имеет более
-			// широкое право (`*` / bare без state-селектора этого resource.action).
-			// Симметрично soulprint/regex-веткам.
+			// ADR-047 S2c: state subset = string-equality, fail-closed. Whether
+			// one state CEL predicate covers another (logical containment) is
+			// statically undecidable → MVP: the caller may grant ONLY an
+			// identical predicate (present in its effective state set) OR holds
+			// a broader right (`*` / bare with no state selector on this
+			// resource.action). Symmetric with the soulprint/regex branches.
 			for _, expr := range values {
 				if !callerHoldsState(callerPerms, req.Resource, req.Action, expr) {
 					return false
@@ -339,13 +356,15 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 			continue
 		}
 		if key == "trait" {
-			// ADR-047 amendment (ADR-060 п.7 slice 1): trait-subset = string-equality
-			// fail-closed. trait — точная `key:value`-пара (не предикат), но логика
-			// покрытия та же, что у state/soulprint: caller вправе выдать ТОЛЬКО
-			// идентичную пару (есть в его эффективном trait-наборе) ЛИБО имеет более
-			// широкое право (`*` / bare без trait-селектора этого resource.action).
-			// Через Matches идти НЕЛЬЗЯ (trait fail-closed без traits в context) —
-			// прямое сравнение пар, симметрично state/soulprint-веткам.
+			// ADR-047 amendment (ADR-060 item 7, slice 1): trait subset =
+			// string-equality, fail-closed. A trait is an exact `key:value` pair
+			// (not a predicate), but the coverage logic matches state/soulprint:
+			// the caller may grant ONLY an identical pair (present in its
+			// effective trait set) OR holds a broader right (`*` / bare with no
+			// trait selector on this resource.action). Going through Matches is
+			// NOT an option (trait is fail-closed without traits in context) —
+			// direct pair comparison, symmetric with the state/soulprint
+			// branches.
 			for _, pair := range values {
 				if !callerHoldsTrait(callerPerms, req.Resource, req.Action, pair) {
 					return false
@@ -362,18 +381,20 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 	return true
 }
 
-// callerHoldsRegex — покрывает ли caller выдачу regex-паттерна pat для
-// (resource, action). MVP-семантика (ADR-047 S2a, fail-closed): покрыто, если
-// у caller-а есть
-//   - `*`-permission (покрывает всё), ИЛИ
-//   - матчащая (resource, action) BARE-permission (Selector==nil — caller
-//     ничем не ограничен, вправе выдать любой regex), ИЛИ
-//   - матчащая permission с ИДЕНТИЧНЫМ regex-паттерном (string-equality).
+// callerHoldsRegex reports whether the caller covers granting regex pattern
+// pat for (resource, action). MVP semantics (ADR-047 S2a, fail-closed):
+// covered if the caller has
+//   - a `*` permission (covers everything), OR
+//   - a matching (resource, action) BARE permission (Selector==nil — caller
+//     is unrestricted, may grant any regex), OR
+//   - a matching permission with an IDENTICAL regex pattern
+//     (string-equality).
 //
-// Caller с ОГРАНИЧЕНИЕМ В ДРУГОМ измерении (`coven=prod` без regex) НЕ покрывает
-// regex-грант — симметрия с exact-ключами ([Permission.Matches]: ключ-not-in-
-// context → deny). Сужение regex (caller `^web-` выдаёт `^web-prod-`) статически
-// недоказуемо → DENY. Containment regex НЕ реализуется (см. ВНИМАНИЕ в ТЗ S2a).
+// A caller RESTRICTED IN A DIFFERENT dimension (`coven=prod` with no regex)
+// does NOT cover a regex grant — symmetric with exact keys
+// ([Permission.Matches]: key-not-in-context → deny). Narrowing a regex
+// (caller `^web-` grants `^web-prod-`) is statically undecidable → DENY.
+// Regex containment is NOT implemented (see the S2a spec's warning).
 func callerHoldsRegex(callerPerms []Permission, resource, action, pat string) bool {
 	for _, cp := range callerPerms {
 		if cp.IsWildcard {
@@ -386,7 +407,7 @@ func callerHoldsRegex(callerPerms []Permission, resource, action, pat string) bo
 			continue
 		}
 		if cp.Selector == nil {
-			// bare-permission caller-а — не ограничен по regex, покрывает любой.
+			// Caller's bare permission — unrestricted by regex, covers any.
 			return true
 		}
 		for _, cpat := range cp.Selector["regex"] {
@@ -398,17 +419,19 @@ func callerHoldsRegex(callerPerms []Permission, resource, action, pat string) bo
 	return false
 }
 
-// callerHoldsSoulprint — покрывает ли caller выдачу soulprint-предиката expr для
-// (resource, action). MVP-семантика (ADR-047 S2b, fail-closed, параллель
-// [callerHoldsRegex]): покрыто, если у caller-а есть
-//   - `*`-permission (покрывает всё), ИЛИ
-//   - матчащая (resource, action) BARE-permission (Selector==nil — caller ничем
-//     не ограничен, вправе выдать любой soulprint-предикат), ИЛИ
-//   - матчащая permission с ИДЕНТИЧНЫМ soulprint-предикатом (string-equality).
+// callerHoldsSoulprint reports whether the caller covers granting soulprint
+// predicate expr for (resource, action). MVP semantics (ADR-047 S2b,
+// fail-closed, parallels [callerHoldsRegex]): covered if the caller has
+//   - a `*` permission (covers everything), OR
+//   - a matching (resource, action) BARE permission (Selector==nil — caller
+//     is unrestricted, may grant any soulprint predicate), OR
+//   - a matching permission with an IDENTICAL soulprint predicate
+//     (string-equality).
 //
-// Caller с ОГРАНИЧЕНИЕМ В ДРУГОМ измерении (`coven=prod` / иной soulprint) НЕ
-// покрывает soulprint-грант — симметрия с exact-ключами и regex. Логический
-// containment CEL-предикатов недоказуем статически → DENY (fail-closed).
+// A caller RESTRICTED IN A DIFFERENT dimension (`coven=prod` / a different
+// soulprint) does NOT cover a soulprint grant — symmetric with exact keys
+// and regex. Logical containment of CEL predicates is statically undecidable
+// → DENY (fail-closed).
 func callerHoldsSoulprint(callerPerms []Permission, resource, action, expr string) bool {
 	for _, cp := range callerPerms {
 		if cp.IsWildcard {
@@ -421,7 +444,7 @@ func callerHoldsSoulprint(callerPerms []Permission, resource, action, expr strin
 			continue
 		}
 		if cp.Selector == nil {
-			// bare-permission caller-а — не ограничен по soulprint, покрывает любой.
+			// Caller's bare permission — unrestricted by soulprint, covers any.
 			return true
 		}
 		for _, cexpr := range cp.Selector["soulprint"] {
@@ -433,17 +456,19 @@ func callerHoldsSoulprint(callerPerms []Permission, resource, action, expr strin
 	return false
 }
 
-// callerHoldsState — покрывает ли caller выдачу state-предиката expr для
-// (resource, action). MVP-семантика (ADR-047 S2c, fail-closed, параллель
-// [callerHoldsSoulprint]): покрыто, если у caller-а есть
-//   - `*`-permission (покрывает всё), ИЛИ
-//   - матчащая (resource, action) BARE-permission (Selector==nil — caller ничем
-//     не ограничен, вправе выдать любой state-предикат), ИЛИ
-//   - матчащая permission с ИДЕНТИЧНЫМ state-предикатом (string-equality).
+// callerHoldsState reports whether the caller covers granting state
+// predicate expr for (resource, action). MVP semantics (ADR-047 S2c,
+// fail-closed, parallels [callerHoldsSoulprint]): covered if the caller has
+//   - a `*` permission (covers everything), OR
+//   - a matching (resource, action) BARE permission (Selector==nil — caller
+//     is unrestricted, may grant any state predicate), OR
+//   - a matching permission with an IDENTICAL state predicate
+//     (string-equality).
 //
-// Caller с ОГРАНИЧЕНИЕМ В ДРУГОМ измерении (`coven=prod` / иной state) НЕ
-// покрывает state-грант — симметрия с exact-ключами, regex и soulprint.
-// Логический containment CEL-предикатов недоказуем статически → DENY (fail-closed).
+// A caller RESTRICTED IN A DIFFERENT dimension (`coven=prod` / a different
+// state) does NOT cover a state grant — symmetric with exact keys, regex,
+// and soulprint. Logical containment of CEL predicates is statically
+// undecidable → DENY (fail-closed).
 func callerHoldsState(callerPerms []Permission, resource, action, expr string) bool {
 	for _, cp := range callerPerms {
 		if cp.IsWildcard {
@@ -456,7 +481,7 @@ func callerHoldsState(callerPerms []Permission, resource, action, expr string) b
 			continue
 		}
 		if cp.Selector == nil {
-			// bare-permission caller-а — не ограничен по state, покрывает любой.
+			// Caller's bare permission — unrestricted by state, covers any.
 			return true
 		}
 		for _, cexpr := range cp.Selector["state"] {
@@ -468,16 +493,18 @@ func callerHoldsState(callerPerms []Permission, resource, action, expr string) b
 	return false
 }
 
-// callerHoldsTrait — покрывает ли caller выдачу trait-пары pair (`key:value`) для
-// (resource, action). MVP-семантика (ADR-047 amendment / ADR-060 п.7 slice 1,
-// fail-closed, параллель [callerHoldsState]): покрыто, если у caller-а есть
-//   - `*`-permission (покрывает всё), ИЛИ
-//   - матчащая (resource, action) BARE-permission (Selector==nil — caller ничем
-//     не ограничен, вправе выдать любую trait-пару), ИЛИ
-//   - матчащая permission с ИДЕНТИЧНОЙ trait-парой (string-equality).
+// callerHoldsTrait reports whether the caller covers granting trait pair
+// pair (`key:value`) for (resource, action). MVP semantics (ADR-047
+// amendment / ADR-060 item 7, slice 1, fail-closed, parallels
+// [callerHoldsState]): covered if the caller has
+//   - a `*` permission (covers everything), OR
+//   - a matching (resource, action) BARE permission (Selector==nil — caller
+//     is unrestricted, may grant any trait pair), OR
+//   - a matching permission with an IDENTICAL trait pair (string-equality).
 //
-// Caller с ОГРАНИЧЕНИЕМ В ДРУГОМ измерении (`coven=prod` / иная trait-пара) НЕ
-// покрывает trait-грант — симметрия с exact-ключами, regex, soulprint и state.
+// A caller RESTRICTED IN A DIFFERENT dimension (`coven=prod` / a different
+// trait pair) does NOT cover a trait grant — symmetric with exact keys,
+// regex, soulprint, and state.
 func callerHoldsTrait(callerPerms []Permission, resource, action, pair string) bool {
 	for _, cp := range callerPerms {
 		if cp.IsWildcard {
@@ -490,7 +517,7 @@ func callerHoldsTrait(callerPerms []Permission, resource, action, pair string) b
 			continue
 		}
 		if cp.Selector == nil {
-			// bare-permission caller-а — не ограничен по trait, покрывает любую.
+			// Caller's bare permission — unrestricted by trait, covers any.
 			return true
 		}
 		for _, cpair := range cp.Selector["trait"] {
@@ -502,9 +529,9 @@ func callerHoldsTrait(callerPerms []Permission, resource, action, pair string) b
 	return false
 }
 
-// matchesAny — true, если хотя бы одна permission caller-а матчит конкретную
-// (resource, action, context)-точку. Тонкая обёртка над [Permission.Matches]
-// для перебора набора.
+// matchesAny reports whether at least one caller permission matches the
+// specific (resource, action, context) point. A thin wrapper over
+// [Permission.Matches] for iterating the set.
 func matchesAny(callerPerms []Permission, resource, action string, ctx map[string]string) bool {
 	for _, cp := range callerPerms {
 		if cp.Matches(resource, action, ctx) {

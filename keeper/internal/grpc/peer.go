@@ -11,25 +11,25 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulseed"
 )
 
-// Sentinel-ошибки извлечения peer-cert. Маппятся в gRPC-status в
-// interceptor-е [seedAuthStreamInterceptor].
+// Sentinel errors for peer-cert extraction. Mapped to gRPC status in the
+// [seedAuthStreamInterceptor] interceptor.
 var (
-	// ErrPeerNotInContext — gRPC не положил peer в context-е. Происходит
-	// только при некорректной интеграции (тесты, кастомные dialer-ы);
-	// production-gRPC-stack всегда заполняет peer.
+	// ErrPeerNotInContext — gRPC didn't put a peer in the context. Happens
+	// only with incorrect integration (tests, custom dialers); the
+	// production gRPC stack always populates the peer.
 	ErrPeerNotInContext = errors.New("grpc: peer not in context")
-	// ErrPeerNotTLS — peer установил соединение, но не через TLS. Не
-	// должен случаться при mTLS-listener-е, страховка от misconfig.
+	// ErrPeerNotTLS — the peer connected, but not over TLS. Shouldn't
+	// happen with an mTLS listener; a safeguard against misconfiguration.
 	ErrPeerNotTLS = errors.New("grpc: peer is not TLS")
-	// ErrPeerNoCert — TLS-handshake прошёл, но клиент не предъявил
-	// сертификат. При `RequireAndVerifyClientCert` Go-runtime отвергает
-	// такой handshake раньше, но проверка дёшевая.
+	// ErrPeerNoCert — the TLS handshake succeeded, but the client didn't
+	// present a certificate. With `RequireAndVerifyClientCert` the Go
+	// runtime rejects such a handshake earlier, but the check is cheap.
 	ErrPeerNoCert = errors.New("grpc: peer presented no client certificate")
 )
 
-// peerCert извлекает leaf-сертификат клиента из gRPC peer-context-а.
-// Возвращает [ErrPeerNotInContext] / [ErrPeerNotTLS] / [ErrPeerNoCert] —
-// caller маппит в нужный gRPC-status.
+// peerCert extracts the client's leaf certificate from the gRPC peer
+// context. Returns [ErrPeerNotInContext] / [ErrPeerNotTLS] / [ErrPeerNoCert]
+// — the caller maps it to the appropriate gRPC status.
 func peerCert(ctx context.Context) (*x509.Certificate, error) {
 	p, ok := grpcpeer.FromContext(ctx)
 	if !ok || p == nil {
@@ -45,9 +45,9 @@ func peerCert(ctx context.Context) (*x509.Certificate, error) {
 	return ti.State.PeerCertificates[0], nil
 }
 
-// peerFingerprint — convenience: leaf-cert → SHA-256 fingerprint
-// SubjectPublicKeyInfo. Совпадает с тем, что Keeper писал в `soul_seeds`
-// при онбординге через [soulseed.FingerprintFromCert].
+// peerFingerprint — convenience: leaf-cert → SHA-256 fingerprint of
+// SubjectPublicKeyInfo. Matches what Keeper wrote to `soul_seeds` during
+// onboarding via [soulseed.FingerprintFromCert].
 func peerFingerprint(ctx context.Context) (string, error) {
 	cert, err := peerCert(ctx)
 	if err != nil {

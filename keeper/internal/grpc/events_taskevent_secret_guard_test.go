@@ -12,22 +12,22 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// Security guard-инвариант (ИБ-аудит, low/secrets): RenderedTask.Params и
-// resolved-Vault-значения НИКОГДА не попадают в наблюдаемые каналы (audit_log /
-// SSE / логи). Тесты фиксируют это на полном пути handleTaskEvent (audit + SSE
-// одновременно) — регресс ловится здесь.
+// Security guard invariant (security audit, low/secrets): RenderedTask.Params and
+// resolved Vault values NEVER reach observable channels (audit_log /
+// SSE / logs). These tests pin that down on the full handleTaskEvent path (audit + SSE
+// at once) — a regression is caught here.
 //
-// Структурный фундамент инварианта: TaskEvent (Soul→Keeper, apply.proto) НЕ
-// несёт params вовсе — keeper-side handler физически не может их транслировать.
-// А register_data/error.message no_log-задачи (единственный остаточный канал
-// произвольного секрета, который MaskSecrets по vault-ref не ловит) подавляются
-// формой payload до записи. Эти тесты проверяют оба факта на стыке handler→
+// Structural foundation of the invariant: TaskEvent (Soul→Keeper, apply.proto) does NOT
+// carry params at all — the keeper-side handler physically cannot forward them.
+// And a no_log task's register_data/error.message (the only remaining channel for
+// an arbitrary secret that MaskSecrets can't catch by vault-ref) are suppressed
+// by the payload shape before writing. These tests verify both facts at the handler→
 // audit/SSE.
 
-// TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels — no_log-задача
-// с секретом в register_data И в error.message: ни audit-payload, ни SSE-фрейм
-// не несут plaintext. В audit вместо них маркер suppressed:"no_log"; в SSE
-// register не публикуется никогда, error без message.
+// TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels — a no_log task
+// with a secret in register_data AND in error.message: neither the audit payload nor the SSE frame
+// carries plaintext. audit gets a suppressed:"no_log" marker instead; SSE
+// never publishes register, and error has no message.
 func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T) {
 	const secret = "S3cr3t-PlainText-Password"
 
@@ -58,7 +58,7 @@ func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T)
 		t.Fatal("no SSE event published")
 	}
 
-	// Audit-канал: payload не несёт секрет и не несёт register-ключ.
+	// Audit channel: the payload carries neither the secret nor the register key.
 	auditEvents := aw.snapshot()
 	if len(auditEvents) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(auditEvents))
@@ -74,7 +74,7 @@ func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T)
 		t.Errorf("no_log marker missing in audit: %v", auditEvents[0].Payload)
 	}
 
-	// SSE-канал: фрейм не несёт секрет, register и error.message.
+	// SSE channel: the frame carries neither the secret, register, nor error.message.
 	sseBlob, _ := json.Marshal(sseEv.Payload)
 	if strings.Contains(string(sseBlob), secret) {
 		t.Errorf("no_log secret leaked into SSE frame: %s", sseBlob)
@@ -85,10 +85,10 @@ func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T)
 	}
 }
 
-// TestHandleTaskEvent_NoParamsKeyInAnyChannel — структурный guard: на полном
-// пути handler→audit/SSE ни в одном канале не возникает ключа, содержащего
-// "param". TaskEvent params не несёт (apply.proto), поэтому источника нет —
-// тест ловит регресс, если кто-то проложит params в audit/SSE.
+// TestHandleTaskEvent_NoParamsKeyInAnyChannel — a structural guard: on the full
+// handler→audit/SSE path, no channel ever produces a key containing
+// "param". TaskEvent doesn't carry params (apply.proto), so there's no source —
+// this test catches a regression if someone routes params into audit/SSE.
 func TestHandleTaskEvent_NoParamsKeyInAnyChannel(t *testing.T) {
 	aw := &recordingAudit{}
 	bus := applybus.NewBus(discardLogger(t))
@@ -122,8 +122,8 @@ func TestHandleTaskEvent_NoParamsKeyInAnyChannel(t *testing.T) {
 	}
 }
 
-// assertNoParamKeyAnyLevel — рекурсивная проверка отсутствия param-shaped ключа
-// в map-payload-е (case-insensitive «param»). channel — для диагностики.
+// assertNoParamKeyAnyLevel — recursively checks for the absence of a param-shaped key
+// in a map payload (case-insensitive "param"). channel is for diagnostics.
 func assertNoParamKeyAnyLevel(t *testing.T, channel string, m map[string]any) {
 	t.Helper()
 	for k, v := range m {
@@ -136,8 +136,8 @@ func assertNoParamKeyAnyLevel(t *testing.T, channel string, m map[string]any) {
 	}
 }
 
-// newTestHandlerWithBusAudit — handler с подключёнными ApplyBus И recording-audit
-// для guard-тестов полного пути handleTaskEvent (оба наблюдаемых канала сразу).
+// newTestHandlerWithBusAudit — a handler with both ApplyBus AND recording-audit wired up
+// for guard tests of the full handleTaskEvent path (both observable channels at once).
 func newTestHandlerWithBusAudit(t *testing.T, aw *recordingAudit, bus *applybus.EventBus) *eventStreamHandler {
 	t.Helper()
 	deps := EventStreamDeps{

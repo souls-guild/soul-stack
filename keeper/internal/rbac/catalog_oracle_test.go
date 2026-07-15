@@ -2,9 +2,9 @@ package rbac
 
 import "testing"
 
-// TestCatalog_OraclePermissions — 6 vigil.*/decree.*-permissions Oracle (ADR-030
-// beacons, rbac.md §Oracle) присутствуют в каталоге как 2-сегментные
-// <resource>.<action>.
+// TestCatalog_OraclePermissions — the 6 vigil.*/decree.* Oracle permissions
+// (ADR-030 beacons, rbac.md §Oracle) are present in the catalog as
+// 2-segment <resource>.<action>.
 func TestCatalog_OraclePermissions(t *testing.T) {
 	cases := []struct{ resource, action string }{
 		{"vigil", "create"}, {"vigil", "list"}, {"vigil", "delete"},
@@ -17,8 +17,8 @@ func TestCatalog_OraclePermissions(t *testing.T) {
 	}
 }
 
-// TestCatalog_OracleWildcard — vigil.* / decree.* валидны (cluster-admin `*`
-// покрывает; wildcard разворачивается на известные action-ы resource-а).
+// TestCatalog_OracleWildcard — vigil.* / decree.* are valid (cluster-admin
+// `*` covers them; the wildcard expands to the resource's known actions).
 func TestCatalog_OracleWildcard(t *testing.T) {
 	if !IsAllowedPermission("vigil", "*") {
 		t.Error("vigil.* should be valid (catalog has vigil.create etc)")

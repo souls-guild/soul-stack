@@ -9,52 +9,53 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// outboundBufferSize — длина per-stream outbound-канала (PM-decision 1
-// M2.5: buffered=10 + drop+log при переполнении). Stale-stream не
-// блокирует scenario-runner-а; back-pressure обратно в caller-а
-// обрабатывается явно — caller получает [ErrOutboundQueueFull].
+// outboundBufferSize — the length of the per-stream outbound channel
+// (PM-decision 1 M2.5: buffered=10 + drop+log on overflow). A stale stream
+// doesn't block the scenario-runner; back-pressure to the caller is
+// handled explicitly — the caller gets [ErrOutboundQueueFull].
 //
-// Размер выбран эмпирически: при нормальном flow один Soul видит
-// последовательно `ApplyRequest` (1 шт. на прогон), редкие
-// `CancelApply` и `SeedRotationReply` — 10 элементов покрывают burst
-// «оператор повторно нажал Cancel» без накопления mailbox-а.
+// The size was chosen empirically: in normal flow one Soul sees a sequence
+// of `ApplyRequest` (1 per run), with occasional `CancelApply` and
+// `SeedRotationReply` — 10 elements cover the burst of "the operator hit
+// Cancel repeatedly" without accumulating a mailbox backlog.
 const outboundBufferSize = 10
 
-// Sentinel-ошибки [StreamManager] / [Outbound].
+// Sentinel errors for [StreamManager] / [Outbound].
 var (
-	// ErrSoulNotConnected — нет активного EventStream-а на этом Keeper-е
-	// для запрошенного SID. Caller (scenario-runner) обязан проверить
-	// `souls.last_seen_at` и/или Redis heartbeat-кэш до Send-а — здесь
-	// мы фиксируем факт «у конкретно этого Keeper-инстанса нет стрима»
-	// (cluster-mode: другой Keeper может держать lease на тот же SID,
-	// маршрутизация между Keeper-инстансами — отдельный slice).
+	// ErrSoulNotConnected — there's no active EventStream on this Keeper
+	// for the requested SID. The caller (scenario-runner) must check
+	// `souls.last_seen_at` and/or the Redis heartbeat cache before
+	// sending — here we're just recording the fact that "this particular
+	// Keeper instance has no stream" (cluster-mode: another Keeper may
+	// hold the lease for the same SID; routing between Keeper instances is
+	// a separate slice).
 	ErrSoulNotConnected = errors.New("grpc: no active EventStream for sid")
 
-	// ErrOutboundQueueFull — per-stream outbound-канал переполнен. Soul
-	// не успевает принимать (медленная сеть / зависший receive-loop на
-	// клиенте). PM-decision 1: drop+log, caller получает sentinel и сам
-	// решает (для ApplyDispatch — fail прогона; для CancelApply — retry
-	// или skip; для SeedRotationReply — Soul retry-ует через свой
-	// rotation-loop).
+	// ErrOutboundQueueFull — the per-stream outbound channel is full. The
+	// Soul isn't keeping up (slow network / a stuck receive loop on the
+	// client). PM-decision 1: drop+log, the caller gets the sentinel and
+	// decides for itself (for ApplyDispatch — fail the run; for
+	// CancelApply — retry or skip; for SeedRotationReply — the Soul will
+	// retry via its own rotation loop).
 	ErrOutboundQueueFull = errors.New("grpc: outbound queue full for sid")
 )
 
-// streamEntry — per-stream state, хранящийся в [StreamManager].
+// streamEntry — per-stream state held in [StreamManager].
 //
-// Лежит за указателем, чтобы Lookup мог вернуть его наружу и
-// гарантировать, что concurrent Unregister не вырвет канал из-под
-// активного caller-а (channel close — единственная race-free операция,
-// см. [StreamManager.Unregister]).
+// Stored behind a pointer so Lookup can hand it out and guarantee that a
+// concurrent Unregister won't yank the channel out from under an active
+// caller (channel close is the only race-free operation, see
+// [StreamManager.Unregister]).
 //
-// cancel — отмена per-stream ctx (см. [StreamManager.RegisterStream]). Нужна
-// активному shedding-у (Watchman, soul-shedding S2): при устойчивой изоляции
-// Keeper-инстанса [StreamManager.CloseAll] отменяет ctx каждого стрима →
-// EventStream-handler выходит из receive-loop-а, делает штатный teardown
-// (Unregister/lease-Release LIFO), gRPC шлёт Soul-у EOF, и Soul по
-// reconnect-loop/failback-list уходит на живой Keeper. nil — стрим
-// зарегистрирован без cancel (тесты/Outbound через [StreamManager.Register]):
-// CloseAll такой стрим пропускает (закрытие outCh-канала всё равно произойдёт
-// штатным Unregister-ом).
+// cancel — cancels the per-stream ctx (see [StreamManager.RegisterStream]).
+// Needed for active shedding (Watchman, soul-shedding S2): when a Keeper
+// instance is being drained, [StreamManager.CloseAll] cancels every
+// stream's ctx → the EventStream handler exits its receive loop, does a
+// normal teardown (Unregister/lease-Release LIFO), gRPC sends the Soul an
+// EOF, and the Soul moves to a live Keeper via its reconnect-loop/failback
+// list. nil means the stream was registered without a cancel
+// (tests/Outbound via [StreamManager.Register]): CloseAll skips such a
+// stream (the outCh channel still gets closed via the normal Unregister).
 type streamEntry struct {
 	sid     string
 	outCh   chan *keeperv1.FromKeeper
@@ -63,22 +64,25 @@ type streamEntry struct {
 	closed  bool
 }
 
-// StreamManager — реестр активных EventStream-ов на текущем Keeper-инстансе.
+// StreamManager — the registry of active EventStreams on the current
+// Keeper instance.
 //
-// Ключ — SID (authoritative из mTLS peer-cert; см. [authenticatedSIDFrom]).
-// Значение — outbound-channel, в который пишутся `FromKeeper`-сообщения;
-// send-loop EventStream-handler-а вычитывает их и зовёт `stream.Send`.
+// Key — SID (authoritative from the mTLS peer cert; see
+// [authenticatedSIDFrom]). Value — the outbound channel that `FromKeeper`
+// messages are written to; the EventStream handler's send loop reads them
+// and calls `stream.Send`.
 //
-// Cluster-mode: per-Keeper-инстанс реестр; routing между Keeper-инстансами
-// (когда Soul держит стрим на Keeper-B, а Operator API вызывает SendApply
-// на Keeper-A) — отдельный slice (post-M2.5, через Redis pub/sub).
+// Cluster-mode: a per-Keeper-instance registry; routing between Keeper
+// instances (when a Soul holds a stream on Keeper-B but the Operator API
+// calls SendApply on Keeper-A) is a separate slice (post-M2.5, via Redis
+// pub/sub).
 type StreamManager struct {
 	mu      sync.RWMutex
 	entries map[string]*streamEntry
 	logger  *slog.Logger
 }
 
-// NewStreamManager собирает пустой реестр.
+// NewStreamManager assembles an empty registry.
 func NewStreamManager(logger *slog.Logger) *StreamManager {
 	return &StreamManager{
 		entries: make(map[string]*streamEntry),
@@ -86,33 +90,35 @@ func NewStreamManager(logger *slog.Logger) *StreamManager {
 	}
 }
 
-// Register регистрирует новый стрим для SID-а БЕЗ per-stream cancel-а и
-// возвращает outbound-channel. Тонкая обёртка над [StreamManager.RegisterStream]
-// для caller-ов, которым shedding не нужен (unit-тесты, ad-hoc регистрация в
-// Outbound-тестах): такой стрим [StreamManager.CloseAll] не отменяет (нечего
-// отменять), штатный teardown остаётся через Unregister.
+// Register registers a new stream for a SID WITHOUT a per-stream cancel
+// and returns the outbound channel. A thin wrapper over
+// [StreamManager.RegisterStream] for callers that don't need shedding
+// (unit tests, ad-hoc registration in Outbound tests): [StreamManager.CloseAll]
+// doesn't cancel such a stream (nothing to cancel), and normal teardown
+// still happens via Unregister.
 func (m *StreamManager) Register(sid string) <-chan *keeperv1.FromKeeper {
 	return m.RegisterStream(sid, nil)
 }
 
-// RegisterStream регистрирует новый стрим для SID-а с per-stream cancel-ом и
-// возвращает outbound-channel, который handler передаёт send-loop-у. Если на
-// тот же SID уже есть запись — старая закрывается (channel.close), новый стрим
-// вытесняет старый.
+// RegisterStream registers a new stream for a SID with a per-stream cancel
+// and returns the outbound channel that the handler hands to its send
+// loop. If an entry already exists for the same SID, the old one is closed
+// (channel.close) and the new stream evicts it.
 //
-// cancel — отмена производного от `stream.Context()` per-stream ctx; даёт
-// активному shedding-у ([StreamManager.CloseAll], Watchman S2) точку
-// принудительного закрытия стрима. nil допустим (см. [streamEntry.cancel] /
+// cancel — cancels the per-stream ctx derived from `stream.Context()`; it
+// gives active shedding ([StreamManager.CloseAll], Watchman S2) a point to
+// force-close the stream. nil is allowed (see [streamEntry.cancel] /
 // [StreamManager.Register]).
 //
-// Вытеснение симметрично Redis SoulLease (см. [eventStreamHandler.acquireSoulLease]):
-// если внутри одного Keeper-инстанса Soul переподключился (например,
-// после клиент-side reconnect), новый стрим имеет приоритет — старый
-// receive-loop в любом случае получит io.EOF/Canceled на следующем Recv.
-// cancel вытесняемого стрима НЕ дёргается: его receive-loop уже выходит сам
-// (eviction идёт по новому Register-у того же SID-а, т.е. Soul переподключился —
-// старый стрим закрывается gRPC-уровнем), а лишняя отмена прошла бы по уже
-// сменившемуся в map-е entry.
+// Eviction is symmetric with the Redis SoulLease (see
+// [eventStreamHandler.acquireSoulLease]): if a Soul reconnects within the
+// same Keeper instance (e.g. after a client-side reconnect), the new
+// stream takes priority — the old receive loop will get io.EOF/Canceled on
+// its next Recv regardless. The evicted stream's cancel is NOT invoked:
+// its receive loop is already exiting on its own (the eviction is driven
+// by a new Register on the same SID, i.e. the Soul reconnected and the old
+// stream is being closed at the gRPC level), and an extra cancel would hit
+// an entry that's already been replaced in the map.
 func (m *StreamManager) RegisterStream(sid string, cancel context.CancelFunc) <-chan *keeperv1.FromKeeper {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -132,13 +138,13 @@ func (m *StreamManager) RegisterStream(sid string, cancel context.CancelFunc) <-
 	return entry.outCh
 }
 
-// Unregister удаляет запись и закрывает outbound-channel. Idempotent:
-// повторный вызов — no-op. Caller (handler defer) обязан вызвать после
-// окончания receive-loop-а.
+// Unregister removes the entry and closes the outbound channel.
+// Idempotent: a repeated call is a no-op. The caller (handler defer) must
+// call it after the receive loop ends.
 //
-// Принимает SID и pointer на entry-владельца (через owner-handle получаем
-// гарантию, что мы удаляем СВОЙ entry, а не вытеснителя из конкурентного
-// Register).
+// Takes the SID and a pointer to the owning entry (the owner handle
+// guarantees we're removing OUR OWN entry, not one that evicted us via a
+// concurrent Register).
 func (m *StreamManager) Unregister(sid string, owner <-chan *keeperv1.FromKeeper) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -147,9 +153,9 @@ func (m *StreamManager) Unregister(sid string, owner <-chan *keeperv1.FromKeeper
 	if !ok {
 		return
 	}
-	// Сравнение каналов — это сравнение указателей внутри chan-header-а;
-	// если в map уже лежит более новый entry (нас вытеснил Register),
-	// owner-канал не совпадает — не трогаем.
+	// Comparing channels compares the pointers inside the chan header; if
+	// the map already holds a newer entry (we were evicted by a Register),
+	// the owner channel won't match — don't touch it.
 	if (<-chan *keeperv1.FromKeeper)(entry.outCh) != owner {
 		return
 	}
@@ -157,18 +163,19 @@ func (m *StreamManager) Unregister(sid string, owner <-chan *keeperv1.FromKeeper
 	delete(m.entries, sid)
 }
 
-// lookup — read-lock получение entry. nil если стрима нет.
+// lookup — fetches the entry under a read lock. nil if there's no stream.
 func (m *StreamManager) lookup(sid string) *streamEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.entries[sid]
 }
 
-// SIDs возвращает снимок SID-ов всех активных стримов на этом Keeper-инстансе.
-// Снимок копируется под RLock — caller итерирует свободно, конкурентные
-// Register/Unregister не держатся. Используется cluster-wide Sigil-re-broadcast-ом
-// (S6c): по invalidate-сигналу нода раздаёт свежий active-набор каждому своему
-// подключённому Soul-у. Порядок не гарантирован (map-итерация).
+// SIDs returns a snapshot of the SIDs of all active streams on this Keeper
+// instance. The snapshot is copied under RLock — the caller iterates
+// freely, without holding up concurrent Register/Unregister calls. Used by
+// the cluster-wide Sigil re-broadcast (S6c): on an invalidate signal, a
+// node distributes the fresh active set to each of its connected Souls.
+// Order is not guaranteed (map iteration).
 func (m *StreamManager) SIDs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -179,22 +186,24 @@ func (m *StreamManager) SIDs() []string {
 	return out
 }
 
-// CloseAll принудительно закрывает ВСЕ локальные стримы — отменяет per-stream
-// ctx каждого зарегистрированного entry (soul-shedding S2, Watchman). Возвращает
-// число стримов, у которых cancel был дёрнут (для лога/метрики caller-а).
+// CloseAll force-closes ALL local streams — cancels the per-stream ctx of
+// every registered entry (soul-shedding S2, Watchman). Returns the number
+// of streams whose cancel was invoked (for the caller's log/metric).
 //
-// Отмена ctx будит receive-loop EventStream-handler-а (`ctx.Err() != nil` →
-// return nil), и handler делает СВОЙ штатный teardown (Unregister →
-// lease-Release LIFO). CloseAll сам outCh-каналы НЕ закрывает и записи из map-а
-// НЕ удаляет — это сделает handler-овский Unregister, чтобы не разъехаться с
-// его defer-цепочкой (двойное закрытие/удаление-под-ногами). Поэтому повторный
-// CloseAll до того, как handler-ы реально вышли, снова дёрнет те же cancel-ы —
-// это идемпотентно (context.CancelFunc безопасна к повторному вызову).
+// Cancelling the ctx wakes up the EventStream handler's receive loop
+// (`ctx.Err() != nil` → return nil), and the handler does its OWN normal
+// teardown (Unregister → lease-Release LIFO). CloseAll itself does NOT
+// close the outCh channels and does NOT remove entries from the map — the
+// handler's Unregister does that, so it doesn't race with its own defer
+// chain (double close/remove-under-your-feet). So a repeated CloseAll
+// before the handlers have actually exited invokes the same cancels again
+// — this is idempotent (context.CancelFunc is safe to call repeatedly).
 //
-// Снимок cancel-ов снимается под RLock, сами cancel-ы вызываются вне lock-а:
-// cancel дешёвый, но teardown handler-а (он сработает синхронно с отменой в
-// другой горутине) может попытаться взять Lock на Unregister — держать write-lock
-// тут было бы deadlock-prone, RLock + вызов снаружи исключает это.
+// The snapshot of cancels is taken under RLock, and the cancels themselves
+// are invoked outside the lock: cancel is cheap, but the handler's
+// teardown (which fires synchronously with the cancel, in another
+// goroutine) may try to take the Lock in Unregister — holding a write lock
+// here would be deadlock-prone; RLock plus calling outside it avoids that.
 func (m *StreamManager) CloseAll() int {
 	m.mu.RLock()
 	cancels := make([]context.CancelFunc, 0, len(m.entries))
@@ -211,8 +220,8 @@ func (m *StreamManager) CloseAll() int {
 	return len(cancels)
 }
 
-// close — идемпотентное закрытие канала. Под closeMu, чтобы повторный
-// Unregister/eviction не паниковал на double-close.
+// close — idempotent channel close. Guarded by closeMu so a repeated
+// Unregister/eviction doesn't panic on a double close.
 func (e *streamEntry) close() {
 	e.closeMu.Lock()
 	defer e.closeMu.Unlock()
@@ -223,9 +232,10 @@ func (e *streamEntry) close() {
 	close(e.outCh)
 }
 
-// send — non-blocking enqueue. true → принято, false → channel-buffer
-// полон или закрыт (расцениваем оба как fail; closed-канал не должен
-// существовать без Unregister-а, но защищаемся от race-окна).
+// send — non-blocking enqueue. true → accepted, false → the channel
+// buffer is full or closed (we treat both as failure; a closed channel
+// shouldn't exist without an Unregister, but we guard against the race
+// window).
 func (e *streamEntry) send(msg *keeperv1.FromKeeper) bool {
 	e.closeMu.Lock()
 	if e.closed {

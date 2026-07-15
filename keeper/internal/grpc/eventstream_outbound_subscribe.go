@@ -9,29 +9,29 @@ import (
 
 // Cluster-mode outbound-subscribe loop (ADR-002 HA).
 //
-// Когда EventStream-handler регистрирует стрим в StreamManager на
-// Keeper-B, параллельно подписывается на Redis pub/sub-канал
-// `outbound:<sid>`. Другой Keeper-инстанс (Keeper-A), у которого
-// Outbound.SendApply не нашёл локального стрима и увидел в lease
-// `holder == kid-B`, публикует туда FromKeeper-сообщение. Subscriber
-// здесь форвардит его в локальный outbound-channel того же entry.
+// When the EventStream handler registers a stream in StreamManager on
+// Keeper-B, it also subscribes to the Redis pub/sub channel
+// `outbound:<sid>`. Another Keeper instance (Keeper-A), whose
+// Outbound.SendApply found no local stream and saw `holder == kid-B` in
+// the lease, publishes a FromKeeper message there. The subscriber here
+// forwards it to the local outbound channel of the same entry.
 //
-// Self-фильтрация по `origin_kid` — на стороне
-// [keeperredis.SubscribeOutbound]; сюда уже доходят сообщения,
-// опубликованные другими Keeper-инстансами.
+// Self-filtering by `origin_kid` happens on the
+// [keeperredis.SubscribeOutbound] side; only messages published by other
+// Keeper instances reach this point.
 
-// startOutboundSubscriber поднимает Redis-подписку и forward-goroutine
-// для cluster-mode routing-а. Возвращает cleanup-функцию (Close
-// pub/sub) и канал, который закрывается при выходе forward-goroutine.
+// startOutboundSubscriber sets up the Redis subscription and the forward
+// goroutine for cluster-mode routing. Returns a cleanup function (closes
+// the pub/sub) and a channel that closes when the forward goroutine exits.
 //
-// Если Manager==nil или Redis==nil — cluster-routing выключен:
-// возвращаем (nil cleanup, сразу закрытый done). Caller (handler)
-// просто ждёт done и игнорирует nil-cleanup.
+// If Manager==nil or Redis==nil, cluster routing is disabled: returns
+// (nil cleanup, an already-closed done). The caller (handler) just waits
+// on done and ignores the nil cleanup.
 //
-// Ошибка подписки → warn-лог, cluster-routing деградирует до
-// per-instance (locally-only); handler продолжает работу — критичных
-// инвариантов это не ломает (просто Outbound.SendApply с другого
-// Keeper-а вернёт ErrSoulNotConnected, и caller увидит штатный
+// A subscribe error logs a warning and cluster routing degrades to
+// per-instance (locally-only); the handler keeps running — this breaks no
+// critical invariant (Outbound.SendApply from another Keeper will simply
+// return ErrSoulNotConnected, and the caller sees the regular
 // "no subscribers" error).
 func (h *eventStreamHandler) startOutboundSubscriber(ctx context.Context, sid string, done chan<- struct{}) func() {
 	if h.deps.Manager == nil || h.deps.Redis == nil {
@@ -48,10 +48,10 @@ func (h *eventStreamHandler) startOutboundSubscriber(ctx context.Context, sid st
 		close(done)
 		return nil
 	}
-	// Ждём подтверждения от Redis, что подписка зарегистрирована — иначе
-	// PublishOutbound, вызванный сразу после захвата lease на этой
-	// стороне, мог бы промахнуться. Не блокируемся бесконечно:
-	// разумный таймаут привязан к ctx стрима.
+	// Wait for Redis to confirm the subscription is registered — otherwise
+	// a PublishOutbound called right after this side acquires the lease
+	// could miss it. Don't block forever: a sane timeout is tied to the
+	// stream ctx.
 	if err := sub.Ready(ctx); err != nil {
 		h.logger.Warn("eventstream: outbound pub/sub Ready failed",
 			slog.String("sid", sid),
@@ -72,9 +72,9 @@ func (h *eventStreamHandler) runOutboundSubscriber(sid string, sub *keeperredis.
 	for msg := range in {
 		entry := h.deps.Manager.lookup(sid)
 		if entry == nil {
-			// Стрим уже Unregister-ован — это конкурентный shutdown.
-			// Сообщение теряется (fire-and-forget семантика pub/sub-а
-			// по PM-decision 5).
+			// The stream was already Unregistered — this is a concurrent
+			// shutdown. The message is dropped (fire-and-forget pub/sub
+			// semantics per PM-decision 5).
 			h.logger.Debug("eventstream: outbound subscriber dropping message — no local entry",
 				slog.String("sid", sid))
 			continue

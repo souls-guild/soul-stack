@@ -5,31 +5,32 @@ import (
 	"time"
 )
 
-// defaultLastSeenFlushFactor — делитель reaper `stale_after`, дающий
-// throttle-интервал PG-flush-а `last_seen_at`. При дефолтном
-// `mark_disconnected.stale_after = 90s` → flush раз в 30s на каждый SID.
+// defaultLastSeenFlushFactor — divisor of the reaper's `stale_after` that
+// gives the throttle interval for the `last_seen_at` PG flush. With the
+// default `mark_disconnected.stale_after = 90s`, that's a flush every 30s
+// per SID.
 //
-// 1/3 выбрана так, чтобы внутри окна disconnect-порога заведомо умещалось
-// ≥2 flush-а: даже при пропуске одного (нет app-сообщений в окне) следующий
-// успеет освежить snapshot до того, как Reaper сочтёт стрим мёртвым. Меньший
-// делитель → лишние UPDATE-ы в PG; больший → риск ложного disconnected при
-// редком трафике стрима.
+// 1/3 is chosen so that the disconnect-threshold window reliably fits ≥2
+// flushes: even if one is missed (no app messages in the window), the next
+// one refreshes the snapshot before the Reaper considers the stream dead.
+// A smaller divisor means extra PG UPDATEs; a larger one risks a false
+// disconnected on low-traffic streams.
 const defaultLastSeenFlushFactor = 3
 
-// lastSeenFlusher — per-SID throttle PG-flush-а `souls.last_seen_at`.
+// lastSeenFlusher — per-SID throttle for the `souls.last_seen_at` PG flush.
 //
-// Live-стрим обновляет heartbeat в Redis на каждое app-сообщение
-// ([eventStreamHandler.touchSeen]); это быстрый слой. PG-snapshot нужен
-// Reaper-у (`mark_disconnected` смотрит на `souls.last_seen_at`) и
-// Operator API — но писать в PG на каждое сообщение слишком тяжело.
-// Flusher пропускает в PG не чаще раза в [lastSeenFlusher.interval] на
-// каждый SID (in-memory last-flush time).
+// A live stream updates the heartbeat in Redis on every app message
+// ([eventStreamHandler.touchSeen]); that's the fast layer. The PG snapshot
+// is needed by the Reaper (`mark_disconnected` looks at
+// `souls.last_seen_at`) and the Operator API — but writing to PG on every
+// message is too heavy. The flusher lets through at most one PG write per
+// [lastSeenFlusher.interval] per SID (in-memory last-flush time).
 //
-// Стейт привязан к handler-инстансу (один на EventStream-listener). При
-// multi-instance каждый Keeper флашит только SID-ы своих стримов
-// (гарантия [SoulLease] — один Keeper на SID одновременно); при переезде
-// стрима на другой Keeper новый handler throttle-времени не знает и
-// флашит сразу — безопасно (один лишний UPDATE при failover).
+// State is tied to the handler instance (one per EventStream listener).
+// Under multi-instance, each Keeper only flushes SIDs of its own streams
+// (guaranteed by [SoulLease] — one Keeper per SID at a time); when a stream
+// moves to another Keeper, the new handler doesn't know the throttle time
+// and flushes right away — safe (one extra UPDATE on failover).
 type lastSeenFlusher struct {
 	interval time.Duration
 
@@ -44,10 +45,10 @@ func newLastSeenFlusher(interval time.Duration) *lastSeenFlusher {
 	}
 }
 
-// shouldFlush сообщает, пора ли сбросить `last_seen_at` для sid в PG, и при
-// положительном ответе атомарно фиксирует now как момент последнего flush-а.
-// Так гарантируется, что между двумя true-ответами для одного SID проходит
-// не меньше [lastSeenFlusher.interval], даже при конкурентных вызовах.
+// shouldFlush reports whether it's time to flush `last_seen_at` for sid to
+// PG, and on a positive answer atomically records now as the last-flush
+// moment. This guarantees at least [lastSeenFlusher.interval] between two
+// true answers for the same SID, even under concurrent calls.
 func (f *lastSeenFlusher) shouldFlush(sid string, now time.Time) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -59,9 +60,10 @@ func (f *lastSeenFlusher) shouldFlush(sid string, now time.Time) bool {
 	return true
 }
 
-// forget убирает SID из throttle-стейта — вызывается при закрытии стрима,
-// чтобы карта не росла на disconnected-Soul-ах. Следующее подключение того
-// же SID начнёт с чистого листа (flush сразу), что и нужно.
+// forget removes the SID from the throttle state — called when the stream
+// closes, so the map doesn't grow with disconnected Souls. The next
+// connection of the same SID starts with a clean slate (flush right away),
+// which is what we want.
 func (f *lastSeenFlusher) forget(sid string) {
 	f.mu.Lock()
 	delete(f.lastByID, sid)

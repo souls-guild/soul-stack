@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// fakeSource — управляемый SnapshotSource для тестов Holder без Postgres-а.
-// Снимок и ошибка меняются между Refresh-ами под Mutex-ом (Run читает в
-// фоне).
+// fakeSource is a controllable SnapshotSource for testing Holder without
+// Postgres. The snapshot and error are changed between Refreshes under a
+// Mutex (Run reads in the background).
 type fakeSource struct {
 	mu   sync.Mutex
 	snap *Snapshot
@@ -36,8 +36,8 @@ func (f *fakeSource) set(snap *Snapshot, err error) {
 	f.err = err
 }
 
-// snapshotWith — хелпер: снимок с одной ролью cluster-admin (perm `*`) и
-// заданным списком привязанных AID.
+// snapshotWith is a helper: a snapshot with one cluster-admin role (perm
+// `*`) and a given list of bound AIDs.
 func adminSnapshot(aids ...string) *Snapshot {
 	s := &Snapshot{
 		Roles:      map[string][]string{"cluster-admin": {"*"}},
@@ -80,12 +80,12 @@ func TestHolder_Refresh_PicksUpNewMembership(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 
-	// До перечита Bob не админ.
+	// Before reload, Bob isn't an admin.
 	if err := h.Check("archon-bob", "operator", "create", nil); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("bob should be denied before refresh: %v", err)
 	}
 
-	// Меняем снимок в БД: Bob тоже cluster-admin.
+	// Change the snapshot in the DB: Bob becomes cluster-admin too.
 	src.set(adminSnapshot("archon-alice", "archon-bob"), nil)
 	if err := h.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
@@ -106,7 +106,7 @@ func TestHolder_Refresh_ErrorKeepsPrevEnforcer(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 
-	// Перечит падает — активный enforcer должен остаться прежним.
+	// Reload fails — the active enforcer should stay unchanged.
 	src.set(nil, errors.New("db blip"))
 	if err := h.Refresh(context.Background()); err == nil {
 		t.Fatal("Refresh should return error on Load failure")
@@ -123,8 +123,8 @@ func TestHolder_Refresh_BadPermissionKeepsPrevEnforcer(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 
-	// Снимок с невалидной permission (вне каталога) → NewEnforcerFromSnapshot
-	// падает; активный enforcer не меняется.
+	// A snapshot with an invalid permission (outside the catalog) →
+	// NewEnforcerFromSnapshot fails; the active enforcer is unchanged.
 	src.set(&Snapshot{
 		Roles:      map[string][]string{"bad": {"unknown.create"}},
 		Membership: map[string][]string{"archon-bob": {"bad"}},
@@ -148,13 +148,14 @@ func TestHolder_Run_TTLPolls(t *testing.T) {
 	defer cancel()
 	go h.Run(ctx)
 
-	// Меняем снимок; фоновый ticker должен подхватить за несколько интервалов.
+	// Change the snapshot; the background ticker should pick it up within a
+	// few intervals.
 	src.set(adminSnapshot("archon-alice", "archon-bob"), nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if err := h.Check("archon-bob", "operator", "create", nil); err == nil {
-			break // подхвачено
+			break // picked up
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("TTL-poll did not pick up new membership within deadline")
@@ -171,18 +172,18 @@ func TestHolder_NilSource_DefaultDeny(t *testing.T) {
 	if err := h.Check("archon-anyone", "operator", "create", nil); !errors.Is(err, ErrPermissionDenied) {
 		t.Errorf("nil-source Holder should deny: %v", err)
 	}
-	// Run при nil-src — no-op, не виснет.
+	// Run with nil src is a no-op — doesn't hang.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	h.Run(ctx)
 }
 
-// fakeInvalidationSource — управляемый [InvalidationSource] для тестов
-// WatchInvalidations без Redis-а. invalidate() имитирует приход чужого
-// invalidate-сигнала; Watch блокируется до ctx.Done() или fatalErr.
+// fakeInvalidationSource is a controllable [InvalidationSource] for testing
+// WatchInvalidations without Redis. invalidate() simulates a remote
+// invalidate signal arriving; Watch blocks until ctx.Done() or fatalErr.
 type fakeInvalidationSource struct {
 	signals chan struct{}
-	err     error // если задан — Watch возвращает её сразу (имитация фатальной подписки)
+	err     error // if set, Watch returns it immediately (simulates a fatal subscribe)
 }
 
 func newFakeInvalidationSource() *fakeInvalidationSource {
@@ -205,9 +206,9 @@ func (f *fakeInvalidationSource) Watch(ctx context.Context, onInvalidate func())
 	}
 }
 
-// TestHolder_WatchInvalidations_NearInstantRefresh — приход invalidate-сигнала
-// рефрешит снимок из БД БЕЗ ожидания TTL-poll-а (interval=час, тик не сработает
-// в окне теста).
+// TestHolder_WatchInvalidations_NearInstantRefresh — an invalidate signal
+// arriving refreshes the snapshot from the DB WITHOUT waiting for the TTL
+// poll (interval=1 hour, the tick won't fire within the test window).
 func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 	src := &fakeSource{snap: adminSnapshot("archon-alice")}
 	h, err := NewHolder(context.Background(), src, time.Hour, nil)
@@ -220,20 +221,20 @@ func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 	defer cancel()
 	go h.WatchInvalidations(ctx, invSrc)
 
-	// До инвалидации Bob не админ.
+	// Before invalidation, Bob isn't an admin.
 	if err := h.Check("archon-bob", "operator", "create", nil); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("bob should be denied before invalidate: %v", err)
 	}
 
-	// Меняем снимок в БД и шлём invalidate — Holder должен near-instant
-	// перечитать (не дожидаясь часового TTL-тика).
+	// Change the snapshot in the DB and send invalidate — Holder should
+	// reload near-instantly (without waiting for the hourly TTL tick).
 	src.set(adminSnapshot("archon-alice", "archon-bob"), nil)
 	invSrc.invalidate()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if err := h.Check("archon-bob", "operator", "create", nil); err == nil {
-			break // подхвачено через pub/sub-invalidate
+			break // picked up via pub/sub invalidate
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("invalidate did not trigger near-instant refresh within deadline")
@@ -242,9 +243,9 @@ func TestHolder_WatchInvalidations_NearInstantRefresh(t *testing.T) {
 	}
 }
 
-// TestHolder_WatchInvalidations_TTLFallbackStillWorks — даже когда invalidate
-// НЕ приходит (потеря сообщения / нет pub/sub), TTL-poll [Run] всё равно
-// рефрешит снимок. B2 = B1 + pub/sub, fallback не сломан.
+// TestHolder_WatchInvalidations_TTLFallbackStillWorks — even when invalidate
+// does NOT arrive (dropped message / no pub/sub), TTL poll [Run] still
+// refreshes the snapshot. B2 = B1 + pub/sub, the fallback isn't broken.
 func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	src := &fakeSource{snap: adminSnapshot("archon-alice")}
 	h, err := NewHolder(context.Background(), src, 5*time.Millisecond, nil)
@@ -255,16 +256,17 @@ func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	invSrc := newFakeInvalidationSource()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go h.Run(ctx)                        // TTL-poll
-	go h.WatchInvalidations(ctx, invSrc) // pub/sub — но сигнал НЕ шлём
+	go h.Run(ctx)                        // TTL poll
+	go h.WatchInvalidations(ctx, invSrc) // pub/sub — but we don't send the signal
 
-	// Меняем снимок, invalidate НЕ шлём — подхватить должен только TTL-poll.
+	// Change the snapshot, don't send invalidate — only TTL poll should pick
+	// it up.
 	src.set(adminSnapshot("archon-alice", "archon-bob"), nil)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if err := h.Check("archon-bob", "operator", "create", nil); err == nil {
-			break // подхвачено TTL-poll-ом (fallback)
+			break // picked up by TTL poll (fallback)
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("TTL-poll fallback did not pick up change without invalidate")
@@ -273,9 +275,9 @@ func TestHolder_WatchInvalidations_TTLFallbackStillWorks(t *testing.T) {
 	}
 }
 
-// TestHolder_WatchInvalidations_FatalSubscribeFailSoft — фатальная ошибка
-// подписки НЕ роняет: WatchInvalidations возвращается (логирует warn), daemon
-// продолжает на TTL-poll.
+// TestHolder_WatchInvalidations_FatalSubscribeFailSoft — a fatal subscribe
+// error does NOT bring things down: WatchInvalidations returns (logs a
+// warning), the daemon continues on TTL polling.
 func TestHolder_WatchInvalidations_FatalSubscribeFailSoft(t *testing.T) {
 	src := &fakeSource{snap: adminSnapshot("archon-alice")}
 	h, err := NewHolder(context.Background(), src, time.Hour, nil)
@@ -292,26 +294,27 @@ func TestHolder_WatchInvalidations_FatalSubscribeFailSoft(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		// OK — вернулся без паники/виса.
+		// OK — returned without panicking/hanging.
 	case <-time.After(2 * time.Second):
 		t.Fatal("WatchInvalidations did not return on fatal subscribe error")
 	}
 }
 
-// TestHolder_WatchInvalidations_NilSourceNoop — при nil-БД-источнике или
-// nil-инвалидаторе Watch — no-op (нечего рефрешить / некуда подписываться).
+// TestHolder_WatchInvalidations_NilSourceNoop — with a nil DB source or a
+// nil invalidator, Watch is a no-op (nothing to refresh / nowhere to
+// subscribe).
 func TestHolder_WatchInvalidations_NilSourceNoop(t *testing.T) {
-	// nil-БД-источник: Holder в default-deny, Watch сразу выходит.
+	// nil DB source: Holder is in default-deny, Watch returns immediately.
 	h, err := NewHolder(context.Background(), nil, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("NewHolder(nil src): %v", err)
 	}
-	h.WatchInvalidations(context.Background(), newFakeInvalidationSource()) // не виснет
+	h.WatchInvalidations(context.Background(), newFakeInvalidationSource()) // doesn't hang
 
-	// nil-инвалидатор при живом БД-источнике: тоже no-op.
+	// nil invalidator with a live DB source: also a no-op.
 	h2, err := NewHolder(context.Background(), &fakeSource{snap: adminSnapshot("archon-alice")}, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("NewHolder: %v", err)
 	}
-	h2.WatchInvalidations(context.Background(), nil) // не виснет
+	h2.WatchInvalidations(context.Background(), nil) // doesn't hang
 }

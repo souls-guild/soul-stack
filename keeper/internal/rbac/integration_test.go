@@ -1,11 +1,12 @@
 //go:build integration
 
-// Integration-тесты RBAC-repository (ADR-028 Фаза 1) через testcontainers-go.
+// Integration tests for the RBAC repository (ADR-028 Phase 1) via
+// testcontainers-go.
 //
-// Поднимают postgres:16-alpine, применяют миграции 026/027, проверяют
-// LoadSnapshot / GrantOperator против реальной БД. Один контейнер per-package.
+// Spins up postgres:16-alpine, applies migrations 026/027, and checks
+// LoadSnapshot / GrantOperator against a real DB. One container per package.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/rbac/
 
@@ -75,11 +76,11 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// resetRBAC приводит RBAC-таблицы в исходное состояние «только seed-роль
-// cluster-admin». TRUNCATE operators CASCADE каскадно truncate-ит и rbac_roles
-// (FK created_by_aid → operators) вместе с её permissions/membership — поэтому
-// после wipe ре-сидим cluster-admin идемпотентно (в проде её держит миграция
-// 027; здесь воспроизводим post-wipe-состояние явно).
+// resetRBAC restores the RBAC tables to the initial "seed cluster-admin role
+// only" state. TRUNCATE operators CASCADE also cascades into rbac_roles (FK
+// created_by_aid → operators) along with its permissions/membership — so
+// after the wipe we idempotently reseed cluster-admin (migration 027 seeds
+// it in prod; here we reproduce the post-wipe state explicitly).
 func resetRBAC(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -99,11 +100,12 @@ func resetRBAC(t *testing.T) {
 	}
 }
 
-// seedOperator вставляет оператора для удовлетворения FK rbac_role_operators.aid.
+// seedOperator inserts an operator to satisfy the rbac_role_operators.aid FK.
 //
-// bootstrap=true → created_by_aid IS NULL (первый Архонт; ровно один разрешён
-// partial unique index-ом). Последующие операторы вставляются с
-// createdBy=<bootstrap-aid>, иначе нарушат operators_first_archon_idx.
+// bootstrap=true → created_by_aid IS NULL (the first Archon; exactly one is
+// allowed by the partial unique index). Subsequent operators must be
+// inserted with createdBy=<bootstrap-aid>, otherwise they violate
+// operators_first_archon_idx.
 func seedOperator(t *testing.T, aid string, createdBy *string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -129,7 +131,7 @@ func TestIntegration_LoadSnapshot_SeedOnly(t *testing.T) {
 	if len(perms) != 1 || perms[0] != "*" {
 		t.Errorf("cluster-admin perms = %v, want [*]", perms)
 	}
-	// Без membership-а — пустой Membership.
+	// No membership yet — Membership should be empty.
 	if len(snap.Membership) != 0 {
 		t.Errorf("Membership = %v, want empty (no grants yet)", snap.Membership)
 	}
@@ -143,7 +145,7 @@ func TestIntegration_GrantOperator_Idempotent(t *testing.T) {
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("GrantOperator #1: %v", err)
 	}
-	// Повторный grant той же пары — no-op (ON CONFLICT DO NOTHING).
+	// A repeat grant of the same pair is a no-op (ON CONFLICT DO NOTHING).
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("GrantOperator #2 (idempotent): %v", err)
 	}
@@ -157,7 +159,7 @@ func TestIntegration_GrantOperator_Idempotent(t *testing.T) {
 		t.Errorf("membership rows = %d, want 1 (idempotent)", n)
 	}
 
-	// granted_by_aid IS NULL у bootstrap-membership-а.
+	// granted_by_aid IS NULL for a bootstrap membership.
 	var grantedBy *string
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT granted_by_aid FROM rbac_role_operators WHERE aid = 'archon-alice'`).Scan(&grantedBy); err != nil {
@@ -218,10 +220,10 @@ func TestIntegration_GrantOperator_FKViolation_UnknownAID(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoadSnapshot_IncludesRevoked — ADR-014 Amendment 2026-05-27:
-// после UPDATE operators.revoked_at LoadSnapshot отдаёт ревокнутого AID в
-// Snapshot.Revoked; активные операторы там отсутствуют. Полный путь
-// «revoke → enforcer.Check вернёт ErrOperatorRevoked».
+// TestIntegration_LoadSnapshot_IncludesRevoked — ADR-014 Amendment
+// 2026-05-27: after UPDATE operators.revoked_at, LoadSnapshot returns the
+// revoked AID in Snapshot.Revoked; active operators aren't there. Full path:
+// "revoke → enforcer.Check returns ErrOperatorRevoked".
 func TestIntegration_LoadSnapshot_IncludesRevoked(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -245,8 +247,8 @@ func TestIntegration_LoadSnapshot_IncludesRevoked(t *testing.T) {
 		t.Errorf("Revoked[archon-active] = true, want false (активный оператор не в выборке)")
 	}
 
-	// Сквозной путь: enforcer построен из снимка → Check для revoked AID
-	// возвращает ErrOperatorRevoked.
+	// End-to-end path: enforcer built from the snapshot → Check for a
+	// revoked AID returns ErrOperatorRevoked.
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-fired", &active); err != nil {
 		t.Fatalf("GrantOperator: %v", err)
 	}
@@ -263,14 +265,15 @@ func TestIntegration_LoadSnapshot_IncludesRevoked(t *testing.T) {
 	}
 }
 
-// TestIntegration_Snapshot_To_Enforcer — full path: grant двух ролей одному
-// AID, LoadSnapshot → NewEnforcerFromSnapshot → Check резолвит union permissions.
+// TestIntegration_Snapshot_To_Enforcer — full path: grant two roles to one
+// AID, LoadSnapshot → NewEnforcerFromSnapshot → Check resolves the union of
+// permissions.
 func TestIntegration_Snapshot_To_Enforcer(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
 	seedOperator(t, "archon-x", nil)
 
-	// Кастомная роль soul-reader через прямой INSERT (role.create — Фаза 2).
+	// Custom soul-reader role via a direct INSERT (role.create is Phase 2).
 	if _, err := integrationPool.Exec(ctx,
 		`INSERT INTO rbac_roles (name, builtin) VALUES ('soul-reader', false)`); err != nil {
 		t.Fatalf("insert role: %v", err)
@@ -299,10 +302,11 @@ func TestIntegration_Snapshot_To_Enforcer(t *testing.T) {
 	}
 }
 
-// TestIntegration_SynodMembershipUnion — ADR-049 на реальной PG: роль через
-// Synod даёт permission так же, как прямой грант (Check). seedSynod + добавление
-// архона в группу (synod_operators) + bundle роли в группу (synod_roles) →
-// LoadSnapshot разворачивает union → enforcer.Check проходит.
+// TestIntegration_SynodMembershipUnion — ADR-049 against real PG: a role via
+// Synod grants permission the same way as a direct grant (Check). Seeding a
+// Synod + adding an archon to the group (synod_operators) + bundling a role
+// into the group (synod_roles) → LoadSnapshot expands the union →
+// enforcer.Check passes.
 func TestIntegration_SynodMembershipUnion(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -336,8 +340,9 @@ func TestIntegration_SynodMembershipUnion(t *testing.T) {
 	}
 }
 
-// TestIntegration_SynodCascadeOnDelete — ADR-049(d): DELETE synods каскадно
-// чистит synod_operators и synod_roles (FK ON DELETE CASCADE с обеих сторон).
+// TestIntegration_SynodCascadeOnDelete — ADR-049(d): DELETE synods cascades
+// to clean up synod_operators and synod_roles (FK ON DELETE CASCADE on both
+// sides).
 func TestIntegration_SynodCascadeOnDelete(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -370,9 +375,10 @@ func TestIntegration_SynodCascadeOnDelete(t *testing.T) {
 	}
 }
 
-// TestIntegration_SynodRoleCascadeOnRoleDelete — ADR-049(d): DELETE rbac_roles
-// снимает роль из всех Synod-bundle-ов (synod_roles FK на rbac_roles ON DELETE
-// CASCADE), не трогая саму группу и её membership.
+// TestIntegration_SynodRoleCascadeOnRoleDelete — ADR-049(d): DELETE
+// rbac_roles removes the role from all Synod bundles (synod_roles FK to
+// rbac_roles ON DELETE CASCADE) without touching the group itself or its
+// membership.
 func TestIntegration_SynodRoleCascadeOnRoleDelete(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -401,7 +407,8 @@ func TestIntegration_SynodRoleCascadeOnRoleDelete(t *testing.T) {
 	if roleRows != 0 {
 		t.Errorf("synod_roles rows = %d after DELETE role, want 0 (ON DELETE CASCADE)", roleRows)
 	}
-	// Группа и её membership остаются (роль ушла — bundle опустел).
+	// The group and its membership remain (the role is gone — the bundle is
+	// now empty).
 	var opRows int64
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM synod_operators WHERE synod_name = 'team-prod'`).Scan(&opRows); err != nil {

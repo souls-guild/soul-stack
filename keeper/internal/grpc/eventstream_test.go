@@ -22,8 +22,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeSeedDB — реализация [soulseed.ExecQueryRower] на in-memory map-е.
-// Используется для unit-тестов [SeedAuthenticator].
+// fakeSeedDB — an [soulseed.ExecQueryRower] implementation over an
+// in-memory map. Used for [SeedAuthenticator] unit tests.
 type fakeSeedDB struct {
 	byFingerprint map[string]fakeSeedRow
 	queryErr      error
@@ -66,7 +66,7 @@ type fakeRowVal struct {
 }
 
 func (r fakeRowVal) Scan(dest ...any) error {
-	// Порядок совпадает с selectByFingerprintSQL в soulseed/crud.go:
+	// Order matches selectByFingerprintSQL in soulseed/crud.go:
 	// seed_id, sid, fingerprint, serial_number, issued_at, expires_at,
 	// issued_by_kid, status, revocation_reason.
 	if len(dest) != 9 {
@@ -161,14 +161,14 @@ func TestSeedAuthenticator_HappyPath(t *testing.T) {
 	}
 }
 
-// ctxWithLeafCert — кладёт в context фейковый peer-cert, генерируя его
-// в указанной директории (PEM-файл `leaf.pem` остаётся для последующего
-// mustLoadCert в том же тесте).
+// ctxWithLeafCert — puts a fake peer cert into the context, generating it
+// in the given directory (the `leaf.pem` PEM file is left behind for a
+// later mustLoadCert in the same test).
 func ctxWithLeafCert(t *testing.T, dir string) context.Context {
 	t.Helper()
 	certPath, _ := mustSelfSigned(t, dir)
-	// Сохраним copy под именем leaf.pem, чтобы тест мог восстановить
-	// fingerprint независимо от внутренних имён mustSelfSigned.
+	// Save a copy named leaf.pem so the test can recover the fingerprint
+	// independently of mustSelfSigned's internal naming.
 	if certPath != filepath.Join(dir, "leaf.pem") {
 		mustCopyFile(t, certPath, filepath.Join(dir, "leaf.pem"))
 	}
@@ -288,8 +288,9 @@ func TestEventStreamServer_StartShutdown(t *testing.T) {
 	}
 }
 
-// mustCopyFile / readFile / parseFirstCert — мелкие helpers, не светим
-// наружу. parseCertificatePEM из bootstrap.go доступен в том же пакете.
+// mustCopyFile / readFile / parseFirstCert — small helpers kept unexported.
+// parseCertificatePEM from bootstrap.go is available within the same
+// package.
 func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 func parseFirstCert(pemBytes []byte) (*x509.Certificate, error) {

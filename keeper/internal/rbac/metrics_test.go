@@ -18,8 +18,8 @@ func TestRegisterRBACMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterRBACMetrics returned nil")
 	}
 
-	// Vec/Histogram/Counter без первого Observe/Inc семейство не публикуют —
-	// прогоняем все Observe-методы, затем сверяем присутствие семейств.
+	// Vec/Histogram/Counter don't publish their family until the first
+	// Observe/Inc — run all Observe methods, then check family presence.
 	m.ObserveRebuildSuccess(2*time.Millisecond, 3, 2)
 	m.ObserveRebuildError(time.Millisecond, rebuildErrorLoad)
 	m.ObserveCheck(nil)
@@ -75,7 +75,7 @@ func TestRBACMetrics_RebuildErrorsByKind(t *testing.T) {
 	if !strings.Contains(body, `keeper_rbac_snapshot_rebuild_errors_total{kind="parse"} 2`) {
 		t.Errorf("parse count mismatch; got=\n%s", body)
 	}
-	// Каждый ObserveRebuildError тоже наблюдает длительность.
+	// Each ObserveRebuildError also observes duration.
 	if !strings.Contains(body, `keeper_rbac_snapshot_rebuild_duration_seconds_count 3`) {
 		t.Errorf("rebuild duration count should be 3; got=\n%s", body)
 	}
@@ -117,8 +117,9 @@ func TestRBACMetrics_ChecksByResult(t *testing.T) {
 }
 
 func TestRBACMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Holder может подниматься без obs-стека (NewHolder в bootstrap-пути,
-	// unit-тесты до wire-up метрик). Метод на nil-получателе — no-op без паники.
+	// Holder can start up without the obs stack (NewHolder in the bootstrap
+	// path, unit tests before metrics wire-up). Method on a nil receiver is a
+	// no-op, no panic.
 	var m *RBACMetrics
 	m.ObserveRebuildSuccess(time.Second, 1, 1)
 	m.ObserveRebuildError(time.Second, rebuildErrorLoad)
@@ -127,9 +128,9 @@ func TestRBACMetrics_NilReceiver_NoOp(t *testing.T) {
 	m.ObserveInvalidation()
 }
 
-// TestHolder_RefreshRecordsSnapshotMetrics — интеграция Holder.Refresh с
-// метриками: counts ролей/операторов берутся из построенного enforcer-а.
-// fakeSource/adminSnapshot переиспользуются из holder_test.go (тот же пакет).
+// TestHolder_RefreshRecordsSnapshotMetrics — integration of Holder.Refresh
+// with metrics: role/operator counts come from the built enforcer.
+// fakeSource/adminSnapshot are reused from holder_test.go (same package).
 func TestHolder_RefreshRecordsSnapshotMetrics(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRBACMetrics(reg)
@@ -163,7 +164,7 @@ func TestHolder_RefreshRecordsSnapshotMetrics(t *testing.T) {
 	}
 }
 
-// TestHolder_RefreshLoadErrorKind — отказ src.Load маппится в kind=load.
+// TestHolder_RefreshLoadErrorKind — a src.Load failure maps to kind=load.
 func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRBACMetrics(reg)
@@ -174,7 +175,7 @@ func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 		t.Fatalf("NewHolder: %v", err)
 	}
 	h.SetMetrics(m)
-	src.set(nil, errors.New("db down")) // источник падает после первичной загрузки
+	src.set(nil, errors.New("db down")) // source fails after the initial load
 
 	if err := h.Refresh(context.Background()); err == nil {
 		t.Fatal("expected Refresh error")
@@ -186,8 +187,8 @@ func TestHolder_RefreshLoadErrorKind(t *testing.T) {
 	}
 }
 
-// TestHolder_CheckRecordsResult — Holder.Check инкрементирует checks_total
-// по реальному исходу enforcer.Check.
+// TestHolder_CheckRecordsResult — Holder.Check increments checks_total
+// based on the actual outcome of enforcer.Check.
 func TestHolder_CheckRecordsResult(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRBACMetrics(reg)
@@ -215,18 +216,20 @@ func TestHolder_CheckRecordsResult(t *testing.T) {
 	}
 }
 
-// TestHolder_SetMetricsRace воспроизводит реальный init-order daemon-а: фоновая
-// goroutine Run (запускается в setupRBAC) живёт, когда SetMetrics вызывается
-// позже в setupMetricsRegistry. В этом окне Run конкурентно читает поле metrics
-// (через Refresh.ObserveRebuild* и Check.ObserveCheck), пока SetMetrics его
-// пишет. С обычным полем `metrics *RBACMetrics` это data race — go test -race
-// падал бы (write ↔ read одного и того же слова без синхронизации). С
-// atomic.Pointer Store/Load атомарны, race-детектор чист.
+// TestHolder_SetMetricsRace reproduces the daemon's real init order: the
+// background Run goroutine (started in setupRBAC) is already alive when
+// SetMetrics gets called later, in setupMetricsRegistry. During that window
+// Run concurrently reads the metrics field (via Refresh.ObserveRebuild* and
+// Check.ObserveCheck) while SetMetrics writes it. With a plain
+// `metrics *RBACMetrics` field this is a data race — go test -race would
+// fail (write ↔ read of the same word without synchronization). With
+// atomic.Pointer, Store/Load are atomic and the race detector stays clean.
 //
-// Зачем interval=мс: тик Run-а реально вызывает Refresh → m.ObserveRebuild*,
-// т.е. читателя поля metrics, а не просто крутит select. Параллельный Check —
-// второй читатель того же поля. Цикл SetMetrics — писатель. Возврат к обычному
-// полю снова уронит этот тест под -race (регрессия ловится).
+// interval is in ms so that Run's ticks actually trigger Refresh →
+// m.ObserveRebuild* — a real reader of the metrics field, not just a select
+// loop. The concurrent Check is a second reader of the same field; the
+// SetMetrics loop is the writer. Reverting to a plain field would fail this
+// test under -race again (the regression this test catches).
 func TestHolder_SetMetricsRace(t *testing.T) {
 	src := &fakeSource{snap: adminSnapshot("archon-alice")}
 	h, err := NewHolder(context.Background(), src, time.Millisecond, nil)
@@ -237,8 +240,8 @@ func TestHolder_SetMetricsRace(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Read-сторона: фоновый Run (как в setupRBAC) перечитывает снимок и на
-	// каждом тике/проверке читает поле metrics.
+	// Read side: the background Run (as in setupRBAC) re-reads the snapshot
+	// and reads the metrics field on every tick/check.
 	go h.Run(ctx)
 	checkDone := make(chan struct{})
 	go func() {
@@ -253,13 +256,13 @@ func TestHolder_SetMetricsRace(t *testing.T) {
 		}
 	}()
 
-	// Write-сторона: SetMetrics конкурентно пишет поле (как в
-	// setupMetricsRegistry, позже по времени). Каждый Store на отдельном
-	// дескрипторе — нагляднее для гонки.
+	// Write side: SetMetrics concurrently writes the field (as in
+	// setupMetricsRegistry, later in time). Each Store uses a fresh
+	// descriptor — makes the race more visible.
 	reg := obs.NewRegistry()
 	m := RegisterRBACMetrics(reg)
 	for i := 0; i < 200; i++ {
-		h.SetMetrics(m) // повтор одного и того же дескриптора допустим (idempotent Store)
+		h.SetMetrics(m) // repeating the same descriptor is fine (idempotent Store)
 	}
 
 	cancel()

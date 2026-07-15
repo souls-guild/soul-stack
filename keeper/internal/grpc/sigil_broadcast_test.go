@@ -12,7 +12,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeSigilStore — настраиваемая реализация [SigilStore] для broadcast-тестов.
+// fakeSigilStore — a configurable [SigilStore] implementation for
+// broadcast tests.
 type fakeSigilStore struct {
 	recs []*sigil.Sigil
 	err  error
@@ -22,14 +23,14 @@ func (f *fakeSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) {
 	return f.recs, f.err
 }
 
-// fakeBidiStream — минимальный [grpclib.BidiStreamingServer] для прямого вызова
-// broadcastSigils: захватывает отправленные FromKeeper и умеет имитировать
-// fail на Send. ServerStream embedded nil-ом — broadcastSigils дёргает только
-// Send (Context берётся из переданного ctx, не из стрима).
+// fakeBidiStream — a minimal [grpclib.BidiStreamingServer] for calling
+// broadcastSigils directly: captures the sent FromKeeper messages and can
+// simulate a Send failure. ServerStream is embedded as nil — broadcastSigils
+// only calls Send (Context comes from the passed ctx, not from the stream).
 type fakeBidiStream struct {
 	grpclib.ServerStream
 	sent    []*keeperv1.FromKeeper
-	failAt  int // 1-based индекс Send-а, на котором вернуть ошибку (0 = не падать)
+	failAt  int // 1-based index of the Send call to fail on (0 = never fail)
 	sendErr error
 }
 
@@ -62,9 +63,10 @@ func newBroadcastHandler(t *testing.T, store SigilStore) *eventStreamHandler {
 	return newEventStreamHandler(deps, discardLogger(t))
 }
 
-// TestBroadcastSigils_SendsSnapshotWithManifestRaw — connect-time broadcast шлёт
-// ОДИН SigilSnapshot (ReplaceAll, ADR-026(h)), а не поштучные PluginSigil.
-// Manifest внутри snapshot = ManifestRaw byte-exact (M1), не JSONB-проекция.
+// TestBroadcastSigils_SendsSnapshotWithManifestRaw — the connect-time
+// broadcast sends ONE SigilSnapshot (ReplaceAll, ADR-026(h)), not
+// individual PluginSigil messages. Manifest inside the snapshot is
+// byte-exact ManifestRaw (M1), not the JSONB projection.
 func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 	rec := &sigil.Sigil{
 		Namespace:   "core",
@@ -73,7 +75,7 @@ func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 		SHA256:      "deadbeef",
 		Signature:   []byte("ed25519-sig"),
 		ManifestRaw: []byte("raw: signed\nbytes: yes\n"),
-		Manifest:    []byte(`{"raw":"signed"}`), // JSONB-проекция — НЕ должна попасть в wire
+		Manifest:    []byte(`{"raw":"signed"}`), // JSONB projection — must NOT make it onto the wire
 	}
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: []*sigil.Sigil{rec}})
 	stream := &fakeBidiStream{}
@@ -97,7 +99,7 @@ func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 	if got.GetBinarySha256() != "deadbeef" {
 		t.Errorf("binary_sha256 = %q, want deadbeef", got.GetBinarySha256())
 	}
-	// КРИТИЧНО (M1): Manifest = ManifestRaw byte-exact, НЕ JSONB-проекция.
+	// CRITICAL (M1): Manifest = ManifestRaw byte-exact, NOT the JSONB projection.
 	if !bytes.Equal(got.GetManifest(), rec.ManifestRaw) {
 		t.Errorf("manifest = %q, want byte-equal ManifestRaw %q", got.GetManifest(), rec.ManifestRaw)
 	}
@@ -118,9 +120,10 @@ func TestBroadcastSigils_NilStoreNoOp(t *testing.T) {
 	}
 }
 
-// TestBroadcastSigils_EmptyListSendsEmptySnapshot — при пустом реестре (но
-// включённом Sigil) connect-time всё равно шлёт пустой snapshot: на reconnect-е
-// Soul ReplaceAll-ом приведёт кеш к «ни один плагин не допущен» (S6c).
+// TestBroadcastSigils_EmptyListSendsEmptySnapshot — with an empty registry
+// (but Sigil enabled), connect-time still sends an empty snapshot: on
+// reconnect the Soul will use ReplaceAll to bring its cache to "no plugin
+// is granted" (S6c).
 func TestBroadcastSigils_EmptyListSendsEmptySnapshot(t *testing.T) {
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: nil})
 	stream := &fakeBidiStream{}
@@ -140,8 +143,9 @@ func TestBroadcastSigils_EmptyListSendsEmptySnapshot(t *testing.T) {
 func TestBroadcastSigils_ListErrorDoesNotPanicAndSkips(t *testing.T) {
 	h := newBroadcastHandler(t, &fakeSigilStore{err: errors.New("pg down")})
 	stream := &fakeBidiStream{}
-	// Не должно паниковать и не должно ничего отправить — стрим остаётся жив
-	// (broadcast best-effort, verify fail-closed на Soul-е защитит).
+	// Should not panic and should not send anything — the stream stays
+	// alive (broadcast is best-effort, fail-closed verify on the Soul
+	// protects it).
 	h.broadcastSigils(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 0 {
 		t.Fatalf("sent = %d, want 0 (ListActive error → skip)", len(stream.sent))
@@ -155,8 +159,9 @@ func TestBroadcastSigils_SendFailDoesNotPanic(t *testing.T) {
 	}
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: recs})
 	stream := &fakeBidiStream{failAt: 1}
-	// Единственный Send (snapshot) падает → метод не паникует и не возвращает
-	// ошибку наружу (best-effort), стрим закроется по своему recv-loop.
+	// The single Send (snapshot) fails → the method doesn't panic and
+	// doesn't return an error to the caller (best-effort); the stream will
+	// close via its own recv loop.
 	h.broadcastSigils(context.Background(), stream, "sid", "sess")
 	if len(stream.sent) != 1 {
 		t.Fatalf("sent = %d, want 1 (одна попытка Send, упавшая)", len(stream.sent))

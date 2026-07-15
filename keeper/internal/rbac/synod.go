@@ -9,107 +9,116 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrSynodNotFound — группа с указанным name отсутствует в synods.
-// Возвращается при SELECT … FOR UPDATE / DELETE, не нашедшем строку.
-// Transport маппит «нет группы» в 404 (симметрия [ErrRoleNotFound]).
+// ErrSynodNotFound means no group with the given name exists in synods.
+// Returned when SELECT … FOR UPDATE / DELETE finds no row. Transport maps
+// "no such group" to 404 (symmetric with [ErrRoleNotFound]).
 var ErrSynodNotFound = errors.New("rbac: synod not found")
 
-// ErrSynodAlreadyExists — UNIQUE-violation (`23505`) на PK synods.name при
-// CreateSynod. Transport маппит в 409 (симметрия [ErrRoleAlreadyExists]).
+// ErrSynodAlreadyExists signals a UNIQUE violation (`23505`) on the
+// synods.name PK during CreateSynod. Transport maps it to 409 (symmetric
+// with [ErrRoleAlreadyExists]).
 var ErrSynodAlreadyExists = errors.New("rbac: synod already exists")
 
-// ErrInvalidSynodName — name группы не проходит [reSynodName]. Validation-
-// error sentinel (transport маппит в 422, симметрия [ErrInvalidRoleName]).
+// ErrInvalidSynodName means the group name fails [reSynodName]. A
+// validation-error sentinel (transport maps it to 422, symmetric with
+// [ErrInvalidRoleName]).
 var ErrInvalidSynodName = errors.New("rbac: invalid synod name")
 
-// ErrSynodBuiltin — попытка synod.delete над группой с builtin=true. Builtin-
-// группа не удаляется (ADR-049(g), симметрия [ErrRoleBuiltin]). Transport
-// маппит в 409.
+// ErrSynodBuiltin signals a synod.delete attempt on a group with
+// builtin=true. A builtin group cannot be deleted (ADR-049(g), symmetric
+// with [ErrRoleBuiltin]). Transport maps it to 409.
 var ErrSynodBuiltin = errors.New("rbac: synod is builtin (delete forbidden)")
 
-// ErrSynodOperatorNotFound — membership-строка (synod_name, aid) отсутствует
-// в synod_operators при RemoveOperator. Transport маппит в 404.
+// ErrSynodOperatorNotFound means the membership row (synod_name, aid) is
+// missing from synod_operators during RemoveOperator. Transport maps it to
+// 404.
 var ErrSynodOperatorNotFound = errors.New("rbac: synod-operator membership not found")
 
-// ErrSynodRoleNotFound — bundle-строка (synod_name, role_name) отсутствует
-// в synod_roles при RevokeRole. Transport маппит в 404.
+// ErrSynodRoleNotFound means the bundle row (synod_name, role_name) is
+// missing from synod_roles during RevokeRole. Transport maps it to 404.
 var ErrSynodRoleNotFound = errors.New("rbac: synod-role bundle entry not found")
 
-// SynodDescriptionMaxLen — потолок длины description группы (cap против
-// раздувания UI/audit-payload). Единый источник правды для ОБОИХ write-path:
-// HTTP-handler (PATCH /v1/synods/{name}) и MCP-tool (keeper.synod.update)
-// ссылаются на него, чтобы превышение давало одинаковый validation-failed
-// (422). OpenAPI-схема несёт тот же maxLength — двойная защита (спека +
-// transport). Превышение → [problem.TypeValidationFailed] / mcpCodeValidationFailed.
+// SynodDescriptionMaxLen caps a group's description length (guards against
+// bloating the UI/audit payload). The single source of truth for BOTH write
+// paths: the HTTP handler (PATCH /v1/synods/{name}) and the MCP tool
+// (keeper.synod.update) both reference it, so exceeding it produces the same
+// validation-failed (422). The OpenAPI schema carries the same maxLength —
+// belt-and-suspenders (spec + transport). Exceeding it →
+// [problem.TypeValidationFailed] / mcpCodeValidationFailed.
 const SynodDescriptionMaxLen = 1024
 
-// reSynodName совпадает с SQL CHECK synods_name_format (миграция 069) и с
-// [reRoleName] — kebab-case. Дублируется в Go для валидации до round-trip-а.
-// Используется единый [reRoleName] (формат идентичен), отдельная regexp не
-// заводится, чтобы не плодить два источника одного паттерна.
+// reSynodName matches the SQL CHECK synods_name_format (migration 069) and
+// [reRoleName] — kebab-case. Duplicated in Go for pre-round-trip validation.
+// Reuses the single [reRoleName] (identical format); no separate regexp is
+// defined, to avoid two sources for the same pattern.
 
 const (
-	// insertSynodSQL — INSERT строки synods. builtin всегда false для групп,
-	// созданных через API (builtin=true ставит только seed-миграция, если
-	// появится). created_at из DEFAULT NOW().
+	// insertSynodSQL inserts a synods row. builtin is always false for
+	// groups created through the API (only a seed migration, if one ever
+	// appears, would set builtin=true). created_at comes from DEFAULT NOW().
 	insertSynodSQL = `
 INSERT INTO synods (name, description, builtin, created_by_aid)
 VALUES ($1, $2, false, $3)
 `
 
-	// updateSynodDescriptionSQL — правка ТОЛЬКО description группы (ADR-049
-	// amend). name (PK) immutable, поэтому в WHERE и не меняется. builtin/roles/
-	// membership не трогаются — description косметический, прав не выдаёт.
+	// updateSynodDescriptionSQL edits ONLY the group's description (ADR-049
+	// amend). name (PK) is immutable, so it only appears in WHERE and is
+	// never changed. builtin/roles/membership are untouched — description is
+	// cosmetic and grants no rights.
 	updateSynodDescriptionSQL = `UPDATE synods SET description = $2 WHERE name = $1`
 
-	// deleteSynodSQL — DELETE строки synods. CASCADE на synod_operators /
-	// synod_roles сносит membership и bundle одной операцией.
+	// deleteSynodSQL deletes a synods row. CASCADE on synod_operators /
+	// synod_roles removes membership and the bundle in one operation.
 	deleteSynodSQL = `DELETE FROM synods WHERE name = $1`
 
-	// lockSynodForUpdateSQL — SELECT builtin строки группы под row-lock
-	// (FOR UPDATE) до конца tx. Первый шаг мутаций над группой: сериализует
-	// конкурентные операции и читает builtin для builtin-границы.
+	// lockSynodForUpdateSQL selects a group row's builtin flag under a row
+	// lock (FOR UPDATE) for the rest of the tx. The first step of any
+	// mutation on a group: serializes concurrent operations and reads
+	// builtin for the builtin boundary check.
 	lockSynodForUpdateSQL = `SELECT builtin FROM synods WHERE name = $1 FOR UPDATE`
 
-	// insertSynodOperatorSQL — INSERT membership-строки (synod_name, aid).
-	// ON CONFLICT DO NOTHING делает grant идемпотентным (повторное добавление
-	// архона в группу — no-op, симметрия insertRoleOperatorSQL).
+	// insertSynodOperatorSQL inserts a membership row (synod_name, aid).
+	// ON CONFLICT DO NOTHING makes the grant idempotent (re-adding an archon
+	// to a group is a no-op, symmetric with insertRoleOperatorSQL).
 	insertSynodOperatorSQL = `
 INSERT INTO synod_operators (synod_name, aid, added_by_aid)
 VALUES ($1, $2, $3)
 ON CONFLICT (synod_name, aid) DO NOTHING
 `
 
-	// deleteSynodOperatorSQL — DELETE одной membership-строки (synod, aid).
+	// deleteSynodOperatorSQL deletes a single membership row (synod, aid).
 	deleteSynodOperatorSQL = `DELETE FROM synod_operators WHERE synod_name = $1 AND aid = $2`
 
-	// insertSynodRoleSQL — INSERT bundle-строки (synod_name, role_name).
-	// ON CONFLICT DO NOTHING — повторный grant роли в группу no-op.
+	// insertSynodRoleSQL inserts a bundle row (synod_name, role_name).
+	// ON CONFLICT DO NOTHING — re-granting a role to a group is a no-op.
 	insertSynodRoleSQL = `
 INSERT INTO synod_roles (synod_name, role_name, granted_by_aid)
 VALUES ($1, $2, $3)
 ON CONFLICT (synod_name, role_name) DO NOTHING
 `
 
-	// deleteSynodRoleSQL — DELETE одной bundle-строки (synod, role).
+	// deleteSynodRoleSQL deletes a single bundle row (synod, role).
 	deleteSynodRoleSQL = `DELETE FROM synod_roles WHERE synod_name = $1 AND role_name = $2`
 
-	// lockSynodRoleForUpdateSQL — row-lock bundle-строки (synod, role) до
-	// конца tx. Используется RevokeRole-путём перед self-lockout-проверкой.
+	// lockSynodRoleForUpdateSQL row-locks a bundle row (synod, role) for the
+	// rest of the tx. Used by the RevokeRole path before the self-lockout
+	// check.
 	lockSynodRoleForUpdateSQL = `SELECT 1 FROM synod_roles WHERE synod_name = $1 AND role_name = $2 FOR UPDATE`
 
-	// lockSynodOperatorForUpdateSQL — row-lock membership-строки (synod, aid)
-	// до конца tx. Используется RemoveOperator-путём перед self-lockout.
+	// lockSynodOperatorForUpdateSQL row-locks a membership row (synod, aid)
+	// for the rest of the tx. Used by the RemoveOperator path before
+	// self-lockout.
 	lockSynodOperatorForUpdateSQL = `SELECT 1 FROM synod_operators WHERE synod_name = $1 AND aid = $2 FOR UPDATE`
 )
 
-// CreateSynod создаёт группу. builtin-граница и self-lockout к create неприменимы
-// (создание пустой группы прав не выдаёт). db должен быть tx/pool.
+// CreateSynod creates a group. The builtin boundary and self-lockout don't
+// apply to create (creating an empty group grants no rights). db must be a
+// tx/pool.
 //
-// Ошибки:
-//   - [ErrSynodAlreadyExists] на UNIQUE-violation synods.name (23505).
-//   - [ErrInvalidSynodName] на битом name (до round-trip-а).
-//   - wrapped FK-violation на created_by_aid (несуществующий AID).
+// Errors:
+//   - [ErrSynodAlreadyExists] on a UNIQUE violation of synods.name (23505).
+//   - [ErrInvalidSynodName] on a malformed name (before the round trip).
+//   - a wrapped FK violation on created_by_aid (nonexistent AID).
 func CreateSynod(ctx context.Context, db ExecQueryRower, name, description string, createdByAID *string) error {
 	if !reRoleName.MatchString(name) {
 		return fmt.Errorf("%w: %q must match %s", ErrInvalidSynodName, name, reRoleName.String())
@@ -124,9 +133,9 @@ func CreateSynod(ctx context.Context, db ExecQueryRower, name, description strin
 	return nil
 }
 
-// DeleteSynod удаляет группу; CASCADE сносит её membership и bundle. builtin-
-// граница и self-lockout-проверка — на стороне [Service.DeleteSynod] (здесь
-// только DELETE).
+// DeleteSynod deletes a group; CASCADE removes its membership and bundle.
+// The builtin boundary and self-lockout check live in [Service.DeleteSynod]
+// (this is just the DELETE).
 func DeleteSynod(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, deleteSynodSQL, name)
 	if err != nil {
@@ -138,9 +147,10 @@ func DeleteSynod(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// lockSynod берёт row-lock на строку группы (FOR UPDATE) и возвращает её
-// builtin-флаг. Первый шаг service-мутаций над группой (симметрия [lockRole]).
-// tx ОБЯЗАН быть транзакцией. Возврат [ErrSynodNotFound], если строки нет.
+// lockSynod takes a row lock on the group row (FOR UPDATE) and returns its
+// builtin flag. The first step of any service mutation on a group
+// (symmetric with [lockRole]). tx MUST be a transaction. Returns
+// [ErrSynodNotFound] if the row doesn't exist.
 func lockSynod(ctx context.Context, tx ExecQueryRower, name string) (builtin bool, err error) {
 	rows, err := tx.Query(ctx, lockSynodForUpdateSQL, name)
 	if err != nil {
@@ -159,8 +169,8 @@ func lockSynod(ctx context.Context, tx ExecQueryRower, name string) (builtin boo
 	return builtin, nil
 }
 
-// lockSynodRole берёт row-lock на bundle-строку (synod, role). Возврат
-// [ErrSynodRoleNotFound], если пары нет. tx ОБЯЗАН быть tx.
+// lockSynodRole takes a row lock on a bundle row (synod, role). Returns
+// [ErrSynodRoleNotFound] if the pair doesn't exist. tx MUST be a tx.
 func lockSynodRole(ctx context.Context, tx ExecQueryRower, synodName, roleName string) error {
 	rows, err := tx.Query(ctx, lockSynodRoleForUpdateSQL, synodName, roleName)
 	if err != nil {
@@ -176,8 +186,9 @@ func lockSynodRole(ctx context.Context, tx ExecQueryRower, synodName, roleName s
 	return nil
 }
 
-// lockSynodOperator берёт row-lock на membership-строку (synod, aid). Возврат
-// [ErrSynodOperatorNotFound], если пары нет. tx ОБЯЗАН быть tx.
+// lockSynodOperator takes a row lock on a membership row (synod, aid).
+// Returns [ErrSynodOperatorNotFound] if the pair doesn't exist. tx MUST be a
+// tx.
 func lockSynodOperator(ctx context.Context, tx ExecQueryRower, synodName, aid string) error {
 	rows, err := tx.Query(ctx, lockSynodOperatorForUpdateSQL, synodName, aid)
 	if err != nil {
@@ -193,9 +204,9 @@ func lockSynodOperator(ctx context.Context, tx ExecQueryRower, synodName, aid st
 	return nil
 }
 
-// synodRoles читает роли группы (bundle synod_roles) без lock-а — нужен
-// service-у при grant-role/revoke-role, чтобы посчитать `*`/least-privilege.
-// Группа уже залочена lockSynod-ом в той же tx.
+// synodRoles reads a group's roles (the synod_roles bundle) without a lock —
+// needed by the service on grant-role/revoke-role to compute `*`/
+// least-privilege. The group is already locked by lockSynod in the same tx.
 func synodRoles(ctx context.Context, tx ExecQueryRower, name string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT role_name FROM synod_roles WHERE synod_name = $1`, name)
 	if err != nil {
@@ -216,11 +227,11 @@ func synodRoles(ctx context.Context, tx ExecQueryRower, name string) ([]string, 
 	return out, nil
 }
 
-// mapSynodError маппит pgx-ошибки synod-INSERT-ов в sentinel-ы (паттерн
-// [mapRoleError]):
+// mapSynodError maps pgx errors from synod INSERTs to sentinels (same
+// pattern as [mapRoleError]):
 //   - 23505 (UNIQUE) → [ErrSynodAlreadyExists].
-//   - 23503 (FK) → wrapped с именем constraint-а (created_by_aid).
-//   - прочее → wrapped с SQLSTATE.
+//   - 23503 (FK) → wrapped with the constraint name (created_by_aid).
+//   - anything else → wrapped with the SQLSTATE.
 func mapSynodError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -234,15 +245,17 @@ func mapSynodError(err error) error {
 	return fmt.Errorf("rbac: %w", wrapPgErr(err))
 }
 
-// mapSynodMemberError маппит pgx-ошибку INSERT-membership-а/bundle-а (add-
-// operator / grant-role). Группа service проверяет lock-ом до insert-а, поэтому
-// FK-violation тут — несуществующий operator (add-operator) ИЛИ роль
-// (grant-role):
-//   - 23503 (FK) на aid/added_by_aid → [ErrOperatorNotFound];
-//   - 23503 (FK) на role_name → [ErrRoleNotFound] (grant-role над несуществующей ролью);
-//   - прочее → wrapped с SQLSTATE.
+// mapSynodMemberError maps a pgx error from a membership/bundle INSERT
+// (add-operator / grant-role). The service already locked the group before
+// the insert, so an FK violation here means a nonexistent operator
+// (add-operator) OR role (grant-role):
+//   - 23503 (FK) on aid/added_by_aid → [ErrOperatorNotFound];
+//   - 23503 (FK) on role_name → [ErrRoleNotFound] (grant-role targeting a
+//     nonexistent role);
+//   - anything else → wrapped with the SQLSTATE.
 //
-// Различение по имени constraint-а: synod_roles_role_fk → роль, иначе оператор.
+// Distinguished by constraint name: synod_roles_role_fk → role, otherwise
+// operator.
 func mapSynodMemberError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
@@ -254,10 +267,11 @@ func mapSynodMemberError(err error) error {
 	return fmt.Errorf("rbac: %w", wrapPgErr(err))
 }
 
-// SynodView — API-проекция группы для read-эндпоинта synod.list (ADR-049(g)):
-// каталожные поля (Description / Builtin) + развёрнутые Roles (имена ролей в
-// bundle) и Operators (AID-члены). Симметрия [RoleView]. Roles/Operators
-// отсортированы детерминированно (стабильный вывод list-а).
+// SynodView is the API projection of a group for the synod.list read
+// endpoint (ADR-049(g)): catalog fields (Description / Builtin) plus
+// expanded Roles (role names in the bundle) and Operators (AID members).
+// Symmetric with [RoleView]. Roles/Operators are sorted deterministically
+// (stable list output).
 type SynodView struct {
 	Name        string
 	Description string
@@ -267,15 +281,17 @@ type SynodView struct {
 }
 
 const (
-	// selectSynodViewsSQL — каталог групп с description/builtin. ORDER BY name —
-	// детерминированный порядок list-а (симметрия selectRoleViewsSQL).
+	// selectSynodViewsSQL is the group catalog with description/builtin.
+	// ORDER BY name — deterministic list order (symmetric with
+	// selectRoleViewsSQL).
 	selectSynodViewsSQL = `SELECT name, description, builtin FROM synods ORDER BY name`
 )
 
-// LoadSynodViews собирает API-каталог групп тремя SELECT-ами (группы / bundle /
-// membership) — без N+1, симметрично [LoadRoleViews]. Сборка «synod → роли/
-// операторы» делается в Go по name-ключу. Roles/Operators группы без записей —
-// пустой слайс. Висячие строки (роль/AID вне каталога групп) отбрасываются.
+// LoadSynodViews assembles the group API catalog with three SELECTs
+// (groups / bundle / membership) — no N+1, symmetric with [LoadRoleViews].
+// The "synod → roles/operators" join happens in Go, keyed by name. A group
+// with no rows gets an empty Roles/Operators slice. Orphaned rows (role/AID
+// outside the group catalog) are dropped.
 func LoadSynodViews(ctx context.Context, db ExecQueryRower) ([]SynodView, error) {
 	views, index, err := loadSynodViewRows(ctx, db)
 	if err != nil {

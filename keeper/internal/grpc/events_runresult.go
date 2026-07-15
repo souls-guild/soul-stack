@@ -17,34 +17,34 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// handleRunResult — обработчик payload-а [keeperv1.RunResult] (M2.4).
+// handleRunResult — handler for the [keeperv1.RunResult] payload (M2.4).
 //
 // PM-decision (4):
 //   - SUCCESS  → UPDATE incarnation.state + state_history + status=ready.
-//   - FAILED / CANCELLED / ERROR_LOCKED → UPDATE status=error_locked (state не
-//     меняем — храним последний known-good snapshot).
+//   - FAILED / CANCELLED / ERROR_LOCKED → UPDATE status=error_locked (state is
+//     not changed — we keep the last known-good snapshot).
 //
-// Атомарность — одна транзакция через [pgx.BeginFunc]:
+// Atomicity — a single transaction via [pgx.BeginFunc]:
 //   - INSERT state_history;
 //   - UPDATE incarnation.state/status/status_details.
 //
-// Audit `run.completed` пишется **после** commit-а — DB-консистентность не
-// зависит от write-path-а аудита (паттерн идентичен Bootstrap).
+// Audit `run.completed` is written **after** the commit — DB consistency does
+// not depend on the audit write path (pattern identical to Bootstrap).
 //
-// Адресация incarnation (M2.x): `apply_id` тащит сам Soul, имя incarnation
-// в proto отсутствует (см. apply.proto: RunResult содержит только
-// apply_id/status/state_changes). Correlation закрывает таблица `apply_runs`
-// (миграция 018): scenario-runner пишет строку `(apply_id, sid)` при
-// dispatch-е `ApplyRequest`, а этот handler читает её через
-// [applyrun.SelectIncarnationByApplyID] и переводит в терминальный статус
-// ([correlateRunResult]). apply_id, не найденный в `apply_runs` (ad-hoc push
-// без scenario-runner-а) → log+skip.
+// Incarnation addressing (M2.x): `apply_id` is carried by the Soul itself; the
+// incarnation name is absent from the proto (see apply.proto: RunResult only
+// carries apply_id/status/state_changes). Correlation is closed by the `apply_runs`
+// table (migration 018): the scenario-runner writes a `(apply_id, sid)` row on
+// dispatch of `ApplyRequest`, and this handler reads it via
+// [applyrun.SelectIncarnationByApplyID] and moves it to a terminal status
+// ([correlateRunResult]). An apply_id not found in `apply_runs` (ad-hoc push
+// without a scenario-runner) → log+skip.
 //
-// Коммит `incarnation.state` (применение `state_changes` по scenario-DSL) —
-// зона scenario-runner-а (.g): он владеет cross-host final-barrier-ом
-// (docs/scenario/orchestration.md §7), коммитит state один раз после
-// безусловного барьера и вызывает [commitRunState] с уже merged-state-ом.
-// Здесь state НЕ трогаем, чтобы не нарушить barrier-инвариант на multi-host.
+// Committing `incarnation.state` (applying `state_changes` per the scenario-DSL) —
+// is the scenario-runner's domain (.g): it owns the cross-host final barrier
+// (docs/scenario/orchestration.md §7), commits state once after the
+// unconditional barrier, and calls [commitRunState] with the already merged state.
+// We do NOT touch state here, so as not to break the barrier invariant on multi-host.
 func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID string, ev *keeperv1.RunResult) {
 	if ev == nil {
 		h.logger.Warn("eventstream: RunResult payload is nil",
@@ -56,9 +56,9 @@ func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID
 		"sid":      sid,
 		"apply_id": ev.GetApplyId(),
 		"status":   ev.GetStatus().String(),
-		// passage (ADR-056 staged-render): индекс Passage, терминал которого несёт
-		// этот отчёт. 0 = единственный Passage (поведение как до staged-render).
-		// Корреляция/барьер per-Passage — S3; здесь поле едет в audit для триажа.
+		// passage (ADR-056 staged-render): the index of the Passage whose terminal
+		// carries this report. 0 = the only Passage (behavior as before staged-render).
+		// Per-Passage correlation/barrier is S3; here the field just goes into audit for triage.
 		"passage": ev.GetPassage(),
 	}
 	if sc := ev.GetStateChanges(); sc != nil {
@@ -91,21 +91,21 @@ func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID
 	h.correlateRunResult(ctx, sid, sessionID, ev)
 }
 
-// correlateRunResult резолвит incarnation по `(apply_id, sid)` через реестр
-// `apply_runs` и переводит строку прогона в терминальный статус
-// (`success`/`failed`/`cancelled`). Закрывает correlation-разрыв «Keeper не
-// знает, к какой incarnation относится прогон».
+// correlateRunResult resolves the incarnation by `(apply_id, sid)` via the
+// `apply_runs` registry and moves the run row to a terminal status
+// (`success`/`failed`/`cancelled`). Closes the correlation gap “Keeper doesn't
+// know which incarnation a run belongs to.”
 //
-// ApplyRunDB=nil (unit-сборка без PG / ad-hoc push) → no-op.
-// apply_id не найден в `apply_runs` (push без scenario-runner-а) → log+skip.
+// ApplyRunDB=nil (unit build without PG / ad-hoc push) → no-op.
+// apply_id not found in `apply_runs` (push without a scenario-runner) → log+skip.
 func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessionID string, ev *keeperv1.RunResult) {
 	if h.deps.ApplyRunDB == nil {
 		return
 	}
 	applyID := ev.GetApplyId()
-	// passage (ADR-056 staged-render): RunResult коррелирует со строкой
-	// (apply_id, sid, passage). Soul эхает passage из ApplyRequest как есть; N=1 →
-	// 0 (единственная строка хоста), correlation БИТ-В-БИТ как до staged-render.
+	// passage (ADR-056 staged-render): RunResult correlates with the
+	// (apply_id, sid, passage) row. The Soul echoes passage from ApplyRequest as-is; N=1 →
+	// 0 (the host's only row), correlation is BIT-FOR-BIT as before staged-render.
 	passage := int(ev.GetPassage())
 	name, scenario, rowAttempt, err := applyrun.SelectIncarnationByApplyID(ctx, h.deps.ApplyRunDB, applyID, sid, passage)
 	if err != nil {
@@ -123,17 +123,17 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		return
 	}
 
-	// epoch-check (gate-1, ADR-027(g)): результат от устаревшей попытки не коммитим.
-	//   recvAttempt == 0          → старый Soul без эхо (forward-compat) → коммитим;
-	//   recvAttempt <  rowAttempt → stale: существует пере-claim с бОльшим epoch →
-	//                               DROP (метрика keeper_runresult_stale_total),
-	//                               state НЕ коммитим;
-	//   recvAttempt == rowAttempt → актуально → коммитим;
-	//   recvAttempt >  rowAttempt → невозможный инвариант (apply_runs.attempt растёт
-	//                               только вверх при claim, RunResult.attempt — эхо
-	//                               захваченного epoch) → defensive warn + всё равно
-	//                               коммитим (fail-safe: не теряем результат живого
-	//                               прогона из-за рассинхрона/аномалии чтения строки).
+	// epoch-check (gate-1, ADR-027(g)): we don't commit a result from a stale attempt.
+	//   recvAttempt == 0          → old Soul without echo (forward-compat) → commit;
+	//   recvAttempt <  rowAttempt → stale: a re-claim with a bigger epoch exists →
+	//                               DROP (keeper_runresult_stale_total metric),
+	//                               state is NOT committed;
+	//   recvAttempt == rowAttempt → current → commit;
+	//   recvAttempt >  rowAttempt → impossible invariant (apply_runs.attempt only grows
+	//                               on claim, RunResult.attempt echoes the
+	//                               captured epoch) → defensive warn + commit
+	//                               anyway (fail-safe: we don't lose the result of a
+	//                               live run due to a desync/row-read anomaly).
 	recvAttempt := ev.GetAttempt()
 	if recvAttempt != 0 && recvAttempt < rowAttempt {
 		h.deps.Metrics.ObserveRunResultStale()
@@ -147,9 +147,9 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		return
 	}
 	if recvAttempt > rowAttempt {
-		// Инвариант «attempt только растёт» нарушен: keeper↔soul рассинхрон epoch-а
-		// либо аномалия чтения строки. Не дропаем — коммитим (fail-safe), но
-		// сигнализируем нарушение инварианта для триажа.
+		// The “attempt only grows” invariant is violated: keeper↔soul epoch desync
+		// or a row-read anomaly. We don't drop — we commit (fail-safe), but
+		// flag the invariant violation for triage.
 		h.logger.Warn("eventstream: RunResult.attempt больше attempt строки — нарушен инвариант «attempt только растёт» (commit fail-safe)",
 			slog.String("sid", sid),
 			slog.String("apply_id", applyID),
@@ -158,16 +158,16 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 	}
 
 	status := runStatusToApplyStatus(ev.GetStatus())
-	// error_summary НЕ перезаписываем здесь: при FAILED причина уже записана
-	// per-task-ом ([recordTaskFailure] → RecordTaskFailure) и несёт idx+module+
-	// message упавшей задачи (BUG-3). UpdateStatus COALESCE-ит — nil не затирает
-	// уже записанное. Если TaskEvent-а с ошибкой не было (dispatch-level фейл),
-	// error_summary остаётся NULL, и barrier classify подставит сам статус
-	// (`failed`) — без бессмысленного `run_status=RUN_STATUS_FAILED`.
+	// error_summary is NOT overwritten here: on FAILED the reason is already recorded
+	// per-task ([recordTaskFailure] → RecordTaskFailure) and carries idx+module+
+	// message of the failed task (BUG-3). UpdateStatus uses COALESCE — nil doesn't overwrite
+	// what's already recorded. If there was no TaskEvent with an error (dispatch-level failure),
+	// error_summary stays NULL, and barrier classify falls back to the status itself
+	// (`failed`) — without a meaningless `run_status=RUN_STATUS_FAILED`.
 	if err := applyrun.UpdateStatus(ctx, h.deps.ApplyRunDB, applyID, sid, passage, status, nil); err != nil {
-		// Append-only single-winner (ADR-027(j)): строку уже перевёл в терминал
-		// другой обработчик (recovery-перехват / повторный RunResult). НЕ ошибка
-		// — первый победил, дубль-терминал не записываем. Логируем как no-op.
+		// Append-only single-winner (ADR-027(j)): another handler already moved the row
+		// to terminal (recovery takeover / repeated RunResult). NOT an error
+		// — the first one won, we don't write a duplicate terminal. Log it as a no-op.
 		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
 			h.logger.Info("eventstream: apply_runs уже терминальна — correlation no-op (первый коммиттер победил)",
 				slog.String("sid", sid),
@@ -192,8 +192,8 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		slog.String("status", string(status)))
 }
 
-// runStatusToApplyStatus маппит [keeperv1.RunStatus] на [applyrun.Status].
-// FAILED / ERROR_LOCKED / прочее → failed (terminal lock); CANCELLED →
+// runStatusToApplyStatus maps [keeperv1.RunStatus] to [applyrun.Status].
+// FAILED / ERROR_LOCKED / other → failed (terminal lock); CANCELLED →
 // cancelled; SUCCESS → success.
 func runStatusToApplyStatus(rs keeperv1.RunStatus) applyrun.Status {
 	switch rs {
@@ -206,14 +206,14 @@ func runStatusToApplyStatus(rs keeperv1.RunStatus) applyrun.Status {
 	}
 }
 
-// publishRunResult транслирует RunResult в SSE-канал через applybus,
-// классифицируя статус прогона:
+// publishRunResult translates RunResult into the SSE channel via applybus,
+// classifying the run status:
 //
 //   - RUN_STATUS_SUCCESS          → apply.completed
 //   - RUN_STATUS_CANCELLED        → apply.cancelled
-//   - RUN_STATUS_FAILED/ERROR_LOCKED/прочее → apply.failed
+//   - RUN_STATUS_FAILED/ERROR_LOCKED/other → apply.failed
 //
-// ApplyBus=nil (dev без SSE) → no-op.
+// ApplyBus=nil (dev without SSE) → no-op.
 func (h *eventStreamHandler) publishRunResult(sid string, ev *keeperv1.RunResult) {
 	if h.deps.ApplyBus == nil {
 		return
@@ -252,26 +252,26 @@ func (h *eventStreamHandler) publishRunResult(sid string, ev *keeperv1.RunResult
 	})
 }
 
-// commitRunState — атомарный commit результатов прогона в incarnation.
-// Вынесен публично для будущего scenario-runner-а (M0.6c-2), который владеет
-// mapping-ом apply_id ↔ incarnation и оркестрирует apply от Operator API
-// до RunResult.
+// commitRunState — atomically commits run results into the incarnation.
+// Exported for the future scenario-runner (M0.6c-2), which owns the
+// apply_id ↔ incarnation mapping and orchestrates apply from the Operator API
+// through to RunResult.
 //
-// pool — *pgxpool.Pool или совместимый. scenario / name / applyID берутся
-// у caller-а из incarnation-state-таблицы. stateBefore — текущее значение
-// `incarnation.state` (читается под SELECT FOR UPDATE внутри транзакции);
-// stateAfter — результат merge `stateBefore + RunResult.state_changes`
-// (caller сам делает merge, потому что грамматика state_changes — scenario-DSL,
-// не gRPC-контракт).
+// pool — *pgxpool.Pool or a compatible type. scenario / name / applyID are taken
+// by the caller from the incarnation-state table. stateBefore — the current value of
+// `incarnation.state` (read under SELECT FOR UPDATE inside the transaction);
+// stateAfter — the result of merging `stateBefore + RunResult.state_changes`
+// (the caller does the merge itself, because the state_changes grammar is the scenario-DSL,
+// not the gRPC contract).
 //
-// На RUN_STATUS_SUCCESS статус становится `ready`; на остальные —
-// `error_locked` со status_details, чтобы триаж видел причину.
+// On RUN_STATUS_SUCCESS the status becomes `ready`; on the rest —
+// `error_locked` with status_details, so triage can see the reason.
 //
-// Single-winner (ADR-027(j) W1): [incarnation.UpdateStateFromRun] коммитит под
-// guard `status IN ('applying','destroying')`. Если строку уже вывел из
-// applying другой коммиттер (recovery-перехват), вернётся
-// [incarnation.ErrAlreadyFinalized] — caller обязан трактовать его как no-op
-// (логировать, не валить путь), а не как ошибку консистентности.
+// Single-winner (ADR-027(j) W1): [incarnation.UpdateStateFromRun] commits under
+// the guard `status IN ('applying','destroying')`. If another committer already
+// moved the row out of applying (recovery takeover), it returns
+// [incarnation.ErrAlreadyFinalized] — the caller must treat it as a no-op
+// (log, don't fail the path), not as a consistency error.
 func commitRunState(
 	ctx context.Context,
 	pool TxBeginner,
@@ -283,7 +283,7 @@ func commitRunState(
 	var details map[string]any
 	switch runStatus {
 	case keeperv1.RunStatus_RUN_STATUS_SUCCESS:
-		// stateAfter уже учитывает state_changes.
+		// stateAfter already accounts for state_changes.
 	default:
 		status = incarnation.StatusErrorLocked
 		details = map[string]any{
@@ -291,7 +291,7 @@ func commitRunState(
 			"run_status": runStatus.String(),
 			"apply_id":   applyID,
 		}
-		// На ошибку state НЕ перезаписываем — оставляем stateBefore.
+		// On error we do NOT overwrite state — we keep stateBefore.
 		stateAfter = stateBefore
 	}
 
@@ -301,7 +301,7 @@ func commitRunState(
 			name, scenario, applyID,
 			stateBefore, stateAfter,
 			status, details,
-			nil, // soul_grpc — без AID Архонта.
+			nil, // soul_grpc — no Archon AID.
 			historyID,
 		)
 	})

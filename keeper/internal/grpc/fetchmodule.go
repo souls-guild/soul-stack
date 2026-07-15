@@ -20,16 +20,18 @@ import (
 )
 
 const (
-	// moduleFetchChunkSize — размер одного PluginChunk. 256 KiB: заведомо меньше
-	// send/recv-лимитов стрима, ~100 сообщений на типичный 25MB-бинарь.
+	// moduleFetchChunkSize — size of one PluginChunk. 256 KiB: comfortably
+	// under the stream's send/recv limits, ~100 messages for a typical
+	// 25MB binary.
 	moduleFetchChunkSize = 256 * 1024
 
-	// defaultModuleFetchPerSID — дефолтный лимит параллельных FetchModule на SID.
+	// defaultModuleFetchPerSID — default limit of concurrent FetchModule
+	// calls per SID.
 	defaultModuleFetchPerSID = 2
 )
 
-// sidInflight — inflight-счётчик per-SID. Ключ удаляется при нуле, карта не
-// растёт с флотом.
+// sidInflight — per-SID inflight counter. The key is removed at zero, so
+// the map doesn't grow with the population of Souls.
 type sidInflight struct {
 	mu sync.Mutex
 	n  map[string]int
@@ -58,11 +60,12 @@ func (l *sidInflight) release(sid string) {
 	l.n[sid]--
 }
 
-// FetchModule — server-streaming раздача байтов SoulModule-плагина по
-// content-addressed sha256 (эпик core.module.installed, S2). Отдаются ТОЛЬКО
-// sigil-allowed байты (fail-closed, [sigil.Service.LookupModuleBinary]);
-// авторизация клиента — mTLS peer cert через [streamSeedAuthInterceptor],
-// как у EventStream. Ошибки клиенту — без filesystem-путей.
+// FetchModule — server-streaming delivery of SoulModule plugin bytes by
+// content-addressed sha256 (epic core.module.installed, S2). Serves ONLY
+// sigil-allowed bytes (fail-closed, [sigil.Service.LookupModuleBinary]);
+// client authorization is the mTLS peer cert via
+// [streamSeedAuthInterceptor], same as EventStream. Errors returned to the
+// client never carry filesystem paths.
 func (h *eventStreamHandler) FetchModule(req *keeperv1.PluginFetchRequest, stream grpclib.ServerStreamingServer[keeperv1.PluginChunk]) error {
 	ctx := stream.Context()
 	sid, ok := authenticatedSIDFrom(ctx)
@@ -107,8 +110,8 @@ func (h *eventStreamHandler) FetchModule(req *keeperv1.PluginFetchRequest, strea
 
 	f, err := os.Open(path)
 	if err != nil {
-		// Слот переехал между lookup-ом и open-ом — allowed-байтов больше нет,
-		// та же категория, что не-allowed sha (fail-closed).
+		// The slot moved between lookup and open — the allowed bytes are
+		// gone; same category as a not-allowed sha (fail-closed).
 		h.logger.Warn("fetchmodule: allowed binary is not readable",
 			slog.String("sid", sid),
 			slog.String("binary_sha256", sha),
@@ -136,7 +139,7 @@ func (h *eventStreamHandler) FetchModule(req *keeperv1.PluginFetchRequest, strea
 		return status.Error(codes.FailedPrecondition, "module binary exceeds size limit")
 	}
 
-	// stream.Send маршалит синхронно — буфер безопасно переиспользовать.
+	// stream.Send marshals synchronously — the buffer is safe to reuse.
 	buf := make([]byte, moduleFetchChunkSize)
 	for {
 		if err := ctx.Err(); err != nil {

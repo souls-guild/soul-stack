@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// reResourceAction — грамматика `<resource>.<action>` из rbac.md.
-// Resource: `[a-z][a-z0-9-]*` (kebab-case); action: `*` или
-// `[a-z][a-z0-9-]*`. Дефис допустим (`issue-token`), пробел/underscore — нет.
+// reResourceAction — the `<resource>.<action>` grammar from rbac.md.
+// Resource: `[a-z][a-z0-9-]*` (kebab-case); action: `*` or
+// `[a-z][a-z0-9-]*`. Hyphens are allowed (`issue-token`), space/underscore are not.
 var (
 	reResource = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	reAction   = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -16,30 +16,31 @@ var (
 	reSelValue = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 )
 
-// maxRegexLen — верхняя граница длины regex-значения селектора (ADR-047 S2a).
-// RE2 (Go regexp) не подвержен catastrophic backtracking, но cap длины — дешёвая
-// страховка против раздутых паттернов в снимке (compile-cost/память на load).
+// maxRegexLen — the upper bound on selector regex-value length (ADR-047 S2a).
+// RE2 (Go regexp) isn't subject to catastrophic backtracking, but a length
+// cap is cheap insurance against bloated patterns in the snapshot
+// (compile cost/memory at load).
 const maxRegexLen = 256
 
-// ParsePermission парсит permission-строку в Permission. Невалидные формы
-// возвращают error с указанием причины.
+// ParsePermission parses a permission string into a Permission. Invalid
+// forms return an error stating the reason.
 //
-// Принимаемые формы:
+// Accepted forms:
 //
 //	"*"                                    → full wildcard.
 //	"incarnation.create"                   → resource+action, no selector.
 //	"incarnation.*"                        → resource+wildcard-action.
 //	"incarnation.create on service=foo"    → +selector.
-//	"incarnation.* on service=foo,bar"     → +selector с множественными значениями.
+//	"incarnation.* on service=foo,bar"     → +selector with multiple values.
 //
-// Отказы:
-//   - Пустая строка.
-//   - Три и более сегментов (`keeper.incarnation.create` — это MCP-tool, не permission).
-//   - Wildcard в resource (`*.create`).
-//   - Unknown selector key (rbac.md закрытый enum: service/coven/incarnation/host).
-//   - Malformed selector (нет `=`, пустое значение, недопустимые символы).
-//   - Unknown permission в каталоге [AllowedPermissions] — проверяется здесь,
-//     чтобы load `keeper.yml` фейлился до runtime (PM-decision M0.6b #7).
+// Rejections:
+//   - Empty string.
+//   - Three or more segments (`keeper.incarnation.create` is an MCP tool, not a permission).
+//   - Wildcard in resource (`*.create`).
+//   - Unknown selector key (rbac.md's closed enum: service/coven/incarnation/host).
+//   - Malformed selector (no `=`, empty value, invalid characters).
+//   - Unknown permission in the [AllowedPermissions] catalog — checked here so
+//     that loading `keeper.yml` fails before runtime (PM-decision M0.6b #7).
 func ParsePermission(raw string) (Permission, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -51,8 +52,8 @@ func ParsePermission(raw string) (Permission, error) {
 		return Permission{IsWildcard: true}, nil
 	}
 
-	// Опциональный `on <selector>`. Разделитель — ровно ` on ` (один пробел
-	// с обеих сторон); rbac.md прибит к этой форме.
+	// Optional `on <selector>`. The separator is exactly ` on ` (one space
+	// on each side); rbac.md is pinned to this form.
 	var head, tail string
 	if idx := strings.Index(s, " on "); idx >= 0 {
 		head = strings.TrimSpace(s[:idx])
@@ -64,7 +65,7 @@ func ParsePermission(raw string) (Permission, error) {
 		head = s
 	}
 
-	// Head: `<resource>.<action>`. Ровно один разделитель `.`.
+	// Head: `<resource>.<action>`. Exactly one `.` separator.
 	dotIdx := strings.IndexByte(head, '.')
 	if dotIdx < 0 {
 		return Permission{}, fmt.Errorf("permission %q: expected <resource>.<action>, no '.' found", raw)
@@ -92,10 +93,10 @@ func ParsePermission(raw string) (Permission, error) {
 		return Permission{}, fmt.Errorf("permission %q: unknown_permission (resource.action not in catalog rbac.md → §Каталог permissions)", raw)
 	}
 
-	// DEPRECATED-alias канонизируется в новое имя (selector сохраняется):
-	// роли со старым именем матчат запрос по каноническому resource.action
-	// без правки [Permission.Matches]. Wildcard-action (`incarnation.*`) не
-	// канонизируется — он и так покрывает каноническое имя.
+	// A DEPRECATED alias is canonicalized to the new name (selector is kept):
+	// roles with the old name match requests by the canonical resource.action
+	// without touching [Permission.Matches]. A wildcard action (`incarnation.*`)
+	// is not canonicalized — it already covers the canonical name.
 	if action != "*" {
 		if canon, ok := deprecatedActionAliases[resource+"."+action]; ok {
 			dotIdx := strings.IndexByte(canon, '.')
@@ -116,14 +117,15 @@ func ParsePermission(raw string) (Permission, error) {
 	return p, nil
 }
 
-// ParseDefaultScope парсит role default_scope-строку (ADR-047 S1) в селектор
-// той же формы, что per-permission `on <selector>` — `key=v1,v2,…`. Пустая
-// строка → nil (измерение НЕ введено, роль без scope-ограничения). Невалидная
-// форма → error (load снимка фейлится, как и на битом permission-е).
+// ParseDefaultScope parses a role's default_scope string (ADR-047 S1) into a
+// selector of the same shape as the per-permission `on <selector>` —
+// `key=v1,v2,…`. An empty string → nil (dimension NOT introduced, role has no
+// scope restriction). An invalid form → error (snapshot load fails, same as
+// for a broken permission).
 //
-// Переиспользует [parseSelector] — синтаксис и closed enum ключей
-// (service/coven/incarnation/host) общие с per-perm-селектором, дублировать
-// грамматику нельзя.
+// Reuses [parseSelector] — the syntax and closed key enum
+// (service/coven/incarnation/host) are shared with the per-perm selector;
+// the grammar must not be duplicated.
 func ParseDefaultScope(raw string) (map[string][]string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -132,9 +134,9 @@ func ParseDefaultScope(raw string) (map[string][]string, error) {
 	return parseSelector(s, "default_scope "+raw)
 }
 
-// parseSelector — `key=v1,v2,…`. Ровно один key (multi-key через запятую
-// не поддерживается; grammar rbac.md). raw — оригинальная permission-строка
-// для message-context-а в error-ах.
+// parseSelector — `key=v1,v2,…`. Exactly one key (multi-key via comma is
+// not supported; see the rbac.md grammar). raw is the original permission
+// string, used for message context in errors.
 func parseSelector(s, raw string) (map[string][]string, error) {
 	eqIdx := strings.Index(s, "=")
 	if eqIdx < 0 {
@@ -155,11 +157,12 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 		return nil, fmt.Errorf("permission %q: selector value-list is empty", raw)
 	}
 
-	// regex-ключ (ADR-047 S2a) — отдельная грамматика: значение в одинарных
-	// кавычках `regex='^web-.*'`. Кавычки нужны, чтобы запятая внутри regex
-	// (`{1,3}`) не интерпретировалась как `,`-разделитель value-list; спецсимволы
-	// regex не проходят reSelValue, поэтому незакавыченная форма запрещена.
-	// Одно значение на ключ (multi-regex через `,` неоднозначен с regex-запятой).
+	// The regex key (ADR-047 S2a) has its own grammar: the value is
+	// single-quoted, `regex='^web-.*'`. Quotes are needed so a comma inside
+	// the regex (`{1,3}`) isn't interpreted as the `,` value-list separator;
+	// regex special characters don't pass reSelValue, so the unquoted form is
+	// forbidden. One value per key (multi-regex via `,` would be ambiguous
+	// with the regex's own commas).
 	if key == "regex" {
 		pat, err := parseRegexValue(values, raw)
 		if err != nil {
@@ -168,12 +171,13 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 		return map[string][]string{key: {pat}}, nil
 	}
 
-	// soulprint-ключ (ADR-047 S2b) — CEL-предикат по фактам хоста
-	// (`soulprint.self.*`, ADR-018 каноническая форма) в одинарных кавычках:
-	// `soulprint='soulprint.self.os.family == "debian"'`. Кавычки нужны, чтобы
-	// пробелы/запятые/двойные кавычки внутри CEL не интерпретировались как
-	// `,`-разделитель value-list. Один предикат на ключ; union — несколькими
-	// ролями/permission-ами. Компиляция валидируется shared/cel на load.
+	// The soulprint key (ADR-047 S2b) is a CEL predicate over host facts
+	// (`soulprint.self.*`, ADR-018 canonical form), single-quoted:
+	// `soulprint='soulprint.self.os.family == "debian"'`. Quotes are needed
+	// so spaces/commas/double quotes inside the CEL aren't interpreted as the
+	// `,` value-list separator. One predicate per key; union comes from
+	// multiple roles/permissions. Compilation is validated by shared/cel at
+	// load.
 	if key == "soulprint" {
 		expr, err := parseSoulprintValue(values, raw)
 		if err != nil {
@@ -182,12 +186,13 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 		return map[string][]string{key: {expr}}, nil
 	}
 
-	// state-ключ (ADR-047 S2c) — CEL-предикат по incarnation.state в одинарных
-	// кавычках: `state='state.redis_version == "8.0"'`. Кавычки нужны по той же
-	// причине, что у soulprint: пробелы/запятые/двойные кавычки внутри CEL не
-	// должны рваться `,`-разделителем value-list. Один предикат на ключ; union —
-	// несколькими ролями/permission-ами. Компиляция валидируется через
-	// keeper/internal/statepredicate на load (migration-sandbox корень `state`).
+	// The state key (ADR-047 S2c) is a CEL predicate over incarnation.state,
+	// single-quoted: `state='state.redis_version == "8.0"'`. Quotes are
+	// needed for the same reason as soulprint: spaces/commas/double quotes
+	// inside the CEL must not be split by the `,` value-list separator. One
+	// predicate per key; union comes from multiple roles/permissions.
+	// Compilation is validated via keeper/internal/statepredicate at load
+	// (migration-sandbox root `state`).
 	if key == "state" {
 		expr, err := parseStateValue(values, raw)
 		if err != nil {
@@ -196,13 +201,14 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 		return map[string][]string{key: {expr}}, nil
 	}
 
-	// trait-ключ (ADR-047 amendment, ADR-060 п.7 slice 1) — exact key:value-match
-	// по incarnation.traits. Форма `trait=key:value`: ровно ОДНА `:` (разделитель
-	// ключа и значения), обе половины — непустые [a-zA-Z0-9_.-]+ (scalar-only, как
-	// обычные exact-значения). Хранится в Selector["trait"] одной строкой
-	// `key:value` (не разбивается) — match сравнивает её целиком против пары
-	// traits-ключа инкарнации (slice 1 п.7). Один trait на ключ (multi-key через
-	// `,` — follow-up: AND-сужение по нескольким парам).
+	// The trait key (ADR-047 amendment, ADR-060 §7 slice 1) is an exact
+	// key:value match against incarnation.traits. Form `trait=key:value`:
+	// exactly ONE `:` (separates key and value), both halves non-empty and
+	// matching [a-zA-Z0-9_.-]+ (scalar-only, like regular exact values).
+	// Stored in Selector["trait"] as a single `key:value` string (not split)
+	// — the match compares it whole against an incarnation's trait
+	// key/value pair (slice 1 §7). One trait per key (multi-key via `,` is a
+	// follow-up: AND-narrowing across multiple pairs).
 	if key == "trait" {
 		pair, err := parseTraitValue(values, raw)
 		if err != nil {
@@ -214,8 +220,8 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 	parts := strings.Split(values, ",")
 	out := make([]string, 0, len(parts))
 	for _, v := range parts {
-		// rbac.md: значения через запятую без пробелов; whitespace внутри
-		// разделителей — невалидно, не trim-аем.
+		// rbac.md: comma-separated values with no spaces; whitespace within
+		// the separators is invalid — we don't trim.
 		if v == "" {
 			return nil, fmt.Errorf("permission %q: empty value in selector %q", raw, s)
 		}
@@ -227,10 +233,10 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 	return map[string][]string{key: out}, nil
 }
 
-// parseRegexValue извлекает RE2-паттерн из quoted-формы `'…'` и валидирует его
-// на load снимка (ADR-047 S2a): пустой/незакавыченный/over-long/некомпилируемый
-// regex → error (load фейлится, как unknown-permission). Возвращает паттерн без
-// кавычек.
+// parseRegexValue extracts an RE2 pattern from the quoted `'…'` form and
+// validates it at snapshot load (ADR-047 S2a): an empty/unquoted/over-long/
+// non-compiling regex → error (load fails, same as unknown-permission).
+// Returns the pattern without quotes.
 func parseRegexValue(values, raw string) (string, error) {
 	if len(values) < 2 || values[0] != '\'' || values[len(values)-1] != '\'' {
 		return "", fmt.Errorf("permission %q: regex value %q must be single-quoted (regex='^web-.*')", raw, values)
@@ -248,12 +254,13 @@ func parseRegexValue(values, raw string) (string, error) {
 	return pat, nil
 }
 
-// parseSoulprintValue извлекает CEL-предикат из quoted-формы `'…'` и валидирует
-// его компиляцию на load снимка (ADR-047 S2b): пустой/незакавыченный/over-long/
-// некомпилируемый/использующий запрещённый sandbox-корень предикат → error (load
-// фейлится, как битый regex / unknown-permission). Возвращает предикат без
-// кавычек. Компиляция — через shared/cel (sandbox FlowControl-env, см.
-// [validateSoulprintExpr]); CEL-движок не дублируется.
+// parseSoulprintValue extracts a CEL predicate from the quoted `'…'` form and
+// validates its compilation at snapshot load (ADR-047 S2b): an
+// empty/unquoted/over-long/non-compiling predicate, or one using a forbidden
+// sandbox root, → error (load fails, same as a broken regex/unknown
+// permission). Returns the predicate without quotes. Compilation goes through
+// shared/cel (sandbox FlowControl env, see [validateSoulprintExpr]); the CEL
+// engine isn't duplicated.
 func parseSoulprintValue(values, raw string) (string, error) {
 	if len(values) < 2 || values[0] != '\'' || values[len(values)-1] != '\'' {
 		return "", fmt.Errorf("permission %q: soulprint value %q must be single-quoted (soulprint='soulprint.self.os.family == \"debian\"')", raw, values)
@@ -271,12 +278,13 @@ func parseSoulprintValue(values, raw string) (string, error) {
 	return expr, nil
 }
 
-// parseStateValue извлекает CEL-предикат из quoted-формы `'…'` и валидирует его
-// компиляцию на load снимка (ADR-047 S2c): пустой/незакавыченный/over-long/
-// некомпилируемый/использующий запрещённый sandbox-корень предикат → error (load
-// фейлится, как битый soulprint / unknown-permission). Возвращает предикат без
-// кавычек. Компиляция — через keeper/internal/statepredicate (migration-sandbox,
-// корень `state`, см. [validateStateExpr]); CEL-движок не дублируется.
+// parseStateValue extracts a CEL predicate from the quoted `'…'` form and
+// validates its compilation at snapshot load (ADR-047 S2c): an
+// empty/unquoted/over-long/non-compiling predicate, or one using a forbidden
+// sandbox root, → error (load fails, same as a broken soulprint/unknown
+// permission). Returns the predicate without quotes. Compilation goes through
+// keeper/internal/statepredicate (migration sandbox, root `state`, see
+// [validateStateExpr]); the CEL engine isn't duplicated.
 func parseStateValue(values, raw string) (string, error) {
 	if len(values) < 2 || values[0] != '\'' || values[len(values)-1] != '\'' {
 		return "", fmt.Errorf("permission %q: state value %q must be single-quoted (state='state.redis_version == \"8.0\"')", raw, values)
@@ -294,23 +302,25 @@ func parseStateValue(values, raw string) (string, error) {
 	return expr, nil
 }
 
-// parseTraitValue валидирует `key:value`-форму trait-селектора на load снимка
-// (ADR-047 amendment, ADR-060 п.7 slice 1) и возвращает её нормализованной
-// строкой `key:value`. Требования: РОВНО одна `:` (одно вхождение — разделитель
-// ключа/значения), обе половины непустые и матчат [reSelValue] (scalar-only, тот
-// же символьный класс, что у обычных exact-значений). Нарушение → error (load
-// фейлится, как битый soulprint/state). Двоеточие внутри ключа/значения
-// запрещено: оно не проходит reSelValue, поэтому неоднозначности «какая `:`
-// разделитель» не возникает — допустимо ровно одно вхождение.
+// parseTraitValue validates the `key:value` form of the trait selector at
+// snapshot load (ADR-047 amendment, ADR-060 §7 slice 1) and returns it as a
+// normalized `key:value` string. Requirements: EXACTLY one `:` (a single
+// occurrence — separates key/value), both halves non-empty and matching
+// [reSelValue] (scalar-only, the same character class as regular exact
+// values). A violation → error (load fails, same as a broken soulprint/
+// state). A colon inside the key/value is forbidden: it doesn't pass
+// reSelValue, so there's no ambiguity about "which `:` is the separator" —
+// exactly one occurrence is allowed.
 func parseTraitValue(values, raw string) (string, error) {
 	key, value, found := strings.Cut(values, ":")
 	if !found {
 		return "", fmt.Errorf("permission %q: trait value %q must be key:value (single ':')", raw, values)
 	}
-	// redundant-defensive: вторую `:` ловит и reSelValue ниже (двоеточие вне
-	// [a-zA-Z0-9_.-]+) — отказ был бы и без этой ветки. Оставлена ради точного
-	// сообщения оператору на load keeper.yml («exactly one ':'» понятнее, чем
-	// «value не матчит класс»); диагностика битого permission — системная граница.
+	// redundant-defensive: a second `:` would also be caught by reSelValue
+	// below (a colon is outside [a-zA-Z0-9_.-]+) — the rejection would happen
+	// without this branch too. Kept for a precise message to the operator at
+	// keeper.yml load ("exactly one ':'" is clearer than "value doesn't match
+	// the class"); diagnosing a broken permission is a system boundary.
 	if strings.Contains(value, ":") {
 		return "", fmt.Errorf("permission %q: trait value %q must contain exactly one ':' (key:value)", raw, values)
 	}

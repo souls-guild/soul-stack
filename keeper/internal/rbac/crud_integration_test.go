@@ -1,14 +1,15 @@
 //go:build integration
 
-// Integration-матрица RBAC-CRUD + self-lockout-ядра (ADR-028 Фаза 2 Slice 1)
-// через testcontainers-go. Делит контейнер / TestMain / resetRBAC / seedOperator
-// с integration_test.go (тот же пакет rbac).
+// Integration matrix for RBAC CRUD + the self-lockout core (ADR-028 Phase 2
+// Slice 1) via testcontainers-go. Shares the container / TestMain /
+// resetRBAC / seedOperator with integration_test.go (same rbac package).
 //
-// Self-lockout-матрица — qa-blocker: каждая из трёх мутаций (role.delete /
-// role.update / role.revoke-operator) над последним `*`-путём → lockout, над
-// НЕ-последним → проходит; + конкурентность (R2/R5) под FOR UPDATE.
+// Self-lockout matrix — qa-blocker: each of the three mutations
+// (role.delete / role.update / role.revoke-operator) over the last `*`
+// path → lockout, over a non-last one → passes; plus concurrency (R2/R5)
+// under FOR UPDATE.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/rbac/
 
@@ -21,7 +22,7 @@ import (
 	"testing"
 )
 
-// newService собирает Service против реального pool-а.
+// newService builds a Service against a real pool.
 func newService(t *testing.T) *Service {
 	t.Helper()
 	s, err := NewService(ServiceDeps{Pool: integrationPool})
@@ -31,12 +32,13 @@ func newService(t *testing.T) *Service {
 	return s
 }
 
-// seedClusterAdmin выдаёт caller-у membership builtin-роли cluster-admin (`*`)
-// в rbac_role_operators. Без этого subset-check (least-privilege, subset.go)
-// видит у caller-а 0 эффективных permissions и отказывает в мутации — модель-C
-// (RBAC в Postgres) резолвит права caller-а из реальной membership, а не из
-// config-RBAC enforcer-а. resetRBAC ре-сидит саму роль cluster-admin с `*`;
-// здесь только привязываем к ней оператора.
+// seedClusterAdmin gives the caller membership in the builtin cluster-admin
+// role (`*`) in rbac_role_operators. Without this, the subset check
+// (least-privilege, subset.go) sees 0 effective permissions for the caller
+// and denies the mutation — model C (RBAC in Postgres) resolves the
+// caller's rights from real membership, not from a config-RBAC enforcer.
+// resetRBAC re-seeds the cluster-admin role itself with `*`; here we only
+// attach the operator to it.
 func seedClusterAdmin(t *testing.T, aid string) {
 	t.Helper()
 	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", aid, nil); err != nil {
@@ -44,8 +46,9 @@ func seedClusterAdmin(t *testing.T, aid string) {
 	}
 }
 
-// insertRole — прямой INSERT кастомной роли + её permissions (минуя service,
-// для подготовки фикстур независимо от self-lockout-границы). builtin=false.
+// insertRole — a direct INSERT of a custom role + its permissions (bypassing
+// the service, to set up fixtures independent of the self-lockout guard).
+// builtin=false.
 func insertRole(t *testing.T, name string, perms ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -61,7 +64,7 @@ func insertRole(t *testing.T, name string, perms ...string) {
 	}
 }
 
-// rolePerms читает permission-строки роли напрямую (для assert-ов).
+// rolePerms reads the role's permission strings directly (for assertions).
 func rolePerms(t *testing.T, name string) []string {
 	t.Helper()
 	rows, err := integrationPool.Query(context.Background(),
@@ -81,7 +84,7 @@ func rolePerms(t *testing.T, name string) []string {
 	return out
 }
 
-// roleExists / membershipExists — point-проверки наличия строк.
+// roleExists / membershipExists — point checks for row existence.
 func roleExists(t *testing.T, name string) bool {
 	t.Helper()
 	var n int
@@ -147,8 +150,8 @@ func TestIntegration_CreateRole_Happy(t *testing.T) {
 	}
 }
 
-// TestIntegration_CreateRole_DefaultScope — ADR-047 S1: default_scope
-// персистится и наследуется bare-permission-ами через ResolvePurview
+// TestIntegration_CreateRole_DefaultScope — ADR-047 S1: default_scope is
+// persisted and inherited by bare permissions via ResolvePurview
 // (round-trip CreateRole → LoadSnapshot → enforcer).
 func TestIntegration_CreateRole_DefaultScope(t *testing.T) {
 	resetRBAC(t)
@@ -173,7 +176,7 @@ func TestIntegration_CreateRole_DefaultScope(t *testing.T) {
 		t.Fatalf("GrantOperator: %v", err)
 	}
 
-	// Колонка default_scope записана.
+	// The default_scope column is written.
 	var got *string
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT default_scope FROM rbac_roles WHERE name = 'prod-ops'`).Scan(&got); err != nil {
@@ -183,7 +186,7 @@ func TestIntegration_CreateRole_DefaultScope(t *testing.T) {
 		t.Fatalf("default_scope = %v, want coven=prod", got)
 	}
 
-	// Наследование через enforcer: bare-perm incarnation.run → covens=[prod].
+	// Inheritance via the enforcer: bare-perm incarnation.run → covens=[prod].
 	snap, err := LoadSnapshot(context.Background(), integrationPool)
 	if err != nil {
 		t.Fatalf("LoadSnapshot: %v", err)
@@ -273,8 +276,9 @@ func TestIntegration_DeleteRole_NotFound(t *testing.T) {
 	}
 }
 
-// TestIntegration_DirectRolesOf — новый helper (HIGH-1 federated-реконсиляция):
-// возвращает прямые membership-роли AID; revoke снимает; чужой AID — пусто.
+// TestIntegration_DirectRolesOf — a new helper (HIGH-1 federated
+// reconciliation): returns an AID's direct membership roles; revoke removes
+// one; an unrelated AID — empty.
 func TestIntegration_DirectRolesOf(t *testing.T) {
 	resetRBAC(t)
 	ctx := context.Background()
@@ -308,7 +312,7 @@ func TestIntegration_DirectRolesOf(t *testing.T) {
 		t.Fatalf("after revoke DirectRolesOf = %v, want [operator]", roles)
 	}
 
-	// Чужой AID — пусто (без ошибки).
+	// An unrelated AID — empty (no error).
 	other, err := DirectRolesOf(ctx, integrationPool, "archon-nobody")
 	if err != nil {
 		t.Fatalf("DirectRolesOf unknown: %v", err)
@@ -321,7 +325,7 @@ func TestIntegration_DirectRolesOf(t *testing.T) {
 func TestIntegration_DeleteRole_Builtin(t *testing.T) {
 	resetRBAC(t)
 	s := newService(t)
-	// cluster-admin (builtin=true) есть из re-seed-а resetRBAC.
+	// cluster-admin (builtin=true) exists from resetRBAC's re-seed.
 	err := s.DeleteRole(context.Background(), "cluster-admin")
 	if !errors.Is(err, ErrRoleBuiltin) {
 		t.Fatalf("err = %v, want ErrRoleBuiltin", err)
@@ -401,15 +405,16 @@ func TestIntegration_UpdateRolePermissions_Builtin(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard — пустой набор
-// снимает все permissions (включая `*`). Проверяется на НЕ-последнем `*`-пути
-// (есть второй admin через cluster-admin), иначе сработал бы self-lockout.
+// TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard — an empty
+// set removes all permissions (including `*`). Checked on a non-last `*`
+// path (a second admin exists via cluster-admin), otherwise self-lockout
+// would trigger.
 func TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
 	alice := "archon-alice"
 	seedOperator(t, "archon-bob", &alice)
-	// alice — admin через cluster-admin; extra-admin-role даёт `*` для bob.
+	// alice is admin via cluster-admin; the extra-admin role grants `*` to bob.
 	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice: %v", err)
 	}
@@ -419,7 +424,7 @@ func TestIntegration_UpdateRolePermissions_EmptySetRemovesWildcard(t *testing.T)
 	}
 	s := newService(t)
 
-	// Снять `*` у extra-admin пустым набором — alice остаётся admin → ok.
+	// Remove `*` from extra-admin with an empty set — alice remains admin → ok.
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name: "extra-admin", Permissions: nil,
 	}); err != nil {
@@ -466,10 +471,10 @@ func TestIntegration_RevokeOperator_NotFound(t *testing.T) {
 }
 
 // ============================================================
-// SELF-LOCKOUT МАТРИЦА (qa-blocker)
+// SELF-LOCKOUT MATRIX (qa-blocker)
 // ============================================================
 
-// setupSingleAdmin — единственный путь к `*`: alice через cluster-admin.
+// setupSingleAdmin — the only path to `*`: alice via cluster-admin.
 func setupSingleAdmin(t *testing.T) {
 	t.Helper()
 	seedOperator(t, "archon-alice", nil)
@@ -478,11 +483,11 @@ func setupSingleAdmin(t *testing.T) {
 	}
 }
 
-// setupTwoAdminPaths — два независимых пути к `*`:
-//   - alice через cluster-admin (builtin);
-//   - bob через кастомную extra-admin (`*`).
+// setupTwoAdminPaths — two independent paths to `*`:
+//   - alice via cluster-admin (builtin);
+//   - bob via the custom extra-admin (`*`).
 //
-// Снятие любого ОДНОГО пути оставляет второй → self-lockout НЕ должен сработать.
+// Removing any ONE path leaves the other → self-lockout must NOT trigger.
 func setupTwoAdminPaths(t *testing.T) {
 	t.Helper()
 	seedOperator(t, "archon-alice", nil)
@@ -499,8 +504,8 @@ func setupTwoAdminPaths(t *testing.T) {
 
 // --- role.delete ---
 
-// DeleteRole последней `*`-роли → lockout. Удаляем extra-admin, когда она
-// единственный путь к `*` (cluster-admin без membership-а).
+// DeleteRole on the last `*` role → lockout. We delete extra-admin when it's
+// the only path to `*` (cluster-admin has no membership).
 func TestIntegration_SelfLockout_DeleteRole_Last(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -519,7 +524,7 @@ func TestIntegration_SelfLockout_DeleteRole_Last(t *testing.T) {
 	}
 }
 
-// DeleteRole НЕ-последней `*`-роли → проходит (есть второй путь).
+// DeleteRole on a non-last `*` role → passes (a second path exists).
 func TestIntegration_SelfLockout_DeleteRole_NotLast(t *testing.T) {
 	resetRBAC(t)
 	setupTwoAdminPaths(t)
@@ -533,7 +538,7 @@ func TestIntegration_SelfLockout_DeleteRole_NotLast(t *testing.T) {
 	}
 }
 
-// --- role.update (снятие `*`) ---
+// --- role.update (removing `*`) ---
 
 func TestIntegration_SelfLockout_UpdateRole_Last(t *testing.T) {
 	resetRBAC(t)
@@ -550,7 +555,7 @@ func TestIntegration_SelfLockout_UpdateRole_Last(t *testing.T) {
 	if !errors.Is(err, ErrWouldLockOutCluster) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
-	// `*` остался — tx откатилась.
+	// `*` remains — the tx rolled back.
 	got := rolePerms(t, "extra-admin")
 	if len(got) != 1 || got[0] != "*" {
 		t.Errorf("permissions = %v, want [*] (откат)", got)
@@ -569,8 +574,8 @@ func TestIntegration_SelfLockout_UpdateRole_NotLast(t *testing.T) {
 	}
 }
 
-// UpdateRole, оставляющий `*` в новом наборе → self-lockout НЕ срабатывает,
-// даже если это единственный путь (новый набор тоже даёт `*`).
+// UpdateRole that keeps `*` in the new set → self-lockout does NOT trigger,
+// even if it's the only path (the new set also grants `*`).
 func TestIntegration_SelfLockout_UpdateRole_KeepsWildcard(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -610,7 +615,7 @@ func TestIntegration_SelfLockout_RevokeOperator_NotLast(t *testing.T) {
 	setupTwoAdminPaths(t)
 	s := newService(t)
 
-	// Снять bob с extra-admin — alice остаётся admin → ok.
+	// Revoke bob from extra-admin — alice remains admin → ok.
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
 		RoleName: "extra-admin", AID: "archon-bob",
 	}); err != nil {
@@ -618,13 +623,13 @@ func TestIntegration_SelfLockout_RevokeOperator_NotLast(t *testing.T) {
 	}
 }
 
-// AID держит `*` через ДВЕ роли: снятие одной membership-строки его не
-// разжалует (он остаётся admin через вторую) → revoke проходит.
+// An AID holds `*` via TWO roles: removing one membership row doesn't
+// demote it (it remains admin via the other) → revoke passes.
 func TestIntegration_SelfLockout_RevokeOperator_AdminViaTwoRoles(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
 	insertRole(t, "extra-admin", "*")
-	// alice — admin и через cluster-admin, и через extra-admin.
+	// alice is admin both via cluster-admin and via extra-admin.
 	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant cluster-admin: %v", err)
 	}
@@ -633,30 +638,31 @@ func TestIntegration_SelfLockout_RevokeOperator_AdminViaTwoRoles(t *testing.T) {
 	}
 	s := newService(t)
 
-	// Снять alice с extra-admin — она остаётся admin через cluster-admin → ok.
+	// Revoke alice from extra-admin — she remains admin via cluster-admin → ok.
 	if err := s.RevokeOperator(context.Background(), RevokeOperatorInput{
 		RoleName: "extra-admin", AID: "archon-alice",
 	}); err != nil {
 		t.Fatalf("RevokeOperator (admin через вторую роль): %v", err)
 	}
-	// Через cluster-admin alice всё ещё admin.
+	// Via cluster-admin alice is still admin.
 	if membershipCount(t, "cluster-admin") != 1 {
 		t.Error("cluster-admin membership alice потерян")
 	}
 }
 
 // ============================================================
-// КОНКУРЕНТНОСТЬ (R2/R5) — FOR UPDATE сериализует lockout-гонку
+// CONCURRENCY (R2/R5) — FOR UPDATE serializes the lockout race
 // ============================================================
 
-// Две параллельные tx снимают последний `*` разными путями:
-//   - revoke alice с cluster-admin;
-//   - delete extra-admin (через которую тот же alice — admin).
+// Two parallel tx remove the last `*` via different paths:
+//   - revoke alice from cluster-admin;
+//   - delete extra-admin (through which that same alice is admin).
 //
-// alice — admin РОВНО через эти два пути. Снятие обоих залочило бы кластер.
-// Без FOR UPDATE обе tx прошли бы probe «останется ≥1 admin» (каждая видит
-// чужой путь ещё живым) и закоммитили → lockout. С сериализацией ровно одна
-// успешна, вторая → lockout. Deadlock-а нет (детерминированный lock-порядок).
+// alice is admin via EXACTLY these two paths. Removing both would lock out
+// the cluster. Without FOR UPDATE, both tx would pass the "≥1 admin
+// remains" probe (each still sees the other path alive) and commit →
+// lockout. With serialization exactly one succeeds, the other → lockout.
+// No deadlock (deterministic lock order).
 func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -704,7 +710,7 @@ func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 		t.Fatalf("successes=%d lockouts=%d, want 1/1 (сериализация FOR UPDATE)", successes, lockouts)
 	}
 
-	// Инвариант: alice осталась admin хотя бы через один путь.
+	// Invariant: alice remains admin via at least one path.
 	admins, err := LockEffectiveClusterAdmins(context.Background(), beginRoTx(t))
 	if err != nil {
 		t.Fatalf("LockEffectiveClusterAdmins: %v", err)
@@ -714,8 +720,8 @@ func TestIntegration_SelfLockout_Concurrent_TwoPaths(t *testing.T) {
 	}
 }
 
-// beginRoTx — короткая tx для финального assert-а LockEffectiveClusterAdmins
-// (FOR UPDATE требует tx). Tx закрывается t.Cleanup-ом.
+// beginRoTx — a short tx for the final LockEffectiveClusterAdmins assertion
+// (FOR UPDATE requires a tx). The tx is closed via t.Cleanup.
 func beginRoTx(t *testing.T) ExecQueryRower {
 	t.Helper()
 	tx, err := integrationPool.Begin(context.Background())
@@ -726,7 +732,7 @@ func beginRoTx(t *testing.T) ExecQueryRower {
 	return tx
 }
 
-// grantedByOf читает granted_by_aid одной membership-строки (role, aid).
+// grantedByOf reads granted_by_aid of one membership row (role, aid).
 func grantedByOf(t *testing.T, roleName, aid string) *string {
 	t.Helper()
 	var by *string
@@ -763,7 +769,7 @@ func TestIntegration_ServiceGrantOperator_Happy(t *testing.T) {
 	}
 }
 
-// CallerAID=nil → granted_by_aid IS NULL (bootstrap-membership без инициатора).
+// CallerAID=nil → granted_by_aid IS NULL (bootstrap membership with no initiator).
 func TestIntegration_ServiceGrantOperator_NilCaller(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -780,7 +786,7 @@ func TestIntegration_ServiceGrantOperator_NilCaller(t *testing.T) {
 	}
 }
 
-// Повторный grant той же пары — no-op (ON CONFLICT DO NOTHING), без ошибки.
+// A repeated grant of the same pair is a no-op (ON CONFLICT DO NOTHING), no error.
 func TestIntegration_ServiceGrantOperator_Idempotent(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -853,7 +859,7 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	}
 	byName := indexViews(views)
 
-	// builtin cluster-admin: builtin=true, `*`, без operators.
+	// builtin cluster-admin: builtin=true, `*`, no operators.
 	ca, ok := byName["cluster-admin"]
 	if !ok {
 		t.Fatal("cluster-admin отсутствует в каталоге")
@@ -884,9 +890,9 @@ func TestIntegration_ServiceListRoles_WithPermissionsAndOperators(t *testing.T) 
 	}
 }
 
-// Пустой каталог (только seed cluster-admin без permissions): resetRBAC
-// re-сидит cluster-admin с `*`, поэтому «пустой каталог» в смысле «нет
-// custom-ролей» — проверяем, что виден ровно cluster-admin без operators.
+// An empty catalog (only the seed cluster-admin, no permissions): resetRBAC
+// re-seeds cluster-admin with `*`, so "empty catalog" meaning "no custom
+// roles" — we check that exactly cluster-admin is visible, with no operators.
 func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 	resetRBAC(t)
 	s := newService(t)
@@ -906,7 +912,7 @@ func TestIntegration_ServiceListRoles_SeedOnly(t *testing.T) {
 	}
 }
 
-// indexViews — name → RoleView для point-assert-ов.
+// indexViews — name → RoleView, for point assertions.
 func indexViews(views []RoleView) map[string]RoleView {
 	m := make(map[string]RoleView, len(views))
 	for _, v := range views {

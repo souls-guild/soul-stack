@@ -1,13 +1,14 @@
-// Package rbactest — тест-фикстуры RBAC для пакетов keeper (api / mcp /
-// middleware / handlers / rbac). После hard-cut-а config-RBAC (ADR-028(g))
-// единственный источник enforcer-а — БД-снимок [rbac.Snapshot]; тесты,
-// которым раньше хватало `config.KeeperRBAC`, собирают эквивалентный снимок
-// вручную через этот хелпер.
+// Package rbactest provides RBAC test fixtures for the keeper packages (api /
+// mcp / middleware / handlers / rbac). After the config-RBAC hard cut
+// (ADR-028(g)), the only source of an enforcer is a DB snapshot
+// [rbac.Snapshot]; tests that used to rely on `config.KeeperRBAC` now build
+// an equivalent snapshot by hand through this helper.
 //
-// Форма [Config]/[Role] повторяет прежний config-RBAC (default_policy +
-// roles[].{name,operators,permissions}) — те же permission-кейсы, только
-// источник = Snapshot вместо keeper.yml. Живёт в обычном (не `_test.go`)
-// файле, потому что фикстура шарится между несколькими тест-пакетами.
+// The [Config]/[Role] shape mirrors the old config-RBAC
+// (default_policy + roles[].{name,operators,permissions}) — same permission
+// cases, just sourced from a Snapshot instead of keeper.yml. Lives in a
+// regular (non-`_test.go`) file because the fixture is shared across several
+// test packages.
 package rbactest
 
 import (
@@ -17,31 +18,31 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// Config — тест-форма RBAC-каталога: плоский список ролей с привязками.
-// Аналог удалённого `config.KeeperRBAC`; `DefaultPolicy` сохранено для
-// читаемости фикстур (deny — единственный режим MVP), на сборку Snapshot
-// не влияет.
+// Config is the test-form RBAC catalog: a flat list of roles with bindings.
+// Analogous to the removed `config.KeeperRBAC`; `DefaultPolicy` is kept for
+// fixture readability (deny is the only MVP mode) and has no effect on the
+// built Snapshot.
 //
-// Revoked — фикстура для ADR-014 Amendment 2026-05-27 (JWT immediate revoke):
-// AID → revoked_at. Не пересекается с Roles/Operators — оператор может быть
-// одновременно в Membership и в Revoked (моделирует «уволенного, но ещё с
-// активной ролью в каталоге»).
+// Revoked is a fixture for ADR-014 Amendment 2026-05-27 (JWT immediate
+// revoke): AID → revoked_at. Independent of Roles/Operators — an operator
+// can be in both Membership and Revoked at once (models "fired, but still
+// has an active role in the catalog").
 type Config struct {
 	DefaultPolicy string
 	Roles         []Role
 	Revoked       map[string]time.Time
 }
 
-// Role — одна роль фикстуры: имя, привязанные AID-ы, permission-строки (RAW).
+// Role is a single fixture role: name, bound AIDs, raw permission strings.
 type Role struct {
 	Name        string
 	Operators   []string
 	Permissions []string
 }
 
-// Snapshot собирает [rbac.Snapshot] из тест-конфига: роль → permissions
-// (Roles) и AID → роли (Membership). nil-конфиг → пустой снимок (default
-// deny), как nil-снимок в [rbac.NewEnforcerFromSnapshot].
+// Snapshot builds an [rbac.Snapshot] from the test config: role → permissions
+// (Roles) and AID → roles (Membership). A nil config yields an empty snapshot
+// (default deny), same as a nil snapshot in [rbac.NewEnforcerFromSnapshot].
 func Snapshot(cfg *Config) *rbac.Snapshot {
 	if cfg == nil {
 		return nil
@@ -63,15 +64,16 @@ func Snapshot(cfg *Config) *rbac.Snapshot {
 	return snap
 }
 
-// NewEnforcer строит [rbac.Enforcer] из тест-конфига через БД-снимок-путь.
-// Возвращает ошибку парсинга permission-строк (тот же [rbac.ParsePermission],
-// что и прод-путь) — тесты на «unknown permission → fatal» этим пользуются.
+// NewEnforcer builds an [rbac.Enforcer] from the test config via the DB
+// snapshot path. Returns permission-string parse errors (the same
+// [rbac.ParsePermission] as the prod path) — tests for "unknown permission →
+// fatal" rely on this.
 func NewEnforcer(cfg *Config) (*rbac.Enforcer, error) {
 	return rbac.NewEnforcerFromSnapshot(Snapshot(cfg))
 }
 
-// MustEnforcer — NewEnforcer с t.Fatalf на ошибке. Удобно для большинства
-// фикстур, где невалидный permission — это баг теста, а не проверяемый кейс.
+// MustEnforcer is NewEnforcer with t.Fatalf on error. Convenient for most
+// fixtures, where an invalid permission is a test bug, not a case under test.
 func MustEnforcer(t *testing.T, cfg *Config) *rbac.Enforcer {
 	t.Helper()
 	e, err := NewEnforcer(cfg)

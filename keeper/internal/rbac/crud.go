@@ -9,149 +9,161 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrRoleNotFound — роль с указанным name отсутствует в rbac_roles.
-// Возвращается DeleteRole / UpdateRolePermissions при 0 affected rows и
-// service-ом при SELECT … FOR UPDATE, не нашедшем строку. Sentinel выделен,
-// чтобы transport маппил «нет роли» в 404, а не 500.
+// ErrRoleNotFound — a role with the given name is absent from rbac_roles.
+// Returned by DeleteRole / UpdateRolePermissions on 0 affected rows, and by
+// the service on a SELECT … FOR UPDATE that finds no row. A dedicated
+// sentinel so transport maps "no such role" to 404, not 500.
 var ErrRoleNotFound = errors.New("rbac: role not found")
 
-// ErrRoleAlreadyExists — UNIQUE-violation (`23505`) на PK rbac_roles.name
-// при CreateRole. Transport маппит в 409 (`role-already-exists`).
+// ErrRoleAlreadyExists — a UNIQUE violation (`23505`) on PK rbac_roles.name
+// during CreateRole. Transport maps it to 409 (`role-already-exists`).
 var ErrRoleAlreadyExists = errors.New("rbac: role already exists")
 
-// ErrRoleBuiltin — попытка role.delete / role.update над ролью с
-// builtin=true (cluster-admin). Builtin-роль не редактируется и не
-// удаляется (ADR-028(b)). Transport маппит в 409 / 422.
+// ErrRoleBuiltin — an attempted role.delete / role.update on a role with
+// builtin=true (cluster-admin). A builtin role can't be edited or deleted
+// (ADR-028(b)). Transport maps it to 409 / 422.
 var ErrRoleBuiltin = errors.New("rbac: role is builtin (delete/update forbidden)")
 
-// ErrRoleOperatorNotFound — membership-строка (role_name, aid) отсутствует
-// в rbac_role_operators при RevokeOperator. Transport маппит в 404.
+// ErrRoleOperatorNotFound — a membership row (role_name, aid) is absent
+// from rbac_role_operators during RevokeOperator. Transport maps it to 404.
 var ErrRoleOperatorNotFound = errors.New("rbac: role-operator membership not found")
 
-// ErrOperatorNotFound — grant-operator над несуществующим AID: FK-violation
-// (23503) на rbac_role_operators_aid_fk. Sentinel выделен, чтобы transport
-// маппил «нет такого Архонта» в 404, а не 500. Существование роли service
-// проверяет lock-ом ДО insert-а ([ErrRoleNotFound]), поэтому FK-violation в
-// grant-пути остаётся только на aid (и теоретически на granted_by_aid —
-// middleware гарантирует валидного caller-а, но FK защищает; оба ведут к
-// этому sentinel-у как «referenced operator not found»).
+// ErrOperatorNotFound — grant-operator on a non-existent AID: an FK
+// violation (23503) on rbac_role_operators_aid_fk. A dedicated sentinel so
+// transport maps "no such Archon" to 404, not 500. The service checks role
+// existence via a lock BEFORE the insert ([ErrRoleNotFound]), so an FK
+// violation on the grant path can only come from aid (and, theoretically,
+// granted_by_aid — middleware guarantees a valid caller, but the FK
+// protects anyway; both lead to this sentinel as "referenced operator not
+// found").
 var ErrOperatorNotFound = errors.New("rbac: operator (AID) not found")
 
-// ErrWouldLockOutCluster — мутация (role.delete / role.update /
-// role.revoke-operator) оставила бы кластер без активного Архонта с
-// эффективным `*`-permission (self-lockout-инвариант ADR-028(f),
-// rbac.md → § Встроенные роли).
+// ErrWouldLockOutCluster — the mutation (role.delete / role.update /
+// role.revoke-operator) would leave the cluster without an active Archon
+// holding an effective `*` permission (the self-lockout invariant,
+// ADR-028(f), rbac.md → § Built-in roles).
 //
-// ОТДЕЛЬНЫЙ sentinel от [operator.ErrWouldLockOutCluster]: пакеты rbac и
-// operator не должны зависеть друг от друга (избегаем import-цикла —
-// operator.Service уже тянет RBACSource-поверхность rbac.Holder). Transport-
-// слой маппит ОБА sentinel-а в один problem-type `would-lock-out-cluster`
-// (409), shared string-а между пакетами нет.
+// A SEPARATE sentinel from [operator.ErrWouldLockOutCluster]: the rbac and
+// operator packages must not depend on each other (avoids an import cycle
+// — operator.Service already pulls in rbac.Holder's RBACSource surface).
+// The transport layer maps BOTH sentinels to a single problem-type
+// `would-lock-out-cluster` (409); there's no shared string between the
+// packages.
 var ErrWouldLockOutCluster = errors.New("rbac: would lock out cluster (no active operator with effective '*' would remain)")
 
-// reRoleName — формат имени роли (rbac.md → § Storage, SQL CHECK
-// rbac_roles_name_format). Дублируется в Go для прикладной валидации до
-// round-trip-а (better error, нет лишнего обращения к БД на битом имени).
+// reRoleName — the role name format (rbac.md → § Storage, SQL CHECK
+// rbac_roles_name_format). Duplicated in Go for application-side validation
+// before a round-trip (a better error, no wasted DB call on a bad name).
 var reRoleName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// RoleNamePattern — публичная строковая форма [reRoleName] для caller-ов
-// другого пакета (например, operator.Service на Create-with-roles, чтобы
-// валидировать имена до открытия tx). Совпадает с SQL CHECK
+// RoleNamePattern — the public string form of [reRoleName] for callers in
+// other packages (e.g. operator.Service on Create-with-roles, to validate
+// names before opening a tx). Matches the SQL CHECK
 // rbac_roles_name_format.
 const RoleNamePattern = `^[a-z][a-z0-9-]*$`
 
-// ValidRoleName проверяет имя роли по [reRoleName]. Экспортирована для
-// caller-ов вне пакета, делающих пред-валидацию до round-trip-а
-// (operator.Service.Create при наличии Roles[]).
+// ValidRoleName checks a role name against [reRoleName]. Exported for
+// callers outside the package that pre-validate before a round-trip
+// (operator.Service.Create when Roles[] is present).
 func ValidRoleName(name string) bool {
 	return reRoleName.MatchString(name)
 }
 
-// pgErrCodeUniqueViolation / pgErrCodeForeignKeyViolation — SQLSTATE для
-// UNIQUE / FK нарушений. Держим локально (как в operator/crud.go), чтобы не
-// тянуть pgerrcode в keeper.
+// pgErrCodeUniqueViolation / pgErrCodeForeignKeyViolation — SQLSTATE codes
+// for UNIQUE / FK violations. Kept local (as in operator/crud.go) to avoid
+// pulling pgerrcode into keeper.
 const (
 	pgErrCodeUniqueViolation     = "23505"
 	pgErrCodeForeignKeyViolation = "23503"
 )
 
 const (
-	// insertRoleSQL — INSERT строки rbac_roles. builtin всегда false для
-	// ролей, созданных через API: builtin=true ставит только seed-миграция
-	// 027 (cluster-admin). created_at берётся из DEFAULT NOW(). default_scope
-	// nullable (ADR-047 S1): NULL = роль без scope-ограничения (backcompat).
+	// insertRoleSQL — INSERT of an rbac_roles row. builtin is always false
+	// for roles created via the API: only seed migration 027
+	// (cluster-admin) sets builtin=true. created_at comes from DEFAULT
+	// NOW(). default_scope is nullable (ADR-047 S1): NULL = a role with no
+	// scope restriction (backcompat).
 	insertRoleSQL = `
 INSERT INTO rbac_roles (name, description, builtin, created_by_aid, default_scope)
 VALUES ($1, $2, false, $3, $4)
 `
 
-	// updateRoleDefaultScopeSQL — установка/снятие default_scope роли
-	// (ADR-047 S1). NULL снимает scope (роль → backcompat-unrestricted для
-	// bare-perms). Используется replace-семантикой UpdateRole.
+	// updateRoleDefaultScopeSQL — sets/clears a role's default_scope
+	// (ADR-047 S1). NULL clears the scope (role → backcompat-unrestricted
+	// for bare perms). Used by UpdateRole's replace semantics.
 	updateRoleDefaultScopeSQL = `UPDATE rbac_roles SET default_scope = $2 WHERE name = $1`
 
-	// insertRolePermissionSQL — INSERT одной permission-строки роли.
-	// ON CONFLICT DO NOTHING делает batch-insert идемпотентным при
-	// дублях в наборе (дубль внутри одного role.create — не ошибка БД).
+	// insertRolePermissionSQL — INSERT of a single role-permission row.
+	// ON CONFLICT DO NOTHING makes the batch insert idempotent on
+	// duplicates within the set (a dup within one role.create isn't a DB
+	// error).
 	insertRolePermissionSQL = `
 INSERT INTO rbac_role_permissions (role_name, permission)
 VALUES ($1, $2)
 ON CONFLICT (role_name, permission) DO NOTHING
 `
 
-	// deleteRoleSQL — DELETE строки rbac_roles. CASCADE на
-	// rbac_role_permissions / rbac_role_operators сносит permissions и
-	// membership одной операцией.
+	// deleteRoleSQL — DELETE of an rbac_roles row. CASCADE onto
+	// rbac_role_permissions / rbac_role_operators wipes permissions and
+	// membership in one operation.
 	deleteRoleSQL = `DELETE FROM rbac_roles WHERE name = $1`
 
-	// deleteRolePermissionsSQL — DELETE всех permission-строк роли.
-	// Первая половина replace-семантики UpdateRolePermissions.
+	// deleteRolePermissionsSQL — DELETE of all of a role's permission rows.
+	// The first half of UpdateRolePermissions' replace semantics.
 	deleteRolePermissionsSQL = `DELETE FROM rbac_role_permissions WHERE role_name = $1`
 
-	// deleteRoleOperatorSQL — DELETE одной membership-строки (role, aid).
+	// deleteRoleOperatorSQL — DELETE of a single membership row (role, aid).
 	deleteRoleOperatorSQL = `DELETE FROM rbac_role_operators WHERE role_name = $1 AND aid = $2`
 
-	// lockRoleForUpdateSQL — SELECT builtin строки роли под row-lock
-	// (FOR UPDATE) до конца транзакции. Используется service-ом первым
-	// шагом всех мутаций (delete/update): сериализует конкурентные операции
-	// над одной ролью и читает builtin для builtin-границы.
+	// lockRoleForUpdateSQL — SELECT of a role row's builtin flag under a
+	// row lock (FOR UPDATE) held to the end of the transaction. Used by
+	// the service as the first step of every mutation (delete/update): it
+	// serializes concurrent operations on the same role and reads builtin
+	// for the builtin guard.
 	lockRoleForUpdateSQL = `SELECT builtin FROM rbac_roles WHERE name = $1 FOR UPDATE`
 
-	// lockRoleOperatorForUpdateSQL — row-lock membership-строки (role, aid)
-	// до конца транзакции. Используется RevokeOperator-путём service-а перед
-	// self-lockout-проверкой.
+	// lockRoleOperatorForUpdateSQL — row-locks a membership row (role, aid)
+	// until the end of the transaction. Used by the service's
+	// RevokeOperator path before the self-lockout check.
 	lockRoleOperatorForUpdateSQL = `SELECT 1 FROM rbac_role_operators WHERE role_name = $1 AND aid = $2 FOR UPDATE`
 
-	// directClusterAdminsForUpdateSQL — ПРЯМАЯ ветка self-lockout-ядра.
+	// directClusterAdminsForUpdateSQL — the DIRECT branch of the
+	// self-lockout core.
 	//
-	// Активные операторы (operators.revoked_at IS NULL) с эффективным `*`
-	// через ЛЮБУЮ ПРЯМУЮ роль (rbac_role_operators), под row-lock на три
-	// таблицы в одной tx.
+	// Active operators (operators.revoked_at IS NULL) with an effective `*`
+	// via ANY DIRECT role (rbac_role_operators), under a row lock on three
+	// tables in one tx.
 	//
-	// ПОЧЕМУ источник — БД (FOR UPDATE), а НЕ enforcer.ClusterAdmins():
-	//   1. Snapshot enforcer-а (in-memory, ADR-028(d)) обновляется с TTL/pub-sub
-	//      задержкой — между чтением снимка и мутацией он устаревает. Решение по
-	//      устаревшему снимку = staleness-дыра: можно снять последнего админа,
-	//      если снимок ещё «помнит» уже-revoked-нутого второго.
-	//   2. FOR UPDATE на ro/rp/o сериализует конкурентные lockout-операции
-	//      (R2/R5): две параллельные tx, снимающие `*` разными путями, не могут
-	//      обе пройти проверку «останется ≥1 админ» — первая держит lock-и до
-	//      COMMIT, вторая ждёт и видит уже-применённое состояние.
-	// НЕ унифицировать обратно на enforcer-снимок — это вернёт дыру (1).
+	// WHY the source is the DB (FOR UPDATE) and NOT enforcer.ClusterAdmins():
+	//  1. The enforcer's snapshot (in-memory, ADR-028(d)) refreshes with a
+	//     TTL/pub-sub delay — it goes stale between reading the snapshot
+	//     and the mutation. Deciding on a stale snapshot is a staleness
+	//     hole: you could remove the last admin if the snapshot still
+	//     "remembers" an already-revoked second one.
+	//  2. FOR UPDATE on ro/rp/o serializes concurrent lockout operations
+	//     (R2/R5): two parallel tx removing `*` via different paths can't
+	//     both pass the "≥1 admin remains" check — the first holds the
+	//     locks until COMMIT, the second waits and sees the already-applied
+	//     state.
+	// Do NOT unify this back onto the enforcer snapshot — that would
+	// reopen hole (1).
 	//
-	// БЕЗ DISTINCT: PostgreSQL запрещает `FOR UPDATE` с `DISTINCT`
-	// (SQLSTATE 0A000). Дедуп AID-ов, держащих `*` через несколько ролей,
-	// делается в Go ([dedupAIDs]); это не меняет ни row-lock, ни множество.
+	// NO DISTINCT: PostgreSQL forbids `FOR UPDATE` with `DISTINCT`
+	// (SQLSTATE 0A000). Deduping AIDs that hold `*` via multiple roles is
+	// done in Go ([dedupAIDs]); this changes neither the row lock nor the
+	// resulting set.
 	//
-	// ИНВАРИАНТ lock-порядка: self-lockout-ядро берёт lock-и ДВУМЯ запросами в
-	// фиксированном порядке — СНАЧАЛА эта прямая ветка (ro,rp,o), ПОТОМ Synod-
-	// ветка ([synodClusterAdminsForUpdateSQL], so,sr,rp,o). Порядок ОДИНАКОВ во
-	// всех call-site-ах (operator.Revoke + role-мутации DeleteRole/
-	// UpdateRolePermissions/RevokeOperator + их exclude-варианты в service.go) —
-	// иначе разный порядок lock-ов = deadlock между конкурентными lockout-
-	// операциями. Расщепление на два SELECT-а (вместо одного UNION) ВЫНУЖДЕННОЕ:
-	// PostgreSQL запрещает `FOR UPDATE` с UNION (SQLSTATE 0A000) — Synod-разворот
-	// (ADR-049(f)) не сложить в один locking-запрос с прямым.
+	// LOCK-ORDER INVARIANT: the self-lockout core takes locks via TWO
+	// queries in a fixed order — FIRST this direct branch (ro,rp,o), THEN
+	// the Synod branch ([synodClusterAdminsForUpdateSQL], so,sr,rp,o). The
+	// order is the SAME at every call site (operator.Revoke + the role
+	// mutations DeleteRole/UpdateRolePermissions/RevokeOperator + their
+	// exclude variants in service.go) — otherwise a different lock order
+	// would deadlock between concurrent lockout operations. Splitting into
+	// two SELECTs (instead of one UNION) is FORCED: PostgreSQL forbids
+	// `FOR UPDATE` with UNION (SQLSTATE 0A000) — the Synod join
+	// (ADR-049(f)) can't be folded into one locking query with the direct
+	// one.
 	directClusterAdminsForUpdateSQL = `
 SELECT ro.aid
 FROM rbac_role_operators ro
@@ -161,17 +173,21 @@ WHERE rp.permission = '*' AND o.revoked_at IS NULL
 FOR UPDATE OF ro, rp, o
 `
 
-	// synodClusterAdminsForUpdateSQL — SYNOD-ветка self-lockout-ядра (ADR-049(f)).
+	// synodClusterAdminsForUpdateSQL — the SYNOD branch of the self-lockout
+	// core (ADR-049(f)).
 	//
-	// Активные операторы с эффективным `*`, пришедшим через ЛЮБОЙ Synod
-	// (synod_operators ⋈ synod_roles → роль с `*`), под row-lock на четыре
-	// таблицы. Без этой ветки `*` через группу невидим self-lockout-у: снятие
-	// прямого `*` залочило бы кластер, даже если последний админ держит `*`
-	// через Synod (и наоборот — нельзя осиротить админа, чей `*` только в группе).
+	// Active operators with an effective `*` arriving via ANY Synod
+	// (synod_operators ⋈ synod_roles → a role with `*`), under a row lock
+	// on four tables. Without this branch, `*` granted through a group
+	// would be invisible to self-lockout: removing the direct `*` could
+	// lock out the cluster even if the last admin still holds `*` via a
+	// Synod (and conversely, an admin whose only `*` is via a group must
+	// not be orphaned).
 	//
-	// Берётся ВТОРЫМ запросом после [directClusterAdminsForUpdateSQL] (см. там
-	// инвариант lock-порядка). Дедуп объединённого множества — в Go ([dedupAIDs]):
-	// AID, держащий `*` и напрямую, и через Synod, должен учитываться один раз.
+	// Taken as the SECOND query after [directClusterAdminsForUpdateSQL]
+	// (see the lock-order invariant there). The combined set is deduped in
+	// Go ([dedupAIDs]): an AID holding `*` both directly and via Synod must
+	// be counted once.
 	synodClusterAdminsForUpdateSQL = `
 SELECT so.aid
 FROM synod_operators so
@@ -183,22 +199,26 @@ FOR UPDATE OF so, sr, rp, o
 `
 )
 
-// CreateRole создаёт роль и её permissions в одной транзакции:
+// CreateRole creates a role and its permissions in a single transaction:
 // INSERT rbac_roles + batch INSERT rbac_role_permissions.
 //
-// Пред-валидация (defense-in-depth; основная — в [Service.CreateRole]):
-//   - name по [reRoleName] (формат рор-CHECK rbac_roles_name_format);
-//   - каждый permission через [ParsePermission] (БД хранит RAW-строку, не
-//     валидирует — парсер ловит мусор до записи).
+// Pre-validation (defense-in-depth; the primary check is in
+// [Service.CreateRole]):
+//   - name against [reRoleName] (matches the SQL CHECK
+//     rbac_roles_name_format);
+//   - each permission via [ParsePermission] (the DB stores the RAW string
+//     and doesn't validate it — the parser catches garbage before it's
+//     written).
 //
-// db должен быть транзакцией (`pgx.Tx`): при ошибке batch-insert-а откат
-// убирает уже вставленную rbac_roles-строку. Вызов на pool-е оставит
-// частично созданную роль при сбое — caller обязан передать tx.
+// db must be a transaction (`pgx.Tx`): on a batch-insert error, the
+// rollback removes the already-inserted rbac_roles row. Calling this on a
+// pool would leave a partially created role on failure — the caller must
+// pass a tx.
 //
-// Ошибки:
-//   - [ErrRoleAlreadyExists] на UNIQUE-violation rbac_roles.name (23505).
-//   - wrapped FK-violation на created_by_aid (несуществующий AID).
-//   - fmt.Errorf на битом name / permission (до round-trip-а).
+// Errors:
+//   - [ErrRoleAlreadyExists] on a UNIQUE violation of rbac_roles.name (23505).
+//   - a wrapped FK violation on created_by_aid (non-existent AID).
+//   - fmt.Errorf on a bad name / permission (before the round-trip).
 func CreateRole(ctx context.Context, db ExecQueryRower, name, description string, permissions []string, createdByAID *string, defaultScope *string) error {
 	if !reRoleName.MatchString(name) {
 		return fmt.Errorf("rbac: invalid role name %q (must match %s)", name, reRoleName.String())
@@ -229,13 +249,13 @@ func CreateRole(ctx context.Context, db ExecQueryRower, name, description string
 	return nil
 }
 
-// DeleteRole удаляет роль; CASCADE сносит её permissions и membership.
-// builtin-граница и self-lockout-проверка — на стороне [Service.DeleteRole]
-// (здесь только DELETE).
+// DeleteRole deletes a role; CASCADE wipes its permissions and membership.
+// The builtin guard and the self-lockout check live in
+// [Service.DeleteRole] (this is DELETE only).
 //
-// Ошибки:
-//   - [ErrRoleNotFound] при 0 affected rows.
-//   - wrapped pgx-ошибка на транспортном сбое.
+// Errors:
+//   - [ErrRoleNotFound] on 0 affected rows.
+//   - a wrapped pgx error on a transport failure.
 func DeleteRole(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, deleteRoleSQL, name)
 	if err != nil {
@@ -247,18 +267,19 @@ func DeleteRole(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// UpdateRolePermissions заменяет набор permissions роли (replace-семантика):
-// DELETE всех permission-строк роли + batch INSERT нового набора. Должен
-// вызываться в транзакции (`pgx.Tx`) — иначе при сбое insert-а роль останется
-// с пустым набором permissions.
+// UpdateRolePermissions replaces a role's permission set (replace
+// semantics): DELETE of all the role's permission rows + batch INSERT of
+// the new set. Must be called within a transaction (`pgx.Tx`) — otherwise
+// an insert failure would leave the role with an empty permission set.
 //
-// Роль обязана существовать: проверяется по rows-affected DELETE-а — 0 строк
-// при пустом старом наборе неоднозначен, поэтому existence-граница (lock роли)
-// делается в [Service.UpdateRolePermissions] до вызова этой функции. Здесь
-// возврат [ErrRoleNotFound] недостижим напрямую (роль уже залочена service-ом);
-// функция остаётся транспортной.
+// The role must exist: checked via the DELETE's rows-affected — 0 rows is
+// ambiguous when the old set was already empty, so the existence guard
+// (locking the role) is done in [Service.UpdateRolePermissions] before
+// calling this function. Here, returning [ErrRoleNotFound] is unreachable
+// directly (the role is already locked by the service); this function stays
+// purely transport-level.
 //
-// Пред-валидация permissions — defense-in-depth (как в CreateRole).
+// Permission pre-validation is defense-in-depth (as in CreateRole).
 func UpdateRolePermissions(ctx context.Context, db ExecQueryRower, name string, permissions []string) error {
 	for _, raw := range permissions {
 		if _, err := ParsePermission(raw); err != nil {
@@ -276,13 +297,13 @@ func UpdateRolePermissions(ctx context.Context, db ExecQueryRower, name string, 
 	return nil
 }
 
-// RevokeOperator снимает membership-строку (roleName, aid) из
-// rbac_role_operators. self-lockout-проверка — на стороне
-// [Service.RevokeOperator] (здесь только DELETE).
+// RevokeOperator removes a membership row (roleName, aid) from
+// rbac_role_operators. The self-lockout check lives in
+// [Service.RevokeOperator] (this is DELETE only).
 //
-// Ошибки:
-//   - [ErrRoleOperatorNotFound] при 0 affected rows (пары нет).
-//   - wrapped pgx-ошибка на транспортном сбое.
+// Errors:
+//   - [ErrRoleOperatorNotFound] on 0 affected rows (the pair doesn't exist).
+//   - a wrapped pgx error on a transport failure.
 func RevokeOperator(ctx context.Context, db ExecQueryRower, roleName, aid string) error {
 	tag, err := db.Exec(ctx, deleteRoleOperatorSQL, roleName, aid)
 	if err != nil {
@@ -294,25 +315,26 @@ func RevokeOperator(ctx context.Context, db ExecQueryRower, roleName, aid string
 	return nil
 }
 
-// LockEffectiveClusterAdmins возвращает AID-ы активных операторов
-// (operators.revoked_at IS NULL) с эффективным `*`-permission через любую роль —
-// ПРЯМУЮ (rbac_role_operators) ИЛИ через Synod (synod_operators ⋈ synod_roles),
-// взяв row-lock (FOR UPDATE) на соответствующие таблицы. ЯДРО self-lockout-
-// инварианта (ADR-028(f) + ADR-049(f) Synod-разворот).
+// LockEffectiveClusterAdmins returns the AIDs of active operators
+// (operators.revoked_at IS NULL) with an effective `*` permission via any
+// role — DIRECT (rbac_role_operators) OR via a Synod (synod_operators ⋈
+// synod_roles) — taking a row lock (FOR UPDATE) on the relevant tables.
+// The CORE of the self-lockout invariant (ADR-028(f) + the ADR-049(f)
+// Synod join).
 //
-// Два locking-запроса в фиксированном порядке (прямой → Synod, см.
-// [directClusterAdminsForUpdateSQL]): UNION в одном locking-запросе PostgreSQL
-// запрещает (SQLSTATE 0A000), поэтому ветки берутся отдельными SELECT-ами и
-// объединяются в Go ([dedupAIDs]) — AID, держащий `*` обоими путями, учитывается
-// один раз.
+// Two locking queries in a fixed order (direct → Synod, see
+// [directClusterAdminsForUpdateSQL]): PostgreSQL forbids UNION in one
+// locking query (SQLSTATE 0A000), so the branches are taken as separate
+// SELECTs and merged in Go ([dedupAIDs]) — an AID holding `*` via both
+// paths is counted once.
 //
-// tx ОБЯЗАН быть транзакцией (`pgx.Tx`): FOR UPDATE вне tx даёт ошибку PG
-// «cannot use FOR UPDATE outside transaction». Lock держится до COMMIT/ROLLBACK
-// и сериализует конкурентные lockout-операции.
+// tx MUST be a transaction (`pgx.Tx`): FOR UPDATE outside a tx raises the
+// PG error "cannot use FOR UPDATE outside transaction". The lock is held
+// until COMMIT/ROLLBACK and serializes concurrent lockout operations.
 //
-// Источник — БД, а НЕ [Enforcer.ClusterAdmins] — см. комментарий
-// [directClusterAdminsForUpdateSQL]: snapshot enforcer-а устаревает до TTL
-// (staleness-дыра), FOR UPDATE сериализует гонку.
+// The source is the DB, NOT [Enforcer.ClusterAdmins] — see the comment on
+// [directClusterAdminsForUpdateSQL]: the enforcer's snapshot goes stale
+// within its TTL (a staleness hole), FOR UPDATE serializes the race.
 func LockEffectiveClusterAdmins(ctx context.Context, tx ExecQueryRower) ([]string, error) {
 	direct, err := scanAIDs(ctx, tx, directClusterAdminsForUpdateSQL)
 	if err != nil {
@@ -325,16 +347,17 @@ func LockEffectiveClusterAdmins(ctx context.Context, tx ExecQueryRower) ([]strin
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// dedupAIDs убирает повторы AID-ов (один AID держит `*` через несколько
-// ролей → несколько строк в JOIN-е). Дедуп в Go заменяет SQL DISTINCT,
-// запрещённый с FOR UPDATE (см. [directClusterAdminsForUpdateSQL]).
+// dedupAIDs removes duplicate AIDs (one AID holding `*` via multiple roles
+// produces multiple JOIN rows). Deduping in Go replaces SQL DISTINCT, which
+// is forbidden with FOR UPDATE (see [directClusterAdminsForUpdateSQL]).
 func dedupAIDs(in []string) []string {
 	if len(in) <= 1 {
 		return in
 	}
 	seen := make(map[string]struct{}, len(in))
-	// Новый слайс, а НЕ in-place in[:0]: явная безопасность на auth-пути —
-	// дедуп не должен мутировать входной слайс caller-а (перф здесь неважен).
+	// A new slice, NOT in-place in[:0]: deliberate safety on the auth
+	// path — dedup must not mutate the caller's input slice (performance
+	// doesn't matter here).
 	out := make([]string, 0, len(in))
 	for _, a := range in {
 		if _, ok := seen[a]; ok {
@@ -346,11 +369,12 @@ func dedupAIDs(in []string) []string {
 	return out
 }
 
-// lockRole берёт row-lock на строку роли (FOR UPDATE) и возвращает её
-// builtin-флаг. Первый шаг service-мутаций над ролью: сериализует
-// конкурентные delete/update и читает builtin для builtin-границы.
+// lockRole takes a row lock on a role row (FOR UPDATE) and returns its
+// builtin flag. The first step of service mutations on a role: it
+// serializes concurrent delete/update and reads builtin for the builtin
+// guard.
 //
-// tx ОБЯЗАН быть транзакцией. Возврат [ErrRoleNotFound], если строки нет.
+// tx MUST be a transaction. Returns [ErrRoleNotFound] if the row doesn't exist.
 func lockRole(ctx context.Context, tx ExecQueryRower, name string) (builtin bool, err error) {
 	rows, err := tx.Query(ctx, lockRoleForUpdateSQL, name)
 	if err != nil {
@@ -369,8 +393,8 @@ func lockRole(ctx context.Context, tx ExecQueryRower, name string) (builtin bool
 	return builtin, nil
 }
 
-// lockRoleOperator берёт row-lock на membership-строку (role, aid).
-// Возврат [ErrRoleOperatorNotFound], если пары нет. tx ОБЯЗАН быть tx.
+// lockRoleOperator takes a row lock on a membership row (role, aid).
+// Returns [ErrRoleOperatorNotFound] if the pair doesn't exist. tx MUST be a tx.
 func lockRoleOperator(ctx context.Context, tx ExecQueryRower, roleName, aid string) error {
 	rows, err := tx.Query(ctx, lockRoleOperatorForUpdateSQL, roleName, aid)
 	if err != nil {
@@ -386,10 +410,11 @@ func lockRoleOperator(ctx context.Context, tx ExecQueryRower, roleName, aid stri
 	return nil
 }
 
-// UpdateRoleDefaultScope заменяет default_scope роли (ADR-047 S1; replace-
-// семантика, NULL снимает scope). Роль обязана существовать — existence-граница
-// (lock роли) делается в [Service.UpdateRolePermissions] до вызова. Здесь
-// валидируется грамматика scope и пишется UPDATE.
+// UpdateRoleDefaultScope replaces a role's default_scope (ADR-047 S1;
+// replace semantics, NULL clears the scope). The role must exist — the
+// existence guard (locking the role) is done in
+// [Service.UpdateRolePermissions] before this call. Here we validate the
+// scope grammar and write the UPDATE.
 func UpdateRoleDefaultScope(ctx context.Context, db ExecQueryRower, name string, defaultScope *string) error {
 	if defaultScope != nil {
 		if _, err := ParseDefaultScope(*defaultScope); err != nil {
@@ -402,10 +427,10 @@ func UpdateRoleDefaultScope(ctx context.Context, db ExecQueryRower, name string,
 	return nil
 }
 
-// defaultScopeArg переводит *string default_scope в args-значение: nil → PG
-// NULL (роль без scope-ограничения), иначе разыменованная RAW-строка. Пустую
-// строку приравниваем к NULL — «введённое пустое» в coven-MVP смысла не имеет
-// (см. ResolvePurview/отчёт S1).
+// defaultScopeArg converts a *string default_scope into an args value: nil
+// → PG NULL (a role with no scope restriction), otherwise the dereferenced
+// RAW string. An empty string is treated as NULL — an "entered empty" value
+// has no meaning in the coven MVP (see ResolvePurview / the S1 report).
 func defaultScopeArg(scope *string) any {
 	if scope == nil || *scope == "" {
 		return nil
@@ -413,9 +438,9 @@ func defaultScopeArg(scope *string) any {
 	return *scope
 }
 
-// roleGivesWildcard — true, если набор permission-строк роли содержит `*`.
-// Используется service-ом для решения, нужна ли self-lockout-проверка
-// (мутация роли без `*` кластер не залочит).
+// roleGivesWildcard is true if a role's set of permission strings contains
+// `*`. Used by the service to decide whether a self-lockout check is
+// needed (mutating a role without `*` can't lock out the cluster).
 func roleGivesWildcard(permissions []string) bool {
 	for _, p := range permissions {
 		if p == "*" {
@@ -425,9 +450,9 @@ func roleGivesWildcard(permissions []string) bool {
 	return false
 }
 
-// rolePermissions читает permission-строки роли (без lock-а) — нужен
-// service-у, чтобы узнать, давала ли роль `*` ДО update/delete. Отдельный
-// SELECT (роль уже залочена lockRole-ом в той же tx).
+// rolePermissions reads a role's permission strings (no lock) — needed by
+// the service to know whether the role granted `*` BEFORE update/delete. A
+// separate SELECT (the role is already locked by lockRole in the same tx).
 func rolePermissions(ctx context.Context, tx ExecQueryRower, name string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT permission FROM rbac_role_permissions WHERE role_name = $1`, name)
 	if err != nil {
@@ -448,10 +473,11 @@ func rolePermissions(ctx context.Context, tx ExecQueryRower, name string) ([]str
 	return out, nil
 }
 
-// roleDefaultScope читает RAW default_scope роли (ADR-047 S1) — нужен subset-у
-// при UpdateRolePermissions без SetDefaultScope: добавляемые bare-perms
-// наследуют СУЩЕСТВУЮЩИЙ scope роли (PATCH-семантика). nil = NULL (роль без
-// scope). Роль уже залочена lockRole-ом в той же tx.
+// roleDefaultScope reads a role's RAW default_scope (ADR-047 S1) — needed
+// by the subset check on UpdateRolePermissions without SetDefaultScope:
+// newly added bare perms inherit the role's EXISTING scope (PATCH
+// semantics). nil = NULL (role has no scope). The role is already locked
+// by lockRole in the same tx.
 func roleDefaultScope(ctx context.Context, tx ExecQueryRower, name string) (*string, error) {
 	rows, err := tx.Query(ctx, `SELECT default_scope FROM rbac_roles WHERE name = $1`, name)
 	if err != nil {
@@ -470,12 +496,12 @@ func roleDefaultScope(ctx context.Context, tx ExecQueryRower, name string) (*str
 	return scope, nil
 }
 
-// mapRoleError маппит pgx-ошибки INSERT-ов в sentinel-ы пакета по образцу
-// [operator.mapInsertError]:
-//   - 23505 (UNIQUE) → [ErrRoleAlreadyExists] (multi-wrap: sentinel + оригинал).
-//   - 23503 (FK) → wrapped с именем constraint-а (created_by_aid /
-//     role_name / aid ссылаются на несуществующую строку).
-//   - прочее → wrapped с SQLSTATE.
+// mapRoleError maps pgx INSERT errors to the package's sentinels, following
+// the [operator.mapInsertError] pattern:
+//   - 23505 (UNIQUE) → [ErrRoleAlreadyExists] (multi-wrap: sentinel + original).
+//   - 23503 (FK) → wrapped with the constraint name (created_by_aid /
+//     role_name / aid reference a non-existent row).
+//   - anything else → wrapped with the SQLSTATE.
 func mapRoleError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -489,11 +515,11 @@ func mapRoleError(err error) error {
 	return fmt.Errorf("rbac: %w", wrapPgErr(err))
 }
 
-// mapGrantError маппит pgx-ошибку INSERT-membership-а (grant-operator path).
-// Роль service проверяет lock-ом до insert-а, поэтому FK-violation тут — это
-// несуществующий operator (aid или granted_by_aid):
-//   - 23503 (FK) → [ErrOperatorNotFound] (multi-wrap: sentinel + оригинал).
-//   - прочее → wrapped с SQLSTATE.
+// mapGrantError maps a pgx INSERT-membership error (grant-operator path).
+// The service checks the role via a lock before the insert, so an FK
+// violation here means a non-existent operator (aid or granted_by_aid):
+//   - 23503 (FK) → [ErrOperatorNotFound] (multi-wrap: sentinel + original).
+//   - anything else → wrapped with the SQLSTATE.
 func mapGrantError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {

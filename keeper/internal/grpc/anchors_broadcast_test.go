@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// fakeTrustAnchorSource — настраиваемая реализация [TrustAnchorSource] для
-// connect-time broadcast-тестов набора якорей (R3-S6).
+// fakeTrustAnchorSource — configurable [TrustAnchorSource] implementation for
+// connect-time trust-anchor-set broadcast tests (R3-S6).
 type fakeTrustAnchorSource struct {
 	pems []string
 }
@@ -27,8 +27,8 @@ func newAnchorBroadcastHandler(t *testing.T, src TrustAnchorSource) *eventStream
 	return newEventStreamHandler(deps, discardLogger(t))
 }
 
-// TestBroadcastTrustAnchors_SendsSet — connect-time broadcast шлёт ОДИН
-// SigilTrustAnchors с полным набором PEM-якорей (R3-S6, ReplaceAll).
+// TestBroadcastTrustAnchors_SendsSet — connect-time broadcast sends ONE
+// SigilTrustAnchors with the full set of PEM anchors (R3-S6, ReplaceAll).
 func TestBroadcastTrustAnchors_SendsSet(t *testing.T) {
 	pems := []string{
 		"-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----\n",
@@ -52,8 +52,8 @@ func TestBroadcastTrustAnchors_SendsSet(t *testing.T) {
 	}
 }
 
-// TestBroadcastTrustAnchors_NilSourceNoOp — TrustAnchors=nil (Sigil выключен) →
-// no-op, ничего не отправляется.
+// TestBroadcastTrustAnchors_NilSourceNoOp — TrustAnchors=nil (Sigil disabled) →
+// no-op, nothing is sent.
 func TestBroadcastTrustAnchors_NilSourceNoOp(t *testing.T) {
 	h := newAnchorBroadcastHandler(t, nil)
 	stream := &fakeBidiStream{}
@@ -63,8 +63,8 @@ func TestBroadcastTrustAnchors_NilSourceNoOp(t *testing.T) {
 	}
 }
 
-// TestBroadcastTrustAnchors_EmptySetSendsEmpty — пустой набор всё равно шлётся
-// (пустой = «якорей нет» → Soul стирает holder, near-instant retire на reconnect-е).
+// TestBroadcastTrustAnchors_EmptySetSendsEmpty — an empty set is still sent
+// (empty = "no anchors" → Soul clears its holder, near-instant retire on reconnect).
 func TestBroadcastTrustAnchors_EmptySetSendsEmpty(t *testing.T) {
 	h := newAnchorBroadcastHandler(t, &fakeTrustAnchorSource{pems: nil})
 	stream := &fakeBidiStream{}
@@ -81,8 +81,8 @@ func TestBroadcastTrustAnchors_EmptySetSendsEmpty(t *testing.T) {
 	}
 }
 
-// TestBroadcastTrustAnchors_SendFailDoesNotPanic — fail отправки не паникует
-// (best-effort, стрим закроется по своему recv-loop).
+// TestBroadcastTrustAnchors_SendFailDoesNotPanic — a send failure does not panic
+// (best-effort; the stream closes via its own recv-loop).
 func TestBroadcastTrustAnchors_SendFailDoesNotPanic(t *testing.T) {
 	h := newAnchorBroadcastHandler(t, &fakeTrustAnchorSource{pems: []string{"pem"}})
 	stream := &fakeBidiStream{failAt: 1}

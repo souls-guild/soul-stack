@@ -1,15 +1,15 @@
 //go:build integration
 
-// Integration-тесты gRPC Bootstrap-RPC через testcontainers (postgres:16-alpine
-// + hashicorp/vault:1.18 с PKI). End-to-end:
+// Integration tests for the gRPC Bootstrap RPC via testcontainers
+// (postgres:16-alpine + hashicorp/vault:1.18 with PKI). End-to-end:
 //
-//  1. Поднимаем PG, прогоняем migrations.
-//  2. Поднимаем Vault, provisioning PKI (mount + root + role).
-//  3. Seed-ит operator + soul + bootstrap_token.
-//  4. Поднимаем BootstrapServer на эфемерном порту.
-//  5. gRPC-клиент (TLS, InsecureSkipVerify к self-signed cert серверу)
-//     вызывает Bootstrap; проверяем: PEM-cert валиден, fingerprint
-//     записан, soul → connected, token used_at != NULL.
+//  1. Bring up PG, run migrations.
+//  2. Bring up Vault, provision PKI (mount + root + role).
+//  3. Seed operator + soul + bootstrap_token.
+//  4. Bring up BootstrapServer on an ephemeral port.
+//  5. A gRPC client (TLS, InsecureSkipVerify against the server's
+//     self-signed cert) calls Bootstrap; we check: the PEM cert is valid,
+//     the fingerprint is recorded, soul → connected, token used_at != NULL.
 
 package grpc
 
@@ -191,7 +191,7 @@ func resetAll(t *testing.T) {
 }
 
 // seedOnboardingFixtures — operator + pending soul + bootstrap_token.
-// Возвращает plain-токен (для предъявления в gRPC) и SID.
+// Returns the plain token (to present over gRPC) and the SID.
 func seedOnboardingFixtures(t *testing.T) (plain, sid string) {
 	t.Helper()
 	ctx := context.Background()
@@ -222,16 +222,17 @@ func seedOnboardingFixtures(t *testing.T) (plain, sid string) {
 	return plain, sid
 }
 
-// startTestServer — поднимает BootstrapServer на 127.0.0.1:0 с self-signed
-// серверным cert-ом, возвращает фактический addr и cleanup-функцию.
-// testSigilPubKeyPEM — фикстура trust-anchor-а Sigil для bootstrap-интеграции.
-// Совпадает с первым элементом набора (primary первым): legacy single-якорь reply
-// теперь выводится из живого набора, не отдельным полем (R3-S7, architect af7d).
+// startTestServer — brings up BootstrapServer on 127.0.0.1:0 with a
+// self-signed server cert, returns the actual addr and a cleanup function.
+// testSigilPubKeyPEM — a Sigil trust-anchor fixture for bootstrap
+// integration. Matches the first element of the set (primary first): the
+// legacy single-anchor reply is now derived from the live set rather than
+// a separate field (R3-S7, architect af7d).
 const testSigilPubKeyPEM = "-----BEGIN PUBLIC KEY-----\nTEST-SIGIL-PUBKEY\n-----END PUBLIC KEY-----\n"
 
-// testSigilPubKeyPEMSet — multi-anchor набор (R3-S6) для bootstrap-интеграции:
-// primary (тот же, что single) + второй якорь. Проверяет, что reply несёт полный
-// набор (set>single на Soul-е).
+// testSigilPubKeyPEMSet — a multi-anchor set (R3-S6) for bootstrap
+// integration: primary (same as the single one) + a second anchor. Checks
+// that the reply carries the full set (set>single on the Soul side).
 var testSigilPubKeyPEMSet = []string{
 	testSigilPubKeyPEM,
 	"-----BEGIN PUBLIC KEY-----\nTEST-SIGIL-PUBKEY-2\n-----END PUBLIC KEY-----\n",
@@ -248,10 +249,11 @@ func startTestServer(t *testing.T) (addr string, cleanup func()) {
 		KID:         "kid-test",
 		PKIMount:    pkiMount,
 		PKIRole:     pkiRole,
-		// Sigil trust-anchor-ы (ADR-026(h), R3-S7): живой источник набора. reply
-		// читает его при каждом онбординге; legacy single-якорь выводится из
-		// первого элемента. Содержимое — не валидный PEM, а маркер «передаётся
-		// как есть»; реальная форма (SPKI) проверяется в soul-side персисте.
+		// Sigil trust anchors (ADR-026(h), R3-S7): a live source for the set.
+		// The reply reads it on every onboarding; the legacy single anchor is
+		// derived from the first element. The content isn't a valid PEM, just
+		// a "passed through as-is" marker; the real form (SPKI) is checked in
+		// the soul-side persistence layer.
 		SigilAnchorSource: &fakeTrustAnchorSource{pems: testSigilPubKeyPEMSet},
 	}
 	srv, err := NewBootstrapServer(config.KeeperListenGRPCBootstrap{
@@ -264,7 +266,7 @@ func startTestServer(t *testing.T) (addr string, cleanup func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = srv.Start(ctx) }()
-	// Ждём bind.
+	// Wait for bind.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && (srv.Addr() == "" || srv.Addr() == "127.0.0.1:0") {
 		time.Sleep(10 * time.Millisecond)
@@ -331,11 +333,12 @@ func TestIntegration_Bootstrap_HappyPath(t *testing.T) {
 	if reply.GetNotAfter() == nil || !reply.GetNotAfter().AsTime().After(time.Now()) {
 		t.Errorf("not_after = %v, want future", reply.GetNotAfter())
 	}
-	// Sigil trust-anchor (ADR-026, S2b) доставлен в reply как есть.
+	// Sigil trust anchor (ADR-026, S2b) delivered in the reply as-is.
 	if reply.GetSigilPubkeyPem() != testSigilPubKeyPEM {
 		t.Errorf("sigil_pubkey_pem = %q, want %q", reply.GetSigilPubkeyPem(), testSigilPubKeyPEM)
 	}
-	// Multi-anchor набор (ADR-026(h), R3-S6) доставлен полностью (set>single на Soul-е).
+	// Multi-anchor set (ADR-026(h), R3-S6) delivered in full (set>single on
+	// the Soul side).
 	gotSet := reply.GetSigilPubkeyPemSet()
 	if len(gotSet) != len(testSigilPubKeyPEMSet) {
 		t.Fatalf("sigil_pubkey_pem_set = %v, want %v", gotSet, testSigilPubKeyPEMSet)
@@ -346,7 +349,7 @@ func TestIntegration_Bootstrap_HappyPath(t *testing.T) {
 		}
 	}
 
-	// Проверяем БД: soul.connected, seed.active, token.used.
+	// Check the DB: soul.connected, seed.active, token.used.
 	s, err := soul.SelectBySID(ctx, integrationPool, sid)
 	if err != nil {
 		t.Fatalf("SelectBySID: %v", err)
@@ -368,7 +371,8 @@ func TestIntegration_Bootstrap_HappyPath(t *testing.T) {
 		t.Error("seed.serial_number empty")
 	}
 
-	// Audit: ровно две записи (bootstrapped + seed-issued) с общим correlation_id.
+	// Audit: exactly two records (bootstrapped + seed-issued) sharing one
+	// correlation_id.
 	rows, err := integrationPool.Query(ctx, `SELECT event_type, correlation_id FROM audit_log ORDER BY event_type`)
 	if err != nil {
 		t.Fatalf("audit query: %v", err)
@@ -414,7 +418,7 @@ func TestIntegration_Bootstrap_InvalidToken(t *testing.T) {
 	if got := status.Code(err); got != codes.PermissionDenied {
 		t.Fatalf("code = %v, want PermissionDenied", got)
 	}
-	// Soul остался в pending; seed не выпущен.
+	// The soul stayed in pending; no seed was issued.
 	s, err := soul.SelectBySID(ctx, integrationPool, sid)
 	if err != nil {
 		t.Fatalf("SelectBySID: %v", err)
@@ -427,20 +431,21 @@ func TestIntegration_Bootstrap_InvalidToken(t *testing.T) {
 	}
 }
 
-// TestIntegration_EventStream_HelloHandshake — e2e EventStream-handshake:
+// TestIntegration_EventStream_HelloHandshake — e2e EventStream handshake:
 //
-//  1. Через Bootstrap (server-only TLS) выпускаем SoulSeed-cert (RSA CSR
-//     с CN=SID, подписан Vault PKI).
-//  2. Поднимаем EventStream-listener (mTLS) с CA = Vault PKI root.
-//  3. Клиент подключается с полученным cert+key, RootCAs = serverCert
-//     (self-signed для server side; реальный Soul доверял бы Keeper-cert
-//     через config).
-//  4. Шлёт Hello, ждёт HelloReply: проверяем kid + ULID-формат + server_time.
+//  1. Issue a SoulSeed cert via Bootstrap (server-only TLS) (RSA CSR with
+//     CN=SID, signed by Vault PKI).
+//  2. Bring up an EventStream listener (mTLS) with CA = Vault PKI root.
+//  3. The client connects with the obtained cert+key, RootCAs = serverCert
+//     (self-signed for the server side; a real Soul would trust the
+//     Keeper cert via config).
+//  4. Send Hello, wait for HelloReply: check kid + ULID format +
+//     server_time.
 func TestIntegration_EventStream_HelloHandshake(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
 
-	// Запуск Bootstrap-server для онбординга.
+	// Start the Bootstrap server for onboarding.
 	bsAddr, bsStop := startTestServer(t)
 	defer bsStop()
 
@@ -464,14 +469,14 @@ func TestIntegration_EventStream_HelloHandshake(t *testing.T) {
 	esAddr, esStop := startEventStreamServer(t, caRootPEM)
 	defer esStop()
 
-	// 3) Клиент: cert/key из Bootstrap-reply, RootCAs = server-cert.
+	// 3) Client: cert/key from the Bootstrap reply, RootCAs = server-cert.
 	clientCert, err := tls.X509KeyPair(bsReply.GetCertificatePem(), clientKey)
 	if err != nil {
 		t.Fatalf("X509KeyPair: %v", err)
 	}
 	conn, err := grpclib.NewClient(esAddr, grpclib.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 		Certificates:       []tls.Certificate{clientCert},
-		InsecureSkipVerify: true, // server-cert self-signed; в проде заменится на RootCAs из конфига Soul.
+		InsecureSkipVerify: true, // server-cert self-signed; in prod this is replaced by RootCAs from the Soul's config.
 		MinVersion:         tls.VersionTLS13,
 	})))
 	if err != nil {
@@ -514,11 +519,11 @@ func TestIntegration_EventStream_HelloHandshake(t *testing.T) {
 	_ = stream.CloseSend()
 }
 
-// TestIntegration_EventStream_RevokedSeedRejected — после Bootstrap-а
-// помечаем seed как `revoked` в БД и убеждаемся, что новое подключение
-// к EventStream отвергается на application-level (Unauthenticated).
-// mTLS-handshake проходит (cert подписан той же PKI, CA та же), но
-// interceptor видит non-active seed и закрывает стрим.
+// TestIntegration_EventStream_RevokedSeedRejected — after Bootstrap, mark
+// the seed as `revoked` in the DB and verify that a new EventStream
+// connection is rejected at the application level (Unauthenticated). The
+// mTLS handshake succeeds (the cert is signed by the same PKI, same CA),
+// but the interceptor sees a non-active seed and closes the stream.
 func TestIntegration_EventStream_RevokedSeedRejected(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -538,7 +543,7 @@ func TestIntegration_EventStream_RevokedSeedRejected(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	// Ревокация seed-а в БД.
+	// Revoke the seed in the DB.
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE soul_seeds SET status = 'revoked', revocation_reason = 'test' WHERE sid = $1`, sid,
 	); err != nil {
@@ -563,13 +568,14 @@ func TestIntegration_EventStream_RevokedSeedRejected(t *testing.T) {
 	esClient := keeperv1.NewKeeperClient(conn)
 	stream, err := esClient.EventStream(ctx)
 	if err != nil {
-		// gRPC может вернуть ошибку уже на этом этапе (interceptor отрабатывает до handler-а).
+		// gRPC can already return an error at this stage (the interceptor
+		// runs before the handler).
 		if got := status.Code(err); got == codes.Unauthenticated {
 			return
 		}
 		t.Fatalf("EventStream open: unexpected err: %v", err)
 	}
-	// Иначе ошибка приходит при первом Send/Recv.
+	// Otherwise the error arrives on the first Send/Recv.
 	_ = stream.Send(&keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_Hello{Hello: &keeperv1.Hello{SidEcho: sid}},
 	})
@@ -579,8 +585,8 @@ func TestIntegration_EventStream_RevokedSeedRejected(t *testing.T) {
 	}
 }
 
-// fetchVaultPKIRootCA — забирает PEM root-CA из Vault PKI engine.
-// Symmetric с `vault read pki/cert/ca`.
+// fetchVaultPKIRootCA — fetches the PEM root CA from the Vault PKI engine.
+// Symmetric with `vault read pki/cert/ca`.
 func fetchVaultPKIRootCA(t *testing.T, ctx context.Context) []byte {
 	t.Helper()
 	sec, err := integrationVaultAPI.Logical().ReadWithContext(ctx, pkiMount+"/cert/ca")
@@ -597,8 +603,8 @@ func fetchVaultPKIRootCA(t *testing.T, ctx context.Context) []byte {
 	return []byte(raw)
 }
 
-// startEventStreamServer — поднимает EventStreamServer на 127.0.0.1:0
-// с self-signed server-cert и CA = переданный PKI root-PEM.
+// startEventStreamServer — brings up EventStreamServer on 127.0.0.1:0
+// with a self-signed server cert and CA = the passed-in PKI root PEM.
 func startEventStreamServer(t *testing.T, caPEM []byte) (addr string, cleanup func()) {
 	return startEventStreamServerExt(t, caPEM, EventStreamDeps{
 		SeedDB:      integrationPool,
@@ -608,9 +614,9 @@ func startEventStreamServer(t *testing.T, caPEM []byte) (addr string, cleanup fu
 	})
 }
 
-// startEventStreamServerExt — расширенная версия для тестов с кастомными
-// deps (например, разным KID-ом или с Redis-client-ом). depsTpl —
-// заготовка; TLS/Addr/Logger выставляются helper-ом.
+// startEventStreamServerExt — an extended version for tests with custom
+// deps (e.g., a different KID or a Redis client). depsTpl is the
+// template; TLS/Addr/Logger are set by the helper.
 func startEventStreamServerExt(t *testing.T, caPEM []byte, deps EventStreamDeps) (addr string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -651,9 +657,9 @@ func startEventStreamServerExt(t *testing.T, caPEM []byte, deps EventStreamDeps)
 	}
 }
 
-// mustMakeCSRWithKeyIT — как mustMakeCSRIT, но возвращает ещё и PEM-encoded
-// private key (RSA PKCS#1) для последующего tls.X509KeyPair-а с подписанным
-// cert-ом.
+// mustMakeCSRWithKeyIT — like mustMakeCSRIT, but also returns the
+// PEM-encoded private key (RSA PKCS#1) for a subsequent tls.X509KeyPair
+// with the signed cert.
 func mustMakeCSRWithKeyIT(t *testing.T, cn string) (csrPEM string, keyPEM []byte) {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -690,13 +696,13 @@ func TestIntegration_Bootstrap_TokenReuseRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Первый раз — успех.
+	// First time — success.
 	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
 		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
 	}); err != nil {
 		t.Fatalf("Bootstrap #1: %v", err)
 	}
-	// Второй раз — токен сожжён.
+	// Second time — the token is burned.
 	_, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
 		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
 	})
@@ -705,8 +711,8 @@ func TestIntegration_Bootstrap_TokenReuseRejected(t *testing.T) {
 	}
 }
 
-// mustMakeCSRIT — копия helper-а из vault/integration_test.go (RSA CSR
-// под allowed_domains role-а).
+// mustMakeCSRIT — a copy of the helper from vault/integration_test.go
+// (RSA CSR under the role's allowed_domains).
 func mustMakeCSRIT(t *testing.T, cn string) string {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -729,9 +735,9 @@ type writerAdapter struct{ b *strings.Builder }
 
 func (w *writerAdapter) Write(p []byte) (int, error) { return w.b.Write(p) }
 
-// mustSelfSignedIT — серверный self-signed cert для TLS gRPC-listener-а.
-// ECDSA, CN=test.example.com, валиден час; для интеграционного теста этого
-// хватает.
+// mustSelfSignedIT — a self-signed server cert for the TLS gRPC listener.
+// ECDSA, CN=test.example.com, valid for an hour; that's enough for the
+// integration test.
 func mustSelfSignedIT(t *testing.T, dir string) (certPath, keyPath string) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

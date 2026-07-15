@@ -27,38 +27,38 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TxBeginner — узкий интерфейс над *pgxpool.Pool (только Begin для
-// связки атомарной транзакции через [pgx.BeginFunc]). Позволяет
-// mock-ать в unit-тестах без поднятия реального PG; production-импл —
+// TxBeginner — narrow interface over *pgxpool.Pool (just Begin, for
+// wiring an atomic transaction through [pgx.BeginFunc]). Lets us
+// mock it in unit tests without a real PG; the production impl is
 // `*pgxpool.Pool`.
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// BootstrapPool — расширение [TxBeginner] для handler-а онбординга: помимо
-// Begin нужен read-доступ (через [bootstraptoken.ExecQueryRower]) для дешёвой
-// pre-check токена ДО Vault-round-trip-а — early-reject мусорного токена без
-// вызова PKI (M3). Production-импл — `*pgxpool.Pool` (реализует оба).
+// BootstrapPool — extends [TxBeginner] for the onboarding handler: besides
+// Begin it needs read access (via [bootstraptoken.ExecQueryRower]) for a cheap
+// token pre-check BEFORE the Vault round trip — early-reject a junk token without
+// calling PKI (M3). Production impl is `*pgxpool.Pool` (satisfies both).
 type BootstrapPool interface {
 	TxBeginner
 	bootstraptoken.ExecQueryRower
 }
 
-// CSRSigner — узкий интерфейс над [keepervault.Client.SignCSR]. Симметричен
-// [TxBeginner]: handler зависит от метода, не от конкретного клиента.
+// CSRSigner — narrow interface over [keepervault.Client.SignCSR]. Symmetric to
+// [TxBeginner]: the handler depends on the method, not a concrete client.
 type CSRSigner interface {
 	SignCSR(ctx context.Context, mount, role, csrPEM string) (*keepervault.SignedCertificate, error)
 }
 
-// BootstrapDeps — wire-up зависимости handler-а онбординга.
+// BootstrapDeps — wire-up dependencies for the onboarding handler.
 //
-// Все поля обязательны: pool — транзакция «burn token + supersede seed +
-// insert seed + flip status»; VaultClient.SignCSR — подпись CSR через
+// All fields are required: Pool — the "burn token + supersede seed +
+// insert seed + flip status" transaction; VaultClient.SignCSR — CSR signing via
 // Vault PKI; AuditWriter — `soul.bootstrapped` + `soul.seed-issued`.
 //
-// KID — идентификатор keeper-инстанса; пишется в `bootstrap_tokens.used_by_kid`
-// и `souls.last_seen_by_kid`, появляется в audit-payload-е.
-// PKIMount / PKIRole — из `keeper.yml::vault.{pki_mount,pki_role}`.
+// KID — the keeper instance identifier; written to `bootstrap_tokens.used_by_kid`
+// and `souls.last_seen_by_kid`, and shows up in the audit payload.
+// PKIMount / PKIRole — from `keeper.yml::vault.{pki_mount,pki_role}`.
 type BootstrapDeps struct {
 	Pool        BootstrapPool
 	VaultClient CSRSigner
@@ -67,28 +67,29 @@ type BootstrapDeps struct {
 	PKIMount    string
 	PKIRole     string
 
-	// Metrics — keeper_grpc_*-collectors (ADR-024). nil → bootstrap-метрика
-	// выключена (nil-safe методы [GRPCMetrics] — no-op). Должен быть тем же
-	// дескриптором, что в [OutboundDeps.Metrics] / [EventStreamDeps.Metrics]
-	// (один Registry).
+	// Metrics — keeper_grpc_*-collectors (ADR-024). nil → bootstrap metrics
+	// are disabled (nil-safe [GRPCMetrics] methods — no-op). Must be the same
+	// descriptor as [OutboundDeps.Metrics] / [EventStreamDeps.Metrics]
+	// (one Registry).
 	Metrics *GRPCMetrics
 
-	// SigilAnchorSource — ЖИВОЙ источник набора trust-anchor-ов подписи Sigil в
-	// PEM-форме (ADR-026(h), R3-S7, architect af7d). Читается при КАЖДОМ
-	// Bootstrap-reply (а НЕ снимок старта): после runtime-ротации ключей подписи
-	// (Introduce/SetPrimary/Retire → cluster reload R3-S6 обновляет holder) новый
-	// Soul при онбординге получает АКТУАЛЬНЫЙ набор. Без этого окно между bootstrap
-	// и connect отдавало бы устаревший набор — опасно при Retire (новый Soul
-	// доверял бы уже выведенному ключу либо отвергал свежий primary).
+	// SigilAnchorSource — LIVE source of the Sigil signing trust-anchor set in
+	// PEM form (ADR-026(h), R3-S7, architect af7d). Read on EVERY Bootstrap reply
+	// (not a startup snapshot): after a runtime signing-key rotation
+	// (Introduce/SetPrimary/Retire → cluster reload R3-S6 updates the holder), a
+	// new Soul onboarding gets the CURRENT set. Without this, the window between
+	// bootstrap and connect would hand out a stale set — dangerous on Retire (the
+	// new Soul would trust an already-retired key, or reject the fresh primary).
 	//
-	// Из набора берётся и одиночный [keeperv1.BootstrapReply.SigilPubkeyPem]
-	// (legacy single-anchor для старого Soul-а) — первый элемент (primary первым),
-	// и полный [keeperv1.BootstrapReply.SigilPubkeyPemSet] (R3-S4 читает set>single).
+	// The set feeds both the single-anchor legacy field
+	// [keeperv1.BootstrapReply.SigilPubkeyPem] (for old Souls) — its first element
+	// (primary first) — and the full [keeperv1.BootstrapReply.SigilPubkeyPemSet]
+	// (R3-S4 reads set > single).
 	//
-	// nil ИЛИ пустой набор = Sigil не настроен/выключен — оба поля reply остаются
-	// пустыми, verify на Soul-е выключен (bootstrap-flow без Sigil-а как раньше).
-	// Реализация в daemon — atomic-holder (trustAnchorHolder), обновляемый
-	// watcher-ом `sigil:anchors-changed`.
+	// nil OR an empty set = Sigil not configured/disabled — both reply fields stay
+	// empty, verify on the Soul side stays off (bootstrap flow behaves as before
+	// Sigil existed). Implemented in the daemon as an atomic holder
+	// (trustAnchorHolder), updated by the `sigil:anchors-changed` watcher.
 	SigilAnchorSource TrustAnchorSource
 }
 
@@ -114,11 +115,11 @@ func (d BootstrapDeps) validate() error {
 	return nil
 }
 
-// bootstrapHandler — реализация [keeperv1.KeeperServer] для Bootstrap-listener-а.
+// bootstrapHandler — implements [keeperv1.KeeperServer] for the Bootstrap listener.
 //
-// EventStream вшит как Unimplemented через embedded [keeperv1.UnimplementedKeeperServer]:
-// на Bootstrap-listener-е (server-only TLS) долгоживущий стрим не
-// запускается, у Soul-а ещё нет клиентского сертификата.
+// EventStream is wired as Unimplemented via the embedded [keeperv1.UnimplementedKeeperServer]:
+// the Bootstrap listener (server-only TLS) never starts the long-lived stream —
+// the Soul doesn't have a client certificate yet.
 type bootstrapHandler struct {
 	keeperv1.UnimplementedKeeperServer
 	deps   BootstrapDeps
@@ -129,42 +130,44 @@ func newBootstrapHandler(deps BootstrapDeps, logger *slog.Logger) *bootstrapHand
 	return &bootstrapHandler{deps: deps, logger: logger}
 }
 
-// Ping — health-check RPC, доступен без авторизации (server-only TLS уже
-// сам по себе ограничивает caller-ов).
+// Ping — health-check RPC, available without authorization (server-only TLS
+// already restricts callers on its own).
 func (h *bootstrapHandler) Ping(_ context.Context, _ *keeperv1.PingRequest) (*keeperv1.PingReply, error) {
 	return &keeperv1.PingReply{Version: h.deps.KID}, nil
 }
 
-// Bootstrap — реализация unary RPC онбординга по [docs/soul/onboarding.md].
+// Bootstrap — implements the unary onboarding RPC per [docs/soul/onboarding.md].
 //
-// Поток:
-//  1. Validate (SID format, token_hash format, CSR PEM ненулевой).
+// Flow:
+//  1. Validate (SID format, token_hash format, CSR PEM non-empty).
 //  2. Hash plain-token → token_hash.
-//  3. Cheap pre-check токена (SelectByHash, без Burn) — early-reject мусора
-//     ДО дорогого Vault-round-trip-а (M3). Anti-enum: любой провал → одна
-//     PermissionDenied, неотличимая от not-found/expired/used.
-//  4. Vault PKI SignCSR — выпуск сертификата (только для прошедшего pre-check).
+//  3. Cheap token pre-check (SelectByHash, no Burn) — early-reject junk
+//     BEFORE the expensive Vault round trip (M3). Anti-enum: any failure → a
+//     single PermissionDenied, indistinguishable from not-found/expired/used.
+//  4. Vault PKI SignCSR — issue the certificate (only once pre-check passed).
 //  5. Parse cert → compute fingerprint (SHA-256 SubjectPublicKeyInfo).
 //  6. Tx BEGIN.
-//  7. Burn token (race-safe UPDATE с WHERE used_at IS NULL) — authoritative
-//     anti-replay-чек под нагрузкой (pre-check на шаге 3 — оптимизация, не
-//     замена: TOCTOU между select и burn закрыт именно этим UPDATE-ом).
-//  8. Supersede предыдущий active-seed (no-op для нового Soul-а).
-//  9. Insert новый active-seed.
+//  7. Burn token (race-safe UPDATE with WHERE used_at IS NULL) — the
+//     authoritative anti-replay check under load (the step-3 pre-check is an
+//     optimization, not a replacement: the TOCTOU gap between select and burn
+//     is closed by this UPDATE).
+//  8. Supersede the previous active seed (no-op for a new Soul).
+//  9. Insert the new active seed.
 //
 // 10. UpdateStatus soul: pending → connected, last_seen_by_kid = KID.
 // 11. COMMIT.
-// 12. Audit: `soul.bootstrapped` + `soul.seed-issued` (один correlation_id = token_id).
+// 12. Audit: `soul.bootstrapped` + `soul.seed-issued` (one correlation_id = token_id).
 //
-// Все ошибки до Vault — fail-fast с rollback-ом. Vault-ошибка → tx
-// rollback + Unavailable (transient — Soul retry-нет). Audit пишется
-// **после** commit-а; failure аудита логируется warn-ом, но не
-// отменяет онбординг (БД консистентна, audit gap — отдельный manual-fix).
+// All errors before Vault are fail-fast with a rollback. A Vault error → tx
+// rollback + Unavailable (transient — the Soul retries). Audit is written
+// **after** commit; an audit failure is logged as a warning but doesn't
+// abort onboarding (the DB is consistent; the audit gap is a separate manual fix).
 func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.BootstrapRequest) (reply *keeperv1.BootstrapReply, err error) {
-	// In-process span на единицу онбординга. sid — атрибут для фильтрации
-	// трейса (в metric-labels запрещён — cardinality, ADR-024 §2.2); секретов
-	// (токен / CSR) не несёт. Метрика bootstrap_total фиксируется по факту
-	// исхода (err==nil → ok). При OTel disabled tracer no-op — span бесплатен.
+	// In-process span for one onboarding attempt. sid is an attribute for trace
+	// filtering (forbidden in metric labels — cardinality, ADR-024 §2.2); it
+	// carries no secrets (token / CSR). The bootstrap_total metric is recorded
+	// based on the outcome (err==nil → ok). With OTel disabled the tracer is a
+	// no-op — the span is free.
 	ctx, span := tracer.Start(ctx, "grpc.bootstrap",
 		trace.WithAttributes(attribute.String("sid", req.GetSid())),
 	)
@@ -184,7 +187,7 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if !soul.ValidSID(sid) {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid sid %q", sid)
 	}
-	// Зарезервированные sid (keeper / __run__) — синтетика прогона, не Soul (NIM-36).
+	// Reserved sids (keeper / __run__) — run synthetics, not a Soul (NIM-36).
 	if soul.IsReservedSID(sid) {
 		return nil, status.Errorf(codes.InvalidArgument, "reserved sid %q", sid)
 	}
@@ -196,29 +199,30 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if len(csrPEM) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "csr_pem is empty")
 	}
-	// CSR CommonName обязан совпадать с запрашиваемым SID (defense-in-depth,
-	// crypto). Authority онбординга якорится на registry-fingerprint, не на CN,
-	// но проверка CN ДО Vault SignCSR не даёт полагаться только на Vault PKI
-	// role-конфиг оператора (allowed_domains мог бы быть шире SID-а). Невалидный
-	// CN → InvalidArgument ДО PKI-round-trip-а.
+	// CSR CommonName must match the requested SID (defense-in-depth, crypto).
+	// Onboarding authority is anchored on the registry fingerprint, not the CN,
+	// but checking CN BEFORE Vault SignCSR keeps us from relying solely on the
+	// operator's Vault PKI role config (allowed_domains could be wider than the
+	// SID). An invalid CN → InvalidArgument BEFORE the PKI round trip.
 	if err := validateCSRCommonName(csrPEM, sid); err != nil {
 		return nil, err
 	}
 	tokenHash := bootstraptoken.HashToken(plainToken)
 
-	// Дешёвый pre-check токена ДО Vault-round-trip-а (M3): мусорный токен
-	// не должен триггерить дорогой PKI-sign. Это оптимизация, не authority:
-	// финальный anti-replay-чек — Burn под FOR-UPDATE-семантикой WHERE-clause
-	// внутри транзакции (шаг 7). Любой провал pre-check-а → одна
-	// PermissionDenied (anti-enum, не различаем not-found/expired/used).
+	// Cheap token pre-check BEFORE the Vault round trip (M3): a junk token
+	// shouldn't trigger an expensive PKI sign. This is an optimization, not
+	// the authority: the final anti-replay check is the Burn, under
+	// FOR-UPDATE WHERE-clause semantics inside the transaction (step 7). Any
+	// pre-check failure → a single PermissionDenied (anti-enum, we don't
+	// distinguish not-found/expired/used).
 	if err := h.precheckToken(ctx, tokenHash, sid); err != nil {
 		return nil, err
 	}
 
-	// Подписание Vault PKI — отдельным шагом ДО транзакции, но ПОСЛЕ
-	// pre-check-а токена. Это сетевой round-trip с непредсказуемой latency,
-	// не имеет смысла держать PG-транзакцию открытой на него. Authoritative
-	// token validation выполнится внутри транзакции через Burn.
+	// Vault PKI signing is a separate step BEFORE the transaction, but AFTER
+	// the token pre-check. It's a network round trip with unpredictable latency;
+	// there's no point holding a PG transaction open for it. Authoritative
+	// token validation happens inside the transaction via Burn.
 	signed, err := h.deps.VaultClient.SignCSR(ctx, h.deps.PKIMount, h.deps.PKIRole, string(csrPEM))
 	if err != nil {
 		return nil, h.mapVaultErr(err, sid)
@@ -267,8 +271,8 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 		return nil, h.mapTxErr(err, sid)
 	}
 
-	// Audit — после commit. Один correlation_id = token_id связывает
-	// soul.bootstrapped и soul.seed-issued (по docs/keeper/audit.md).
+	// Audit — after commit. One correlation_id = token_id links
+	// soul.bootstrapped and soul.seed-issued (per docs/keeper/audit.md).
 	correlationID := tokenID
 	notAfter := signed.NotAfter
 	if writeErr := h.deps.AuditWriter.Write(ctx, &audit.Event{
@@ -329,12 +333,12 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	return out, nil
 }
 
-// applySigilAnchors заполняет Sigil trust-anchor-поля reply ЖИВЫМ набором из
-// [TrustAnchorSource] (ADR-026(h), R3-S7): набор читается при каждом reply, не
-// снимок старта — свежеонбордящийся Soul после ротации получает актуальный
-// набор. Пустой набор (Sigil выключен или source nil) → оба поля остаются nil,
-// bootstrap-контракт обратносовместим. Вынесено отдельным методом для unit-теста
-// «после SetAnchors новый reply несёт новый набор».
+// applySigilAnchors fills the reply's Sigil trust-anchor fields with the LIVE
+// set from [TrustAnchorSource] (ADR-026(h), R3-S7): the set is read on every
+// reply, not a startup snapshot — a Soul onboarding right after a rotation gets
+// the current set. An empty set (Sigil disabled or source nil) → both fields
+// stay nil, keeping the bootstrap contract backward-compatible. Split into its
+// own method for the unit test "after SetAnchors the next reply carries the new set."
 func (h *bootstrapHandler) applySigilAnchors(out *keeperv1.BootstrapReply) {
 	if h.deps.SigilAnchorSource == nil {
 		return
@@ -343,24 +347,24 @@ func (h *bootstrapHandler) applySigilAnchors(out *keeperv1.BootstrapReply) {
 	if len(anchors) == 0 {
 		return
 	}
-	// Multi-anchor набор (R3-S4 читает set > single). Копию не делаем: holder
-	// отдаёт read-only снимок, reply-сериализация его не мутирует.
+	// Multi-anchor set (R3-S4 reads set > single). No copy needed: the holder
+	// hands back a read-only snapshot, and reply serialization doesn't mutate it.
 	out.SigilPubkeyPemSet = anchors
-	// Единичный legacy-якорь для старого Soul-а — первый элемент набора (primary
-	// первым, см. AnchorSetPEM); тоже из живого источника.
+	// Single legacy anchor for old Souls — the set's first element (primary
+	// first, see AnchorSetPEM); also from the live source.
 	single := anchors[0]
 	out.SigilPubkeyPem = &single
 }
 
-// precheckToken — дешёвая проверка токена ДО Vault-sign-а (M3 early-reject).
-// Читает запись по token_hash и проверяет (sid + не сожжён + не истёк) в Go.
-// Authority остаётся за Burn-ом в транзакции; здесь — отсев мусора без
-// PKI-round-trip-а.
+// precheckToken — cheap token check BEFORE Vault-sign (M3 early-reject).
+// Reads the record by token_hash and checks (sid + not burned + not expired)
+// in Go. Authority stays with Burn inside the transaction; this just filters
+// out junk without a PKI round trip.
 //
-// Anti-enum: любой провал (нет записи, чужой SID, истёк, уже использован,
-// мусорный hash-формат) → одна PermissionDenied, неотличимая для Soul-а от
-// остальных по содержимому и timing-классу. Транзиентная ошибка чтения БД
-// (не ErrTokenNotFound) → Unavailable: Soul ретрайнет, мусор так не пройдёт.
+// Anti-enum: any failure (no record, wrong SID, expired, already used, junk
+// hash format) → a single PermissionDenied, indistinguishable to the Soul by
+// content or timing class. A transient DB read error (not ErrTokenNotFound)
+// → Unavailable: the Soul retries, so junk still can't get through.
 func (h *bootstrapHandler) precheckToken(ctx context.Context, tokenHash, sid string) error {
 	rec, err := bootstraptoken.SelectByHash(ctx, h.deps.Pool, tokenHash)
 	if err != nil {
@@ -377,24 +381,24 @@ func (h *bootstrapHandler) precheckToken(ctx context.Context, tokenHash, sid str
 	return nil
 }
 
-// rejectToken — единый anti-enum-ответ на невалидный токен (как из
-// pre-check-а, так и из Burn-а через [mapTxErr]). Soul видит одну причину
-// и не различает not-found / expired / used / wrong-SID по timing-у.
+// rejectToken — the single anti-enum response for an invalid token (whether
+// from pre-check or from Burn via [mapTxErr]). The Soul sees one reason and
+// can't distinguish not-found / expired / used / wrong-SID by timing.
 func (h *bootstrapHandler) rejectToken(sid string) error {
 	return status.Errorf(codes.PermissionDenied,
 		"bootstrap token rejected for sid=%q", sid)
 }
 
-// mapTxErr — мапит CRUD-sentinel в gRPC status:
-//   - ErrTokenInvalid       → PermissionDenied (anti-enum: ничего не различаем).
-//   - ErrSeedActiveExists   → Internal (нарушение инварианта SupersedeBySID).
-//   - ErrSoulNotFound       → FailedPrecondition (soul-registry в неконсистентном состоянии).
-//   - всё прочее            → Internal с обернутым err.
+// mapTxErr — maps a CRUD sentinel to a gRPC status:
+//   - ErrTokenInvalid       → PermissionDenied (anti-enum: no distinctions made).
+//   - ErrSeedActiveExists   → Internal (SupersedeBySID invariant violated).
+//   - ErrSoulNotFound       → FailedPrecondition (soul registry in an inconsistent state).
+//   - everything else      → Internal, wrapping err.
 func (h *bootstrapHandler) mapTxErr(err error, sid string) error {
 	switch {
 	case errors.Is(err, bootstraptoken.ErrTokenInvalid):
-		// Не различаем «истёк», «не найден», «уже использован» — anti-enum
-		// (тот же ответ, что и pre-check на шаге 3).
+		// We don't distinguish "expired", "not found", "already used" — anti-enum
+		// (same response as the step-3 pre-check).
 		return h.rejectToken(sid)
 	case errors.Is(err, soulseed.ErrSeedActiveExists):
 		h.logger.Error("invariant violation: active seed present after Supersede",
@@ -411,10 +415,10 @@ func (h *bootstrapHandler) mapTxErr(err error, sid string) error {
 	}
 }
 
-// mapVaultErr — sign-фаза, ДО транзакции. Vault transient-failures
+// mapVaultErr — sign phase, BEFORE the transaction. Vault transient failures
 // (network, 5xx) → Unavailable; misconfig (bad role, bad mount) →
-// FailedPrecondition; bad CSR → InvalidArgument. По sentinel-кодам
-// keepervault.ErrPKI* различаем дифференцированно.
+// FailedPrecondition; bad CSR → InvalidArgument. Differentiated by the
+// keepervault.ErrPKI* sentinel codes.
 func (h *bootstrapHandler) mapVaultErr(err error, sid string) error {
 	switch {
 	case errors.Is(err, keepervault.ErrPKIMountEmpty),
@@ -428,25 +432,25 @@ func (h *bootstrapHandler) mapVaultErr(err error, sid string) error {
 			slog.String("sid", sid), slog.Any("error", err))
 		return status.Errorf(codes.Internal, "vault PKI response invalid: %v", err)
 	default:
-		// Без sentinel-а — transient by default (Soul retry-нет).
+		// No sentinel — transient by default (the Soul retries).
 		h.logger.Warn("vault PKI sign failed",
 			slog.String("sid", sid), slog.Any("error", err))
 		return status.Errorf(codes.Unavailable, "vault PKI sign failed: %v", err)
 	}
 }
 
-// validateCSRCommonName парсит CSR из PEM и проверяет, что его
-// Subject.CommonName совпадает с запрашиваемым `sid` (defense-in-depth ДО
-// Vault SignCSR). Возвращает gRPC-status:
-//   - невалидный/пустой PEM или непарсящийся CSR → InvalidArgument
-//     (мусорный ввод, отказ ДО PKI);
-//   - CN ≠ sid (включая пустой CN) → InvalidArgument с anti-enum-нейтральным
-//     текстом (CN не эхо-ится в reply — не отдаём подсказку, что именно
-//     запрошено).
+// validateCSRCommonName parses the CSR from PEM and checks that its
+// Subject.CommonName matches the requested `sid` (defense-in-depth BEFORE
+// Vault SignCSR). Returns a gRPC status:
+//   - invalid/empty PEM or an unparsable CSR → InvalidArgument
+//     (junk input, rejected BEFORE PKI);
+//   - CN ≠ sid (including an empty CN) → InvalidArgument with an
+//     anti-enum-neutral message (the CN isn't echoed back in the reply — we
+//     don't hint at what was actually requested).
 //
-// Якорь авторизации остаётся за registry-fingerprint-ом (этой проверкой не
-// подменяется); она лишь не даёт онбордить cert под чужим CN, опираясь только
-// на широкий allowed_domains Vault-role.
+// The authorization anchor remains the registry fingerprint (this check
+// doesn't replace it); it only keeps a cert from being onboarded under the
+// wrong CN by relying solely on a broad Vault role allowed_domains.
 func validateCSRCommonName(csrPEM []byte, sid string) error {
 	csr, err := parseCSRPEM(csrPEM)
 	if err != nil {
@@ -459,9 +463,9 @@ func validateCSRCommonName(csrPEM []byte, sid string) error {
 	return nil
 }
 
-// parseCSRPEM декодирует первый PEM-блок CERTIFICATE REQUEST и парсит его в
-// x509.CertificateRequest. Подпись CSR не проверяется (Vault PKI делает это при
-// SignCSR); здесь нужен только Subject для CN-валидации.
+// parseCSRPEM decodes the first CERTIFICATE REQUEST PEM block and parses it
+// into an x509.CertificateRequest. The CSR signature isn't verified (Vault
+// PKI does that during SignCSR); here we only need the Subject for CN validation.
 func parseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
@@ -477,9 +481,9 @@ func parseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 	return csr, nil
 }
 
-// parseCertificatePEM декодирует первый PEM-блок CERTIFICATE и парсит
-// его в x509.Certificate. Vault PKI выдаёт ровно один блок —
-// дополнительные блоки (которых не должно быть) игнорируются.
+// parseCertificatePEM decodes the first CERTIFICATE PEM block and parses
+// it into an x509.Certificate. Vault PKI issues exactly one block —
+// any extra blocks (which shouldn't be there) are ignored.
 func parseCertificatePEM(certPEM []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
@@ -495,8 +499,8 @@ func parseCertificatePEM(certPEM []byte) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-// peerAddr — best-effort извлечение remote-адреса для лог-полей. Пустая
-// строка если peer не передан (тестовая среда / unix-socket).
+// peerAddr — best-effort extraction of the remote address for log fields.
+// Empty string if no peer is present (test environment / unix socket).
 func peerAddr(ctx context.Context) string {
 	if p, ok := grpcpeer.FromContext(ctx); ok && p.Addr != nil {
 		return p.Addr.String()

@@ -12,28 +12,28 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulseed"
 )
 
-// SeedAuthenticator — application-level аутентификация по SoulSeed
-// fingerprint. mTLS-уровня (RequireAndVerifyClientCert + CA) недостаточно:
-// сертификат подписан нашей PKI, но мог быть отозван оператором или
-// заменён ротацией — это видно только в `soul_seeds.status='active'`.
+// SeedAuthenticator — application-level authentication by SoulSeed
+// fingerprint. mTLS alone (RequireAndVerifyClientCert + CA) isn't enough:
+// the cert is signed by our PKI, but it may have been revoked by an operator
+// or replaced by rotation — that's only visible via `soul_seeds.status='active'`.
 //
-// Возвращает SID привязанного seed-а при успехе. На ошибки маппится:
-//   - cert не известен реестру → Unauthenticated;
-//   - cert не active (superseded/revoked/expired) → Unauthenticated;
-//   - DB-ошибка lookup-а → Unavailable.
+// Returns the SID of the bound seed on success. Errors map to:
+//   - cert unknown to the registry → Unauthenticated;
+//   - cert not active (superseded/revoked/expired) → Unauthenticated;
+//   - DB lookup error → Unavailable.
 type SeedAuthenticator struct {
 	db     soulseed.ExecQueryRower
 	logger *slog.Logger
 }
 
-// NewSeedAuthenticator собирает аутентификатор. db — pool / tx-like
-// объект для `SELECT FROM soul_seeds WHERE fingerprint = $1`.
+// NewSeedAuthenticator assembles the authenticator. db is a pool / tx-like
+// object for `SELECT FROM soul_seeds WHERE fingerprint = $1`.
 func NewSeedAuthenticator(db soulseed.ExecQueryRower, logger *slog.Logger) *SeedAuthenticator {
 	return &SeedAuthenticator{db: db, logger: logger}
 }
 
-// Authenticate проверяет peer-cert против `soul_seeds`. Возвращает SID
-// при успехе или gRPC-status-ошибку.
+// Authenticate checks the peer cert against `soul_seeds`. Returns the SID
+// on success, or a gRPC status error.
 func (a *SeedAuthenticator) Authenticate(ctx context.Context) (sid string, err error) {
 	fp, err := peerFingerprint(ctx)
 	if err != nil {
@@ -53,7 +53,7 @@ func (a *SeedAuthenticator) Authenticate(ctx context.Context) (sid string, err e
 				slog.String("fingerprint", fp))
 			return "", status.Error(codes.Unauthenticated, "unknown soul seed")
 		}
-		// DB-ошибка / неверный формат fingerprint-а от реестра — transient.
+		// DB error / malformed fingerprint from the registry — transient.
 		a.logger.Error("eventstream: soul_seed lookup failed",
 			slog.String("fingerprint", fp), slog.Any("error", err))
 		return "", status.Errorf(codes.Unavailable, "seed lookup failed")
@@ -69,12 +69,12 @@ func (a *SeedAuthenticator) Authenticate(ctx context.Context) (sid string, err e
 	return seed.SID, nil
 }
 
-// streamSeedAuthInterceptor — gRPC stream-interceptor, дёргает [SeedAuthenticator]
-// до передачи стрима handler-у. При ошибке handler не вызывается, клиент
-// получает соответствующий gRPC-status и стрим закрывается.
+// streamSeedAuthInterceptor — gRPC stream interceptor that invokes [SeedAuthenticator]
+// before handing the stream to the handler. On error the handler is never called;
+// the client gets the corresponding gRPC status and the stream closes.
 //
-// SID кладётся в context через [withAuthenticatedSID] — handler читает
-// его через [authenticatedSIDFrom].
+// The SID is stored in the context via [withAuthenticatedSID] — the handler reads
+// it back via [authenticatedSIDFrom].
 func streamSeedAuthInterceptor(auth *SeedAuthenticator) grpclib.StreamServerInterceptor {
 	return func(srv any, ss grpclib.ServerStream, info *grpclib.StreamServerInfo, handler grpclib.StreamHandler) error {
 		sid, err := auth.Authenticate(ss.Context())
@@ -86,9 +86,9 @@ func streamSeedAuthInterceptor(auth *SeedAuthenticator) grpclib.StreamServerInte
 	}
 }
 
-// authStream — обёртка над [grpclib.ServerStream] с подменённым ctx,
-// несущим SID в value. Только Context() переопределяем; остальное
-// делегируем (Recv/Send/SetHeader/...).
+// authStream — wraps [grpclib.ServerStream] with a substituted ctx that
+// carries the SID as a value. Only Context() is overridden; everything else
+// is delegated (Recv/Send/SetHeader/...).
 type authStream struct {
 	grpclib.ServerStream
 	ctx context.Context
@@ -96,17 +96,17 @@ type authStream struct {
 
 func (s *authStream) Context() context.Context { return s.ctx }
 
-// authSIDKey — приватный тип-ключ для контекстного value, чтобы не было
-// коллизий с другими пакетами.
+// authSIDKey — private key type for the context value, to avoid collisions
+// with other packages.
 type authSIDKey struct{}
 
 func withAuthenticatedSID(ctx context.Context, sid string) context.Context {
 	return context.WithValue(ctx, authSIDKey{}, sid)
 }
 
-// authenticatedSIDFrom возвращает SID, проверенный
-// [streamSeedAuthInterceptor]. Пустая строка + false, если interceptor
-// не отработал (только в unit-тестах handler-а без interceptor-цепочки).
+// authenticatedSIDFrom returns the SID verified by
+// [streamSeedAuthInterceptor]. Empty string + false if the interceptor
+// never ran (only in handler unit tests without the interceptor chain).
 func authenticatedSIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(authSIDKey{}).(string)
 	return v, ok && v != ""

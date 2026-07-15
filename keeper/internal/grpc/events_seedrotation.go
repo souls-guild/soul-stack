@@ -14,15 +14,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// SeedRotationDeps — wire-up зависимости handler-а ротации seed-а через
+// SeedRotationDeps — wires up dependencies of the seed-rotation handler via
 // EventStream (M2.5, ADR-012 / ADR-014).
 //
-// Все поля обязательны:
-//   - Pool — *pgxpool.Pool для одной транзакции (`SupersedeBySID` + `Insert`);
-//   - VaultClient — `SignCSR` для выпуска нового сертификата;
-//   - AuditWriter — `soul.seed-rotated` после commit-а;
-//   - Outbound — Send `SeedRotationReply` обратно по тому же стриму;
-//   - KID / PKIMount / PKIRole — те же поля, что у [BootstrapDeps].
+// All fields are required:
+//   - Pool — *pgxpool.Pool for a single transaction (`SupersedeBySID` + `Insert`);
+//   - VaultClient — `SignCSR` to issue a new certificate;
+//   - AuditWriter — `soul.seed-rotated` after the commit;
+//   - Outbound — sends `SeedRotationReply` back over the same stream;
+//   - KID / PKIMount / PKIRole — the same fields as [BootstrapDeps].
 type SeedRotationDeps struct {
 	Pool        TxBeginner
 	VaultClient CSRSigner
@@ -58,29 +58,29 @@ func (d SeedRotationDeps) validate() error {
 	return nil
 }
 
-// handleSeedRotationRequest — обработка inbound-а `SeedRotationRequest`
+// handleSeedRotationRequest — handles an inbound `SeedRotationRequest`
 // (M2.5).
 //
-// Поток (симметричен [bootstrapHandler.Bootstrap], но без burn-токена):
-//  1. Vault PKI SignCSR — выпуск нового cert на public key из CSR.
+// Flow (symmetric to [bootstrapHandler.Bootstrap], but without a burn token):
+//  1. Vault PKI SignCSR — issue a new cert for the public key from the CSR.
 //  2. Tx BEGIN.
-//  3. SupersedeBySID(sid) — предыдущий active → superseded.
-//  4. Insert новый active-seed.
+//  3. SupersedeBySID(sid) — previous active → superseded.
+//  4. Insert the new active seed.
 //  5. COMMIT.
-//  6. Outbound.SendSeedRotationReply → новый cert + ca_chain + not_after.
-//  7. Audit `soul.seed-rotated` (correlation_id = новый seed_id).
+//  6. Outbound.SendSeedRotationReply → new cert + ca_chain + not_after.
+//  7. Audit `soul.seed-rotated` (correlation_id = the new seed_id).
 //
-// PM-decision M2.5(4) — idempotent: если reply не доставлен (queue full /
-// stream упал в окне между commit-ом и Send-ом), оператор/Soul могут
-// повторить через ту же логику: новый CSR → новый Seed, старый-новый
-// просто станет ещё одним superseded.
+// PM-decision M2.5(4) — idempotent: if the reply isn't delivered (queue full /
+// stream dropped in the window between commit and Send), the operator/Soul can
+// retry through the same logic: new CSR → new Seed, the old one
+// simply becomes another superseded seed.
 //
-// Не fatal-ит стрим: на любую ошибку логируем + пропускаем. Soul-side
-// rotation-loop повторит через свой интервал.
+// Doesn't fatal the stream: on any error we log + skip. The Soul-side
+// rotation loop will retry on its own interval.
 func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid, sessionID string, req *keeperv1.SeedRotationRequest) {
 	deps := h.deps.SeedRotation
 	if deps == nil {
-		// SeedRotation disabled на этом Keeper-инстансе (отдельный wire-up).
+		// SeedRotation disabled on this Keeper instance (separate wire-up).
 		h.logger.Warn("eventstream: SeedRotationRequest received but rotation not wired up",
 			slog.String("sid", sid), slog.String("session_id", sessionID))
 		return
@@ -96,11 +96,11 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 			slog.String("sid", sid), slog.String("session_id", sessionID))
 		return
 	}
-	// CN ротационного CSR обязан совпадать с SID стрима (defense-in-depth ДО
-	// Vault SignCSR). sid тут авторитетен — взят из mTLS peer-cert, не из
-	// payload; CSR с чужим/пустым CN отвергаем, не полагаясь на широкий
-	// allowed_domains Vault PKI role. Не fatal-ит стрим (как и прочие ошибки
-	// rotation-пути): warn + skip, Soul-side loop повторит.
+	// The rotation CSR's CN must match the stream's SID (defense-in-depth BEFORE
+	// Vault SignCSR). sid here is authoritative — taken from the mTLS peer cert, not
+	// from the payload; a CSR with a foreign/empty CN is rejected, without relying on the
+	// broad allowed_domains of the Vault PKI role. Doesn't fatal the stream (like other
+	// errors on the rotation path): warn + skip, the Soul-side loop will retry.
 	if err := validateCSRCommonName(csrPEM, sid); err != nil {
 		h.logger.Warn("eventstream: seed-rotation CSR common name mismatch",
 			slog.String("sid", sid),
@@ -147,8 +147,8 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 		return nil
 	})
 	if txErr != nil {
-		// ErrSeedActiveExists — невозможен (SupersedeBySID отработал в той же tx).
-		// Остальные — transient / DB-misbehavior; пропускаем, Soul retry-нет.
+		// ErrSeedActiveExists — impossible (SupersedeBySID ran in the same tx).
+		// The rest — transient / DB misbehavior; skip, the Soul will retry.
 		h.logger.Warn("eventstream: seed-rotation tx failed",
 			slog.String("sid", sid),
 			slog.Any("error", txErr),
@@ -156,8 +156,8 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 		return
 	}
 
-	// Send reply ПЕРЕД audit-write-ом: Soul ждёт ответ — это «горячий
-	// путь» рoтации, audit пишется best-effort после.
+	// Send reply BEFORE the audit write: the Soul is waiting for a reply — this is the
+	// “hot path” of rotation, audit is written best-effort afterward.
 	reply := &keeperv1.SeedRotationReply{
 		CertificatePem: signed.CertificatePEM,
 		CaChainPem:     signed.CAChainPEM,
@@ -169,7 +169,7 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 			slog.String("seed_id", newSeedID),
 			slog.Any("error", sendErr),
 		)
-		// Не return — audit всё равно фиксирует факт выпуска seed-а.
+		// No return — audit still records the fact that the seed was issued.
 	}
 
 	if writeErr := deps.AuditWriter.Write(ctx, &audit.Event{

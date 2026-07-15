@@ -29,11 +29,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tlsx"
 )
 
-// EventStreamServer — gRPC-сервер EventStream-listener-а (mTLS).
+// EventStreamServer is the gRPC server for the EventStream listener (mTLS).
 //
-// Отдельный listener от Bootstrap (см. [BootstrapServer]) по ADR-012(b):
-// разные TLS-режимы (mTLS vs server-only), разные порты, разные
-// [grpclib.Server]-ы. Бизнес-логика handler-а — в [eventStreamHandler].
+// Separate listener from Bootstrap (see [BootstrapServer]) per ADR-012(b):
+// different TLS modes (mTLS vs server-only), different ports, different
+// [grpclib.Server] instances. Handler business logic lives in
+// [eventStreamHandler].
 type EventStreamServer struct {
 	srv        *grpclib.Server
 	configAddr string
@@ -43,63 +44,66 @@ type EventStreamServer struct {
 	logger *slog.Logger
 }
 
-// defaultSoulLeaseTTL — TTL Redis-ключа lease-а Soul-стрима. Выбран так,
-// чтобы выдерживать кратковременные GC-паузы / latency-spike-и Renew-а
-// (Renew идёт каждые TTL/3 ≈ 20s), но при crash-е Keeper-а конкурент мог
-// захватить lease в пределах минуты. Значение в конфиг (`keeper.yml`) не
-// выносится: это инвариант координации, а не пользовательская настройка
-// (паттерн идентичен Reaper-овскому `lock_ttl`).
+// defaultSoulLeaseTTL is the TTL of the Soul stream's lease key in Redis.
+// Chosen to tolerate brief GC pauses / Renew latency spikes (Renew fires
+// every TTL/3 ≈ 20s), while still letting a competitor grab the lease
+// within a minute of a Keeper crash. Not exposed via config (`keeper.yml`):
+// this is a coordination invariant, not a user setting (same pattern as
+// Reaper's `lock_ttl`).
 const defaultSoulLeaseTTL = 60 * time.Second
 
-// defaultLastSeenFlushInterval — fallback throttle PG-flush-а
-// `souls.last_seen_at`, когда [EventStreamDeps.LastSeenFlushInterval] не
-// задан (unit-тесты, dev-сборки без reaper-конфига). Выведен из дефолтного
-// reaper `mark_disconnected.stale_after` (90s) делением на
-// [defaultLastSeenFlushFactor] → 30s. Production wire-up передаёт значение,
-// согласованное с фактическим stale_after из keeper.yml.
+// defaultLastSeenFlushInterval is the fallback throttle for the
+// `souls.last_seen_at` PG flush when [EventStreamDeps.LastSeenFlushInterval]
+// is unset (unit tests, dev builds without reaper config). Derived from the
+// default reaper `mark_disconnected.stale_after` (90s) divided by
+// [defaultLastSeenFlushFactor] → 30s. Production wire-up passes a value
+// consistent with the actual stale_after from keeper.yml.
 const defaultLastSeenFlushInterval = 90 * time.Second / defaultLastSeenFlushFactor
 
-// Resource-лимиты EventStream-listener-а (защита от DoS, H3). В отличие
-// от Bootstrap, доступ post-auth (mTLS + seed-interceptor), но лимиты всё
-// равно нужны: скомпрометированный/баговый Soul не должен валить Keeper.
+// Resource limits for the EventStream listener (DoS protection, H3). Unlike
+// Bootstrap, access here is post-auth (mTLS + seed interceptor), but limits
+// are still needed: a compromised or buggy Soul must not be able to take
+// down Keeper.
 const (
-	// eventStreamMaxRecvMsgSize — максимальный размер входящего FromSoul.
-	// Крупнейший payload — SoulprintReport.typed_facts + (legacy) facts-Struct;
-	// на multi-homed хосте с длинным interfaces[] и raw-facts это десятки КиБ,
-	// RunResult с детальными TaskEvent — сопоставимо. 1 МиБ — комфортный
-	// потолок без 4-МиБ-вектора grpc-дефолта.
+	// eventStreamMaxRecvMsgSize is the max size of an incoming FromSoul.
+	// The largest payload is SoulprintReport.typed_facts + (legacy)
+	// facts-Struct; on a multi-homed host with a long interfaces[] and raw
+	// facts that's tens of KiB, and a RunResult with detailed TaskEvents is
+	// comparable. 1 MiB is a comfortable ceiling, avoiding the attack
+	// surface of grpc's 4-MiB default.
 	eventStreamMaxRecvMsgSize = 1 * 1024 * 1024
 
-	// eventStreamMaxConcurrentStreams — лимит RPC на одно соединение.
-	// Легитимный Soul держит ровно один долгоживущий EventStream-стрим;
-	// 100 — щедрый запас, отсекающий stream-flood по одному conn.
+	// eventStreamMaxConcurrentStreams is the RPC limit per connection. A
+	// legitimate Soul holds exactly one long-lived EventStream stream; 100
+	// is a generous margin that cuts off stream flooding on a single conn.
 	eventStreamMaxConcurrentStreams = 100
 
-	// eventStreamKeepaliveMinTime — минимальный интервал client-ping-ов.
-	// Soul-клиент (soul/internal/grpc/client.go) пингует каждые 30s с
-	// PermitWithoutStream=true; ставим 10s ≤ 30s, чтобы легитимный ping не
-	// ловил GOAWAY too_many_pings, но флуд чаще 10s отсекался.
+	// eventStreamKeepaliveMinTime is the minimum interval between client
+	// pings. The Soul client (soul/internal/grpc/client.go) pings every 30s
+	// with PermitWithoutStream=true; we set 10s ≤ 30s so a legitimate ping
+	// never triggers GOAWAY too_many_pings, while flooding faster than 10s
+	// still gets cut off.
 	eventStreamKeepaliveMinTime = 10 * time.Second
 )
 
-// EventStreamDeps — wire-up зависимости EventStream-handler-а.
+// EventStreamDeps holds the wire-up dependencies for the EventStream handler.
 //
-// SeedDB — pool / tx-like объект для lookup-а `soul_seeds` (peer-auth
-// в interceptor-е). SoulDB — для UPDATE souls.{last_seen_*, soulprint_*}.
-// Redis — клиент координации (SoulLease, heartbeat-кэш). KID — идентификатор
-// Keeper-инстанса (попадает в HelloReply.kid и в lease-value). Logger —
-// общий slog для всех стримов. SoulLeaseTTL — TTL Redis-lease ключа
-// (zero → [defaultSoulLeaseTTL]); существует только для тестов с
-// miniredis FastForward, в проде остаётся дефолтом.
+// SeedDB is a pool / tx-like object for `soul_seeds` lookups (peer auth in
+// the interceptor). SoulDB is for UPDATE souls.{last_seen_*, soulprint_*}.
+// Redis is the coordination client (SoulLease, heartbeat cache). KID is the
+// Keeper instance identifier (goes into HelloReply.kid and the lease value).
+// Logger is the shared slog used by all streams. SoulLeaseTTL is the Redis
+// lease key TTL (zero → [defaultSoulLeaseTTL]); exists only for tests using
+// miniredis FastForward, production always uses the default.
 //
-// Manager — реестр активных стримов для outbound-направления (M2.5).
-// При nil — handler работает в inbound-only режиме (unit-тесты без
-// outbound API); production wire-up (`keeper run`) обязан передать
-// non-nil Manager.
+// Manager is the registry of active streams for the outbound direction
+// (M2.5). nil → the handler runs in inbound-only mode (unit tests without
+// the outbound API); production wire-up (`keeper run`) must pass a non-nil
+// Manager.
 //
-// SeedRotation — wire-up для `SeedRotationRequest`-handler-а (M2.5).
-// При nil — handler логирует warn и игнорирует запрос (минимально-инвазивный
-// fallback на случай не-prod сборок без Vault PKI).
+// SeedRotation is the wire-up for the `SeedRotationRequest` handler (M2.5).
+// nil → the handler logs a warning and ignores the request (a minimally
+// invasive fallback for non-prod builds without Vault PKI).
 type EventStreamDeps struct {
 	SeedDB       soulseed.ExecQueryRower
 	SoulDB       soul.ExecQueryRower
@@ -108,153 +112,166 @@ type EventStreamDeps struct {
 	KID          string
 	SoulLeaseTTL time.Duration
 
-	// LastSeenFlushInterval — throttle PG-flush-а `souls.last_seen_at`
-	// (ADR-006(a)). Live-стрим освежает heartbeat в Redis на каждое
-	// app-сообщение, но в PG snapshot пишется не чаще раза в этот интервал
-	// на каждый SID — иначе Reaper (`mark_disconnected`) ложно помечает
-	// живой стрим disconnected (он смотрит на PG-`last_seen_at`).
+	// LastSeenFlushInterval throttles the `souls.last_seen_at` PG flush
+	// (ADR-006(a)). The live stream refreshes the heartbeat in Redis on
+	// every app message, but the PG snapshot is written no more than once
+	// per this interval per SID — otherwise Reaper (`mark_disconnected`)
+	// would falsely mark a live stream disconnected (it looks at
+	// PG-`last_seen_at`).
 	//
 	// zero → [defaultLastSeenFlushInterval]. Production wire-up (`keeper run`)
-	// выводит значение из reaper `mark_disconnected.stale_after` (÷3), чтобы
-	// flush заведомо был чаще порога disconnect. SoulDB=nil → flush выключен
-	// (heartbeat остаётся только в Redis, dev / unit-режим).
+	// derives the value from reaper `mark_disconnected.stale_after` (÷3) so
+	// the flush is reliably more frequent than the disconnect threshold.
+	// SoulDB=nil → flush disabled (heartbeat stays Redis-only, dev / unit
+	// mode).
 	LastSeenFlushInterval time.Duration
 
 	Manager      *StreamManager
 	SeedRotation *SeedRotationDeps
 
-	// ApplyBus — pub/sub шина apply-событий (M0.7.c). nil → publish-операции
-	// в handler-ах TaskEvent/RunResult выключены (single-Keeper dev-режим без
-	// SSE-консьюмеров). Production wire-up (`keeper run`) обязан передать
-	// non-nil bus, общий с mcp.ServerDeps.Bus.
+	// ApplyBus is the pub/sub bus for apply events (M0.7.c). nil → publish
+	// operations in the TaskEvent/RunResult handlers are disabled
+	// (single-Keeper dev mode without SSE consumers). Production wire-up
+	// (`keeper run`) must pass a non-nil bus, shared with mcp.ServerDeps.Bus.
 	ApplyBus *applybus.EventBus
 
-	// ApplyRunDB — реестр `apply_runs` (M2.x) для correlation `apply_id` ↔
-	// incarnation/scenario. RunResult-handler читает строку по
-	// `(apply_id, sid)` и переводит её в терминальный статус. nil →
-	// correlation/persist выключены (unit-тесты без PG, ad-hoc push без
-	// scenario-runner-а); production wire-up (`keeper run`) передаёт pool.
+	// ApplyRunDB is the `apply_runs` registry (M2.x) for correlating
+	// `apply_id` with an incarnation/scenario. The RunResult handler reads
+	// the row by `(apply_id, sid)` and moves it to a terminal status. nil →
+	// correlation/persist disabled (unit tests without PG, ad-hoc push
+	// without a scenario runner); production wire-up (`keeper run`) passes
+	// the pool.
 	ApplyRunDB applyrun.ExecQueryRower
 
-	// Metrics — keeper_grpc_*-collectors (ADR-024). nil → инструментация
-	// выключена (nil-safe методы [GRPCMetrics] — no-op): unit-тесты и
-	// dev-сборки без observability. Production wire-up (`keeper run`)
-	// передаёт зарегистрированный дескриптор поверх общего [obs.Registry].
+	// Metrics holds the keeper_grpc_* collectors (ADR-024). nil →
+	// instrumentation disabled (nil-safe [GRPCMetrics] methods are no-ops):
+	// unit tests and dev builds without observability. Production wire-up
+	// (`keeper run`) passes a descriptor registered against the shared
+	// [obs.Registry].
 	Metrics *GRPCMetrics
 
-	// SigilStore — реестр активных печатей доверия плагинов (ADR-026, S6).
-	// Connect-time broadcast: сразу после handshake handler читает ListActive
-	// и раздаёт каждую запись Soul-у как PluginSigil. nil → broadcast no-op
-	// (Sigil выключен / dev / unit-режим). Production wire-up передаёт тот же
-	// источник, что и sigil-service (общий pool, см. daemon.setupGRPCEventStream).
+	// SigilStore is the registry of active plugin trust sigils (ADR-026, S6).
+	// Connect-time broadcast: right after the handshake the handler calls
+	// ListActive and hands each record to the Soul as a PluginSigil. nil →
+	// broadcast is a no-op (Sigil disabled / dev / unit mode). Production
+	// wire-up passes the same source as the sigil service (shared pool, see
+	// daemon.setupGRPCEventStream).
 	SigilStore SigilStore
 
-	// TrustAnchors — источник ТЕКУЩЕГО набора trust-anchor-ов подписи Sigil
-	// (ADR-026(h), R3-S6). Connect-time broadcast: сразу после handshake handler
-	// читает набор PEM-якорей и шлёт его Soul-у одним [keeperv1.SigilTrustAnchors]
-	// (ReplaceAll). «Живой» источник (а не зафиксированный на старте набор), чтобы
-	// после runtime-ротации ключей подписи (S6 hot-reload) свежеподключённый Soul
-	// получал актуальный набор. nil → broadcast no-op (Sigil выключен / dev / unit).
-	// Production wire-up передаёт holder, обновляемый watcher-ом `sigil:anchors-changed`
-	// (см. daemon.setupGRPCEventStream).
+	// TrustAnchors is the source of the CURRENT set of Sigil-signing trust
+	// anchors (ADR-026(h), R3-S6). Connect-time broadcast: right after the
+	// handshake the handler reads the set of PEM anchors and sends it to the
+	// Soul as a single [keeperv1.SigilTrustAnchors] (ReplaceAll). A "live"
+	// source (not a set fixed at startup), so that after a runtime
+	// signing-key rotation (S6 hot reload) a freshly connected Soul gets the
+	// current set. nil → broadcast is a no-op (Sigil disabled / dev / unit).
+	// Production wire-up passes a holder updated by the
+	// `sigil:anchors-changed` watcher (see daemon.setupGRPCEventStream).
 	TrustAnchors TrustAnchorSource
 
-	// Augur — wire-up для `AugurRequest`-handler-а (ADR-025, augur.md): резолв
-	// доступа + брокер vault/prometheus/elk (delegate=false). nil → handler
-	// логирует warn и игнорирует запрос (сборки без Augur). Production wire-up
-	// передаёт DB (omens/rites + souls), Vault-клиент, SSRF-guarded Egress-клиент
-	// и тот же Outbound, что и SeedRotationDeps.
+	// Augur is the wire-up for the `AugurRequest` handler (ADR-025,
+	// augur.md): access resolution + vault/prometheus/elk broker
+	// (delegate=false). nil → the handler logs a warning and ignores the
+	// request (builds without Augur). Production wire-up passes the DB
+	// (omens/rites + souls), a Vault client, an SSRF-guarded Egress client,
+	// and the same Outbound as SeedRotationDeps.
 	Augur *AugurDeps
 
-	// AugurConcurrency — лимит параллельных Augur-обработок (global, все стримы;
-	// DoS-guard, см. eventStreamHandler.augurSem). <=0 →
-	// [defaultAugurConcurrency]. Игнорируется при Augur==nil.
+	// AugurConcurrency is the limit on parallel Augur processing (global,
+	// across all streams; DoS guard, see eventStreamHandler.augurSem). <=0 →
+	// [defaultAugurConcurrency]. Ignored when Augur==nil.
 	AugurConcurrency int
 
-	// Oracle — wire-up для `PortentEvent`-handler-а (ADR-030, beacons reactor,
-	// срез S2): match Decree + cooldown + постановка named-scenario в work-queue.
-	// nil → handler логирует warn и игнорирует Portent (сборки без Oracle, как
-	// Augur). Production wire-up передаёт DB (decrees/oracle_fires + souls),
-	// where-CEL evaluator, ScenarioEnqueuer и AuditWriter.
+	// Oracle is the wire-up for the `PortentEvent` handler (ADR-030, beacons
+	// reactor, slice S2): Decree matching + cooldown + enqueueing a
+	// named scenario onto the work queue. nil → the handler logs a warning
+	// and ignores the Portent (builds without Oracle, same as Augur).
+	// Production wire-up passes the DB (decrees/oracle_fires + souls), a
+	// where-CEL evaluator, a ScenarioEnqueuer, and an AuditWriter.
 	Oracle *OracleDeps
 
-	// VigilSource — источник active-набора Vigil для SID при connect-time
-	// broadcast-е VigilSnapshot (ADR-030, ReplaceAll, паттерн SigilStore). nil →
-	// snapshot не шлётся (Oracle выключен / dev / unit). Production wire-up
-	// передаёт реестр vigils (тот же pool, что OracleDeps.DB).
+	// VigilSource is the source of the active Vigil set for a SID, used by
+	// the connect-time VigilSnapshot broadcast (ADR-030, ReplaceAll, same
+	// pattern as SigilStore). nil → snapshot is not sent (Oracle disabled /
+	// dev / unit). Production wire-up passes the vigil registry (the same
+	// pool as OracleDeps.DB).
 	VigilSource VigilSource
 
-	// TollNotifier — Toll cluster-detector hook (ADR-038): handler зовёт его
-	// при выходе из receive-loop-а (disconnect-event). nil → Toll не подключён
-	// (single-instance/dev без Redis): hook no-op. Production wire-up
-	// (`keeper run`) передаёт *toll.Watcher, gate-нутый отсутствием Redis.
+	// TollNotifier is the Toll cluster-detector hook (ADR-038): the handler
+	// calls it whenever the receive loop exits (disconnect event). nil →
+	// Toll is not wired up (single-instance/dev without Redis): the hook is
+	// a no-op. Production wire-up (`keeper run`) passes a *toll.Watcher,
+	// gated on Redis being absent.
 	TollNotifier TollNotifier
 
-	// ModuleBinaries — sigil-резолв «sha256 → путь к allowed-бинарю SoulModule»
-	// для FetchModule (эпик core.module.installed, S2). nil → FetchModule
-	// отвечает Unavailable (Sigil выключен / dev / unit). Production wire-up
-	// передаёт sigil.Service.
+	// ModuleBinaries resolves "sha256 → path to the sigil-allowed SoulModule
+	// binary" for FetchModule (epic core.module.installed, S2). nil →
+	// FetchModule responds Unavailable (Sigil disabled / dev / unit).
+	// Production wire-up passes sigil.Service.
 	ModuleBinaries ModuleBinarySource
 
-	// ModuleFetchMaxBytes — предохранитель размера отдаваемого бинаря
-	// (plugins.max_artifact_size_mb). <=0 → дефолт из config.
+	// ModuleFetchMaxBytes caps the size of the binary served
+	// (plugins.max_artifact_size_mb). <=0 → default from config.
 	ModuleFetchMaxBytes int64
 
-	// ModuleFetchPerSID — лимит параллельных FetchModule на один SID (защита
-	// control-plane от flood-а). <=0 → [defaultModuleFetchPerSID].
+	// ModuleFetchPerSID limits parallel FetchModule calls per SID (protects
+	// the control plane from flooding). <=0 → [defaultModuleFetchPerSID].
 	ModuleFetchPerSID int
 }
 
-// TollNotifier — узкая поверхность Toll-hook-а disconnect-event-а. Сужение
-// до одного метода держит EventStream-handler независимым от полного
-// toll.Watcher-а (тот несёт публикацию, метрики, фильтры) и допускает fake
-// в unit-тестах handler-а. Реализация — *toll.Watcher (метод NotifyDisconnect).
+// TollNotifier is the narrow surface of the Toll disconnect-event hook.
+// Narrowing to one method keeps the EventStream handler independent of the
+// full toll.Watcher (which also carries publication, metrics, filters) and
+// allows a fake in the handler's unit tests. Implementation: *toll.Watcher
+// (method NotifyDisconnect).
 //
-// gracefulShutdown=true означает «инициатор закрытия — сам keeper-инстанс»
-// (ctx-cancel: Watchman shedding / graceful keeper shutdown); false — клиент
-// (EOF / транспортная ошибка / Recv-error). Toll фильтрует graceful (это не
-// отток, это плановое закрытие).
+// gracefulShutdown=true means "the closing party is the keeper instance
+// itself" (ctx-cancel: Watchman shedding / graceful keeper shutdown); false
+// means the client (EOF / transport error / Recv error). Toll filters out
+// graceful closes (that's not churn, it's a planned shutdown).
 type TollNotifier interface {
 	NotifyDisconnect(ctx context.Context, sid, coven string, gracefulShutdown bool)
 }
 
-// VigilSource — узкая поверхность резолва active-набора Vigil для хоста, нужная
-// connect-time broadcast-у ([broadcastVigils]). Сужение до одного метода
-// изолирует EventStream-handler от полного CRUD-а реестра vigils и допускает
-// fake в unit-тестах. Реализация резолвит covens хоста из souls-registry
-// (авторитетно) и набор Vigil по sid ∪ covens
-// ([oracle.SelectActiveVigilsForSubject]), возвращая готовые транспортные
-// [keeperv1.VigilDef].
+// VigilSource is the narrow surface for resolving a host's active Vigil set,
+// needed by the connect-time broadcast ([broadcastVigils]). Narrowing to one
+// method isolates the EventStream handler from the full vigil-registry CRUD
+// and allows a fake in unit tests. The implementation resolves the host's
+// covens from the souls registry (authoritative) and the Vigil set by
+// sid ∪ covens ([oracle.SelectActiveVigilsForSubject]), returning ready
+// transport [keeperv1.VigilDef] values.
 type VigilSource interface {
 	ActiveVigilsForSID(ctx context.Context, sid string) ([]*keeperv1.VigilDef, error)
 }
 
-// SigilStore — узкая поверхность реестра plugin_sigils, нужная connect-time
-// broadcast-у. Сужение до одного метода изолирует EventStream-handler от
-// полного CRUD-а [sigil.Store] и позволяет fake-у в unit-тестах. Реальный
-// [sigil.Store] (из [sigil.NewPGStore]) удовлетворяет автоматически.
+// SigilStore is the narrow surface of the plugin_sigils registry needed by
+// the connect-time broadcast. Narrowing to one method isolates the
+// EventStream handler from the full [sigil.Store] CRUD and allows a fake in
+// unit tests. The real [sigil.Store] (from [sigil.NewPGStore]) satisfies it
+// automatically.
 //
-// Возвращает сырые [sigil.Sigil] (с byte-exact ManifestRaw + Signature),
-// а НЕ projection [sigil.SigilView] — broadcast обязан слать подписанные
-// байты, иначе Soul-side verify (fail-closed) отвергнет печать.
+// Returns raw [sigil.Sigil] records (with byte-exact ManifestRaw +
+// Signature), NOT the [sigil.SigilView] projection — the broadcast must send
+// the signed bytes, or Soul-side verify (fail-closed) will reject the sigil.
 type SigilStore interface {
 	ListActive(ctx context.Context) ([]*sigil.Sigil, error)
 }
 
-// ModuleBinarySource — узкая поверхность резолва sha256 → путь к sigil-allowed
-// бинарю SoulModule ([sigil.Service.LookupModuleBinary]): изолирует FetchModule
-// от полного sigil.Service и допускает fake в unit-тестах. Не-allowed sha —
-// ошибка [sigil.ErrModuleNotAllowed].
+// ModuleBinarySource is the narrow surface for resolving sha256 → path to a
+// sigil-allowed SoulModule binary ([sigil.Service.LookupModuleBinary]): it
+// isolates FetchModule from the full sigil.Service and allows a fake in unit
+// tests. A non-allowed sha returns [sigil.ErrModuleNotAllowed].
 type ModuleBinarySource interface {
 	LookupModuleBinary(ctx context.Context, sha256Hex string) (string, error)
 }
 
-// TrustAnchorSource — узкая поверхность чтения ТЕКУЩЕГО набора trust-anchor-ов
-// подписи Sigil в PEM-форме (ADR-026(h), R3-S6), нужная connect-time broadcast-у
-// ([broadcastTrustAnchors]). Метод возвращает свежий снимок набора: после
-// runtime-ротации ключей подписи (S6 hot-reload подменяет Signer) свежеподключённый
-// Soul получает актуальный набор, а не зафиксированный на старте. Реализация в
-// daemon — atomic-holder, обновляемый watcher-ом `sigil:anchors-changed`.
+// TrustAnchorSource is the narrow surface for reading the CURRENT set of
+// Sigil-signing trust anchors in PEM form (ADR-026(h), R3-S6), needed by the
+// connect-time broadcast ([broadcastTrustAnchors]). The method returns a
+// fresh snapshot of the set: after a runtime signing-key rotation (S6 hot
+// reload swaps the Signer), a freshly connected Soul gets the current set
+// rather than one fixed at startup. The daemon implementation is an
+// atomic holder updated by the `sigil:anchors-changed` watcher.
 type TrustAnchorSource interface {
 	AnchorSetPEM() []string
 }
@@ -269,13 +286,14 @@ func (d EventStreamDeps) validate() error {
 	if d.KID == "" {
 		return errors.New("grpc: EventStreamDeps.KID is required")
 	}
-	// SoulDB и Redis опциональны на уровне сборки сервера: unit-тесты
-	// поднимают listener без них (handshake-only smoke). EventStream-handler
-	// при отсутствии каждого деградирует: SoulDB=nil → UpdateSoulprint
-	// пропускается с warn-ом; Redis=nil → lease/heartbeat выключены (single-
-	// instance dev-режим). Manager / SeedRotation также опциональны (см.
-	// тип-комментарий). Жёсткая обязательность будет в production-wire-up-е
-	// (отдельный slice — runDaemon).
+	// SoulDB and Redis are optional at server-build level: unit tests bring
+	// up the listener without them (handshake-only smoke). The
+	// EventStream handler degrades gracefully when either is absent:
+	// SoulDB=nil → UpdateSoulprint is skipped with a warning; Redis=nil →
+	// lease/heartbeat are disabled (single-instance dev mode). Manager /
+	// SeedRotation are likewise optional (see the type comment). Strict
+	// requiredness will live in the production wire-up (a separate
+	// slice — runDaemon).
 	if d.SeedRotation != nil {
 		if err := d.SeedRotation.validate(); err != nil {
 			return err
@@ -294,14 +312,14 @@ func (d EventStreamDeps) validate() error {
 	return nil
 }
 
-// NewEventStreamServer собирает EventStream-listener с mTLS и
-// зарегистрированным [eventStreamHandler] поверх stream-interceptor-а
-// [streamSeedAuthInterceptor].
+// NewEventStreamServer assembles the EventStream listener with mTLS and a
+// registered [eventStreamHandler] behind the [streamSeedAuthInterceptor]
+// stream interceptor.
 //
-// Возвращает error на:
-//   - пустой cfg.Addr / TLS.Cert / TLS.Key / TLS.CA;
-//   - неверные file paths TLS (передаются в [tlsx.LoadMutualTLS]);
-//   - nil deps (см. [EventStreamDeps.validate]).
+// Returns an error on:
+//   - empty cfg.Addr / TLS.Cert / TLS.Key / TLS.CA;
+//   - invalid TLS file paths (passed to [tlsx.LoadMutualTLS]);
+//   - nil deps (see [EventStreamDeps.validate]).
 func NewEventStreamServer(cfg config.KeeperListenGRPCEventStream, deps EventStreamDeps, logger *slog.Logger) (*EventStreamServer, error) {
 	if cfg.Addr == "" {
 		return nil, errors.New("grpc: listen.grpc.event_stream.addr is empty")
@@ -324,12 +342,13 @@ func NewEventStreamServer(cfg config.KeeperListenGRPCEventStream, deps EventStre
 
 	auth := NewSeedAuthenticator(deps.SeedDB, logger)
 
-	// send-лимит исходящего FromKeeper (прежде всего ApplyRequest с пачкой
-	// RenderedTask). Конфигурируемый, дефолт 8 MiB. Должен быть ≤ Soul-recv-
-	// лимиту (`keeper.max_apply_size_mb` в soul.yml); при превышении Keeper
-	// падает fail-fast с понятной ResourceExhausted-ошибкой, а не отдаёт Soul-у
-	// сообщение, которое тот молча отвергнет. recv-лимит входящих FromSoul —
-	// отдельный внутренний инвариант (eventStreamMaxRecvMsgSize, 1 MiB).
+	// Send limit for outgoing FromKeeper (chiefly an ApplyRequest carrying a
+	// batch of RenderedTask). Configurable, default 8 MiB. Must be ≤ the
+	// Soul recv limit (`keeper.max_apply_size_mb` in soul.yml); on overflow
+	// Keeper fails fast with a clear ResourceExhausted error instead of
+	// sending the Soul a message it would silently reject. The recv limit
+	// for incoming FromSoul is a separate internal invariant
+	// (eventStreamMaxRecvMsgSize, 1 MiB).
 	srv := grpclib.NewServer(
 		grpclib.Creds(credentials.NewTLS(tlsCfg)),
 		grpclib.StreamInterceptor(streamSeedAuthInterceptor(auth)),
@@ -351,9 +370,9 @@ func NewEventStreamServer(cfg config.KeeperListenGRPCEventStream, deps EventStre
 	}, nil
 }
 
-// Start — блокирующий запуск listener-а. Семантика идентична
-// [BootstrapServer.Start]: на ctx.Done() — GracefulStop с
-// [graceDuration]-timeout-ом, превышение → forced Stop.
+// Start is a blocking listener startup. Semantics identical to
+// [BootstrapServer.Start]: on ctx.Done() — GracefulStop with a
+// [graceDuration] timeout, exceeding it → forced Stop.
 func (s *EventStreamServer) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.configAddr)
 	if err != nil {
@@ -404,55 +423,60 @@ func (s *EventStreamServer) Start(ctx context.Context) error {
 	}
 }
 
-// Addr возвращает фактический bind-адрес. После Start — actual port
-// (важно для тестов с `:0`).
+// Addr returns the actual bind address. After Start, this is the actual
+// port (important for tests using `:0`).
 func (s *EventStreamServer) Addr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addr
 }
 
-// eventStreamHandler — реализация [keeperv1.KeeperServer] для
-// EventStream-listener-а.
+// eventStreamHandler is the [keeperv1.KeeperServer] implementation for the
+// EventStream listener.
 //
-// На этом listener-е Ping/Bootstrap не имеют смысла (server-only TLS-handshake
-// невозможен с mTLS-config-ом, у клиента нет SoulSeed до онбординга), но
-// embedded [keeperv1.UnimplementedKeeperServer] возвращает Unimplemented
-// автоматически — отдельной обработки не требуется.
+// Ping/Bootstrap don't make sense on this listener (server-only TLS
+// handshake is impossible with an mTLS config, and the client has no
+// SoulSeed before onboarding), but the embedded
+// [keeperv1.UnimplementedKeeperServer] returns Unimplemented automatically —
+// no separate handling needed.
 type eventStreamHandler struct {
 	keeperv1.UnimplementedKeeperServer
 	deps          EventStreamDeps
 	logger        *slog.Logger
 	lastSeenFlush *lastSeenFlusher
 
-	// augurSem — global семафор параллельных Augur-обработок поверх ВСЕХ
-	// стримов (handler — один экземпляр на сервер). Каждый AugurRequest
-	// спавнит горутину (vault/prom/elk-fetch может занять время и не должен
-	// блокировать receive-loop); без лимита НЕдоверенный Soul-flood
-	// AugurRequest-ов исчерпал бы горутины/соединения Keeper-а — DoS-вектор.
-	// Переполнение → AugurReply{ERROR}, без нового спавна (non-blocking
-	// acquire). nil → лимит выключен (старое поведение, dev/unit без Augur).
+	// augurSem is a global semaphore limiting parallel Augur processing
+	// across ALL streams (the handler is a single instance per server).
+	// Each AugurRequest spawns a goroutine (vault/prom/elk fetch can take
+	// time and must not block the receive loop); without a limit, an
+	// untrusted Soul flooding AugurRequests would exhaust Keeper's
+	// goroutines/connections — a DoS vector. Overflow → AugurReply{ERROR},
+	// with no new spawn (non-blocking acquire). nil → limit disabled (old
+	// behavior, dev/unit without Augur).
 	augurSem chan struct{}
 
-	// fetchInflight — per-SID inflight-лимит FetchModule (защита control-plane
-	// от flood-а fetch-стримов). Zero-value usable (lazy map).
+	// fetchInflight is the per-SID inflight limit for FetchModule (protects
+	// the control plane from a flood of fetch streams). Zero-value usable
+	// (lazy map).
 	fetchInflight sidInflight
 
-	// soulLeaseOwner / instanceAlive — seam-ы presence-gated force-release-а
-	// SID-lease-а (ADR-027 amend (n)) в [acquireSoulLease]. По умолчанию —
-	// прямые [keeperredis.SoulLeaseOwner] / [keeperredis.InstanceAlive];
-	// подменяются в guard-тестах, где нужно воспроизвести гонку смены владельца
-	// и флап Redis именно на presence-чеке (miniredis не даёт инъекцию ошибки
-	// на отдельную команду). Не публичная поверхность — фиксация security-
-	// инвариантов force-release-а тестом.
+	// soulLeaseOwner / instanceAlive are seams for the presence-gated
+	// force-release of a SID lease (ADR-027 amend (n)) in
+	// [acquireSoulLease]. By default they are the direct
+	// [keeperredis.SoulLeaseOwner] / [keeperredis.InstanceAlive]; swapped
+	// out in guard tests that need to reproduce an owner-change race and a
+	// Redis flap specifically on the presence check (miniredis has no way
+	// to inject an error into a single command). Not a public surface —
+	// exists to let a test pin down the force-release security invariants.
 	soulLeaseOwner func(context.Context, *keeperredis.Client, string) (string, bool, error)
 	instanceAlive  func(context.Context, *keeperredis.Client, string) (bool, error)
 }
 
-// defaultAugurConcurrency — дефолтный лимит параллельных Augur-обработок (global,
-// все стримы). Подобран как умеренный: live-fetch — нечастая операция в прогоне,
-// но vault+prom+elk вместе под Soul-flood-ом без лимита опасны. Production
-// wire-up может переопределить через EventStreamDeps.AugurConcurrency.
+// defaultAugurConcurrency is the default limit on parallel Augur processing
+// (global, across all streams). Chosen as a moderate value: live fetch is an
+// infrequent operation in a run, but vault+prom+elk together under a Soul
+// flood are dangerous without a limit. Production wire-up can override via
+// EventStreamDeps.AugurConcurrency.
 const defaultAugurConcurrency = 64
 
 func newEventStreamHandler(deps EventStreamDeps, logger *slog.Logger) *eventStreamHandler {
@@ -480,44 +504,47 @@ func newEventStreamHandler(deps EventStreamDeps, logger *slog.Logger) *eventStre
 	}
 }
 
-// EventStream — bidi-стрим Keeper↔Soul по ADR-012(a).
+// EventStream is the bidi Keeper↔Soul stream per ADR-012(a).
 //
 // M2.3 + M2.4 scope:
-//   - handshake: Hello → HelloReply (как в M2.2);
-//   - Redis SoulLease per SID (`soul:<sid>:lock = <kid>`, TTL renewal в
-//     отдельной goroutine). Конфликт → close stream с AlreadyExists;
-//   - touch heartbeat-кэша на каждое app-сообщение;
-//   - dispatch FromSoul.payload → TaskEvent / RunResult / SoulprintReport
-//     handler-ы.
+//   - handshake: Hello → HelloReply (as in M2.2);
+//   - a Redis SoulLease per SID (`soul:<sid>:lock = <kid>`, TTL renewal in
+//     a separate goroutine). Conflict → close stream with AlreadyExists;
+//   - touch the heartbeat cache on every app message;
+//   - dispatch FromSoul.payload → the TaskEvent / RunResult / SoulprintReport
+//     handlers.
 //
-// SID берётся из interceptor-context-а ([authenticatedSIDFrom]),
-// authoritative-источник — peer cert (mTLS). `Hello.sid_echo` — только
-// для логов; рассинхрон логируется как warn, не отвергается (cf.
-// docs/naming-rules.md → таблица proto-сообщений).
+// SID comes from the interceptor context ([authenticatedSIDFrom]); the
+// authoritative source is the peer cert (mTLS). `Hello.sid_echo` is for logs
+// only; a mismatch is logged as a warning, not rejected (cf.
+// docs/naming-rules.md → proto message table).
 func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper]) error {
 	sid, ok := authenticatedSIDFrom(stream.Context())
 	if !ok {
-		// Interceptor не отработал — bug wire-up-а. Без него мы не знаем,
-		// кто на том конце.
+		// The interceptor didn't run — a wire-up bug. Without it we don't
+		// know who's on the other end.
 		h.logger.Error("EventStream invoked without authenticated SID — interceptor misconfigured")
 		return status.Error(codes.Internal, "authentication context missing")
 	}
 
-	// Производный от stream-ctx-а per-stream ctx с собственным cancel-ом. Весь
-	// дальнейший handler (lease-renewal, send-loop, subscribe-loop, touchSeen,
-	// receive-loop) работает поверх него. cancelStream регистрируется в
-	// StreamManager ниже, чтобы Watchman (soul-shedding S2) мог принудительно
-	// закрыть стрим при устойчивой изоляции инстанса ([StreamManager.CloseAll]):
-	// отмена будит receive/send-loop-ы (`ctx.Err() != nil` / `<-ctx.Done()`),
-	// handler делает СВОЙ штатный teardown (Unregister → lease-Release LIFO),
-	// gRPC шлёт Soul-у EOF, и Soul по reconnect-loop/failback-list уходит на
-	// живой Keeper. Отмена by-Watchman неотличима для teardown-а от естественного
-	// обрыва стрима. defer cancelStream() — финальное освобождение ресурса ctx
-	// (идемпотентно к уже сработавшей отмене от CloseAll).
+	// A per-stream ctx derived from the stream ctx, with its own cancel. The
+	// rest of the handler (lease renewal, send loop, subscribe loop,
+	// touchSeen, receive loop) runs on top of it. cancelStream is registered
+	// with the StreamManager below so that Watchman (soul shedding S2) can
+	// forcibly close the stream on sustained instance isolation
+	// ([StreamManager.CloseAll]): the cancellation wakes the receive/send
+	// loops (`ctx.Err() != nil` / `<-ctx.Done()`), the handler runs its OWN
+	// regular teardown (Unregister → lease-Release LIFO), gRPC sends the
+	// Soul an EOF, and the Soul moves to a live Keeper via its
+	// reconnect-loop/failback list. A Watchman-driven cancellation is
+	// indistinguishable, from the teardown's point of view, from a natural
+	// stream break. defer cancelStream() is the final release of the ctx
+	// resource (idempotent against a cancellation already triggered by
+	// CloseAll).
 	ctx, cancelStream := context.WithCancel(stream.Context())
 	defer cancelStream()
 
-	// Первое сообщение обязано быть Hello (handshake-фаза).
+	// The first message must be Hello (handshake phase).
 	first, err := stream.Recv()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -540,38 +567,40 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 		)
 	}
 
-	// Захват Redis-lease на SID. По PM-decision (1): конфликт → close stream
-	// с AlreadyExists. Без Redis (dev-сборка) — пропускаем lease, single-
-	// instance режим.
+	// Acquire the Redis lease on the SID. Per PM-decision (1): conflict →
+	// close stream with AlreadyExists. Without Redis (dev build) — skip the
+	// lease, single-instance mode.
 	leaseCleanup, leaseErr := h.acquireSoulLease(ctx, sid)
 	if leaseErr != nil {
 		return leaseErr
 	}
 	defer leaseCleanup()
 
-	// Presence (online) теперь = живой Redis SID-lease, захваченный выше через
-	// acquireSoulLease: он гаснет на этом teardown-е (Release в leaseCleanup) или
-	// по TTL после crash-а. Синхронной PG-записи presence на teardown-е больше
-	// нет (ADR-006(a) amend) — таргет-резолвер деривирует online из lease, не из
-	// `souls.status`. Ленивое согласование PG-снимка status (для Operator API
-	// «последнее известное») делает Reaper-правило `mark_disconnected` (тоже
-	// lease-aware), без зависимости штатного закрытия от записи здесь.
+	// Presence (online) is now = a live Redis SID lease acquired above via
+	// acquireSoulLease: it goes away on this teardown (Release in
+	// leaseCleanup) or by TTL after a crash. There's no more synchronous PG
+	// presence write on teardown (ADR-006(a) amend) — the target resolver
+	// derives online from the lease, not from `souls.status`. Lazy
+	// reconciliation of the PG status snapshot (for the Operator API's
+	// "last known") is handled by the Reaper `mark_disconnected` rule (also
+	// lease-aware), without regular closure depending on a write here.
 
-	// StreamManager-регистрация и send-loop (M2.5). Manager=nil — режим
-	// без outbound (handshake-only smoke / unit-тесты): пропускаем
-	// регистрацию и send-loop, FromKeeper-сообщения не отправляются.
+	// StreamManager registration and the send loop (M2.5). Manager=nil →
+	// no-outbound mode (handshake-only smoke / unit tests): skip
+	// registration and the send loop, FromKeeper messages are not sent.
 	//
-	// Unregister обязан выполниться ДО ожидания send-loop-а (см. ниже),
-	// потому что send-loop выходит по close(outCh), который происходит
-	// внутри Unregister. Defer-цепочка строится так, чтобы:
-	//   1) сначала Unregister (закрывает outCh, send-loop выходит);
-	//   2) затем <-sendDone (joins goroutine);
-	//   3) затем leaseCleanup.
-	// LIFO-семантика defer-а инвертирует порядок, поэтому объявляем их
-	// в обратном порядке (cleanup → join → unregister).
+	// Unregister must run BEFORE waiting on the send loop (see below),
+	// because the send loop exits via close(outCh), which happens inside
+	// Unregister. The defer chain is built so that:
+	//   1) Unregister runs first (closes outCh, send loop exits);
+	//   2) then <-sendDone (joins the goroutine);
+	//   3) then leaseCleanup.
+	// defer's LIFO semantics invert the order, so we declare them in
+	// reverse (cleanup → join → unregister).
 	//
-	// cancelStream регистрируется вместе со стримом — отдаёт Watchman точку
-	// принудительного закрытия (см. derive выше / [StreamManager.CloseAll]).
+	// cancelStream is registered together with the stream — it gives
+	// Watchman a point for forced closure (see the derive above /
+	// [StreamManager.CloseAll]).
 	var outCh <-chan *keeperv1.FromKeeper
 	if h.deps.Manager != nil {
 		outCh = h.deps.Manager.RegisterStream(sid, cancelStream)
@@ -590,58 +619,61 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	}
 	h.deps.Metrics.ObserveMessage(directionToSoul)
 
-	// Connect-time broadcast печатей доверия плагинов (ADR-026, S6): сразу
-	// после HelloReply и ДО старта send-loop-а — отправка идёт напрямую
-	// stream.Send в этой же горутине, поэтому порядок гарантирован
-	// (HelloReply → все PluginSigil → app-сообщения), без гонки с send-loop-ом
-	// и без зависимости от размера outbound-буфера. Best-effort: на любой
-	// проблеме (Sigil off / пустой реестр / ошибка чтения / fail отправки)
-	// стрим живёт дальше — Soul-side verify fail-closed защитит от
-	// неподписанных/неполученных плагинов.
+	// Connect-time broadcast of plugin trust sigils (ADR-026, S6): right
+	// after HelloReply and BEFORE the send loop starts — sent directly via
+	// stream.Send in this same goroutine, so ordering is guaranteed
+	// (HelloReply → all PluginSigil → app messages), with no race against
+	// the send loop and no dependency on the outbound buffer size.
+	// Best-effort: on any problem (Sigil off / empty registry / read error /
+	// send failure) the stream keeps living — Soul-side verify (fail-closed)
+	// protects against unsigned/unreceived plugins.
 	h.broadcastSigils(ctx, stream, sid, sessionID)
 
-	// Connect-time broadcast набора trust-anchor-ов подписи Sigil (ADR-026(h),
-	// R3-S6): сразу после snapshot допусков и в той же горутине — отправка
-	// напрямую stream.Send, порядок гарантирован (HelloReply → SigilSnapshot →
-	// SigilTrustAnchors → app-сообщения). Так свежеподключённый Soul получает
-	// АКТУАЛЬНЫЙ набор якорей (включая после runtime-ротации, S6 hot-reload),
-	// против которого верифицирует подписи допусков. Best-effort — см.
-	// [broadcastTrustAnchors].
+	// Connect-time broadcast of the Sigil-signing trust-anchor set
+	// (ADR-026(h), R3-S6): right after the sigil snapshot and in the same
+	// goroutine — sent directly via stream.Send, ordering guaranteed
+	// (HelloReply → SigilSnapshot → SigilTrustAnchors → app messages). This
+	// way a freshly connected Soul gets the CURRENT anchor set (including
+	// after a runtime rotation, S6 hot reload) to verify sigil signatures
+	// against. Best-effort — see [broadcastTrustAnchors].
 	h.broadcastTrustAnchors(ctx, stream, sid, sessionID)
 
-	// Connect-time broadcast active-набора Vigil (ADR-030, beacons-контур S2):
-	// в той же горутине после snapshot-ов Sigil, ДО старта send-loop-а —
-	// отправка напрямую stream.Send, порядок гарантирован (HelloReply →
-	// SigilSnapshot → SigilTrustAnchors → VigilSnapshot → app-сообщения).
-	// ReplaceAll: Soul-scheduler заменяет весь локальный набор Vigil этим
-	// списком (S1). Best-effort — см. [broadcastVigils].
+	// Connect-time broadcast of the active Vigil set (ADR-030, beacons
+	// circuit S2): in the same goroutine after the Sigil snapshots, BEFORE
+	// the send loop starts — sent directly via stream.Send, ordering
+	// guaranteed (HelloReply → SigilSnapshot → SigilTrustAnchors →
+	// VigilSnapshot → app messages). ReplaceAll: the Soul scheduler replaces
+	// its entire local Vigil set with this list (S1). Best-effort — see
+	// [broadcastVigils].
 	h.broadcastVigils(ctx, stream, sid, sessionID)
 
-	// Стрим считается открытым после успешного handshake (HelloReply
-	// доставлен). Inc/Dec — gauge активных стримов; Dec в defer гарантирует
-	// баланс на любом пути выхода handler-а.
+	// The stream counts as open after a successful handshake (HelloReply
+	// delivered). Inc/Dec is the active-streams gauge; Dec in a defer
+	// guarantees balance on any exit path from the handler.
 	h.deps.Metrics.IncStreams()
 	defer h.deps.Metrics.DecStreams()
 
-	// При закрытии стрима убираем SID из throttle-стейта flusher-а, чтобы
-	// карта не накапливала disconnected-Soul-ов. Следующее подключение того
-	// же SID начнёт с немедленного flush-а.
+	// On stream close, remove the SID from the flusher's throttle state so
+	// the map doesn't accumulate disconnected Souls. The next connection of
+	// the same SID will start with an immediate flush.
 	defer h.lastSeenFlush.forget(sid)
 
-	// Hello — тоже app-сообщение, обновляет heartbeat (Redis) и throttled-flush
-	// `last_seen_at`-снимка в PG. Presence (online) НЕ пишется в PG на
-	// session-open: авторитет — захваченный выше Redis SID-lease (ADR-006(a)),
-	// и таргет-резолвер деривирует online из него. Это снимает прежний
-	// HA-blocker (переподключившийся Soul был невидим резолверу из-за
-	// disconnected-снимка в `souls`) без синхронной presence-записи в PG —
-	// lease уже захвачен, Soul виден сразу.
+	// Hello is also an app message: it refreshes the heartbeat (Redis) and
+	// the throttled `last_seen_at` snapshot flush to PG. Presence (online)
+	// is NOT written to PG on session-open: the authority is the Redis SID
+	// lease acquired above (ADR-006(a)), and the target resolver derives
+	// online from it. This removes the old HA blocker (a reconnected Soul
+	// was invisible to the resolver because of a disconnected snapshot in
+	// `souls`) without a synchronous presence write to PG — the lease is
+	// already held, the Soul is visible immediately.
 	h.touchSeen(ctx, sid)
 
-	// Персист анонсированных capabilities (ADR-056 §S5) рядом с presence —
-	// staged-гейт run.go сверяет их ДО dispatch. Пишем ВСЕГДА (включая пустой
-	// набор от старого бинаря), перезаписью: иначе старый Soul, переподключившийся
-	// после нового, унаследовал бы stale-флаг "passage". Best-effort (как
-	// heartbeat): без Redis (dev/unit) — гейт деградирует fail-closed на staged.
+	// Persist the announced capabilities (ADR-056 §S5) alongside presence —
+	// the staged gate in run.go checks them BEFORE dispatch. Always written
+	// (including an empty set from an old binary), by overwrite: otherwise
+	// an old Soul reconnecting after a newer one would inherit a stale
+	// "passage" flag. Best-effort (like the heartbeat): without Redis
+	// (dev/unit) the gate degrades fail-closed to staged.
 	if h.deps.Redis != nil {
 		if err := keeperredis.SetSoulCapabilities(ctx, h.deps.Redis, sid, hello.GetCapabilities()); err != nil {
 			h.logger.Debug("eventstream: persist soul capabilities failed",
@@ -660,11 +692,11 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 		slog.String("session_id", sessionID),
 	)
 
-	// Send-loop: вычитывает outCh, отправляет в stream.Send. Существует
-	// только если StreamManager wired up (outCh != nil). Завершается по
-	// ctx.Done() (graceful stop) либо по close-у outCh (Unregister).
-	// stream.Send-ошибка → лог + выход (стрим уже сломан, receive-loop
-	// тоже встретит EOF).
+	// Send loop: drains outCh, sends via stream.Send. Only exists if a
+	// StreamManager is wired up (outCh != nil). Exits on ctx.Done()
+	// (graceful stop) or on outCh being closed (Unregister). A stream.Send
+	// error → log + exit (the stream is already broken, the receive loop
+	// will also hit EOF).
 	sendDone := make(chan struct{})
 	if outCh != nil {
 		go h.runSendLoop(ctx, stream, sid, sessionID, outCh, sendDone)
@@ -672,22 +704,24 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 		close(sendDone)
 	}
 
-	// Cluster-mode subscribe-loop: подписка на Redis pub/sub-канал
-	// `outbound:<sid>`, форвард входящих FromKeeper в outCh (Outbound
-	// на других Keeper-инстансах публикует туда при routing-е).
-	// Включается только когда Manager и Redis оба не-nil — иначе
-	// cluster-routing не нужен (single-instance / unit-тесты).
+	// Cluster-mode subscribe loop: subscribes to the Redis pub/sub channel
+	// `outbound:<sid>`, forwarding incoming FromKeeper messages to outCh
+	// (Outbound on other Keeper instances publishes there when routing).
+	// Only enabled when Manager and Redis are both non-nil — otherwise
+	// cluster routing isn't needed (single-instance / unit tests).
 	subDone := make(chan struct{})
 	subCleanup := h.startOutboundSubscriber(ctx, sid, subDone)
 
-	// LIFO defer chain: при return-е handler-а сработает в порядке
+	// LIFO defer chain: on handler return this fires in the order
 	//   subCleanup (close pub/sub) → join subDone → Unregister →
-	//   join sendDone → leaseCleanup (объявлен ранее).
-	// Этот порядок гарантирует:
-	//   1) subscriber перестаёт писать в outCh раньше Unregister-а
-	//      (иначе entry.send на закрытый канал — false, drop в лог);
-	//   2) send-loop успевает дочитать outCh после Unregister-а;
-	//   3) lease отдаётся последним — другой Keeper подберёт сразу.
+	//   join sendDone → leaseCleanup (declared earlier).
+	// This order guarantees:
+	//   1) the subscriber stops writing to outCh before Unregister
+	//      (otherwise entry.send on a closed channel returns false, dropped
+	//      to the log);
+	//   2) the send loop manages to drain outCh after Unregister;
+	//   3) the lease is released last — another Keeper can pick it up right
+	//      away.
 	defer func() {
 		if h.deps.Manager != nil {
 			h.deps.Manager.Unregister(sid, outCh)
@@ -701,16 +735,17 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 		<-subDone
 	}()
 
-	// Receive-loop вынесен в отдельную горутину, потому что `stream.Recv()`
-	// блокирует на gRPC-стриме и НЕ реагирует на отмену нашего производного ctx
-	// (его контролирует gRPC, а не мы). Watchman-shedding ([StreamManager.CloseAll])
-	// отменяет cancelStream → срабатывает ветка `<-ctx.Done()` ниже → handler
-	// возвращается → gRPC рвёт RPC и закрывает стрим → осиротевший `stream.Recv()`
-	// в этой горутине разблокируется ошибкой и она выходит сама (её НЕ join-им
-	// синхронно до return-а: иначе deadlock — Recv разблокируется только ПОСЛЕ
-	// закрытия стрима, т.е. после return-а handler-а). recvErr буферизован на 1,
-	// чтобы горутина-receiver не повисла на send-е после того, как handler уже
-	// ушёл по ctx.Done().
+	// The receive loop runs in a separate goroutine because `stream.Recv()`
+	// blocks on the gRPC stream and does NOT react to our derived ctx being
+	// cancelled (gRPC controls it, not us). Watchman shedding
+	// ([StreamManager.CloseAll]) cancels cancelStream → the `<-ctx.Done()`
+	// branch below fires → the handler returns → gRPC tears down the RPC
+	// and closes the stream → the orphaned `stream.Recv()` in this goroutine
+	// unblocks with an error and exits on its own (we do NOT join it
+	// synchronously before returning: that would deadlock — Recv only
+	// unblocks AFTER the stream closes, i.e. after the handler returns).
+	// recvErr is buffered with size 1 so the receiver goroutine doesn't hang
+	// on a send after the handler has already left via ctx.Done().
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -727,21 +762,24 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 		}
 	}()
 
-	// Выход по любому из двух событий:
-	//   - receive-loop завершился (EOF / транспортная ошибка / отмена ctx,
-	//     замеченная самим Recv-ом после возврата) — отдаём его терминальный err;
-	//   - ctx отменён извне (Watchman-shedding при устойчивой изоляции) — выходим
-	//     БЕЗ ошибки: для Soul-а это EOF, он реконнектится на живой Keeper.
-	// В обоих случаях defer-цепочка делает штатный teardown (subscriber →
-	// Unregister → send-loop join → lease-Release LIFO).
+	// Exit on either of two events:
+	//   - the receive loop finished (EOF / transport error / ctx
+	//     cancellation noticed by Recv itself after it returns) — we return
+	//     its terminal err;
+	//   - ctx was cancelled externally (Watchman shedding on sustained
+	//     isolation) — we exit WITHOUT an error: to the Soul this looks like
+	//     EOF, and it reconnects to a live Keeper.
+	// In both cases the defer chain performs the regular teardown
+	// (subscriber → Unregister → send-loop join → lease-Release LIFO).
 	//
-	// Toll-hook (ADR-038): на КАЖДОМ выходе уведомляем cluster-detector.
-	// gracefulShutdown=true для ctx.Done()-ветки (закрытие инициировано самим
-	// keeper-инстансом — Watchman shedding или graceful keeper shutdown);
-	// false для recvErr-ветки (клиент-side disconnect / транспортная ошибка).
-	// Toll сам фильтрует graceful (это не отток). Coven неизвестен в этой точке
-	// (резолв стоил бы PG-query на каждом disconnect-е) — передаём пустую
-	// строку; per-coven counter в [toll.Metrics] остаётся consistent (label="").
+	// Toll hook (ADR-038): notify the cluster detector on EVERY exit.
+	// gracefulShutdown=true for the ctx.Done() branch (closure initiated by
+	// the keeper instance itself — Watchman shedding or a graceful keeper
+	// shutdown); false for the recvErr branch (client-side disconnect /
+	// transport error). Toll itself filters out graceful closes (that's not
+	// churn). Coven is unknown at this point (resolving it would cost a
+	// PG query on every disconnect) — we pass an empty string; the
+	// per-coven counter in [toll.Metrics] stays consistent (label="").
 	select {
 	case err := <-recvErr:
 		h.notifyTollDisconnect(ctx, sid, false)
@@ -756,29 +794,28 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	}
 }
 
-// notifyTollDisconnect — best-effort hook в Toll cluster-detector (ADR-038).
-// nil-safe: при выключенном Toll (deps.TollNotifier==nil) — no-op. ctx
-// освобождаем от cancel (используется как baggage-носитель, hook сам берёт
-// короткий timeout внутри Publisher-а).
+// notifyTollDisconnect is a best-effort hook into the Toll cluster detector
+// (ADR-038). nil-safe: a no-op when Toll is disabled (deps.TollNotifier==nil).
+// We strip ctx of its cancel (used only as a baggage carrier; the hook takes
+// its own short timeout inside the Publisher).
 func (h *eventStreamHandler) notifyTollDisconnect(ctx context.Context, sid string, gracefulShutdown bool) {
 	if h.deps.TollNotifier == nil {
 		return
 	}
-	// WithoutCancel: stream-ctx уже отменён (graceful shutdown / shedding),
-	// но Toll-publish обязан долететь до Redis. Короткий timeout — внутри
-	// Publisher-а (он сам ограничен).
+	// WithoutCancel: the stream ctx may already be cancelled (graceful
+	// shutdown / shedding), but the Toll publish must still reach Redis. The
+	// short timeout lives inside the Publisher (it's self-limited).
 	hookCtx := context.WithoutCancel(ctx)
 	h.deps.TollNotifier.NotifyDisconnect(hookCtx, sid, "", gracefulShutdown)
 }
 
-// runSendLoop — goroutine, гонит сообщения из per-stream outbound-канала
-// в gRPC stream.Send. Запускается из [EventStream], завершается по
-// ctx.Done() или close-у outCh (Unregister).
+// runSendLoop is a goroutine that drives messages from the per-stream
+// outbound channel into gRPC stream.Send. Started from [EventStream], exits
+// on ctx.Done() or on outCh being closed (Unregister).
 //
-// stream.Send блокирует goroutine — это естественный back-pressure от
-// клиента. PM-decision M2.5(1) buffered=10: переполнение buffer-а
-// сигнализируется в Outbound.send (drop+log), сюда уже доходят только
-// принятые сообщения.
+// stream.Send blocks the goroutine — this is natural back-pressure from the
+// client. PM-decision M2.5(1) buffered=10: buffer overflow is signaled in
+// Outbound.send (drop+log), so only already-accepted messages reach here.
 func (h *eventStreamHandler) runSendLoop(
 	ctx context.Context,
 	stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper],
@@ -808,27 +845,31 @@ func (h *eventStreamHandler) runSendLoop(
 	}
 }
 
-// broadcastSigils раздаёт Soul-у ПОЛНЫЙ active-набор печатей доверия плагинов
-// одним [keeperv1.SigilSnapshot] (ADR-026(h), Вариант A: snapshot — единственный
-// источник истины active-набора, применяется как ReplaceAll). Вызывается из
-// [EventStream] в той же горутине между HelloReply и стартом send-loop-а, поэтому
-// шлёт напрямую stream.Send (порядок гарантирован, буфер не задействован).
+// broadcastSigils hands the Soul the FULL active set of plugin trust sigils
+// as a single [keeperv1.SigilSnapshot] (ADR-026(h), Option A: the snapshot
+// is the sole source of truth for the active set, applied as ReplaceAll).
+// Called from [EventStream] in the same goroutine between HelloReply and the
+// start of the send loop, so it sends directly via stream.Send (ordering
+// guaranteed, the buffer isn't involved).
 //
-// Connect-time snapshot обязателен и при пустом реестре: пустой sigils[] = «ни
-// один плагин не допущен», и Soul ReplaceAll-ом приведёт кеш к этому состоянию
-// (важно для near-instant revoke на reconnect-е). Единственное исключение —
-// SigilStore=nil (Sigil выключен / dev / unit): тогда snapshot не шлём вовсе,
-// чтобы не навязывать пустой набор на хостах с выключенным Sigil.
+// The connect-time snapshot is mandatory even for an empty registry: an
+// empty sigils[] means "no plugin is allowed", and the Soul's ReplaceAll
+// brings its cache to that state (important for near-instant revoke on
+// reconnect). The one exception is SigilStore=nil (Sigil disabled / dev /
+// unit): then no snapshot is sent at all, so as not to force an empty set
+// onto hosts with Sigil disabled.
 //
 // Best-effort:
-//   - SigilStore=nil → no-op без ошибки;
-//   - ListActive вернул ошибку → warn, snapshot пропускается, стрим жив
-//     (Soul-side verify fail-closed и так защитит);
-//   - stream.Send упал → warn (стрим уже сломан, receive-loop встретит EOF).
+//   - SigilStore=nil → no-op, no error;
+//   - ListActive returned an error → warn, snapshot skipped, stream stays
+//     alive (Soul-side verify fail-closed protects anyway);
+//   - stream.Send failed → warn (the stream is already broken, the receive
+//     loop will hit EOF too).
 //
-// PluginSigil.Manifest внутри snapshot = rec.ManifestRaw (byte-exact подписанные
-// байты, M1) через [sigilRecordToProto]: re-хеш на Soul-е идёт именно над этими
-// байтами через NormalizeManifestBytes (S3↔S6-инвариант).
+// PluginSigil.Manifest inside the snapshot is rec.ManifestRaw (the
+// byte-exact signed bytes, M1) via [sigilRecordToProto]: the re-hash on the
+// Soul side runs over exactly these bytes via NormalizeManifestBytes
+// (S3↔S6 invariant).
 func (h *eventStreamHandler) broadcastSigils(
 	ctx context.Context,
 	stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper],
@@ -867,28 +908,31 @@ func (h *eventStreamHandler) broadcastSigils(
 	)
 }
 
-// broadcastTrustAnchors раздаёт Soul-у ТЕКУЩИЙ набор trust-anchor-ов подписи
-// Sigil одним [keeperv1.SigilTrustAnchors] (ADR-026(h), R3-S6, ReplaceAll).
-// Вызывается из [EventStream] в той же горутине после [broadcastSigils] и до
-// старта send-loop-а, поэтому шлёт напрямую stream.Send (порядок гарантирован,
-// буфер не задействован).
+// broadcastTrustAnchors hands the Soul the CURRENT set of Sigil-signing
+// trust anchors as a single [keeperv1.SigilTrustAnchors] (ADR-026(h), R3-S6,
+// ReplaceAll). Called from [EventStream] in the same goroutine after
+// [broadcastSigils] and before the send loop starts, so it sends directly
+// via stream.Send (ordering guaranteed, the buffer isn't involved).
 //
-// Набор берётся «живым» из [TrustAnchorSource], а не из зафиксированного на
-// старте слайса: после runtime-ротации ключей подписи (S6 hot-reload подменяет
-// Signer и обновляет holder) свежеподключённый Soul получает актуальный набор.
+// The set is taken "live" from [TrustAnchorSource] rather than from a slice
+// fixed at startup: after a runtime signing-key rotation (S6 hot reload
+// swaps the Signer and updates the holder), a freshly connected Soul gets
+// the current set.
 //
 // Best-effort:
-//   - TrustAnchors=nil → no-op без ошибки (Sigil выключен / dev / unit);
-//   - пустой набор всё равно шлётся (пустой = «якорей нет» → Soul стирает holder,
-//     fail-closed verify по no_trust_anchor — важно для near-instant retire на
-//     reconnect-е, симметрия с пустым SigilSnapshot);
-//   - stream.Send упал → warn (стрим уже сломан, receive-loop встретит EOF).
+//   - TrustAnchors=nil → no-op, no error (Sigil disabled / dev / unit);
+//   - an empty set is still sent (empty = "no anchors" → the Soul clears its
+//     holder, fail-closed verify via no_trust_anchor — important for
+//     near-instant retire on reconnect, symmetric with an empty
+//     SigilSnapshot);
+//   - stream.Send failed → warn (the stream is already broken, the receive
+//     loop will hit EOF too).
 func (h *eventStreamHandler) broadcastTrustAnchors(
 	ctx context.Context,
 	stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper],
 	sid, sessionID string,
 ) {
-	_ = ctx // источник набора синхронный (atomic-holder), ctx сохранён для симметрии сигнатур
+	_ = ctx // the set's source is synchronous (atomic holder); ctx is kept for signature symmetry
 	if h.deps.TrustAnchors == nil {
 		return
 	}
@@ -914,22 +958,26 @@ func (h *eventStreamHandler) broadcastTrustAnchors(
 	)
 }
 
-// broadcastVigils раздаёт Soul-у active-набор Vigil одним [keeperv1.VigilSnapshot]
-// (ADR-030, ReplaceAll — паттерн [broadcastSigils]/[broadcastTrustAnchors]).
-// Вызывается из [EventStream] в той же горутине после snapshot-ов Sigil и до
-// старта send-loop-а, поэтому шлёт напрямую stream.Send (порядок гарантирован,
-// буфер не задействован).
+// broadcastVigils hands the Soul the active Vigil set as a single
+// [keeperv1.VigilSnapshot] (ADR-030, ReplaceAll — same pattern as
+// [broadcastSigils]/[broadcastTrustAnchors]). Called from [EventStream] in
+// the same goroutine after the Sigil snapshots and before the send loop
+// starts, so it sends directly via stream.Send (ordering guaranteed, the
+// buffer isn't involved).
 //
-// Набор резолвится по covens хоста (авторитетно из souls-registry) и его SID.
-// Connect-time snapshot обязателен и при пустом наборе: пустой vigils[] = «ни
-// одной активной проверки», и Soul ReplaceAll-ом приведёт scheduler к этому
-// состоянию (так срабатывает disable/удаление Vigil на reconnect-е). Исключение
-// — VigilSource=nil (Oracle выключен / dev / unit): тогда snapshot не шлём вовсе.
+// The set is resolved from the host's covens (authoritative, from the souls
+// registry) and its SID. The connect-time snapshot is mandatory even for an
+// empty set: an empty vigils[] means "no active checks", and the Soul's
+// ReplaceAll brings the scheduler to that state (this is how a Vigil
+// disable/removal takes effect on reconnect). Exception — VigilSource=nil
+// (Oracle disabled / dev / unit): then no snapshot is sent at all.
 //
 // Best-effort:
-//   - VigilSource=nil → no-op без ошибки;
-//   - резолв вернул ошибку → warn, snapshot пропускается, стрим жив;
-//   - stream.Send упал → warn (стрим уже сломан, receive-loop встретит EOF).
+//   - VigilSource=nil → no-op, no error;
+//   - the resolve returned an error → warn, snapshot skipped, stream stays
+//     alive;
+//   - stream.Send failed → warn (the stream is already broken, the receive
+//     loop will hit EOF too).
 func (h *eventStreamHandler) broadcastVigils(
 	ctx context.Context,
 	stream grpclib.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper],
@@ -968,12 +1016,13 @@ func (h *eventStreamHandler) broadcastVigils(
 	)
 }
 
-// sigilRecordToProto проецирует запись реестра plugin_sigils в транспортный
-// [keeperv1.PluginSigil]. Manifest = rec.ManifestRaw (byte-exact подписанные
-// байты, M1), а НЕ rec.Manifest (JSONB-проекция): re-хеш на Soul-е идёт именно
-// над этими байтами через NormalizeManifestBytes (S3↔S6-инвариант). Общий для
-// connect-time broadcast ([broadcastSigils]) и cluster re-broadcast
-// ([Outbound.RebroadcastSigils], S6c) — единая точка маппинга.
+// sigilRecordToProto projects a plugin_sigils registry record into the
+// transport [keeperv1.PluginSigil]. Manifest = rec.ManifestRaw (the
+// byte-exact signed bytes, M1), NOT rec.Manifest (the JSONB projection): the
+// re-hash on the Soul side runs over exactly these bytes via
+// NormalizeManifestBytes (S3↔S6 invariant). Shared by the connect-time
+// broadcast ([broadcastSigils]) and the cluster re-broadcast
+// ([Outbound.RebroadcastSigils], S6c) — a single mapping point.
 func sigilRecordToProto(rec *sigil.Sigil) *keeperv1.PluginSigil {
 	return &keeperv1.PluginSigil{
 		Namespace:    rec.Namespace,
@@ -985,10 +1034,11 @@ func sigilRecordToProto(rec *sigil.Sigil) *keeperv1.PluginSigil {
 	}
 }
 
-// SigilRecordsToProto конвертирует active-набор записей реестра plugin_sigils в
-// транспортные [keeperv1.PluginSigil] для cluster re-broadcast-а (S6c).
-// Экспортирован для wire-up в `keeper run` (daemon собирает набор из
-// [SigilStore.ListActive] и отдаёт в [Outbound.RebroadcastSigils]).
+// SigilRecordsToProto converts an active set of plugin_sigils registry
+// records into transport [keeperv1.PluginSigil] values for the cluster
+// re-broadcast (S6c). Exported for wire-up in `keeper run` (the daemon
+// gathers the set from [SigilStore.ListActive] and hands it to
+// [Outbound.RebroadcastSigils]).
 func SigilRecordsToProto(recs []*sigil.Sigil) []*keeperv1.PluginSigil {
 	out := make([]*keeperv1.PluginSigil, 0, len(recs))
 	for _, rec := range recs {
@@ -997,11 +1047,11 @@ func SigilRecordsToProto(recs []*sigil.Sigil) []*keeperv1.PluginSigil {
 	return out
 }
 
-// acquireSoulLease — захват lease и поднятие renewal-goroutine. Возвращает
-// cleanup-функцию, которую caller вызывает через defer.
+// acquireSoulLease acquires the lease and starts the renewal goroutine.
+// Returns a cleanup function that the caller invokes via defer.
 //
-// На Redis=nil (dev / unit-сборка) lease выключен — возвращает no-op cleanup.
-// На ErrLeaseTaken → AlreadyExists (PM-decision 1).
+// With Redis=nil (dev / unit build) the lease is disabled — returns a no-op
+// cleanup. On ErrLeaseTaken → AlreadyExists (PM-decision 1).
 func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (func(), error) {
 	if h.deps.Redis == nil {
 		return func() {}, nil
@@ -1014,14 +1064,16 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 	lease, err := keeperredis.AcquireSoulLease(ctx, h.deps.Redis, sid, h.deps.KID, ttl)
 	if err != nil {
 		if errors.Is(err, keeperredis.ErrLeaseTaken) {
-			// Конкурент держит lease. Прежде чем отдать Soul-у AlreadyExists
-			// (он реконнектится ~TTL), пробуем presence-gated force-release у
-			// ДОКАЗАННО-МЁРТВОГО prev-holder-а (ADR-027 amend (n)): после SIGKILL
-			// holder-а его lease висит до TTL (~60s), блокируя reconnect того же
-			// SID к другому keeper-у и dispatched-orphan-реконсиляцию. Это НЕ
-			// слепой DEL — перехват только при подтверждённой смерти владельца
-			// в Conclave; иначе (жив / неопределённо / своя lease) — старое
-			// поведение AlreadyExists (split-brain guard / fail-safe).
+			// A competitor holds the lease. Before handing the Soul
+			// AlreadyExists (it reconnects after ~TTL), try a
+			// presence-gated force-release against a PROVABLY-DEAD
+			// prev-holder (ADR-027 amend (n)): after a holder is SIGKILLed,
+			// its lease hangs around until TTL (~60s), blocking a reconnect
+			// of the same SID to another keeper and blocking
+			// dispatched-orphan reconciliation. This is NOT a blind DEL —
+			// we only take over once Conclave confirms the owner's death;
+			// otherwise (alive / indeterminate / our own lease) — the old
+			// AlreadyExists behavior (split-brain guard / fail-safe).
 			forced, ferr := h.tryForceAcquireDeadLease(ctx, sid, ttl)
 			if ferr != nil {
 				return nil, ferr
@@ -1050,9 +1102,9 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 	return func() {
 		cancelRenew()
 		<-done
-		// Release c detached-ctx: stream-ctx может быть уже отменён (это и
-		// есть нормальный path graceful-stop-а). WithoutCancel: сохраняем
-		// trace-baggage, не наследуем cancel teardown-пути.
+		// Release with a detached ctx: the stream ctx may already be
+		// cancelled (that's the normal graceful-stop path). WithoutCancel:
+		// keep the trace baggage, don't inherit the teardown path's cancel.
 		relCtx, relCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer relCancel()
 		if err := lease.Release(relCtx); err != nil {
@@ -1062,39 +1114,44 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 	}, nil
 }
 
-// tryForceAcquireDeadLease — presence-gated перезахват SID-lease-а у доказанно-
-// мёртвого prev-holder-а (ADR-027 amend (n), recovery-backstop S2). Вызывается
-// из [acquireSoulLease] ТОЛЬКО после того, как обычный AcquireSoulLease вернул
-// ErrLeaseTaken.
+// tryForceAcquireDeadLease is a presence-gated takeover of a SID lease from
+// a provably-dead prev-holder (ADR-027 amend (n), recovery backstop S2).
+// Called from [acquireSoulLease] ONLY after a regular AcquireSoulLease
+// returned ErrLeaseTaken.
 //
-// Решает находку «stale SID-lease ~60s»: после SIGKILL holder-а его lease висит
-// до TTL, и reconnect того же SID к другому keeper-у получал бы AlreadyExists
-// (стрим закрывался до Hello → dispatched-orphan-реконсиляция недостижима).
-// Здесь — точечный перехват, но НЕ слепой DEL: владение снимается ровно у того,
-// чью смерть подтвердил Conclave-presence.
+// Addresses the "stale SID-lease ~60s" finding: after a holder is
+// SIGKILLed, its lease hangs around until TTL, and a reconnect of the same
+// SID to another keeper would get AlreadyExists (the stream closed before
+// Hello → dispatched-orphan reconciliation unreachable). This is a targeted
+// takeover, NOT a blind DEL: ownership is only pulled from whichever holder
+// Conclave presence confirmed dead.
 //
-// Возвращает:
-//   - (lease, nil) — force-release удался, lease на собственном KID, audit эмитнут;
-//   - (nil, nil)   — force НЕ применён (prev жив / это self / неопределённость /
-//     гонка смены ключа): caller отдаёт Soul-у AlreadyExists (split-brain guard);
-//   - (nil, err)   — терминальная gRPC-ошибка (на текущих ветках не возникает,
-//     зарезервировано под будущие fatal-условия; сейчас всегда nil-err).
+// Returns:
+//   - (lease, nil) — force-release succeeded, lease is on our own KID, audit
+//     emitted;
+//   - (nil, nil)   — force NOT applied (prev is alive / it's ourselves /
+//     indeterminate / a race changed the key): the caller hands the Soul
+//     AlreadyExists (split-brain guard);
+//   - (nil, err)   — a terminal gRPC error (doesn't occur on current
+//     branches, reserved for future fatal conditions; currently always
+//     nil-err).
 func (h *eventStreamHandler) tryForceAcquireDeadLease(ctx context.Context, sid string, ttl time.Duration) (*keeperredis.Lease, error) {
 	prevKID, ok, err := h.soulLeaseOwner(ctx, h.deps.Redis, sid)
 	if err != nil {
-		// Не можем установить владельца — fail-safe: не перехватываем.
+		// Can't determine the owner — fail-safe: don't take over.
 		h.logger.Warn("eventstream: soul lease owner lookup failed — yielding AlreadyExists",
 			slog.String("sid", sid), slog.Any("error", err))
 		return nil, nil
 	}
 	if !ok || prevKID == "" {
-		// Ключ исчез между Acquire и GET (TTL истёк прямо сейчас). Не форсим:
-		// caller отдаст AlreadyExists, Soul ретракнётся и обычный Acquire
-		// пройдёт. Без повторного Acquire здесь — без риска цикла.
+		// The key disappeared between Acquire and GET (TTL just expired).
+		// Don't force it: the caller returns AlreadyExists, the Soul
+		// retries, and a regular Acquire will succeed. No retry-Acquire
+		// here — avoids any risk of a loop.
 		return nil, nil
 	}
 	if prevKID == h.deps.KID {
-		// Reconnect к тому же keeper-у / своя lease — не ложный перехват.
+		// Reconnect to the same keeper / our own lease — not a false takeover.
 		h.logger.Warn("eventstream: soul lease still held by self — yielding AlreadyExists (reconnect race / own lease)",
 			slog.String("sid", sid), slog.String("kid", h.deps.KID))
 		return nil, nil
@@ -1102,13 +1159,15 @@ func (h *eventStreamHandler) tryForceAcquireDeadLease(ctx context.Context, sid s
 
 	alive, err := h.instanceAlive(ctx, h.deps.Redis, prevKID)
 	if err != nil {
-		// Presence-чек упал — fail-safe: НЕ объявлять мёртвым, НЕ перехватывать.
+		// The presence check failed — fail-safe: do NOT declare it dead, do
+		// NOT take over.
 		h.logger.Warn("eventstream: prev-holder presence check failed — yielding AlreadyExists (fail-safe)",
 			slog.String("sid", sid), slog.String("prev_kid", prevKID), slog.Any("error", err))
 		return nil, nil
 	}
 	if alive {
-		// Живой holder либо partition-с-живым-Conclave — отдаём Soul-у ретраить.
+		// A live holder, or a partition with a live Conclave — let the Soul
+		// retry.
 		h.logger.Warn("eventstream: soul lease held by live keeper — yielding AlreadyExists",
 			slog.String("sid", sid), slog.String("prev_kid", prevKID))
 		return nil, nil
@@ -1117,14 +1176,16 @@ func (h *eventStreamHandler) tryForceAcquireDeadLease(ctx context.Context, sid s
 	lease, ferr := keeperredis.ForceAcquireSoulLease(ctx, h.deps.Redis, sid, prevKID, h.deps.KID, ttl)
 	if ferr != nil {
 		if errors.Is(ferr, keeperredis.ErrLeaseTaken) {
-			// Гонка: между presence-чеком и CAS ключ сменился на третьего
-			// (TTL истёк / другой keeper успел). НЕ перехватываем чужой свежий
-			// lease — fallback на AlreadyExists, без ретрая (без риска цикла).
+			// Race: between the presence check and the CAS, the key changed
+			// to a third party (TTL expired / another keeper got there
+			// first). We do NOT take over someone else's fresh lease —
+			// fall back to AlreadyExists, no retry (no risk of a loop).
 			h.logger.Warn("eventstream: force-release lost race — yielding AlreadyExists",
 				slog.String("sid", sid), slog.String("prev_kid", prevKID))
 			return nil, nil
 		}
-		// Прочая Redis-ошибка force-CAS — fail-safe: не перехватываем.
+		// Some other Redis error from the force-CAS — fail-safe: don't take
+		// over.
 		h.logger.Warn("eventstream: force-release failed — yielding AlreadyExists",
 			slog.String("sid", sid), slog.String("prev_kid", prevKID), slog.Any("error", ferr))
 		return nil, nil
@@ -1139,10 +1200,11 @@ func (h *eventStreamHandler) tryForceAcquireDeadLease(ctx context.Context, sid s
 	return lease, nil
 }
 
-// auditLeaseForceReleased пишет security-event перехвата владения SID-lease-ом
-// (ADR-027 amend (n)) через тот же [audit.Writer]-путь, что Outbound-форвардер
-// (`source: soul_grpc`). Best-effort: lease уже перезахвачен, fail audit-а не
-// откатывает recovery (паттерн идентичен Outbound apply.dispatched).
+// auditLeaseForceReleased writes a security event for a SID-lease ownership
+// takeover (ADR-027 amend (n)) via the same [audit.Writer] path as the
+// Outbound forwarder (`source: soul_grpc`). Best-effort: the lease is
+// already re-acquired, an audit failure doesn't roll back the recovery
+// (same pattern as Outbound apply.dispatched).
 func (h *eventStreamHandler) auditLeaseForceReleased(ctx context.Context, sid, prevKID string) {
 	if err := h.deps.AuditWriter.Write(ctx, &audit.Event{
 		EventType:     audit.EventLeaseForceReleased,
@@ -1161,12 +1223,12 @@ func (h *eventStreamHandler) auditLeaseForceReleased(ctx context.Context, sid, p
 	}
 }
 
-// renewLeaseLoop — periodic Renew-er. На ErrLeaseLost закрывает done; main
-// receive-loop выходит сам по EOF/Canceled, потому что lease-loss обычно
-// сопровождается timeout-ом стрима либо явной отменой. Мы НЕ форсим
-// прерывание receive-loop-а — пусть Soul доест буфер и закроет стрим
-// штатно (или другой Keeper, уже принявший этот SID, переотправит ему
-// сигнал).
+// renewLeaseLoop is the periodic renewer. On ErrLeaseLost it closes done;
+// the main receive loop exits on its own via EOF/Canceled, because lease
+// loss is usually accompanied by a stream timeout or an explicit
+// cancellation. We do NOT force-interrupt the receive loop — let the Soul
+// drain its buffer and close the stream normally (or let another Keeper,
+// having already taken over this SID, signal it directly).
 func (h *eventStreamHandler) renewLeaseLoop(ctx context.Context, sid string, lease *keeperredis.Lease, every time.Duration, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(every)
@@ -1189,18 +1251,19 @@ func (h *eventStreamHandler) renewLeaseLoop(ctx context.Context, sid string, lea
 	}
 }
 
-// touchSeen — обновляет heartbeat на каждое app-сообщение. Два слоя:
+// touchSeen refreshes the heartbeat on every app message. Two layers:
 //
-//  1. Redis heartbeat-кэш (быстрый слой, real-time): HSET на каждое
-//     сообщение. Ошибки не fatal — heartbeat best-effort, потеря tick-а
-//     компенсируется следующим сообщением.
-//  2. PG `souls.last_seen_at` (snapshot для Reaper / Operator API):
-//     throttled flush не чаще раза в [lastSeenFlusher.interval] на SID.
-//     Без него `mark_disconnected` ложно метил бы живой стрим disconnected
-//     (он смотрит только на PG-`last_seen_at`, см. ADR-006(a) и миграцию
-//     014). UpdateLastSeen — вне stream-ctx-а: stream может отмениться
-//     именно в момент flush-а (graceful stop / lease-переезд), а snapshot
-//     всё равно полезен — иначе при отмене окно flush-а потерялось бы.
+//  1. The Redis heartbeat cache (fast layer, real-time): HSET on every
+//     message. Errors aren't fatal — the heartbeat is best-effort, a missed
+//     tick is made up for by the next message.
+//  2. PG `souls.last_seen_at` (a snapshot for Reaper / the Operator API):
+//     a throttled flush, no more than once per [lastSeenFlusher.interval]
+//     per SID. Without it, `mark_disconnected` would falsely mark a live
+//     stream disconnected (it only looks at PG-`last_seen_at`, see
+//     ADR-006(a) and migration 014). UpdateLastSeen runs outside the stream
+//     ctx: the stream can be cancelled at the exact moment of the flush
+//     (graceful stop / lease handoff), and the snapshot is still useful —
+//     otherwise the flush window would be lost on cancellation.
 func (h *eventStreamHandler) touchSeen(ctx context.Context, sid string) {
 	now := time.Now().UTC()
 	if h.deps.Redis != nil {
@@ -1212,10 +1275,11 @@ func (h *eventStreamHandler) touchSeen(ctx context.Context, sid string) {
 	h.flushLastSeen(ctx, sid, now)
 }
 
-// flushLastSeen — throttled snapshot `last_seen_at` в PG. No-op без SoulDB
-// (dev / unit-режим, heartbeat живёт только в Redis). Throttle per-SID;
-// flush идёт под отдельным background-ctx, чтобы отмена stream-ctx-а в
-// момент сброса не потеряла snapshot (короткий 2s-timeout от зависшего PG).
+// flushLastSeen is a throttled `last_seen_at` snapshot to PG. No-op without
+// SoulDB (dev / unit mode, heartbeat lives in Redis only). Throttled
+// per-SID; the flush runs under its own background ctx so a stream-ctx
+// cancellation at the moment of the flush doesn't lose the snapshot (a
+// short 2s timeout guards against a hung PG).
 func (h *eventStreamHandler) flushLastSeen(ctx context.Context, sid string, now time.Time) {
 	if h.deps.SoulDB == nil {
 		return
@@ -1223,21 +1287,22 @@ func (h *eventStreamHandler) flushLastSeen(ctx context.Context, sid string, now 
 	if !h.lastSeenFlush.shouldFlush(sid, now) {
 		return
 	}
-	// WithoutCancel: сохраняем trace-baggage PG-write last_seen, не наследуем
-	// cancel teardown-пути.
+	// WithoutCancel: keep the trace baggage for the last_seen PG write,
+	// don't inherit the teardown path's cancel.
 	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if err := soul.UpdateLastSeen(flushCtx, h.deps.SoulDB, sid, h.deps.KID, now); err != nil {
-		// ErrSoulNotFound допустим (Soul удалён, стрим ещё дочитывается);
-		// прочие — best-effort, следующее окно повторит.
+		// ErrSoulNotFound is expected (the Soul was deleted, the stream is
+		// still draining); other errors are best-effort, the next window
+		// will retry.
 		h.logger.Debug("eventstream: flush last_seen failed",
 			slog.String("sid", sid), slog.Any("error", err))
 	}
 }
 
-// dispatch — диспетчер oneof payload-а FromSoul. Hello после первого
-// (handshake) логируется warn-ом и игнорируется; SeedRotationRequest
-// оставлен под M2.6.
+// dispatch is the dispatcher for FromSoul's oneof payload. A Hello after the
+// first one (handshake) is logged as a warning and ignored;
+// SeedRotationRequest is reserved for M2.6.
 func (h *eventStreamHandler) dispatch(ctx context.Context, sid, sessionID string, msg *keeperv1.FromSoul) {
 	h.deps.Metrics.ObserveMessage(directionFromSoul)
 	h.touchSeen(ctx, sid)

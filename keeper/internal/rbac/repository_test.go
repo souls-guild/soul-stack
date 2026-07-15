@@ -11,13 +11,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// snapPool — мульти-Query pool-stub для [LoadSnapshot]: реальный repository
-// делает четыре SELECT-а (roles / permissions / membership / revoked), а
-// fakeDB из operator-пакета вмещает только один queryFunc. Свой stub —
-// один файл, нет общих helper-ов; рутина копируется намеренно.
+// snapPool is a multi-Query pool stub for [LoadSnapshot]: the real
+// repository issues four SELECTs (roles / permissions / membership /
+// revoked), while the operator package's fakeDB only holds one queryFunc.
+// Rolling our own stub here is a single file with no shared helpers; the
+// boilerplate is duplicated on purpose.
 type snapPool struct {
 	roles      []string             // selectRolesSQL (name); default_scope NULL
-	roleScopes map[string]string    // ОПЦ.: name → default_scope (ADR-047 S1)
+	roleScopes map[string]string    // OPTIONAL: name → default_scope (ADR-047 S1)
 	perms      []rolePermRow        // selectRolePermissionsSQL
 	membership []membershipRow      // selectRoleOperatorsSQL
 	revoked    []revokedOperatorRow // selectRevokedOperatorsSQL
@@ -25,9 +26,9 @@ type snapPool struct {
 	synodOps   []synodOperatorRow // selectSynodOperatorsSQL (ADR-049)
 	synodRoles []synodRoleRow     // selectSynodRolesSQL (ADR-049)
 
-	// failQuery — если непусто, Query возвращает эту ошибку для SQL,
-	// содержащего соответствующую подстроку. Используется для негативных
-	// сценариев (loadRevoked возвращает err).
+	// failQuery — if non-empty, Query returns this error for SQL containing
+	// the matching substring. Used for negative-path scenarios (loadRevoked
+	// returning an err).
 	failQuery map[string]error
 }
 
@@ -76,8 +77,9 @@ func contains(s, sub string) bool {
 	return false
 }
 
-// snapRoleRows — для selectRolesSQL (name, default_scope). default_scope
-// nullable (ADR-047 S1): scope из scopes-map, отсутствие ключа → NULL (*string=nil).
+// snapRoleRows — for selectRolesSQL (name, default_scope). default_scope is
+// nullable (ADR-047 S1): scope comes from the scopes map, a missing key →
+// NULL (*string=nil).
 type snapRoleRows struct {
 	names  []string
 	scopes map[string]string
@@ -114,7 +116,7 @@ func (r *snapRoleRows) Values() ([]any, error)                       { return ni
 func (r *snapRoleRows) RawValues() [][]byte                          { return nil }
 func (r *snapRoleRows) Conn() *pgx.Conn                              { return nil }
 
-// snapPermRows — для selectRolePermissionsSQL (role_name, permission).
+// snapPermRows — for selectRolePermissionsSQL (role_name, permission).
 type snapPermRows struct {
 	values []rolePermRow
 	idx    int
@@ -144,7 +146,7 @@ func (r *snapPermRows) Values() ([]any, error)                       { return ni
 func (r *snapPermRows) RawValues() [][]byte                          { return nil }
 func (r *snapPermRows) Conn() *pgx.Conn                              { return nil }
 
-// snapMembershipRows — для selectRoleOperatorsSQL (role_name, aid).
+// snapMembershipRows — for selectRoleOperatorsSQL (role_name, aid).
 type snapMembershipRows struct {
 	values []membershipRow
 	idx    int
@@ -174,7 +176,7 @@ func (r *snapMembershipRows) Values() ([]any, error)                       { ret
 func (r *snapMembershipRows) RawValues() [][]byte                          { return nil }
 func (r *snapMembershipRows) Conn() *pgx.Conn                              { return nil }
 
-// snapRevokedRows — для selectRevokedOperatorsSQL (aid, revoked_at).
+// snapRevokedRows — for selectRevokedOperatorsSQL (aid, revoked_at).
 type snapRevokedRows struct {
 	values []revokedOperatorRow
 	idx    int
@@ -204,7 +206,7 @@ func (r *snapRevokedRows) Values() ([]any, error)                       { return
 func (r *snapRevokedRows) RawValues() [][]byte                          { return nil }
 func (r *snapRevokedRows) Conn() *pgx.Conn                              { return nil }
 
-// snapSynodOpRows — для selectSynodOperatorsSQL (synod_name, aid) (ADR-049).
+// snapSynodOpRows — for selectSynodOperatorsSQL (synod_name, aid) (ADR-049).
 type snapSynodOpRows struct {
 	values []synodOperatorRow
 	idx    int
@@ -234,7 +236,7 @@ func (r *snapSynodOpRows) Values() ([]any, error)                       { return
 func (r *snapSynodOpRows) RawValues() [][]byte                          { return nil }
 func (r *snapSynodOpRows) Conn() *pgx.Conn                              { return nil }
 
-// snapSynodRoleRows — для selectSynodRolesSQL (synod_name, role_name) (ADR-049).
+// snapSynodRoleRows — for selectSynodRolesSQL (synod_name, role_name) (ADR-049).
 type snapSynodRoleRows struct {
 	values []synodRoleRow
 	idx    int
@@ -264,10 +266,10 @@ func (r *snapSynodRoleRows) Values() ([]any, error)                       { retu
 func (r *snapSynodRoleRows) RawValues() [][]byte                          { return nil }
 func (r *snapSynodRoleRows) Conn() *pgx.Conn                              { return nil }
 
-// TestLoadSnapshot_IncludesRevoked — ADR-014 Amendment 2026-05-27: четвёртая
-// проекция Snapshot.Revoked заполняется AID-ами ревокнутых Архонтов из
-// `operators`. Активные операторы в проекции отсутствуют (WHERE
-// revoked_at IS NOT NULL на стороне SQL).
+// TestLoadSnapshot_IncludesRevoked — ADR-014 Amendment 2026-05-27: the fourth
+// projection, Snapshot.Revoked, is populated with revoked Archons' AIDs from
+// `operators`. Active operators are absent from the projection (WHERE
+// revoked_at IS NOT NULL on the SQL side).
 func TestLoadSnapshot_IncludesRevoked(t *testing.T) {
 	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
 	earlier := now.Add(-24 * time.Hour)
@@ -304,9 +306,9 @@ func TestLoadSnapshot_IncludesRevoked(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_RevokedEmpty — Snapshot.Revoked инициализирован пустой
-// map-ой даже при отсутствии revoked-операторов (nil ломал бы read-side
-// Enforcer.Check на map-lookup).
+// TestLoadSnapshot_RevokedEmpty — Snapshot.Revoked is initialized to an
+// empty map even when there are no revoked operators (nil would break the
+// read-side Enforcer.Check on the map lookup).
 func TestLoadSnapshot_RevokedEmpty(t *testing.T) {
 	pool := &snapPool{
 		roles: []string{"cluster-admin"},
@@ -324,9 +326,9 @@ func TestLoadSnapshot_RevokedEmpty(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_RoleScopes — ADR-047 S1: default_scope читается в
-// Snapshot.RoleScopes. NULL (роль без scope) в проекцию НЕ попадает —
-// отсутствие ключа = измерение не введено (backcompat).
+// TestLoadSnapshot_RoleScopes — ADR-047 S1: default_scope is read into
+// Snapshot.RoleScopes. NULL (a role with no scope) does NOT end up in the
+// projection — a missing key means the dimension isn't set (backcompat).
 func TestLoadSnapshot_RoleScopes(t *testing.T) {
 	pool := &snapPool{
 		roles:      []string{"prod-ops", "free-ops"},
@@ -348,9 +350,9 @@ func TestLoadSnapshot_RoleScopes(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_RevokedQueryError — ошибка на четвёртом SELECT-е (revoked)
-// пробрасывается caller-у, ранее загруженные roles/membership не «полу-
-// валидируют» снимок.
+// TestLoadSnapshot_RevokedQueryError — an error on the fourth SELECT
+// (revoked) propagates to the caller; previously-loaded roles/membership
+// don't "half-validate" the snapshot.
 func TestLoadSnapshot_RevokedQueryError(t *testing.T) {
 	pool := &snapPool{
 		roles:     []string{"cluster-admin"},
@@ -363,23 +365,23 @@ func TestLoadSnapshot_RevokedQueryError(t *testing.T) {
 	}
 }
 
-// --- Synod (ADR-049): эффективные роли архона = прямые ∪ через Synod ---
+// --- Synod (ADR-049): an archon's effective roles = direct ∪ via Synod ---
 
-// sortedStrings — копия слайса в отсортированном виде (Membership-список ролей
-// не гарантирует порядок; тесты сверяют множество).
+// sortedStrings returns a sorted copy of the slice (the Membership role list
+// makes no ordering guarantee; tests compare it as a set).
 func sortedStrings(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
 }
 
-// TestLoadSnapshot_SynodRolesUnioned — архон в Synod, у которого роль R,
-// получает R в Membership (как если бы роль была прямой). ADR-049(c)/(e).
+// TestLoadSnapshot_SynodRolesUnioned — an archon in a Synod that has role R
+// gets R in Membership (as if the role were direct). ADR-049(c)/(e).
 func TestLoadSnapshot_SynodRolesUnioned(t *testing.T) {
 	pool := &snapPool{
 		roles: []string{"prod-ops"},
 		perms: []rolePermRow{{"prod-ops", "incarnation.run"}},
-		// Прямых membership-строк нет — роль приходит ТОЛЬКО через Synod.
+		// No direct membership rows — the role only arrives via Synod.
 		synodOps:   []synodOperatorRow{{"team-prod", "archon-alice"}},
 		synodRoles: []synodRoleRow{{"team-prod", "prod-ops"}},
 	}
@@ -392,8 +394,9 @@ func TestLoadSnapshot_SynodRolesUnioned(t *testing.T) {
 		t.Fatalf("Membership[archon-alice] = %v, want [prod-ops]", got)
 	}
 
-	// Сквозной резолв: enforcer выдаёт permission роли через Synod так же,
-	// как через прямой грант (Check / ResolvePurview / PermissionsOf).
+	// End-to-end resolution: the enforcer grants a Synod-derived role's
+	// permission the same way as a direct grant (Check / ResolvePurview /
+	// PermissionsOf).
 	e, err := NewEnforcerFromSnapshot(snap)
 	if err != nil {
 		t.Fatalf("NewEnforcerFromSnapshot: %v", err)
@@ -410,9 +413,10 @@ func TestLoadSnapshot_SynodRolesUnioned(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodScopeUnion — union scope-ов: прямая роль (scope=staging)
-// + роль через Synod (scope=prod) → Purview.Covens = {prod, staging} (union, не
-// пересечение). ADR-047 union default_scope нескольких ролей + ADR-049.
+// TestLoadSnapshot_SynodScopeUnion — union of scopes: a direct role
+// (scope=staging) plus a role via Synod (scope=prod) → Purview.Covens =
+// {prod, staging} (union, not intersection). ADR-047 union of multiple
+// roles' default_scope + ADR-049.
 func TestLoadSnapshot_SynodScopeUnion(t *testing.T) {
 	pool := &snapPool{
 		roles:      []string{"staging-ops", "prod-ops"},
@@ -421,7 +425,7 @@ func TestLoadSnapshot_SynodScopeUnion(t *testing.T) {
 			{"staging-ops", "incarnation.run"},
 			{"prod-ops", "incarnation.run"},
 		},
-		// staging-ops — напрямую; prod-ops — через Synod.
+		// staging-ops — direct; prod-ops — via Synod.
 		membership: []membershipRow{{"staging-ops", "archon-alice"}},
 		synodOps:   []synodOperatorRow{{"team-prod", "archon-alice"}},
 		synodRoles: []synodRoleRow{{"team-prod", "prod-ops"}},
@@ -444,8 +448,9 @@ func TestLoadSnapshot_SynodScopeUnion(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodRoleDedup — одна роль и напрямую, и через Synod → в
-// Membership не двоится (union множества, не мультимножество). ADR-049(c).
+// TestLoadSnapshot_SynodRoleDedup — a role held both directly and via
+// Synod isn't duplicated in Membership (set union, not a multiset).
+// ADR-049(c).
 func TestLoadSnapshot_SynodRoleDedup(t *testing.T) {
 	pool := &snapPool{
 		roles:      []string{"prod-ops"},
@@ -464,8 +469,9 @@ func TestLoadSnapshot_SynodRoleDedup(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodMultipleSynods — архон в двух Synod, разные роли →
-// union обеих. Дубль роли через два Synod-а идемпотентен. ADR-049(c).
+// TestLoadSnapshot_SynodMultipleSynods — an archon in two Synods with
+// different roles gets the union of both. A role duplicated across two
+// Synods is idempotent. ADR-049(c).
 func TestLoadSnapshot_SynodMultipleSynods(t *testing.T) {
 	pool := &snapPool{
 		roles: []string{"role-a", "role-b"},
@@ -480,7 +486,7 @@ func TestLoadSnapshot_SynodMultipleSynods(t *testing.T) {
 		synodRoles: []synodRoleRow{
 			{"team-1", "role-a"},
 			{"team-2", "role-b"},
-			{"team-2", "role-a"}, // дубль role-a через второй Synod
+			{"team-2", "role-a"}, // duplicate role-a via the second Synod
 		},
 	}
 	snap, err := LoadSnapshot(context.Background(), pool)
@@ -493,10 +499,11 @@ func TestLoadSnapshot_SynodMultipleSynods(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodRevokedShortcut — ревокнутый архон, у которого `*`
-// приходит ТОЛЬКО через Synod, всё равно получает revoked-shortcut: Check
-// возвращает ErrOperatorRevoked раньше групповых ролей. Revoked-проекция от
-// Synod не зависит — гарантия, что групповой путь не обходит revoke.
+// TestLoadSnapshot_SynodRevokedShortcut — a revoked archon whose `*` arrives
+// ONLY via Synod still hits the revoked shortcut: Check returns
+// ErrOperatorRevoked before group roles are considered. The Revoked
+// projection doesn't depend on Synod — a guarantee that the group path can't
+// bypass revoke.
 func TestLoadSnapshot_SynodRevokedShortcut(t *testing.T) {
 	revokedAt := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	pool := &snapPool{
@@ -522,9 +529,10 @@ func TestLoadSnapshot_SynodRevokedShortcut(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodRemovalDropsRoles — убрать архона из synod_operators
-// (пересборка snapshot без его строки) → права через эту группу пропадают.
-// Моделирует synod.remove-operator + пересборку снимка.
+// TestLoadSnapshot_SynodRemovalDropsRoles — removing an archon from
+// synod_operators (rebuilding the snapshot without its row) drops the
+// permissions it held via that group. Models synod.remove-operator plus a
+// snapshot rebuild.
 func TestLoadSnapshot_SynodRemovalDropsRoles(t *testing.T) {
 	ctx := context.Background()
 	base := func(withMembership bool) *snapPool {
@@ -548,7 +556,7 @@ func TestLoadSnapshot_SynodRemovalDropsRoles(t *testing.T) {
 		t.Fatalf("before removal Check: %v, want nil", err)
 	}
 
-	// Архон убран из synod_operators — пересобираем snapshot.
+	// The archon has been removed from synod_operators — rebuild the snapshot.
 	snapAfter, err := LoadSnapshot(ctx, base(false))
 	if err != nil {
 		t.Fatalf("LoadSnapshot after: %v", err)
@@ -562,10 +570,10 @@ func TestLoadSnapshot_SynodRemovalDropsRoles(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodDanglingRole — synod_roles ссылается на роль вне
-// каталога (рассинхрон) → enforcer её игнорирует (та же защита, что
-// dangling-membership rbac_role_operators). Membership-имя при этом попадает,
-// но NewEnforcerFromSnapshot отбрасывает несуществующую роль.
+// TestLoadSnapshot_SynodDanglingRole — synod_roles references a role outside
+// the catalog (drift) → the enforcer ignores it (same guard as a dangling
+// rbac_role_operators membership). The membership name still ends up in the
+// snapshot, but NewEnforcerFromSnapshot drops the nonexistent role.
 func TestLoadSnapshot_SynodDanglingRole(t *testing.T) {
 	pool := &snapPool{
 		roles:      []string{"prod-ops"},
@@ -586,9 +594,9 @@ func TestLoadSnapshot_SynodDanglingRole(t *testing.T) {
 	}
 }
 
-// TestLoadSnapshot_SynodQueryError — ошибка на SELECT-е synod_operators
-// пробрасывается caller-у (как loadRevoked-ошибка): полу-собранный снимок не
-// валиден.
+// TestLoadSnapshot_SynodQueryError — an error on the synod_operators SELECT
+// propagates to the caller (like a loadRevoked error): a half-assembled
+// snapshot isn't valid.
 func TestLoadSnapshot_SynodQueryError(t *testing.T) {
 	pool := &snapPool{
 		roles:     []string{"cluster-admin"},

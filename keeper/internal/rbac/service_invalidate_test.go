@@ -10,10 +10,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// nopPool — заглушка [ServicePool] для unit-тестов invalidate-хука: NewService
-// требует non-nil Pool, но эти тесты не дёргают БД (только invalidate/
-// SetInvalidator). Любой реальный вызов → ошибка (тест бы упал, если бы случайно
-// дошёл до БД-пути).
+// nopPool — a [ServicePool] stub for the invalidate-hook unit tests: NewService
+// requires a non-nil Pool, but these tests never touch the DB (only invalidate/
+// SetInvalidator). Any real call fails loudly (the test would break if it
+// accidentally hit the DB path).
 type nopPool struct{}
 
 func (nopPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -26,30 +26,32 @@ func (nopPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return nil, errors.New("nopPool: BeginTx not expected")
 }
 
-// countingInvalidator — тестовый [Invalidator], считающий вызовы Invalidate.
+// countingInvalidator is a test [Invalidator] that counts Invalidate calls.
 type countingInvalidator struct {
 	calls atomic.Int64
 }
 
 func (c *countingInvalidator) Invalidate(_ context.Context) { c.calls.Add(1) }
 
-// TestService_Invalidate_NilSafe — без подключённого invalidator-а
-// Service.invalidate — no-op (single-Keeper/dev без Redis), не паникует.
+// TestService_Invalidate_NilSafe verifies that Service.invalidate is a no-op
+// when no invalidator is attached (single-Keeper/dev without Redis) and
+// doesn't panic.
 func TestService_Invalidate_NilSafe(t *testing.T) {
 	s, err := NewService(ServiceDeps{Pool: nopPool{}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	// invalidate без SetInvalidator — тихо ничего не делает.
+	// invalidate without SetInvalidator silently does nothing.
 	s.invalidate(context.Background())
 
-	// SetInvalidator(nil) тоже не должен ломать последующий invalidate.
+	// SetInvalidator(nil) must not break a subsequent invalidate either.
 	s.SetInvalidator(nil)
 	s.invalidate(context.Background())
 }
 
-// TestService_Invalidate_CallsInvalidator — подключённый invalidator
-// дёргается на каждый invalidate (хук, который 5 мутаций зовут после commit-а).
+// TestService_Invalidate_CallsInvalidator verifies that an attached
+// invalidator fires on every invalidate (the hook that all 5 mutations call
+// after commit).
 func TestService_Invalidate_CallsInvalidator(t *testing.T) {
 	s, err := NewService(ServiceDeps{Pool: nopPool{}})
 	if err != nil {
@@ -64,7 +66,7 @@ func TestService_Invalidate_CallsInvalidator(t *testing.T) {
 		t.Fatalf("Invalidate calls = %d, want 2", got)
 	}
 
-	// Снятие invalidator-а возвращает к no-op (счётчик не растёт).
+	// Removing the invalidator falls back to no-op (counter stops growing).
 	s.SetInvalidator(nil)
 	s.invalidate(context.Background())
 	if got := inv.calls.Load(); got != 2 {

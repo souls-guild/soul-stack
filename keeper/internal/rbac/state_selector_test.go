@@ -5,22 +5,25 @@ import (
 	"testing"
 )
 
-// ADR-047 S2c — state-ключ селектора: CEL-предикат по incarnation.state.
-// TDD-first: тесты фиксируют контракт ДО реализации (red), затем зеленеют.
+// ADR-047 S2c — the state selector key: a CEL predicate over
+// incarnation.state. TDD-first: tests fix the contract BEFORE the
+// implementation (red), then go green.
 //
-// Параллель regex (S2a) / soulprint (S2b), но валидация/eval делегированы
-// keeper/internal/statepredicate (Compile/Matches уже есть, sandbox migration-CEL
-// корень `state`) — RBAC НЕ дублирует CEL-движок state-предикатов.
+// Parallels regex (S2a) / soulprint (S2b), but validation/eval is delegated
+// to keeper/internal/statepredicate (Compile/Matches already exist, sandbox
+// migration-CEL root `state`) — RBAC does NOT duplicate the state-predicate
+// CEL engine.
 //
-// Граница S2c (как soulprint в S2b): state добавляется в грамматику селектора +
-// Purview.StateExprs + least-privilege subset (string-equality fail-closed).
-// Matches активен, когда incarnation.state есть в context (S3b его подаст); пока
-// context (map[string]string) не несёт nested state — fail-closed deny.
+// S2c scope (like soulprint in S2b): state is added to the selector grammar
+// + Purview.StateExprs + the least-privilege subset check (string-equality,
+// fail-closed). Matches is active once incarnation.state is present in
+// context (S3b will supply it); until then, context (map[string]string)
+// carries no nested state — fail-closed deny.
 
-// --- Парсинг quoted state-значения ---
+// --- Parsing a quoted state value ---
 
-// state='state.redis_version == "8.0"' парсится в Selector{state:[…]}
-// (CEL-предикат без внешних кавычек).
+// state='state.redis_version == "8.0"' parses into Selector{state:[…]}
+// (the CEL predicate without its outer quotes).
 func TestParseSelector_State_Simple(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on state='state.redis_version == "8.0"'`)
 	if err != nil {
@@ -33,8 +36,9 @@ func TestParseSelector_State_Simple(t *testing.T) {
 	}
 }
 
-// Внутренние двойные кавычки и пробелы CEL-предиката не рвут value-list:
-// одинарные кавычки снаружи защищают от `,`-разделителя и пробелов.
+// Inner double quotes and spaces in the CEL predicate don't break the
+// value-list: the outer single quotes protect against the `,` separator and
+// spaces.
 func TestParseSelector_State_QuotesAndSpaces(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on state='state.redis_version == "8.0" && state.replicas == 3'`)
 	if err != nil {
@@ -47,13 +51,13 @@ func TestParseSelector_State_QuotesAndSpaces(t *testing.T) {
 	}
 }
 
-// Битый CEL → ошибка load (parseSelector валидирует компиляцию через
+// Malformed CEL → load error (parseSelector validates compilation through
 // statepredicate.Compile).
 func TestParseSelector_State_BrokenRejected(t *testing.T) {
 	cases := []string{
-		`incarnation.run on state='state.redis_version =='`, // незавершённое выражение
+		`incarnation.run on state='state.redis_version =='`, // unterminated expression
 		`incarnation.run on state='state.redis_version && '`,
-		`incarnation.run on state='('`, // несбалансированная скобка
+		`incarnation.run on state='('`, // unbalanced parenthesis
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -68,9 +72,10 @@ func TestParseSelector_State_BrokenRejected(t *testing.T) {
 	}
 }
 
-// CEL-предикат, обращающийся к запрещённому в migration-sandbox корню/функции,
-// отвергается на load — state-scope = чистая функция от state (запрещены
-// vault/now/register/soulprint/input/essence; объявлен только `state.*`).
+// A CEL predicate that touches a root/function forbidden in the
+// migration-sandbox is rejected at load — state scope is a pure function of
+// state (vault/now/register/soulprint/input/essence are forbidden; only
+// `state.*` is declared).
 func TestParseSelector_State_SandboxRejected(t *testing.T) {
 	cases := []string{
 		`incarnation.run on state='vault("secret/x") == "y"'`,
@@ -87,8 +92,8 @@ func TestParseSelector_State_SandboxRejected(t *testing.T) {
 	}
 }
 
-// Незакавыченное state-значение запрещено: предикат с пробелами/кавычками
-// неотличим от value-list без quoted-формы.
+// An unquoted state value is forbidden: a predicate with spaces/quotes is
+// indistinguishable from a value-list without the quoted form.
 func TestParseSelector_State_RequiresQuotes(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on state=state.redis_version`)
 	if err == nil {
@@ -96,7 +101,7 @@ func TestParseSelector_State_RequiresQuotes(t *testing.T) {
 	}
 }
 
-// Пустой state (state=”) отвергается.
+// An empty state (state=”) is rejected.
 func TestParseSelector_State_EmptyRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on state=''`)
 	if err == nil {
@@ -104,7 +109,7 @@ func TestParseSelector_State_EmptyRejected(t *testing.T) {
 	}
 }
 
-// Слишком длинный предикат отвергается на load (length-cap).
+// An overly long predicate is rejected at load (length cap).
 func TestParseSelector_State_LengthCapped(t *testing.T) {
 	long := `state.redis_version == "` + strings.Repeat("a", maxStateExprLen) + `"`
 	_, err := ParsePermission(`incarnation.run on state='` + long + `'`)
@@ -116,10 +121,10 @@ func TestParseSelector_State_LengthCapped(t *testing.T) {
 	}
 }
 
-// --- Matches: активен при наличии incarnation.state в context, иначе fail-closed ---
+// --- Matches: active once incarnation.state is present in context, else fail-closed ---
 
-// Без state в context — soulprint-подобный fail-closed deny: текущий
-// map[string]string-context не несёт nested state (S3b его подаст).
+// Without state in context — a soulprint-like fail-closed deny: the current
+// map[string]string context carries no nested state (S3b will supply it).
 func TestMatches_State_FailClosedWithoutState(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on state='state.redis_version == "8.0"'`)
 	if err != nil {
@@ -133,7 +138,7 @@ func TestMatches_State_FailClosedWithoutState(t *testing.T) {
 	}
 }
 
-// --- Standalone CEL-eval против incarnation.state (через statepredicate, готов под S3b) ---
+// --- Standalone CEL eval against incarnation.state (via statepredicate, ready for S3b) ---
 
 func TestEvalStateExpr(t *testing.T) {
 	v80 := map[string]any{"redis_version": "8.0", "replicas": int64(3)}
@@ -145,11 +150,11 @@ func TestEvalStateExpr(t *testing.T) {
 	if ok, err := EvalStateExpr(`state.redis_version == "8.0"`, v81); err != nil || ok {
 		t.Errorf("state 8.1: ok=%v err=%v, want false,nil", ok, err)
 	}
-	// Отсутствующий ключ в state → no-match (fail-closed), НЕ ошибка функции.
+	// A missing key in state → no-match (fail-closed), NOT a function error.
 	if ok, err := EvalStateExpr(`state.redis_version == "8.0"`, map[string]any{}); err != nil || ok {
 		t.Errorf("пустой state: ok=%v err=%v, want false,nil (no-such-key → no-match)", ok, err)
 	}
-	// nil-state → no-match.
+	// nil state → no-match.
 	if ok, err := EvalStateExpr(`state.redis_version == "8.0"`, nil); err != nil || ok {
 		t.Errorf("nil-state: ok=%v err=%v, want false,nil", ok, err)
 	}
@@ -157,7 +162,7 @@ func TestEvalStateExpr(t *testing.T) {
 
 // --- Purview.StateExprs ---
 
-// ResolvePurview со state-permission заполняет Purview.StateExprs.
+// ResolvePurview with a state permission populates Purview.StateExprs.
 func TestResolvePurview_State(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "redis8-ops", operators: []string{"archon-a"},
@@ -173,7 +178,7 @@ func TestResolvePurview_State(t *testing.T) {
 	}
 }
 
-// default_scope=state наследуется bare-permission-ом (S1+S2c вместе).
+// default_scope=state is inherited by a bare permission (S1+S2c together).
 func TestResolvePurview_State_DefaultScopeInherited(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "redis8-ops", operators: []string{"archon-a"},
@@ -195,15 +200,15 @@ func TestResolvePurview_State_DefaultScopeInherited(t *testing.T) {
 func TestSubset_State_StringEquality(t *testing.T) {
 	v80 := `incarnation.run on state='state.redis_version == "8.0"'`
 	v81 := `incarnation.run on state='state.redis_version == "8.1"'`
-	// Логически уже предиката v80 (8.0 И replicas==3), но статически containment
-	// CEL неразрешим → string-inequal → DENY.
+	// Logically narrower than the v80 predicate (8.0 AND replicas==3), but
+	// static CEL containment is undecidable → string-inequal → DENY.
 	v80repl := `incarnation.run on state='state.redis_version == "8.0" && state.replicas == 3'`
 
 	tests := []struct {
 		name        string
 		callerRaws  []string
 		grantedRaws []string
-		wantHeld    bool // true → ErrPermissionNotHeld (выдача запрещена)
+		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
 			name:        "идентичный state → выдача ок",

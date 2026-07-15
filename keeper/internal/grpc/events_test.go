@@ -22,8 +22,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// fakeApplyRunDB — applyrun.ExecQueryRower-stub: настраиваемый QueryRow для
-// SelectIncarnationByApplyID и счётчик Exec для UpdateStatus.
+// fakeApplyRunDB — an applyrun.ExecQueryRower stub: a configurable QueryRow for
+// SelectIncarnationByApplyID and an Exec counter for UpdateStatus.
 type fakeApplyRunDB struct {
 	queryRow  func() pgx.Row
 	execCalls int
@@ -49,8 +49,8 @@ func (f *fakeApplyRunDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row
 	return applyRunErrRow{err: pgx.ErrNoRows}
 }
 
-// Query — grpc-handler-у не нужен (RunResult-correlation ходит только через
-// QueryRow/Exec); реализуем no-op-ом ради соответствия applyrun.ExecQueryRower.
+// Query isn't needed by the grpc handler (RunResult correlation only goes through
+// QueryRow/Exec); implemented as a no-op to satisfy applyrun.ExecQueryRower.
 func (f *fakeApplyRunDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	return nil, errors.New("fakeApplyRunDB: Query not used")
 }
@@ -59,8 +59,8 @@ type applyRunErrRow struct{ err error }
 
 func (r applyRunErrRow) Scan(_ ...any) error { return r.err }
 
-// applyRunStaticRow — отдаёт (incarnation_name, scenario, attempt) для резолва
-// SelectIncarnationByApplyID. attempt — fencing-epoch строки (gate-1 epoch-check).
+// applyRunStaticRow — returns (incarnation_name, scenario, attempt) to resolve
+// SelectIncarnationByApplyID. attempt — the row's fencing epoch (gate-1 epoch-check).
 type applyRunStaticRow struct {
 	name, scenario string
 	attempt        int32
@@ -76,8 +76,8 @@ func (r applyRunStaticRow) Scan(dest ...any) error {
 	return nil
 }
 
-// recordingAudit — fake [audit.Writer], копит события в порядке записи
-// для проверки event_type / payload-полей.
+// recordingAudit — a fake [audit.Writer] that accumulates events in write order
+// for checking event_type / payload fields.
 type recordingAudit struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -181,16 +181,16 @@ func TestHandleTaskEvent_NilPayloadDoesNothing(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_FailedRecordsTaskFailure — BUG-3: упавшая задача пишет
-// task_idx + `task <idx> <module>: <message>` в apply_runs.error_summary,
-// чтобы оператор видел причину, а не голый RUN_STATUS_FAILED.
+// TestHandleTaskEvent_FailedRecordsTaskFailure — BUG-3: a failed task writes
+// task_idx + `task <idx> <module>: <message>` into apply_runs.error_summary,
+// so the operator sees the reason instead of a bare RUN_STATUS_FAILED.
 func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
 	h := newTestHandlerWithApplyRun(t, aw, ardb)
-	// GUARD (ADR-056 §S1 fix Variant B): локальный TaskIdx=1 ≠ глобальный
-	// PlanIndex=6 (staged/per-host-where). recordTaskFailure ОБЯЗАН писать в
-	// failed_plan_index ГЛОБАЛЬНЫЙ ev.PlanIndex (6-й арг), task_idx — локальный.
+	// GUARD (ADR-056 §S1 fix Variant B): local TaskIdx=1 ≠ the global
+	// PlanIndex=6 (staged/per-host-where). recordTaskFailure MUST write the
+	// GLOBAL ev.PlanIndex into failed_plan_index (6th arg); task_idx is local.
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 		ApplyId:   "01HAPPLY",
 		TaskIdx:   1,
@@ -207,9 +207,9 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 		!strings.Contains(ardb.execSQL, "COALESCE(failed_plan_index") {
 		t.Errorf("SQL = %q, want RecordTaskFailure UPDATE (с failed_plan_index)", ardb.execSQL)
 	}
-	// S3 (ADR-056): RecordTaskFailure несёт passage (5-й арг) + failed_plan_index
-	// (6-й арг) — причина пишется в строку (apply_id, sid, passage). passage из
-	// эхо TaskEvent.passage (тут 0).
+	// S3 (ADR-056): RecordTaskFailure carries passage (5th arg) + failed_plan_index
+	// (6th arg) — the reason is written into the (apply_id, sid, passage) row. passage comes from
+	// the echoed TaskEvent.passage (0 here).
 	if len(ardb.execArgs) != 6 {
 		t.Fatalf("execArgs len = %d, want 6", len(ardb.execArgs))
 	}
@@ -228,8 +228,8 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_TimedOutRecordsTaskFailure — TIMED_OUT (частный случай
-// failed) тоже фиксирует причину.
+// TestHandleTaskEvent_TimedOutRecordsTaskFailure — TIMED_OUT (a special case of
+// failed) also records the reason.
 func TestHandleTaskEvent_TimedOutRecordsTaskFailure(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
@@ -247,8 +247,8 @@ func TestHandleTaskEvent_TimedOutRecordsTaskFailure(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_OKDoesNotRecordFailure — успешная/changed задача не
-// трогает apply_runs.error_summary.
+// TestHandleTaskEvent_OKDoesNotRecordFailure — a successful/changed task doesn't
+// touch apply_runs.error_summary.
 func TestHandleTaskEvent_OKDoesNotRecordFailure(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
@@ -261,10 +261,10 @@ func TestHandleTaskEvent_OKDoesNotRecordFailure(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_FailedMasksSecretInSummary — vault-ref в message задачи
-// маскируется (MaskSecrets-floor) перед записью в error_summary, чтобы секрет
-// не утёк в operator-facing причину. Это floor для всех задач (для no_log —
-// дополнительное полное подавление в scenario.dispatch).
+// TestHandleTaskEvent_FailedMasksSecretInSummary — a vault-ref in a task's message
+// is masked (MaskSecrets floor) before being written to error_summary, so the secret
+// doesn't leak into the operator-facing reason. This is a floor for all tasks (for no_log —
+// there's additional full suppression in scenario.dispatch).
 func TestHandleTaskEvent_FailedMasksSecretInSummary(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
@@ -286,10 +286,10 @@ func TestHandleTaskEvent_FailedMasksSecretInSummary(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_NoLogSuppressesAudit — [H]-фикс: для no_log-задачи в
-// долгоживущий audit НЕ попадают register_data (params/output) и error.message
-// (= stderr) — корень утечки произвольного секрета мимо MaskSecrets. Остаются
-// несекретные sid/apply_id/task_idx/status + error.code/module и маркер
+// TestHandleTaskEvent_NoLogSuppressesAudit — [H]-fix: for a no_log task,
+// register_data (params/output) and error.message (= stderr) do NOT reach the
+// long-lived audit — the root of an arbitrary secret leak past MaskSecrets. What remains
+// is the non-secret sid/apply_id/task_idx/status + error.code/module and the
 // suppressed:"no_log".
 func TestHandleTaskEvent_NoLogSuppressesAudit(t *testing.T) {
 	aw := &recordingAudit{}
@@ -344,9 +344,9 @@ func TestHandleTaskEvent_NoLogSuppressesAudit(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_NoLogFalseKeepsAudit — регресс: при no_log=false audit
-// пишется как раньше (register_data + error.message присутствуют, маркера
-// suppressed нет).
+// TestHandleTaskEvent_NoLogFalseKeepsAudit — regression: with no_log=false, audit
+// is written as before (register_data + error.message are present, no
+// suppressed marker).
 func TestHandleTaskEvent_NoLogFalseKeepsAudit(t *testing.T) {
 	aw := &recordingAudit{}
 	h := newTestHandler(t, aw)
@@ -427,9 +427,9 @@ func TestHandleTaskEvent_AccumulatesRegister(t *testing.T) {
 	if want := "INSERT INTO apply_task_register"; !strings.Contains(ardb.execSQL, want) {
 		t.Errorf("SQL = %q, want содержащий %q", ardb.execSQL, want)
 	}
-	// ADR-056 §S1 fix Variant B: register-upsert несёт ГЛОБАЛЬНЫЙ plan_index как
-	// ключ корреляции ($3), локальный task_idx — данными ($4), passage — компонент
-	// FK на apply_runs(apply_id, sid, passage) ($6). args: apply_id, sid, plan_index,
+	// ADR-056 §S1 fix Variant B: the register-upsert carries the GLOBAL plan_index as the
+	// correlation key ($3), local task_idx as data ($4), passage as a component of the
+	// FK on apply_runs(apply_id, sid, passage) ($6). args: apply_id, sid, plan_index,
 	// task_idx, register_data, passage.
 	if len(ardb.execArgs) != 6 {
 		t.Fatalf("execArgs len = %d, want 6", len(ardb.execArgs))
@@ -452,7 +452,7 @@ func TestHandleTaskEvent_NoRegisterData_NoAccumulate(t *testing.T) {
 }
 
 func TestHandleTaskEvent_NilApplyRunDB_NoAccumulate(t *testing.T) {
-	// ApplyRunDB=nil → accumulateRegister no-op; audit без паники.
+	// ApplyRunDB=nil → accumulateRegister no-op; audit without a panic.
 	aw := &recordingAudit{}
 	h := newTestHandler(t, aw)
 	rd, err := structpb.NewStruct(map[string]any{"stdout": "x"})
@@ -501,7 +501,7 @@ func TestHandleRunResult_NilPayloadDoesNothing(t *testing.T) {
 	}
 }
 
-// newTestHandlerWithApplyRun — handler с подключённым fake apply_runs DB.
+// newTestHandlerWithApplyRun — a handler with a fake apply_runs DB wired up.
 func newTestHandlerWithApplyRun(t *testing.T, aw audit.Writer, ardb applyrun.ExecQueryRower) *eventStreamHandler {
 	t.Helper()
 	deps := EventStreamDeps{
@@ -516,8 +516,8 @@ func newTestHandlerWithApplyRun(t *testing.T, aw audit.Writer, ardb applyrun.Exe
 	return newEventStreamHandler(deps, discardLogger(t))
 }
 
-// newTestHandlerWithBus собирает handler с подключённым ApplyBus, чтобы
-// проверить SSE-publish-payload (publishTaskExecuted) на изоляцию stderr.
+// newTestHandlerWithBus builds a handler with ApplyBus wired up, to
+// verify the SSE publish payload (publishTaskExecuted) isolates stderr.
 func newTestHandlerWithBus(t *testing.T, aw audit.Writer, bus *applybus.EventBus) *eventStreamHandler {
 	t.Helper()
 	deps := EventStreamDeps{
@@ -532,8 +532,8 @@ func newTestHandlerWithBus(t *testing.T, aw audit.Writer, bus *applybus.EventBus
 	return newEventStreamHandler(deps, discardLogger(t))
 }
 
-// collectSSE подписывается на applyID и собирает один опубликованный Event.
-// Возвращает (event, ok); ok=false при таймауте.
+// collectSSE subscribes to applyID and collects one published Event.
+// Returns (event, ok); ok=false on timeout.
 func collectSSE(t *testing.T, bus *applybus.EventBus, applyID string, publish func()) (applybus.Event, bool) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -554,10 +554,10 @@ func collectSSE(t *testing.T, bus *applybus.EventBus, applyID string, publish fu
 	}
 }
 
-// TestPublishTaskExecuted_FailedOmitsRawStderr — BUG-3 floor: упавшая задача
-// НЕ кладёт сырой stderr (TaskError.Message) в SSE-payload. Даже если message
-// несёт plaintext-секрет no_log-задачи, который MaskSecrets по vault-ref не
-// ловит, его в опубликованном фрейме нет. error-блок несёт только code/module.
+// TestPublishTaskExecuted_FailedOmitsRawStderr — BUG-3 floor: a failed task
+// does NOT place raw stderr (TaskError.Message) into the SSE payload. Even if message
+// carries a no_log task's plaintext secret that MaskSecrets can't catch by
+// vault-ref, it's absent from the published frame. The error block only carries code/module.
 func TestPublishTaskExecuted_FailedOmitsRawStderr(t *testing.T) {
 	bus := applybus.NewBus(discardLogger(t))
 	h := newTestHandlerWithBus(t, &recordingAudit{}, bus)
@@ -607,8 +607,8 @@ func TestPublishTaskExecuted_FailedOmitsRawStderr(t *testing.T) {
 	}
 }
 
-// TestPublishTaskExecuted_OKHasNoError — успешная задача публикуется без
-// error-блока (полезные поля статуса не теряются).
+// TestPublishTaskExecuted_OKHasNoError — a successful task is published without
+// an error block (useful status fields aren't lost).
 func TestPublishTaskExecuted_OKHasNoError(t *testing.T) {
 	bus := applybus.NewBus(discardLogger(t))
 	h := newTestHandlerWithBus(t, &recordingAudit{}, bus)
@@ -659,9 +659,9 @@ func TestHandleRunResult_CorrelatesAndUpdatesApplyRun_Success(t *testing.T) {
 }
 
 func TestHandleRunResult_FailedPreservesPerTaskSummary(t *testing.T) {
-	// BUG-3: RunResult-handler НЕ перезаписывает error_summary — причина уже
-	// записана per-task-ом (recordTaskFailure). UpdateStatus получает nil →
-	// COALESCE сохраняет `task <idx> <module>: <message>`, не затирая голым
+	// BUG-3: the RunResult handler does NOT overwrite error_summary — the reason is already
+	// recorded per-task (recordTaskFailure). UpdateStatus receives nil →
+	// COALESCE preserves `task <idx> <module>: <message>`, without overwriting it with a bare
 	// `run_status=...`.
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{
@@ -693,9 +693,9 @@ func TestHandleRunResult_CancelledMapsToCancelled(t *testing.T) {
 	}
 }
 
-// newTestHandlerWithApplyRunMetrics — handler с apply_runs DB и зарегистрированными
-// keeper_grpc_*-метриками (нужен epoch-check-тестам, скрейпящим
-// keeper_runresult_stale_total). Возвращает handler и registry для scrape.
+// newTestHandlerWithApplyRunMetrics — a handler with an apply_runs DB and registered
+// keeper_grpc_* metrics (needed by epoch-check tests that scrape
+// keeper_runresult_stale_total). Returns the handler and registry for scraping.
 func newTestHandlerWithApplyRunMetrics(t *testing.T, aw audit.Writer, ardb applyrun.ExecQueryRower) (*eventStreamHandler, *obs.Registry) {
 	t.Helper()
 	reg := obs.NewRegistry()
@@ -713,7 +713,7 @@ func newTestHandlerWithApplyRunMetrics(t *testing.T, aw audit.Writer, ardb apply
 }
 
 // TestCorrelateRunResult_EqualAttemptCommits — gate-1: recvAttempt == rowAttempt
-// → актуальный результат, UpdateStatus вызывается (commit), stale-метрика не растёт.
+// → a current result, UpdateStatus is called (commit), the stale metric doesn't grow.
 func TestCorrelateRunResult_EqualAttemptCommits(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{
@@ -732,7 +732,7 @@ func TestCorrelateRunResult_EqualAttemptCommits(t *testing.T) {
 }
 
 // TestCorrelateRunResult_StaleAttemptDropped — gate-1: recvAttempt < rowAttempt →
-// результат от устаревшей попытки, UpdateStatus НЕ вызывается, метрика инкрементнута.
+// a result from a stale attempt, UpdateStatus is NOT called, the metric is incremented.
 func TestCorrelateRunResult_StaleAttemptDropped(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{
@@ -748,15 +748,15 @@ func TestCorrelateRunResult_StaleAttemptDropped(t *testing.T) {
 	if body := obstest.Scrape(t, reg.Gatherer()); !strings.Contains(body, "keeper_runresult_stale_total 1") {
 		t.Errorf("stale_total must be 1 on stale attempt; got=\n%s", body)
 	}
-	// audit + SSE-publish идут ДО correlate — факт приёма фиксируется даже на stale.
+	// audit + SSE-publish happen BEFORE correlate — receipt is recorded even on stale.
 	if len(aw.snapshot()) != 1 {
 		t.Errorf("audit events = %d, want 1 (run.completed пишется до correlate)", len(aw.snapshot()))
 	}
 }
 
 // TestCorrelateRunResult_ZeroAttemptForwardCompat — gate-1: recvAttempt == 0
-// (старый Soul без эхо) → forward-compat, проверка актуальности НЕ применяется,
-// commit проходит даже при ненулевом rowAttempt.
+// (an old Soul without echo) → forward-compat, the currency check is NOT applied,
+// commit goes through even with a nonzero rowAttempt.
 func TestCorrelateRunResult_ZeroAttemptForwardCompat(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{
@@ -764,7 +764,7 @@ func TestCorrelateRunResult_ZeroAttemptForwardCompat(t *testing.T) {
 	}
 	h, reg := newTestHandlerWithApplyRunMetrics(t, aw, ardb)
 	h.handleRunResult(context.Background(), "host.example.com", "session-1", &keeperv1.RunResult{
-		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, // Attempt не задан → 0
+		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, // Attempt not set → 0
 	})
 	if ardb.execCalls != 1 {
 		t.Fatalf("execCalls = %d, want 1 (forward-compat commit on attempt=0)", ardb.execCalls)
@@ -775,9 +775,9 @@ func TestCorrelateRunResult_ZeroAttemptForwardCompat(t *testing.T) {
 }
 
 // TestCorrelateRunResult_GreaterAttemptCommitsFailSafe — gate-1 defensive: recvAttempt >
-// rowAttempt — невозможный инвариант (attempt растёт только вверх при claim). Ветка
-// fail-safe: warn-лог + всё равно commit (UpdateStatus вызывается), stale-метрика НЕ
-// инкрементнута — результат живого прогона не теряем из-за рассинхрона epoch-а.
+// rowAttempt — an impossible invariant (attempt only grows on claim). The
+// fail-safe branch: warn log + commit anyway (UpdateStatus is called), the stale metric is NOT
+// incremented — we don't lose the result of a live run due to an epoch desync.
 func TestCorrelateRunResult_GreaterAttemptCommitsFailSafe(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{
@@ -797,7 +797,7 @@ func TestCorrelateRunResult_GreaterAttemptCommitsFailSafe(t *testing.T) {
 
 func TestHandleRunResult_ApplyRunNotFound_LogSkip(t *testing.T) {
 	// QueryRow → ErrNoRows → SelectIncarnationByApplyID returns NotFound.
-	// Correlation skipped, UpdateStatus НЕ вызывается; audit всё равно есть.
+	// Correlation skipped, UpdateStatus is NOT called; audit still happens.
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{} // default → ErrNoRows
 	h := newTestHandlerWithApplyRun(t, aw, ardb)
@@ -813,7 +813,7 @@ func TestHandleRunResult_ApplyRunNotFound_LogSkip(t *testing.T) {
 }
 
 func TestHandleRunResult_NilApplyRunDB_NoCorrelation(t *testing.T) {
-	// ApplyRunDB=nil → correlateRunResult no-op; audit + publish без паники.
+	// ApplyRunDB=nil → correlateRunResult no-op; audit + publish without a panic.
 	aw := &recordingAudit{}
 	h := newTestHandler(t, aw)
 	h.handleRunResult(context.Background(), "host.example.com", "session-1", &keeperv1.RunResult{
@@ -879,12 +879,12 @@ func TestHandleSoulprintReport_NilPayloadDoesNothing(t *testing.T) {
 	}
 }
 
-// TestSoulprintFactsMarshaler_SnakeCaseKeys фиксирует E2E BUG-A: проекция
-// soulprint в render-контекст использует snake_case composite-ключи
-// (pkg_mgr/init_system/primary_ip), канон ADR-018 / templating.md §3.2
-// (.self.<path> в text/template ≡ soulprint.self.<path> в CEL — единая точка
-// правды). jsonName camelCase (pkgMgr/initSystem/primaryIp) недопустим —
-// шаблон `{{ .self.os.pkg_mgr }}` падал бы «map has no entry».
+// TestSoulprintFactsMarshaler_SnakeCaseKeys pins down E2E BUG-A: the soulprint
+// projection into the render context uses snake_case composite keys
+// (pkg_mgr/init_system/primary_ip), the canon per ADR-018 / templating.md §3.2
+// (.self.<path> in text/template ≡ soulprint.self.<path> in CEL — a single source
+// of truth). jsonName camelCase (pkgMgr/initSystem/primaryIp) is not acceptable —
+// the template `{{ .self.os.pkg_mgr }}` would fail with "map has no entry".
 func TestSoulprintFactsMarshaler_SnakeCaseKeys(t *testing.T) {
 	tf := &keeperv1.SoulprintFacts{
 		Sid:      "host.example.com",
@@ -931,8 +931,8 @@ func TestSoulprintFactsMarshaler_SnakeCaseKeys(t *testing.T) {
 func TestHandleTaskEvent_AuditWriterErrorIsNotFatal(t *testing.T) {
 	aw := &recordingAudit{err: errors.New("db down")}
 	h := newTestHandler(t, aw)
-	// Не должно паниковать; warn в логах достаточно (проверяем что не было
-	// panic-а вызовом до возврата).
+	// Must not panic; a warning in the logs is enough (we're checking there was no
+	// panic by calling through to return).
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 		ApplyId: "apply-x", Status: keeperv1.TaskStatus_TASK_STATUS_OK,
 	})
@@ -940,17 +940,17 @@ func TestHandleTaskEvent_AuditWriterErrorIsNotFatal(t *testing.T) {
 
 // --- staged-render Passage backward-compat (★ guard, ADR-056 S1) ---
 //
-// S1-инвариант: single-passage прогон (passage=0, в т.ч. старый Soul без поля —
-// proto-дефолт 0) проходит correlation/register/audit БИТ-В-БИТ как до
-// staged-render. Доказываем: явный passage=0 и опущенный passage дают идентичный
-// результат, корреляция по (apply_id, sid) не меняется, а passage=0 эхается в
-// observability-payload. Multi-passage цикл (passage>0) — S2/S3.
+// S1 invariant: a single-passage run (passage=0, including an old Soul without the field —
+// proto default 0) goes through correlation/register/audit BIT-FOR-BIT as before
+// staged-render. We prove: an explicit passage=0 and an omitted passage give an identical
+// result, correlation by (apply_id, sid) doesn't change, and passage=0 is echoed into the
+// observability payload. The multi-passage cycle (passage>0) is S2/S3.
 
-// TestHandleRunResult_Passage0_CorrelatesIdentically — RunResult с passage=0
-// (и опущенным passage) коррелирует со строкой (apply_id, sid, passage=0) —
-// тем же UpdateStatus, что N=1-прогон до staged-render (S3 ADR-056): passage=0
-// хитит ту же единственную строку хоста (data-level БИТ-В-БИТ). passage=0 едет
-// в audit-payload для триажа per-Passage.
+// TestHandleRunResult_Passage0_CorrelatesIdentically — a RunResult with passage=0
+// (and with passage omitted) correlates with the (apply_id, sid, passage=0) row —
+// the same UpdateStatus as an N=1 run before staged-render (S3 ADR-056): passage=0
+// hits the same single host row (data-level BIT-FOR-BIT). passage=0 goes into the
+// audit payload for per-Passage triage.
 func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
 	run := func(t *testing.T, ev *keeperv1.RunResult) (*fakeApplyRunDB, *recordingAudit) {
 		t.Helper()
@@ -966,14 +966,14 @@ func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
 	explicit, awExplicit := run(t, &keeperv1.RunResult{
 		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, Passage: 0,
 	})
-	// Опущенный passage (старый Soul без поля) — proto-дефолт 0, идентичный путь.
+	// Omitted passage (an old Soul without the field) — proto default 0, the identical path.
 	omitted, _ := run(t, &keeperv1.RunResult{
 		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS,
 	})
 
-	// Correlation: ровно один UpdateStatus, WHERE по (apply_id, sid, passage) с
-	// passage=0 (5-й арг). N=1-прогон шлёт passage=0 → хитит ту же единственную
-	// строку хоста, что до staged-render (data-level БИТ-В-БИТ).
+	// Correlation: exactly one UpdateStatus, WHERE by (apply_id, sid, passage) with
+	// passage=0 (5th arg). An N=1 run sends passage=0 → hits the same single
+	// host row as before staged-render (data-level BIT-FOR-BIT).
 	for name, ardb := range map[string]*fakeApplyRunDB{"explicit": explicit, "omitted": omitted} {
 		if ardb.execCalls != 1 {
 			t.Fatalf("%s: UpdateStatus execCalls = %d, want 1", name, ardb.execCalls)
@@ -992,7 +992,7 @@ func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
 		}
 	}
 
-	// passage=0 эхается в audit run.completed для триажа per-Passage (foundation).
+	// passage=0 is echoed into audit run.completed for per-Passage triage (foundation).
 	got := awExplicit.snapshot()
 	if len(got) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(got))
@@ -1002,10 +1002,10 @@ func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_Passage0_AccumulatesIdentically — TaskEvent с passage=0
-// (N=1, plan_index==task_idx) копит register так же, как до staged-render: ключ
-// корреляции plan_index ($3) равен task_idx, passage=0 — компонент FK на
-// apply_runs (ADR-056 §S1 fix Variant B; миграция 079). passage=0 едет в
+// TestHandleTaskEvent_Passage0_AccumulatesIdentically — a TaskEvent with passage=0
+// (N=1, plan_index==task_idx) accumulates register the same as before staged-render: the
+// correlation key plan_index ($3) equals task_idx, passage=0 is a component of the FK on
+// apply_runs (ADR-056 §S1 fix Variant B; migration 079). passage=0 goes into the
 // task.executed payload.
 func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
 	aw := &recordingAudit{}
@@ -1016,16 +1016,16 @@ func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStruct: %v", err)
 	}
-	// N=1: старый Soul без plan_index шлёт 0; новый Soul эхает plan_index==task_idx.
-	// Эмулируем эхо нового Soul-а (plan_index=task_idx=2) — поведение идентично N=1.
+	// N=1: an old Soul without plan_index sends 0; a new Soul echoes plan_index==task_idx.
+	// We emulate a new Soul's echo (plan_index=task_idx=2) — behavior identical to N=1.
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 		ApplyId: "01HABCAPPLY00000000000000", PlanIndex: 2, TaskIdx: 2,
 		Status: keeperv1.TaskStatus_TASK_STATUS_CHANGED, RegisterData: rd, Passage: 0,
 	})
 
-	// upsert apply_task_register (ADR-056 §S1 fix Variant B): 6 аргументов
-	// (apply_id, sid, plan_index, task_idx, register_data, passage). Ключ
-	// корреляции — plan_index; passage=0 — компонент FK на apply_runs.
+	// upsert apply_task_register (ADR-056 §S1 fix Variant B): 6 arguments
+	// (apply_id, sid, plan_index, task_idx, register_data, passage). The
+	// correlation key is plan_index; passage=0 is a component of the FK on apply_runs.
 	if ardb.execCalls != 1 {
 		t.Fatalf("execCalls = %d, want 1 (upsert apply_task_register)", ardb.execCalls)
 	}
@@ -1042,7 +1042,7 @@ func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
 		t.Errorf("passage arg = %v, want 0", ardb.execArgs[5])
 	}
 
-	// passage=0 эхается в task.executed payload.
+	// passage=0 is echoed into the task.executed payload.
 	got := aw.snapshot()
 	if len(got) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(got))

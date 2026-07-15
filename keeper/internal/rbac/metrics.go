@@ -8,87 +8,90 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// RBACMetrics — набор Prometheus-collector-ов RBAC-подсистемы Keeper-а
-// (snapshot-rebuild + permission-checks + cluster-инвалидация, ADR-028).
-// Регистрируется отдельным helper-ом поверх компонент-агностичного
-// [obs.Registry] — тем же паттерном, что [scenario.RegisterScenarioMetrics] /
-// [vault.RegisterVaultMetrics] (ADR-024 §4.0): registry-core не знает про
-// конкретные метрики, а keeper_rbac_*-метрики — частность RBAC-фасада.
+// RBACMetrics is the set of Prometheus collectors for Keeper's RBAC
+// subsystem (snapshot rebuild + permission checks + cluster invalidation,
+// ADR-028). Registered via a dedicated helper on top of the component-agnostic
+// [obs.Registry] — same pattern as [scenario.RegisterScenarioMetrics] /
+// [vault.RegisterVaultMetrics] (ADR-024 §4.0): the registry core knows
+// nothing about specific metrics; keeper_rbac_* metrics are an RBAC-facade
+// concern.
 //
-// Метрики живут здесь (keeper/internal/rbac), а не в shared/obs, потому что
-// привязаны к keeper-внутреннему [Holder]/[Enforcer] и не переиспользуются
-// Soul-ом (ADR-011: shared/ — действительно поперечный код; RBAC — Keeper-side).
+// Metrics live here (keeper/internal/rbac), not in shared/obs, because they're
+// tied to Keeper-internal [Holder]/[Enforcer] and aren't reused by Soul
+// (ADR-011: shared/ is truly cross-cutting code; RBAC is Keeper-side).
 //
-// БЕЗОПАСНОСТЬ + кардинальность (ADR-024 §2.2, инвариант ADR-028): в label-ы
-// НЕ кладём ни aid, ни permission, ни role_name, ни resource/action. Разрез —
-// только closed-enum: `kind` ошибки rebuild (load/parse) и `result` проверки
-// (allow/deny). Кто именно и что проверял — уходит в audit-log/trace, не в
-// метрику.
+// SECURITY + cardinality (ADR-024 §2.2, ADR-028 invariant): labels never
+// carry aid, permission, role_name, or resource/action. The only cut is a
+// closed enum: rebuild error `kind` (load/parse) and check `result`
+// (allow/deny). Who checked what goes to audit-log/trace, not metrics.
 //
-// Имена — Prometheus convention (snake_case, _total для counter, _seconds для
-// histogram длительности, _timestamp_seconds для абсолютного времени;
+// Names follow Prometheus convention (snake_case, _total for counters,
+// _seconds for duration histograms, _timestamp_seconds for absolute time;
 // ADR-024 §2.1).
 type RBACMetrics struct {
-	// rebuildDuration — длительность одной пересборки RBAC-снимка в секундах
-	// (src.Load из БД → NewEnforcerFromSnapshot). Наблюдается на каждом
-	// [Holder.Refresh] (TTL-poll, pub/sub-инвалидация, lazy-путь), независимо
-	// от исхода.
+	// rebuildDuration is the duration of one RBAC snapshot rebuild in seconds
+	// (src.Load from DB → NewEnforcerFromSnapshot). Observed on every
+	// [Holder.Refresh] (TTL poll, pub/sub invalidation, lazy path), regardless
+	// of outcome.
 	rebuildDuration prometheus.Histogram
 
-	// rebuildErrorsTotal — счётчик неуспешных пересборок снимка, разрезанный
-	// по фазе отказа: `load` — src.Load (БД недоступна/ошибка SELECT-ов),
-	// `parse` — NewEnforcerFromSnapshot (невалидная permission в БД после
-	// рассинхрона версий каталога). Деталь причины — в log/trace caller-а.
+	// rebuildErrorsTotal counts failed snapshot rebuilds, cut by failure
+	// phase: `load` — src.Load (DB unreachable / SELECT error), `parse` —
+	// NewEnforcerFromSnapshot (invalid permission in DB after a catalog
+	// version desync). Failure detail goes to the caller's log/trace.
 	rebuildErrorsTotal *prometheus.CounterVec
 
-	// lastSuccessTimestamp — Unix-time последней УСПЕШНОЙ пересборки снимка.
-	// Возраст снимка считается в PromQL как `time() - <этот gauge>` — отдельную
-	// _age_seconds-метрику сознательно не заводим (gauge-возраст «протух» бы
-	// между scrape-ами).
+	// lastSuccessTimestamp is the Unix time of the last SUCCESSFUL snapshot
+	// rebuild. Snapshot age is computed in PromQL as `time() - <this gauge>`;
+	// we deliberately skip a separate _age_seconds metric since a gauge-based
+	// age would go stale between scrapes.
 	lastSuccessTimestamp prometheus.Gauge
 
-	// roles — число ролей в актуальном снимке (gauge, обновляется на каждом
-	// успешном Refresh).
+	// roles is the number of roles in the current snapshot (gauge, updated on
+	// every successful Refresh).
 	roles prometheus.Gauge
 
-	// operators — число операторов с ≥1 ролевой привязкой в актуальном снимке
-	// (gauge). AID без привязок в снимок-enforcer не попадает — это default-deny,
-	// в метрику не считается.
+	// operators is the number of operators with >=1 role binding in the
+	// current snapshot (gauge). An AID with no bindings never enters the
+	// snapshot enforcer — that's default-deny and isn't counted here.
 	operators prometheus.Gauge
 
-	// checksTotal — счётчик permission-проверок ([Holder.Check]), разрезанный
-	// по исходу: `allow` (err==nil) / `deny` (любой не-nil error, включая
-	// misconfigured-call). Это горячий путь admin-API/MCP до tool-execution.
+	// checksTotal counts permission checks ([Holder.Check]), cut by outcome:
+	// `allow` (err==nil) / `deny` (any non-nil error, including a
+	// misconfigured call). This is the hot path for admin-API/MCP before
+	// tool execution.
 	checksTotal *prometheus.CounterVec
 
-	// invalidationsTotal — счётчик принятых cluster-wide RBAC-инвалидаций
-	// ([Holder.WatchInvalidations] callback). Инкремент на каждый сигнал,
-	// до запуска перечита. Self-origin уже отфильтрован источником.
+	// invalidationsTotal counts received cluster-wide RBAC invalidations
+	// ([Holder.WatchInvalidations] callback). Incremented on every signal,
+	// before the reload runs. Self-origin signals are already filtered out
+	// by the source.
 	invalidationsTotal prometheus.Counter
 }
 
-// Фазы отказа пересборки снимка для keeper_rbac_snapshot_rebuild_errors_total.
-// Closed enum в 2 значения — разрезает «БД недоступна» (load) и «битый
-// каталог» (parse): алертить на них надо по-разному.
+// Snapshot rebuild failure phases for keeper_rbac_snapshot_rebuild_errors_total.
+// Closed 2-value enum — splits "DB unreachable" (load) from "corrupt catalog"
+// (parse): these need different alerting.
 const (
 	rebuildErrorLoad  = "load"
 	rebuildErrorParse = "parse"
 )
 
-// Исходы permission-проверки для keeper_rbac_checks_total. Closed enum в 2
-// значения; deny агрегирует и явный ErrPermissionDenied, и misconfigured-call
-// (пустой resource/action) — наружу оба = 403, разрез не нужен.
+// Permission check outcomes for keeper_rbac_checks_total. Closed 2-value
+// enum; deny aggregates both an explicit ErrPermissionDenied and a
+// misconfigured call (empty resource/action) — both surface as 403, so no
+// further split is needed.
 const (
 	checkResultAllow = "allow"
 	checkResultDeny  = "deny"
 )
 
-// RegisterRBACMetrics создаёт keeper_rbac_*-collectors и регистрирует их в
-// [obs.Registry]. Возвращает дескриптор для wire-up через [Holder.SetMetrics].
+// RegisterRBACMetrics creates the keeper_rbac_* collectors and registers them
+// on [obs.Registry]. Returns the descriptor for wire-up via [Holder.SetMetrics].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на
-// одном Registry); падать сразу удобнее, чем носить ленивую инициализацию
-// (паттерн идентичен [scenario.RegisterScenarioMetrics]).
+// MustRegister: a duplicate registration is a programmer error (called twice
+// on the same Registry); failing fast is simpler than carrying lazy init
+// (same pattern as [scenario.RegisterScenarioMetrics]).
 func RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics {
 	m := &RBACMetrics{
 		rebuildDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -139,12 +142,12 @@ func RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics {
 	return m
 }
 
-// ObserveRebuildSuccess фиксирует успешную пересборку снимка ([Holder.Refresh]):
-// наблюдает длительность, обновляет last_success_timestamp (Unix-now) и gauge-и
-// roles/operators по актуальному снимку.
+// ObserveRebuildSuccess records a successful snapshot rebuild ([Holder.Refresh]):
+// observes duration, updates last_success_timestamp (Unix now), and sets the
+// roles/operators gauges from the current snapshot.
 //
-// nil-получатель — no-op: Holder может подниматься без observability
-// (NewHolder в bootstrap-пути / unit-тестах до wire-up метрик).
+// nil receiver is a no-op: Holder can come up without observability
+// (NewHolder on the bootstrap path / unit tests before metrics wire-up).
 func (m *RBACMetrics) ObserveRebuildSuccess(dur time.Duration, roleCount, operatorCount int) {
 	if m == nil {
 		return
@@ -155,11 +158,11 @@ func (m *RBACMetrics) ObserveRebuildSuccess(dur time.Duration, roleCount, operat
 	m.operators.Set(float64(operatorCount))
 }
 
-// ObserveRebuildError фиксирует неуспешную пересборку снимка: наблюдает
-// длительность и инкрементирует rebuild_errors_total с явной фазой отказа
-// (`load` — src.Load из БД, `parse` — NewEnforcerFromSnapshot). Caller
-// ([Holder.Refresh]) знает фазу точно, поэтому она передаётся, а не
-// угадывается по типу ошибки. nil-получатель — no-op.
+// ObserveRebuildError records a failed snapshot rebuild: observes duration
+// and increments rebuild_errors_total with the explicit failure phase
+// (`load` — src.Load from DB, `parse` — NewEnforcerFromSnapshot). The caller
+// ([Holder.Refresh]) knows the phase precisely, so it's passed in rather than
+// guessed from the error type. nil receiver is a no-op.
 func (m *RBACMetrics) ObserveRebuildError(dur time.Duration, kind string) {
 	if m == nil {
 		return
@@ -168,8 +171,8 @@ func (m *RBACMetrics) ObserveRebuildError(dur time.Duration, kind string) {
 	m.rebuildErrorsTotal.WithLabelValues(kind).Inc()
 }
 
-// ObserveCheck инкрементирует checks_total по исходу одной [Holder.Check]:
-// err==nil → allow, иначе → deny. nil-получатель — no-op.
+// ObserveCheck increments checks_total by the outcome of one [Holder.Check]:
+// err==nil → allow, otherwise → deny. nil receiver is a no-op.
 func (m *RBACMetrics) ObserveCheck(err error) {
 	if m == nil {
 		return
@@ -181,8 +184,8 @@ func (m *RBACMetrics) ObserveCheck(err error) {
 	m.checksTotal.WithLabelValues(result).Inc()
 }
 
-// ObserveInvalidation инкрементирует invalidations_received_total на один
-// принятый cluster-сигнал. nil-получатель — no-op.
+// ObserveInvalidation increments invalidations_received_total for one
+// received cluster signal. nil receiver is a no-op.
 func (m *RBACMetrics) ObserveInvalidation() {
 	if m == nil {
 		return

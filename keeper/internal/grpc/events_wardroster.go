@@ -8,20 +8,20 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// handleWardRoster — обработчик payload-а [keeperv1.WardRoster] (Soul-reconcile,
-// ADR-027(g), S6). Soul на (re)connect-е объявляет ведомые apply_id (ReplaceAll);
-// Keeper по набору терминалит осиротевшие `dispatched`-строки этого SID-а.
+// handleWardRoster — handler for the [keeperv1.WardRoster] payload (Soul-reconcile,
+// ADR-027(g), S6). On (re)connect the Soul declares the apply_ids it's tracking (ReplaceAll);
+// the Keeper uses the set to terminate this SID's orphaned `dispatched` rows.
 //
-// Закрывает dispatched-orphan дыру «Keeper и Soul оба мертвы после отдачи»: строка
-// иначе застряла бы в `dispatched` навсегда (reclaim сужен до `claimed`, Reaper
-// dispatched-timeout сознательно не делаем). Sweep запускается ТОЛЬКО при приходе
-// WardRoster — старый Soul без этого сообщения никогда его не шлёт, и для его
-// dispatched-строк sweep не выполняется (fail-safe висяк, forward-compat).
+// Closes the dispatched-orphan hole “Keeper and Soul both die after dispatch”: the row
+// would otherwise get stuck in `dispatched` forever (reclaim is scoped to `claimed`; the Reaper
+// deliberately doesn't do a dispatched-timeout). The sweep runs ONLY when a
+// WardRoster arrives — an old Soul without this message never sends it, so its
+// dispatched rows never get swept (a fail-safe hang, forward-compat).
 //
-// ApplyRunDB=nil (unit-сборка без PG / ad-hoc push без scenario-runner-а) → no-op.
-// Авторитет — общая PG: reconnect на любой инстанс кластера сверяет с той же
-// таблицей. Single-winner и гонка sweep ↔ RunResult разрешаются фильтром
-// `status='dispatched'` внутри [applyrun.OrphanDispatched].
+// ApplyRunDB=nil (unit build without PG / ad-hoc push without a scenario-runner) → no-op.
+// The authority is the shared PG: a reconnect to any cluster instance checks against the same
+// table. Single-winner and the sweep ↔ RunResult race are resolved by the
+// `status='dispatched'` filter inside [applyrun.OrphanDispatched].
 func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionID string, ev *keeperv1.WardRoster) {
 	if ev == nil {
 		h.logger.Warn("eventstream: WardRoster payload is nil",
@@ -57,9 +57,9 @@ func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionI
 		slog.Int("known", len(known)))
 }
 
-// wardRosterToActive маппит proto-набор [keeperv1.WardRoster] в доменные
-// [applyrun.ActiveApply], изолируя CRUD-слой applyrun от proto-генерации.
-// Пустой/nil-набор → nil (явная декларация «ничего не ведётся»).
+// wardRosterToActive maps the proto set [keeperv1.WardRoster] into domain
+// [applyrun.ActiveApply], isolating the applyrun CRUD layer from proto generation.
+// An empty/nil set → nil (an explicit declaration of “nothing is being tracked”).
 func wardRosterToActive(ev *keeperv1.WardRoster) []*applyrun.ActiveApply {
 	src := ev.GetActive()
 	if len(src) == 0 {

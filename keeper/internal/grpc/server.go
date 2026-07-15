@@ -1,14 +1,14 @@
-// Package grpc — Keeper-side gRPC-сервер по [ADR-012].
+// Package grpc — Keeper-side gRPC server per [ADR-012].
 //
-// MVP scope (M2.1.b.2): Bootstrap-listener c server-only TLS и Ping-RPC
-// для health-check-а. EventStream-listener (mTLS, долгоживущий
-// bidi-стрим) поднимается параллельно как заглушка (Unimplemented),
-// реальная реализация — M2.2+.
+// MVP scope (M2.1.b.2): a Bootstrap listener with server-only TLS and a
+// Ping RPC for health checks. The EventStream listener (mTLS, long-lived
+// bidi stream) comes up in parallel as a stub (Unimplemented); the real
+// implementation is M2.2+.
 //
-// Архитектура двух listener-ов отражает ADR-012(b): у Soul-а до
-// онбординга нет SoulSeed-сертификата, поэтому Bootstrap требует
-// server-only TLS. Listener-ы независимы (разные TLS-режимы, разные
-// порты, разные [grpc.Server]-ы); общая бизнес-логика — через
+// The two-listener architecture reflects ADR-012(b): before onboarding, a
+// Soul has no SoulSeed certificate, so Bootstrap requires server-only TLS.
+// The listeners are independent (different TLS modes, different ports,
+// different [grpc.Server]s); shared business logic goes through
 // [BootstrapHandler.Deps].
 //
 // [ADR-012]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
@@ -32,38 +32,40 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tlsx"
 )
 
-// graceDuration — grace-period для GracefulStop. Совпадает с api/mcp
-// (10s) — единый класс серверов Keeper-а.
+// graceDuration — the grace period for GracefulStop. Matches api/mcp
+// (10s) — a single server class for Keeper.
 const graceDuration = 10 * time.Second
 
-// Resource-лимиты Bootstrap-listener-а (защита от DoS, H3). Bootstrap —
-// pre-auth (server-only TLS, токен ещё не проверен в момент чтения
-// сообщения), поэтому лимиты строгие.
+// Resource limits for the Bootstrap listener (DoS protection, H3).
+// Bootstrap is pre-auth (server-only TLS, the token hasn't been checked yet
+// at message-read time), so the limits are strict.
 const (
-	// bootstrapMaxRecvMsgSize — максимальный размер входящего сообщения.
-	// BootstrapRequest несёт SID + bootstrap_token + один CSR PEM; даже
-	// RSA-4096 CSR укладывается в единицы КиБ. 256 КиБ — запас на порядки
-	// без открытия 4-МиБ-вектора grpc-дефолта.
+	// bootstrapMaxRecvMsgSize — the maximum size of an incoming message.
+	// BootstrapRequest carries SID + bootstrap_token + one CSR PEM; even an
+	// RSA-4096 CSR fits in a few KiB. 256 KiB leaves orders of magnitude of
+	// headroom without opening up the gRPC default's 4 MiB attack surface.
 	bootstrapMaxRecvMsgSize = 256 * 1024
 
-	// bootstrapMaxConcurrentStreams — лимит одновременных RPC на одно
-	// соединение. Bootstrap — короткий unary (Ping/Bootstrap), легитимному
-	// клиенту параллелизм не нужен; 10 закрывает stream-flood по одному conn.
+	// bootstrapMaxConcurrentStreams — the limit on concurrent RPCs per
+	// connection. Bootstrap is a short unary call (Ping/Bootstrap); a
+	// legitimate client doesn't need parallelism. 10 closes off a
+	// stream-flood over a single conn.
 	bootstrapMaxConcurrentStreams = 10
 
-	// bootstrapKeepaliveMinTime — минимальный интервал между client-ping-ами.
-	// Bootstrap-клиент (soul, push) keepalive на этом listener-е не настраивает
-	// и держит соединение единицы секунд; любой ping чаще 30s — флуд.
+	// bootstrapKeepaliveMinTime — the minimum interval between client pings.
+	// The Bootstrap client (soul, push) doesn't configure keepalive on this
+	// listener and holds the connection for a few seconds; any ping more
+	// frequent than 30s is a flood.
 	bootstrapKeepaliveMinTime = 30 * time.Second
 )
 
-// BootstrapServer — gRPC-сервер Bootstrap-listener-а.
+// BootstrapServer — the gRPC server for the Bootstrap listener.
 //
-// Слушает `listen.grpc.bootstrap.addr` с server-only TLS (см.
-// [tlsx.LoadServerOnlyTLS]). Регистрирует Ping и Bootstrap RPC; для
-// EventStream возвращает Unimplemented (см. [keeperv1.UnimplementedKeeperServer]).
+// Listens on `listen.grpc.bootstrap.addr` with server-only TLS (see
+// [tlsx.LoadServerOnlyTLS]). Registers the Ping and Bootstrap RPCs; returns
+// Unimplemented for EventStream (see [keeperv1.UnimplementedKeeperServer]).
 //
-// Mu защищает поле addr, обновляемое в Start при `:0`-bind (тесты).
+// Mu guards the addr field, which Start updates on a `:0` bind (tests).
 type BootstrapServer struct {
 	srv        *grpclib.Server
 	configAddr string
@@ -73,13 +75,13 @@ type BootstrapServer struct {
 	logger *slog.Logger
 }
 
-// NewBootstrapServer собирает Bootstrap-listener с server-only TLS и
-// зарегистрированным [BootstrapHandler].
+// NewBootstrapServer assembles a Bootstrap listener with server-only TLS
+// and a registered [BootstrapHandler].
 //
-// Возвращает error на:
-//   - пустой `cfg.Addr` / `cfg.TLS.Cert` / `cfg.TLS.Key`;
-//   - неверные file paths TLS (передаются в [tlsx.LoadServerOnlyTLS]);
-//   - nil deps (см. [BootstrapDeps.validate]).
+// Returns an error on:
+//   - empty `cfg.Addr` / `cfg.TLS.Cert` / `cfg.TLS.Key`;
+//   - invalid TLS file paths (passed to [tlsx.LoadServerOnlyTLS]);
+//   - nil deps (see [BootstrapDeps.validate]).
 func NewBootstrapServer(cfg config.KeeperListenGRPCBootstrap, deps BootstrapDeps, logger *slog.Logger) (*BootstrapServer, error) {
 	if cfg.Addr == "" {
 		return nil, errors.New("grpc: listen.grpc.bootstrap.addr is empty")
@@ -118,11 +120,11 @@ func NewBootstrapServer(cfg config.KeeperListenGRPCBootstrap, deps BootstrapDeps
 	}, nil
 }
 
-// Start — блокирующий запуск listener-а. На ctx.Done() делает
-// GracefulStop с [graceDuration]-timeout-ом; превышение → forced Stop.
+// Start — a blocking listener startup. On ctx.Done() it does a
+// GracefulStop with a [graceDuration] timeout; exceeding it → forced Stop.
 //
-// Возвращает nil при штатном graceful shutdown. Listen-ошибка
-// (bind-конфликт, EACCES) — wrapped fmt.Errorf.
+// Returns nil on a normal graceful shutdown. A listen error (bind conflict,
+// EACCES) is wrapped with fmt.Errorf.
 func (s *BootstrapServer) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.configAddr)
 	if err != nil {
@@ -136,8 +138,8 @@ func (s *BootstrapServer) Start(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		// Serve возвращает grpc.ErrServerStopped после GracefulStop/Stop —
-		// для нас это штатный shutdown.
+		// Serve returns grpc.ErrServerStopped after GracefulStop/Stop —
+		// that's a normal shutdown for us.
 		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, grpclib.ErrServerStopped) {
 			errCh <- err
 			return
@@ -175,8 +177,8 @@ func (s *BootstrapServer) Start(ctx context.Context) error {
 	}
 }
 
-// Addr возвращает фактический bind-адрес. После Start — actual port
-// (важно для тестов с `:0`).
+// Addr returns the actual bind address. After Start it's the actual port
+// (important for tests using `:0`).
 func (s *BootstrapServer) Addr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

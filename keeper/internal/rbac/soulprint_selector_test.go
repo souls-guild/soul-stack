@@ -5,22 +5,23 @@ import (
 	"testing"
 )
 
-// ADR-047 S2b — soulprint-ключ селектора: CEL-предикат по фактам хоста
-// (`soulprint.self.*`, ADR-018 каноническая форма). TDD-first: тесты фиксируют
-// контракт ДО реализации (red), затем зеленеют.
+// ADR-047 S2b — the soulprint selector key: a CEL predicate over host facts
+// (`soulprint.self.*`, ADR-018 canonical form). TDD-first: tests fix the
+// contract BEFORE the implementation (red), then go green.
 //
-// Граница S2b (как regex в S2a): soulprint добавляется в грамматику селектора +
-// Purview.SoulprintExprs + least-privilege subset (string-equality fail-closed).
-// Matches в S2b — fail-closed: текущий context (map[string]string) НЕ несёт
-// nested soulprint-факты, поэтому soulprint-предикат всегда deny; РЕАЛЬНЫЙ
-// CEL-eval против фактов хоста — слайсы S3/S4 (list-видимость/target), там
-// резолвер list/target подаёт факты. Standalone-eval (EvalSoulprintExpr) готов и
-// протестирован под S3.
+// S2b scope (like regex in S2a): soulprint is added to the selector grammar
+// + Purview.SoulprintExprs + the least-privilege subset check
+// (string-equality, fail-closed). Matches in S2b is fail-closed: the current
+// context (map[string]string) carries no nested soulprint facts, so a
+// soulprint predicate always denies; REAL CEL eval against host facts is
+// slices S3/S4 (list visibility/target), where the list/target resolver
+// supplies the facts. Standalone eval (EvalSoulprintExpr) is ready and
+// tested for S3.
 
-// --- Парсинг quoted soulprint-значения ---
+// --- Parsing a quoted soulprint value ---
 
-// soulprint='soulprint.self.os.family == "debian"' парсится в
-// Selector{soulprint:[…]} (CEL-предикат без внешних кавычек).
+// soulprint='soulprint.self.os.family == "debian"' parses into
+// Selector{soulprint:[…]} (the CEL predicate without its outer quotes).
 func TestParseSelector_Soulprint_Simple(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on soulprint='soulprint.self.os.family == "debian"'`)
 	if err != nil {
@@ -33,8 +34,9 @@ func TestParseSelector_Soulprint_Simple(t *testing.T) {
 	}
 }
 
-// Внутренние двойные кавычки и пробелы CEL-предиката не рвут value-list:
-// одинарные кавычки снаружи защищают от `,`-разделителя и пробелов.
+// Inner double quotes and spaces in the CEL predicate don't break the
+// value-list: the outer single quotes protect against the `,` separator and
+// spaces.
 func TestParseSelector_Soulprint_QuotesAndSpaces(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on soulprint='soulprint.self.os.family == "debian" && soulprint.self.os.arch == "amd64"'`)
 	if err != nil {
@@ -47,12 +49,13 @@ func TestParseSelector_Soulprint_QuotesAndSpaces(t *testing.T) {
 	}
 }
 
-// Битый CEL → ошибка load (parseSelector валидирует компиляцию через shared/cel).
+// Malformed CEL → load error (parseSelector validates compilation through
+// shared/cel).
 func TestParseSelector_Soulprint_BrokenRejected(t *testing.T) {
 	cases := []string{
-		`incarnation.run on soulprint='soulprint.self.os.family =='`, // незавершённое выражение
+		`incarnation.run on soulprint='soulprint.self.os.family =='`, // unterminated expression
 		`incarnation.run on soulprint='soulprint.self.os.family && '`,
-		`incarnation.run on soulprint='('`, // несбалансированная скобка
+		`incarnation.run on soulprint='('`, // unbalanced parenthesis
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -67,12 +70,13 @@ func TestParseSelector_Soulprint_BrokenRejected(t *testing.T) {
 	}
 }
 
-// CEL-предикат, обращающийся к запрещённому в sandbox-е корню/функции, отвергается
-// на load — soulprint-scope = чистая функция от фактов хоста (FlowControl-
-// песочница: vault()/now() guard-ом, state — необъявлен). register/input/essence
-// в FlowControl ОБЪЯВЛЕНЫ (общий контекст-набор) и компилируются, но для
-// scope-предиката бессмысленны (всегда no-such-key → deny); это безвредный
-// footgun (deny + string-equality subset), не load-fail (см. observations).
+// A CEL predicate that touches a root/function forbidden in the sandbox is
+// rejected at load — soulprint scope is a pure function of host facts
+// (FlowControl sandbox: vault()/now() guarded, state undeclared).
+// register/input/essence ARE declared in FlowControl (the shared context
+// set) and compile fine, but are meaningless for a scope predicate (always
+// no-such-key → deny); that's a harmless footgun (deny + string-equality
+// subset), not a load failure (see observations).
 func TestParseSelector_Soulprint_SandboxRejected(t *testing.T) {
 	cases := []string{
 		`incarnation.run on soulprint='vault("secret/x") == "y"'`,
@@ -88,8 +92,9 @@ func TestParseSelector_Soulprint_SandboxRejected(t *testing.T) {
 	}
 }
 
-// soulprint.hosts/soulprint.where — host-аксессор прогона, недоступен в
-// scope-предикате (изоляция allowHosts=false в FlowControl-песочнице) → load-fail.
+// soulprint.hosts/soulprint.where is a run-level host accessor, unavailable
+// in a scope predicate (allowHosts=false isolation in the FlowControl
+// sandbox) → load failure.
 func TestParseSelector_Soulprint_HostsAccessorRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on soulprint='soulprint.hosts.exists(h, h.sid == "x")'`)
 	if err == nil {
@@ -97,8 +102,8 @@ func TestParseSelector_Soulprint_HostsAccessorRejected(t *testing.T) {
 	}
 }
 
-// Незакавыченное soulprint-значение запрещено: предикат с пробелами/кавычками
-// неотличим от value-list без quoted-формы.
+// An unquoted soulprint value is forbidden: a predicate with spaces/quotes
+// is indistinguishable from a value-list without the quoted form.
 func TestParseSelector_Soulprint_RequiresQuotes(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on soulprint=soulprint.self.os.family`)
 	if err == nil {
@@ -106,7 +111,7 @@ func TestParseSelector_Soulprint_RequiresQuotes(t *testing.T) {
 	}
 }
 
-// Пустой soulprint (soulprint=”) отвергается.
+// An empty soulprint (soulprint=”) is rejected.
 func TestParseSelector_Soulprint_EmptyRejected(t *testing.T) {
 	_, err := ParsePermission(`incarnation.run on soulprint=''`)
 	if err == nil {
@@ -114,7 +119,7 @@ func TestParseSelector_Soulprint_EmptyRejected(t *testing.T) {
 	}
 }
 
-// Слишком длинный предикат отвергается на load (length-cap).
+// An overly long predicate is rejected at load (length cap).
 func TestParseSelector_Soulprint_LengthCapped(t *testing.T) {
 	long := `soulprint.self.os.family == "` + strings.Repeat("a", maxSoulprintExprLen) + `"`
 	_, err := ParsePermission(`incarnation.run on soulprint='` + long + `'`)
@@ -126,17 +131,17 @@ func TestParseSelector_Soulprint_LengthCapped(t *testing.T) {
 	}
 }
 
-// --- Matches: fail-closed в S2b (context не несёт soulprint-факты) ---
+// --- Matches: fail-closed in S2b (context carries no soulprint facts) ---
 
-// soulprint-предикат в S2b всегда даёт deny через Matches: текущий
-// map[string]string-context не несёт nested facts. Реальный eval — S3/S4.
+// A soulprint predicate in S2b always denies through Matches: the current
+// map[string]string context carries no nested facts. Real eval is S3/S4.
 func TestMatches_Soulprint_FailClosed(t *testing.T) {
 	p, err := ParsePermission(`incarnation.run on soulprint='soulprint.self.os.family == "debian"'`)
 	if err != nil {
 		t.Fatalf("ParsePermission: %v", err)
 	}
-	// Никакой context (включая coven/host/sid) не активирует soulprint-предикат
-	// в S2b — фактов в map[string]string нет.
+	// No context (including coven/host/sid) activates a soulprint predicate
+	// in S2b — there are no facts in map[string]string.
 	if p.Matches("incarnation", "run", map[string]string{"host": "web-01", "coven": "prod"}) {
 		t.Errorf("soulprint-perm должна давать deny в Matches (S2b fail-closed)")
 	}
@@ -145,7 +150,7 @@ func TestMatches_Soulprint_FailClosed(t *testing.T) {
 	}
 }
 
-// --- Standalone CEL-eval против фактов хоста (готов под S3) ---
+// --- Standalone CEL eval against host facts (ready for S3) ---
 
 func TestEvalSoulprintExpr(t *testing.T) {
 	debian := map[string]any{"os": map[string]any{"family": "debian", "arch": "amd64"}}
@@ -157,11 +162,11 @@ func TestEvalSoulprintExpr(t *testing.T) {
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, rhel); err != nil || ok {
 		t.Errorf("rhel-хост: ok=%v err=%v, want false,nil", ok, err)
 	}
-	// Отсутствующий ключ в фактах → no-match (default-deny), НЕ ошибка функции.
+	// A missing key in the facts → no-match (default-deny), NOT a function error.
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, map[string]any{}); err != nil || ok {
 		t.Errorf("пустые факты: ok=%v err=%v, want false,nil (no-such-key → no-match)", ok, err)
 	}
-	// nil-факты → no-match.
+	// nil facts → no-match.
 	if ok, err := EvalSoulprintExpr(`soulprint.self.os.family == "debian"`, nil); err != nil || ok {
 		t.Errorf("nil-факты: ok=%v err=%v, want false,nil", ok, err)
 	}
@@ -169,7 +174,7 @@ func TestEvalSoulprintExpr(t *testing.T) {
 
 // --- Purview.SoulprintExprs ---
 
-// ResolvePurview с soulprint-permission заполняет Purview.SoulprintExprs.
+// ResolvePurview with a soulprint permission populates Purview.SoulprintExprs.
 func TestResolvePurview_Soulprint(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "deb-ops", operators: []string{"archon-a"},
@@ -185,7 +190,8 @@ func TestResolvePurview_Soulprint(t *testing.T) {
 	}
 }
 
-// default_scope=soulprint наследуется bare-permission-ом (S1+S2b вместе).
+// default_scope=soulprint is inherited by a bare permission (S1+S2b
+// together).
 func TestResolvePurview_Soulprint_DefaultScopeInherited(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "deb-ops", operators: []string{"archon-a"},
@@ -207,15 +213,15 @@ func TestResolvePurview_Soulprint_DefaultScopeInherited(t *testing.T) {
 func TestSubset_Soulprint_StringEquality(t *testing.T) {
 	deb := `incarnation.run on soulprint='soulprint.self.os.family == "debian"'`
 	rhel := `incarnation.run on soulprint='soulprint.self.os.family == "rhel"'`
-	// Логически уже предиката deb (debian И amd64), но статически containment
-	// CEL неразрешим → string-inequal → DENY.
+	// Logically narrower than the deb predicate (debian AND amd64), but
+	// static CEL containment is undecidable → string-inequal → DENY.
 	debArch := `incarnation.run on soulprint='soulprint.self.os.family == "debian" && soulprint.self.os.arch == "amd64"'`
 
 	tests := []struct {
 		name        string
 		callerRaws  []string
 		grantedRaws []string
-		wantHeld    bool // true → ErrPermissionNotHeld (выдача запрещена)
+		wantHeld    bool // true → ErrPermissionNotHeld (grant denied)
 	}{
 		{
 			name:        "идентичный soulprint → выдача ок",

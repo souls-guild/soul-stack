@@ -1,11 +1,11 @@
 //go:build integration
 
-// Integration-тесты M2.3 (Redis SoulLease) и M2.4 (event handlers).
+// Integration tests for M2.3 (Redis SoulLease) and M2.4 (event handlers).
 //
-// Поднимаем PG + Vault PKI (общие fixture-ы из integration_test.go) и
-// miniredis-ом в процессе для Redis. miniredis не требует docker-а, но мы
-// держимся под тегом `integration`, потому что без PG handler-ы не запишут
-// `souls` и `audit_log`.
+// We bring up PG + Vault PKI (shared fixtures from integration_test.go) and
+// an in-process miniredis for Redis. miniredis needs no docker, but we
+// still keep this under the `integration` tag because without PG the
+// handlers can't write `souls` and `audit_log`.
 
 package grpc
 
@@ -33,18 +33,18 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// discardIntegrationLogger — slog-логгер, который не печатает ничего.
-// Не t.Helper-завязан (используется из non-test-helper-функций); под
-// integration-сборку лежит здесь, чтобы не зависеть от unit-build-тегов.
+// discardIntegrationLogger — a slog logger that prints nothing. Not tied
+// to t.Helper (used from non-test-helper functions); lives here under the
+// integration build so it doesn't depend on unit-build tags.
 func discardIntegrationLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// drainEventStreamClient — закрывает send-half клиента и вычитывает
-// receive-half до EOF/error-а. Нужно для тестов, которые поднимают
-// EventStream-server с outbound-каналом: если клиент не закроет стрим,
-// GracefulStop сервера ждёт окончания всех bidi-streams и срабатывает
-// 5s timeout-страховка из startEventStreamServerExt.
+// drainEventStreamClient — closes the client's send half and reads the
+// receive half until EOF/error. Needed for tests that bring up an
+// EventStream server with an outbound channel: if the client doesn't close
+// the stream, the server's GracefulStop waits for all bidi streams to end
+// and the 5s timeout safety net in startEventStreamServerExt kicks in.
 func drainEventStreamClient(stream keeperv1.Keeper_EventStreamClient) {
 	_ = stream.CloseSend()
 	for {
@@ -55,8 +55,8 @@ func drainEventStreamClient(stream keeperv1.Keeper_EventStreamClient) {
 	}
 }
 
-// newIntegrationRedisClient — miniredis-инстанс + Keeper-Redis-обёртка.
-// miniredis в процессе → не требует docker-а.
+// newIntegrationRedisClient — a miniredis instance + Keeper-Redis wrapper.
+// In-process miniredis → no docker needed.
 func newIntegrationRedisClient(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -68,8 +68,8 @@ func newIntegrationRedisClient(t *testing.T) (*keeperredis.Client, *miniredis.Mi
 	return c, mr
 }
 
-// helloAndEventStream — onboards + открывает EventStream + шлёт Hello.
-// Возвращает стрим (caller сам шлёт следующие payload-ы).
+// helloAndEventStream — onboards + opens EventStream + sends Hello.
+// Returns the stream (the caller sends any further payloads itself).
 func helloAndEventStream(t *testing.T, ctx context.Context, esAddr string, certPEM, keyPEM []byte) keeperv1.Keeper_EventStreamClient {
 	t.Helper()
 	clientCert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -99,11 +99,11 @@ func helloAndEventStream(t *testing.T, ctx context.Context, esAddr string, certP
 	return stream
 }
 
-// TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists — второй
-// подключающийся Keeper-инстанс к тому же SID получает AlreadyExists, когда
-// текущий holder ЖИВ в Conclave (split-brain guard, ADR-027 amend (n)).
-// Presence-gated force-release НЕ срабатывает на живого владельца — иначе
-// дедуп доставки по SID-lease был бы подорван.
+// TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists — a
+// second Keeper instance connecting for the same SID gets AlreadyExists
+// when the current holder is ALIVE in Conclave (split-brain guard, ADR-027
+// amend (n)). Presence-gated force-release does NOT trigger on a live
+// owner — otherwise delivery dedup by SID lease would be undermined.
 func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -125,16 +125,17 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 	caRootPEM := fetchVaultPKIRootCA(t, ctx)
 	rc, _ := newIntegrationRedisClient(t)
 
-	// kid-a жив в Conclave: EventStream-server сам presence не регистрирует
-	// (это делает daemon-wire-up), поэтому в тесте регистрируем явно — иначе
-	// kid-b счёл бы kid-a мёртвым и сделал бы force-release (это покрыто
-	// reconnect-сценарием отдельно). Здесь проверяем именно guard живого
-	// holder-а.
+	// kid-a is alive in Conclave: the EventStream server itself doesn't
+	// register presence (that's done by the daemon wire-up), so the test
+	// registers it explicitly — otherwise kid-b would consider kid-a dead
+	// and force-release it (that's covered separately by the reconnect
+	// scenario). Here we're specifically checking the guard for a live
+	// holder.
 	if err := keeperredis.RegisterInstance(ctx, rc, "kid-a", "kid-a", 30*time.Second, false); err != nil {
 		t.Fatalf("RegisterInstance(kid-a): %v", err)
 	}
 
-	// Keeper A — захватывает lease, держит стрим открытым.
+	// Keeper A — acquires the lease, keeps the stream open.
 	esAddrA, esStopA := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
 		SeedDB: integrationPool, SoulDB: integrationPool, Redis: rc,
 		AuditWriter:  auditpg.NewWriter(integrationPool),
@@ -146,7 +147,7 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 	streamA := helloAndEventStream(t, ctx, esAddrA, bsReply.GetCertificatePem(), clientKey)
 	defer streamA.CloseSend()
 
-	// Keeper B — пытается принять стрим тем же SID-ом.
+	// Keeper B — tries to accept a stream with the same SID.
 	esAddrB, esStopB := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
 		SeedDB: integrationPool, SoulDB: integrationPool, Redis: rc,
 		AuditWriter:  auditpg.NewWriter(integrationPool),
@@ -177,7 +178,7 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 	if err := streamB.Send(&keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_Hello{Hello: &keeperv1.Hello{SidEcho: sid}},
 	}); err != nil {
-		// AlreadyExists может прилететь и при Send.
+		// AlreadyExists can also arrive on Send.
 		if code := status.Code(err); code == codes.AlreadyExists {
 			return
 		}
@@ -188,13 +189,14 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 	}
 }
 
-// TestIntegration_EventStream_DeadHolderLease_ForceReleased — находка 2
-// (ADR-027 amend (n)): stale SID-lease мёртвого holder-а перехватывается на
-// reconnect-е того же SID к другому keeper-у. Эмуляция: kid-dead держит lease
-// (как после SIGKILL — ключ висит до TTL), но его Conclave-presence отсутствует
-// (инстанс не renew-ит). Soul переподключается к kid-live → presence-gated
-// force-release → стрим ОТКРЫВАЕТСЯ (HelloReply доходит), а НЕ закрывается с
-// AlreadyExists. Это и снимает ~60s-блокировку dispatched-orphan-реконсиляции.
+// TestIntegration_EventStream_DeadHolderLease_ForceReleased — finding 2
+// (ADR-027 amend (n)): a stale SID lease from a dead holder is hijacked on
+// reconnect of the same SID to a different keeper. Emulation: kid-dead
+// holds the lease (as after a SIGKILL — the key hangs around until TTL),
+// but its Conclave presence is gone (the instance isn't renewing). The
+// Soul reconnects to kid-live → presence-gated force-release → the stream
+// OPENS (HelloReply arrives) instead of closing with AlreadyExists. This
+// is what lifts the ~60s block on dispatched-orphan reconciliation.
 func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 	resetAll(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -205,13 +207,14 @@ func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 	caRootPEM := fetchVaultPKIRootCA(t, ctx)
 	rc, _ := newIntegrationRedisClient(t)
 
-	// Мёртвый holder kid-dead: lease висит (crash оставил его до TTL), но
-	// Conclave-presence НЕ зарегистрирована (renewal-goroutine мертва).
+	// Dead holder kid-dead: the lease hangs around (the crash left it until
+	// TTL), but Conclave presence is NOT registered (the renewal goroutine
+	// is dead).
 	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-dead", 60*time.Second); err != nil {
 		t.Fatalf("seed dead-holder lease: %v", err)
 	}
 
-	// Живой keeper kid-live принимает reconnect Soul-а.
+	// The live keeper kid-live accepts the Soul's reconnect.
 	esAddr, esStop := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
 		SeedDB: integrationPool, SoulDB: integrationPool, Redis: rc,
 		AuditWriter:  auditpg.NewWriter(integrationPool),
@@ -220,12 +223,12 @@ func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 	})
 	defer esStop()
 
-	// helloAndEventStream падает t.Fatal-ом, если HelloReply не пришёл —
-	// успешный возврат = стрим открыт, force-release сработал.
+	// helloAndEventStream fails with t.Fatal if HelloReply doesn't arrive —
+	// a successful return means the stream is open, force-release worked.
 	stream := helloAndEventStream(t, ctx, esAddr, certPEM, keyPEM)
 	defer drainEventStreamClient(stream)
 
-	// lease перезахвачен на kid-live.
+	// The lease has been re-acquired by kid-live.
 	if !waitSoulAlive(t, ctx, rc, sid, true) {
 		t.Fatalf("soul offline after reconnect, want online (force-release acquired lease)")
 	}
@@ -237,7 +240,7 @@ func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 		t.Errorf("lease owner = %q, want kid-live (перехвачен у мёртвого kid-dead)", owner)
 	}
 
-	// Audit `eventstream.lease_force_released` с prev/new KID.
+	// Audit `eventstream.lease_force_released` with prev/new KID.
 	deadline := time.Now().Add(3 * time.Second)
 	var (
 		prevKID, newKID string
@@ -263,8 +266,8 @@ func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
 	}
 }
 
-// TestIntegration_EventStream_HeartbeatUpdated — после Hello heartbeat-кэш
-// в Redis обновляется (HSET soul:<sid>:hb).
+// TestIntegration_EventStream_HeartbeatUpdated — after Hello, the Redis
+// heartbeat cache is updated (HSET soul:<sid>:hb).
 func TestIntegration_EventStream_HeartbeatUpdated(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -294,7 +297,7 @@ func TestIntegration_EventStream_HeartbeatUpdated(t *testing.T) {
 	stream := helloAndEventStream(t, ctx, esAddr, bsReply.GetCertificatePem(), clientKey)
 	defer stream.CloseSend()
 
-	// Polling: heartbeat пишется async к Send-у Hello.
+	// Polling: the heartbeat is written async relative to the Hello Send.
 	deadline := time.Now().Add(2 * time.Second)
 	var atStr, kidStr string
 	for time.Now().Before(deadline) {
@@ -314,7 +317,7 @@ func TestIntegration_EventStream_HeartbeatUpdated(t *testing.T) {
 }
 
 // TestIntegration_EventStream_TaskEventWritesAudit — TaskEvent → audit_log
-// с event_type=task.executed и correlation_id=apply_id.
+// with event_type=task.executed and correlation_id=apply_id.
 func TestIntegration_EventStream_TaskEventWritesAudit(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -352,7 +355,7 @@ func TestIntegration_EventStream_TaskEventWritesAudit(t *testing.T) {
 		t.Fatalf("send TaskEvent: %v", err)
 	}
 	_ = stream.CloseSend()
-	// Дожидаемся EOF от сервера, чтобы audit writer успел отработать.
+	// Wait for EOF from the server so the audit writer has time to run.
 	for {
 		_, err := stream.Recv()
 		if err == nil {
@@ -364,8 +367,8 @@ func TestIntegration_EventStream_TaskEventWritesAudit(t *testing.T) {
 		break
 	}
 
-	// Polling: audit пишется в той же гoроутине handler-а, но Send/Close
-	// async-завершают стрим — даём небольшое окно.
+	// Polling: audit is written in the handler's same goroutine, but
+	// Send/Close finish the stream asynchronously — give it a small window.
 	deadline := time.Now().Add(3 * time.Second)
 	var found bool
 	for time.Now().Before(deadline) {
@@ -383,9 +386,9 @@ func TestIntegration_EventStream_TaskEventWritesAudit(t *testing.T) {
 	}
 }
 
-// TestIntegration_EventStream_OutboundSendApply — после Hello-handshake
-// и регистрации в StreamManager-е, SendApply на тот же SID долетает до
-// клиента через stream.Recv() (M2.5).
+// TestIntegration_EventStream_OutboundSendApply — after the Hello
+// handshake and registration in StreamManager, SendApply for the same SID
+// reaches the client via stream.Recv() (M2.5).
 func TestIntegration_EventStream_OutboundSendApply(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -479,8 +482,8 @@ func TestIntegration_EventStream_OutboundSendApply(t *testing.T) {
 	}
 }
 
-// TestIntegration_EventStream_OutboundSendCancel — SendCancel приходит
-// клиенту как CancelApply (M2.5).
+// TestIntegration_EventStream_OutboundSendCancel — SendCancel arrives at
+// the client as CancelApply (M2.5).
 func TestIntegration_EventStream_OutboundSendCancel(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -543,9 +546,9 @@ func TestIntegration_EventStream_OutboundSendCancel(t *testing.T) {
 	drainEventStreamClient(stream)
 }
 
-// TestIntegration_EventStream_SeedRotation — Soul шлёт SeedRotationRequest,
-// Keeper подписывает CSR через Vault PKI, supersede-ит старый seed,
-// вставляет новый и шлёт SeedRotationReply обратно (M2.5).
+// TestIntegration_EventStream_SeedRotation — the Soul sends a
+// SeedRotationRequest, the Keeper signs the CSR via Vault PKI, supersedes
+// the old seed, inserts a new one, and sends SeedRotationReply back (M2.5).
 func TestIntegration_EventStream_SeedRotation(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -563,7 +566,7 @@ func TestIntegration_EventStream_SeedRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	// Старый active-seed (выпущен при Bootstrap-е).
+	// The old active seed (issued during Bootstrap).
 	oldSeed, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
 	if err != nil {
 		t.Fatalf("SelectActiveBySID: %v", err)
@@ -598,7 +601,7 @@ func TestIntegration_EventStream_SeedRotation(t *testing.T) {
 
 	stream := helloAndEventStream(t, ctx, esAddr, bsReply.GetCertificatePem(), clientKey)
 
-	// Готовим новый CSR (новая пара ключей).
+	// Prepare a new CSR (a new key pair).
 	newCSRPEM, _ := mustMakeCSRWithKeyIT(t, sid)
 	if err := stream.Send(&keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_SeedRotationRequest{
@@ -624,7 +627,7 @@ func TestIntegration_EventStream_SeedRotation(t *testing.T) {
 	}
 	drainEventStreamClient(stream)
 
-	// БД: новый active-seed, старый — superseded.
+	// DB: the new active seed, the old one — superseded.
 	deadline := time.Now().Add(3 * time.Second)
 	var (
 		newSeed *soulseed.SoulSeed
@@ -647,7 +650,7 @@ func TestIntegration_EventStream_SeedRotation(t *testing.T) {
 		t.Error("seed.fingerprint not changed")
 	}
 
-	// Старый seed → superseded.
+	// The old seed → superseded.
 	var oldStatus string
 	row := integrationPool.QueryRow(ctx, `SELECT status FROM soul_seeds WHERE seed_id = $1`, oldSeed.SeedID)
 	if err := row.Scan(&oldStatus); err != nil {
@@ -743,9 +746,10 @@ func TestIntegration_EventStream_SoulprintReportWritesSoulsAndAudit(t *testing.T
 	if !strings.Contains(factsJSON, "debian") {
 		t.Errorf("souls.soulprint_facts = %q, want family=debian", factsJSON)
 	}
-	// E2E BUG-A: composite-ключи в JSONB — snake_case (ADR-018, единая точка
-	// правды с CEL/template-проекцией .self.os.pkg_mgr). camelCase jsonName
-	// (pkgMgr/initSystem) недопустим — рассинхрон с шаблоном.
+	// E2E BUG-A: composite keys in JSONB are snake_case (ADR-018, the
+	// single source of truth shared with the CEL/template projection
+	// .self.os.pkg_mgr). A camelCase jsonName (pkgMgr/initSystem) is not
+	// acceptable — it would desync from the template.
 	if !strings.Contains(factsJSON, `"pkg_mgr"`) || !strings.Contains(factsJSON, `"init_system"`) {
 		t.Errorf("souls.soulprint_facts = %q, want snake_case keys pkg_mgr/init_system", factsJSON)
 	}
@@ -764,8 +768,8 @@ func TestIntegration_EventStream_SoulprintReportWritesSoulsAndAudit(t *testing.T
 		t.Errorf("audit count = %d, want 1", n)
 	}
 
-	// UpdateSoulprint reachable из CRUD-слоя: дополнительно проверим, что
-	// тайминги попали в колонки.
+	// UpdateSoulprint is reachable from the CRUD layer: additionally check
+	// that the timings landed in the columns.
 	s, err := soul.SelectBySID(ctx, integrationPool, sid)
 	if err != nil {
 		t.Fatalf("SelectBySID: %v", err)
@@ -773,9 +777,9 @@ func TestIntegration_EventStream_SoulprintReportWritesSoulsAndAudit(t *testing.T
 	_ = s
 }
 
-// seedConnectedSoul вставляет connected-soul со заданным last_seen_at.
-// created_by_aid=NULL (FK ON DELETE SET NULL допускает) — operator для теста
-// flush-а не нужен.
+// seedConnectedSoul inserts a connected soul with the given last_seen_at.
+// created_by_aid=NULL (allowed by FK ON DELETE SET NULL) — the flush test
+// doesn't need an operator.
 func seedConnectedSoul(t *testing.T, ctx context.Context, sid string, lastSeen time.Time) {
 	t.Helper()
 	_, err := integrationPool.Exec(ctx,
@@ -797,9 +801,10 @@ func soulStatus(t *testing.T, ctx context.Context, sid string) string {
 	return st
 }
 
-// bootstrapForStream — онбордит seedOnboardingFixtures-Soul через Bootstrap-RPC
-// и возвращает выданный cert + client key для последующего EventStream-а.
-// Сворачивает повторяющийся boilerplate тестов session-lifecycle (Часть 1/2).
+// bootstrapForStream — onboards the seedOnboardingFixtures Soul via the
+// Bootstrap RPC and returns the issued cert + client key for a subsequent
+// EventStream. Collapses the repeated boilerplate of session-lifecycle
+// tests (Part 1/2).
 func bootstrapForStream(t *testing.T, ctx context.Context) (sid string, certPEM, keyPEM []byte) {
 	t.Helper()
 	plain, s := seedOnboardingFixtures(t)
@@ -818,9 +823,10 @@ func bootstrapForStream(t *testing.T, ctx context.Context) (sid string, certPEM,
 	return sid, reply.GetCertificatePem(), clientKey
 }
 
-// soulAlive — presence-предикат: жив ли Redis SID-lease (= Soul online для
-// таргет-резолвера, ADR-006(a)). Заменяет прежний PG-status-снимок: presence
-// больше не пишется синхронно в `souls.status`.
+// soulAlive — presence predicate: whether the Redis SID lease is alive
+// (= Soul online for the target resolver, ADR-006(a)). Replaces the former
+// PG status snapshot: presence is no longer written synchronously to
+// `souls.status`.
 func soulAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client, sid string) bool {
 	t.Helper()
 	alive, err := keeperredis.SoulStreamAlive(ctx, rc, sid)
@@ -830,7 +836,8 @@ func soulAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client, sid st
 	return alive
 }
 
-// waitSoulAlive поллит presence-предикат до желаемого значения или дедлайна.
+// waitSoulAlive polls the presence predicate until the desired value or
+// the deadline.
 func waitSoulAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client, sid string, want bool) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -843,11 +850,12 @@ func waitSoulAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client, si
 	return soulAlive(t, ctx, rc, sid) == want
 }
 
-// TestIntegration_EventStream_Reconnect_RestoresPresence — presence-модель
-// (ADR-006(a)): после рестарта Keeper-а переподключившийся Soul становится
-// online через захват SID-lease на session-open — без синхронной PG-записи
-// presence. Это и есть видимость таргет-резолверу (он деривирует online из
-// lease). disconnected-снимок в `souls.status` НЕ мешает: presence решает lease.
+// TestIntegration_EventStream_Reconnect_RestoresPresence — presence model
+// (ADR-006(a)): after a Keeper restart, a reconnecting Soul becomes online
+// by acquiring the SID lease on session-open — without a synchronous PG
+// presence write. This is exactly the visibility the target resolver
+// needs (it derives online from the lease). A disconnected snapshot in
+// `souls.status` doesn't get in the way: the lease decides presence.
 func TestIntegration_EventStream_Reconnect_RestoresPresence(t *testing.T) {
 	resetAll(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -855,8 +863,9 @@ func TestIntegration_EventStream_Reconnect_RestoresPresence(t *testing.T) {
 
 	sid, certPEM, keyPEM := bootstrapForStream(t, ctx)
 
-	// Эмуляция «Keeper рестартанул, стрим был потерян»: legacy-снимок в
-	// disconnected (presence из него больше НЕ читается).
+	// Emulating "Keeper restarted, the stream was lost": the legacy
+	// snapshot is set to disconnected (presence is no longer read from
+	// it).
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE souls SET status = 'disconnected' WHERE sid = $1`, sid); err != nil {
 		t.Fatalf("force disconnected: %v", err)
@@ -864,7 +873,7 @@ func TestIntegration_EventStream_Reconnect_RestoresPresence(t *testing.T) {
 
 	caRootPEM := fetchVaultPKIRootCA(t, ctx)
 	rc, _ := newIntegrationRedisClient(t)
-	// До подключения lease нет → presence offline.
+	// Before connecting there's no lease → presence offline.
 	if soulAlive(t, ctx, rc, sid) {
 		t.Fatalf("precondition: soul online before stream, want offline (no lease)")
 	}
@@ -878,16 +887,17 @@ func TestIntegration_EventStream_Reconnect_RestoresPresence(t *testing.T) {
 	stream := helloAndEventStream(t, ctx, esAddr, certPEM, keyPEM)
 	defer drainEventStreamClient(stream)
 
-	// session-open захватил lease → presence online (виден резолверу), несмотря
-	// на disconnected-снимок в PG.
+	// session-open acquired the lease → presence online (visible to the
+	// resolver), despite the disconnected snapshot in PG.
 	if !waitSoulAlive(t, ctx, rc, sid, true) {
 		t.Errorf("soul offline after reconnect, want online (lease acquired on session-open)")
 	}
 }
 
-// TestIntegration_EventStream_Teardown_DropsPresence — штатное закрытие стрима
-// гасит presence (Release SID-lease) без ожидания Reaper-таймаута и без записи
-// в `souls.status`. После teardown-а Soul offline для резолвера.
+// TestIntegration_EventStream_Teardown_DropsPresence — a normal stream
+// close drops presence (Release SID lease) without waiting for the Reaper
+// timeout and without writing to `souls.status`. After teardown, the Soul
+// is offline for the resolver.
 func TestIntegration_EventStream_Teardown_DropsPresence(t *testing.T) {
 	resetAll(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -905,12 +915,12 @@ func TestIntegration_EventStream_Teardown_DropsPresence(t *testing.T) {
 
 	stream := helloAndEventStream(t, ctx, esAddr, certPEM, keyPEM)
 
-	// session-open захватил lease → presence online.
+	// session-open acquired the lease → presence online.
 	if !waitSoulAlive(t, ctx, rc, sid, true) {
 		t.Fatalf("precondition: soul offline after session-open, want online")
 	}
 
-	// Штатное закрытие стрима клиентом → teardown освобождает lease.
+	// A normal client-side stream close → teardown releases the lease.
 	drainEventStreamClient(stream)
 
 	if !waitSoulAlive(t, ctx, rc, sid, false) {
@@ -918,10 +928,11 @@ func TestIntegration_EventStream_Teardown_DropsPresence(t *testing.T) {
 	}
 }
 
-// TestIntegration_EventStream_Teardown_ForeignLease_NoRelease — ключевой
-// инвариант lease-модели: teardown старого инстанса НЕ гасит presence, если
-// lease уже принадлежит ДРУГОМУ Keeper-у (Soul переехал). Lease compare-and-set
-// по value=KID: Release чужого lease — no-op, presence остаётся online.
+// TestIntegration_EventStream_Teardown_ForeignLease_NoRelease — a key
+// invariant of the lease model: teardown of the old instance does NOT
+// drop presence if the lease already belongs to a DIFFERENT Keeper (the
+// Soul moved). Lease compare-and-set by value=KID: releasing someone
+// else's lease is a no-op, presence stays online.
 func TestIntegration_EventStream_Teardown_ForeignLease_NoRelease(t *testing.T) {
 	resetAll(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -940,24 +951,27 @@ func TestIntegration_EventStream_Teardown_ForeignLease_NoRelease(t *testing.T) {
 
 	stream := helloAndEventStream(t, ctx, esAddr, certPEM, keyPEM)
 
-	// session-open kid-old захватил lease → presence online.
+	// session-open by kid-old acquired the lease → presence online.
 	if !waitSoulAlive(t, ctx, rc, sid, true) {
 		t.Fatalf("precondition: soul offline after session-open, want online")
 	}
 
-	// Эмуляция lease-переезда: lease теперь принадлежит kid-new (перетираем
-	// value напрямую в miniredis). Старый инстанс kid-old больше не владелец.
+	// Emulating a lease move: the lease now belongs to kid-new (we
+	// overwrite the value directly in miniredis). The old instance kid-old
+	// is no longer the owner.
 	leaseKey := keeperredis.SoulLeaseKey(sid)
 	if err := mr.Set(leaseKey, "kid-new"); err != nil {
 		t.Fatalf("simulate lease move: %v", err)
 	}
 
-	// kid-old закрывает свою (уже мёртвую) сессию → Release чужого lease no-op
-	// (compare-and-delete по value=kid-old не сматчит kid-new).
+	// kid-old closes its own (already dead) session → releasing someone
+	// else's lease is a no-op (compare-and-delete by value=kid-old won't
+	// match kid-new).
 	drainEventStreamClient(stream)
 	time.Sleep(500 * time.Millisecond)
 
-	// Presence остаётся online (lease kid-new жив, не перетёрт teardown-ом kid-old).
+	// Presence stays online (kid-new's lease is alive, not overwritten by
+	// kid-old's teardown).
 	if !soulAlive(t, ctx, rc, sid) {
 		t.Errorf("soul offline after foreign teardown, want online (kid-new lease must survive)")
 	}
@@ -966,14 +980,16 @@ func TestIntegration_EventStream_Teardown_ForeignLease_NoRelease(t *testing.T) {
 	}
 }
 
-// TestIntegration_HeartbeatFlush_PreventsFalseDisconnect — регрессия HA-бага:
-// live EventStream-стрим обновлял heartbeat только в Redis, PG-`last_seen_at`
-// оставался stale, и Reaper-правило `mark_disconnected` ложно помечало живой
-// стрим disconnected через stale_after.
+// TestIntegration_HeartbeatFlush_PreventsFalseDisconnect — regression test
+// for an HA bug: a live EventStream stream only updated the heartbeat in
+// Redis, PG's `last_seen_at` stayed stale, and the Reaper rule
+// `mark_disconnected` falsely marked a live stream disconnected once
+// stale_after elapsed.
 //
-// End-to-end: connected soul со stale last_seen → flushLastSeen (реальный pool)
-// освежает PG → mark_disconnected(90s) НЕ трогает. Контроль: второй soul без
-// flush-а тем же mark_disconnected помечается disconnected.
+// End-to-end: a connected soul with a stale last_seen → flushLastSeen (a
+// real pool) refreshes PG → mark_disconnected(90s) leaves it alone.
+// Control: a second soul without a flush gets marked disconnected by the
+// same mark_disconnected call.
 func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -981,14 +997,15 @@ func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 
 	const staleAfter = 90 * time.Second
 	now := time.Now().UTC()
-	stale := now.Add(-5 * time.Minute) // заведомо старше stale_after
+	stale := now.Add(-5 * time.Minute) // comfortably older than stale_after
 
 	const liveSID = "live-stream.example.com"
 	const deadSID = "no-flush.example.com"
 	seedConnectedSoul(t, ctx, liveSID, stale)
 	seedConnectedSoul(t, ctx, deadSID, stale)
 
-	// Имитируем live-стрим: throttled PG-flush через тот же handler-путь.
+	// Simulate a live stream: a throttled PG flush through the same
+	// handler path.
 	h := newEventStreamHandler(EventStreamDeps{
 		SeedDB:                &fakeSeedDB{},
 		SoulDB:                integrationPool,
@@ -998,7 +1015,7 @@ func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 	}, discardIntegrationLogger())
 	h.flushLastSeen(ctx, liveSID, time.Now().UTC())
 
-	// PG-snapshot live-soul-а теперь свежий.
+	// The live soul's PG snapshot is now fresh.
 	var flushed time.Time
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT last_seen_at FROM souls WHERE sid = $1`, liveSID).Scan(&flushed); err != nil {
@@ -1023,9 +1040,10 @@ func TestIntegration_HeartbeatFlush_PreventsFalseDisconnect(t *testing.T) {
 	}
 }
 
-// callMarkDisconnected — прямой вызов SQL-функции mark_disconnected на
-// integrationPool (Reaper-purger тянет лишние зависимости; здесь нужен только
-// сам предикат по PG-`last_seen_at`).
+// callMarkDisconnected — a direct call of the mark_disconnected SQL
+// function on integrationPool (the Reaper purger pulls in extra
+// dependencies; here we only need the predicate itself over PG's
+// `last_seen_at`).
 func callMarkDisconnected(ctx context.Context, staleAfter time.Duration) (int64, error) {
 	var n int64
 	err := integrationPool.QueryRow(ctx,

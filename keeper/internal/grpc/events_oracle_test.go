@@ -22,11 +22,11 @@ import (
 
 // --- fakes -----------------------------------------------------------------
 
-// oracleFakeDB реализует oracleDB. Маршрутизация по SQL:
-//   - Query "FROM decrees"      → набор Decree;
-//   - QueryRow "FROM souls"     → covens субъекта;
+// oracleFakeDB implements oracleDB. SQL routing:
+//   - Query "FROM decrees"      → set of Decree;
+//   - QueryRow "FROM souls"     → subject's covens;
 //   - QueryRow "FROM oracle_fires" → cooldown-state (last fired);
-//   - Exec "oracle_fires"       → record fire (фиксируется).
+//   - Exec "oracle_fires"       → record fire.
 type oracleFakeDB struct {
 	decreeRows  func() (pgx.Rows, error)
 	soulCoven   []string
@@ -34,10 +34,10 @@ type oracleFakeDB struct {
 	lastFired   *time.Time
 	recordedFnc func(args []any)
 
-	// circuit-breaker (ADR-030(a), S4). bumpReturns — fire_count, который вернёт
-	// BumpCircuit (RETURNING). bumpCalled — фиксирует, что BumpCircuit вызывался
-	// (для проверки breaker-off → не зовётся). tripWins — выиграл ли TripDecree
-	// (RowsAffected==1, single-winner); false → RowsAffected==0.
+	// circuit-breaker (ADR-030(a), S4). bumpReturns — the fire_count that
+	// BumpCircuit (RETURNING) will return. bumpCalled — records that BumpCircuit
+	// was called (to verify breaker-off → not called). tripWins — whether
+	// TripDecree won (RowsAffected==1, single-winner); false → RowsAffected==0.
 	bumpReturns int
 	bumpCalled  bool
 	tripWins    bool
@@ -47,7 +47,7 @@ func (f *oracleFakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.
 	if strings.Contains(sql, "oracle_fires") && f.recordedFnc != nil {
 		f.recordedFnc(args)
 	}
-	// TripDecree: UPDATE decrees SET enabled=false … single-winner по RowsAffected.
+	// TripDecree: UPDATE decrees SET enabled=false … single-winner by RowsAffected.
 	if strings.Contains(sql, "UPDATE decrees") {
 		if f.tripWins {
 			return pgconn.NewCommandTag("UPDATE 1"), nil
@@ -63,9 +63,9 @@ func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		if f.soulErr != nil {
 			return oracleErrRow{err: f.soulErr}
 		}
-		// Порядок selectBySIDSQL: sid, transport, status, coven, traits,
+		// selectBySIDSQL order: sid, transport, status, coven, traits,
 		// registered_at, last_seen_at, last_seen_by_kid, created_by_aid,
-		// requested_at, note (traits NULL → пустой map в scanSoul, ADR-060).
+		// requested_at, note (traits NULL → empty map in scanSoul, ADR-060).
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
@@ -153,12 +153,12 @@ func oracleAssign(dest, src any) {
 	}
 }
 
-// decreeRow строит staticRow в порядке decreeColumns:
+// decreeRow builds a staticRow in decreeColumns order:
 // name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name,
 // action_scenario, action_input, cooldown, enabled, created_at, updated_at,
 // created_by_aid.
 func decreeRow(d *oracle.Decree) []any {
-	var whereArg, sidArg, byArg any // nil → SQL NULL в **string-таргете
+	var whereArg, sidArg, byArg any // nil → SQL NULL in a **string target
 	if d.WhereCEL != nil {
 		whereArg = *d.WhereCEL
 	}
@@ -191,7 +191,7 @@ func (r *oracleEmptyRows) Values() ([]any, error)                       { return
 func (r *oracleEmptyRows) RawValues() [][]byte                          { return nil }
 func (r *oracleEmptyRows) Conn() *pgx.Conn                              { return nil }
 
-// oracleStaticRows — фейковый pgx.Rows над набором staticRow-значений.
+// oracleStaticRows — a fake pgx.Rows over a set of staticRow values.
 type oracleStaticRows struct {
 	rows [][]any
 	idx  int
@@ -224,7 +224,7 @@ func decreesRows(ds ...*oracle.Decree) func() (pgx.Rows, error) {
 	return func() (pgx.Rows, error) { return &oracleStaticRows{rows: rows}, nil }
 }
 
-// fakeEnqueuer — записывает enqueue-вызовы.
+// fakeEnqueuer — records enqueue calls.
 type fakeEnqueuer struct {
 	mu    sync.Mutex
 	calls []EnqueueScenarioRequest
@@ -257,9 +257,9 @@ func newOracleHandler(t *testing.T, db oracleDB, enq *fakeEnqueuer, aw audit.Wri
 	return h
 }
 
-// newOracleHandlerWithMetrics — как newOracleHandler, но дополнительно
-// регистрирует keeper_oracle_*-метрики на свежем registry и возвращает его
-// gatherer для scrape-проверок (Part 2, ADR-030 S4).
+// newOracleHandlerWithMetrics — like newOracleHandler, but additionally
+// registers keeper_oracle_* metrics on a fresh registry and returns its
+// gatherer for scrape checks (Part 2, ADR-030 S4).
 func newOracleHandlerWithMetrics(t *testing.T, db oracleDB, enq *fakeEnqueuer, aw audit.Writer) (*eventStreamHandler, *obs.Registry) {
 	t.Helper()
 	where, err := oracle.NewWhereEvaluator()
@@ -285,9 +285,9 @@ func newOracleHandlerWithMetrics(t *testing.T, db oracleDB, enq *fakeEnqueuer, a
 	return newEventStreamHandler(deps, discardLogger(t)), reg
 }
 
-// newOracleHandlerWithCircuit — handler с включённым circuit-breaker-ом
-// (CircuitMaxFires/CircuitWindow заданы, ADR-030(a) S4). maxFires==0 → breaker
-// OFF (escape-hatch). Возвращает registry для scrape-проверки circuit_tripped.
+// newOracleHandlerWithCircuit — handler with the circuit breaker enabled
+// (CircuitMaxFires/CircuitWindow set, ADR-030(a) S4). maxFires==0 → breaker
+// OFF (escape hatch). Returns the registry for scraping circuit_tripped.
 func newOracleHandlerWithCircuit(t *testing.T, db oracleDB, enq *fakeEnqueuer, aw audit.Writer, maxFires int, window time.Duration) (*eventStreamHandler, *obs.Registry) {
 	t.Helper()
 	where, err := oracle.NewWhereEvaluator()
@@ -381,7 +381,7 @@ func TestPortent_NoDecreeDefaultDeny(t *testing.T) {
 func TestPortent_SubjectMismatch(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{
-		soulCoven: []string{"db"}, // хост в db, Decree про web
+		soulCoven: []string{"db"}, // host is in db, Decree is about web
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, ActionScenario: "restart", Cooldown: "5m", Enabled: true,
@@ -399,8 +399,8 @@ func TestPortent_SubjectMismatch(t *testing.T) {
 func TestPortent_MembershipMismatch(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	// Субъект В coven `web` (subject-match пройдёт), НО таргет-incarnation Decree-а
-	// `other-app` НЕ среди covens хоста → membership-check fail-closed → skip.
+	// Subject IS in coven `web` (subject-match passes), BUT the Decree's target
+	// incarnation `other-app` is NOT among the host's covens → membership-check fail-closed → skip.
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"},
 		decreeRows: decreesRows(&oracle.Decree{
@@ -416,7 +416,7 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 	if len(enq.snapshot()) != 0 {
 		t.Error("membership-mismatch: enqueue не должен произойти")
 	}
-	// fire не пишется и audit oracle.fired не пишется.
+	// fire is not recorded and audit oracle.fired is not written.
 	for _, e := range aw.snapshot() {
 		if e.EventType == audit.EventOracleFired {
 			t.Error("membership-mismatch: audit oracle.fired НЕ должен писаться")
@@ -427,8 +427,8 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	// sid-Decree: субъект — конкретный SID; членство в incarnation проверяется
-	// по covens хоста (incarnation_name `web-app` ∈ covens), как и у coven-Decree.
+	// sid-Decree: the subject is a specific SID; incarnation membership is checked
+	// against the host's covens (incarnation_name `web-app` ∈ covens), same as coven-Decree.
 	db := &oracleFakeDB{
 		soulCoven: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
@@ -488,7 +488,7 @@ func TestPortent_WhereCELFilters(t *testing.T) {
 
 func TestPortent_CooldownBlocks(t *testing.T) {
 	enq := &fakeEnqueuer{}
-	recent := time.Now().UTC().Add(-1 * time.Minute) // в окне 5m
+	recent := time.Now().UTC().Add(-1 * time.Minute) // within the 5m window
 	db := &oracleFakeDB{
 		soulCoven: []string{"web-app", "web"},
 		lastFired: &recent,
@@ -506,8 +506,8 @@ func TestPortent_CooldownBlocks(t *testing.T) {
 	}
 }
 
-// TestPortent_MetricsEnqueuePath — на полном match-пути инкрементятся
-// portents_received / decrees_matched / scenarios_enqueued (Part 2, ADR-030 S4).
+// TestPortent_MetricsEnqueuePath — on the full match path, portents_received /
+// decrees_matched / scenarios_enqueued are incremented (Part 2, ADR-030 S4).
 func TestPortent_MetricsEnqueuePath(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{
@@ -534,8 +534,8 @@ func TestPortent_MetricsEnqueuePath(t *testing.T) {
 	}
 }
 
-// TestPortent_MetricsCooldownPath — cooldown в окне инкрементит
-// portents_received + cooldown_blocked, но НЕ decrees_matched/scenarios_enqueued.
+// TestPortent_MetricsCooldownPath — cooldown within the window increments
+// portents_received + cooldown_blocked, but NOT decrees_matched/scenarios_enqueued.
 func TestPortent_MetricsCooldownPath(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	recent := time.Now().UTC().Add(-1 * time.Minute)
@@ -565,8 +565,8 @@ func TestPortent_MetricsCooldownPath(t *testing.T) {
 	}
 }
 
-// TestPortent_MetricsDefaultDeny — без Decree инкрементится только
-// portents_received (default-deny на decrees_matched и далее).
+// TestPortent_MetricsDefaultDeny — without a Decree, only portents_received is
+// incremented (default-deny on decrees_matched and beyond).
 func TestPortent_MetricsDefaultDeny(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{soulCoven: []string{"web"}, decreeRows: decreesRows()}
@@ -583,8 +583,8 @@ func TestPortent_MetricsDefaultDeny(t *testing.T) {
 	}
 }
 
-// circuitDB — общий builder fake-DB под circuit-breaker-тесты: один enabled
-// coven-Decree на svc-down, заданный bumpReturns/tripWins.
+// circuitDB — a shared fake-DB builder for circuit-breaker tests: one enabled
+// coven-Decree on svc-down, with configurable bumpReturns/tripWins.
 func circuitDB(bumpReturns int, tripWins bool) *oracleFakeDB {
 	return &oracleFakeDB{
 		soulCoven:   []string{"web-app", "web"},
@@ -598,12 +598,12 @@ func circuitDB(bumpReturns int, tripWins bool) *oracleFakeDB {
 	}
 }
 
-// TestPortent_CircuitTripsAtThreshold — cnt >= max_fires и TripDecree выиграл →
-// circuit_tripped-метрика + audit decree.circuit_tripped + Decree авто-disable.
+// TestPortent_CircuitTripsAtThreshold — cnt >= max_fires and TripDecree won →
+// circuit_tripped metric + audit decree.circuit_tripped + Decree auto-disable.
 func TestPortent_CircuitTripsAtThreshold(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	db := circuitDB(5, true) // bump вернёт 5 == max, trip single-winner выигрывает
+	db := circuitDB(5, true) // bump returns 5 == max, trip single-winner wins
 	h, reg := newOracleHandlerWithCircuit(t, db, enq, aw, 5, 10*time.Minute)
 
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
@@ -635,12 +635,12 @@ func TestPortent_CircuitTripsAtThreshold(t *testing.T) {
 	}
 }
 
-// TestPortent_CircuitBelowThreshold — cnt < max_fires → BumpCircuit вызван, но
-// trip не происходит (нет метрики/audit-а circuit_tripped).
+// TestPortent_CircuitBelowThreshold — cnt < max_fires → BumpCircuit is called,
+// but trip does not occur (no circuit_tripped metric/audit).
 func TestPortent_CircuitBelowThreshold(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	db := circuitDB(3, true) // 3 < 5; tripWins не важен — TripDecree не зовётся
+	db := circuitDB(3, true) // 3 < 5; tripWins doesn't matter — TripDecree isn't called
 	h, reg := newOracleHandlerWithCircuit(t, db, enq, aw, 5, 10*time.Minute)
 
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
@@ -659,12 +659,12 @@ func TestPortent_CircuitBelowThreshold(t *testing.T) {
 	}
 }
 
-// TestPortent_CircuitOffSkipsBump — max_fires==0 (escape-hatch) → BumpCircuit
-// вообще не вызывается, trip невозможен.
+// TestPortent_CircuitOffSkipsBump — max_fires==0 (escape hatch) → BumpCircuit
+// is never called, trip is impossible.
 func TestPortent_CircuitOffSkipsBump(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	db := circuitDB(99, true) // вернул бы много, но breaker OFF
+	db := circuitDB(99, true) // would return a lot, but breaker is OFF
 	h, reg := newOracleHandlerWithCircuit(t, db, enq, aw, 0, 10*time.Minute)
 
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
@@ -678,12 +678,12 @@ func TestPortent_CircuitOffSkipsBump(t *testing.T) {
 	}
 }
 
-// TestPortent_CircuitTripLoserNoDuplicate — cnt >= max, но TripDecree проиграл
-// (RowsAffected==0, другой инстанс выиграл) → НЕ дублируем metric/audit.
+// TestPortent_CircuitTripLoserNoDuplicate — cnt >= max, but TripDecree lost
+// (RowsAffected==0, another instance won) → we do NOT duplicate metric/audit.
 func TestPortent_CircuitTripLoserNoDuplicate(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
-	db := circuitDB(7, false) // 7 >= 5, но trip проиграл гонку
+	db := circuitDB(7, false) // 7 >= 5, but trip lost the race
 	h, reg := newOracleHandlerWithCircuit(t, db, enq, aw, 5, 10*time.Minute)
 
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
@@ -699,19 +699,19 @@ func TestPortent_CircuitTripLoserNoDuplicate(t *testing.T) {
 	}
 }
 
-// TestPortent_EnqueueFailNoFireNoAudit — сбой EnqueueScenario (Enqueuer.err) на
-// прошедшем фильтр Decree: fire (cooldown-запись) НЕ пишется и audit oracle.fired
-// НЕ пишется (qa coverage_gap #2: иначе ложный cooldown заблокировал бы будущие
-// реальные реакции). decrees_matched ИНКРЕМЕНТИТСЯ (match фиксируется ДО enqueue
-// — учитываем попытку), но scenarios_enqueued — нет.
+// TestPortent_EnqueueFailNoFireNoAudit — EnqueueScenario failure (Enqueuer.err) on
+// a Decree that passed the filter: fire (cooldown record) is NOT written and
+// audit oracle.fired is NOT written (qa coverage_gap #2: otherwise a false
+// cooldown would block future real reactions). decrees_matched IS INCREMENTED
+// (match is recorded BEFORE enqueue — the attempt counts), but scenarios_enqueued is not.
 func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 	enq := &fakeEnqueuer{err: errors.New("enqueue: incarnation not found")}
 	aw := &recordingAudit{}
 	var fireRecorded bool
 	db := &oracleFakeDB{
 		soulCoven: []string{"web-app", "web"},
-		// recordedFnc сигналит запись в oracle_fires (RecordFire). На fail-пути
-		// её быть не должно.
+		// recordedFnc signals a write to oracle_fires (RecordFire). On the fail
+		// path it must not happen.
 		recordedFnc: func([]any) { fireRecorded = true },
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
@@ -732,7 +732,7 @@ func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 		}
 	}
 	body := obstest.Scrape(t, reg.Gatherer())
-	// match зафиксирован ДО enqueue (учёт попытки), enqueued — нет.
+	// match is recorded BEFORE enqueue (the attempt counts), enqueued is not.
 	if !strings.Contains(body, "keeper_oracle_decrees_matched_total 1") {
 		t.Errorf("match должен фиксироваться до enqueue; got=\n%s", body)
 	}
@@ -741,10 +741,10 @@ func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 	}
 }
 
-// TestPortent_AuditPayloadExcludesEventData — регрессия-guard (qa coverage_gap
-// #4): audit oracle.fired кладёт ровно {sid,beacon,decree,scenario,apply_id} и НЕ
-// протекает event.data (недоверенный payload Soul-события). Подаём event.data с
-// явным маркером и проверяем, что он не появился ни в одном значении payload-а.
+// TestPortent_AuditPayloadExcludesEventData — regression guard (qa coverage_gap
+// #4): audit oracle.fired stores exactly {sid,beacon,decree,scenario,apply_id} and does
+// NOT leak event.data (untrusted payload of the Soul event). We feed event.data with
+// an explicit marker and verify it never appears in any payload value.
 func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
@@ -771,7 +771,7 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 	if fired == nil {
 		t.Fatal("ожидали audit oracle.fired")
 	}
-	// Ровно ожидаемый набор ключей — ни больше, ни меньше.
+	// Exactly the expected set of keys — no more, no less.
 	wantKeys := map[string]bool{"sid": true, "beacon": true, "decree": true, "scenario": true, "apply_id": true}
 	if len(fired.Payload) != len(wantKeys) {
 		t.Errorf("payload keys = %v, want exactly %v", keysOf(fired.Payload), keysOf(map[string]any{"sid": 0, "beacon": 0, "decree": 0, "scenario": 0, "apply_id": 0}))
@@ -781,7 +781,7 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 			t.Errorf("неожиданный ключ в payload: %q", k)
 		}
 	}
-	// Ни одно значение payload-а не несёт маркер event.data.
+	// No payload value carries the event.data marker.
 	for k, v := range fired.Payload {
 		if s, ok := v.(string); ok && strings.Contains(s, leak) {
 			t.Errorf("event.data протёк в payload[%q] = %q", k, s)
@@ -797,16 +797,16 @@ func keysOf(m map[string]any) []string {
 	return out
 }
 
-// TestPortent_SIDDecreeMembershipMismatch — sid-Decree, хост совпал по SID, НО
-// таргет-incarnation Decree-а НЕ среди covens хоста → membership-барьер
-// fail-closed → skip (qa coverage_gap #5: второй барьер membership работает не
-// только для coven-Decree, но и для sid-Decree). enqueue/fire/audit НЕ пишутся.
+// TestPortent_SIDDecreeMembershipMismatch — sid-Decree, host matched by SID, BUT
+// the Decree's target incarnation is NOT among the host's covens → membership
+// barrier fail-closed → skip (qa coverage_gap #5: the second membership barrier
+// applies not only to coven-Decree but also to sid-Decree). enqueue/fire/audit are NOT written.
 func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
 	var fireRecorded bool
-	// SID хоста совпадает с subject_sid Decree-а (subject-match пройдёт), но
-	// incarnation `other-app` НЕ среди covens хоста (`web-app`) → membership fail.
+	// The host's SID matches the Decree's subject_sid (subject-match passes), but
+	// incarnation `other-app` is NOT among the host's covens (`web-app`) → membership fail.
 	db := &oracleFakeDB{
 		soulCoven:   []string{"web-app"},
 		recordedFnc: func([]any) { fireRecorded = true },
@@ -855,7 +855,7 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 	}
 }
 
-// oracleVigilDB — fake для VigilSource: souls (covens) + vigils (набор).
+// oracleVigilDB — fake for VigilSource: souls (covens) + vigils (set).
 type oracleVigilDB struct {
 	soulCoven []string
 	vigils    [][]any
@@ -866,7 +866,7 @@ func (f *oracleVigilDB) Exec(context.Context, string, ...any) (pgconn.CommandTag
 }
 func (f *oracleVigilDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	if strings.Contains(sql, "FROM souls") {
-		// traits jsonb (ADR-060) — слот после coven; NULL → пустой map в scanSoul.
+		// traits jsonb (ADR-060) — slot after coven; NULL → empty map in scanSoul.
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
@@ -881,7 +881,7 @@ func (f *oracleVigilDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows
 	return &oracleEmptyRows{}, nil
 }
 
-// vigilRow в порядке vigilColumns:
+// vigilRow in vigilColumns order:
 // name, coven, sid, interval_spec, check_addr, params, enabled, created_at,
 // updated_at, created_by_aid.
 func vigilRow(name string, coven []string, interval, check string) []any {

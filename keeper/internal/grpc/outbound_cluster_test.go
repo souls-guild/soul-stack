@@ -12,8 +12,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// newClusterRedis — поднимает miniredis-инстанс и оборачивает в
-// [keeperredis.Client]. Cleanup регистрируется через t.Cleanup.
+// newClusterRedis spins up a miniredis instance and wraps it in a
+// [keeperredis.Client]. Cleanup is registered via t.Cleanup.
 func newClusterRedis(t *testing.T) *keeperredis.Client {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -28,23 +28,23 @@ func newClusterRedis(t *testing.T) *keeperredis.Client {
 }
 
 // TestOutbound_Cluster_PublishesToRemoteHolder — Keeper-A.SendApply
-// для SID, чей lease держит Keeper-B, должен:
-//   - локальный lookup пуст;
-//   - публиковать в `outbound:<sid>` (1 subscriber, поднятый отдельно);
-//   - не вернуть ошибку.
+// for a SID whose lease is held by Keeper-B must:
+//   - find an empty local lookup;
+//   - publish to `outbound:<sid>` (1 subscriber, raised separately);
+//   - return no error.
 func TestOutbound_Cluster_PublishesToRemoteHolder(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Keeper-B держит lease.
+	// Keeper-B holds the lease.
 	leaseB, err := keeperredis.AcquireSoulLease(ctx, r, "host.example.com", "kid-B", 30*time.Second)
 	if err != nil {
 		t.Fatalf("AcquireSoulLease(B): %v", err)
 	}
 	defer leaseB.Release(ctx)
 
-	// Keeper-B подписан на outbound-канал (симулируем его EventStream-handler).
+	// Keeper-B is subscribed to the outbound channel (simulating its EventStream handler).
 	sub, err := keeperredis.SubscribeOutbound(ctx, r, "host.example.com", "kid-B", discardLogger(t))
 	if err != nil {
 		t.Fatalf("SubscribeOutbound: %v", err)
@@ -54,7 +54,7 @@ func TestOutbound_Cluster_PublishesToRemoteHolder(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Keeper-A (текущий) — Outbound без локального стрима.
+	// Keeper-A (the current one) — Outbound with no local stream.
 	mA := NewStreamManager(discardLogger(t))
 	ca := &captureAudit{}
 	ob, err := NewOutbound(OutboundDeps{
@@ -91,8 +91,8 @@ func TestOutbound_Cluster_PublishesToRemoteHolder(t *testing.T) {
 	}
 }
 
-// TestOutbound_Cluster_NoHolderReturnsNotConnected — если lease никто
-// не держит → ErrSoulNotConnected.
+// TestOutbound_Cluster_NoHolderReturnsNotConnected — if nobody holds the
+// lease → ErrSoulNotConnected.
 func TestOutbound_Cluster_NoHolderReturnsNotConnected(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx := context.Background()
@@ -115,9 +115,9 @@ func TestOutbound_Cluster_NoHolderReturnsNotConnected(t *testing.T) {
 	}
 }
 
-// TestOutbound_Cluster_LocalLeaseWithoutStream — lease на текущем
-// kid-е есть, но локального стрима нет (race: disconnect, lease ещё
-// жив). → ErrSoulNotConnected, без publish-а.
+// TestOutbound_Cluster_LocalLeaseWithoutStream — the lease exists on the
+// current kid, but there's no local stream (race: disconnect, lease still
+// alive). → ErrSoulNotConnected, no publish.
 func TestOutbound_Cluster_LocalLeaseWithoutStream(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -147,8 +147,8 @@ func TestOutbound_Cluster_LocalLeaseWithoutStream(t *testing.T) {
 	}
 }
 
-// TestOutbound_Cluster_LocalStreamWins — если локальный стрим есть, он
-// получает сообщение даже при наличии Redis (lease не проверяется).
+// TestOutbound_Cluster_LocalStreamWins — if a local stream exists, it
+// gets the message even when Redis is present (the lease isn't checked).
 func TestOutbound_Cluster_LocalStreamWins(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx := context.Background()
@@ -181,8 +181,8 @@ func TestOutbound_Cluster_LocalStreamWins(t *testing.T) {
 	}
 }
 
-// TestOutbound_Cluster_PublishCancelToRemoteHolder — SendCancel также
-// маршрутизируется через pub/sub.
+// TestOutbound_Cluster_PublishCancelToRemoteHolder — SendCancel is also
+// routed through pub/sub.
 func TestOutbound_Cluster_PublishCancelToRemoteHolder(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -234,10 +234,11 @@ func TestOutbound_Cluster_PublishCancelToRemoteHolder(t *testing.T) {
 	}
 }
 
-// TestOutbound_Cluster_PublishWithZeroSubscribers — holder в lease есть,
-// но никто не подписан на outbound-канал → ErrSoulNotConnected с
-// аннотацией "no subscribers". Self-фильтр гарантирует, что Keeper-B,
-// который мы не подняли как subscriber, действительно не доходит.
+// TestOutbound_Cluster_PublishWithZeroSubscribers — a holder exists in the
+// lease, but nobody is subscribed to the outbound channel →
+// ErrSoulNotConnected annotated with "no subscribers". The self-filter
+// guarantees that Keeper-B, which we didn't raise as a subscriber, really
+// doesn't get the message.
 func TestOutbound_Cluster_PublishWithZeroSubscribers(t *testing.T) {
 	r := newClusterRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -267,8 +268,8 @@ func TestOutbound_Cluster_PublishWithZeroSubscribers(t *testing.T) {
 	}
 }
 
-// TestNewOutbound_RedisRequiresKID — установка Redis без KID должна
-// быть отвергнута на конструкторе.
+// TestNewOutbound_RedisRequiresKID — setting Redis without a KID must be
+// rejected by the constructor.
 func TestNewOutbound_RedisRequiresKID(t *testing.T) {
 	r := newClusterRedis(t)
 	mA := NewStreamManager(discardLogger(t))

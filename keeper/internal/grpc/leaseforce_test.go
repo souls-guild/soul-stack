@@ -1,15 +1,16 @@
 package grpc
 
-// Guard-тесты presence-gated force-release SID-lease (ADR-027 amend (n), S2).
+// Guard tests for presence-gated force-release of a SID lease (ADR-027
+// amend (n), S2).
 //
-// Покрывают ветку [eventStreamHandler.acquireSoulLease] на ErrLeaseTaken:
-// перезахват lease у ДОКАЗАННО-МЁРТВОГО prev-holder-а (force-release) против
-// сохранения AlreadyExists (split-brain guard / fail-safe). Это
-// security-чувствительная операция перехвата владения — каждый инвариант
-// зафиксирован тестом, ловящим регресс.
+// Cover the [eventStreamHandler.acquireSoulLease] branch on ErrLeaseTaken:
+// re-acquiring the lease from a PROVABLY-DEAD prev-holder (force-release)
+// versus preserving AlreadyExists (split-brain guard / fail-safe). This is
+// a security-sensitive ownership-takeover operation — every invariant is
+// pinned by a test that catches regressions.
 //
-// Уровень — unit (miniredis в процессе, без PG): acquireSoulLease зависит
-// только от Redis (lease + Conclave-presence) и AuditWriter.
+// Level — unit (in-process miniredis, no PG): acquireSoulLease depends only
+// on Redis (lease + Conclave presence) and AuditWriter.
 
 import (
 	"context"
@@ -24,8 +25,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newForceLeaseHandler собирает handler с miniredis-Redis-ом, заданным KID-ом
-// и capture-audit-ом — общий boilerplate всех force-release-тестов.
+// newForceLeaseHandler assembles a handler with a miniredis-backed Redis, a
+// given KID, and a capture-audit writer — shared boilerplate for all
+// force-release tests.
 func newForceLeaseHandler(t *testing.T, kid string) (*eventStreamHandler, *keeperredis.Client, *captureAudit) {
 	t.Helper()
 	rc := newClusterRedis(t)
@@ -40,8 +42,8 @@ func newForceLeaseHandler(t *testing.T, kid string) (*eventStreamHandler, *keepe
 	return h, rc, ca
 }
 
-// markInstanceAlive регистрирует Conclave-presence-запись KID-а (живой
-// keeper-инстанс), чтобы InstanceAlive(kid) вернул true.
+// markInstanceAlive registers a Conclave presence record for the KID (a
+// live keeper instance), so that InstanceAlive(kid) returns true.
 func markInstanceAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client, kid string) {
 	t.Helper()
 	if err := keeperredis.RegisterInstance(ctx, rc, kid, kid, 30*time.Second, false); err != nil {
@@ -49,17 +51,18 @@ func markInstanceAlive(t *testing.T, ctx context.Context, rc *keeperredis.Client
 	}
 }
 
-// TestAcquireSoulLease_DeadPrevHolder_ForceReleases — prevKID мёртв в Conclave
-// (presence-ключа нет) → force-release: lease перезахвачена на собственный KID,
-// cleanup не-nil, ошибки нет (стрим живёт), эмитится audit
-// `eventstream.lease_force_released`.
+// TestAcquireSoulLease_DeadPrevHolder_ForceReleases — prevKID is dead in
+// Conclave (no presence key) → force-release: the lease is re-acquired for
+// our own KID, cleanup is non-nil, no error (the stream lives), and audit
+// `eventstream.lease_force_released` is emitted.
 func TestAcquireSoulLease_DeadPrevHolder_ForceReleases(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// Мёртвый prev-holder держит lease (TTL не истёк после crash-а), но его
-	// presence-записи в Conclave НЕТ → доказанно мёртв.
+	// The dead prev-holder still holds the lease (TTL hasn't expired since
+	// the crash), but it has NO presence record in Conclave → provably
+	// dead.
 	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-dead", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
@@ -99,10 +102,10 @@ func TestAcquireSoulLease_DeadPrevHolder_ForceReleases(t *testing.T) {
 	}
 }
 
-// TestAcquireSoulLease_LivePrevHolder_NoForce — prevKID ЖИВ в Conclave
-// (presence-ключ есть) → НЕ force: AlreadyExists, lease не тронут, audit пуст.
-// Защита от split-brain: живого holder-а (или partition-с-живым-Conclave) не
-// перехватываем.
+// TestAcquireSoulLease_LivePrevHolder_NoForce — prevKID is ALIVE in
+// Conclave (presence key exists) → NOT forced: AlreadyExists, the lease is
+// untouched, audit is empty. Split-brain protection: we don't hijack a
+// live holder (or a partition with a live Conclave).
 func TestAcquireSoulLease_LivePrevHolder_NoForce(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()
@@ -128,9 +131,10 @@ func TestAcquireSoulLease_LivePrevHolder_NoForce(t *testing.T) {
 	}
 }
 
-// TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce — InstanceAlive вернул
-// ОШИБКУ (флап Redis на presence-чеке) → fail-safe: НЕ объявлять мёртвым, НЕ
-// force → AlreadyExists. По неопределённости lease не перехватывается.
+// TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce — InstanceAlive
+// returned an ERROR (Redis flapped on the presence check) → fail-safe: do
+// NOT declare it dead, do NOT force → AlreadyExists. Under uncertainty the
+// lease is not hijacked.
 func TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()
@@ -139,8 +143,9 @@ func TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce(t *testing.T) {
 	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-unknown", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
-	// Presence-чек падает: подменяем seam на ошибку (эмуляция флапа Redis
-	// именно на EXISTS conclave-ключа, без сноса всего miniredis).
+	// The presence check fails: swap the seam for an error (emulating a
+	// Redis flap specifically on the conclave key's EXISTS, without
+	// tearing down all of miniredis).
 	h.instanceAlive = func(context.Context, *keeperredis.Client, string) (bool, error) {
 		return false, errors.New("redis flap on EXISTS")
 	}
@@ -160,20 +165,22 @@ func TestAcquireSoulLease_PresenceCheckError_FailSafeNoForce(t *testing.T) {
 	}
 }
 
-// TestAcquireSoulLease_PrevHolderIsSelf_NoForce — prevKID == собственный KID
-// (reconnect к тому же keeper-у / своя lease) → НЕ force, текущее поведение
-// AlreadyExists. Защита от ложного перехвата своей же lease.
+// TestAcquireSoulLease_PrevHolderIsSelf_NoForce — prevKID == our own KID
+// (reconnect to the same keeper / our own lease) → NOT forced, current
+// behavior is AlreadyExists. Protects against falsely hijacking our own
+// lease.
 func TestAcquireSoulLease_PrevHolderIsSelf_NoForce(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// lease уже держит ЭТОТ же keeper-инстанс (kid-self).
+	// The lease is already held by THIS SAME keeper instance (kid-self).
 	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-self", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
-	// Conclave-presence self не регистрируем намеренно: ветка self обязана
-	// сработать ДО presence-чека (иначе self ложно «мёртв» → force своей lease).
+	// We deliberately don't register Conclave presence for self: the self
+	// branch must trigger BEFORE the presence check (otherwise self would
+	// falsely look "dead" → force our own lease).
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if cleanup != nil {
@@ -190,30 +197,32 @@ func TestAcquireSoulLease_PrevHolderIsSelf_NoForce(t *testing.T) {
 	}
 }
 
-// TestAcquireSoulLease_ForceRace_KeyChanged_FallbackNoHijack — гонка: prevKID
-// доказанно мёртв, но между presence-чеком и force-release ключ сменился на
-// третьего ЖИВОГО владельца (TTL истёк / другой keeper успел). CAS-by-prev-holder
-// в ForceAcquireSoulLease вернёт ErrLeaseTaken → корректный fallback на
-// AlreadyExists, без перехвата чужого свежего lease и без бесконечного цикла.
+// TestAcquireSoulLease_ForceRace_KeyChanged_FallbackNoHijack — race: prevKID
+// is provably dead, but between the presence check and the force-release
+// the key changed to a third, LIVE owner (TTL expired / another keeper won
+// the race). The CAS-by-prev-holder in ForceAcquireSoulLease returns
+// ErrLeaseTaken → correct fallback to AlreadyExists, without hijacking
+// someone else's fresh lease and without an infinite loop.
 func TestAcquireSoulLease_ForceRace_KeyChanged_FallbackNoHijack(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// prevKID мёртв в Conclave (presence не регистрируем) — но к моменту
-	// force-release ключ уже принадлежит kid-fresh (эмуляция гонки: lease
-	// перезаписан после того, как SoulLeaseOwner вернул prevKID). Чтобы
-	// SoulLeaseOwner внутри handler-а вернул именно kid-dead, а CAS увидел
-	// kid-fresh, подменяем seam owner-а на kid-dead, а реальный ключ ставим
-	// в kid-fresh.
+	// prevKID is dead in Conclave (we don't register presence) — but by
+	// the time force-release runs, the key already belongs to kid-fresh
+	// (race emulation: the lease was overwritten after SoulLeaseOwner
+	// returned prevKID). To make SoulLeaseOwner inside the handler return
+	// exactly kid-dead while the CAS sees kid-fresh, we swap the owner
+	// seam for kid-dead and set the real key to kid-fresh.
 	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-fresh", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
 	h.soulLeaseOwner = func(context.Context, *keeperredis.Client, string) (string, bool, error) {
 		return "kid-dead", true, nil
 	}
-	// kid-dead доказанно мёртв (его presence нет); kid-fresh жив — но force
-	// CAS сверяет ключ с prevKID(kid-dead), не сматчит kid-fresh → ErrLeaseTaken.
+	// kid-dead is provably dead (no presence); kid-fresh is alive — but the
+	// force CAS compares the key against prevKID(kid-dead), which won't
+	// match kid-fresh → ErrLeaseTaken.
 
 	cleanup, err := h.acquireSoulLease(ctx, sid)
 	if cleanup != nil {
@@ -230,9 +239,9 @@ func TestAcquireSoulLease_ForceRace_KeyChanged_FallbackNoHijack(t *testing.T) {
 	}
 }
 
-// TestAcquireSoulLease_NoConflict_HappyPath — нет конкурента: lease свободен →
-// обычный захват, без presence-чека и без audit-а (контроль, что врезка не
-// ломает штатный путь).
+// TestAcquireSoulLease_NoConflict_HappyPath — no contender: the lease is
+// free → a regular acquire, with no presence check and no audit (control
+// check that the new logic doesn't break the normal path).
 func TestAcquireSoulLease_NoConflict_HappyPath(t *testing.T) {
 	h, rc, ca := newForceLeaseHandler(t, "kid-self")
 	ctx := context.Background()

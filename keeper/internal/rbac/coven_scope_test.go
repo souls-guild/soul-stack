@@ -66,10 +66,11 @@ func TestCovenScope_UnionAcrossRoles(t *testing.T) {
 	}
 }
 
-// Право с непустым селектором, но БЕЗ ключа coven (host=) НЕ делает оператора
-// unrestricted по coven — симметрия с Permission.Matches (host-only-permission
-// не сматчит запрос без host в контексте, значит ограничивает в другом
-// измерении). Вклад covens=nil, unrestricted=false («не вправе по coven»).
+// A permission with a non-empty selector but WITHOUT a coven key (host=)
+// does NOT make the operator unrestricted by coven — symmetric with
+// Permission.Matches (a host-only permission won't match a request without
+// host in the context, so it restricts along a different dimension).
+// Contributes covens=nil, unrestricted=false ("no coven-scoped right").
 func TestCovenScope_HostSelector_NotCovenScoped(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "host-ops", operators: []string{"archon-a"},
@@ -108,8 +109,8 @@ func TestCovenScope_UnknownAID_Empty(t *testing.T) {
 }
 
 func TestCovenScope_DifferentAction_NotMatched(t *testing.T) {
-	// coven-scope для другого действия (soul.list) не должен «протекать» в
-	// coven-assign.
+	// The coven-scope for a different action (soul.list) must not "leak"
+	// into coven-assign.
 	e := mustEnforcer(t, fixtureRole{
 		name: "lister", operators: []string{"archon-a"},
 		permissions: []string{"soul.list on coven=dev"},

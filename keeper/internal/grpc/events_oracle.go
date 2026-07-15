@@ -16,23 +16,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// OracleDeps — wire-up зависимости handler-а `PortentEvent` через EventStream
-// (ADR-030, beacons reactor, срез S2). Приём Portent → match по реестру Decree →
-// постановка named-scenario в work-queue.
+// OracleDeps — wire-up dependencies for the `PortentEvent` handler over EventStream
+// (ADR-030, beacons reactor, slice S2). Receives a Portent → matches against the
+// Decree registry → enqueues a named scenario on the work queue.
 //
-// Обязательны при wire-up-е:
-//   - DB — реестр decrees / oracle_fires (match + cooldown) + souls (резолв
-//     covens субъекта по авторитетному SID);
-//   - Where — sandbox-CEL для where-предикатов Decree (event.data);
-//   - Enqueuer — постановка named-scenario в work-queue (ADR-027);
-//   - AuditWriter — `oracle.fired` / `decree.circuit_tripped` на срабатывания.
+// Required for wire-up:
+//   - DB — the decrees / oracle_fires registry (match + cooldown) + souls (resolves
+//     the subject's covens by the authoritative SID);
+//   - Where — sandbox CEL for Decree where-predicates (event.data);
+//   - Enqueuer — enqueues the named scenario on the work queue (ADR-027);
+//   - AuditWriter — `oracle.fired` / `decree.circuit_tripped` on triggers.
 //
-// Опционально:
-//   - Metrics — keeper_oracle_*-дескриптор (ADR-024 S4). nil → инструментация
-//     выключена (nil-safe Observe*-методы — no-op), как Metrics в [AugurDeps].
+// Optional:
+//   - Metrics — keeper_oracle_* descriptor (ADR-024 S4). nil → instrumentation
+//     disabled (nil-safe Observe* methods — no-op), same as Metrics in [AugurDeps].
 //
-// nil-OracleDeps (handler не wired up) → handler логирует warn и игнорирует
-// Portent (минимально-инвазивный fallback на сборках без Oracle), как AugurDeps.
+// nil OracleDeps (handler not wired up) → the handler logs a warning and ignores
+// the Portent (minimally-invasive fallback for builds without Oracle), same as AugurDeps.
 type OracleDeps struct {
 	DB          oracleDB
 	Where       *oracle.WhereEvaluator
@@ -40,43 +40,47 @@ type OracleDeps struct {
 	AuditWriter audit.Writer
 	Metrics     *oracle.OracleMetrics
 
-	// CircuitMaxFires / CircuitWindow — пороги circuit-breaker-а Oracle
-	// (ADR-030(a), beacons S4): после CircuitMaxFires срабатываний одного Decree
-	// за окно CircuitWindow он авто-disable-ится (enabled=false). Резолв дефолтов
-	// — в daemon (пусто-поле→дефолт). CircuitMaxFires==0 → breaker OFF
-	// (escape-hatch): BumpCircuit не вызывается, Decree никогда не авто-disable.
+	// CircuitMaxFires / CircuitWindow — thresholds for Oracle's circuit breaker
+	// (ADR-030(a), beacons S4): after CircuitMaxFires triggers of one Decree
+	// within the CircuitWindow, it auto-disables (enabled=false). Default
+	// resolution happens in the daemon (empty field → default). CircuitMaxFires==0
+	// → breaker OFF (escape hatch): BumpCircuit is never called, the Decree never
+	// auto-disables.
 	CircuitMaxFires int
 	CircuitWindow   time.Duration
 }
 
-// oracleDB — совмещённая поверхность PG, нужная Oracle-резолву: decrees /
-// oracle_fires (oracle.ExecQueryRower) + souls-ридер (soul.ExecQueryRower) для
-// covens субъекта из авторитетного registry. *pgxpool.Pool удовлетворяет обоим.
+// oracleDB — the combined PG surface the Oracle resolve needs: decrees /
+// oracle_fires (oracle.ExecQueryRower) + a souls reader (soul.ExecQueryRower)
+// for the subject's covens from the authoritative registry. *pgxpool.Pool
+// satisfies both.
 type oracleDB interface {
 	oracle.ExecQueryRower
 	soul.ExecQueryRower
 }
 
-// ScenarioEnqueuer — узкая поверхность постановки named-scenario в work-queue
-// (ADR-027) от имени Oracle-реакции. Интерфейс (а не прямой импорт scenario/
-// applyrun) держит Oracle-handler независимым от того, КАК резолвится
-// incarnation/ServiceRef субъектного хоста — это решение wire-up-а (daemon).
+// ScenarioEnqueuer — the narrow surface for enqueueing a named scenario on the
+// work queue (ADR-027) on behalf of an Oracle reaction. An interface (rather
+// than a direct scenario/applyrun import) keeps the Oracle handler independent
+// of HOW the subject host's incarnation/ServiceRef is resolved — that's a
+// wire-up decision (the daemon).
 //
-// EnqueueScenario ставит сценарий action_scenario на хост subjectSID с входом
-// actionInput (vault-ref КАК ЕСТЬ — инвариант A ADR-027). Возвращает apply_id
-// поставленного прогона (для audit-correlation) либо ошибку резолва/постановки.
+// EnqueueScenario enqueues the action_scenario on host subjectSID with input
+// actionInput (vault-ref AS-IS — invariant A of ADR-027). Returns the apply_id
+// of the enqueued run (for audit correlation) or a resolve/enqueue error.
 type ScenarioEnqueuer interface {
 	EnqueueScenario(ctx context.Context, req EnqueueScenarioRequest) (applyID string, err error)
 }
 
-// EnqueueScenarioRequest — параметры постановки scenario от Oracle-реакции.
-// SubjectSID — авторитетный SID хоста-отправителя (mTLS peer cert).
-// IncarnationName — таргет-incarnation из Decree (РЕШЕНИЕ #1, вариант b):
-// Enqueuer резолвит ServiceRef ИЗ неё (incarnation.service → реестр сервисов),
-// а не из Decree. ScenarioName — action_scenario из Decree (whitelist).
-// ActionInput — JSONB action_input из Decree (vault-ref КАК ЕСТЬ); nil/пустой →
-// сценарий без input. DecreeName — имя сматчившего Decree (для audit/диагностики
-// постановки).
+// EnqueueScenarioRequest — parameters for enqueueing a scenario from an
+// Oracle reaction. SubjectSID — the authoritative SID of the sending host
+// (mTLS peer cert). IncarnationName — the target incarnation from the Decree
+// (DECISION #1, option b): the Enqueuer resolves the ServiceRef FROM it
+// (incarnation.service → the service registry), not from the Decree.
+// ScenarioName — the action_scenario from the Decree (whitelist). ActionInput
+// — the JSONB action_input from the Decree (vault-ref AS-IS); nil/empty →
+// scenario with no input. DecreeName — the name of the matched Decree (for
+// audit/enqueue diagnostics).
 type EnqueueScenarioRequest struct {
 	SubjectSID      string
 	IncarnationName string
@@ -101,18 +105,18 @@ func (d *OracleDeps) validate() error {
 	return nil
 }
 
-// vigilSource — реализация [VigilSource] поверх реестра vigils + souls
-// (connect-time broadcast VigilSnapshot, ADR-030). Резолвит covens хоста из
-// авторитетного souls-registry, затем active-набор Vigil по sid ∪ covens и
-// проецирует его в транспортные [keeperv1.VigilDef]. Wire-up в daemon: тот же
-// pool, что OracleDeps.DB.
+// vigilSource — implements [VigilSource] over the vigils + souls registry
+// (connect-time broadcast VigilSnapshot, ADR-030). Resolves the host's covens
+// from the authoritative souls registry, then the active Vigil set by
+// sid ∪ covens, and projects it into transport [keeperv1.VigilDef]. Wired up
+// in the daemon with the same pool as OracleDeps.DB.
 type vigilSource struct {
 	db oracleDB
 }
 
-// NewVigilSource собирает [VigilSource] поверх совмещённого pool-а (vigils +
-// souls). db обязан удовлетворять [oracle.ExecQueryRower] и [soul.ExecQueryRower]
-// (*pgxpool.Pool удовлетворяет обоим).
+// NewVigilSource assembles a [VigilSource] over a combined pool (vigils +
+// souls). db must satisfy [oracle.ExecQueryRower] and [soul.ExecQueryRower]
+// (*pgxpool.Pool satisfies both).
 func NewVigilSource(db oracleDB) VigilSource {
 	return &vigilSource{db: db}
 }
@@ -124,8 +128,8 @@ func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*ke
 	case err == nil:
 		covens = su.Coven
 	case errors.Is(err, soul.ErrSoulNotFound):
-		// Хост ещё не в реестре (онбординг не завершён) — coven-Vigil не
-		// сматчит, но sid-Vigil может. Резолвим с пустыми covens.
+		// The host isn't in the registry yet (onboarding incomplete) — a
+		// coven Vigil won't match, but a sid Vigil might. Resolve with empty covens.
 	default:
 		return nil, fmt.Errorf("grpc: vigil source covens resolve: %w", err)
 	}
@@ -153,26 +157,26 @@ func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*ke
 	return out, nil
 }
 
-// handlePortentEvent — обработчик payload-а [keeperv1.PortentEvent] (ADR-030).
+// handlePortentEvent — handler for the [keeperv1.PortentEvent] payload (ADR-030).
 //
-// SID берётся из mTLS peer cert сессии (передан caller-ом), НЕ из
-// PortentEvent.sid — авторитет идентичности Soul-а это сертификат (ADR-012(i),
-// ADR-030: beacon-событие = недоверенный вход).
+// SID comes from the session's mTLS peer cert (passed by the caller), NOT from
+// PortentEvent.sid — the authority for a Soul's identity is the certificate
+// (ADR-012(i), ADR-030: a beacon event is an untrusted input).
 //
-// Поток (default-deny):
-//  1. SelectDecreesByBeacon(beacon_name) — enabled-Decree-ы на этот Vigil.
-//     Пусто → ничего (нет правила → нет действия).
-//  2. covens субъекта из souls-registry (НЕ из payload).
-//  3. для каждого Decree: SubjectMatches (sid/coven) — нет → skip;
-//     where-CEL (если задан) над event.data — false → skip.
-//  4. cooldown-check per-(decree, subject): в окне → skip + debug-лог.
+// Flow (default-deny):
+//  1. SelectDecreesByBeacon(beacon_name) — enabled Decrees on this Vigil.
+//     Empty → nothing (no rule → no action).
+//  2. Subject covens from the souls registry (NOT from the payload).
+//  3. For each Decree: SubjectMatches (sid/coven) — no → skip;
+//     where-CEL (if set) over event.data — false → skip.
+//  4. Cooldown check per-(decree, subject): within the window → skip + debug log.
 //  5. EnqueueScenario(action_scenario, action_input) → RecordFire → audit
 //     oracle.fired.
 //
-// Любой сбой на одном Decree не прерывает обработку остальных (best-effort,
-// несколько Decree могут реагировать на один Portent). default-deny строго:
-// любая неуверенность (no subject-match / where false / resolve-сбой) →
-// пропуск, не действие.
+// A failure on one Decree doesn't interrupt processing of the others
+// (best-effort — multiple Decrees may react to one Portent). Strict
+// default-deny: any uncertainty (no subject match / where false / resolve
+// failure) → skip, not action.
 func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessionID string, evt *keeperv1.PortentEvent) {
 	deps := h.deps.Oracle
 	if deps == nil {
@@ -193,7 +197,7 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 		return
 	}
 
-	// Принят валидный Portent (непустой beacon_name) — знаменатель прочих метрик.
+	// A valid Portent was accepted (non-empty beacon_name) — the denominator for the other metrics.
 	deps.Metrics.ObservePortentReceived()
 
 	decrees, err := oracle.SelectDecreesByBeacon(ctx, deps.DB, beacon)
@@ -207,13 +211,13 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 		return
 	}
 	if len(decrees) == 0 {
-		// Default-deny: нет матчащего Decree → событие не вызывает действия.
+		// Default-deny: no matching Decree → the event triggers no action.
 		h.logger.Debug("eventstream: oracle no decree for beacon — default-deny",
 			slog.String("sid", sid), slog.String("beacon", beacon))
 		return
 	}
 
-	// covens субъекта из авторитетного souls-registry (НЕ из payload).
+	// Subject covens from the authoritative souls registry (NOT from the payload).
 	covens, err := h.oracleSubjectCovens(ctx, deps, sid)
 	if err != nil {
 		h.logger.Warn("eventstream: oracle subject covens resolve failed",
@@ -224,17 +228,17 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 		return
 	}
 
-	// where-CEL читает полный event (typed payload V5-1 + legacy data, оба
-	// стиля доступа): передаём evt целиком в evaluateDecree. Активация
-	// собирается в WhereEvaluator.EvalEvent.
+	// where-CEL reads the full event (typed payload V5-1 + legacy data, both
+	// access styles): we pass evt whole into evaluateDecree. The activation is
+	// assembled in WhereEvaluator.EvalEvent.
 	for _, decree := range decrees {
 		h.evaluateDecree(ctx, deps, sid, sessionID, beacon, decree, covens, evt)
 	}
 }
 
-// oracleSubjectCovens резолвит covens субъекта по авторитетному SID из реестра
-// souls. ErrSoulNotFound → пустые covens (хост ещё не зарегистрирован; sid-Decree
-// всё равно может сматчить по SID, coven-Decree — нет).
+// oracleSubjectCovens resolves the subject's covens by authoritative SID from
+// the souls registry. ErrSoulNotFound → empty covens (the host isn't
+// registered yet; a sid-Decree can still match by SID, a coven-Decree cannot).
 func (h *eventStreamHandler) oracleSubjectCovens(ctx context.Context, deps *OracleDeps, sid string) ([]string, error) {
 	s, err := soul.SelectBySID(ctx, deps.DB, sid)
 	if err != nil {
@@ -246,11 +250,12 @@ func (h *eventStreamHandler) oracleSubjectCovens(ctx context.Context, deps *Orac
 	return s.Coven, nil
 }
 
-// subjectInIncarnation сообщает, принадлежит ли хост-отправитель таргет-
-// incarnation Decree-а: incarnation.name — корневая Coven-метка (ADR-008),
-// поэтому членство сводится к incarnationName ∈ covens субъекта. covens —
-// авторитетные из souls-registry. Пустой incarnationName (теоретически
-// невозможен — NOT NULL в схеме) трактуется fail-closed как «не член».
+// subjectInIncarnation reports whether the sending host belongs to the
+// Decree's target incarnation: incarnation.name is the root Coven label
+// (ADR-008), so membership reduces to incarnationName ∈ subject covens.
+// covens are authoritative, from the souls registry. An empty incarnationName
+// (theoretically impossible — NOT NULL in the schema) is treated fail-closed
+// as "not a member."
 func subjectInIncarnation(incarnationName string, covens []string) bool {
 	if incarnationName == "" {
 		return false
@@ -263,10 +268,10 @@ func subjectInIncarnation(incarnationName string, covens []string) bool {
 	return false
 }
 
-// evaluateDecree применяет один Decree к Portent-у: subject-match → where-CEL →
-// membership-check → cooldown → enqueue → record fire → audit. Любой сбой
-// логируется и НЕ валит обработку прочих Decree-ов (best-effort). default-deny:
-// каждая неуверенность — пропуск.
+// evaluateDecree applies one Decree to a Portent: subject match → where-CEL →
+// membership check → cooldown → enqueue → record fire → audit. Any failure is
+// logged and does NOT fail processing of the other Decrees (best-effort).
+// default-deny: every uncertainty means skip.
 func (h *eventStreamHandler) evaluateDecree(
 	ctx context.Context,
 	deps *OracleDeps,
@@ -281,12 +286,13 @@ func (h *eventStreamHandler) evaluateDecree(
 		return
 	}
 
-	// Membership sanity-check (РЕШЕНИЕ #3): хост-отправитель должен принадлежать
-	// таргет-incarnation Decree-а. incarnation.name — корневая Coven-метка
-	// (ADR-008), поэтому членство = incarnation_name ∈ covens субъекта (covens
-	// авторитетны из souls-registry). Не член → skip + warn, fire НЕ пишется,
-	// audit oracle.fired НЕ пишется: запрет ставить сценарий incarnation-а на
-	// хост вне него (защита от cross-incarnation-эскалации, ADR-030(b)).
+	// Membership sanity check (DECISION #3): the sending host must belong to
+	// the Decree's target incarnation. incarnation.name is the root Coven
+	// label (ADR-008), so membership = incarnation_name ∈ subject covens
+	// (covens are authoritative, from the souls registry). Not a member →
+	// skip + warn; fire is NOT recorded, oracle.fired audit is NOT written:
+	// this forbids enqueueing an incarnation's scenario on a host outside it
+	// (protection against cross-incarnation escalation, ADR-030(b)).
 	if !subjectInIncarnation(decree.IncarnationName, covens) {
 		h.logger.Warn("eventstream: oracle decree subject not in target incarnation — skip",
 			slog.String("sid", sid),
@@ -299,8 +305,8 @@ func (h *eventStreamHandler) evaluateDecree(
 	if decree.WhereCEL != nil && *decree.WhereCEL != "" {
 		ok, err := deps.Where.EvalEvent(*decree.WhereCEL, evt)
 		if err != nil {
-			// Битый where_cel (compile-ошибка) — конфигурационная проблема
-			// Decree-а; default-deny: не срабатываем, логируем для оператора.
+			// A broken where_cel (compile error) is a Decree configuration
+			// problem; default-deny: don't fire, log it for the operator.
 			h.logger.Warn("eventstream: oracle decree where-CEL compile failed — skip (default-deny)",
 				slog.String("sid", sid),
 				slog.String("decree", decree.Name),
@@ -334,13 +340,14 @@ func (h *eventStreamHandler) evaluateDecree(
 		return
 	}
 
-	// Decree прошёл весь фильтр (subject/membership/where/cooldown) и будет
-	// поставлен — фиксируем match ДО enqueue (учтём попытку даже при сбое enqueue;
-	// расхождение matched↔enqueued = ошибки постановки, видимы по серии).
+	// The Decree passed the whole filter (subject/membership/where/cooldown)
+	// and will be enqueued — we record the match BEFORE enqueue (so the
+	// attempt counts even if enqueue fails; a matched↔enqueued gap signals
+	// enqueue errors, visible in the series).
 	deps.Metrics.ObserveDecreeMatched()
 
-	// action_input (JSONB) → map для RunSpec. Битый JSON — конфигурационная
-	// ошибка Decree-а (валидируется на service-слое S3); default-deny: skip.
+	// action_input (JSONB) → map for RunSpec. Malformed JSON is a Decree
+	// configuration error (validated at the service layer, S3); default-deny: skip.
 	var actionInput map[string]any
 	if len(decree.ActionInput) > 0 {
 		if err := json.Unmarshal(decree.ActionInput, &actionInput); err != nil {
@@ -368,21 +375,23 @@ func (h *eventStreamHandler) evaluateDecree(
 	}
 	deps.Metrics.ObserveScenarioEnqueued()
 
-	// Cooldown-state фиксируется ПОСЛЕ успешной постановки: запись срабатывания
-	// без фактического enqueue ложно заблокировала бы будущие реакции.
+	// Cooldown state is recorded AFTER a successful enqueue: recording a fire
+	// without an actual enqueue would falsely block future reactions.
 	if err := oracle.RecordFire(ctx, deps.DB, decree.Name, sid, now); err != nil {
-		// Прогон уже поставлен — fire-record best-effort: при сбое cooldown на
-		// эту пару не активируется (возможен повтор до следующего успешного
-		// record), но idempotent scenario гасит петлю на уровне action (ADR-030(a)).
+		// The run is already enqueued — the fire record is best-effort: on
+		// failure, cooldown isn't activated for this pair (a repeat is possible
+		// until the next successful record), but an idempotent scenario
+		// dampens the loop at the action level (ADR-030(a)).
 		h.logger.Warn("eventstream: oracle record fire failed — cooldown not persisted",
 			slog.String("sid", sid), slog.String("decree", decree.Name), slog.Any("error", err))
 	}
 
-	// circuit-breaker (ADR-030(a), beacons S4): второй барьер loop-prevention
-	// после cooldown. cooldown гасит per-(decree, subject); circuit-breaker
-	// считает срабатывания правила СУММАРНО (fixed-window) и при превышении
-	// порога авто-disable-ит Decree. breaker-off (max_fires==0, escape-hatch) →
-	// BumpCircuit не вызываем вовсе. now — тот же момент, что cooldown/audit.
+	// circuit breaker (ADR-030(a), beacons S4): the second loop-prevention
+	// barrier after cooldown. cooldown dampens per-(decree, subject);
+	// circuit-breaker counts rule triggers TOTAL (fixed window) and
+	// auto-disables the Decree once the threshold is exceeded. breaker-off
+	// (max_fires==0, escape hatch) → BumpCircuit is never called at all.
+	// now is the same instant as cooldown/audit.
 	h.tripCircuitIfTripped(ctx, deps, decree, now)
 
 	h.auditOracleFired(ctx, sid, beacon, decree.Name, decree.ActionScenario, applyID)
@@ -396,16 +405,17 @@ func (h *eventStreamHandler) evaluateDecree(
 	)
 }
 
-// tripCircuitIfTripped инкрементирует fixed-window счётчик срабатываний Decree-а
-// и, при достижении порога, авто-disable-ит правило (circuit-breaker, ADR-030(a)).
-// Вызывается ПОСЛЕ успешного enqueue+RecordFire (только реально поставленное
-// срабатывание считается). breaker-off (CircuitMaxFires==0) — no-op (BumpCircuit
-// не вызывается). Любой сбой best-effort: логируется и НЕ валит обработку (прогон
-// уже поставлен).
+// tripCircuitIfTripped increments the fixed-window trigger counter for a
+// Decree and, once the threshold is reached, auto-disables the rule
+// (circuit breaker, ADR-030(a)). Called AFTER a successful enqueue+RecordFire
+// (only an actually-enqueued trigger counts). breaker-off (CircuitMaxFires==0)
+// — no-op (BumpCircuit isn't called). Any failure is best-effort: logged and
+// does NOT fail processing (the run is already enqueued).
 //
-// Trip выполняется single-winner-ом: TripDecree переводит enabled true→false
-// атомарно, и только инстанс с RowsAffected==1 пишет metric+audit+warn — при
-// конкурентном trip-е с нескольких Keeper-инстансов алертит ровно один.
+// The trip is a single-winner operation: TripDecree flips enabled true→false
+// atomically, and only the instance with RowsAffected==1 writes
+// metric+audit+warn — under a concurrent trip from multiple Keeper instances,
+// exactly one alerts.
 func (h *eventStreamHandler) tripCircuitIfTripped(ctx context.Context, deps *OracleDeps, decree *oracle.Decree, now time.Time) {
 	if deps.CircuitMaxFires <= 0 {
 		return // breaker OFF (escape-hatch)
@@ -428,8 +438,8 @@ func (h *eventStreamHandler) tripCircuitIfTripped(ctx context.Context, deps *Ora
 		return
 	}
 	if !tripped {
-		// Другой Keeper-инстанс уже выиграл trip (или Decree снят оператором) —
-		// не дублируем alert/audit/metric.
+		// Another Keeper instance already won the trip (or the Decree was
+		// disabled by an operator) — don't duplicate alert/audit/metric.
 		return
 	}
 
@@ -443,11 +453,12 @@ func (h *eventStreamHandler) tripCircuitIfTripped(ctx context.Context, deps *Ora
 	)
 }
 
-// auditDecreeCircuitTripped пишет событие `decree.circuit_tripped` на авто-disable
-// Decree-а circuit-breaker-ом (ADR-030(a)). Payload — свойство правила (decree /
-// fire_count / window / trigger), БЕЗ subject/beacon/event.data: недоверенный
-// payload события не кладём, trip привязан к правилу, а не к конкретному хосту.
-// Best-effort: сбой audit-а не отменяет уже выполненный авто-disable.
+// auditDecreeCircuitTripped writes the `decree.circuit_tripped` event when a
+// Decree is auto-disabled by the circuit breaker (ADR-030(a)). The payload is
+// a property of the rule (decree / fire_count / window / trigger), WITHOUT
+// subject/beacon/event.data: we don't include the untrusted event payload —
+// the trip is tied to the rule, not a specific host. Best-effort: an audit
+// failure doesn't undo the already-performed auto-disable.
 func (h *eventStreamHandler) auditDecreeCircuitTripped(ctx context.Context, decree string, fireCount int, window time.Duration) {
 	if err := h.deps.Oracle.AuditWriter.Write(ctx, &audit.Event{
 		EventType: audit.EventDecreeCircuitTripped,
@@ -467,10 +478,10 @@ func (h *eventStreamHandler) auditDecreeCircuitTripped(ctx context.Context, decr
 	}
 }
 
-// auditOracleFired пишет событие `oracle.fired` на срабатывание reactor-а
-// (ADR-030(b), категория soul_grpc). Значения event.data в payload НЕ кладём
-// (недоверенный источник). Best-effort: сбой audit-а не отменяет уже
-// поставленный прогон (паттерн прочих event-handler-ов).
+// auditOracleFired writes the `oracle.fired` event when the reactor triggers
+// (ADR-030(b), category soul_grpc). event.data values are NEVER included in
+// the payload (untrusted source). Best-effort: an audit failure doesn't undo
+// the already-enqueued run (same pattern as the other event handlers).
 func (h *eventStreamHandler) auditOracleFired(ctx context.Context, sid, beacon, decree, scenario, applyID string) {
 	if err := h.deps.Oracle.AuditWriter.Write(ctx, &audit.Event{
 		EventType:     audit.EventOracleFired,

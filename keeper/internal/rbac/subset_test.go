@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mustParse — хелпер: парсит permission-строки в []Permission, fail на ошибке.
+// mustParse is a helper: parses permission strings into []Permission, failing on error.
 func mustParse(t *testing.T, raws ...string) []Permission {
 	t.Helper()
 	out := make([]Permission, 0, len(raws))
@@ -19,8 +19,8 @@ func mustParse(t *testing.T, raws ...string) []Permission {
 	return out
 }
 
-// TestAssertCallerCovers — least-privilege subset-check (чистая логика
-// покрытия, без БД). Семантика implication берётся из ParsePermission/Matches.
+// TestAssertCallerCovers is the least-privilege subset check (pure coverage
+// logic, no DB). Implication semantics come from ParsePermission/Matches.
 func TestAssertCallerCovers(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -100,8 +100,8 @@ func TestAssertCallerCovers(t *testing.T) {
 	}
 }
 
-// TestAssertCallerCovers_Selectors — покрытие селекторов: выдача
-// `x on coven=a,b` требует, чтобы caller покрывал ОБА значения.
+// TestAssertCallerCovers_Selectors covers selector coverage: granting
+// `x on coven=a,b` requires the caller to cover BOTH values.
 func TestAssertCallerCovers_Selectors(t *testing.T) {
 	t.Run("caller с тем же селектором покрывает", func(t *testing.T) {
 		caller := mustParse(t, "incarnation.run on coven=prod")
@@ -112,7 +112,7 @@ func TestAssertCallerCovers_Selectors(t *testing.T) {
 	})
 
 	t.Run("caller без селектора покрывает любой селектор", func(t *testing.T) {
-		// `incarnation.run` (без фильтра) матчит любой context (Selector=nil).
+		// `incarnation.run` (no filter) matches any context (Selector=nil).
 		caller := mustParse(t, "incarnation.run")
 		err := assertCallerCovers(caller, mustParse(t, "incarnation.run on coven=prod,stage"))
 		if errors.Is(err, ErrPermissionNotHeld) {
@@ -121,7 +121,7 @@ func TestAssertCallerCovers_Selectors(t *testing.T) {
 	})
 
 	t.Run("caller с одним значением НЕ покрывает выдачу двух", func(t *testing.T) {
-		// Выдать `coven=prod,stage`, имея только `coven=prod`, — эскалация на stage.
+		// Granting `coven=prod,stage` while only holding `coven=prod` is escalation onto stage.
 		caller := mustParse(t, "incarnation.run on coven=prod")
 		err := assertCallerCovers(caller, mustParse(t, "incarnation.run on coven=prod,stage"))
 		if !errors.Is(err, ErrPermissionNotHeld) {
@@ -138,8 +138,8 @@ func TestAssertCallerCovers_Selectors(t *testing.T) {
 	})
 }
 
-// TestAddedPermissions — diff для UpdateRolePermissions (subset-check только
-// на добавляемые права; удаление не ограничивается).
+// TestAddedPermissions is the diff for UpdateRolePermissions (the subset
+// check applies only to added permissions; removal is unrestricted).
 func TestAddedPermissions(t *testing.T) {
 	tests := []struct {
 		name string

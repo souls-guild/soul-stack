@@ -11,12 +11,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// TestHandleWardRoster_SweepsOrphans — dispatched-строки SID-а вне набора
-// терминалятся в orphaned (OrphanDispatched вызывается, метрика растёт на число
-// осиротевших). Соль S6: «Keeper и Soul оба мертвы после отдачи».
+// TestHandleWardRoster_SweepsOrphans — a SID's dispatched rows outside the set
+// are terminated into orphaned (OrphanDispatched is called, the metric grows by the number
+// of orphans). The point of S6: “Keeper and Soul both die after dispatch”.
 func TestHandleWardRoster_SweepsOrphans(t *testing.T) {
 	aw := &recordingAudit{}
-	// Exec вернёт UPDATE 2 — две dispatched-строки осиротели.
+	// Exec returns UPDATE 2 — two dispatched rows were orphaned.
 	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 2")}
 	h, reg := newTestHandlerWithApplyRunMetrics(t, aw, ardb)
 
@@ -30,7 +30,7 @@ func TestHandleWardRoster_SweepsOrphans(t *testing.T) {
 	if !strings.Contains(ardb.execSQL, "status        = 'orphaned'") {
 		t.Errorf("sweep SQL не ставит orphaned: %q", ardb.execSQL)
 	}
-	// $2 — known apply_ids: «живой» защищает свою строку от orphan.
+	// $2 — known apply_ids: a “live” one protects its own row from being orphaned.
 	known, ok := ardb.execArgs[1].([]string)
 	if !ok || len(known) != 1 || known[0] != "apply-live" {
 		t.Errorf("known-набор = %v, want [apply-live]", ardb.execArgs[1])
@@ -40,8 +40,8 @@ func TestHandleWardRoster_SweepsOrphans(t *testing.T) {
 	}
 }
 
-// TestHandleWardRoster_InSet_NotTouched — когда набор покрывает все dispatched
-// (Exec затронул 0 строк), метрика НЕ растёт: строки в наборе не осиротляются.
+// TestHandleWardRoster_InSet_NotTouched — when the set covers all dispatched
+// rows (Exec affects 0 rows), the metric does NOT grow: rows in the set aren't orphaned.
 func TestHandleWardRoster_InSet_NotTouched(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
@@ -60,8 +60,8 @@ func TestHandleWardRoster_InSet_NotTouched(t *testing.T) {
 	}
 }
 
-// TestHandleWardRoster_EmptySet_OrphansAll — пустой WardRoster (рестарт Soul):
-// sweep запускается с пустым known-набором → терминалятся все dispatched-строки.
+// TestHandleWardRoster_EmptySet_OrphansAll — an empty WardRoster (Soul restart):
+// the sweep runs with an empty known set → all dispatched rows are terminated.
 func TestHandleWardRoster_EmptySet_OrphansAll(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 5")}
@@ -81,18 +81,18 @@ func TestHandleWardRoster_EmptySet_OrphansAll(t *testing.T) {
 	}
 }
 
-// TestHandleWardRoster_NilApplyRunDB_NoSweep — без ApplyRunDB (unit/ad-hoc) sweep
-// не делается (no-op, без паники).
+// TestHandleWardRoster_NilApplyRunDB_NoSweep — without ApplyRunDB (unit/ad-hoc), the sweep
+// doesn't happen (no-op, no panic).
 func TestHandleWardRoster_NilApplyRunDB_NoSweep(t *testing.T) {
-	h := newTestHandler(t, &recordingAudit{}) // ApplyRunDB не задан
+	h := newTestHandler(t, &recordingAudit{}) // ApplyRunDB not set
 	h.handleWardRoster(context.Background(), "host.example.com", "session-1", &keeperv1.WardRoster{
 		Active: []*keeperv1.ActiveApply{{ApplyId: "x"}},
 	})
-	// Дошли без паники — ApplyRunDB=nil → ранний возврат.
+	// Got here without a panic — ApplyRunDB=nil → early return.
 }
 
-// TestHandleWardRoster_NilPayload_NoSweep — nil payload не валит handler и не
-// дёргает DB.
+// TestHandleWardRoster_NilPayload_NoSweep — a nil payload doesn't crash the handler and doesn't
+// touch the DB.
 func TestHandleWardRoster_NilPayload_NoSweep(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
@@ -103,8 +103,8 @@ func TestHandleWardRoster_NilPayload_NoSweep(t *testing.T) {
 	}
 }
 
-// TestWardRosterToActive_MapsAndFilters — proto → домен: nil-записи отбрасываются,
-// apply_id/attempt протягиваются; пустой набор → nil.
+// TestWardRosterToActive_MapsAndFilters — proto → domain: nil entries are dropped,
+// apply_id/attempt are carried through; an empty set → nil.
 func TestWardRosterToActive_MapsAndFilters(t *testing.T) {
 	got := wardRosterToActive(&keeperv1.WardRoster{Active: []*keeperv1.ActiveApply{
 		{ApplyId: "a", Attempt: 2},
@@ -123,17 +123,17 @@ func TestWardRosterToActive_MapsAndFilters(t *testing.T) {
 	}
 }
 
-// TestDispatch_OldSoulNoWardRoster_NoSweep — forward-compat: старый Soul без
-// WardRoster никогда не шлёт это сообщение. Гоним через dispatch payload-ы, не
-// несущие ward-семантику (TaskEvent / SoulprintReport): OrphanDispatched (UPDATE
-// 'orphaned') по ним НЕ вызывается — sweep недостижим, dispatched-строки остаются
-// висеть (fail-safe). handleWardRoster — единственная точка sweep-а.
+// TestDispatch_OldSoulNoWardRoster_NoSweep — forward-compat: an old Soul without
+// WardRoster never sends this message. We drive it through dispatch payloads that don't
+// carry ward semantics (TaskEvent / SoulprintReport): OrphanDispatched (UPDATE
+// 'orphaned') is NOT invoked for them — the sweep is unreachable, dispatched rows stay
+// hanging (fail-safe). handleWardRoster is the only sweep entry point.
 func TestDispatch_OldSoulNoWardRoster_NoSweep(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
 	h, _ := newTestHandlerWithApplyRunMetrics(t, aw, ardb)
 
-	// TaskEvent OK — не пишет ни failure, ни sweep (см. handleTaskEvent).
+	// TaskEvent OK — writes neither failure nor sweep (see handleTaskEvent).
 	h.dispatch(context.Background(), "host.example.com", "session-1", &keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_TaskEvent{TaskEvent: &keeperv1.TaskEvent{
 			ApplyId: "01HAPPLY", Status: keeperv1.TaskStatus_TASK_STATUS_OK,

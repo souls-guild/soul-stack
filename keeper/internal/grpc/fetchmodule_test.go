@@ -23,8 +23,8 @@ import (
 
 const testModuleSHA = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 
-// fakeModuleBinaries — fake [ModuleBinarySource]: фиксированный путь/ошибка +
-// запись последнего запрошенного sha.
+// fakeModuleBinaries — fake [ModuleBinarySource]: fixed path/error + records
+// the last requested sha.
 type fakeModuleBinaries struct {
 	mu     sync.Mutex
 	path   string
@@ -49,7 +49,8 @@ func (f *fakeModuleBinaries) lastSHA() string {
 }
 
 // fakePluginChunkStream — fake grpc.ServerStreamingServer[PluginChunk].
-// onSend (опционально) вызывается ПОСЛЕ записи чанка — хук для cancel/блокировки.
+// onSend (optional) is called AFTER the chunk is recorded — a hook for
+// cancel/blocking.
 type fakePluginChunkStream struct {
 	grpclib.ServerStream
 	ctx    context.Context
@@ -123,9 +124,9 @@ func fetchCtx(sid string) context.Context {
 	return withAuthenticatedSID(context.Background(), sid)
 }
 
-// TestFetchModule_AllowedSHA_StreamsChunks — allowed sha: файл больше чанка
-// уходит несколькими PluginChunk, конкатенация байт-в-байт равна файлу; в
-// lookup передаётся lowercase-sha.
+// TestFetchModule_AllowedSHA_StreamsChunks — allowed sha: a file bigger
+// than a chunk goes out as several PluginChunks, the byte-for-byte
+// concatenation equals the file; lookup is called with a lowercase sha.
 func TestFetchModule_AllowedSHA_StreamsChunks(t *testing.T) {
 	path, content := writeModuleFile(t, moduleFetchChunkSize*2+1234)
 	src := &fakeModuleBinaries{path: path}
@@ -152,7 +153,7 @@ func TestFetchModule_AllowedSHA_StreamsChunks(t *testing.T) {
 }
 
 // TestFetchModule_NotAllowed_NotFound — ErrModuleNotAllowed → NotFound,
-// без утечки filesystem-пути в сообщение клиенту.
+// with no filesystem path leaking into the message sent to the client.
 func TestFetchModule_NotAllowed_NotFound(t *testing.T) {
 	src := &fakeModuleBinaries{err: fmt.Errorf("%w: %s", sigil.ErrModuleNotAllowed, testModuleSHA)}
 	h := newFetchHandler(t, EventStreamDeps{ModuleBinaries: src})
@@ -167,8 +168,9 @@ func TestFetchModule_NotAllowed_NotFound(t *testing.T) {
 	}
 }
 
-// TestFetchModule_LookupStoreError_Unavailable — DB/store-ошибка lookup-а
-// (не ErrModuleNotAllowed) → Unavailable (transient, retry-able для Soul).
+// TestFetchModule_LookupStoreError_Unavailable — a DB/store lookup error
+// (not ErrModuleNotAllowed) → Unavailable (transient, retryable for the
+// Soul).
 func TestFetchModule_LookupStoreError_Unavailable(t *testing.T) {
 	src := &fakeModuleBinaries{err: errors.New("pg down")}
 	h := newFetchHandler(t, EventStreamDeps{ModuleBinaries: src})
@@ -180,9 +182,10 @@ func TestFetchModule_LookupStoreError_Unavailable(t *testing.T) {
 	}
 }
 
-// TestFetchModule_NoAuthenticatedSID_Internal — вызов без SID в context-е
-// (interceptor не отработал) → Internal, lookup не дёргается. Паттерн
-// EventStream: без interceptor-а мы не знаем, кто на том конце.
+// TestFetchModule_NoAuthenticatedSID_Internal — a call with no SID in the
+// context (the interceptor didn't run) → Internal, lookup isn't touched.
+// Same pattern as EventStream: without the interceptor we don't know who's
+// on the other end.
 func TestFetchModule_NoAuthenticatedSID_Internal(t *testing.T) {
 	src := &fakeModuleBinaries{path: "/nonexistent"}
 	h := newFetchHandler(t, EventStreamDeps{ModuleBinaries: src})
@@ -197,8 +200,8 @@ func TestFetchModule_NoAuthenticatedSID_Internal(t *testing.T) {
 	}
 }
 
-// TestFetchModule_NilSource_Unavailable — Sigil выключен (ModuleBinaries nil)
-// → Unavailable.
+// TestFetchModule_NilSource_Unavailable — Sigil disabled (ModuleBinaries
+// nil) → Unavailable.
 func TestFetchModule_NilSource_Unavailable(t *testing.T) {
 	h := newFetchHandler(t, EventStreamDeps{})
 	stream := &fakePluginChunkStream{ctx: fetchCtx("host.example.com")}
@@ -209,8 +212,8 @@ func TestFetchModule_NilSource_Unavailable(t *testing.T) {
 	}
 }
 
-// TestFetchModule_InvalidSHA_InvalidArgument — не-hex / неверная длина /
-// пустой sha отвергаются до lookup-а.
+// TestFetchModule_InvalidSHA_InvalidArgument — a non-hex / wrong-length /
+// empty sha is rejected before lookup.
 func TestFetchModule_InvalidSHA_InvalidArgument(t *testing.T) {
 	cases := map[string]string{
 		"empty":    "",
@@ -236,9 +239,9 @@ func TestFetchModule_InvalidSHA_InvalidArgument(t *testing.T) {
 	}
 }
 
-// TestFetchModule_FileTooLarge_FailedPrecondition — файл больше
+// TestFetchModule_FileTooLarge_FailedPrecondition — a file bigger than
 // ModuleFetchMaxBytes (plugins.max_artifact_size_mb) → FailedPrecondition,
-// ни одного чанка.
+// not a single chunk sent.
 func TestFetchModule_FileTooLarge_FailedPrecondition(t *testing.T) {
 	path, _ := writeModuleFile(t, 4096)
 	src := &fakeModuleBinaries{path: path}
@@ -254,8 +257,9 @@ func TestFetchModule_FileTooLarge_FailedPrecondition(t *testing.T) {
 	}
 }
 
-// TestFetchModule_MissingFile_NotFound — lookup вернул путь, но байты исчезли
-// (слот переехал между lookup и open) → NotFound, как не-allowed.
+// TestFetchModule_MissingFile_NotFound — lookup returned a path, but the
+// bytes are gone (the slot moved between lookup and open) → NotFound, same
+// as not-allowed.
 func TestFetchModule_MissingFile_NotFound(t *testing.T) {
 	src := &fakeModuleBinaries{path: filepath.Join(t.TempDir(), "gone")}
 	h := newFetchHandler(t, EventStreamDeps{ModuleBinaries: src})
@@ -267,8 +271,9 @@ func TestFetchModule_MissingFile_NotFound(t *testing.T) {
 	}
 }
 
-// TestFetchModule_ContextCancel_StopsStream — отмена контекста после первого
-// чанка прерывает стрим (Canceled), остаток файла не шлётся.
+// TestFetchModule_ContextCancel_StopsStream — canceling the context after
+// the first chunk aborts the stream (Canceled); the rest of the file is
+// never sent.
 func TestFetchModule_ContextCancel_StopsStream(t *testing.T) {
 	path, _ := writeModuleFile(t, moduleFetchChunkSize*4)
 	src := &fakeModuleBinaries{path: path}
@@ -290,9 +295,10 @@ func TestFetchModule_ContextCancel_StopsStream(t *testing.T) {
 	}
 }
 
-// TestFetchModule_PerSIDLimit — limit=1: пока первый fetch SID-а держит слот,
-// второй тем же SID получает ResourceExhausted; другой SID проходит; после
-// завершения первого слот освобождается.
+// TestFetchModule_PerSIDLimit — limit=1: while the first fetch for a SID
+// holds the slot, a second fetch for the same SID gets ResourceExhausted;
+// a different SID goes through; the slot frees up once the first one
+// finishes.
 func TestFetchModule_PerSIDLimit(t *testing.T) {
 	path, _ := writeModuleFile(t, 128)
 	src := &fakeModuleBinaries{path: path}
@@ -318,14 +324,14 @@ func TestFetchModule_PerSIDLimit(t *testing.T) {
 		t.Fatal("первый fetch не дошёл до Send")
 	}
 
-	// Тот же SID поверх занятого слота → ResourceExhausted.
+	// Same SID on top of an occupied slot → ResourceExhausted.
 	sameSID := &fakePluginChunkStream{ctx: fetchCtx("host.example.com")}
 	err := h.FetchModule(&keeperv1.PluginFetchRequest{BinarySha256: testModuleSHA}, sameSID)
 	if got := status.Code(err); got != codes.ResourceExhausted {
 		t.Fatalf("same-SID code = %v, want ResourceExhausted; err = %v", got, err)
 	}
 
-	// Другой SID лимитом первого не задет.
+	// A different SID is unaffected by the first one's limit.
 	otherSID := &fakePluginChunkStream{ctx: fetchCtx("other.example.com")}
 	if err := h.FetchModule(&keeperv1.PluginFetchRequest{BinarySha256: testModuleSHA}, otherSID); err != nil {
 		t.Fatalf("other-SID FetchModule: %v", err)
@@ -336,16 +342,17 @@ func TestFetchModule_PerSIDLimit(t *testing.T) {
 		t.Fatalf("holder FetchModule: %v", err)
 	}
 
-	// Слот освободился — повторный fetch тем же SID проходит.
+	// The slot freed up — a retry fetch with the same SID goes through.
 	retry := &fakePluginChunkStream{ctx: fetchCtx("host.example.com")}
 	if err := h.FetchModule(&keeperv1.PluginFetchRequest{BinarySha256: testModuleSHA}, retry); err != nil {
 		t.Fatalf("retry FetchModule после release: %v", err)
 	}
 }
 
-// TestKeeperServiceDesc_OnlyAdd — guard forward-compat ADR-012: прежние RPC
-// на месте, FetchModule добавлен как server-streaming. Ловит удаление/переименование
-// метода в service Keeper (breaking для старых Soul-ов).
+// TestKeeperServiceDesc_OnlyAdd — forward-compat guard for ADR-012: the
+// prior RPCs are still there, FetchModule was added as server-streaming.
+// Catches a method being removed/renamed from service Keeper (breaking for
+// older Souls).
 func TestKeeperServiceDesc_OnlyAdd(t *testing.T) {
 	desc := keeperv1.Keeper_ServiceDesc
 	methods := map[string]bool{}

@@ -1,22 +1,24 @@
-// Package rbac — runtime-проверка permissions Архонтов по [docs/keeper/rbac.md].
+// Package rbac provides runtime permission checks for Archons, per
+// [docs/keeper/rbac.md].
 //
-// Каталог [AllowedPermissions] — closed enum имён, валидируемых
-// [NewEnforcer] при load `keeper.yml`. Unknown-имя → fatal-ошибка
+// The [AllowedPermissions] catalog is a closed enum of names, validated by
+// [NewEnforcer] when loading `keeper.yml`. An unknown name → fatal error
 // (PM-decision M0.6b #7).
 //
-// Селекторы (`on key=v1,v2`) парсятся отдельно; grammar — `<resource>.<action>`
-// + optional `key=values` где key ∈ {service, coven, incarnation, host}.
+// Selectors (`on key=v1,v2`) are parsed separately; grammar is
+// `<resource>.<action>` + optional `key=values` where key ∈ {service,
+// coven, incarnation, host}.
 package rbac
 
 import "sort"
 
-// AllowedPermissions — каталог permission-имён из rbac.md → §Каталог
-// permissions. 103 имени (сумма категорий ниже):
+// AllowedPermissions — the catalog of permission names from rbac.md →
+// §Catalog of permissions. 103 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
-//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set / view-secrets;
+//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets;
 //   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -32,36 +34,37 @@ import "sort"
 //   - cadence (6): create / list / update / delete / enable / disable (ADR-046, S4; enable/disable — amendment 2026-06-02);
 //   - herald (5): create / read / list / update / delete (ADR-052, S4);
 //   - tiding (5): create / read / list / update / delete (ADR-052, S4);
-//   - provisioning (2): read / update (ADR-058 Часть B — политика способов создания операторов);
+//   - provisioning (2): read / update (ADR-058 Part B — operator-creation-method policy);
 //   - audit (1): read;
 //   - provider (3): create / read / delete (ADR-017, Cloud CRUD);
 //   - profile (3): create / read / delete (ADR-017, Cloud CRUD).
 //
-// Wildcard `*` в `<action>` (`incarnation.*`) разворачивается на этапе
-// resolve и матчит любое известное `<action>` для данного `<resource>`.
-// Wildcard в `<resource>` не поддерживается в MVP.
+// A wildcard `*` in `<action>` (`incarnation.*`) expands at resolve time
+// and matches any known `<action>` for that `<resource>`. Wildcard in
+// `<resource>` is not supported in the MVP.
 //
-// Расширение каталога — обычный PR с дублирующим обновлением rbac.md.
-// Removed-имена — never (operator-роли в `keeper.yml` могут содержать
-// исторические имена; remove ломает существующие installations).
+// Extending the catalog is a normal PR with a matching rbac.md update.
+// Names are never removed (operator roles in `keeper.yml` may hold
+// historical names; removal would break existing installations).
 var AllowedPermissions = map[string]struct{}{
 	// operator.*
 	"operator.create":      {},
 	"operator.revoke":      {},
 	"operator.issue-token": {},
-	// operator.list / operator.read — read-only-доступ к реестру Архонтов
-	// (`GET /v1/operators`, `GET /v1/operators/{aid}`). Селектор — NoSelector
-	// (нет per-resource scope, как и у operator.create/revoke); per-AID-scope —
-	// отдельный slice при появлении мульти-тенант-RBAC. `operator.read` отделён
-	// от `operator.list` симметрично push.read↔push.apply: read одной записи
-	// концептуально шире `list`, но в MVP оба покрываются одним правом —
-	// drift-test и rbac.md фиксируют наличие в каталоге, route монтирует
-	// `operator.list` на оба эндпоинта.
+	// operator.list / operator.read — read-only access to the Archon
+	// registry (`GET /v1/operators`, `GET /v1/operators/{aid}`). Selector —
+	// NoSelector (no per-resource scope, same as operator.create/revoke);
+	// per-AID scope is a separate future slice once multi-tenant RBAC
+	// lands. `operator.read` is split from `operator.list` symmetrically
+	// with push.read↔push.apply: reading a single record is conceptually
+	// broader than `list`, but in the MVP both are covered by one right —
+	// the drift test and rbac.md record its presence in the catalog, the
+	// route mounts `operator.list` on both endpoints.
 	"operator.list": {},
 	"operator.read": {},
 
-	// role.* — управление RBAC (роли / permissions / membership) через
-	// OpenAPI/MCP (ADR-028(e), rbac.md → §Каталог permissions → Role).
+	// role.* — RBAC management (roles / permissions / membership) via
+	// OpenAPI/MCP (ADR-028(e), rbac.md → §Catalog of permissions → Role).
 	"role.create":          {},
 	"role.delete":          {},
 	"role.list":            {},
@@ -69,13 +72,14 @@ var AllowedPermissions = map[string]struct{}{
 	"role.grant-operator":  {},
 	"role.revoke-operator": {},
 
-	// synod.* — управление Synod-группами (ADR-049): промежуточный уровень
-	// Архон → Synod → Роли. 8 permissions. Селектор — NoSelector (управление
-	// группами — кластер-уровневая операция, без scope по coven/host, как role.*
-	// / operator.*; group-scope ADR-049 НЕ вводит). grant-role/add-operator
-	// под least-privilege subset, delete/remove-operator/revoke-role под
-	// self-lockout (ADR-049(f)). synod.update меняет ТОЛЬКО description (косметика,
-	// прав не выдаёт/не отнимает) — без subset/self-lockout; name (PK) immutable.
+	// synod.* — Synod group management (ADR-049): an intermediate level
+	// Archon → Synod → Roles. 8 permissions. Selector — NoSelector (group
+	// management is a cluster-level operation, no coven/host scope, same
+	// as role.* / operator.*; ADR-049 does NOT introduce group-scope).
+	// grant-role/add-operator are gated by the least-privilege subset,
+	// delete/remove-operator/revoke-role by self-lockout (ADR-049(f)).
+	// synod.update changes ONLY the description (cosmetic, grants/revokes
+	// no rights) — no subset/self-lockout check; name (PK) is immutable.
 	"synod.create":          {},
 	"synod.update":          {},
 	"synod.delete":          {},
@@ -87,11 +91,12 @@ var AllowedPermissions = map[string]struct{}{
 
 	// incarnation.*
 	"incarnation.create": {},
-	// incarnation.rerun-last — перезапуск последнего упавшего сценария из
-	// error_locked (`POST /v1/incarnations/{name}/rerun-last`). Отдельное право от
-	// `incarnation.create`/`incarnation.unlock`: rerun снимает error_locked +
-	// перезапускает последний упавший сценарий одним действием, требует reason.
-	// Scope-селектор тот же (incarnation/coven/service по path-{name}).
+	// incarnation.rerun-last — restarts the last failed scenario from
+	// error_locked (`POST /v1/incarnations/{name}/rerun-last`). A separate
+	// right from `incarnation.create`/`incarnation.unlock`: rerun clears
+	// error_locked and restarts the last failed scenario in one action,
+	// requires a reason. Same scope selector (incarnation/coven/service by
+	// path-{name}).
 	"incarnation.rerun-last":  {},
 	"incarnation.run":         {},
 	"incarnation.get":         {},
@@ -101,35 +106,41 @@ var AllowedPermissions = map[string]struct{}{
 	"incarnation.upgrade":     {},
 	"incarnation.destroy":     {},
 	"incarnation.check-drift": {},
-	// incarnation.update-hosts — изменение declared `spec.hosts[]` записи
-	// incarnation через Operator API (`PATCH /v1/incarnations/{name}/hosts`,
-	// UI Hosts editing): тот же scope-селектор incarnation/coven/service, что
-	// у других incarnation-мутаций (run/unlock/upgrade). Имя сужено с прежнего
-	// `incarnation.update` (PM-decision 2026-06-02) под задел будущих
-	// update-covens/update-spec — каждая операция получит свою permission.
+	// incarnation.update-hosts — changes the declared `spec.hosts[]` of an
+	// incarnation record via the Operator API (`PATCH
+	// /v1/incarnations/{name}/hosts`, UI Hosts editing): same scope
+	// selector incarnation/coven/service as other incarnation mutations
+	// (run/unlock/upgrade). Name narrowed from the former
+	// `incarnation.update` (PM-decision 2026-06-02) to make room for
+	// future update-covens/update-spec — each operation gets its own
+	// permission.
 	"incarnation.update-hosts": {},
-	// incarnation.update — DEPRECATED-alias `incarnation.update-hosts`. Оставлен
-	// в каталоге (closed enum, removed-имена — never): роли/operators в
-	// keeper.yml / БД с историческим именем НЕ должны фейлить load снимка.
-	// [ParsePermission] канонизирует его в `incarnation.update-hosts` (см.
-	// [deprecatedActionAliases]), поэтому такие роли сохраняют доступ к /hosts.
+	// incarnation.update — DEPRECATED alias for `incarnation.update-hosts`.
+	// Kept in the catalog (closed enum, names are never removed): roles/
+	// operators in keeper.yml / DB with the historical name must NOT fail
+	// snapshot load. [ParsePermission] canonicalizes it to
+	// `incarnation.update-hosts` (see [deprecatedActionAliases]), so such
+	// roles keep access to /hosts.
 	"incarnation.update": {},
-	// incarnation.traits-set — целостная замена operator-set trait-меток
-	// инкарнации (`incarnation.traits` jsonb, ADR-060 amend R1) через
-	// `PUT /v1/incarnations/{name}/traits`. incarnation.traits — источник истины,
-	// проецируемый sync-hook-ом в `souls.traits` хостов-членов; перенос
-	// operator-facing trait-управления с per-soul (`soul.traits-assign`,
-	// deprecated) на per-incarnation. Action — hyphenated (`traits-set`), т.к.
-	// permission-грамматика — ровно `<resource>.<action>` (паттерн
-	// soul.traits-assign / incarnation.update-hosts). Тот же scope-селектор
-	// incarnation/coven/service по path-{name}, что у incarnation.update-hosts.
+	// incarnation.traits-set — a wholesale replacement of an incarnation's
+	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060 amend
+	// R1) via `PUT /v1/incarnations/{name}/traits`. incarnation.traits is
+	// the source of truth, projected by a sync hook into `souls.traits` of
+	// member hosts; moves operator-facing trait management from per-soul
+	// (`soul.traits-assign`, deprecated) to per-incarnation. Action is
+	// hyphenated (`traits-set`) since the permission grammar is exactly
+	// `<resource>.<action>` (pattern: soul.traits-assign /
+	// incarnation.update-hosts). Same scope selector
+	// incarnation/coven/service by path-{name} as incarnation.update-hosts.
 	"incarnation.traits-set": {},
-	// incarnation.view-secrets — раскрытие (reveal) plaintext-значения секрета
-	// инкарнации, объявленного `revealable_secrets` сервиса (NIM-74): POST
-	// .../secrets/reveal + discovery GET .../secrets/revealable. Строго
-	// привилегированнее `incarnation.get` (снятие маски, не read под маской).
-	// Тот же scope-селектор incarnation/coven/service по path-{name}, что у прочих
-	// incarnation-мутаций. Audit `incarnation.secret_revealed` (без значения).
+	// incarnation.view-secrets — reveals the plaintext value of an
+	// incarnation secret declared in the service's `revealable_secrets`
+	// (NIM-74): POST .../secrets/reveal + discovery GET
+	// .../secrets/revealable. Strictly more privileged than
+	// `incarnation.get` (unmasking, not reading under the mask). Same
+	// scope selector incarnation/coven/service by path-{name} as other
+	// incarnation mutations. Audited as `incarnation.secret_revealed` (no
+	// value logged).
 	"incarnation.view-secrets": {},
 
 	// soul.*
@@ -137,51 +148,55 @@ var AllowedPermissions = map[string]struct{}{
 	"soul.create":       {},
 	"soul.issue-token":  {},
 	"soul.coven-assign": {},
-	// soul.traits-assign — bulk-мутация operator-set trait-меток (jsonb-колонка
-	// `souls.traits`, ADR-060) массово по селектору: merge/replace/remove.
-	// Action — hyphenated (`traits-assign`), т.к. permission-грамматика — ровно
-	// `<resource>.<action>` (паттерн soul.coven-assign / soul.ssh-target-update).
-	// Селектор тот же, что у soul.coven-assign (`coven=` / `host=` / bare): bulk
-	// trait-assign гейтится тем же coven-scope (гейт a, целевые хосты ⊆ scope) —
-	// least-privilege не ослаблен. trait-КЛЮЧ НЕ является scope-измерением (в
-	// отличие от Coven-метки), поэтому гейта (b) на ключи нет.
+	// soul.traits-assign — bulk mutation of operator-set trait labels
+	// (jsonb column `souls.traits`, ADR-060) across a selector:
+	// merge/replace/remove. Action is hyphenated (`traits-assign`) since
+	// the permission grammar is exactly `<resource>.<action>` (pattern:
+	// soul.coven-assign / soul.ssh-target-update). Same selector as
+	// soul.coven-assign (`coven=` / `host=` / bare): bulk trait-assign is
+	// gated by the same coven-scope (gate a, target hosts ⊆ scope) —
+	// least-privilege isn't weakened. The trait KEY is NOT a scope
+	// dimension (unlike a Coven label), so there's no gate (b) on keys.
 	"soul.traits-assign": {},
-	// soul.ssh-target-update — изменение per-host SSH-реквизитов push-flow
-	// (ADR-032 amendment 2026-05-26, S7-1). Action — hyphenated (`ssh-target-update`),
-	// т.к. permission-грамматика — ровно `<resource>.<action>` (3-сегментный
-	// `soul.ssh-target.update` — это MCP-tool, не permission; паттерн
-	// `sigil.key-introduce` ↔ `keeper.sigil.key.introduce`).
+	// soul.ssh-target-update — changes per-host SSH credentials for the
+	// push flow (ADR-032 amendment 2026-05-26, S7-1). Action is hyphenated
+	// (`ssh-target-update`) since the permission grammar is exactly
+	// `<resource>.<action>` (the 3-segment `soul.ssh-target.update` is an
+	// MCP tool, not a permission; pattern: `sigil.key-introduce` ↔
+	// `keeper.sigil.key.introduce`).
 	"soul.ssh-target-update": {},
 
-	// plugin.* — управление allow-list-ом целостности плагинов Sigil
-	// (ADR-026, rbac.md → §Каталог permissions → Plugin Sigil).
+	// plugin.* — management of Sigil's plugin-integrity allow-list
+	// (ADR-026, rbac.md → §Catalog of permissions → Plugin Sigil).
 	"plugin.allow":  {},
 	"plugin.revoke": {},
 	"plugin.list":   {},
 
-	// sigil.* — ротация trust-anchor-ключей ПОДПИСИ Sigil (ADR-026(h), R3-S7).
-	// Отдельный resource от plugin.* (тот про допуски бинарей, этот — про ключи
-	// их подписи). Action — hyphenated (`key-introduce`), т.к. permission-
-	// грамматика — ровно `<resource>.<action>` (3-сегментный `sigil.key.introduce`
-	// — это MCP-tool, не permission); MCP-tool keeper.sigil.key.<verb> ↔
+	// sigil.* — rotation of Sigil's SIGNING trust-anchor keys (ADR-026(h),
+	// R3-S7). A separate resource from plugin.* (that one is about binary
+	// allow-listing, this one about the keys that sign them). Action is
+	// hyphenated (`key-introduce`) since the permission grammar is exactly
+	// `<resource>.<action>` (the 3-segment `sigil.key.introduce` is an MCP
+	// tool, not a permission); MCP tool keeper.sigil.key.<verb> ↔
 	// permission sigil.key-<verb>.
 	"sigil.key-introduce":   {},
 	"sigil.key-retire":      {},
 	"sigil.key-list":        {},
 	"sigil.key-set-primary": {},
 
-	// service.* — управление реестром Service-ов `service_registry`
-	// (ADR-028-паттерн RBAC-storage, naming-rules.md → service_registry).
+	// service.* — management of the `service_registry` Service registry
+	// (ADR-028 RBAC-storage pattern, naming-rules.md → service_registry).
 	"service.register":   {},
 	"service.update":     {},
 	"service.list":       {},
 	"service.deregister": {},
 
-	// omen.* / rite.* — operator-facing CRUD реестров Augur (omens / rites,
-	// ADR-025, rbac.md §Augur). resource — omen/rite (НЕ augur.*); 2-сегментная
-	// permission <resource>.<action> с verbs create/list/delete. Live-fetch от
-	// Soul (AugurRequest) RBAC-permission НЕ контролируется — это машинный gRPC-
-	// запрос, не операторская операция (rbac.md §Augur).
+	// omen.* / rite.* — operator-facing CRUD for the Augur registries
+	// (omens / rites, ADR-025, rbac.md §Augur). resource is omen/rite (NOT
+	// augur.*); 2-segment permission <resource>.<action> with verbs
+	// create/list/delete. The Soul's live-fetch (AugurRequest) is NOT
+	// gated by an RBAC permission — it's a machine gRPC request, not an
+	// operator action (rbac.md §Augur).
 	"omen.create": {},
 	"omen.list":   {},
 	"omen.delete": {},
@@ -189,12 +204,13 @@ var AllowedPermissions = map[string]struct{}{
 	"rite.list":   {},
 	"rite.delete": {},
 
-	// vigil.* / decree.* — operator-facing CRUD реестров Oracle (vigils /
-	// decrees, ADR-030 beacons, rbac.md §Oracle). resource — vigil/decree;
-	// 2-сегментная permission <resource>.<action> с verbs create/list/delete
-	// (паттерн omen/rite). Reactor-флоу (Portent → match Decree → enqueue)
-	// RBAC-permission НЕ контролируется — это машинный Soul-инициированный путь,
-	// не операторская операция (security — субъектная привязка Decree, ADR-030(b)).
+	// vigil.* / decree.* — operator-facing CRUD for the Oracle registries
+	// (vigils / decrees, ADR-030 beacons, rbac.md §Oracle). resource is
+	// vigil/decree; 2-segment permission <resource>.<action> with verbs
+	// create/list/delete (omen/rite pattern). The Reactor flow (Portent →
+	// match Decree → enqueue) is NOT gated by an RBAC permission — it's a
+	// machine, Soul-initiated path, not an operator action (security is
+	// via Decree's subject binding, ADR-030(b)).
 	"vigil.create":  {},
 	"vigil.list":    {},
 	"vigil.delete":  {},
@@ -205,44 +221,48 @@ var AllowedPermissions = map[string]struct{}{
 	// push.*
 	"push.apply":   {},
 	"push.cleanup": {},
-	// push.read — чтение состояния push-прогона (`GET /v1/push/{apply_id}`,
-	// Variant C orchestrator). Отдельно от push.apply: read-операция не требует
-	// mutate-прав (паттерн service.list / role.list — read без audit, бывают
-	// сужены под отдельный role для observability-операторов).
+	// push.read — reads push-run state (`GET /v1/push/{apply_id}`, Variant
+	// C orchestrator). Separate from push.apply: a read operation doesn't
+	// need mutate rights (pattern: service.list / role.list — read without
+	// audit, sometimes scoped to a dedicated role for observability
+	// operators).
 	"push.read": {},
 
-	// push-provider.* — CRUD реестра Push-Provider-ов (per-provider env-payload
-	// params SSH-плагинов push-flow, ADR-032 amendment 2026-05-26, S7-2). resource
-	// — `push-provider` (kebab-single-section с дефисом — корректная форма для
-	// двухсловной области, симметрично прецеденту `ssh-target` в action). 5
-	// permissions: create / update / delete / list / read. Селектор —
-	// NoSelector в MVP: CRUD оперирует самим реестром (как provider.* / service.*
-	// / operator.*); per-name scope — отдельный slice при появлении мульти-
-	// тенант-RBAC.
+	// push-provider.* — CRUD for the Push-Provider registry (per-provider
+	// env-payload params for push-flow SSH plugins, ADR-032 amendment
+	// 2026-05-26, S7-2). resource is `push-provider` (a single kebab
+	// section with a hyphen — the correct form for a two-word area,
+	// symmetric with the `ssh-target` precedent in an action). 5
+	// permissions: create / update / delete / list / read. Selector —
+	// NoSelector in the MVP: CRUD operates on the registry itself (like
+	// provider.* / service.* / operator.*); per-name scope is a separate
+	// future slice once multi-tenant RBAC lands.
 	"push-provider.create": {},
 	"push-provider.update": {},
 	"push-provider.delete": {},
 	"push-provider.list":   {},
 	"push-provider.read":   {},
 
-	// errand.* — pull-ad-hoc exec одиночного модуля (ADR-033, rbac.md §Errand).
-	// Селекторы — `host=<sid>` / `coven=<label>` (как у soul.list / soul.issue-
-	// token); bare — unrestricted. errand.cancel — slice E5 (DELETE-endpoint
-	// ещё не реализован), permission зарегистрирован forward-only чтобы
-	// конфиги ролей не ломались при появлении endpoint-а.
+	// errand.* — pull ad-hoc exec of a single module (ADR-033, rbac.md
+	// §Errand). Selectors — `host=<sid>` / `coven=<label>` (same as
+	// soul.list / soul.issue-token); bare — unrestricted. errand.cancel is
+	// slice E5 (the DELETE endpoint isn't implemented yet); the permission
+	// is registered forward-only so role configs don't break once the
+	// endpoint lands.
 	"errand.run":    {},
 	"errand.cancel": {},
 	"errand.list":   {},
 
-	// choir.* — operator-facing CRUD топологии хостов внутри инкарнации
-	// (Choir/Voice, ADR-044, S-T3). Choir принадлежит инкарнации, поэтому
-	// селектор тот же, что у incarnation.* — `incarnation=` / `service=` /
-	// `coven=` (приземляется [IncarnationScopeSelector] по path-{name}); bare
-	// — unrestricted. resource — `choir`; actions — create / delete / list +
-	// add-voice / remove-voice (управление Voice-членством). Voice-actions —
-	// hyphenated (`add-voice`/`remove-voice`), т.к. permission-грамматика —
-	// ровно `<resource>.<action>` (паттерн soul.ssh-target-update /
-	// sigil.key-introduce). Mutating-CRUD аудируется (choir.created /
+	// choir.* — operator-facing CRUD for host topology within an
+	// incarnation (Choir/Voice, ADR-044, S-T3). A Choir belongs to an
+	// incarnation, so it uses the same selector as incarnation.* —
+	// `incarnation=` / `service=` / `coven=` (resolved by
+	// [IncarnationScopeSelector] via path-{name}); bare — unrestricted.
+	// resource is `choir`; actions — create / delete / list + add-voice /
+	// remove-voice (Voice membership management). Voice actions are
+	// hyphenated (`add-voice`/`remove-voice`) since the permission grammar
+	// is exactly `<resource>.<action>` (pattern: soul.ssh-target-update /
+	// sigil.key-introduce). Mutating CRUD is audited (choir.created /
 	// choir.deleted / choir.voice_added / choir.voice_removed).
 	"choir.create":       {},
 	"choir.delete":       {},
@@ -250,26 +270,30 @@ var AllowedPermissions = map[string]struct{}{
 	"choir.add-voice":    {},
 	"choir.remove-voice": {},
 
-	// cadence.* — operator-facing CRUD реестра Cadence-расписаний (`cadences`,
-	// ADR-046 §7). resource — `cadence`; actions — create / list / update /
-	// delete + гранулярные enable / disable (паттерн omen/rite/vigil/decree).
-	// Селектор — NoSelector в MVP: CRUD оперирует самим реестром расписаний (как
-	// push-provider.* / operator.*); per-name scope — отдельный slice при
-	// появлении мульти-тенант-RBAC.
-	// ДВУХУРОВНЕВЫЙ guard (security-критичный, ADR-046 §7): право `cadence.*`
-	// управляет расписанием, но рецепт спавнит Voyage, поэтому при СОЗДАНИИ
-	// создатель обязан иметь и Voyage-permission по `kind` рецепта
-	// (`incarnation.run` для scenario / `errand.run` для command, ADR-043 §6) —
-	// иначе Cadence стала бы privilege-escalation-обходом RBAC. Проверка живёт
-	// внутри CadenceHandler.Create (kind виден только из тела, parity Voyage).
+	// cadence.* — operator-facing CRUD for the Cadence-schedule registry
+	// (`cadences`, ADR-046 §7). resource is `cadence`; actions — create /
+	// list / update / delete + granular enable / disable (pattern:
+	// omen/rite/vigil/decree). Selector — NoSelector in the MVP: CRUD
+	// operates on the schedule registry itself (like push-provider.* /
+	// operator.*); per-name scope is a separate future slice once
+	// multi-tenant RBAC lands.
+	// TWO-LEVEL guard (security-critical, ADR-046 §7): the `cadence.*`
+	// right controls the schedule, but the recipe spawns a Voyage, so on
+	// CREATE the creator must also hold the Voyage permission for the
+	// recipe's `kind` (`incarnation.run` for scenario / `errand.run` for
+	// command, ADR-043 §6) — otherwise Cadence would become a
+	// privilege-escalation bypass of RBAC. The check lives inside
+	// CadenceHandler.Create (kind is only visible from the body, Voyage
+	// parity).
 	//
-	// cadence.enable / cadence.disable — гранулярные права на toggle расписания
-	// (`POST /v1/cadences/{id}/enable` / `.../disable`), отделены от
-	// `cadence.update` (PATCH рецепта), ADR-046 amendment 2026-06-02. BACKCOMPAT:
-	// `cadence.update` остаётся валидным грантом и для toggle — роли со старым
-	// правом не теряют enable/disable. Роуты используют OR-гейт
-	// [middleware.RequireAnyPermission]: enable допускает `cadence.enable` ИЛИ
-	// `cadence.update`, disable — `cadence.disable` ИЛИ `cadence.update`.
+	// cadence.enable / cadence.disable — granular rights to toggle a
+	// schedule (`POST /v1/cadences/{id}/enable` / `.../disable`), split
+	// from `cadence.update` (PATCH of the recipe), ADR-046 amendment
+	// 2026-06-02. BACKCOMPAT: `cadence.update` remains a valid grant for
+	// toggling too — roles with the old right don't lose enable/disable.
+	// Routes use the OR gate [middleware.RequireAnyPermission]: enable
+	// accepts `cadence.enable` OR `cadence.update`, disable accepts
+	// `cadence.disable` OR `cadence.update`.
 	"cadence.create":  {},
 	"cadence.list":    {},
 	"cadence.update":  {},
@@ -277,13 +301,14 @@ var AllowedPermissions = map[string]struct{}{
 	"cadence.enable":  {},
 	"cadence.disable": {},
 
-	// herald.* / tiding.* — operator-facing CRUD реестров уведомлений Herald
-	// (каналы доставки) / Tiding (правила подписки) о событиях прогонов (ADR-052,
-	// S4). resource — `herald` / `tiding`; actions — create / read / list /
-	// update / delete (паттерн omen.* / push-provider.*). Селектор — NoSelector:
-	// управление каналами/правилами кластер-уровневое (как role.* / synod.* /
-	// omen.*); per-name scope — отдельный slice при появлении мульти-тенант-RBAC.
-	// Mutating-CRUD аудируется (herald.created/updated/deleted + tiding.*).
+	// herald.* / tiding.* — operator-facing CRUD for the run-event
+	// notification registries: Herald (delivery channels) / Tiding
+	// (subscription rules) (ADR-052, S4). resource is `herald` / `tiding`;
+	// actions — create / read / list / update / delete (pattern: omen.* /
+	// push-provider.*). Selector — NoSelector: channel/rule management is
+	// cluster-level (like role.* / synod.* / omen.*); per-name scope is a
+	// separate future slice once multi-tenant RBAC lands. Mutating CRUD is
+	// audited (herald.created/updated/deleted + tiding.*).
 	"herald.create": {},
 	"herald.read":   {},
 	"herald.list":   {},
@@ -295,32 +320,35 @@ var AllowedPermissions = map[string]struct{}{
 	"tiding.update": {},
 	"tiding.delete": {},
 
-	// provisioning.* — runtime-управление политикой способов СОЗДАНИЯ операторов
-	// (`provisioning_allowed_methods` в keeper_settings, ADR-058 Часть B). resource
-	// — `provisioning`; actions — read (`GET /v1/provisioning-policy`) / update
-	// (`PUT /v1/provisioning-policy`). Селектор — NoSelector: политика кластер-
-	// уровневая (как operator.* / role.*). update аудируется
-	// (`provisioning.policy_changed`), read — нет.
+	// provisioning.* — runtime management of the operator-creation-method
+	// policy (`provisioning_allowed_methods` in keeper_settings, ADR-058
+	// Part B). resource is `provisioning`; actions — read (`GET
+	// /v1/provisioning-policy`) / update (`PUT /v1/provisioning-policy`).
+	// Selector — NoSelector: the policy is cluster-level (like operator.*
+	// / role.*). update is audited (`provisioning.policy_changed`), read
+	// is not.
 	"provisioning.read":   {},
 	"provisioning.update": {},
 
-	// audit.* — read-only-доступ к `audit_log` (`GET /v1/audit`). Селектор —
-	// NoSelector в MVP: фильтрация по archon_aid делается query-param-ом, а
-	// per-AID/coven-scope под audit-trail пока не вводится. read audit-событий
-	// сам в audit НЕ пишется (избегаем рекурсии: иначе каждый GET /v1/audit
-	// удваивает таблицу).
+	// audit.* — read-only access to `audit_log` (`GET /v1/audit`). Selector
+	// — NoSelector in the MVP: filtering by archon_aid is done via a query
+	// param, and per-AID/coven scope for the audit trail isn't introduced
+	// yet. Reading audit events is NOT itself written to audit (avoids
+	// recursion: otherwise every GET /v1/audit would double the table).
 	"audit.read": {},
 
-	// provider.* / profile.* — operator-facing CRUD реестров Cloud-Provider-ов
-	// (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, docs/keeper/cloud.md).
-	// resource — `provider` / `profile`; actions — create / read / delete
-	// (паттерн push-provider.*, без update: Provider/Profile иммутабельны —
-	// смена параметров = delete+create, защита от частичной мутации live-VM-
-	// spec). Селектор — NoSelector в MVP: CRUD оперирует самим реестром (как
-	// push-provider.* / service.*); per-name scope — отдельный slice при
-	// появлении мульти-тенант-RBAC. Mutating-CRUD аудируется
-	// (provider.created/deleted + profile.created/deleted). `read` гейтит и
-	// list, и get (как operator.list↔read: одно право на оба read-роута).
+	// provider.* / profile.* — operator-facing CRUD for the Cloud-Provider
+	// (`providers`) and Cloud-Profile (`profiles`) registries (ADR-017,
+	// docs/keeper/cloud.md). resource is `provider` / `profile`; actions —
+	// create / read / delete (push-provider.* pattern, no update:
+	// Provider/Profile are immutable — changing params means delete+create,
+	// protecting against partial mutation of a live VM spec). Selector —
+	// NoSelector in the MVP: CRUD operates on the registry itself (like
+	// push-provider.* / service.*); per-name scope is a separate future
+	// slice once multi-tenant RBAC lands. Mutating CRUD is audited
+	// (provider.created/deleted + profile.created/deleted). `read` gates
+	// both list and get (like operator.list↔read: one right for both read
+	// routes).
 	"provider.create": {},
 	"provider.read":   {},
 	"provider.delete": {},
@@ -329,30 +357,30 @@ var AllowedPermissions = map[string]struct{}{
 	"profile.delete":  {},
 }
 
-// deprecatedActionAliases — DEPRECATED permission-имена → каноническое.
-// Ключ/значение — полная форма `<resource>.<action>`. [ParsePermission]
-// канонизирует ключ в значение на load снимка, чтобы [Permission.Matches]
-// остался чистым строковым сравнением, а роутер монтировал только
-// каноническое имя. Оба имени остаются валидными в [AllowedPermissions]
-// (closed enum, removed-имена — never): роли в keeper.yml / БД со старым
-// именем НЕ фейлят load и сохраняют доступ.
+// deprecatedActionAliases — DEPRECATED permission names → their canonical
+// form. Key/value is the full `<resource>.<action>` form. [ParsePermission]
+// canonicalizes the key to the value on snapshot load, so
+// [Permission.Matches] stays a plain string comparison and the router only
+// mounts the canonical name. Both names remain valid in
+// [AllowedPermissions] (closed enum, names are never removed): roles in
+// keeper.yml / DB with the old name don't fail load and keep their access.
 //
 //   - `incarnation.update` → `incarnation.update-hosts` (PM-decision
-//     2026-06-02): прежнее имя покрывало только `PATCH /hosts`, сужено под
-//     задел будущих update-covens/update-spec.
+//     2026-06-02): the old name covered only `PATCH /hosts`, narrowed to
+//     make room for future update-covens/update-spec.
 var deprecatedActionAliases = map[string]string{
 	"incarnation.update": "incarnation.update-hosts",
 }
 
-// IsAllowedPermission — проверка строки `<resource>.<action>` против
-// каталога. Для wildcard-permission (`<resource>.*`) проверяется
-// наличие хотя бы одного `<resource>.*`-имени в каталоге (т.е. resource
+// IsAllowedPermission checks a `<resource>.<action>` string against the
+// catalog. For a wildcard permission (`<resource>.*`), it checks that at
+// least one `<resource>.*`-name exists in the catalog (i.e. the resource is
 // known).
 func IsAllowedPermission(resource, action string) bool {
 	if action == "*" {
-		// `<resource>.*` валиден, если для resource есть хотя бы одна
-		// permission в каталоге. Любой full-wildcard `*` (без resource)
-		// валидируется отдельно в parsePermission.
+		// `<resource>.*` is valid if the catalog has at least one
+		// permission for that resource. A full wildcard `*` (no resource)
+		// is validated separately in parsePermission.
 		for name := range AllowedPermissions {
 			if len(name) > len(resource)+1 &&
 				name[:len(resource)] == resource && name[len(resource)] == '.' {
@@ -365,34 +393,37 @@ func IsAllowedPermission(resource, action string) bool {
 	return ok
 }
 
-// allowedSelectorKeys — closed enum ключей селектора (rbac.md §
-// Грамматика селектора). Расширение — отдельный PR.
+// allowedSelectorKeys — the closed enum of selector keys (rbac.md §
+// Selector grammar). Extending it is a separate PR.
 //
-// `regex` (ADR-047 S2a) — RE2-паттерн по SID/имени хоста, quoted-форма
-// `regex='^web-.*'`. В отличие от exact-ключей матчинг — regexp.MatchString
-// против host/sid-контекста ([Permission.Matches]).
+// `regex` (ADR-047 S2a) — an RE2 pattern over SID/host name, quoted form
+// `regex='^web-.*'`. Unlike exact keys, matching is regexp.MatchString
+// against the host/sid context ([Permission.Matches]).
 //
-// `soulprint` (ADR-047 S2b) — CEL-предикат по фактам хоста (`soulprint.self.*`,
-// ADR-018), quoted-форма `soulprint='soulprint.self.os.family == "debian"'`.
-// Компиляция валидируется shared/cel на load; реальный CEL-eval против фактов —
-// слайсы S3/S4 ([Permission.Matches] для soulprint в S2b fail-closed: context
-// map[string]string не несёт nested facts).
+// `soulprint` (ADR-047 S2b) — a CEL predicate over host facts
+// (`soulprint.self.*`, ADR-018), quoted form
+// `soulprint='soulprint.self.os.family == "debian"'`. Compilation is
+// validated by shared/cel on load; real CEL eval against facts is slices
+// S3/S4 ([Permission.Matches] for soulprint fail-closed in S2b: the
+// map[string]string context carries no nested facts).
 //
-// `state` (ADR-047 S2c) — CEL-предикат по incarnation.state, quoted-форма
-// `state='state.redis_version == "8.0"'`. Компиляция валидируется через
-// keeper/internal/statepredicate (migration-sandbox корень `state`) на load;
-// реальный CEL-eval против state — слайс S3b ([Permission.Matches] для state
-// fail-closed без incarnation.state в context).
+// `state` (ADR-047 S2c) — a CEL predicate over incarnation.state, quoted
+// form `state='state.redis_version == "8.0"'`. Compilation is validated via
+// keeper/internal/statepredicate (migration-sandbox root `state`) on load;
+// real CEL eval against state is slice S3b ([Permission.Matches] for state
+// fail-closed with no incarnation.state in the context).
 //
-// `trait` (ADR-047 amendment, ADR-060 п.7 slice 1) — exact key:value-match по
-// `incarnation.traits` (operator-set key-value метки инкарнации, jsonb). Форма
-// `trait=key:value` (ровно одна `:`; обе половины — [a-zA-Z0-9_.-]+, scalar-only).
-// В отличие от CEL-измерений soulprint/state — это точное равенство (как coven),
-// не предикат: значение Trait в [Permission.Matches] fail-closed (текущий
-// map[string]string-context не несёт nested incarnation.traits — реальный match
-// делает incarnation-list/get резолвер, slice 1 п.7). Семантика slice 1 —
-// OR-измерение Purview (incarnation видна, если её traits[key]==value); AND-
-// сужение по нескольким парам — follow-up multi-key.
+// `trait` (ADR-047 amendment, ADR-060 item 7 slice 1) — an exact
+// key:value match against `incarnation.traits` (operator-set key-value
+// labels on an incarnation, jsonb). Form `trait=key:value` (exactly one
+// `:`; both halves — [a-zA-Z0-9_.-]+, scalar-only). Unlike the CEL
+// dimensions soulprint/state, this is exact equality (like coven), not a
+// predicate: the Trait value is fail-closed in [Permission.Matches] (the
+// current map[string]string context carries no nested
+// incarnation.traits — the real match is done by the incarnation
+// list/get resolver, slice 1 item 7). Slice 1 semantics — an OR dimension
+// of Purview (an incarnation is visible if its traits[key]==value); AND
+// narrowing across multiple pairs is a follow-up multi-key feature.
 var allowedSelectorKeys = map[string]struct{}{
 	"service":     {},
 	"coven":       {},
@@ -404,17 +435,17 @@ var allowedSelectorKeys = map[string]struct{}{
 	"trait":       {},
 }
 
-// IsAllowedSelectorKey — проверка ключа селектора против closed enum.
+// IsAllowedSelectorKey checks a selector key against the closed enum.
 func IsAllowedSelectorKey(key string) bool {
 	_, ok := allowedSelectorKeys[key]
 	return ok
 }
 
-// SelectorKeys возвращает отсортированный список допустимых ключей селектора
-// (closed enum [allowedSelectorKeys]). Per-permission-метаданных в каталоге MVP
-// нет — это общий список допустимых ключей скоупа, применимый к permission-ам,
-// поддерживающим селектор. Используется каталог-эндпоинтом `GET /v1/permissions`
-// (selector_keys в выдаче — этот общий список).
+// SelectorKeys returns a sorted list of allowed selector keys (closed enum
+// [allowedSelectorKeys]). The MVP catalog has no per-permission metadata —
+// this is a general list of allowed scope keys, applicable to permissions
+// that support a selector. Used by the `GET /v1/permissions` catalog
+// endpoint (selector_keys in the response is this general list).
 func SelectorKeys() []string {
 	keys := make([]string, 0, len(allowedSelectorKeys))
 	for k := range allowedSelectorKeys {

@@ -7,23 +7,24 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/statepredicate"
 )
 
-// maxStateExprLen — верхняя граница длины state-CEL-предиката селектора
-// (ADR-047 S2c). Параллель [maxSoulprintExprLen]/[maxRegexLen]: cap длины —
-// дешёвая страховка против раздутых выражений в снимке (compile-cost/память на
-// load). CEL-go не подвержен catastrophic backtracking, ограничение — про объём.
+// maxStateExprLen is the upper bound on the length of a selector's state CEL
+// predicate (ADR-047 S2c). Parallels [maxSoulprintExprLen]/[maxRegexLen]: a
+// length cap is cheap insurance against bloated expressions in a snapshot
+// (compile cost/memory on load). CEL-go isn't subject to catastrophic
+// backtracking; the limit is about size, not ReDoS.
 const maxStateExprLen = 512
 
-// stateResolver — общий валидатор/eval state-предикатов RBAC-селектора (ADR-047
-// S2c). НЕ дублирует CEL-движок: делегирует keeper/internal/statepredicate
-// (migration-sandbox корень `state`, запрещены vault/now/register/soulprint/
-// input/essence — state-предикат = чистая функция от incarnation.state). Один
-// резолвер на процесс (потокобезопасен, общий compile-cache shared/cel) — как
-// soulprintEngine.
+// stateResolver is the shared validator/eval for RBAC-selector state
+// predicates (ADR-047 S2c). Does NOT duplicate the CEL engine: delegates to
+// keeper/internal/statepredicate (migration-sandbox root `state`; vault/now/
+// register/soulprint/input/essence are forbidden — a state predicate is a
+// pure function of incarnation.state). One resolver per process (thread-safe,
+// shared shared/cel compile cache) — same pattern as soulprintEngine.
 //
-// Собирается лениво один раз: конструктор statepredicate.New не зависит от
-// рантайма (ошибка только при программной несовместимости cel-go), но строить
-// его в init() значит платить на каждый импорт пакета; ленивая сборка под
-// sync.Once дешевле.
+// Built lazily, once: the statepredicate.New constructor doesn't depend on
+// runtime state (it can only fail on a cel-go build incompatibility), but
+// building it in init() would mean paying the cost on every package import;
+// lazy construction under sync.Once is cheaper.
 var (
 	stateResolverOnce sync.Once
 	stateResolverInst statepredicate.Resolver
@@ -37,11 +38,12 @@ func stateResolver() (statepredicate.Resolver, error) {
 	return stateResolverInst, stateResolverErr
 }
 
-// validateStateExpr компилирует state-CEL на load снимка (ADR-047 S2c) через
-// statepredicate.Compile: синтаксис + sandbox (запрещённый корень/функция) →
-// load-fail. Runtime-no-such-key на реальной инкарнации НЕ ошибка (Compile это
-// уже учитывает: валидация против пустого state). Симметрично
-// [validateSoulprintExpr], но движок — statepredicate.
+// validateStateExpr compiles state CEL on snapshot load (ADR-047 S2c) via
+// statepredicate.Compile: syntax errors and sandbox violations (forbidden
+// root/function) both fail the load. A runtime no-such-key on a real
+// incarnation is NOT an error (Compile already accounts for this: it
+// validates against an empty state). Symmetric with [validateSoulprintExpr],
+// but backed by the statepredicate engine.
 func validateStateExpr(expr string) error {
 	r, err := stateResolver()
 	if err != nil {
@@ -50,17 +52,18 @@ func validateStateExpr(expr string) error {
 	return r.Compile(expr)
 }
 
-// EvalStateExpr вычисляет state-предикат против incarnation.state. Готов под S3b
-// (видимость/резолв инкарнаций по state): резолвер list/target подаёт реальный
-// state инкарнации. Тонкая обёртка над statepredicate.Matches — единый источник
-// семантики (no-such-key → fail-closed no-match, не-bool → ошибка автора).
+// EvalStateExpr evaluates a state predicate against incarnation.state. Ready
+// for S3b (state-based incarnation visibility/resolution): the list/target
+// resolver will feed it the incarnation's real state. A thin wrapper over
+// statepredicate.Matches — the single source of semantics (no-such-key is a
+// fail-closed no-match, non-bool is an author error).
 //
-// Возврат:
-//   - (true, nil)  — предикат истинен (инкарнация в scope);
-//   - (false, nil) — ложен ЛИБО нужный state-факт отсутствует (no-such-key →
-//     fail-closed: «не в scope», не ошибка);
-//   - (false, err) — compile-ошибка (битый предикат; в норме отсеян на load)
-//     либо не-bool результат предиката.
+// Returns:
+//   - (true, nil)  — predicate is true (incarnation is in scope);
+//   - (false, nil) — predicate is false OR the needed state fact is absent
+//     (no-such-key → fail-closed "not in scope", not an error);
+//   - (false, err) — compile error (malformed predicate; normally filtered
+//     out at load) or a non-bool predicate result.
 func EvalStateExpr(expr string, state map[string]any) (bool, error) {
 	r, err := stateResolver()
 	if err != nil {

@@ -10,64 +10,68 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrInvalidRoleName — name роли не проходит [reRoleName]. Validation-error
-// sentinel (отдельно от ErrRoleAlreadyExists / ErrRoleNotFound): transport
-// маппит в 422, а не 409/404. Конкретный битый permission возвращается
-// wrapped-ошибкой ParsePermission (тоже 422; sentinel не нужен — текст несёт
-// диагностику).
+// ErrInvalidRoleName is returned when a role name fails [reRoleName]. A
+// validation-error sentinel (separate from ErrRoleAlreadyExists /
+// ErrRoleNotFound): transport maps it to 422, not 409/404. A specific broken
+// permission is returned as a wrapped ParsePermission error instead (also
+// 422; no sentinel needed there — the message carries the diagnosis).
 var ErrInvalidRoleName = errors.New("rbac: invalid role name")
 
-// ServicePool — узкое подмножество pgxpool.Pool, нужное [Service]:
-// транспортная поверхность [ExecQueryRower] + BeginTx для атомарных мутаций
-// под FOR UPDATE. Реальный `*pgxpool.Pool` удовлетворяет автоматически.
+// ServicePool is the narrow subset of pgxpool.Pool that [Service] needs: the
+// [ExecQueryRower] transport surface plus BeginTx for atomic mutations under
+// FOR UPDATE. The real `*pgxpool.Pool` satisfies it automatically.
 //
-// Симметрично [operator.ServicePool]; объявлено локально, чтобы rbac не тянул
-// operator (и обратно — избегаем import-цикла, см. [ErrWouldLockOutCluster]).
+// Mirrors [operator.ServicePool]; declared locally so rbac doesn't pull in
+// operator (and vice versa — avoiding an import cycle, see
+// [ErrWouldLockOutCluster]).
 type ServicePool interface {
 	ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// Invalidator — поверхность cluster-wide RBAC-инвалидации (ADR-028(d), B2).
-// После успешного commit-а role-мутации [Service] вызывает Invalidate, чтобы
-// остальные Keeper-ноды near-instant перечитали снимок (вместо ожидания
-// TTL-poll-а). Реализуется в `keeper run` адаптером поверх
-// [keeperredis.PublishRBACInvalidate]; в single-Keeper/dev-режиме (без Redis)
-// инвалидатор не подключён — работает только TTL-poll.
+// Invalidator is the cluster-wide RBAC invalidation surface (ADR-028(d),
+// B2). After a role mutation commits successfully, [Service] calls
+// Invalidate so other Keeper nodes re-read the snapshot near-instantly
+// (instead of waiting for the TTL poll). Implemented in `keeper run` by an
+// adapter over [keeperredis.PublishRBACInvalidate]; in single-Keeper/dev mode
+// (no Redis) no invalidator is attached — only the TTL poll runs.
 //
-// Invalidate — best-effort: ошибку публикации НЕ возвращает (мутация уже
-// зафиксирована в БД), реализация логирует и глотает.
+// Invalidate is best-effort: it does NOT return a publish error (the
+// mutation is already committed to the DB); the implementation logs and
+// swallows it.
 type Invalidator interface {
 	Invalidate(ctx context.Context)
 }
 
-// ServiceDeps — зависимости [Service]. Все поля immutable после конструктора.
+// ServiceDeps holds [Service]'s dependencies. All fields are immutable after
+// construction.
 type ServiceDeps struct {
 	Pool   ServicePool
 	Logger *slog.Logger
 }
 
-// Service — бизнес-логика RBAC-CRUD (роли / permissions / membership) под
-// role.*-permissions (ADR-028(e)). Один источник правды для будущего
-// transport-фасада (OpenAPI/MCP — Slice 2); инварианты (builtin-граница,
-// self-lockout) живут здесь, transport только декодирует input / кодирует
-// output.
+// Service holds the RBAC CRUD business logic (roles / permissions /
+// membership) behind the role.* permissions (ADR-028(e)). The single source
+// of truth for the future transport facade (OpenAPI/MCP — Slice 2);
+// invariants (the builtin boundary, self-lockout) live here, transport only
+// decodes input / encodes output.
 //
-// Безопасен для конкурентного использования: deps immutable, состояние не
-// держится; атомарность мутаций обеспечивается транзакциями + FOR UPDATE.
+// Safe for concurrent use: deps are immutable and no state is held;
+// mutation atomicity comes from transactions plus FOR UPDATE.
 type Service struct {
 	pool   ServicePool
 	logger *slog.Logger
 
-	// inv — опциональный cluster-wide invalidator (B2). Late-binding через
-	// [Service.SetInvalidator]: Redis-клиент в `keeper run` поднимается ПОСЛЕ
-	// NewService, поэтому инъекция отложена (паттерн store.SetAuditWriter /
-	// vc.SetMetrics в main.go). atomic.Pointer — конкурентная запись сеттером
-	// vs. чтение из мутаций без отдельного mutex-а.
+	// inv is the optional cluster-wide invalidator (B2). Late-bound via
+	// [Service.SetInvalidator]: the Redis client in `keeper run` comes up
+	// AFTER NewService, so injection is deferred (the same pattern as
+	// store.SetAuditWriter / vc.SetMetrics in main.go). atomic.Pointer
+	// handles concurrent writes from the setter vs. reads from mutations
+	// without a separate mutex.
 	inv atomic.Pointer[Invalidator]
 }
 
-// NewService собирает service. Pool обязателен.
+// NewService assembles the service. Pool is required.
 func NewService(d ServiceDeps) (*Service, error) {
 	if d.Pool == nil {
 		return nil, errors.New("rbac: ServiceDeps.Pool is nil")
@@ -75,9 +79,9 @@ func NewService(d ServiceDeps) (*Service, error) {
 	return &Service{pool: d.Pool, logger: d.Logger}, nil
 }
 
-// SetInvalidator late-binding-ом подключает cluster-wide invalidator (B2).
-// Вызывается из `keeper run` после подъёма Redis-клиента. nil — снять
-// invalidator (вернуться к чистому TTL-poll-у). Идемпотентен, потокобезопасен.
+// SetInvalidator late-binds the cluster-wide invalidator (B2). Called from
+// `keeper run` after the Redis client comes up. nil removes the invalidator
+// (falling back to a pure TTL poll). Idempotent, thread-safe.
 func (s *Service) SetInvalidator(inv Invalidator) {
 	if inv == nil {
 		s.inv.Store(nil)
@@ -86,37 +90,40 @@ func (s *Service) SetInvalidator(inv Invalidator) {
 	s.inv.Store(&inv)
 }
 
-// invalidate шлёт cluster-wide invalidate-сигнал после успешного commit-а
-// role-мутации (B2). No-op, если invalidator не подключён (single-Keeper/dev).
-// Best-effort: реализация Invalidate сама логирует и глотает ошибку publish-а
-// — мутация уже зафиксирована, потеря сигнала компенсируется TTL-poll-ом.
+// invalidate sends the cluster-wide invalidate signal after a role mutation
+// commits successfully (B2). No-op when no invalidator is attached
+// (single-Keeper/dev). Best-effort: the Invalidate implementation logs and
+// swallows any publish error itself — the mutation is already committed, and
+// a lost signal is covered by the TTL poll.
 func (s *Service) invalidate(ctx context.Context) {
 	if p := s.inv.Load(); p != nil {
 		(*p).Invalidate(ctx)
 	}
 }
 
-// CreateRoleInput — параметры CreateRole.
+// CreateRoleInput holds the parameters for CreateRole.
 type CreateRoleInput struct {
 	Name        string
 	Description string
 	Permissions []string
 	CallerAID   string
-	// DefaultScope — role default_scope (ADR-047 S1), наследуемый permission-ами
-	// роли без своего селектора. nil = роль без scope-ограничения (backcompat).
+	// DefaultScope is the role's default_scope (ADR-047 S1), inherited by the
+	// role's permissions that don't have their own selector. nil means the
+	// role has no scope restriction (backcompat).
 	DefaultScope *string
 }
 
-// CreateRole создаёт роль с её permissions. Валидация name + КАЖДОГО
-// permission через [ParsePermission] идёт ДО открытия tx (битый ввод не
-// должен держать транзакцию).
+// CreateRole creates a role along with its permissions. Validating the name
+// plus EVERY permission via [ParsePermission] happens BEFORE the tx opens
+// (bad input shouldn't hold a transaction open).
 //
-// Возврат:
-//   - [ErrInvalidRoleName] — name не по формату (422).
-//   - wrapped ParsePermission-ошибка — битый permission (422).
-//   - [ErrRoleAlreadyExists] — name занят (409).
-//   - wrapped FK-violation — CallerAID не существует в operators (вряд ли:
-//     middleware гарантирует валидного caller-а, но FK защищает).
+// Returns:
+//   - [ErrInvalidRoleName] — name doesn't match the format (422).
+//   - a wrapped ParsePermission error — a broken permission (422).
+//   - [ErrRoleAlreadyExists] — name already taken (409).
+//   - a wrapped FK violation — CallerAID doesn't exist in operators
+//     (unlikely: middleware guarantees a valid caller, but the FK is a
+//     backstop).
 func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 	if !reRoleName.MatchString(in.Name) {
 		return fmt.Errorf("%w: %q must match %s", ErrInvalidRoleName, in.Name, reRoleName.String())
@@ -143,12 +150,13 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Least-privilege subset-check (ADR-028, rbac.md → § Инвариант
-	// least-privilege): нельзя создать роль с permission, которым caller не
-	// обладает сам. Защита от вертикальной эскалации (role.create без `*` →
-	// роль с `*` → grant себе → cluster-admin). Гранящиеся bare-perms
-	// разворачиваются под создаваемый default_scope роли (ADR-047 S1), иначе
-	// caller со scope=prod выдал бы роль scope=staging.
+	// Least-privilege subset check (ADR-028, rbac.md → § Least-Privilege
+	// Invariant): a caller can't create a role with a permission it doesn't
+	// itself hold. Guards against vertical escalation (role.create without
+	// `*` → a role with `*` → grant it to self → cluster-admin). Granted
+	// bare perms are expanded under the role's own default_scope being
+	// created (ADR-047 S1), otherwise a caller scoped to prod could grant a
+	// role scoped to staging.
 	required, err := requiredPermissions(in.Permissions, in.DefaultScope)
 	if err != nil {
 		return err
@@ -167,14 +175,16 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 	return nil
 }
 
-// DeleteRole удаляет роль (каскадом permissions + membership).
+// DeleteRole deletes a role (cascading to its permissions and membership).
 //
-// Порядок проверок в tx (детерминированный lock-порядок против deadlock — R2:
-// роль → permissions → membership/operators):
-//  1. lock строки роли (SELECT … FOR UPDATE); нет → [ErrRoleNotFound].
-//  2. builtin=true → [ErrRoleBuiltin] (ПЕРВОЙ, до lockout — builtin важнее).
-//  3. если роль даёт `*` — self-lockout-проверка: останутся ли активные
-//     админы с `*` через РОЛЬ ≠ удаляемая; пусто → [ErrWouldLockOutCluster].
+// Order of checks inside the tx (a deterministic lock order against
+// deadlock — R2: role → permissions → membership/operators):
+//  1. lock the role row (SELECT … FOR UPDATE); missing → [ErrRoleNotFound].
+//  2. builtin=true → [ErrRoleBuiltin] (FIRST, before lockout — builtin takes
+//     priority).
+//  3. if the role grants `*` — a self-lockout check: will active admins with
+//     `*` remain through a role OTHER than the one being deleted; none →
+//     [ErrWouldLockOutCluster].
 //  4. DELETE.
 func (s *Service) DeleteRole(ctx context.Context, name string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -211,29 +221,31 @@ func (s *Service) DeleteRole(ctx context.Context, name string) error {
 	return nil
 }
 
-// UpdateRolePermissionsInput — параметры UpdateRolePermissions.
+// UpdateRolePermissionsInput holds the parameters for UpdateRolePermissions.
 type UpdateRolePermissionsInput struct {
 	Name        string
 	Permissions []string
 	CallerAID   string
 
-	// SetDefaultScope — если true, default_scope роли ЗАМЕНЯЕТСЯ значением
-	// DefaultScope (nil → снять scope). Если false — default_scope не трогается
-	// (PATCH-семантика: caller, не передавший поле, не сбрасывает scope роли).
+	// SetDefaultScope — when true, the role's default_scope is REPLACED with
+	// DefaultScope (nil clears the scope). When false, default_scope is left
+	// untouched (PATCH semantics: a caller that doesn't send the field
+	// doesn't reset the role's scope).
 	SetDefaultScope bool
-	// DefaultScope — новое значение default_scope при SetDefaultScope=true.
+	// DefaultScope is the new default_scope value when SetDefaultScope=true.
 	DefaultScope *string
 }
 
-// UpdateRolePermissions заменяет набор permissions роли (replace-семантика).
+// UpdateRolePermissions replaces a role's permission set (replace
+// semantics).
 //
-// Порядок в tx:
-//  1. lock роли; нет → [ErrRoleNotFound].
-//  2. builtin=true → [ErrRoleBuiltin] (до lockout).
-//  3. валидация нового набора через [ParsePermission].
-//  4. если старый набор давал `*`, а новый — нет → self-lockout-проверка
-//     (останутся ли админы с `*` через РОЛЬ ≠ обновляемая); пусто →
-//     [ErrWouldLockOutCluster].
+// Order inside the tx:
+//  1. lock the role; missing → [ErrRoleNotFound].
+//  2. builtin=true → [ErrRoleBuiltin] (before lockout).
+//  3. validate the new set via [ParsePermission].
+//  4. if the old set granted `*` and the new one doesn't → a self-lockout
+//     check (will admins with `*` remain through a role OTHER than the one
+//     being updated); none → [ErrWouldLockOutCluster].
 //  5. replace.
 func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermissionsInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -261,25 +273,27 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		}
 	}
 
-	// rolePermissions читает старый набор без отдельного lock-а на
-	// rbac_role_permissions: роль уже залочена lockRole-ом (FOR UPDATE на
-	// rbac_roles) в этой же tx, а изменить permissions роли можно только
-	// через эту роль-строку — конкурентная мутация сериализуется тем же
-	// row-lock-ом. Дополнительный lock на permission-строки избыточен.
+	// rolePermissions reads the old set without a separate lock on
+	// rbac_role_permissions: the role is already locked by lockRole (FOR
+	// UPDATE on rbac_roles) in this same tx, and a role's permissions can
+	// only be changed through that role row — a concurrent mutation
+	// serializes on the same row lock. A separate lock on the permission
+	// rows would be redundant.
 	oldPerms, err := rolePermissions(ctx, tx, in.Name)
 	if err != nil {
 		return err
 	}
 
-	// Least-privilege subset-check: ограничиваются только ДОБАВЛЯЕМЫЕ
-	// permissions (новые, которых не было в старом наборе). Удаление прав не
-	// ограничивается (оператор может урезать чужую роль, даже не владея этими
-	// правами — это не эскалация). Защита от обхода через update: caller с
-	// role.update добавляет `*` в существующую роль.
+	// Least-privilege subset check: only the ADDED permissions (new ones not
+	// in the old set) are restricted. Removing permissions isn't restricted
+	// (an operator can trim someone else's role even without holding those
+	// permissions — that's not escalation). Guards against the update-based
+	// bypass: a caller with role.update adding `*` to an existing role.
 	added := addedPermissions(oldPerms, in.Permissions)
-	// Эффективный scope добавляемых bare-perms (ADR-047 S1): при SetDefaultScope
-	// — НОВОЕ значение (replace), иначе — СУЩЕСТВУЮЩИЙ scope роли (PATCH:
-	// добавляемые права наследуют тот scope, под которым роль будет жить).
+	// Effective scope of the added bare perms (ADR-047 S1): with
+	// SetDefaultScope, it's the NEW value (replace); otherwise the role's
+	// EXISTING scope (PATCH: added permissions inherit whatever scope the
+	// role ends up living under).
 	grantedScope := in.DefaultScope
 	if !in.SetDefaultScope {
 		grantedScope, err = roleDefaultScope(ctx, tx, in.Name)
@@ -295,8 +309,9 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		return err
 	}
 
-	// Self-lockout-проверка нужна только при снятии `*`: старый набор давал
-	// `*`, новый — нет. Если новый набор тоже даёт `*` — кластер не залочится.
+	// The self-lockout check is only needed when `*` is being removed: the
+	// old set granted `*`, the new one doesn't. If the new set still grants
+	// `*`, the cluster can't get locked out.
 	if roleGivesWildcard(oldPerms) && !roleGivesWildcard(in.Permissions) {
 		if err := s.assertNotLastWildcardRole(ctx, tx, in.Name); err != nil {
 			return err
@@ -318,22 +333,24 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 	return nil
 }
 
-// RevokeOperatorInput — параметры RevokeOperator.
+// RevokeOperatorInput holds the parameters for RevokeOperator.
 type RevokeOperatorInput struct {
 	RoleName string
 	AID      string
 }
 
-// RevokeOperator снимает membership-строку (RoleName, AID).
+// RevokeOperator removes a membership row (RoleName, AID).
 //
-// builtin-граница: revoke-operator над builtin cluster-admin РАЗРЕШЁН (иначе
-// нельзя снять ошибочно назначенного админа), но с тем же self-lockout-ом.
+// builtin boundary: revoke-operator on the builtin cluster-admin role IS
+// ALLOWED (otherwise you couldn't remove a mistakenly-assigned admin), but
+// with the same self-lockout guard.
 //
-// Порядок в tx:
-//  1. lock membership-строки; нет → [ErrRoleOperatorNotFound].
-//  2. если роль даёт `*` И снимаемый AID держит `*` ТОЛЬКО через неё —
-//     self-lockout-проверка: останутся ли активные админы с `*` после
-//     исключения пары (RoleName, AID); пусто → [ErrWouldLockOutCluster].
+// Order inside the tx:
+//  1. lock the membership row; missing → [ErrRoleOperatorNotFound].
+//  2. if the role grants `*` AND the AID being removed holds `*` ONLY
+//     through it — a self-lockout check: will active admins with `*` remain
+//     after excluding the (RoleName, AID) pair; none →
+//     [ErrWouldLockOutCluster].
 //  3. DELETE.
 func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -346,11 +363,13 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		return err
 	}
 
-	// Lock роли (детерминированный порядок: роль → permissions → operators —
-	// против deadlock R2) и чтение её permissions — нужно знать, даёт ли роль `*`.
+	// Lock the role (deterministic order: role → permissions → operators —
+	// against deadlock R2) and read its permissions — we need to know
+	// whether the role grants `*`.
 	if _, err := lockRole(ctx, tx, in.RoleName); err != nil {
-		// Роль не может исчезнуть после успешного lockRoleOperator (FK +
-		// row-lock на membership), но защищаемся: ErrRoleNotFound → как есть.
+		// The role can't disappear after a successful lockRoleOperator (FK
+		// plus the row lock on membership), but we guard anyway:
+		// ErrRoleNotFound propagates as-is.
 		return err
 	}
 	perms, err := rolePermissions(ctx, tx, in.RoleName)
@@ -358,9 +377,10 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		return err
 	}
 	if roleGivesWildcard(perms) {
-		// Снимаем последнего админа с `*`? Контрольный запрос ПОД FOR UPDATE
-		// исключает целевую пару (RoleName, AID): если AID держит `*` и через
-		// другие роли — он останется в выборке и lockout не сработает.
+		// Are we removing the last admin with `*`? The probe query, run
+		// UNDER FOR UPDATE, excludes the target (RoleName, AID) pair: if the
+		// AID also holds `*` via other roles, it stays in the result set and
+		// lockout doesn't trigger.
 		if err := s.assertNotLastWildcardOperator(ctx, tx, in.RoleName, in.AID); err != nil {
 			return err
 		}
@@ -376,32 +396,33 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 	return nil
 }
 
-// GrantOperatorInput — параметры GrantOperator. CallerAID опционален
-// (nil → granted_by_aid IS NULL для bootstrap-membership-а; transport
-// заполняет caller-ом из claims).
+// GrantOperatorInput holds the parameters for GrantOperator. CallerAID is
+// optional (nil → granted_by_aid IS NULL, for bootstrap membership;
+// transport fills it in from the caller's claims).
 type GrantOperatorInput struct {
 	RoleName  string
 	AID       string
 	CallerAID *string
 }
 
-// GrantOperator привязывает AID к роли — вставляет membership-строку
-// (RoleName, AID) с granted_by_aid = CallerAID. Фасад поверх пакетной
-// [GrantOperator] (repository.go), симметричный [Service.RevokeOperator].
+// GrantOperator binds an AID to a role — inserts a membership row
+// (RoleName, AID) with granted_by_aid = CallerAID. A facade over the
+// package-level [GrantOperator] (repository.go), mirroring
+// [Service.RevokeOperator].
 //
-// Порядок в tx (детерминированный lock-порядок против deadlock — R2:
-// роль → operators; тот же, что у RevokeOperator):
-//  1. lock строки роли (SELECT … FOR UPDATE); нет → [ErrRoleNotFound].
-//  2. INSERT membership-а; FK-violation на несуществующий AID →
-//     [ErrOperatorNotFound] (через [mapGrantError]).
+// Order inside the tx (a deterministic lock order against deadlock — R2:
+// role → operators; the same as RevokeOperator):
+//  1. lock the role row (SELECT … FOR UPDATE); missing → [ErrRoleNotFound].
+//  2. INSERT the membership row; an FK violation on a nonexistent AID →
+//     [ErrOperatorNotFound] (via [mapGrantError]).
 //
-// self-lockout-проверки НЕТ: grant только добавляет membership (в т.ч.
-// admin-а) — расширение admin-set-а кластер запереть не может. Это
-// единственная мутация membership-а без lockout-границы (revoke/delete/
-// update её требуют).
+// NO self-lockout check: a grant only adds membership (even for an admin)
+// — expanding the admin set can never lock the cluster out. This is the
+// only membership mutation without a lockout boundary (revoke/delete/update
+// all require one).
 //
-// Идемпотентно: повторный grant той же пары — no-op (ON CONFLICT DO NOTHING
-// в insertRoleOperatorSQL).
+// Idempotent: regranting the same pair is a no-op (ON CONFLICT DO NOTHING
+// in insertRoleOperatorSQL).
 func (s *Service) GrantOperator(ctx context.Context, in GrantOperatorInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -409,28 +430,32 @@ func (s *Service) GrantOperator(ctx context.Context, in GrantOperatorInput) erro
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Lock роли существование-границей: даёт чистый ErrRoleNotFound вместо
-	// FK-violation на role_name (тот неотличим от FK на aid в одном маппере).
+	// Lock the role as an existence check: gives a clean ErrRoleNotFound
+	// instead of an FK violation on role_name (indistinguishable from an FK
+	// on aid in a single mapper).
 	if _, err := lockRole(ctx, tx, in.RoleName); err != nil {
 		return err
 	}
 
-	// Least-privilege subset-check: нельзя грантить роль, содержащую
-	// permission вне набора caller-а — иначе обход (cluster-admin создал
-	// мощную роль, suboperator с role.grant-operator привязал её себе/другим
-	// и поднялся). Проверяются permissions ГРАНЯЩЕЙСЯ роли.
+	// Least-privilege subset check: can't grant a role that contains a
+	// permission outside the caller's own set — otherwise a bypass (a
+	// cluster-admin creates a powerful role, a sub-operator with
+	// role.grant-operator binds it to itself/others and escalates). Checks
+	// the permissions of the role BEING GRANTED.
 	//
-	// CallerAID == nil — системный/bootstrap-грант (keeper init привязывает
-	// первого Архонта к cluster-admin внутри advisory-lock-tx): least-privilege
-	// к нему не применяется (нет caller-Архонта как субъекта). Subject-грант из
-	// transport-а всегда несёт CallerAID (claims.Subject).
+	// CallerAID == nil — a system/bootstrap grant (keeper init binds the
+	// first Archon to cluster-admin inside its advisory-lock tx):
+	// least-privilege doesn't apply here (there's no caller Archon as a
+	// subject). A subject-initiated grant from transport always carries a
+	// CallerAID (claims.Subject).
 	if in.CallerAID != nil {
 		grantedPerms, err := rolePermissions(ctx, tx, in.RoleName)
 		if err != nil {
 			return err
 		}
-		// bare-perms гранящейся роли наследуют её default_scope (ADR-047 S1):
-		// привязка scoped-роли конферит право в её scope, не unrestricted.
+		// The bare perms of the role being granted inherit its default_scope
+		// (ADR-047 S1): binding a scoped role confers the right within its
+		// scope, not unrestricted.
 		grantedScope, err := roleDefaultScope(ctx, tx, in.RoleName)
 		if err != nil {
 			return err
@@ -454,8 +479,8 @@ func (s *Service) GrantOperator(ctx context.Context, in GrantOperatorInput) erro
 	return nil
 }
 
-// grantedByArg переводит *string CallerAID в args-значение для
-// granted_by_aid: nil → nil (PG NULL), иначе разыменованная строка.
+// grantedByArg converts a *string CallerAID into an args value for
+// granted_by_aid: nil → nil (PG NULL), otherwise the dereferenced string.
 func grantedByArg(callerAID *string) any {
 	if callerAID == nil {
 		return nil
@@ -463,23 +488,25 @@ func grantedByArg(callerAID *string) any {
 	return *callerAID
 }
 
-// ListRoles возвращает API-каталог ролей (имя / description / builtin +
-// развёрнутые permissions и operators-AID-ы). Read-only, без tx — собирается
-// тремя SELECT-ами без N+1 ([LoadRoleViews], симметрично [LoadSnapshot]).
-// Это API-view, не enforcer-snapshot: с description/builtin для role.list.
+// ListRoles returns the API role catalog (name / description / builtin plus
+// expanded permissions and operator AIDs). Read-only, no tx — assembled with
+// three SELECTs, no N+1 ([LoadRoleViews], mirrors [LoadSnapshot]). This is
+// an API view, not an enforcer snapshot: it carries description/builtin for
+// role.list.
 func (s *Service) ListRoles(ctx context.Context) ([]RoleView, error) {
 	return LoadRoleViews(ctx, s.pool)
 }
 
-// assertNotLastWildcardRole — self-lockout для delete/update→remove-`*`:
-// взять lock на effective-cluster-admins (ядро, БД + FOR UPDATE) и проверить,
-// что останется ≥1 активный AID с `*` через РОЛЬ ≠ excludeRole. Пусто →
-// [ErrWouldLockOutCluster].
+// assertNotLastWildcardRole is the self-lockout guard for delete/
+// update-that-removes-`*`: lock the effective-cluster-admins core (DB + FOR
+// UPDATE) and check that ≥1 active AID with `*` remains via a role OTHER
+// than excludeRole. None → [ErrWouldLockOutCluster].
 //
-// excludeRole мутируется/удаляется в этой же tx — её вклад в эффективный `*`
-// исчезнет. Поэтому считаем «выживших» через ДРУГИЕ роли. Для точности
-// используем per-role membership (нельзя просто исключить роль из общего
-// списка AID-ов: AID мог держать `*` и через excludeRole, и через другую).
+// excludeRole is being mutated/deleted in this same tx — its contribution to
+// the effective `*` is about to vanish. So we count "survivors" via OTHER
+// roles. For accuracy we use per-role membership (we can't just exclude the
+// role from a flat AID list: an AID may hold `*` via both excludeRole and
+// another role).
 func (s *Service) assertNotLastWildcardRole(ctx context.Context, tx ExecQueryRower, excludeRole string) error {
 	survivors, err := s.lockWildcardAdminsExcludingRole(ctx, tx, excludeRole)
 	if err != nil {
@@ -491,14 +518,14 @@ func (s *Service) assertNotLastWildcardRole(ctx context.Context, tx ExecQueryRow
 	return nil
 }
 
-// assertNotLastWildcardOperator — self-lockout для revoke-operator: взять lock
-// на effective-cluster-admins и проверить, что останется ≥1 активный AID с `*`
-// ПОСЛЕ исключения ровно пары (excludeRole, excludeAID). Пусто →
-// [ErrWouldLockOutCluster].
+// assertNotLastWildcardOperator is the self-lockout guard for
+// revoke-operator: lock the effective-cluster-admins core and check that ≥1
+// active AID with `*` remains AFTER excluding exactly the (excludeRole,
+// excludeAID) pair. None → [ErrWouldLockOutCluster].
 //
-// Исключается только вклад пары: если excludeAID держит `*` ещё и через другую
-// роль — он остаётся; если другой AID держит `*` через excludeRole — он
-// остаётся (снимается лишь membership excludeAID, не вся роль).
+// Only the pair's contribution is excluded: if excludeAID also holds `*` via
+// another role, it stays; if another AID holds `*` via excludeRole, it stays
+// too (only excludeAID's membership is being removed, not the whole role).
 func (s *Service) assertNotLastWildcardOperator(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) error {
 	survivors, err := s.lockWildcardAdminsExcludingPair(ctx, tx, excludeRole, excludeAID)
 	if err != nil {
@@ -510,20 +537,22 @@ func (s *Service) assertNotLastWildcardOperator(ctx context.Context, tx ExecQuer
 	return nil
 }
 
-// lockWildcardAdminsExcludingRole берёт lock на self-lockout-ядро (FOR UPDATE) и
-// возвращает активных AID-ов с эффективным `*` через роль ≠ excludeRole —
-// учитывая ОБА пути (прямой ∪ через Synod, ADR-049(f)). excludeRole
-// удаляется/теряет `*` в этой же tx, поэтому её вклад исключается из обеих
-// веток: прямой `ro.role_name <> $1` и Synod `sr.role_name <> $1` (роль,
-// бандленная в группу, тоже перестаёт давать `*`). Без Synod-ветки админ,
-// держащий `*` ТОЛЬКО через группу, был бы посчитан «несуществующим» → ложный
-// lockout ИЛИ (хуже) ложный пропуск удаления последней `*`-роли.
+// lockWildcardAdminsExcludingRole locks the self-lockout core (FOR UPDATE)
+// and returns active AIDs with effective `*` via a role ≠ excludeRole —
+// accounting for BOTH paths (direct ∪ via Synod, ADR-049(f)). excludeRole is
+// being deleted/losing `*` in this same tx, so its contribution is excluded
+// from both branches: direct `ro.role_name <> $1` and Synod
+// `sr.role_name <> $1` (a role bundled into a group also stops granting
+// `*`). Without the Synod branch, an admin holding `*` ONLY via a group
+// would be counted as "nonexistent" → a false lockout OR (worse) a false
+// pass that lets the last `*`-granting role be deleted.
 //
-// Два locking-запроса в фиксированном порядке (прямой → Synod, см.
-// [directClusterAdminsForUpdateSQL]) — UNION с FOR UPDATE PostgreSQL запрещает.
+// Two locking queries in a fixed order (direct → Synod, see
+// [directClusterAdminsForUpdateSQL]) — PostgreSQL forbids UNION with FOR
+// UPDATE.
 func (s *Service) lockWildcardAdminsExcludingRole(ctx context.Context, tx ExecQueryRower, excludeRole string) ([]string, error) {
-	// Без DISTINCT: FOR UPDATE его запрещает (SQLSTATE 0A000). Для проверки
-	// «пусто/непусто» дедуп не нужен; scanAIDs всё равно дедупит для чистоты.
+	// No DISTINCT: FOR UPDATE forbids it (SQLSTATE 0A000). Dedup isn't needed
+	// for an empty/non-empty check; scanAIDs dedups anyway for cleanliness.
 	const directQ = `
 SELECT ro.aid
 FROM rbac_role_operators ro
@@ -552,23 +581,24 @@ FOR UPDATE OF so, sr, rp, o
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// lockWildcardAdminsExcludingPair берёт lock на self-lockout-ядро и возвращает
-// активных AID-ов с эффективным `*` ПОСЛЕ исключения ровно одной ПРЯМОЙ
-// membership-строки (excludeRole, excludeAID) — путь `role.revoke-operator`
-// снимает именно её из rbac_role_operators.
+// lockWildcardAdminsExcludingPair locks the self-lockout core and returns
+// active AIDs with effective `*` AFTER excluding exactly one DIRECT
+// membership row (excludeRole, excludeAID) — the exact row that
+// `role.revoke-operator` removes from rbac_role_operators.
 //
-// Synod-ветка (ADR-049(f)) НЕ фильтруется по паре: revoke-operator НЕ трогает
-// synod_operators/synod_roles — если excludeAID держит `*` через Synod, он
-// остаётся admin-ом и после снятия прямой строки. Это семантически верно: убран
-// один путь, групповой путь жив. (Зеркально: другой AID, держащий `*` через
-// excludeRole напрямую ИЛИ через Synod с этой ролью, тоже остаётся — снимается
-// лишь membership excludeAID, не сама роль.)
+// The Synod branch (ADR-049(f)) is NOT filtered by the pair: revoke-operator
+// doesn't touch synod_operators/synod_roles — if excludeAID holds `*` via
+// Synod, it stays an admin even after the direct row is removed. This is
+// semantically correct: one path is removed, the group path is still alive.
+// (Mirror case: another AID holding `*` via excludeRole either directly OR
+// through a Synod bundling that role also stays — only excludeAID's
+// membership is being removed, not the role itself.)
 //
-// Прямая ветка исключает пару: `NOT (role_name=$1 AND aid=$2)`. Два locking-
-// запроса в фиксированном порядке (прямой → Synod, см.
+// The direct branch excludes the pair: `NOT (role_name=$1 AND aid=$2)`. Two
+// locking queries in a fixed order (direct → Synod, see
 // [directClusterAdminsForUpdateSQL]).
 func (s *Service) lockWildcardAdminsExcludingPair(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) ([]string, error) {
-	// Без DISTINCT (см. lockWildcardAdminsExcludingRole).
+	// No DISTINCT (see lockWildcardAdminsExcludingRole).
 	const directQ = `
 SELECT ro.aid
 FROM rbac_role_operators ro
@@ -598,15 +628,16 @@ FOR UPDATE OF so, sr, rp, o
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// assertNotLastWildcardSynod — self-lockout для synod.delete: взять lock на
-// effective-cluster-admins и проверить, что останется ≥1 активный AID с `*`
-// ПОСЛЕ исчезновения всей группы excludeSynod. Пусто → [ErrWouldLockOutCluster].
+// assertNotLastWildcardSynod is the self-lockout guard for synod.delete:
+// lock the effective-cluster-admins core and check that ≥1 active AID with
+// `*` remains AFTER the whole excludeSynod group disappears. None →
+// [ErrWouldLockOutCluster].
 //
-// Группа удаляется CASCADE-ом в этой же tx → её bundle-роли перестают давать `*`
-// ВСЕМ её членам. Поэтому Synod-ветка контрольного запроса исключает строки
-// этой группы (`so.synod_name <> excludeSynod`); прямая ветка не трогается
-// (delete группы не снимает прямой membership). Выжившие — админы через ДРУГИЕ
-// группы ИЛИ напрямую.
+// The group is removed via CASCADE in this same tx → its bundled roles stop
+// granting `*` to ALL its members. So the Synod branch of the probe query
+// excludes that group's rows (`so.synod_name <> excludeSynod`); the direct
+// branch is untouched (deleting a group doesn't remove direct membership).
+// Survivors are admins via OTHER groups OR directly.
 func (s *Service) assertNotLastWildcardSynod(ctx context.Context, tx ExecQueryRower, excludeSynod string) error {
 	survivors, err := s.lockWildcardAdminsExcludingSynod(ctx, tx, excludeSynod)
 	if err != nil {
@@ -618,15 +649,16 @@ func (s *Service) assertNotLastWildcardSynod(ctx context.Context, tx ExecQueryRo
 	return nil
 }
 
-// assertNotLastWildcardSynodRole — self-lockout для synod.revoke-role: взять
-// lock на effective-cluster-admins и проверить, что останется ≥1 активный AID с
-// `*` ПОСЛЕ снятия роли excludeRole из bundle группы excludeSynod. Пусто →
-// [ErrWouldLockOutCluster].
+// assertNotLastWildcardSynodRole is the self-lockout guard for
+// synod.revoke-role: lock the effective-cluster-admins core and check that
+// ≥1 active AID with `*` remains AFTER excludeRole is removed from
+// excludeSynod's bundle. None → [ErrWouldLockOutCluster].
 //
-// Роль уходит из bundle ровно ЭТОЙ группы (synod_roles-строка удаляется в этой
-// же tx) → перестаёт давать `*` через excludeSynod, но через другие группы / тот
-// же AID напрямую — остаётся. Synod-ветка исключает пару (excludeSynod,
-// excludeRole); прямая ветка цела.
+// The role leaves exactly THAT group's bundle (the synod_roles row is
+// deleted in this same tx) → it stops granting `*` via excludeSynod, but
+// still grants it via other groups / the same AID directly. The Synod branch
+// excludes the (excludeSynod, excludeRole) pair; the direct branch is
+// untouched.
 func (s *Service) assertNotLastWildcardSynodRole(ctx context.Context, tx ExecQueryRower, excludeSynod, excludeRole string) error {
 	survivors, err := s.lockWildcardAdminsExcludingSynodRole(ctx, tx, excludeSynod, excludeRole)
 	if err != nil {
@@ -638,16 +670,17 @@ func (s *Service) assertNotLastWildcardSynodRole(ctx context.Context, tx ExecQue
 	return nil
 }
 
-// assertNotLastWildcardSynodOperator — self-lockout для synod.remove-operator:
-// взять lock на effective-cluster-admins и проверить, что останется ≥1 активный
-// AID с `*` ПОСЛЕ исключения ровно пары (excludeSynod, excludeAID) из membership-а
-// группы. Пусто → [ErrWouldLockOutCluster].
+// assertNotLastWildcardSynodOperator is the self-lockout guard for
+// synod.remove-operator: lock the effective-cluster-admins core and check
+// that ≥1 active AID with `*` remains AFTER excluding exactly the
+// (excludeSynod, excludeAID) pair from the group's membership. None →
+// [ErrWouldLockOutCluster].
 //
-// Снимается одна synod_operators-строка → excludeAID теряет роли excludeSynod, но
-// если он держит `*` через ДРУГУЮ группу ИЛИ напрямую — остаётся; другие члены
-// excludeSynod не затрагиваются. Synod-ветка исключает пару (excludeSynod,
-// excludeAID); прямая ветка цела (excludeAID мог держать `*` напрямую — тогда он
-// остаётся admin-ом).
+// One synod_operators row is removed → excludeAID loses excludeSynod's
+// roles, but if it holds `*` via ANOTHER group OR directly, it stays; other
+// members of excludeSynod are unaffected. The Synod branch excludes the
+// (excludeSynod, excludeAID) pair; the direct branch is untouched
+// (excludeAID may hold `*` directly — in which case it remains an admin).
 func (s *Service) assertNotLastWildcardSynodOperator(ctx context.Context, tx ExecQueryRower, excludeSynod, excludeAID string) error {
 	survivors, err := s.lockWildcardAdminsExcludingSynodOperator(ctx, tx, excludeSynod, excludeAID)
 	if err != nil {
@@ -659,10 +692,11 @@ func (s *Service) assertNotLastWildcardSynodOperator(ctx context.Context, tx Exe
 	return nil
 }
 
-// lockWildcardAdminsExcludingSynod — admin-set с `*` после исчезновения всей
-// группы excludeSynod (synod.delete). Прямая ветка цела; Synod-ветка исключает
-// строки группы (`so.synod_name <> $1`). Два locking-запроса в фиксированном
-// порядке (прямой → Synod, см. [directClusterAdminsForUpdateSQL]).
+// lockWildcardAdminsExcludingSynod — the admin set with `*` after the whole
+// excludeSynod group disappears (synod.delete). The direct branch is
+// untouched; the Synod branch excludes the group's rows
+// (`so.synod_name <> $1`). Two locking queries in a fixed order (direct →
+// Synod, see [directClusterAdminsForUpdateSQL]).
 func (s *Service) lockWildcardAdminsExcludingSynod(ctx context.Context, tx ExecQueryRower, excludeSynod string) ([]string, error) {
 	const synodQ = `
 SELECT so.aid
@@ -684,9 +718,10 @@ FOR UPDATE OF so, sr, rp, o
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// lockWildcardAdminsExcludingSynodRole — admin-set с `*` после снятия роли
-// excludeRole из bundle группы excludeSynod (synod.revoke-role). Прямая ветка
-// цела; Synod-ветка исключает пару (`NOT (sr.synod_name=$1 AND sr.role_name=$2)`).
+// lockWildcardAdminsExcludingSynodRole — the admin set with `*` after
+// excludeRole is removed from excludeSynod's bundle (synod.revoke-role). The
+// direct branch is untouched; the Synod branch excludes the pair
+// (`NOT (sr.synod_name=$1 AND sr.role_name=$2)`).
 func (s *Service) lockWildcardAdminsExcludingSynodRole(ctx context.Context, tx ExecQueryRower, excludeSynod, excludeRole string) ([]string, error) {
 	const synodQ = `
 SELECT so.aid
@@ -709,10 +744,10 @@ FOR UPDATE OF so, sr, rp, o
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// lockWildcardAdminsExcludingSynodOperator — admin-set с `*` после исключения
-// пары (excludeSynod, excludeAID) из membership-а группы (synod.remove-operator).
-// Прямая ветка цела; Synod-ветка исключает пару
-// (`NOT (so.synod_name=$1 AND so.aid=$2)`).
+// lockWildcardAdminsExcludingSynodOperator — the admin set with `*` after
+// excluding the (excludeSynod, excludeAID) pair from the group's membership
+// (synod.remove-operator). The direct branch is untouched; the Synod branch
+// excludes the pair (`NOT (so.synod_name=$1 AND so.aid=$2)`).
 func (s *Service) lockWildcardAdminsExcludingSynodOperator(ctx context.Context, tx ExecQueryRower, excludeSynod, excludeAID string) ([]string, error) {
 	const synodQ = `
 SELECT so.aid
@@ -735,7 +770,8 @@ FOR UPDATE OF so, sr, rp, o
 	return dedupAIDs(append(direct, synod...)), nil
 }
 
-// scanAIDs — общий сбор одностолбцового AID-результата self-lockout-запросов.
+// scanAIDs collects the single-column AID result shared by the self-lockout
+// queries.
 func scanAIDs(ctx context.Context, tx ExecQueryRower, sql string, args ...any) ([]string, error) {
 	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {

@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// ResolvePurview (ADR-047 S0) — обобщение CovenScope в Purview. Эти тесты
-// фиксируют, что наблюдаемое поведение НЕ меняется: каждый сценарий
-// CovenScope имеет эквивалентный Purview-результат, а CovenScope становится
-// тонкой проекцией (covens, unrestricted) ResolvePurview.
+// ResolvePurview (ADR-047 S0) is a generalization of CovenScope into
+// Purview. These tests pin down that observable behavior does NOT change:
+// every CovenScope scenario has an equivalent Purview result, and CovenScope
+// becomes a thin (covens, unrestricted) projection of ResolvePurview.
 
 func TestResolvePurview_Wildcard_Unrestricted(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
@@ -54,11 +54,12 @@ func TestResolvePurview_CovenSelector_Restricted(t *testing.T) {
 	}
 }
 
-// TestResolvePurview_Revoked_Deny (ADR-047 G1) — ревокнутый Архонт с активной
-// ролью ЛЮБОГО измерения получает Purview{Deny:true} с пустыми полями. Это
-// единая точка revoked-aware-резолва: gate (HoldsAction→false), single-read
-// (soulpurview.Resolve→Empty→404), InScope (Deny→false) — все деривируются
-// отсюда. Зеркало revoked-shortcut в Check (enforcer.go).
+// TestResolvePurview_Revoked_Deny (ADR-047 G1) — a revoked Archon with an
+// active role of ANY dimension gets Purview{Deny:true} with empty fields.
+// This is the single point of revoked-aware resolution: gate
+// (HoldsAction→false), single-read (soulpurview.Resolve→Empty→404), InScope
+// (Deny→false) — all derive from here. Mirrors the revoked-shortcut in
+// Check (enforcer.go).
 func TestResolvePurview_Revoked_Deny(t *testing.T) {
 	cases := []struct {
 		name string
@@ -108,8 +109,9 @@ func TestResolvePurview_UnionAcrossRoles(t *testing.T) {
 	}
 }
 
-// Host-only селектор не делает оператора unrestricted по coven и не даёт ни
-// одной coven-метки — текущее поведение CovenScope (covens=nil, unrestricted=false).
+// A host-only selector doesn't make the operator unrestricted by coven and
+// doesn't grant any coven label — current CovenScope behavior (covens=nil,
+// unrestricted=false).
 func TestResolvePurview_HostSelector_NotCovenScoped(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "host-ops", operators: []string{"archon-a"},
@@ -124,8 +126,8 @@ func TestResolvePurview_HostSelector_NotCovenScoped(t *testing.T) {
 	}
 }
 
-// AID без подходящей роли (но известный) — текущий CovenScope отдаёт
-// (nil, false). В S0 НЕ меняем семантику на Deny=true: pure refactor.
+// A known AID without a matching role — current CovenScope returns
+// (nil, false). S0 does NOT change the semantics to Deny=true: pure refactor.
 func TestResolvePurview_NoMatchingPermission_NotUnrestricted(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "viewer", operators: []string{"archon-a"}, permissions: []string{"soul.list"},
@@ -139,8 +141,8 @@ func TestResolvePurview_NoMatchingPermission_NotUnrestricted(t *testing.T) {
 	}
 }
 
-// Неизвестный AID — CovenScope сейчас отдаёт (nil, false); проекция через
-// ResolvePurview обязана быть эквивалентна.
+// Unknown AID — CovenScope currently returns (nil, false); the projection
+// through ResolvePurview must be equivalent.
 func TestResolvePurview_UnknownAID_Empty(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "ops", operators: []string{"archon-a"}, permissions: []string{"soul.coven-assign"},
@@ -151,8 +153,8 @@ func TestResolvePurview_UnknownAID_Empty(t *testing.T) {
 	}
 }
 
-// Заготовки S2-измерений (regexes/soulprint/state) в S0 ВСЕГДА пустые —
-// доказательство, что S0 их не заполняет и S2 будет additive.
+// S2-dimension placeholders (regexes/soulprint/state) are ALWAYS empty in
+// S0 — proof that S0 doesn't populate them and S2 will be additive.
 func TestResolvePurview_S2Dimensions_EmptyInS0(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "dev-ops", operators: []string{"archon-a"},
@@ -165,9 +167,10 @@ func TestResolvePurview_S2Dimensions_EmptyInS0(t *testing.T) {
 	}
 }
 
-// Эквивалентность: CovenScope == проекция ResolvePurview на (Covens, Unrestricted)
-// по всем характерным сценариям. Это центральный регресс-тест S0 —
-// рефакторинг не меняет ни одного решения по coven-scope.
+// Equivalence: CovenScope == the ResolvePurview projection onto
+// (Covens, Unrestricted) across all characteristic scenarios. This is the
+// central S0 regression test — the refactor doesn't change a single
+// coven-scope decision.
 func TestCovenScope_EquivalentToResolvePurviewProjection(t *testing.T) {
 	e := mustEnforcer(t,
 		fixtureRole{name: "admin", operators: []string{"archon-wild"}, permissions: []string{"*"}},

@@ -1,11 +1,11 @@
 //go:build integration
 
-// Integration-матрица least-privilege subset-check (security-fix: вертикальная
-// эскалация привилегий через role.create/update/grant-operator). Делит
-// контейнер / resetRBAC / seedOperator / insertRole / newService с
-// integration_test.go + crud_integration_test.go (тот же пакет rbac).
+// Integration matrix for the least-privilege subset check (security fix:
+// vertical privilege escalation via role.create/update/grant-operator).
+// Shares the container / resetRBAC / seedOperator / insertRole / newService
+// with integration_test.go + crud_integration_test.go (same rbac package).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/rbac/
 
@@ -17,21 +17,22 @@ import (
 	"testing"
 )
 
-// setupSuboperator поднимает caller-а без `*`: archon-sub держит ровно
-// role.create + role.grant-operator (через кастомную роль granters), плюс
-// archon-alice как bootstrap-admin (`*` через cluster-admin) — чтобы кластер
-// не залочился и был источник «сильных» прав для grant-сценариев.
+// setupSuboperator sets up a caller without `*`: archon-sub holds exactly
+// role.create + role.grant-operator (via the custom granters role), plus
+// archon-alice as bootstrap-admin (`*` via cluster-admin) — so the cluster
+// isn't locked out and there's a source of "strong" rights for grant
+// scenarios.
 func setupSuboperator(t *testing.T) (sub, alice string) {
 	t.Helper()
 	ctx := context.Background()
 	seedOperator(t, "archon-alice", nil)
 	a := "archon-alice"
 	seedOperator(t, "archon-sub", &a)
-	// alice — cluster-admin (источник `*` и второй admin против self-lockout).
+	// alice is cluster-admin (source of `*` and a second admin against self-lockout).
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// sub — только role.create + role.grant-operator.
+	// sub gets only role.create + role.grant-operator.
 	insertRole(t, "granters", "role.create", "role.grant-operator")
 	if err := GrantOperator(ctx, integrationPool, "granters", "archon-sub", &a); err != nil {
 		t.Fatalf("grant sub→granters: %v", err)
@@ -39,9 +40,9 @@ func setupSuboperator(t *testing.T) (sub, alice string) {
 	return "archon-sub", a
 }
 
-// insertRoleScoped — insertRole + default_scope (ADR-047 S1). Прямой INSERT
-// фикстуры роли с per-role scope, минуя Service (для caller-фикстур, чьи права
-// сами под default_scope).
+// insertRoleScoped is insertRole + default_scope (ADR-047 S1). A direct
+// INSERT of a role fixture with a per-role scope, bypassing Service (for
+// caller fixtures whose own rights are under a default_scope).
 func insertRoleScoped(t *testing.T, name, scope string, perms ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -57,9 +58,10 @@ func insertRoleScoped(t *testing.T, name, scope string, perms ...string) {
 	}
 }
 
-// setupScopedCaller поднимает caller-а scoped-ролью (default_scope=coven=prod +
-// bare incarnation.run) → его эффективный scope = covens[prod]. alice —
-// cluster-admin (источник `*`, второй admin против self-lockout).
+// setupScopedCaller sets up a caller with a scoped role (default_scope=
+// coven=prod + bare incarnation.run) → its effective scope is covens[prod].
+// alice is cluster-admin (source of `*`, a second admin against
+// self-lockout).
 func setupScopedCaller(t *testing.T) (sub, alice string) {
 	t.Helper()
 	ctx := context.Background()
@@ -69,8 +71,8 @@ func setupScopedCaller(t *testing.T) (sub, alice string) {
 	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// sub держит incarnation.run, но ограниченный coven=prod через default_scope
-	// + role.create/grant-operator (чтобы вообще иметь право на мутацию).
+	// sub holds incarnation.run, but restricted to coven=prod via default_scope
+	// + role.create/grant-operator (so it has any right to mutate at all).
 	insertRoleScoped(t, "prod-runners", "coven=prod", "incarnation.run", "role.create", "role.grant-operator")
 	if err := GrantOperator(ctx, integrationPool, "prod-runners", "archon-sub", &a); err != nil {
 		t.Fatalf("grant sub→prod-runners: %v", err)
@@ -78,12 +80,12 @@ func setupScopedCaller(t *testing.T) (sub, alice string) {
 	return "archon-sub", a
 }
 
-// ---- default_scope privilege-escalation (security-fix) ----
+// ---- default_scope privilege escalation (security fix) ----
 
-// ЭСКАЛАЦИЯ: caller scope=prod + bare incarnation.run создаёт роль с
-// `incarnation.run on coven=staging` → должен быть ОТКАЗ (его эффективный scope
-// не покрывает staging). До фикса subset сравнивал сырую bare-perm (покрывает
-// всё) → грант проходил.
+// ESCALATION: caller scope=prod + bare incarnation.run creates a role with
+// `incarnation.run on coven=staging` → must be DENIED (its effective scope
+// doesn't cover staging). Before the fix, subset compared the raw bare perm
+// (covers everything) → the grant would go through.
 func TestIntegration_Subset_DefaultScope_CreateRole_Escalation_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedCaller(t)
@@ -102,8 +104,8 @@ func TestIntegration_Subset_DefaultScope_CreateRole_Escalation_Denied(t *testing
 	}
 }
 
-// caller scope=prod создаёт роль с incarnation.run on coven=prod → ОК
-// (в пределах его scope).
+// caller scope=prod creates a role with incarnation.run on coven=prod → OK
+// (within its scope).
 func TestIntegration_Subset_DefaultScope_CreateRole_InScope_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedCaller(t)
@@ -121,8 +123,8 @@ func TestIntegration_Subset_DefaultScope_CreateRole_InScope_OK(t *testing.T) {
 	}
 }
 
-// caller scope=prod создаёт роль с default_scope=prod + bare → ОК
-// (эффективно тот же scope: bare наследует prod обеих сторон).
+// caller scope=prod creates a role with default_scope=prod + bare → OK
+// (effectively the same scope: bare inherits prod on both sides).
 func TestIntegration_Subset_DefaultScope_CreateRole_SameScope_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedCaller(t)
@@ -142,8 +144,9 @@ func TestIntegration_Subset_DefaultScope_CreateRole_SameScope_OK(t *testing.T) {
 	}
 }
 
-// caller scope=prod создаёт роль с default_scope=staging + bare → ОТКАЗ
-// (granted-сторона эффективно coven=staging, вне scope caller-а).
+// caller scope=prod creates a role with default_scope=staging + bare →
+// DENIED (the granted side is effectively coven=staging, outside the
+// caller's scope).
 func TestIntegration_Subset_DefaultScope_CreateRole_OtherScope_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupScopedCaller(t)
@@ -164,7 +167,7 @@ func TestIntegration_Subset_DefaultScope_CreateRole_OtherScope_Denied(t *testing
 	}
 }
 
-// cluster-admin (`*`) выдаёт любой scope → ОК (исключение №1 ADR-047).
+// cluster-admin (`*`) can grant any scope → OK (exception #1 from ADR-047).
 func TestIntegration_Subset_DefaultScope_ClusterAdmin_AnyScope_OK(t *testing.T) {
 	resetRBAC(t)
 	_, alice := setupScopedCaller(t)
@@ -182,9 +185,10 @@ func TestIntegration_Subset_DefaultScope_ClusterAdmin_AnyScope_OK(t *testing.T) 
 	}
 }
 
-// backcompat: caller БЕЗ default_scope (unrestricted) + bare incarnation.run
-// выдаёт `incarnation.run on coven=staging` → ОК (как было до фикса:
-// unrestricted bare покрывает любой scope, существующее поведение не сломано).
+// backcompat: caller WITHOUT default_scope (unrestricted) + bare
+// incarnation.run grants `incarnation.run on coven=staging` → OK (as before
+// the fix: an unrestricted bare perm covers any scope, existing behavior
+// isn't broken).
 func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -193,7 +197,7 @@ func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testi
 	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
 		t.Fatalf("grant alice→cluster-admin: %v", err)
 	}
-	// Роль БЕЗ default_scope (NULL) → bare-perms unrestricted.
+	// A role WITHOUT default_scope (NULL) → bare perms unrestricted.
 	insertRole(t, "unrestricted-runners", "incarnation.run", "role.create")
 	if err := GrantOperator(context.Background(), integrationPool, "unrestricted-runners", "archon-unrestricted", &a); err != nil {
 		t.Fatalf("grant→unrestricted-runners: %v", err)
@@ -213,9 +217,9 @@ func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testi
 	}
 }
 
-// ---- CreateRole subset-check ----
+// ---- CreateRole subset check ----
 
-// suboperator пытается создать роль с `*` → отказ (эскалация до cluster-admin).
+// suboperator tries to create a role with `*` → denied (escalation to cluster-admin).
 func TestIntegration_Subset_CreateRole_Wildcard_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
@@ -234,7 +238,7 @@ func TestIntegration_Subset_CreateRole_Wildcard_Denied(t *testing.T) {
 	}
 }
 
-// suboperator пытается создать роль с правом вне своего набора → отказ.
+// suboperator tries to create a role with a permission outside its set → denied.
 func TestIntegration_Subset_CreateRole_ForeignPermission_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
@@ -242,7 +246,7 @@ func TestIntegration_Subset_CreateRole_ForeignPermission_Denied(t *testing.T) {
 
 	err := s.CreateRole(context.Background(), CreateRoleInput{
 		Name:        "ops",
-		Permissions: []string{"operator.create"}, // нет у sub
+		Permissions: []string{"operator.create"}, // sub doesn't have this
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
@@ -253,7 +257,7 @@ func TestIntegration_Subset_CreateRole_ForeignPermission_Denied(t *testing.T) {
 	}
 }
 
-// suboperator создаёт роль с правом В своём наборе → ок.
+// suboperator creates a role with a permission IN its own set → OK.
 func TestIntegration_Subset_CreateRole_OwnedPermission_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
@@ -261,7 +265,7 @@ func TestIntegration_Subset_CreateRole_OwnedPermission_OK(t *testing.T) {
 
 	if err := s.CreateRole(context.Background(), CreateRoleInput{
 		Name:        "more-granters",
-		Permissions: []string{"role.create"}, // есть у sub
+		Permissions: []string{"role.create"}, // sub has this
 		CallerAID:   sub,
 	}); err != nil {
 		t.Fatalf("CreateRole (право в наборе): %v", err)
@@ -271,7 +275,7 @@ func TestIntegration_Subset_CreateRole_OwnedPermission_OK(t *testing.T) {
 	}
 }
 
-// cluster-admin создаёт роль с любым правом → ок (subset покрывает всё через `*`).
+// cluster-admin creates a role with any permission → OK (subset covers everything via `*`).
 func TestIntegration_Subset_CreateRole_ClusterAdmin_OK(t *testing.T) {
 	resetRBAC(t)
 	_, alice := setupSuboperator(t)
@@ -289,9 +293,9 @@ func TestIntegration_Subset_CreateRole_ClusterAdmin_OK(t *testing.T) {
 	}
 }
 
-// ---- UpdateRolePermissions subset-check ----
+// ---- UpdateRolePermissions subset check ----
 
-// suboperator добавляет чужое право в существующую роль → отказ.
+// suboperator adds a foreign permission to an existing role → denied.
 func TestIntegration_Subset_UpdateRole_AddForeign_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
@@ -300,20 +304,20 @@ func TestIntegration_Subset_UpdateRole_AddForeign_Denied(t *testing.T) {
 
 	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:        "target",
-		Permissions: []string{"role.create", "*"}, // добавляет `*`
+		Permissions: []string{"role.create", "*"}, // adds `*`
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {
 		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
 	}
-	// `*` не добавлен — tx откатилась.
+	// `*` wasn't added — the tx rolled back.
 	got := rolePerms(t, "target")
 	if len(got) != 1 || got[0] != "role.create" {
 		t.Errorf("permissions = %v, want [role.create] (откат)", got)
 	}
 }
 
-// suboperator добавляет своё право → ок.
+// suboperator adds its own permission → OK.
 func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
@@ -322,7 +326,7 @@ func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
 
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:        "target",
-		Permissions: []string{"role.create", "role.grant-operator"}, // оба у sub
+		Permissions: []string{"role.create", "role.grant-operator"}, // both held by sub
 		CallerAID:   sub,
 	}); err != nil {
 		t.Fatalf("UpdateRolePermissions (свои права): %v", err)
@@ -332,16 +336,16 @@ func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
 	}
 }
 
-// Удаление чужого права (без добавления нового) suboperator-ом → ок:
-// subset-check ограничивает только ДОБАВЛЯЕМЫЕ права. target держит право вне
-// набора sub-а; sub снимает его, оставляя только свои.
+// A suboperator removing a foreign permission (without adding a new one) →
+// OK: the subset check only restricts ADDED permissions. target holds a
+// permission outside sub's set; sub removes it, keeping only its own.
 func TestIntegration_Subset_UpdateRole_RemoveForeign_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
 	insertRole(t, "target", "role.create", "operator.create")
 	s := newService(t)
 
-	// Снять operator.create (которого у sub нет) — это удаление, не эскалация.
+	// Removing operator.create (which sub doesn't have) is a removal, not escalation.
 	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
 		Name:        "target",
 		Permissions: []string{"role.create"},
@@ -355,10 +359,10 @@ func TestIntegration_Subset_UpdateRole_RemoveForeign_OK(t *testing.T) {
 	}
 }
 
-// ---- GrantOperator subset-check ----
+// ---- GrantOperator subset check ----
 
-// suboperator грантит роль, содержащую `*`, → отказ (обход: привязал бы мощную
-// роль себе/другому и поднялся).
+// suboperator grants a role containing `*` → denied (a workaround: it would
+// bind a powerful role to itself/another and escalate).
 func TestIntegration_Subset_GrantOperator_PowerfulRole_Denied(t *testing.T) {
 	resetRBAC(t)
 	sub, alice := setupSuboperator(t)
@@ -379,12 +383,12 @@ func TestIntegration_Subset_GrantOperator_PowerfulRole_Denied(t *testing.T) {
 	}
 }
 
-// suboperator грантит роль в пределах своих прав → ок.
+// suboperator grants a role within its own rights → OK.
 func TestIntegration_Subset_GrantOperator_WithinRights_OK(t *testing.T) {
 	resetRBAC(t)
 	sub, alice := setupSuboperator(t)
 	seedOperator(t, "archon-bob", &alice)
-	insertRole(t, "weak", "role.create") // право есть у sub
+	insertRole(t, "weak", "role.create") // sub has this permission
 	s := newService(t)
 
 	if err := s.GrantOperator(context.Background(), GrantOperatorInput{
@@ -399,7 +403,7 @@ func TestIntegration_Subset_GrantOperator_WithinRights_OK(t *testing.T) {
 	}
 }
 
-// cluster-admin грантит роль с `*` → ок.
+// cluster-admin grants a role with `*` → OK.
 func TestIntegration_Subset_GrantOperator_ClusterAdmin_OK(t *testing.T) {
 	resetRBAC(t)
 	_, alice := setupSuboperator(t)
@@ -419,8 +423,8 @@ func TestIntegration_Subset_GrantOperator_ClusterAdmin_OK(t *testing.T) {
 	}
 }
 
-// Bootstrap-грант (CallerAID=nil) обходит subset-check — keeper init привязывает
-// первого Архонта к cluster-admin (`*`) без caller-субъекта.
+// A bootstrap grant (CallerAID=nil) bypasses the subset check — keeper init
+// binds the first Archon to cluster-admin (`*`) with no caller subject.
 func TestIntegration_Subset_GrantOperator_NilCaller_BypassesCheck(t *testing.T) {
 	resetRBAC(t)
 	seedOperator(t, "archon-alice", nil)
@@ -438,14 +442,15 @@ func TestIntegration_Subset_GrantOperator_NilCaller_BypassesCheck(t *testing.T) 
 	}
 }
 
-// revoked caller теряет права для subset-а: его permissions не учитываются
-// (revoked_at IS NULL фильтр в callerPermissions). Тут sub держит role.create
-// через granters, но если оператор revoked — subset-набор пуст → отказ даже на
-// «своё» право. Проверяем фильтр revoked_at.
+// A revoked caller loses its rights for the subset check: its permissions
+// aren't counted (the revoked_at IS NULL filter in callerPermissions). Here
+// sub holds role.create via granters, but once the operator is revoked, its
+// subset is empty → denied even on "its own" permission. Verifies the
+// revoked_at filter.
 func TestIntegration_Subset_RevokedCaller_HasNoPermissions(t *testing.T) {
 	resetRBAC(t)
 	sub, _ := setupSuboperator(t)
-	// Ревокнуть sub-а.
+	// Revoke sub.
 	if _, err := integrationPool.Exec(context.Background(),
 		`UPDATE operators SET revoked_at = NOW() WHERE aid = $1`, sub); err != nil {
 		t.Fatalf("revoke sub: %v", err)
@@ -454,7 +459,7 @@ func TestIntegration_Subset_RevokedCaller_HasNoPermissions(t *testing.T) {
 
 	err := s.CreateRole(context.Background(), CreateRoleInput{
 		Name:        "x",
-		Permissions: []string{"role.create"}, // было бы у активного sub
+		Permissions: []string{"role.create"}, // sub would have this if active
 		CallerAID:   sub,
 	})
 	if !errors.Is(err, ErrPermissionNotHeld) {

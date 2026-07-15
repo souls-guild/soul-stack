@@ -21,9 +21,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// augurFakeDB — реализует augurDB (augur.ExecQueryRower + soul.ExecQueryRower).
-// Маршрутизация по SQL: SELECT ... FROM omens → omen-строка; FROM souls →
-// soul-строка (covens); FROM rites → rite-набор.
+// augurFakeDB — implements augurDB (augur.ExecQueryRower + soul.ExecQueryRower).
+// Routes by SQL: SELECT ... FROM omens → an omen row; FROM souls →
+// a soul row (covens); FROM rites → a rite set.
 type augurFakeDB struct {
 	omenRow   func() pgx.Row // SelectOmenByName
 	soulRow   func() pgx.Row // SelectBySID (covens)
@@ -61,7 +61,7 @@ type augurErrRow struct{ err error }
 
 func (r augurErrRow) Scan(_ ...any) error { return r.err }
 
-// augurOmenRowVals — значения в порядке omenColumns:
+// augurOmenRowVals — values in omenColumns order:
 // name, source_type, endpoint, auth_ref, created_by_aid, created_at.
 type augurValRow struct{ vals []any }
 
@@ -135,7 +135,7 @@ func (r *augurEmptyRows) Values() ([]any, error)                       { return 
 func (r *augurEmptyRows) RawValues() [][]byte                          { return nil }
 func (r *augurEmptyRows) Conn() *pgx.Conn                              { return nil }
 
-// augurRiteRows — отдаёт набор rite-строк в порядке riteColumns:
+// augurRiteRows — yields a set of rite rows in riteColumns order:
 // id, omen, coven, sid, allow, delegate, token_ttl, token_num_uses,
 // created_by_aid, created_at.
 type augurRiteRows struct {
@@ -168,15 +168,15 @@ func augurAllowPaths(paths ...string) []byte {
 	return b
 }
 
-// augurOmenRowVault — omen-строка vault-типа. nil = NULL-колонка.
+// augurOmenRowVault — a vault-type omen row. nil = NULL column.
 func augurOmenRowVault(name string) pgx.Row {
 	return augurValRow{vals: []any{name, "vault", "https://vault:8200", "vault:secret/keeper/augur/" + name, nil, augurTestNow}}
 }
 
-// augurSoulRow — soul-строка с заданными covens (11 колонок selectBySIDSQL:
+// augurSoulRow — a soul row with the given covens (11 columns per selectBySIDSQL:
 // sid, transport, status, coven, traits, registered_at, last_seen_at,
-// last_seen_by_kid, created_by_aid, requested_at, note). nil = NULL-колонка
-// (traits NULL → пустой map в scanSoul, ADR-060).
+// last_seen_by_kid, created_by_aid, requested_at, note). nil = NULL column
+// (traits NULL → empty map in scanSoul, ADR-060).
 func augurSoulRow(sid string, covens []string) pgx.Row {
 	return augurValRow{vals: []any{
 		sid, "agent", "connected", covens, nil, augurTestNow,
@@ -184,7 +184,7 @@ func augurSoulRow(sid string, covens []string) pgx.Row {
 	}}
 }
 
-// augurRiteRow — rite-строка (coven-субъект) с allow.paths. nil = NULL-колонка.
+// augurRiteRow — a rite row (coven subject) with allow.paths. nil = NULL column.
 func augurRiteRow(id int, omen, coven string, paths ...string) []any {
 	return []any{
 		int64(id), omen, coven, nil, augurAllowPaths(paths...),
@@ -207,8 +207,8 @@ func (s *stubKV) ReadKV(_ context.Context, path string) (map[string]any, error) 
 	return s.data, nil
 }
 
-// newAugurHandler собирает handler с Augur-deps + StreamManager + Outbound и
-// возвращает outCh, из которого читается отправленный AugurReply (тот же стрим).
+// newAugurHandler assembles a handler with Augur deps + StreamManager + Outbound
+// and returns outCh, from which the sent AugurReply is read (the same stream).
 func newAugurHandler(t *testing.T, db augurDB, kv augur.KVReader, aw audit.Writer, sid string) (*eventStreamHandler, <-chan *keeperv1.FromKeeper) {
 	t.Helper()
 	mgr := NewStreamManager(discardLogger(t))
@@ -236,8 +236,8 @@ func newAugurHandler(t *testing.T, db augurDB, kv augur.KVReader, aw audit.Write
 	return newEventStreamHandler(deps, discardLogger(t)), outCh
 }
 
-// stubDoer — заглушка augur.HTTPDoer для vault-round-trip-тестов (prom/elk не
-// дёргаются). prom/elk-специфичные тесты передают собственный doer через
+// stubDoer — a stub augur.HTTPDoer for vault round-trip tests (prom/elk aren't
+// touched). prom/elk-specific tests pass their own doer via
 // newAugurHandlerEgress.
 type stubDoer struct {
 	resp func() (*http.Response, error)
@@ -250,8 +250,9 @@ func (d stubDoer) Do(*http.Request) (*http.Response, error) {
 	return nil, errors.New("stubDoer: not configured")
 }
 
-// newAugurHandlerEgress — как newAugurHandler, но с явным egress-doer и опц.
-// лимитом параллелизма (0 → default). Для prom/elk и семафор-тестов.
+// newAugurHandlerEgress — like newAugurHandler, but with an explicit egress
+// doer and an optional concurrency limit (0 → default). For prom/elk and
+// semaphore tests.
 func newAugurHandlerEgress(t *testing.T, db augurDB, kv augur.KVReader, doer augur.HTTPDoer, aw audit.Writer, sid string, concurrency int) (*eventStreamHandler, <-chan *keeperv1.FromKeeper) {
 	t.Helper()
 	mgr := NewStreamManager(discardLogger(t))
@@ -330,7 +331,7 @@ func TestAugur_RoundTrip_OK(t *testing.T) {
 		t.Errorf("ReadKV path = %q, want secret/keeper/db", kv.gotPath)
 	}
 
-	// audit: augur.fetch_brokered, без значения секрета.
+	// audit: augur.fetch_brokered, without the secret value.
 	evs := aw.snapshot()
 	if len(evs) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(evs))
@@ -357,7 +358,7 @@ func TestAugur_RoundTrip_Denied_NoRite(t *testing.T) {
 		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
 		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: nil}, nil // нет Rite-ов
+			return &augurRiteRows{rows: nil}, nil // no Rites
 		},
 	}
 	kv := &stubKV{}
@@ -409,16 +410,17 @@ func TestAugur_Denied_QueryNotInAllow(t *testing.T) {
 	}
 }
 
-// TestAugur_SIDFromMTLS — handler берёт SID из аргумента (mTLS peer cert),
-// а covens резолвятся по ЭТОМУ SID, игнорируя любой sid внутри AugurRequest
-// (его в proto и нет). Проверяем: covens-резолв идёт по authoritative SID.
+// TestAugur_SIDFromMTLS — the handler takes the SID from its argument (mTLS
+// peer cert), and covens are resolved for THAT SID, ignoring any sid inside
+// AugurRequest (there isn't one in the proto anyway). Verifies: covens resolve
+// uses the authoritative SID.
 func TestAugur_SIDFromMTLS(t *testing.T) {
 	const authoritativeSID = "host.example.com"
 	var soulQueriedSID string
 	db := &augurFakeDB{
 		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
 		soulRow: func() pgx.Row {
-			soulQueriedSID = authoritativeSID // fake возвращает covens только для него
+			soulQueriedSID = authoritativeSID // fake only returns covens for this SID
 			return augurSoulRow(authoritativeSID, []string{"prod"})
 		},
 		riteRows: func() (pgx.Rows, error) {
@@ -439,7 +441,7 @@ func TestAugur_SIDFromMTLS(t *testing.T) {
 	if soulQueriedSID != authoritativeSID {
 		t.Errorf("covens resolved for %q, want authoritative %q", soulQueriedSID, authoritativeSID)
 	}
-	// audit фиксирует authoritative SID.
+	// audit records the authoritative SID.
 	if aw.snapshot()[0].Payload["sid"] != authoritativeSID {
 		t.Errorf("audit sid = %v, want %q", aw.snapshot()[0].Payload["sid"], authoritativeSID)
 	}
@@ -465,14 +467,14 @@ func TestAugur_VaultReadFail_Error(t *testing.T) {
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_ERROR {
 		t.Fatalf("status = %v, want ERROR", reply.GetStatus())
 	}
-	// На ERROR (доступ разрешён, но fetch не состоялся) audit-события нет.
+	// On ERROR (access granted, but the fetch didn't happen) there's no audit event.
 	if len(aw.snapshot()) != 0 {
 		t.Errorf("expected no audit on fetch error, got %d", len(aw.snapshot()))
 	}
 }
 
-// TestAugur_GoroutinePath — handleAugurRequest запускает обработку в горутине;
-// проверяем, что reply всё равно приходит (полный путь dispatch → goroutine).
+// TestAugur_GoroutinePath — handleAugurRequest starts processing in a goroutine;
+// verifies the reply still arrives (full dispatch → goroutine path).
 func TestAugur_GoroutinePath(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
@@ -501,11 +503,11 @@ func TestAugur_NilDeps_NoPanic(t *testing.T) {
 		t.Fatalf("deps validate: %v", err)
 	}
 	h := newEventStreamHandler(deps, discardLogger(t))
-	// Augur=nil → warn + no-op, без паники.
+	// Augur=nil → warn + no-op, no panic.
 	h.handleAugurRequest(context.Background(), "host", "sess", &keeperv1.AugurRequest{OmenName: "x"})
 }
 
-// assertNoSecretInPayload — payload не содержит значений секрета (s3cr3t / svc).
+// assertNoSecretInPayload — asserts the payload contains no secret values (s3cr3t / svc).
 func assertNoSecretInPayload(t *testing.T, payload map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(payload)
@@ -516,7 +518,7 @@ func assertNoSecretInPayload(t *testing.T, payload map[string]any) {
 	}
 }
 
-// --- prom / elk round-trip + семафор ----------------------------------
+// --- prom / elk round-trip + semaphore ----------------------------------
 
 func augurOmenRowProm(name string) pgx.Row {
 	return augurValRow{vals: []any{name, "prometheus", "https://prom.example.com:9090", "vault:secret/keeper/" + name, nil, augurTestNow}}
@@ -620,9 +622,9 @@ func TestAugur_ELK_RoundTrip_OK(t *testing.T) {
 	}
 }
 
-// TestAugur_Semaphore_Overflow — при заполненном семафоре новый AugurRequest
-// получает ERROR без спавна обработки. Лимит=1, первый запрос блокируется в
-// fetch-е (doer ждёт сигнал) → второй упирается в полный семафор.
+// TestAugur_Semaphore_Overflow — with the semaphore full, a new AugurRequest
+// gets ERROR without spawning processing. Limit=1, the first request blocks in
+// the fetch (the doer waits for a signal) → the second hits the full semaphore.
 func TestAugur_Semaphore_Overflow(t *testing.T) {
 	const sid = "host.example.com"
 	release := make(chan struct{})
@@ -630,7 +632,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 	var once sync.Once
 	blockingDoer := stubDoer{resp: func() (*http.Response, error) {
 		once.Do(func() { started <- struct{}{} })
-		<-release // держим слот занятым
+		<-release // keep the slot occupied
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
 	}}
 	db := &augurFakeDB{
@@ -643,7 +645,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 	aw := &recordingAudit{}
 	h, outCh := newAugurHandlerEgress(t, db, &stubKV{data: map[string]any{}}, blockingDoer, aw, sid, 1)
 
-	// Первый запрос — займёт единственный слот и зависнет в fetch-е.
+	// First request — takes the only slot and hangs in the fetch.
 	h.handleAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
 		RequestId: "s-1", OmenName: "prom-main", Query: "up",
 	})
@@ -653,7 +655,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 		t.Fatal("первый запрос не дошёл до fetch (семафор не занят)")
 	}
 
-	// Второй — семафор полон → немедленный ERROR без спавна.
+	// Second — semaphore full → immediate ERROR without spawning.
 	h.handleAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
 		RequestId: "s-2", OmenName: "prom-main", Query: "up",
 	})
@@ -668,7 +670,7 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 		t.Errorf("overflow error = %q, want concurrency/busy", reply.GetError())
 	}
 
-	// Отпускаем первый — он должен завершиться OK, слот освободиться.
+	// Release the first — it should complete OK and free the slot.
 	close(release)
 	r1 := recvReply(t, outCh)
 	if r1.GetRequestId() != "s-1" || r1.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
@@ -678,9 +680,9 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 
 // --- keeper_augur_* metrics wire-up ----------------------------------
 
-// newAugurHandlerWithMetrics — как newAugurHandler, но с зарегистрированным
-// keeper_augur_*-дескриптором в AugurDeps.Metrics; возвращает Registry для
-// скрейпа. concurrency=0 → default.
+// newAugurHandlerWithMetrics — like newAugurHandler, but with a registered
+// keeper_augur_* descriptor in AugurDeps.Metrics; returns the Registry for
+// scraping. concurrency=0 → default.
 func newAugurHandlerWithMetrics(t *testing.T, db augurDB, kv augur.KVReader, doer augur.HTTPDoer, aw audit.Writer, sid string, concurrency int) (*eventStreamHandler, <-chan *keeperv1.FromKeeper, *obs.Registry) {
 	t.Helper()
 	mgr := NewStreamManager(discardLogger(t))
@@ -711,7 +713,7 @@ func newAugurHandlerWithMetrics(t *testing.T, db augurDB, kv augur.KVReader, doe
 	return newEventStreamHandler(deps, discardLogger(t)), outCh, reg
 }
 
-// TestAugurMetrics_FetchOK — успешный брокер инкрементирует
+// TestAugurMetrics_FetchOK — a successful broker call increments
 // fetch_total{source=vault,decision=ok}.
 func TestAugurMetrics_FetchOK(t *testing.T) {
 	const sid = "host.example.com"
@@ -739,7 +741,7 @@ func TestAugurMetrics_FetchOK(t *testing.T) {
 	if !strings.Contains(body, `keeper_augur_fetch_duration_seconds_count{source="vault"} 1`) {
 		t.Errorf("fetch_duration vault count mismatch; got=\n%s", body)
 	}
-	// Секрет/omen/query не должны утечь в метрики.
+	// Secret/omen/query must not leak into metrics.
 	for _, leak := range []string{"omen=", "query=", "sid=", "secret/keeper/db", "vault-prod"} {
 		if strings.Contains(body, leak) {
 			t.Errorf("augur metrics leak %q; got=\n%s", leak, body)
@@ -747,7 +749,7 @@ func TestAugurMetrics_FetchOK(t *testing.T) {
 	}
 }
 
-// TestAugurMetrics_Denied — denied резолв инкрементирует
+// TestAugurMetrics_Denied — a denied resolve increments
 // fetch_total{decision=denied}.
 func TestAugurMetrics_Denied(t *testing.T) {
 	const sid = "host.example.com"
@@ -755,7 +757,7 @@ func TestAugurMetrics_Denied(t *testing.T) {
 		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
 		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: nil}, nil // нет Rite-ов → denied
+			return &augurRiteRows{rows: nil}, nil // no Rites → denied
 		},
 	}
 	h, outCh, reg := newAugurHandlerWithMetrics(t, db, &stubKV{}, stubDoer{}, &recordingAudit{}, sid, 0)
@@ -773,7 +775,7 @@ func TestAugurMetrics_Denied(t *testing.T) {
 	}
 }
 
-// TestAugurMetrics_SemaphoreOverflow — отбой по concurrency-limit учитывается как
+// TestAugurMetrics_SemaphoreOverflow — a concurrency-limit rejection is counted as
 // fetch_total{source=unknown,decision=error}.
 func TestAugurMetrics_SemaphoreOverflow(t *testing.T) {
 	const sid = "host.example.com"
@@ -802,7 +804,7 @@ func TestAugurMetrics_SemaphoreOverflow(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("первый запрос не дошёл до fetch")
 	}
-	// Второй — отбой семафором.
+	// Second — rejected by the semaphore.
 	h.handleAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
 		RequestId: "ms-2", OmenName: "prom-main", Query: "up",
 	})
@@ -816,5 +818,5 @@ func TestAugurMetrics_SemaphoreOverflow(t *testing.T) {
 	}
 
 	close(release)
-	_ = recvReply(t, outCh) // дренаж завершения первого запроса
+	_ = recvReply(t, outCh) // drain the first request's completion
 }

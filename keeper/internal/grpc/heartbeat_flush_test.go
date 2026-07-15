@@ -9,9 +9,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeSoulDB — soul.ExecQueryRower-stub: считает Exec-вызовы (UpdateLastSeen
-// ходит только через Exec). RowsAffected=1 по умолчанию, чтобы UpdateLastSeen
-// не вернул ErrSoulNotFound.
+// fakeSoulDB — soul.ExecQueryRower stub: counts Exec calls (UpdateLastSeen
+// only goes through Exec). RowsAffected=1 by default, so UpdateLastSeen
+// doesn't return ErrSoulNotFound.
 type fakeSoulDB struct {
 	execCalls int
 	lastArgs  []any
@@ -56,7 +56,7 @@ func TestLastSeenFlusher_PerSIDIndependent(t *testing.T) {
 	if !f.shouldFlush("a.example.com", base) {
 		t.Fatal("первый flush для a")
 	}
-	// Другой SID внутри окна первого — не должен троттлиться.
+	// A different SID within the first one's window should not be throttled.
 	if !f.shouldFlush("b.example.com", base.Add(time.Second)) {
 		t.Error("первый flush для b должен пройти независимо от a")
 	}
@@ -73,8 +73,8 @@ func TestLastSeenFlusher_ForgetResetsThrottle(t *testing.T) {
 		t.Fatal("первый flush")
 	}
 	f.forget("host.example.com")
-	// После forget следующий вызов внутри окна снова флашит (как новое
-	// подключение того же SID).
+	// After forget, the next call within the window flushes again (as if
+	// it were a new connection of the same SID).
 	if !f.shouldFlush("host.example.com", base.Add(time.Second)) {
 		t.Error("после forget вызов внутри окна должен флашить")
 	}
@@ -103,21 +103,22 @@ func TestNewEventStreamHandler_FlushIntervalFromDeps(t *testing.T) {
 	}
 }
 
-// TestFlushLastSeen_NoSoulDB_NoOp — без SoulDB flush выключен (dev / unit-
-// режим): heartbeat живёт только в Redis, PG не трогаем.
+// TestFlushLastSeen_NoSoulDB_NoOp — without a SoulDB, flushing is disabled
+// (dev / unit mode): the heartbeat lives only in Redis, PG is untouched.
 func TestFlushLastSeen_NoSoulDB_NoOp(t *testing.T) {
 	h := newEventStreamHandler(EventStreamDeps{
 		SeedDB:      &fakeSeedDB{},
 		AuditWriter: nopAudit{},
 		KID:         "kid-test",
 	}, discardLogger(t))
-	// shouldFlush не должен даже вызываться при nil SoulDB, но проверяем
-	// главное — отсутствие паники и факт, что писать некуда.
+	// shouldFlush shouldn't even be called with a nil SoulDB, but the main
+	// thing we're checking is no panic and the fact that there's nowhere
+	// to write.
 	h.flushLastSeen(context.Background(), "host.example.com", time.Now())
 }
 
-// TestFlushLastSeen_WritesThenThrottles — первый flush пишет в PG, второй в
-// окне — нет (один Exec на оба вызова).
+// TestFlushLastSeen_WritesThenThrottles — the first flush writes to PG, the
+// second one within the window doesn't (one Exec for both calls).
 func TestFlushLastSeen_WritesThenThrottles(t *testing.T) {
 	db := &fakeSoulDB{}
 	h := newEventStreamHandler(EventStreamDeps{
@@ -143,8 +144,9 @@ func TestFlushLastSeen_WritesThenThrottles(t *testing.T) {
 	}
 }
 
-// TestTouchSeen_FlushesLastSeen — touchSeen без Redis всё равно флашит PG
-// (Redis-слой опционален, PG-snapshot нужен Reaper-у независимо).
+// TestTouchSeen_FlushesLastSeen — touchSeen flushes PG regardless of Redis
+// (the Redis layer is optional, the PG snapshot is needed by the Reaper
+// independently).
 func TestTouchSeen_FlushesLastSeen(t *testing.T) {
 	db := &fakeSoulDB{}
 	h := newEventStreamHandler(EventStreamDeps{
@@ -159,7 +161,7 @@ func TestTouchSeen_FlushesLastSeen(t *testing.T) {
 	if db.execCalls != 1 {
 		t.Fatalf("touchSeen: execCalls = %d, want 1", db.execCalls)
 	}
-	// Аргументы UpdateLastSeen: sid, at(UTC), kid.
+	// UpdateLastSeen arguments: sid, at(UTC), kid.
 	if len(db.lastArgs) != 3 {
 		t.Fatalf("UpdateLastSeen args = %d, want 3", len(db.lastArgs))
 	}

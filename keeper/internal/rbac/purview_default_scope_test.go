@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-// ADR-047 S1 — role.default_scope: наследование/override + default-deny по
-// явно введённым измерениям с тремя исключениями (`*` / bare-без-scope /
-// введённое-пустое). Эти тесты — спецификация семантики (TDD-first), они
-// фиксируют контракт ResolvePurview ДО реализации.
+// ADR-047 S1 — role.default_scope: inheritance/override + default-deny for
+// explicitly introduced dimensions, with three exceptions (`*` / bare-no-scope /
+// introduced-but-empty). These tests are the semantics spec (TDD-first): they
+// pin down the ResolvePurview contract BEFORE the implementation.
 
-// Наследование: роль с default_scope=coven=prod + bare-permission incarnation.run
-// → permission наследует scope роли. Не unrestricted: scope введён.
+// Inheritance: a role with default_scope=coven=prod + bare-permission
+// incarnation.run → the permission inherits the role's scope. Not
+// unrestricted: a scope was introduced.
 func TestResolvePurview_DefaultScope_Inherited(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "prod-ops", operators: []string{"archon-a"},
@@ -30,8 +31,8 @@ func TestResolvePurview_DefaultScope_Inherited(t *testing.T) {
 	}
 }
 
-// Override: per-perm-селектор `on coven=staging` ПОЛНОСТЬЮ переопределяет
-// default_scope=coven=prod (не мерж prod+staging → только staging).
+// Override: a per-perm selector `on coven=staging` FULLY overrides
+// default_scope=coven=prod (not a prod+staging merge — staging only).
 func TestResolvePurview_DefaultScope_OverriddenByPerPerm(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "prod-ops", operators: []string{"archon-a"},
@@ -47,8 +48,9 @@ func TestResolvePurview_DefaultScope_OverriddenByPerPerm(t *testing.T) {
 	}
 }
 
-// BACKCOMPAT: роль БЕЗ default_scope (NULL) + bare-permission → unrestricted.
-// NULL default_scope = измерение НЕ введено = существующие роли не ломаются.
+// BACKCOMPAT: a role WITHOUT default_scope (NULL) + bare permission →
+// unrestricted. NULL default_scope = dimension NOT introduced = existing
+// roles keep working.
 func TestResolvePurview_NoDefaultScope_BarePermission_Unrestricted(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "ops", operators: []string{"archon-a"},
@@ -63,7 +65,8 @@ func TestResolvePurview_NoDefaultScope_BarePermission_Unrestricted(t *testing.T)
 	}
 }
 
-// Роль БЕЗ default_scope + per-perm-селектор → как S0 (covens из селектора).
+// A role WITHOUT default_scope + a per-perm selector → behaves like S0
+// (covens come from the selector).
 func TestResolvePurview_NoDefaultScope_PerPermSelector(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "ops", operators: []string{"archon-a"},
@@ -78,15 +81,16 @@ func TestResolvePurview_NoDefaultScope_PerPermSelector(t *testing.T) {
 	}
 }
 
-// КРИТИЧНЫЙ: `*`-permission ВСЕГДА unrestricted, даже в роли с default_scope.
-// cluster-admin не залочен default-deny — иначе bootstrap-админ запирается.
+// CRITICAL: a `*` permission is ALWAYS unrestricted, even in a role with
+// default_scope. cluster-admin must not be locked by default-deny — otherwise
+// the bootstrap admin locks itself out.
 func TestResolvePurview_Wildcard_IgnoresDefaultScope(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "admin", operators: []string{"archon-root"},
 		defaultScope: "coven=prod",
 		permissions:  []string{"*"},
 	})
-	// `*` матчит ЛЮБОЙ (resource, action) — проверяем на произвольном.
+	// `*` matches ANY (resource, action) — we check an arbitrary one.
 	p := e.ResolvePurview("archon-root", "incarnation", "run")
 	if !p.Unrestricted {
 		t.Errorf("Unrestricted=false, want true (`*` игнорирует default_scope — cluster-admin не залочен)")
@@ -99,15 +103,15 @@ func TestResolvePurview_Wildcard_IgnoresDefaultScope(t *testing.T) {
 	}
 }
 
-// default_scope роли применяется ТОЛЬКО к permissions ЭТОЙ роли — запрос на
-// другой (resource, action), которого роль не покрывает, scope не получает.
+// A role's default_scope applies ONLY to THAT role's permissions — a request
+// for a different (resource, action) that the role doesn't cover gets no scope.
 func TestResolvePurview_DefaultScope_OnlyOwnPermissions(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "prod-ops", operators: []string{"archon-a"},
 		defaultScope: "coven=prod",
 		permissions:  []string{"incarnation.run"},
 	})
-	// Роль НЕ даёт soul.coven-assign → не матчит → пустой Purview (не prod).
+	// The role does NOT grant soul.coven-assign → no match → empty Purview (not prod).
 	p := e.ResolvePurview("archon-a", "soul", "coven-assign")
 	if p.Unrestricted {
 		t.Errorf("Unrestricted=true, want false (роль не покрывает soul.coven-assign)")
@@ -117,8 +121,8 @@ func TestResolvePurview_DefaultScope_OnlyOwnPermissions(t *testing.T) {
 	}
 }
 
-// Union по ролям оператора: одна роль наследует default_scope=prod, другая —
-// per-perm coven=staging. Итог — union [prod, staging].
+// Union across an operator's roles: one role inherits default_scope=prod,
+// the other has a per-perm coven=staging. Result: union [prod, staging].
 func TestResolvePurview_UnionAcrossRoles_WithDefaultScope(t *testing.T) {
 	e := mustEnforcer(t,
 		fixtureRole{
@@ -140,8 +144,9 @@ func TestResolvePurview_UnionAcrossRoles_WithDefaultScope(t *testing.T) {
 	}
 }
 
-// Union «unrestricted побеждает»: одна роль scoped (default_scope=prod), другая
-// bare-без-scope (unrestricted). Хотя бы одна unrestricted → итог unrestricted.
+// Union "unrestricted wins": one role is scoped (default_scope=prod), the
+// other is bare-without-scope (unrestricted). At least one unrestricted →
+// the result is unrestricted.
 func TestResolvePurview_UnionAcrossRoles_UnrestrictedWins(t *testing.T) {
 	e := mustEnforcer(t,
 		fixtureRole{
@@ -160,8 +165,8 @@ func TestResolvePurview_UnionAcrossRoles_UnrestrictedWins(t *testing.T) {
 	}
 }
 
-// default_scope с multi-coven значениями наследуется целиком (union внутри
-// измерения).
+// A default_scope with multi-coven values is inherited whole (union within
+// the dimension).
 func TestResolvePurview_DefaultScope_MultiCoven(t *testing.T) {
 	e := mustEnforcer(t, fixtureRole{
 		name: "multi", operators: []string{"archon-a"},
@@ -174,9 +179,9 @@ func TestResolvePurview_DefaultScope_MultiCoven(t *testing.T) {
 	}
 }
 
-// BACKCOMPAT-эквивалентность: с default_scope=NULL во ВСЕХ ролях ResolvePurview
-// обязан вести себя ровно как S0 (CovenScope-проекция). Центральный регресс —
-// S1 не ломает существующие роли.
+// BACKCOMPAT equivalence: with default_scope=NULL on ALL roles, ResolvePurview
+// must behave exactly like S0 (the CovenScope projection). The central
+// regression check: S1 doesn't break existing roles.
 func TestResolvePurview_NoDefaultScope_EquivalentToS0(t *testing.T) {
 	e := mustEnforcer(t,
 		fixtureRole{name: "admin", operators: []string{"archon-wild"}, permissions: []string{"*"}},

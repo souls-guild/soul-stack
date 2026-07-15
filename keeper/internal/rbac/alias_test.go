@@ -5,17 +5,18 @@ import (
 	"testing"
 )
 
-// Спецификация переименования permission `incarnation.update` →
-// `incarnation.update-hosts` (PM-decision 2026-06-02): чёткость имени +
-// задел под update-covens/update-spec. Эндпоинт `PATCH /v1/incarnations/
-// {name}/hosts` теперь гейтится новым `incarnation.update-hosts`.
+// Spec for renaming the `incarnation.update` permission to
+// `incarnation.update-hosts` (PM-decision 2026-06-02): clearer name + room
+// for future update-covens/update-spec. The `PATCH /v1/incarnations/
+// {name}/hosts` endpoint is now gated by the new `incarnation.update-hosts`.
 //
-// Backcompat-инвариант: роли/operators со СТАРЫМ `incarnation.update` (в
-// keeper.yml / БД) НЕ должны потерять доступ — старое имя — deprecated-alias
-// канонического `incarnation.update-hosts` (parse-time canonicalization).
+// Backcompat invariant: roles/operators still holding the OLD
+// `incarnation.update` (in keeper.yml / DB) must NOT lose access — the old
+// name is a deprecated alias for the canonical `incarnation.update-hosts`
+// (parse-time canonicalization).
 
-// TestEnforcer_UpdateHosts_NewPermissionGrants — роль с новым каноническим
-// именем имеет доступ к update-hosts.
+// TestEnforcer_UpdateHosts_NewPermissionGrants — a role with the new
+// canonical name has access to update-hosts.
 func TestEnforcer_UpdateHosts_NewPermissionGrants(t *testing.T) {
 	snap := snapshotOf(fixtureRole{
 		name:        "host-editor",
@@ -31,9 +32,9 @@ func TestEnforcer_UpdateHosts_NewPermissionGrants(t *testing.T) {
 	}
 }
 
-// TestEnforcer_UpdateHosts_DeprecatedAliasGrants — роль со СТАРЫМ
-// `incarnation.update` всё ещё имеет доступ к update-hosts (backcompat —
-// существующие роли не залочены).
+// TestEnforcer_UpdateHosts_DeprecatedAliasGrants — a role with the OLD
+// `incarnation.update` still has access to update-hosts (backcompat —
+// existing roles aren't locked out).
 func TestEnforcer_UpdateHosts_DeprecatedAliasGrants(t *testing.T) {
 	snap := snapshotOf(fixtureRole{
 		name:        "legacy-editor",
@@ -49,9 +50,9 @@ func TestEnforcer_UpdateHosts_DeprecatedAliasGrants(t *testing.T) {
 	}
 }
 
-// TestEnforcer_UpdateHosts_DeprecatedAliasPreservesSelector — alias сохраняет
-// scope-селектор: `incarnation.update on coven=prod` гейтит update-hosts
-// только в coven=prod.
+// TestEnforcer_UpdateHosts_DeprecatedAliasPreservesSelector — the alias
+// preserves the scope selector: `incarnation.update on coven=prod` gates
+// update-hosts only in coven=prod.
 func TestEnforcer_UpdateHosts_DeprecatedAliasPreservesSelector(t *testing.T) {
 	snap := snapshotOf(fixtureRole{
 		name:        "legacy-prod-editor",
@@ -71,8 +72,8 @@ func TestEnforcer_UpdateHosts_DeprecatedAliasPreservesSelector(t *testing.T) {
 	}
 }
 
-// TestEnforcer_UpdateHosts_BareWithoutEitherDenied — роль без update/
-// update-hosts получает deny.
+// TestEnforcer_UpdateHosts_BareWithoutEitherDenied — a role without either
+// update/update-hosts is denied.
 func TestEnforcer_UpdateHosts_BareWithoutEitherDenied(t *testing.T) {
 	snap := snapshotOf(fixtureRole{
 		name:        "reader",
@@ -89,9 +90,10 @@ func TestEnforcer_UpdateHosts_BareWithoutEitherDenied(t *testing.T) {
 	}
 }
 
-// TestParsePermission_DeprecatedUpdateCanonicalized — старое имя при парсе
-// канонизируется в новое (Action="update-hosts"), чтобы Matches остался
-// чистым строковым сравнением, а роутер знал только новое имя.
+// TestParsePermission_DeprecatedUpdateCanonicalized — the old name is
+// canonicalized to the new one on parse (Action="update-hosts"), so Matches
+// stays a plain string comparison and the router only needs to know the new
+// name.
 func TestParsePermission_DeprecatedUpdateCanonicalized(t *testing.T) {
 	p, err := ParsePermission("incarnation.update")
 	if err != nil {
@@ -102,9 +104,9 @@ func TestParsePermission_DeprecatedUpdateCanonicalized(t *testing.T) {
 	}
 }
 
-// TestParsePermission_DeprecatedUpdateStillValid — старое имя остаётся
-// валидным в каталоге (closed enum, removed-имена — never): load keeper.yml /
-// БД-снимка с `incarnation.update` НЕ фейлится.
+// TestParsePermission_DeprecatedUpdateStillValid — the old name remains
+// valid in the catalog (closed enum, names are never removed): loading
+// keeper.yml / a DB snapshot with `incarnation.update` must NOT fail.
 func TestParsePermission_DeprecatedUpdateStillValid(t *testing.T) {
 	if !IsAllowedPermission("incarnation", "update") {
 		t.Errorf("deprecated incarnation.update must remain in catalog (closed enum, no removal)")

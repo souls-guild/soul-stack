@@ -57,9 +57,9 @@ func TestParsePermission_KebabCaseAction(t *testing.T) {
 	}
 }
 
-// TestParsePermission_RolePermissions — все шесть role.*-permissions
-// (ADR-028(e)) парсятся без ошибок. Без записи в каталоге (catalog.go)
-// роль с этими permission не запарсилась бы (unknown_permission).
+// TestParsePermission_RolePermissions — all six role.*-permissions
+// (ADR-028(e)) parse without errors. Without a catalog entry (catalog.go),
+// a role with these permissions would fail to parse (unknown_permission).
 func TestParsePermission_RolePermissions(t *testing.T) {
 	names := []string{
 		"role.create", "role.delete", "role.list",
@@ -91,8 +91,8 @@ func TestParsePermission_WithSelector(t *testing.T) {
 	}
 }
 
-// ADR-047 S1: ParseDefaultScope переиспользует parseSelector — тот же closed
-// enum ключей и грамматика, что у per-perm-селектора.
+// ADR-047 S1: ParseDefaultScope reuses parseSelector — the same closed key
+// enum and grammar as the per-perm selector.
 func TestParseDefaultScope(t *testing.T) {
 	t.Run("empty-nil", func(t *testing.T) {
 		sel, err := ParseDefaultScope("")
@@ -156,7 +156,7 @@ func TestParsePermission_Errors(t *testing.T) {
 }
 
 func TestParsePermission_AllCatalogEntries(t *testing.T) {
-	// Все имена из каталога должны парситься без ошибок (sanity).
+	// All catalog names should parse without errors (sanity).
 	for name := range AllowedPermissions {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ParsePermission(name); err != nil {
@@ -167,8 +167,9 @@ func TestParsePermission_AllCatalogEntries(t *testing.T) {
 }
 
 func TestIsAllowedPermission_CadenceEnableDisable(t *testing.T) {
-	// cadence.enable / cadence.disable — гранулярные права на toggle расписания
-	// (отделены от cadence.update; cadence.update остаётся backcompat-грантом).
+	// cadence.enable / cadence.disable — granular rights to toggle the
+	// schedule (split off from cadence.update; cadence.update remains a
+	// backcompat grant).
 	for _, action := range []string{"enable", "disable"} {
 		if !IsAllowedPermission("cadence", action) {
 			t.Errorf("cadence.%s should be in catalog", action)
@@ -177,8 +178,9 @@ func TestIsAllowedPermission_CadenceEnableDisable(t *testing.T) {
 }
 
 func TestIsAllowedPermission_SynodUpdate(t *testing.T) {
-	// synod.update (ADR-049 amend) — правка description. Должна быть в каталоге:
-	// роль с этим правом иначе отвергнется как unknown_permission на load снимка.
+	// synod.update (ADR-049 amend) — editing description. Must be in the
+	// catalog: otherwise a role with this right would be rejected as
+	// unknown_permission when loading the snapshot.
 	if !IsAllowedPermission("synod", "update") {
 		t.Errorf("synod.update should be in catalog (ADR-049 amend)")
 	}

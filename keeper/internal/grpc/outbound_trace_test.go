@@ -13,9 +13,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// w3cPropagator — тот же composite TraceContext, что ставит obs.SetupOTel.
-// Тесты propagation ставят его явно (глобальный propagator у no-op-провайдера
-// по умолчанию ничего не инжектит).
+// w3cPropagator — the same composite TraceContext that obs.SetupOTel sets up.
+// Propagation tests set it explicitly (the global propagator defaults to a
+// no-op provider that injects nothing).
 func w3cPropagator() propagation.TextMapPropagator {
 	return propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
@@ -23,18 +23,18 @@ func w3cPropagator() propagation.TextMapPropagator {
 	)
 }
 
-// TestSendApply_InjectsTraceContext проверяет, что при активном span-е в ctx
-// SendApply кладёт непустой W3C traceparent в req.TraceContext (ADR-024
-// cross-process trace-propagation). Soul извлечёт его и поднимет apply.run как
-// child grpc.apply_dispatch.
+// TestSendApply_InjectsTraceContext verifies that with an active span in
+// ctx, SendApply puts a non-empty W3C traceparent into req.TraceContext
+// (ADR-024 cross-process trace propagation). Soul will extract it and raise
+// apply.run as a child of grpc.apply_dispatch.
 func TestSendApply_InjectsTraceContext(t *testing.T) {
 	prevProp := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(w3cPropagator())
 	t.Cleanup(func() { otel.SetTextMapPropagator(prevProp) })
 
-	// Активный валидный родительский SpanContext в ctx — достаточно для
-	// инжекта traceparent независимо от TracerProvider-а (Inject читает
-	// SpanContext из ctx). grpc.apply_dispatch внутри SendApply наследует его.
+	// An active valid parent SpanContext in ctx is enough for injecting the
+	// traceparent regardless of the TracerProvider (Inject reads the
+	// SpanContext from ctx). grpc.apply_dispatch inside SendApply inherits it.
 	tp := sdktrace.NewTracerProvider()
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	ctx, parent := tp.Tracer("test").Start(context.Background(), "parent")
@@ -43,8 +43,9 @@ func TestSendApply_InjectsTraceContext(t *testing.T) {
 	mgr := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, mgr, nopAudit{})
 
-	// Soul не подключён → deliver вернёт ErrSoulNotConnected, но инжект делается
-	// ДО deliver — req.TraceContext должен быть заполнен в любом случае.
+	// Soul isn't connected → deliver will return ErrSoulNotConnected, but the
+	// injection happens BEFORE deliver — req.TraceContext must be populated
+	// regardless.
 	req := &keeperv1.ApplyRequest{ApplyId: "01HAPPLY00000000000000000Z"}
 	if err := ob.SendApply(ctx, "host.example.test", req); !errors.Is(err, ErrSoulNotConnected) {
 		t.Fatalf("SendApply err = %v, want ErrSoulNotConnected", err)
@@ -54,8 +55,8 @@ func TestSendApply_InjectsTraceContext(t *testing.T) {
 		t.Fatal("req.TraceContext пуст, ожидался непустой W3C traceparent")
 	}
 
-	// Round-trip: Extract из инжектнутого traceparent даёт валидный remote
-	// SpanContext c тем же trace-id, что у родителя (= сквозная трасса).
+	// Round-trip: Extract on the injected traceparent gives a valid remote
+	// SpanContext with the same trace-id as the parent (= end-to-end trace).
 	extracted := otel.GetTextMapPropagator().Extract(context.Background(),
 		propagation.MapCarrier{"traceparent": req.GetTraceContext()})
 	sc := trace.SpanContextFromContext(extracted)
@@ -67,9 +68,10 @@ func TestSendApply_InjectsTraceContext(t *testing.T) {
 	}
 }
 
-// TestApplyRequest_ExtractTraceContext_RoundTrip моделирует Soul-side извлечение:
-// непустой traceparent → ctx с валидным remote SpanContext (apply.run станет
-// child). Дублирует логику строки soul/cmd/soul/main.go без подъёма Soul-демона.
+// TestApplyRequest_ExtractTraceContext_RoundTrip models the Soul-side
+// extraction: a non-empty traceparent → ctx with a valid remote SpanContext
+// (apply.run becomes a child). Duplicates the logic of a line in
+// soul/cmd/soul/main.go without spinning up the Soul daemon.
 func TestApplyRequest_ExtractTraceContext_RoundTrip(t *testing.T) {
 	prevProp := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(w3cPropagator())
@@ -92,9 +94,9 @@ func TestApplyRequest_ExtractTraceContext_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestApplyRequest_ExtractTraceContext_Empty — forward-compat деградация: пустой
-// trace_context (старый Keeper без поля) → Extract noop, без паники, apply.run
-// останется корнем собственной трассы.
+// TestApplyRequest_ExtractTraceContext_Empty — forward-compat degradation:
+// an empty trace_context (an old Keeper without the field) → Extract is a
+// no-op, no panic, apply.run remains the root of its own trace.
 func TestApplyRequest_ExtractTraceContext_Empty(t *testing.T) {
 	prevProp := otel.GetTextMapPropagator()
 	otel.SetTextMapPropagator(w3cPropagator())
