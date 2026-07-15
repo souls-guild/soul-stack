@@ -11,7 +11,7 @@
 // different [grpc.Server]s); shared business logic goes through
 // [BootstrapHandler.Deps].
 //
-// [ADR-012]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
+// [ADR-012]: docs/adr/0012-keeper-soul-grpc.md
 package grpc
 
 import (
