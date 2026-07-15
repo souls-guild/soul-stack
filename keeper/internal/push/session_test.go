@@ -10,9 +10,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// testEd25519PEM генерирует свежий ed25519-приватник в OpenSSH-PEM (для
-// SignReply.private_key в dispatcher-тестах). ssh.ParsePrivateKey должен его
-// распарсить.
+// testEd25519PEM generates a fresh ed25519 private key in OpenSSH-PEM (for
+// SignReply.private_key in dispatcher tests). ssh.ParsePrivateKey must be
+// able to parse it.
 func testEd25519PEM(t *testing.T) string {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -26,8 +26,8 @@ func testEd25519PEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(block))
 }
 
-// testCAKey генерирует ed25519-ключ host-CA. Возвращает signer (для подписи
-// host-cert-ов) и публичную часть как ssh.PublicKey (trust-anchor).
+// testCAKey generates an ed25519 host-CA key. Returns the signer (for
+// signing host certs) and the public part as ssh.PublicKey (trust anchor).
 func testCAKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -41,15 +41,15 @@ func testCAKey(t *testing.T) (ssh.Signer, ssh.PublicKey) {
 	return signer, signer.PublicKey()
 }
 
-// testCAPub — только публичная часть свежего CA (для Deps.HostAuthority).
+// testCAPub — just the public part of a fresh CA (for Deps.HostAuthority).
 func testCAPub(t *testing.T) ssh.PublicKey {
 	t.Helper()
 	_, pub := testCAKey(t)
 	return pub
 }
 
-// makeHostCert выпускает host-сертификат на hostKey, подписанный ca, с
-// principal-ом host. Имитирует Vault SSH CA host-cert.
+// makeHostCert issues a host certificate for hostKey, signed by ca, with
+// principal host. Mimics a Vault SSH CA host cert.
 func makeHostCert(t *testing.T, ca ssh.Signer, hostKey ssh.PublicKey, host string) *ssh.Certificate {
 	t.Helper()
 	cert := &ssh.Certificate{
@@ -79,13 +79,13 @@ func freshHostKey(t *testing.T) ssh.PublicKey {
 	return sshPub
 }
 
-// singleCASet — helper для тестов: набор-singleton из одного CA с дефолт-именем.
+// singleCASet — a test helper: a singleton set of one CA with a default name.
 func singleCASet(pub ssh.PublicKey) []NamedHostKeyAuthority {
 	return []NamedHostKeyAuthority{{Name: "default", CAPubKey: pub}}
 }
 
-// TestHostCertCallback_ValidCert — host предъявил cert, подписанный нашим CA →
-// callback принимает (ok).
+// TestHostCertCallback_ValidCert — the host presented a cert signed by our
+// CA → the callback accepts it (ok).
 func TestHostCertCallback_ValidCert(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 	hostKey := freshHostKey(t)
@@ -97,10 +97,10 @@ func TestHostCertCallback_ValidCert(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_ForeignCA — cert подписан ДРУГИМ CA → reject.
+// TestHostCertCallback_ForeignCA — the cert is signed by ANOTHER CA → reject.
 func TestHostCertCallback_ForeignCA(t *testing.T) {
-	foreignSigner, _ := testCAKey(t) // чужой CA подписывает
-	_, ourCAPub := testCAKey(t)      // доверяем нашему
+	foreignSigner, _ := testCAKey(t) // a foreign CA signs
+	_, ourCAPub := testCAKey(t)      // we trust our own
 	hostKey := freshHostKey(t)
 	cert := makeHostCert(t, foreignSigner, hostKey, "host-1.example.com")
 
@@ -110,11 +110,12 @@ func TestHostCertCallback_ForeignCA(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_SelfSignedBareKey — host предъявил голый ключ (не cert) →
-// reject (отказ от TOFU: нет доверенного пути для bare host-key).
+// TestHostCertCallback_SelfSignedBareKey — the host presented a bare key
+// (not a cert) → reject (refusal of TOFU: no trusted path for a bare host
+// key).
 func TestHostCertCallback_SelfSignedBareKey(t *testing.T) {
 	_, ourCAPub := testCAKey(t)
-	bareKey := freshHostKey(t) // не сертификат
+	bareKey := freshHostKey(t) // not a certificate
 
 	cb := hostCertCallback(singleCASet(ourCAPub), nil)
 	if err := cb("host-1.example.com:22", nil, bareKey); err == nil {
@@ -122,8 +123,9 @@ func TestHostCertCallback_SelfSignedBareKey(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_WrongPrincipal — cert от нашего CA, но principal не
-// покрывает запрашиваемый хост → reject (CertChecker проверяет principals).
+// TestHostCertCallback_WrongPrincipal — a cert from our CA, but the
+// principal doesn't cover the requested host → reject (CertChecker checks
+// principals).
 func TestHostCertCallback_WrongPrincipal(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 	hostKey := freshHostKey(t)
@@ -135,7 +137,7 @@ func TestHostCertCallback_WrongPrincipal(t *testing.T) {
 	}
 }
 
-// TestDial_RequiresCA — Dial без CA fail-closed (InsecureIgnoreHostKey запрещён).
+// TestDial_RequiresCA — Dial without a CA is fail-closed (InsecureIgnoreHostKey is forbidden).
 func TestDial_RequiresCA(t *testing.T) {
 	_, err := Dial(t.Context(), DialConfig{Host: "h", Port: 22, User: "u"})
 	if err == nil {
@@ -143,8 +145,9 @@ func TestDial_RequiresCA(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_MultiCA_MatchFirst — S7-3: host-cert подписан первым CA
-// в наборе → callback принимает + OnHostCAMatch фиксирует имя первого CA.
+// TestHostCertCallback_MultiCA_MatchFirst — S7-3: the host cert is signed by
+// the first CA in the set → the callback accepts + OnHostCAMatch records the
+// first CA's name.
 func TestHostCertCallback_MultiCA_MatchFirst(t *testing.T) {
 	ca1Signer, ca1Pub := testCAKey(t)
 	_, ca2Pub := testCAKey(t)
@@ -167,9 +170,10 @@ func TestHostCertCallback_MultiCA_MatchFirst(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_MultiCA_MatchSecond — S7-3: host-cert подписан вторым CA
-// в наборе → OR-проверка находит совпадение, OnHostCAMatch фиксирует имя
-// именно второго CA (без false-match-а с первым).
+// TestHostCertCallback_MultiCA_MatchSecond — S7-3: the host cert is signed
+// by the second CA in the set → the OR-check finds a match, OnHostCAMatch
+// records the second CA's name specifically (no false-match with the
+// first).
 func TestHostCertCallback_MultiCA_MatchSecond(t *testing.T) {
 	_, ca1Pub := testCAKey(t)
 	ca2Signer, ca2Pub := testCAKey(t)
@@ -192,8 +196,8 @@ func TestHostCertCallback_MultiCA_MatchSecond(t *testing.T) {
 	}
 }
 
-// TestHostCertCallback_MultiCA_NoMatch — S7-3: cert подписан CA вне набора →
-// reject; OnHostCAMatch не вызывается.
+// TestHostCertCallback_MultiCA_NoMatch — S7-3: the cert is signed by a CA
+// outside the set → reject; OnHostCAMatch is not called.
 func TestHostCertCallback_MultiCA_NoMatch(t *testing.T) {
 	foreignSigner, _ := testCAKey(t)
 	_, ca1Pub := testCAKey(t)

@@ -62,8 +62,8 @@ func TestSubscribeSummons_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestSummons_RoundTrip — publish/subscribe полный цикл: на PublishSummons
-// подписчик дёргает onSignal. Self-filter отсутствует — origin неважен.
+// TestSummons_RoundTrip — a full publish/subscribe cycle: on PublishSummons
+// the subscriber calls onSignal. No self-filter — origin doesn't matter.
 func TestSummons_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -94,14 +94,15 @@ func TestSummons_RoundTrip(t *testing.T) {
 
 	select {
 	case <-fired:
-		// OK — callback вызван.
+		// OK — the callback was called.
 	case <-time.After(2 * time.Second):
 		t.Fatal("onSignal not called within 2s")
 	}
 }
 
-// TestSummons_NoSelfFilter — сигнал от того же origin, что и подписчик, всё
-// равно дёргает callback (Summons НЕ фильтрует self, в отличие от applybus).
+// TestSummons_NoSelfFilter — a signal from the same origin as the
+// subscriber still calls the callback (Summons does NOT filter self, unlike
+// applybus).
 func TestSummons_NoSelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,7 +118,7 @@ func TestSummons_NoSelfFilter(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Один и тот же origin дважды — оба должны дёрнуть callback.
+	// The same origin twice — both must call the callback.
 	if _, err := PublishSummons(ctx, c, "keeper-same"); err != nil {
 		t.Fatalf("PublishSummons #1: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestSummons_NoSelfFilter(t *testing.T) {
 	t.Fatalf("onSignal called %d times, want >= 2 (no self-filter)", calls.Load())
 }
 
-// TestSummons_NoSubscribers — publish без подписчиков → 0, без ошибки.
+// TestSummons_NoSubscribers — publish with no subscribers → 0, no error.
 func TestSummons_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -149,8 +150,9 @@ func TestSummons_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestPublishSummons_BestEffortOnClosedClient — недоступный (закрытый) Redis
-// при Publish возвращает ошибку (caller её глотает), но не паникует.
+// TestPublishSummons_BestEffortOnClosedClient — an unavailable (closed)
+// Redis on Publish returns an error (the caller swallows it), but doesn't
+// panic.
 func TestPublishSummons_BestEffortOnClosedClient(t *testing.T) {
 	c, _ := newClientMR(t)
 	if err := c.Close(); err != nil {
@@ -161,8 +163,8 @@ func TestPublishSummons_BestEffortOnClosedClient(t *testing.T) {
 	}
 }
 
-// TestSummons_CloseShutsDownGoroutine — Close завершает goroutine; повторный
-// Close идемпотентен.
+// TestSummons_CloseShutsDownGoroutine — Close terminates the goroutine; a
+// repeat Close is idempotent.
 func TestSummons_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -183,8 +185,8 @@ func TestSummons_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestSummons_CloseSurvivesConcurrentReceive — гонка Close vs поток сигналов.
-// -race должен пройти.
+// TestSummons_CloseSurvivesConcurrentReceive — a race between Close and the
+// signal stream. -race must pass.
 func TestSummons_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

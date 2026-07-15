@@ -6,31 +6,32 @@ import (
 	"fmt"
 )
 
-// Cleaner удаляет соул-артефакты с push-хоста после прогона (бинарь + плагины).
-// Вызывается оператором явно через [SshDispatcher.Cleanup], не автоматически в
-// конце SendApply: повторные прогоны выигрывают от SHA-256-кеша доставки, и
-// чистка между ними дала бы лишние roundtrip-ы. Cleanup имеет смысл при
-// выводе хоста из push-flow / смене soul-агента.
+// Cleaner removes soul artifacts from a push host after a run (binary +
+// plugins). Called by the operator explicitly via [SshDispatcher.Cleanup],
+// not automatically at the end of SendApply: repeat runs benefit from the
+// SHA-256 delivery cache, and cleaning between them would add pointless
+// roundtrips. Cleanup makes sense when retiring a host from the push flow /
+// swapping the soul agent.
 //
-// Logs/journal (`/var/log/soul-stack/` и пр.) НЕ трогаются — это аудит-трейл,
-// не короткоживущая инстал-зона.
+// Logs/journal (`/var/log/soul-stack/` etc.) are NOT touched — that's an
+// audit trail, not a short-lived install zone.
 type Cleaner interface {
 	Cleanup(ctx context.Context, session Session) error
 }
 
-// ShaCleaner — дефолтная реализация поверх ssh exec `rm -rf`. Хост-layout
-// фиксирован (`/var/lib/soul-stack/{bin,modules}/`), поэтому путь не приходит
-// извне и shell-инжекшен невозможен.
+// ShaCleaner — the default implementation over ssh exec `rm -rf`. The host
+// layout is fixed (`/var/lib/soul-stack/{bin,modules}/`), so the path never
+// comes from outside and shell injection is impossible.
 type ShaCleaner struct{}
 
-// NewShaCleaner — конструктор для DI-явности.
+// NewShaCleaner — constructor for DI-explicitness.
 func NewShaCleaner() *ShaCleaner { return &ShaCleaner{} }
 
-// Cleanup удаляет hostSoulDir и hostModulesDir вместе с их содержимым.
-// /var/log/soul-stack/ намеренно НЕ затрагивается (аудит-данные).
+// Cleanup removes hostSoulDir and hostModulesDir along with their contents.
+// /var/log/soul-stack/ is intentionally NOT touched (audit data).
 //
-// fail-closed: ненулевой exit `rm` (например — permissions) поднимается наверх,
-// чтобы caller не считал, что хост вычищен «как-нибудь».
+// fail-closed: a nonzero `rm` exit (e.g. permissions) propagates up, so the
+// caller can't assume the host was cleaned up "somehow".
 func (c *ShaCleaner) Cleanup(ctx context.Context, session Session) error {
 	if session == nil {
 		return errors.New("push/cleanup: session is nil")

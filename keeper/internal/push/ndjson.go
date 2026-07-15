@@ -13,43 +13,44 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// ErrNoRunResult — поток stdout завершился (EOF) без финального RunResult.
-// Это маркер недоставленного результата: `soul apply` всегда шлёт ровно один
-// RunResult в конце (ndjsonsink.go), его отсутствие = крах процесса/обрыв
-// сессии до завершения прогона. Диспетчер обязан трактовать это как fail
-// (fail-closed), а не как «успех без отчёта».
+// ErrNoRunResult — the stdout stream ended (EOF) without a final RunResult.
+// This marks an undelivered result: `soul apply` always sends exactly one
+// RunResult at the end (ndjsonsink.go), so its absence means the process
+// crashed or the session was cut before the run finished. The dispatcher must
+// treat this as a failure (fail-closed), not as "success without a report".
 var ErrNoRunResult = errors.New("push: NDJSON-поток завершился без RunResult")
 
-// EventHandler — колбэк на каждый промежуточный TaskEvent NDJSON-потока.
-// nil допустим: пилоту TaskEvent-ы нужны только end-to-end (RunResult несёт
-// итог), полная per-task обработка/запись в apply_task_register — слайс
-// интеграции в runner (S3).
+// EventHandler — callback for each intermediate TaskEvent in the NDJSON
+// stream. nil is fine: the pilot only needs TaskEvents end-to-end (RunResult
+// carries the outcome), full per-task handling/writing to
+// apply_task_register is a runner-integration slice (S3).
 type EventHandler func(*keeperv1.TaskEvent)
 
-// ParseStream читает построчный NDJSON-stdout `soul apply` (ndjsonsink.go):
-// последовательность protojson-строк TaskEvent, затем РОВНО одна финальная
-// строка RunResult. Каждый TaskEvent передаётся в onEvent (если не nil),
-// RunResult возвращается как итог.
+// ParseStream reads the line-delimited NDJSON stdout of `soul apply`
+// (ndjsonsink.go): a sequence of protojson TaskEvent lines, followed by
+// EXACTLY one final RunResult line. Each TaskEvent is passed to onEvent (if
+// not nil), RunResult is returned as the outcome.
 //
-// Дискриминатор TaskEvent vs RunResult: оба сериализуются как голый protojson
-// БЕЗ type-тега (ndjsonsink пишет их одним writeLine), но их enum-поле `status`
-// использует непересекающиеся префиксы — `TASK_STATUS_*` у TaskEvent против
-// `RUN_STATUS_*` у RunResult. Различаем по этому префиксу, а не по «последняя
-// строка = RunResult»: построчное чтение не знает заранее, где конец, а опора
-// на overlapping-поля (protojson.Unmarshal lenient) дала бы тихий mis-parse.
+// TaskEvent vs RunResult discriminator: both are serialized as bare protojson
+// WITHOUT a type tag (ndjsonsink writes them with a single writeLine), but
+// their `status` enum field uses non-overlapping prefixes — `TASK_STATUS_*`
+// for TaskEvent vs `RUN_STATUS_*` for RunResult. We discriminate on that
+// prefix rather than "the last line is the RunResult": line-by-line reading
+// doesn't know the end in advance, and relying on overlapping fields
+// (protojson.Unmarshal is lenient) would cause a silent mis-parse.
 //
-// Возврат:
-//   - (*RunResult, nil) — поток корректен, финальный RunResult получен.
-//   - (nil, ErrNoRunResult) — EOF без RunResult (краш/обрыв до завершения).
-//   - (nil, ошибка) — битая/неклассифицируемая строка, либо ошибка чтения.
+// Returns:
+//   - (*RunResult, nil) — the stream is well-formed, the final RunResult was received.
+//   - (nil, ErrNoRunResult) — EOF without a RunResult (crash/cut-off before completion).
+//   - (nil, error) — a malformed/unclassifiable line, or a read error.
 //
-// Строки после RunResult — ошибка протокола (RunResult финален): такой поток
-// отвергается. Пустые строки (двойной '\n') пропускаются.
+// Lines after RunResult are a protocol error (RunResult is final): such a
+// stream is rejected. Empty lines (double '\n') are skipped.
 func ParseStream(r io.Reader, onEvent EventHandler) (*keeperv1.RunResult, error) {
 	sc := bufio.NewScanner(r)
-	// soul apply может вернуть крупный TaskEvent (register_data/output): поднимаем
-	// лимит строки с дефолтных 64 KiB до 1 MiB, чтобы длинный output не рвал поток
-	// ErrTooLong-ом на ровном месте.
+	// soul apply may return a large TaskEvent (register_data/output): raise the
+	// line limit from the 64 KiB default to 1 MiB so long output doesn't break
+	// the stream with a spurious ErrTooLong.
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var result *keeperv1.RunResult
@@ -104,14 +105,15 @@ const (
 	runStatusPrefix  = "RUN_STATUS_"
 )
 
-// classifyLine определяет тип NDJSON-строки по enum-префиксу её поля `status`
-// (см. ParseStream). Поле `status` шлётся обоими сообщениями и его enum-неймы
-// непересекающиеся, поэтому это надёжный дискриминатор без type-тега.
+// classifyLine determines the NDJSON line's type from the enum prefix of its
+// `status` field (see ParseStream). The `status` field is sent by both
+// message types and their enum names don't overlap, so it's a reliable
+// discriminator without a type tag.
 //
-// Граничные случаи (все → понятная ошибка, fail-closed):
-//   - не-JSON / частичная строка → ошибка разбора;
-//   - JSON без `status` либо `status` не строка → неклассифицируемо;
-//   - `status` с неизвестным префиксом → неклассифицируемо.
+// Edge cases (all → a clear error, fail-closed):
+//   - non-JSON / partial line → parse error;
+//   - JSON without `status`, or `status` not a string → unclassifiable;
+//   - `status` with an unknown prefix → unclassifiable.
 func classifyLine(line string) (lineKind, error) {
 	var probe struct {
 		Status string `json:"status"`
@@ -129,8 +131,8 @@ func classifyLine(line string) (lineKind, error) {
 	}
 }
 
-// truncate ограничивает строку для error-сообщений (битая строка может быть
-// длинной — не засоряем лог целиком).
+// truncate caps a string for error messages (a malformed line can be long —
+// avoid flooding the log with the whole thing).
 func truncate(s string) string {
 	const max = 200
 	if len(s) <= max {

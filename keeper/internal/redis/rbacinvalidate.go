@@ -1,33 +1,33 @@
 package redis
 
-// Cluster-wide RBAC-инвалидация через Redis pub/sub (ADR-028(d), Фаза 3 = B2).
+// Cluster-wide RBAC invalidation via Redis pub/sub (ADR-028(d), Phase 3 = B2).
 //
-// Проблема: каждый Keeper-инстанс держит собственный RBAC-снимок
-// (`rbac.Holder`/`rbac.Enforcer`), построенный из Postgres. Мутация роли
+// Problem: each Keeper instance holds its own RBAC snapshot
+// (`rbac.Holder`/`rbac.Enforcer`), built from Postgres. A role mutation
 // (CreateRole/DeleteRole/UpdateRolePermissions/GrantOperator/RevokeOperator)
-// коммитится в общую БД на Keeper-A, но снимки остальных нод видят её только
-// через TTL-poll (B1, до `rbac.DefaultRefreshInterval`). Окно устаревания —
-// секунды.
+// commits to the shared DB on Keeper-A, but the other nodes' snapshots only
+// see it via TTL-poll (B1, up to `rbac.DefaultRefreshInterval`). The
+// staleness window is seconds.
 //
-// Решение симметрично apply-events-routing-у (см. [PublishApplyEvent] /
-// [SubscribeApplyEvent]): мутирующая нода после успешного commit-а PUBLISH-ит
-// в канал `rbac:invalidate`, остальные ноды по SUBSCRIBE перечитывают снимок
-// из БД (near-instant). Self-filter по `origin_kid` отсекает эхо собственной
-// публикации — мутирующая нода полагается на свой TTL-poll (рефрешить снимок
-// прямо в момент publish здесь не нужно, образец applybus так же отбрасывает
-// self-origin).
+// Solution mirrors apply-events routing (see [PublishApplyEvent] /
+// [SubscribeApplyEvent]): after a successful commit, the mutating node
+// PUBLISHes to the `rbac:invalidate` channel, and the other nodes'
+// SUBSCRIBE re-reads the snapshot from the DB (near-instant). Self-filter
+// by `origin_kid` drops the echo of its own publish — the mutating node
+// relies on its own TTL-poll (no need to refresh the snapshot right at
+// publish time; the applybus pattern likewise drops self-origin).
 //
-// B2 = B1 + pub/sub: TTL-poll НЕ убирается. Redis pub/sub не имеет
-// persistence — если сообщение потеряно (нода реконнектится, брокер мигнул),
-// его подхватит следующий TTL-poll. Pub/sub лишь сокращает типичную задержку
-// до миллисекунд, а не заменяет fallback.
+// B2 = B1 + pub/sub: TTL-poll is NOT removed. Redis pub/sub has no
+// persistence — if a message is lost (node reconnects, broker blips), the
+// next TTL-poll picks it up. Pub/sub only shortens the typical delay to
+// milliseconds, it doesn't replace the fallback.
 //
-// Convention `rbac:invalidate` — отдельный namespace (PM-decision,
-// подтверждённый topic), не пересекается с `apply:<id>`/`outbound:<sid>`/
-// `soul:<sid>:*`. Wire-формат — компактный JSON-envelope: только
-// `origin_kid` (для self-filter) + `at` (диагностика/лог). Payload-а нет —
-// сообщение «снимок устарел, перечитай из БД», конкретику подписчик берёт
-// из Postgres сам.
+// Convention `rbac:invalidate` — a separate namespace (PM-decision,
+// confirmed topic), doesn't overlap with `apply:<id>`/`outbound:<sid>`/
+// `soul:<sid>:*`. Wire format is a compact JSON envelope: only `origin_kid`
+// (for self-filter) + `at` (diagnostics/log). No payload — the message is
+// "snapshot is stale, re-read from the DB", the subscriber pulls specifics
+// from Postgres itself.
 
 import (
 	"context"
@@ -40,35 +40,38 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RBACInvalidateChannel — Redis-канал cluster-wide RBAC-инвалидации.
-// Фиксированный (не per-ID): любая role-мутация на любой ноде шлёт сюда.
+// RBACInvalidateChannel is the Redis channel for cluster-wide RBAC
+// invalidation. Fixed (not per-ID): any role mutation on any node publishes here.
 const RBACInvalidateChannel = "rbac:invalidate"
 
-// rbacInvalidateEnvelope — JSON-обёртка одного invalidate-сообщения.
+// rbacInvalidateEnvelope is the JSON wrapper for one invalidate message.
 //
-// `OriginKID` — KID Keeper-инстанса, опубликовавшего инвалидацию; подписчик
-// отбрасывает сообщения с OriginKID == собственный KID (self-filter,
-// симметрично [applyEventEnvelope.OriginKID]).
+// `OriginKID` is the KID of the Keeper instance that published the
+// invalidation; the subscriber drops messages where OriginKID == its own
+// KID (self-filter, mirrors [applyEventEnvelope.OriginKID]).
 //
-// `At` — момент публикации (диагностика); семантической нагрузки на
-// rebuild-снимка не несёт.
+// `At` is the publish time (diagnostics); it carries no semantic weight for
+// the snapshot rebuild.
 type rbacInvalidateEnvelope struct {
 	OriginKID string    `json:"origin_kid"`
 	At        time.Time `json:"at"`
 }
 
-// RBACInvalidate — распакованное invalidate-сообщение, доставляемое
-// подписчику. Payload-а нет: само получение = сигнал «перечитай RBAC-снимок».
+// RBACInvalidate is the unpacked invalidate message delivered to a
+// subscriber. No payload: receiving it at all is the signal to "re-read the
+// RBAC snapshot".
 type RBACInvalidate struct {
 	OriginKID string
 	At        time.Time
 }
 
-// PublishRBACInvalidate публикует invalidate-сигнал в [RBACInvalidateChannel].
-// Возвращает количество подписчиков, получивших сообщение.
+// PublishRBACInvalidate publishes an invalidate signal to
+// [RBACInvalidateChannel]. Returns the number of subscribers that received
+// the message.
 //
-// Best-effort: caller (rbac.Service после commit-а) глотает ошибку — мутация
-// уже зафиксирована в БД, потеря publish-а не критична (TTL-poll подхватит).
+// Best-effort: the caller (rbac.Service after a commit) swallows the error
+// — the mutation is already committed to the DB, and a lost publish isn't
+// critical (TTL-poll will pick it up).
 func PublishRBACInvalidate(ctx context.Context, c *Client, originKID string) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishRBACInvalidate: nil client")
@@ -92,17 +95,20 @@ func PublishRBACInvalidate(ctx context.Context, c *Client, originKID string) (in
 	return n, nil
 }
 
-// rbacInvalidateSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом (Holder). Инвалидации редки (role-мутации — десятки в день), но
-// небольшой запас отсекает drop при burst-е bulk-grant-ов. Меньше
-// applyEventSubBufferSize — поток на порядки реже.
+// rbacInvalidateSubBufferSize is the Go channel buffer between the
+// Redis-PubSub loop and the caller (Holder). Invalidations are rare (role
+// mutations — dozens per day), but the small margin avoids drops during
+// bulk-grant bursts. Smaller than applyEventSubBufferSize — this stream is
+// orders of magnitude rarer.
 const rbacInvalidateSubBufferSize = 16
 
-// RBACInvalidateSubscription — handle на подписку [RBACInvalidateChannel].
+// RBACInvalidateSubscription is a handle to the [RBACInvalidateChannel]
+// subscription.
 //
-// Идентична по lifecycle [ApplyEventSubscription]: spawn goroutine читает
-// PubSub-канал → парсит envelope → filter self-origin → отдаёт
-// *RBACInvalidate в Channel(). Close() прерывает goroutine и закрывает канал.
+// Lifecycle is identical to [ApplyEventSubscription]: a spawned goroutine
+// reads the PubSub channel → parses the envelope → filters self-origin →
+// delivers *RBACInvalidate to Channel(). Close() stops the goroutine and
+// closes the channel.
 type RBACInvalidateSubscription struct {
 	ps        *redis.PubSub
 	out       chan *RBACInvalidate
@@ -113,7 +119,7 @@ type RBACInvalidateSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными invalidate-сообщениями.
+// Channel is the read side of the Go channel with unpacked invalidate messages.
 func (s *RBACInvalidateSubscription) Channel() <-chan *RBACInvalidate {
 	if s == nil {
 		return nil
@@ -121,8 +127,8 @@ func (s *RBACInvalidateSubscription) Channel() <-chan *RBACInvalidate {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis (или
-// ctx.Done() / Close()). См. doc-comment [ApplyEventSubscription.Ready].
+// Ready blocks until the first subscribe acknowledgement from Redis (or
+// ctx.Done() / Close()). See the doc comment on [ApplyEventSubscription.Ready].
 func (s *RBACInvalidateSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.RBACInvalidateSubscription.Ready: nil subscription")
@@ -137,8 +143,8 @@ func (s *RBACInvalidateSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и Go-канал.
-// Идемпотентна.
+// Close stops the subscribe loop and closes the Redis pubsub handle and Go
+// channel. Idempotent.
 func (s *RBACInvalidateSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -146,8 +152,8 @@ func (s *RBACInvalidateSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeRBACInvalidate подписывается на [RBACInvalidateChannel] и поднимает
-// goroutine-forwarder. selfKID используется для self-фильтрации (как в
+// SubscribeRBACInvalidate subscribes to [RBACInvalidateChannel] and starts
+// the goroutine-forwarder. selfKID is used for self-filtering (as in
 // [SubscribeApplyEvent]).
 func SubscribeRBACInvalidate(ctx context.Context, c *Client, selfKID string, logger *slog.Logger) (*RBACInvalidateSubscription, error) {
 	if c == nil {
@@ -227,9 +233,9 @@ func (s *RBACInvalidateSubscription) run(ctx context.Context, closed <-chan stru
 			continue
 		}
 		if ev.OriginKID == s.selfKID {
-			// Self-echo: мутацию сделали мы сами. Не рефрешимся по своему
-			// publish-у — собственный TTL-poll подхватит (B1-fallback). Тот же
-			// self-filter, что в SubscribeApplyEvent.
+			// Self-echo: we made this mutation ourselves. Don't refresh off
+			// our own publish — our own TTL-poll will pick it up
+			// (B1-fallback). Same self-filter as in SubscribeApplyEvent.
 			s.logger.Debug("redis.SubscribeRBACInvalidate: ignoring self-origin invalidate",
 				slog.String("origin_kid", ev.OriginKID))
 			continue
@@ -238,9 +244,9 @@ func (s *RBACInvalidateSubscription) run(ctx context.Context, closed <-chan stru
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик (Holder) не успел перечитать снимок.
-			// Drop безопасен: каждое сообщение — лишь «перечитай», последний
-			// Refresh всё равно прочтёт актуальный БД-снимок целиком.
+			// Channel full — the subscriber (Holder) hasn't caught up on the
+			// snapshot. Drop is safe: each message just means "re-read", the
+			// next Refresh will read the full, current DB snapshot anyway.
 			s.logger.Warn("redis.SubscribeRBACInvalidate: forward channel full, dropping",
 				slog.String("origin_kid", ev.OriginKID))
 		}

@@ -19,12 +19,12 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// SSHTarget — реквизиты SSH-подключения к push-хосту: host (= SID/FQDN), порт,
-// пользователь, путь к уже установленному soul-бинарю.
+// SSHTarget — SSH connection details for a push host: host (= SID/FQDN), port,
+// user, and the path to an already-installed soul binary.
 //
-// В пилоте soul-бинарь предполагается уже на хосте по известному пути
-// (SHA-256-кеш доставки/sync — слайс S1), поэтому SoulPath приходит из резолва,
-// а не вычисляется.
+// In the pilot, the soul binary is assumed to already be on the host at a
+// known path (SHA-256 delivery/sync cache is the S1 slice), so SoulPath comes
+// from the resolve step rather than being computed.
 type SSHTarget struct {
 	Host     string
 	Port     int
@@ -32,128 +32,136 @@ type SSHTarget struct {
 	SoulPath string
 }
 
-// TargetResolver резолвит SSH-реквизиты по SID. Внедряется как зависимость:
-// пилот подставляет config-backed резолвер, S7-1 — PGFallbackTargetResolver.
+// TargetResolver resolves SSH connection details by SID. Injected as a
+// dependency: the pilot plugs in a config-backed resolver, S7-1 plugs in
+// PGFallbackTargetResolver.
 type TargetResolver interface {
 	Resolve(ctx context.Context, sid string) (SSHTarget, error)
 }
 
-// SoulLookup читает Soul по SID — нужен диспетчеру ТОЛЬКО для проверки
-// предусловия transport=ssh (валидация входа). Сужено до одного метода, чтобы
-// диспетчер мокался без PG. Реализуется обёрткой над [soul.SelectBySID].
+// SoulLookup reads a Soul by SID — the dispatcher only needs it to check the
+// transport=ssh precondition (input validation). Narrowed to a single method
+// so the dispatcher can be mocked without PG. Implemented by a wrapper over
+// [soul.SelectBySID].
 type SoulLookup interface {
 	SelectBySID(ctx context.Context, sid string) (*soul.Soul, error)
 }
 
-// Dialer открывает SSH-сессию по DialConfig. Production — [Dial]; тест —
-// мок-функция, возвращающая фейковую [Session]. Тип-функция (а не интерфейс)
-// держит wire-up тривиальным.
+// Dialer opens an SSH session per DialConfig. Production uses [Dial]; tests
+// use a mock function returning a fake [Session]. A function type (rather
+// than an interface) keeps the wire-up trivial.
 type Dialer func(ctx context.Context, cfg DialConfig) (Session, error)
 
-// ProviderRespawner — узкая поверхность для runtime re-spawn SshProvider
-// plugin-handle с обновлёнными env-payload params. Реализуется wire-up-ом в
-// daemon (он держит pluginhost.Host + discovered + PGFallbackProviderResolver).
+// ProviderRespawner — a narrow surface for runtime re-spawn of an SshProvider
+// plugin handle with updated env-payload params. Implemented by the wire-up
+// in the daemon (which holds pluginhost.Host + discovered +
+// PGFallbackProviderResolver).
 //
-// Контракт: получив имя плагина, реализация резолвит свежие params из
-// PG/legacy-fallback, spawn-ит новый plugin-handle с обновлённым env-payload
-// SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS и возвращает пару (SshProvider,
-// io.Closer) — Closer закрывает spawned plugin-process (вызывается dispatcher-
-// ом при следующем RefreshProvider либо в его собственном Close-path).
+// Contract: given a plugin name, the implementation resolves fresh params
+// from PG/legacy-fallback, spawns a new plugin handle with an updated
+// SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS env payload, and returns a pair
+// (SshProvider, io.Closer) — the Closer closes the spawned plugin process
+// (called by the dispatcher on the next RefreshProvider, or from its own
+// Close path).
 type ProviderRespawner interface {
-	// RespawnProvider закрывает текущий plugin-handle (если передан oldCloser ≠
-	// nil) и spawn-ит новый с обновлёнными params.
+	// RespawnProvider closes the current plugin handle (if oldCloser is
+	// non-nil) and spawns a new one with updated params.
 	//
-	// Reentrant-инвариант: caller (SshDispatcher.RefreshProvider) держит mutex,
-	// одновременных Respawn по тому же имени не будет.
+	// Reentrancy invariant: the caller (SshDispatcher.RefreshProvider) holds the
+	// mutex, so there won't be concurrent Respawns for the same name.
 	RespawnProvider(ctx context.Context, providerName string, oldCloser io.Closer) (SshProvider, io.Closer, error)
 }
 
-// ProviderEntry — один зарегистрированный SshProvider-плагин в карте
-// диспетчера. Closer закрывает spawned plugin-process (typically
-// *pluginhost.SshProviderPlugin); при подмене через RefreshProvider старый
-// Closer закрывается respawner-ом, новый ставится на место.
+// ProviderEntry — one registered SshProvider plugin in the dispatcher's map.
+// Closer closes the spawned plugin process (typically
+// *pluginhost.SshProviderPlugin); when swapped via RefreshProvider, the old
+// Closer is closed by the respawner and the new one takes its place.
 //
-// nil Closer допустим: unit-тесты подсовывают мок-Provider без spawn-а
-// дочернего процесса.
+// A nil Closer is fine: unit tests plug in a mock Provider without spawning a
+// child process.
 type ProviderEntry struct {
 	Provider SshProvider
 	Closer   io.Closer
 }
 
-// Deps — зависимости [SshDispatcher].
+// Deps — dependencies for [SshDispatcher].
 //
-// Multi-provider routing (ADR-032 amendment 2026-05-27, P2 W-2): диспетчер
-// держит карту провайдеров по имени `Providers map[string]ProviderEntry`.
-// SendApply/Cleanup получают `providerName` от caller-а (pushorch.PushRun
-// резолвит его через ProviderRouter) и делают lookup в карте под RLock.
+// Multi-provider routing (ADR-032 amendment 2026-05-27, P2 W-2): the
+// dispatcher keeps a map of providers by name, `Providers
+// map[string]ProviderEntry`. SendApply/Cleanup receive `providerName` from
+// the caller (pushorch.PushRun resolves it via ProviderRouter) and look it up
+// in the map under RLock.
 type Deps struct {
-	// Providers — карта зарегистрированных SshProvider-плагинов по имени
-	// (manifest.Name). Пустая карта — программная ошибка: NewSshDispatcher
-	// валит создание. Подменяется в рантайме через [SshDispatcher.
-	// RefreshProvider] под d.mu (атомарная подмена одной записи без эффекта на
-	// остальных).
+	// Providers — a map of registered SshProvider plugins by name
+	// (manifest.Name). An empty map is a programmer error: NewSshDispatcher
+	// fails construction. Swapped at runtime via [SshDispatcher.
+	// RefreshProvider] under d.mu (an atomic swap of one entry with no effect
+	// on the others).
 	Providers map[string]ProviderEntry
-	// Respawner — runtime re-spawn новой версии plugin-handle с обновлённым
-	// env-payload. nil → [SshDispatcher.RefreshProvider] вернёт
+	// Respawner — runtime re-spawn of a new plugin-handle version with an
+	// updated env payload. nil → [SshDispatcher.RefreshProvider] returns
 	// ErrRespawnNotSupported.
 	Respawner ProviderRespawner
-	// Targets — резолв SSH-реквизитов по SID.
+	// Targets — resolves SSH connection details by SID.
 	Targets TargetResolver
-	// Souls — проверка предусловия transport=ssh.
+	// Souls — checks the transport=ssh precondition.
 	Souls SoulLookup
-	// HostAuthorities — multi-CA-набор для verify host-сертификатов (S7-3,
-	// ADR-032 amendment 2026-05-26). Непустой; на handshake-е делается OR-
-	// проверка по всем элементам через ssh.CertChecker.IsHostAuthority.
+	// HostAuthorities — the multi-CA set for verifying host certificates (S7-3,
+	// ADR-032 amendment 2026-05-26). Must be non-empty; the handshake does an
+	// OR-check across all elements via ssh.CertChecker.IsHostAuthority.
 	HostAuthorities []NamedHostKeyAuthority
-	// Metrics — опц. observability multi-CA (счётчик матчей по `ca_name`).
-	// nil — no-op (unit-тесты без obs.Registry / push выключен).
+	// Metrics — optional multi-CA observability (a counter of matches by
+	// `ca_name`). nil is a no-op (unit tests without obs.Registry / push
+	// disabled).
 	Metrics *Metrics
-	// Dial — открытие SSH-сессии. nil → [Dial] (production).
+	// Dial — opens the SSH session. nil → [Dial] (production).
 	Dial Dialer
-	// Logger обязателен.
+	// Logger is required.
 	Logger *slog.Logger
-	// DialTimeout — таймаут connect+handshake. 0 → defaultDialTimeout.
+	// DialTimeout — the connect+handshake timeout. 0 → defaultDialTimeout.
 	DialTimeout time.Duration
-	// Deliverer — доставка soul-бинаря и зарегистрированных модулей с SHA-256-
-	// дедупом ПЕРЕД exec-ом `soul apply`. nil → доставка пропускается (BC с S0:
-	// в пилоте бинарь уже на хосте по SoulPath).
+	// Deliverer — delivers the soul binary and registered modules with
+	// SHA-256 dedup BEFORE the `soul apply` exec. nil → delivery is skipped
+	// (BC with S0: in the pilot the binary is already on the host at SoulPath).
 	Deliverer Deliverer
-	// SoulSpec — что доставлять (см. [SoulSpec]). Игнорируется при Deliverer=nil.
+	// SoulSpec — what to deliver (see [SoulSpec]). Ignored when Deliverer=nil.
 	SoulSpec SoulSpec
-	// Cleaner — host-side чистка артефактов (`rm -rf /var/lib/soul-stack/{bin,
-	// modules}/`). Используется методом [SshDispatcher.Cleanup]; SendApply его
-	// не дергает (см. doc Cleaner).
+	// Cleaner — host-side artifact cleanup (`rm -rf /var/lib/soul-stack/{bin,
+	// modules}/`). Used by the [SshDispatcher.Cleanup] method; SendApply
+	// doesn't call it (see the Cleaner doc).
 	Cleaner Cleaner
 }
 
 const defaultDialTimeout = 30 * time.Second
 
-// SshDispatcher — push-реализация диспетчера apply (ADR-004, агентless SSH).
-// Метод [SshDispatcher.SendApply] повторяет сигнатуру-семантику pull-Outbound,
-// чтобы позже стать его alt-реализацией (ветвление по transport на точке
-// Outbound.SendApply). Отличие: push синхронный oneshot — возвращает
-// *RunResult сразу (нет асинхронного EventStream-барьера).
+// SshDispatcher — the push implementation of the apply dispatcher (ADR-004,
+// agentless SSH). The [SshDispatcher.SendApply] method mirrors the
+// signature/semantics of pull-Outbound so it can later become an alt
+// implementation of it (branching by transport at the Outbound.SendApply
+// call site). Difference: push is a synchronous oneshot — it returns
+// *RunResult right away (no asynchronous EventStream barrier).
 //
-// Multi-provider (P2 W-2): диспетчер держит карту `Deps.Providers` и lookup-ит
-// провайдер по имени, переданному в SendApply/Cleanup. Routing-логика (per-SID
-// → coven-default → cluster-default) — за рамками диспетчера, см.
-// [ProviderRouter].
+// Multi-provider (P2 W-2): the dispatcher keeps a `Deps.Providers` map and
+// looks up the provider by the name passed to SendApply/Cleanup. The routing
+// logic (per-SID → coven-default → cluster-default) is out of scope for the
+// dispatcher, see [ProviderRouter].
 type SshDispatcher struct {
-	// mu защищает deps.Providers при runtime re-spawn (RefreshProvider).
-	// SendApply/Cleanup на горячем пути берут RLock-style snapshot ссылки на
-	// конкретный ProviderEntry и доезжают до конца сессии без блокировки.
-	// Используем sync.RWMutex.
+	// mu protects deps.Providers during runtime re-spawn (RefreshProvider).
+	// SendApply/Cleanup on the hot path take an RLock-style snapshot reference
+	// to a specific ProviderEntry and run through to the end of the session
+	// without blocking. We use sync.RWMutex.
 	mu   sync.RWMutex
 	deps Deps
 }
 
-// NewSshDispatcher собирает диспетчер. Providers / Targets / Souls / Logger
-// обязательны; `HostAuthorities` непустой (без CA нет доверенного host-cert
-// verification). Каждый элемент HostAuthorities обязан иметь непустой `Name`
-// и непустой `CAPubKey` — это инвариант caller-а. Dial nil → production [Dial].
+// NewSshDispatcher assembles the dispatcher. Providers / Targets / Souls /
+// Logger are required; `HostAuthorities` must be non-empty (no CA means no
+// trusted host-cert verification). Every HostAuthorities element must have a
+// non-empty `Name` and a non-empty `CAPubKey` — that's the caller's
+// invariant to uphold. Dial nil → production [Dial].
 //
-// Карта Providers обязана быть непустой и каждая запись — иметь non-nil
-// Provider (Closer допустим nil — unit-тесты).
+// The Providers map must be non-empty and every entry must have a non-nil
+// Provider (a nil Closer is fine — unit tests).
 func NewSshDispatcher(deps Deps) (*SshDispatcher, error) {
 	if len(deps.Providers) == 0 {
 		return nil, errors.New("push: Deps.Providers must be non-empty (multi-provider map)")
@@ -192,13 +200,13 @@ func NewSshDispatcher(deps Deps) (*SshDispatcher, error) {
 	return &SshDispatcher{deps: deps}, nil
 }
 
-// providerEntry возвращает зарегистрированный ProviderEntry по имени под
-// RLock. SendApply/Cleanup на горячем пути берут snapshot одной записи и
-// держат её до конца прогона. RefreshProvider под Lock подменяет запись
-// атомарно — параллельные SendApply на другие имена не блокируются.
+// providerEntry returns the registered ProviderEntry by name under RLock.
+// SendApply/Cleanup on the hot path take a snapshot of one entry and hold it
+// through the end of the run. RefreshProvider swaps the entry atomically
+// under Lock — concurrent SendApply calls for other names aren't blocked.
 //
-// Возвращает (ProviderEntry{}, false) если имя не зарегистрировано — caller
-// (SendApply/Cleanup) маппит это в ErrProviderUnknown.
+// Returns (ProviderEntry{}, false) if the name isn't registered — the caller
+// (SendApply/Cleanup) maps this to ErrProviderUnknown.
 func (d *SshDispatcher) providerEntry(name string) (ProviderEntry, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -206,16 +214,16 @@ func (d *SshDispatcher) providerEntry(name string) (ProviderEntry, bool) {
 	return e, ok
 }
 
-// HasProvider — операторская диагностика: «зарегистрирован ли SshProvider с
-// этим именем». Используется тестами и invalidation-listener-ом, чтобы не
-// дёргать RefreshProvider на чужие имена.
+// HasProvider — operator diagnostics: "is an SshProvider with this name
+// registered". Used by tests and the invalidation listener to avoid calling
+// RefreshProvider on names that aren't theirs.
 func (d *SshDispatcher) HasProvider(name string) bool {
 	_, ok := d.providerEntry(name)
 	return ok
 }
 
-// ProviderNames — снимок имён зарегистрированных провайдеров (диагностика,
-// логи). Порядок недетерминирован.
+// ProviderNames — a snapshot of registered provider names (diagnostics,
+// logs). Order is nondeterministic.
 func (d *SshDispatcher) ProviderNames() []string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -226,24 +234,25 @@ func (d *SshDispatcher) ProviderNames() []string {
 	return out
 }
 
-// RefreshProvider — runtime re-spawn SshProvider plugin-handle с обновлёнными
-// env-payload params (S7-2 hot-reload, ADR-032 amendment 2026-05-26;
-// расширено amendment 2026-05-27 P2 W-2 для multi-provider map).
+// RefreshProvider — runtime re-spawn of an SshProvider plugin handle with
+// updated env-payload params (S7-2 hot-reload, ADR-032 amendment 2026-05-26;
+// extended by amendment 2026-05-27 P2 W-2 for the multi-provider map).
 //
-// Алгоритм:
+// Algorithm:
 //
-//  1. Имя пустое → массовая инвалидация: re-spawn ВСЕХ зарегистрированных
-//     провайдеров (последовательно, под общим Lock). Используется при
-//     неизвестной точке мутации.
-//  2. Имя задано, в карте отсутствует → no-op без ошибки (это не наш провайдер,
-//     pub/sub-сообщение пришло от другого кластера / другой ноды с иным
-//     каталогом плагинов).
-//  3. Имя задано, в карте есть → под Lock зовёт respawner.RespawnProvider:
-//     тот закрывает старый handle и spawn-ит новый. При успехе подменяет
-//     запись; при ошибке очищает её (degraded state — последующий SendApply
-//     на этот provider вернёт ErrProviderUnknown / nil-provider).
+//  1. Empty name → mass invalidation: re-spawn ALL registered providers
+//     (sequentially, under one shared Lock). Used when the mutation's origin
+//     is unknown.
+//  2. Name given, missing from the map → no-op without an error (not our
+//     provider, the pub/sub message came from another cluster / another
+//     node with a different plugin catalog).
+//  3. Name given, present in the map → under Lock calls
+//     respawner.RespawnProvider: it closes the old handle and spawns a new
+//     one. On success it swaps the entry; on error it clears it (degraded
+//     state — a subsequent SendApply for this provider will return
+//     ErrProviderUnknown / nil-provider).
 //
-// Возвращает ErrRespawnNotSupported, если Respawner не сконфигурирован.
+// Returns ErrRespawnNotSupported if Respawner isn't configured.
 func (d *SshDispatcher) RefreshProvider(ctx context.Context, providerName string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -253,8 +262,8 @@ func (d *SshDispatcher) RefreshProvider(ctx context.Context, providerName string
 	}
 
 	if providerName == "" {
-		// Массовая инвалидация: проходим по всем именам. Ошибка на одном
-		// провайдере не прерывает остальных — каждый идёт независимо.
+		// Mass invalidation: iterate over all names. An error on one provider
+		// doesn't stop the rest — each goes independently.
 		var firstErr error
 		for name := range d.deps.Providers {
 			if err := d.respawnOneLocked(ctx, name); err != nil && firstErr == nil {
@@ -264,23 +273,24 @@ func (d *SshDispatcher) RefreshProvider(ctx context.Context, providerName string
 		return firstErr
 	}
 
-	// Не наш провайдер — no-op (multi-provider routing: другие SshDispatcher-ы
-	// не существуют в текущей раскладке, но защитимся от чужих pub/sub-сообщений).
+	// Not our provider — no-op (multi-provider routing: other SshDispatchers
+	// don't exist in the current layout, but let's guard against foreign
+	// pub/sub messages anyway).
 	if _, ok := d.deps.Providers[providerName]; !ok {
 		return nil
 	}
 	return d.respawnOneLocked(ctx, providerName)
 }
 
-// respawnOneLocked — re-spawn одной записи карты. Caller обязан держать
-// d.mu.Lock (не RLock).
+// respawnOneLocked — re-spawns one map entry. The caller must hold d.mu.Lock
+// (not RLock).
 func (d *SshDispatcher) respawnOneLocked(ctx context.Context, name string) error {
 	old := d.deps.Providers[name]
 	newProv, newCloser, err := d.deps.Respawner.RespawnProvider(ctx, name, old.Closer)
 	if err != nil {
-		// degraded state: удаляем запись, чтобы последующий SendApply вернул
-		// ErrProviderUnknown с понятным сообщением (а не nil-deref). respawner
-		// уже закрыл старый handle (документированный контракт).
+		// degraded state: remove the entry so a subsequent SendApply returns
+		// ErrProviderUnknown with a clear message (instead of a nil-deref). The
+		// respawner has already closed the old handle (a documented contract).
 		delete(d.deps.Providers, name)
 		return fmt.Errorf("push: re-spawn provider %q: %w", name, err)
 	}
@@ -290,32 +300,35 @@ func (d *SshDispatcher) respawnOneLocked(ctx context.Context, name string) error
 	return nil
 }
 
-// ErrRespawnNotSupported — sentinel-ошибка [SshDispatcher.RefreshProvider]:
-// диспетчер собран без ProviderRespawner (single-instance dev / unit-тесты).
-// Caller (daemon listener) трактует её как «нечего обновлять» и продолжает.
+// ErrRespawnNotSupported — sentinel error for [SshDispatcher.RefreshProvider]:
+// the dispatcher was built without a ProviderRespawner (single-instance dev /
+// unit tests). The caller (daemon listener) treats it as "nothing to update"
+// and carries on.
 var ErrRespawnNotSupported = errors.New("push: ProviderRespawner not configured")
 
-// ErrProviderUnknown — sentinel-ошибка SendApply/Cleanup: providerName не
-// зарегистрирован в карте (routing-промах, либо предыдущий RefreshProvider
-// перевёл запись в degraded state из-за spawn-fail).
+// ErrProviderUnknown — sentinel error for SendApply/Cleanup: providerName
+// isn't registered in the map (a routing miss, or a previous RefreshProvider
+// pushed the entry into degraded state due to a spawn failure).
 //
-// pushorch.PushRun на этой ошибке помечает per-host status="error" с
+// On this error, pushorch.PushRun marks the per-host status="error" with
 // error_code="ssh_provider_unavailable: <name>".
 var ErrProviderUnknown = errors.New("push: SshProvider not registered")
 
-// SendApply исполняет прогон на push-хосте по SSH синхронно: lookup provider
-// по имени → резолв target → проверка transport=ssh → ephemeral keypair →
-// Authorize → Sign(pubkey) → connect (CA-host-cert verify) → `soul apply`
-// со stdin=ApplyRequest → разбор NDJSON-stdout → RunResult.
+// SendApply executes a run on a push host over SSH synchronously: lookup the
+// provider by name → resolve the target → check transport=ssh → ephemeral
+// keypair → Authorize → Sign(pubkey) → connect (CA-host-cert verify) →
+// `soul apply` with stdin=ApplyRequest → parse NDJSON stdout → RunResult.
 //
-// providerName — имя SshProvider-плагина (резолвится pushorch.ProviderRouter-ом
-// до вызова). Пустая строка либо не зарегистрированное имя → ErrProviderUnknown.
+// providerName — the SshProvider plugin name (resolved by
+// pushorch.ProviderRouter before the call). An empty string or an
+// unregistered name → ErrProviderUnknown.
 //
-// Возврат:
-//   - (*RunResult, nil) — прогон доехал до RunResult (его status может быть
-//     FAILED — это валидный итог, не ошибка транспорта).
-//   - (nil, ошибка) — сбой ДО RunResult: ErrProviderUnknown, deny Authorize,
-//     fail connect/Sign, обрыв до RunResult, битый NDJSON.
+// Returns:
+//   - (*RunResult, nil) — the run reached a RunResult (its status can be
+//     FAILED — that's a valid outcome, not a transport error).
+//   - (nil, error) — failure BEFORE a RunResult: ErrProviderUnknown, an
+//     Authorize deny, a connect/Sign failure, a cut-off before RunResult, a
+//     malformed NDJSON.
 func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName string, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
 	if req == nil {
 		return nil, errors.New("push: ApplyRequest is nil")
@@ -334,7 +347,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 		slog.String("ssh_provider", providerName),
 	)
 
-	// Предусловие: диспетчер обслуживает ТОЛЬКО transport=ssh.
+	// Precondition: the dispatcher only serves transport=ssh.
 	s, err := d.deps.Souls.SelectBySID(ctx, sid)
 	if err != nil {
 		return nil, fmt.Errorf("push: резолв soul %s: %w", sid, err)
@@ -350,7 +363,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 
 	prov := entry.Provider
 
-	// Authorize — fail-closed: deny прекращает прогон до connect-а.
+	// Authorize — fail-closed: a deny stops the run before connect.
 	authReply, err := prov.Authorize(ctx, &pluginv1.AuthorizeRequest{
 		Host: target.Host,
 		User: target.User,
@@ -362,8 +375,9 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 		return nil, fmt.Errorf("push: Authorize отказал для %s@%s: %s", target.User, target.Host, authReply.GetReason())
 	}
 
-	// Ephemeral keypair: Keeper-side ed25519-пара per-session. Pubkey уезжает
-	// в SignRequest для CA-провайдеров. Приватник НИКОГДА не покидает Keeper.
+	// Ephemeral keypair: a Keeper-side ed25519 pair per session. The pubkey
+	// goes out in SignRequest for CA providers. The private key NEVER leaves
+	// Keeper.
 	ephSigner, ephPubAuthorized, err := newEphemeralEd25519()
 	if err != nil {
 		return nil, fmt.Errorf("push: генерация ephemeral keypair %s: %w", sid, err)
@@ -431,11 +445,11 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	return rr, nil
 }
 
-// Cleanup открывает SSH-сессию к хосту sid и удаляет соул-артефакты
-// (`/var/lib/soul-stack/{bin,modules}/`) через [Cleaner].
+// Cleanup opens an SSH session to host sid and removes soul artifacts
+// (`/var/lib/soul-stack/{bin,modules}/`) via [Cleaner].
 //
-// providerName — то же имя SshProvider-плагина, что использовалось в
-// предшествующем SendApply (caller сохраняет соответствие в push_runs.summary).
+// providerName — the same SshProvider plugin name used in the preceding
+// SendApply (the caller keeps the correspondence in push_runs.summary).
 func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName string) error {
 	if d.deps.Cleaner == nil {
 		return errors.New("push: Cleaner не сконфигурирован")
@@ -524,15 +538,15 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 	return nil
 }
 
-// authMethodsFromSign конвертирует SignReply в ssh.AuthMethod-ы. Поддерживает
-// два режима (PM-decision SSH key-ownership):
+// authMethodsFromSign converts a SignReply into ssh.AuthMethod values.
+// Supports two modes (PM-decision SSH key-ownership):
 //
-//   - Keeper-ephemeral (Vault SSH CA, канонический для CA-провайдеров): плагин
-//     возвращает только certificate, private_key="". Подписант — ephemeral
-//     keypair Keeper-а. Cert + ephSigner → ssh.NewCertSigner.
+//   - Keeper-ephemeral (Vault SSH CA, the canonical mode for CA providers):
+//     the plugin returns only a certificate, private_key="". The signer is
+//     Keeper's ephemeral keypair. Cert + ephSigner → ssh.NewCertSigner.
 //
-//   - Static-flow (соул-ssh-static): плагин владеет ключом и возвращает готовую
-//     пару (private_key непуст). ephSigner игнорируется.
+//   - Static flow (soul-ssh-static): the plugin owns the key and returns a
+//     ready-made pair (private_key non-empty). ephSigner is ignored.
 func authMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh.AuthMethod, error) {
 	if reply.GetPrivateKey() != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(reply.GetPrivateKey()))
@@ -563,8 +577,9 @@ func authMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh
 	return []ssh.AuthMethod{ssh.PublicKeys(certSigner)}, nil
 }
 
-// certSignerFrom разбирает OpenSSH-cert в текстовом виде и склеивает с signer-ом
-// в ssh.CertSigner. Используется обоими flow-ами (static с cert / ephemeral).
+// certSignerFrom parses a text-form OpenSSH cert and combines it with a
+// signer into an ssh.CertSigner. Used by both flows (static with cert /
+// ephemeral).
 func certSignerFrom(certText string, signer ssh.Signer) (ssh.Signer, error) {
 	pub, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(certText))
 	if perr != nil {
@@ -581,10 +596,10 @@ func certSignerFrom(certText string, signer ssh.Signer) (ssh.Signer, error) {
 	return certSigner, nil
 }
 
-// newEphemeralEd25519 генерирует свежий ed25519-keypair per-session и
-// возвращает (signer, marshaled-pubkey в OpenSSH authorized_keys-формате).
+// newEphemeralEd25519 generates a fresh ed25519 keypair per session and
+// returns (signer, marshaled pubkey in OpenSSH authorized_keys format).
 //
-// SENSITIVE: приватник остаётся ТОЛЬКО внутри возвращённого signer-а.
+// SENSITIVE: the private key stays ONLY inside the returned signer.
 func newEphemeralEd25519() (ssh.Signer, string, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -602,13 +617,14 @@ func newEphemeralEd25519() (ssh.Signer, string, error) {
 	return signer, authorized, nil
 }
 
-// soulApplyCommand строит команду запуска oneshot-applier на хосте.
-// stdin=protojson ApplyRequest подаётся отдельно (Session.Run), stdout=NDJSON.
+// soulApplyCommand builds the command to start the oneshot applier on the
+// host. stdin=protojson ApplyRequest is fed separately (Session.Run),
+// stdout=NDJSON.
 func soulApplyCommand(soulPath string) string {
 	return soulPath + " apply"
 }
 
-// onHostCAMatch — callback из `hostCertCallback` при матче host-CA.
+// onHostCAMatch — callback from `hostCertCallback` on a host-CA match.
 func (d *SshDispatcher) onHostCAMatch(caName string) {
 	if d.deps.Logger != nil {
 		d.deps.Logger.Debug("push: host CA matched", slog.String("ca_name", caName))

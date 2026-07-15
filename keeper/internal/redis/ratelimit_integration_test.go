@@ -1,13 +1,15 @@
 //go:build integration
 
-// Integration-тест Tempo token-bucket (ADR-050) на реальном redis:7 через
-// testcontainers-go. Реальный Redis обязателен (не miniredis): примитив
-// читает время через `redis.call("TIME")`, а miniredis-Lua не эмулирует
-// рефилл-во-времени корректно — тесты refill/atomicity потеряли бы смысл.
+// Integration test for the Tempo token bucket (ADR-050) against a real
+// redis:7 via testcontainers-go. A real Redis is required (not miniredis):
+// the primitive reads time via `redis.call("TIME")`, and miniredis's Lua
+// doesn't emulate refill-over-time correctly — the refill/atomicity tests
+// would lose their meaning.
 //
-// Контейнер и `integrationAddr` поднимает общий TestMain (integration_test.go).
+// The container and `integrationAddr` are set up by the shared TestMain
+// (integration_test.go).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && TESTCONTAINERS_RYUK_DISABLED=true \
 //	    SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
@@ -40,25 +42,26 @@ func newTokenBucketInt(t *testing.T) *TokenBucket {
 	return tb
 }
 
-// uniqueAID — уникальный AID на тест, чтобы бакеты тестов не пересекались
-// в общем Redis-контейнере.
+// uniqueAID returns a unique AID per test so test buckets don't collide in
+// the shared Redis container.
 func uniqueAID(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("archon-test-%s", t.Name())
 }
 
-// TestIntegration_TokenBucket_BurstThenSustained — burst пропускается целиком,
-// дальше (без рефилла) запросы режутся с положительным retryAfter.
+// TestIntegration_TokenBucket_BurstThenSustained — the burst is let through
+// in full, then (without refill) requests are cut off with a positive
+// retryAfter.
 func TestIntegration_TokenBucket_BurstThenSustained(t *testing.T) {
 	tb := newTokenBucketInt(t)
 	ctx := context.Background()
 
-	const rate = 1.0 // 1 токен/сек — рефилл медленный, в окне теста незаметен
+	const rate = 1.0 // 1 token/sec — refill is slow, unnoticeable within the test window
 	const burst = 5
 
 	aid := uniqueAID(t)
 
-	// Первые burst запросов проходят.
+	// The first burst requests go through.
 	for i := 0; i < burst; i++ {
 		allowed, retry, err := tb.Allow(ctx, aid, "voyage_create", rate, burst)
 		if err != nil {
@@ -72,7 +75,7 @@ func TestIntegration_TokenBucket_BurstThenSustained(t *testing.T) {
 		}
 	}
 
-	// burst+1 — бакет пуст, deny + положительный retryAfter.
+	// burst+1 — bucket empty, deny + positive retryAfter.
 	allowed, retry, err := tb.Allow(ctx, aid, "voyage_create", rate, burst)
 	if err != nil {
 		t.Fatalf("Allow over burst: %v", err)
@@ -83,24 +86,24 @@ func TestIntegration_TokenBucket_BurstThenSustained(t *testing.T) {
 	if retry <= 0 {
 		t.Fatalf("Allow over burst: retryAfter должен быть > 0, got %v", retry)
 	}
-	// При rate=1 до следующего токена ~1с; допускаем небольшой разброс.
+	// At rate=1, the next token is ~1s away; allow some slack.
 	if retry > 2*time.Second {
 		t.Fatalf("Allow over burst: retryAfter неожиданно велик: %v", retry)
 	}
 }
 
-// TestIntegration_TokenBucket_RefillOverTime — после исчерпания бакет
-// восстанавливается во времени: подождав, снова получаем allow.
+// TestIntegration_TokenBucket_RefillOverTime — after exhaustion, the bucket
+// recovers over time: after waiting, allow succeeds again.
 func TestIntegration_TokenBucket_RefillOverTime(t *testing.T) {
 	tb := newTokenBucketInt(t)
 	ctx := context.Background()
 
-	const rate = 10.0 // 10 токенов/сек → 1 токен за 100ms
+	const rate = 10.0 // 10 tokens/sec → 1 token per 100ms
 	const burst = 2
 
 	aid := uniqueAID(t)
 
-	// Сжигаем бакет.
+	// Drain the bucket.
 	for i := 0; i < burst; i++ {
 		if allowed, _, err := tb.Allow(ctx, aid, "voyage_create", rate, burst); err != nil || !allowed {
 			t.Fatalf("Allow drain #%d: allowed=%v err=%v", i, allowed, err)
@@ -110,7 +113,7 @@ func TestIntegration_TokenBucket_RefillOverTime(t *testing.T) {
 		t.Fatalf("Allow after drain: ожидался deny, allowed=%v err=%v", allowed, err)
 	}
 
-	// Ждём заведомо больше одного интервала рефилла (1 токен = 100ms при rate=10).
+	// Wait comfortably longer than one refill interval (1 token = 100ms at rate=10).
 	time.Sleep(300 * time.Millisecond)
 
 	allowed, retry, err := tb.Allow(ctx, aid, "voyage_create", rate, burst)
@@ -122,8 +125,8 @@ func TestIntegration_TokenBucket_RefillOverTime(t *testing.T) {
 	}
 }
 
-// TestIntegration_TokenBucket_IsolationByKey — разные AID и разные bucket-имена
-// не делят один бакет.
+// TestIntegration_TokenBucket_IsolationByKey — different AIDs and different
+// bucket names don't share one bucket.
 func TestIntegration_TokenBucket_IsolationByKey(t *testing.T) {
 	tb := newTokenBucketInt(t)
 	ctx := context.Background()
@@ -134,7 +137,7 @@ func TestIntegration_TokenBucket_IsolationByKey(t *testing.T) {
 	aidA := uniqueAID(t) + "-a"
 	aidB := uniqueAID(t) + "-b"
 
-	// Сжигаем бакет AID-A полностью.
+	// Fully drain AID-A's bucket.
 	for i := 0; i < burst; i++ {
 		if allowed, _, err := tb.Allow(ctx, aidA, "voyage_create", rate, burst); err != nil || !allowed {
 			t.Fatalf("drain A #%d: allowed=%v err=%v", i, allowed, err)
@@ -144,30 +147,31 @@ func TestIntegration_TokenBucket_IsolationByKey(t *testing.T) {
 		t.Fatalf("A over burst: ожидался deny, allowed=%v err=%v", allowed, err)
 	}
 
-	// AID-B — независимый бакет, первый запрос проходит.
+	// AID-B — independent bucket, the first request goes through.
 	if allowed, _, err := tb.Allow(ctx, aidB, "voyage_create", rate, burst); err != nil || !allowed {
 		t.Fatalf("B first: ожидался allow (другой AID), allowed=%v err=%v", allowed, err)
 	}
 
-	// Тот же AID-A, но другой bucket — тоже независим.
+	// Same AID-A, but a different bucket — also independent.
 	if allowed, _, err := tb.Allow(ctx, aidA, "voyage_preview", rate, burst); err != nil || !allowed {
 		t.Fatalf("A other-bucket: ожидался allow (другой bucket), allowed=%v err=%v", allowed, err)
 	}
 }
 
-// TestIntegration_TokenBucket_CreateVsPreviewSeparate — ИНВАРИАНТ ADR-050
-// amendment 2026-06-17 через РЕАЛЬНЫЙ Redis: voyage_create и voyage_preview —
-// разные ключи `tempo:<aid>:<bucket>` для одного AID, квоту НЕ делят.
-// Исчерпание create НЕ влияет на preview, и симметрично.
+// TestIntegration_TokenBucket_CreateVsPreviewSeparate — the ADR-050
+// amendment 2026-06-17 INVARIANT via REAL Redis: voyage_create and
+// voyage_preview are different `tempo:<aid>:<bucket>` keys for the same
+// AID, and do NOT share quota. Exhausting create doesn't affect preview,
+// and symmetrically.
 func TestIntegration_TokenBucket_CreateVsPreviewSeparate(t *testing.T) {
 	tb := newTokenBucketInt(t)
 	ctx := context.Background()
 
-	const rate = 1.0 // медленный refill — в окне теста незаметен
+	const rate = 1.0 // slow refill — unnoticeable within the test window
 	const burst = 1
 	aid := uniqueAID(t)
 
-	// Сжигаем create-бакет (burst=1): первый allow, второй deny.
+	// Drain the create bucket (burst=1): first allow, second deny.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_create", rate, burst); err != nil || !allowed {
 		t.Fatalf("create #1: ожидался allow, allowed=%v err=%v", allowed, err)
 	}
@@ -175,16 +179,16 @@ func TestIntegration_TokenBucket_CreateVsPreviewSeparate(t *testing.T) {
 		t.Fatalf("create #2: ожидался deny (create исчерпан), allowed=%v err=%v", allowed, err)
 	}
 
-	// preview ТОГО ЖЕ AID нетронут исчерпанием create → проходит.
+	// preview for the SAME AID is untouched by create's exhaustion → passes.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_preview", rate, burst); err != nil || !allowed {
 		t.Fatalf("preview #1: ожидался allow — preview не делит квоту с create, allowed=%v err=%v", allowed, err)
 	}
-	// preview исчерпан собственным burst → deny.
+	// preview exhausted by its own burst → deny.
 	if allowed, _, err := tb.Allow(ctx, aid, "voyage_preview", rate, burst); err != nil || allowed {
 		t.Fatalf("preview #2: ожидался deny (собственный preview-бакет исчерпан), allowed=%v err=%v", allowed, err)
 	}
 
-	// Симметрия на свежем AID: исчерпание preview не трогает create.
+	// Symmetry on a fresh AID: exhausting preview doesn't touch create.
 	aid2 := uniqueAID(t) + "-sym"
 	if allowed, _, err := tb.Allow(ctx, aid2, "voyage_preview", rate, burst); err != nil || !allowed {
 		t.Fatalf("sym preview #1: ожидался allow, allowed=%v err=%v", allowed, err)
@@ -197,8 +201,8 @@ func TestIntegration_TokenBucket_CreateVsPreviewSeparate(t *testing.T) {
 	}
 }
 
-// TestIntegration_TokenBucket_RejectsInvalidArgs — невалидные аргументы
-// отвергаются ошибкой, не молча.
+// TestIntegration_TokenBucket_RejectsInvalidArgs — invalid arguments are
+// rejected with an error, not silently.
 func TestIntegration_TokenBucket_RejectsInvalidArgs(t *testing.T) {
 	tb := newTokenBucketInt(t)
 	ctx := context.Background()

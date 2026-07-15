@@ -60,8 +60,9 @@ func TestSubscribeServiceInvalidate_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestServiceInvalidate_RoundTrip — publish/subscribe полный цикл: подписчик с
-// чужим KID получает invalidate-сообщение со штампом At.
+// TestServiceInvalidate_RoundTrip — full publish/subscribe cycle: a
+// subscriber with a different KID receives the invalidate message with an
+// At stamp.
 func TestServiceInvalidate_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,8 +102,8 @@ func TestServiceInvalidate_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestServiceInvalidate_SelfFilter — publish с тем же origin_kid, что и selfKID
-// подписчика → игнорируется; чужой проходит.
+// TestServiceInvalidate_SelfFilter — publishing with the same origin_kid as
+// the subscriber's selfKID → ignored; a different origin gets through.
 func TestServiceInvalidate_SelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,11 +118,11 @@ func TestServiceInvalidate_SelfFilter(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Self-origin сначала — должно быть отфильтровано.
+	// Self-origin first — should be filtered out.
 	if _, err := PublishServiceInvalidate(ctx, c, "keeper-self"); err != nil {
 		t.Fatalf("PublishServiceInvalidate self: %v", err)
 	}
-	// Потом чужой — должен прийти.
+	// Then a different origin — should arrive.
 	if _, err := PublishServiceInvalidate(ctx, c, "keeper-other"); err != nil {
 		t.Fatalf("PublishServiceInvalidate other: %v", err)
 	}
@@ -135,18 +136,18 @@ func TestServiceInvalidate_SelfFilter(t *testing.T) {
 		t.Fatal("did not receive other-origin message within 2s")
 	}
 
-	// Self не должен прийти дополнительно.
+	// Self shouldn't arrive as an extra message.
 	select {
 	case got, ok := <-sub.Channel():
 		if ok {
 			t.Errorf("unexpected extra message: origin_kid = %q", got.OriginKID)
 		}
 	case <-time.After(150 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered out.
 	}
 }
 
-// TestServiceInvalidate_NoSubscribers — publish без подписчиков → 0, без ошибки.
+// TestServiceInvalidate_NoSubscribers — publish with no subscribers → 0, no error.
 func TestServiceInvalidate_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -160,8 +161,8 @@ func TestServiceInvalidate_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestServiceInvalidate_CloseShutsDownGoroutine — Close завершает goroutine и
-// закрывает out-канал; повторный Close идемпотентен.
+// TestServiceInvalidate_CloseShutsDownGoroutine — Close terminates the
+// goroutine and closes the out channel; a repeated Close is idempotent.
 func TestServiceInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -190,8 +191,8 @@ func TestServiceInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestServiceInvalidate_CloseSurvivesConcurrentReceive — гонка Close vs поток
-// данных. -race должен пройти.
+// TestServiceInvalidate_CloseSurvivesConcurrentReceive — a race between
+// Close and the data stream. -race must pass.
 func TestServiceInvalidate_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

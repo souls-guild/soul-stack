@@ -60,8 +60,8 @@ func TestSubscribeRBACInvalidate_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestRBACInvalidate_RoundTrip — publish/subscribe полный цикл: подписчик с
-// чужим KID получает invalidate-сообщение со штампом At.
+// TestRBACInvalidate_RoundTrip — full publish/subscribe cycle: a subscriber
+// with a different KID receives the invalidate message with an At stamp.
 func TestRBACInvalidate_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,8 +101,8 @@ func TestRBACInvalidate_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestRBACInvalidate_SelfFilter — publish с тем же origin_kid, что и selfKID
-// подписчика → игнорируется; чужой проходит.
+// TestRBACInvalidate_SelfFilter — publishing with the same origin_kid as the
+// subscriber's selfKID → ignored; a different origin gets through.
 func TestRBACInvalidate_SelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,11 +117,11 @@ func TestRBACInvalidate_SelfFilter(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Self-origin сначала — должно быть отфильтровано.
+	// Self-origin first — should be filtered out.
 	if _, err := PublishRBACInvalidate(ctx, c, "keeper-self"); err != nil {
 		t.Fatalf("PublishRBACInvalidate self: %v", err)
 	}
-	// Потом чужой — должен прийти.
+	// Then a different origin — should arrive.
 	if _, err := PublishRBACInvalidate(ctx, c, "keeper-other"); err != nil {
 		t.Fatalf("PublishRBACInvalidate other: %v", err)
 	}
@@ -135,18 +135,18 @@ func TestRBACInvalidate_SelfFilter(t *testing.T) {
 		t.Fatal("did not receive other-origin message within 2s")
 	}
 
-	// Self не должен прийти дополнительно.
+	// Self shouldn't arrive as an extra message.
 	select {
 	case got, ok := <-sub.Channel():
 		if ok {
 			t.Errorf("unexpected extra message: origin_kid = %q", got.OriginKID)
 		}
 	case <-time.After(150 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered out.
 	}
 }
 
-// TestRBACInvalidate_NoSubscribers — publish без подписчиков → 0, без ошибки.
+// TestRBACInvalidate_NoSubscribers — publish with no subscribers → 0, no error.
 func TestRBACInvalidate_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -160,8 +160,8 @@ func TestRBACInvalidate_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestRBACInvalidate_CloseShutsDownGoroutine — Close завершает goroutine и
-// закрывает out-канал; повторный Close идемпотентен.
+// TestRBACInvalidate_CloseShutsDownGoroutine — Close terminates the goroutine
+// and closes the out channel; a repeated Close is idempotent.
 func TestRBACInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -190,8 +190,8 @@ func TestRBACInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestRBACInvalidate_CloseSurvivesConcurrentReceive — гонка Close vs поток
-// данных. -race должен пройти.
+// TestRBACInvalidate_CloseSurvivesConcurrentReceive — a race between Close
+// and the data stream. -race must pass.
 func TestRBACInvalidate_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

@@ -1,12 +1,14 @@
 //go:build integration
 
-// Integration-тест LoginGuard anti-bruteforce-примитива (ADR-058(g), HIGH-3) на
-// реальном redis:7 через testcontainers-go. Реальный Redis обязателен (Lua
-// TIME/INCR/PEXPIRE/SET PX): miniredis не эмулирует это корректно.
+// Integration test for the LoginGuard anti-bruteforce primitive (ADR-058(g),
+// HIGH-3) against a real redis:7 via testcontainers-go. Real Redis is
+// required (Lua TIME/INCR/PEXPIRE/SET PX): miniredis doesn't emulate this
+// correctly.
 //
-// Контейнер и integrationAddr поднимает общий TestMain (integration_test.go).
+// The container and integrationAddr are set up by the shared TestMain
+// (integration_test.go).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && TESTCONTAINERS_RYUK_DISABLED=true \
 //	    SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
@@ -42,8 +44,8 @@ func uniquePrincipal(t *testing.T) string {
 	return fmt.Sprintf("p-%s", t.Name())
 }
 
-// TestIntegration_LoginGuard_LockoutAfterThreshold — порог неудач достигается на
-// threshold-й RecordFailure → Locked=true; до порога Locked=false.
+// TestIntegration_LoginGuard_LockoutAfterThreshold — the failure threshold is
+// reached on the threshold-th RecordFailure → Locked=true; before that, Locked=false.
 func TestIntegration_LoginGuard_LockoutAfterThreshold(t *testing.T) {
 	g := newLoginGuardInt(t)
 	ctx := context.Background()
@@ -52,7 +54,7 @@ func TestIntegration_LoginGuard_LockoutAfterThreshold(t *testing.T) {
 	const window = time.Minute
 	const lockout = time.Minute
 
-	// До порога — не заблокирован.
+	// Below the threshold — not locked.
 	for i := 1; i < threshold; i++ {
 		lockedNow, err := g.RecordFailure(ctx, "ip", principal, threshold, window, lockout)
 		if err != nil {
@@ -66,7 +68,7 @@ func TestIntegration_LoginGuard_LockoutAfterThreshold(t *testing.T) {
 		}
 	}
 
-	// threshold-я неудача → блокировка.
+	// The threshold-th failure → lockout.
 	lockedNow, err := g.RecordFailure(ctx, "ip", principal, threshold, window, lockout)
 	if err != nil {
 		t.Fatalf("RecordFailure threshold: %v", err)
@@ -86,7 +88,7 @@ func TestIntegration_LoginGuard_LockoutAfterThreshold(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoginGuard_NotLockedFresh — неизвестный принципал не заблокирован.
+// TestIntegration_LoginGuard_NotLockedFresh — an unknown principal is not locked.
 func TestIntegration_LoginGuard_NotLockedFresh(t *testing.T) {
 	g := newLoginGuardInt(t)
 	locked, _, err := g.Locked(context.Background(), "user", uniquePrincipal(t))
@@ -98,8 +100,8 @@ func TestIntegration_LoginGuard_NotLockedFresh(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoginGuard_ThrottleBurst — burst попыток проходит, дальше — 429
-// (allowed=false с retryAfter). Параллель TokenBucket, отдельный key-prefix.
+// TestIntegration_LoginGuard_ThrottleBurst — a burst of attempts passes, then
+// 429 (allowed=false with retryAfter). Parallels TokenBucket, separate key prefix.
 func TestIntegration_LoginGuard_ThrottleBurst(t *testing.T) {
 	g := newLoginGuardInt(t)
 	ctx := context.Background()

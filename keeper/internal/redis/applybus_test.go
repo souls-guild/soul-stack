@@ -12,13 +12,14 @@ import (
 	"time"
 )
 
-// crockfordULIDAlphabet — алфавит Crockford-base32 как в ULID (без I/L/O/U).
+// crockfordULIDAlphabet is the Crockford-base32 alphabet used by ULID (no I/L/O/U).
 const crockfordULIDAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-// randULID генерирует 26-символьную ULID-подобную строку (тот же алфавит и
-// длина, что у реальных applyID). Для теста распределения важна лишь форма и
-// энтропия, не монотонность времени — поэтому самодостаточно, без внешней
-// зависимости (не тянем oklog/ulid в direct-импорт redis-модуля).
+// randULID generates a 26-character ULID-like string (same alphabet and
+// length as real applyIDs). The distribution test only cares about shape and
+// entropy, not time monotonicity — so this is self-contained, with no
+// external dependency (avoids pulling oklog/ulid into a direct import of the
+// redis module).
 func randULID(t *testing.T) string {
 	t.Helper()
 	var raw [26]byte
@@ -39,7 +40,7 @@ func TestApplyBusChannel(t *testing.T) {
 	if got != want {
 		t.Fatalf("ApplyBusChannel = %q, want %q", got, want)
 	}
-	// Префикс — events (закрыт TODO-rename apply:→events:), индекс в диапазоне.
+	// Prefix is events (the TODO-rename apply:→events: is done), index in range.
 	if !strings.HasPrefix(got, "events:shard:") {
 		t.Errorf("channel %q must use events:shard: prefix", got)
 	}
@@ -48,14 +49,14 @@ func TestApplyBusChannel(t *testing.T) {
 	}
 }
 
-// TestApplyBusChannel_DeterministicShard — guard на детерминизм shard-резолва
-// и его равномерность по K шардам на выборке ULID. Детерминизм критичен:
-// publisher и subscriber на разных Keeper-инстансах обязаны вычислить ОДИН
-// shard-канал для одного applyID, иначе cross-keeper-доставка не сойдётся.
-// Равномерность — обоснование выбора K=256: при перекосе hot-shard свёл бы
-// шардирование на нет.
+// TestApplyBusChannel_DeterministicShard — guards the determinism of shard
+// resolution and its uniformity across K shards on a ULID sample. Determinism
+// is critical: publisher and subscriber on different Keeper instances must
+// compute the SAME shard channel for the same applyID, or cross-keeper
+// delivery won't line up. Uniformity justifies choosing K=256: a skewed hot
+// shard would defeat the point of sharding.
 func TestApplyBusChannel_DeterministicShard(t *testing.T) {
-	// (1) Детерминизм: один applyID → один и тот же канал и индекс.
+	// (1) Determinism: one applyID → the same channel and index every time.
 	const sample = "01J0DETERMINISTICSHARD000A"
 	idx0 := ApplyBusShardIndex(sample)
 	ch0 := ApplyBusChannel(sample)
@@ -68,7 +69,7 @@ func TestApplyBusChannel_DeterministicShard(t *testing.T) {
 		}
 	}
 
-	// (2) Все индексы в диапазоне [0, K) и канал согласован с индексом.
+	// (2) All indexes are in range [0, K) and the channel matches the index.
 	const n = 50000
 	hits := make([]int, ApplyBusShardCount)
 	for i := 0; i < n; i++ {
@@ -83,9 +84,9 @@ func TestApplyBusChannel_DeterministicShard(t *testing.T) {
 		hits[idx]++
 	}
 
-	// (3) Равномерность: ни один shard не пустой и не «горячий». Идеал —
-	// n/K попаданий на shard; допускаем ±60% коридор (запас на дисперсию
-	// случайной выборки, без статистического χ², чтобы не флакать).
+	// (3) Uniformity: no shard is empty or "hot". Ideal is n/K hits per
+	// shard; we allow a ±60% corridor (headroom for random-sample variance,
+	// no statistical χ² test, to avoid flakiness).
 	ideal := float64(n) / float64(ApplyBusShardCount)
 	lo, hi := ideal*0.4, ideal*1.6
 	for i, h := range hits {
@@ -153,8 +154,8 @@ func TestSubscribeApplyEvent_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestApplyBus_RoundTrip — publish/subscribe полный цикл. Подписчик
-// должен получить ApplyEvent с восстановленным kind/applyID/payload.
+// TestApplyBus_RoundTrip — full publish/subscribe cycle. The subscriber
+// must receive an ApplyEvent with kind/applyID/payload reconstructed.
 func TestApplyBus_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -207,8 +208,8 @@ func TestApplyBus_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestApplyBus_SelfFilter — publish с тем же origin_kid, что и selfKID
-// подписчика → сообщение игнорируется.
+// TestApplyBus_SelfFilter — publish with the same origin_kid as the
+// subscriber's selfKID → the message is ignored.
 func TestApplyBus_SelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -224,11 +225,11 @@ func TestApplyBus_SelfFilter(t *testing.T) {
 	}
 
 	payload := json.RawMessage(`{"x":1}`)
-	// Self-origin сначала.
+	// Self-origin first.
 	if _, err := PublishApplyEvent(ctx, c, "id", "keeper-self", "task.executed", time.Time{}, payload); err != nil {
 		t.Fatalf("PublishApplyEvent self: %v", err)
 	}
-	// Потом other-origin — оно должно прийти.
+	// Then other-origin — it must arrive.
 	if _, err := PublishApplyEvent(ctx, c, "id", "keeper-other", "apply.completed", time.Time{}, payload); err != nil {
 		t.Fatalf("PublishApplyEvent other: %v", err)
 	}
@@ -242,19 +243,19 @@ func TestApplyBus_SelfFilter(t *testing.T) {
 		t.Fatal("did not receive other-origin message within 2s")
 	}
 
-	// Self не должен прийти дополнительно.
+	// Self must not arrive as an extra message.
 	select {
 	case got, ok := <-sub.Channel():
 		if ok {
 			t.Errorf("unexpected extra message: kind = %q", got.Kind)
 		}
 	case <-time.After(150 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered out.
 	}
 }
 
-// TestApplyBus_NoSubscribers — PublishApplyEvent без подписчиков
-// возвращает 0 без ошибки.
+// TestApplyBus_NoSubscribers — PublishApplyEvent with no subscribers
+// returns 0 with no error.
 func TestApplyBus_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -268,8 +269,8 @@ func TestApplyBus_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestApplyBus_CloseShutsDownGoroutine — Close корректно завершает
-// goroutine и закрывает out-канал.
+// TestApplyBus_CloseShutsDownGoroutine — Close correctly terminates the
+// goroutine and closes the out-channel.
 func TestApplyBus_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -300,8 +301,8 @@ func TestApplyBus_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestApplyBus_CloseSurvivesConcurrentReceive — гонка между внешним
-// Close и потоком данных. -race должен пройти.
+// TestApplyBus_CloseSurvivesConcurrentReceive — race between an external
+// Close and the data stream. -race must pass.
 func TestApplyBus_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -329,7 +330,7 @@ func TestApplyBus_CloseSurvivesConcurrentReceive(t *testing.T) {
 	}
 }
 
-// TestPublishApplyEvent_StampsAtIfZero — at.IsZero подменяется на
+// TestPublishApplyEvent_StampsAtIfZero — at.IsZero gets replaced with
 // time.Now().UTC().
 func TestPublishApplyEvent_StampsAtIfZero(t *testing.T) {
 	c, _ := newClientMR(t)
@@ -359,19 +360,22 @@ func TestPublishApplyEvent_StampsAtIfZero(t *testing.T) {
 	}
 }
 
-// TestApplyBus_ForwardBufferOverflowDropsOldest — guard на shard-side
-// forward-буфер (`s.out`, размер applyEventSubBufferSize). Подписчик НЕ
-// дренирует Channel(); в shard-канал заливается >applyEventSubBufferSize
-// cross-origin сообщений с монотонным seq в payload. Инварианты:
+// TestApplyBus_ForwardBufferOverflowDropsOldest — guards the shard-side
+// forward buffer (`s.out`, sized applyEventSubBufferSize). The subscriber
+// does NOT drain Channel(); the shard channel is flooded with
+// >applyEventSubBufferSize cross-origin messages carrying a monotonic seq in
+// the payload. Invariants:
 //
-//	(а) publisher (PublishApplyEvent) НЕ блокируется на полном буфере;
-//	(б) forward-loop не паникует;
-//	(в) лишние события дропаются (в дренаже не больше buffer событий);
-//	(г) drop-OLDEST: сохраняется NEWEST — последний seq доезжает,
-//	    первые отброшены (симметрично applybus TestBufferOverflowDropsOldest).
+//	(a) the publisher (PublishApplyEvent) does NOT block on a full buffer;
+//	(b) the forward-loop does not panic;
+//	(c) excess events are dropped (draining yields no more than buffer events);
+//	(d) drop-OLDEST: NEWEST survives — the last seq makes it through, the
+//	    earliest ones are discarded (symmetric with applybus
+//	    TestBufferOverflowDropsOldest).
 //
-// origin отличен от selfKID, иначе self-filter отбросил бы всё ещё в
-// forward-loop-е (см. doc-comment про echo собственных публикаций).
+// origin differs from selfKID, otherwise the self-filter would have dropped
+// everything in the forward-loop already (see the doc-comment about echoing
+// a node's own publishes).
 func TestApplyBus_ForwardBufferOverflowDropsOldest(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -386,23 +390,23 @@ func TestApplyBus_ForwardBufferOverflowDropsOldest(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Заливаем buffer + запас, НЕ читая Channel(). seq монотонно растёт —
-	// после drop-oldest должен сохраниться хвост (наибольшие seq).
+	// Flood buffer + headroom, WITHOUT reading Channel(). seq grows
+	// monotonically — after drop-oldest the tail (largest seq) should survive.
 	total := applyEventSubBufferSize + 32
 	for i := 0; i < total; i++ {
 		payload := json.RawMessage(fmt.Sprintf(`{"seq":%d}`, i))
-		// (а) publisher не должен блокироваться, даже когда forward-буфер полон.
+		// (a) the publisher must not block, even when the forward buffer is full.
 		if _, err := PublishApplyEvent(ctx, c, "01JOVERFLOW", "keeper-other", "task.executed", time.Time{}, payload); err != nil {
 			t.Fatalf("PublishApplyEvent seq=%d: %v (publisher blocked or errored on full buffer)", i, err)
 		}
 	}
 
-	// Даём forward-loop-у разгрести Redis-очередь в s.out (с дропами).
-	// Поллим до стабилизации: длина канала перестаёт расти и достигла предела.
+	// Let the forward-loop drain the Redis queue into s.out (with drops).
+	// Poll until it stabilizes: channel length stops growing and hits its cap.
 	waitForStable(t, 3*time.Second, func() int { return len(sub.Channel()) })
 
-	// (в)+(г) Дренируем без блокировки. Не больше buffer событий; последний
-	// seq присутствует (newest сохранён), а начальные seq отброшены.
+	// (c)+(d) Drain without blocking. No more than buffer events; the last
+	// seq is present (newest survived), and the earliest seqs are dropped.
 	var got []int
 drain:
 	for {
@@ -429,19 +433,19 @@ drain:
 	if len(got) > applyEventSubBufferSize {
 		t.Fatalf("forwarded %d events, want <= %d (buffer not bounded)", len(got), applyEventSubBufferSize)
 	}
-	// (г) newest сохранён: последний опубликованный seq доехал.
+	// (d) newest survived: the last published seq made it through.
 	last := got[len(got)-1]
 	if last != total-1 {
 		t.Errorf("newest forwarded seq = %d, want %d (drop-oldest semantics: freshest must survive)", last, total-1)
 	}
-	// (г) старейшие отброшены: seq=0 не должен пережить overflow при buffer<total.
+	// (d) oldest were dropped: seq=0 must not survive overflow when buffer<total.
 	for _, s := range got {
 		if s == 0 {
 			t.Errorf("oldest seq=0 survived overflow — drop-newest leaked instead of drop-oldest")
 			break
 		}
 	}
-	// (б) Подписка ещё жива (forward-loop не упал паникой): новый publish доходит.
+	// (b) the subscription is still alive (forward-loop didn't panic): a new publish gets through.
 	if _, err := PublishApplyEvent(ctx, c, "01JOVERFLOW", "keeper-other", "apply.completed", time.Time{}, json.RawMessage(`{"seq":-1}`)); err != nil {
 		t.Fatalf("post-overflow PublishApplyEvent: %v", err)
 	}
@@ -458,9 +462,9 @@ drain:
 	}
 }
 
-// waitForStable поллит size() пока значение не перестанет расти между двумя
-// замерами (или таймаут). Для async Redis-pubsub: ждём, пока forward-loop
-// дойдёт до своего bounded-предела на полном буфере.
+// waitForStable polls size() until the value stops growing between two
+// consecutive reads (or times out). For async Redis pub/sub: we wait for the
+// forward-loop to reach its bounded limit on a full buffer.
 func waitForStable(t *testing.T, timeout time.Duration, size func() int) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -481,7 +485,7 @@ func waitForStable(t *testing.T, timeout time.Duration, size func() int) {
 	}
 }
 
-// TestPublishApplyEvent_PreservesNonZeroAt — переданный at сохраняется.
+// TestPublishApplyEvent_PreservesNonZeroAt — a passed-in at is preserved.
 func TestPublishApplyEvent_PreservesNonZeroAt(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

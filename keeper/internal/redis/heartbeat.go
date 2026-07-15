@@ -1,24 +1,25 @@
 package redis
 
-// Heartbeat-кэш Soul-агентов в Redis (ADR-006(a) →
-// docs/keeper/storage.md — роль (a) Heartbeat-кэш).
+// Heartbeat cache for Soul agents in Redis (ADR-006(a) →
+// docs/keeper/storage.md — role (a) Heartbeat cache).
 //
-// PG `souls.last_seen_at` / `last_seen_by_kid` — flush-снимок;
-// real-time значение живёт здесь. На каждое app-сообщение в
-// EventStream-е (Hello / TaskEvent / RunResult / SoulprintReport)
-// EventStream-handler пишет [TouchHeartbeat]. PG-snapshot
-// (`souls.last_seen_at`) тот же handler сбрасывает throttled —
-// не чаще раза в `stale_after/3` на каждый SID
-// (keeper/internal/grpc/heartbeat_flush.go), иначе Reaper-правило
-// `mark_disconnected` ложно метило бы живой стрим disconnected.
+// PG `souls.last_seen_at` / `last_seen_by_kid` is a flush snapshot;
+// the real-time value lives here. On every app message on the
+// EventStream (Hello / TaskEvent / RunResult / SoulprintReport) the
+// EventStream handler writes [TouchHeartbeat]. The same handler
+// flushes the PG snapshot (`souls.last_seen_at`) throttled — no more
+// than once per `stale_after/3` per SID
+// (keeper/internal/grpc/heartbeat_flush.go), otherwise the Reaper
+// rule `mark_disconnected` would falsely mark a live stream as
+// disconnected.
 //
-// Структура — Hash `soul:<sid>:hb` с полями `at` (RFC3339Nano,
-// UTC) и `kid`. Hash, а не два отдельных ключа, чтобы атомарно
-// обновлять оба поля одной командой и читать одним HGETALL при
-// flush-е. TTL не выставляется: запись живёт до явного DEL
-// (Reaper-правила `purge_souls` / `mark_disconnected`); при
-// рестарте всего Redis-а данные теряются, и flush-snapshot из PG
-// служит fallback-ом до первого нового сообщения.
+// The structure is a Hash `soul:<sid>:hb` with fields `at`
+// (RFC3339Nano, UTC) and `kid`. A Hash rather than two separate keys
+// so both fields update atomically in one command and read in one
+// HGETALL on flush. No TTL is set: the record lives until an explicit
+// DEL (Reaper rules `purge_souls` / `mark_disconnected`); a full
+// Redis restart loses the data, and the flush snapshot from PG serves
+// as a fallback until the next new message.
 
 import (
 	"context"
@@ -31,25 +32,25 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// HeartbeatKey — Redis-ключ Hash-а heartbeat-кэша конкретного SID.
+// HeartbeatKey is the Redis key of the heartbeat-cache Hash for a given SID.
 func HeartbeatKey(sid string) string { return "soul:" + sid + ":hb" }
 
-// heartbeatCapsField — поле Hash-а `soul:<sid>:hb`, хранящее анонсированный при
-// connect-е набор Soul-capabilities (ADR-056 §S5 forward-compat) — отсортированный
-// уникальный список через запятую. Лежит в том же Hash-е, что heartbeat (а не
-// отдельным ключом с собственным TTL): presence-фильтр таргет-резолвера уже
-// отбрасывает оффлайн-хосты по живому SID-lease ДО чтения caps, поэтому stale-caps
-// мёртвого хоста до Reaper-purge никого не таргетит. На Hello caps пишется ВСЕГДА
-// перезаписью (включая пустым) — иначе старый бинарь, переподключившийся после
-// нового, унаследовал бы stale-флаг "passage".
+// heartbeatCapsField is the field of the `soul:<sid>:hb` Hash holding the set of
+// Soul capabilities announced at connect time (ADR-056 §S5 forward-compat) — a
+// sorted, deduplicated, comma-joined list. It lives in the same Hash as the
+// heartbeat (not a separate key with its own TTL): the target resolver's presence
+// filter already drops offline hosts by live SID lease BEFORE reading caps, so a
+// dead host's stale caps don't target anyone until Reaper purge. On Hello, caps
+// are ALWAYS written by overwrite (including empty) — otherwise an old binary
+// reconnecting after a newer one would inherit a stale "passage" flag.
 const heartbeatCapsField = "caps"
 
-// TouchHeartbeat обновляет heartbeat-кэш для SID атомарно. Пишет
-// `at = now` (UTC, RFC3339Nano) и `kid = <kid>` одним HSET-вызовом.
+// TouchHeartbeat atomically updates the heartbeat cache for a SID. Writes
+// `at = now` (UTC, RFC3339Nano) and `kid = <kid>` in a single HSET call.
 //
-// Не возвращает ошибки на конфликт с конкурирующим writer-ом — последняя
-// запись побеждает (Soul-стрим обслуживается одним Keeper-ом одновременно
-// по [SoulLease], так что конкуренции в норме нет).
+// Does not return an error on conflict with a competing writer — last write
+// wins (a Soul stream is served by exactly one Keeper at a time via
+// [SoulLease], so there's normally no contention).
 func TouchHeartbeat(ctx context.Context, c *Client, sid, kid string, now time.Time) error {
 	if c == nil {
 		return errors.New("redis.TouchHeartbeat: nil client")
@@ -73,13 +74,14 @@ func TouchHeartbeat(ctx context.Context, c *Client, sid, kid string, now time.Ti
 	return nil
 }
 
-// SetSoulCapabilities перезаписывает набор capabilities SID-а в heartbeat-Hash-е
-// (поле [heartbeatCapsField]) одним HSET. Вызывается на Hello — ВСЕГДА, включая
-// пустой набор (явная перезапись чужого stale-флага при reconnect старого бинаря).
+// SetSoulCapabilities overwrites the SID's capability set in the heartbeat Hash
+// (field [heartbeatCapsField]) with a single HSET. Called on Hello — ALWAYS,
+// including with an empty set (explicit overwrite of a stale flag on an old
+// binary's reconnect).
 //
-// caps нормализуется (уникум, отсортирован, пустые отброшены) и сериализуется
-// comma-joined. Пустой набор пишет пустую строку — [SoulHasCapability] трактует её
-// как «нет ни одной capability» (fail-closed для фич-зависимых прогонов).
+// caps is normalized (deduplicated, sorted, empties dropped) and serialized
+// comma-joined. An empty set writes an empty string — [SoulHasCapability] treats
+// it as "no capabilities" (fail-closed for feature-dependent runs).
 func SetSoulCapabilities(ctx context.Context, c *Client, sid string, caps []string) error {
 	if c == nil {
 		return errors.New("redis.SetSoulCapabilities: nil client")
@@ -94,13 +96,15 @@ func SetSoulCapabilities(ctx context.Context, c *Client, sid string, caps []stri
 	return nil
 }
 
-// SoulHasCapability сообщает, анонсировал ли активный стрим SID-а данную
-// capability (ADR-056 §S5). Читает поле [heartbeatCapsField] одного SID-а (HGET).
+// SoulHasCapability reports whether the SID's active stream announced the given
+// capability (ADR-056 §S5). Reads the [heartbeatCapsField] field for one SID
+// (HGET).
 //
-// Отсутствие ключа/поля или пустой набор → false (fail-closed): старый Soul без
-// capability-анонса или хост, не присылавший Hello, трактуется как НЕ
-// поддерживающий фичу. Сетевой/протокольный сбой HGET → ошибка (caller — staged-
-// гейт run.go — обязан отвергнуть прогон, а не угадать поддержку).
+// Missing key/field or an empty set → false (fail-closed): an old Soul without a
+// capability announcement, or a host that never sent Hello, is treated as NOT
+// supporting the feature. A network/protocol failure of HGET → error (the
+// caller — the staged gate in run.go — must reject the run rather than guess
+// support).
 func SoulHasCapability(ctx context.Context, c *Client, sid, capability string) (bool, error) {
 	if c == nil {
 		return false, errors.New("redis.SoulHasCapability: nil client")
@@ -123,13 +127,14 @@ func SoulHasCapability(ctx context.Context, c *Client, sid, capability string) (
 	return false, nil
 }
 
-// SoulsLackingCapability — batched-проверка для набора SID-ов: возвращает
-// подмножество SID-ов, которые НЕ анонсировали данную capability (ADR-056 §S5
-// staged-гейт). Один Redis-pipeline HGET per SID (round-trip-ов O(1)).
+// SoulsLackingCapability is a batched check over a set of SIDs: returns the
+// subset of SIDs that did NOT announce the given capability (ADR-056 §S5 staged
+// gate). One Redis pipeline HGET per SID (O(1) round trips).
 //
-// SID без ключа/поля/с пустым набором попадает в результат (fail-closed). Пустой
-// `sids` → пустой результат без обращения к Redis. Ошибка pipeline → возврат
-// ошибки целиком (caller отвергает staged-прогон, не угадывает).
+// A SID with a missing key/field or an empty set ends up in the result
+// (fail-closed). Empty `sids` → empty result without hitting Redis. Pipeline
+// error → the whole call fails (the caller rejects the staged run rather than
+// guessing).
 func SoulsLackingCapability(ctx context.Context, c *Client, sids []string, capability string) ([]string, error) {
 	if c == nil {
 		return nil, errors.New("redis.SoulsLackingCapability: nil client")
@@ -152,8 +157,8 @@ func SoulsLackingCapability(ctx context.Context, c *Client, sids []string, capab
 	if len(cmds) == 0 {
 		return nil, nil
 	}
-	// Pipeline.Exec возвращает ошибку первой неуспешной команды; redis.Nil
-	// (отсутствие поля) — НЕ повод проваливать весь пакет, его разбираем per-cmd.
+	// Pipeline.Exec returns the error of the first failed command; redis.Nil
+	// (missing field) is NOT a reason to fail the whole batch — handled per-cmd.
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("redis.SoulsLackingCapability: pipeline EXEC: %w", err)
 	}
@@ -162,7 +167,7 @@ func SoulsLackingCapability(ctx context.Context, c *Client, sids []string, capab
 		v, err := p.cmd.Result()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
-				lacking = append(lacking, p.sid) // нет ключа/поля → fail-closed.
+				lacking = append(lacking, p.sid) // missing key/field → fail-closed.
 				continue
 			}
 			return nil, fmt.Errorf("redis.SoulsLackingCapability: HGET %q: %w", HeartbeatKey(p.sid), err)
@@ -174,8 +179,8 @@ func SoulsLackingCapability(ctx context.Context, c *Client, sids []string, capab
 	return lacking, nil
 }
 
-// joinCaps нормализует набор capabilities в стабильную comma-joined строку
-// (уникум, отсортирован, пустые отброшены).
+// joinCaps normalizes a capability set into a stable comma-joined string
+// (deduplicated, sorted, empties dropped).
 func joinCaps(caps []string) string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(caps))
@@ -193,7 +198,7 @@ func joinCaps(caps []string) string {
 	return strings.Join(out, ",")
 }
 
-// capsContain сообщает, есть ли capability в comma-joined-строке.
+// capsContain reports whether the capability is present in the comma-joined string.
 func capsContain(joined, capability string) bool {
 	for _, c := range strings.Split(joined, ",") {
 		if c == capability {
@@ -203,11 +208,11 @@ func capsContain(joined, capability string) bool {
 	return false
 }
 
-// ReadHeartbeat возвращает последнее значение из кэша. Полезно для
-// Operator API / диагностики; основной потребитель — будущий batch-flush.
+// ReadHeartbeat returns the latest value from the cache. Useful for the
+// Operator API / diagnostics; the main consumer is the future batch flush.
 //
-// На отсутствие ключа возвращает (time.Time{}, "", false, nil) —
-// «не было heartbeat-а», не ошибка.
+// Returns (time.Time{}, "", false, nil) if the key is missing —
+// "no heartbeat yet", not an error.
 func ReadHeartbeat(ctx context.Context, c *Client, sid string) (at time.Time, kid string, ok bool, err error) {
 	if c == nil {
 		return time.Time{}, "", false, errors.New("redis.ReadHeartbeat: nil client")
@@ -222,7 +227,7 @@ func ReadHeartbeat(ctx context.Context, c *Client, sid string) (at time.Time, ki
 	atStr := res["at"]
 	kid = res["kid"]
 	if atStr == "" || kid == "" {
-		// Битая запись (полу-записаны половины). Считаем за отсутствие.
+		// Corrupt record (partially written). Treat as absent.
 		return time.Time{}, "", false, nil
 	}
 	at, err = time.Parse(time.RFC3339Nano, atStr)

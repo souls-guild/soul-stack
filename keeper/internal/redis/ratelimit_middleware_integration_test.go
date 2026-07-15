@@ -1,22 +1,25 @@
 //go:build integration
 
-// Integration-guard-тесты Tempo (ADR-050, S-R4) НА УРОВНЕ middleware + реальный
-// Redis: HTTP-запрос проходит через apimiddleware.RateLimit поверх живого
-// *TokenBucket. Это e2e-срез (HTTP → middleware → Redis Lua-bucket), проверяющий
-// поведенческие инварианты, которые primitive-тесты (ratelimit_integration_test.go)
-// и unit-тесты middleware (api/middleware/ratelimit_test.go с fake-limiter-ом) по
-// отдельности не закрывают:
+// Tempo integration guard tests (ADR-050, S-R4) AT THE middleware LEVEL with
+// a real Redis: an HTTP request goes through apimiddleware.RateLimit on top
+// of a live *TokenBucket. This is an e2e slice (HTTP → middleware → Redis
+// Lua bucket) verifying behavioral invariants that the primitive tests
+// (ratelimit_integration_test.go) and the middleware unit tests
+// (api/middleware/ratelimit_test.go with a fake limiter) don't cover on
+// their own:
 //
-//   - per-AID когерентность через ОБЩИЙ Redis (burst исчерпан → 429; разные AID
-//     не делят bucket) — лимит авторитетен в Redis, не размножается (ADR-050(a));
-//   - fail-OPEN при недоступном Redis (limiter.Allow вернул ошибку → passthrough,
-//     НЕ 5xx, ADR-050(b));
-//   - 429 несёт Retry-After (секунды, округление вверх) + application/problem+json
-//     с type=tempo-exceeded (ADR-050(d)).
+//   - per-AID coherence through a SHARED Redis (burst exhausted → 429;
+//     different AIDs don't share a bucket) — the limit is authoritative in
+//     Redis, not multiplied (ADR-050(a));
+//   - fail-OPEN when Redis is unavailable (limiter.Allow returns an error →
+//     passthrough, NOT 5xx, ADR-050(b));
+//   - 429 carries Retry-After (seconds, rounded up) + application/problem+json
+//     with type=tempo-exceeded (ADR-050(d)).
 //
-// Контейнер и integrationAddr поднимает общий TestMain (integration_test.go).
+// The container and integrationAddr are set up by the shared TestMain
+// (integration_test.go).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && TESTCONTAINERS_RYUK_DISABLED=true \
 //	    SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
@@ -44,9 +47,10 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// tempoMWHandler собирает chi/net-http-цепочку «RateLimit(middleware) → next»
-// поверх limiter-а с фиксированными rate/burst. next отвечает 202 (как реальный
-// async-create Voyage). bucket уникален на тест (изоляция в общем Redis).
+// tempoMWHandler assembles the chi/net-http chain "RateLimit(middleware) →
+// next" on top of a limiter with fixed rate/burst. next responds 202 (like
+// the real async-create Voyage). bucket is unique per test (isolation in
+// the shared Redis).
 func tempoMWHandler(limiter apimiddleware.RateLimiter, bucket string, rate float64, burst int) (http.Handler, *int) {
 	nextCalls := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -60,18 +64,19 @@ func tempoMWHandler(limiter apimiddleware.RateLimiter, bucket string, rate float
 	return mw(next), &nextCalls
 }
 
-// postAs формирует POST-запрос с claims (AID) в context, как после RequireJWT.
+// postAs builds a POST request with claims (AID) in context, as after RequireJWT.
 func postAs(aid string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/voyages", nil)
 	ctx := apimiddleware.WithClaims(req.Context(), &jwt.Claims{Subject: aid})
 	return req.WithContext(ctx)
 }
 
-// TestIntegration_TempoMW_PerAIDCoherence — через ОБЩИЙ Redis-bucket: исчерпание
-// burst одним AID → 429; ДРУГОЙ AID не затронут (независимый bucket).
+// TestIntegration_TempoMW_PerAIDCoherence — via a SHARED Redis bucket:
+// exhausting burst for one AID → 429; ANOTHER AID is unaffected (independent
+// bucket).
 func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 	tb := newTokenBucketInt(t)
-	const rate = 1.0 // медленный refill — в окне теста незаметен
+	const rate = 1.0 // slow refill — unnoticeable within the test window
 	const burst = 3
 	bucket := "voyage_create_" + t.Name()
 
@@ -80,7 +85,7 @@ func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 	aidA := uniqueAID(t) + "-a"
 	aidB := uniqueAID(t) + "-b"
 
-	// burst запросов AID-A проходят (202).
+	// burst requests for AID-A go through (202).
 	for i := 0; i < burst; i++ {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, postAs(aidA))
@@ -89,14 +94,14 @@ func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 		}
 	}
 
-	// burst+1 для AID-A — бакет пуст → 429.
+	// burst+1 for AID-A — bucket empty → 429.
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, postAs(aidA))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("A over burst: ожидался 429, got %d", rec.Code)
 	}
 
-	// AID-B — независимый bucket в общем Redis: первый запрос проходит.
+	// AID-B — independent bucket in the shared Redis: the first request goes through.
 	recB := httptest.NewRecorder()
 	h.ServeHTTP(recB, postAs(aidB))
 	if recB.Code != http.StatusAccepted {
@@ -104,9 +109,9 @@ func TestIntegration_TempoMW_PerAIDCoherence(t *testing.T) {
 	}
 }
 
-// TestIntegration_TempoMW_FailOpenOnRedisDown — Redis недоступен (клиент закрыт
-// после конструирования limiter-а) → limiter.Allow возвращает ошибку →
-// middleware fail-OPEN passthrough (202, next вызван), НЕ 5xx (ADR-050(b)).
+// TestIntegration_TempoMW_FailOpenOnRedisDown — Redis is unavailable (client
+// closed after constructing the limiter) → limiter.Allow returns an error →
+// middleware fail-OPEN passthrough (202, next called), NOT 5xx (ADR-050(b)).
 func TestIntegration_TempoMW_FailOpenOnRedisDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -119,8 +124,8 @@ func TestIntegration_TempoMW_FailOpenOnRedisDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTokenBucket: %v", err)
 	}
-	// Рвём соединение ПОСЛЕ конструирования: следующий Allow упрётся в closed
-	// client → ошибка → fail-open. Деттерминированная имитация Redis-down.
+	// Break the connection AFTER construction: the next Allow will hit a
+	// closed client → error → fail-open. A deterministic simulation of Redis-down.
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -138,25 +143,25 @@ func TestIntegration_TempoMW_FailOpenOnRedisDown(t *testing.T) {
 	}
 }
 
-// TestIntegration_TempoMW_429Shape — отклонённый запрос несёт Retry-After
-// (целые секунды, минимум 1) + application/problem+json с type=tempo-exceeded
-// и status 429 в теле (ADR-050(d)).
+// TestIntegration_TempoMW_429Shape — a rejected request carries Retry-After
+// (whole seconds, minimum 1) + application/problem+json with
+// type=tempo-exceeded and status 429 in the body (ADR-050(d)).
 func TestIntegration_TempoMW_429Shape(t *testing.T) {
 	tb := newTokenBucketInt(t)
-	const rate = 1.0 // 1 rps → retryAfter до следующего токена ~1с
+	const rate = 1.0 // 1 rps → retryAfter until the next token is ~1s
 	const burst = 1
 	h, _ := tempoMWHandler(tb, "voyage_create_"+t.Name(), rate, burst)
 
 	aid := uniqueAID(t)
 
-	// Сжигаем единственный токен.
+	// Burn the single token.
 	rec0 := httptest.NewRecorder()
 	h.ServeHTTP(rec0, postAs(aid))
 	if rec0.Code != http.StatusAccepted {
 		t.Fatalf("drain: ожидался 202, got %d", rec0.Code)
 	}
 
-	// Второй запрос — 429 с полной формой.
+	// Second request — 429 with the full shape.
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, postAs(aid))
 

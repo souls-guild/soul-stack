@@ -1,20 +1,21 @@
 package redis
 
-// Lease — Redis-based лидерство для фоновых задач Keeper-а
-// (ADR-006(d), Reaper-loop в M0.6+). Алгоритм:
+// Lease — Redis-based leadership for Keeper background tasks
+// (ADR-006(d), Reaper loop in M0.6+). Algorithm:
 //
-//   - Acquire — `SET key holder NX EX ttl`. Если ключ уже занят
-//     другим holder-ом — [ErrLeaseTaken]; вызывающий ретраит сам с
-//     backoff-ом.
-//   - Renew — Lua-скрипт CAS: если `GET key == holder`, обновить TTL
-//     через `PEXPIRE`; иначе [ErrLeaseLost] (нас вытеснил кто-то).
-//   - Release — Lua-скрипт CAS: `DEL key`, только если holder совпал.
-//     На `not-mine` молча выходит (idempotent stop).
+//   - Acquire — `SET key holder NX EX ttl`. If the key is already held
+//     by another holder — [ErrLeaseTaken]; the caller retries itself
+//     with backoff.
+//   - Renew — Lua-script CAS: if `GET key == holder`, refresh the TTL
+//     via `PEXPIRE`; otherwise [ErrLeaseLost] (someone else took over).
+//   - Release — Lua-script CAS: `DEL key`, only if the holder matches.
+//     On `not-mine` it exits silently (idempotent stop).
 //
-// Holder-строка — `kid` Keeper-инстанса (см. shared/config/keeper.go::KID),
-// caller передаёт её сам. Это даёт человекочитаемые логи «lease acquired
-// by keeper-eu-west-01», и позволяет реактору в будущем различать смены
-// лидерства между инстансами одного кластера.
+// The holder string is the Keeper instance's `kid` (see
+// shared/config/keeper.go::KID), the caller passes it in. This gives
+// human-readable logs like "lease acquired by keeper-eu-west-01", and
+// lets the Reaper distinguish leadership changes between instances of
+// the same cluster in the future.
 
 import (
 	"context"
@@ -25,21 +26,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrLeaseTaken — [Acquire] не получил lease, ключ удерживается другим
-// holder-ом. Caller (Reaper-runner) ретраит с backoff-ом.
+// ErrLeaseTaken — [Acquire] didn't get the lease, the key is held by another
+// holder. The caller (Reaper runner) retries with backoff.
 var ErrLeaseTaken = errors.New("redis: lease already taken")
 
-// ErrLeaseLost — [Lease.Renew] обнаружил, что ключ принадлежит другому
-// holder-у (или истёк и был перезахвачен). Caller обязан остановить
-// loop — split-brain недопустим.
+// ErrLeaseLost — [Lease.Renew] found that the key belongs to another
+// holder (or expired and was reacquired). The caller must stop the
+// loop — split-brain is not acceptable.
 var ErrLeaseLost = errors.New("redis: lease lost (no longer leader)")
 
-// Lease — handle на удерживаемый ключ.
+// Lease is a handle to a held key.
 //
-// Lease НЕ потокобезопасен относительно Release vs Renew: caller обязан
-// упорядочить вызовы (типично — один renewal-goroutine + один Release из
-// main-defer-а). Конкурентные Renew между собой безопасны (Redis сам
-// сериализует команды), но смысла в этом нет.
+// Lease is NOT thread-safe with respect to Release vs Renew: the caller must
+// order the calls itself (typically one renewal goroutine + one Release from
+// a main defer). Concurrent Renew calls are safe among themselves (Redis
+// serializes commands), but there's no point in doing that.
 type Lease struct {
 	client *Client
 	key    string
@@ -47,21 +48,21 @@ type Lease struct {
 	ttl    time.Duration
 }
 
-// Key — Redis-ключ, который удерживает lease. Полезно для логов.
+// Key is the Redis key the lease holds. Useful for logs.
 func (l *Lease) Key() string { return l.key }
 
-// Holder — значение, записанное в ключ. Полезно для логов.
+// Holder is the value written into the key. Useful for logs.
 func (l *Lease) Holder() string { return l.holder }
 
-// TTL — текущий target-TTL ключа. Renew продлевает до этого значения.
+// TTL is the key's current target TTL. Renew extends it to this value.
 func (l *Lease) TTL() time.Duration { return l.ttl }
 
-// Acquire пробует захватить lease. На success возвращает handle; на
-// конфликт — [ErrLeaseTaken]; на сетевую/протокольную ошибку — обёрнутый err.
+// Acquire tries to acquire the lease. On success returns a handle; on
+// conflict — [ErrLeaseTaken]; on a network/protocol error — a wrapped err.
 //
-// `ttl` должно быть > 0 — отрицательное / нулевое значение означало бы
-// либо моментально-истекающий lease (race-окно), либо бесконечный (Redis
-// `SET ... EX 0` это ошибка). В обоих случаях — программная ошибка caller-а.
+// `ttl` must be > 0 — a negative/zero value would mean either an
+// instantly-expiring lease (a race window) or an infinite one (Redis
+// `SET ... EX 0` is an error). Either way it's a caller bug.
 func Acquire(ctx context.Context, c *Client, key, holder string, ttl time.Duration) (*Lease, error) {
 	if c == nil {
 		return nil, errors.New("redis.Acquire: nil client")
@@ -86,14 +87,15 @@ func Acquire(ctx context.Context, c *Client, key, holder string, ttl time.Durati
 	return &Lease{client: c, key: key, holder: holder, ttl: ttl}, nil
 }
 
-// PeekLeaseHolder читает текущего holder-а lease-ключа (value = KID держателя)
-// БЕЗ захвата — чистый `GET`. Возвращает (holder, true) если ключ жив;
-// (_, false) если lease свободен / истёк (`redis.Nil`).
+// PeekLeaseHolder reads the lease key's current holder (value = holder's KID)
+// WITHOUT acquiring it — a plain `GET`. Returns (holder, true) if the key is
+// alive; (_, false) if the lease is free / expired (`redis.Nil`).
 //
-// Read-only-инспекция для наблюдаемости (`GET /v1/cluster` → кто сейчас
-// Reaper-лидер по ключу reaper.LeaderLeaseKey). НЕ участвует в CAS-протоколе
-// Acquire/Renew/Release: только показывает, кому ключ принадлежит прямо сейчас.
-// Значение эфемерно (lease под TTL) — caller трактует ответ как снимок момента.
+// A read-only inspection for observability (`GET /v1/cluster` → who's
+// currently the Reaper leader for the reaper.LeaderLeaseKey key). Does NOT
+// participate in the Acquire/Renew/Release CAS protocol: it only shows who
+// owns the key right now. The value is ephemeral (lease under TTL) — the
+// caller should treat the answer as a point-in-time snapshot.
 func PeekLeaseHolder(ctx context.Context, c *Client, key string) (string, bool, error) {
 	if c == nil {
 		return "", false, errors.New("redis.PeekLeaseHolder: nil client")
@@ -111,14 +113,15 @@ func PeekLeaseHolder(ctx context.Context, c *Client, key string) (string, bool, 
 	return v, true, nil
 }
 
-// renewScript — CAS-renew: вернёт 1 если ключ всё ещё наш и TTL обновлён,
-// иначе 0. PEXPIRE применяется к существующему ключу — атомарность
-// GET+PEXPIRE гарантируется тем, что Lua-скрипт исполняется атомарно
-// внутри Redis-а.
+// renewScript is CAS-renew: returns 1 if the key is still ours and the TTL
+// was refreshed, otherwise 0. PEXPIRE applies to an existing key — the
+// atomicity of GET+PEXPIRE is guaranteed by the Lua script executing
+// atomically inside Redis.
 //
-// PEXPIRE (миллисекунды) выбран вместо EXPIRE (секунды), чтобы lock_ttl
-// уровня sub-second в тестах (typical миnireredis-тесты — 50–200 ms)
-// работал точно; в проде sub-second не нужен, но overhead нулевой.
+// PEXPIRE (milliseconds) is chosen over EXPIRE (seconds) so that sub-second
+// lock_ttl values in tests (typical miniredis tests use 50-200 ms) work
+// precisely; production doesn't need sub-second precision, but the overhead
+// is zero.
 var renewScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then
 	return redis.call("PEXPIRE", KEYS[1], ARGV[2])
@@ -127,10 +130,10 @@ else
 end
 `)
 
-// Renew продлевает TTL ключа до [Lease.TTL] (через PEXPIRE), но только
-// если значение по-прежнему равно [Lease.Holder]. На несовпадение
-// holder-а — [ErrLeaseLost]; ключа уже нет (истёк и не пересоздан) —
-// тоже [ErrLeaseLost] (CAS вернёт 0, потому что GET вернул nil).
+// Renew extends the key's TTL to [Lease.TTL] (via PEXPIRE), but only if the
+// value still equals [Lease.Holder]. On a holder mismatch — [ErrLeaseLost];
+// if the key is already gone (expired and not recreated) — also
+// [ErrLeaseLost] (CAS returns 0 because GET returned nil).
 func (l *Lease) Renew(ctx context.Context) error {
 	if l == nil || l.client == nil {
 		return errors.New("redis.Lease.Renew: nil lease/client")
@@ -149,8 +152,8 @@ func (l *Lease) Renew(ctx context.Context) error {
 	return nil
 }
 
-// releaseScript — CAS-delete: удалить ключ только если значение наше.
-// Возвращает количество удалённых ключей (0 или 1).
+// releaseScript is CAS-delete: delete the key only if the value is ours.
+// Returns the number of keys deleted (0 or 1).
 var releaseScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then
 	return redis.call("DEL", KEYS[1])
@@ -159,13 +162,13 @@ else
 end
 `)
 
-// Release удаляет ключ, если он всё ещё принадлежит нам. На чужой holder
-// или истёкший ключ — no-op (идемпотентно). Сетевая ошибка прокидывается,
-// но caller обычно её игнорирует — Release вызывается из defer-shutdown-а,
-// где Redis может быть уже недоступен.
+// Release deletes the key if it still belongs to us. On a foreign holder
+// or an expired key — no-op (idempotent). A network error is propagated,
+// but the caller usually ignores it — Release is called from a
+// defer-shutdown, where Redis may already be unreachable.
 //
-// После Release повторный Renew/Release безопасен — вернёт [ErrLeaseLost]
-// или no-op соответственно (Redis-state-driven, без флага в Go-struct).
+// After Release, a repeat Renew/Release is safe — it returns [ErrLeaseLost]
+// or no-op respectively (Redis-state-driven, no flag in the Go struct).
 func (l *Lease) Release(ctx context.Context) error {
 	if l == nil || l.client == nil {
 		return errors.New("redis.Lease.Release: nil lease/client")

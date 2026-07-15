@@ -12,109 +12,121 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Session — узкая абстракция одной SSH-сессии, нужная диспетчеру: запустить
-// `soul apply`, подать stdin (protojson ApplyRequest) и вернуть stdout-reader
-// (NDJSON-поток) + ожидание завершения с exit-кодом.
+// Session is the narrow abstraction of a single SSH session that the
+// dispatcher needs: run `soul apply`, feed stdin (protojson ApplyRequest),
+// and return a stdout reader (NDJSON stream) plus waiting for completion with
+// an exit code.
 //
-// Интерфейс (а не конкретный *sshSession) вынесен, чтобы [SshDispatcher]
-// тестировался без живого sshd: unit-тесты подставляют мок Session, проверяя
-// stdin-feed → NDJSON-parse → RunResult. Live-sshd-интеграция — follow-up
-// (docker занят другим прогоном, см. отчёт).
+// It's an interface (rather than a concrete *sshSession) so [SshDispatcher]
+// can be tested without a live sshd: unit tests substitute a mock Session,
+// verifying stdin-feed → NDJSON-parse → RunResult. Live-sshd integration is a
+// follow-up (docker was busy with another run, see the report).
 type Session interface {
-	// Run выполняет команду на хосте, передавая stdinData в stdin процесса, и
-	// блокирует до завершения. Возвращает stdout целиком и ошибку:
-	//   - nil — процесс завершился с exit 0;
-	//   - *ssh.ExitError — ненулевой exit (stdout всё равно возвращается: там
-	//     может лежать NDJSON с FAILED-RunResult).
-	// stdout возвращается строкой, а не reader-ом: oneshot `soul apply` пишет
-	// ограниченный объём (NDJSON-поток без long-running progress, ADR-012),
-	// потоковый разбор по мере поступления — оптимизация S3.
+	// Run executes the command on the host, feeding stdinData to the
+	// process's stdin, and blocks until it finishes. Returns the full stdout
+	// and an error:
+	//   - nil — the process exited 0;
+	//   - *ssh.ExitError — non-zero exit (stdout is still returned: it may
+	//     hold NDJSON with a FAILED RunResult).
+	// stdout is returned as a string, not a reader: a oneshot `soul apply`
+	// writes a bounded amount (an NDJSON stream without long-running
+	// progress, ADR-012); streaming parse as data arrives is an S3
+	// optimization.
 	Run(ctx context.Context, cmd string, stdinData []byte) (stdout string, err error)
-	// Close закрывает SSH-соединение. Идемпотентен.
+	// Close closes the SSH connection. Idempotent.
 	Close() error
 }
 
-// HostKeyAuthority — публичный ключ CA, подписавшего host-сертификаты целевых
-// хостов (Vault SSH CA host-key). Проверка host-cert идёт против него: хост
-// предъявляет cert, подписанный этим CA → доверяем; чужой/самоподписанный →
-// reject. Заменяет TOFU/known_hosts на CA-trust (PM-decision S0).
+// HostKeyAuthority is the public key of the CA that signed target hosts'
+// host certificates (the Vault SSH CA host key). Host-cert verification goes
+// against it: a host presenting a cert signed by this CA is trusted; a
+// foreign/self-signed one is rejected. Replaces TOFU/known_hosts with
+// CA-trust (PM decision S0).
 //
-// S7-3 ввёл multi-CA через [NamedHostKeyAuthority] / [LoadHostCAs]: основная
-// поверхность — [DialConfig.HostAuthorities]. `HostKeyAuthority` остаётся как
-// типизированный value-объект (используется в [LoadHostCA] singular helper-е
-// для backward-compat path) и для `ProxyHostAuthority` (отдельный proxy-CA,
-// без multi-CA расширения).
+// S7-3 introduced multi-CA via [NamedHostKeyAuthority] / [LoadHostCAs]: the
+// primary surface is now [DialConfig.HostAuthorities]. `HostKeyAuthority`
+// remains as a typed value object (used in the [LoadHostCA] singular helper
+// for the backward-compat path) and for `ProxyHostAuthority` (a separate
+// proxy CA, without the multi-CA extension).
 type HostKeyAuthority struct {
-	// CAPublicKey — публичная часть host-CA.
+	// CAPublicKey is the public part of the host CA.
 	CAPublicKey ssh.PublicKey
 }
 
-// DialConfig — параметры открытия одной SSH-сессии.
+// DialConfig holds the parameters for opening a single SSH session.
 type DialConfig struct {
-	// Host — FQDN/IP целевого хоста (= SID push-хоста).
+	// Host is the FQDN/IP of the target host (= the push host's SID).
 	Host string
-	// Port — TCP-порт sshd.
+	// Port is the sshd TCP port.
 	Port int
-	// User — SSH-пользователь для входа.
+	// User is the SSH user to log in as.
 	User string
-	// Auth — методы аутентификации Keeper-а на хосте (из SignReply: cert+key
-	// либо ephemeral keypair). Готовятся диспетчером по результату Sign.
+	// Auth holds Keeper's authentication methods on the host (from
+	// SignReply: cert+key or an ephemeral keypair). Prepared by the
+	// dispatcher from the Sign result.
 	//
-	// Канонический Teleport-flow: один и тот же набор Auth (signed user-cert на
-	// ephemeral keypair) используется на ОБА хопа — proxy и target. Cert от
-	// Teleport/Vault SSH CA авторизует пользователя на обеих сторонах.
+	// Canonical Teleport flow: the same Auth set (a signed user cert on an
+	// ephemeral keypair) is used on BOTH hops — proxy and target. The cert
+	// from the Teleport/Vault SSH CA authorizes the user on both sides.
 	Auth []ssh.AuthMethod
-	// HostAuthorities — multi-CA-набор для verify host-cert целевого хоста
-	// (S7-3, ADR-032 amendment 2026-05-26). Непустой; на handshake-е делается
-	// OR-проверка по всем элементам через ssh.CertChecker.IsHostAuthority. При
-	// непустом [ProxyJump] и nil [ProxyHostAuthority] этот же набор используется
-	// и для верификации host-cert proxy-хопа.
+	// HostAuthorities is the multi-CA set for verifying the target host's
+	// host cert (S7-3, ADR-032 amendment 2026-05-26). Must be non-empty; the
+	// handshake does an OR check across all elements via
+	// ssh.CertChecker.IsHostAuthority. When [ProxyJump] is non-empty and
+	// [ProxyHostAuthority] is nil, this same set is also used to verify the
+	// proxy hop's host cert.
 	HostAuthorities []NamedHostKeyAuthority
-	// OnHostCAMatch — опц. callback на матч host-CA (для observability:
-	// debug-log + `keeper_push_host_ca_used_total{ca_name=...}`-метрики). nil —
-	// callback не вызывается. Caller — [SshDispatcher]; live-`Dial`-флоу собирает
-	// его сам, тесты могут оставлять nil.
+	// OnHostCAMatch is an optional callback fired on a host-CA match (for
+	// observability: debug-log + the
+	// `keeper_push_host_ca_used_total{ca_name=...}` metric). nil means the
+	// callback isn't called. Caller is [SshDispatcher]; the live `Dial` flow
+	// wires it up itself, and tests may leave it nil.
 	OnHostCAMatch func(caName string)
-	// ProxyJump — bastion/proxy в формате `[user@]host:port`, через который
-	// идёт SSH-туннель до target. Пустая строка — прямой коннект (S0-flow).
-	// Источник — [pluginv1.SignReply.proxy_jump] от SshProvider (Teleport).
+	// ProxyJump is a bastion/proxy in `[user@]host:port` form, through which
+	// the SSH tunnel to target runs. An empty string means a direct connect
+	// (the S0 flow). Sourced from [pluginv1.SignReply.proxy_jump] from the
+	// SshProvider (Teleport).
 	//
-	// Семантика: dispatcher открывает SSH-client к proxy_jump-хосту, на нём
-	// запрашивает direct-tcpip-канал к [Host]:[Port], и поверх этого канала
-	// проводит второй SSH-handshake с target. Это эквивалент `ssh -J <proxy>
-	// <host>`. Аутентификация — теми же [Auth] на обоих хопах (Teleport-flow:
-	// один user-cert проходит через proxy и аутентифицирует на target).
+	// Semantics: the dispatcher opens an SSH client to the proxy_jump host,
+	// requests a direct-tcpip channel to [Host]:[Port] on it, and performs a
+	// second SSH handshake with target over that channel. This is equivalent
+	// to `ssh -J <proxy> <host>`. Authentication uses the same [Auth] on
+	// both hops (Teleport flow: one user cert passes through the proxy and
+	// authenticates on target).
 	ProxyJump string
-	// ProxyHostAuthority — отдельный CA для host-cert верификации proxy-хопа.
-	// nil → для proxy используется [HostAuthorities] (типовой случай: один host-CA
-	// подписывает host-cert-ы и proxy, и target). Заполняется, когда оператор
-	// явно разделяет proxy-CA и target-CA через params плагина.
+	// ProxyHostAuthority is a separate CA for host-cert verification on the
+	// proxy hop. nil means [HostAuthorities] is used for the proxy too (the
+	// typical case: one host CA signs host certs for both proxy and
+	// target). Filled in when the operator explicitly separates the
+	// proxy CA from the target CA via plugin params.
 	ProxyHostAuthority *HostKeyAuthority
-	// Timeout — таймаут TCP+handshake фазы соединения. При proxy_jump
-	// применяется к каждому хопу отдельно (proxy и target).
+	// Timeout is the TCP+handshake phase timeout for the connection. With
+	// proxy_jump, it applies to each hop separately (proxy and target).
 	Timeout time.Duration
 }
 
-// hostCertCallback строит ssh.HostKeyCallback, который доверяет ТОЛЬКО хостам,
-// предъявившим host-сертификат, подписанный любым CA из набора (S7-3 multi-CA
-// OR-проверка). Не-cert host-key (голый ed25519/rsa без подписи CA) и cert
-// чужого CA — reject.
+// hostCertCallback builds an ssh.HostKeyCallback that trusts ONLY hosts that
+// present a host certificate signed by any CA in the set (S7-3 multi-CA OR
+// check). A non-cert host key (a bare ed25519/rsa key without a CA
+// signature) or a cert from a foreign CA is rejected.
 //
-// Реализация через ssh.CertChecker:
-//   - IsHostAuthority(auth, addr) == true ⟺ auth совпадает с одним из CA в
-//     наборе (по marshaled-форме). CertChecker сам проверяет, что
-//     предъявленный cert имеет CertType=HostCert, подписан этим authority,
-//     валиден по времени и его principals покрывают addr.
-//   - HostKeyFallback не задан → если предъявлен не-cert ключ, проверка падает
-//     (нет доверенного пути для голого host-key) — это и есть «отказ от TOFU».
-//   - `onMatch` (может быть nil) — callback с именем matched-CA для
-//     observability (`keeper_push_host_ca_used_total{ca_name=...}` + debug-log).
+// Implemented via ssh.CertChecker:
+//   - IsHostAuthority(auth, addr) == true iff auth matches one of the CAs in
+//     the set (by marshaled form). CertChecker itself verifies that the
+//     presented cert has CertType=HostCert, is signed by that authority, is
+//     valid by time, and its principals cover addr.
+//   - HostKeyFallback isn't set → if a non-cert key is presented, the check
+//     fails (there's no trusted path for a bare host key) — this is the
+//     "no TOFU" stance.
+//   - `onMatch` (may be nil) is a callback with the matched CA's name, for
+//     observability (`keeper_push_host_ca_used_total{ca_name=...}` +
+//     debug-log).
 //
-// Замечание по performance hot-path-а: набор CA закрепляется оператором в
-// keeper.yml (closed-set единиц), линейный bytes.Equal по marshaled-форме
-// внутри handshake-callback-а не требует индекса — handshake и так делает
-// больше системной работы (crypto/network), а ключ-сравнение остаётся O(n)
-// по числу CA в наборе.
+// Note on hot-path performance: the operator pins the CA set in keeper.yml
+// (a closed set of a handful), so a linear bytes.Equal over the marshaled
+// form inside the handshake callback doesn't need an index — the handshake
+// already does far more system work (crypto/network), and the key
+// comparison stays O(n) in the number of CAs in the set.
 func hostCertCallback(cas []NamedHostKeyAuthority, onMatch func(caName string)) ssh.HostKeyCallback {
 	marshaled := make([][]byte, len(cas))
 	names := make([]string, len(cas))
@@ -139,8 +151,9 @@ func hostCertCallback(cas []NamedHostKeyAuthority, onMatch func(caName string)) 
 	return checker.CheckHostKey
 }
 
-// bytesEqual — constant-time-неважное сравнение marshaled-ключей (это публичные
-// данные, timing-канала нет). Вынесено ради читаемости callback-а.
+// bytesEqual compares marshaled keys without caring about constant-time (this
+// is public data, so there's no timing channel). Split out for the
+// callback's readability.
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -153,28 +166,32 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// sshSession — production-реализация [Session] поверх golang.org/x/crypto/ssh.
+// sshSession is the production implementation of [Session] over
+// golang.org/x/crypto/ssh.
 //
-// proxy — опционально удерживаемый client до bastion-а (когда target открыт
-// через direct-tcpip-канал на proxy). Закрывается ПОСЛЕ target, чтобы не
-// оборвать active канал.
+// proxy is an optionally-held client to the bastion (when target is opened
+// via a direct-tcpip channel on the proxy). Closed AFTER target, so as not
+// to cut off the active channel.
 type sshSession struct {
 	client *ssh.Client
 	proxy  *ssh.Client
 }
 
-// Dial открывает SSH-соединение по cfg с CA-signed host-cert verification.
-// Возвращает [Session] либо ошибку connect/handshake (в т.ч. отказ host-cert
-// проверки — host предъявил cert не от нашего CA или голый ключ).
+// Dial opens an SSH connection per cfg with CA-signed host-cert
+// verification. Returns a [Session] or a connect/handshake error (including
+// a host-cert verification failure — the host presented a cert not from our
+// CA, or a bare key).
 //
-// Если cfg.ProxyJump непуст — сначала открывается SSH-client к proxy-хопу, на
-// нём запрашивается direct-tcpip до target, поверх канала проводится второй
-// SSH-handshake (эквивалент `ssh -J <proxy> <host>`). Аутентификация — теми же
-// cfg.Auth на обоих хопах (Teleport-flow: один signed user-cert).
+// If cfg.ProxyJump is non-empty, an SSH client to the proxy hop is opened
+// first; a direct-tcpip channel to target is requested on it, and a second
+// SSH handshake runs over that channel (equivalent to `ssh -J <proxy>
+// <host>`). Authentication uses the same cfg.Auth on both hops (Teleport
+// flow: one signed user cert).
 func Dial(ctx context.Context, cfg DialConfig) (Session, error) {
 	if len(cfg.HostAuthorities) == 0 {
-		// fail-closed: без CA нет доверенного пути проверки host-key.
-		// InsecureIgnoreHostKey в push НЕ допускается (PM-decision S0).
+		// fail-closed: without a CA there's no trusted path to verify the
+		// host key. InsecureIgnoreHostKey is NOT allowed in push (PM
+		// decision S0).
 		return nil, errors.New("push: HostAuthorities is empty (CA-signed host-cert verification)")
 	}
 	if cfg.ProxyJump == "" {
@@ -183,7 +200,7 @@ func Dial(ctx context.Context, cfg DialConfig) (Session, error) {
 	return dialViaProxy(ctx, cfg)
 }
 
-// dialDirect — прямой коннект (proxy_jump пуст).
+// dialDirect is a direct connect (proxy_jump empty).
 func dialDirect(ctx context.Context, cfg DialConfig) (Session, error) {
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.User,
@@ -200,19 +217,21 @@ func dialDirect(ctx context.Context, cfg DialConfig) (Session, error) {
 	client, err := newSSHClient(conn, addr, clientCfg)
 	if err != nil {
 		_ = conn.Close()
-		// Отказ host-cert проверки приходит сюда же (handshake fail) — это
-		// штатный путь reject-а чужого/самоподписанного host-key.
+		// A host-cert verification failure lands here too (handshake fail) —
+		// this is the normal path for rejecting a foreign/self-signed host
+		// key.
 		return nil, fmt.Errorf("push: SSH-handshake с %s: %w", addr, err)
 	}
 	return &sshSession{client: client}, nil
 }
 
-// dialViaProxy — Teleport-flow: SSH-client к proxy, direct-tcpip-канал до
-// target, второй handshake поверх канала. Оба хопа проходят CA-signed host-cert
-// verification: proxy — через cfg.ProxyHostAuthority (или cfg.HostAuthorities при
-// nil); target — через cfg.HostAuthorities. Аутентификация — теми же cfg.Auth на
-// обоих хопах. Cleanup при ошибке fail-closed: target дёргается раньше proxy,
-// иначе direct-tcpip-канал умрёт раньше своего ssh-channel-а.
+// dialViaProxy is the Teleport flow: an SSH client to proxy, a direct-tcpip
+// channel to target, a second handshake over that channel. Both hops go
+// through CA-signed host-cert verification: proxy via
+// cfg.ProxyHostAuthority (or cfg.HostAuthorities when nil); target via
+// cfg.HostAuthorities. Authentication uses the same cfg.Auth on both hops.
+// Cleanup on a fail-closed error: target is torn down before proxy,
+// otherwise the direct-tcpip channel would die before its own ssh channel.
 func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	proxyUser, proxyAddr, err := parseProxyJump(cfg.ProxyJump, cfg.User)
 	if err != nil {
@@ -223,16 +242,17 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 		if cfg.ProxyHostAuthority.CAPublicKey == nil {
 			return nil, errors.New("push: ProxyHostAuthority задан, но CAPublicKey пуст")
 		}
-		// Отдельный proxy-CA — singleton-набор, multi-CA для proxy-хопа в MVP
-		// не вводится (отдельный CA-bag здесь нужен под кейс «разные владельцы
-		// CA для proxy и target», не под «несколько proxy-CA»).
+		// A separate proxy CA is a singleton set; multi-CA for the proxy hop
+		// isn't introduced in MVP (a separate CA bag here covers the "proxy
+		// and target have different CA owners" case, not "several proxy
+		// CAs").
 		proxyCAs = []NamedHostKeyAuthority{{
 			Name:     "proxy",
 			CAPubKey: cfg.ProxyHostAuthority.CAPublicKey,
 		}}
 	}
 
-	// Хоп 1: TCP+SSH-handshake до proxy_jump-хоста.
+	// Hop 1: TCP+SSH handshake to the proxy_jump host.
 	proxyCfg := &ssh.ClientConfig{
 		User:            proxyUser,
 		Auth:            cfg.Auth,
@@ -250,7 +270,7 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 		return nil, fmt.Errorf("push: SSH-handshake с proxy %s: %w", proxyAddr, err)
 	}
 
-	// Хоп 2: direct-tcpip-канал proxy → target + второй handshake.
+	// Hop 2: direct-tcpip channel proxy → target + second handshake.
 	targetAddr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	tunnelConn, err := proxyClient.Dial("tcp", targetAddr)
 	if err != nil {
@@ -272,8 +292,9 @@ func dialViaProxy(ctx context.Context, cfg DialConfig) (Session, error) {
 	return &sshSession{client: targetClient, proxy: proxyClient}, nil
 }
 
-// newSSHClient — обёртка ssh.NewClientConn+ssh.NewClient: один контракт для
-// direct dial и для туннельного net.Conn (direct-tcpip-канал поверх proxy).
+// newSSHClient wraps ssh.NewClientConn+ssh.NewClient: a single contract for
+// both a direct dial and a tunneled net.Conn (a direct-tcpip channel over
+// proxy).
 func newSSHClient(conn net.Conn, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
@@ -282,9 +303,9 @@ func newSSHClient(conn net.Conn, addr string, cfg *ssh.ClientConfig) (*ssh.Clien
 	return ssh.NewClient(sshConn, chans, reqs), nil
 }
 
-// parseProxyJump разбирает SignReply.proxy_jump в `[user@]host:port`. user
-// опционален: при отсутствии наследуется defaultUser (тот же, что для target —
-// Teleport canonical-flow, один пользователь на оба хопа).
+// parseProxyJump parses SignReply.proxy_jump as `[user@]host:port`. user is
+// optional: when absent, it's inherited from defaultUser (the same one used
+// for target — the Teleport canonical flow, one user for both hops).
 func parseProxyJump(raw, defaultUser string) (user, addr string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -309,7 +330,8 @@ func parseProxyJump(raw, defaultUser string) (user, addr string, err error) {
 	return user, net.JoinHostPort(host, port), nil
 }
 
-// Run открывает channel-сессию, подаёт stdin и собирает stdout команды.
+// Run opens a channel session, feeds stdin, and collects the command's
+// stdout.
 func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (string, error) {
 	sess, err := s.client.NewSession()
 	if err != nil {
@@ -328,10 +350,11 @@ func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (str
 		return "", fmt.Errorf("push: запуск %q: %w", cmd, err)
 	}
 
-	// Подаём stdin (ApplyRequest protojson) и закрываем — `soul apply` читает
-	// stdin до EOF, иначе процесс не стартует прогон. Для команд без stdin
-	// (delivery/cleanup-helpers) сразу закрываем pipe; EOF/уже-закрытый-канал
-	// от Close() в этом случае — норма, не ошибка.
+	// We feed stdin (ApplyRequest protojson) and close it — `soul apply`
+	// reads stdin to EOF, otherwise the process won't start the run. For
+	// commands without stdin (delivery/cleanup helpers), we close the pipe
+	// right away; an EOF/already-closed-channel from Close() in that case is
+	// normal, not an error.
 	var writeErr error
 	if len(stdinData) == 0 {
 		_ = stdinPipe.Close()
@@ -339,8 +362,9 @@ func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (str
 		writeErr = writeAllAndClose(stdinPipe, stdinData)
 	}
 
-	// ctx-отмена: прерываем сессию, не дожидаясь Wait. soul-side guard и барьер
-	// Keeper-а обрабатывают обрыв как fail (ParseStream вернёт ErrNoRunResult).
+	// ctx cancellation: we abort the session without waiting for Wait. The
+	// soul-side guard and Keeper's barrier treat the drop as a failure
+	// (ParseStream will return ErrNoRunResult).
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
 
@@ -348,21 +372,21 @@ func (s *sshSession) Run(ctx context.Context, cmd string, stdinData []byte) (str
 	case <-ctx.Done():
 		_ = sess.Signal(ssh.SIGTERM)
 		_ = sess.Close()
-		<-done // дождаться завершения goroutine, не утечь
+		<-done // wait for the goroutine to finish, don't leak it
 		return stdout.String(), fmt.Errorf("push: сессия прервана: %w", ctx.Err())
 	case waitErr := <-done:
 		if writeErr != nil && waitErr == nil {
-			// stdin не доставлен, но процесс отчитался 0 — противоречие; вернём
-			// write-ошибку как первичную.
+			// stdin wasn't delivered, but the process reported 0 — a
+			// contradiction; return the write error as primary.
 			return stdout.String(), fmt.Errorf("push: подача stdin: %w", writeErr)
 		}
 		return stdout.String(), waitErr
 	}
 }
 
-// Close закрывает target первым, потом proxy. Обратный порядок оборвал бы
-// direct-tcpip-канал раньше его SSH-channel-а на target-стороне. Идемпотентен:
-// двойной вызов даст nil после первого успешного закрытия.
+// Close closes target first, then proxy. The reverse order would cut off the
+// direct-tcpip channel before its SSH channel on the target side.
+// Idempotent: a second call returns nil after the first successful close.
 func (s *sshSession) Close() error {
 	var firstErr error
 	if s.client != nil {
@@ -380,9 +404,9 @@ func (s *sshSession) Close() error {
 	return firstErr
 }
 
-// writeAllAndClose пишет data в stdin-pipe и закрывает его (EOF для soul apply).
-// Close вызывается всегда, даже при write-ошибке (иначе процесс зависнет на
-// чтении stdin).
+// writeAllAndClose writes data to the stdin pipe and closes it (EOF for soul
+// apply). Close is always called, even on a write error (otherwise the
+// process would hang reading stdin).
 func writeAllAndClose(w interface {
 	Write([]byte) (int, error)
 	Close() error

@@ -9,8 +9,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// stubVault — in-memory passwordResolver для unit-тестов резолва пароля без
-// поднятого Vault. Возвращает заранее заданный KV-payload по path-у.
+// stubVault is an in-memory passwordResolver for password-resolution unit
+// tests without a live Vault. Returns a pre-set KV payload by path.
 type stubVault struct {
 	byPath map[string]map[string]any
 	err    error
@@ -27,8 +27,9 @@ func (s stubVault) ReadKV(_ context.Context, path string) (map[string]any, error
 	return kv, nil
 }
 
-// TestNewClient_EmptyAddr защищает sentinel-error для случая пустого
-// addr-а в standalone (config-parser его не отлавливает — это runtime-инвариант).
+// TestNewClient_EmptyAddr guards the sentinel error for an empty addr in
+// standalone mode (the config parser doesn't catch it — this is a runtime
+// invariant).
 func TestNewClient_EmptyAddr(t *testing.T) {
 	_, err := NewClient(context.Background(), Config{}, nil)
 	if err == nil {
@@ -36,8 +37,8 @@ func TestNewClient_EmptyAddr(t *testing.T) {
 	}
 }
 
-// TestNewClient_Miniredis — happy-path: коннект к miniredis-у (standalone),
-// Ping, Close. На повторный Close — без ошибки (идемпотентность контракта).
+// TestNewClient_Miniredis — happy path: connect to miniredis (standalone),
+// Ping, Close. A repeat Close returns no error (idempotency contract).
 func TestNewClient_Miniredis(t *testing.T) {
 	mr := miniredis.RunT(t)
 
@@ -59,8 +60,8 @@ func TestNewClient_Miniredis(t *testing.T) {
 	}
 }
 
-// TestNewClient_PingFails — addr-port на котором никто не слушает, Ping
-// падает, NewClient возвращает обёрнутую ошибку.
+// TestNewClient_PingFails — an addr:port nobody is listening on, Ping
+// fails, NewClient returns a wrapped error.
 func TestNewClient_PingFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -71,8 +72,8 @@ func TestNewClient_PingFails(t *testing.T) {
 	}
 }
 
-// TestResolvedMode — пустой Mode == standalone (forward-compat), остальные
-// проходят as-is.
+// TestResolvedMode — empty Mode == standalone (forward-compat), everything
+// else passes through as-is.
 func TestResolvedMode(t *testing.T) {
 	cases := map[string]string{
 		"":           ModeStandalone,
@@ -86,8 +87,9 @@ func TestResolvedMode(t *testing.T) {
 	}
 }
 
-// TestBuild_ModeSelection — конструктор ветвится по Mode и валидирует
-// обязательные для режима поля (build без Ping, чтобы не нужен живой Redis).
+// TestBuild_ModeSelection — the constructor branches on Mode and validates
+// the fields required for each mode (build without Ping, so no live Redis is
+// needed).
 func TestBuild_ModeSelection(t *testing.T) {
 	t.Run("standalone requires addr", func(t *testing.T) {
 		if _, err := build(Config{Mode: ModeStandalone}, "", ""); err == nil {
@@ -123,7 +125,7 @@ func TestBuild_ModeSelection(t *testing.T) {
 	})
 }
 
-// TestResolvePassword — все ветки vault-резолва пароля.
+// TestResolvePassword — every branch of vault password resolution.
 func TestResolvePassword(t *testing.T) {
 	ctx := context.Background()
 
@@ -199,8 +201,9 @@ func TestResolvePassword(t *testing.T) {
 	})
 }
 
-// TestNewClient_VaultRef_NilVC — password_ref: vault:... без vc валит NewClient
-// с ErrVaultClientRequired (раньше тут был ErrPasswordResolveNotImplemented).
+// TestNewClient_VaultRef_NilVC — password_ref: vault:... without a vc fails
+// NewClient with ErrVaultClientRequired (this used to be
+// ErrPasswordResolveNotImplemented).
 func TestNewClient_VaultRef_NilVC(t *testing.T) {
 	_, err := NewClient(context.Background(), Config{
 		Addr:        "127.0.0.1:0",
@@ -211,9 +214,9 @@ func TestNewClient_VaultRef_NilVC(t *testing.T) {
 	}
 }
 
-// TestNewClient_VaultRef_Resolved — password_ref: vault:... резолвится через
-// stub-vc, клиент коннектится к miniredis (без пароля — miniredis игнорирует
-// AUTH при отсутствии requirepass, но путь резолва пройден).
+// TestNewClient_VaultRef_Resolved — password_ref: vault:... resolves via a
+// stub-vc, the client connects to miniredis (no password — miniredis ignores
+// AUTH when requirepass isn't set, but the resolve path is exercised).
 func TestNewClient_VaultRef_Resolved(t *testing.T) {
 	mr := miniredis.RunT(t)
 	mr.RequireAuth("from-vault")

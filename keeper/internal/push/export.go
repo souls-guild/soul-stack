@@ -5,19 +5,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// NewEphemeralEd25519 — exported-обёртка над [newEphemeralEd25519] для
-// переиспользования вне пакета push (keeper-side core-модуль
-// `core.bootstrap.delivered`, ADR-063: тот же ephemeral-keypair + Sign-flow, что
-// у SshDispatcher.SendApply). Генерирует свежий ed25519-keypair per-session;
-// приватник остаётся ТОЛЬКО внутри возвращённого signer-а.
+// NewEphemeralEd25519 — exported wrapper around [newEphemeralEd25519] for
+// reuse outside the push package (keeper-side core module
+// `core.bootstrap.delivered`, ADR-063: same ephemeral-keypair + Sign-flow as
+// SshDispatcher.SendApply). Generates a fresh ed25519 keypair per session;
+// the private key stays ONLY inside the returned signer.
 func NewEphemeralEd25519() (ssh.Signer, string, error) {
 	return newEphemeralEd25519()
 }
 
-// AuthMethodsFromSign — exported-обёртка над [authMethodsFromSign]: конвертирует
-// SignReply (от SshProvider) в ssh.AuthMethod-ы (ephemeral-cert либо static-key
-// режим). Переиспользуется `core.bootstrap.delivered` (ADR-063) тем же путём,
-// что SshDispatcher.
+// AuthMethodsFromSign — exported wrapper around [authMethodsFromSign]:
+// converts a SignReply (from SshProvider) into ssh.AuthMethod values
+// (ephemeral-cert or static-key mode). Reused by `core.bootstrap.delivered`
+// (ADR-063) the same way as SshDispatcher.
 func AuthMethodsFromSign(reply *pluginv1.SignReply, ephSigner ssh.Signer) ([]ssh.AuthMethod, error) {
 	return authMethodsFromSign(reply, ephSigner)
 }

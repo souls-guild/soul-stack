@@ -16,18 +16,18 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// liveShellHandle — обработчик target-сервера, который умеет:
+// liveShellHandle — a target-server handler that understands:
 //   - mkdir -p <paths...>
 //   - test -f '<p>' && sha256sum '<p>' || echo MISSING
-//   - set -e; cat > <p> && chmod 0755 <p>     (stdin → файл, без shell)
+//   - set -e; cat > <p> && chmod 0755 <p>     (stdin → file, no shell)
 //   - rm -rf <paths...>
 //
-// Это узкий sub-shell, ровно то, что использует ShaDeliverer/ShaCleaner. Без
-// fork/exec реального /bin/sh — целиком in-process, чтобы L1-тест не зависел
-// от docker.
+// A narrow sub-shell — exactly what ShaDeliverer/ShaCleaner use. No
+// fork/exec of a real /bin/sh — entirely in-process, so the L1 test doesn't
+// depend on docker.
 type liveFs struct {
 	mu    sync.Mutex
-	root  string // tmp-каталог хоста: к нему приклеиваются host-paths
+	root  string // host tmp dir: host-paths are glued onto it
 	dirs  map[string]bool
 	files map[string][]byte
 }
@@ -48,8 +48,8 @@ func (fs *liveFs) handle(t *testing.T, cmd string, stdin io.Reader) (stdout stri
 		}
 		return "", 0
 	case strings.HasPrefix(cmd, "test -f "):
-		// Формат: test -f '<p>' && sha256sum '<p>' || echo MISSING
-		// (single-quote escape, см. delivery.go::remoteSha256).
+		// Format: test -f '<p>' && sha256sum '<p>' || echo MISSING
+		// (single-quote escape, see delivery.go::remoteSha256).
 		fields := strings.Fields(cmd)
 		if len(fields) < 3 {
 			return "", 1
@@ -72,7 +72,7 @@ func (fs *liveFs) handle(t *testing.T, cmd string, stdin io.Reader) (stdout stri
 		if !fs.dirs[parent] {
 			return "", 1
 		}
-		// Читаем stdin до EOF — соответствует поведению `cat`.
+		// Read stdin to EOF — matches `cat` behavior.
 		buf, err := io.ReadAll(stdin)
 		if err != nil {
 			return "", 1
@@ -94,8 +94,8 @@ func (fs *liveFs) handle(t *testing.T, cmd string, stdin io.Reader) (stdout stri
 	}
 }
 
-// liveShellTarget — обработчик SSH-сервера, который вызывает liveFs.handle для
-// каждой команды exec. Канал session принимает stdin для cat-команды.
+// liveShellTarget — an SSH-server handler that calls liveFs.handle for every
+// exec command. The session channel accepts stdin for the cat command.
 func liveShellTarget(fs *liveFs) func(t *testing.T, sc *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 	return func(t *testing.T, _ *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 		go ssh.DiscardRequests(reqs)
@@ -138,10 +138,10 @@ func liveShellTarget(fs *liveFs) func(t *testing.T, sc *ssh.ServerConn, chans <-
 	}
 }
 
-// TestDeliverThenRunThenCleanup_LiveSSH — end-to-end через in-process SSH:
-// поднимаем target, ShaDeliverer кладёт файлы через ssh exec, ShaCleaner их
-// удаляет. Доказывает совместимость наших exec-команд с реальным sshd-каналом
-// (без отдельной зависимости sftp/scp).
+// TestDeliverThenRunThenCleanup_LiveSSH — end-to-end over in-process SSH:
+// bring up a target, ShaDeliverer places files via ssh exec, ShaCleaner
+// removes them. Proves our exec commands are compatible with a real sshd
+// channel (without a separate sftp/scp dependency).
 func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 	fs := newLiveFs(t)
@@ -166,7 +166,7 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// Готовим локальный «soul-бинарь» и «модуль».
+	// Prepare a local "soul binary" and "module".
 	soulDir := t.TempDir()
 	soulPath := filepath.Join(soulDir, "soul")
 	if err := os.WriteFile(soulPath, []byte("SOUL-BIN-LIVE"), 0o755); err != nil {
@@ -191,7 +191,7 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 		t.Fatalf("модуль не доехал, got %q ok=%v", got, ok)
 	}
 
-	// Повторный Deliver — должен быть idempotent (sha256 совпадёт).
+	// Repeat Deliver — must be idempotent (sha256 will match).
 	beforeFiles := len(fs.files)
 	if err := d.Deliver(ctx, sess, SoulSpec{
 		SoulBinaryPath: soulPath,

@@ -1,10 +1,10 @@
 //go:build integration
 
-// Integration-тест Redis-клиента и lease-семантики на реальном redis:7
-// через testcontainers-go (generic container — отдельный модуль
-// `testcontainers/modules/redis` не подключаем, чтобы не плодить зависимости).
+// Integration test for the Redis client and lease semantics against a real
+// redis:7 via testcontainers-go (generic container — we don't pull in the
+// separate `testcontainers/modules/redis` module, to avoid extra dependencies).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 ./internal/redis/...
@@ -115,7 +115,7 @@ func TestIntegration_LeaseAcquireRenewRelease(t *testing.T) {
 		t.Errorf("Renew: %v", err)
 	}
 
-	// Конкурент не должен получить ключ.
+	// A competitor must not get the key.
 	if _, err := Acquire(ctx, c, key, "keeper-int-b", 5*time.Second); !errors.Is(err, ErrLeaseTaken) {
 		t.Errorf("competing Acquire err = %v, want ErrLeaseTaken", err)
 	}
@@ -124,7 +124,7 @@ func TestIntegration_LeaseAcquireRenewRelease(t *testing.T) {
 		t.Errorf("Release: %v", err)
 	}
 
-	// После Release конкурент проходит.
+	// After Release, the competitor succeeds.
 	l2, err := Acquire(ctx, c, key, "keeper-int-b", 5*time.Second)
 	if err != nil {
 		t.Errorf("Acquire after Release: %v", err)
@@ -144,7 +144,7 @@ func TestIntegration_LeaseExpiry(t *testing.T) {
 
 	key := uniqueKey(t)
 
-	// Короткий TTL, без Renew — Renew после expiry должен вернуть ErrLeaseLost.
+	// Short TTL, no Renew — Renew after expiry must return ErrLeaseLost.
 	l, err := Acquire(ctx, c, key, "keeper-int-a", 500*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -163,8 +163,8 @@ func uniqueKey(t *testing.T) string {
 }
 
 // TestIntegration_OutboundPubSub_RoundTrip — real Redis pub/sub:
-// PublishOutbound от одного клиента, SubscribeOutbound на другом,
-// FromKeeper доходит через protojson-envelope.
+// PublishOutbound from one client, SubscribeOutbound on another,
+// FromKeeper arrives via a protojson envelope.
 func TestIntegration_OutboundPubSub_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -225,7 +225,7 @@ func TestIntegration_OutboundPubSub_RoundTrip(t *testing.T) {
 }
 
 // TestIntegration_OutboundPubSub_SelfFilter — real Redis: self-origin
-// сообщения отфильтровываются.
+// messages are filtered out.
 func TestIntegration_OutboundPubSub_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -273,13 +273,13 @@ func TestIntegration_OutboundPubSub_SelfFilter(t *testing.T) {
 			t.Errorf("unexpected extra message: payload = %T", got.GetPayload())
 		}
 	case <-time.After(500 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered out.
 	}
 }
 
 // TestIntegration_ApplyBusPubSub_RoundTrip — real Redis pub/sub:
-// PublishApplyEvent от одного клиента, SubscribeApplyEvent на другом,
-// событие доходит через JSON-envelope.
+// PublishApplyEvent from one client, SubscribeApplyEvent on another,
+// the event arrives via a JSON envelope.
 func TestIntegration_ApplyBusPubSub_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -334,7 +334,7 @@ func TestIntegration_ApplyBusPubSub_RoundTrip(t *testing.T) {
 }
 
 // TestIntegration_ApplyBusPubSub_SelfFilter — real Redis: self-origin
-// сообщения отфильтровываются.
+// messages are filtered out.
 func TestIntegration_ApplyBusPubSub_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -380,13 +380,13 @@ func TestIntegration_ApplyBusPubSub_SelfFilter(t *testing.T) {
 			t.Errorf("unexpected extra message: kind = %q", got.Kind)
 		}
 	case <-time.After(500 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered out.
 	}
 }
 
 // TestIntegration_Summons_RoundTrip — real Redis pub/sub:
-// PublishSummons от одного клиента, SubscribeSummons на другом, onSignal
-// дёрнут. Self-filter отсутствует (origin неважен).
+// PublishSummons from one client, SubscribeSummons on another, onSignal
+// fires. No self-filter (origin doesn't matter).
 func TestIntegration_Summons_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -430,16 +430,17 @@ func TestIntegration_Summons_RoundTrip(t *testing.T) {
 
 	select {
 	case <-fired:
-		// OK — callback вызван.
+		// OK — callback fired.
 	case <-time.After(5 * time.Second):
 		t.Fatal("onSignal not called within 5s")
 	}
 }
 
 // TestIntegration_RBACInvalidate_RoundTrip — real Redis pub/sub:
-// PublishRBACInvalidate с ноды A (origin_kid=A), SubscribeRBACInvalidate на
-// ноде B (kid=B) получает сигнал «перечитай RBAC-снимок». Origin отличается от
-// подписчика → self-filter не срабатывает, сообщение доходит до Channel().
+// PublishRBACInvalidate from node A (origin_kid=A), SubscribeRBACInvalidate on
+// node B (kid=B) receives the "re-read the RBAC snapshot" signal. Origin
+// differs from the subscriber → self-filter doesn't trigger, the message
+// reaches Channel().
 func TestIntegration_RBACInvalidate_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -489,10 +490,11 @@ func TestIntegration_RBACInvalidate_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_RBACInvalidate_SelfFilter — real Redis: подписчик с kid=A
-// собственный publish (origin_kid=A) ИГНОРИРУЕТ (self-filter по KID), а
-// cross-node сигнал (origin_kid=B) пропускает. Ключевой инвариант: нода не
-// рефрешит снимок по своему же publish-у (полагается на TTL-poll, B1-fallback).
+// TestIntegration_RBACInvalidate_SelfFilter — real Redis: a subscriber with
+// kid=A IGNORES its own publish (origin_kid=A) (self-filter by KID), but lets
+// a cross-node signal (origin_kid=B) through. Key invariant: a node doesn't
+// refresh its snapshot on its own publish (relies on TTL-poll, the B1
+// fallback).
 func TestIntegration_RBACInvalidate_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -515,9 +517,9 @@ func TestIntegration_RBACInvalidate_SelfFilter(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 
-	// Сначала self-origin (должен быть отфильтрован), затем other-origin (должен
-	// дойти). Порядок гарантирует: если бы self НЕ фильтровался, он пришёл бы
-	// первым и тест упал бы на проверке origin_kid.
+	// self-origin first (must be filtered), then other-origin (must arrive).
+	// The ordering guarantees: if self were NOT filtered, it would arrive
+	// first and the test would fail the origin_kid check.
 	if _, err := PublishRBACInvalidate(ctx, c, selfKID); err != nil {
 		t.Fatalf("PublishRBACInvalidate self: %v", err)
 	}
@@ -534,19 +536,19 @@ func TestIntegration_RBACInvalidate_SelfFilter(t *testing.T) {
 		t.Fatal("did not receive other-origin invalidate within 5s")
 	}
 
-	// Лишних сообщений быть не должно — self отфильтрован.
+	// There must be no extra messages — self was filtered out.
 	select {
 	case got, ok := <-sub.Channel():
 		if ok {
 			t.Errorf("unexpected extra message: origin_kid = %q", got.OriginKID)
 		}
 	case <-time.After(500 * time.Millisecond):
-		// OK — self-origin отфильтрован.
+		// OK — self-origin was filtered out.
 	}
 }
 
-// TestIntegration_ReadSoulLeaseHolder_RoundTrip — real Redis: lease
-// hold-value читается через ReadSoulLeaseHolder.
+// TestIntegration_ReadSoulLeaseHolder_RoundTrip — real Redis: the lease
+// hold value is read via ReadSoulLeaseHolder.
 func TestIntegration_ReadSoulLeaseHolder_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

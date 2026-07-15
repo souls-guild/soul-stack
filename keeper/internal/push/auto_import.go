@@ -13,60 +13,60 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// AutoImportSystemAID — фиксированный AID, под которым auto-import пишет
-// `created_by_aid` для `push_providers`-строк и `archon_aid` в audit-events.
-// Не Архонт-оператор (нет JWT-инициатора), не [config.SourceKeeperInternal]
-// (другая семантика — миграция данных по согласию оператора, не автономная
-// инициатива Keeper-а). Отделено в системную AID для audit-фильтра.
+// AutoImportSystemAID — the fixed AID under which auto-import writes
+// `created_by_aid` for `push_providers` rows and `archon_aid` in audit-events.
+// Not an Archon operator (no JWT initiator), not [config.SourceKeeperInternal]
+// (different semantics — data migration by operator consent, not an autonomous
+// Keeper initiative). Kept as a separate system AID for the audit filter.
 //
-// FK на `operators(aid)` для `push_providers.created_by_aid` обязывает строку
-// `archon-system` существовать в реестре до первого auto-import-а. Строка
-// `operators(archon-system, created_via='system', created_by_aid=NULL)` посеяна
-// миграцией 086 (ADR-058(d)) — FK гарантирован после применения миграций.
+// The FK on `operators(aid)` for `push_providers.created_by_aid` requires the
+// `archon-system` row to exist in the registry before the first auto-import.
+// The row `operators(archon-system, created_via='system', created_by_aid=NULL)`
+// is seeded by migration 086 (ADR-058(d)) — the FK is guaranteed after migrations apply.
 const AutoImportSystemAID = "archon-system"
 
-// AutoImporterReader — узкая read-поверхность над storage push_providers,
-// нужная импортёру: проверка существования по PK перед INSERT. Симметрично
-// [PushProviderResolver]; вынесено отдельным интерфейсом, чтобы unit-тест мог
-// подменить fake без подъёма Postgres.
+// AutoImporterReader — a narrow read surface over push_providers storage,
+// needed by the importer: existence check by PK before INSERT. Symmetric to
+// [PushProviderResolver]; split into its own interface so a unit test can
+// swap in a fake without spinning up Postgres.
 type AutoImporterReader interface {
 	SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error)
 }
 
-// AutoImporterInserter — узкая write-поверхность для INSERT push_providers
-// при auto-import-е. Отдельно от [pushprovider.Service.Create]: импорт не
-// должен публиковать `push-providers:changed` per-row и не пишет
-// `push-provider.created` audit (вместо него — `push-provider.imported_from_config`
-// с источником `config_bootstrap`).
+// AutoImporterInserter — a narrow write surface for INSERT push_providers
+// during auto-import. Separate from [pushprovider.Service.Create]: import
+// must not publish per-row `push-providers:changed` and doesn't write
+// `push-provider.created` audit (instead — `push-provider.imported_from_config`
+// with source `config_bootstrap`).
 type AutoImporterInserter interface {
 	Insert(ctx context.Context, p *pushprovider.PushProvider) error
 }
 
-// AutoImporterTargetReader — узкая read-поверхность для проверки текущего
-// `souls.ssh_target` (NULL → импортируем, не NULL → skip). Симметрично
-// [PGTargetReader], но повторно объявлено, чтобы держать ровный per-importer
-// набор сужений (на случай будущего разъезда).
+// AutoImporterTargetReader — a narrow read surface for checking the current
+// `souls.ssh_target` (NULL → import, not NULL → skip). Symmetric to
+// [PGTargetReader], but redeclared to keep an even per-importer set of
+// narrow interfaces (in case they diverge in the future).
 type AutoImporterTargetReader interface {
 	SelectSshTarget(ctx context.Context, sid string) (*soul.SSHTarget, error)
 }
 
-// AutoImporterTargetWriter — узкая write-поверхность для UPDATE
-// `souls.ssh_target` при auto-import-е.
+// AutoImporterTargetWriter — a narrow write surface for UPDATE
+// `souls.ssh_target` during auto-import.
 type AutoImporterTargetWriter interface {
 	UpdateSshTarget(ctx context.Context, sid string, target *soul.SSHTarget) error
 }
 
-// AuditWriter — узкое подмножество [audit.Writer]; повторно объявлено локально,
-// чтобы фейк в unit-тесте не зависел от пакета audit.
+// AuditWriter — a narrow subset of [audit.Writer]; redeclared locally so a
+// fake in a unit test doesn't depend on the audit package.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// AutoImporterDeps — зависимости [AutoImporter].
+// AutoImporterDeps — dependencies of [AutoImporter].
 //
-// Все поля immutable после конструктора. Не использует *pgxpool.Pool напрямую —
-// принимает узкие read/write-поверхности (read+write по targets, read+insert по
-// providers), чтобы unit-тесты ходили через fake без подъёма PG.
+// All fields are immutable after construction. Doesn't use *pgxpool.Pool
+// directly — accepts narrow read/write surfaces (read+write for targets,
+// read+insert for providers) so unit tests can go through a fake without PG.
 type AutoImporterDeps struct {
 	TargetReader   AutoImporterTargetReader
 	TargetWriter   AutoImporterTargetWriter
@@ -76,25 +76,25 @@ type AutoImporterDeps struct {
 	Logger         *slog.Logger
 }
 
-// AutoImporter — one-shot миграция inline-`keeper.yml::push`-блоков в
-// PG-источники (ADR-032 amendment 2026-05-26, S7-4).
+// AutoImporter — a one-shot migration of inline `keeper.yml::push` blocks
+// into PG sources (ADR-032 amendment 2026-05-26, S7-4).
 //
-// Запускается один раз в pipeline старта Keeper-а (см. wire-up в
-// `runLegacyAutoImport` / `keeper/cmd/keeper`). Идемпотентно: записи,
-// присутствующие в PG, пропускаются — повторный старт = no-op.
+// Runs once in the Keeper start pipeline (see wire-up in
+// `runLegacyAutoImport` / `keeper/cmd/keeper`). Idempotent: rows already
+// present in PG are skipped — a repeat start is a no-op.
 //
-// Гейт — флаги `push.auto_import_legacy_targets` и
-// `push.auto_import_legacy_providers` в [config.KeeperPush]. Default false:
-// без явного opt-in импорт не выполняется (молчаливая миграция данных
-// запрещена security policy).
+// Gated by the `push.auto_import_legacy_targets` and
+// `push.auto_import_legacy_providers` flags in [config.KeeperPush]. Default
+// false: without explicit opt-in, no import runs (silent data migration is
+// forbidden by security policy).
 type AutoImporter struct {
 	deps AutoImporterDeps
 }
 
-// NewAutoImporter собирает импортёр. Любой nil в deps → ошибка конструктора
-// (импортёр не имеет смысла без хотя бы одной полной пары: для targets — read
-// + write, для providers — read + write; auditor + logger обязательны для
-// аудит-trail-а).
+// NewAutoImporter assembles the importer. Any nil in deps → constructor error
+// (the importer is meaningless without at least one complete pair: read +
+// write for targets, read + write for providers; auditor + logger are
+// required for the audit trail).
 func NewAutoImporter(deps AutoImporterDeps) (*AutoImporter, error) {
 	if deps.TargetReader == nil || deps.TargetWriter == nil {
 		return nil, errors.New("push: AutoImporter targets reader/writer is nil")
@@ -111,19 +111,21 @@ func NewAutoImporter(deps AutoImporterDeps) (*AutoImporter, error) {
 	return &AutoImporter{deps: deps}, nil
 }
 
-// ImportLegacyOnStart выполняет one-shot миграцию двух blocks по флагам
-// [config.KeeperPush.AutoImportLegacyTargets] / `AutoImportLegacyProviders`.
+// ImportLegacyOnStart runs the one-shot migration of the two blocks per the
+// [config.KeeperPush.AutoImportLegacyTargets] / `AutoImportLegacyProviders` flags.
 //
-// Контракт ошибок:
-//   - PG-ошибка при чтении/записи любой записи прерывает импорт (fail-closed:
-//     оператор включил auto-import, не должен молча получить «половина
-//     импортирована, половина — нет»). Уже импортированные строки остаются;
-//     неимпортированные — на следующем старте подхватятся (идемпотент);
-//   - отсутствующая `souls`-row для config-target SID-а — WARN-skip (не fatal:
-//     soul ещё не зарегистрирован, импорт SSH-реквизита бессмыслен — оператор
-//     потом сам PUT-нёт через `/v1/souls/{sid}/ssh-target`);
-//   - audit-write fail — лог WARN, продолжаем импорт (storage уже committed,
-//     mismatch audit↔storage не блокирует следующие записи; паттерн bootstrap-а).
+// Error contract:
+//   - a PG error reading/writing any row aborts the import (fail-closed: the
+//     operator turned on auto-import and shouldn't silently end up with "half
+//     imported, half not"). Already-imported rows stay; not-yet-imported ones
+//     get picked up on the next start (idempotent);
+//   - a missing `souls` row for a config-target SID — WARN-skip (not fatal:
+//     the soul isn't registered yet, importing an SSH credential is
+//     meaningless — the operator later PUTs it themselves via
+//     `/v1/souls/{sid}/ssh-target`);
+//   - audit-write failure — WARN log, import continues (storage is already
+//     committed, an audit↔storage mismatch doesn't block subsequent rows;
+//     the bootstrap pattern).
 func (i *AutoImporter) ImportLegacyOnStart(ctx context.Context, cfg config.KeeperPush) error {
 	if cfg.AutoImportLegacyTargets && len(cfg.Targets) > 0 {
 		if err := i.importTargets(ctx, cfg.Targets); err != nil {
@@ -143,7 +145,7 @@ func (i *AutoImporter) importTargets(ctx context.Context, targets []config.Keepe
 
 	for _, t := range targets {
 		if t.SID == "" {
-			// Schema-фаза уже отвергает такое; defense-in-depth.
+			// The schema phase already rejects this; defense-in-depth.
 			skipped++
 			continue
 		}
@@ -158,16 +160,16 @@ func (i *AutoImporter) importTargets(ctx context.Context, targets []config.Keepe
 			return fmt.Errorf("read souls.ssh_target %q: %w", t.SID, err)
 		}
 		if existing != nil {
-			// PG canonical-источник уже содержит данные — не перезаписываем
-			// (идемпотент, повторный старт no-op).
+			// The PG canonical source already has data — don't overwrite it
+			// (idempotent, a repeat start is a no-op).
 			skipped++
 			continue
 		}
 
-		// Pilot-форма S6 хранит только заданное оператором (резолверы
-		// подставляют дефолты на пустых полях). Импорт сохраняет ту же
-		// семантику: 0/"" пишем в jsonb как есть, дефолты подставит
-		// PGFallbackTargetResolver при резолве.
+		// The pilot form S6 stores only what the operator set (resolvers fill
+		// in defaults for empty fields). Import keeps the same semantics: 0/""
+		// is written to jsonb as-is, PGFallbackTargetResolver fills in defaults
+		// at resolve time.
 		target := &soul.SSHTarget{
 			SSHPort:  t.SSHPort,
 			SSHUser:  t.SSHUser,
@@ -180,7 +182,7 @@ func (i *AutoImporter) importTargets(ctx context.Context, targets []config.Keepe
 		i.writeAudit(ctx, &audit.Event{
 			EventType: audit.EventSoulSshTargetImportedFromConfig,
 			Source:    audit.SourceConfigBootstrap,
-			// archon_aid: NULL — system-action, не оператор-инициатор.
+			// archon_aid: NULL — system action, not an operator initiator.
 			Payload: map[string]any{
 				"sid":       t.SID,
 				"ssh_port":  t.SSHPort,
@@ -209,7 +211,7 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 		}
 		_, err := i.deps.ProviderReader.SelectByName(ctx, p.Name)
 		if err == nil {
-			// PG canonical-источник уже содержит запись — skip.
+			// The PG canonical source already has the row — skip.
 			skipped++
 			continue
 		}
@@ -223,8 +225,8 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 			CreatedByAID: AutoImportSystemAID,
 		}
 		if err := i.deps.ProviderWriter.Insert(ctx, entry); err != nil {
-			// ErrPushProviderAlreadyExists на race здесь невозможен (старт
-			// последовательный, один импортёр); пробрасываем как PG-ошибку.
+			// ErrPushProviderAlreadyExists on a race is impossible here (startup
+			// is sequential, a single importer); propagate as a PG error.
 			return fmt.Errorf("insert push_providers %q: %w", p.Name, err)
 		}
 
@@ -246,9 +248,10 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 	return nil
 }
 
-// writeAudit — best-effort обёртка над auditor.Write. Storage уже committed,
-// провал audit-write не должен прерывать импорт следующих записей (паттерн
-// bootstrap.ErrAuditWriteFailed — расхождение разрешается оператором вручную).
+// writeAudit — a best-effort wrapper over auditor.Write. Storage is already
+// committed, an audit-write failure must not abort importing subsequent rows
+// (the bootstrap.ErrAuditWriteFailed pattern — the mismatch is resolved by
+// the operator manually).
 func (i *AutoImporter) writeAudit(ctx context.Context, event *audit.Event) {
 	if err := i.deps.Auditor.Write(ctx, event); err != nil {
 		i.deps.Logger.Warn("push: S7-4 auto-import audit write failed",
@@ -257,10 +260,10 @@ func (i *AutoImporter) writeAudit(ctx context.Context, event *audit.Event) {
 	}
 }
 
-// paramsKeys возвращает отсортированный список ключей params без значений
-// (симметрия с pushprovider.Service.Create payload: ключи фиксируются для
-// аудит-trail-а, sensitive-значения по политике в audit не пишутся —
-// устойчивость к будущему расширению allow-list).
+// paramsKeys returns a sorted list of params keys without values (symmetric
+// with the pushprovider.Service.Create payload: keys are recorded for the
+// audit trail, sensitive values are never written to audit per policy —
+// robust to a future allow-list extension).
 func paramsKeys(params map[string]any) []string {
 	if len(params) == 0 {
 		return []string{}
@@ -273,19 +276,20 @@ func paramsKeys(params map[string]any) []string {
 	return keys
 }
 
-// PGTargetReadWriter / PGProviderReadWriter — конкретные адаптеры
-// pgxpool.Pool (или любой соответствующий ExecQueryRower) к интерфейсам
-// AutoImporterTargetReader+Writer / AutoImporterReader+Inserter. Live тонкая
-// обёртка; нужна, чтобы daemon-wire-up не строил два отдельных адаптера
-// (read+write одна и та же *pgxpool.Pool) и не светил pgx-deps в Auto-Importer.
+// PGTargetReadWriter / PGProviderReadWriter — concrete adapters from
+// pgxpool.Pool (or any matching ExecQueryRower) to the
+// AutoImporterTargetReader+Writer / AutoImporterReader+Inserter interfaces.
+// A thin live wrapper; needed so daemon wire-up doesn't build two separate
+// adapters (read+write over the same *pgxpool.Pool) and doesn't leak pgx
+// deps into Auto-Importer.
 
-// pgTargetReadWriter — продакшен-implementation для targets.
+// pgTargetReadWriter — the production implementation for targets.
 type pgTargetReadWriter struct {
 	db soul.ExecQueryRower
 }
 
-// NewPGTargetReadWriter возвращает реализацию AutoImporterTargetReader +
-// AutoImporterTargetWriter поверх soul.ExecQueryRower (тип *pgxpool.Pool).
+// NewPGTargetReadWriter returns an implementation of AutoImporterTargetReader +
+// AutoImporterTargetWriter over soul.ExecQueryRower (type *pgxpool.Pool).
 func NewPGTargetReadWriter(db soul.ExecQueryRower) interface {
 	AutoImporterTargetReader
 	AutoImporterTargetWriter
@@ -301,13 +305,13 @@ func (a *pgTargetReadWriter) UpdateSshTarget(ctx context.Context, sid string, ta
 	return soul.UpdateSshTarget(ctx, a.db, sid, target)
 }
 
-// pgProviderReadWriter — продакшен-implementation для providers.
+// pgProviderReadWriter — the production implementation for providers.
 type pgProviderReadWriter struct {
 	db pushprovider.ExecQueryRower
 }
 
-// NewPGProviderReadWriter возвращает реализацию AutoImporterReader +
-// AutoImporterInserter поверх pushprovider.ExecQueryRower (*pgxpool.Pool).
+// NewPGProviderReadWriter returns an implementation of AutoImporterReader +
+// AutoImporterInserter over pushprovider.ExecQueryRower (*pgxpool.Pool).
 func NewPGProviderReadWriter(db pushprovider.ExecQueryRower) interface {
 	AutoImporterReader
 	AutoImporterInserter

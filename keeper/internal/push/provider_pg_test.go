@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 )
 
-// fakePushProviderReader — мок [PushProviderResolver] для unit-тестов.
+// fakePushProviderReader is a mock [PushProviderResolver] for unit tests.
 type fakePushProviderReader struct {
 	provider *pushprovider.PushProvider
 	err      error
@@ -21,7 +21,7 @@ func (r *fakePushProviderReader) SelectByName(_ context.Context, _ string) (*pus
 	return r.provider, r.err
 }
 
-// fakeLegacyFallback — мок [LegacyPushProvidersFallback].
+// fakeLegacyFallback is a mock [LegacyPushProvidersFallback].
 type fakeLegacyFallback struct {
 	params map[string]any
 	ok     bool
@@ -45,7 +45,7 @@ func TestPGFallback_PGFirstReturnsPGParams(t *testing.T) {
 	r := &PGFallbackProviderResolver{
 		Reader:      reader,
 		Fallback:    fallback,
-		AllowLegacy: true, // включён, но не должен сработать (PG-запись есть)
+		AllowLegacy: true, // enabled, but shouldn't trigger (PG row exists)
 	}
 	params, err := r.ResolveParams(context.Background(), "vault-bastion")
 	if err != nil {
@@ -125,7 +125,7 @@ func TestPGFallback_WARNOnceOnly(t *testing.T) {
 
 func TestPGFallback_LegacyNotFoundReturnsNotConfigured(t *testing.T) {
 	reader := &fakePushProviderReader{err: pushprovider.ErrPushProviderNotFound}
-	fallback := &fakeLegacyFallback{ok: false} // и в yaml нет
+	fallback := &fakeLegacyFallback{ok: false} // not in yaml either
 	r := &PGFallbackProviderResolver{
 		Reader: reader, Fallback: fallback, AllowLegacy: true,
 	}

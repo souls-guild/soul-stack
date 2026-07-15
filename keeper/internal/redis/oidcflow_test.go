@@ -28,8 +28,8 @@ func TestOIDCFlowStore_SaveConsume(t *testing.T) {
 	}
 }
 
-// TestOIDCFlowStore_SingleUse — ★ anti-replay: повторный Consume того же state
-// возвращает ErrOIDCFlowNotFound (GETDEL удалил запись на первом чтении).
+// TestOIDCFlowStore_SingleUse — ★ anti-replay: a repeat Consume of the same
+// state returns ErrOIDCFlowNotFound (GETDEL deleted the entry on the first read).
 func TestOIDCFlowStore_SingleUse(t *testing.T) {
 	c, _ := newClientMR(t)
 	store, _ := NewOIDCFlowStore(c, time.Minute)
@@ -44,7 +44,7 @@ func TestOIDCFlowStore_SingleUse(t *testing.T) {
 	}
 }
 
-// TestOIDCFlowStore_UnknownState — неизвестный state → ErrOIDCFlowNotFound.
+// TestOIDCFlowStore_UnknownState — an unknown state → ErrOIDCFlowNotFound.
 func TestOIDCFlowStore_UnknownState(t *testing.T) {
 	c, _ := newClientMR(t)
 	store, _ := NewOIDCFlowStore(c, time.Minute)
@@ -53,21 +53,21 @@ func TestOIDCFlowStore_UnknownState(t *testing.T) {
 	}
 }
 
-// TestOIDCFlowStore_Expiry — истёкший TTL → ErrOIDCFlowNotFound.
+// TestOIDCFlowStore_Expiry — an expired TTL → ErrOIDCFlowNotFound.
 func TestOIDCFlowStore_Expiry(t *testing.T) {
 	c, mr := newClientMR(t)
 	store, _ := NewOIDCFlowStore(c, time.Minute)
 	ctx := context.Background()
 
 	_ = store.Save(ctx, "state-3", OIDCFlowState{Nonce: "n", CodeVerifier: "v"})
-	mr.FastForward(2 * time.Minute) // протолкнуть TTL
+	mr.FastForward(2 * time.Minute) // push past the TTL
 	if _, err := store.Consume(ctx, "state-3"); !errors.Is(err, ErrOIDCFlowNotFound) {
 		t.Fatalf("expired state err=%v, want ErrOIDCFlowNotFound", err)
 	}
 }
 
-// TestOIDCFlowStore_Collision — повторный Save того же state (без потребления)
-// отвергается (SET NX), чтобы не затереть активный flow.
+// TestOIDCFlowStore_Collision — a repeat Save of the same state (without
+// consuming it) is rejected (SET NX), to avoid clobbering an active flow.
 func TestOIDCFlowStore_Collision(t *testing.T) {
 	c, _ := newClientMR(t)
 	store, _ := NewOIDCFlowStore(c, time.Minute)

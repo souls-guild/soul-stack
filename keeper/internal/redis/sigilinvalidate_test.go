@@ -44,9 +44,9 @@ func TestSubscribeSigilInvalidate_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestSigilInvalidate_RoundTrip — publish/subscribe полный цикл: подписчик
-// получает invalidate-сообщение со штампом At. Self-filter-а нет (мутирующая
-// нода тоже обязана re-broadcast-ить своим Soul-ам).
+// TestSigilInvalidate_RoundTrip — full publish/subscribe cycle: a
+// subscriber receives the invalidate message with an At stamp. There's no
+// self-filter (the mutating node must also re-broadcast to its own Souls).
 func TestSigilInvalidate_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -83,8 +83,8 @@ func TestSigilInvalidate_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestSigilInvalidate_NoSelfFilter — собственная публикация НЕ фильтруется:
-// мутирующая нода должна получить свой сигнал и re-broadcast-ить Soul-ам.
+// TestSigilInvalidate_NoSelfFilter — its own publish is NOT filtered: the
+// mutating node must receive its own signal and re-broadcast to its Souls.
 func TestSigilInvalidate_NoSelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -112,7 +112,7 @@ func TestSigilInvalidate_NoSelfFilter(t *testing.T) {
 	}
 }
 
-// TestSigilInvalidate_NoSubscribers — publish без подписчиков → 0, без ошибки.
+// TestSigilInvalidate_NoSubscribers — publish with no subscribers → 0, no error.
 func TestSigilInvalidate_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	n, err := PublishSigilInvalidate(context.Background(), c)
@@ -124,8 +124,8 @@ func TestSigilInvalidate_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestSigilInvalidate_CloseShutsDownGoroutine — Close завершает goroutine и
-// закрывает out-канал; повторный Close идемпотентен.
+// TestSigilInvalidate_CloseShutsDownGoroutine — Close terminates the
+// goroutine and closes the out channel; a repeated Close is idempotent.
 func TestSigilInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -154,8 +154,8 @@ func TestSigilInvalidate_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestSigilInvalidate_CloseSurvivesConcurrentReceive — гонка Close vs поток
-// данных. -race должен пройти.
+// TestSigilInvalidate_CloseSurvivesConcurrentReceive — a race between Close
+// and the data stream. -race must pass.
 func TestSigilInvalidate_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

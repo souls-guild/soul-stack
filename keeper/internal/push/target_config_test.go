@@ -11,7 +11,7 @@ import (
 func TestConfigTargetResolver_HappyPath(t *testing.T) {
 	r := NewConfigTargetResolver([]config.KeeperPushTarget{
 		{SID: "soul-a.example.com", SSHPort: 2222, SSHUser: "deploy", SoulPath: "/opt/soul/bin/soul"},
-		{SID: "soul-b.example.com"}, // дефолты
+		{SID: "soul-b.example.com"}, // defaults
 	})
 
 	a, err := r.Resolve(context.Background(), "soul-a.example.com")
@@ -42,9 +42,9 @@ func TestConfigTargetResolver_NotFound(t *testing.T) {
 }
 
 func TestConfigTargetResolver_EmptySIDSkipped(t *testing.T) {
-	// Defense-in-depth: schema-фаза отвергает пустой SID, но если попало —
-	// конструктор молча пропускает запись (не индексирует), не создавая
-	// пустой ключ "" в map.
+	// Defense in depth: the schema phase rejects an empty SID, but if one
+	// slips through, the constructor silently skips the entry (doesn't
+	// index it), avoiding an empty "" key in the map.
 	r := NewConfigTargetResolver([]config.KeeperPushTarget{
 		{SID: ""},
 		{SID: "valid.example.com"},

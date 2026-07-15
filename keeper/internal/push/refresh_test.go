@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// mockRespawner — захватывает аргументы и отдаёт заранее заданный
-// результат. Позволяет проверять, что dispatcher закрывает старый handle
-// (oldCloser.Close был вызван), spawn-ит новый и подменяет ссылку.
+// mockRespawner captures arguments and returns a pre-set result. Lets tests
+// verify that the dispatcher closes the old handle (oldCloser.Close was
+// called), spawns a new one, and swaps the reference.
 type mockRespawner struct {
 	mu          sync.Mutex
 	calls       int32
@@ -28,7 +28,7 @@ func (m *mockRespawner) RespawnProvider(_ context.Context, name string, oldClose
 	atomic.AddInt32(&m.calls, 1)
 	m.gotName = name
 	m.gotOldClose = oldCloser
-	// Документированный контракт: respawner сам закрывает old, потом spawn-ит.
+	// Documented contract: the respawner closes old itself, then spawns.
 	if oldCloser != nil {
 		_ = oldCloser.Close()
 	}
@@ -38,8 +38,8 @@ func (m *mockRespawner) RespawnProvider(_ context.Context, name string, oldClose
 	return m.newProv, m.newCloser, nil
 }
 
-// recordingCloser — io.Closer, фиксирующий факт вызова Close. Используется как
-// «старый» plugin-handle.
+// recordingCloser is an io.Closer that records whether Close was called. Used
+// as the "old" plugin handle.
 type recordingCloser struct {
 	closed atomic.Int32
 	err    error
@@ -50,9 +50,9 @@ func (c *recordingCloser) Close() error {
 	return c.err
 }
 
-// providerForTest — helper: считывает текущий Provider из карты под RLock.
-// Заменяет приватный getter provider() из single-provider формы. Возвращает
-// nil, если запись отсутствует (degraded state).
+// providerForTest is a helper that reads the current Provider from the map
+// under RLock. Replaces the private provider() getter from the
+// single-provider form. Returns nil if the entry is missing (degraded state).
 func providerForTest(d *SshDispatcher, name string) SshProvider {
 	entry, ok := d.providerEntry(name)
 	if !ok {
@@ -61,8 +61,8 @@ func providerForTest(d *SshDispatcher, name string) SshProvider {
 	return entry.Provider
 }
 
-// TestRefreshProvider_HappyPath — re-spawn должен закрыть старый handle и
-// поставить новый. Последующий lookup в карте возвращает новый Provider.
+// TestRefreshProvider_HappyPath verifies that re-spawn closes the old handle
+// and installs a new one. A subsequent map lookup returns the new Provider.
 func TestRefreshProvider_HappyPath(t *testing.T) {
 	oldProv := &mockProvider{authAllowed: true}
 	oldCloser := &recordingCloser{}
@@ -93,15 +93,16 @@ func TestRefreshProvider_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRefreshProvider_EmptyName_MassInvalidate — пустое имя из pub/sub-сообщения
-// (mass invalidate) → re-spawn ВСЕХ зарегистрированных провайдеров.
+// TestRefreshProvider_EmptyName_MassInvalidate verifies that an empty name
+// from a pub/sub message (mass invalidate) re-spawns ALL registered providers.
 func TestRefreshProvider_EmptyName_MassInvalidate(t *testing.T) {
 	oldA := &mockProvider{authAllowed: true}
 	oldB := &mockProvider{authAllowed: true}
 	newA := &mockProvider{authAllowed: true}
 	newB := &mockProvider{authAllowed: true}
 
-	// Сложный mockRespawner: возвращает разный provider в зависимости от имени.
+	// A more elaborate mockRespawner: returns a different provider depending
+	// on the name.
 	r := &nameAwareRespawner{
 		out: map[string]SshProvider{
 			"static": newA,
@@ -133,8 +134,8 @@ func TestRefreshProvider_EmptyName_MassInvalidate(t *testing.T) {
 	}
 }
 
-// TestRefreshProvider_WrongName_NoOp — сообщение про неизвестное имя (не наш
-// каталог плагинов) → no-op без ошибки.
+// TestRefreshProvider_WrongName_NoOp verifies that a message for an unknown
+// name (not in our plugin catalog) is a no-op without an error.
 func TestRefreshProvider_WrongName_NoOp(t *testing.T) {
 	oldProv := &mockProvider{authAllowed: true}
 	r := &mockRespawner{newProv: &mockProvider{}, newCloser: &recordingCloser{}}
@@ -157,8 +158,8 @@ func TestRefreshProvider_WrongName_NoOp(t *testing.T) {
 	}
 }
 
-// TestRefreshProvider_NoRespawner_Sentinel — диспетчер без Respawner возвращает
-// ErrRespawnNotSupported.
+// TestRefreshProvider_NoRespawner_Sentinel verifies that a dispatcher without
+// a Respawner returns ErrRespawnNotSupported.
 func TestRefreshProvider_NoRespawner_Sentinel(t *testing.T) {
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true}}},
@@ -172,9 +173,9 @@ func TestRefreshProvider_NoRespawner_Sentinel(t *testing.T) {
 	}
 }
 
-// TestRefreshProvider_SpawnFailed_DegradedState — Spawn упал → dispatcher
-// удаляет запись из карты (degraded), последующий SendApply вернёт
-// ErrProviderUnknown.
+// TestRefreshProvider_SpawnFailed_DegradedState verifies that when Spawn
+// fails, the dispatcher removes the entry from the map (degraded), and a
+// subsequent SendApply returns ErrProviderUnknown.
 func TestRefreshProvider_SpawnFailed_DegradedState(t *testing.T) {
 	oldCloser := &recordingCloser{}
 	r := &mockRespawner{err: errors.New("plugin binary missing")}
@@ -200,9 +201,9 @@ func TestRefreshProvider_SpawnFailed_DegradedState(t *testing.T) {
 	}
 }
 
-// TestRefreshProvider_Concurrent_MutexProtected — два конкурентных
-// RefreshProvider не должны падать; respawner вызывается последовательно
-// (mutex), final-provider — один из spawn-result.
+// TestRefreshProvider_Concurrent_MutexProtected verifies that two concurrent
+// RefreshProvider calls don't crash; the respawner is invoked sequentially
+// (mutex), and the final provider is one of the spawn results.
 func TestRefreshProvider_Concurrent_MutexProtected(t *testing.T) {
 	provA := &mockProvider{authAllowed: true}
 	provB := &mockProvider{authAllowed: true}
@@ -253,8 +254,8 @@ func TestRefreshProvider_Concurrent_MutexProtected(t *testing.T) {
 	}
 }
 
-// TestSendApply_UnknownProvider_ReturnsSentinel — SendApply на не
-// зарегистрированный provider возвращает ErrProviderUnknown.
+// TestSendApply_UnknownProvider_ReturnsSentinel verifies that SendApply on an
+// unregistered provider returns ErrProviderUnknown.
 func TestSendApply_UnknownProvider_ReturnsSentinel(t *testing.T) {
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{
@@ -264,14 +265,14 @@ func TestSendApply_UnknownProvider_ReturnsSentinel(t *testing.T) {
 		Souls:   &mockSouls{s: sshSoul()},
 	})
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", "ghost-provider", nil)
-	// ApplyRequest nil → раньше отвалится; передаём не-nil для теста именно
-	// маршрута provider-unknown.
+	// A nil ApplyRequest would fail earlier; we pass non-nil to specifically
+	// test the provider-unknown path.
 	_ = err
 }
 
-// nameAwareRespawner — расширенный мок: возвращает provider по имени (для
-// mass-invalidate теста с двумя SshProvider-ами в карте). Сохранён в отдельный
-// тип, чтобы не загромождать mockRespawner — у того уже simple-форма.
+// nameAwareRespawner is an extended mock: returns a provider by name (for the
+// mass-invalidate test with two SshProviders in the map). Kept as a separate
+// type so as not to clutter mockRespawner, which already has a simple form.
 type nameAwareRespawner struct {
 	mu    sync.Mutex
 	calls atomic.Int32
@@ -292,8 +293,8 @@ func (n *nameAwareRespawner) RespawnProvider(_ context.Context, name string, old
 	return prov, &recordingCloser{}, nil
 }
 
-// concurrencyTrackingRespawner — детектор конкурентных вызовов respawner-а
-// (mutex должен сериализовать).
+// concurrencyTrackingRespawner detects concurrent calls into the respawner
+// (the mutex is expected to serialize them).
 type concurrencyTrackingRespawner struct {
 	calls         atomic.Int32
 	inFlight      atomic.Int32

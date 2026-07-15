@@ -1,14 +1,14 @@
 package push
 
-// router.go — 3-tier resolver выбора SshProvider-плагина по SID (ADR-032
-// amendment 2026-05-27, P2 W-3 Multi-provider routing).
+// router.go — a 3-tier resolver for selecting the SshProvider plugin by SID
+// (ADR-032 amendment 2026-05-27, P2 W-3 Multi-provider routing).
 //
-// Контекст. До P2 single-provider pilot держал ровно одного SshProvider-плагина
-// per-keeper: оператор настраивал `vault-bastion` ИЛИ `static`, не оба
-// одновременно. P2 вводит карту провайдеров (W-2) и резолвер их выбора
-// per-SID — оператор может одновременно поднять несколько SshProvider-ов и
-// маршрутизировать SID-ы между ними (smoke prod-env через `static`, prod —
-// через `vault-bastion`).
+// Context. Before P2, the single-provider pilot held exactly one
+// SshProvider plugin per keeper: the operator configured either
+// `vault-bastion` or `static`, not both at once. P2 introduces a map of
+// providers (W-2) and a resolver that picks one per SID — the operator can
+// run several SshProviders at once and route SIDs between them (smoke a
+// prod env through `static`, prod through `vault-bastion`).
 //
 // Selector R1 (architect-decisions 2026-05-27, 3-tier resolve):
 //
@@ -16,12 +16,14 @@ package push
 //	Level 2: push.coven_default_providers     (per-coven default)
 //	Level 3: push.cluster_default_provider    (cluster fallback)
 //
-// Tiebreak при множественном coven-match (Soul в нескольких ковенах, каждый
-// настроен на свой провайдер): алфавитный порядок имён ковенов (детерминизм).
+// Tiebreak on multiple coven matches (a Soul in several covens, each
+// configured with its own provider): alphabetical order of coven names
+// (deterministic).
 //
-// Все три уровня пусты → ErrProviderNotRouted → fail per-host. БЕЗ
-// provider-chain fallback: auth-perimeter разных providers разный, silent
-// fallback ломает trust-инвариант (security-first).
+// All three levels empty → ErrProviderNotRouted → fail per-host. NO
+// provider-chain fallback: different providers have different auth
+// perimeters, and a silent fallback would break the trust invariant
+// (security-first).
 
 import (
 	"context"
@@ -32,34 +34,35 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// ProviderRouter резолвит имя SshProvider-плагина для конкретного SID.
-// Используется в pushorch.PushRun.executeAsync до dispatch-фазы.
+// ProviderRouter resolves the SshProvider plugin name for a given SID.
+// Used in pushorch.PushRun.executeAsync before the dispatch phase.
 //
-// Сужено до одного метода — позволяет fake-ить в unit-тестах без подъёма PG.
+// Narrowed to a single method so unit tests can fake it without a live PG.
 type ProviderRouter interface {
 	RouteFor(ctx context.Context, sid string) (providerName string, source RouteSource, err error)
 }
 
-// RouteSource — какой из трёх уровней резолва дал ответ. Несётся в audit-
-// summary (`push_runs.summary.hosts[sid].route_source`) и в Prometheus-counter
-// `keeper_push_provider_routed_total{provider, decision_source}` (низкая
-// cardinality: per-provider × 3 labels = единицы серий).
+// RouteSource is which of the three resolve levels produced the answer.
+// Carried in the audit summary (`push_runs.summary.hosts[sid].route_source`)
+// and in the Prometheus counter
+// `keeper_push_provider_routed_total{provider, decision_source}` (low
+// cardinality: per-provider × 3 labels = a handful of series).
 type RouteSource int
 
 const (
-	// SourceUnknown — нулевое значение (программная ошибка, не валидный путь
-	// резолва). Используется только как defensive default.
+	// SourceUnknown is the zero value (a programming error, not a valid
+	// resolve path). Used only as a defensive default.
 	SourceUnknown RouteSource = 0
-	// SourceSoul — Level 1, per-SID explicit (`souls.ssh_target.ssh_provider`).
+	// SourceSoul is Level 1, per-SID explicit (`souls.ssh_target.ssh_provider`).
 	SourceSoul RouteSource = iota
-	// SourceCoven — Level 2, per-coven default
+	// SourceCoven is Level 2, per-coven default
 	// (`push.coven_default_providers[<coven>]`).
 	SourceCoven
-	// SourceCluster — Level 3, cluster fallback (`push.cluster_default_provider`).
+	// SourceCluster is Level 3, cluster fallback (`push.cluster_default_provider`).
 	SourceCluster
 )
 
-// String — kebab-case label для логов / audit-payload.
+// String returns a kebab-case label for logs / audit payloads.
 func (s RouteSource) String() string {
 	switch s {
 	case SourceSoul:
@@ -73,72 +76,74 @@ func (s RouteSource) String() string {
 	}
 }
 
-// ErrProviderNotRouted — sentinel: ни Level 1, ни Level 2, ни Level 3 не
-// дали имя SshProvider. caller (pushorch) маппит на per-host status="error"
-// + error_code="provider_not_routed".
+// ErrProviderNotRouted is a sentinel: neither Level 1, Level 2, nor Level 3
+// produced an SshProvider name. The caller (pushorch) maps this to a
+// per-host status="error" + error_code="provider_not_routed".
 var ErrProviderNotRouted = errors.New("push: SshProvider not routed (no per-SID / per-coven / cluster default)")
 
-// PGRouterReader — узкая поверхность над storage-слоем soul.* для PG-резолва
-// `ssh_target.ssh_provider` и списка `coven`-меток Soul-а. Сужено под router-у
-// (TargetReader из target_pg.go нацелен на полный SSHTarget, а router-у нужны
-// только два поля — выделено чтобы unit-тесты не тащили лишнее).
+// PGRouterReader is the narrow surface over the soul.* storage layer for the
+// PG resolve of `ssh_target.ssh_provider` and a Soul's list of `coven`
+// labels. Narrowed for the router (TargetReader from target_pg.go targets the
+// full SSHTarget, but the router needs only two fields — split out so unit
+// tests don't have to carry the extra baggage).
 type PGRouterReader interface {
-	// SelectSshTarget — для чтения `ssh_target.ssh_provider` (Level 1).
+	// SelectSshTarget reads `ssh_target.ssh_provider` (Level 1).
 	SelectSshTarget(ctx context.Context, sid string) (*soul.SSHTarget, error)
-	// SelectCovens — для чтения списка `coven` Soul-а (Level 2 lookup
-	// per-coven default-карты). Возврат пустого слайса при отсутствии меток.
+	// SelectCovens reads a Soul's `coven` list (Level 2 lookup into the
+	// per-coven default map). Returns an empty slice when there are no
+	// labels.
 	SelectCovens(ctx context.Context, sid string) ([]string, error)
 }
 
-// RouterConfig — read-only snapshot конфига cluster-defaults. Передаётся как
-// функция-снимок, чтобы hot-reload (config.Store.OnReload) переустанавливал
-// карту без пересоздания PGRouter-а: routing-decisions берут свежий снимок на
-// каждый RouteFor.
+// RouterConfig is a read-only snapshot of the cluster-defaults config. Passed
+// as a snapshot function so hot-reload (config.Store.OnReload) can swap the
+// map without recreating the PGRouter: routing decisions take a fresh
+// snapshot on every RouteFor call.
 //
-// CovenDefaultProviders — map coven-имя → provider-имя.
-// ClusterDefaultProvider — fallback при отсутствии match-а.
+// CovenDefaultProviders maps coven name → provider name.
+// ClusterDefaultProvider is the fallback when there's no match.
 type RouterConfig struct {
 	CovenDefaultProviders  map[string]string
 	ClusterDefaultProvider string
 }
 
-// RouterConfigSource — источник свежего snapshot-а конфига. Реализуется
-// daemon-wire-up-ом обёрткой над config.Store. nil-указатель опасен (router
-// без конфига — фактически только Level 1 / fail) — caller обязан передать
-// non-nil.
+// RouterConfigSource is the source of a fresh config snapshot. Implemented
+// by daemon wire-up as a wrapper over config.Store. A nil pointer is
+// dangerous (a router without config effectively only has Level 1 / fail) —
+// the caller must pass a non-nil value.
 type RouterConfigSource interface {
 	Snapshot() RouterConfig
 }
 
-// staticRouterConfig — static-snapshot для unit-тестов и единичного init-снимка
-// при отсутствии hot-reload.
+// staticRouterConfig is a static snapshot for unit tests and a one-off init
+// snapshot when hot-reload isn't in play.
 type staticRouterConfig struct {
 	cfg RouterConfig
 }
 
-// NewStaticRouterConfigSource — обёртка для тестов.
+// NewStaticRouterConfigSource is a wrapper for tests.
 func NewStaticRouterConfigSource(cfg RouterConfig) RouterConfigSource {
 	return &staticRouterConfig{cfg: cfg}
 }
 
 func (s *staticRouterConfig) Snapshot() RouterConfig { return s.cfg }
 
-// PGRouter — production-implementation [ProviderRouter] поверх storage-слоя
-// soul.* и snapshot-конфига cluster-defaults.
+// PGRouter is the production implementation of [ProviderRouter] over the
+// soul.* storage layer and a snapshot of cluster-defaults config.
 //
-// Алгоритм RouteFor:
+// RouteFor algorithm:
 //
-//  1. SELECT souls.ssh_target.ssh_provider → если непустое → SourceSoul.
-//  2. SELECT souls.coven[] → для каждого coven (alphabetical) lookup в
-//     CovenDefaultProviders → первый match → SourceCoven.
-//  3. ClusterDefaultProvider непустой → SourceCluster.
-//  4. Иначе ErrProviderNotRouted.
+//  1. SELECT souls.ssh_target.ssh_provider → if non-empty → SourceSoul.
+//  2. SELECT souls.coven[] → for each coven (alphabetical) look up
+//     CovenDefaultProviders → first match → SourceCoven.
+//  3. ClusterDefaultProvider non-empty → SourceCluster.
+//  4. Otherwise ErrProviderNotRouted.
 type PGRouter struct {
 	Reader PGRouterReader
 	Config RouterConfigSource
 }
 
-// NewPGRouter валидирует зависимости и возвращает router.
+// NewPGRouter validates dependencies and returns a router.
 func NewPGRouter(reader PGRouterReader, cfg RouterConfigSource) (*PGRouter, error) {
 	if reader == nil {
 		return nil, errors.New("push: PGRouter requires Reader")
@@ -149,11 +154,11 @@ func NewPGRouter(reader PGRouterReader, cfg RouterConfigSource) (*PGRouter, erro
 	return &PGRouter{Reader: reader, Config: cfg}, nil
 }
 
-// RouteFor реализует [ProviderRouter].
+// RouteFor implements [ProviderRouter].
 func (r *PGRouter) RouteFor(ctx context.Context, sid string) (string, RouteSource, error) {
-	// Level 1: per-SID explicit. soul.ErrSoulNotFound пробрасываем — это
-	// нештатный путь (caller обычно уже валидировал Soul-row), но не наша
-	// ответственность маскировать.
+	// Level 1: per-SID explicit. We propagate soul.ErrSoulNotFound — this is
+	// an off-path case (the caller has usually already validated the Soul
+	// row), but it's not our job to mask it.
 	target, err := r.Reader.SelectSshTarget(ctx, sid)
 	if err != nil {
 		return "", SourceUnknown, fmt.Errorf("router: select ssh_target %s: %w", sid, err)
@@ -164,9 +169,9 @@ func (r *PGRouter) RouteFor(ctx context.Context, sid string) (string, RouteSourc
 
 	cfg := r.Config.Snapshot()
 
-	// Level 2: per-coven default. Tiebreak — алфавитный порядок имён ковенов
-	// (детерминизм). Линейный sort на короткой выборке (Soul обычно в 1-3
-	// ковенах); скан карты — тоже короткий.
+	// Level 2: per-coven default. Tiebreak is alphabetical order of coven
+	// names (deterministic). A linear sort on a short slice (a Soul is
+	// usually in 1-3 covens); the map scan is short too.
 	if len(cfg.CovenDefaultProviders) > 0 {
 		covens, err := r.Reader.SelectCovens(ctx, sid)
 		if err != nil {

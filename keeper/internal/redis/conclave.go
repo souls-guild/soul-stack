@@ -1,26 +1,29 @@
 package redis
 
-// Conclave — реестр живых Keeper-инстансов кластера в Redis (ADR-006 amend,
-// soul-shedding S1). Каждый инстанс на старте регистрирует свою presence-запись
-// `keeper:instance:<kid>` с TTL и продлевает её renewal-goroutine-ой; на
-// graceful shutdown — удаляет, на crash — запись истекает по TTL. Перечисление
-// живых ([LiveKIDs] / [CountLive]) идёт SCAN-ом по префиксу.
+// Conclave is the registry of live cluster Keeper instances in Redis
+// (ADR-006 amend, soul-shedding S1). Each instance registers its own
+// presence record `keeper:instance:<kid>` with a TTL on startup and renews it
+// via a renewal goroutine; on graceful shutdown it deletes the record, on
+// crash the record expires by TTL. Enumerating live instances ([LiveKIDs] /
+// [CountLive]) is a SCAN over the prefix.
 //
-// Отличие от [Lease]/[SoulLease]: это НЕ эксклюзивный lock. Каждый инстанс
-// держит СВОЙ ключ (по своему KID), конкуренции за один ключ нет —
-// регистрация без NX. Опц. NX-проверка ([RegisterInstance]) ловит коллизию KID
-// (два keeper-процесса с одинаковым `kid` в конфиге = ошибка оператора) и
-// логируется как warn, не как блокирующая ошибка: presence своего KID — это
-// инвариант, а не борьба за лидерство.
+// Difference from [Lease]/[SoulLease]: this is NOT an exclusive lock. Each
+// instance holds its OWN key (by its own KID), so there's no contention over
+// a single key — registration happens without NX. The optional NX check
+// ([RegisterInstance]) catches a KID collision (two keeper processes with the
+// same `kid` in their config = an operator error) and is logged as a warning,
+// not a blocking error: presence for one's own KID is an invariant, not a
+// fight for leadership.
 //
-// Авторитет presence — Redis (инвариант presence→Redis): PG-вариант отвергнут
-// (presence волатильна, TTL+renew — естественная модель). Единый источник
-// истины — сами TTL-ключи, без параллельного Redis-Set (как [SoulsStreamAlive]
-// отверг отдельный Set живых SID-ов): десятки инстансов на кластер — SCAN
-// дёшев.
+// Presence is authoritative in Redis (the presence→Redis invariant): a PG
+// variant was rejected (presence is volatile, TTL+renew is the natural
+// model). The TTL keys themselves are the single source of truth, with no
+// parallel Redis Set (mirroring how [SoulsStreamAlive] rejected a separate
+// Set of live SIDs): a few dozen instances per cluster makes SCAN cheap.
 //
-// Питает (S2/S3, отдельные слайсы): refuse-guard «я не один» (CountLive > 1) и
-// soul-shedding (есть куда уходить — LiveKIDs минус собственный KID).
+// Feeds (S2/S3, separate slices): the "I'm not alone" refuse-guard
+// (CountLive > 1) and soul-shedding (is there somewhere to go — LiveKIDs
+// minus one's own KID).
 
 import (
 	"context"
@@ -33,41 +36,43 @@ import (
 )
 
 const (
-	// conclaveKeyPrefix — префикс presence-ключей Conclave. Имя ключа
-	// техническое (как `soul:<sid>:lock`), сущность в словаре — Conclave.
+	// conclaveKeyPrefix is the prefix for Conclave presence keys. The key
+	// name is technical (like `soul:<sid>:lock`), the dictionary entity is
+	// Conclave.
 	conclaveKeyPrefix = "keeper:instance:"
 
-	// DefaultConclaveTTL / DefaultConclaveRenewInterval — TTL presence-ключа и
-	// период его продления. TTL ≈ 3×renew, чтобы пережить кратковременные
-	// GC-паузы / latency-spike-и Renew-а (тот же запас, что у SoulLease).
+	// DefaultConclaveTTL / DefaultConclaveRenewInterval — the presence key's
+	// TTL and its renewal period. TTL ≈ 3×renew to ride out brief GC pauses /
+	// Renew latency spikes (the same headroom as SoulLease).
 	DefaultConclaveTTL           = 30 * time.Second
 	DefaultConclaveRenewInterval = 10 * time.Second
 )
 
-// ErrConclaveKIDTaken — [RegisterInstance] с requireUnique=true обнаружил, что
-// ключ `keeper:instance:<kid>` уже существует. Означает коллизию KID (два
-// keeper-процесса с одинаковым `kid` в конфиге) — ошибка конфигурации
-// оператора. Caller логирует warn и продолжает регистрацию (presence своего
-// KID — инвариант).
+// ErrConclaveKIDTaken is returned when [RegisterInstance] with
+// requireUnique=true finds that the `keeper:instance:<kid>` key already
+// exists. Means a KID collision (two keeper processes with the same `kid` in
+// their config) — an operator configuration error. The caller logs a warning
+// and proceeds with registration (presence for one's own KID is an
+// invariant).
 var ErrConclaveKIDTaken = errors.New("redis: conclave instance key already exists (KID collision)")
 
-// ConclaveKey формирует Redis presence-ключ для конкретного KID.
+// ConclaveKey builds the Redis presence key for a specific KID.
 func ConclaveKey(kid string) string {
 	return conclaveKeyPrefix + kid
 }
 
-// RegisterInstance записывает presence-запись keeper-инстанса
-// `keeper:instance:<kid>` с TTL `ttl` и value `meta` (лёгкие метаданные для
-// диагностики — JSON / KID, caller формирует сам).
+// RegisterInstance writes the keeper instance's presence record
+// `keeper:instance:<kid>` with TTL `ttl` and value `meta` (lightweight
+// diagnostic metadata — JSON / KID, the caller builds it).
 //
-// requireUnique=true сначала проверяет отсутствие ключа (NX-семантика через
-// `SET NX`): на коллизию KID возвращает [ErrConclaveKIDTaken] БЕЗ перезаписи —
-// чтобы caller залогировал warn. requireUnique=false (штатный путь рестарта:
-// тот же KID после crash-а, чужой TTL-ключ ещё не истёк) — безусловный SET,
-// перетирая возможный собственный остаток.
+// requireUnique=true first checks the key is absent (NX semantics via
+// `SET NX`): on a KID collision it returns [ErrConclaveKIDTaken] WITHOUT
+// overwriting — so the caller can log a warning. requireUnique=false (the
+// normal restart path: the same KID after a crash, its own stale TTL key
+// hasn't expired yet) does an unconditional SET, overwriting any leftover of
+// its own.
 //
-// `ttl` должно быть > 0 (как [Acquire]): нулевой / отрицательный TTL — ошибка
-// caller-а.
+// `ttl` must be > 0 (like [Acquire]): a zero/negative TTL is a caller error.
 func RegisterInstance(ctx context.Context, c *Client, kid, meta string, ttl time.Duration, requireUnique bool) error {
 	if c == nil {
 		return errors.New("redis.RegisterInstance: nil client")
@@ -97,15 +102,16 @@ func RegisterInstance(ctx context.Context, c *Client, kid, meta string, ttl time
 	return nil
 }
 
-// RenewInstance продлевает TTL presence-ключа `keeper:instance:<kid>` до `ttl`
-// (PEXPIRE на существующий ключ). В отличие от [Lease.Renew] здесь нет CAS-а по
-// holder-у: ключ принадлежит этому инстансу по построению (один KID — один
-// процесс), конкуренции за него нет.
+// RenewInstance extends the TTL of the presence key `keeper:instance:<kid>`
+// to `ttl` (PEXPIRE on an existing key). Unlike [Lease.Renew] there's no
+// holder CAS here: the key belongs to this instance by construction (one KID
+// — one process), so there's no contention over it.
 //
-// Если ключ исчез (истёк из-за пропущенных renew / был удалён) — PEXPIRE
-// вернёт 0; renewal-goroutine пере-создаёт presence заново ([RegisterInstance]),
-// чтобы исцелиться, а не молча перестать быть видимым кластеру (restart-safe
-// семантика). На «ключ есть, TTL продлён» — ok=true.
+// If the key is gone (expired from missed renewals / was deleted), PEXPIRE
+// returns 0; the renewal goroutine re-creates presence from scratch
+// ([RegisterInstance]) to self-heal, rather than silently becoming invisible
+// to the cluster (restart-safe semantics). "Key exists, TTL extended" means
+// ok=true.
 func RenewInstance(ctx context.Context, c *Client, kid string, ttl time.Duration) (ok bool, err error) {
 	if c == nil {
 		return false, errors.New("redis.RenewInstance: nil client")
@@ -123,11 +129,11 @@ func RenewInstance(ctx context.Context, c *Client, kid string, ttl time.Duration
 	return res, nil
 }
 
-// DeregisterInstance удаляет presence-ключ `keeper:instance:<kid>` (graceful
-// shutdown). Идемпотентно: отсутствующий ключ — no-op (DEL вернёт 0).
-// Сетевая ошибка прокидывается, но caller обычно её игнорирует — вызов идёт
-// из shutdown-cleanup-а, где Redis может быть уже недоступен (crash-fallback на
-// TTL-expiry).
+// DeregisterInstance removes the presence key `keeper:instance:<kid>`
+// (graceful shutdown). Idempotent: a missing key is a no-op (DEL returns 0).
+// A network error is propagated, but the caller usually ignores it — the
+// call happens during shutdown cleanup, where Redis may already be
+// unreachable (falls back to crash/TTL-expiry).
 func DeregisterInstance(ctx context.Context, c *Client, kid string) error {
 	if c == nil {
 		return errors.New("redis.DeregisterInstance: nil client")
@@ -141,28 +147,31 @@ func DeregisterInstance(ctx context.Context, c *Client, kid string) error {
 	return nil
 }
 
-// LiveKIDs перечисляет KID-ы живых keeper-инстансов — SCAN по префиксу
-// `keeper:instance:*` с обрезкой префикса. Мёртвый инстанс (crash без
-// Deregister) выпадает из выборки по TTL-expiry его ключа.
+// LiveKIDs enumerates the KIDs of live keeper instances — a SCAN over the
+// `keeper:instance:*` prefix with the prefix trimmed off. A dead instance
+// (crashed without Deregister) drops out of the result once its key hits
+// TTL-expiry.
 //
-// SCAN (не KEYS) — неблокирующий курсор: KEYS на проде блокирует Redis на всё
-// время обхода keyspace. Десятки инстансов → один-два прохода курсора, дёшево.
-// count=100 — hint размера батча per-итерация (Redis волен вернуть больше/
-// меньше). Дубли KID-ов между батчами SCAN-а (возможны при rehash) свёрнуты
-// через set.
+// SCAN (not KEYS) is a non-blocking cursor: KEYS in production blocks Redis
+// for the entire keyspace walk. A few dozen instances means one or two
+// cursor passes, cheap. count=100 is a per-iteration batch-size hint (Redis
+// is free to return more or less). Duplicate KIDs across SCAN batches
+// (possible during rehash) are collapsed via a set.
 //
-// Cluster-режим (ADR-006 amendment): presence-ключи разных KID садятся в РАЗНЫЕ
-// слоты (нет общего hash-tag — это намеренно: иначе весь presence-keyspace осел
-// бы на один узел). Обычный SCAN на `*redis.ClusterClient` обходит только ОДИН
-// узел → недосчёт presence → тихо ломает refuse-guard «я не один» (ADR-027) и
-// soul-shedding. Поэтому в cluster SCAN идёт per-master через [ClusterClient.ForEachMaster]
-// и объединяется (дедуп тем же seen-set). Type-switch — по факт-типу underlying().
+// Cluster mode (ADR-006 amendment): presence keys for different KIDs land in
+// DIFFERENT slots (no shared hash-tag — intentional: otherwise the whole
+// presence keyspace would pile onto one node). A plain SCAN on
+// `*redis.ClusterClient` only covers ONE node → undercounts presence →
+// silently breaks the "I'm not alone" refuse-guard (ADR-027) and
+// soul-shedding. So in cluster mode SCAN runs per-master via
+// [ClusterClient.ForEachMaster] and results are merged (dedup via the same
+// seen-set). The type-switch is on underlying()'s concrete type.
 func LiveKIDs(ctx context.Context, c *Client) ([]string, error) {
 	if c == nil {
 		return nil, errors.New("redis.LiveKIDs: nil client")
 	}
-	// seen дедуплицирует KID-ы: между батчами SCAN-а (rehash) и между master-
-	// узлами кластера. mu защищает обновление под конкурентным ForEachMaster.
+	// seen deduplicates KIDs: across SCAN batches (rehash) and across cluster
+	// master nodes. mu guards the update under concurrent ForEachMaster.
 	var mu sync.Mutex
 	seen := make(map[string]struct{})
 	var kids []string
@@ -180,9 +189,10 @@ func LiveKIDs(ctx context.Context, c *Client) ([]string, error) {
 	}
 
 	if cc, ok := c.underlying().(*redis.ClusterClient); ok {
-		// SCAN на каждом master-узле кластера: ключи разных KID шардированы по
-		// слотам, один узел видит лишь свою долю. ForEachMaster вызывает fn
-		// конкурентно по узлам — collect синхронизирован через mu.
+		// SCAN on every master node in the cluster: keys for different KIDs
+		// are sharded across slots, and one node sees only its share.
+		// ForEachMaster calls fn concurrently across nodes — collect is
+		// synchronized via mu.
 		err := cc.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
 			kidsOnNode, err := scanKIDs(ctx, node)
 			if err != nil {
@@ -209,10 +219,10 @@ func LiveKIDs(ctx context.Context, c *Client) ([]string, error) {
 	return kids, nil
 }
 
-// scanKIDs выполняет курсорный SCAN по `keeper:instance:*` на ОДНОМ узле и
-// возвращает обрезанные KID-ы (с возможными дублями между батчами — дедуп на
-// стороне вызывающего). `s` — UniversalClient (весь кластер) либо `*redis.Client`
-// (один master-узел из ForEachMaster).
+// scanKIDs runs a cursor SCAN over `keeper:instance:*` on ONE node and
+// returns the trimmed KIDs (possibly with duplicates across batches — dedup
+// is the caller's job). `s` is either a UniversalClient (the whole cluster)
+// or a `*redis.Client` (a single master node from ForEachMaster).
 func scanKIDs(ctx context.Context, s redis.Cmdable) ([]string, error) {
 	var out []string
 	var cursor uint64
@@ -232,15 +242,17 @@ func scanKIDs(ctx context.Context, s redis.Cmdable) ([]string, error) {
 	return out, nil
 }
 
-// ReadInstanceMeta читает value presence-ключа `keeper:instance:<kid>` — лёгкие
-// метаданные инстанса (`{started_at, kid}`-JSON, записанные caller-ом при
-// [RegisterInstance]). Возвращает (meta, true) если ключ жив; (_, false) если
-// инстанс мёртв / ключ истёк (`redis.Nil`). Питает `GET /v1/cluster`: список
-// живых KID-ов ([LiveKIDs]) + started_at каждого.
+// ReadInstanceMeta reads the value of the presence key `keeper:instance:<kid>`
+// — lightweight instance metadata (a `{started_at, kid}` JSON written by the
+// caller in [RegisterInstance]). Returns (meta, true) if the key is alive;
+// (_, false) if the instance is dead / the key has expired (`redis.Nil`).
+// Feeds `GET /v1/cluster`: the list of live KIDs ([LiveKIDs]) plus each one's
+// started_at.
 //
-// meta отдаётся сырой строкой — парсинг (JSON→started_at) на стороне caller-а
-// (handler), storage-слой не навязывает форму value (fail-safe RegisterInstance
-// мог записать голый KID вместо JSON — caller обязан быть к этому готов).
+// meta is returned as a raw string — parsing (JSON→started_at) is the
+// caller's job (the handler); the storage layer doesn't impose a value
+// shape (a fail-safe RegisterInstance could have written a bare KID instead
+// of JSON — the caller must be ready for that).
 func ReadInstanceMeta(ctx context.Context, c *Client, kid string) (string, bool, error) {
 	if c == nil {
 		return "", false, errors.New("redis.ReadInstanceMeta: nil client")
@@ -258,9 +270,9 @@ func ReadInstanceMeta(ctx context.Context, c *Client, kid string) (string, bool,
 	return v, true, nil
 }
 
-// CountLive возвращает число живых keeper-инстансов (= len([LiveKIDs])).
-// Питает refuse-guard «я не один» (CountLive > 1, S3) — отдельный helper, чтобы
-// caller-у, которому нужно только число, не аллоцировать слайс KID-ов.
+// CountLive returns the number of live keeper instances (= len([LiveKIDs])).
+// Feeds the "I'm not alone" refuse-guard (CountLive > 1, S3) — a separate
+// helper so a caller that only needs the count doesn't allocate a KID slice.
 func CountLive(ctx context.Context, c *Client) (int, error) {
 	kids, err := LiveKIDs(ctx, c)
 	if err != nil {
@@ -269,21 +281,23 @@ func CountLive(ctx context.Context, c *Client) (int, error) {
 	return len(kids), nil
 }
 
-// InstanceAlive — точечный presence-чек одного KID: жив ли keeper-инстанс
-// прямо сейчас (EXISTS его presence-ключа `keeper:instance:<kid>`). Запись
-// существует только пока renewal-goroutine инстанса её продлевает; пропадает
-// на graceful-shutdown ([DeregisterInstance]) либо по TTL-expiry после crash-а.
+// InstanceAlive is a point presence check for a single KID: is the keeper
+// instance alive right now (EXISTS on its presence key
+// `keeper:instance:<kid>`). The record exists only as long as the instance's
+// renewal goroutine keeps extending it; it disappears on graceful shutdown
+// ([DeregisterInstance]) or by TTL-expiry after a crash.
 //
-// В отличие от [LiveKIDs]/[CountLive] (SCAN всего реестра) — один EXISTS:
-// caller знает конкретный KID и спрашивает только про него. Питает recovery-
-// детект «владелец прогона / стрима доказанно мёртв» (ADR-027 amend (m) —
-// reconcile_orphan_applying presence-gate; amend (n) — force-release SID-lease
-// у мёртвого prev-holder-а). Симметрия с [SoulStreamAlive] (EXISTS по
-// SID-lease-ключу), но другой keyspace — presence keeper-инстансов, не Souls.
+// Unlike [LiveKIDs]/[CountLive] (SCAN over the whole registry), this is a
+// single EXISTS: the caller knows the specific KID and only asks about that
+// one. Feeds recovery detection of "the run/stream owner is provably dead"
+// (ADR-027 amend (m) — reconcile_orphan_applying presence-gate; amend (n) —
+// force-release the SID-lease from a dead prev-holder). Symmetric with
+// [SoulStreamAlive] (EXISTS on the SID-lease key), but a different keyspace —
+// keeper-instance presence, not Souls.
 //
-// Возврат ошибки (сетевой/протокольный сбой EXISTS) caller трактует fail-safe:
-// неизвестно — значит НЕ объявлять мёртвым (не реклеймить lock / не снимать
-// lease), чтобы не сорвать живой прогон при флапе Redis.
+// The caller treats an error return (network/protocol failure of EXISTS)
+// fail-safe: unknown means do NOT declare it dead (don't reclaim the lock /
+// don't release the lease), so a live run isn't disrupted by a Redis blip.
 func InstanceAlive(ctx context.Context, c *Client, kid string) (bool, error) {
 	if c == nil {
 		return false, errors.New("redis.InstanceAlive: nil client")

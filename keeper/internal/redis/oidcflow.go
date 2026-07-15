@@ -1,22 +1,23 @@
 package redis
 
-// OIDCFlowStore — короткоживущий server-side store состояния OIDC code-flow
-// (ADR-058(b), стадия 2). Между /auth/oidc/login и /auth/oidc/callback Keeper
-// должен помнить per-flow секреты, которые НЕ кладутся в URL/браузер:
+// OIDCFlowStore is a short-lived server-side store for OIDC code-flow state
+// (ADR-058(b), stage 2). Between /auth/oidc/login and /auth/oidc/callback,
+// Keeper must remember per-flow secrets that must NOT go into the URL/browser:
 //
-//   - nonce — anti-replay id_token (сверяется с claim `nonce`);
-//   - code_verifier — PKCE-секрет (S256-challenge ушёл IdP в login-URL, verifier
-//     остаётся на сервере и предъявляется при code-exchange).
+//   - nonce — anti-replay for id_token (checked against the `nonce` claim);
+//   - code_verifier — the PKCE secret (the S256 challenge went to the IdP in
+//     the login URL, the verifier stays on the server and is presented at
+//     code-exchange time).
 //
-// Ключ — opaque `state` (CSRF-токен, единственное, что уходит в браузер и
-// возвращается на callback). Store cluster-shared (любой Keeper-инстанс может
-// принять callback после login на другом — stateless-кластер ADR-002): Redis,
-// а не in-memory map.
+// The key is an opaque `state` (a CSRF token, the only thing that goes to the
+// browser and comes back on callback). The store is cluster-shared (any
+// Keeper instance can accept the callback after a login on another one —
+// stateless cluster, ADR-002): Redis, not an in-memory map.
 //
-// Single-use: Consume атомарно читает И удаляет запись (GETDEL). Повторный
-// callback с тем же state ничего не найдёт → отказ. Это закрывает replay
-// authorization-code и double-submit. TTL (~5 мин) ограничивает окно
-// незавершённого flow.
+// Single-use: Consume atomically reads AND deletes the entry (GETDEL). A
+// repeat callback with the same state finds nothing → rejected. This closes
+// authorization-code replay and double-submit. TTL (~5 min) bounds the window
+// of an unfinished flow.
 
 import (
 	"context"
@@ -28,32 +29,35 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrOIDCFlowNotFound — Consume не нашёл записи по state: либо неизвестный/
-// подделанный state (CSRF), либо уже потреблённый (replay), либо истёкший TTL.
-// Все три наружу неразличимы (anti-oracle) — endpoint маппит в общий отказ.
+// ErrOIDCFlowNotFound — Consume found no entry for the state: either an
+// unknown/forged state (CSRF), an already-consumed one (replay), or an
+// expired TTL. All three are indistinguishable from the outside (anti-oracle)
+// — the endpoint maps them to a single generic rejection.
 var ErrOIDCFlowNotFound = errors.New("redis: oidc flow state not found")
 
-// oidcFlowKeyPrefix — namespace ключей flow-state. Отделён от lease/heartbeat,
-// чтобы не пересекаться с другими координационными ключами.
+// oidcFlowKeyPrefix is the namespace for flow-state keys. Kept separate from
+// lease/heartbeat to avoid clashing with other coordination keys.
 const oidcFlowKeyPrefix = "oidc:flow:"
 
-// OIDCFlowState — server-side секреты одного code-flow. Сериализуется в Redis
-// как JSON под ключом state. Ни одно поле НЕ покидает сервер в браузер.
+// OIDCFlowState holds the server-side secrets of a single code flow.
+// Serialized into Redis as JSON under the state key. No field ever leaves the
+// server to the browser.
 type OIDCFlowState struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"code_verifier"`
 }
 
-// OIDCFlowStore — Redis-backed реализация store-а. nil-safe не нужен: OIDC-
-// endpoint монтируется только при наличии Redis (ADR-006/ADR-053), без Redis
-// flow невозможен (cluster-shared требование).
+// OIDCFlowStore is the Redis-backed store implementation. nil-safety isn't
+// needed: the OIDC endpoint is mounted only when Redis is present
+// (ADR-006/ADR-053) — without Redis, the flow is impossible (cluster-shared
+// requirement).
 type OIDCFlowStore struct {
 	client *Client
 	ttl    time.Duration
 }
 
-// NewOIDCFlowStore конструирует store поверх Redis-клиента. ttl > 0 обязателен
-// (нулевой/отрицательный → программная ошибка caller-а, как у Acquire).
+// NewOIDCFlowStore builds a store on top of a Redis client. ttl > 0 is
+// required (zero/negative → a caller bug, same as Acquire).
 func NewOIDCFlowStore(c *Client, ttl time.Duration) (*OIDCFlowStore, error) {
 	if c == nil {
 		return nil, errors.New("redis.NewOIDCFlowStore: nil client")
@@ -64,9 +68,10 @@ func NewOIDCFlowStore(c *Client, ttl time.Duration) (*OIDCFlowStore, error) {
 	return &OIDCFlowStore{client: c, ttl: ttl}, nil
 }
 
-// Save кладёт состояние под state с TTL. SET NX: если ключ уже существует
-// (коллизия 256-битного state практически невозможна, но защищаемся от
-// перезаписи активного flow) — ошибка. state непустой (caller генерит crypto/rand).
+// Save stores the state under state with a TTL. SET NX: if the key already
+// exists (a collision on a 256-bit state is practically impossible, but we
+// guard against overwriting an active flow) — an error. state must be
+// non-empty (the caller generates it via crypto/rand).
 func (s *OIDCFlowStore) Save(ctx context.Context, state string, fs OIDCFlowState) error {
 	if state == "" {
 		return errors.New("redis.OIDCFlowStore.Save: empty state")
@@ -85,17 +90,17 @@ func (s *OIDCFlowStore) Save(ctx context.Context, state string, fs OIDCFlowState
 	return nil
 }
 
-// Consume атомарно читает И удаляет запись по state (GETDEL). Запись не найдена
-// → [ErrOIDCFlowNotFound]. Single-use: повторный Consume того же state вернёт
-// ErrOIDCFlowNotFound (anti-replay).
+// Consume atomically reads AND deletes the entry for state (GETDEL). If the
+// entry isn't found → [ErrOIDCFlowNotFound]. Single-use: a repeat Consume of
+// the same state returns ErrOIDCFlowNotFound (anti-replay).
 func (s *OIDCFlowStore) Consume(ctx context.Context, state string) (OIDCFlowState, error) {
 	if state == "" {
 		return OIDCFlowState{}, ErrOIDCFlowNotFound
 	}
 	raw, err := s.client.underlying().GetDel(ctx, oidcFlowKeyPrefix+state).Bytes()
 	if err != nil {
-		// redis.Nil — ключа нет (неизвестный/потреблённый/истёкший state);
-		// отличаем от сетевой ошибки (паттерн SoulLeaseOwner).
+		// redis.Nil — no key (unknown/consumed/expired state); distinguished
+		// from a network error (SoulLeaseOwner pattern).
 		if errors.Is(err, redis.Nil) {
 			return OIDCFlowState{}, ErrOIDCFlowNotFound
 		}

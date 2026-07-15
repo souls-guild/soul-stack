@@ -1,22 +1,23 @@
 package redis
 
-// Cluster-wide инвалидация снимка Tiding-правил dispatcher-а через Redis
+// Cluster-wide invalidation of the dispatcher's Tiding-rule snapshot via Redis
 // pub/sub (ADR-052, S4).
 //
-// Проблема: notification-dispatcher держит TTL-кэш ВКЛЮЧЁННЫХ Tiding-правил
-// (DefaultRuleCacheTTL=15s). Оператор делает CRUD Herald/Tiding — мутация
-// коммитится в общую таблицу на Keeper-A и in-process там сбрасывает кэш, но
-// Keeper-B держит устаревший снимок до истечения TTL (новое правило не
-// сработает / удалённое продолжит слать ≤15s).
+// Problem: the notification dispatcher keeps a TTL cache of ENABLED Tiding
+// rules (DefaultRuleCacheTTL=15s). An operator does a Herald/Tiding CRUD — the
+// mutation commits to the shared table on Keeper-A and resets the cache there
+// in-process, but Keeper-B keeps a stale snapshot until the TTL expires (a new
+// rule won't fire / a deleted one keeps sending for ≤15s).
 //
-// Решение симметрично [PublishPushProvidersChanged] / [PublishSigilInvalidate]:
-// мутирующая нода после успешного commit-а CRUD PUBLISH-ит в канал
-// `herald:invalidate`, каждая нода по SUBSCRIBE дёргает свой
-// Dispatcher.InvalidateRules (следующий матч перечитает enabled-снимок из PG).
+// Solution, symmetric to [PublishPushProvidersChanged] / [PublishSigilInvalidate]:
+// after a successful CRUD commit, the mutating node PUBLISHes to the
+// `herald:invalidate` channel; every node's SUBSCRIBE handler calls its own
+// Dispatcher.InvalidateRules (the next match re-reads the enabled snapshot from
+// PG).
 //
-// Persistence у Redis pub/sub нет: потеря сообщения (reconnect ноды, мигание
-// брокера) → сходимость наступит через TTL-poll (DefaultRuleCacheTTL).
-// Допустимо: CRUD-мутации редкие (operator-driven), окно устаревания ≤15s.
+// Redis pub/sub has no persistence: a lost message (node reconnect, broker
+// blip) → convergence happens via the TTL poll (DefaultRuleCacheTTL).
+// Acceptable: CRUD mutations are rare (operator-driven), staleness window ≤15s.
 
 import (
 	"context"
@@ -29,31 +30,33 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// HeraldInvalidateChannel — Redis pub/sub topic. Совпадает с техническим
-// именем канала в naming-rules (`herald:invalidate`, стиль
-// `<подсистема>:<событие>` как `rbac:invalidate` / `push-providers:changed`).
+// HeraldInvalidateChannel is the Redis pub/sub topic. Matches the channel's
+// technical name in naming-rules (`herald:invalidate`, `<subsystem>:<event>`
+// style like `rbac:invalidate` / `push-providers:changed`).
 const HeraldInvalidateChannel = "herald:invalidate"
 
-// heraldInvalidateEnvelope — JSON-обёртка одного invalidate-сообщения. `Name` —
-// имя изменённого Herald/Tiding (диагностика; инвалидация всегда полная — снимок
-// перечитывается целиком, имя не таргетирует сброс); `At` — момент публикации.
+// heraldInvalidateEnvelope is the JSON wrapper for one invalidate message.
+// `Name` is the name of the changed Herald/Tiding (diagnostics only —
+// invalidation is always full, the whole snapshot is re-read, the name doesn't
+// target the reset); `At` is the publish time.
 type heraldInvalidateEnvelope struct {
 	Name string    `json:"name,omitempty"`
 	At   time.Time `json:"at"`
 }
 
-// HeraldInvalidate — распакованное invalidate-сообщение для подписчика.
+// HeraldInvalidate is the unpacked invalidate message for a subscriber.
 type HeraldInvalidate struct {
 	Name string
 	At   time.Time
 }
 
-// PublishHeraldInvalidate публикует invalidate-сигнал. Возвращает количество
-// подписчиков, получивших сообщение.
+// PublishHeraldInvalidate publishes the invalidate signal. Returns the number
+// of subscribers that received the message.
 //
-// Best-effort: caller (herald.Service после commit-а CRUD-операции) глотает
-// ошибку — мутация уже зафиксирована в БД, потеря publish-а компенсируется
-// TTL-сходимостью dispatcher-кэша (DefaultRuleCacheTTL).
+// Best-effort: the caller (herald.Service after a CRUD operation commits)
+// swallows the error — the mutation is already committed to the DB, a lost
+// publish is compensated by the dispatcher cache's TTL convergence
+// (DefaultRuleCacheTTL).
 func PublishHeraldInvalidate(ctx context.Context, c *Client, name string) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishHeraldInvalidate: nil client")
@@ -69,13 +72,13 @@ func PublishHeraldInvalidate(ctx context.Context, c *Client, name string) (int64
 	return n, nil
 }
 
-// heraldInvalidateSubBufferSize — буфер Go-канала между PubSub-loop-ом и
-// caller-ом. CRUD-мутации Herald/Tiding редки; небольшой запас отсекает drop
-// при burst-е. Совпадает с pushProvidersChangedSubBufferSize.
+// heraldInvalidateSubBufferSize is the Go channel buffer between the PubSub
+// loop and the caller. Herald/Tiding CRUD mutations are rare; a small margin
+// avoids drops on a burst. Matches pushProvidersChangedSubBufferSize.
 const heraldInvalidateSubBufferSize = 16
 
-// HeraldInvalidateSubscription — handle на подписку. Lifecycle идентичен
-// [PushProvidersChangedSubscription].
+// HeraldInvalidateSubscription is a handle to the subscription. Lifecycle is
+// identical to [PushProvidersChangedSubscription].
 type HeraldInvalidateSubscription struct {
 	ps        *redis.PubSub
 	out       chan *HeraldInvalidate
@@ -85,7 +88,7 @@ type HeraldInvalidateSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными invalidate-сообщениями.
+// Channel is the read side of the Go channel with unpacked invalidate messages.
 func (s *HeraldInvalidateSubscription) Channel() <-chan *HeraldInvalidate {
 	if s == nil {
 		return nil
@@ -93,7 +96,7 @@ func (s *HeraldInvalidateSubscription) Channel() <-chan *HeraldInvalidate {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis.
+// Ready blocks until the first subscribe acknowledgement from Redis.
 func (s *HeraldInvalidateSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.HeraldInvalidateSubscription.Ready: nil subscription")
@@ -108,7 +111,7 @@ func (s *HeraldInvalidateSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop. Идемпотентен.
+// Close stops the subscribe loop. Idempotent.
 func (s *HeraldInvalidateSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -116,7 +119,7 @@ func (s *HeraldInvalidateSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeHeraldInvalidate подписывается на [HeraldInvalidateChannel].
+// SubscribeHeraldInvalidate subscribes to [HeraldInvalidateChannel].
 func SubscribeHeraldInvalidate(ctx context.Context, c *Client, logger *slog.Logger) (*HeraldInvalidateSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribeHeraldInvalidate: nil client")
@@ -192,9 +195,9 @@ func (s *HeraldInvalidateSubscription) run(ctx context.Context, closed <-chan st
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик не успел перечитать. Drop безопасен:
-			// каждое сообщение — лишь «InvalidateRules», следующее перечитает
-			// актуальный снимок целиком.
+			// Channel is full — the subscriber didn't catch up. Dropping is safe:
+			// each message is just "InvalidateRules"; the next one will re-read
+			// the current snapshot in full.
 			s.logger.Warn("redis.SubscribeHeraldInvalidate: forward channel full, dropping")
 		}
 	}

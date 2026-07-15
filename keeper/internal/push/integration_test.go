@@ -1,24 +1,25 @@
 //go:build integration
 
-// Integration-тест keeper.push end-to-end через РЕАЛЬНЫЙ sshd: testcontainers
-// поднимает linuxserver/openssh-server, конфигурируется host-CA / host-cert /
-// TrustedUserCAKeys, диспетчер открывает SSH-сессию с CA-signed host-cert verify,
-// ShaDeliverer кладёт mock-«soul-бинарь» (shell-скрипт, печатающий валидный
-// RunResult), ShaCleaner вычищает артефакты.
+// Integration test for keeper.push end-to-end against a REAL sshd:
+// testcontainers spins up linuxserver/openssh-server, configures host-CA /
+// host-cert / TrustedUserCAKeys, the dispatcher opens an SSH session with
+// CA-signed host-cert verify, ShaDeliverer drops a mock "soul binary" (a
+// shell script that prints a valid RunResult), ShaCleaner wipes the
+// artifacts.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && go test -tags=integration -count=1 ./internal/push/...
 //
-// Зависимости: docker daemon (testcontainers-go стартует контейнер на 127.0.0.1
-// с публикацией случайного порта).
+// Dependencies: docker daemon (testcontainers-go starts a container on
+// 127.0.0.1 with a randomly published port).
 //
-// Проверяет:
-//   - host-cert verification против testCA (Dial → ssh.CertChecker accept);
-//   - ephemeral keypair user-cert проходит TrustedUserCAKeys;
-//   - SHA-256-кеш: повторный Deliver не перезаписывает идентичный файл;
-//   - exec на хосте даёт валидный NDJSON-RunResult → SendApply возвращает SUCCESS;
-//   - Cleanup удаляет /var/lib/soul-stack/{bin,modules}/.
+// Verifies:
+//   - host-cert verification against testCA (Dial → ssh.CertChecker accept);
+//   - the ephemeral keypair user-cert passes TrustedUserCAKeys;
+//   - SHA-256 cache: a repeated Deliver doesn't re-upload an identical file;
+//   - exec on the host produces a valid NDJSON RunResult → SendApply returns SUCCESS;
+//   - Cleanup removes /var/lib/soul-stack/{bin,modules}/.
 
 package push
 
@@ -51,8 +52,8 @@ const (
 	integrationSSHUser   = "soul"
 )
 
-// integrationCA — сгенерированная per-тест CA-пара. Используется и как host-CA
-// (подписывает host-cert sshd), и как user-CA (TrustedUserCAKeys).
+// integrationCA — a CA keypair generated per test. Used both as the host-CA
+// (signs sshd's host-cert) and as the user-CA (TrustedUserCAKeys).
 type integrationCA struct {
 	signer ssh.Signer
 	pub    ssh.PublicKey
@@ -71,8 +72,8 @@ func genIntegrationCA(t *testing.T) integrationCA {
 	return integrationCA{signer: signer, pub: signer.PublicKey()}
 }
 
-// genHostKeyAndCert выпускает ed25519-host-key + host-cert, подписанный CA, с
-// principal=127.0.0.1 (testcontainers пробрасывает порт на localhost).
+// genHostKeyAndCert issues an ed25519 host key + a CA-signed host-cert with
+// principal=127.0.0.1 (testcontainers forwards the port to localhost).
 func genHostKeyAndCert(t *testing.T, ca integrationCA) (hostPrivPEM, hostPub, hostCert string) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -105,15 +106,16 @@ func genHostKeyAndCert(t *testing.T, ca integrationCA) (hostPrivPEM, hostPub, ho
 	return
 }
 
-// writeSSHContainerConfig подготавливает host-mount каталог с custom sshd_config,
-// host-key + host-cert, TrustedUserCAKeys, mock-soul-script.
+// writeSSHContainerConfig prepares a host-mount directory with a custom
+// sshd_config, host-key + host-cert, TrustedUserCAKeys, and a mock-soul
+// script.
 func writeSSHContainerConfig(t *testing.T, ca integrationCA) (mountDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	hostPrivPEM, _, hostCert := genHostKeyAndCert(t, ca)
 
-	// host-key (RSA-формат для совместимости с openssh-server: ed25519 в PEM
-	// тоже принимается современным sshd — оставим ed25519).
+	// host-key (RSA format for compatibility with openssh-server: modern sshd
+	// also accepts ed25519 in PEM, so we'll keep ed25519).
 	if err := os.WriteFile(filepath.Join(dir, "ssh_host_ed25519_key"), []byte(hostPrivPEM), 0o600); err != nil {
 		t.Fatalf("write host key: %v", err)
 	}
@@ -124,7 +126,7 @@ func writeSSHContainerConfig(t *testing.T, ca integrationCA) (mountDir string) {
 		t.Fatalf("write user-ca: %v", err)
 	}
 
-	// Минимальный sshd_config: HostKey + HostCertificate + TrustedUserCAKeys.
+	// Minimal sshd_config: HostKey + HostCertificate + TrustedUserCAKeys.
 	// PubkeyAuthentication on, PasswordAuthentication off (fail-closed).
 	sshdConfig := `Port 2222
 HostKey /etc/ssh/keys/ssh_host_ed25519_key
@@ -150,9 +152,9 @@ LogLevel DEBUG3
 		t.Fatalf("write sshd_config: %v", err)
 	}
 
-	// Mock-soul: shell-скрипт, читающий stdin и печатающий валидный RunResult
-	// (json одной строкой с status RUN_STATUS_SUCCESS). Используется в e2e-тесте
-	// SendApply на реальном sshd.
+	// Mock-soul: a shell script that reads stdin and prints a valid RunResult
+	// (a single-line json with status RUN_STATUS_SUCCESS). Used in the e2e test
+	// of SendApply against a real sshd.
 	mockSoul := `#!/bin/sh
 cat >/dev/null
 printf '{"apply_id":"integration-1","status":"RUN_STATUS_SUCCESS"}\n'
@@ -165,15 +167,16 @@ exit 0
 	return dir
 }
 
-// startSSHContainer стартует контейнер с custom-sshd. linuxserver/openssh-server
-// сам не настроит host-cert и TrustedUserCAKeys из env, поэтому мы подменяем
-// sshd_config через volume-mount и стартуем sshd напрямую как entrypoint
-// (минуя s6-overlay), чтобы не тратить 10+с на init.
+// startSSHContainer starts a container with a custom sshd. linuxserver/openssh-server
+// won't configure host-cert and TrustedUserCAKeys from env by itself, so we
+// swap in sshd_config via a volume mount and start sshd directly as the
+// entrypoint (bypassing s6-overlay) to avoid burning 10+s on init.
 func startSSHContainer(ctx context.Context, t *testing.T, configDir string) (host string, port int, terminate func()) {
 	t.Helper()
 
-	// Шелл-скрипт-entrypoint: ставит openssh-server (если ещё нет), готовит
-	// /etc/ssh/keys, добавляет soul-пользователя, запускает sshd с custom-config.
+	// Shell-script entrypoint: installs openssh-server (if not present yet),
+	// prepares /etc/ssh/keys, adds the soul user, starts sshd with the custom
+	// config.
 	entrypoint := `#!/bin/sh
 set -e
 apk add --no-cache openssh openssh-server-pam openssh-keygen sudo >/dev/null 2>&1 || true
@@ -252,9 +255,10 @@ exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config
 	return host, portN, terminate
 }
 
-// makeEphemeralAuthForIntegration выпускает ephemeral user-keypair + cert от
-// integrationCA с principal=soul (как требует AllowUsers/TrustedUserCAKeys). Это
-// эмулирует выход SshProvider.Sign() в Vault-режиме.
+// makeEphemeralAuthForIntegration issues an ephemeral user keypair + cert
+// from integrationCA with principal=soul (as required by
+// AllowUsers/TrustedUserCAKeys). This emulates the output of
+// SshProvider.Sign() in Vault mode.
 func makeEphemeralAuthForIntegration(t *testing.T, ca integrationCA) ([]ssh.AuthMethod, string) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -283,9 +287,9 @@ func makeEphemeralAuthForIntegration(t *testing.T, ca integrationCA) ([]ssh.Auth
 	return []ssh.AuthMethod{ssh.PublicKeys(certSigner)}, string(ssh.MarshalAuthorizedKey(cert))
 }
 
-// integrationProvider эмулирует SshProvider, возвращающий cert на pubkey,
-// который передал dispatcher (Vault SSH CA flow). private_key пуст —
-// канонический ephemeral-режим.
+// integrationProvider emulates an SshProvider that returns a cert on the
+// pubkey the dispatcher passed in (Vault SSH CA flow). private_key is empty —
+// the canonical ephemeral mode.
 type integrationProvider struct {
 	t  *testing.T
 	ca integrationCA
@@ -317,9 +321,9 @@ func (p *integrationProvider) Sign(_ context.Context, req *pluginv1.SignRequest)
 	}, nil
 }
 
-// TestIntegration_LiveSSHD_DeliverApplyCleanup — end-to-end через реальный sshd:
-// CA-signed host-cert verify + TrustedUserCAKeys user auth + ShaDeliverer +
-// SendApply (mock-soul печатает RunResult) + ShaCleaner.
+// TestIntegration_LiveSSHD_DeliverApplyCleanup — end-to-end against a real
+// sshd: CA-signed host-cert verify + TrustedUserCAKeys user auth +
+// ShaDeliverer + SendApply (mock-soul prints a RunResult) + ShaCleaner.
 func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test requires docker")
@@ -332,7 +336,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	containerHost, containerPort, terminate := startSSHContainer(ctx, t, configDir)
 	defer terminate()
 
-	// Подготовим local artifacts для Deliverer.
+	// Prepare local artifacts for the Deliverer.
 	localSoul := filepath.Join(t.TempDir(), "soul")
 	if err := os.WriteFile(localSoul, []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"apply_id\":\"integration-1\",\"status\":\"RUN_STATUS_SUCCESS\"}\\n'\n"), 0o755); err != nil {
 		t.Fatalf("write soul: %v", err)
@@ -368,10 +372,10 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 		t.Errorf("status = %v, want SUCCESS", rr.GetStatus())
 	}
 
-	// Проверим, что файлы реально доехали: повторим SendApply — sha256 совпадёт,
-	// upload не должен случиться (т.е. оба прогона дают SUCCESS, и второй прогон
-	// быстрее — но это не assert-able без таймингов; проверим хотя бы, что нет
-	// regression).
+	// Verify the files actually made it over: repeat SendApply — sha256 will
+	// match, upload should not happen (i.e. both runs return SUCCESS, and the
+	// second run is faster — but that's not assert-able without timing; at
+	// least check there's no regression).
 	rr2, err := disp.SendApply(ctx, containerHost, testProviderName, &keeperv1.ApplyRequest{ApplyId: "integration-2"})
 	if err != nil {
 		t.Fatalf("SendApply (повтор): %v", err)
@@ -380,14 +384,14 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 		t.Errorf("повторный прогон status = %v, want SUCCESS", rr2.GetStatus())
 	}
 
-	// Cleanup → /var/lib/soul-stack/{bin,modules}/ удалены.
+	// Cleanup → /var/lib/soul-stack/{bin,modules}/ removed.
 	if err := disp.Cleanup(ctx, containerHost, testProviderName); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
 
-	// Пост-Cleanup проверим, что директорий нет: открываем новый Dial и делаем
-	// `ls /var/lib/soul-stack` → ожидаем пустой/отсутствует. Открываем своими
-	// средствами (минуя dispatcher.SendApply, который снова бы их создал).
+	// Post-Cleanup, verify the directories are gone: open a fresh Dial and run
+	// `ls /var/lib/soul-stack` → expect it empty/absent. We open it ourselves
+	// (bypassing dispatcher.SendApply, which would recreate them).
 	auth, _ := makeEphemeralAuthForIntegration(t, ca)
 	sess, err := Dial(ctx, DialConfig{
 		Host:            containerHost,

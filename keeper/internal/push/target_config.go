@@ -8,44 +8,46 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ErrTargetNotConfigured — SID отсутствует в `keeper.yml::push.targets[]`.
-// Sentinel позволяет caller-у (pushorch executeAsync) различать «оператор
-// забыл прописать хост» от транспортных ошибок (Authorize/Sign/Dial).
+// ErrTargetNotConfigured means the SID is missing from
+// `keeper.yml::push.targets[]`. The sentinel lets the caller (pushorch
+// executeAsync) distinguish "the operator forgot to list the host" from
+// transport errors (Authorize/Sign/Dial).
 //
-// Pilot-форма (S6, 2026-05-26): inline в keeper.yml. S7 заменит резолвер на
-// `souls.ssh_target jsonb`-чтение, sentinel останется тот же.
+// Pilot form (S6, 2026-05-26): inline in keeper.yml. S7 will replace the
+// resolver with a `souls.ssh_target jsonb` read; the sentinel stays the same.
 var ErrTargetNotConfigured = errors.New("push: SID не сконфигурирован в push.targets[]")
 
-// Дефолты pilot-резолвера для опущенных полей `push.targets[].*` (см.
-// [config.KeeperPushTarget] doc). Каноничные unix-конвенции; оператор перебивает
-// per-target явным значением.
+// Defaults for the pilot resolver's omitted `push.targets[].*` fields (see
+// the [config.KeeperPushTarget] doc). Canonical unix conventions; the
+// operator can override per-target with an explicit value.
 const (
 	defaultSSHPort  = 22
 	defaultSSHUser  = "root"
 	defaultSoulPath = "/usr/local/bin/soul"
 )
 
-// ConfigTargetResolver — pilot-резолвер SSH-реквизитов из `keeper.yml::push.targets[]`
-// (S6 wire-up SshDispatcher, [ADR-032 amendment]). Индексирует записи по SID на
-// конструкторе: O(1) lookup на горячем пути SendApply.
+// ConfigTargetResolver is the pilot resolver for SSH credentials from
+// `keeper.yml::push.targets[]` (S6 SshDispatcher wire-up, [ADR-032
+// amendment]). Indexes entries by SID in the constructor: O(1) lookup on the
+// SendApply hot path.
 //
-// Резолв: SID → [SSHTarget] с подставленными дефолтами (port 22 / user root /
-// soul-path /usr/local/bin/soul, симметрия с docs/keeper/push.md).
-// SID без записи → [ErrTargetNotConfigured] (fail-closed, оператор видит
-// чёткое сообщение в push_runs.summary).
+// Resolve: SID → [SSHTarget] with defaults filled in (port 22 / user root /
+// soul-path /usr/local/bin/soul, symmetric with docs/keeper/push.md).
+// A SID without an entry → [ErrTargetNotConfigured] (fail-closed; the
+// operator sees a clear message in push_runs.summary).
 //
-// S7 заменит этот источник на `souls.ssh_target jsonb` — интерфейс
-// [TargetResolver] не изменится, поменяется только конструктор резолвера в
-// daemon-wire-up.
+// S7 will replace this source with `souls.ssh_target jsonb` — the
+// [TargetResolver] interface won't change, only the resolver's constructor
+// in daemon wire-up.
 type ConfigTargetResolver struct {
 	byID map[string]SSHTarget
 }
 
-// NewConfigTargetResolver индексирует список `push.targets[]` по SID,
-// подставляя дефолты на пустых полях. Дубликаты SID schema-фаза уже отвергла
-// (validatePush в shared/config/schema.go); defense-in-depth — последняя
-// запись перекрывает предыдущую (но не должно происходить на провалидированном
-// конфиге).
+// NewConfigTargetResolver indexes the `push.targets[]` list by SID, filling
+// in defaults for empty fields. Duplicate SIDs are already rejected by the
+// schema phase (validatePush in shared/config/schema.go); as defense in
+// depth, the last entry overwrites the previous one (though this shouldn't
+// happen on a validated config).
 func NewConfigTargetResolver(targets []config.KeeperPushTarget) *ConfigTargetResolver {
 	byID := make(map[string]SSHTarget, len(targets))
 	for _, t := range targets {
@@ -62,7 +64,8 @@ func NewConfigTargetResolver(targets []config.KeeperPushTarget) *ConfigTargetRes
 	return &ConfigTargetResolver{byID: byID}
 }
 
-// Resolve реализует [TargetResolver]. Lookup по SID; не найден → ErrTargetNotConfigured.
+// Resolve implements [TargetResolver]. Lookup by SID; not found →
+// ErrTargetNotConfigured.
 func (r *ConfigTargetResolver) Resolve(_ context.Context, sid string) (SSHTarget, error) {
 	t, ok := r.byID[sid]
 	if !ok {

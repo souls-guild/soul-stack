@@ -1,33 +1,37 @@
 package redis
 
-// Cluster-wide инвалидация реестра Service-ов и keeper-settings через Redis
-// pub/sub (S2 переноса реестра в Postgres, паттерн ADR-028(d) RBAC).
+// Cluster-wide invalidation of the Service registry and keeper-settings via
+// Redis pub/sub (S2 of moving the registry to Postgres, the ADR-028(d) RBAC
+// pattern).
 //
-// Проблема: каждый Keeper-инстанс держит собственный in-memory снимок реестра
-// service_registry + keeper_settings (`serviceregistry.Holder`), построенный из
-// Postgres. CRUD-мутация (Insert/Update/Delete service / SetSetting) коммитится
-// в общую БД на Keeper-A, но снимки остальных нод видят её только через
-// TTL-poll (до `serviceregistry.DefaultRefreshInterval`). Окно устаревания —
-// секунды.
+// Problem: each Keeper instance holds its own in-memory snapshot of the
+// service_registry + keeper_settings registry (`serviceregistry.Holder`),
+// built from Postgres. A CRUD mutation (Insert/Update/Delete service /
+// SetSetting) commits to the shared DB on Keeper-A, but the other nodes'
+// snapshots only see it via TTL-poll (up to
+// `serviceregistry.DefaultRefreshInterval`). The staleness window is
+// seconds.
 //
-// Решение симметрично [PublishRBACInvalidate] / [SubscribeRBACInvalidate]:
-// мутирующая нода после успешного commit-а PUBLISH-ит в канал
-// `service:invalidate`, остальные ноды по SUBSCRIBE near-instant перечитывают
-// снимок из БД. Self-filter по `origin_kid` отсекает эхо собственной публикации
-// — мутирующая нода уже зафиксировала изменение в БД и полагается на свой
-// TTL-poll (тот же self-filter, что в RBAC; у Sigil его нет — там кеши живут на
-// Soul-ах, здесь снимок локален Keeper-у).
+// Solution mirrors [PublishRBACInvalidate] / [SubscribeRBACInvalidate]:
+// after a successful commit, the mutating node PUBLISHes to the
+// `service:invalidate` channel, and the other nodes' SUBSCRIBE re-reads the
+// snapshot from the DB near-instantly. Self-filter by `origin_kid` drops
+// the echo of its own publish — the mutating node has already recorded the
+// change in the DB and relies on its own TTL-poll (the same self-filter as
+// RBAC; Sigil doesn't have one — its caches live on the Souls, here the
+// snapshot is local to the Keeper).
 //
-// S2 = TTL-poll + pub/sub: TTL-poll НЕ убирается. Redis pub/sub не имеет
-// persistence — если сообщение потеряно (реконнект ноды, мигание брокера), его
-// подхватит следующий TTL-poll. Pub/sub лишь сокращает типичную задержку до
-// миллисекунд, не заменяет fallback.
+// S2 = TTL-poll + pub/sub: TTL-poll is NOT removed. Redis pub/sub has no
+// persistence — if a message is lost (node reconnect, broker blip), the
+// next TTL-poll picks it up. Pub/sub only shortens the typical delay to
+// milliseconds, it doesn't replace the fallback.
 //
-// Convention `service:invalidate` — отдельный namespace (стиль
-// `<подсистема>:<событие>`, как `rbac:invalidate`/`sigil:invalidate`), не
-// пересекается с `apply:<id>`/`outbound:<sid>`/`soul:<sid>:*`. Wire-формат —
-// компактный JSON-envelope: `origin_kid` (self-filter) + `at` (диагностика).
-// Payload-а нет — сообщение «снимок устарел, перечитай из БД».
+// Convention `service:invalidate` — a separate namespace (the
+// `<subsystem>:<event>` style, like `rbac:invalidate`/`sigil:invalidate`),
+// doesn't overlap with `apply:<id>`/`outbound:<sid>`/`soul:<sid>:*`. Wire
+// format is a compact JSON envelope: `origin_kid` (self-filter) + `at`
+// (diagnostics). No payload — the message is "snapshot is stale, re-read
+// from the DB".
 
 import (
 	"context"
@@ -40,38 +44,39 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ServiceInvalidateChannel — Redis-канал cluster-wide инвалидации реестра
-// Service-ов. Фиксированный (не per-name): любая CRUD-мутация service/setting на
-// любой ноде шлёт сюда.
+// ServiceInvalidateChannel is the Redis channel for cluster-wide Service
+// registry invalidation. Fixed (not per-name): any service/setting CRUD
+// mutation on any node publishes here.
 const ServiceInvalidateChannel = "service:invalidate"
 
-// serviceInvalidateEnvelope — JSON-обёртка одного invalidate-сообщения.
+// serviceInvalidateEnvelope is the JSON wrapper for one invalidate message.
 //
-// `OriginKID` — KID Keeper-инстанса, опубликовавшего инвалидацию; подписчик
-// отбрасывает сообщения с OriginKID == собственный KID (self-filter,
-// симметрично [rbacInvalidateEnvelope.OriginKID]).
+// `OriginKID` is the KID of the Keeper instance that published the
+// invalidation; the subscriber drops messages where OriginKID == its own
+// KID (self-filter, mirrors [rbacInvalidateEnvelope.OriginKID]).
 //
-// `At` — момент публикации (диагностика); семантической нагрузки на
-// rebuild-снимка не несёт.
+// `At` is the publish time (diagnostics); it carries no semantic weight for
+// the snapshot rebuild.
 type serviceInvalidateEnvelope struct {
 	OriginKID string    `json:"origin_kid"`
 	At        time.Time `json:"at"`
 }
 
-// ServiceInvalidate — распакованное invalidate-сообщение, доставляемое
-// подписчику. Payload-а нет: само получение = сигнал «перечитай снимок реестра».
+// ServiceInvalidate is the unpacked invalidate message delivered to a
+// subscriber. No payload: receiving it at all is the signal to "re-read the
+// registry snapshot".
 type ServiceInvalidate struct {
 	OriginKID string
 	At        time.Time
 }
 
-// PublishServiceInvalidate публикует invalidate-сигнал в
-// [ServiceInvalidateChannel]. Возвращает количество подписчиков, получивших
-// сообщение.
+// PublishServiceInvalidate publishes an invalidate signal to
+// [ServiceInvalidateChannel]. Returns the number of subscribers that
+// received the message.
 //
-// Best-effort: caller (serviceregistry.Service после commit-а) глотает ошибку —
-// мутация уже зафиксирована в БД, потеря publish-а не критична (TTL-poll
-// подхватит).
+// Best-effort: the caller (serviceregistry.Service after a commit) swallows
+// the error — the mutation is already committed to the DB, and a lost
+// publish isn't critical (TTL-poll will pick it up).
 func PublishServiceInvalidate(ctx context.Context, c *Client, originKID string) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishServiceInvalidate: nil client")
@@ -95,17 +100,20 @@ func PublishServiceInvalidate(ctx context.Context, c *Client, originKID string) 
 	return n, nil
 }
 
-// serviceInvalidateSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом (Holder). Инвалидации редки (CRUD-мутации реестра — десятки в день),
-// небольшой запас отсекает drop при burst-е bulk-импорта. Совпадает с
-// rbacInvalidateSubBufferSize — тот же класс редкого административного потока.
+// serviceInvalidateSubBufferSize is the Go channel buffer between the
+// Redis-PubSub loop and the caller (Holder). Invalidations are rare
+// (registry CRUD mutations — dozens per day); the small margin avoids
+// drops during bulk-import bursts. Matches rbacInvalidateSubBufferSize —
+// the same class of rare administrative traffic.
 const serviceInvalidateSubBufferSize = 16
 
-// ServiceInvalidateSubscription — handle на подписку [ServiceInvalidateChannel].
+// ServiceInvalidateSubscription is a handle to the [ServiceInvalidateChannel]
+// subscription.
 //
-// Идентична по lifecycle [RBACInvalidateSubscription]: spawn goroutine читает
-// PubSub-канал → парсит envelope → filter self-origin → отдаёт
-// *ServiceInvalidate в Channel(). Close() прерывает goroutine и закрывает канал.
+// Lifecycle is identical to [RBACInvalidateSubscription]: a spawned
+// goroutine reads the PubSub channel → parses the envelope → filters
+// self-origin → delivers *ServiceInvalidate to Channel(). Close() stops the
+// goroutine and closes the channel.
 type ServiceInvalidateSubscription struct {
 	ps        *redis.PubSub
 	out       chan *ServiceInvalidate
@@ -116,7 +124,7 @@ type ServiceInvalidateSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными invalidate-сообщениями.
+// Channel is the read side of the Go channel with unpacked invalidate messages.
 func (s *ServiceInvalidateSubscription) Channel() <-chan *ServiceInvalidate {
 	if s == nil {
 		return nil
@@ -124,8 +132,8 @@ func (s *ServiceInvalidateSubscription) Channel() <-chan *ServiceInvalidate {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis (или
-// ctx.Done() / Close()). См. doc-comment [RBACInvalidateSubscription.Ready].
+// Ready blocks until the first subscribe acknowledgement from Redis (or
+// ctx.Done() / Close()). See the doc comment on [RBACInvalidateSubscription.Ready].
 func (s *ServiceInvalidateSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.ServiceInvalidateSubscription.Ready: nil subscription")
@@ -140,8 +148,8 @@ func (s *ServiceInvalidateSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и Go-канал.
-// Идемпотентна.
+// Close stops the subscribe loop and closes the Redis pubsub handle and Go
+// channel. Idempotent.
 func (s *ServiceInvalidateSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -149,8 +157,8 @@ func (s *ServiceInvalidateSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeServiceInvalidate подписывается на [ServiceInvalidateChannel] и
-// поднимает goroutine-forwarder. selfKID используется для self-фильтрации (как в
+// SubscribeServiceInvalidate subscribes to [ServiceInvalidateChannel] and
+// starts the goroutine-forwarder. selfKID is used for self-filtering (as in
 // [SubscribeRBACInvalidate]).
 func SubscribeServiceInvalidate(ctx context.Context, c *Client, selfKID string, logger *slog.Logger) (*ServiceInvalidateSubscription, error) {
 	if c == nil {
@@ -230,9 +238,9 @@ func (s *ServiceInvalidateSubscription) run(ctx context.Context, closed <-chan s
 			continue
 		}
 		if ev.OriginKID == s.selfKID {
-			// Self-echo: мутацию сделали мы сами. Не рефрешимся по своему
-			// publish-у — собственный TTL-poll подхватит. Тот же self-filter,
-			// что в SubscribeRBACInvalidate.
+			// Self-echo: we made this mutation ourselves. Don't refresh off
+			// our own publish — our own TTL-poll will pick it up. Same
+			// self-filter as in SubscribeRBACInvalidate.
 			s.logger.Debug("redis.SubscribeServiceInvalidate: ignoring self-origin invalidate",
 				slog.String("origin_kid", ev.OriginKID))
 			continue
@@ -241,9 +249,10 @@ func (s *ServiceInvalidateSubscription) run(ctx context.Context, closed <-chan s
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик (Holder) не успел перечитать снимок.
-			// Drop безопасен: каждое сообщение — лишь «перечитай», последний
-			// rebuild всё равно прочтёт актуальный БД-снимок целиком.
+			// Channel full — the subscriber (Holder) hasn't caught up on
+			// the snapshot. Drop is safe: each message just means
+			// "re-read", the next rebuild will read the full, current DB
+			// snapshot anyway.
 			s.logger.Warn("redis.SubscribeServiceInvalidate: forward channel full, dropping",
 				slog.String("origin_kid", ev.OriginKID))
 		}

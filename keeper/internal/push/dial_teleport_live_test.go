@@ -15,10 +15,11 @@ func envOr(key, def string) string {
 	return def
 }
 
-// TestLiveTeleportRun — env-gated live-harness ownership-фикса proxy-клиента:
-// Dial через настоящий Teleport Proxy + ДВА последовательных Run по одной сессии
-// (регресс бил уже первый Run: `ssh: unexpected packet in response to channel
-// open: <nil>`). Дефолты — dev-стенд (keeper.dev.yml push.teleport). Запуск:
+// TestLiveTeleportRun — an env-gated live harness for the proxy-client
+// ownership fix: Dial through a real Teleport Proxy + TWO sequential Run
+// calls on one session (the regression already broke the first Run: `ssh:
+// unexpected packet in response to channel open: <nil>`). Defaults — the dev
+// stand (keeper.dev.yml push.teleport). Run:
 //
 //	TELEPORT_LIVE=1 TELEPORT_LIVE_SID=<node-name> \
 //	  go test -count=1 -run TestLiveTeleportRun -v ./internal/push/

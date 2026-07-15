@@ -16,7 +16,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// --- моки ---
+// --- mocks ---
 
 type mockProvider struct {
 	authAllowed bool
@@ -58,7 +58,7 @@ func (m *mockSouls) SelectBySID(_ context.Context, _ string) (*soul.Soul, error)
 	return m.s, m.err
 }
 
-// mockSession ловит stdin и отдаёт заранее заданный stdout/err.
+// mockSession captures stdin and returns a pre-set stdout/err.
 type mockSession struct {
 	stdout   string
 	runErr   error
@@ -75,9 +75,10 @@ func (m *mockSession) Run(_ context.Context, cmd string, stdinData []byte) (stri
 
 func (m *mockSession) Close() error { m.closed = true; return nil }
 
-// testSigner — реальный ed25519-ключ в PEM для Sign-ответа (ssh.ParsePrivateKey
-// должен распарсить). Генерируем один раз через ssh.NewSignerFromKey не выйдет —
-// нужен PEM; используем фиксированный сгенерированный helper.
+// testSigner — a real ed25519 key in PEM for the Sign response
+// (ssh.ParsePrivateKey needs to parse it). Generating it once via
+// ssh.NewSignerFromKey won't work — we need PEM, so we use a fixed generated
+// helper.
 
 func validSignReply(t *testing.T) *pluginv1.SignReply {
 	t.Helper()
@@ -92,14 +93,15 @@ func sshSoul() *soul.Soul {
 	return &soul.Soul{SID: "host-1.example.com", Transport: soul.TransportSSH, Status: soul.StatusPending}
 }
 
-// testProviderName — default-имя SshProvider в unit-тестах. Используется
-// helper-ами newTestDispatcher / testSendApply, чтобы не повторять литерал.
+// testProviderName — the default SshProvider name in unit tests. Used by the
+// newTestDispatcher / testSendApply helpers to avoid repeating the literal.
 const testProviderName = "vault-ssh"
 
-// testDispatcherOpts — короткая опц.-форма для newTestDispatcher: тест часто
-// настраивает один provider + ровно одну реализацию (mockProvider) и не хочет
-// руками собирать map[string]ProviderEntry. Если ProviderEntry-map уже задан в
-// Deps.Providers — приоритет за ним (multi-provider тест задаёт его сам).
+// testDispatcherOpts — a short optional form for newTestDispatcher: a test
+// often configures a single provider + exactly one implementation
+// (mockProvider) and doesn't want to build map[string]ProviderEntry by hand.
+// If a ProviderEntry map is already set in Deps.Providers, it takes priority
+// (a multi-provider test builds it itself).
 type testDispatcherOpts struct {
 	provider SshProvider
 	name     string
@@ -118,8 +120,8 @@ func newTestDispatcher(t *testing.T, d Deps, single ...testDispatcherOpts) *SshD
 		}}
 	}
 	if d.Providers == nil {
-		// Single-provider шорткат: если тест передал testDispatcherOpts —
-		// собираем карту из неё, иначе берём дефолтный mockProvider.
+		// Single-provider shortcut: if the test passed testDispatcherOpts, build
+		// the map from it, otherwise fall back to the default mockProvider.
 		var sp SshProvider
 		var closer io.Closer
 		name := testProviderName
@@ -171,7 +173,7 @@ func TestSendApply_HappyPath(t *testing.T) {
 		t.Errorf("RunResult.status = %v, want SUCCESS", rr.GetStatus())
 	}
 
-	// ApplyRequest должен уехать в stdin как protojson.
+	// ApplyRequest must go out over stdin as protojson.
 	gotReq := &keeperv1.ApplyRequest{}
 	if err := protojson.Unmarshal(sess.gotStdin, gotReq); err != nil {
 		t.Fatalf("stdin не protojson ApplyRequest: %v", err)
@@ -185,19 +187,19 @@ func TestSendApply_HappyPath(t *testing.T) {
 	if !sess.closed {
 		t.Error("сессия не закрыта (defer Close)")
 	}
-	// CA должен доехать до Dial (host-cert verification).
+	// CA must reach Dial (host-cert verification).
 	if len(dialedCfg.HostAuthorities) == 0 {
 		t.Error("HostAuthorities не переданы в Dial")
 	}
 }
 
 func TestSendApply_FailedRunResult_NoTransportError(t *testing.T) {
-	// soul apply вернул FAILED+exit1: транспорт ОК, RunResult доставлен.
+	// soul apply returned FAILED+exit1: transport is OK, RunResult was delivered.
 	ev, _ := protojson.Marshal(&keeperv1.TaskEvent{ApplyId: "ap-2", Status: keeperv1.TaskStatus_TASK_STATUS_FAILED})
 	rr, _ := protojson.Marshal(&keeperv1.RunResult{ApplyId: "ap-2", Status: keeperv1.RunStatus_RUN_STATUS_FAILED})
 	sess := &mockSession{
 		stdout: string(ev) + "\n" + string(rr) + "\n",
-		runErr: &ssh.ExitError{}, // непустой exit
+		runErr: &ssh.ExitError{}, // non-empty exit
 	}
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
@@ -278,7 +280,7 @@ func TestSendApply_RejectsNonSSHTransport(t *testing.T) {
 }
 
 func TestSendApply_NoRunResultIsTransportError(t *testing.T) {
-	// Поток оборвался до RunResult (краш soul apply) → dispatch-level fail.
+	// The stream was cut before RunResult (soul apply crash) → dispatch-level fail.
 	ev, _ := protojson.Marshal(&keeperv1.TaskEvent{ApplyId: "ap-6", Status: keeperv1.TaskStatus_TASK_STATUS_OK})
 	sess := &mockSession{stdout: string(ev) + "\n", runErr: &ssh.ExitError{}}
 	disp := newTestDispatcher(t, Deps{
@@ -311,10 +313,11 @@ func TestSendApply_SignError(t *testing.T) {
 	}
 }
 
-// vaultStyleSignReply имитирует ответ Vault SSH CA-провайдера: только
-// certificate, private_key="". Подписант — ephemeral signer, который генерит
-// dispatcher. Сертификат подписан caSigner на ephPub (для CA-провайдеров
-// host-CA и user-CA — разные сущности; здесь caSigner играет роль user-CA).
+// vaultStyleSignReply mimics the Vault SSH CA provider's response: only a
+// certificate, private_key="". The signer is the ephemeral signer generated
+// by the dispatcher. The certificate is signed by caSigner over ephPub (for
+// CA providers, host-CA and user-CA are different entities; here caSigner
+// plays the role of the user-CA).
 func vaultStyleCertOnPub(t *testing.T, ephPubAuthorized string) string {
 	t.Helper()
 	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(ephPubAuthorized))
@@ -335,9 +338,9 @@ func vaultStyleCertOnPub(t *testing.T, ephPubAuthorized string) string {
 	return string(ssh.MarshalAuthorizedKey(cert))
 }
 
-// signCapturingProvider — мок Provider, который запоминает SignRequest для
-// проверки, что dispatcher положил туда ephemeral-pubkey, и формирует ответ
-// в зависимости от полученного public_key (Vault-style: cert на этой pubkey).
+// signCapturingProvider — a mock Provider that records the SignRequest to
+// verify the dispatcher put the ephemeral pubkey there, and builds its reply
+// based on the received public_key (Vault-style: a cert on that pubkey).
 type signCapturingProvider struct {
 	t         *testing.T
 	gotReq    *pluginv1.SignRequest
@@ -357,9 +360,9 @@ func (p *signCapturingProvider) Sign(_ context.Context, req *pluginv1.SignReques
 	return p.makeReply(p.t, req), nil
 }
 
-// TestSendApply_VaultEphemeralMode — Vault SSH CA-режим: SignReply без
-// private_key + certificate на ephemeral-pubkey, который Keeper передал в
-// SignRequest. Должно собраться без ошибок и доехать до RunResult.
+// TestSendApply_VaultEphemeralMode — Vault SSH CA mode: a SignReply without
+// private_key + a certificate on the ephemeral pubkey that Keeper put in the
+// SignRequest. Should assemble without errors and reach a RunResult.
 func TestSendApply_VaultEphemeralMode(t *testing.T) {
 	sess := &mockSession{stdout: successStdout(t, "ap-vault-1")}
 	prov := &signCapturingProvider{
@@ -367,7 +370,7 @@ func TestSendApply_VaultEphemeralMode(t *testing.T) {
 		makeReply: func(t *testing.T, req *pluginv1.SignRequest) *pluginv1.SignReply {
 			return &pluginv1.SignReply{
 				Certificate: vaultStyleCertOnPub(t, req.GetPublicKey()),
-				PrivateKey:  "", // канонический Vault-flow
+				PrivateKey:  "", // canonical Vault flow
 				TtlSeconds:  1800,
 			}
 		},
@@ -386,8 +389,8 @@ func TestSendApply_VaultEphemeralMode(t *testing.T) {
 	if rr.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		t.Errorf("status = %v, want SUCCESS", rr.GetStatus())
 	}
-	// Проверка S2-инварианта: dispatcher положил непустой OpenSSH-pubkey в
-	// SignRequest.public_key (без него Vault SSH CA не сможет подписать).
+	// Checking the S2 invariant: the dispatcher put a non-empty OpenSSH pubkey
+	// in SignRequest.public_key (without it, Vault SSH CA can't sign).
 	if prov.gotReq == nil || prov.gotReq.GetPublicKey() == "" {
 		t.Fatal("SignRequest.public_key пуст — dispatcher не передал ephemeral pubkey")
 	}
@@ -396,8 +399,9 @@ func TestSendApply_VaultEphemeralMode(t *testing.T) {
 	}
 }
 
-// TestSendApply_VaultEphemeralMode_RejectsEmptyCert — Vault-стиль: private_key
-// пуст И certificate пуст → fail-closed (нечем подписать handshake).
+// TestSendApply_VaultEphemeralMode_RejectsEmptyCert — Vault style: private_key
+// is empty AND certificate is empty → fail-closed (nothing to sign the
+// handshake with).
 func TestSendApply_VaultEphemeralMode_RejectsEmptyCert(t *testing.T) {
 	dialed := false
 	disp := newTestDispatcher(t, Deps{
@@ -415,10 +419,12 @@ func TestSendApply_VaultEphemeralMode_RejectsEmptyCert(t *testing.T) {
 	}
 }
 
-// TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked — приватник ephemeral
-// keypair не должен попадать ни в SignRequest, ни в ошибки. Проверяем, что:
-//   - SignRequest.public_key — только pubkey (никакого `BEGIN PRIVATE KEY`);
-//   - ошибочный путь (битый cert) не подставляет приватник в error-message.
+// TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked — the ephemeral
+// keypair's private key must never leak into SignRequest or into errors. We
+// check that:
+//   - SignRequest.public_key is pubkey-only (no `BEGIN PRIVATE KEY`);
+//   - the error path (a broken cert) doesn't leak the private key into the
+//     error message.
 func TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked(t *testing.T) {
 	signer, pubAuth, err := newEphemeralEd25519()
 	if err != nil {
@@ -427,8 +433,8 @@ func TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked(t *testing.T) {
 	if strings.Contains(pubAuth, "PRIVATE KEY") {
 		t.Errorf("ephemeral authorized-key содержит PRIVATE KEY — утечка: %q", pubAuth)
 	}
-	// Битый cert + valid ephSigner → ошибка должна быть про разбор cert, без
-	// приватника в тексте.
+	// A broken cert + valid ephSigner → the error should be about parsing the
+	// cert, with no private key in the text.
 	_, err = authMethodsFromSign(&pluginv1.SignReply{Certificate: "not a cert", PrivateKey: ""}, signer)
 	if err == nil {
 		t.Fatal("ждали ошибку на битый cert")
@@ -438,9 +444,10 @@ func TestAuthMethodsFromSign_EphemeralPrivateKeyNotLeaked(t *testing.T) {
 	}
 }
 
-// TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner — обратная совместимость:
-// если private_key непуст, dispatcher должен собрать ssh.AuthMethod-ы из ключа
-// плагина, ephSigner игнорировать. Это гарантия не-сломанного static-провайдера.
+// TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner — backward compatibility:
+// if private_key is non-empty, the dispatcher must build ssh.AuthMethod
+// values from the plugin's key and ignore ephSigner. This guarantees a
+// static provider isn't broken.
 func TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner(t *testing.T) {
 	staticReply := &pluginv1.SignReply{PrivateKey: testEd25519PEM(t), Certificate: ""}
 	ephSigner, _, err := newEphemeralEd25519()
@@ -454,15 +461,16 @@ func TestAuthMethodsFromSign_StaticFlowIgnoresEphSigner(t *testing.T) {
 	if len(auth) != 1 {
 		t.Errorf("ждали ровно один AuthMethod, got %d", len(auth))
 	}
-	// Без ephSigner тот же reply должен работать (явный тест регрессии S0).
+	// Without ephSigner the same reply should still work (explicit S0
+	// regression test).
 	if _, err := authMethodsFromSign(staticReply, nil); err != nil {
 		t.Errorf("static-flow без ephSigner сломался: %v", err)
 	}
 }
 
-// TestSendApply_ProxyJumpPropagatedToDial — dispatcher должен класть
-// SignReply.proxy_jump в DialConfig.ProxyJump (без правки Auth: тот же signed
-// cert идёт на оба хопа Teleport-flow).
+// TestSendApply_ProxyJumpPropagatedToDial — the dispatcher must put
+// SignReply.proxy_jump into DialConfig.ProxyJump (without touching Auth: the
+// same signed cert goes to both hops of the Teleport flow).
 func TestSendApply_ProxyJumpPropagatedToDial(t *testing.T) {
 	sess := &mockSession{stdout: successStdout(t, "ap-pj-1")}
 	prov := &signCapturingProvider{
@@ -496,14 +504,15 @@ func TestSendApply_ProxyJumpPropagatedToDial(t *testing.T) {
 	if dialedCfg.Host != "host-1.example.com" || dialedCfg.Port != 22 {
 		t.Errorf("target изменился: host=%q port=%d", dialedCfg.Host, dialedCfg.Port)
 	}
-	// Auth — тот же набор, что для direct-flow (один user-cert на оба хопа).
+	// Auth — the same set as for the direct flow (one user-cert for both hops).
 	if len(dialedCfg.Auth) != 1 {
 		t.Errorf("Auth len = %d, want 1", len(dialedCfg.Auth))
 	}
 }
 
-// TestSendApply_ProxyJumpEmpty_DirectFlow — S0-regression: пустой proxy_jump в
-// SignReply не должен попадать в DialConfig.ProxyJump (=> direct dial).
+// TestSendApply_ProxyJumpEmpty_DirectFlow — S0 regression: an empty
+// proxy_jump in SignReply must not end up in DialConfig.ProxyJump (=> direct
+// dial).
 func TestSendApply_ProxyJumpEmpty_DirectFlow(t *testing.T) {
 	sess := &mockSession{stdout: successStdout(t, "ap-pj-empty")}
 	var dialedCfg DialConfig

@@ -44,9 +44,9 @@ func TestSubscribeAnchorsChanged_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestAnchorsChanged_RoundTrip — publish/subscribe полный цикл: подписчик
-// получает сигнал со штампом At. Self-filter-а нет (мутирующая нода тоже обязана
-// re-load + re-broadcast).
+// TestAnchorsChanged_RoundTrip — full publish/subscribe cycle: the subscriber
+// receives the signal with an At timestamp. No self-filter (the mutating node
+// must also reload + re-broadcast).
 func TestAnchorsChanged_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -83,8 +83,8 @@ func TestAnchorsChanged_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestAnchorsChanged_NoSelfFilter — собственная публикация НЕ фильтруется:
-// мутирующая нода должна получить свой сигнал и re-load набор.
+// TestAnchorsChanged_NoSelfFilter — a node's own publish is NOT filtered:
+// the mutating node must receive its own signal and reload the set.
 func TestAnchorsChanged_NoSelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -112,7 +112,7 @@ func TestAnchorsChanged_NoSelfFilter(t *testing.T) {
 	}
 }
 
-// TestAnchorsChanged_NoSubscribers — publish без подписчиков → 0, без ошибки.
+// TestAnchorsChanged_NoSubscribers — publish with no subscribers → 0, no error.
 func TestAnchorsChanged_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	n, err := PublishAnchorsChanged(context.Background(), c)
@@ -124,8 +124,8 @@ func TestAnchorsChanged_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestAnchorsChanged_CloseShutsDownGoroutine — Close завершает goroutine и
-// закрывает out-канал; повторный Close идемпотентен.
+// TestAnchorsChanged_CloseShutsDownGoroutine — Close terminates the goroutine
+// and closes the out-channel; a repeat Close is idempotent.
 func TestAnchorsChanged_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -154,8 +154,8 @@ func TestAnchorsChanged_CloseShutsDownGoroutine(t *testing.T) {
 	}
 }
 
-// TestAnchorsChanged_CloseSurvivesConcurrentReceive — гонка Close vs поток
-// данных. -race должен пройти.
+// TestAnchorsChanged_CloseSurvivesConcurrentReceive — race between Close and
+// the data stream. -race must pass.
 func TestAnchorsChanged_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

@@ -15,8 +15,8 @@ const (
 	testHolderB = "keeper-test-b"
 )
 
-// newClientMR — helper, поднимает miniredis-инстанс и оборачивает его в
-// [Client]. miniredis.RunT регистрирует cleanup автоматически.
+// newClientMR is a helper that spins up a miniredis instance and wraps it in
+// a [Client]. miniredis.RunT registers cleanup automatically.
 func newClientMR(t *testing.T) (*Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -118,14 +118,14 @@ func TestRenew_HappyPath(t *testing.T) {
 		t.Fatalf("Acquire: %v", err)
 	}
 
-	// Подвигаем время на 300 ms (lease ещё жив), Renew — продлевает.
+	// Advance time by 300 ms (lease still alive), Renew extends it.
 	mr.FastForward(300 * time.Millisecond)
 	if err := l.Renew(ctx); err != nil {
 		t.Fatalf("Renew: %v", err)
 	}
 
-	// Ещё 300 ms — без Renew lease бы умер (300+300=600 > 500), но Renew
-	// сбросил TTL → значение всё ещё присутствует.
+	// Another 300 ms — without Renew the lease would have died
+	// (300+300=600 > 500), but Renew reset the TTL → the value is still there.
 	mr.FastForward(300 * time.Millisecond)
 	if v, _ := mr.Get(testKey); v != testHolderA {
 		t.Errorf("value after Renew+FastForward = %q, want %q (Renew must extend TTL)", v, testHolderA)
@@ -141,8 +141,8 @@ func TestRenew_HolderChanged(t *testing.T) {
 		t.Fatalf("Acquire: %v", err)
 	}
 
-	// Симулируем «нас вытеснили»: переписываем значение под другим
-	// holder-ом без участия [Lease].
+	// Simulate "we got preempted": overwrite the value under a different
+	// holder without going through [Lease].
 	mr.Set(testKey, testHolderB)
 
 	err = l.Renew(ctx)
@@ -161,7 +161,7 @@ func TestRenew_KeyExpired(t *testing.T) {
 	}
 	mr.FastForward(200 * time.Millisecond)
 
-	// Ключ истёк, GET вернёт nil → CAS не совпадёт.
+	// The key has expired, GET returns nil → CAS won't match.
 	if err := l.Renew(ctx); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("Renew after expiry err = %v, want ErrLeaseLost", err)
 	}
@@ -194,8 +194,8 @@ func TestRelease_HolderChanged_NoOp(t *testing.T) {
 	}
 	mr.Set(testKey, testHolderB)
 
-	// Release не должен удалить чужой ключ — но и ошибку CAS-неуспеха не
-	// возвращает (idempotent stop).
+	// Release must not delete a foreign key — but also doesn't return a
+	// CAS-failure error (idempotent stop).
 	if err := l.Release(ctx); err != nil {
 		t.Fatalf("Release on foreign holder: %v", err)
 	}
@@ -222,8 +222,8 @@ func TestRelease_KeyAlreadyGone_NoOp(t *testing.T) {
 	}
 }
 
-// TestRenew_AfterRelease — после Release повторный Renew возвращает
-// ErrLeaseLost (Redis-state-driven, без флага в Go-struct).
+// TestRenew_AfterRelease — after Release, a repeat Renew returns
+// ErrLeaseLost (Redis-state-driven, no flag in the Go struct).
 func TestRenew_AfterRelease(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

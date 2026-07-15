@@ -106,8 +106,8 @@ func contains(s, sub string) bool {
 	return false
 }
 
-// TestLoadHostCAs_HappyPath — S7-3: два ref-а → два NamedHostKeyAuthority с
-// корректно прокинутыми Name/SourceRef и парсенными CAPubKey.
+// TestLoadHostCAs_HappyPath — S7-3: two refs → two NamedHostKeyAuthority
+// values with correctly propagated Name/SourceRef and parsed CAPubKey.
 func TestLoadHostCAs_HappyPath(t *testing.T) {
 	pem1 := genHostCAAuthorizedKey(t)
 	pem2 := genHostCAAuthorizedKey(t)
@@ -137,13 +137,14 @@ func TestLoadHostCAs_HappyPath(t *testing.T) {
 	}
 }
 
-// TestLoadHostCAs_PartialFail — S7-3: ошибка vault на втором ref-е → весь
-// LoadHostCAs fail-fast с именем сбойного CA в обёртке (caller валит старт).
+// TestLoadHostCAs_PartialFail — S7-3: a vault error on the second ref → the
+// whole LoadHostCAs fails fast with the failing CA's name in the wrapper
+// (caller aborts startup).
 func TestLoadHostCAs_PartialFail(t *testing.T) {
 	pem := genHostCAAuthorizedKey(t)
 	vc := &fakeKVReader{data: map[string]map[string]any{
 		"secret/keeper/ssh-host-ca-prod": {"public_key": pem},
-		// stage-CA отсутствует → LoadHostCA вернёт ошибку "not found".
+		// stage-CA is missing → LoadHostCA will return a "not found" error.
 	}}
 	refs := []config.KeeperPushCARef{
 		{Ref: "vault:secret/keeper/ssh-host-ca-prod", Name: "prod"},
@@ -158,8 +159,8 @@ func TestLoadHostCAs_PartialFail(t *testing.T) {
 	}
 }
 
-// TestLoadHostCAs_EmptyRefs — пустой набор → (nil, nil). Caller сам решает,
-// fail это или valid case (singular path / push выключен).
+// TestLoadHostCAs_EmptyRefs — an empty set → (nil, nil). The caller decides
+// whether that's a failure or a valid case (singular path / push disabled).
 func TestLoadHostCAs_EmptyRefs(t *testing.T) {
 	out, err := LoadHostCAs(context.Background(), &fakeKVReader{}, nil)
 	if err != nil {
@@ -170,8 +171,9 @@ func TestLoadHostCAs_EmptyRefs(t *testing.T) {
 	}
 }
 
-// TestLoadHostCAs_NilVault — defensive guard на nil vault-client (caller
-// гарантирует non-nil, но проверяем для symmetry с LoadHostCA single).
+// TestLoadHostCAs_NilVault — defensive guard for a nil vault client (the
+// caller guarantees non-nil, but we check it for symmetry with the single
+// LoadHostCA).
 func TestLoadHostCAs_NilVault(t *testing.T) {
 	refs := []config.KeeperPushCARef{{Ref: "vault:secret/x/y", Name: "x"}}
 	_, err := LoadHostCAs(context.Background(), nil, refs)

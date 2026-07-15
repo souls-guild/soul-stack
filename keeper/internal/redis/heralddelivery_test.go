@@ -19,7 +19,7 @@ func newHeraldQueueMR(t *testing.T) (*HeraldDeliveryQueue, *miniredis.Miniredis)
 	return q, mr
 }
 
-// idParse — извлекает id из payload-а формы `id:<id>` (тестовый формат).
+// idParse extracts the id from a payload of the form `id:<id>` (test format).
 func idParse(payload []byte) (string, bool) {
 	s := string(payload)
 	if !strings.HasPrefix(s, "id:") {
@@ -48,7 +48,7 @@ func TestHeraldQueue_EnqueueClaimAck(t *testing.T) {
 	if err := q.Ack(ctx, "j1", claimed.Payload); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
-	// После Ack processing пуст, следующий Claim — таймаут (nil, nil).
+	// After Ack, processing is empty, so the next Claim times out (nil, nil).
 	next, err := q.Claim(ctx, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Claim after ack: %v", err)
@@ -80,7 +80,7 @@ func TestHeraldQueue_Requeue_MovesBackToPending(t *testing.T) {
 	if err := q.Requeue(ctx, "r1", claimed.Payload, []byte("id:r1-retry")); err != nil {
 		t.Fatalf("Requeue: %v", err)
 	}
-	// Перепоставленный job снова клеймится.
+	// The requeued job can be claimed again.
 	re, err := q.Claim(ctx, 100*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Claim after requeue: %v", err)
@@ -90,8 +90,8 @@ func TestHeraldQueue_Requeue_MovesBackToPending(t *testing.T) {
 	}
 }
 
-// TestHeraldQueue_RequeueExpired_ReclaimsOrphan — claimed-job с истёкшим
-// lease-ключом возвращается mini-reaper-ом в pending.
+// TestHeraldQueue_RequeueExpired_ReclaimsOrphan — a claimed job with an expired
+// lease key gets returned to pending by the mini-reaper.
 func TestHeraldQueue_RequeueExpired_ReclaimsOrphan(t *testing.T) {
 	q, mr := newHeraldQueueMR(t)
 	ctx := context.Background()
@@ -102,7 +102,7 @@ func TestHeraldQueue_RequeueExpired_ReclaimsOrphan(t *testing.T) {
 	}
 	_ = q.SetLease(ctx, "orphan", time.Second)
 
-	// lease ещё жив → reaper НЕ трогает.
+	// Lease is still alive → reaper does NOT touch it.
 	n, err := q.RequeueExpired(ctx, idParse)
 	if err != nil {
 		t.Fatalf("RequeueExpired (live lease): %v", err)
@@ -111,7 +111,7 @@ func TestHeraldQueue_RequeueExpired_ReclaimsOrphan(t *testing.T) {
 		t.Fatalf("live-lease job must not be requeued, got %d", n)
 	}
 
-	// Истекаем lease (miniredis FastForward сдвигает виртуальные часы).
+	// Expire the lease (miniredis FastForward advances the virtual clock).
 	mr.FastForward(2 * time.Second)
 
 	n, err = q.RequeueExpired(ctx, idParse)
@@ -121,15 +121,15 @@ func TestHeraldQueue_RequeueExpired_ReclaimsOrphan(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("orphaned job must be requeued, got %d", n)
 	}
-	// Возвращённый job снова доступен для claim.
+	// The reclaimed job is available for claim again.
 	re, _ := q.Claim(ctx, 100*time.Millisecond)
 	if re == nil || string(re.Payload) != "id:orphan" {
 		t.Fatalf("reclaimed job = %+v, want id:orphan", re)
 	}
 }
 
-// TestHeraldQueue_RequeueExpired_DropsUnparsable — битый payload в processing
-// без id снимается без перепостановки (mini-reaper не зацикливается).
+// TestHeraldQueue_RequeueExpired_DropsUnparsable — a corrupt payload in
+// processing with no id is removed without requeuing (mini-reaper doesn't loop).
 func TestHeraldQueue_RequeueExpired_DropsUnparsable(t *testing.T) {
 	q, _ := newHeraldQueueMR(t)
 	ctx := context.Background()
@@ -144,7 +144,7 @@ func TestHeraldQueue_RequeueExpired_DropsUnparsable(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("unparsable job is dropped, not requeued, got %d", n)
 	}
-	// processing пуст, pending пуст → claim таймаутит.
+	// processing is empty, pending is empty → claim times out.
 	next, _ := q.Claim(ctx, 50*time.Millisecond)
 	if next != nil {
 		t.Fatalf("unparsable job must be removed, got %+v", next)

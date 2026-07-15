@@ -13,8 +13,8 @@ import (
 	"testing"
 )
 
-// fakeFile — реестр «удалённого хоста» для тестов: путь → содержимое (+ sha256).
-// Тред-сейф: тесты не параллельны, но мьютекс держит код проще.
+// fakeFile — a "remote host" registry for tests: path → contents (+ sha256).
+// Thread-safe: tests aren't parallel, but the mutex keeps the code simpler.
 type fakeFile struct {
 	mu       sync.Mutex
 	files    map[string][]byte
@@ -38,13 +38,13 @@ func (f *fakeFile) sha256(p string) (string, bool) {
 	return hex.EncodeToString(h[:]), true
 }
 
-// fakeShellSession реализует Session как мини-эмулятор шелла: понимает
+// fakeShellSession implements Session as a mini shell emulator: understands
 // `mkdir -p ...`, `test -f ... && sha256sum ... || echo MISSING`,
-// `set -e; cat > path && chmod 0755 path`, `rm -rf ...`. Для unit-тестов
-// этого достаточно — sftp-зависимости нет, поверхность Deliverer 100% покрыта.
+// `set -e; cat > path && chmod 0755 path`, `rm -rf ...`. Sufficient for unit
+// tests — no sftp dependency, the Deliverer surface is 100% covered.
 type fakeShellSession struct {
 	fs       *fakeFile
-	failNext map[string]error // подмена ошибки по подстроке команды
+	failNext map[string]error // error override by command substring
 }
 
 func newFakeShell(fs *fakeFile) *fakeShellSession {
@@ -75,8 +75,8 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		s.fs.mu.Unlock()
 		return "", nil
 	case strings.HasPrefix(cmd, "test -f "):
-		// Формат: test -f '<p>' && sha256sum '<p>' || echo MISSING
-		// (single-quote escape, см. delivery.go::remoteSha256).
+		// Format: test -f '<p>' && sha256sum '<p>' || echo MISSING
+		// (single-quote escape, see delivery.go::remoteSha256).
 		fields := strings.Fields(cmd)
 		if len(fields) < 3 {
 			return "", fmt.Errorf("плохая команда: %q", cmd)
@@ -97,7 +97,7 @@ func (s *fakeShellSession) Run(_ context.Context, cmd string, stdin []byte) (str
 		}
 		path := parts[0]
 		s.fs.mu.Lock()
-		// Проверим, что dir существует.
+		// Confirm the dir exists.
 		parent := filepath.Dir(path)
 		if !s.fs.dirs[parent] {
 			s.fs.mu.Unlock()
@@ -152,14 +152,14 @@ func TestDeliver_UploadsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	// Файлы доставлены.
+	// Files delivered.
 	if got, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; !ok || string(got) != "SOUL-BINARY-V1" {
 		t.Errorf("soul не доставлен, got %q ok=%v", got, ok)
 	}
 	if got, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; !ok || string(got) != "MOD-PKG-V1" {
 		t.Errorf("модуль не доставлен, got %q ok=%v", got, ok)
 	}
-	// chmod проверим по присутствию подкоманды в exec-логе.
+	// Check chmod by the presence of a subcommand in the exec log.
 	var sawChmod bool
 	for _, c := range fs.execLog {
 		if strings.Contains(c, "chmod 0755") {
@@ -177,8 +177,8 @@ func TestDeliver_IdempotentSkipsWhenSha256Matches(t *testing.T) {
 	sess := newFakeShell(fs)
 	soulPath := writeTemp(t, "soul", "BIN")
 
-	// Заранее «положим» файл на хост с правильной sha256 — Deliver обязан
-	// skip-нуть upload.
+	// Pre-place a file on the host with the right sha256 — Deliver must
+	// skip the upload.
 	fs.dirs[hostSoulDir] = true
 	fs.dirs[hostModulesDir] = true
 	fs.files[hostSoulDir+"/"+hostSoulFile] = []byte("BIN")
@@ -229,8 +229,9 @@ func TestDeliver_FailClosedOnExecError(t *testing.T) {
 }
 
 func TestDeliver_FailClosedOnPostVerifyMismatch(t *testing.T) {
-	// Эмулируем сценарий «cat записал не то, что отдали» — после upload-а
-	// подменяем содержимое на хосте, sha256 не совпадёт с локальным.
+	// Emulate the scenario "cat wrote something other than what was sent" —
+	// after the upload, swap the content on the host, sha256 won't match
+	// the local one.
 	fs := newFakeFile()
 	sess := &corruptingShell{inner: newFakeShell(fs), corruptOn: hostSoulDir + "/" + hostSoulFile}
 	soulPath := writeTemp(t, "soul", "ORIGINAL")
@@ -245,8 +246,9 @@ func TestDeliver_FailClosedOnPostVerifyMismatch(t *testing.T) {
 	}
 }
 
-// corruptingShell оборачивает fakeShellSession и портит содержимое файла после
-// его записи — имитация «сеть исказила upload» для проверки post-verify.
+// corruptingShell wraps fakeShellSession and corrupts a file's contents
+// after it's written — simulating "the network mangled the upload" to
+// exercise post-verify.
 type corruptingShell struct {
 	inner     *fakeShellSession
 	corruptOn string
@@ -342,8 +344,8 @@ func TestCleanup_NilSession(t *testing.T) {
 }
 
 func TestCleanup_PreservesLogsLayout(t *testing.T) {
-	// Cleanup не должен трогать /var/log/soul-stack/. Эмулируем log-файл рядом
-	// с артефактами и убеждаемся, что rm-команда его не задевает.
+	// Cleanup must not touch /var/log/soul-stack/. Emulate a log file next
+	// to the artifacts and confirm the rm command doesn't touch it.
 	fs := newFakeFile()
 	fs.files["/var/log/soul-stack/audit.log"] = []byte("AUDIT")
 	fs.dirs[hostSoulDir] = true

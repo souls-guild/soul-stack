@@ -1,21 +1,22 @@
 //go:build integration
 
-// Integration-тест S7-2 hot-reload closure (ADR-032 amendment 2026-05-27):
+// Integration test for the S7-2 hot-reload closure (ADR-032 amendment 2026-05-27):
 //
-//	PG/REST CRUD-мутация → publish('push-providers:changed') →
-//	  каждая нода SUBSCRIBE → daemon-listener → SshDispatcher.RefreshProvider →
-//	    ProviderRespawner.RespawnProvider → новый plugin-handle.
+//	PG/REST CRUD mutation → publish('push-providers:changed') →
+//	  each node SUBSCRIBEs → daemon-listener → SshDispatcher.RefreshProvider →
+//	    ProviderRespawner.RespawnProvider → new plugin handle.
 //
-// Здесь моделируем правый край цепочки (publish → listener → RefreshProvider →
-// respawner): PG/REST/Service-слой не вовлекается, потому что они уже покрыты
-// pushprovider.Service unit-/integration-тестами; цель — доказать, что
-// именно фронт invalidate-канала действительно вызывает re-spawn (это
-// ровно то, что TODO от S7-2 закрывал).
+// Here we model the right-hand edge of the chain (publish → listener →
+// RefreshProvider → respawner): the PG/REST/Service layer isn't involved,
+// since it's already covered by pushprovider.Service unit/integration tests;
+// the goal is to prove that the invalidation-channel front end actually
+// triggers a re-spawn (exactly what the S7-2 TODO was closing).
 //
-// Redis-фикстура — miniredis (без docker), pub/sub-support штатно. Это даёт
-// быстрый прогон в `make check` без зависимости от testcontainers/docker.
+// Redis fixture is miniredis (no docker), with pub/sub support out of the
+// box. That gives a fast run in `make check` without depending on
+// testcontainers/docker.
 //
-// Запуск:
+// Run:
 //
 //	go test -tags=integration -count=1 ./keeper/internal/push/...
 
@@ -36,9 +37,10 @@ import (
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 )
 
-// TestRefresh_RedisRoundTrip — публикация в `push-providers:changed` приводит
-// к фактическому вызову RefreshProvider → подмене SshProvider в dispatcher-е
-// (через mockRespawner). Это та цепочка, которой не хватало в S7-2.
+// TestRefresh_RedisRoundTrip verifies that publishing to
+// `push-providers:changed` actually triggers RefreshProvider, which swaps the
+// SshProvider in the dispatcher (via mockRespawner). This is the chain that
+// was missing in S7-2.
 func TestRefresh_RedisRoundTrip(t *testing.T) {
 	mr := miniredis.RunT(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -74,8 +76,9 @@ func TestRefresh_RedisRoundTrip(t *testing.T) {
 		Souls:     &mockSouls{s: sshSoul()},
 	})
 
-	// Мини-листенер, повторяющий контракт daemon.runPushProviderInvalidationListener:
-	// читает канал, делегирует Refresh. Используем wg для синхронного assert.
+	// A mini-listener mirroring the daemon.runPushProviderInvalidationListener
+	// contract: reads the channel, delegates to Refresh. We use wg for a
+	// synchronous assert.
 	refreshed := make(chan string, 4)
 	var listenerWG sync.WaitGroup
 	listenerWG.Add(1)
@@ -120,9 +123,9 @@ func TestRefresh_RedisRoundTrip(t *testing.T) {
 	listenerWG.Wait()
 }
 
-// TestRefresh_RedisRoundTrip_DegradedOnSpawnFail — publish при сломанном
-// respawner-е (spawn-fail) НЕ должен валить listener: ошибка логируется,
-// goroutine продолжает читать следующие сообщения.
+// TestRefresh_RedisRoundTrip_DegradedOnSpawnFail verifies that publishing
+// while the respawner is broken (spawn failure) must NOT crash the listener:
+// the error is logged, and the goroutine keeps reading subsequent messages.
 func TestRefresh_RedisRoundTrip_DegradedOnSpawnFail(t *testing.T) {
 	mr := miniredis.RunT(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

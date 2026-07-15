@@ -14,10 +14,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeTargetReadWriter — in-memory storage targets с подменяемой ошибкой.
+// fakeTargetReadWriter — in-memory storage for targets with a swappable error.
 type fakeTargetReadWriter struct {
 	rows         map[string]*soul.SSHTarget // sid → target (nil = ssh_target IS NULL)
-	missingSouls map[string]struct{}        // sid → ErrSoulNotFound при чтении
+	missingSouls map[string]struct{}        // sid → ErrSoulNotFound on read
 	selectErr    error
 	updateErr    error
 	selectCalls  int
@@ -51,7 +51,7 @@ func (f *fakeTargetReadWriter) UpdateSshTarget(_ context.Context, sid string, ta
 	return nil
 }
 
-// fakeProviderReadWriter — in-memory storage push_providers.
+// fakeProviderReadWriter — in-memory storage for push_providers.
 type fakeProviderReadWriter struct {
 	rows        map[string]*pushprovider.PushProvider
 	selectErr   error
@@ -84,14 +84,14 @@ func (f *fakeProviderReadWriter) Insert(_ context.Context, p *pushprovider.PushP
 	if _, exists := f.rows[p.Name]; exists {
 		return pushprovider.ErrPushProviderAlreadyExists
 	}
-	// Копируем значение, чтобы тест увидел запись такой, как пришла, без
-	// последующих мутаций caller-ом (defense, имитация PG-INSERT).
+	// Copy the value so the test sees the row as it arrived, without later
+	// caller mutations (defense, mimicking a PG INSERT).
 	row := *p
 	f.rows[p.Name] = &row
 	return nil
 }
 
-// fakeAuditor — собирает все Write-вызовы.
+// fakeAuditor — collects all Write calls.
 type fakeAuditor struct {
 	events   []*audit.Event
 	writeErr error
@@ -101,7 +101,7 @@ func (f *fakeAuditor) Write(_ context.Context, ev *audit.Event) error {
 	if f.writeErr != nil {
 		return f.writeErr
 	}
-	// Копируем, чтобы caller-овский Payload не «съехал» после Write.
+	// Copy so the caller's Payload doesn't shift after Write.
 	cp := *ev
 	if ev.Payload != nil {
 		cp.Payload = make(map[string]any, len(ev.Payload))
@@ -216,7 +216,7 @@ func TestAutoImporter_Targets_Existing_Skip(t *testing.T) {
 	if tw.updateCalls != 0 {
 		t.Errorf("UpdateSshTarget вызван при существующем PG-target — должен быть skip; calls = %d", tw.updateCalls)
 	}
-	// PG-row не должна быть перезаписана.
+	// The PG row must not be overwritten.
 	if tw.rows["soul-a.example.com"].SSHPort != 22 {
 		t.Errorf("existing PG-row overwritten: %+v", tw.rows["soul-a.example.com"])
 	}
@@ -249,7 +249,7 @@ func TestAutoImporter_Targets_MissingSoul_WarnSkip(t *testing.T) {
 
 func TestAutoImporter_Targets_Idempotent(t *testing.T) {
 	tw := newFakeTargetRW()
-	tw.rows["soul-a.example.com"] = nil // first run: импортирует
+	tw.rows["soul-a.example.com"] = nil // first run: imports
 	pw := newFakeProviderRW()
 	au := &fakeAuditor{}
 	imp := newImporter(t, tw, pw, au)
@@ -261,7 +261,7 @@ func TestAutoImporter_Targets_Idempotent(t *testing.T) {
 	if err := imp.ImportLegacyOnStart(context.Background(), cfg); err != nil {
 		t.Fatalf("ImportLegacyOnStart run1: %v", err)
 	}
-	// Второй прогон с теми же данными: PG-row уже не NULL → no-op.
+	// Second run with the same data: the PG row is no longer NULL → no-op.
 	updateCallsAfterRun1 := tw.updateCalls
 	auditEventsAfterRun1 := len(au.events)
 
@@ -319,7 +319,7 @@ func TestAutoImporter_Providers_NotInPG_Imports(t *testing.T) {
 	if !reflect.DeepEqual(keys, wantKeys) {
 		t.Errorf("params_keys = %v, want %v (sorted, values not leaked)", keys, wantKeys)
 	}
-	// Sanity: values по sensitive-ключам в payload НЕ кладутся.
+	// Sanity: values for sensitive keys are NOT placed in the payload.
 	for k := range ev.Payload {
 		if k == "secret_id" || k == "password" || k == "token" || k == "private_key" {
 			t.Errorf("audit payload leaks sensitive key value: %q", k)
@@ -403,8 +403,8 @@ func TestAutoImporter_AuditWriteFailure_NotFatal(t *testing.T) {
 		AutoImportLegacyTargets: true,
 		Targets:                 []config.KeeperPushTarget{{SID: "soul-a.example.com", SSHPort: 22}},
 	}
-	// Audit write fail должен быть best-effort: storage уже committed, импорт
-	// продолжается без ошибки.
+	// Audit write failure must be best-effort: storage is already committed,
+	// import continues without error.
 	if err := imp.ImportLegacyOnStart(context.Background(), cfg); err != nil {
 		t.Fatalf("ImportLegacyOnStart: %v (audit-fail must not be fatal)", err)
 	}

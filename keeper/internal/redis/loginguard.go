@@ -1,29 +1,32 @@
 package redis
 
-// LoginGuard — anti-bruteforce-примитив для публичных login-эндпоинтов
-// (ADR-058(g), HIGH-3). Два механизма поверх Redis, оба cluster-shared
-// (авторитет в Redis, не размножается ×N по stateless-HA-инстансам Keeper-а,
-// ADR-002/ADR-006):
+// LoginGuard is an anti-bruteforce primitive for public login endpoints
+// (ADR-058(g), HIGH-3). Two mechanisms on top of Redis, both cluster-shared
+// (authority lives in Redis, not duplicated ×N across Keeper's stateless HA
+// instances, ADR-002/ADR-006):
 //
-//  1. ТРОТТЛ ЧАСТОТЫ (token-bucket) — лимит на ЧИСЛО ПОПЫТОК с одного принципала
-//     (IP или username) в единицу времени. Берётся ДО обработки запроса, на
-//     КАЖДУЮ попытку. Гасит флуд (включая flood flow-state на /auth/oidc/login —
-//     каждый login-старт тратит токен). Совпадает по алгоритму с Tempo-bucket-ом
-//     (ratelimit.go), но отдельный key-prefix `authrl:` и принципал = IP/username,
-//     а не AID (логин — pre-JWT, AID ещё нет).
+//  1. RATE THROTTLE (token bucket) — limits the NUMBER OF ATTEMPTS from one
+//     principal (IP or username) per unit of time. Taken BEFORE processing the
+//     request, on EVERY attempt. Damps flooding (including flood flow-state on
+//     /auth/oidc/login — every login start spends a token). Same algorithm as
+//     the Tempo bucket (ratelimit.go), but a separate `authrl:` key prefix and
+//     principal = IP/username, not AID (login is pre-JWT, there's no AID yet).
 //
-//  2. LOCKOUT ПО НЕУДАЧАМ — счётчик ПРОВАЛЕННЫХ логинов в скользящем окне; при
-//     достижении порога принципал блокируется на backoff-интервал (для IP и для
-//     username независимо). RecordFailure инкрементит счётчик ПОСЛЕ неудачи;
-//     Locked/RetryAfter проверяет блокировку ДО обработки. Успешный логин счётчик
-//     НЕ трогает (provision/role-смена — не неудача); счётчик сам истекает по TTL
-//     окна. Anti-bruteforce: подбор пароля и перебор username отбиваются.
+//  2. FAILURE LOCKOUT — a counter of FAILED logins in a sliding window; once
+//     the threshold is reached, the principal is locked out for a backoff
+//     interval (independently for IP and for username). RecordFailure
+//     increments the counter AFTER a failure; Locked/RetryAfter checks the
+//     lockout BEFORE processing. A successful login does NOT touch the
+//     counter (provisioning/role change isn't a failure); the counter expires
+//     on its own via the window TTL. Anti-bruteforce: password guessing and
+//     username enumeration are both fended off.
 //
-// Fail-closed на Lockout-проверке: при Redis-ошибке Locked возвращает ошибку,
-// middleware решает политику (HIGH-3 требует fail-closed на login — в отличие от
-// Tempo fail-open: login — security-периметр, недоступность Redis НЕ должна
-// открывать брутфорс). Троттл-часть (Allow) при Redis-ошибке — на усмотрение
-// middleware; реализация лишь сигнализирует ошибку.
+// Fail-closed on the Lockout check: on a Redis error, Locked returns an
+// error, and the middleware decides the policy (HIGH-3 requires fail-closed
+// on login — unlike Tempo's fail-open: login is a security perimeter,
+// Redis unavailability must NOT open the door to bruteforce). The throttle
+// part (Allow) is left to the middleware's discretion on a Redis error; the
+// implementation only signals the error.
 
 import (
 	"context"
@@ -34,14 +37,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// LoginGuard — handle для anti-bruteforce-операций login-эндпоинтов. Stateless
-// относительно конкретного принципала: ключ передаётся в каждый вызов.
+// LoginGuard is a handle for anti-bruteforce operations on login endpoints.
+// Stateless with respect to a specific principal: the key is passed on every
+// call.
 type LoginGuard struct {
 	client *Client
 }
 
-// NewLoginGuard оборачивает Redis-клиент. Ошибка только на nil-клиенте
-// (программный wire-up: middleware при отсутствии Redis получает nil-guard).
+// NewLoginGuard wraps a Redis client. Errors only on a nil client
+// (wiring: the middleware gets a nil guard when Redis is absent).
 func NewLoginGuard(c *Client) (*LoginGuard, error) {
 	if c == nil {
 		return nil, errors.New("redis.NewLoginGuard: nil client")
@@ -49,30 +53,33 @@ func NewLoginGuard(c *Client) (*LoginGuard, error) {
 	return &LoginGuard{client: c}, nil
 }
 
-// throttleKey — ключ token-bucket-а троттла попыток. `authrl:<scope>:<principal>`
-// (scope = "ip"|"user", principal = IP-адрес/username). Отдельный prefix от
-// `tempo:` — auth-троттл живёт независимо от Tempo-квот операций.
+// throttleKey is the attempt-throttle token bucket's key.
+// `authrl:<scope>:<principal>` (scope = "ip"|"user", principal =
+// IP address/username). A separate prefix from `tempo:` — the auth throttle
+// lives independently of operation Tempo quotas.
 func throttleKey(scope, principal string) string {
 	return "authrl:" + scope + ":" + principal
 }
 
-// lockoutCountKey — ключ счётчика неудач. `authlock:<scope>:<principal>:n`.
+// lockoutCountKey is the failure counter's key. `authlock:<scope>:<principal>:n`.
 func lockoutCountKey(scope, principal string) string {
 	return "authlock:" + scope + ":" + principal + ":n"
 }
 
-// lockoutFlagKey — ключ флага блокировки. `authlock:<scope>:<principal>:locked`.
+// lockoutFlagKey is the lockout flag's key. `authlock:<scope>:<principal>:locked`.
 func lockoutFlagKey(scope, principal string) string {
 	return "authlock:" + scope + ":" + principal + ":locked"
 }
 
-// Allow атомарно берёт один токен троттла попыток для принципала (scope+principal).
-// Алгоритм/контракт идентичны [TokenBucket.Allow] (тот же Lua refill+take), но
-// отдельный key-prefix. allowed=false → retryAfter до пополнения токена.
+// Allow atomically takes one attempt-throttle token for the principal
+// (scope+principal). Algorithm/contract are identical to [TokenBucket.Allow]
+// (the same Lua refill+take), but with a separate key prefix. allowed=false →
+// retryAfter until the token refills.
 //
-// Caller (middleware) на этой ветке может деградировать по своей политике;
-// рекомендация HIGH-3 — для login fail-closed недопустим только на LOCKOUT,
-// троттл при Redis-флапе допускает fail-open (доступность login-страницы).
+// The caller (middleware) can degrade on this branch by its own policy; the
+// HIGH-3 recommendation is that fail-closed for login is required only on
+// LOCKOUT — the throttle allows fail-open on a Redis flap (keeping the login
+// page available).
 func (g *LoginGuard) Allow(ctx context.Context, scope, principal string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error) {
 	if g == nil || g.client == nil {
 		return false, 0, errors.New("redis.LoginGuard.Allow: nil guard/client")
@@ -107,12 +114,13 @@ func (g *LoginGuard) Allow(ctx context.Context, scope, principal string, rate fl
 	return allowed, retryAfter, nil
 }
 
-// Locked сообщает, заблокирован ли принципал прямо сейчас (флаг-ключ существует),
-// и сколько до снятия блокировки (PTTL). Проверяется ДО обработки логина.
+// Locked reports whether the principal is currently locked out (the flag key
+// exists), and how long until the lockout is lifted (PTTL). Checked BEFORE
+// processing the login.
 //
-// Fail-closed: при Redis-ошибке возвращает err — caller на login-периметре
-// ОБЯЗАН трактовать ошибку как «заблокировано» (HIGH-3: недоступность Redis не
-// должна открывать брутфорс).
+// Fail-closed: on a Redis error it returns err — the caller on the login
+// perimeter MUST treat the error as "locked" (HIGH-3: Redis unavailability
+// must not open the door to bruteforce).
 func (g *LoginGuard) Locked(ctx context.Context, scope, principal string) (locked bool, retryAfter time.Duration, err error) {
 	if g == nil || g.client == nil {
 		return false, 0, errors.New("redis.LoginGuard.Locked: nil guard/client")
@@ -125,28 +133,30 @@ func (g *LoginGuard) Locked(ctx context.Context, scope, principal string) (locke
 	if runErr != nil {
 		return false, 0, fmt.Errorf("redis.LoginGuard.Locked %q: %w", key, runErr)
 	}
-	// PTTL: -2 = нет ключа (не заблокирован), -1 = без TTL (не должно случаться —
-	// флаг ставится с PEXPIRE), >0 = заблокирован, осталось ttl.
+	// PTTL: -2 = no key (not locked), -1 = no TTL (shouldn't happen — the flag
+	// is always set with PEXPIRE), >0 = locked, ttl remaining.
 	if ttl < 0 {
 		return false, 0, nil
 	}
 	return true, ttl, nil
 }
 
-// recordFailureScript атомарно инкрементит счётчик неудач принципала и, при
-// достижении порога, выставляет lockout-флаг с backoff-TTL.
+// recordFailureScript atomically increments the principal's failure counter
+// and, once the threshold is reached, sets the lockout flag with a
+// backoff TTL.
 //
-// KEYS[1] — счётчик неудач (authlock:<...>:n).
-// KEYS[2] — флаг блокировки (authlock:<...>:locked).
-// ARGV[1] — threshold (порог неудач для блокировки).
-// ARGV[2] — windowMs (TTL окна счётчика, мс).
-// ARGV[3] — lockoutMs (backoff-TTL флага блокировки, мс).
+// KEYS[1] — failure counter (authlock:<...>:n).
+// KEYS[2] — lockout flag (authlock:<...>:locked).
+// ARGV[1] — threshold (failure count that triggers lockout).
+// ARGV[2] — windowMs (counter window TTL, ms).
+// ARGV[3] — lockoutMs (lockout flag backoff TTL, ms).
 //
-// Возврат — {count, locked}: count — текущее число неудач, locked=1 если порог
-// достигнут и флаг выставлен. Счётчик скользит по TTL окна (каждая неудача
-// продлевает окно — наблюдаемое поведение «N неудач за окно»). При выставлении
-// флага счётчик сбрасывается (DEL), чтобы после снятия блокировки порог считался
-// заново, а не блокировал бесконечно одной старой серией.
+// Returns {count, locked}: count is the current failure count, locked=1 if
+// the threshold was reached and the flag was set. The counter slides with the
+// window TTL (each failure extends the window — observable as "N failures per
+// window"). When the flag is set, the counter is reset (DEL), so once the
+// lockout is lifted the threshold is counted fresh, instead of locking
+// forever off one old streak.
 var recordFailureScript = redis.NewScript(`
 local threshold = tonumber(ARGV[1])
 local window_ms = tonumber(ARGV[2])
@@ -163,12 +173,14 @@ end
 return {count, 0}
 `)
 
-// RecordFailure инкрементит счётчик неудач принципала после проваленного логина;
-// при достижении threshold выставляет lockout-флаг на lockout-интервал. Окно
-// счётчика — window. Возвращает, привела ли эта неудача к блокировке.
+// RecordFailure increments the principal's failure counter after a failed
+// login; once threshold is reached it sets the lockout flag for the lockout
+// interval. The counter's window is window. Returns whether this failure
+// triggered a lockout.
 //
-// Успешный логин RecordFailure НЕ вызывает — счётчик истечёт сам по TTL окна
-// (нет необходимости в явном reset-е: безуспешные серии естественно затухают).
+// RecordFailure is NOT called on a successful login — the counter expires on
+// its own via the window TTL (no explicit reset needed: failure streaks decay
+// naturally).
 func (g *LoginGuard) RecordFailure(ctx context.Context, scope, principal string, threshold int, window, lockout time.Duration) (lockedNow bool, err error) {
 	if g == nil || g.client == nil {
 		return false, errors.New("redis.LoginGuard.RecordFailure: nil guard/client")

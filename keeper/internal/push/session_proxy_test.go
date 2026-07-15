@@ -19,10 +19,10 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// liveSSHServer — общий каркас in-process SSH-сервера для proxy_jump-тестов.
-// Поднимается на 127.0.0.1:0 (порт ОС-выдаётся), host-key подписан переданным
-// host-CA, авторизация — любой публичный ключ принимается (тесты не проверяют
-// authn-policy, эта зона — session.Dial и direct-tcpip).
+// liveSSHServer — a shared in-process SSH-server harness for proxy_jump
+// tests. Comes up on 127.0.0.1:0 (OS-assigned port), the host key is signed
+// by the passed-in host-CA, authorization accepts any public key (the tests
+// don't check authn policy — that's session.Dial and direct-tcpip's zone).
 type liveSSHServer struct {
 	listener   net.Listener
 	host       string
@@ -32,7 +32,7 @@ type liveSSHServer struct {
 	wg         sync.WaitGroup
 	stopCh     chan struct{}
 
-	// telemetry — флаги, которые тесты читают для assert-ов.
+	// telemetry — flags the tests read for assertions.
 	sawDirectTCPIP atomic.Bool
 	sawTargetExec  atomic.Bool
 }
@@ -47,9 +47,9 @@ func (s *liveSSHServer) close() {
 	s.wg.Wait()
 }
 
-// newLiveSSHServer запускает SSH-сервер; host-cert выпускается на принципала
-// principal (тесты подставляют "127.0.0.1", чтобы CertChecker по умолчанию его
-// принял для соединения с этим IP).
+// newLiveSSHServer starts an SSH server; the host cert is issued for the
+// principal `principal` (tests pass "127.0.0.1" so CertChecker accepts it by
+// default for a connection to this IP).
 func newLiveSSHServer(
 	t *testing.T,
 	caSigner ssh.Signer,
@@ -58,7 +58,7 @@ func newLiveSSHServer(
 ) *liveSSHServer {
 	t.Helper()
 
-	// Host-key для сервера + host-cert от CA.
+	// Host key for the server + a host cert from the CA.
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("host genkey: %v", err)
@@ -85,8 +85,8 @@ func newLiveSSHServer(
 
 	cfg := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
-			// Тесты не проверяют user-cert на server-side; разрешаем всё, чтобы
-			// сосредоточиться на проверке dispatcher proxy_jump-логики.
+			// Tests don't check the user-cert server-side; allow everything to
+			// focus on checking the dispatcher's proxy_jump logic.
 			return &ssh.Permissions{}, nil
 		},
 	}
@@ -139,9 +139,9 @@ func (s *liveSSHServer) acceptLoop(t *testing.T) {
 	}
 }
 
-// proxyHandle — обработчик SSH-сервера, играющего роль bastion: принимает
-// direct-tcpip-каналы и пробрасывает их до фактического target-адреса (берётся
-// из payload канала).
+// proxyHandle — a handler for an SSH server playing the bastion role:
+// accepts direct-tcpip channels and forwards them to the actual target
+// address (taken from the channel payload).
 func proxyHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 	return func(t *testing.T, _ *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 		go ssh.DiscardRequests(reqs)
@@ -172,9 +172,9 @@ func proxyHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans 
 	}
 }
 
-// targetHandle — обработчик target: принимает session-channel, ждёт exec-запрос
-// `soul apply`, читает stdin до EOF, пишет в stdout NDJSON с одним успешным
-// RunResult и завершает с exit 0.
+// targetHandle — a target handler: accepts a session channel, waits for the
+// `soul apply` exec request, reads stdin to EOF, writes an NDJSON with one
+// successful RunResult to stdout, and finishes with exit 0.
 func targetHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 	return func(t *testing.T, _ *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) {
 		go ssh.DiscardRequests(reqs)
@@ -216,10 +216,10 @@ func targetHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans
 					return
 				}
 				s.sawTargetExec.Store(true)
-				// Читаем stdin до EOF (так dispatcher закрывает stdin после
-				// подачи ApplyRequest protojson).
+				// Read stdin to EOF (that's how the dispatcher closes stdin
+				// after feeding in the ApplyRequest protojson).
 				_, _ = io.Copy(io.Discard, ch)
-				// Пишем RunResult в stdout и сообщаем exit 0.
+				// Write RunResult to stdout and report exit 0.
 				rrBytes, _ := protojson.Marshal(&keeperv1.RunResult{
 					ApplyId: "live-pj",
 					Status:  keeperv1.RunStatus_RUN_STATUS_SUCCESS,
@@ -231,7 +231,7 @@ func targetHandle(s *liveSSHServer) func(t *testing.T, sc *ssh.ServerConn, chans
 	}
 }
 
-// directTCPIPPayload — payload канала "direct-tcpip" (RFC 4254 §7.2).
+// directTCPIPPayload — the "direct-tcpip" channel payload (RFC 4254 §7.2).
 type directTCPIPPayload struct {
 	raddr string
 	rport uint32
@@ -254,7 +254,7 @@ func parseDirectTCPIP(b []byte) (directTCPIPPayload, error) {
 	return p, nil
 }
 
-// parseExecPayload — payload типа exec: ssh-string с командой.
+// parseExecPayload — an exec-type payload: an ssh-string with the command.
 func parseExecPayload(b []byte) string {
 	var pkt struct{ Command string }
 	if err := ssh.Unmarshal(b, &pkt); err != nil {
@@ -263,7 +263,7 @@ func parseExecPayload(b []byte) string {
 	return pkt.Command
 }
 
-// bidirectionalCopy — pipe двух потоков (ssh-channel ↔ net.Conn) для proxy.
+// bidirectionalCopy — pipes two streams (ssh-channel ↔ net.Conn) for the proxy.
 func bidirectionalCopy(a io.ReadWriteCloser, b io.ReadWriteCloser) {
 	defer a.Close()
 	defer b.Close()
@@ -273,9 +273,10 @@ func bidirectionalCopy(a io.ReadWriteCloser, b io.ReadWriteCloser) {
 	<-done
 }
 
-// userAuthForLiveTests — auth-методы Keeper-а для live-тестов: ed25519-ключ + cert
-// от user-CA. На server-side authn-policy выключена (PublicKeyCallback allows
-// all), но клиенту нужен валидный signer для прохождения handshake.
+// userAuthForLiveTests — Keeper's auth methods for live tests: an ed25519
+// key + a cert from the user-CA. authn policy is off server-side
+// (PublicKeyCallback allows all), but the client needs a valid signer to get
+// through the handshake.
 func userAuthForLiveTests(t *testing.T, userCASigner ssh.Signer) []ssh.AuthMethod {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -303,10 +304,10 @@ func userAuthForLiveTests(t *testing.T, userCASigner ssh.Signer) []ssh.AuthMetho
 	return []ssh.AuthMethod{ssh.PublicKeys(certSigner)}
 }
 
-// TestDial_ProxyJump_EndToEnd — поднимает proxy + target SSH-серверы in-process,
-// затем Dial с непустым ProxyJump. Проверяет: трафик идёт ЧЕРЕЗ proxy (proxy
-// зафиксировал direct-tcpip), target зафиксировал exec, sess.Run возвращает
-// stdout, который успешно парсится в RunResult.
+// TestDial_ProxyJump_EndToEnd — brings up proxy + target SSH servers
+// in-process, then Dial with a non-empty ProxyJump. Checks: traffic goes
+// THROUGH the proxy (the proxy recorded direct-tcpip), the target recorded
+// exec, sess.Run returns stdout that parses successfully into a RunResult.
 func TestDial_ProxyJump_EndToEnd(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 
@@ -357,9 +358,10 @@ func TestDial_ProxyJump_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestDial_ProxyJump_Empty_DirectFlowUnchanged — regression S0: при пустом
-// ProxyJump Dial идёт напрямую к target без поднятого proxy. Поднимаем только
-// target и убеждаемся, что Dial успешен (== direct-flow не сломан правкой).
+// TestDial_ProxyJump_Empty_DirectFlowUnchanged — regression S0: with an
+// empty ProxyJump, Dial goes directly to the target without a proxy up.
+// Bring up only the target and confirm Dial succeeds (== direct-flow wasn't
+// broken by the change).
 func TestDial_ProxyJump_Empty_DirectFlowUnchanged(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 
@@ -392,12 +394,13 @@ func TestDial_ProxyJump_Empty_DirectFlowUnchanged(t *testing.T) {
 	}
 }
 
-// TestDial_ProxyJump_ProxyUnavailable — proxy_jump указан, но proxy недоступен →
-// fail-closed (ошибка про proxy, до target дойти не должно).
+// TestDial_ProxyJump_ProxyUnavailable — proxy_jump is set, but the proxy is
+// unreachable → fail-closed (an error about the proxy, must not reach the
+// target).
 func TestDial_ProxyJump_ProxyUnavailable(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 
-	// Поднимаем listener и сразу закрываем — порт станет «отказывает в коннекте».
+	// Bring up a listener and close it right away — the port becomes "refuses connection".
 	deadL, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -410,7 +413,7 @@ func TestDial_ProxyJump_ProxyUnavailable(t *testing.T) {
 
 	_, err = Dial(ctx, DialConfig{
 		Host:            "127.0.0.1",
-		Port:            22, // не важно — до target дойти не должны
+		Port:            22, // doesn't matter — must not reach the target
 		User:            "soul",
 		Auth:            userAuthForLiveTests(t, caSigner),
 		HostAuthorities: []NamedHostKeyAuthority{{Name: "test-ca", CAPubKey: caPub}},
@@ -425,8 +428,8 @@ func TestDial_ProxyJump_ProxyUnavailable(t *testing.T) {
 	}
 }
 
-// TestDial_ProxyJump_TargetUnavailable — proxy жив, target — нет. direct-tcpip
-// reject → ошибка про direct-tcpip / target.
+// TestDial_ProxyJump_TargetUnavailable — the proxy is alive, the target is
+// not. direct-tcpip reject → an error about direct-tcpip / target.
 func TestDial_ProxyJump_TargetUnavailable(t *testing.T) {
 	caSigner, caPub := testCAKey(t)
 
@@ -437,7 +440,7 @@ func TestDial_ProxyJump_TargetUnavailable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// Адрес target → закрытый listener (port отказывает).
+	// Target address → a closed listener (the port refuses).
 	deadL, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -463,7 +466,7 @@ func TestDial_ProxyJump_TargetUnavailable(t *testing.T) {
 	}
 }
 
-// TestParseProxyJump — таблица.
+// TestParseProxyJump — table-driven.
 func TestParseProxyJump(t *testing.T) {
 	cases := []struct {
 		name       string

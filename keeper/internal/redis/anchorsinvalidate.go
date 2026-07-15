@@ -1,39 +1,41 @@
 package redis
 
-// Cluster-wide инвалидация набора trust-anchor-ов подписи Sigil через Redis
+// Cluster-wide invalidation of the Sigil signing trust-anchor set via Redis
 // pub/sub (ADR-026(h), R3-S6).
 //
-// Проблема: набор trust-anchor-ов (sigil_signing_keys) меняется ротацией ключей
-// подписи (Introduce / SetPrimary / Retire, S7). Мутация коммитится в общую
-// таблицу на Keeper-A, но КАЖДАЯ нода держит собственный in-memory snapshot
-// набора (sigil.Signer + keeper-host AnchorSet) и раздаёт его своим подключённым
-// Soul-ам connect-time broadcast-ом. После ротации ноды должны: (1) перечитать
-// набор из БД, (2) пересобрать Signer (новый primary + якоря), (3) обновить
-// keeper-host verify-набор, (4) re-broadcast-ить свежий набор своим Soul-ам —
-// иначе Soul на другой ноде проверяет подписи против устаревшего набора якорей
-// (новый primary ещё «недоверенный»; retired-якорь ещё «доверенный»).
+// Problem: the trust-anchor set (sigil_signing_keys) changes on signing-key
+// rotation (Introduce / SetPrimary / Retire, S7). The mutation commits to the
+// shared table on Keeper-A, but EVERY node keeps its own in-memory snapshot of
+// the set (sigil.Signer + keeper-host AnchorSet) and hands it to its connected
+// Souls via connect-time broadcast. After a rotation, nodes must: (1) reload
+// the set from the DB, (2) rebuild the Signer (new primary + anchors), (3)
+// update the keeper-host verify-set, (4) re-broadcast the fresh set to their
+// Souls — otherwise a Soul on another node verifies signatures against a
+// stale anchor set (a new primary still "untrusted"; a retired anchor still
+// "trusted").
 //
-// Решение симметрично [PublishSigilInvalidate] / [SubscribeSigilInvalidate]:
-// мутирующая нода после успешного commit-а ротации PUBLISH-ит в канал
-// `sigil:anchors-changed`, КАЖДАЯ нода по SUBSCRIBE re-load-ит Signer/набор и
-// re-broadcast-ит SigilTrustAnchors своим Soul-ам.
+// Solution is symmetric to [PublishSigilInvalidate] / [SubscribeSigilInvalidate]:
+// after a successful rotation commit, the mutating node PUBLISHes to the
+// `sigil:anchors-changed` channel; EVERY node reloads its Signer/set on
+// SUBSCRIBE and re-broadcasts SigilTrustAnchors to its Souls.
 //
-// Self-origin НЕ фильтруется (как у sigil:invalidate, в отличие от rbac:invalidate).
-// Набор живёт на Soul-ах и в keeper-host-е КАЖДОЙ ноды; мутирующая нода обязана
-// re-load-ить и re-broadcast-ить ровно так же, как чужая (её собственный
-// in-memory Signer ещё хранит старый набор до re-load-а). Единый путь через
-// pub/sub без отдельного in-process re-load после commit-а проще и без двойной
-// обработки: нода получит собственное сообщение по подписке и обработает его.
-// Поэтому envelope несёт только `at` (диагностика), без origin_kid.
+// Self-origin is NOT filtered (like sigil:invalidate, unlike rbac:invalidate).
+// The set lives on Souls and in the keeper-host of EVERY node; the mutating
+// node must reload and re-broadcast exactly like any other node (its own
+// in-memory Signer still holds the old set until reload). A single pub/sub
+// path without a separate in-process reload after commit is simpler and
+// avoids double handling: the node just receives its own message via the
+// subscription and processes it. Hence the envelope carries only `at`
+// (diagnostics), no origin_kid.
 //
-// Persistence у Redis pub/sub нет: потеря сообщения (reconnect ноды, мигание
-// брокера) оставляет ноду со старым набором до её следующего рестарта
-// (load-at-start в setupSigil). Это окно осознанное — connect-time broadcast и
-// fail-closed verify на Soul-е защищают целостность; pub/sub лишь сокращает
-// окно рассинхрона набора до миллисекунд.
+// Redis pub/sub has no persistence: a lost message (node reconnect, broker
+// blip) leaves a node with a stale set until its next restart (load-at-start
+// in setupSigil). This window is accepted — connect-time broadcast and
+// fail-closed verify on the Soul side protect integrity; pub/sub only shrinks
+// the anchor-set desync window to milliseconds.
 //
-// Convention `sigil:anchors-changed` — отдельный namespace (стиль
-// `<подсистема>:<событие>`, как `sigil:invalidate`), не пересекается с
+// Convention `sigil:anchors-changed` — a separate namespace (`<subsystem>:<event>`
+// style, like `sigil:invalidate`), does not overlap with
 // `apply:<id>`/`outbound:<sid>`/`soul:<sid>:*`.
 
 import (
@@ -47,32 +49,32 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// AnchorsChangedChannel — Redis-канал cluster-wide инвалидации набора
-// trust-anchor-ов подписи Sigil. Фиксированный (не per-key): любая ротация
-// ключей подписи на любой ноде шлёт сюда, каждая нода re-load-ит набор и
-// re-broadcast-ит его всем своим Soul-ам.
+// AnchorsChangedChannel is the Redis channel for cluster-wide invalidation of
+// the Sigil signing trust-anchor set. Fixed (not per-key): any signing-key
+// rotation on any node publishes here; every node reloads the set and
+// re-broadcasts it to its Souls.
 const AnchorsChangedChannel = "sigil:anchors-changed"
 
-// anchorsChangedEnvelope — JSON-обёртка одного anchors-changed-сообщения.
-// Payload-а нет: само получение = сигнал «набор якорей изменился, re-load набор
-// и re-broadcast своим Soul-ам». `At` — момент публикации (диагностика/лог).
+// anchorsChangedEnvelope is the JSON wrapper for one anchors-changed message.
+// No payload: receipt itself is the signal "anchor set changed, reload it and
+// re-broadcast to your Souls". `At` is the publish time (diagnostics/logging).
 type anchorsChangedEnvelope struct {
 	At time.Time `json:"at"`
 }
 
-// AnchorsChanged — распакованное anchors-changed-сообщение, доставляемое
-// подписчику. Без payload-а: получение = сигнал re-load + re-broadcast.
+// AnchorsChanged is the decoded anchors-changed message delivered to the
+// subscriber. No payload: receipt is the reload + re-broadcast signal.
 type AnchorsChanged struct {
 	At time.Time
 }
 
-// PublishAnchorsChanged публикует anchors-changed-сигнал в [AnchorsChangedChannel].
-// Возвращает количество подписчиков, получивших сообщение.
+// PublishAnchorsChanged publishes an anchors-changed signal to
+// [AnchorsChangedChannel]. Returns the number of subscribers that received it.
 //
-// Best-effort: caller (rotation-handler S7 после commit-а Introduce/SetPrimary/
-// Retire) глотает ошибку — мутация уже зафиксирована в БД, потеря publish-а
-// оставит ноды со старым набором до рестарта (осознанное окно, см. doc-comment
-// файла).
+// Best-effort: the caller (rotation handler S7, after an Introduce/SetPrimary/
+// Retire commit) swallows the error — the mutation is already committed to the
+// DB, and a lost publish just leaves nodes with the stale set until restart
+// (an accepted window, see the file doc-comment).
 func PublishAnchorsChanged(ctx context.Context, c *Client) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishAnchorsChanged: nil client")
@@ -90,17 +92,18 @@ func PublishAnchorsChanged(ctx context.Context, c *Client) (int64, error) {
 	return n, nil
 }
 
-// anchorsChangedSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом. Ротации ключей подписи редки (единицы за всю жизнь кластера),
-// небольшой запас отсекает drop при burst-е (например, Introduce+SetPrimary
-// подряд). Совпадает с sigilInvalidateSubBufferSize — тот же класс редкого
-// административного потока.
+// anchorsChangedSubBufferSize is the Go channel buffer between the
+// Redis-PubSub loop and the caller. Signing-key rotations are rare (a handful
+// over a cluster's lifetime); a small buffer avoids drops on bursts (e.g.
+// Introduce+SetPrimary back to back). Matches sigilInvalidateSubBufferSize —
+// same class of rare administrative traffic.
 const anchorsChangedSubBufferSize = 16
 
-// AnchorsChangedSubscription — handle на подписку [AnchorsChangedChannel].
-// Lifecycle идентичен [SigilInvalidateSubscription]: spawn goroutine читает
-// PubSub-канал → парсит envelope → отдаёт *AnchorsChanged в Channel().
-// Close() прерывает goroutine и закрывает канал. Идемпотентен.
+// AnchorsChangedSubscription is a handle on a subscription to
+// [AnchorsChangedChannel]. Lifecycle is identical to
+// [SigilInvalidateSubscription]: a spawned goroutine reads the PubSub channel
+// → decodes the envelope → delivers *AnchorsChanged on Channel(). Close()
+// stops the goroutine and closes the channel. Idempotent.
 type AnchorsChangedSubscription struct {
 	ps        *redis.PubSub
 	out       chan *AnchorsChanged
@@ -110,7 +113,8 @@ type AnchorsChangedSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными anchors-changed-сообщениями.
+// Channel is the read side of the Go channel carrying decoded
+// anchors-changed messages.
 func (s *AnchorsChangedSubscription) Channel() <-chan *AnchorsChanged {
 	if s == nil {
 		return nil
@@ -118,8 +122,8 @@ func (s *AnchorsChangedSubscription) Channel() <-chan *AnchorsChanged {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis (или
-// ctx.Done() / Close()). См. doc-comment [SigilInvalidateSubscription.Ready].
+// Ready blocks until the first subscribe-acknowledgement from Redis (or
+// ctx.Done() / Close()). See doc-comment on [SigilInvalidateSubscription.Ready].
 func (s *AnchorsChangedSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.AnchorsChangedSubscription.Ready: nil subscription")
@@ -134,8 +138,8 @@ func (s *AnchorsChangedSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и Go-канал.
-// Идемпотентна.
+// Close stops the subscribe loop and closes the Redis pubsub handle and the
+// Go channel. Idempotent.
 func (s *AnchorsChangedSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -143,8 +147,8 @@ func (s *AnchorsChangedSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeAnchorsChanged подписывается на [AnchorsChangedChannel] и поднимает
-// goroutine-forwarder.
+// SubscribeAnchorsChanged subscribes to [AnchorsChangedChannel] and starts the
+// forwarder goroutine.
 func SubscribeAnchorsChanged(ctx context.Context, c *Client, logger *slog.Logger) (*AnchorsChangedSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribeAnchorsChanged: nil client")
@@ -222,9 +226,10 @@ func (s *AnchorsChangedSubscription) run(ctx context.Context, closed <-chan stru
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик не успел re-load + re-broadcast.
-			// Drop безопасен: каждое сообщение — лишь «re-load набор», последний
-			// re-load всё равно прочтёт актуальный БД-набор целиком.
+			// Channel full — the subscriber hasn't caught up on reload +
+			// re-broadcast. Dropping is safe: each message just means "reload
+			// the set", and the latest reload reads the full up-to-date DB
+			// set anyway.
 			s.logger.Warn("redis.SubscribeAnchorsChanged: forward channel full, dropping")
 		}
 	}

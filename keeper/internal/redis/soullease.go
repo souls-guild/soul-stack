@@ -1,19 +1,19 @@
 package redis
 
-// SoulLease — координация «какой Keeper-инстанс держит активный EventStream
-// к данному Soul» через Redis-lease (ADR-006(b) → [storage.md → Lease на SID]).
+// SoulLease coordinates "which Keeper instance holds the active EventStream
+// to this Soul" via a Redis lease (ADR-006(b) → [storage.md → Lease on SID]).
 //
-// Ключ — `soul:<sid>:lock`, значение — `kid` Keeper-а, TTL продлевается
-// renewal-goroutine-ой (паттерн идентичен Reaper-у).
+// The key is `soul:<sid>:lock`, the value is the Keeper's `kid`; the TTL is
+// renewed by a renewal goroutine (pattern identical to the Reaper).
 //
-// Семантика лидерства одного Soul-стрима:
-//   - Один Keeper в момент времени держит lease → принимает EventStream.
-//   - Конкурирующий Keeper при попытке принять стрим того же SID получает
-//     [ErrLeaseTaken]; handler закрывает стрим с `code.AlreadyExists`.
-//   - На graceful shutdown Keeper делает Release; следующий Keeper свободно
-//     занимает на ближайшем reconnect-е Soul-а.
-//   - На crash Keeper-а: TTL истекает, следующий reconnect Soul-а захватывает
-//     lease у нового Keeper-а.
+// Leadership semantics for one Soul stream:
+//   - One Keeper holds the lease at a time → accepts the EventStream.
+//   - A competing Keeper trying to accept a stream for the same SID gets
+//     [ErrLeaseTaken]; the handler closes the stream with `code.AlreadyExists`.
+//   - On graceful shutdown, the Keeper does Release; the next Keeper freely
+//     takes over on the Soul's next reconnect.
+//   - On Keeper crash: the TTL expires, and the Soul's next reconnect
+//     acquires the lease on a new Keeper.
 
 import (
 	"context"
@@ -24,20 +24,22 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// SoulStreamAlive сообщает, держит ли какой-либо Keeper-инстанс живой
-// EventStream к данному SID — по наличию SID-lease-ключа `soul:<sid>:lock`.
+// SoulStreamAlive reports whether any Keeper instance holds a live
+// EventStream to this SID — based on the presence of the SID lease key
+// `soul:<sid>:lock`.
 //
-// Lease (а НЕ heartbeat-Hash) — авторитетный признак живого стрима: ключ
-// существует только пока renewal-goroutine handler-а его продлевает (TTL
-// [defaultSoulLeaseTTL]), и пропадает при штатном Release либо по истечении
-// TTL после crash-а инстанса. Heartbeat-Hash (`soul:<sid>:hb`) для этой
-// проверки не годится — он без TTL (см. heartbeat.go) и пережил бы давно
-// закрытый стрим, давая ложно-живой ответ.
+// The lease (NOT the heartbeat hash) is the authoritative signal of a live
+// stream: the key only exists while the handler's renewal goroutine keeps
+// renewing it (TTL [defaultSoulLeaseTTL]), and disappears on a graceful
+// Release or when the TTL expires after an instance crash. The heartbeat
+// hash (`soul:<sid>:hb`) doesn't work for this check — it has no TTL (see
+// heartbeat.go) and would outlive a long-closed stream, giving a
+// false-alive answer.
 //
-// Назначение — lease-aware Reaper-правило `mark_disconnected`: idle-Soul на
-// живом стриме (шлёт лишь soulprint раз в refresh_interval, PG `last_seen_at`
-// stale) не должен ложно метиться `disconnected`, пока его стрим держит
-// lease (ADR-006(a)).
+// Purpose: the lease-aware Reaper rule `mark_disconnected` — an idle Soul
+// on a live stream (sending only soulprint once per refresh_interval, with
+// a stale PG `last_seen_at`) shouldn't be falsely marked `disconnected`
+// while its stream still holds the lease (ADR-006(a)).
 func SoulStreamAlive(ctx context.Context, c *Client, sid string) (bool, error) {
 	if c == nil {
 		return false, errors.New("redis.SoulStreamAlive: nil client")
@@ -52,19 +54,21 @@ func SoulStreamAlive(ctx context.Context, c *Client, sid string) (bool, error) {
 	return n > 0, nil
 }
 
-// SoulsStreamAlive — batched-вариант [SoulStreamAlive] для набора SID-ов
-// (presence-фильтр таргет-резолвера, ADR-006(a)). Возвращает множество SID-ов
-// с живым lease-ключом `soul:<sid>:lock` (EXISTS).
+// SoulsStreamAlive is the batched variant of [SoulStreamAlive] for a set of
+// SIDs (the target resolver's presence filter, ADR-006(a)). Returns the set
+// of SIDs with a live lease key `soul:<sid>:lock` (EXISTS).
 //
-// Реализация — один Redis-pipeline на EXISTS-команду per SID: round-trip-ов
-// O(1) вместо O(N) последовательных EXISTS. Резолвер таргетит хосты ОДНОГО
-// incarnation (десятки–сотни), pipeline дёшев; отдельный Redis-Set живых
-// SID-ов (Variant B) не вводим — лишний источник истины рядом с lease-ключом.
+// Implementation: one Redis pipeline with an EXISTS command per SID —
+// O(1) round trips instead of O(N) sequential EXISTS calls. The resolver
+// targets hosts within a SINGLE incarnation (tens to hundreds), so the
+// pipeline is cheap; a separate Redis Set of live SIDs (Variant B) isn't
+// introduced — it would be a redundant source of truth alongside the lease
+// key.
 //
-// Пустой `sids` → пустой результат без обращения к Redis. nil-элементы /
-// пустые строки в `sids` пропускаются (не формируют валидный lease-ключ).
-// Ошибка pipeline-а → возврат ошибки целиком (caller — резолвер — деградирует
-// fail-safe на SQL-presence, см. topology.Resolver).
+// Empty `sids` → empty result without hitting Redis. nil elements / empty
+// strings in `sids` are skipped (they don't form a valid lease key). A
+// pipeline error → the whole call returns the error (the caller — the
+// resolver — degrades fail-safe to SQL presence, see topology.Resolver).
 func SoulsStreamAlive(ctx context.Context, c *Client, sids []string) (map[string]struct{}, error) {
 	if c == nil {
 		return nil, errors.New("redis.SoulsStreamAlive: nil client")
@@ -75,9 +79,9 @@ func SoulsStreamAlive(ctx context.Context, c *Client, sids []string) (map[string
 	}
 
 	pipe := c.underlying().Pipeline()
-	// Параллельный slice (sid ↔ его *IntCmd): после Exec читаем результат
-	// каждой команды по индексу. Пустые SID пропускаем — для них команда не
-	// ставится, индекс не резервируется.
+	// Parallel slice (sid ↔ its *IntCmd): after Exec, read each command's
+	// result by index. Empty SIDs are skipped — no command is queued for
+	// them, no index is reserved.
 	type pending struct {
 		sid string
 		cmd *redis.IntCmd
@@ -108,20 +112,22 @@ func SoulsStreamAlive(ctx context.Context, c *Client, sids []string) (map[string
 	return alive, nil
 }
 
-// SoulLeaseOwner возвращает KID Keeper-инстанса, держащего активный
-// EventStream к данному SID — значение lease-ключа `soul:<sid>:lock` (GET).
+// SoulLeaseOwner returns the KID of the Keeper instance holding the active
+// EventStream to this SID — the value of the lease key `soul:<sid>:lock`
+// (GET).
 //
-// В отличие от [SoulStreamAlive] (EXISTS — есть ли вообще владелец), здесь нужен
-// именно ВЛАДЕЛЕЦ: multi-keeper-guard run-goroutine-пути (acolytes=0) сверяет
-// его с собственным KID. Если SendApply пойдёт Soul-у, чей стрим держит ДРУГОЙ
-// Keeper-инстанс, RunResult уйдёт туда, а владелец-прогон здесь зависнет в
-// applying (footgun, поправимый только переходом на acolytes>0 / work-queue
-// ADR-027).
+// Unlike [SoulStreamAlive] (EXISTS — is there any owner at all), this needs
+// the actual OWNER: the multi-keeper-guard run-goroutine path
+// (acolytes=0) compares it against its own KID. If SendApply targets a
+// Soul whose stream is held by ANOTHER Keeper instance, the RunResult goes
+// there while the owning run hangs here in applying (a footgun, fixable
+// only by moving to acolytes>0 / a work queue, ADR-027).
 //
-// Возврат: ok=false без ошибки — lease-ключа нет (Soul не на стриме ни у кого:
-// EXISTS вернул бы false, redis.Nil здесь не ошибка). ok=true + kid — владелец
-// известен. Ошибка — только сетевой/протокольный сбой GET (caller — guard —
-// деградирует молча: при ошибке проверки warn не печатается).
+// Return: ok=false with no error — there's no lease key (the Soul isn't on
+// anyone's stream: EXISTS would return false, redis.Nil isn't an error
+// here). ok=true + kid — the owner is known. An error only on a
+// network/protocol failure of GET (the caller — the guard — degrades
+// silently: no warn is printed on a check failure).
 func SoulLeaseOwner(ctx context.Context, c *Client, sid string) (kid string, ok bool, err error) {
 	if c == nil {
 		return "", false, errors.New("redis.SoulLeaseOwner: nil client")
@@ -139,41 +145,42 @@ func SoulLeaseOwner(ctx context.Context, c *Client, sid string) (kid string, ok 
 	return v, true, nil
 }
 
-// SoulLeaseKey формирует Redis-ключ lease-а для конкретного SID.
+// SoulLeaseKey builds the Redis lease key for a given SID.
 //
-// Convention `soul:<sid>:lock` зафиксирована в docs/keeper/storage.md
-// (Redis — горячий слой, роль (b) Lease на SID).
+// The `soul:<sid>:lock` convention is fixed in docs/keeper/storage.md
+// (Redis — hot layer, role (b) Lease on SID).
 func SoulLeaseKey(sid string) string {
 	return "soul:" + sid + ":lock"
 }
 
-// AcquireSoulLease — обёртка [Acquire] с фиксированным префиксом ключа.
-// Параметры symmetric Reaper-овскому use-case-у:
+// AcquireSoulLease is a wrapper around [Acquire] with a fixed key prefix.
+// Parameters mirror the Reaper's use case:
 //
-//   - sid — SID Soul-а (FQDN), формирует ключ.
-//   - kid — идентификатор Keeper-инстанса, пишется как value.
-//   - ttl — продолжительность жизни ключа без Renew. Renewal-goroutine
-//     обязана продлевать чаще чем ttl (типично ttl/3).
+//   - sid — the Soul's SID (FQDN), used to build the key.
+//   - kid — the Keeper instance identifier, written as the value.
+//   - ttl — how long the key lives without a Renew. The renewal goroutine
+//     must renew more often than ttl (typically ttl/3).
 //
-// На конфликт возвращает [ErrLeaseTaken]; caller (EventStream-handler)
-// закрывает стрим с `code.AlreadyExists`.
+// Returns [ErrLeaseTaken] on conflict; the caller (the EventStream handler)
+// closes the stream with `code.AlreadyExists`.
 func AcquireSoulLease(ctx context.Context, c *Client, sid, kid string, ttl time.Duration) (*Lease, error) {
 	return Acquire(ctx, c, SoulLeaseKey(sid), kid, ttl)
 }
 
-// forceAcquireSoulLeaseScript — CAS-by-prev-holder перезахват SID-lease.
-// Перезахватывает ключ на `newKID` (ARGV[2]) только в двух случаях:
-//   - ключ всё ещё принадлежит ДОКАЗАННО-МЁРТВОМУ `prevKID` (ARGV[1]) — DEL+SET;
-//   - ключа нет (prev-holder уже истёк по TTL) — SETNX.
+// forceAcquireSoulLeaseScript is a CAS-by-prev-holder re-acquire of the
+// SID lease. Re-acquires the key for `newKID` (ARGV[2]) only in two cases:
+//   - the key still belongs to the PROVEN-DEAD `prevKID` (ARGV[1]) — DEL+SET;
+//   - the key is absent (the prev-holder already TTL-expired) — SETNX.
 //
-// Если ключ в гонке СМЕНИЛСЯ на третьего владельца (другой Keeper уже
-// перезахватил / Soul реконнектнулся ещё куда-то) — НЕ трогаем (return 0).
-// Это и есть защита от split-brain: слепой DEL чужого живого lease подорвал бы
-// SID-lease-дедуп доставки (ADR-027(n)); здесь снимаем lease ровно у того, чью
-// смерть caller уже подтвердил presence-чеком ([InstanceAlive]).
+// If the key raced to a THIRD owner (another Keeper already re-acquired it
+// / the Soul reconnected somewhere else) — leave it alone (return 0). This
+// is exactly the split-brain protection: a blind DEL of someone else's live
+// lease would break SID-lease delivery dedup (ADR-027(n)); this only lifts
+// the lease from the holder whose death the caller has already confirmed
+// via a presence check ([InstanceAlive]).
 //
-// PX (миллисекунды) — как в renewScript: точный sub-second TTL для miniredis-
-// тестов, нулевой overhead в проде.
+// PX (milliseconds) — as in renewScript: precise sub-second TTL for
+// miniredis tests, zero overhead in production.
 var forceAcquireSoulLeaseScript = redis.NewScript(`
 local cur = redis.call("GET", KEYS[1])
 if cur == false then
@@ -189,22 +196,24 @@ else
 end
 `)
 
-// ForceAcquireSoulLease — presence-gated перезахват SID-lease у доказанно-
-// мёртвого prev-holder-а (ADR-027(n), server-side фундамент S0; врезка в
-// acquireSoulLease-handler — S2).
+// ForceAcquireSoulLease is a presence-gated re-acquire of the SID lease
+// from a proven-dead prev-holder (ADR-027(n), server-side foundation S0;
+// wiring into the acquireSoulLease handler is S2).
 //
-// Контракт: caller вызывает ЭТО только после того, как:
-//   - обычный [AcquireSoulLease] вернул [ErrLeaseTaken];
-//   - [SoulLeaseOwner] дал `prevKID` — текущего владельца ключа;
-//   - [InstanceAlive](prevKID) подтвердил, что prev-holder МЁРТВ в Conclave.
+// Contract: the caller invokes THIS only after:
+//   - a plain [AcquireSoulLease] returned [ErrLeaseTaken];
+//   - [SoulLeaseOwner] gave `prevKID` — the key's current owner;
+//   - [InstanceAlive](prevKID) confirmed the prev-holder is DEAD in the
+//     Conclave.
 //
-// Перезахват атомарен (Lua CAS-by-prev-holder): ключ перетирается на `newKID`
-// ТОЛЬКО если он всё ещё `== prevKID` (или отсутствует — штатный SETNX). Если
-// между presence-чеком и этим вызовом ключ сменился на третьего владельца —
-// возвращается [ErrLeaseTaken] (НЕ перезахватываем чужой живой lease).
+// The re-acquire is atomic (Lua CAS-by-prev-holder): the key is overwritten
+// to `newKID` ONLY if it's still `== prevKID` (or absent — plain SETNX). If
+// the key raced to a third owner between the presence check and this call,
+// [ErrLeaseTaken] is returned (we do NOT re-acquire someone else's live
+// lease).
 //
-// Успех → `*Lease` на новом holder-е, готовый к Renew/Release (renewal-
-// goroutine handler-а продлевает его как обычный AcquireSoulLease-lease).
+// On success → a `*Lease` for the new holder, ready for Renew/Release (the
+// handler's renewal goroutine renews it like any normal AcquireSoulLease lease).
 func ForceAcquireSoulLease(ctx context.Context, c *Client, sid, prevKID, newKID string, ttl time.Duration) (*Lease, error) {
 	if c == nil {
 		return nil, errors.New("redis.ForceAcquireSoulLease: nil client")

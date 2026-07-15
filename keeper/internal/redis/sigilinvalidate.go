@@ -1,38 +1,40 @@
 package redis
 
-// Cluster-wide Sigil-инвалидация через Redis pub/sub (ADR-026, S6c).
+// Cluster-wide Sigil invalidation via Redis pub/sub (ADR-026, S6c).
 //
-// Проблема: Soul держит in-memory кеш допусков плагинов (PluginSigil),
-// наполняемый connect-time broadcast-ом от того Keeper-инстанса, к которому
-// подключён стрим. Оператор делает plugin.allow / plugin.revoke — мутация
-// коммитится в общую таблицу plugin_sigils на Keeper-A, но Soul может висеть
-// на Keeper-B и о новом allow-list-е ничего не узнает: кеш остаётся
-// устаревшим (revoked-допуск ещё «доверенный», новый allow ещё не доехал).
+// Problem: a Soul holds an in-memory cache of plugin grants (PluginSigil),
+// populated by a connect-time broadcast from whichever Keeper instance its
+// stream is connected to. An operator does plugin.allow / plugin.revoke —
+// the mutation commits to the shared plugin_sigils table on Keeper-A, but a
+// Soul may be sitting on Keeper-B and never learn about the new allow-list:
+// its cache stays stale (a revoked grant is still "trusted", a new allow
+// hasn't arrived yet).
 //
-// Решение симметрично [PublishRBACInvalidate] / [SubscribeRBACInvalidate]:
-// мутирующая нода после успешного commit-а Allow/Revoke PUBLISH-ит в канал
-// `sigil:invalidate`, КАЖДАЯ нода по SUBSCRIBE перечитывает active-набор из БД
-// и re-broadcast-ит его своим подключённым Soul-ам (через тот же путь, что и
-// connect-time broadcast). Так Soul на Keeper-B получает свежий набор после
-// мутации на Keeper-A.
+// Solution mirrors [PublishRBACInvalidate] / [SubscribeRBACInvalidate]:
+// after a successful Allow/Revoke commit, the mutating node PUBLISHes to
+// the `sigil:invalidate` channel, and EVERY node's SUBSCRIBE re-reads the
+// active set from the DB and re-broadcasts it to its connected Souls
+// (through the same path as the connect-time broadcast). This way a Soul on
+// Keeper-B gets the fresh set after a mutation on Keeper-A.
 //
-// Отличие от RBAC: здесь self-origin НЕ фильтруется. RBAC-снимок мутирующей
-// ноды обновляется её собственным in-process commit-ом, поэтому ноде не нужно
-// реагировать на свой publish. Sigil-кеши живут на Soul-ах, а не на Keeper-е;
-// мутирующая нода обязана re-broadcast-ить своим Soul-ам ровно так же, как
-// чужая. Отдельного in-process re-broadcast после commit-а нет — единый путь
-// через pub/sub проще и без двойной раздачи: нода получит собственное
-// сообщение по подписке и раздаст его. Поэтому envelope несёт только `at`
-// (диагностика), без origin_kid.
+// Difference from RBAC: self-origin is NOT filtered here. The mutating
+// node's RBAC snapshot is updated by its own in-process commit, so it
+// doesn't need to react to its own publish. Sigil caches live on the Souls,
+// not on the Keeper; the mutating node must re-broadcast to its own Souls
+// exactly like any other node. There's no separate in-process re-broadcast
+// after the commit — a single path through pub/sub is simpler and avoids a
+// double dispatch: the node receives its own message via the subscription
+// and dispatches it. That's why the envelope carries only `at`
+// (diagnostics), no origin_kid.
 //
-// Persistence у Redis pub/sub нет: потеря сообщения (reconnect ноды, мигание
-// брокера) → допуск доедет на следующем reconnect Soul-а (connect-time
-// broadcast). Pub/sub лишь сокращает окно устаревания до миллисекунд, не
-// заменяет connect-time-fallback.
+// Redis pub/sub has no persistence: a lost message (node reconnect, broker
+// blip) means the grant arrives on the Soul's next reconnect (connect-time
+// broadcast). Pub/sub only shortens the staleness window to milliseconds,
+// it doesn't replace the connect-time fallback.
 //
-// Convention `sigil:invalidate` — отдельный namespace (стиль
-// `<подсистема>:<событие>`, как `rbac:invalidate`), не пересекается с
-// `apply:<id>`/`outbound:<sid>`/`soul:<sid>:*`.
+// Convention `sigil:invalidate` — a separate namespace (the
+// `<subsystem>:<event>` style, like `rbac:invalidate`), doesn't overlap
+// with `apply:<id>`/`outbound:<sid>`/`soul:<sid>:*`.
 
 import (
 	"context"
@@ -45,30 +47,34 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// SigilInvalidateChannel — Redis-канал cluster-wide Sigil-инвалидации.
-// Фиксированный (не per-SID): любая allow/revoke-мутация на любой ноде шлёт
-// сюда, каждая нода re-broadcast-ит active-набор всем своим Soul-ам.
+// SigilInvalidateChannel is the Redis channel for cluster-wide Sigil
+// invalidation. Fixed (not per-SID): any allow/revoke mutation on any node
+// publishes here, and every node re-broadcasts the active set to all its
+// Souls.
 const SigilInvalidateChannel = "sigil:invalidate"
 
-// sigilInvalidateEnvelope — JSON-обёртка одного invalidate-сообщения. Payload-а
-// нет: само получение = сигнал «allow-list изменился, re-broadcast active-набор
-// своим Soul-ам». `At` — момент публикации (диагностика/лог).
+// sigilInvalidateEnvelope is the JSON wrapper for one invalidate message.
+// No payload: receiving it at all is the signal "allow-list changed,
+// re-broadcast the active set to your Souls". `At` is the publish time
+// (diagnostics/log).
 type sigilInvalidateEnvelope struct {
 	At time.Time `json:"at"`
 }
 
-// SigilInvalidate — распакованное invalidate-сообщение, доставляемое
-// подписчику. Без payload-а: получение = сигнал re-broadcast-а.
+// SigilInvalidate is the unpacked invalidate message delivered to a
+// subscriber. No payload: receiving it is the re-broadcast signal.
 type SigilInvalidate struct {
 	At time.Time
 }
 
-// PublishSigilInvalidate публикует invalidate-сигнал в [SigilInvalidateChannel].
-// Возвращает количество подписчиков, получивших сообщение.
+// PublishSigilInvalidate publishes an invalidate signal to
+// [SigilInvalidateChannel]. Returns the number of subscribers that
+// received the message.
 //
-// Best-effort: caller (sigil.Service после commit-а Allow/Revoke) глотает
-// ошибку — мутация уже зафиксирована в БД, потеря publish-а компенсируется
-// connect-time broadcast-ом при следующем reconnect Soul-а.
+// Best-effort: the caller (sigil.Service after an Allow/Revoke commit)
+// swallows the error — the mutation is already committed to the DB, and a
+// lost publish is compensated by the connect-time broadcast on the Soul's
+// next reconnect.
 func PublishSigilInvalidate(ctx context.Context, c *Client) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishSigilInvalidate: nil client")
@@ -86,16 +92,18 @@ func PublishSigilInvalidate(ctx context.Context, c *Client) (int64, error) {
 	return n, nil
 }
 
-// sigilInvalidateSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом. Allow/revoke-мутации редки (десятки в день), небольшой запас
-// отсекает drop при burst-е bulk-allow-ов. Совпадает с
-// rbacInvalidateSubBufferSize — тот же класс редкого административного потока.
+// sigilInvalidateSubBufferSize is the Go channel buffer between the
+// Redis-PubSub loop and the caller. Allow/revoke mutations are rare
+// (dozens per day); the small margin avoids drops during bulk-allow
+// bursts. Matches rbacInvalidateSubBufferSize — the same class of rare
+// administrative traffic.
 const sigilInvalidateSubBufferSize = 16
 
-// SigilInvalidateSubscription — handle на подписку [SigilInvalidateChannel].
-// Lifecycle идентичен [RBACInvalidateSubscription]: spawn goroutine читает
-// PubSub-канал → парсит envelope → отдаёт *SigilInvalidate в Channel().
-// Close() прерывает goroutine и закрывает канал. Идемпотентен.
+// SigilInvalidateSubscription is a handle to the [SigilInvalidateChannel]
+// subscription. Lifecycle is identical to [RBACInvalidateSubscription]: a
+// spawned goroutine reads the PubSub channel → parses the envelope →
+// delivers *SigilInvalidate to Channel(). Close() stops the goroutine and
+// closes the channel. Idempotent.
 type SigilInvalidateSubscription struct {
 	ps        *redis.PubSub
 	out       chan *SigilInvalidate
@@ -105,7 +113,7 @@ type SigilInvalidateSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными invalidate-сообщениями.
+// Channel is the read side of the Go channel with unpacked invalidate messages.
 func (s *SigilInvalidateSubscription) Channel() <-chan *SigilInvalidate {
 	if s == nil {
 		return nil
@@ -113,8 +121,8 @@ func (s *SigilInvalidateSubscription) Channel() <-chan *SigilInvalidate {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis (или
-// ctx.Done() / Close()). См. doc-comment [RBACInvalidateSubscription.Ready].
+// Ready blocks until the first subscribe acknowledgement from Redis (or
+// ctx.Done() / Close()). See the doc comment on [RBACInvalidateSubscription.Ready].
 func (s *SigilInvalidateSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.SigilInvalidateSubscription.Ready: nil subscription")
@@ -129,8 +137,8 @@ func (s *SigilInvalidateSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и Go-канал.
-// Идемпотентна.
+// Close stops the subscribe loop and closes the Redis pubsub handle and Go
+// channel. Idempotent.
 func (s *SigilInvalidateSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -138,8 +146,8 @@ func (s *SigilInvalidateSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeSigilInvalidate подписывается на [SigilInvalidateChannel] и
-// поднимает goroutine-forwarder.
+// SubscribeSigilInvalidate subscribes to [SigilInvalidateChannel] and
+// starts the goroutine-forwarder.
 func SubscribeSigilInvalidate(ctx context.Context, c *Client, logger *slog.Logger) (*SigilInvalidateSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribeSigilInvalidate: nil client")
@@ -217,9 +225,10 @@ func (s *SigilInvalidateSubscription) run(ctx context.Context, closed <-chan str
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик не успел re-broadcast-ить.
-			// Drop безопасен: каждое сообщение — лишь «re-broadcast active-набор»,
-			// последний re-broadcast всё равно прочтёт актуальный БД-набор целиком.
+			// Channel full — the subscriber hasn't re-broadcast yet. Drop
+			// is safe: each message just means "re-broadcast the active
+			// set", the next re-broadcast will read the full, current DB
+			// set anyway.
 			s.logger.Warn("redis.SubscribeSigilInvalidate: forward channel full, dropping")
 		}
 	}

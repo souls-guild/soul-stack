@@ -78,9 +78,9 @@ func TestSubscribeOutbound_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestOutboundPubSub_RoundTrip — publish/subscribe полный цикл с
-// разными origin_kid. Subscriber должен получить FromKeeper и
-// корректно распаковать payload.
+// TestOutboundPubSub_RoundTrip — a full publish/subscribe cycle with
+// different origin_kid values. The subscriber must receive FromKeeper and
+// unpack the payload correctly.
 func TestOutboundPubSub_RoundTrip(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -131,8 +131,8 @@ func TestOutboundPubSub_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestOutboundPubSub_SelfFilter — publish с тем же origin_kid, что и
-// selfKID подписчика → сообщение игнорируется.
+// TestOutboundPubSub_SelfFilter — publish with the same origin_kid as the
+// subscriber's selfKID → the message is ignored.
 func TestOutboundPubSub_SelfFilter(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -150,11 +150,11 @@ func TestOutboundPubSub_SelfFilter(t *testing.T) {
 	msg := &keeperv1.FromKeeper{
 		Payload: &keeperv1.FromKeeper_CancelApply{CancelApply: &keeperv1.CancelApply{ApplyId: "x"}},
 	}
-	// Self-origin сначала.
+	// Self-origin first.
 	if _, err := PublishOutbound(ctx, c, "sid", "keeper-self", msg); err != nil {
 		t.Fatalf("PublishOutbound self: %v", err)
 	}
-	// Потом other-origin — оно должно прийти.
+	// Then other-origin — it must arrive.
 	if _, err := PublishOutbound(ctx, c, "sid", "keeper-other", msg); err != nil {
 		t.Fatalf("PublishOutbound other: %v", err)
 	}
@@ -168,21 +168,21 @@ func TestOutboundPubSub_SelfFilter(t *testing.T) {
 		t.Fatal("did not receive other-origin message within 2s")
 	}
 
-	// После other-origin сообщения канал не должен содержать ещё одно (self
-	// был отфильтрован). Дополнительный delay даёт subscribe-loop-у
-	// шанс положить self-сообщение, если бы фильтр не работал.
+	// After the other-origin message, the channel must not contain another
+	// one (self was filtered). The extra delay gives the subscribe loop a
+	// chance to put a self-message in, if the filter weren't working.
 	select {
 	case got, ok := <-sub.Channel():
 		if ok {
 			t.Errorf("unexpected extra message: payload = %T", got.GetPayload())
 		}
 	case <-time.After(150 * time.Millisecond):
-		// OK — self отфильтрован.
+		// OK — self was filtered.
 	}
 }
 
-// TestOutboundPubSub_NoSubscribers — PublishOutbound без подписчиков
-// возвращает 0 без ошибки.
+// TestOutboundPubSub_NoSubscribers — PublishOutbound with no subscribers
+// returns 0 without error.
 func TestOutboundPubSub_NoSubscribers(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -197,8 +197,8 @@ func TestOutboundPubSub_NoSubscribers(t *testing.T) {
 	}
 }
 
-// TestOutboundPubSub_CloseShutsDownGoroutine — Close на subscription
-// корректно завершает goroutine и закрывает out-канал.
+// TestOutboundPubSub_CloseShutsDownGoroutine — Close on a subscription
+// correctly terminates the goroutine and closes the out channel.
 func TestOutboundPubSub_CloseShutsDownGoroutine(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -215,7 +215,7 @@ func TestOutboundPubSub_CloseShutsDownGoroutine(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 
-	// Канал должен быть закрыт за разумное время.
+	// The channel must close within a reasonable time.
 	select {
 	case _, ok := <-sub.Channel():
 		if ok {
@@ -225,7 +225,7 @@ func TestOutboundPubSub_CloseShutsDownGoroutine(t *testing.T) {
 		t.Fatal("Channel not closed within 2s after Close")
 	}
 
-	// Двойной Close — no-op.
+	// A double Close — no-op.
 	if err := sub.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
@@ -275,8 +275,8 @@ func TestReadSoulLeaseHolder_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// TestSubscribeOutbound_CloseSurvivesConcurrentReceive — гонка между
-// внешним Close и потоком данных. -race должен пройти.
+// TestSubscribeOutbound_CloseSurvivesConcurrentReceive — a race between an
+// external Close and the data stream. -race must pass.
 func TestSubscribeOutbound_CloseSurvivesConcurrentReceive(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
@@ -297,14 +297,14 @@ func TestSubscribeOutbound_CloseSurvivesConcurrentReceive(t *testing.T) {
 		}
 	}()
 
-	// Не вычитываем — Channel может быть заполнен; Close всё равно должен
-	// корректно завершить goroutine.
+	// Don't drain — the channel may fill up; Close must still terminate the
+	// goroutine correctly.
 	time.Sleep(20 * time.Millisecond)
 	if err := sub.Close(); err != nil && !errors.Is(err, io.EOF) {
 		t.Errorf("Close: %v", err)
 	}
 
-	// Канал закрыт — drain до пустоты.
+	// The channel is closed — drain to empty.
 	for range sub.Channel() {
 	}
 }

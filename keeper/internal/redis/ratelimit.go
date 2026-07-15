@@ -1,23 +1,25 @@
 package redis
 
-// TokenBucket — per-AID rate-limiter Tempo (ADR-050) поверх Redis.
+// TokenBucket is a per-AID rate limiter for Tempo (ADR-050) on top of Redis.
 //
-// Алгоритм — классический token-bucket, состояние которого живёт в Redis-hash
-// `tempo:<aid>:<bucket>` (поля `tokens` / `last_refill_ts`). Refill+take —
-// атомарно ОДНИМ Lua-скриптом (read-modify-write бакета в одном round-trip),
-// что и даёт когерентный лимит поверх stateless-HA-кластера Keeper-а: лимит
-// авторитетен в Redis, а не размножается ×N по инстансам (ADR-050(a)).
+// The algorithm is a classic token bucket whose state lives in a Redis hash
+// `tempo:<aid>:<bucket>` (fields `tokens` / `last_refill_ts`). Refill+take is
+// atomic via ONE Lua script (a read-modify-write of the bucket in a single
+// round trip), which is what gives a coherent limit across the stateless HA
+// Keeper cluster: the limit is authoritative in Redis rather than multiplied
+// ×N across instances (ADR-050(a)).
 //
-// Образец стиля — соседние [Lease] (lease.go) / SoulLease (soullease.go):
-// вся атомарная логика — в Lua-скрипте, Go-обёртка только формирует ключ,
-// прокидывает аргументы и интерпретирует результат.
+// Style follows its neighbors [Lease] (lease.go) / SoulLease (soullease.go):
+// all atomic logic lives in the Lua script, the Go wrapper only builds the
+// key, passes arguments, and interprets the result.
 //
-// Время бакет читает ИЗ САМОГО Redis-а (`redis.call("TIME")`), а не из Go-часов
-// вызывающего: иначе refill зависел бы от рассинхрона часов между N Keeper-
-// инстансами, и бакет «дрейфовал» бы при обращениях с разных инстансов. TIME —
-// единый источник для всех take-ов одного бакета. NB: `redis.call("TIME")` —
-// non-deterministic, поэтому скрипт требует Redis >= 5 (effects-replication:
-// в реплику/AOF попадают эффекты HSET/PEXPIRE, а не сам скрипт).
+// The bucket reads time FROM REDIS ITSELF (`redis.call("TIME")`), not from
+// the caller's Go clock: otherwise refill would depend on clock skew between
+// N Keeper instances, and the bucket would "drift" across requests hitting
+// different instances. TIME is the single source for all takes on one
+// bucket. NB: `redis.call("TIME")` is non-deterministic, so the script
+// requires Redis >= 5 (effects-replication: replica/AOF record the
+// HSET/PEXPIRE effects, not the script itself).
 
 import (
 	"context"
@@ -28,17 +30,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// TokenBucket — handle для take-операций над token-bucket-ами в Redis.
-// Stateless относительно конкретного бакета: ключ передаётся в каждый [Allow],
-// один TokenBucket обслуживает любое число AID/bucket-комбинаций.
+// TokenBucket is a handle for take operations against token buckets in
+// Redis. Stateless with respect to any particular bucket: the key is passed
+// to every [Allow] call, and one TokenBucket serves any number of
+// AID/bucket combinations.
 type TokenBucket struct {
 	client *Client
 }
 
-// NewTokenBucket оборачивает Redis-клиент в Tempo-rate-limiter. Возвращает
-// ошибку только на nil-клиенте — это программная ошибка wire-up-а (middleware
-// при отсутствии Redis получает nil-limiter и работает passthrough, см.
-// api/middleware/ratelimit.go, поэтому до сюда nil доходить не должен).
+// NewTokenBucket wraps a Redis client as a Tempo rate limiter. Only errors
+// on a nil client — that's a wire-up bug (when Redis is absent, middleware
+// gets a nil limiter and runs passthrough, see api/middleware/ratelimit.go,
+// so a nil client shouldn't reach here).
 func NewTokenBucket(c *Client) (*TokenBucket, error) {
 	if c == nil {
 		return nil, errors.New("redis.NewTokenBucket: nil client")
@@ -46,31 +49,32 @@ func NewTokenBucket(c *Client) (*TokenBucket, error) {
 	return &TokenBucket{client: c}, nil
 }
 
-// tokenBucketKey формирует Redis-ключ бакета. Convention `tempo:<aid>:<bucket>`
-// зафиксирована каноном (ADR-050(a), naming-rules.md): per-AID, per-логический-
-// bucket эндпоинта.
+// tokenBucketKey builds the bucket's Redis key. The `tempo:<aid>:<bucket>`
+// convention is fixed by canon (ADR-050(a), naming-rules.md): per-AID,
+// per-logical-endpoint bucket.
 func tokenBucketKey(aid, bucket string) string {
 	return "tempo:" + aid + ":" + bucket
 }
 
-// allowScript — атомарный refill+take token-bucket-а.
+// allowScript is the atomic refill+take of a token bucket.
 //
-// KEYS[1] — ключ бакета (`tempo:<aid>:<bucket>`).
-// ARGV[1] — rate (токенов в секунду, float).
-// ARGV[2] — burst (capacity бакета, целое > 0).
-// ARGV[3] — TTL ключа в миллисекундах (PEXPIRE, скользит на каждом take).
+// KEYS[1] — the bucket key (`tempo:<aid>:<bucket>`).
+// ARGV[1] — rate (tokens per second, float).
+// ARGV[2] — burst (bucket capacity, integer > 0).
+// ARGV[3] — key TTL in milliseconds (PEXPIRE, slides on every take).
 //
-// Возврат — массив `{allowed, retry_after_ms}`:
-//   - allowed=1, retry_after_ms=0      — токен взят, запрос пропускается;
-//   - allowed=0, retry_after_ms=<ms>   — бакет пуст, до пополнения хотя бы
-//     одного токена осталось retry_after_ms миллисекунд.
+// Returns an array `{allowed, retry_after_ms}`:
+//   - allowed=1, retry_after_ms=0      — token taken, request passes;
+//   - allowed=0, retry_after_ms=<ms>   — bucket empty, retry_after_ms
+//     milliseconds left until at least one token refills.
 //
-// Время — из `redis.call("TIME")` (см. doc-comment пакета). Дробная часть
-// токенов сохраняется в hash как float-строка: иначе высокий-rate-low-burst
-// сценарий терял бы накопление между take-ами (каждый раз округление в ноль).
+// Time comes from `redis.call("TIME")` (see the package doc comment). The
+// fractional part of tokens is stored in the hash as a float string:
+// otherwise a high-rate-low-burst scenario would lose accumulation between
+// takes (rounding to zero every time).
 //
-// Первый запрос к несуществующему бакету трактуется как полный бакет
-// (tokens = burst): новый оператор не штрафуется «холодным» бакетом.
+// The first request against a nonexistent bucket is treated as a full
+// bucket (tokens = burst): a new operator isn't penalized by a "cold" bucket.
 var allowScript = redis.NewScript(`
 local rate = tonumber(ARGV[1])
 local burst = tonumber(ARGV[2])
@@ -117,33 +121,35 @@ redis.call("PEXPIRE", KEYS[1], ttl_ms)
 return {allowed, retry_after_ms}
 `)
 
-// bucketTTL — за сколько времени полностью пустой бакет восстанавливается до
-// capacity: burst/rate секунд + запас. Дольше держать ключ незачем (бакет
-// и так был бы полным), но и обрезать раньше нельзя — иначе активный лимит
-// «забывался» бы между всплесками. Возвращается в миллисекундах для PEXPIRE.
+// bucketTTL is how long it takes a fully empty bucket to refill to
+// capacity: burst/rate seconds plus margin. No point holding the key longer
+// (the bucket would already be full), but cutting it shorter would let an
+// active limit be "forgotten" between bursts. Returned in milliseconds for
+// PEXPIRE.
 func bucketTTL(rate float64, burst int) time.Duration {
 	refillSeconds := float64(burst) / rate
-	// Удваиваем + 1с страховки от округления — TTL не критичен к точности,
-	// важно лишь чтобы ключ пережил окно реального использования бакета.
+	// Double + 1s rounding safety margin — TTL isn't precision-critical, it
+	// just needs to outlive the bucket's actual usage window.
 	ttl := time.Duration((refillSeconds*2)+1) * time.Second
 	return ttl
 }
 
-// Allow атомарно пытается взять один токен из бакета `tempo:<aid>:<bucket>`.
+// Allow atomically tries to take one token from the `tempo:<aid>:<bucket>`
+// bucket.
 //
-//   - allowed=true             — токен взят, запрос можно пропускать;
+//   - allowed=true             — token taken, request can pass;
 //     retryAfter == 0.
-//   - allowed=false            — бакет пуст; retryAfter — время до пополнения
-//     хотя бы одного токена (для HTTP-заголовка Retry-After).
+//   - allowed=false            — bucket empty; retryAfter is the time until
+//     at least one token refills (for the HTTP Retry-After header).
 //
-// `rate` — токенов в секунду (> 0), `burst` — ёмкость бакета (> 0). Невалидные
-// аргументы — программная ошибка caller-а (конфиг провалидирован выше), здесь
-// отвергаются явной ошибкой, а не молча.
+// `rate` is tokens per second (> 0), `burst` is bucket capacity (> 0).
+// Invalid arguments are a caller bug (config is validated upstream); here
+// they're rejected with an explicit error rather than silently.
 //
-// Ошибка возвращается только на сетевой/протокольный сбой Redis-а либо на
-// невалидные аргументы. Caller (middleware) при Redis-ошибке деградирует
-// fail-OPEN (passthrough, ADR-050(b)) — Allow сам решения о fail-open не
-// принимает, лишь сигнализирует ошибку.
+// An error is returned only on a Redis network/protocol failure or invalid
+// arguments. On a Redis error, the caller (middleware) degrades fail-OPEN
+// (passthrough, ADR-050(b)) — Allow itself doesn't decide to fail open, it
+// just signals the error.
 func (tb *TokenBucket) Allow(ctx context.Context, aid, bucket string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error) {
 	if tb == nil || tb.client == nil {
 		return false, 0, errors.New("redis.TokenBucket.Allow: nil bucket/client")

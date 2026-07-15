@@ -52,7 +52,7 @@ func TestRegisterInstance_RequireUnique_Collision(t *testing.T) {
 	if err := RegisterInstance(ctx, c, testKIDa, "first", 30*time.Second, true); err != nil {
 		t.Fatalf("first RegisterInstance: %v", err)
 	}
-	// Второй процесс с тем же KID при requireUnique=true → коллизия.
+	// A second process with the same KID under requireUnique=true → collision.
 	err := RegisterInstance(ctx, c, testKIDa, "second", 30*time.Second, true)
 	if !errors.Is(err, ErrConclaveKIDTaken) {
 		t.Fatalf("second RegisterInstance err = %v, want ErrConclaveKIDTaken", err)
@@ -66,8 +66,8 @@ func TestRegisterInstance_NonUnique_Overwrites(t *testing.T) {
 	if err := RegisterInstance(ctx, c, testKIDa, "stale", 30*time.Second, true); err != nil {
 		t.Fatalf("first RegisterInstance: %v", err)
 	}
-	// Рестарт того же KID: requireUnique=false должен безусловно перетереть
-	// собственный остаток (чужой TTL-ключ ещё не истёк).
+	// Restart of the same KID: requireUnique=false must unconditionally
+	// overwrite its own leftover (its own stale TTL key hasn't expired yet).
 	if err := RegisterInstance(ctx, c, testKIDa, "fresh", 30*time.Second, false); err != nil {
 		t.Fatalf("re-RegisterInstance: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRenewInstance_ExtendsTTL(t *testing.T) {
 		t.Fatal("RenewInstance ok=false, want true (key still alive)")
 	}
 
-	// Ещё 300 ms: без Renew ключ бы умер (300+300 > 500), Renew сбросил TTL.
+	// Another 300ms: without Renew the key would have died (300+300 > 500), Renew reset the TTL.
 	mr.FastForward(300 * time.Millisecond)
 	if !mr.Exists(ConclaveKey(testKIDa)) {
 		t.Error("key gone after Renew+FastForward — Renew must extend TTL")
@@ -152,7 +152,7 @@ func TestDeregisterInstance_Idempotent(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
 
-	// Отсутствующий ключ → no-op без ошибки.
+	// A missing key → no-op, no error.
 	if err := DeregisterInstance(ctx, c, testKIDa); err != nil {
 		t.Fatalf("DeregisterInstance on missing key: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestLiveKIDsAndCount(t *testing.T) {
 		t.Errorf("CountLive = %d, want 3", n)
 	}
 
-	// Один инстанс crash-нул (TTL истёк, без Deregister) — выпадает из выборки.
+	// One instance crashed (TTL expired, no Deregister) — drops out of the result.
 	mr.Del(ConclaveKey(testKIDb))
 	n, err = CountLive(ctx, c)
 	if err != nil {
@@ -243,7 +243,7 @@ func TestInstanceAlive_Dead(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()
 
-	// Ключ никогда не регистрировался (или crash-нул и истёк по TTL) → мёртв.
+	// The key was never registered (or it crashed and expired by TTL) → dead.
 	alive, err := InstanceAlive(ctx, c, testKIDa)
 	if err != nil {
 		t.Fatalf("InstanceAlive: %v", err)
@@ -274,7 +274,7 @@ func TestInstanceAlive_TTLExpiryDead(t *testing.T) {
 func TestInstanceAlive_RedisErrorPropagates(t *testing.T) {
 	c, mr := newClientMR(t)
 	ctx := context.Background()
-	mr.Close() // Redis недоступен → EXISTS вернёт ошибку.
+	mr.Close() // Redis unavailable → EXISTS will return an error.
 
 	if _, err := InstanceAlive(ctx, c, testKIDa); err == nil {
 		t.Error("InstanceAlive on broken Redis: want error (presence-чек fail-safe у caller-а)")

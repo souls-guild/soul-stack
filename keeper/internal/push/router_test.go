@@ -11,8 +11,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeRouterReader реализует PGRouterReader для unit-тестов. ssh_target
-// возвращается из соответствующего поля; covens — из map[sid][]string.
+// fakeRouterReader implements PGRouterReader for unit tests. ssh_target is
+// returned from the corresponding field; covens come from map[sid][]string.
 type fakeRouterReader struct {
 	target map[string]*soul.SSHTarget
 	covens map[string][]string
@@ -37,8 +37,9 @@ func sshTargetWithProvider(p string) *soul.SSHTarget {
 	return &soul.SSHTarget{SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul", SSHProvider: &p}
 }
 
-// TestPGRouter_Level1_SoulExplicit — souls.ssh_target.ssh_provider непустой →
-// SourceSoul, провайдер из поля.
+// TestPGRouter_Level1_SoulExplicit verifies that a non-empty
+// souls.ssh_target.ssh_provider yields SourceSoul, with the provider taken
+// from that field.
 func TestPGRouter_Level1_SoulExplicit(t *testing.T) {
 	r := &fakeRouterReader{
 		target: map[string]*soul.SSHTarget{"sid-1": sshTargetWithProvider("vault-bastion")},
@@ -59,8 +60,8 @@ func TestPGRouter_Level1_SoulExplicit(t *testing.T) {
 	}
 }
 
-// TestPGRouter_Level2_CovenDefault — ssh_provider не задан, но Coven Soul-а
-// есть в карте → SourceCoven.
+// TestPGRouter_Level2_CovenDefault verifies that when ssh_provider isn't set
+// but the Soul's Coven is in the map, the result is SourceCoven.
 func TestPGRouter_Level2_CovenDefault(t *testing.T) {
 	r := &fakeRouterReader{
 		target: map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
@@ -77,14 +78,14 @@ func TestPGRouter_Level2_CovenDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RouteFor: %v", err)
 	}
-	// Tiebreak — алфавитный порядок ковенов: eu-west < prod → static-eu.
+	// Tiebreak: alphabetical order of covens: eu-west < prod → static-eu.
 	if name != "static-eu" || src != SourceCoven {
 		t.Errorf("got (%q, %v), want (static-eu, SourceCoven)", name, src)
 	}
 }
 
-// TestPGRouter_Level3_ClusterDefault — ни Level 1, ни Level 2 не дали match →
-// SourceCluster.
+// TestPGRouter_Level3_ClusterDefault verifies that when neither Level 1 nor
+// Level 2 produce a match, the result is SourceCluster.
 func TestPGRouter_Level3_ClusterDefault(t *testing.T) {
 	r := &fakeRouterReader{
 		target: map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
@@ -104,7 +105,8 @@ func TestPGRouter_Level3_ClusterDefault(t *testing.T) {
 	}
 }
 
-// TestPGRouter_NotRouted — все три уровня пусты → ErrProviderNotRouted.
+// TestPGRouter_NotRouted verifies that when all three levels are empty, the
+// result is ErrProviderNotRouted.
 func TestPGRouter_NotRouted(t *testing.T) {
 	r := &fakeRouterReader{}
 	cfg := NewStaticRouterConfigSource(RouterConfig{})
@@ -115,8 +117,8 @@ func TestPGRouter_NotRouted(t *testing.T) {
 	}
 }
 
-// TestPGRouter_PGError_PropagatesUnknown — реальная PG-ошибка читается как
-// SourceUnknown + wrapped error (не ErrProviderNotRouted).
+// TestPGRouter_PGError_PropagatesUnknown verifies that a real PG error comes
+// back as SourceUnknown + a wrapped error (not ErrProviderNotRouted).
 func TestPGRouter_PGError_PropagatesUnknown(t *testing.T) {
 	r := &fakeRouterReader{err: errors.New("conn refused")}
 	cfg := NewStaticRouterConfigSource(RouterConfig{})
@@ -133,8 +135,9 @@ func TestPGRouter_PGError_PropagatesUnknown(t *testing.T) {
 	}
 }
 
-// TestPGRouter_CovenAlphabeticalTiebreak — детерминизм tiebreak: если Soul в
-// нескольких ковенах, каждый со своим default, побеждает алфабетически первый.
+// TestPGRouter_CovenAlphabeticalTiebreak verifies deterministic tiebreak: if
+// a Soul is in several covens, each with its own default, the
+// alphabetically-first one wins.
 func TestPGRouter_CovenAlphabeticalTiebreak(t *testing.T) {
 	r := &fakeRouterReader{
 		target: map[string]*soul.SSHTarget{"sid-1": {SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}},
@@ -148,7 +151,7 @@ func TestPGRouter_CovenAlphabeticalTiebreak(t *testing.T) {
 		},
 	})
 	router, _ := NewPGRouter(r, cfg)
-	// alpha < mu < zeta → выигрывает alpha.
+	// alpha < mu < zeta → alpha wins.
 	name, _, err := router.RouteFor(context.Background(), "sid-1")
 	if err != nil {
 		t.Fatalf("RouteFor: %v", err)
@@ -160,8 +163,9 @@ func TestPGRouter_CovenAlphabeticalTiebreak(t *testing.T) {
 
 // --- Multi-provider dispatcher tests (W-2 map + concurrent-safety) ---
 
-// TestDispatcher_MultiProvider_LookupByName — карта несёт двух провайдеров,
-// SendApply каждому уходит на свой mock (косвенно через successful resolve).
+// TestDispatcher_MultiProvider_LookupByName verifies that the map carries two
+// providers, and SendApply to each reaches its own mock (indirectly, via a
+// successful resolve).
 func TestDispatcher_MultiProvider_LookupByName(t *testing.T) {
 	provA := &mockProvider{authAllowed: true}
 	provB := &mockProvider{authAllowed: true}
@@ -187,8 +191,8 @@ func TestDispatcher_MultiProvider_LookupByName(t *testing.T) {
 	}
 }
 
-// TestDispatcher_SendApply_UnknownProvider — SendApply на не зарегистрированный
-// provider возвращает ErrProviderUnknown.
+// TestDispatcher_SendApply_UnknownProvider verifies that SendApply on an
+// unregistered provider returns ErrProviderUnknown.
 func TestDispatcher_SendApply_UnknownProvider(t *testing.T) {
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{
@@ -197,7 +201,7 @@ func TestDispatcher_SendApply_UnknownProvider(t *testing.T) {
 		Targets: &mockTargets{target: sshTarget()},
 		Souls:   &mockSouls{s: sshSoul()},
 	})
-	// non-nil request требуется для прохождения первой проверки SendApply.
+	// A non-nil request is required to pass SendApply's first check.
 	req := &keeperv1.ApplyRequest{ApplyId: "ap-ghost"}
 	_, err := disp.SendApply(context.Background(), "host-1.example.com", "ghost", req)
 	if !errors.Is(err, ErrProviderUnknown) {
@@ -205,11 +209,12 @@ func TestDispatcher_SendApply_UnknownProvider(t *testing.T) {
 	}
 }
 
-// TestDispatcher_RefreshProvider_DoesNotBlockOtherProviders — concurrent
-// RefreshProvider("static") не блокирует HasProvider("vault") долго: refresh
-// держит Lock, но HasProvider/ProviderNames — RLock → конкурентны для read-pure.
-// Тест проверяет, что новое имя не появляется параллельно (refresh для другого
-// имени работает изолированно).
+// TestDispatcher_RefreshProvider_DoesNotBlockOtherProviders verifies that a
+// concurrent RefreshProvider("static") doesn't block HasProvider("vault") for
+// long: refresh holds Lock, but HasProvider/ProviderNames use RLock, so
+// they're concurrent for pure reads. The test checks that the new name
+// doesn't appear in parallel (refresh for a different name works in
+// isolation).
 func TestDispatcher_RefreshProvider_PerNameIsolated(t *testing.T) {
 	provA := &mockProvider{authAllowed: true}
 	provB := &mockProvider{authAllowed: true}
@@ -229,7 +234,7 @@ func TestDispatcher_RefreshProvider_PerNameIsolated(t *testing.T) {
 	if err := disp.RefreshProvider(context.Background(), "static"); err != nil {
 		t.Fatalf("RefreshProvider(static): %v", err)
 	}
-	// static подменён, vault остался прежним.
+	// static was swapped, vault stayed the same.
 	if providerForTest(disp, "static") != newA {
 		t.Errorf("static не подменился")
 	}
@@ -238,8 +243,9 @@ func TestDispatcher_RefreshProvider_PerNameIsolated(t *testing.T) {
 	}
 }
 
-// TestDispatcher_Concurrent_ReadWrite — параллельные HasProvider/ProviderNames
-// и RefreshProvider не приводят к panic-у/гонкам (race-detector).
+// TestDispatcher_Concurrent_ReadWrite verifies that concurrent
+// HasProvider/ProviderNames and RefreshProvider don't cause a panic/race
+// (race detector).
 func TestDispatcher_Concurrent_ReadWrite(t *testing.T) {
 	provA := &mockProvider{authAllowed: true}
 	newA := &mockProvider{authAllowed: true}

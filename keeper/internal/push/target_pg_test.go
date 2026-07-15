@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeTargetReader — stub PGTargetReader для unit-тестов без подъёма PG.
+// fakeTargetReader is a stub PGTargetReader for unit tests without a live PG.
 type fakeTargetReader struct {
 	target *soul.SSHTarget
 	err    error
@@ -29,7 +29,7 @@ func TestPGFallbackTargetResolver_PGRowPopulated(t *testing.T) {
 	}}
 	r := &PGFallbackTargetResolver{
 		Reader: reader,
-		// Fallback / AllowLegacy не используются (PG-row не NULL).
+		// Fallback / AllowLegacy aren't used (the PG row isn't NULL).
 	}
 
 	got, err := r.Resolve(context.Background(), "soul-a.example.com")
@@ -43,8 +43,8 @@ func TestPGFallbackTargetResolver_PGRowPopulated(t *testing.T) {
 }
 
 func TestPGFallbackTargetResolver_PGRowPopulated_FillsDefaults(t *testing.T) {
-	// Empty-fields в storage → дефолты в резолве (storage хранит ТОЛЬКО заданное
-	// оператором, дефолты — единая точка).
+	// Empty fields in storage → defaults during resolve (storage holds ONLY
+	// what the operator set; defaults live in a single place).
 	reader := &fakeTargetReader{target: &soul.SSHTarget{}}
 	r := &PGFallbackTargetResolver{Reader: reader}
 
@@ -59,7 +59,8 @@ func TestPGFallbackTargetResolver_PGRowPopulated_FillsDefaults(t *testing.T) {
 }
 
 func TestPGFallbackTargetResolver_NullColumn_NoLegacy(t *testing.T) {
-	// PG-row.ssh_target IS NULL + AllowLegacy=false (default) → ErrTargetNotConfigured.
+	// PG row.ssh_target IS NULL + AllowLegacy=false (default) →
+	// ErrTargetNotConfigured.
 	reader := &fakeTargetReader{target: nil}
 	r := &PGFallbackTargetResolver{
 		Reader:      reader,
@@ -73,8 +74,8 @@ func TestPGFallbackTargetResolver_NullColumn_NoLegacy(t *testing.T) {
 }
 
 func TestPGFallbackTargetResolver_NullColumn_LegacyFallback(t *testing.T) {
-	// PG-row IS NULL + AllowLegacy=true → fallback на ConfigTargetResolver +
-	// WARN один раз.
+	// PG row IS NULL + AllowLegacy=true → fallback to ConfigTargetResolver +
+	// a one-time WARN.
 	reader := &fakeTargetReader{target: nil}
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -96,7 +97,7 @@ func TestPGFallbackTargetResolver_NullColumn_LegacyFallback(t *testing.T) {
 		t.Errorf("got = %+v, want = %+v", got, want)
 	}
 
-	// Второй вызов: WARN не должен повториться (sync.Once gating).
+	// Second call: WARN must not repeat (sync.Once gating).
 	got2, err := r.Resolve(context.Background(), "soul-a.example.com")
 	if err != nil {
 		t.Fatalf("Resolve(2): %v", err)
@@ -112,8 +113,8 @@ func TestPGFallbackTargetResolver_NullColumn_LegacyFallback(t *testing.T) {
 }
 
 func TestPGFallbackTargetResolver_NullColumn_LegacyFallback_UnknownSID(t *testing.T) {
-	// AllowLegacy=true, но даже Fallback не знает SID → ErrTargetNotConfigured
-	// (от ConfigTargetResolver).
+	// AllowLegacy=true, but even Fallback doesn't know the SID →
+	// ErrTargetNotConfigured (from ConfigTargetResolver).
 	reader := &fakeTargetReader{target: nil}
 	r := &PGFallbackTargetResolver{
 		Reader:      reader,
@@ -139,8 +140,9 @@ func TestPGFallbackTargetResolver_ReaderError(t *testing.T) {
 	}
 }
 
-// bytesCount — счётчик вхождений needle в haystack (избегаем strings.Count в
-// тестах, чтобы не плодить пакет-import под одну функцию).
+// bytesCount counts occurrences of needle in haystack (we avoid
+// strings.Count in tests to skip adding a package import for a single
+// function).
 func bytesCount(haystack, needle string) int {
 	n := 0
 	for i := 0; i+len(needle) <= len(haystack); {

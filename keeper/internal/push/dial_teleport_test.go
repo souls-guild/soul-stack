@@ -23,9 +23,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// TestNewTeleportDialer_RejectsEmptyFields — конструктор отвергает пустые
-// обязательные поля (proxy_addr / identity_file / cluster). Проверяется ДО
-// preflight-load (пустой identity_file ловится этим же гейтом).
+// TestNewTeleportDialer_RejectsEmptyFields — the constructor rejects empty
+// required fields (proxy_addr / identity_file / cluster). Checked BEFORE
+// preflight-load (an empty identity_file is caught by the same gate).
 func TestNewTeleportDialer_RejectsEmptyFields(t *testing.T) {
 	id := writeValidIdentityFile(t)
 	full := TeleportDialerConfig{ProxyAddr: "proxy.example.com:443", IdentityFile: id, Cluster: "c1"}
@@ -55,11 +55,11 @@ func TestNewTeleportDialer_RejectsEmptyFields(t *testing.T) {
 	}
 }
 
-// TestNewTeleportDialer_PreflightRejectsBadIdentity — fail-fast: конструктор
-// один раз загружает identity-file и проверяет, что TLSConfig()/SSHClientConfig()
-// поднимаются. Несуществующий/битый файл → конструктор-ошибка (keeper отказывает
-// на старте через buildBootstrapTeleportDialer → errSetupFailed), а не падает
-// поздно на первом Dial.
+// TestNewTeleportDialer_PreflightRejectsBadIdentity — fail-fast: the
+// constructor loads the identity file once and checks that
+// TLSConfig()/SSHClientConfig() come up cleanly. A missing/corrupt file →
+// constructor error (keeper refuses to start via buildBootstrapTeleportDialer
+// → errSetupFailed), instead of failing late on the first Dial.
 func TestNewTeleportDialer_PreflightRejectsBadIdentity(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
 		d, err := NewTeleportDialer(TeleportDialerConfig{
@@ -94,9 +94,10 @@ func TestNewTeleportDialer_PreflightRejectsBadIdentity(t *testing.T) {
 	})
 }
 
-// TestNewTeleportDialer_ValidIdentityOK — валидный identity-file: preflight
-// проходит, конструктор возвращает непустой Dialer без ошибки. Сам Dial здесь не
-// вызывается (нужна живая Teleport-сеть) — проверяется только конструктор.
+// TestNewTeleportDialer_ValidIdentityOK — a valid identity file: preflight
+// passes, the constructor returns a non-nil Dialer without error. Dial itself
+// is not called here (needs a live Teleport network) — only the constructor
+// is checked.
 func TestNewTeleportDialer_ValidIdentityOK(t *testing.T) {
 	d, err := NewTeleportDialer(TeleportDialerConfig{
 		ProxyAddr:    "proxy.example.com:443",
@@ -111,10 +112,11 @@ func TestNewTeleportDialer_ValidIdentityOK(t *testing.T) {
 	}
 }
 
-// TestApplyProxyTLSTrust_SystemTrust — guard ADR-063 amendment («Teleport-proxy
-// за L7-TLS-балансировщиком»): при UseSystemTrust=true итоговый tls.Config имеет
-// RootCAs=nil (системный trust store) + ServerName=host(proxy_addr) (снят sentinel
-// `teleport.cluster.local`), а client-cert (mTLS-auth на proxy) СОХРАНЁН.
+// TestApplyProxyTLSTrust_SystemTrust — guard for ADR-063 amendment
+// ("Teleport proxy behind an L7 TLS load balancer"): with UseSystemTrust=true,
+// the resulting tls.Config has RootCAs=nil (system trust store) +
+// ServerName=host(proxy_addr) (the `teleport.cluster.local` sentinel is
+// dropped), while the client cert (mTLS auth to the proxy) is PRESERVED.
 func TestApplyProxyTLSTrust_SystemTrust(t *testing.T) {
 	clientCert := tls.Certificate{Certificate: [][]byte{{0x01, 0x02}}}
 	cfg := &tls.Config{
@@ -139,9 +141,10 @@ func TestApplyProxyTLSTrust_SystemTrust(t *testing.T) {
 	}
 }
 
-// TestApplyProxyTLSTrust_Default — guard: при UseSystemTrust=false tls.Config не
-// меняется (identity-CA-pool + sentinel-ServerName `teleport.cluster.local`),
-// существующие Teleport-issued-proxy инсталляции работают бит-в-бит как раньше.
+// TestApplyProxyTLSTrust_Default — guard: with UseSystemTrust=false,
+// tls.Config is left unchanged (identity-CA pool + sentinel ServerName
+// `teleport.cluster.local`), so existing Teleport-issued-proxy installs keep
+// working bit-for-bit as before.
 func TestApplyProxyTLSTrust_Default(t *testing.T) {
 	pool := x509.NewCertPool()
 	cfg := &tls.Config{
@@ -159,17 +162,18 @@ func TestApplyProxyTLSTrust_Default(t *testing.T) {
 	}
 }
 
-// TestApplyProxyTLSTrustALPN_UnionTrust — guard ADR-063 amendment («Teleport-
-// proxy за L7-TLS-балансировщиком», решение «a»): при alpn-conn-upgrade
-// внутренний gRPC-mTLS-слой получает ОБЪЕДИНЁННЫЙ trust RootCAs = системный пул ∪
-// identity-CA. Проверяется, что итоговый пул содержит И identity-CA (по subject),
-// И системные CA (если системный пул на машине непуст), ServerName остаётся
-// sentinel `teleport.cluster.local`, InsecureSkipVerify=false, client-cert сохранён.
+// TestApplyProxyTLSTrustALPN_UnionTrust — guard for ADR-063 amendment
+// ("Teleport proxy behind an L7 TLS load balancer", decision "a"): under
+// alpn-conn-upgrade, the inner gRPC mTLS layer gets a UNION trust RootCAs =
+// system pool ∪ identity-CA. Checks that the resulting pool contains BOTH
+// the identity-CA (by subject) AND the system CAs (if the machine's system
+// pool is non-empty), ServerName stays the `teleport.cluster.local` sentinel,
+// InsecureSkipVerify=false, and the client cert is preserved.
 func TestApplyProxyTLSTrustALPN_UnionTrust(t *testing.T) {
 	caPEM, caSubject := makeCACertPEM(t)
 	clientCert := tls.Certificate{Certificate: [][]byte{{0x01, 0x02}}}
 	cfg := &tls.Config{
-		RootCAs:      x509.NewCertPool(), // identity-CA-pool из creds.TLSConfig() (непрозрачный)
+		RootCAs:      x509.NewCertPool(), // identity-CA pool from creds.TLSConfig() (opaque)
 		ServerName:   "teleport.cluster.local",
 		Certificates: []tls.Certificate{clientCert},
 	}
@@ -196,9 +200,10 @@ func TestApplyProxyTLSTrustALPN_UnionTrust(t *testing.T) {
 		t.Error("union RootCAs must contain identity-CA subject (Teleport-CA from identity), not found")
 	}
 
-	// Системные CA попадают в объединение, если на машине системный trust непуст.
-	// На минимальных рантаймах (пустой системный пул) этот инвариант не проверяем —
-	// объединение там вырождается в один identity-CA, что корректно.
+	// System CAs land in the union if the machine's system trust store is
+	// non-empty. On minimal runtimes (empty system pool) we don't check this
+	// invariant — the union degenerates to just the identity-CA there, which
+	// is correct.
 	if sys, err := x509.SystemCertPool(); err == nil && sys != nil {
 		sysSubjects := sys.Subjects() //nolint:staticcheck // intentional: baseline system subjects in guard
 		if len(sysSubjects) > 0 && !containsSubject(subjects, sysSubjects[0]) {
@@ -207,9 +212,9 @@ func TestApplyProxyTLSTrustALPN_UnionTrust(t *testing.T) {
 	}
 }
 
-// TestApplyProxyTLSTrustALPN_RejectsBadPEM — guard: невалидный identity-CA PEM →
-// ошибка (fail-closed на Dial, без тихого пустого trust). ServerName/RootCAs не
-// важны при ошибке — Dial аварийно завершится до использования tls.Config.
+// TestApplyProxyTLSTrustALPN_RejectsBadPEM — guard: an invalid identity-CA
+// PEM → error (fail-closed on Dial, no silent empty trust). ServerName/RootCAs
+// don't matter on error — Dial aborts before tls.Config is ever used.
 func TestApplyProxyTLSTrustALPN_RejectsBadPEM(t *testing.T) {
 	cfg := &tls.Config{ServerName: "teleport.cluster.local"}
 	err := applyProxyTLSTrustALPN(cfg, [][]byte{[]byte("not a pem block")})
@@ -221,15 +226,15 @@ func TestApplyProxyTLSTrustALPN_RejectsBadPEM(t *testing.T) {
 	}
 }
 
-// TestNewTeleportDialer_SystemTrustProxyAddr — при UseSystemTrust=true host
-// режется из proxy_addr на старте: битый proxy_addr (нет `:port`) → конструктор-
-// ошибка (fail-closed), валидный `host:port` → ok.
+// TestNewTeleportDialer_SystemTrustProxyAddr — with UseSystemTrust=true, host
+// is sliced out of proxy_addr at startup: a malformed proxy_addr (no
+// `:port`) → constructor error (fail-closed), a valid `host:port` → ok.
 func TestNewTeleportDialer_SystemTrustProxyAddr(t *testing.T) {
 	id := writeValidIdentityFile(t)
 
 	t.Run("malformed proxy_addr fails", func(t *testing.T) {
 		d, err := NewTeleportDialer(TeleportDialerConfig{
-			ProxyAddr:      "tp.rwb.ru", // нет порта → SplitHostPort ошибка
+			ProxyAddr:      "tp.rwb.ru", // no port → SplitHostPort error
 			IdentityFile:   id,
 			Cluster:        "c1",
 			UseSystemTrust: true,
@@ -261,10 +266,11 @@ func TestNewTeleportDialer_SystemTrustProxyAddr(t *testing.T) {
 	})
 }
 
-// TestBuildProxyClientConfig_AlpnUpgrade — guard ADR-063 amendment («Teleport-
-// proxy за L7-TLS-балансировщиком»): AlpnUpgrade=true → proxy.ClientConfig.
-// ALPNConnUpgradeRequired=true (ALPN-conn-upgrade WebSocket-туннель для L7-LB);
-// AlpnUpgrade=false (дефолт) → false, остальные поля проброшены бит-в-бит.
+// TestBuildProxyClientConfig_AlpnUpgrade — guard for ADR-063 amendment
+// ("Teleport proxy behind an L7 TLS load balancer"): AlpnUpgrade=true →
+// proxy.ClientConfig.ALPNConnUpgradeRequired=true (ALPN-conn-upgrade
+// WebSocket tunnel for the L7 LB); AlpnUpgrade=false (default) → false, the
+// rest of the fields pass through bit-for-bit.
 func TestBuildProxyClientConfig_AlpnUpgrade(t *testing.T) {
 	tlsCfg := &tls.Config{ServerName: "tp.rwb.ru"}
 	sshCfg := apissh.ClientConfig{User: "root"}
@@ -308,14 +314,16 @@ func TestBuildProxyClientConfig_AlpnUpgrade(t *testing.T) {
 		}
 	})
 
-	// Compile-time guard: имя поля proxy.ClientConfig.ALPNConnUpgradeRequired
-	// зафиксировано (ловит переименование в апстрим-teleport при bump).
+	// Compile-time guard: pins the field name
+	// proxy.ClientConfig.ALPNConnUpgradeRequired (catches a rename in
+	// upstream teleport on bump).
 	_ = proxy.ClientConfig{ALPNConnUpgradeRequired: true}
 }
 
-// TestBuildProxyClientConfig_ResetsNextProtos — guard ALPN-ловушки «h2-first →
-// 403 web-стек» (см. комментарий у сброса NextProtos в buildProxyClientConfig).
-// Инвариант держится для ОБЕИХ веток (alpn и direct-gRPC) — call site один.
+// TestBuildProxyClientConfig_ResetsNextProtos — guard for the ALPN pitfall
+// "h2-first → 403 web stack" (see the comment at the NextProtos reset in
+// buildProxyClientConfig). The invariant holds for BOTH branches (alpn and
+// direct-gRPC) — there's a single call site.
 func TestBuildProxyClientConfig_ResetsNextProtos(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -325,7 +333,7 @@ func TestBuildProxyClientConfig_ResetsNextProtos(t *testing.T) {
 		{"direct_grpc", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tlsCfg := &tls.Config{NextProtos: []string{"h2"}} // как из creds.TLSConfig()
+			tlsCfg := &tls.Config{NextProtos: []string{"h2"}} // as it comes from creds.TLSConfig()
 			got := buildProxyClientConfig(
 				TeleportDialerConfig{ProxyAddr: "tp.rwb.ru:443", AlpnUpgrade: tc.alpn},
 				tlsCfg, apissh.ClientConfig{}, time.Second,
@@ -341,7 +349,7 @@ func TestBuildProxyClientConfig_ResetsNextProtos(t *testing.T) {
 	}
 }
 
-// journalCloser пишет метку в общий журнал закрытий.
+// journalCloser writes a label into the shared closing journal.
 type journalCloser struct {
 	label   string
 	journal *[]string
@@ -354,7 +362,7 @@ func (c *journalCloser) Close() error {
 	return nil
 }
 
-// journalSession — inner-Session для teleportSession, фиксирует момент Close.
+// journalSession — inner Session for teleportSession, records the moment of Close.
 type journalSession struct {
 	journal *[]string
 }
@@ -365,12 +373,13 @@ func (s *journalSession) Close() error {
 	return nil
 }
 
-// TestTeleportSession_ProxyClientOwnership — guard ownership-контракта: conn от
-// DialHost мультиплексирован поверх gRPC-стрима proxy-клиента, ранний Close
-// убивает транспорт под *ssh.Client (live-баг: первый sess.Run → `ssh:
-// unexpected packet in response to channel open: <nil>`). Требования: proxy-
-// клиент НЕ закрыт после получения Session, закрыт ровно один раз в
-// sess.Close(), ПОСЛЕ SSH-client-а; повторный Close идемпотентен.
+// TestTeleportSession_ProxyClientOwnership — guard for the ownership
+// contract: the conn from DialHost is multiplexed over the proxy client's
+// gRPC stream, an early Close kills the transport under *ssh.Client (live
+// bug: the first sess.Run → `ssh: unexpected packet in response to channel
+// open: <nil>`). Requirements: the proxy client is NOT closed right after
+// Session is obtained, it's closed exactly once in sess.Close(), AFTER the
+// SSH client; a repeated Close is idempotent.
 func TestTeleportSession_ProxyClientOwnership(t *testing.T) {
 	var journal []string
 	proxyClient := &journalCloser{label: "proxy", journal: &journal}
@@ -397,12 +406,13 @@ func TestTeleportSession_ProxyClientOwnership(t *testing.T) {
 	}
 }
 
-// writeValidIdentityFile собирает минимально-валидный Teleport identity-file
-// (ed25519 priv + self-signed SSH user-cert + self-signed X.509 TLS-cert под тот
-// же ключ) и возвращает путь. Достаточен, чтобы creds.TLSConfig() И
-// creds.SSHClientConfig() поднялись без живой Teleport-сети (known_hosts опущен,
-// чтобы ProxyClientSSHConfig не требовал CA). Не валиден для реального коннекта —
-// нужен только для проверки preflight-парсинга.
+// writeValidIdentityFile assembles a minimally-valid Teleport identity file
+// (ed25519 priv + a self-signed SSH user cert + a self-signed X.509 TLS cert
+// under the same key) and returns its path. Enough for both
+// creds.TLSConfig() and creds.SSHClientConfig() to come up without a live
+// Teleport network (known_hosts is omitted so ProxyClientSSHConfig doesn't
+// require a CA). Not valid for a real connection — it's only for checking
+// preflight parsing.
 func writeValidIdentityFile(t *testing.T) string {
 	t.Helper()
 
@@ -415,8 +425,8 @@ func writeValidIdentityFile(t *testing.T) string {
 		t.Fatalf("marshal private key: %v", err)
 	}
 
-	// SSH user-cert, self-signed тем же ключом (CA == subject — для парсинга
-	// этого достаточно, SSHSigner проверяет лишь соответствие priv↔cert pubkey).
+	// SSH user cert, self-signed with the same key (CA == subject — that's
+	// enough for parsing, SSHSigner only checks that priv matches cert pubkey).
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		t.Fatalf("ssh public key: %v", err)
@@ -439,7 +449,7 @@ func writeValidIdentityFile(t *testing.T) string {
 	}
 	sshCertPEM := ssh.MarshalAuthorizedKey(cert)
 
-	// X.509 TLS-cert, self-signed тем же ed25519-ключом.
+	// X.509 TLS cert, self-signed with the same ed25519 key.
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
@@ -463,10 +473,10 @@ func writeValidIdentityFile(t *testing.T) string {
 	return path
 }
 
-// makeCACertPEM собирает self-signed CA-cert (ed25519) и возвращает его PEM-блок
-// вместе с RAW-DER subject (для сверки присутствия в x509.CertPool.Subjects()).
-// Имитирует identity-CA из identity-file (CACerts.TLS), который объединённый
-// alpn-trust добавляет в системный пул.
+// makeCACertPEM assembles a self-signed CA cert (ed25519) and returns its PEM
+// block along with the RAW-DER subject (for checking presence in
+// x509.CertPool.Subjects()). Simulates the identity-CA from the identity file
+// (CACerts.TLS) that the union alpn-trust adds to the system pool.
 func makeCACertPEM(t *testing.T) (pemBlock []byte, rawSubject []byte) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

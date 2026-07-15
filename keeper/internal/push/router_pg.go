@@ -1,12 +1,13 @@
 package push
 
-// router_pg.go — production-implementation [PGRouterReader] поверх pgxpool.Pool
-// (ADR-032 amendment 2026-05-27, P2 W-3 Multi-provider routing).
+// router_pg.go — production implementation of [PGRouterReader] over
+// pgxpool.Pool (ADR-032 amendment 2026-05-27, P2 W-3 Multi-provider routing).
 //
-// Separate type-обёртка над pgPoolTargetReader (см. target_pg.go) добавляет
-// чтение `souls.coven[]` для Level 2 резолва. Изолировано от target-reader-а:
-// последний широко используется в PGFallbackTargetResolver (hot path SendApply,
-// где coven читать не нужно), смешивать ради одного типа неоправданно.
+// A separate type wrapping pgPoolTargetReader (see target_pg.go) adds reading
+// `souls.coven[]` for the Level 2 resolve. Kept isolated from the
+// target-reader: the latter is used broadly in PGFallbackTargetResolver (the
+// SendApply hot path, where coven doesn't need to be read), so merging them
+// into one type isn't worth it.
 
 import (
 	"context"
@@ -14,13 +15,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// pgPoolRouterReader реализует [PGRouterReader] над soul.ExecQueryRower.
+// pgPoolRouterReader implements [PGRouterReader] over soul.ExecQueryRower.
 type pgPoolRouterReader struct {
 	db soul.ExecQueryRower
 }
 
-// NewPGRouterReader адаптирует pgxpool.Pool (или любой soul.ExecQueryRower)
-// под [PGRouterReader]. Используется setupPushDispatchers в daemon-wire-up.
+// NewPGRouterReader adapts a pgxpool.Pool (or any soul.ExecQueryRower) to
+// [PGRouterReader]. Used by setupPushDispatchers in daemon wire-up.
 func NewPGRouterReader(db soul.ExecQueryRower) PGRouterReader {
 	return &pgPoolRouterReader{db: db}
 }
@@ -30,10 +31,11 @@ func (r *pgPoolRouterReader) SelectSshTarget(ctx context.Context, sid string) (*
 }
 
 func (r *pgPoolRouterReader) SelectCovens(ctx context.Context, sid string) ([]string, error) {
-	// SelectBySID — единственный CRUD-метод, возвращающий полный Soul вместе с
-	// coven[]. router-у нужны только метки, но дополнительный SQL под router
-	// усложнит инвалидацию схемы; стоимость лишних 5 полей в Soul-row
-	// мизерная против отдельного round-trip-а либо отдельного SELECT-а.
+	// SelectBySID is the only CRUD method that returns a full Soul along with
+	// coven[]. The router only needs the labels, but adding SQL dedicated to
+	// the router would complicate schema invalidation; the cost of 5 extra
+	// fields in the Soul row is negligible next to a separate round trip or a
+	// separate SELECT.
 	s, err := soul.SelectBySID(ctx, r.db, sid)
 	if err != nil {
 		return nil, err

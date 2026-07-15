@@ -12,9 +12,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// orderingDeliverer и orderingSession ловят порядок: Deliver должен случиться
-// ПОСЛЕ Dial и ДО exec-а `soul apply`. Иначе доставка либо идёт на
-// несконнекченную сессию, либо staled бинарь успевает запуститься.
+// orderingDeliverer and orderingSession capture ordering: Deliver must happen
+// AFTER Dial and BEFORE the `soul apply` exec. Otherwise delivery either
+// targets an unconnected session, or a stale binary gets to run first.
 type orderingDeliverer struct {
 	mu       sync.Mutex
 	deliverN int
@@ -45,8 +45,8 @@ func (c *orderingCleaner) Cleanup(_ context.Context, sess Session) error {
 	return c.err
 }
 
-// orderingSession отмечает время Run-вызова relatively к Deliver через общий
-// trace-список.
+// orderingSession records the timing of the Run call relative to Deliver via
+// a shared trace list.
 type orderingSession struct {
 	stdout string
 	trace  *[]string
@@ -61,8 +61,8 @@ func (s *orderingSession) Run(_ context.Context, _ string, _ []byte) (string, er
 }
 func (s *orderingSession) Close() error { return nil }
 
-// tracingDeliverer пишет в общий trace, чтобы проверить порядок Dial → Deliver →
-// session.Run.
+// tracingDeliverer writes to a shared trace to verify the order
+// Dial → Deliver → session.Run.
 type tracingDeliverer struct {
 	trace *[]string
 	mu    *sync.Mutex
@@ -132,8 +132,8 @@ func TestSendApply_DeliverFailAbortsExec(t *testing.T) {
 }
 
 func TestSendApply_DelivererNilSkipsDelivery_S0BC(t *testing.T) {
-	// S0-flow: Deliverer не сконфигурирован, доставка должна быть пропущена,
-	// прогон по-прежнему работает через предустановленный soul-бинарь.
+	// S0-flow: Deliverer is not configured, delivery should be skipped, the
+	// run still works via the pre-installed soul binary.
 	sess := &mockSession{stdout: successStdout(t, "ap-deliv-3")}
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},

@@ -101,7 +101,7 @@ func TestForceAcquireSoulLease_KeyIsPrevHolder_Reacquires(t *testing.T) {
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// Мёртвый prev-holder всё ещё держит ключ (TTL не истёк после crash-а).
+	// The dead prev-holder still holds the key (TTL hasn't expired after the crash).
 	if _, err := AcquireSoulLease(ctx, c, sid, "kid-dead", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
@@ -126,8 +126,9 @@ func TestForceAcquireSoulLease_KeyChanged_DoesNotReacquire(t *testing.T) {
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// В гонке ключ уже сменился: им владеет НЕ доказанно-мёртвый prevKID, а
-	// третий живой Keeper. CAS-by-prev-holder НЕ должен его перетереть.
+	// In the race, the key has already changed owner: it's held not by the
+	// provably-dead prevKID, but by a third, live Keeper. CAS-by-prev-holder
+	// must NOT overwrite it.
 	if _, err := AcquireSoulLease(ctx, c, sid, "kid-other", 60*time.Second); err != nil {
 		t.Fatalf("seed lease: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestForceAcquireSoulLease_KeyAbsent_SetnxAcquires(t *testing.T) {
 	ctx := context.Background()
 	sid := "host.example.com"
 
-	// prev-holder уже истёк по TTL (ключа нет) → штатный SETNX-захват.
+	// The prev-holder already expired by TTL (no key) → the normal SETNX acquire.
 	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
 	if err != nil {
 		t.Fatalf("ForceAcquireSoulLease on absent key: %v", err)
@@ -174,7 +175,7 @@ func TestForceAcquireSoulLease_RenewWorksAfterReacquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForceAcquireSoulLease: %v", err)
 	}
-	// Возвращённый handle принадлежит новому holder-у — Renew по CAS проходит.
+	// The returned handle belongs to the new holder — Renew by CAS goes through.
 	if err := l.Renew(ctx); err != nil {
 		t.Errorf("Renew after re-acquire: %v (handle должен быть kid-new)", err)
 	}

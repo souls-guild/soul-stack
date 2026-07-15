@@ -1,24 +1,25 @@
 package redis
 
-// Cluster-wide push-providers инвалидация через Redis pub/sub (ADR-032
+// Cluster-wide push-providers invalidation via Redis pub/sub (ADR-032
 // amendment 2026-05-26, S7-2).
 //
-// Проблема: SshDispatcher держит spawned SshProvider-плагин с env-payload
-// `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, наполненным при старте keeper-а
-// из push_providers. Оператор делает POST/PUT/DELETE /v1/push-providers
-// — мутация коммитится в общую таблицу на Keeper-A, но Keeper-B держит
-// плагин со старым env-payload-ом и узнает только при следующем рестарте.
+// Problem: SshDispatcher holds a spawned SshProvider plugin with an
+// env-payload `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, populated at keeper
+// startup from push_providers. An operator does POST/PUT/DELETE
+// /v1/push-providers — the mutation commits to the shared table on Keeper-A,
+// but Keeper-B keeps the plugin with the stale env-payload and only finds
+// out on its next restart.
 //
-// Решение симметрично [PublishSigilInvalidate] / [SubscribeSigilInvalidate]:
-// мутирующая нода после успешного commit-а Create/Update/Delete PUBLISH-ит
-// в канал `push-providers:changed`, каждая нода по SUBSCRIBE помечает свой
-// SshProvider-handle stale и пере-spawn-ит его на ближайшем RPC
+// Solution mirrors [PublishSigilInvalidate] / [SubscribeSigilInvalidate]:
+// after a successful Create/Update/Delete commit, the mutating node
+// PUBLISHes to the `push-providers:changed` channel; every node's SUBSCRIBE
+// marks its SshProvider handle stale and re-spawns it on the next RPC
 // (spawn-on-change, PM-decision S7-2 #6).
 //
-// Persistence у Redis pub/sub нет: потеря сообщения (reconnect ноды,
-// мигание брокера) → пере-spawn произойдёт только при следующем рестарте
-// keeper-а либо при следующей мутации. Допустимо: мутации редкие
-// (operator-driven), окно устаревания миллисекунды в штатной работе.
+// Redis pub/sub has no persistence: a lost message (node reconnect, broker
+// blip) means the re-spawn only happens on the next keeper restart or the
+// next mutation. Acceptable: mutations are rare (operator-driven), staleness
+// window is milliseconds in normal operation.
 
 import (
 	"context"
@@ -31,31 +32,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// PushProvidersChangedChannel — Redis pub/sub topic. Совпадает с
-// pushprovider.TopicPushProvidersChanged (constant дублирован, чтобы redis-
-// пакет не тянул pushprovider в импорты — direction-инвариант).
+// PushProvidersChangedChannel is the Redis pub/sub topic. Matches
+// pushprovider.TopicPushProvidersChanged (the constant is duplicated so the
+// redis package doesn't import pushprovider — a direction invariant).
 const PushProvidersChangedChannel = "push-providers:changed"
 
-// pushProvidersChangedEnvelope — JSON-обёртка одного invalidate-сообщения.
-// `Name` — имя изменённого provider-а (или пустая строка для массовой
-// инвалидации); `At` — момент публикации (диагностика).
+// pushProvidersChangedEnvelope is the JSON wrapper for one invalidate
+// message. `Name` is the changed provider's name (empty string for a bulk
+// invalidation); `At` is the publish time (diagnostics).
 type pushProvidersChangedEnvelope struct {
 	Name string    `json:"name,omitempty"`
 	At   time.Time `json:"at"`
 }
 
-// PushProvidersChanged — распакованное invalidate-сообщение для подписчика.
+// PushProvidersChanged is the unpacked invalidate message for a subscriber.
 type PushProvidersChanged struct {
 	Name string
 	At   time.Time
 }
 
-// PublishPushProvidersChanged публикует invalidate-сигнал.
-// Возвращает количество подписчиков, получивших сообщение.
+// PublishPushProvidersChanged publishes an invalidate signal.
+// Returns the number of subscribers that received the message.
 //
-// Best-effort: caller (pushprovider.Service после commit-а CRUD-операции)
-// глотает ошибку — мутация уже зафиксирована в БД, потеря publish-а
-// компенсируется ленивым re-spawn-ом при следующей мутации/рестарте.
+// Best-effort: the caller (pushprovider.Service after a CRUD commit)
+// swallows the error — the mutation is already committed to the DB, and a
+// lost publish is compensated by a lazy re-spawn on the next mutation/restart.
 func PublishPushProvidersChanged(ctx context.Context, c *Client, providerName string) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishPushProvidersChanged: nil client")
@@ -75,14 +76,14 @@ func PublishPushProvidersChanged(ctx context.Context, c *Client, providerName st
 	return n, nil
 }
 
-// pushProvidersChangedSubBufferSize — буфер Go-канала между PubSub-loop-ом и
-// caller-ом. push-providers-мутации редки (десятки в день максимум), небольшой
-// запас отсекает drop при burst-е bulk-операций. Совпадает с
-// sigilInvalidateSubBufferSize.
+// pushProvidersChangedSubBufferSize is the Go channel buffer between the
+// PubSub loop and the caller. push-providers mutations are rare (at most
+// dozens per day); the small margin avoids drops during bulk-operation
+// bursts. Matches sigilInvalidateSubBufferSize.
 const pushProvidersChangedSubBufferSize = 16
 
-// PushProvidersChangedSubscription — handle на подписку.
-// Lifecycle идентичен [SigilInvalidateSubscription].
+// PushProvidersChangedSubscription is a handle to the subscription.
+// Lifecycle is identical to [SigilInvalidateSubscription].
 type PushProvidersChangedSubscription struct {
 	ps        *redis.PubSub
 	out       chan *PushProvidersChanged
@@ -92,7 +93,7 @@ type PushProvidersChangedSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными invalidate-сообщениями.
+// Channel is the read side of the Go channel with unpacked invalidate messages.
 func (s *PushProvidersChangedSubscription) Channel() <-chan *PushProvidersChanged {
 	if s == nil {
 		return nil
@@ -100,7 +101,7 @@ func (s *PushProvidersChangedSubscription) Channel() <-chan *PushProvidersChange
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis.
+// Ready blocks until the first subscribe acknowledgement from Redis.
 func (s *PushProvidersChangedSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.PushProvidersChangedSubscription.Ready: nil subscription")
@@ -115,7 +116,7 @@ func (s *PushProvidersChangedSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop. Идемпотентен.
+// Close stops the subscribe loop. Idempotent.
 func (s *PushProvidersChangedSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -123,7 +124,7 @@ func (s *PushProvidersChangedSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribePushProvidersChanged подписывается на [PushProvidersChangedChannel].
+// SubscribePushProvidersChanged subscribes to [PushProvidersChangedChannel].
 func SubscribePushProvidersChanged(ctx context.Context, c *Client, logger *slog.Logger) (*PushProvidersChangedSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribePushProvidersChanged: nil client")
@@ -201,9 +202,9 @@ func (s *PushProvidersChangedSubscription) run(ctx context.Context, closed <-cha
 		select {
 		case s.out <- ev:
 		default:
-			// Канал переполнен — подписчик не успел перечитать. Drop
-			// безопасен: каждое сообщение — лишь «re-spawn at next RPC»,
-			// следующее перечитает актуальный набор params целиком.
+			// Channel full — the subscriber hasn't caught up. Drop is
+			// safe: each message just means "re-spawn at next RPC", the
+			// next one will re-read the full, current set of params.
 			s.logger.Warn("redis.SubscribePushProvidersChanged: forward channel full, dropping")
 		}
 	}

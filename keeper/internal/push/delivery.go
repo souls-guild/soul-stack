@@ -13,9 +13,9 @@ import (
 	"strings"
 )
 
-// Хост-side layout доставки. Фиксирован, чтобы Soul-side искал бинарь и плагины
-// по одному и тому же пути в pull/push (ADR-004, docs/keeper/push.md). Менять —
-// PM-decision (затрагивает Soul-агента).
+// Host-side delivery layout. Fixed, so the Soul side looks for the binary
+// and plugins at the same path in pull/push (ADR-004, docs/keeper/push.md).
+// Changing it is a PM decision (affects the Soul agent).
 const (
 	hostSoulDir    = "/var/lib/soul-stack/bin"
 	hostModulesDir = "/var/lib/soul-stack/modules"
@@ -23,59 +23,61 @@ const (
 	hostFileMode   = "0755"
 )
 
-// moduleNameRe ограничивает имя модуля безопасным алфавитом. Имя приходит из
-// keeper-конфига (не от Soul), но даже доверенный источник лучше валидировать —
-// fail-closed на любом отклонении (точки, слэши, `..`, кавычки), чтобы не дать
-// никаких injection-возможностей в shell-команду на хосте.
+// moduleNameRe restricts the module name to a safe alphabet. The name comes
+// from the keeper config (not from Soul), but even a trusted source is
+// better validated — fail-closed on any deviation (dots, slashes, `..`,
+// quotes) so no injection is possible into the shell command on the host.
 var moduleNameRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
-// Deliverer выкладывает soul-бинарь и зарегистрированные модули на push-хост по
-// фиксированному layout-у (`/var/lib/soul-stack/{bin,modules}/`) с дедупом по
-// SHA-256: если файл уже на хосте и совпадает — skip; иначе перезаписываем.
+// Deliverer lays out the soul binary and registered modules on a push host
+// per the fixed layout (`/var/lib/soul-stack/{bin,modules}/`) with SHA-256
+// dedup: if the file is already on the host and matches — skip; otherwise
+// overwrite.
 //
-// Вызывается диспетчером ПЕРЕД exec-ом `soul apply`. Fail-closed: любая ошибка
-// доставки прерывает прогон до запуска applier-а (нет смысла запускать staled
-// бинарь).
+// Called by the dispatcher BEFORE the `soul apply` exec. Fail-closed: any
+// delivery error aborts the run before the applier starts (no point running
+// a stale binary).
 type Deliverer interface {
 	Deliver(ctx context.Context, session Session, spec SoulSpec) error
 }
 
-// SoulSpec — что доставить на хост: путь к локальному soul-бинарю + плагины
-// (`soul-mod-*`). Версии фиксированы git-tag-ом (ADR-007); резолв конкретных
-// файлов на keeper-стороне — зона выше (S3/runner).
+// SoulSpec — what to deliver to the host: the path to the local soul binary
+// + plugins (`soul-mod-*`). Versions are pinned by git tag (ADR-007);
+// resolving concrete files on the keeper side is a layer above (S3/runner).
 type SoulSpec struct {
-	// SoulBinaryPath — абсолютный путь к локальному ./soul-бинарю на keeper-узле.
-	// Доставляется как `<hostSoulDir>/soul` с mode 0755.
+	// SoulBinaryPath — the absolute path to the local ./soul binary on the
+	// keeper node. Delivered as `<hostSoulDir>/soul` with mode 0755.
 	SoulBinaryPath string
-	// Modules — нечё доставлять в `<hostModulesDir>/<Name>`. Порядок безразличен.
+	// Modules — what to deliver into `<hostModulesDir>/<Name>`. Order doesn't matter.
 	Modules []ModuleSpec
 }
 
-// ModuleSpec — один плагин (`soul-mod-*`).
+// ModuleSpec — a single plugin (`soul-mod-*`).
 type ModuleSpec struct {
-	// Name — имя файла на хосте (без каталога). Валидируется по moduleNameRe.
+	// Name — the file name on the host (no directory). Validated by moduleNameRe.
 	Name string
-	// Path — абсолютный путь к локальному файлу.
+	// Path — the absolute path to the local file.
 	Path string
 }
 
-// ShaDeliverer — дефолтная реализация Deliverer через Session.Run (ssh exec).
-// Не тянет отдельную SFTP-зависимость: всё, что нужно — `mkdir -p`, `sha256sum`,
-// запись файла через `cat > path` со stdin, `chmod`. Это и проще для in-process
-// тестов (мок Session покрывает 100% поверхности), и не добавляет внешнего
-// модуля под фичу.
+// ShaDeliverer — the default Deliverer implementation over Session.Run (ssh
+// exec). Doesn't pull in a separate SFTP dependency: everything needed is
+// `mkdir -p`, `sha256sum`, writing a file via `cat > path` with stdin,
+// `chmod`. This is both simpler for in-process tests (a Session mock covers
+// 100% of the surface) and doesn't add an external module for the feature.
 //
-// Семантика идемпотентна: если на хосте уже лежит файл с тем же SHA-256 — skip
-// upload (только проверка). Это hot-path при повторных прогонах.
+// Semantics are idempotent: if the host already has a file with the same
+// SHA-256 — skip upload (check only). This is the hot path on repeat runs.
 type ShaDeliverer struct{}
 
-// NewShaDeliverer — конструктор для DI-явности (Deps.Deliverer). Возвращает
-// указатель на пустую struct, чтобы swap на новую реализацию был тривиален.
+// NewShaDeliverer — constructor for DI-explicitness (Deps.Deliverer). Returns
+// a pointer to an empty struct so swapping in a new implementation is trivial.
 func NewShaDeliverer() *ShaDeliverer { return &ShaDeliverer{} }
 
-// Deliver проверяет каждый файл SoulSpec на хосте и докатывает несовпадающие.
-// Шаги: validate spec → mkdir -p {bin,modules} → для каждого file: local sha256 →
-// remote sha256 (sha256sum) → если совпадает skip, иначе upload + chmod 0755.
+// Deliver checks each SoulSpec file against the host and ships over any that
+// don't match. Steps: validate spec → mkdir -p {bin,modules} → for each file:
+// local sha256 → remote sha256 (sha256sum) → skip if it matches, otherwise
+// upload + chmod 0755.
 func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSpec) error {
 	if session == nil {
 		return errors.New("push/delivery: session is nil")
@@ -92,7 +94,7 @@ func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSp
 		}
 	}
 
-	// Один mkdir -p создаёт оба каталога — экономит roundtrip.
+	// A single mkdir -p creates both directories — saves a roundtrip.
 	if _, err := session.Run(ctx, fmt.Sprintf("mkdir -p %s %s", hostSoulDir, hostModulesDir), nil); err != nil {
 		return fmt.Errorf("push/delivery: mkdir %s %s: %w", hostSoulDir, hostModulesDir, err)
 	}
@@ -109,9 +111,9 @@ func (d *ShaDeliverer) Deliver(ctx context.Context, session Session, spec SoulSp
 	return nil
 }
 
-// deliverFile — sha256-сверка локального и удалённого файла + upload при
-// расхождении. Sha-256 — компромисс по криптостойкости/скорости: для дедупа
-// артефактов достаточно, коллизий нет.
+// deliverFile — sha256 comparison of the local and remote file + upload on
+// mismatch. SHA-256 is a crypto-strength/speed tradeoff: sufficient for
+// artifact dedup, no collisions.
 func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPath, remotePath string) error {
 	localSum, err := fileSha256(localPath)
 	if err != nil {
@@ -125,21 +127,22 @@ func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPa
 		return nil
 	}
 
-	// Шифт через stdin: `cat > path` не имеет лимита размера и не оставляет
-	// файла в /tmp. shell-escape пути — не нужен, путь жёстко контролируется
-	// (hostSoulDir + проверенное moduleNameRe).
-	data, err := os.ReadFile(localPath) //nolint:gosec // путь — наш собственный артефакт keeper-стороны
+	// Ships over stdin: `cat > path` has no size limit and leaves no file
+	// in /tmp. Shell-escaping the path isn't needed — the path is tightly
+	// controlled (hostSoulDir + validated moduleNameRe).
+	data, err := os.ReadFile(localPath) //nolint:gosec // the path is our own keeper-side artifact
 	if err != nil {
 		return fmt.Errorf("чтение локального файла %s: %w", localPath, err)
 	}
-	// `set -e; cat > path; chmod 0755 path` в одной команде: на отказ chmod
-	// прогон тоже фейлится (без отдельного roundtrip).
+	// `set -e; cat > path; chmod 0755 path` in one command: if chmod fails,
+	// the run fails too (without a separate roundtrip).
 	cmd := fmt.Sprintf("set -e; cat > %s && chmod %s %s", remotePath, hostFileMode, remotePath)
 	if _, err := session.Run(ctx, cmd, data); err != nil {
 		return fmt.Errorf("upload %s: %w", remotePath, err)
 	}
-	// Пост-верификация: убеждаемся, что записанный файл соответствует sha-сумме
-	// (защита от усечения/искажения в транспорте). Дёшево относительно upload-а.
+	// Post-verification: confirm the written file matches the sha sum
+	// (protection against truncation/corruption in transport). Cheap
+	// relative to the upload.
 	got, err := remoteSha256(ctx, session, remotePath)
 	if err != nil {
 		return fmt.Errorf("проверка sha256 после upload %s: %w", remotePath, err)
@@ -150,10 +153,10 @@ func (d *ShaDeliverer) deliverFile(ctx context.Context, session Session, localPa
 	return nil
 }
 
-// fileSha256 считает sha256-хеш локального файла потоково (без полной загрузки
-// в память для крупных бинарей).
+// fileSha256 computes the sha256 hash of a local file streaming (without
+// fully loading large binaries into memory).
 func fileSha256(p string) (string, error) {
-	f, err := os.Open(p) //nolint:gosec // путь — наш собственный артефакт keeper-стороны
+	f, err := os.Open(p) //nolint:gosec // the path is our own keeper-side artifact
 	if err != nil {
 		return "", err
 	}
@@ -165,22 +168,22 @@ func fileSha256(p string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// remoteSha256 запрашивает sha256-хеш файла на хосте. Если файла нет — пустая
-// строка (== «никогда не совпадёт с локальным» → upload). На иной ошибке —
-// возврат err (fail-closed: не доставляем «вслепую», если sha256sum/permissions
-// сбойнули).
+// remoteSha256 requests a file's sha256 hash on the host. If the file
+// doesn't exist — an empty string (== "will never match the local one" →
+// upload). On any other error — return err (fail-closed: don't deliver
+// "blindly" if sha256sum/permissions failed).
 //
-// Парсинг: `sha256sum <path>` печатает `<hex>  <path>\n`; нас интересует первое
-// поле.
+// Parsing: `sha256sum <path>` prints `<hex>  <path>\n`; we care about the
+// first field.
 func remoteSha256(ctx context.Context, session Session, p string) (string, error) {
-	// `[ -f path ] && sha256sum path || echo MISSING` — но shell-эскейп
-	// раздражает; проще проверить отдельной командой.
-	// Single-quote вокруг %s — профилактика shell-injection при будущем
-	// расширении regex для `m.Name`; сейчас path под нашим контролем.
+	// `[ -f path ] && sha256sum path || echo MISSING` — but shell-escaping is
+	// annoying; simpler to check with a separate command.
+	// Single-quotes around %s — a shell-injection safeguard for a future
+	// widening of the `m.Name` regex; the path is under our control for now.
 	stdout, err := session.Run(ctx, fmt.Sprintf("test -f '%s' && sha256sum '%s' || echo MISSING", p, p), nil)
 	if err != nil {
-		// `||` гарантирует exit 0, sshd возвращает не nil только на проблемах
-		// channel/exec — это уже не «нет файла», это сбой транспорта.
+		// `||` guarantees exit 0; sshd returns non-nil only on channel/exec
+		// problems — that's no longer "file missing", it's a transport failure.
 		return "", fmt.Errorf("ssh exec sha256sum: %w", err)
 	}
 	out := strings.TrimSpace(stdout)

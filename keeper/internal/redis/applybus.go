@@ -1,44 +1,44 @@
 package redis
 
-// Cluster-mode SSE-routing apply-событий через Redis pub/sub (ADR-006(c)).
+// Cluster-mode SSE routing of apply events via Redis pub/sub (ADR-006(c)).
 //
-// Проблема: in-memory [applybus.EventBus] (M0.7.c) живёт внутри одного
-// Keeper-инстанса. Если SSE-подписчик пришёл на Keeper-A
-// (`GET /mcp/events?apply_id=X` повисел там), а Soul, который льёт
-// TaskEvent/RunResult по EventStream-у, подключился к Keeper-B —
-// publisher на Keeper-B запишет события только в свой local-bus, и
-// SSE-клиент на Keeper-A никогда их не увидит.
+// Problem: the in-memory [applybus.EventBus] (M0.7.c) lives inside a single
+// Keeper instance. If an SSE subscriber landed on Keeper-A
+// (`GET /mcp/events?apply_id=X` parked there) while the Soul streaming
+// TaskEvent/RunResult over EventStream connected to Keeper-B, the publisher
+// on Keeper-B would write events only to its own local bus, and the SSE
+// client on Keeper-A would never see them.
 //
-// Решение симметрично outbound-routing-у (см. [PublishOutbound] /
-// [SubscribeOutbound]): publisher дополнительно PUBLISH-ит в шардированный
-// Redis-канал `events:shard:<n>`, все Keeper-инстансы подписаны на нужные
-// шарды и форвардят события в свои local-bus-ы. Self-filter по `origin_kid`
-// отсекает эхо собственных публикаций.
+// Solution is symmetric to outbound routing (see [PublishOutbound] /
+// [SubscribeOutbound]): the publisher additionally PUBLISHes to a sharded
+// Redis channel `events:shard:<n>`; all Keeper instances subscribe to the
+// relevant shards and forward events into their local bus. A self-filter on
+// `origin_kid` strips echoes of a node's own publishes.
 //
-// Шардирование (ADR-006(c) amendment, S2 applybus-bottleneck): per-applyID
-// канал `apply:<apply_id>` давал на больших флотах столько же Redis-подписок,
-// сколько одновременных прогонов, и упирался в `maxclients`. Канал сведён к
-// фиксированному множеству из [ApplyBusShardCount] шардов; applyID
-// детерминированно отображается в шард через [shardIndex] (fnv32a % K).
-// Несколько applyID шарят одну shard-подписку; forward-loop на стороне
-// applybus отсеивает чужие события по `envelope.ApplyID` (см.
-// `keeper/internal/applybus/bus.go`).
+// Sharding (ADR-006(c) amendment, S2 applybus-bottleneck): a per-applyID
+// channel `apply:<apply_id>` produced as many Redis subscriptions as
+// concurrent runs on deployments with many Souls, hitting `maxclients`. The
+// channel space is now a fixed set of [ApplyBusShardCount] shards; applyID
+// maps deterministically to a shard via [shardIndex] (fnv32a % K). Several
+// applyIDs share one shard subscription; the forward-loop on the applybus
+// side filters out events belonging to other applyIDs by `envelope.ApplyID`
+// (see `keeper/internal/applybus/bus.go`).
 //
-// Convention `events:shard:<n>` — отдельный namespace от
-// `outbound:<sid>`/`soul:<sid>:hb`/`soul:<sid>:lock`, ключевое слово
-// «events» симметрично EventKind-ам (`apply.started`/`apply.completed`/
-// `errand.completed`/…) и не привязано к одному семейству opaque-id.
+// Convention `events:shard:<n>` — a separate namespace from
+// `outbound:<sid>`/`soul:<sid>:hb`/`soul:<sid>:lock`; the keyword "events" is
+// symmetric with EventKinds (`apply.started`/`apply.completed`/
+// `errand.completed`/…) and isn't tied to a single opaque-id family.
 //
-// Wire-формат — JSON-envelope `applyEventEnvelope`. Payload остаётся
-// `json.RawMessage`, чтобы избежать двойной перекодировки: publisher
-// уже отдаёт payload как json-сериализуемый `map[string]any` (см.
-// events_taskevent.go / events_runresult.go).
+// Wire format is the JSON envelope `applyEventEnvelope`. Payload stays a
+// `json.RawMessage` to avoid double re-encoding: the publisher already hands
+// it over as a json-serializable `map[string]any` (see events_taskevent.go /
+// events_runresult.go).
 //
-// Семантика: fire-and-forget. Redis pub/sub не имеет persistence — если
-// подписчик ещё не subscribe-нулся в момент PUBLISH, сообщение теряется.
-// Это приемлемо: SSE-клиент по контракту подписывается ДО старта apply
-// (порядок «subscribe → tools/call → ждать SSE-events», см. doc-comment
-// [applybus.EventBus.Publish] про late-subscriber semantics).
+// Semantics: fire-and-forget. Redis pub/sub has no persistence — if a
+// subscriber hasn't subscribed yet at PUBLISH time, the message is lost.
+// That's acceptable: by contract, an SSE client subscribes BEFORE starting
+// an apply (order is "subscribe → tools/call → wait for SSE events"; see the
+// doc-comment on [applybus.EventBus.Publish] about late-subscriber semantics).
 
 import (
 	"context"
@@ -52,49 +52,52 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// applyBusChannelPrefix — namespace шардированных apply-events-каналов.
-// Слово «events» симметрично EventKind-ам и не привязано к одному семейству
-// opaque-id (apply.* / errand.* / …), в отличие от прежнего `apply:<id>`.
+// applyBusChannelPrefix is the namespace for sharded apply-events channels.
+// The word "events" is symmetric with EventKinds and isn't tied to a single
+// opaque-id family (apply.* / errand.* / …), unlike the old `apply:<id>`.
 const applyBusChannelPrefix = "events"
 
-// ApplyBusShardCount — фиксированное число shard-каналов. applyID
-// детерминированно отображается в один из них через [ApplyBusShardIndex].
-// Значение подобрано как компромисс: достаточно велико, чтобы события разных
-// прогонов почти не делили один forward-loop (collision-частота ≈ 1/K), и
-// достаточно мало, чтобы каждый Keeper-инстанс держал ограниченное число
-// Redis-подписок независимо от размера флота (snapshot выбирался architect-ом).
+// ApplyBusShardCount is the fixed number of shard channels. applyID maps
+// deterministically to one of them via [ApplyBusShardIndex]. The value is a
+// tradeoff: large enough that events from different runs rarely share a
+// forward-loop (collision rate ≈ 1/K), and small enough that each Keeper
+// instance holds a bounded number of Redis subscriptions regardless of how
+// many Souls are in the deployment (the snapshot value was chosen by the
+// architect).
 const ApplyBusShardCount = 256
 
-// ApplyBusShardIndex отображает applyID в индекс shard-канала
-// [0, ApplyBusShardCount). fnv32a — быстрый неаллоцирующий хеш;
-// криптостойкость не нужна (это распределение нагрузки, не безопасность).
+// ApplyBusShardIndex maps an applyID to a shard-channel index
+// [0, ApplyBusShardCount). fnv32a is a fast, non-allocating hash;
+// cryptographic strength isn't needed (this is load distribution, not
+// security).
 //
-// Экспортирован, чтобы applybus ключевал per-shard bridge-refs тем же индексом,
-// что и канал (единый источник shard-резолва, без рассинхрона).
+// Exported so that applybus keys its per-shard bridge-refs with the same
+// index as the channel (a single source of shard resolution, no desync).
 func ApplyBusShardIndex(applyID string) uint32 {
 	h := fnv.New32a()
-	// Hash.Write по контракту never-error.
+	// Hash.Write never errors by contract.
 	_, _ = h.Write([]byte(applyID))
 	return h.Sum32() % ApplyBusShardCount
 }
 
-// ApplyBusChannel формирует шардированный Redis-канал для applyID.
-// Детерминирован: один applyID всегда даёт один канал (см. [ApplyBusShardIndex]).
+// ApplyBusChannel builds the sharded Redis channel for an applyID.
+// Deterministic: a given applyID always yields the same channel (see
+// [ApplyBusShardIndex]).
 func ApplyBusChannel(applyID string) string {
 	return fmt.Sprintf("%s:shard:%d", applyBusChannelPrefix, ApplyBusShardIndex(applyID))
 }
 
-// applyEventEnvelope — JSON-обёртка одного PUBLISH-сообщения.
+// applyEventEnvelope is the JSON wrapper for one PUBLISH message.
 //
-// `OriginKID` — KID Keeper-инстанса, который опубликовал; подписчик
-// фильтрует сообщения с OriginKID == собственный KID (предотвращает
-// дубль local-publish + Redis-echo на том же Keeper-е).
+// `OriginKID` is the KID of the Keeper instance that published; the
+// subscriber filters out messages where OriginKID == its own KID (prevents a
+// duplicate of local-publish + Redis-echo on the same Keeper).
 //
-// `Payload` — `json.RawMessage`: publisher (events_taskevent.go /
-// events_runresult.go) собирает `map[string]any` и так уже подаёт его в
-// `applybus.Event.Payload`. Чтобы не делать `json.Marshal` дважды
-// (один раз в SSE-frame, второй — внутрь envelope-string), payload
-// маршалим один раз на стороне publisher-а и кладём байтами в RawMessage.
+// `Payload` is `json.RawMessage`: the publisher (events_taskevent.go /
+// events_runresult.go) already assembles a `map[string]any` and hands it to
+// `applybus.Event.Payload` that way. To avoid `json.Marshal`-ing twice (once
+// into the SSE frame, again into the envelope string), the payload is
+// marshaled once on the publisher side and stored as bytes in RawMessage.
 type applyEventEnvelope struct {
 	OriginKID string          `json:"origin_kid"`
 	Kind      string          `json:"kind"`
@@ -103,11 +106,11 @@ type applyEventEnvelope struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// ApplyEvent — распакованное cluster-bus-сообщение, доставляемое
-// подписчику. Симметрично `applybus.Event`, но Payload здесь —
-// `json.RawMessage`: cluster-bridge не знает typed-структуру payload-а,
-// он лишь передаёт байты, а SSE-handler сериализует их обратно в frame
-// (см. mcp/sse.go::writeSSEEvent).
+// ApplyEvent is the decoded cluster-bus message delivered to a subscriber.
+// Symmetric with `applybus.Event`, but Payload here is `json.RawMessage`:
+// the cluster-bridge doesn't know the payload's typed structure, it just
+// carries the bytes, and the SSE handler re-serializes them into a frame
+// (see mcp/sse.go::writeSSEEvent).
 type ApplyEvent struct {
 	OriginKID string
 	Kind      string
@@ -116,12 +119,12 @@ type ApplyEvent struct {
 	Payload   json.RawMessage
 }
 
-// PublishApplyEvent сериализует event и публикует в канал
-// [ApplyBusChannel]. payload — уже сериализованный JSON-объект
-// (см. doc-comment [applyEventEnvelope]). Возвращает количество
-// подписчиков, получивших сообщение.
+// PublishApplyEvent serializes the event and publishes it to the
+// [ApplyBusChannel]. payload is an already-serialized JSON object (see
+// doc-comment on [applyEventEnvelope]). Returns the number of subscribers
+// that received the message.
 //
-// Если at.IsZero — подставляется time.Now().UTC() (симметрично
+// If at.IsZero, time.Now().UTC() is substituted (symmetric with
 // `applybus.EventBus.Publish`).
 func PublishApplyEvent(ctx context.Context, c *Client, applyID, originKID, kind string, at time.Time, payload json.RawMessage) (int64, error) {
 	if c == nil {
@@ -158,23 +161,23 @@ func PublishApplyEvent(ctx context.Context, c *Client, applyID, originKID, kind 
 	return n, nil
 }
 
-// applyEventSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом (applybus-bridge). Симметричен outboundSubBufferSize. 64
-// события — типичный apply (10–30 задач + старт/финал) + запас на burst;
-// на один shard-канал может приходить несколько applyID (collision ≈ 1/K),
-// но forward-loop разгребает в local-subs синхронно и быстро, переполнение
-// маловероятно.
+// applyEventSubBufferSize is the Go channel buffer between the
+// Redis-PubSub loop and the caller (the applybus bridge). Symmetric with
+// outboundSubBufferSize. 64 events covers a typical apply (10-30 tasks +
+// start/final) plus burst headroom; a single shard channel can receive
+// several applyIDs (collision ≈ 1/K), but the forward-loop drains into
+// local subs synchronously and fast, so overflow is unlikely.
 const applyEventSubBufferSize = 64
 
-// ApplyEventSubscription — handle на подписку одного shard-канала
-// `events:shard:<n>` (см. [ApplyBusChannel]). Через неё проходят события
-// всех applyID, отображённых в этот shard; фильтрацию по конкретному applyID
-// делает forward-loop в applybus.
+// ApplyEventSubscription is a handle on a subscription to a single shard
+// channel `events:shard:<n>` (see [ApplyBusChannel]). Events for every
+// applyID mapped to this shard flow through it; filtering by a specific
+// applyID is done by the forward-loop in applybus.
 //
-// Идентичен по lifecycle [OutboundSubscription]:
-// spawn goroutine читает PubSub-канал → парсит envelope → filter
-// self-origin → отдаёт *ApplyEvent в Channel(). Close() прерывает
-// goroutine и закрывает канал.
+// Identical lifecycle to [OutboundSubscription]: a spawned goroutine reads
+// the PubSub channel → decodes the envelope → filters self-origin →
+// delivers *ApplyEvent on Channel(). Close() stops the goroutine and closes
+// the channel.
 type ApplyEventSubscription struct {
 	ps        *redis.PubSub
 	out       chan *ApplyEvent
@@ -186,7 +189,8 @@ type ApplyEventSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными ApplyEvent-сообщениями.
+// Channel is the read side of the Go channel carrying decoded ApplyEvent
+// messages.
 func (s *ApplyEventSubscription) Channel() <-chan *ApplyEvent {
 	if s == nil {
 		return nil
@@ -194,8 +198,8 @@ func (s *ApplyEventSubscription) Channel() <-chan *ApplyEvent {
 	return s.out
 }
 
-// Ready блокируется до первого subscribe-acknowledgement от Redis (или
-// ctx.Done() / Close()). См. doc-comment [OutboundSubscription.Ready].
+// Ready blocks until the first subscribe-acknowledgement from Redis (or
+// ctx.Done() / Close()). See doc-comment on [OutboundSubscription.Ready].
 func (s *ApplyEventSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.ApplyEventSubscription.Ready: nil subscription")
@@ -210,8 +214,8 @@ func (s *ApplyEventSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и
-// Go-канал. Идемпотентна.
+// Close stops the subscribe loop and closes the Redis pubsub handle and the
+// Go channel. Idempotent.
 func (s *ApplyEventSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -219,11 +223,12 @@ func (s *ApplyEventSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeApplyEvent подписывается на shard-канал [ApplyBusChannel] (applyID)
-// и поднимает goroutine-forwarder. selfKID используется для self-фильтрации
-// (как в [SubscribeOutbound]). applyID здесь задаёт лишь shard и используется
-// в логах; на канал приходят события всех applyID того же shard-а — отсев по
-// конкретному applyID делает caller (applybus forward-loop).
+// SubscribeApplyEvent subscribes to the shard channel [ApplyBusChannel]
+// (applyID) and starts the forwarder goroutine. selfKID is used for
+// self-filtering (as in [SubscribeOutbound]). applyID here only picks the
+// shard and is used in logs; the channel carries events for every applyID
+// in the same shard — filtering down to one specific applyID is the
+// caller's job (the applybus forward-loop).
 func SubscribeApplyEvent(ctx context.Context, c *Client, applyID, selfKID string, logger *slog.Logger) (*ApplyEventSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribeApplyEvent: nil client")
@@ -306,8 +311,8 @@ func (s *ApplyEventSubscription) run(ctx context.Context, closed <-chan struct{}
 			continue
 		}
 		if ev.OriginKID == s.selfKID {
-			// Self-echo: эту публикацию сделали мы сами. Не пересылаем
-			// дальше — local-bus уже доставил её local-subscriber-ам.
+			// Self-echo: we made this publish ourselves. Don't forward it
+			// further — the local bus already delivered it to local subscribers.
 			s.logger.Debug("redis.SubscribeApplyEvent: ignoring self-origin event",
 				slog.String("apply_id", s.applyID),
 				slog.String("origin_kid", ev.OriginKID))
@@ -318,25 +323,27 @@ func (s *ApplyEventSubscription) run(ctx context.Context, closed <-chan struct{}
 	}
 }
 
-// forward кладёт ev в s.out. При полном буфере дропает САМОЕ СТАРОЕ событие
-// (вычитывает один элемент и пишет новый в освободившийся слот), симметрично
-// local-буферу applybus (drop-oldest, см. [applybus.EventBus.deliver]).
+// forward puts ev into s.out. On a full buffer it drops the OLDEST event
+// (reads one element out and writes the new one into the freed slot),
+// symmetric with applybus's local buffer (drop-oldest, see
+// [applybus.EventBus.deliver]).
 //
-// Почему keep-freshest, а не keep-oldest: на cross-keeper-пути самое свежее
-// событие — терминал прогона (`apply.completed`/`apply.failed`), и дропать его
-// в пользу старого «task_idx=0 OK» хуже для SSE-клиента. Сам applybus
-// неавторитетен (источник правды — PG, недоставленный терминал добивает
-// dispatcher-timer), но keep-freshest — правильная политика по умолчанию.
+// Why keep-freshest rather than keep-oldest: on the cross-keeper path the
+// freshest event is the run's terminal (`apply.completed`/`apply.failed`),
+// and dropping it in favor of a stale "task_idx=0 OK" is worse for the SSE
+// client. applybus itself isn't authoritative (PG is the source of truth,
+// and the dispatcher-timer catches an undelivered terminal), but
+// keep-freshest is the right default policy.
 //
-// Forward-loop единственный писатель в s.out, поэтому read+write здесь без
-// гонки за слот: между select-ами никто другой в канал не пишет.
+// The forward-loop is the sole writer into s.out, so the read+write here has
+// no race for the slot: nothing else writes to the channel between selects.
 func (s *ApplyEventSubscription) forward(ev *ApplyEvent) {
 	select {
 	case s.out <- ev:
 		return
 	default:
 	}
-	// Полный буфер — освобождаем слот, вытолкнув самое старое.
+	// Buffer full — free a slot by evicting the oldest.
 	select {
 	case <-s.out:
 		s.logger.Warn("redis.SubscribeApplyEvent: forward channel full — dropped oldest event",
@@ -344,14 +351,15 @@ func (s *ApplyEventSubscription) forward(ev *ApplyEvent) {
 			slog.String("origin_kid", ev.OriginKID),
 			slog.String("kind", ev.Kind))
 	default:
-		// Буфер опустошён читателем между select-ами — кладём новое ниже.
+		// Buffer was drained by the reader between selects — falling
+		// through to write the new one below.
 	}
 	select {
 	case s.out <- ev:
 	default:
-		// Маловероятно (читатель не успел вычитать освобождённый слот) — но
-		// не блокируемся: гарантия «forward-loop не зависает» важнее одного
-		// события. Symmetric с applybus.deliver final-branch.
+		// Unlikely (the reader hasn't drained the freed slot yet) — but we
+		// don't block: the "forward-loop never stalls" guarantee matters
+		// more than one event. Symmetric with applybus.deliver's final branch.
 		s.logger.Warn("redis.SubscribeApplyEvent: forward channel still full after drop — event lost",
 			slog.String("apply_id", s.applyID),
 			slog.String("origin_kid", ev.OriginKID),

@@ -73,7 +73,7 @@ func TestParseStream_FailureRunResult(t *testing.T) {
 }
 
 func TestParseStream_NoRunResult(t *testing.T) {
-	// Только TaskEvent-ы, поток оборвался до RunResult (краш/обрыв сессии).
+	// Only TaskEvents, the stream was cut off before RunResult (crash/session drop).
 	stream := taskLine(t, &keeperv1.TaskEvent{ApplyId: "a3", Status: keeperv1.TaskStatus_TASK_STATUS_OK}) + "\n"
 
 	_, err := ParseStream(strings.NewReader(stream), nil)
@@ -90,7 +90,7 @@ func TestParseStream_EmptyStream(t *testing.T) {
 }
 
 func TestParseStream_BlankLinesSkipped(t *testing.T) {
-	// Двойные '\n' между сообщениями не должны ломать разбор.
+	// Double '\n' between messages must not break parsing.
 	stream := "\n" +
 		taskLine(t, &keeperv1.TaskEvent{ApplyId: "a4", Status: keeperv1.TaskStatus_TASK_STATUS_OK}) + "\n\n" +
 		runLine(t, &keeperv1.RunResult{ApplyId: "a4", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS}) + "\n"
@@ -119,9 +119,9 @@ func TestParseStream_BrokenJSON(t *testing.T) {
 }
 
 func TestParseStream_PartialLine_NoTrailingNewline(t *testing.T) {
-	// Строка без завершающего '\n' (оборванный writer): bufio.Scanner отдаёт
-	// последнюю строку, но она частичная и не парсится как JSON.
-	stream := `{"applyId":"a5","stat` // обрыв посреди protojson
+	// A line missing the trailing '\n' (writer got cut off): bufio.Scanner
+	// returns the last line, but it's partial and doesn't parse as JSON.
+	stream := `{"applyId":"a5","stat` // cut off mid-protojson
 	_, err := ParseStream(strings.NewReader(stream), nil)
 	if err == nil {
 		t.Fatal("ожидалась ошибка на частичной строке")
@@ -132,7 +132,7 @@ func TestParseStream_PartialLine_NoTrailingNewline(t *testing.T) {
 }
 
 func TestParseStream_UnclassifiableLine(t *testing.T) {
-	// Валидный JSON, но status не из наших enum-неймов.
+	// Valid JSON, but status isn't one of our enum names.
 	stream := `{"applyId":"a6","status":"SOMETHING_ELSE"}` + "\n"
 	_, err := ParseStream(strings.NewReader(stream), nil)
 	if err == nil {
@@ -144,7 +144,7 @@ func TestParseStream_UnclassifiableLine(t *testing.T) {
 }
 
 func TestParseStream_LineAfterRunResult(t *testing.T) {
-	// RunResult финален: любая строка после него — ошибка протокола.
+	// RunResult is final: any line after it is a protocol error.
 	stream := runLine(t, &keeperv1.RunResult{ApplyId: "a7", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS}) + "\n" +
 		taskLine(t, &keeperv1.TaskEvent{ApplyId: "a7", Status: keeperv1.TaskStatus_TASK_STATUS_OK}) + "\n"
 	_, err := ParseStream(strings.NewReader(stream), nil)

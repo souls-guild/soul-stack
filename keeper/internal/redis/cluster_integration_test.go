@@ -1,32 +1,34 @@
 //go:build integration
 
-// Integration-тесты sentinel/cluster-топологий Redis-клиента и cluster-
-// блокеров (ADR-006 amendment). В отличие от integration_test.go (standalone
-// redis:7 из общего TestMain), эти тесты поднимают СВОИ контейнеры внутри
-// тест-функций — стандартный standalone-контейнер им не нужен.
+// Integration tests for the Redis client's sentinel/cluster topologies and
+// cluster blockers (ADR-006 amendment). Unlike integration_test.go (the
+// standalone redis:7 from the shared TestMain), these tests spin up their
+// OWN containers inside the test functions — they don't need the standard
+// standalone container.
 //
-// Запуск (как и прочие integration-наборы пакета):
+// Run (like the package's other integration suites):
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 \
 //	    -run 'Cluster|Sentinel' ./internal/redis/...
 //
-// Образы:
-//   - cluster:  grokzen/redis-cluster:7.0.10 (3 master + 3 replica в одном
-//     контейнере; IP=0.0.0.0 заставляет узлы анонсировать 127.0.0.1, иначе
-//     клиент с хоста не достучится до внутренних IP узлов — классический
-//     testcontainers NAT-pain).
-//   - sentinel: bitnami/redis (master) + bitnami/redis-sentinel в общей docker-
-//     сети; master анонсируется по имени контейнера, sentinel отдаёт клиенту
-//     это имя — поэтому клиент тоже подключается ВНУТРИ сети (sidecar-redis-cli
-//     exec), а не с хоста. host-NAT для sentinel-announced-адресов не решается
-//     без host-networking, поэтому пароль-резолв/CROSSSLOT-guard-и сосредоточены
-//     в cluster-наборе, а sentinel-набор доказывает выбор режима + failover-
-//     перенаведение через exec внутри сети.
+// Images:
+//   - cluster: grokzen/redis-cluster:7.0.10 (3 masters + 3 replicas in one
+//     container; IP=0.0.0.0 makes nodes announce 127.0.0.1, otherwise a
+//     client on the host can't reach the nodes' internal IPs — the classic
+//     testcontainers NAT pain).
+//   - sentinel: bitnami/redis (master) + bitnami/redis-sentinel on a shared
+//     docker network; the master is announced by container name, and
+//     sentinel hands that name to the client — so the client also connects
+//     FROM INSIDE the network (sidecar redis-cli exec), not from the host.
+//     Host-NAT for sentinel-announced addresses isn't solvable without
+//     host-networking, so password-resolve/CROSSSLOT guards are concentrated
+//     in the cluster suite, while the sentinel suite proves mode selection +
+//     failover re-pointing via exec inside the network.
 //
-// Если контейнеры/кластер в песочнице не поднимаются — тест self-skip-ается
-// (как vault/redis integration), но при SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1
-// падает (не маскирует непрогон).
+// If containers/cluster don't come up in the sandbox, the test self-skips
+// (like vault/redis integration), but fails under
+// SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 (doesn't mask a non-run).
 
 package redis
 
@@ -55,14 +57,14 @@ const (
 	vaultClusterImg = "hashicorp/vault:1.18"
 )
 
-// startCluster поднимает grokzen/redis-cluster и возвращает host:port одного из
-// seed-узлов (port 7000). IP=0.0.0.0 → узлы анонсируют 127.0.0.1; host-порты
-// мапятся 1:1 на 7000..7005, чтобы анонсированные адреса были достижимы.
+// startCluster brings up grokzen/redis-cluster and returns host:port of one
+// of the seed nodes (port 7000). IP=0.0.0.0 → nodes announce 127.0.0.1;
+// host ports map 1:1 to 7000..7005 so the announced addresses are reachable.
 func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate func()) {
 	t.Helper()
 
-	// Фиксируем host-порт = контейнер-порт для каждого узла: grokzen анонсирует
-	// 127.0.0.1:<contport>, и go-redis ClusterClient идёт по этим адресам.
+	// Pin host-port = container-port for each node: grokzen announces
+	// 127.0.0.1:<contport>, and the go-redis ClusterClient dials those addresses.
 	portBindings := func(hc *dockercontainer.HostConfig) {
 		hc.PortBindings = nat7000to7005()
 	}
@@ -99,15 +101,15 @@ func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate
 	return fmt.Sprintf("%s:7000", host), terminate
 }
 
-// newClusterClient подключается к поднятому кластеру; даёт время на gossip-
-// сходимость (grokzen иногда репортит Ready до полного формирования слотов).
+// newClusterClient connects to the running cluster; allows time for gossip
+// convergence (grokzen sometimes reports Ready before slots fully form).
 func newClusterClient(ctx context.Context, t *testing.T, seed string) *Client {
 	t.Helper()
 	var lastErr error
 	for i := 0; i < 20; i++ {
 		c, err := NewClient(ctx, Config{Mode: ModeCluster, Nodes: []string{seed}}, nil)
 		if err == nil {
-			// Дополнительно дождёмся, что slot-карта сформирована (любой SET проходит).
+			// Additionally wait until the slot map has formed (any SET succeeds).
 			if perr := c.underlying().Set(ctx, "cluster:warmup", "1", time.Minute).Err(); perr == nil {
 				return c
 			} else {
@@ -126,8 +128,8 @@ func newClusterClient(ctx context.Context, t *testing.T, seed string) *Client {
 	return nil
 }
 
-// TestIntegration_Cluster_SingleKeyLease — single-key Lua-lease cluster-safe
-// (один KEYS → один слот, CROSSSLOT невозможен).
+// TestIntegration_Cluster_SingleKeyLease — single-key Lua-lease is
+// cluster-safe (one KEYS → one slot, CROSSSLOT impossible).
 func TestIntegration_Cluster_SingleKeyLease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -150,9 +152,9 @@ func TestIntegration_Cluster_SingleKeyLease(t *testing.T) {
 	}
 }
 
-// TestIntegration_Cluster_HeraldNoCrossSlot — БЛОКЕР 1 guard: BRPOPLPUSH
-// pending→processing не даёт CROSSSLOT, потому что все ключи очереди — под
-// общим hash-tag `{q}` (= один слот). Дополнительно сверяем CLUSTER KEYSLOT.
+// TestIntegration_Cluster_HeraldNoCrossSlot — BLOCKER 1 guard: BRPOPLPUSH
+// pending→processing does not trigger CROSSSLOT, because all queue keys sit
+// under a shared hash-tag `{q}` (= one slot). Also cross-checks CLUSTER KEYSLOT.
 func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -162,7 +164,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 	c := newClusterClient(ctx, t, seed)
 	defer c.Close()
 
-	// Проверка: pending и processing садятся в ОДИН слот (hash-tag {q}).
+	// Check: pending and processing land in ONE slot (hash-tag {q}).
 	slotPending, err := c.underlying().ClusterKeySlot(ctx, heraldPendingKey).Result()
 	if err != nil {
 		t.Fatalf("CLUSTER KEYSLOT pending: %v", err)
@@ -180,7 +182,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 			slotPending, slotProcessing, slotLease)
 	}
 
-	// Реальный BRPOPLPUSH через Claim — без hash-tag это был бы CROSSSLOT.
+	// A real BRPOPLPUSH via Claim — without the hash-tag this would be CROSSSLOT.
 	q, err := NewHeraldDeliveryQueue(c)
 	if err != nil {
 		t.Fatalf("NewHeraldDeliveryQueue: %v", err)
@@ -191,7 +193,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 	}
 	claimed, err := q.Claim(ctx, 2*time.Second)
 	if err != nil {
-		// Именно тут проявился бы CROSSSLOT, если бы ключи были в разных слотах.
+		// This is exactly where CROSSSLOT would show up if the keys were in different slots.
 		if strings.Contains(strings.ToUpper(err.Error()), "CROSSSLOT") {
 			t.Fatalf("БЛОКЕР 1 регрессировал: Claim вернул CROSSSLOT: %v", err)
 		}
@@ -205,10 +207,11 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 	}
 }
 
-// TestIntegration_Cluster_CountLiveCrossNode — БЛОКЕР 2 guard: presence-ключи
-// `keeper:instance:<kid>` разных KID садятся в РАЗНЫЕ слоты (= разные master-
-// узлы); CountLive обязан увидеть ВСЕХ через per-master SCAN (ForEachMaster).
-// Без фикса обычный SCAN обошёл бы один узел и недосчитал.
+// TestIntegration_Cluster_CountLiveCrossNode — BLOCKER 2 guard: presence keys
+// `keeper:instance:<kid>` for different KIDs land in DIFFERENT slots (=
+// different master nodes); CountLive must see ALL of them via per-master
+// SCAN (ForEachMaster). Without the fix, a plain SCAN would cover only one
+// node and undercount.
 func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -218,8 +221,8 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 	c := newClusterClient(ctx, t, seed)
 	defer c.Close()
 
-	// Подбираем KID-ы так, чтобы presence-ключи легли на разные слоты/узлы.
-	// 12 разных KID практически гарантируют покрытие всех 3 master-узлов.
+	// Pick KIDs so presence keys land on different slots/nodes.
+	// 12 distinct KIDs practically guarantee coverage of all 3 master nodes.
 	kids := make([]string, 0, 12)
 	slots := map[int64]struct{}{}
 	for i := 0; i < 12; i++ {
@@ -261,9 +264,9 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 	}
 }
 
-// TestIntegration_Cluster_PubSubCrossNode — классический broadcast pub/sub
-// доставляется в cluster (ADR-006: sharded SPUBLISH — отдельный GA-slice, тут
-// проверяем, что обычный PUBLISH/SUBSCRIBE работает на ClusterClient).
+// TestIntegration_Cluster_PubSubCrossNode — classic broadcast pub/sub is
+// delivered on a cluster (ADR-006: sharded SPUBLISH is a separate GA slice;
+// here we verify that plain PUBLISH/SUBSCRIBE works on a ClusterClient).
 func TestIntegration_Cluster_PubSubCrossNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -276,7 +279,7 @@ func TestIntegration_Cluster_PubSubCrossNode(t *testing.T) {
 	const channel = "events:shard:test"
 	sub := c.underlying().Subscribe(ctx, channel)
 	defer sub.Close()
-	if _, err := sub.Receive(ctx); err != nil { // подтверждение подписки
+	if _, err := sub.Receive(ctx); err != nil { // subscribe confirmation
 		t.Fatalf("subscribe confirm: %v", err)
 	}
 	ch := sub.Channel()
@@ -294,11 +297,12 @@ func TestIntegration_Cluster_PubSubCrossNode(t *testing.T) {
 	}
 }
 
-// TestIntegration_Cluster_PasswordFromVault — пароль кластера резолвится из
-// РЕАЛЬНОГО Vault (KV v2) через keeper-vault-клиент. grokzen без пароля, поэтому
-// сам резолв проверяется отдельно от коннекта: keeper-vault.ReadKV отдаёт
-// password, resolvePassword извлекает его. (Связку «resolved password → AUTH»
-// покрывает unit TestNewClient_VaultRef_Resolved на miniredis.)
+// TestIntegration_Cluster_PasswordFromVault — the cluster password is
+// resolved from a REAL Vault (KV v2) through the keeper-vault client. grokzen
+// has no password, so the resolve itself is verified separately from the
+// connect: keeper-vault.ReadKV returns the password, resolvePassword extracts
+// it. (The "resolved password → AUTH" link is covered by the unit test
+// TestNewClient_VaultRef_Resolved against miniredis.)
 func TestIntegration_Cluster_PasswordFromVault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -314,7 +318,7 @@ func TestIntegration_Cluster_PasswordFromVault(t *testing.T) {
 		t.Errorf("resolved password = %q, want cluster-pw", got)
 	}
 
-	// `#field`-override против реального Vault.
+	// `#field` override against a real Vault.
 	gotF, err := resolvePassword(ctx, vc, "vault:secret/keeper/redis#rotated")
 	if err != nil {
 		t.Fatalf("resolvePassword #field from real Vault: %v", err)
@@ -324,9 +328,9 @@ func TestIntegration_Cluster_PasswordFromVault(t *testing.T) {
 	}
 }
 
-// startVaultWithRedisSecret поднимает Vault dev и кладёт secret/keeper/redis с
-// полями password + rotated. Возвращает keeper-vault-клиент (он удовлетворяет
-// passwordResolver).
+// startVaultWithRedisSecret brings up a Vault dev server and seeds
+// secret/keeper/redis with password + rotated fields. Returns the
+// keeper-vault client (it satisfies passwordResolver).
 func startVaultWithRedisSecret(ctx context.Context, t *testing.T, pw string) (*keepervault.Client, func()) {
 	t.Helper()
 	ctr, err := tcvault.Run(ctx, vaultClusterImg, tcvault.WithToken(vaultClusterTok))
@@ -355,7 +359,7 @@ func startVaultWithRedisSecret(ctx context.Context, t *testing.T, pw string) (*k
 		t.Fatalf("vaultapi.NewClient: %v", err)
 	}
 	api.SetToken(vaultClusterTok)
-	// dev-Vault поднимает `secret/` как KV v2 (как vault/integration_test.go).
+	// The dev Vault mounts `secret/` as KV v2 (like vault/integration_test.go).
 	if _, err := api.KVv2("secret").Put(ctx, "keeper/redis", map[string]any{
 		"password": pw,
 		"rotated":  pw + "-rotated",
@@ -378,9 +382,9 @@ func startVaultWithRedisSecret(ctx context.Context, t *testing.T, pw string) (*k
 
 // --- helpers ---
 
-// nat7000to7005 возвращает PortBindings, фиксирующие host-порт = контейнер-порт
-// для каждого cluster-узла (нужно, чтобы анонсированный 127.0.0.1:<port> был
-// достижим с хоста).
+// nat7000to7005 returns PortBindings that pin host-port = container-port for
+// each cluster node (needed so the announced 127.0.0.1:<port> is reachable
+// from the host).
 func nat7000to7005() dockernetwork.PortMap {
 	m := dockernetwork.PortMap{}
 	for p := 7000; p <= 7005; p++ {

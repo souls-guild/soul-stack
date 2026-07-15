@@ -1,36 +1,39 @@
 package redis
 
-// Reliable-queue доставки уведомлений Herald (ADR-052(d), S3). at-least-once
-// claim-queue поверх Redis (hot→Redis, ADR-006: статусы попыток НЕ в PG).
+// Reliable delivery queue for Herald notifications (ADR-052(d), S3). An
+// at-least-once claim queue on top of Redis (hot→Redis, ADR-006: attempt
+// status is NOT stored in PG).
 //
-// Модель (parity reliable-queue Redis: pending-LIST → processing-LIST +
-// per-claim lease-ключ):
+// Model (Redis reliable-queue parity: pending LIST → processing LIST +
+// per-claim lease key):
 //
-//   - pending (LIST `herald:delivery:{q}:pending`) — очередь job-ов; Enqueue =
-//     LPUSH JSON-payload-а (неблокирующий).
-//   - processing (LIST `herald:delivery:{q}:processing`) — claimed-job-ы; Claim =
-//     BRPOPLPUSH pending→processing (АТОМАРНЫЙ pop+перенос: при крэше worker-а
-//     job не теряется, остаётся в processing), затем SET lease-ключа PX=ttl.
+//   - pending (LIST `herald:delivery:{q}:pending`) — job queue; Enqueue =
+//     LPUSH of the JSON payload (non-blocking).
+//   - processing (LIST `herald:delivery:{q}:processing`) — claimed jobs; Claim =
+//     BRPOPLPUSH pending→processing (an ATOMIC pop+move: if the worker crashes
+//     the job isn't lost, it stays in processing), followed by SET of the
+//     lease key with PX=ttl.
 //   - lease (string `herald:delivery:{q}:lease:<id>`, PX=leaseTTL) — heartbeat
-//     владения job-ом. Жив → job обрабатывается; истёк → job осиротел.
+//     of job ownership. Alive → job is being processed; expired → job is
+//     orphaned.
 //
-// Hash-tag `{q}` во всех трёх ключах сажает весь keyspace очереди в один слот
-// Redis Cluster — это обязательно, чтобы мультиключевой BRPOPLPUSH
-// pending→processing не отвергался с CROSSSLOT (детали — у const-блока ниже).
-//   - Ack (успех/терминал) = LREM job из processing + DEL lease.
-//   - Requeue (retry) = LREM job из processing + LPUSH нового payload-а в
-//     pending (caller инкрементит attempt) + DEL lease.
-//   - RequeueExpired (mini-reaper) = для каждого job в processing без живого
-//     lease-ключа — перенос обратно в pending (осиротевшие после крэша).
+// The `{q}` hash tag on all three keys puts the whole queue keyspace in one
+// Redis Cluster slot — required so the multi-key BRPOPLPUSH pending→processing
+// isn't rejected with CROSSSLOT (details at the const block below).
+//   - Ack (success/terminal) = LREM job from processing + DEL lease.
+//   - Requeue (retry) = LREM job from processing + LPUSH the new payload into
+//     pending (caller increments attempt) + DEL lease.
+//   - RequeueExpired (mini-reaper) = for every job in processing without a
+//     live lease key — move it back to pending (orphaned after a crash).
 //
-// Конкурентные Claim с разных Keeper-инстансов безопасны (BRPOPLPUSH атомарен —
-// один job достаётся одному worker-у). at-least-once: дубль возможен, если
-// worker доставил, но не успел Ack до крэша — приемлемо (решение пользователя,
-// ADR-052(d)).
+// Concurrent Claim calls from different Keeper instances are safe (BRPOPLPUSH
+// is atomic — one job goes to exactly one worker). at-least-once: a duplicate
+// is possible if a worker delivered but crashed before Ack — acceptable (user
+// decision, ADR-052(d)).
 //
-// Backend оперирует OPAQUE payload-ом (string job_id + []byte JSON): redis-
-// пакет НЕ импортирует herald (избегаем цикла), сериализация DeliveryJob —
-// ответственность herald-пакета.
+// The backend operates on an OPAQUE payload (string job_id + []byte JSON): the
+// redis package does NOT import herald (to avoid a cycle) — serializing
+// DeliveryJob is the herald package's responsibility.
 
 import (
 	"context"
@@ -41,16 +44,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Convention-ключи очереди доставки (фиксированы, стиль `<подсистема>:<очередь>`
-// как `apply:summons` / `tempo:<aid>`). Не per-Herald: единая очередь на все
-// каналы, разбор адресата — внутри payload-а job-а (herald-пакет).
+// Convention keys for the delivery queue (fixed, `<subsystem>:<queue>` style
+// like `apply:summons` / `tempo:<aid>`). Not per-Herald: a single queue for all
+// channels, recipient resolution happens inside the job payload (herald
+// package).
 //
-// Hash-tag `{q}` (ADR-006 amendment, cluster-режим): `Claim` делает атомарный
-// BRPOPLPUSH pending→processing — обе KEYS обязаны лежать в одном слоте, иначе
-// Redis Cluster отвергает мультиключевую команду с CROSSSLOT. Hash-tag `{q}`
-// присутствует во ВСЕХ ключах очереди (pending/processing/lease), поэтому весь
-// keyspace доставки садится в один слот (= CLUSTER KEYSLOT совпадает). В
-// standalone/sentinel hash-tag — просто часть имени ключа, поведение не меняет.
+// Hash tag `{q}` (ADR-006 amendment, cluster mode): `Claim` does an atomic
+// BRPOPLPUSH pending→processing — both KEYS must live in the same slot,
+// otherwise Redis Cluster rejects the multi-key command with CROSSSLOT. The
+// `{q}` hash tag is present in ALL queue keys (pending/processing/lease), so
+// the entire delivery keyspace lands in one slot (i.e. CLUSTER KEYSLOT
+// matches). In standalone/sentinel the hash tag is just part of the key name
+// and doesn't change behavior.
 const (
 	heraldPendingKey    = "herald:delivery:{q}:pending"
 	heraldProcessingKey = "herald:delivery:{q}:processing"
@@ -59,15 +64,16 @@ const (
 
 func heraldLeaseKey(jobID string) string { return heraldLeasePrefix + jobID }
 
-// HeraldDeliveryQueue — handle reliable-queue доставки поверх Redis-клиента.
-// Stateless относительно job-а: все операции принимают payload/id явно.
+// HeraldDeliveryQueue is a handle to the delivery reliable queue on top of a
+// Redis client. Stateless with respect to a job: all operations take the
+// payload/id explicitly.
 type HeraldDeliveryQueue struct {
 	client *Client
 }
 
-// NewHeraldDeliveryQueue оборачивает Redis-клиент в очередь доставки. nil-клиент
-// — программная ошибка wire-up-а (daemon при отсутствии Redis вовсе не поднимает
-// доставку, fail-open, см. setupHeraldDelivery).
+// NewHeraldDeliveryQueue wraps a Redis client into a delivery queue. A nil
+// client is a wiring bug (the daemon doesn't stand up delivery at all when
+// Redis is absent, fail-open — see setupHeraldDelivery).
 func NewHeraldDeliveryQueue(c *Client) (*HeraldDeliveryQueue, error) {
 	if c == nil {
 		return nil, errors.New("redis.NewHeraldDeliveryQueue: nil client")
@@ -75,9 +81,10 @@ func NewHeraldDeliveryQueue(c *Client) (*HeraldDeliveryQueue, error) {
 	return &HeraldDeliveryQueue{client: c}, nil
 }
 
-// Enqueue кладёт сериализованный job в pending (LPUSH — неблокирующий). Вызов из
-// dispatcher-а (tap-путь): должен быть быстрым, чтобы Dispatch не залипал на
-// сетевом I/O и не подвешивал tap-consumer/Close (ctx caller-а несёт deadline).
+// Enqueue pushes a serialized job into pending (LPUSH — non-blocking). Called
+// from the dispatcher (tap path): must be fast so Dispatch doesn't stall on
+// network I/O and block the tap-consumer/Close (the caller's ctx carries the
+// deadline).
 func (q *HeraldDeliveryQueue) Enqueue(ctx context.Context, payload []byte) error {
 	if len(payload) == 0 {
 		return errors.New("redis.HeraldDeliveryQueue.Enqueue: empty payload")
@@ -88,27 +95,28 @@ func (q *HeraldDeliveryQueue) Enqueue(ctx context.Context, payload []byte) error
 	return nil
 }
 
-// ClaimedJob — результат успешного [HeraldDeliveryQueue.Claim].
+// ClaimedJob is the result of a successful [HeraldDeliveryQueue.Claim].
 type ClaimedJob struct {
-	// Payload — сериализованный job (тот же байт-в-байт, что лёг в processing;
-	// Ack/Requeue требуют точное значение для LREM).
+	// Payload is the serialized job (byte-for-byte identical to what was
+	// stored in processing; Ack/Requeue need the exact value for LREM).
 	Payload []byte
-	// JobID — id job-а (caller извлекает из payload-а и передаёт сюда для
-	// lease-ключа); см. SetLease.
+	// JobID is the job's id (the caller extracts it from the payload and
+	// passes it here for the lease key); see SetLease.
 	JobID string
 }
 
-// Claim блокирующе ждёт job в pending до timeout-а и атомарно переносит его в
-// processing (BRPOPLPUSH). Возвращает (nil, nil) на пустую очередь по истечении
-// timeout-а — caller повторит claim-цикл. lease-ключ ставит [SetLease] (отдельно:
-// job_id извлекается из payload-а уже в herald-пакете).
+// Claim blocks waiting for a job in pending until timeout, and atomically
+// moves it to processing (BRPOPLPUSH). Returns (nil, nil) on an empty queue
+// once the timeout elapses — the caller repeats the claim loop. [SetLease]
+// sets the lease key separately (job_id is extracted from the payload in the
+// herald package).
 //
-// blockTimeout=0 → бесконечная блокировка (нежелательно — не реагирует на
-// ctx.Done без сетевого пинга); caller передаёт конечный (poll-interval).
+// blockTimeout=0 → blocks forever (undesirable — doesn't react to ctx.Done
+// without a network ping); the caller passes a finite value (poll interval).
 func (q *HeraldDeliveryQueue) Claim(ctx context.Context, blockTimeout time.Duration) (*ClaimedJob, error) {
 	res, err := q.client.underlying().BRPopLPush(ctx, heraldPendingKey, heraldProcessingKey, blockTimeout).Result()
 	if errors.Is(err, redis.Nil) {
-		// Таймаут — pending пуст. Не ошибка.
+		// Timeout — pending is empty. Not an error.
 		return nil, nil
 	}
 	if err != nil {
@@ -117,9 +125,9 @@ func (q *HeraldDeliveryQueue) Claim(ctx context.Context, blockTimeout time.Durat
 	return &ClaimedJob{Payload: []byte(res)}, nil
 }
 
-// SetLease ставит/продлевает lease-ключ job-а (PX=ttl). Worker зовёт его сразу
-// после Claim и продлевает периодически, пока доставляет. Истечение ключа —
-// сигнал mini-reaper-у ([RequeueExpired]), что job осиротел.
+// SetLease sets/renews the job's lease key (PX=ttl). The worker calls it right
+// after Claim and renews it periodically while delivering. Expiry of the key
+// signals the mini-reaper ([RequeueExpired]) that the job is orphaned.
 func (q *HeraldDeliveryQueue) SetLease(ctx context.Context, jobID string, ttl time.Duration) error {
 	if jobID == "" {
 		return errors.New("redis.HeraldDeliveryQueue.SetLease: empty jobID")
@@ -133,25 +141,27 @@ func (q *HeraldDeliveryQueue) SetLease(ctx context.Context, jobID string, ttl ti
 	return nil
 }
 
-// Ack снимает job из processing после терминала (delivered/failed) и удаляет
-// lease-ключ. payload — точное значение из [ClaimedJob.Payload] (LREM требует
-// побайтового совпадения). LREM count=1 — снять одну копию (дублей быть не
-// должно: id уникален).
+// Ack removes the job from processing after a terminal outcome
+// (delivered/failed) and deletes the lease key. payload must be the exact
+// value from [ClaimedJob.Payload] (LREM requires a byte-for-byte match). LREM
+// count=1 — remove one copy (there shouldn't be duplicates: id is unique).
 func (q *HeraldDeliveryQueue) Ack(ctx context.Context, jobID string, payload []byte) error {
 	if err := q.client.underlying().LRem(ctx, heraldProcessingKey, 1, payload).Err(); err != nil {
 		return fmt.Errorf("redis.HeraldDeliveryQueue.Ack: LREM processing: %w", err)
 	}
-	// lease чистим best-effort: истечёт сам по TTL, но явный DEL освобождает
-	// память сразу. Ошибку DEL не пробрасываем — Ack главного (LREM) уже прошёл.
+	// Lease cleanup is best-effort: it will expire on its own via TTL, but an
+	// explicit DEL frees memory right away. We don't propagate the DEL error —
+	// the main Ack (LREM) already succeeded.
 	_ = q.client.underlying().Del(ctx, heraldLeaseKey(jobID)).Err()
 	return nil
 }
 
-// Requeue возвращает job на повтор: снимает старый payload из processing и
-// кладёт newPayload (caller инкрементил attempt) обратно в pending. lease старого
-// job-а удаляется. Атомарность LREM+LPUSH здесь не критична: при крэше между
-// ними старый payload остаётся в processing и его подберёт [RequeueExpired] по
-// истёкшему lease — at-least-once сохраняется.
+// Requeue returns a job for retry: removes the old payload from processing and
+// pushes newPayload (caller has already incremented attempt) back into
+// pending. The old job's lease is deleted. Atomicity of LREM+LPUSH doesn't
+// matter here: if a crash happens between them, the old payload stays in
+// processing and [RequeueExpired] will pick it up once its lease expires —
+// at-least-once is preserved.
 func (q *HeraldDeliveryQueue) Requeue(ctx context.Context, jobID string, oldPayload, newPayload []byte) error {
 	if len(newPayload) == 0 {
 		return errors.New("redis.HeraldDeliveryQueue.Requeue: empty newPayload")
@@ -166,19 +176,21 @@ func (q *HeraldDeliveryQueue) Requeue(ctx context.Context, jobID string, oldPayl
 	return nil
 }
 
-// expiredRequeueFn — callback извлечения jobID из payload-а для [RequeueExpired].
-// redis-пакет не знает форму job-а; herald-пакет передаёт парсер. Возврат
-// ok=false → payload битый, mini-reaper его дропает (LREM без перепостановки).
+// expiredRequeueFn is a callback that extracts jobID from a payload for
+// [RequeueExpired]. The redis package doesn't know the job's shape; the herald
+// package supplies the parser. Returning ok=false → the payload is corrupt,
+// the mini-reaper drops it (LREM without requeuing).
 type expiredRequeueFn func(payload []byte) (jobID string, ok bool)
 
-// RequeueExpired — mini-reaper осиротевших job-ов: сканирует processing и для
-// каждого job без живого lease-ключа переносит его обратно в pending (worker,
-// клеймивший job, умер, не успев Ack/Requeue). Возвращает число возвращённых.
+// RequeueExpired is a mini-reaper for orphaned jobs: scans processing and, for
+// every job without a live lease key, moves it back to pending (the worker
+// that claimed the job died before it could Ack/Requeue). Returns the number
+// requeued.
 //
-// Сканирование через LRange (снимок processing) + точечная проверка lease по
-// каждому job-у: processing обычно короткий (in-flight доставки), полный скан
-// дёшев. Перепостановка — Requeue с тем же payload-ом (attempt НЕ меняем — это
-// не новая попытка по решению worker-а, а возврат после краша).
+// Scans via LRange (a snapshot of processing) + a point lease check per job:
+// processing is typically short (in-flight deliveries), so a full scan is
+// cheap. Requeuing reuses the same payload (attempt is NOT changed — this
+// isn't a new attempt by worker decision, it's a recovery after a crash).
 func (q *HeraldDeliveryQueue) RequeueExpired(ctx context.Context, parse expiredRequeueFn) (int, error) {
 	items, err := q.client.underlying().LRange(ctx, heraldProcessingKey, 0, -1).Result()
 	if err != nil {
@@ -189,8 +201,8 @@ func (q *HeraldDeliveryQueue) RequeueExpired(ctx context.Context, parse expiredR
 		payload := []byte(raw)
 		jobID, ok := parse(payload)
 		if !ok {
-			// Битый payload в processing — не зацикливаем mini-reaper на нём:
-			// снимаем без перепостановки.
+			// Corrupt payload in processing — don't let the mini-reaper loop on
+			// it: remove it without requeuing.
 			_ = q.client.underlying().LRem(ctx, heraldProcessingKey, 1, payload).Err()
 			continue
 		}
@@ -199,10 +211,10 @@ func (q *HeraldDeliveryQueue) RequeueExpired(ctx context.Context, parse expiredR
 			return requeued, fmt.Errorf("redis.HeraldDeliveryQueue.RequeueExpired: EXISTS lease: %w", err)
 		}
 		if exists == 1 {
-			// lease жив — job обрабатывается, не трогаем.
+			// Lease is alive — job is being processed, leave it alone.
 			continue
 		}
-		// Осиротел: lease истёк, владелец не Ack-нул. Возвращаем тот же payload.
+		// Orphaned: lease expired, owner never Ack'd. Return the same payload.
 		if err := q.client.underlying().LPush(ctx, heraldPendingKey, payload).Err(); err != nil {
 			return requeued, fmt.Errorf("redis.HeraldDeliveryQueue.RequeueExpired: LPUSH pending: %w", err)
 		}

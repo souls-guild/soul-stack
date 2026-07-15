@@ -1,32 +1,33 @@
 package redis
 
-// Cluster-mode outbound-routing через Redis pub/sub (ADR-002, HA).
+// Cluster-mode outbound routing via Redis pub/sub (ADR-002, HA).
 //
-// Проблема: StreamManager в keeper/internal/grpc — per-Keeper-инстанс
-// реестр. Если Outbound.SendApply вызван на Keeper-A для SID, чей
-// EventStream висит на Keeper-B, локальный Lookup пуст и без pub/sub
-// возвращается ErrSoulNotConnected.
+// Problem: StreamManager in keeper/internal/grpc is a per-Keeper-instance
+// registry. If Outbound.SendApply is called on Keeper-A for a SID whose
+// EventStream is held by Keeper-B, the local Lookup is empty and without
+// pub/sub it returns ErrSoulNotConnected.
 //
-// Решение: Keeper-A проверяет SoulLease (`soul:<sid>:lock`), узнаёт
-// holder=Keeper-B и публикует FromKeeper-сообщение в канал
-// `outbound:<sid>`. Keeper-B при Register-е стрима подписывается на
-// этот канал и форвардит входящие в локальный outbound-channel.
+// Solution: Keeper-A checks the SoulLease (`soul:<sid>:lock`), learns
+// holder=Keeper-B, and publishes a FromKeeper message to the
+// `outbound:<sid>` channel. Keeper-B, when registering the stream,
+// subscribes to this channel and forwards incoming messages to the local
+// outbound channel.
 //
-// Convention `outbound:<sid>` симметрична heartbeat-кэшу
-// (`soul:<sid>:hb`) и lease-у (`soul:<sid>:lock`).
+// The `outbound:<sid>` convention mirrors the heartbeat cache
+// (`soul:<sid>:hb`) and the lease (`soul:<sid>:lock`).
 //
-// Wire-формат — protojson (PM-decision: text-friendly, debuggable
-// через `redis-cli SUBSCRIBE`, форвард-compat по proto-полям). Поверх
-// — тонкая JSON-envelope с полем `origin_kid`, чтобы subscriber мог
-// фильтровать собственные публикации (race-окно: holder поменялся
-// между publish и delivery — Keeper, ставший новым holder-ом, мог бы
-// получить эхо своей же отправки).
+// Wire format is protojson (PM decision: text-friendly, debuggable via
+// `redis-cli SUBSCRIBE`, forward-compat on proto fields). On top of it — a
+// thin JSON envelope with an `origin_kid` field, so a subscriber can filter
+// out its own publications (a race window: the holder changed between
+// publish and delivery — the Keeper that became the new holder could
+// otherwise receive an echo of its own send).
 //
-// Семантика: fire-and-forget. Redis pub/sub не имеет TTL/persistence
-// — если subscriber отключён в момент PUBLISH, сообщение теряется.
-// Это приемлемо для apply-commands (caller увидит результат через
-// RunResult; для отсутствующего ответа есть таймауты на уровне
-// сценария).
+// Semantics: fire-and-forget. Redis pub/sub has no TTL/persistence — if the
+// subscriber is disconnected at PUBLISH time, the message is lost. This is
+// acceptable for apply commands (the caller will see the result via
+// RunResult; missing responses are covered by timeouts at the scenario
+// level).
 
 import (
 	"context"
@@ -41,41 +42,41 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// OutboundChannelKey формирует Redis-канал outbound-routing для SID.
+// OutboundChannelKey builds the Redis outbound-routing channel for a SID.
 //
-// `outbound:<sid>` — отдельный namespace, не пересекается с
-// heartbeat-кэшем (`soul:<sid>:hb`) и lease-ключом
-// (`soul:<sid>:lock`); канал pub/sub-only, keyspace отдельный.
+// `outbound:<sid>` is a separate namespace, not overlapping the
+// heartbeat cache (`soul:<sid>:hb`) or the lease key
+// (`soul:<sid>:lock`); the channel is pub/sub-only, a separate keyspace.
 func OutboundChannelKey(sid string) string {
 	return "outbound:" + sid
 }
 
-// outboundEnvelope — JSON-обёртка для одного PUBLISH-сообщения.
+// outboundEnvelope is the JSON wrapper for one PUBLISH message.
 //
-// `OriginKID` — KID Keeper-инстанса, который опубликовал; subscriber
-// игнорирует сообщения с OriginKID == собственный KID (см.
+// `OriginKID` is the KID of the Keeper instance that published;
+// a subscriber ignores messages where OriginKID == its own KID (see
 // [OutboundSubscription.run]).
 //
-// `Payload` — protojson-сериализованный `FromKeeper`. Хранится как
-// json.RawMessage, чтобы избежать двойного encode (protojson → byte
-// → json-string → byte): сразу подкладываем raw protojson внутрь
+// `Payload` is a protojson-serialized `FromKeeper`. Stored as
+// json.RawMessage to avoid double encoding (protojson → byte
+// → json string → byte): we drop the raw protojson straight into the
 // envelope.
 type outboundEnvelope struct {
 	OriginKID string          `json:"origin_kid"`
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// PublishOutbound сериализует `FromKeeper` через protojson, заворачивает в
-// outbound-envelope с OriginKID = kid Publisher-а и публикует в канал
-// [OutboundChannelKey].
+// PublishOutbound serializes `FromKeeper` via protojson, wraps it in the
+// outbound envelope with OriginKID = the publisher's kid, and publishes to
+// the [OutboundChannelKey] channel.
 //
-// Возвращает количество подписчиков, получивших сообщение (Redis
-// PUBLISH-результат). Caller (Outbound.SendApply/Cancel/...)
-// интерпретирует 0 как «никто не подписан в момент publish — Soul
-// возможно реконнектится, либо сообщение пропало». В MVP-семантике
-// мы НЕ ретраим автоматически: для apply-команд это правильно (даже
-// retransmit-нутая команда может пересечься с тем же apply_id), для
-// cancel — Soul ProteinApplyRunner всё равно дочитает run до конца.
+// Returns the number of subscribers that received the message (the Redis
+// PUBLISH result). The caller (Outbound.SendApply/Cancel/...) interprets 0
+// as "no one was subscribed at publish time — the Soul may be reconnecting,
+// or the message was lost." In MVP semantics we do NOT auto-retry: for apply
+// commands this is correct (even a retransmitted command could collide with
+// the same apply_id); for cancel, the Soul's ProteinApplyRunner will read the
+// run through to completion anyway.
 func PublishOutbound(ctx context.Context, c *Client, sid, originKID string, msg *keeperv1.FromKeeper) (int64, error) {
 	if c == nil {
 		return 0, errors.New("redis.PublishOutbound: nil client")
@@ -106,19 +107,19 @@ func PublishOutbound(ctx context.Context, c *Client, sid, originKID string, msg 
 	return n, nil
 }
 
-// OutboundSubscription — handle на активную подписку `outbound:<sid>`.
+// OutboundSubscription is a handle to an active `outbound:<sid>` subscription.
 //
-// Создаётся через [SubscribeOutbound]; goroutine читает Redis
-// PubSub-канал, парсит envelope, фильтрует по origin_kid (отсекает
-// эхо собственных публикаций), кладёт *FromKeeper в Go-канал
-// [OutboundSubscription.Channel]. На Close() закрывает Redis-pubsub
-// и Go-канал.
+// Created via [SubscribeOutbound]; a goroutine reads the Redis PubSub
+// channel, parses the envelope, filters by origin_kid (drops echoes of its
+// own publications), and puts *FromKeeper on the Go channel
+// [OutboundSubscription.Channel]. Close() closes the Redis pubsub and the
+// Go channel.
 //
-// Поток жизни subscribe-loop-а: spawn под Register(sid) в
-// StreamManager, Close() при Unregister. Не потокобезопасен между
-// Close() и read-ом из Channel() — caller обязан остановить чтение
-// до Close (типично — handler-defer LIFO: сначала Unregister →
-// Close, потом ожидание receive-loop-а).
+// Subscribe-loop lifecycle: spawned under Register(sid) in StreamManager,
+// Close() on Unregister. Not thread-safe between Close() and reading from
+// Channel() — the caller must stop reading before Close (typically —
+// handler-defer LIFO: Unregister → Close first, then wait for the
+// receive loop).
 type OutboundSubscription struct {
 	ps        *redis.PubSub
 	out       chan *keeperv1.FromKeeper
@@ -130,12 +131,12 @@ type OutboundSubscription struct {
 	closeOnce func() error
 }
 
-// Channel — read-side Go-канала с распакованными FromKeeper-сообщениями.
+// Channel is the read side of the Go channel with unpacked FromKeeper messages.
 //
-// Закрывается при [OutboundSubscription.Close] или при фатальной
-// ошибке Redis (потеря соединения — go-redis сам пытается
-// reconnect, но ReceiveMessage может вернуть err после нескольких
-// неудач). На закрытие caller завершает forward-loop-у.
+// Closes on [OutboundSubscription.Close] or on a fatal Redis error
+// (connection loss — go-redis retries reconnecting on its own, but
+// ReceiveMessage can return an error after several failures). On close,
+// the caller's forward loop terminates.
 func (s *OutboundSubscription) Channel() <-chan *keeperv1.FromKeeper {
 	if s == nil {
 		return nil
@@ -143,15 +144,15 @@ func (s *OutboundSubscription) Channel() <-chan *keeperv1.FromKeeper {
 	return s.out
 }
 
-// Ready блокируется до первого `subscribe`-acknowledgement от Redis
-// (или ctx.Done() / Close()). Гарантирует, что после возврата канал
-// действительно зарегистрирован на Redis-стороне; без этого
-// PublishOutbound, вызванный сразу после SubscribeOutbound, мог бы
-// промахнуться (subscribe еще не дошёл до брокера).
+// Ready blocks until the first `subscribe` acknowledgement from Redis
+// (or ctx.Done() / Close()). Guarantees that once it returns, the channel
+// is actually registered on the Redis side; without this,
+// PublishOutbound called right after SubscribeOutbound could miss (the
+// subscribe hadn't reached the broker yet).
 //
-// Используется тестами; production-код вызывает однократно после
-// [SubscribeOutbound], чтобы гарантировать ordering между Register
-// и первой возможной публикацией.
+// Used by tests; production code calls it once after
+// [SubscribeOutbound], to guarantee ordering between Register and the
+// first possible publication.
 func (s *OutboundSubscription) Ready(ctx context.Context) error {
 	if s == nil {
 		return errors.New("redis.OutboundSubscription.Ready: nil subscription")
@@ -166,8 +167,8 @@ func (s *OutboundSubscription) Ready(ctx context.Context) error {
 	}
 }
 
-// Close прерывает subscribe-loop, закрывает Redis-pubsub-handle и Go-
-// канал. Идемпотентна — повторный Close — no-op.
+// Close stops the subscribe loop, closes the Redis pubsub handle and the
+// Go channel. Idempotent — a repeat Close is a no-op.
 func (s *OutboundSubscription) Close() error {
 	if s == nil {
 		return nil
@@ -175,18 +176,18 @@ func (s *OutboundSubscription) Close() error {
 	return s.closeOnce()
 }
 
-// SubscribeOutbound подписывается на `outbound:<sid>` и поднимает
-// goroutine-forwarder. selfKID используется для self-фильтрации (см.
-// тип-комментарий [OutboundSubscription]).
+// SubscribeOutbound subscribes to `outbound:<sid>` and starts the
+// forwarder goroutine. selfKID is used for self-filtering (see the type
+// comment on [OutboundSubscription]).
 //
-// Goroutine завершается по:
-//   - Close() caller-а (Unregister в StreamManager);
-//   - ctx.Done() — внешняя отмена;
-//   - фатальная ошибка ReceiveMessage (Redis недоступен надолго).
+// The goroutine terminates on:
+//   - the caller's Close() (Unregister in StreamManager);
+//   - ctx.Done() — external cancellation;
+//   - a fatal ReceiveMessage error (Redis unreachable for a long time).
 //
-// На любую non-fatal ошибку парсинга envelope пишем warn-log и
-// продолжаем (битое сообщение — bug сериализатора, не повод ронять
-// весь канал).
+// On any non-fatal envelope parse error we log a warning and continue
+// (a corrupt message is a serializer bug, not a reason to bring down the
+// whole channel).
 func SubscribeOutbound(ctx context.Context, c *Client, sid, selfKID string, logger *slog.Logger) (*OutboundSubscription, error) {
 	if c == nil {
 		return nil, errors.New("redis.SubscribeOutbound: nil client")
@@ -221,8 +222,8 @@ func SubscribeOutbound(ctx context.Context, c *Client, sid, selfKID string, logg
 		default:
 		}
 		close(closed)
-		// ps.Close прерывает ReceiveMessage в forward-loop-е (вернёт ошибку);
-		// loop завершается, закрывает out-канал и s.stopped.
+		// ps.Close interrupts ReceiveMessage in the forward loop (it returns an
+		// error); the loop terminates, closing the out channel and s.stopped.
 		err := ps.Close()
 		<-s.stopped
 		return err
@@ -232,19 +233,18 @@ func SubscribeOutbound(ctx context.Context, c *Client, sid, selfKID string, logg
 	return s, nil
 }
 
-// outboundSubBufferSize — буфер Go-канала между Redis-PubSub-loop-ом и
-// caller-ом (StreamManager forward-goroutine). Симметричен
-// outboundBufferSize в grpc-пакете: один Soul видит редкие
-// FromKeeper-сообщения, 10 элементов покрывают burst.
+// outboundSubBufferSize is the Go channel buffer between the Redis PubSub
+// loop and the caller (the StreamManager forward goroutine). Mirrors
+// outboundBufferSize in the grpc package: one Soul sees infrequent
+// FromKeeper messages, 10 elements cover a burst.
 const outboundSubBufferSize = 10
 
 func (s *OutboundSubscription) run(ctx context.Context, closed <-chan struct{}) {
 	defer close(s.out)
 	defer close(s.stopped)
 
-	// Дожидаемся subscribe-acknowledgement, потом сигналим Ready. На
-	// fatal-ошибку Receive — выходим (closeOnce ниже не вызывает
-	// двойную close).
+	// Wait for the subscribe acknowledgement, then signal Ready. On a
+	// fatal Receive error we return (closeOnce below won't double-close).
 	if _, err := s.ps.Receive(ctx); err != nil {
 		s.logger.Warn("redis.SubscribeOutbound: initial Receive failed",
 			slog.String("sid", s.sid), slog.Any("error", err))
@@ -265,7 +265,7 @@ func (s *OutboundSubscription) run(ctx context.Context, closed <-chan struct{}) 
 		if err != nil {
 			select {
 			case <-closed:
-				// Ожидаемое завершение через Close().
+				// Expected termination via Close().
 				return
 			case <-ctx.Done():
 				return
@@ -281,9 +281,9 @@ func (s *OutboundSubscription) run(ctx context.Context, closed <-chan struct{}) 
 			continue
 		}
 		if originKID == s.selfKID {
-			// Self-echo: эту публикацию сделали мы сами (race-окно при
-			// смене lease-holder-а — мы стали holder-ом уже после publish,
-			// но до subscribe). Игнорируем, чтобы не зацикливать.
+			// Self-echo: we made this publication ourselves (a race window
+			// during a lease-holder change — we became the holder after the
+			// publish but before the subscribe). Ignore it to avoid looping.
 			s.logger.Debug("redis.SubscribeOutbound: ignoring self-origin message",
 				slog.String("sid", s.sid), slog.String("origin_kid", originKID))
 			continue
@@ -292,9 +292,10 @@ func (s *OutboundSubscription) run(ctx context.Context, closed <-chan struct{}) 
 		select {
 		case s.out <- fromKeeper:
 		default:
-			// Forward-канал переполнен — local stream-receiver не успевает.
-			// Drop+log: гарантии delivery нет уже на уровне pub/sub-а,
-			// drop на forward-границе симметричен drop-у в Outbound.send.
+			// Forward channel is full — the local stream receiver isn't keeping
+			// up. Drop+log: there's no delivery guarantee at the pub/sub level
+			// anyway; dropping at the forward boundary mirrors the drop in
+			// Outbound.send.
 			s.logger.Warn("redis.SubscribeOutbound: forward channel full, dropping",
 				slog.String("sid", s.sid), slog.String("origin_kid", originKID))
 		}
@@ -322,17 +323,17 @@ func (s *OutboundSubscription) decodeMessage(payload string) (*keeperv1.FromKeep
 	return out, env.OriginKID, true
 }
 
-// ReadSoulLeaseHolder возвращает текущий kid-holder lease-а на SID, либо
-// "" если ключа нет. Используется Outbound-ом для cluster-mode
-// routing-а: holder != self → publish to outbound-канал; holder ==
-// self без локального стрима → lease-inconsistency error; holder ==
+// ReadSoulLeaseHolder returns the current kid-holder of the SID's lease, or
+// "" if the key doesn't exist. Used by Outbound for cluster-mode
+// routing: holder != self → publish to the outbound channel; holder ==
+// self with no local stream → a lease-inconsistency error; holder ==
 // "" → ErrSoulNotConnected.
 //
-// Это голый GET по lease-ключу (SoulLeaseKey) — не lease-acquire, не
-// modify. Никакой race-protection поверх: holder может смениться
-// между read-ом и последующим Publish-ом, и это нормально (worst
-// case — публикация уходит в эфир без подписчика и теряется,
-// семантика «fire-and-forget» сохраняется).
+// This is a plain GET on the lease key (SoulLeaseKey) — not a lease
+// acquire, not a modify. No race protection on top: the holder can
+// change between the read and the subsequent Publish, and that's fine
+// (worst case — the publication goes out with no subscriber and is
+// lost, preserving the "fire-and-forget" semantics).
 func ReadSoulLeaseHolder(ctx context.Context, c *Client, sid string) (string, error) {
 	if c == nil {
 		return "", errors.New("redis.ReadSoulLeaseHolder: nil client")

@@ -11,45 +11,48 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// hostCAField — имя поля в Vault KV, из которого читается PEM-encoded SSH
-// public key host-CA (`push.host_ca_ref` / `push.host_ca_refs[].ref`).
-// Симметрия с `signing_key` (auth.jwt) / `password` (metrics.auth.basic):
-// в Vault KV хранится ровно одно поле, его имя зафиксировано конвенцией.
+// hostCAField — the Vault KV field name holding the PEM-encoded SSH public
+// key for the host-CA (`push.host_ca_ref` / `push.host_ca_refs[].ref`).
+// Symmetric with `signing_key` (auth.jwt) / `password` (metrics.auth.basic):
+// the Vault KV secret holds exactly one field, its name fixed by convention.
 const hostCAField = "public_key"
 
-// NamedHostKeyAuthority — один CA в multi-CA-наборе (S7-3, ADR-032 amendment
-// 2026-05-26). Имя — operator-defined (или auto-name `default` при backward-
-// compat adapt singular `host_ca_ref`); используется как label-значение в
-// `keeper_push_host_ca_used_total{ca_name=...}` и в diag-сообщениях.
+// NamedHostKeyAuthority — one CA in the multi-CA set (S7-3, ADR-032 amendment
+// 2026-05-26). Name is operator-defined (or the `default` auto-name under
+// backward-compat adapt of the singular `host_ca_ref`); used as the label
+// value in `keeper_push_host_ca_used_total{ca_name=...}` and in diagnostic
+// messages.
 //
-// SourceRef сохраняется для логов / fail-fast-ошибок (без него на ошибку
-// «парс PEM упал» не понять, какой ref сломан).
+// SourceRef is kept for logs / fail-fast errors (without it, a "PEM parse
+// failed" error gives no way to tell which ref is broken).
 type NamedHostKeyAuthority struct {
 	Name      string
 	CAPubKey  ssh.PublicKey
 	SourceRef string
 }
 
-// KVReader — узкое чтение KV из Vault, нужное [LoadHostCA]. Удовлетворяется
-// keeper-side *keepervault.Client; вынесено отдельно ради unit-тестируемости
-// без подъёма Vault-клиента.
+// KVReader — the narrow Vault KV read needed by [LoadHostCA]. Satisfied by
+// the keeper-side *keepervault.Client; factored out separately for unit
+// testability without standing up a Vault client.
 type KVReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// LoadHostCA читает public host-CA из Vault по vault-ref-у (`vault:<mount>/<path>`)
-// и возвращает [HostKeyAuthority] для инжекции в [SshDispatcher.Deps.HostAuthority].
+// LoadHostCA reads the public host-CA from Vault by a vault ref
+// (`vault:<mount>/<path>`) and returns a [HostKeyAuthority] for injection
+// into [SshDispatcher.Deps.HostAuthority].
 //
-// Vault KV-объект должен иметь поле `public_key` со значением одного из:
-//   - OpenSSH authorized_keys-форма (`ssh-ed25519 AAAA... [comment]`);
-//   - PEM-блок SSH PUBLIC KEY (поддерживается через `ssh.ParseAuthorizedKey` для
-//     authorized-форм; PEM-обёртка не предусмотрена pilot-схемой, оператор
-//     кладёт authorized-key как наиболее частую форму вывода `ssh-keygen -y`).
+// The Vault KV secret must have a `public_key` field with one of:
+//   - OpenSSH authorized_keys form (`ssh-ed25519 AAAA... [comment]`);
+//   - a PEM SSH PUBLIC KEY block (supported via `ssh.ParseAuthorizedKey` for
+//     authorized forms; the PEM wrapper isn't covered by the pilot schema,
+//     the operator puts in an authorized-key, the most common output form of
+//     `ssh-keygen -y`).
 //
-// Любая ошибка резолва (нет ref-а / Vault недоступен / отсутствует поле /
-// невалидная форма) — fail-fast: caller (daemon setupPushDispatchers) валит
-// старт keeper-а, иначе push-диспетчер уйдёт без host-CA и любой connect
-// провалится с невнятной ошибкой.
+// Any resolve error (missing ref / Vault unavailable / missing field /
+// invalid form) is fail-fast: the caller (daemon setupPushDispatchers) aborts
+// keeper startup, otherwise the push dispatcher would run without a host-CA
+// and any connect would fail with a confusing error.
 func LoadHostCA(ctx context.Context, vc KVReader, ref string) (HostKeyAuthority, error) {
 	if vc == nil {
 		return HostKeyAuthority{}, errors.New("push: LoadHostCA: vault client is nil")
@@ -80,15 +83,16 @@ func LoadHostCA(ctx context.Context, vc KVReader, ref string) (HostKeyAuthority,
 	return HostKeyAuthority{CAPublicKey: pub}, nil
 }
 
-// LoadHostCAs резолвит множество vault-ref-ов в [NamedHostKeyAuthority]-набор
-// для multi-CA verify host-keys (S7-3, ADR-032 amendment 2026-05-26).
-// Переиспользует [LoadHostCA] на каждый элемент — единственная точка чтения
-// Vault KV / парсинга PEM. При ошибке резолва одного из ref-ов — fail-fast с
-// именем CA в обёртке (caller `setupPushDispatchers` валит старт keeper-а).
+// LoadHostCAs resolves a set of vault refs into a [NamedHostKeyAuthority] set
+// for multi-CA host-key verification (S7-3, ADR-032 amendment 2026-05-26).
+// Reuses [LoadHostCA] for each element — the single point of Vault KV
+// reading / PEM parsing. If resolving one of the refs fails, it's fail-fast
+// with the CA name in the wrapper (caller `setupPushDispatchers` aborts
+// keeper startup).
 //
-// Пустой `refs` → nil, nil: caller сам решает, fail это или valid case
-// (singular path / push выключен). Daemon валит старт раньше — на gate-проверке
-// «host_ca_ref/refs не задан».
+// An empty `refs` → nil, nil: the caller decides whether that's a failure or
+// a valid case (singular path / push disabled). The daemon aborts startup
+// earlier, at the "host_ca_ref/refs not set" gate check.
 func LoadHostCAs(ctx context.Context, vc KVReader, refs []config.KeeperPushCARef) ([]NamedHostKeyAuthority, error) {
 	if len(refs) == 0 {
 		return nil, nil

@@ -11,33 +11,34 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ErrPushProviderNotConfigured — sentinel-ошибка резолва env-payload params:
-// в PG-таблице `push_providers` нет записи для имени плагина, и
-// legacy-fallback запрещён (`push.allow_legacy_push_providers=false`).
+// ErrPushProviderNotConfigured is the sentinel error for resolving env-payload
+// params: the PG table `push_providers` has no row for the plugin name, and
+// legacy fallback is disabled (`push.allow_legacy_push_providers=false`).
 //
-// Не ошибка: pilot S6 + legacy-fallback false означал «нет env-payload —
-// плагин стартует с дефолтами», поэтому setupPushDispatchers НЕ обязан
-// трактовать это как ошибку старта. Sentinel выделен для diagnostic-сообщения
-// в логе wire-up («provider X не сконфигурирован в PG, fallback запрещён —
-// плагин стартует без env-payload»).
+// Not an error condition: pilot S6 + legacy-fallback false meant "no
+// env-payload — the plugin starts with defaults," so setupPushDispatchers
+// isn't required to treat this as a startup error. The sentinel exists for a
+// diagnostic message in the wire-up log ("provider X not configured in PG,
+// fallback disabled — plugin starts without env-payload").
 var ErrPushProviderNotConfigured = errors.New("push: provider not configured in PG and legacy fallback disabled")
 
-// PushProviderResolver — узкая поверхность над storage push_providers,
-// нужная PG-резолверу. Реализуется обёрткой над pgxpool.Pool (см.
-// [NewPGPushProviderReader]); unit-тесты подставляют fake.
+// PushProviderResolver is the narrow surface over push_providers storage that
+// the PG resolver needs. Implemented by a wrapper over pgxpool.Pool (see
+// [NewPGPushProviderReader]); unit tests substitute a fake.
 type PushProviderResolver interface {
 	SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error)
 }
 
-// pgPoolPushProviderReader — production-implementation [PushProviderResolver]
-// поверх pgxpool.Pool / соответствующего pushprovider.ExecQueryRower.
+// pgPoolPushProviderReader is the production implementation of
+// [PushProviderResolver] over pgxpool.Pool / the corresponding
+// pushprovider.ExecQueryRower.
 type pgPoolPushProviderReader struct {
 	db pushprovider.ExecQueryRower
 }
 
-// NewPGPushProviderReader адаптирует pgxpool.Pool (или любой
-// pushprovider.ExecQueryRower) под [PushProviderResolver]. Используется
-// setupPushDispatchers в daemon-wire-up.
+// NewPGPushProviderReader adapts a pgxpool.Pool (or any
+// pushprovider.ExecQueryRower) to [PushProviderResolver]. Used by
+// setupPushDispatchers in daemon wire-up.
 func NewPGPushProviderReader(db pushprovider.ExecQueryRower) PushProviderResolver {
 	return &pgPoolPushProviderReader{db: db}
 }
@@ -46,23 +47,23 @@ func (r *pgPoolPushProviderReader) SelectByName(ctx context.Context, name string
 	return pushprovider.SelectByName(ctx, r.db, name)
 }
 
-// LegacyPushProvidersFallback — узкая поверхность над config-резолвом
-// `keeper.yml::push.providers[]`. Реализуется тонким wrapper-ом в
-// daemon-wire-up над `[]config.KeeperPushProvider`.
+// LegacyPushProvidersFallback is the narrow surface over resolving config
+// `keeper.yml::push.providers[]`. Implemented by a thin wrapper in
+// daemon wire-up over `[]config.KeeperPushProvider`.
 type LegacyPushProvidersFallback interface {
 	ResolveParams(name string) (map[string]any, bool)
 }
 
-// configProvidersFallback — production-implementation
-// [LegacyPushProvidersFallback] поверх `[]config.KeeperPushProvider` (inline-
-// форма из pilot S6). Lookup по name линейный: список короткий (1-2 плагина в
-// типичной инсталляции), мапу не строим.
+// configProvidersFallback is the production implementation of
+// [LegacyPushProvidersFallback] over `[]config.KeeperPushProvider` (the
+// inline form from pilot S6). Lookup by name is linear: the list is short
+// (1-2 plugins in a typical install), so we don't bother building a map.
 type configProvidersFallback struct {
 	entries []config.KeeperPushProvider
 }
 
-// NewLegacyConfigProvidersFallback оборачивает `keeper.yml::push.providers[]`
-// в LegacyPushProvidersFallback.
+// NewLegacyConfigProvidersFallback wraps `keeper.yml::push.providers[]` in a
+// LegacyPushProvidersFallback.
 func NewLegacyConfigProvidersFallback(providers []config.KeeperPushProvider) LegacyPushProvidersFallback {
 	return &configProvidersFallback{entries: providers}
 }
@@ -76,27 +77,27 @@ func (f *configProvidersFallback) ResolveParams(name string) (map[string]any, bo
 	return nil, false
 }
 
-// PGFallbackProviderResolver — PG-first резолвер env-payload params SSH-
-// плагина с опциональным fallback на keeper.yml::push.providers[]
+// PGFallbackProviderResolver is a PG-first resolver for the SSH plugin's
+// env-payload params, with an optional fallback to keeper.yml::push.providers[]
 // (ADR-032 amendment 2026-05-26, S7-2).
 //
-// Алгоритм ResolveParams:
+// ResolveParams algorithm:
 //
-//  1. SELECT push_providers по name:
-//     - запись найдена → возвращаем `params` (может быть пустой объектом).
-//     - [pushprovider.ErrPushProviderNotFound] → переход к шагу 2.
-//     - прочие ошибки → пробрасываем (PG недоступна).
+//  1. SELECT push_providers by name:
+//     - row found → return `params` (may be an empty object).
+//     - [pushprovider.ErrPushProviderNotFound] → go to step 2.
+//     - other errors → propagate (PG unavailable).
 //
-//  2. `AllowLegacy=false` (default S7-2) → возвращаем
-//     [ErrPushProviderNotConfigured]; caller (daemon-wire-up) при этой ошибке
-//     спокойно стартует плагин без env-payload.
-//     `AllowLegacy=true` → одноразовый WARN deprecation-log + делегируем в
-//     [Fallback] (резолвер поверх keeper.yml::push.providers[]).
+//  2. `AllowLegacy=false` (default for S7-2) → return
+//     [ErrPushProviderNotConfigured]; the caller (daemon wire-up) treats this
+//     error as fine and starts the plugin without env-payload.
+//     `AllowLegacy=true` → log a one-time WARN deprecation notice and
+//     delegate to [Fallback] (a resolver over keeper.yml::push.providers[]).
 //
-// Семантика fail-safe: provider не сконфигурирован — НЕ ошибка старта;
-// security-инвариант (sensitive params как vault-refs) проверяется в
-// pushprovider.Service.Create/Update, не здесь — здесь нет операторской
-// атаки, только чтение.
+// Fail-safe semantics: an unconfigured provider is NOT a startup error;
+// the security invariant (sensitive params as vault-refs) is checked in
+// pushprovider.Service.Create/Update, not here — there's no operator input
+// here, only reads.
 type PGFallbackProviderResolver struct {
 	Reader       PushProviderResolver
 	Fallback     LegacyPushProvidersFallback
@@ -105,8 +106,8 @@ type PGFallbackProviderResolver struct {
 	legacyWarned sync.Once
 }
 
-// ResolveParams возвращает env-payload params плагина с именем pluginName.
-// Семантика — см. doc-comment типа.
+// ResolveParams returns env-payload params for the plugin named pluginName.
+// Semantics — see the type's doc comment.
 func (r *PGFallbackProviderResolver) ResolveParams(ctx context.Context, pluginName string) (map[string]any, error) {
 	p, err := r.Reader.SelectByName(ctx, pluginName)
 	if err == nil {
@@ -119,7 +120,7 @@ func (r *PGFallbackProviderResolver) ResolveParams(ctx context.Context, pluginNa
 		return nil, fmt.Errorf("push: read push_providers %q: %w", pluginName, err)
 	}
 
-	// PG-запись отсутствует: переключаемся на legacy-fallback при флаге.
+	// No PG row: switch to legacy fallback if the flag allows it.
 	if !r.AllowLegacy || r.Fallback == nil {
 		return nil, fmt.Errorf("%w: %s", ErrPushProviderNotConfigured, pluginName)
 	}

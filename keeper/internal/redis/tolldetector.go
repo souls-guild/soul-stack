@@ -1,16 +1,17 @@
 package redis
 
-// Toll cluster-detector Redis-primitives (ADR-038). Тонкие helper-ы — единое
-// место всех Redis-ops Toll-инфраструктуры (паттерн heartbeat.go / soullease.go
-// / conclave.go): пакет `toll` потребляет их через узкие интерфейсы
-// (toll.Publisher / toll.DegradedReader / ...), не тянет *redis.Client
-// напрямую.
+// Toll cluster-detector Redis primitives (ADR-038). Thin helpers — the
+// single place for all Redis ops of the Toll infrastructure (the pattern of
+// heartbeat.go / soullease.go / conclave.go): the `toll` package consumes
+// them through narrow interfaces (toll.Publisher / toll.DegradedReader /
+// ...), doesn't pull in *redis.Client directly.
 //
-// Ключи: см. doc-комментарии toll-пакета — SortedSetKey ("toll:disconnects"),
-// LeaseKey ("cluster:toll:leader"), DegradedKey ("cluster:degraded"). Они
-// дублируются строками здесь сознательно: keeperredis — низкоуровневый слой,
-// не должен import-ить toll (toll → keeperredis-направление). При расхождении
-// тесты пакета `toll` (integration) поймают.
+// Keys: see the toll package's doc-comments — SortedSetKey
+// ("toll:disconnects"), LeaseKey ("cluster:toll:leader"), DegradedKey
+// ("cluster:degraded"). They're deliberately duplicated as strings here:
+// keeperredis is the low-level layer, it must not import toll (the
+// direction is toll → keeperredis). Any mismatch is caught by the `toll`
+// package's tests (integration).
 
 import (
 	"context"
@@ -25,11 +26,11 @@ const (
 	tollDegradedKey  = "cluster:degraded"
 )
 
-// PublishTollDisconnect — ZADD одного disconnect-event-а в sorted-set
-// `toll:disconnects` (score=unix-сек, value=member). Caller (toll.Watcher через
-// adapter) формирует member через toll.EncodeDisconnect. Идемпотентность не
-// гарантируется (для уникальности member-а EncodeDisconnect добавляет UnixNano-
-// суффикс).
+// PublishTollDisconnect — ZADD of a single disconnect event into the
+// `toll:disconnects` sorted set (score=unix-seconds, value=member). The
+// caller (toll.Watcher via an adapter) builds the member via
+// toll.EncodeDisconnect. Idempotency isn't guaranteed (for member
+// uniqueness, EncodeDisconnect adds a UnixNano suffix).
 func PublishTollDisconnect(ctx context.Context, c *Client, member string, atUnix int64) error {
 	if c == nil {
 		return fmt.Errorf("redis.PublishTollDisconnect: nil client")
@@ -45,8 +46,8 @@ func PublishTollDisconnect(ctx context.Context, c *Client, member string, atUnix
 	return nil
 }
 
-// TollCountInWindow — ZCOUNT sorted-set по range [fromUnix, toUnix]. Caller
-// (toll.Leader через adapter) считает rate.
+// TollCountInWindow — ZCOUNT over the sorted set for range [fromUnix,
+// toUnix]. The caller (toll.Leader via an adapter) computes the rate.
 func TollCountInWindow(ctx context.Context, c *Client, fromUnix, toUnix int64) (int64, error) {
 	if c == nil {
 		return 0, fmt.Errorf("redis.TollCountInWindow: nil client")
@@ -61,16 +62,17 @@ func TollCountInWindow(ctx context.Context, c *Client, fromUnix, toUnix int64) (
 	return n, nil
 }
 
-// TollCountByCovenInWindow — ZRANGEBYSCORE по диапазону + group-by coven
+// TollCountByCovenInWindow — ZRANGEBYSCORE over the range + group-by coven
 // (ADR-038 amendment 2026-05-27, per-coven thresholds).
 //
-// Member-value `<sid>|<kid>|<coven>|<nano>` (см. toll.EncodeDisconnect):
-// извлекаем coven из 3-го `|`-сегмента. Невалидные/слишком короткие member-ы
-// пропускаются (defensive: разреш Redis-данные старых форматов после
-// rolling-upgrade без падения).
+// Member-value `<sid>|<kid>|<coven>|<nano>` (see toll.EncodeDisconnect):
+// extract coven from the 3rd `|`-segment. Invalid/too-short members are
+// skipped (defensive: tolerate old-format Redis data after a rolling
+// upgrade without crashing).
 //
-// Возвращает map[coven]count; пустой coven попадает в ключ "" (Watcher
-// допускает пустую coven-метку). На пустом окне — пустой map без ошибки.
+// Returns map[coven]count; an empty coven lands under the "" key (the
+// Watcher allows an empty coven label). On an empty window — an empty map,
+// no error.
 func TollCountByCovenInWindow(ctx context.Context, c *Client, fromUnix, toUnix int64) (map[string]int64, error) {
 	if c == nil {
 		return nil, fmt.Errorf("redis.TollCountByCovenInWindow: nil client")
@@ -93,23 +95,23 @@ func TollCountByCovenInWindow(ctx context.Context, c *Client, fromUnix, toUnix i
 	return counts, nil
 }
 
-// extractCovenFromMember парсит member-value `<sid>|<kid>|<coven>|<nano>` и
-// возвращает 3-й сегмент. ok=false при < 3 сегментах (невалидный/обрезанный
-// member).
+// extractCovenFromMember parses the member-value
+// `<sid>|<kid>|<coven>|<nano>` and returns the 3rd segment. ok=false with <
+// 3 segments (invalid/truncated member).
 func extractCovenFromMember(m string) (string, bool) {
-	// Поиск 1-го `|` → start of kid.
+	// Find the 1st `|` → start of kid.
 	i1 := indexByte(m, '|')
 	if i1 < 0 {
 		return "", false
 	}
 	rest := m[i1+1:]
-	// 2-й `|` → start of coven.
+	// 2nd `|` → start of coven.
 	i2 := indexByte(rest, '|')
 	if i2 < 0 {
 		return "", false
 	}
 	rest = rest[i2+1:]
-	// 3-й `|` → end of coven (есть всегда: EncodeDisconnect добавляет nano-суффикс).
+	// 3rd `|` → end of coven (always present: EncodeDisconnect adds a nano suffix).
 	i3 := indexByte(rest, '|')
 	if i3 < 0 {
 		return "", false
@@ -117,8 +119,8 @@ func extractCovenFromMember(m string) (string, bool) {
 	return rest[:i3], true
 }
 
-// indexByte — локальный аналог strings.IndexByte без импорта strings ради
-// единственной функции. Inline-friendly.
+// indexByte — a local analog of strings.IndexByte without importing strings
+// for a single function. Inline-friendly.
 func indexByte(s string, b byte) int {
 	for i := 0; i < len(s); i++ {
 		if s[i] == b {
@@ -128,9 +130,9 @@ func indexByte(s string, b byte) int {
 	return -1
 }
 
-// TollTrimBelow — ZREMRANGEBYSCORE удаляет всё со score < beforeUnix.
-// Idempotent (на пустой выборке возвращает 0 без ошибки). Caller (Leader)
-// чистит хвост окна на каждом тике.
+// TollTrimBelow — ZREMRANGEBYSCORE removes everything with score <
+// beforeUnix. Idempotent (returns 0 without error on an empty selection).
+// The caller (Leader) trims the window tail on every tick.
 func TollTrimBelow(ctx context.Context, c *Client, beforeUnix int64) error {
 	if c == nil {
 		return fmt.Errorf("redis.TollTrimBelow: nil client")
@@ -144,9 +146,9 @@ func TollTrimBelow(ctx context.Context, c *Client, beforeUnix int64) error {
 	return nil
 }
 
-// TollSetDegraded — `SET cluster:degraded <holder> EX <ttl>`. Не NX — Leader
-// освежает TTL на каждом своём тике (re-arm). Holder для диагностики «какой
-// инстанс взвёл флаг».
+// TollSetDegraded — `SET cluster:degraded <holder> EX <ttl>`. Not NX — the
+// Leader refreshes the TTL on every tick of its own (re-arm). Holder is for
+// diagnosing "which instance raised the flag".
 func TollSetDegraded(ctx context.Context, c *Client, holder string, ttl time.Duration) error {
 	if c == nil {
 		return fmt.Errorf("redis.TollSetDegraded: nil client")
@@ -174,8 +176,9 @@ func TollClearDegraded(ctx context.Context, c *Client) error {
 	return nil
 }
 
-// TollIsDegraded — EXISTS cluster:degraded. true = флаг стоит, false = нет.
-// EXISTS дешевле GET — value не нужен (флаг бинарный).
+// TollIsDegraded — EXISTS cluster:degraded. true = the flag is set, false =
+// it isn't. EXISTS is cheaper than GET — the value isn't needed (the flag
+// is binary).
 func TollIsDegraded(ctx context.Context, c *Client) (bool, error) {
 	if c == nil {
 		return false, fmt.Errorf("redis.TollIsDegraded: nil client")

@@ -8,19 +8,20 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// PGSoulLookup — production-реализация [SoulLookup] над общим pgxpool.Pool.
-// Тонкая обёртка над [soul.SelectBySID]; вынесена отдельно от crud.go ради
-// явности call-site в daemon-wire-up и симметрии с PGStore-адаптерами других
-// подсистем (sigil, cloud, …).
+// PGSoulLookup is the production implementation of [SoulLookup] over the
+// shared pgxpool.Pool. A thin wrapper over [soul.SelectBySID]; kept separate
+// from crud.go for call-site clarity in daemon wire-up and symmetry with
+// PGStore adapters in other subsystems (sigil, cloud, ...).
 type PGSoulLookup struct {
 	pool *pgxpool.Pool
 }
 
-// NewPGSoulLookup собирает адаптер. Pool обязателен (nil-pool — программная
-// ошибка caller-а, валится сразу на первом SelectBySID).
+// NewPGSoulLookup assembles the adapter. Pool is required (a nil pool is a
+// caller programming error, and it will panic immediately on the first
+// SelectBySID).
 func NewPGSoulLookup(pool *pgxpool.Pool) *PGSoulLookup { return &PGSoulLookup{pool: pool} }
 
-// SelectBySID реализует [SoulLookup]: проксирует на [soul.SelectBySID].
+// SelectBySID implements [SoulLookup]: it proxies to [soul.SelectBySID].
 func (l *PGSoulLookup) SelectBySID(ctx context.Context, sid string) (*soul.Soul, error) {
 	return soul.SelectBySID(ctx, l.pool, sid)
 }
