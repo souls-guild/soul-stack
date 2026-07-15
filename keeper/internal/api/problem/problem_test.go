@@ -43,7 +43,7 @@ func TestWrite_SetsContentType(t *testing.T) {
 	if p.Type != TypeNotFound || p.Status != 404 {
 		t.Errorf("body shape: %+v", p)
 	}
-	// JSON не должен начинаться с BOM (0xEF 0xBB 0xBF).
+	// JSON must not start with a BOM (0xEF 0xBB 0xBF).
 	body := rec.Body.Bytes()
 	if len(body) >= 3 && body[0] == 0xEF && body[1] == 0xBB && body[2] == 0xBF {
 		t.Errorf("body has UTF-8 BOM")

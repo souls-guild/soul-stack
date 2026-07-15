@@ -1,23 +1,23 @@
-// Operator API handler-ы реестра Augur (Omen — внешняя система, Rite — grant;
-// ADR-025, augur.md §4). Тот же [augur.Service] вызывает MCP-tool-handler
-// (keeper.augur.omen.* / keeper.augur.rite.*), один источник правды.
+// Operator API handlers for the Augur registry (Omen — external system, Rite — grant;
+// ADR-025, augur.md §4). The same [augur.Service] backs the MCP tool handlers
+// (keeper.augur.omen.* / keeper.augur.rite.*) — one source of truth.
 //
-// T5d-2c (handler-native): домен augur отвязан от legacy-генерата. *Typed-функции
-// принимают NATIVE request-типы (handlers.OmenCreateInput / RiteCreateInput;
-// huma-input в пакете api биндит и валидирует тело по этим полям) и возвращают
-// доменные result-ы с ПЛОСКИМИ wire-полями (handlers.OmenView / RiteView) — НЕ
-// legacy-генерата-Body. Native wire-DTO (схему OpenAPI) строит пакет api из этих полей
-// (register-func huma_augur.go), oapi-генерёные типы в augur-домене не участвуют.
-// (w,r)-оболочки сняты: HTTP обслуживает huma full-typed, MCP зовёт
-// augur.Service напрямую (мимо handler — Service-direct, не httptest).
+// T5d-2c (handler-native): the augur domain is decoupled from the legacy generator.
+// *Typed functions take NATIVE request types (handlers.OmenCreateInput / RiteCreateInput;
+// the huma-input in package api binds and validates the body against these fields) and
+// return domain results with FLAT wire fields (handlers.OmenView / RiteView), NOT a
+// legacy-generator Body. Package api builds the native wire-DTO (the OpenAPI schema) from
+// these fields (register func huma_augur.go); oapi-generated types play no part in the
+// augur domain. The (w,r) wrappers are gone: HTTP is served by huma full-typed, MCP calls
+// augur.Service directly (bypassing the handler — Service-direct, not httptest).
 //
-// Бизнес-логика (валидация name/source_type/auth_ref, XOR-субъект, allow-shape,
-// token-поля) — в [augur.Service]; handler делает path/query-валидацию и маппит
-// sentinel-ы в RFC 7807. RBAC — в middleware (router.go).
+// Business logic (name/source_type/auth_ref validation, XOR subject, allow-shape,
+// token fields) lives in [augur.Service]; the handler does path/query validation and maps
+// sentinels to RFC 7807. RBAC lives in middleware (router.go).
 //
-// БЕЗОПАСНОСТЬ: master-credential внешней системы в реестре НЕ хранится (только
-// auth_ref — vault-ref, augur.md §4.1); endpoint / auth_ref / allow секретов не
-// несут и логируются в audit. Значения секретов через этот path не проходят.
+// SECURITY: the external system's master credential is NOT stored in the registry (only
+// auth_ref — a vault-ref, augur.md §4.1); endpoint / auth_ref / allow carry no secrets and
+// are logged in audit. Secret values never pass through this path.
 package handlers
 
 import (
@@ -37,20 +37,20 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// reOmenName — формат path-сегмента {name} Omen-а (kebab 1..63, augur.NamePattern).
-// Path-сегмент без слешей/`..` — безопасен от traversal.
+// reOmenName — format of the {name} path segment of an Omen (kebab 1..63, augur.NamePattern).
+// A path segment without slashes/`..` is traversal-safe.
 var reOmenName = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
 
-// AugurHandler — REST-эндпоинты реестра Augur (omens + rites). Делегирует
-// бизнес-логику в [augur.Service]. Все зависимости immutable; safe for
+// AugurHandler — REST endpoints of the Augur registry (omens + rites). Delegates
+// business logic to [augur.Service]. All dependencies are immutable; safe for
 // concurrent use.
 type AugurHandler struct {
 	svc    *augur.Service
 	logger *slog.Logger
 }
 
-// NewAugurHandler создаёт handler. svc обязателен (паника при nil — единственная
-// точка misconfiguration; caller обязан передать non-nil).
+// NewAugurHandler builds the handler. svc is required (panic on nil — the only
+// misconfiguration point; caller must pass non-nil).
 func NewAugurHandler(svc *augur.Service, logger *slog.Logger) *AugurHandler {
 	if svc == nil {
 		panic("handlers.NewAugurHandler: augur.Service is nil")
@@ -61,20 +61,20 @@ func NewAugurHandler(svc *augur.Service, logger *slog.Logger) *AugurHandler {
 	return &AugurHandler{svc: svc, logger: logger}
 }
 
-// AugurSpecStub — непустой *AugurHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaAugurSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [OperatorSpecStub]).
+// AugurSpecStub — a non-empty *AugurHandler stub for generating the huma OpenAPI
+// fragment (HumaAugurSpecYAML): the domain handler is not called during dump, but
+// huma.Register requires non-nil for its nil no-op check. svc is nil — the handler
+// never executes in spec mode (parity [OperatorSpecStub]).
 func AugurSpecStub() *AugurHandler {
 	return &AugurHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
 // --- Omen -------------------------------------------------------------
 
-// OmenView — ПЛОСКАЯ wire-форма Omen-а (create-201 / list-item / get-200),
-// handler-native. created_by_aid — nullable (NULL → ключ опущен). source_type —
-// плоская строка (пакет api проецирует её в native enum OmenViewSourceType).
-// created_at — UTC + Truncate(Second) (фиксируется здесь, как в эталоне operator).
+// OmenView — FLAT wire form of an Omen (create-201 / list-item / get-200),
+// handler-native. created_by_aid is nullable (NULL → key omitted). source_type is a
+// flat string (package api projects it into the native enum OmenViewSourceType).
+// created_at is UTC + Truncate(Second) (pinned here, as in the operator reference).
 type OmenView struct {
 	Name         string
 	SourceType   string
@@ -95,10 +95,10 @@ func toOmenView(o *augur.Omen) OmenView {
 	}
 }
 
-// OmenCreateInput — NATIVE request-форма POST /v1/augur/omens (handler-native).
-// Заменяет OmenCreateRequest: huma-input (пакет api) биндит и валидирует
-// тело по этим полям, затем зовёт CreateOmenTyped. Закрытый набор source_type
-// валидирует service (доменный ValidSourceType).
+// OmenCreateInput — NATIVE request form for POST /v1/augur/omens (handler-native).
+// Replaces OmenCreateRequest: the huma-input (package api) binds and validates the
+// body against these fields, then calls CreateOmenTyped. The service validates the
+// closed source_type set (domain ValidSourceType).
 type OmenCreateInput struct {
 	Name       string
 	SourceType string
@@ -106,15 +106,15 @@ type OmenCreateInput struct {
 	AuthRef    string
 }
 
-// OmenCreateReply — извлечённый результат [AugurHandler.CreateOmenTyped]
-// (handler-native). Несёт плоский 201-вид (View) + caller AID (для audit-payload).
+// OmenCreateReply — extracted result of [AugurHandler.CreateOmenTyped]
+// (handler-native). Carries the flat 201 view (View) + caller AID (for audit-payload).
 type OmenCreateReply struct {
 	View      OmenView
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload omen.create-роута (parity легаси:
-// name/source_type/endpoint/auth_ref/created_by_aid; без секретов, augur.md §8).
+// AuditPayload builds the audit-payload for the omen.create route (legacy parity:
+// name/source_type/endpoint/auth_ref/created_by_aid; no secrets, augur.md §8).
 func (r OmenCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.View.Name,
@@ -125,9 +125,9 @@ func (r OmenCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateOmenTyped — доменная функция POST /v1/augur/omens (handler-native):
-// svc.CreateOmen + sentinel→problem. Ошибки — *problemError; успех —
-// [OmenCreateReply] (плоский 201-вид + audit-поля).
+// CreateOmenTyped — domain function POST /v1/augur/omens (handler-native):
+// svc.CreateOmen + sentinel→problem. Errors are *problemError; success is
+// [OmenCreateReply] (flat 201 view + audit fields).
 func (h *AugurHandler) CreateOmenTyped(ctx context.Context, claims *keeperjwt.Claims, req OmenCreateInput) (OmenCreateReply, error) {
 	var zero OmenCreateReply
 	callerAID := claims.Subject
@@ -144,9 +144,9 @@ func (h *AugurHandler) CreateOmenTyped(ctx context.Context, claims *keeperjwt.Cl
 	return OmenCreateReply{View: toOmenView(o), CallerAID: callerAID}, nil
 }
 
-// OmenListPage — доменный paged-результат GET /v1/augur/omens (handler-native).
-// Плоские offset/limit/total + срез OmenView; пакет api проецирует в native
-// envelope OmenListReply.
+// OmenListPage — domain paged result of GET /v1/augur/omens (handler-native).
+// Flat offset/limit/total + a slice of OmenView; package api projects it into the
+// native envelope OmenListReply.
 type OmenListPage struct {
 	Items  []OmenView
 	Offset int
@@ -154,9 +154,9 @@ type OmenListPage struct {
 	Total  int
 }
 
-// ListOmensTyped — доменная функция GET /v1/augur/omens (handler-native, read-
-// with-typed-query, БЕЗ audit). offset/limit приходят уже провалидированными
-// (huma-bind int32); диапазон enforce-ит CheckPageBounds → 400. Ошибка чтения →
+// ListOmensTyped — domain function GET /v1/augur/omens (handler-native, read with
+// typed query, no audit). offset/limit arrive already validated (huma-bind int32);
+// CheckPageBounds enforces the range → 400. A read error →
 // *problemError (500).
 func (h *AugurHandler) ListOmensTyped(ctx context.Context, offset, limit int) (OmenListPage, error) {
 	var zero OmenListPage
@@ -176,9 +176,9 @@ func (h *AugurHandler) ListOmensTyped(ctx context.Context, offset, limit int) (O
 	return OmenListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetOmenTyped — доменная функция GET /v1/augur/omens/{name} (handler-native,
-// read-with-path, БЕЗ audit): валидация path-name + svc.GetOmen + sentinel→problem
-// (404/422/500). Ошибки — *problemError; успех — [OmenView].
+// GetOmenTyped — domain function GET /v1/augur/omens/{name} (handler-native,
+// read with path, no audit): path-name validation + svc.GetOmen + sentinel→problem
+// (404/422/500). Errors are *problemError; success is [OmenView].
 func (h *AugurHandler) GetOmenTyped(ctx context.Context, name string) (OmenView, error) {
 	var zero OmenView
 	if !reOmenName.MatchString(name) {
@@ -198,20 +198,20 @@ func (h *AugurHandler) GetOmenTyped(ctx context.Context, name string) (OmenView,
 	}
 }
 
-// OmenDeleteReply — извлечённый результат [AugurHandler.DeleteOmenTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// OmenDeleteReply — extracted result of [AugurHandler.DeleteOmenTyped]
+// (handler-native). Carries audit fields (HTTP response is an empty 204 body).
 type OmenDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload omen.delete-роута (parity легаси: name).
+// AuditPayload builds the audit-payload for the omen.delete route (legacy parity: name).
 func (r OmenDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteOmenTyped — доменная функция DELETE /v1/augur/omens/{name} (handler-
-// native): валидация path-name + svc.DeleteOmen + sentinel→problem. Ошибки —
-// *problemError; успех — [OmenDeleteReply].
+// DeleteOmenTyped — domain function DELETE /v1/augur/omens/{name} (handler-
+// native): path-name validation + svc.DeleteOmen + sentinel→problem. Errors are
+// *problemError; success is [OmenDeleteReply].
 func (h *AugurHandler) DeleteOmenTyped(ctx context.Context, name string) (OmenDeleteReply, error) {
 	var zero OmenDeleteReply
 	if !reOmenName.MatchString(name) {
@@ -231,13 +231,13 @@ func (h *AugurHandler) DeleteOmenTyped(ctx context.Context, name string) (OmenDe
 	}
 }
 
-// omenError маппит sentinel-ы [augur.Service] (Omen create) в *problemError:
+// omenError maps [augur.Service] sentinels (Omen create) to *problemError:
 //   - ErrValidation       → validation-failed (422).
 //   - ErrOmenAlreadyExists → omen-already-exists (409).
 //
-// Для unknown-ошибок — internal-error (500) + generic-detail (raw err.Error()
-// не пробрасывается клиенту; диагностика — в логах). Доставляется huma-обёрткой
-// через AsProblemDetails.
+// For unknown errors — internal-error (500) + generic detail (raw err.Error()
+// is not surfaced to the client; diagnostics go to the logs). Delivered by the huma
+// wrapper via AsProblemDetails.
 func (h *AugurHandler) omenError(op, name, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, augur.ErrValidation):
@@ -253,11 +253,11 @@ func (h *AugurHandler) omenError(op, name, callerAID string, err error) error {
 
 // --- Rite -------------------------------------------------------------
 
-// RiteView — ПЛОСКАЯ wire-форма Rite-а (create-201 / list-item), handler-native.
-// allow — byte-passthrough JSONB ([json.RawMessage], ADR-051 категория D): сырые
-// байты домена едут as-is, БЕЗ unmarshal→map→marshal (re-marshal переупорядочил бы
-// ключи — PG-JSONB-канонизация ≠ Go-`map`-marshal лексикографический порядок).
-// coven/sid/token_*/created_by_aid — nullable (nil → ключ опущен). created_at —
+// RiteView — FLAT wire form of a Rite (create-201 / list-item), handler-native.
+// allow is byte-passthrough JSONB ([json.RawMessage], ADR-051 category D): the domain's
+// raw bytes travel as-is, without unmarshal→map→marshal (re-marshal would reorder the
+// keys — PG JSONB canonicalization ≠ Go `map`-marshal lexicographic order).
+// coven/sid/token_*/created_by_aid are nullable (nil → key omitted). created_at is
 // UTC + Truncate(Second).
 type RiteView struct {
 	ID           int64
@@ -287,11 +287,11 @@ func toRiteView(r *augur.Rite) RiteView {
 	}
 }
 
-// RiteCreateInput — NATIVE request-форма POST /v1/augur/rites (handler-native).
-// Заменяет RiteCreateRequest: subject — XOR coven/sid; allow —
-// `json.RawMessage` (byte-passthrough JSONB, ADR-051 категория D); delegate —
-// pointer-optional (опущено → false). XOR-субъект / allow-shape / token-поля
-// валидирует service.
+// RiteCreateInput — NATIVE request form for POST /v1/augur/rites (handler-native).
+// Replaces RiteCreateRequest: subject is XOR coven/sid; allow is
+// `json.RawMessage` (byte-passthrough JSONB, ADR-051 category D); delegate is
+// pointer-optional (omitted → false). The service validates XOR subject / allow-shape /
+// token fields.
 type RiteCreateInput struct {
 	Omen         string
 	Coven        *string
@@ -302,17 +302,17 @@ type RiteCreateInput struct {
 	TokenNumUses *int
 }
 
-// RiteCreateReply — извлечённый результат [AugurHandler.CreateRiteTyped]
-// (handler-native). Несёт плоский 201-вид (View) + субъект и caller AID (для
-// audit-payload; allow-list в audit НЕ кладётся, augur.md §8).
+// RiteCreateReply — extracted result of [AugurHandler.CreateRiteTyped]
+// (handler-native). Carries the flat 201 view (View) + subject and caller AID (for
+// audit-payload; the allow-list is NOT put into audit, augur.md §8).
 type RiteCreateReply struct {
 	View      RiteView
 	Subject   string
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload rite.create-роута (parity легаси:
-// id/omen/subject/delegate/created_by_aid; allow НЕ кладётся).
+// AuditPayload builds the audit-payload for the rite.create route (legacy parity:
+// id/omen/subject/delegate/created_by_aid; allow is NOT included).
 func (r RiteCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"id":             r.View.ID,
@@ -323,10 +323,10 @@ func (r RiteCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateRiteTyped — доменная функция POST /v1/augur/rites (handler-native):
-// svc.CreateRite + sentinel→problem. allow — byte-passthrough JSONB (ADR-051
-// категория D), едет в service-валидатор напрямую. Ошибки — *problemError; успех —
-// [RiteCreateReply] (плоский 201-вид + audit-поля).
+// CreateRiteTyped — domain function POST /v1/augur/rites (handler-native):
+// svc.CreateRite + sentinel→problem. allow is byte-passthrough JSONB (ADR-051
+// category D), passed straight to the service validator. Errors are *problemError;
+// success is [RiteCreateReply] (flat 201 view + audit fields).
 func (h *AugurHandler) CreateRiteTyped(ctx context.Context, claims *keeperjwt.Claims, req RiteCreateInput) (RiteCreateReply, error) {
 	var zero RiteCreateReply
 	callerAID := claims.Subject
@@ -346,16 +346,16 @@ func (h *AugurHandler) CreateRiteTyped(ctx context.Context, claims *keeperjwt.Cl
 	return RiteCreateReply{View: toRiteView(rite), Subject: riteSubject(rite), CallerAID: callerAID}, nil
 }
 
-// RiteListResult — доменный результат GET /v1/augur/rites?omen=<name> (handler-
-// native, items-only без пагинации). Пакет api проецирует в native RiteListReply.
+// RiteListResult — domain result of GET /v1/augur/rites?omen=<name> (handler-
+// native, items-only, no pagination). Package api projects it into native RiteListReply.
 type RiteListResult struct {
 	Items []RiteView
 }
 
-// ListRitesTyped — доменная функция GET /v1/augur/rites?omen=<name> (handler-
-// native, read-with-typed-query, БЕЗ audit). Фильтр by-omen ОБЯЗАТЕЛЕН в MVP
-// (augur.md §6): пустой/битый omen → 422 (доменная regex-валидация). Ошибка
-// чтения → *problemError (500).
+// ListRitesTyped — domain function GET /v1/augur/rites?omen=<name> (handler-
+// native, read with typed query, no audit). The by-omen filter is REQUIRED in MVP
+// (augur.md §6): empty/malformed omen → 422 (domain regex validation). A read
+// error → *problemError (500).
 func (h *AugurHandler) ListRitesTyped(ctx context.Context, omen string) (RiteListResult, error) {
 	var zero RiteListResult
 	if !reOmenName.MatchString(omen) {
@@ -377,20 +377,20 @@ func (h *AugurHandler) ListRitesTyped(ctx context.Context, omen string) (RiteLis
 	return RiteListResult{Items: items}, nil
 }
 
-// RiteDeleteReply — извлечённый результат [AugurHandler.DeleteRiteTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// RiteDeleteReply — extracted result of [AugurHandler.DeleteRiteTyped]
+// (handler-native). Carries audit fields (HTTP response is an empty 204 body).
 type RiteDeleteReply struct {
 	ID int64
 }
 
-// AuditPayload собирает audit-payload rite.delete-роута (parity легаси: id).
+// AuditPayload builds the audit-payload for the rite.delete route (legacy parity: id).
 func (r RiteDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteRiteTyped — доменная функция DELETE /v1/augur/rites/{id} (handler-
-// native): валидация path-id (положительное число → 422) + svc.DeleteRite +
-// sentinel→problem. Ошибки — *problemError; успех — [RiteDeleteReply].
+// DeleteRiteTyped — domain function DELETE /v1/augur/rites/{id} (handler-
+// native): path-id validation (must be a positive integer, else 422) + svc.DeleteRite +
+// sentinel→problem. Errors are *problemError; success is [RiteDeleteReply].
 func (h *AugurHandler) DeleteRiteTyped(ctx context.Context, rawID string) (RiteDeleteReply, error) {
 	var zero RiteDeleteReply
 	id, perr := strconv.ParseInt(rawID, 10, 64)
@@ -412,9 +412,9 @@ func (h *AugurHandler) DeleteRiteTyped(ctx context.Context, rawID string) (RiteD
 	}
 }
 
-// riteError маппит sentinel-ы [augur.Service] (Rite create) в *problemError:
+// riteError maps [augur.Service] sentinels (Rite create) to *problemError:
 //   - ErrValidation   → validation-failed (422).
-//   - ErrOmenNotFound → not-found (404; Omen grant-а не существует).
+//   - ErrOmenNotFound → not-found (404; the grant's Omen does not exist).
 func (h *AugurHandler) riteError(op, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, augur.ErrValidation):
@@ -428,9 +428,9 @@ func (h *AugurHandler) riteError(op, callerAID string, err error) error {
 	}
 }
 
-// riteSubject — человекочитаемая форма субъекта Rite-а для audit-payload
-// (`coven=<v>` / `sid=<v>`). XOR гарантирован валидацией; при пустом обоих
-// (теоретически невозможно после insert) — пустая строка.
+// riteSubject — human-readable form of a Rite's subject for the audit-payload
+// (`coven=<v>` / `sid=<v>`). XOR is guaranteed by validation; if both are empty
+// (theoretically impossible after insert) — empty string.
 func riteSubject(r *augur.Rite) string {
 	if r.Coven != nil && *r.Coven != "" {
 		return "coven=" + *r.Coven

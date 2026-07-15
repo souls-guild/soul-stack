@@ -1,13 +1,14 @@
 package api
 
-// РЕГРЕСС NIM-37: live-ход прогона (SSE) за ПОЛНЫМ прод-middleware /v1. Существующий
-// huma_sse_test.go гоняет урезанный роутер (RequireJWT + huma), где huma BodyWriter
-// разворачивается прямо в chi *http.response (сам http.Flusher) — потому флаш «работает»
-// и баг невидим. В проде events-роут обёрнут obs-metrics-рекордером (router.go
-// MiddlewareForPath) — он встраивает http.ResponseWriter без Unwrap/Flush, рвёт цепочку
-// unwrapFlusher → flush=no-op → huma StreamResponse не коммитит ответ → клиент 0 байт.
-// Здесь роутер несёт ту же обёртку (obs-metrics + audit-StatusRecorder), и тест требует,
-// чтобы стартовый `:ok`-preamble долетел ДО публикации любого события.
+// REGRESSION NIM-37: live run progress (SSE) behind the FULL prod /v1 middleware. The
+// existing huma_sse_test.go runs a trimmed router (RequireJWT + huma), where the huma
+// BodyWriter unwraps directly to the chi *http.response (itself an http.Flusher) — so the
+// flush "works" and the bug is invisible. In prod the events route is wrapped by the
+// obs-metrics recorder (router.go MiddlewareForPath) — it embeds http.ResponseWriter without
+// Unwrap/Flush, breaking the unwrapFlusher chain → flush=no-op → huma StreamResponse does not
+// commit the response → the client gets 0 bytes. Here the router carries the same wrapper
+// (obs-metrics + audit StatusRecorder), and the test requires the starting `:ok` preamble to
+// reach the client BEFORE any event is published.
 
 import (
 	"bufio"
@@ -28,9 +29,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// sseHarnessProdMiddleware — /v1-роутер с events-роутом за ПРОД-обёртками ResponseWriter:
-// obs-metrics-рекордер (как router.go) + audit StatusRecorder. Оба встраивают
-// http.ResponseWriter; проверяем, что флаш SSE проходит сквозь них до сокета.
+// sseHarnessProdMiddleware — a /v1 router with the events route behind the PROD ResponseWriter
+// wrappers: the obs-metrics recorder (like router.go) + the audit StatusRecorder. Both embed
+// http.ResponseWriter; we check that the SSE flush passes through them to the socket.
 func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac apimiddleware.PermissionChecker) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
@@ -44,8 +45,8 @@ func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEv
 	}
 
 	metrics := obs.RegisterHTTPMetrics(obs.NewRegistry())
-	// Оборачивает writer в общий audit StatusRecorder (как делает apimiddleware.Audit на
-	// write-роутах): второе звено, которое обязано быть прозрачным для flush/unwrap.
+	// Wraps the writer in the shared audit StatusRecorder (as apimiddleware.Audit does on
+	// write routes): the second link that must be transparent to flush/unwrap.
 	auditRecorderWrap := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(apimiddleware.NewStatusRecorder(w), r)
@@ -54,7 +55,7 @@ func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEv
 
 	r := chi.NewRouter()
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(metrics.MiddlewareForPath(nil)) // прод-обёртка events-роута (router.go:261)
+		r.Use(metrics.MiddlewareForPath(nil)) // prod wrapper of the events route (router.go:261)
 		r.Use(apimiddleware.RequireJWT(verifier))
 		r.Route("/incarnations", func(r chi.Router) {
 			r.Group(func(r chi.Router) {
@@ -82,10 +83,11 @@ func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEv
 	return srv, mint
 }
 
-// TestRunEventsSSE_PreambleFlushesThroughV1Middleware — стартовый `:ok`-preamble обязан
-// долететь до клиента, пока хендлер ещё стримит (событий не публикуем). Без Unwrap/Flush
-// в obs/audit-рекордерах huma StreamResponse не коммитит ответ → Do висит до дедлайна →
-// тест краснеет. С фиксом флаш проходит → 200 + preamble приходят сразу.
+// TestRunEventsSSE_PreambleFlushesThroughV1Middleware — the starting `:ok` preamble must
+// reach the client while the handler is still streaming (we publish no events). Without
+// Unwrap/Flush in the obs/audit recorders, huma StreamResponse does not commit the response →
+// Do hangs until the deadline → the test reddens. With the fix the flush passes → 200 +
+// preamble arrive immediately.
 func TestRunEventsSSE_PreambleFlushesThroughV1Middleware(t *testing.T) {
 	bus := applybus.NewBus(discardLogger())
 	const applyID = "01APPLYFLUSHGUARD0000000000"
@@ -112,8 +114,9 @@ func TestRunEventsSSE_PreambleFlushesThroughV1Middleware(t *testing.T) {
 	}
 }
 
-// readSSEPreambleLine читает первую строку SSE-потока (стартовый `:ok`-комментарий) с
-// таймаутом. В отличие от readFirstSSEFrame НЕ пропускает `:`-комментарии — их и проверяем.
+// readSSEPreambleLine reads the first line of the SSE stream (the starting `:ok` comment)
+// with a timeout. Unlike readFirstSSEFrame it does NOT skip `:` comments — those are exactly
+// what we check.
 func readSSEPreambleLine(t *testing.T, r io.Reader) string {
 	t.Helper()
 	ch := make(chan string, 1)

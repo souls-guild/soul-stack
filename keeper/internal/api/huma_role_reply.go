@@ -1,34 +1,37 @@
 package api
 
-// HUMA-NATIVE wire-DTO ROLE-домена (handler-native T5d). Reply/output Body huma-
-// операций — native Go-struct в пакете api, БЕЗ legacy-генерата. Handler (handlers/role.go)
-// возвращает доменные result-ы с плоскими полями; register-func (huma_role.go)
-// проецирует их В ЭТИ типы напрямую — конвертеров legacy-генерата → native больше нет.
-// Ключевое:
+// HUMA-NATIVE wire-DTOs of the ROLE domain (handler-native T5d). The Reply/output Body
+// of the huma operations are native Go structs in package api, with no legacy
+// generator. The handler (handlers/role.go) returns domain results with flat fields;
+// the register func (huma_role.go) projects them INTO THESE types directly — there
+// are no more legacy-generator → native converters. Key points:
 //
-//   - ИМЯ СХЕМЫ = контрактное (RoleView): huma DefaultSchemaNamer берёт
-//     reflect.Type.Name() → схема под тем же именем, что давал RoleView.
-//   - Единственный reply домена с телом — GET /v1/roles (RoleListReply.Items []RoleView).
-//     create/delete/update-permissions/grant/revoke — 201/204 БЕЗ тела.
-//   - default_scope/description — `*string` С omitempty (nil → ключ опущен); operators/
-//     permissions — `[]string` БЕЗ omitempty (handler даёт non-nil пустой массив → `[]`).
-//   - ФОРМА wire (json-теги/omitempty/[]-vs-null категории A-D ADR-051) — golden
-//     byte-exact фиксирует huma_role_reply_test.go.
+//   - THE SCHEMA NAME = the contract one (RoleView): huma DefaultSchemaNamer takes
+//     reflect.Type.Name() → a schema under the same name RoleView gave.
+//   - The domain's only reply with a body is GET /v1/roles (RoleListReply.Items
+//     []RoleView). create/delete/update-permissions/grant/revoke — 201/204 with no
+//     body.
+//   - default_scope/description — `*string` WITH omitempty (nil → key omitted);
+//     operators/permissions — `[]string` WITHOUT omitempty (the handler gives a
+//     non-nil empty array → `[]`).
+//   - THE wire SHAPE (json tags/omitempty/[]-vs-null, categories A-D of ADR-051) —
+//     golden byte-exact pinned by huma_role_reply_test.go.
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// OUTPUT-PATTERN ИМЁН (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). name ← rbac.RoleNamePattern. Формат для клиент-
-// кодогена; pattern не влияет на json.Marshal (golden byte-exact цел). RoleView output-only
-// (role.list — отдельный *Request на create) → input-422-риска нет. operators[] НЕ
-// тегируется: это AID (operator.AIDPattern), вне name-скоупа этого батча.
+// NAME OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT
+// validate the response body (empirically 200, not 500). name ← rbac.RoleNamePattern.
+// A format for client codegen; the pattern does not affect json.Marshal (golden
+// byte-exact intact). RoleView is output-only (role.list — a separate *Request for
+// create) → no input-422 risk. operators[] is NOT tagged: it is an AID
+// (operator.AIDPattern), outside the name scope of this batch.
 
-// RoleView — native запись каталога ролей (element RoleListReply.items). Форма 1:1 с
-// прежним RoleView: builtin (bool), default_scope/description — `*string` С
-// omitempty (nil → ключ опущен), operators/permissions — `[]string` БЕЗ omitempty
-// (пустой массив, не nil).
+// RoleView — a native role-catalog record (element RoleListReply.items). Shape 1:1
+// with the former RoleView: builtin (bool), default_scope/description — `*string`
+// WITH omitempty (nil → key omitted), operators/permissions — `[]string` WITHOUT
+// omitempty (an empty array, not nil).
 type RoleView struct {
 	Builtin      bool     `json:"builtin"`
 	DefaultScope *string  `json:"default_scope,omitempty"`
@@ -38,12 +41,12 @@ type RoleView struct {
 	Permissions  []string `json:"permissions"`
 }
 
-// === проекция доменного handlers.RoleView (плоские поля) → native wire-DTO ===
+// === projection of domain handlers.RoleView (flat fields) → native wire-DTO ===
 
-// newRoleView проецирует плоскую доменную handlers.RoleView в native RoleView.
-// Description отдаётся всегда (даже пустой "" — поле без omitempty в прежнем wire),
-// поэтому указатель безусловный; DefaultScope пустой (NULL) → nil (omitempty опускает
-// ключ — роль без scope).
+// newRoleView projects the flat domain handlers.RoleView into the native RoleView.
+// Description is always emitted (even empty "" — a field without omitempty in the
+// former wire), so the pointer is unconditional; an empty DefaultScope (NULL) → nil
+// (omitempty omits the key — a role with no scope).
 func newRoleView(v handlers.RoleView) RoleView {
 	desc := v.Description
 	out := RoleView{
@@ -59,9 +62,10 @@ func newRoleView(v handlers.RoleView) RoleView {
 	return out
 }
 
-// newRoleListReply проецирует доменный handlers.RoleListPage в native RoleListReply
-// (items под `items`, БЕЗ пагинации). Сохраняет nil-vs-empty input 1:1 (nil → null,
-// [] → []) ради byte-exact wire каталога (категория B ADR-051).
+// newRoleListReply projects the domain handlers.RoleListPage into the native
+// RoleListReply (items under `items`, with no pagination). Preserves nil-vs-empty
+// input 1:1 (nil → null, [] → []) for the catalog's byte-exact wire (category B of
+// ADR-051).
 func newRoleListReply(p handlers.RoleListPage) RoleListReply {
 	if p.Items == nil {
 		return RoleListReply{Items: nil}

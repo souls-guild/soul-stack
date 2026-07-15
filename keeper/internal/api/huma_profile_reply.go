@@ -1,18 +1,18 @@
 package api
 
-// HUMA-NATIVE reply-DTO PROFILE-домена (Cloud Profile CRUD, ADR-017). Имя
-// структуры = контрактное имя схемы. Форма выровнена под MCP-output
+// HUMA-NATIVE reply-DTO of the PROFILE domain (Cloud Profile CRUD, ADR-017). The struct
+// name = the contract schema name. The shape is aligned with the MCP output
 // schemaProfileCreateOutput (manifest.go): name/provider/params + cloud_init
-// (опц.) + created_at + created_by_aid (nullable). params нормализован nil→{}
-// handler-ом (на wire всегда объект).
+// (optional) + created_at + created_by_aid (nullable). params is normalized nil→{} by the
+// handler (always an object on the wire).
 
 import (
 	"time"
 )
 
-// Profile — native запись реестра profiles (POST 201 / GET 200 / list-element).
-// params — `map` БЕЗ omitempty (handler даёт {} при nil); cloud_init /
-// created_by_aid — `*string` С omitempty; created_at — наносекундный time-wire.
+// Profile — native profiles-registry record (POST 201 / GET 200 / list-element).
+// params — `map` with NO omitempty (handler gives {} when nil); cloud_init /
+// created_by_aid — `*string` WITH omitempty; created_at — nanosecond time-wire.
 type Profile struct {
 	CloudInit    *string                `json:"cloud_init,omitempty"`
 	CreatedAt    time.Time              `json:"created_at"`
@@ -22,7 +22,7 @@ type Profile struct {
 	Provider     string                 `json:"provider"`
 }
 
-// ProfileListReply — native 200-тело GET /v1/profiles (offset-envelope).
+// ProfileListReply — native 200 body for GET /v1/profiles (offset-envelope).
 type ProfileListReply struct {
 	Items  []Profile `json:"items"`
 	Limit  int       `json:"limit"`

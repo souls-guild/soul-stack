@@ -1,16 +1,16 @@
 package api
 
-// FULL-TYPED форма GET /v1/cadences (code-first источник OpenAPI, ADR-054 §Pattern
-// ЧЕТВЁРТЫЙ tier — read-with-typed-query). Go-типы — единственный источник правды:
-// huma строит из них И JSON Schema OpenAPI-фрагмента (query-параметры с типами/
-// границами/enum), И typed-bind входа, И typed-output. Teardown T1 завершает
-// перенос cadence-домена на huma (последний live strict-mount в /v1).
+// FULL-TYPED shape of GET /v1/cadences (code-first OpenAPI source, ADR-054 §Pattern
+// FOURTH tier — read with typed query). Go types are the single source of truth:
+// huma builds from them BOTH the JSON Schema OpenAPI fragment (query params with types/
+// bounds/enum), the typed-bind input, AND the typed output. Teardown T1 completes the
+// migration of the cadence domain to huma (the last live strict-mount in /v1).
 //
-// КЛЮЧЕВОЙ инвариант tier-а (контракт сохранён, parity legacy List): bad-int
-// offset/limit → 400 TypeMalformedRequest (huma parseInto-фейл → error-override
-// hasQueryParseError); out-of-range offset/limit → 400 (домен CheckPageBounds, НЕ
+// KEY tier invariant (contract preserved, parity with legacy List): bad-int
+// offset/limit → 400 TypeMalformedRequest (huma parseInto failure → error-override
+// hasQueryParseError); out-of-range offset/limit → 400 (domain CheckPageBounds, NOT
 // huma min/max); bad enabled/kind enum → 422 TypeValidationFailed (schema-validate
-// enum-mismatch — другой Message, в parse-набор не попадает; ровно как leglist).
+// enum-mismatch — a different Message, not in the parse set; exactly like leglist).
 
 import (
 	"net/http"
@@ -20,25 +20,25 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// cadenceListInput — huma-input GET /v1/cadences (FULL-TYPED typed-query). КАЖДОЕ
-// поле несёт `query:"<name>"`-тег → huma биндит из url.Values и валидирует по схеме
-// из тегов. RequestBody у GET НЕТ (huma не выводит body без Body-поля).
+// cadenceListInput — huma input for GET /v1/cadences (FULL-TYPED typed-query). EVERY
+// field carries a `query:"<name>"` tag → huma binds from url.Values and validates by the
+// schema from the tags. GET has NO RequestBody (huma emits no body without a Body field).
 //
-// Семантика bind-фазы (parity легаси CadenceHandler.List → ListTyped):
-//   - Enabled — string c enum:"true,false": empty (опущен) → фильтр не применять;
-//     "true" → только enabled; "false" → без фильтра (показать все). Значение вне
-//     набора → 422 (schema-validate enum-mismatch → error-override TypeValidationFailed,
-//     ровно как legacy "query 'enabled' must be 'true' or 'false'"). НЕ *bool: легаси-
-//     контракт даёт на bad-value 422, а *bool-parse дал бы 400.
-//   - Kind — string c enum:"scenario,command": exact-match по kind рецепта; вне
-//     набора → 422 (parity legacy ValidKind → 422). Опущен → без фильтра.
-//   - Offset/Limit — int32 (НЕ Go-int: huma на int эмитит format:int64, committed-
-//     спека несёт int32; пагинация влезает в int32) с `default` (offset 0, limit 50),
-//     совпадающим с shared/api.ParsePage. bad-int (нечисловое) → 400 (parseInto).
-//     ГРАНИЦЫ диапазона (offset≥0, limit∈[1,1000]) НЕ выражены huma-тегами
-//     minimum/maximum СОЗНАТЕЛЬНО: huma отбивал бы out-of-range на 422, а легаси/
-//     ParsePage даёт ровно 400 (TypeMalformedRequest). Диапазон enforce-ит доменная
-//     ListTyped через CheckPageBounds → 400 — иначе wire-change.
+// Bind-phase semantics (parity with legacy CadenceHandler.List → ListTyped):
+//   - Enabled — string with enum:"true,false": empty (omitted) → do not apply the filter;
+//     "true" → only enabled; "false" → no filter (show all). A value outside the set
+//     → 422 (schema-validate enum-mismatch → error-override TypeValidationFailed,
+//     exactly like legacy "query 'enabled' must be 'true' or 'false'"). NOT *bool: the
+//     legacy contract returns 422 on a bad value, whereas *bool parsing would give 400.
+//   - Kind — string with enum:"scenario,command": exact-match on the recipe kind; outside
+//     the set → 422 (parity with legacy ValidKind → 422). Omitted → no filter.
+//   - Offset/Limit — int32 (NOT Go int: huma emits format:int64 for int, the committed
+//     spec carries int32; pagination fits in int32) with `default` (offset 0, limit 50)
+//     matching shared/api.ParsePage. bad-int (non-numeric) → 400 (parseInto).
+//     The range BOUNDS (offset≥0, limit∈[1,1000]) are DELIBERATELY not expressed via huma
+//     minimum/maximum tags: huma would reject out-of-range as 422, whereas legacy/
+//     ParsePage returns exactly 400 (TypeMalformedRequest). The domain ListTyped enforces
+//     the range via CheckPageBounds → 400 — otherwise a wire change.
 type cadenceListInput struct {
 	Enabled string `query:"enabled" enum:"true,false" doc:"фильтр по enabled: true → только включённые, false → все (без фильтра); опущен → все"`
 	Kind    string `query:"kind" enum:"scenario,command" doc:"фильтр по типу рецепта (exact); вне набора → 422"`
@@ -46,19 +46,19 @@ type cadenceListInput struct {
 	Limit   int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
 
-// cadenceListOutput — huma-output GET /v1/cadences (FULL-TYPED). Body — typed 200-
-// envelope (handlers.CadenceListReply = sharedapi.PagedResponse[cadenceDTO], тот же
-// конверт {items,offset,limit,total}, что отдавала легаси writeJSON). Wire-форма
-// (items non-nil []) зафиксирована golden-JSON byte-exact-тестом (главный guard).
+// cadenceListOutput — huma output for GET /v1/cadences (FULL-TYPED). Body is the typed
+// 200 envelope (handlers.CadenceListReply = sharedapi.PagedResponse[cadenceDTO], the same
+// {items,offset,limit,total} envelope the legacy writeJSON returned). The wire shape
+// (items non-nil []) is pinned by a golden-JSON byte-exact test (the main guard).
 type cadenceListOutput struct {
 	Body handlers.CadenceListReply
 }
 
-// cadenceListOperation — метаданные GET /v1/cadences. Path = "/" ОТНОСИТЕЛЬНЫЙ к
-// chi-группе /v1/cadences (huma.API смонтирован на ней; chi.Walk видит /v1/cadences,
-// drift-test зелёный). DefaultStatus=200. READ-роут: audit НЕ навешан. Permission
-// cadence.list (read-tier — как legacy strict ListCadences). Errors: 400 (bad int /
-// out-of-range pagination), 403 RBAC, 422 (bad enabled/kind enum), 500 (БД).
+// cadenceListOperation — metadata for GET /v1/cadences. Path = "/" RELATIVE to the
+// chi group /v1/cadences (huma.API is mounted on it; chi.Walk sees /v1/cadences,
+// drift-test green). DefaultStatus=200. READ route: audit not wired. Permission
+// cadence.list (read tier — like legacy strict ListCadences). Errors: 400 (bad int /
+// out-of-range pagination), 403 RBAC, 422 (bad enabled/kind enum), 500 (DB).
 func cadenceListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listCadences",

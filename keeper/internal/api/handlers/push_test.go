@@ -10,18 +10,18 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 )
 
-// PushHandler-list-tests фокусируются на двух уровнях:
-//   1. Валидация query (status / pagination) — доменный инвариант ListRunsTyped
-//      (ValidStatus → 422, CheckPageBounds → 400), проверяется напрямую без (w,r)
-//      и без реального *pushorch.PushRun (handler-native: HTTP/bind покрыт
-//      huma-integration в пакете api).
-//   2. Маппинг pushorch.PushRunRow → плоский PushRunListEntryView через
-//      rowToPushRunListEntryView / extractSummaryCounts — на граничном конвертере.
+// PushHandler list tests focus on two levels:
+//   1. Query validation (status / pagination) — the ListRunsTyped domain invariant
+//      (ValidStatus → 422, CheckPageBounds → 400), checked directly without (w,r)
+//      and without a real *pushorch.PushRun (handler-native: HTTP/bind covered by
+//      huma-integration in the api package).
+//   2. Mapping pushorch.PushRunRow → flat PushRunListEntryView via
+//      rowToPushRunListEntryView / extractSummaryCounts — at the boundary converter.
 //
-// End-to-end проверка списка с реальной PG-страницей живёт в integration-тестах
-// (pushorch/integration_test.go под build-tag `integration_pg`).
+// End-to-end list checking against a real PG page lives in integration tests
+// (pushorch/integration_test.go under build-tag `integration_pg`).
 
-// pushProblemType извлекает problem.Type из ошибки *Typed-функции (nil → "").
+// pushProblemType extracts problem.Type from a *Typed function error (nil → "").
 func pushProblemType(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
@@ -51,9 +51,9 @@ func TestPush_ListRunsTyped_BadLimit_400(t *testing.T) {
 }
 
 func TestPush_ListRunsTyped_NilSvc_500(t *testing.T) {
-	// Валидный запрос: query-валидация прошла, но svc==nil → 500.
-	// Имитирует production-сборку, в которой PushRun не сконфигурирован
-	// (no SshDispatcher) — handler не должен паниковать на ListRows.
+	// Valid request: query validation passed, but svc==nil → 500.
+	// Simulates a production build where PushRun is not configured
+	// (no SshDispatcher) — the handler must not panic on ListRows.
 	h := NewPushHandler(nil, nil)
 	_, err := h.ListRunsTyped(context.Background(), nil, "", 0, 50)
 	if got := pushProblemType(t, err); !strings.Contains(got, "internal") {
@@ -62,8 +62,8 @@ func TestPush_ListRunsTyped_NilSvc_500(t *testing.T) {
 }
 
 func TestPush_ListRunsTyped_ValidStatusAndProvider_PassValidation(t *testing.T) {
-	// status и ssh_provider валидны → query-валидация проходит; svc=nil →
-	// дальше 500. Цель — убедиться, что валидные значения НЕ отвергаются (не 422).
+	// status and ssh_provider valid → query validation passes; svc=nil →
+	// then 500. Goal: make sure valid values are NOT rejected (not 422).
 	h := NewPushHandler(nil, nil)
 	_, err := h.ListRunsTyped(context.Background(), []string{"success", "failed"}, "openssh", 0, 50)
 	if got := pushProblemType(t, err); !strings.Contains(got, "internal") {
@@ -85,8 +85,8 @@ func TestExtractSummaryCounts_Nil(t *testing.T) {
 
 func TestExtractSummaryCounts_NoNumericFields(t *testing.T) {
 	t.Parallel()
-	// jsonb с hosts[] но без агрегированных counts — возвращаем nil
-	// (terminal статус с только-hosts без агрегатов — теоретический edge).
+	// jsonb with hosts[] but no aggregated counts — return nil
+	// (terminal status with only-hosts and no aggregates — a theoretical edge).
 	summary := map[string]any{"hosts": []any{}}
 	if got := extractSummaryCounts(summary); got != nil {
 		t.Errorf("non-numeric summary → got %+v, want nil", got)
@@ -95,7 +95,7 @@ func TestExtractSummaryCounts_NoNumericFields(t *testing.T) {
 
 func TestExtractSummaryCounts_AllFields(t *testing.T) {
 	t.Parallel()
-	// json.Unmarshal -> map[string]any числовые поля кладёт как float64.
+	// json.Unmarshal -> map[string]any puts numeric fields as float64.
 	summary := map[string]any{
 		"total":         float64(5),
 		"success_count": float64(3),
@@ -118,7 +118,7 @@ func TestExtractSummaryCounts_AllFields(t *testing.T) {
 
 func TestExtractSummaryCounts_PartialFields(t *testing.T) {
 	t.Parallel()
-	// success_count есть, total/fail_count — нет. Возвращаем non-nil с *SuccessCount.
+	// success_count present, total/fail_count absent. Return non-nil with *SuccessCount.
 	summary := map[string]any{"success_count": float64(7)}
 	got := extractSummaryCounts(summary)
 	if got == nil {

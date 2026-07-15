@@ -1,20 +1,20 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2e разворота SOUL-домена на huma full-typed (ADR-054 §Pattern,
-// эталоны role/operator + audit-endpoint). create/coven-assign/issue-token/ssh-target —
-// WRITE+AUDIT (вариант B); list/get/soulprint/history — read (БЕЗ audit). ErrandExec НЕ в
-// этом батче (strict). Доказывают инварианты поверх chi:
+// Guard tests for ROLLOUT-BATCH-2e turning the SOUL domain onto huma full-typed (ADR-054 §Pattern,
+// references role/operator + audit-endpoint). create/coven-assign/issue-token/ssh-target —
+// WRITE+AUDIT (variant B); list/get/soulprint/history — read (no audit). ErrandExec is NOT in
+// this batch (strict). They prove the invariants on top of chi:
 //
 //   - wire/golden: create 201 SoulCreateReply (byte-exact); issue-token 200 (token+expires);
 //     ssh-target 200 snapshot; coven-assign 200 (custom XOR);
 //   - create unknown-field → 400; missing-required → 422; list bad-offset → 400; list/coven bad-
 //     status-enum → 422; history bad-offset → 400; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write (create/coven-assign/issue-token/ssh-target): полная huma-
-//     навеска пишет ВЕРНЫЙ event-type с НЕПУСТЫМ payload на 2xx и НЕ пишет на 403/400/422;
+//   - S6-GUARD on EVERY write (create/coven-assign/issue-token/ssh-target): the full huma
+//     wiring writes the CORRECT event-type with a NON-EMPTY payload on 2xx and does NOT write on 403/400/422;
 //   - reads (get/list/soulprint/history) → NoAudit.
 //
-// Глубокая бизнес-логика (keyset/scope-eval/bulk-chunks/partial/transaction-rollback) покрыта
-// handlers/soul_test.go через ТЕ ЖЕ *Typed-функции (huma-роут зовёт их же); здесь — huma-слой.
+// Deep business logic (keyset/scope-eval/bulk-chunks/partial/transaction-rollback) is covered by
+// handlers/soul_test.go via the SAME *Typed functions (the huma route calls them too); here — the huma layer.
 
 import (
 	"context"
@@ -46,14 +46,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// hSoulAt — фиксированное registered_at/expires_at для детерминированного golden.
+// hSoulAt — fixed registered_at/expires_at for a deterministic golden.
 var hSoulAt = time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
 
-// hSoulPool — компактный мок [handlers.SoulPool] для huma-теста. Поддерживает Create (Insert
+// hSoulPool — a compact mock of [handlers.SoulPool] for the huma test. Supports Create (Insert
 // souls + Insert bootstrap_token + Commit), IssueToken (SelectBySID + Insert), UpdateSshTarget,
-// List (COUNT + Query). Глубокие сценарии — handlers/soul_test.go.
+// List (COUNT + Query). Deep scenarios — handlers/soul_test.go.
 type hSoulPool struct {
-	existing  *soul.Soul // SelectBySID → строка (issue-token/get); nil → ErrNoRows
+	existing  *soul.Soul // SelectBySID → row (issue-token/get); nil → ErrNoRows
 	insertErr error
 	listSouls []*soul.Soul
 }
@@ -187,7 +187,7 @@ func (r *hSoulRows) Values() ([]any, error)                       { return nil, 
 func (r *hSoulRows) RawValues() [][]byte                          { return nil }
 func (r *hSoulRows) Conn() *pgx.Conn                              { return nil }
 
-// assignScan присваивает значение в pgx-dest по типу (узкий набор колонок souls).
+// assignScan assigns a value to a pgx dest by type (a narrow set of souls columns).
 func hSoulAssignScan(d, v any) {
 	switch dst := d.(type) {
 	case *string:
@@ -223,8 +223,8 @@ func hSoulAssignScan(d, v any) {
 	}
 }
 
-// hSoulScoper — мок [handlers.PurviewResolver]: unrestricted → весь флот видим (offset-fast-
-// path, без keyset). Для huma-теста достаточно (scope-eval покрыт handlers/soul_test.go).
+// hSoulScoper — a mock of [handlers.PurviewResolver]: unrestricted → all souls visible (offset-fast-
+// path, no keyset). Sufficient for the huma test (scope-eval is covered by handlers/soul_test.go).
 type hSoulScoper struct{ unrestricted bool }
 
 func (s hSoulScoper) ResolvePurview(string, string, string) rbac.Purview {
@@ -235,9 +235,9 @@ func newHSoulHandler(pool *hSoulPool) *handlers.SoulHandler {
 	return handlers.NewSoulHandler(pool, hSoulScoper{unrestricted: true}, nil, nil)
 }
 
-// hSoulEnforcer реализует и [apimiddleware.PermissionChecker] (write-роуты, RequirePermission),
-// и [apimiddleware.ActionHolder] (read-роуты, RequireAction existence-gate). allow=false →
-// 403 на обоих путях.
+// hSoulEnforcer implements both [apimiddleware.PermissionChecker] (write routes, RequirePermission)
+// and [apimiddleware.ActionHolder] (read routes, RequireAction existence-gate). allow=false →
+// 403 on both paths.
 type hSoulEnforcer struct{ allow bool }
 
 func (e hSoulEnforcer) Check(string, string, string, map[string]string) error {
@@ -249,8 +249,8 @@ func (e hSoulEnforcer) Check(string, string, string, map[string]string) error {
 
 func (e hSoulEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 
-// humaSoulRouter собирает chi-роутер со ВСЕМИ soul-роутами через huma (кроме exec) —
-// продакшен-навеска из router.go. injectClaims заменяет RequireJWT.
+// humaSoulRouter assembles a chi router with ALL soul routes via huma (except exec) —
+// the production wiring from router.go. injectClaims replaces RequireJWT.
 func humaSoulRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, soulH *handlers.SoulHandler) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -308,7 +308,7 @@ func TestHumaSoul_Create_GoldenWire(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	// transport=ssh → без bootstrap_token; date-time секундный.
+	// transport=ssh → no bootstrap_token; date-time seconds.
 	const golden = `{"covens":["web"],"created_by_aid":"archon-alice","registered_at":"2026-06-13T12:00:00Z","sid":"host-1.example.com","status":"pending","transport":"ssh"}`
 	if got := remarshalSorted(t, rec.Body.Bytes()); got != golden {
 		t.Errorf("GOLDEN wire-дрейф soul.create:\n got  = %s\n want = %s", got, golden)
@@ -476,12 +476,12 @@ func TestHumaAudit_SoulSshTarget_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventSoulSshTargetUpdated, map[string]any{"sid": "host-1.example.com"})
 }
 
-// === COVEN-ASSIGN (WRITE+AUDIT soul.coven-changed) — dry_run (без bulk-chunk-плана) ===
+// === COVEN-ASSIGN (WRITE+AUDIT soul.coven-changed) — dry_run (no bulk-chunk plan) ===
 
 func TestHumaSoul_CovenAssign_DryRunGolden(t *testing.T) {
 	r := humaSoulRouter(t, hSoulEnforcer{allow: true}, nil, newHSoulHandler(&hSoulPool{}))
 	rec := httptest.NewRecorder()
-	// dry_run + unrestricted scope → CountBulkMatched (COUNT) без UPDATE. append-mode.
+	// dry_run + unrestricted scope → CountBulkMatched (COUNT) without UPDATE. append-mode.
 	req := httptest.NewRequest(http.MethodPost, "/v1/souls/coven",
 		strings.NewReader(`{"mode":"append","label":"prod","dry_run":true,"selector":{"all":true}}`))
 	r.ServeHTTP(rec, req)
@@ -492,7 +492,7 @@ func TestHumaSoul_CovenAssign_DryRunGolden(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
 	}
-	// custom MarshalJSON XOR: append → label (не labels), dry_run:true.
+	// custom MarshalJSON XOR: append → label (not labels), dry_run:true.
 	if m["mode"] != "append" || m["label"] != "prod" || m["dry_run"] != true {
 		t.Errorf("coven-assign dry_run 200-тело XOR-форма неверна: %v", m)
 	}
@@ -526,7 +526,7 @@ func TestHumaAudit_SoulCovenAssign_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventSoulCovenChanged, map[string]any{"mode": "append"})
 }
 
-// === LIST (READ-with-typed-query, БЕЗ audit) ===
+// === LIST (READ with typed query, no audit) ===
 
 func TestHumaSoul_List_BadOffset_400(t *testing.T) {
 	r := humaSoulRouter(t, hSoulEnforcer{allow: true}, nil, newHSoulHandler(&hSoulPool{}))
@@ -561,8 +561,8 @@ func TestHumaSoul_List_BadStatusEnum_422(t *testing.T) {
 func TestHumaSoul_List_OffsetCursorConflict_422(t *testing.T) {
 	r := humaSoulRouter(t, hSoulEnforcer{allow: true}, nil, newHSoulHandler(&hSoulPool{}))
 	rec := httptest.NewRecorder()
-	// offset>0 + ВАЛИДНЫЙ cursor → 422 (две пагинации одновременно). Битый cursor дал бы 400
-	// (decode-фейл ДО conflict-чека), поэтому кодируем настоящий keyset-курсор.
+	// offset>0 + a VALID cursor → 422 (two paginations at once). A broken cursor would give 400
+	// (decode-fail BEFORE the conflict check), so we encode a real keyset cursor.
 	enc := sharedapi.EncodeKeysetCursor(sharedapi.KeysetCursor{RegisteredAt: hSoulAt, SID: "host-1.example.com"})
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/souls?offset=5&cursor="+enc, nil))
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -571,10 +571,10 @@ func TestHumaSoul_List_OffsetCursorConflict_422(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
 
-// TestHumaSoul_List_BadCursor_400 — битый keyset-курсор (DecodeKeysetCursor-фейл)
-// → 400 TypeMalformedRequest. Покрывает ветку soulParsePage (decode-фейл ДО
-// conflict-чека); симметрично TestHumaSoul_List_OffsetCursorConflict_422, но без
-// offset — чистый decode-фейл. "not-base64!" не декодируется как keyset-курсор.
+// TestHumaSoul_List_BadCursor_400 — a broken keyset cursor (DecodeKeysetCursor fail)
+// → 400 TypeMalformedRequest. Covers the soulParsePage branch (decode-fail BEFORE the
+// conflict check); symmetric to TestHumaSoul_List_OffsetCursorConflict_422, but without
+// offset — a pure decode-fail. "not-base64!" does not decode as a keyset cursor.
 func TestHumaSoul_List_BadCursor_400(t *testing.T) {
 	r := humaSoulRouter(t, hSoulEnforcer{allow: true}, nil, newHSoulHandler(&hSoulPool{}))
 	rec := httptest.NewRecorder()
@@ -621,7 +621,7 @@ func TestHumaSoul_History_BadOffset_400(t *testing.T) {
 
 // === EXEC (POST /v1/souls/{sid}/exec — WRITE+AUDIT errand.invoked, 200 sync / 202 async) ===
 
-// hExecStore — in-memory StoreAPI для exec-happy-path (Insert/MarkTerminal/Get).
+// hExecStore — in-memory StoreAPI for the exec happy-path (Insert/MarkTerminal/Get).
 type hExecStore struct {
 	mu   sync.Mutex
 	rows map[string]errand.Row
@@ -660,8 +660,8 @@ func (s *hExecStore) Get(_ context.Context, id string) (*errand.Row, error) {
 	return &cp, nil
 }
 
-// hExecBus — bus, доставляющий заранее заданный ResultEvent на Subscribe (sync 200).
-// nil-event → канал не публикует (escalation-путь к 202 при малом ServerCap).
+// hExecBus — a bus that delivers a pre-set ResultEvent on Subscribe (sync 200).
+// nil event → the channel does not publish (escalation path to 202 with a small ServerCap).
 type hExecBus struct {
 	deliver *errand.ResultEvent
 }
@@ -679,9 +679,9 @@ func (b hExecBus) SubscribeWithBridge(_ context.Context, applyID string, _ bool)
 	return ch
 }
 
-// buildHExecDispatcher — in-memory Dispatcher для exec. deliver != nil → sync-результат
-// доставляется немедленно (200); deliver == nil + serverCap малый → async (202). Audit=nil
-// → dispatcher НЕ пишет self-audit (S6-guard проверяет именно middleware-путь).
+// buildHExecDispatcher — in-memory Dispatcher for exec. deliver != nil → the sync result
+// is delivered immediately (200); deliver == nil + small serverCap → async (202). Audit=nil
+// → the dispatcher does NOT write self-audit (the S6-guard checks the middleware path).
 func buildHExecDispatcher(t *testing.T, deliver *errand.ResultEvent, serverCap time.Duration) *errand.Dispatcher {
 	t.Helper()
 	d, err := errand.NewDispatcher(errand.Deps{
@@ -704,9 +704,9 @@ type hExecOutbound struct{}
 func (hExecOutbound) SendErrand(context.Context, string, *keeperv1.ErrandRequest) error { return nil }
 func (hExecOutbound) SendCancelErrand(context.Context, string, string) error            { return nil }
 
-// humaExecRouter — chi-роутер с huma-exec-роутом (прод-зеркало router.go): RequirePermission
-// (errand.run, ErrandSIDSelector) + huma-audit-middleware errand.invoked. injectClaims
-// заменяет RequireJWT.
+// humaExecRouter — a chi router with the huma exec route (prod mirror of router.go): RequirePermission
+// (errand.run, ErrandSIDSelector) + huma audit middleware errand.invoked. injectClaims
+// replaces RequireJWT.
 func humaExecRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, d *errand.Dispatcher) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -750,9 +750,9 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
-	// errand_id (свежий ULID) и duration_ms (реальный time.Since elapsed) недетерминированы —
-	// проверяем их наличие, обнуляем для byte-exact-сравнения остального wire (поля/enum/
-	// started_at-truncation). Тот же контракт у легаси strict-пути.
+	// errand_id (a fresh ULID) and duration_ms (real time.Since elapsed) are non-deterministic —
+	// we check their presence and zero them for a byte-exact comparison of the rest of the wire (fields/enum/
+	// started_at-truncation). The same contract as the legacy strict path.
 	if m["errand_id"] == "" || m["errand_id"] == nil {
 		t.Errorf("sync 200-тело должно нести errand_id, got %v", m)
 	}
@@ -762,7 +762,7 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 	delete(m, "errand_id")
 	delete(m, "duration_ms")
 	out, _ := json.Marshal(m)
-	// started_at = hSoulAt (Clock) .UTC().Truncate(Second); статус голая enum-строка.
+	// started_at = hSoulAt (Clock) .UTC().Truncate(Second); status a bare enum string.
 	const golden = `{"exit_code":0,"module":"core.cmd.shell","sid":"host-1.example.com","started_at":"2026-06-13T12:00:00Z","started_by_aid":"archon-alice","status":"success","stdout":"ok"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-дрейф soul.exec (sync 200):\n got  = %s\n want = %s", got, golden)
@@ -770,7 +770,7 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 }
 
 func TestHumaSoul_Exec_GoldenWire_Async202(t *testing.T) {
-	// deliver=nil + ServerCap=1ms + timeout=2s → sync-окно истекает БЕЗ результата → 202.
+	// deliver=nil + ServerCap=1ms + timeout=2s → the sync window expires WITHOUT a result → 202.
 	d := buildHExecDispatcher(t, nil, time.Millisecond)
 	r := humaExecRouter(t, hSoulEnforcer{allow: true}, nil, d)
 	rec := httptest.NewRecorder()
@@ -844,7 +844,7 @@ func TestHumaSoul_Exec_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === EXEC S6-GUARD (errand.invoked на ОБА 2xx; НЕ пишет на 403/422) ===
+// === EXEC S6-GUARD (errand.invoked on BOTH 2xx; does NOT write on 403/422) ===
 
 func TestHumaAudit_ErrandExec_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
@@ -911,8 +911,8 @@ func TestHumaAudit_ErrandExec_NoAudit_OnValidationFail(t *testing.T) {
 }
 
 func TestHumaAudit_ErrandExec_NoAudit_OnSoulNotConnected_404(t *testing.T) {
-	// Outbound.SendErrand вернёт ErrSoulNotConnected → dispatcher отдаёт terminal-fail
-	// с err → ExecTyped мапит 404; middleware не пишет (4xx).
+	// Outbound.SendErrand returns ErrSoulNotConnected → the dispatcher returns a terminal-fail
+	// with err → ExecTyped maps to 404; the middleware does not write (4xx).
 	auditCap := &auditCaptureWriter{}
 	r := humaExecRouter(t, hSoulEnforcer{allow: true}, auditCap, errandNotConnectedDispatcher(t))
 	rec := httptest.NewRecorder()
@@ -928,8 +928,8 @@ func TestHumaAudit_ErrandExec_NoAudit_OnSoulNotConnected_404(t *testing.T) {
 	}
 }
 
-// errandNotConnectedDispatcher — Outbound, отдающий ErrSoulNotConnected (Soul не
-// подключён) → Dispatch возвращает err → ExecTyped мапит 404.
+// errandNotConnectedDispatcher — an Outbound returning ErrSoulNotConnected (Soul not
+// connected) → Dispatch returns err → ExecTyped maps to 404.
 func errandNotConnectedDispatcher(t *testing.T) *errand.Dispatcher {
 	t.Helper()
 	d, err := errand.NewDispatcher(errand.Deps{
@@ -954,13 +954,13 @@ func (hExecOutboundOffline) SendErrand(context.Context, string, *keeperv1.Errand
 }
 func (hExecOutboundOffline) SendCancelErrand(context.Context, string, string) error { return nil }
 
-// TestHumaSoul_Exec_ChiCoexistence — guard на сосуществование huma-exec
-// (/v1/souls/{sid}/exec) со ВСЕМИ остальными soul-detail-huma-роутами
-// (/v1/souls/{sid}[/issue-token|/ssh-target|/soulprint|/history]) на одной
-// /souls-chi-группе. Собирает прод-router через buildRouter с НЕ-nil errandH
-// (drift-test ставит nil → exec не монтируется) и обходит chi.Walk: exec ДОЛЖЕН
-// быть ровно один, без дубль-mount-а / коллизии префикса. Сборка router-а с
-// коллизией chi-pattern-ов паникнула бы здесь.
+// TestHumaSoul_Exec_ChiCoexistence — guard for the coexistence of huma-exec
+// (/v1/souls/{sid}/exec) with ALL the other soul-detail huma routes
+// (/v1/souls/{sid}[/issue-token|/ssh-target|/soulprint|/history]) on one
+// /souls chi group. Builds the prod router via buildRouter with a NON-nil errandH
+// (the drift-test sets nil → exec is not mounted) and walks chi.Walk: exec MUST
+// appear exactly once, without a duplicate mount / prefix collision. Building the router
+// with a chi-pattern collision would panic here.
 func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 	h := buildRouter(
 		nil, // verifier
@@ -974,7 +974,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil,                                      // pushProviderH
 		nil,                                      // providerH
 		nil,                                      // profileH
-		handlers.NewErrandHandler(nil, nil, nil), // errandH non-nil → exec монтируется на huma
+		handlers.NewErrandHandler(nil, nil, nil), // errandH non-nil → exec is mounted on huma
 		nil,                                      // voyageH
 		nil,                                      // cadenceH
 		nil,                                      // auditH
@@ -994,14 +994,14 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui вне интереса soul-роутинг-теста
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		false,                                // webUIEnabled — /ui is out of scope for the soul routing test
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
-		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
-		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
+		nil,                                  // soulStatsStaleFn (default 90s in the test)
+		nil,                                  // clusterH (cluster-view not mounted in the test)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
 		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)

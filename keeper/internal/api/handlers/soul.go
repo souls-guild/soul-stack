@@ -26,90 +26,90 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// SoulPool — поверхность над pgxpool.Pool, нужная Soul-handler-у.
+// SoulPool — the surface over pgxpool.Pool that the Soul handler needs.
 //
-//   - BeginTx — Create (souls-row + bootstrap-token атомарно) и IssueToken
-//     (force-flow: expire active + insert new в одной транзакции).
-//   - ExecQueryRower — List (count + select без транзакции, через
-//     [soul.SelectAll]); read-only, транзакция избыточна.
+//   - BeginTx — Create (souls-row + bootstrap-token atomically) and IssueToken
+//     (force-flow: expire active + insert new in one transaction).
+//   - ExecQueryRower — List (count + select without a transaction, via
+//     [soul.SelectAll]); read-only, a transaction is redundant.
 //
-// `*pgxpool.Pool` удовлетворяет обоим; unit-тесты — fake.
+// `*pgxpool.Pool` satisfies both; unit tests — fake.
 type SoulPool interface {
 	soul.ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// PurviewResolver — read-поверхность enforcer для scope-границы оператора:
-// «верни [rbac.Purview] (верхнюю границу видимости/таргетинга) для
-// (resource, action)». Реализуют [rbac.Enforcer] и [rbac.Holder] (hot-reload-
-// aware). Обобщает прежний CovenScoper (S0 `(covens, unrestricted)`) на полный
-// Purview — один резолвер для обоих souls-потребителей scope:
-//   - `GET /v1/souls` scoped-видимость (ADR-047 S3b, через keeper/internal/
-//     soulpurview) — coven-pushdown в SQL;
-//   - bulk coven-assign scope-intersection (`POST /v1/souls/coven`) — coven-
-//     измерение Purview даёт прежнюю `(covens, unrestricted)`-форму [soul.BulkScope].
+// PurviewResolver — the enforcer read surface for the operator's scope boundary:
+// "return [rbac.Purview] (the upper bound of visibility/targeting) for
+// (resource, action)". Implemented by [rbac.Enforcer] and [rbac.Holder] (hot-reload-
+// aware). Generalizes the former CovenScoper (S0 `(covens, unrestricted)`) to the full
+// Purview — one resolver for both souls scope consumers:
+//   - `GET /v1/souls` scoped visibility (ADR-047 S3b, via keeper/internal/
+//     soulpurview) — coven pushdown into SQL;
+//   - bulk coven-assign scope intersection (`POST /v1/souls/coven`) — the coven
+//     dimension of Purview yields the former `(covens, unrestricted)` shape [soul.BulkScope].
 //
-// Симметрично least-privilege subset-check в rbac.Service (тот режет выдачу
-// прав, этот — объём массовой мутации/видимости).
+// Symmetric to the least-privilege subset-check in rbac.Service (that one trims the grant
+// of rights, this one — the scope of the bulk mutation/visibility).
 type PurviewResolver interface {
 	ResolvePurview(aid, resource, action string) rbac.Purview
 }
 
-// SoulPresence — узкая поверхность batch-проверки «жив ли Redis SID-lease»
-// (живой EventStream), нужная presence-overlay-у `GET /v1/souls` (ADR-006(a)).
-// Симметрична [topology.SoulLeaseChecker]: реальная реализация — обёртка над
-// [keeperredis.SoulsStreamAlive], собранная в cmd/keeper; production wire-up
-// передаёт тот же Redis-клиент, что и topology-резолверу.
+// SoulPresence — a narrow surface for the batch check "is the Redis SID lease alive"
+// (a live EventStream), needed by the presence overlay of `GET /v1/souls` (ADR-006(a)).
+// Symmetric to [topology.SoulLeaseChecker]: the real implementation is a wrapper over
+// [keeperredis.SoulsStreamAlive], assembled in cmd/keeper; the production wire-up
+// passes the same Redis client as the topology resolver.
 //
-// presence — авторитет online/offline (ADR-006(a)); PG-колонка `souls.status`
-// — лишь лениво-сверяемый Reaper-ом снимок «последнего известного», поэтому на
-// hot-path-е reconnect-а она не флипается в connected, и read-path обязан
-// деривировать presence из lease, а не отдавать stale-снимок.
+// presence is the authority for online/offline (ADR-006(a)); the PG column `souls.status`
+// is only a "last known" snapshot lazily reconciled by the Reaper, so on the
+// reconnect hot-path it does not flip to connected, and the read path must
+// derive presence from the lease rather than return a stale snapshot.
 //
-// Возвращает множество SID-ов с живым lease. nil-checker (single-instance dev
-// без Redis / unit-тесты) → overlay выключен, отдаётся PG-снимок status как есть
-// (в single-instance он когерентен с фактом стрима по построению, симметрично
-// reaper-у и topology-резолверу).
+// Returns the set of SIDs with a live lease. A nil checker (single-instance dev
+// without Redis / unit tests) → the overlay is off, the PG status snapshot is returned as-is
+// (in single-instance it is coherent with the stream fact by construction, symmetric to
+// the reaper and the topology resolver).
 type SoulPresence interface {
 	SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error)
 }
 
-// SoulHandler — endpoints онбординга Soul-ов: Create + IssueToken + List +
+// SoulHandler — Soul onboarding endpoints: Create + IssueToken + List +
 // AssignCoven (bulk).
 //
-// При force-reissue освобождённый токен помечается системным маркером
-// [bootstraptoken.SystemKIDForceReissue] в `bootstrap_tokens.used_by_kid`
-// (см. IssueToken). Все зависимости immutable; safe for concurrent use.
+// On force-reissue the freed token is marked with the system marker
+// [bootstraptoken.SystemKIDForceReissue] in `bootstrap_tokens.used_by_kid`
+// (see IssueToken). All dependencies are immutable; safe for concurrent use.
 type SoulHandler struct {
 	pool     SoulPool
 	scoper   PurviewResolver
 	presence SoulPresence
 	logger   *slog.Logger
 
-	// scopeEvalInnerPageSize — внутренний page-size keyset-eval-а (ADR-047
-	// S3b-2a). 0 → [scopeEvalInnerPageSize] (prod-дефолт). Переопределяется
-	// только в тестах (малое значение, чтобы смоделировать многостраничный
-	// добор без подъёма флота на десятки тысяч).
+	// scopeEvalInnerPageSize — the internal page size of the keyset eval (ADR-047
+	// S3b-2a). 0 → [scopeEvalInnerPageSize] (prod default). Overridden
+	// only in tests (a small value to model a multi-page
+	// fill without spinning up tens of thousands of souls).
 	scopeEvalInnerPageSize int
 
-	// scopeEvalMaxInnerPages — cap внутренних keyset-итераций на один запрос
-	// (ADR-047 S3b-2a). 0 → [scopeEvalMaxInnerPages] (prod-дефолт). Инъекция
-	// только для тестов: малый cap моделирует cap-выход (узкий regex на большом
-	// флоте) без подъёма десятков тысяч хостов.
+	// scopeEvalMaxInnerPages — the cap on internal keyset iterations per request
+	// (ADR-047 S3b-2a). 0 → [scopeEvalMaxInnerPages] (prod default). Injected
+	// only for tests: a small cap models the cap exit (a narrow regex over a large
+	// fleet) without spinning up tens of thousands of hosts.
 	scopeEvalMaxInnerPages int
 }
 
-// NewSoulHandler создаёт handler. scoper — read-поверхность scope-границы
-// оператора ([PurviewResolver], production-wire-up передаёт rbac.Holder).
-// Используется и `GET /v1/souls` scoped-видимостью (ADR-047 S3b), и bulk
-// AssignCoven. nil допустим только в тестах, не использующих List/bulk-роут:
-// List при nil-scoper fail-closed (пустой список — безопасный дефолт, НЕ весь
-// флот), AssignCoven вернёт 500.
+// NewSoulHandler creates the handler. scoper — the read surface of the operator's
+// scope boundary ([PurviewResolver], the production wire-up passes rbac.Holder).
+// Used both by `GET /v1/souls` scoped visibility (ADR-047 S3b) and by bulk
+// AssignCoven. nil is allowed only in tests that do not use the List/bulk route:
+// List with a nil scoper is fail-closed (an empty list — the safe default, NOT all
+// souls), AssignCoven returns 500.
 //
-// presence — lease-overlay presence для `GET /v1/souls` (ADR-006(a)): при
-// non-nil поле `status` в ответе List/Get деривируется из живого Redis
-// SID-lease, а не отдаётся как stale PG-снимок (см. [SoulPresence]). nil →
-// overlay выключен (single-instance dev / unit-тесты), отдаётся PG-снимок.
+// presence — the lease-overlay presence for `GET /v1/souls` (ADR-006(a)): when
+// non-nil the `status` field in the List/Get response is derived from the live Redis
+// SID lease rather than returned as a stale PG snapshot (see [SoulPresence]). nil →
+// the overlay is off (single-instance dev / unit tests), the PG snapshot is returned.
 func NewSoulHandler(pool SoulPool, scoper PurviewResolver, presence SoulPresence, logger *slog.Logger) *SoulHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -117,23 +117,23 @@ func NewSoulHandler(pool SoulPool, scoper PurviewResolver, presence SoulPresence
 	return &SoulHandler{pool: pool, scoper: scoper, presence: presence, logger: logger}
 }
 
-// SoulSpecStub — непустой *SoulHandler-заглушка для генерации huma-OpenAPI-фрагмента
-// (HumaSoulSpecYAML): при dump доменный handler не вызывается, но huma.Register требует
-// non-nil для nil-проверки (parity [RoleSpecStub]). pool nil — handler в spec-режиме не
-// исполняется.
+// SoulSpecStub — a non-empty *SoulHandler stub for generating the huma OpenAPI fragment
+// (HumaSoulSpecYAML): on dump the domain handler is not called, but huma.Register requires
+// non-nil for its nil check (parity [RoleSpecStub]). pool nil — the handler does not execute
+// in spec mode.
 func SoulSpecStub() *SoulHandler {
 	return &SoulHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// soulCreateRequest — POST /v1/souls body. НЕ alias на [SoulCreateRequest]:
-// домен несёт server-only поле `note` (запись в souls.note), которого нет в
-// OpenAPI-схеме SoulCreateRequest; pure-alias уронил бы его (strict-декодер
-// отверг бы `note` как unknown → 400). Поэтому остаётся доменным типом
-// (симметрично soulCovenAssignResponse — там alias тоже невозможен).
+// soulCreateRequest — POST /v1/souls body. NOT an alias of [SoulCreateRequest]:
+// the domain carries the server-only field `note` (written to souls.note), which is not in
+// the OpenAPI schema SoulCreateRequest; a pure alias would drop it (the strict decoder
+// would reject `note` as unknown → 400). So it stays a domain type
+// (symmetric to soulCovenAssignResponse — an alias is impossible there too).
 //
-// Поле `covens` совпадает по имени с OpenAPI SoulCreateRequest и с ответом
-// (`SoulCreateReply.covens`): strict-декодер отвергает unknown-поля, поэтому
-// расхождение имени запроса и схемы = 400 на документированном клиенте.
+// The `covens` field matches by name the OpenAPI SoulCreateRequest and the response
+// (`SoulCreateReply.covens`): the strict decoder rejects unknown fields, so a
+// mismatch between the request field name and the schema = 400 on a documented client.
 type soulCreateRequest struct {
 	SID       string   `json:"sid"`
 	Transport string   `json:"transport"`
@@ -141,19 +141,19 @@ type soulCreateRequest struct {
 	Note      string   `json:"note,omitempty"`
 }
 
-// NewSoulCreateRequest конструирует доменный [soulCreateRequest] из примитивов huma-body
-// (soulCreateRequest unexported — huma-роут пакета api собирает запрос через этот
-// конструктор, parity тонкого-конверта §Pattern шаг 3).
+// NewSoulCreateRequest constructs a domain [soulCreateRequest] from huma-body primitives
+// (soulCreateRequest is unexported — the huma route in package api assembles the request via this
+// constructor, parity with the thin converter §Pattern step 3).
 func NewSoulCreateRequest(sid, transport string, covens []string, note string) soulCreateRequest {
 	return soulCreateRequest{SID: sid, Transport: transport, Covens: covens, Note: note}
 }
 
-// SoulCreateView — ПЛОСКАЯ доменная проекция 201-тела POST /v1/souls (handler-native
-// T5d). Пакет api проецирует её в native-схему SoulCreateReply. status/transport — RAW
-// string домена (native-тип в api держит enum-форму). Covens — non-nil slice (`&covens`
-// после coalesceCoven → ключ всегда present). BootstrapToken/ExpiresAt — pointer-optional
-// (присутствуют только для transport=agent; nil → ключ опущен native-типом). date-time —
-// СЕКУНДНЫЙ wire (.UTC().Truncate(time.Second), parity легаси RFC3339-`.Format`).
+// SoulCreateView — the FLAT domain projection of the 201 body of POST /v1/souls (handler-native
+// T5d). Package api projects it into the native schema SoulCreateReply. status/transport — the domain's
+// RAW string (the native type in api holds the enum form). Covens — a non-nil slice (`&covens`
+// after coalesceCoven → the key is always present). BootstrapToken/ExpiresAt — pointer-optional
+// (present only for transport=agent; nil → key omitted by the native type). date-time —
+// SECOND-precision wire (.UTC().Truncate(time.Second), parity with the legacy RFC3339 `.Format`).
 type SoulCreateView struct {
 	SID            string
 	Transport      string
@@ -165,7 +165,7 @@ type SoulCreateView struct {
 	ExpiresAt      *time.Time
 }
 
-// soulCreateView строит доменную проекцию [SoulCreateView] из реестровой записи.
+// soulCreateView builds the domain projection [SoulCreateView] from a registry record.
 func soulCreateView(s *soul.Soul, createdByAID string) SoulCreateView {
 	return SoulCreateView{
 		SID:          s.SID,
@@ -177,8 +177,8 @@ func soulCreateView(s *soul.Soul, createdByAID string) SoulCreateView {
 	}
 }
 
-// SoulCreateReply — результат [SoulHandler.CreateTyped] (handler-native). Несёт доменную
-// проекцию 201-тела (SoulCreateView) + audit-поля. bootstrap_token присутствует только для
+// SoulCreateReply — the result of [SoulHandler.CreateTyped] (handler-native). Carries the domain
+// projection of the 201 body (SoulCreateView) + audit fields. bootstrap_token is present only for
 // transport=agent.
 type SoulCreateReply struct {
 	Body         SoulCreateView
@@ -189,8 +189,8 @@ type SoulCreateReply struct {
 	TokenIssued  bool
 }
 
-// AuditPayload — audit-поля 201-Create (parity легаси SetAuditPayload; сам bootstrap-токен
-// не пишется).
+// AuditPayload — audit fields of the 201 Create (parity with the legacy SetAuditPayload; the bootstrap
+// token itself is not written).
 func (r SoulCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"sid":            r.SID,
@@ -201,10 +201,10 @@ func (r SoulCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateTyped — извлечённая доменная функция POST /v1/souls (FULL-TYPED разворот ADR-054
-// §Pattern): онбординг souls-row (+ bootstrap-токен для agent) без http-границы. req — уже
-// декодированное тело. Ошибки — *problemError (422 невалидный sid/transport/coven; 409
-// soul-exists; 500 PG-сбой); успех — [SoulCreateReply] (201-тело + audit-поля).
+// CreateTyped — the extracted domain function of POST /v1/souls (FULL-TYPED rollout ADR-054
+// §Pattern): onboarding of the souls row (+ a bootstrap token for agent) without the http boundary. req is the already
+// decoded body. Errors — *problemError (422 invalid sid/transport/coven; 409
+// soul-exists; 500 PG failure); success — [SoulCreateReply] (201 body + audit fields).
 func (h *SoulHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req soulCreateRequest) (SoulCreateReply, error) {
 	var zero SoulCreateReply
 	if req.SID == "" {
@@ -296,17 +296,17 @@ func (h *SoulHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req s
 	}, nil
 }
 
-// SoulIssueTokenView — ПЛОСКАЯ доменная проекция 200-тела POST /v1/souls/{sid}/issue-token
-// (handler-native T5d). Пакет api проецирует её в native-схему SoulIssueTokenReply. Все поля
-// required; expires_at — СЕКУНДНЫЙ wire (.UTC().Truncate(time.Second), parity легаси).
-// bootstrap_token отдаётся один раз (SENSITIVE; secret-mask вырезает из логов).
+// SoulIssueTokenView — the FLAT domain projection of the 200 body of POST /v1/souls/{sid}/issue-token
+// (handler-native T5d). Package api projects it into the native schema SoulIssueTokenReply. All fields
+// required; expires_at — SECOND-precision wire (.UTC().Truncate(time.Second), parity with legacy).
+// bootstrap_token is returned once (SENSITIVE; secret-mask strips it from logs).
 type SoulIssueTokenView struct {
 	SID            string
 	BootstrapToken string
 	ExpiresAt      time.Time
 }
 
-// soulIssueTokenView строит доменную проекцию [SoulIssueTokenView].
+// soulIssueTokenView builds the domain projection [SoulIssueTokenView].
 func soulIssueTokenView(sid, token string, expiresAt time.Time) SoulIssueTokenView {
 	return SoulIssueTokenView{
 		SID:            sid,
@@ -315,9 +315,9 @@ func soulIssueTokenView(sid, token string, expiresAt time.Time) SoulIssueTokenVi
 	}
 }
 
-// SoulIssueTokenReply — результат [SoulHandler.IssueTokenTyped] (handler-native). Несёт
-// доменную проекцию 200-тела (SoulIssueTokenView: sid/bootstrap_token/expires_at) + audit-
-// поля. bootstrap_token отдаётся один раз (SENSITIVE).
+// SoulIssueTokenReply — the result of [SoulHandler.IssueTokenTyped] (handler-native). Carries the
+// domain projection of the 200 body (SoulIssueTokenView: sid/bootstrap_token/expires_at) + audit
+// fields. bootstrap_token is returned once (SENSITIVE).
 type SoulIssueTokenReply struct {
 	Body            SoulIssueTokenView
 	SID             string
@@ -326,8 +326,8 @@ type SoulIssueTokenReply struct {
 	ExpiresAtRFC    string
 }
 
-// AuditPayload — audit-поля 200-IssueToken. Ключи БЕЗ `token`-substring (audit secret-mask
-// редактирует любой ключ с `token` в `***MASKED***`); сам токен не пишется.
+// AuditPayload — audit fields of the 200 IssueToken. Keys WITHOUT a `token` substring (the audit secret-mask
+// redacts any key containing `token` to `***MASKED***`); the token itself is not written.
 func (r SoulIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"sid":              r.SID,
@@ -337,10 +337,10 @@ func (r SoulIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// IssueTokenTyped — извлечённая доменная функция POST /v1/souls/{sid}/issue-token
-// (FULL-TYPED): повторная выписка bootstrap-токена (transport=agent) без http-границы.
-// Ошибки — *problemError (422 невалидный sid / transport=ssh; 404 нет soul; 409 активный
-// токен без force; 500 PG-сбой); успех — [SoulIssueTokenReply] (200-тело + audit-поля).
+// IssueTokenTyped — the extracted domain function of POST /v1/souls/{sid}/issue-token
+// (FULL-TYPED): reissuing a bootstrap token (transport=agent) without the http boundary.
+// Errors — *problemError (422 invalid sid / transport=ssh; 404 no soul; 409 an active
+// token without force; 500 PG failure); success — [SoulIssueTokenReply] (200 body + audit fields).
 func (h *SoulHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, sid string, force bool) (SoulIssueTokenReply, error) {
 	var zero SoulIssueTokenReply
 	if !soul.ValidSID(sid) {
@@ -413,13 +413,13 @@ func (h *SoulHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, s
 	}, nil
 }
 
-// SoulListView — ПЛОСКАЯ доменная проекция одной строки реестра `souls` (handler-native
-// T5d): shared element списка `GET /v1/souls` И get-Body `GET /v1/souls/{sid}`. Пакет api
-// проецирует её в native-схему SoulListEntry. Проекция реестра; fingerprint SoulSeed-а и
-// любые секреты сознательно НЕ включены. status/transport — RAW string домена (native-тип
-// в api держит enum-форму). covens — non-nullable slice (nil → `[]` через coalesceCoven).
-// LastSeenAt/LastSeenByKid/RequestedAt/CreatedByAID — pointer-nullable (native-тип без
-// omitempty → `null` при nil). date-time — НАНОСЕКУНДНЫЙ wire (голый UTC, без Truncate).
+// SoulListView — the FLAT domain projection of one `souls` registry row (handler-native
+// T5d): the shared element of the `GET /v1/souls` list AND the get-Body of `GET /v1/souls/{sid}`. Package api
+// projects it into the native schema SoulListEntry. A registry projection; the SoulSeed fingerprint and
+// any secrets are deliberately NOT included. status/transport — the domain's RAW string (the native type
+// in api holds the enum form). covens — a non-nullable slice (nil → `[]` via coalesceCoven).
+// LastSeenAt/LastSeenByKid/RequestedAt/CreatedByAID — pointer-nullable (the native type without
+// omitempty → `null` on nil). date-time — NANOSECOND wire (bare UTC, no Truncate).
 type SoulListView struct {
 	SID           string
 	Transport     string
@@ -433,8 +433,8 @@ type SoulListView struct {
 	CreatedByAID  *string
 }
 
-// toSoulListView проецирует [soul.Soul] в доменный [SoulListView]. date-time — `.UTC()`
-// БЕЗ Truncate (pgx уже отдаёт UTC, усечение сломало бы байт-в-байт). covens nil → `[]`.
+// toSoulListView projects [soul.Soul] into the domain [SoulListView]. date-time — `.UTC()`
+// WITHOUT Truncate (pgx already returns UTC; truncation would break byte-for-byte). covens nil → `[]`.
 func toSoulListView(s *soul.Soul) SoulListView {
 	item := SoulListView{
 		SID:           s.SID,
@@ -457,24 +457,24 @@ func toSoulListView(s *soul.Soul) SoulListView {
 	return item
 }
 
-// overlayPresence деривирует поле `status` ответа из живого Redis SID-lease
-// (ADR-006(a)): PG-колонка `souls.status` — лениво-сверяемый Reaper-ом снимок
-// «последнего известного», она НЕ флипается в connected на hot-path-е reconnect-а,
-// поэтому read-path обязан определять presence по lease, иначе переподключившийся
-// Soul висит `disconnected` до следующего тика Reaper-а (live-баг). Симметрично
-// [topology.Resolver.filterAlive] — единый presence-источник для всех consumer-ов.
+// overlayPresence derives the response's `status` field from the live Redis SID lease
+// (ADR-006(a)): the PG column `souls.status` is a "last known" snapshot lazily reconciled
+// by the Reaper; it does NOT flip to connected on the reconnect hot-path,
+// so the read path must determine presence from the lease, otherwise a reconnected
+// Soul stays `disconnected` until the next Reaper tick (a live bug). Symmetric to
+// [topology.Resolver.filterAlive] — a single presence source for all consumers.
 //
-// Overlay затрагивает ТОЛЬКО presence-снимковые статусы (`connected`/`disconnected`):
-//   - lease жив  → `connected`;
-//   - lease мёртв → `disconnected`.
+// The overlay touches ONLY presence-snapshot statuses (`connected`/`disconnected`):
+//   - lease alive → `connected`;
+//   - lease dead  → `disconnected`.
 //
-// Lifecycle-статусы (`pending`/`revoked`/`expired`/`destroyed`) — НЕ presence, а
-// состояние онбординга/терминал; они не имеют lease-семантики и отдаются как есть
-// (то же исключение, что в topology.rosterSQL).
+// Lifecycle statuses (`pending`/`revoked`/`expired`/`destroyed`) are NOT presence but
+// onboarding/terminal state; they have no lease semantics and are returned as-is
+// (the same exception as in topology.rosterSQL).
 //
-// presence==nil (single-instance dev / unit) → no-op: PG-снимок отдаётся как есть.
-// Ошибка Redis-проверки → fail-safe: warn + PG-снимок без overlay (сетевой сбой
-// Redis не должен искажать весь список в одну сторону).
+// presence==nil (single-instance dev / unit) → no-op: the PG snapshot is returned as-is.
+// A Redis-check error → fail-safe: warn + PG snapshot without overlay (a Redis network
+// failure must not skew the whole list one way).
 func (h *SoulHandler) overlayPresence(ctx context.Context, items []SoulListView) {
 	if h.presence == nil || len(items) == 0 {
 		return
@@ -506,8 +506,8 @@ func (h *SoulHandler) overlayPresence(ctx context.Context, items []SoulListView)
 	}
 }
 
-// presenceSnapshotStatus — статус, чья семантика = presence-снимок (online/offline),
-// а значит участвует в lease-overlay. Лифецикл-статусы исключены (см. overlayPresence).
+// presenceSnapshotStatus — a status whose semantics = a presence snapshot (online/offline),
+// and thus participates in the lease overlay. Lifecycle statuses are excluded (see overlayPresence).
 func presenceSnapshotStatus(status string) bool {
 	switch soul.Status(status) {
 	case soul.StatusConnected, soul.StatusDisconnected:
@@ -516,29 +516,29 @@ func presenceSnapshotStatus(status string) bool {
 	return false
 }
 
-// scopeEvalInnerPageSize — внутренний page-size keyset-eval-а: handler читает
-// флот окном этого размера и Go-OR-фильтрует, набирая клиентский limit. НЕ
-// грузит весь флот одной выборкой (ADR-047 §Перф, симметрично bulkChunkSize).
+// scopeEvalInnerPageSize — the internal page size of the keyset eval: the handler reads
+// souls in a window of this size and Go-OR-filters, accumulating the client limit. Does NOT
+// load all souls in one query (ADR-047 §Perf, symmetric to bulkChunkSize).
 const scopeEvalInnerPageSize = 2000
 
-// scopeEvalMaxInnerPages — cap внутренних keyset-итераций на ОДИН клиентский
-// запрос (~20 страниц = 40k просмотренных строк). За cap handler отдаёт что
-// собрал + next_cursor (клиент дочитает следующим запросом) — защита от
-// patho-кейса «очень узкий regex на огромном флоте» (полный скан под одним
-// HTTP-запросом недопустим).
+// scopeEvalMaxInnerPages — the cap on internal keyset iterations per ONE client
+// request (~20 pages = 40k scanned rows). Past the cap the handler returns what it
+// gathered + next_cursor (the client reads the rest with the next request) — protection against
+// the patho-case "a very narrow regex over a huge fleet" (a full scan under one
+// HTTP request is unacceptable).
 const scopeEvalMaxInnerPages = 20
 
-// GET /v1/souls (ListTyped) — видимость scoped по RBAC (ADR-047 S3b): оператор видит только
-// хосты в своей scope-границе (`soul.list` Purview). scope прозрачен для клиента —
-// деривируется из JWT, НЕ query-параметр; coven-query (filter) сужает ВНУТРИ scope (AND).
-// Два режима, режим выбирает СЕРВЕР из Purview: coven-only/Unrestricted → offset-fast-path
-// (SQL-pushdown, точный total, без next_cursor); regex-измерение → keyset-режим (S3b-2a,
-// total_approximate, next_cursor). fail-closed (ОБРАТНО presence fail-SAFE): нет claims /
-// nil-scoper / пустой Purview / битый regex → ПУСТОЙ список (не весь флот).
+// GET /v1/souls (ListTyped) — visibility scoped by RBAC (ADR-047 S3b): an operator sees only
+// hosts within their scope boundary (`soul.list` Purview). The scope is transparent to the client —
+// derived from the JWT, NOT a query parameter; the coven query (filter) narrows WITHIN the scope (AND).
+// Two modes, the SERVER picks the mode from the Purview: coven-only/Unrestricted → offset-fast-path
+// (SQL pushdown, exact total, no next_cursor); a regex dimension → keyset mode (S3b-2a,
+// total_approximate, next_cursor). fail-closed (OPPOSITE to presence fail-SAFE): no claims /
+// nil-scoper / empty Purview / broken regex → an EMPTY list (not all souls).
 
-// SoulListInput — параметры [SoulHandler.ListTyped] (FULL-TYPED). Coven/Status/Transport —
-// string-фильтры (пусто = не применять). Page/Cursor — уже распарсенные huma-слоем
-// (offset+cursor конфликт и битый cursor разрешаются ДО ListTyped).
+// SoulListInput — parameters of [SoulHandler.ListTyped] (FULL-TYPED). Coven/Status/Transport —
+// string filters (empty = do not apply). Page/Cursor — already parsed by the huma layer
+// (offset+cursor conflict and a broken cursor are resolved BEFORE ListTyped).
 type SoulListInput struct {
 	Coven     string
 	Status    string
@@ -547,17 +547,17 @@ type SoulListInput struct {
 	Cursor    *sharedapi.KeysetCursor
 }
 
-// SoulListReply — wire-тип ответа GET /v1/souls (paged-envelope SoulListView). Алиас на
-// sharedapi.PagedResponse[SoulListView] — единая форма offset- и keyset-режимов (CURSOR,
-// 6 полей). Пакет api проецирует его в native-envelope soulListReply через RegisterTypeAlias
-// (handler-native T5d: element-схема SoulListView сводится на контрактную SoulListEntry).
+// SoulListReply — the wire type of the GET /v1/souls response (paged-envelope SoulListView). An alias of
+// sharedapi.PagedResponse[SoulListView] — the single shape of offset and keyset modes (CURSOR,
+// 6 fields). Package api projects it into the native envelope soulListReply via RegisterTypeAlias
+// (handler-native T5d: the element schema SoulListView collapses onto the contractual SoulListEntry).
 type SoulListReply = sharedapi.PagedResponse[SoulListView]
 
-// SoulStatsView — плоская доменная проекция 200-тела GET /v1/souls/stats (Souls
-// Overview UI). Карты «значение оси → число хостов»; ключи — RAW string домена
-// (status/transport в доменной форме). Transport — agent/ssh (НЕ pull/push):
-// UI сам маппит на pull/push-лейблы. Пустые оси → пустые (не nil) карты, чтобы
-// wire всегда нёс объект (а не null).
+// SoulStatsView — the flat domain projection of the 200 body of GET /v1/souls/stats (Souls
+// Overview UI). Maps "axis value → host count"; keys — the domain's RAW string
+// (status/transport in domain form). Transport — agent/ssh (NOT pull/push):
+// the UI maps to pull/push labels itself. Empty axes → empty (not nil) maps, so the
+// wire always carries an object (not null).
 type SoulStatsView struct {
 	ByStatus    map[string]int
 	ByTransport map[string]int
@@ -566,29 +566,29 @@ type SoulStatsView struct {
 	StaleCount  int
 }
 
-// SoulStatsReply — результат [SoulHandler.StatsTyped]. Несёт доменную проекцию
-// агрегата; пакет api проецирует её в native wire-DTO.
+// SoulStatsReply — the result of [SoulHandler.StatsTyped]. Carries the domain projection
+// of the aggregate; package api projects it into a native wire-DTO.
 type SoulStatsReply struct {
 	Body SoulStatsView
 }
 
-// StatsTyped — доменная функция GET /v1/souls/stats: агрегат реестра souls в
-// границах Purview-scope оператора (тот же fail-closed scope-резолв, что и
-// ListTyped). staleThreshold — cutoff «протухшего» last_seen_at, приходит из
-// reaper.ResolveMarkDisconnectedStale (register-слой читает актуальный конфиг),
-// чтобы stale_count совпадал с disconnect-порогом Reaper-а.
+// StatsTyped — the domain function of GET /v1/souls/stats: an aggregate of the souls registry
+// within the operator's Purview scope (the same fail-closed scope resolution as
+// ListTyped). staleThreshold — the cutoff for a "stale" last_seen_at, coming from
+// reaper.ResolveMarkDisconnectedStale (the register layer reads the current config),
+// so stale_count matches the Reaper's disconnect threshold.
 //
-// fail-closed (симметрично ListTyped): нет claims / nil-scoper / пустой Purview →
-// НУЛЕВОЙ агрегат (200, не 403) — не палим существование хостов вне scope.
-// Ошибки — *problemError (500 PG). Partial-scope (soulprint/state-измерения,
-// S3b-2b) деградирует в coven-агрегат: агрегат по scope-CTE НЕ применяет regex-
-// измерение (coven-pushdown), поэтому regex-scoped оператор увидит агрегат ТОЛЬКО
-// по coven-части своего Purview (строгое подмножество, never over-show) — то же
-// поведение, что offset-fast-path списка.
+// fail-closed (symmetric to ListTyped): no claims / nil-scoper / empty Purview →
+// a ZERO aggregate (200, not 403) — we do not leak the existence of hosts outside the scope.
+// Errors — *problemError (500 PG). Partial-scope (soulprint/state dimensions,
+// S3b-2b) degrades to a coven aggregate: the scope-CTE aggregate does NOT apply the regex
+// dimension (coven-pushdown), so a regex-scoped operator sees an aggregate ONLY
+// over the coven part of their Purview (a strict subset, never over-show) — the same
+// behavior as the list's offset-fast-path.
 func (h *SoulHandler) StatsTyped(ctx context.Context, claims *jwt.Claims, staleThreshold time.Duration) (SoulStatsReply, error) {
 	scope, ok := h.resolveListScopeForClaims(claims)
 	if !ok {
-		// fail-closed: scope не определён → нулевой агрегат, НЕ весь флот.
+		// fail-closed: scope undefined → a zero aggregate, NOT all souls.
 		return SoulStatsReply{Body: emptySoulStatsView()}, nil
 	}
 	stats, err := soul.SelectStats(ctx, h.pool,
@@ -601,9 +601,9 @@ func (h *SoulHandler) StatsTyped(ctx context.Context, claims *jwt.Claims, staleT
 	return SoulStatsReply{Body: soulStatsView(stats)}, nil
 }
 
-// soulStatsView проецирует доменный [soul.Stats] в плоский wire-view (typed-карты
-// осей → string-ключи). Инициализирует пустые карты как непустые, чтобы wire нёс
-// объект даже для пустой оси.
+// soulStatsView projects the domain [soul.Stats] into a flat wire-view (typed axis
+// maps → string keys). Initializes empty maps as non-nil, so the wire carries an
+// object even for an empty axis.
 func soulStatsView(s soul.Stats) SoulStatsView {
 	v := SoulStatsView{
 		ByStatus:    make(map[string]int, len(s.ByStatus)),
@@ -624,7 +624,7 @@ func soulStatsView(s soul.Stats) SoulStatsView {
 	return v
 }
 
-// emptySoulStatsView — нулевой агрегат (fail-closed): пустые (не nil) карты + нули.
+// emptySoulStatsView — a zero aggregate (fail-closed): empty (not nil) maps + zeros.
 func emptySoulStatsView() SoulStatsView {
 	return SoulStatsView{
 		ByStatus:    map[string]int{},
@@ -633,10 +633,10 @@ func emptySoulStatsView() SoulStatsView {
 	}
 }
 
-// ListTyped — извлечённая доменная функция GET /v1/souls (FULL-TYPED): scoped-видимость
-// (offset-fast-path либо keyset-режим, режим выбирает СЕРВЕР из Purview). fail-closed: нет
-// claims / nil-scoper / пустой Purview / битый regex → ПУСТОЙ список (200). Ошибки —
-// *problemError (422 невалидный status/transport-фильтр; 500 PG); успех — [SoulListReply].
+// ListTyped — the extracted domain function of GET /v1/souls (FULL-TYPED): scoped visibility
+// (offset-fast-path or keyset mode, the SERVER picks the mode from the Purview). fail-closed: no
+// claims / nil-scoper / empty Purview / broken regex → an EMPTY list (200). Errors —
+// *problemError (422 invalid status/transport filter; 500 PG); success — [SoulListReply].
 func (h *SoulHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in SoulListInput) (SoulListReply, error) {
 	var zero SoulListReply
 	var filter soul.ListFilter
@@ -660,7 +660,7 @@ func (h *SoulHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in Soul
 
 	scope, ok := h.resolveListScopeForClaims(claims)
 	if !ok {
-		// fail-closed: scope не определён → пустой список, НЕ весь флот (200, не 403).
+		// fail-closed: scope undefined → an empty list, NOT all souls (200, not 403).
 		return h.emptyListReply(in.Page), nil
 	}
 	if scope.NeedsKeyset() {
@@ -669,8 +669,8 @@ func (h *SoulHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in Soul
 	return h.listOffsetTyped(ctx, filter, scope, in.Page)
 }
 
-// listOffsetTyped — coven-only / Unrestricted режим: SQL-pushdown offset-пагинация
-// (backward-compatible путь S3b-0). total точен, next_cursor отсутствует.
+// listOffsetTyped — coven-only / Unrestricted mode: SQL-pushdown offset pagination
+// (the backward-compatible path S3b-0). total is exact, next_cursor is absent.
 func (h *SoulHandler) listOffsetTyped(ctx context.Context, filter soul.ListFilter, scope soulpurview.Scope, page sharedapi.Page) (SoulListReply, error) {
 	items, total, err := soul.SelectAll(ctx, h.pool,
 		filter, soul.ListScope{Covens: scope.Covens, Unrestricted: scope.Unrestricted},
@@ -692,42 +692,42 @@ func (h *SoulHandler) listOffsetTyped(ctx context.Context, filter soul.ListFilte
 	}, nil
 }
 
-// listKeyset — regex-режим (ADR-047 S3b-2a): keyset-окно по `(registered_at,
-// sid)` + Go-OR-постфильтр (covenMatch OR regexMatch) + добор до limit. Наличие
-// regex отключает coven-SQL-pushdown (иначе AND сузил бы видимость НИЖЕ
-// Purview); scope-union считается в Go. total не считается (total_approximate:true).
+// listKeyset — regex mode (ADR-047 S3b-2a): a keyset window over `(registered_at,
+// sid)` + a Go-OR post-filter (covenMatch OR regexMatch) + fill up to limit. The presence
+// of a regex disables coven-SQL-pushdown (otherwise an AND would narrow visibility BELOW
+// the Purview); the scope union is computed in Go. total is not counted (total_approximate:true).
 //
-// Пользовательский filter (status/transport/coven из query-params) пробрасывается
-// в [soul.ListForScopeEval] и применяется как SQL WHERE — он сужает ВНУТРИ scope
-// (AND), не расширяет. Итоговая видимость хоста ⟺ (filter в SQL) AND (scope-union
-// в Go-eval). Без этого keyset-режим молча игнорировал бы фильтры (regex-scoped
-// оператор с `?status=connected` видел бы и pending-хосты — тихий недо-фильтр).
+// The user filter (status/transport/coven from query params) is forwarded
+// into [soul.ListForScopeEval] and applied as SQL WHERE — it narrows WITHIN the scope
+// (AND), does not widen. A host's final visibility ⟺ (filter in SQL) AND (scope union
+// in Go-eval). Without this, keyset mode would silently ignore the filters (a regex-scoped
+// operator with `?status=connected` would also see pending hosts — a silent under-filter).
 //
-// Инвариант next_cursor — «продолжить с места, где перестали ПРОСМАТРИВАТЬ»:
-// каждая прочитанная из БД строка Go-eval-ится (просмотрена), поэтому курсор
-// кодирует ПОСЛЕДНЮЮ ПРОСМОТРЕННУЮ строку (`bound`), а не последнюю отданную.
-//   - нормальный путь (набор по limit): скан останавливается на заполнении →
-//     последняя просмотренная == последняя отданная, курсор не «убегает» вперёд.
-//   - cap-выход (узкий regex, упёрлись в cap внутренних страниц): `bound` >
-//     последней отданной — клиент дочитает скан со следующего запроса. Иначе
-//     при пустой странице next_cursor не выдался бы (lastEmitted==nil), клиент
-//     остановился бы, и матчащие хосты за первыми cap-страницами терялись бы
-//     навсегда (нарушение keyset «без пропусков»).
-//   - exhausted (БД пройдена): курсора нет — конец. Резюме от `bound` корректен:
-//     всё ≤ bound просмотрено (прошедшие отданы, не-прошедшие отброшены — они вне
-//     Purview), > bound ещё не тронуто → ни дублей, ни пропусков.
+// next_cursor invariant — "continue from where we stopped SCANNING":
+// every row read from the DB is Go-eval'd (scanned), so the cursor
+// encodes the LAST SCANNED row (`bound`), not the last emitted one.
+//   - normal path (filled to limit): the scan stops on fill →
+//     the last scanned == the last emitted, the cursor does not "run" ahead.
+//   - cap exit (a narrow regex, hit the internal page cap): `bound` >
+//     the last emitted — the client reads the rest of the scan from the next request. Otherwise
+//     on an empty page next_cursor would not be emitted (lastEmitted==nil), the client
+//     would stop, and matching hosts past the first cap pages would be lost
+//     forever (a keyset "no gaps" violation).
+//   - exhausted (DB fully scanned): no cursor — the end. The summary from `bound` is correct:
+//     everything ≤ bound is scanned (matches emitted, non-matches discarded — they are outside
+//     the Purview), > bound not yet touched → neither duplicates nor gaps.
 //
-// scope-eval сужает набор ДО presence-overlay-я: presence навешивается только
-// на прошедшие scope элементы (scope fail-CLOSED, presence fail-SAFE — два
-// разных слоя, см. overlayPresence).
+// scope-eval narrows the set BEFORE the presence overlay: presence is applied only
+// to elements that passed the scope (scope fail-CLOSED, presence fail-SAFE — two
+// different layers, see overlayPresence).
 //
-// Битый/слишком длинный regex (CompileScope error) → fail-closed: пустой список,
-// НЕ 500 (scope-eval-error скрывает).
+// A broken/too-long regex (CompileScope error) → fail-closed: an empty list,
+// NOT 500 (a scope-eval-error hides it).
 func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilter, scope soulpurview.Scope, page sharedapi.Page, cursor *sharedapi.KeysetCursor) (SoulListReply, error) {
 	compiled, err := soulpurview.CompileScope(scope)
 	if err != nil {
-		// scope-eval-error fail-CLOSED: битый regex в Purview не показывает флот
-		// и не падает в 500 — скрывает (пустой список).
+		// scope-eval-error fail-CLOSED: a broken regex in the Purview does not show souls
+		// and does not fall into 500 — it hides (an empty list).
 		h.logger.Warn("soul.list: scope regex compile failed — fail-closed (пустой список)",
 			slog.Any("error", err))
 		return h.emptyListReply(page), nil
@@ -763,10 +763,10 @@ func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilte
 		filled := false
 		for i := range rows {
 			row := rows[i]
-			// bound = последняя ПРОСМОТРЕННАЯ строка. Двигаем на каждой строке
-			// (а не только на конце окна): при выходе по limt внутри окна bound
-			// останавливается ровно на последней отданной, не убегая на хвост
-			// окна, который мы НЕ просматривали.
+			// bound = the last SCANNED row. We advance it on every row
+			// (not just at the window end): when exiting on limit within a window, bound
+			// stops exactly at the last emitted row, not running to the tail
+			// of the window that we did NOT scan.
 			bound = &soul.KeysetCursorBound{RegisteredAt: row.RegisteredAt, SID: row.SID}
 			if compiled.Visible(row.SID, row.Coven) {
 				collected = append(collected, scopeEvalRowToListItem(row))
@@ -794,9 +794,9 @@ func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilte
 		Total:            0,
 		TotalApproximate: true,
 	}
-	// next_cursor отсутствует ТОЛЬКО когда БД исчерпана (весь флот просмотрен).
-	// Иначе (набор по limit ИЛИ cap-выход) — есть ещё, курсор = последняя
-	// ПРОСМОТРЕННАЯ строка (bound), чтобы клиент дочитал скан без пропусков.
+	// next_cursor is absent ONLY when the DB is exhausted (all souls scanned).
+	// Otherwise (filled to limit OR cap exit) — there is more, the cursor = the last
+	// SCANNED row (bound), so the client reads the rest of the scan without gaps.
 	if !exhausted && bound != nil {
 		enc := sharedapi.EncodeKeysetCursor(sharedapi.KeysetCursor{
 			RegisteredAt: bound.RegisteredAt,
@@ -807,8 +807,8 @@ func (h *SoulHandler) listKeysetTyped(ctx context.Context, filter soul.ListFilte
 	return resp, nil
 }
 
-// emptyListReply — fail-closed/пустой ответ списка (200 + items:[]). total точен (пусто —
-// точный факт): TotalApproximate опущен, без next_cursor.
+// emptyListReply — a fail-closed/empty list response (200 + items:[]). total is exact (empty is
+// an exact fact): TotalApproximate omitted, no next_cursor.
 func (h *SoulHandler) emptyListReply(page sharedapi.Page) SoulListReply {
 	return SoulListReply{
 		Items:  []SoulListView{},
@@ -818,11 +818,11 @@ func (h *SoulHandler) emptyListReply(page sharedapi.Page) SoulListReply {
 	}
 }
 
-// scopeEvalRowToListItem — проекция полной [soul.ScopeEvalRow] в [SoulListView].
-// Карточка формо-идентична offset-режиму (toSoulListView): несёт status/
-// transport/last_seen/created_by_aid/requested_at — иначе presence-overlay не
-// флипнул бы status (он опускается на пустом снимке), и `GET /v1/souls` отдавал
-// бы разную форму карточки по Purview оператора.
+// scopeEvalRowToListItem — the projection of the full [soul.ScopeEvalRow] into [SoulListView].
+// The card is shape-identical to offset mode (toSoulListView): it carries status/
+// transport/last_seen/created_by_aid/requested_at — otherwise the presence overlay would not
+// flip status (it is omitted on an empty snapshot), and `GET /v1/souls` would return
+// a different card shape depending on the operator's Purview.
 func scopeEvalRowToListItem(row soul.ScopeEvalRow) SoulListView {
 	item := SoulListView{
 		SID:           row.SID,
@@ -845,20 +845,20 @@ func scopeEvalRowToListItem(row soul.ScopeEvalRow) SoulListView {
 	return item
 }
 
-// resolveListScope деривирует RBAC scope-границу `GET /v1/souls` из Purview
-// оператора (ADR-047 S3b). Возвращает (scope, true) — применить; (_, false) —
-// fail-closed (вызывающий отдаёт пустой список).
+// resolveListScope derives the RBAC scope boundary of `GET /v1/souls` from the operator's
+// Purview (ADR-047 S3b). Returns (scope, true) — apply; (_, false) —
+// fail-closed (the caller returns an empty list).
 //
-// fail-closed-ветки (НЕ весь флот при сомнении — ПРОТИВОПОЛОЖНО presence
+// fail-closed branches (NOT all souls when in doubt — OPPOSITE to presence
 // fail-safe):
-//   - нет claims в контексте (защита: route под RequireJWT, недостижимо штатно);
-//   - scoper не сконфигурирован (nil) — не строим scope, скрываем всё;
-//   - Purview пуст ([soulpurview.Scope].Empty) — оператору не положено ни одного
-//     хоста (default-deny без вычислимого измерения).
+//   - no claims in the context (guard: the route is under RequireJWT, unreachable normally);
+//   - scoper not configured (nil) — we do not build a scope, we hide everything;
+//   - Purview is empty ([soulpurview.Scope].Empty) — the operator is entitled to no
+//     hosts (default-deny without a computable dimension).
 //
-// Partial-scope (введены soulprint/state — S3b-2b): вычислимые измерения
-// (coven/regex) применяются, soulprint/state опускаются (строгое подмножество,
-// никогда НЕ over-show), warn-ом фиксируя недопоказ.
+// Partial-scope (soulprint/state introduced — S3b-2b): computable dimensions
+// (coven/regex) are applied, soulprint/state are dropped (a strict subset,
+// never over-show), logging the under-show with a warn.
 func (h *SoulHandler) resolveListScopeForClaims(claims *jwt.Claims) (soulpurview.Scope, bool) {
 	if claims == nil || h.scoper == nil {
 		return soulpurview.Scope{}, false
@@ -868,9 +868,9 @@ func (h *SoulHandler) resolveListScopeForClaims(claims *jwt.Claims) (soulpurview
 		return soulpurview.Scope{}, false
 	}
 	if sc.Partial {
-		// coven/regex применяются; soulprint/state (S3b-2b) опускаются. Под-показ
-		// безопасен (fail-closed-сторона), но фиксируем — оператор может
-		// недосчитаться видимых хостов до реализации soulprint-постфильтра.
+		// coven/regex are applied; soulprint/state (S3b-2b) are dropped. The under-show
+		// is safe (the fail-closed side), but we log it — an operator may
+		// undercount visible hosts until the soulprint post-filter is implemented.
 		h.logger.Warn("soul.list: scope содержит не-вычисляемые измерения (soulprint/state) — применены только coven/regex, часть доступных хостов скрыта (S3b-2b)",
 			slog.String("aid", claims.Subject),
 			slog.Any("covens", sc.Covens),
@@ -879,10 +879,10 @@ func (h *SoulHandler) resolveListScopeForClaims(claims *jwt.Claims) (soulpurview
 	return sc, true
 }
 
-// GetTyped — извлечённая доменная функция GET /v1/souls/{sid} (FULL-TYPED): single-soul
-// read со scope-гейтом. claims — для readScopeForClaims (вне scope → 404, не палим чужой
-// хост). Ошибки — *problemError (422 невалидный sid; 404 нет soul / вне scope; 500 PG);
-// успех — [SoulListView] (та же проекция, что в list).
+// GetTyped — the extracted domain function of GET /v1/souls/{sid} (FULL-TYPED): a single-soul
+// read with a scope gate. claims — for readScopeForClaims (outside the scope → 404, we do not leak someone else's
+// host). Errors — *problemError (422 invalid sid; 404 no soul / outside scope; 500 PG);
+// success — [SoulListView] (the same projection as in list).
 func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid string) (SoulListView, error) {
 	var zero SoulListView
 	if !soul.ValidSID(sid) {
@@ -904,11 +904,11 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 	return dtos[0], nil
 }
 
-// readScopeForClaims деривирует scope-границу single-read из Purview оператора
-// (`soul.list`, coven-измерение в пилоте). fail-closed: nil claims / nil-scoper →
-// [soulpurview.Scope]{Empty:true} → [soulpurview.InScope] false → 404. Симметрично
-// [SoulHandler.resolveListScope], но Scope (single-object через InScope), а не
-// [soul.ListScope] (SQL-pushdown списка).
+// readScopeForClaims derives the single-read scope boundary from the operator's Purview
+// (`soul.list`, the coven dimension in the pilot). fail-closed: nil claims / nil-scoper →
+// [soulpurview.Scope]{Empty:true} → [soulpurview.InScope] false → 404. Symmetric to
+// [SoulHandler.resolveListScope], but Scope (a single object via InScope), not
+// [soul.ListScope] (the list's SQL pushdown).
 func (h *SoulHandler) readScopeForClaims(claims *jwt.Claims) soulpurview.Scope {
 	if claims == nil || h.scoper == nil {
 		return soulpurview.Scope{Empty: true}
@@ -916,20 +916,20 @@ func (h *SoulHandler) readScopeForClaims(claims *jwt.Claims) soulpurview.Scope {
 	return soulpurview.Resolve(h.scoper.ResolvePurview(claims.Subject, "soul", "list"))
 }
 
-// soulprintReadReply — 200-body GET /v1/souls/{sid}/soulprint. Проекция
-// `souls.{soulprint_facts, soulprint_collected_at, soulprint_received_at}`. Имя
-// типа = контрактное имя схемы рукописи (docs/keeper/openapi.yaml :6858 →
-// SoulprintReadReply): huma DefaultSchemaNamer капитализирует первую букву →
+// soulprintReadReply — the 200 body of GET /v1/souls/{sid}/soulprint. A projection of
+// `souls.{soulprint_facts, soulprint_collected_at, soulprint_received_at}`. The type
+// name = the contractual hand-written schema name (docs/keeper/openapi.yaml :6858 →
+// SoulprintReadReply): huma's DefaultSchemaNamer capitalizes the first letter →
 // "SoulprintReadReply".
 //
-// typed_facts — byte-passthrough `json.RawMessage` (категория D, ADR-051/ADR-018
-// amend): сырые JSONB-байты `souls.soulprint_facts` отдаются AS-IS, без
-// unmarshal→map→re-marshal. Этим гарантируется forward-compat — новые proto-поля
-// `SoulprintFacts` Soul-агента доезжают на wire без рекомпиляции Keeper-а (Keeper
-// не парсит содержимое). Порядок ключей — PG-jsonb-нормализованный (jsonb-колонка
-// перенормализует при записи). Прежний `map[string]any`-путь сортировал ключи
-// лексикографически на re-marshal; byte-passthrough отдаёт jsonb-порядок —
-// одноразовый намеренный wire-change порядка ключей (под guard-тестом).
+// typed_facts — byte-passthrough `json.RawMessage` (category D, ADR-051/ADR-018
+// amend): the raw JSONB bytes of `souls.soulprint_facts` are returned AS-IS, without
+// unmarshal→map→re-marshal. This guarantees forward-compat — new proto fields of the
+// Soul agent's `SoulprintFacts` reach the wire without recompiling the Keeper (the Keeper
+// does not parse the content). Key order is PG-jsonb-normalized (the jsonb column
+// renormalizes on write). The former `map[string]any` path sorted keys
+// lexicographically on re-marshal; byte-passthrough returns the jsonb order —
+// a one-time intentional wire change of key order (under a guard test).
 type soulprintReadReply struct {
 	SID         string          `json:"sid"`
 	TypedFacts  json.RawMessage `json:"typed_facts"`
@@ -939,38 +939,38 @@ type soulprintReadReply struct {
 
 // GetSoulprint — GET /v1/souls/{sid}/soulprint.
 //
-// Возвращает последний полученный typed-SoulprintReport (`SoulprintFacts`,
-// ADR-018). Permission — `soul.list` (тот же, что для get; rbac.md note —
-// `soul.get` отложен до отдельного PR, list-permission покрывает чтение
-// детали и soulprint — симметрично service.list / omen.list).
+// Returns the last received typed SoulprintReport (`SoulprintFacts`,
+// ADR-018). Permission — `soul.list` (the same as for get; rbac.md note —
+// `soul.get` is deferred to a separate PR, the list permission covers reading
+// the detail and soulprint — symmetric to service.list / omen.list).
 //
-// Видимость scoped по RBAC (ADR-047 S3b-1, тот же [readScope]-гейт, что у Get):
-// scope-проверка идёт ДО раскрытия фактов — covens хоста берутся отдельным
-// фетчем реестра ([soul.SelectBySID]; SelectSoulprint их не возвращает). Вне
-// scope / fail-closed → 404 (как для несуществующего SID, не палим существование
-// чужого хоста и не раскрываем его факты).
+// Visibility scoped by RBAC (ADR-047 S3b-1, the same [readScope] gate as Get):
+// the scope check runs BEFORE revealing facts — the host's covens are taken by a separate
+// registry fetch ([soul.SelectBySID]; SelectSoulprint does not return them). Outside
+// scope / fail-closed → 404 (like a non-existent SID, we do not leak the existence
+// of someone else's host nor reveal its facts).
 //
-// Контракт:
+// Contract:
 //   - 200 + `{sid, typed_facts, collected_at, received_at}`.
-//   - 404 (not-found) — SID отсутствует в реестре `souls` ЛИБО вне scope оператора.
-//   - 410 (gone, soulprint-not-received) — запись Soul-а есть, но
-//     `SoulprintReport` ни разу не приходил (`soulprint_facts IS NULL`).
-//     Отдельный код vs 404 — UI решает «нет данных пока» vs «нет хоста».
-//   - 422 — невалидный path-SID.
+//   - 404 (not-found) — the SID is absent from the `souls` registry OR outside the operator's scope.
+//   - 410 (gone, soulprint-not-received) — the Soul record exists, but
+//     a `SoulprintReport` never arrived (`soulprint_facts IS NULL`).
+//     A separate code vs 404 — the UI decides "no data yet" vs "no host".
+//   - 422 — an invalid path SID.
 //
-// typed_facts — byte-passthrough (категория D): сырой JSONB отдаётся as-is, без
-// unmarshal-валидации, поэтому прежний 500 на «битый JSONB» снят — storage-
-// инвариант (eventstream пишет через `protojson.Marshal` валидный JSON в jsonb-
-// колонку, которая сама отвергнет невалидный JSON на записи) гарантирует
-// валидность, и Keeper не дублирует проверку (forward-compat — не парсим).
+// typed_facts — byte-passthrough (category D): the raw JSONB is returned as-is, without
+// unmarshal validation, so the former 500 on "broken JSONB" is removed — the storage
+// invariant (eventstream writes valid JSON via `protojson.Marshal` into a jsonb
+// column, which itself rejects invalid JSON on write) guarantees
+// validity, and the Keeper does not duplicate the check (forward-compat — we do not parse).
 
-// SoulprintReadReply — экспортированный алиас на wire-тип ответа GET /v1/souls/{sid}/soulprint
-// (typed_facts byte-passthrough). Через него huma-роут (пакет api) типизирует 200-output.
+// SoulprintReadReply — the exported alias of the GET /v1/souls/{sid}/soulprint response wire type
+// (typed_facts byte-passthrough). The huma route (package api) types the 200 output through it.
 type SoulprintReadReply = soulprintReadReply
 
-// GetSoulprintTyped — извлечённая доменная функция GET /v1/souls/{sid}/soulprint (FULL-TYPED):
-// typed-SoulprintReport со scope-гейтом ДО раскрытия фактов. Ошибки — *problemError (422
-// невалидный sid; 404 нет soul / вне scope; 410 soulprint не получен; 500 PG); успех —
+// GetSoulprintTyped — the extracted domain function of GET /v1/souls/{sid}/soulprint (FULL-TYPED):
+// a typed SoulprintReport with a scope gate BEFORE revealing facts. Errors — *problemError (422
+// invalid sid; 404 no soul / outside scope; 410 soulprint not received; 500 PG); success —
 // [SoulprintReadReply].
 func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims, sid string) (SoulprintReadReply, error) {
 	var zero SoulprintReadReply
@@ -978,8 +978,8 @@ func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims,
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'sid' must match "+soul.SIDPattern)}
 	}
 
-	// scope-гейт ДО раскрытия фактов: covens хоста — из реестра (SelectSoulprint их
-	// не несёт). not-found хоста и not-found из-за scope дают один 404.
+	// scope gate BEFORE revealing facts: the host's covens come from the registry (SelectSoulprint does not
+	// carry them). host not-found and not-found due to scope both give a single 404.
 	s, err := soul.SelectBySID(ctx, h.pool, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
@@ -1020,11 +1020,11 @@ func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims,
 	return resp, nil
 }
 
-// SoulHistoryItemView — ПЛОСКАЯ доменная проекция одной записи per-host timeline
-// (handler-native T5d). Пакет api проецирует её в native-схему SoulHistoryItem. Type — RAW
-// string домена (native-тип в api держит enum-форму). Поля, специфичные для одного источника,
-// pointer-optional (incarnation/scenario — только scenario; module — только errand; voyage_id —
-// back-link на Voyage; nil → ключ опущен native-типом). date-time — СЕКУНДНЫЙ wire.
+// SoulHistoryItemView — the FLAT domain projection of one per-host timeline entry
+// (handler-native T5d). Package api projects it into the native schema SoulHistoryItem. Type — the domain's RAW
+// string (the native type in api holds the enum form). Fields specific to a single source are
+// pointer-optional (incarnation/scenario — scenario only; module — errand only; voyage_id —
+// a back-link to Voyage; nil → key omitted by the native type). date-time — SECOND-precision wire.
 type SoulHistoryItemView struct {
 	Type        string
 	ID          string
@@ -1037,9 +1037,9 @@ type SoulHistoryItemView struct {
 	VoyageID    *string
 }
 
-// SoulHistoryView — доменный результат GET /v1/souls/{sid}/history (handler-native T5d).
-// Пакет api проецирует {SID, Items, Offset, Limit, Total} → native SoulHistoryReply
-// (самостоятельный envelope с top-level sid, НЕ generic PagedResponse).
+// SoulHistoryView — the domain result of GET /v1/souls/{sid}/history (handler-native T5d).
+// Package api projects {SID, Items, Offset, Limit, Total} → native SoulHistoryReply
+// (a standalone envelope with a top-level sid, NOT a generic PagedResponse).
 type SoulHistoryView struct {
 	SID    string
 	Items  []SoulHistoryItemView
@@ -1048,10 +1048,10 @@ type SoulHistoryView struct {
 	Total  int
 }
 
-// toSoulHistoryItemView — проекция [soul.HistoryItem] в доменный [SoulHistoryItemView].
-// date-time started_at/finished_at — СЕКУНДНЫЙ wire (.UTC().Truncate(time.Second), parity
-// легаси RFC3339-секунд). incarnation/scenario/module/voyage_id — пустая строка → nil → ключ
-// опущен (байт-в-байт со старым `string ...,omitempty`-DTO).
+// toSoulHistoryItemView — the projection of [soul.HistoryItem] into the domain [SoulHistoryItemView].
+// date-time started_at/finished_at — SECOND-precision wire (.UTC().Truncate(time.Second), parity
+// with legacy RFC3339 seconds). incarnation/scenario/module/voyage_id — empty string → nil → key
+// omitted (byte-for-byte with the old `string ...,omitempty` DTO).
 func toSoulHistoryItemView(it soul.HistoryItem) SoulHistoryItemView {
 	dto := SoulHistoryItemView{
 		Type:      string(it.Type),
@@ -1081,17 +1081,17 @@ func toSoulHistoryItemView(it soul.HistoryItem) SoulHistoryItemView {
 	return dto
 }
 
-// GET /v1/souls/{sid}/history (HistoryTyped) — агрегированный per-host timeline:
-// scenario-задачи (`apply_runs`) + ad-hoc exec (`errands`) под целевым SID, merge по
-// started_at DESC. Permission — `soul.list`. Видимость scoped по RBAC (ADR-047 §г, паттерн
-// 1:1 с GetSoulprint): scope-проверка ДО раскрытия timeline — covens хоста отдельным фетчем
-// реестра ([soul.SelectBySID]). Вне scope / fail-closed → 404 (не палим чужой хост).
-// Revoked-оператор отрезается revoked-aware [rbac.Enforcer.ResolvePurview].
+// GET /v1/souls/{sid}/history (HistoryTyped) — the aggregated per-host timeline:
+// scenario tasks (`apply_runs`) + ad-hoc exec (`errands`) under the target SID, merged by
+// started_at DESC. Permission — `soul.list`. Visibility scoped by RBAC (ADR-047 §d, pattern
+// 1:1 with GetSoulprint): the scope check BEFORE revealing the timeline — the host's covens by a separate
+// registry fetch ([soul.SelectBySID]). Outside scope / fail-closed → 404 (we do not leak someone else's host).
+// A revoked operator is cut off by the revoked-aware [rbac.Enforcer.ResolvePurview].
 
-// SoulHistoryInput — параметры [SoulHandler.HistoryTyped] (FULL-TYPED). Types — multi-value
-// (scenario|errand). Since — нулевой time.Time → фильтр границы не применяется (huma на bad
-// date-time даёт 400 при bind; legacy 422 недостижим через router — единственный source).
-// Offset/Limit — диапазон enforce-ит CheckPageBounds → 400.
+// SoulHistoryInput — parameters of [SoulHandler.HistoryTyped] (FULL-TYPED). Types — multi-value
+// (scenario|errand). Since — a zero time.Time → the boundary filter is not applied (huma on a bad
+// date-time gives 400 on bind; the legacy 422 is unreachable via the router — the single source).
+// Offset/Limit — the range is enforced by CheckPageBounds → 400.
 type SoulHistoryInput struct {
 	SID    string
 	Types  []string
@@ -1100,10 +1100,10 @@ type SoulHistoryInput struct {
 	Limit  int
 }
 
-// HistoryTyped — извлечённая доменная функция GET /v1/souls/{sid}/history (FULL-TYPED):
-// per-host timeline (apply_runs + errands) со scope-гейтом ДО раскрытия. Ошибки —
-// *problemError (400 out-of-range pagination; 422 невалидный sid / type; 404 нет soul / вне
-// scope; 500 PG); успех — [SoulHistoryView].
+// HistoryTyped — the extracted domain function of GET /v1/souls/{sid}/history (FULL-TYPED):
+// a per-host timeline (apply_runs + errands) with a scope gate BEFORE revealing. Errors —
+// *problemError (400 out-of-range pagination; 422 invalid sid / type; 404 no soul / outside
+// scope; 500 PG); success — [SoulHistoryView].
 func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in SoulHistoryInput) (SoulHistoryView, error) {
 	var zero SoulHistoryView
 	if !soul.ValidSID(in.SID) {
@@ -1113,8 +1113,8 @@ func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in S
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
 	}
 
-	// scope-гейт ДО раскрытия timeline: covens хоста — из реестра (SelectHistory их
-	// не несёт). not-found хоста и not-found из-за scope дают один 404.
+	// scope gate BEFORE revealing the timeline: the host's covens come from the registry (SelectHistory does not
+	// carry them). host not-found and not-found due to scope both give a single 404.
 	s, err := soul.SelectBySID(ctx, h.pool, in.SID)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
@@ -1149,16 +1149,16 @@ func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in S
 	return SoulHistoryView{SID: in.SID, Items: dtos, Offset: in.Offset, Limit: in.Limit, Total: total}, nil
 }
 
-// SoulCovenAssignInput — NATIVE request-форма POST /v1/souls/coven (handler-native T5d).
-// Заменяет SoulCovenAssignRequest: huma-input (пакет api) биндит тело по своим полям,
-// затем зовёт AssignCovenTyped с этой плоской моделью.
+// SoulCovenAssignInput — the NATIVE request shape of POST /v1/souls/coven (handler-native T5d).
+// Replaces SoulCovenAssignRequest: the huma input (package api) binds the body by its fields,
+// then calls AssignCovenTyped with this flat model.
 //
-// `label` (одна метка) и `labels` (набор) XOR по mode:
-//   - mode=append/remove → label обязателен, labels запрещён;
-//   - mode=replace → labels обязателен (может быть пустым = «снять все»), label запрещён.
+// `label` (one label) and `labels` (a set) are XOR by mode:
+//   - mode=append/remove → label required, labels forbidden;
+//   - mode=replace → labels required (may be empty = "clear all"), label forbidden.
 //
-// Selector — подмножество словаря таргетинга soul.* (all/sids/coven/incarnation/status).
-// Свободный CEL-предикат сознательно НЕ поддержан (ломает доказуемость scope-проверки).
+// Selector — a subset of the soul.* targeting vocabulary (all/sids/coven/incarnation/status).
+// A free CEL predicate is deliberately NOT supported (it breaks the provability of the scope check).
 type SoulCovenAssignInput struct {
 	Mode     string
 	Label    string
@@ -1167,7 +1167,7 @@ type SoulCovenAssignInput struct {
 	Selector SoulCovenAssignSelectorInput
 }
 
-// SoulCovenAssignSelectorInput — NATIVE форма селектора coven-assign (handler-native T5d).
+// SoulCovenAssignSelectorInput — the NATIVE shape of the coven-assign selector (handler-native T5d).
 type SoulCovenAssignSelectorInput struct {
 	All         bool
 	SIDs        []string
@@ -1176,8 +1176,8 @@ type SoulCovenAssignSelectorInput struct {
 	Status      string
 }
 
-// covenAssignFields — value-снимок полей запроса coven-assign (nil → zero), сохраняет
-// прежнюю логику XOR/валидации без рассеянных nil-чеков.
+// covenAssignFields — a value snapshot of the coven-assign request fields (nil → zero), keeping
+// the former XOR/validation logic without scattered nil checks.
 type covenAssignFields struct {
 	Mode     string
 	Label    string
@@ -1186,7 +1186,7 @@ type covenAssignFields struct {
 	Selector covenAssignSelectorFields
 }
 
-// covenAssignSelectorFields — value-снимок pointer-optional полей селектора.
+// covenAssignSelectorFields — a value snapshot of the selector's pointer-optional fields.
 type covenAssignSelectorFields struct {
 	All         bool
 	SIDs        []string
@@ -1211,12 +1211,12 @@ func derefCovenAssign(req SoulCovenAssignInput) covenAssignFields {
 	}
 }
 
-// soulCovenAssignResponse — 200 body. status ∈ completed | partial. Для
-// mode=replace `label` отсутствует, `labels` отражает применённый набор
-// (включая пустой [] для «снять все»). MarshalJSON решает XOR на сериализации:
-// `omitempty` на []string не годится (пустой набор для replace надо отдать как
-// `[]`, а не опустить поле). json-теги — для документации формы (Marshal
-// делает map; Unmarshal не используется на server-side).
+// soulCovenAssignResponse — the 200 body. status ∈ completed | partial. For
+// mode=replace `label` is absent, `labels` reflects the applied set
+// (including an empty [] for "clear all"). MarshalJSON resolves the XOR at serialization:
+// `omitempty` on []string will not do (an empty set for replace must be returned as
+// `[]`, not omitted). The json tags document the shape (Marshal
+// builds a map; Unmarshal is not used server-side).
 type soulCovenAssignResponse struct {
 	Mode    string   `json:"mode"`
 	Label   string   `json:"label,omitempty"`
@@ -1228,13 +1228,13 @@ type soulCovenAssignResponse struct {
 	DryRun  bool     `json:"dry_run"`
 }
 
-// SoulCovenAssignResponse — экспортированный алиас на внутренний wire-тип (custom MarshalJSON
-// XOR label↔labels), через который huma-роут (пакет api) типизирует output без форка wire-
-// формы (huma строит схему из полей, сериализует через тот же тип; схему имени выравнивает
-// alias soulCovenAssignReply в huma_soul_envelope.go).
+// SoulCovenAssignResponse — the exported alias of the internal wire type (custom MarshalJSON
+// XOR label↔labels), through which the huma route (package api) types the output without forking the wire
+// shape (huma builds the schema from the fields, serializes via the same type; the schema name is aligned by the
+// alias soulCovenAssignReply in huma_soul_envelope.go).
 type SoulCovenAssignResponse = soulCovenAssignResponse
 
-// MarshalJSON собирает поля XOR-сериализацией label↔labels по HasSet.
+// MarshalJSON assembles the fields with XOR serialization of label↔labels by HasSet.
 func (r soulCovenAssignResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{
 		"mode":    r.Mode,
@@ -1257,45 +1257,45 @@ func (r soulCovenAssignResponse) MarshalJSON() ([]byte, error) {
 
 // AssignCoven — POST /v1/souls/coven.
 //
-// Массово добавляет (append) / снимает (remove) ОДНУ Coven-метку либо
-// ЗАМЕНЯЕТ (replace) набор Coven-меток на хостах под selector ∩ scope
-// оператора. Coven — холодная PG-метка: чистый UPDATE souls, без Redis.
-// Permission-гейт (`soul.coven-assign`) ставит middleware; scope-intersection
-// (целевые хосты ⊆ scope + назначаемая метка / каждая из replace-набора ∈
-// scope) — здесь, ДО UPDATE: без него bulk = privilege-escalation.
+// Bulk-adds (append) / removes (remove) ONE Coven label or
+// REPLACES (replace) the set of Coven labels on hosts under selector ∩ the operator's
+// scope. Coven is a cold PG label: a plain UPDATE souls, no Redis.
+// The permission gate (`soul.coven-assign`) is applied by middleware; the scope intersection
+// (target hosts ⊆ scope + the assigned label / each of the replace set ∈
+// scope) — here, BEFORE UPDATE: without it bulk = privilege-escalation.
 //
-// XOR-форма тела: для append/remove обязателен `label`, `labels` запрещён;
-// для replace обязателен `labels` (может быть пустым = снять все), `label`
-// запрещён.
+// Body XOR shape: append/remove require `label`, `labels` forbidden;
+// replace requires `labels` (may be empty = clear all), `label`
+// forbidden.
 //
-// dry_run (body или `?dry_run=true`) — вернуть matched под selector ∩ scope
-// без UPDATE.
+// dry_run (body or `?dry_run=true`) — return matched under selector ∩ scope
+// without UPDATE.
 //
-// Контракт:
+// Contract:
 //   - 200 + {mode, label?, labels?, matched, changed, status, dry_run}.
-//   - 400 — невалидный JSON.
-//   - 422 — невалидный mode / label(s) / status / incarnation / пустой
-//     selector / метка вне scope оператора / XOR-нарушение (label+labels).
-//   - 500 — scoper не сконфигурирован или ошибка БД.
+//   - 400 — invalid JSON.
+//   - 422 — invalid mode / label(s) / status / incarnation / empty
+//     selector / label outside the operator's scope / XOR violation (label+labels).
+//   - 500 — scoper not configured or a DB error.
 //
-// partial-семантика (часть чанков закоммичена, затем фейл) отдаётся как 200
-// со `status: partial` — закоммиченные изменения идемпотентно до-повторяются
-// оператором, откатывать их небезопасно. PG-ошибка ДО первого коммита (count
-// или первый чанк) — 500.
+// partial semantics (some chunks committed, then a failure) is returned as 200
+// with `status: partial` — committed changes are idempotently re-applied
+// by the operator; rolling them back is unsafe. A PG error BEFORE the first commit (count
+// or the first chunk) — 500.
 
-// SoulCovenAssignReply — результат [SoulHandler.AssignCovenTyped] (handler-native).
-// Несёт 200-тело ([soulCovenAssignResponse] с custom MarshalJSON XOR label↔labels) +
+// SoulCovenAssignReply — the result of [SoulHandler.AssignCovenTyped] (handler-native).
+// Carries the 200 body ([soulCovenAssignResponse] with custom MarshalJSON XOR label↔labels) +
 // audit-payload.
 type SoulCovenAssignReply struct {
 	Body         soulCovenAssignResponse
 	AuditPayload middleware.AuditPayload
 }
 
-// AssignCovenTyped — доменная функция POST /v1/souls/coven (handler-native): bulk
-// coven-assign со scope-intersection. rawReq — native input; dryRunQuery — флаг из
-// `?dry_run=true` (OR с body.dry_run). Ошибки — *problemError (422 невалидный mode/label(s)/
-// selector / XOR-нарушение / метка вне scope; 500 scoper nil / PG); успех —
-// [SoulCovenAssignReply] (200-тело + audit-payload, в т.ч. partial-семантика → 200).
+// AssignCovenTyped — the domain function of POST /v1/souls/coven (handler-native): bulk
+// coven-assign with scope intersection. rawReq — the native input; dryRunQuery — the flag from
+// `?dry_run=true` (OR with body.dry_run). Errors — *problemError (422 invalid mode/label(s)/
+// selector / XOR violation / label outside scope; 500 scoper nil / PG); success —
+// [SoulCovenAssignReply] (200 body + audit-payload, including partial semantics → 200).
 func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, rawReq SoulCovenAssignInput, dryRunQuery bool) (SoulCovenAssignReply, error) {
 	var zero SoulCovenAssignReply
 	if h.scoper == nil {
@@ -1310,10 +1310,10 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 			"field 'mode' must be one of: append, remove, replace")}
 	}
 
-	// XOR label↔labels по mode. append/remove оперируют ОДНОЙ меткой
-	// (array_append/array_remove над scalar-ом); replace принимает НАБОР
-	// целиком. Смешение полей — программная ошибка вызывающего, отвергаем
-	// до семантической валидации.
+	// XOR label↔labels by mode. append/remove operate on ONE label
+	// (array_append/array_remove over a scalar); replace takes the WHOLE
+	// set. Mixing the fields is a caller programming error, rejected
+	// before semantic validation.
 	switch mode {
 	case soul.CovenAppend, soul.CovenRemove:
 		if len(req.Labels) > 0 {
@@ -1331,8 +1331,8 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 				"field 'label' is allowed only for mode=append/remove; use 'labels' for replace")}
 		}
-		// Пустой набор разрешён (= снять все метки); валидируем формат и
-		// проводим через label-валидатор каждую метку.
+		// An empty set is allowed (= clear all labels); we validate the format and
+		// run each label through the label validator.
 		for _, l := range req.Labels {
 			if !soul.ValidCoven(l) {
 				return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "labels entry "+l+" must match "+soul.CovenPattern)}
@@ -1369,16 +1369,16 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
 	}
 
-	// coven-scope bulk-операции = coven-измерение Purview оператора (тот же
-	// резолвер, что у List — обобщённый PurviewResolver).
+	// coven-scope bulk operations = the coven dimension of the operator's Purview (the same
+	// resolver as List — the generalized PurviewResolver).
 	pv := h.scoper.ResolvePurview(claims.Subject, "soul", "coven-assign")
 	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
 
 	dryRun := req.DryRun || dryRunQuery
 
-	// Для replace гейт (b) применяем явно до dry_run-COUNT (как BulkAssignCoven
-	// делает для append): out-of-scope метка должна отвергаться ДО любого
-	// обращения к БД, иначе COUNT даст misleading-matched.
+	// For replace we apply gate (b) explicitly before the dry_run COUNT (as BulkAssignCoven
+	// does for append): an out-of-scope label must be rejected BEFORE any
+	// DB access, otherwise COUNT would give a misleading matched.
 	if mode == soul.CovenReplace && !scope.Unrestricted {
 		labelScope := soulpurview.Scope{Covens: scope.Covens}
 		for _, l := range req.Labels {
@@ -1406,8 +1406,8 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 		rep, err = soul.BulkAssignCoven(ctx, h.pool, sel, scope, req.Label, mode)
 	}
 	if err != nil {
-		// partial: часть чанков закоммичена — отдаём 200 + status:partial, чтобы
-		// оператор видел сделанное и мог до-повторить (идемпотентно).
+		// partial: some chunks committed — we return 200 + status:partial, so the
+		// operator sees what was done and can re-apply (idempotently).
 		if rep.Status == soul.BulkPartial {
 			h.logger.Warn("soul.coven-assign: partial",
 				slog.String("label", req.Label),
@@ -1425,7 +1425,7 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 	return h.buildCovenAssignReply(req, mode, scope, rep, false), nil
 }
 
-// bulkErrorToProblem маппит ошибки bulk-слоя в *problemError.
+// bulkErrorToProblem maps bulk-layer errors into *problemError.
 func (h *SoulHandler) bulkErrorToProblem(err error) error {
 	switch {
 	case errors.Is(err, soul.ErrBulkEmptySelector):
@@ -1439,11 +1439,11 @@ func (h *SoulHandler) bulkErrorToProblem(err error) error {
 	}
 }
 
-// respondCovenAssign пишет audit-payload + 200-ответ.
+// respondCovenAssign writes the audit-payload + the 200 response.
 //
-// Поля `label`/`labels` отражают применённую форму mode-а: для append/remove —
-// `label`; для replace — `labels` (всегда массив, в т.ч. пустой при «снять
-// все»). Audit-payload симметричен ответу.
+// The `label`/`labels` fields reflect the applied mode shape: for append/remove —
+// `label`; for replace — `labels` (always an array, including empty on "clear
+// all"). The audit-payload is symmetric to the response.
 func (h *SoulHandler) buildCovenAssignReply(req covenAssignFields, mode soul.CovenMode, scope soul.BulkScope, rep soul.Report, dryRun bool) SoulCovenAssignReply {
 	scopeApplied := !scope.Unrestricted
 	payload := middleware.AuditPayload{
@@ -1464,8 +1464,8 @@ func (h *SoulHandler) buildCovenAssignReply(req covenAssignFields, mode soul.Cov
 		DryRun:  dryRun,
 	}
 	if mode == soul.CovenReplace {
-		// nil → []string{} для устойчивого JSON `[]` (replace с пустым набором —
-		// валидная операция «снять все метки»).
+		// nil → []string{} for stable JSON `[]` (replace with an empty set is
+		// a valid "clear all labels" operation).
 		labels := req.Labels
 		if labels == nil {
 			labels = []string{}
@@ -1480,7 +1480,7 @@ func (h *SoulHandler) buildCovenAssignReply(req covenAssignFields, mode soul.Cov
 	return SoulCovenAssignReply{Body: resp, AuditPayload: payload}
 }
 
-// normalizeCovenSelector — нормализованная форма селектора для audit-payload.
+// normalizeCovenSelector — the normalized selector form for the audit-payload.
 func normalizeCovenSelector(s covenAssignSelectorFields) map[string]any {
 	out := map[string]any{"all": s.All}
 	if len(s.SIDs) > 0 {
@@ -1498,39 +1498,39 @@ func normalizeCovenSelector(s covenAssignSelectorFields) map[string]any {
 	return out
 }
 
-// covenLabelValidator возвращает активный CovenLabelValidator. В пилоте —
-// format-only no-op (формат уже проверен ValidCoven); хук под будущий
-// справочник окружений (Q1) без новых полей API.
+// covenLabelValidator returns the active CovenLabelValidator. In the pilot —
+// a format-only no-op (the format is already checked by ValidCoven); a hook for a future
+// environments catalog (Q1) without new API fields.
 func (h *SoulHandler) covenLabelValidator() soul.CovenLabelValidator {
 	return soul.NoopCovenLabelValidator{}
 }
 
-// SoulCovenLabelSelector — middleware-helper для RBAC bulk coven-assign
-// (`POST /v1/souls/coven`): извлекает назначаемую метку из JSON-body и
-// возвращает `{"coven": label}` для permission-проверки (rbac.md § селектор
-// `coven=`). Это гейт (b) — coven-scoped оператор проходит middleware только
-// для метки в своём scope; bare/`*` — для любой.
+// SoulCovenLabelSelector — a middleware helper for RBAC bulk coven-assign
+// (`POST /v1/souls/coven`): extracts the assigned label from the JSON body and
+// returns `{"coven": label}` for the permission check (rbac.md § the `coven=`
+// selector). This is gate (b) — a coven-scoped operator passes the middleware only
+// for a label within their scope; bare/`*` — for any.
 //
-// Body вычитывается (под уже навешенным MaxBytesReader-лимитом /v1/*) и
-// восстанавливается для handler-а через io.NopCloser над буфером — handler
-// декодирует тело повторно. Невалидный/пустой body → nil-селектор: тогда
-// permission со `coven=`-селектором не сматчит (deny на middleware), а
-// bare/`*` — пройдёт, и handler вернёт 400 на битом JSON. Это безопасно:
-// под-привилегированный оператор без подходящего scope не проходит дальше.
+// The body is read (under the already-applied MaxBytesReader limit on /v1/*) and
+// restored for the handler via io.NopCloser over a buffer — the handler
+// decodes the body again. An invalid/empty body → a nil selector: then
+// a permission with a `coven=` selector will not match (deny at the middleware), while
+// bare/`*` — passes, and the handler returns 400 on broken JSON. This is safe:
+// an under-privileged operator without a matching scope does not pass further.
 //
-// Mode=replace отдаёт `labels[]` вместо одной `label`. Enforcer.Matches не
-// поддерживает multi-value selector → возвращаем первую метку набора как
-// заявку «оператор хотя бы для одной из меток имеет право»; КАЖДАЯ метка
-// набора повторно проверяется handler-side гейтом (b) перед БД — middleware
-// здесь лишь грубый фильтр (deny под-привилегированного без подходящего
-// scope), service-уровень закрывает остаток.
+// Mode=replace returns `labels[]` instead of a single `label`. Enforcer.Matches does not
+// support a multi-value selector → we return the first label of the set as a
+// claim "the operator has the right for at least one of the labels"; EACH label of the
+// set is re-checked by the handler-side gate (b) before the DB — the middleware
+// here is only a coarse filter (deny an under-privileged operator without a matching
+// scope), the service level covers the rest.
 func SoulCovenLabelSelector(r *http.Request) map[string]string {
 	if r.Body == nil {
 		return nil
 	}
 	body, err := io.ReadAll(r.Body)
 	_ = r.Body.Close()
-	// Восстанавливаем тело для handler-а в любом случае (даже на ошибке/пусто).
+	// Restore the body for the handler in any case (even on error/empty).
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	if err != nil || len(body) == 0 {
 		return nil
@@ -1548,24 +1548,24 @@ func SoulCovenLabelSelector(r *http.Request) map[string]string {
 	if len(probe.Labels) > 0 {
 		return map[string]string{"coven": probe.Labels[0]}
 	}
-	// Пустые label/labels: для replace с пустым labels = «снять все» — пускаем
-	// дальше bare-permission. Coven-scoped без scope-match отвалится на
-	// service-гейте (BulkReplaceCoven проверит, что целевые хосты ⊆ scope).
+	// Empty label/labels: for replace with empty labels = "clear all" — we let it
+	// through to bare permission. A coven-scoped operator without a scope match falls off at the
+	// service gate (BulkReplaceCoven checks that the target hosts ⊆ scope).
 	return nil
 }
 
-// === POST /v1/souls/traits (traits-assign) — bulk operator-set trait-метки (ADR-060) ===
+// === POST /v1/souls/traits (traits-assign) — bulk operator-set trait labels (ADR-060) ===
 
-// SoulTraitsAssignInput — NATIVE request-форма POST /v1/souls/traits (handler-native).
-// Traits — это map (key → scalar|list), отдельная ось рядом с плоским Coven (read/target
-// пилот уже в HEAD: souls.traits jsonb, soulprint.self.traits). Mode-семантика:
-//   - merge (дефолт): set/overwrite ключи из Traits, остальные сохранить;
-//   - replace: заменить ВЕСЬ traits-map на Traits целиком (пустой = очистить);
-//   - remove: удалить ключи из Keys (список имён).
+// SoulTraitsAssignInput — the NATIVE request shape of POST /v1/souls/traits (handler-native).
+// Traits is a map (key → scalar|list), a separate axis alongside the flat Coven (the read/target
+// pilot is already in HEAD: souls.traits jsonb, soulprint.self.traits). Mode semantics:
+//   - merge (default): set/overwrite keys from Traits, keep the rest;
+//   - replace: replace the WHOLE traits map with Traits (empty = clear);
+//   - remove: delete the keys in Keys (a list of names).
 //
-// XOR Traits↔Keys по mode: merge/replace принимают `traits` (map), remove — `keys`
-// (список имён). Selector — то же подмножество таргетинга soul.* (all/sids/coven/
-// incarnation/status), что у coven-assign.
+// XOR Traits↔Keys by mode: merge/replace take `traits` (a map), remove — `keys`
+// (a list of names). Selector — the same subset of the soul.* targeting vocabulary (all/sids/coven/
+// incarnation/status) as coven-assign.
 type SoulTraitsAssignInput struct {
 	Mode     string
 	Traits   map[string]any
@@ -1574,10 +1574,10 @@ type SoulTraitsAssignInput struct {
 	Selector SoulCovenAssignSelectorInput
 }
 
-// soulTraitsAssignResponse — 200 body. status ∈ completed | partial. `keys` — список
-// затронутых trait-КЛЮЧЕЙ (merge/replace → ключи переданного набора; remove → удаляемые).
-// Значения traits в ответе НЕ эхуются (симметрия с audit-payload: фиксируем форму операции,
-// не содержимое — trait-значения могут нести инфраструктурные данные хоста).
+// soulTraitsAssignResponse — the 200 body. status ∈ completed | partial. `keys` — the list of
+// affected trait KEYS (merge/replace → keys of the given set; remove → deleted ones).
+// trait values are NOT echoed in the response (symmetric to the audit-payload: we record the operation shape,
+// not the content — trait values may carry a host's infrastructure data).
 type soulTraitsAssignResponse struct {
 	Mode    string   `json:"mode"`
 	Keys    []string `json:"keys"`
@@ -1587,37 +1587,37 @@ type soulTraitsAssignResponse struct {
 	DryRun  bool     `json:"dry_run"`
 }
 
-// SoulTraitsAssignResponse — экспортированный алиас на внутренний wire-тип (через него
-// huma-роут типизирует output; имя схемы выравнивает alias soulTraitsAssignReply в
+// SoulTraitsAssignResponse — the exported alias of the internal wire type (the huma
+// route types the output through it; the schema name is aligned by the alias soulTraitsAssignReply in
 // huma_soul_envelope.go).
 type SoulTraitsAssignResponse = soulTraitsAssignResponse
 
-// SoulTraitsAssignReply — результат [SoulHandler.AssignTraitsTyped] (handler-native):
-// 200-тело + audit-payload.
+// SoulTraitsAssignReply — the result of [SoulHandler.AssignTraitsTyped] (handler-native):
+// the 200 body + audit-payload.
 type SoulTraitsAssignReply struct {
 	Body         soulTraitsAssignResponse
 	AuditPayload middleware.AuditPayload
 }
 
-// AssignTraitsTyped — доменная функция POST /v1/souls/traits (handler-native): bulk
-// trait-assign со scope-intersection (гейт a — целевые хосты ⊆ coven-scope оператора).
-// rawReq — native input; dryRunQuery — флаг из `?dry_run=true` (OR с body.dry_run).
+// AssignTraitsTyped — the domain function of POST /v1/souls/traits (handler-native): bulk
+// trait-assign with scope intersection (gate a — target hosts ⊆ the operator's coven-scope).
+// rawReq — the native input; dryRunQuery — the flag from `?dry_run=true` (OR with body.dry_run).
 //
-// БЕЗОПАСНОСТЬ. Least-privilege держится тем же [soul.BulkScope] (coven-scope оператора),
-// что и coven-assign: bulk не ослаблен. trait-КЛЮЧ НЕ является RBAC-измерением scope (в
-// отличие от Coven-метки), поэтому гейта (b) на ключи нет — coven-scoped оператор не может
-// мутировать traits хостов вне своего coven-scope (гейт a в WHERE-предикате), но любой
-// валидный ключ внутри scope ему доступен.
+// SECURITY. Least-privilege holds via the same [soul.BulkScope] (the operator's coven-scope)
+// as coven-assign: bulk is not weakened. A trait KEY is NOT an RBAC scope dimension (unlike
+// a Coven label), so there is no gate (b) on keys — a coven-scoped operator cannot
+// mutate traits of hosts outside their coven-scope (gate a in the WHERE predicate), but any
+// valid key within the scope is available to them.
 //
-// Ошибки — *problemError (422 невалидный mode / ключ / значение / nested / XOR-нарушение /
-// пустой selector; 500 scoper nil / PG); успех — [SoulTraitsAssignReply] (200-тело +
-// audit-payload, в т.ч. partial-семантика → 200).
+// Errors — *problemError (422 invalid mode / key / value / nested / XOR violation /
+// empty selector; 500 scoper nil / PG); success — [SoulTraitsAssignReply] (200 body +
+// audit-payload, including partial semantics → 200).
 func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims, rawReq SoulTraitsAssignInput, dryRunQuery bool) (SoulTraitsAssignReply, error) {
 	var zero SoulTraitsAssignReply
-	// DEPRECATED (ADR-060 amend R1): operator-set trait-управление перенесено
-	// per-soul → per-incarnation (incarnation.traits — источник истины, PUT
-	// /v1/incarnations/{name}/traits). Per-soul write перетирается следующей
-	// проекцией. Эндпоинт сохранён forward-compat; вызов сигналим в лог.
+	// DEPRECATED (ADR-060 amend R1): operator-set trait management moved
+	// per-soul → per-incarnation (incarnation.traits is the source of truth, PUT
+	// /v1/incarnations/{name}/traits). A per-soul write is overwritten by the next
+	// projection. The endpoint is kept forward-compat; we signal the call to the log.
 	h.logger.Warn("soul.traits-assign: DEPRECATED per-soul trait-write (ADR-060) — используйте PUT /v1/incarnations/{name}/traits",
 		slog.String("by_aid", claims.Subject))
 	if h.scoper == nil {
@@ -1627,15 +1627,15 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 
 	mode := soul.TraitMode(rawReq.Mode)
 	if mode == "" {
-		mode = soul.TraitMerge // дефолт.
+		mode = soul.TraitMerge // default.
 	}
 	if !soul.ValidTraitMode(mode) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'mode' must be one of: merge, replace, remove")}
 	}
 
-	// XOR traits↔keys по mode + format/значение-валидация. merge/replace оперируют
-	// map-ом ключ→значение; remove — списком имён ключей.
+	// XOR traits↔keys by mode + format/value validation. merge/replace operate on a
+	// key→value map; remove — on a list of key names.
 	switch mode {
 	case soul.TraitMerge, soul.TraitReplace:
 		if len(rawReq.Keys) > 0 {
@@ -1708,8 +1708,8 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 		rep, err = soul.BulkAssignTraits(ctx, h.pool, sel, scope, mode, rawReq.Traits, rawReq.Keys)
 	}
 	if err != nil {
-		// partial: часть чанков закоммичена — 200 + status:partial (идемпотентно
-		// до-повторяется оператором, откатывать небезопасно — паритет coven).
+		// partial: some chunks committed — 200 + status:partial (idempotently
+		// re-applied by the operator, rolling back is unsafe — parity with coven).
 		if rep.Status == soul.BulkPartial {
 			h.logger.Warn("soul.traits-assign: partial",
 				slog.String("mode", rawReq.Mode),
@@ -1725,9 +1725,9 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	return h.buildTraitsAssignReply(rawReq, mode, scope, rep, false), nil
 }
 
-// buildTraitsAssignReply собирает 200-ответ + audit-payload. `keys` — отсортированный
-// список затронутых ключей (для merge/replace — ключи переданного набора; для remove —
-// удаляемые). trait-значения НЕ кладутся ни в ответ, ни в audit (секрет-гигиена).
+// buildTraitsAssignReply assembles the 200 response + audit-payload. `keys` — the sorted
+// list of affected keys (for merge/replace — keys of the given set; for remove —
+// deleted ones). trait values are put neither in the response nor in the audit (secret hygiene).
 func (h *SoulHandler) buildTraitsAssignReply(req SoulTraitsAssignInput, mode soul.TraitMode, scope soul.BulkScope, rep soul.Report, dryRun bool) SoulTraitsAssignReply {
 	keys := affectedTraitKeys(mode, req.Traits, req.Keys)
 	payload := middleware.AuditPayload{
@@ -1752,8 +1752,8 @@ func (h *SoulHandler) buildTraitsAssignReply(req SoulTraitsAssignInput, mode sou
 	return SoulTraitsAssignReply{Body: resp, AuditPayload: payload}
 }
 
-// affectedTraitKeys — отсортированный набор затронутых trait-ключей: для merge/replace —
-// ключи map-а Traits, для remove — список Keys. nil → []string{} (устойчивый JSON `[]`).
+// affectedTraitKeys — the sorted set of affected trait keys: for merge/replace —
+// the keys of the Traits map, for remove — the Keys list. nil → []string{} (stable JSON `[]`).
 func affectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []string) []string {
 	var out []string
 	if mode == soul.TraitRemove {
@@ -1771,9 +1771,9 @@ func affectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []string
 	return out
 }
 
-// SoulSIDSelector — middleware-helper для RBAC: извлекает SID из path-param
-// для permission-проверки. Использует ключ селектора `host` (rbac.md §
-// Грамматика селектора — `host` для per-Soul-таргетинга).
+// SoulSIDSelector — a middleware helper for RBAC: extracts the SID from the path param
+// for the permission check. Uses the selector key `host` (rbac.md §
+// Selector grammar — `host` for per-Soul targeting).
 func SoulSIDSelector(r *http.Request) map[string]string {
 	sid := chi.URLParam(r, "sid")
 	if sid == "" {
@@ -1782,13 +1782,13 @@ func SoulSIDSelector(r *http.Request) map[string]string {
 	return map[string]string{"host": sid}
 }
 
-// SoulSshTargetInput — NATIVE request-форма PUT /v1/souls/{sid}/ssh-target (handler-native
-// T5d). Заменяет SoulSSHTargetRequest: huma-input (пакет api) биндит тело по своим полям,
-// затем зовёт UpdateSshTargetTyped с этой плоской моделью.
+// SoulSshTargetInput — the NATIVE request shape of PUT /v1/souls/{sid}/ssh-target (handler-native
+// T5d). Replaces SoulSSHTargetRequest: the huma input (package api) binds the body by its fields,
+// then calls UpdateSshTargetTyped with this flat model.
 //
-// Все поля required, кроме `ssh_provider` (P2 W-1, ADR-032 amendment 2026-05-27): операция
-// «обновить SSH-реквизиты», а не «частично дополнить». `ssh_provider` (пусто → nil → routing
-// идёт через coven_default → cluster_default; kebab-case, валидируется handler-ом до записи).
+// All fields required except `ssh_provider` (P2 W-1, ADR-032 amendment 2026-05-27): the operation
+// is "update the SSH credentials", not "partially amend". `ssh_provider` (empty → nil → routing
+// goes via coven_default → cluster_default; kebab-case, validated by the handler before writing).
 type SoulSshTargetInput struct {
 	SSHPort     int
 	SSHUser     string
@@ -1796,10 +1796,10 @@ type SoulSshTargetInput struct {
 	SSHProvider string
 }
 
-// SoulSshTargetView — ПЛОСКАЯ доменная проекция 200-тела PUT /v1/souls/{sid}/ssh-target
-// (handler-native T5d). Пакет api проецирует её в native-схему SoulSshTargetReply (nested
-// ssh_target — class-A reuse native SoulSshTarget). Snapshot сохранённого состояния.
-// SSHProvider пусто → ключ опущен native-типом (omitempty).
+// SoulSshTargetView — the FLAT domain projection of the 200 body of PUT /v1/souls/{sid}/ssh-target
+// (handler-native T5d). Package api projects it into the native schema SoulSshTargetReply (nested
+// ssh_target — class-A reuse of the native SoulSshTarget). A snapshot of the saved state.
+// SSHProvider empty → key omitted by the native type (omitempty).
 type SoulSshTargetView struct {
 	SID         string
 	SSHPort     int
@@ -1808,17 +1808,17 @@ type SoulSshTargetView struct {
 	SSHProvider string
 }
 
-// SoulSshTargetReply — результат [SoulHandler.UpdateSshTargetTyped] (handler-native). Несёт
-// доменную проекцию 200-тела (SoulSshTargetView: snapshot) + audit-payload.
+// SoulSshTargetReply — the result of [SoulHandler.UpdateSshTargetTyped] (handler-native). Carries
+// the domain projection of the 200 body (SoulSshTargetView: a snapshot) + audit-payload.
 type SoulSshTargetReply struct {
 	Body         SoulSshTargetView
 	AuditPayload middleware.AuditPayload
 }
 
-// UpdateSshTargetTyped — доменная функция PUT /v1/souls/{sid}/ssh-target (handler-native):
-// обновление per-host SSH-реквизитов push-flow. req — native input. Ошибки — *problemError
-// (422 невалидный sid/ssh_port/ssh_user/soul_path/ssh_provider; 404 нет soul; 500 PG); успех —
-// [SoulSshTargetReply] (доменная проекция 200-тела + audit-payload).
+// UpdateSshTargetTyped — the domain function of PUT /v1/souls/{sid}/ssh-target (handler-native):
+// updating per-host SSH credentials for the push-flow. req — the native input. Errors — *problemError
+// (422 invalid sid/ssh_port/ssh_user/soul_path/ssh_provider; 404 no soul; 500 PG); success —
+// [SoulSshTargetReply] (the domain projection of the 200 body + audit-payload).
 func (h *SoulHandler) UpdateSshTargetTyped(ctx context.Context, sid string, req SoulSshTargetInput) (SoulSshTargetReply, error) {
 	var zero SoulSshTargetReply
 	if !soul.ValidSID(sid) {
@@ -1834,8 +1834,8 @@ func (h *SoulHandler) UpdateSshTargetTyped(ctx context.Context, sid string, req 
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'soul_path' must be an absolute Unix path (start with '/')")}
 	}
-	// P2 W-1: optional `ssh_provider` — kebab-case имя плагина. Пусто → routing
-	// уходит на coven_default/cluster_default уровни.
+	// P2 W-1: optional `ssh_provider` — the kebab-case plugin name. Empty → routing
+	// goes to the coven_default/cluster_default levels.
 	provider := req.SSHProvider
 	if provider != "" && !pushprovider.ValidName(provider) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'ssh_provider' must match "+pushprovider.NamePattern)}
@@ -1875,8 +1875,8 @@ func (h *SoulHandler) UpdateSshTargetTyped(ctx context.Context, sid string, req 
 	}, nil
 }
 
-// parseTransport маппит JSON-строку transport в [soul.Transport]. Возвращает
-// ok=false на пустую/неизвестную строку (→ 422 на handler-стороне).
+// parseTransport maps the JSON transport string to [soul.Transport]. Returns
+// ok=false for an empty/unknown string (→ 422 on the handler side).
 func parseTransport(v string) (soul.Transport, bool) {
 	switch soul.Transport(v) {
 	case soul.TransportAgent:
@@ -1888,8 +1888,8 @@ func parseTransport(v string) (soul.Transport, bool) {
 	}
 }
 
-// coalesceCoven нормализует nil-slice в пустой — для JSON `[]` вместо `null`
-// (covens объявлен non-nullable в proto/OpenAPI).
+// coalesceCoven normalizes a nil slice to empty — for JSON `[]` instead of `null`
+// (covens is declared non-nullable in proto/OpenAPI).
 func coalesceCoven(c []string) []string {
 	if c == nil {
 		return []string{}
@@ -1897,10 +1897,10 @@ func coalesceCoven(c []string) []string {
 	return c
 }
 
-// coalesceTraits нормализует nil-map в пустой — для JSON `{}` вместо `null`
-// (traits объявлен non-nullable в OpenAPI, симметрично coalesceCoven). bare-soul
-// без operator-set меток отдаётся как `{}`, а не `null` — UI может рендерить
-// пустой набор без nil-проверки (ADR-060 read-path).
+// coalesceTraits normalizes a nil map to empty — for JSON `{}` instead of `null`
+// (traits is declared non-nullable in OpenAPI, symmetric to coalesceCoven). A bare soul
+// without operator-set labels is returned as `{}`, not `null` — the UI can render an
+// empty set without a nil check (ADR-060 read-path).
 func coalesceTraits(t map[string]any) map[string]any {
 	if t == nil {
 		return map[string]any{}

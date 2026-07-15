@@ -1,24 +1,24 @@
 package api
 
-// Guard-тесты PILOT-1 разворота POST /v1/cadences на huma, FULL-TYPED форма
-// (code-first, ADR-054 Amendment 2026-06-12). Доказывают, что huma-роут поверх chi
-// сохраняет инварианты кластера, сосуществуя с oapi-strict-роутами, и что FULL-TYPED
-// граница (typed Body + конверт + извлечённая CreateTyped) корректна:
+// Guard tests for PILOT-1, migrating POST /v1/cadences to huma, FULL-TYPED form
+// (code-first, ADR-054 Amendment 2026-06-12). They prove that a huma route over chi
+// preserves the cluster invariants while coexisting with oapi-strict routes, and that the FULL-TYPED
+// boundary (typed Body + envelope + extracted CreateTyped) is correct:
 //
 //   - wire: 201 + Location + cadence_id (CreateTyped → typed output);
-//   - unknown-field → 400 application/problem+json (теперь huma-нативно: huma
-//     ловит additionalProperties:false, error-override классифицирует
-//     "unexpected property" → 400, НЕ доменный DisallowUnknownFields);
-//   - malformed-body → 400 application/problem+json (huma JSON-parse);
+//   - unknown-field → 400 application/problem+json (now huma-native: huma
+//     catches additionalProperties:false, the error-override classifies
+//     "unexpected property" → 400, NOT the domain DisallowUnknownFields);
+//   - malformed-body → 400 application/problem+json (huma JSON parse);
 //   - missing-required (target) → 422 problem+json (huma `required:"true"`);
-//   - RBAC-deny на cadence.create → 403 (навеска группы, huma её наследует);
-//   - AUDIT (КРИТ, урок S6): cadence.create через huma пишет audit-event с непустым
-//     payload (cadence self-audit ВНУТРИ CreateTyped → huma не задевает);
-//   - no-audit-on-reject: 422 не пишет audit;
-//   - OpenAPI-фрагмент: huma генерит 3.1-спеку POST /v1/cadences из FULL-TYPED
-//     Go-типов;
-//   - GOLDEN-JSON: 201-reply байт-в-байт == зафиксированный эталон (wire-регресс-
-//     guard тиража: omitempty/nullable NextRunAt, []-vs-null).
+//   - RBAC-deny on cadence.create → 403 (group wiring, huma inherits it);
+//   - AUDIT (CRITICAL, S6 lesson): cadence.create via huma writes an audit event with a non-empty
+//     payload (cadence self-audit INSIDE CreateTyped → huma does not touch it);
+//   - no-audit-on-reject: 422 writes no audit;
+//   - OpenAPI fragment: huma generates the 3.1 spec of POST /v1/cadences from the FULL-TYPED
+//     Go types;
+//   - GOLDEN-JSON: the 201 reply is byte-for-byte == the pinned reference (wire regression
+//     guard for the rollout: omitempty/nullable NextRunAt, []-vs-null).
 
 import (
 	"encoding/json"
@@ -37,11 +37,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// humaCadenceRouter собирает chi-роутер с POST /v1/cadences через huma —
-// продакшен-навеска буквально из router.go: RequirePermission(cadence.create) на
-// группе + huma-операция внутри. installHumaErrorOverride вызывается явно (как в
-// buildRouter — единая точка). injectClaims заменяет RequireJWT (валидный JWT не
-// нужен — предмет проверки huma-обвязка, не auth). enforcer/auditW параметризованы.
+// humaCadenceRouter assembles a chi router with POST /v1/cadences via huma —
+// the production wiring taken verbatim from router.go: RequirePermission(cadence.create) on
+// the group + the huma operation inside. installHumaErrorOverride is called explicitly (as in
+// buildRouter — a single point). injectClaims replaces RequireJWT (a valid JWT is not
+// needed — the subject under test is the huma wiring, not auth). enforcer/auditW are parameterized.
 func humaCadenceRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -68,8 +68,8 @@ func humaCadenceRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, a
 	return r
 }
 
-// TestHumaCadence_Create_WireEquivalent — FULL-TYPED конверт даёт 201 + Location +
-// cadence_id (CreateTyped → typed output), как прямой вызов handler-а.
+// TestHumaCadence_Create_WireEquivalent — the FULL-TYPED envelope yields 201 + Location +
+// cadence_id (CreateTyped → typed output), like a direct handler call.
 func TestHumaCadence_Create_WireEquivalent(t *testing.T) {
 	r := humaCadenceRouter(t, strictAllowAll{}, nil)
 
@@ -99,10 +99,10 @@ func TestHumaCadence_Create_WireEquivalent(t *testing.T) {
 	}
 }
 
-// TestHumaCadence_Create_UnknownField_400 — КЛЮЧЕВОЙ инвариант FULL-TYPED: huma
-// валидирует typed Body (additionalProperties:false ЧЕСТНЫЙ), unknown-поле ловит
-// huma → "unexpected property" → error-override классифицирует 400
-// application/problem+json (контракт кластера unknown→400, теперь huma-нативно).
+// TestHumaCadence_Create_UnknownField_400 — the KEY FULL-TYPED invariant: huma
+// validates the typed Body (additionalProperties:false is HONEST), an unknown field is caught by
+// huma → "unexpected property" → the error-override classifies 400
+// application/problem+json (the cluster contract unknown→400, now huma-native).
 func TestHumaCadence_Create_UnknownField_400(t *testing.T) {
 	r := humaCadenceRouter(t, strictAllowAll{}, nil)
 
@@ -117,8 +117,8 @@ func TestHumaCadence_Create_UnknownField_400(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
 
-// TestHumaCadence_Create_MalformedBody_400 — битый JSON → 400 problem+json
-// (huma JSON-parse, error-override 400 TypeMalformedRequest).
+// TestHumaCadence_Create_MalformedBody_400 — malformed JSON → 400 problem+json
+// (huma JSON parse, error-override 400 TypeMalformedRequest).
 func TestHumaCadence_Create_MalformedBody_400(t *testing.T) {
 	r := humaCadenceRouter(t, strictAllowAll{}, nil)
 
@@ -132,10 +132,10 @@ func TestHumaCadence_Create_MalformedBody_400(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
 
-// TestHumaCadence_Create_MissingTarget_422 — required-валидация (target обязателен)
-// теперь делает huma (`required:"true"`) → 422 problem+json. Доказывает, что
-// missing-required отбивается huma-нативно (НЕ доменным кодом), статус совпадает с
-// прежней доменной классификацией 422.
+// TestHumaCadence_Create_MissingTarget_422 — required validation (target is mandatory)
+// is now done by huma (`required:"true"`) → 422 problem+json. Proves that
+// missing-required is rejected huma-natively (NOT by domain code), and the status matches
+// the former domain classification 422.
 func TestHumaCadence_Create_MissingTarget_422(t *testing.T) {
 	r := humaCadenceRouter(t, strictAllowAll{}, nil)
 
@@ -150,9 +150,9 @@ func TestHumaCadence_Create_MissingTarget_422(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
 
-// TestHumaCadence_Create_RBACDeny_403 — RequirePermission(cadence.create) на группе
-// отбивает запрос ДО huma-handler-а (deny-enforcer) → 403. Доказывает, что навеска
-// группы наследуется huma-роутом.
+// TestHumaCadence_Create_RBACDeny_403 — RequirePermission(cadence.create) on the group
+// rejects the request BEFORE the huma handler (deny-enforcer) → 403. Proves that the group
+// wiring is inherited by the huma route.
 func TestHumaCadence_Create_RBACDeny_403(t *testing.T) {
 	r := humaCadenceRouter(t, strictDenyAll{}, nil)
 
@@ -165,10 +165,10 @@ func TestHumaCadence_Create_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// TestHumaCadence_Create_AuditRecorded — КРИТ guard (урок S6): cadence.create через
-// huma пишет audit-event с непустым payload на успешном write-пути. Cadence self-
-// audit (emitWrite ВНУТРИ CreateTyped) — FULL-TYPED извлечение его сохраняет; guard
-// ловит регресс «huma проглотил/не довёл write-путь до audit».
+// TestHumaCadence_Create_AuditRecorded — CRITICAL guard (S6 lesson): cadence.create via
+// huma writes an audit event with a non-empty payload on the successful write path. The cadence
+// self-audit (emitWrite INSIDE CreateTyped) is preserved by the FULL-TYPED extraction; the guard
+// catches the regression "huma swallowed / did not carry the write path to audit".
 func TestHumaCadence_Create_AuditRecorded(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRouter(t, strictAllowAll{}, auditCap)
@@ -199,8 +199,8 @@ func TestHumaCadence_Create_AuditRecorded(t *testing.T) {
 	}
 }
 
-// TestHumaCadence_NoAudit_OnReject — negative-guard: при huma-reject (missing target
-// → 422) audit НЕ пишется (CreateTyped не доходит до emitWrite).
+// TestHumaCadence_NoAudit_OnReject — negative guard: on a huma reject (missing target
+// → 422) audit is NOT written (CreateTyped never reaches emitWrite).
 func TestHumaCadence_NoAudit_OnReject(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRouter(t, strictAllowAll{}, auditCap)
@@ -218,9 +218,9 @@ func TestHumaCadence_NoAudit_OnReject(t *testing.T) {
 	}
 }
 
-// TestHumaCadence_OpenAPIFragment_3_1 — huma генерит OpenAPI-фрагмент POST
-// /v1/cadences из FULL-TYPED Go-типов (code-first), версия 3.1.0 (huma-дефолт).
-// Фрагмент несёт форму тела (required name/schedule_kind, enum kind) И форму ответа.
+// TestHumaCadence_OpenAPIFragment_3_1 — huma generates the OpenAPI fragment of POST
+// /v1/cadences from the FULL-TYPED Go types (code-first), version 3.1.0 (huma default).
+// The fragment carries the body shape (required name/schedule_kind, enum kind) AND the response shape.
 func TestHumaCadence_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaCadenceSpecYAML()
 	if err != nil {
@@ -236,13 +236,13 @@ func TestHumaCadence_OpenAPIFragment_3_1(t *testing.T) {
 	}
 }
 
-// TestHumaCadence_Create_GoldenWire — GOLDEN-JSON snapshot (wire-регресс-guard
-// тиража, КРИТ): 201-reply huma-output, проведённый через map→sorted-marshal, ==
-// зафиксированный эталон. Guard фиксирует НАБОР ключей, omitempty/nullable
-// (NextRunAt отсутствует при nil — strictFakeCadenceStore не возвращает next_run_at)
-// и отсутствие лишних полей ($schema). Порядок ключей для JSON не семантичен и
-// нормализуется ремаршалом через map. cadence_id нормализуется (ULID
-// недетерминирован) перед сравнением.
+// TestHumaCadence_Create_GoldenWire — GOLDEN-JSON snapshot (wire regression guard
+// for the rollout, CRITICAL): the 201 reply huma-output, run through map→sorted-marshal, ==
+// the pinned reference. The guard pins the SET of keys, omitempty/nullable
+// (NextRunAt is absent when nil — strictFakeCadenceStore does not return next_run_at)
+// and the absence of extra fields ($schema). JSON key order is not semantic and is
+// normalized by re-marshaling through a map. cadence_id is normalized (the ULID is
+// nondeterministic) before comparison.
 func TestHumaCadence_Create_GoldenWire(t *testing.T) {
 	r := humaCadenceRouter(t, strictAllowAll{}, nil)
 
@@ -254,11 +254,11 @@ func TestHumaCadence_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Нормализация недетерминированного ULID (cadence_id + хвост location) и
-	// timestamp next_run_at на плейсхолдеры — иначе golden недостижим. Присутствие/
-	// отсутствие ключей (omitempty) и форма сохраняются: тело cron-расписания несёт
-	// next_run_at (resolved next-hour) — golden фиксирует ЕГО ПРИСУТСТВИЕ как
-	// nullable-ключ (если CadenceCreateReply потеряет omitempty/тип — дрейф).
+	// Normalize the nondeterministic ULID (cadence_id + the location tail) and the
+	// next_run_at timestamp to placeholders — otherwise the golden is unreachable. Presence/
+	// absence of keys (omitempty) and shape are preserved: the cron-schedule body carries
+	// next_run_at (resolved next-hour) — the golden pins ITS PRESENCE as a
+	// nullable key (if CadenceCreateReply loses omitempty/type — drift).
 	got := normalizeCadenceWire(t, rec.Body.Bytes())
 
 	const golden = `{"cadence_id":"_ULID_","enabled":true,"location":"/v1/cadences/_ULID_","name":"hourly","next_run_at":"_TS_"}`
@@ -267,11 +267,11 @@ func TestHumaCadence_Create_GoldenWire(t *testing.T) {
 	}
 }
 
-// normalizeCadenceWire перекладывает reply через map → канонический marshal (ключи
-// сортируются) и заменяет недетерминированные значения (cadence_id + хвост location
-// → "<ULID>"; next_run_at-timestamp → "<TS>") на плейсхолдеры. Сохраняет
-// присутствие/отсутствие ключей (omitempty) и любые лишние поля (например, $schema —
-// сразу всплывёт в diff). Так golden фиксирует ФОРМУ, не значения.
+// normalizeCadenceWire runs the reply through map → canonical marshal (keys are
+// sorted) and replaces nondeterministic values (cadence_id + the location tail
+// → "<ULID>"; next_run_at timestamp → "<TS>") with placeholders. It preserves
+// the presence/absence of keys (omitempty) and any extra fields (e.g. $schema —
+// which surfaces immediately in the diff). This way the golden pins the SHAPE, not the values.
 func normalizeCadenceWire(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any
@@ -285,16 +285,16 @@ func normalizeCadenceWire(t *testing.T, raw []byte) string {
 		}
 	}
 	if _, ok := m["next_run_at"]; ok {
-		m["next_run_at"] = "_TS_" // фиксируем присутствие nullable-ключа, не значение
+		m["next_run_at"] = "_TS_" // pin the presence of the nullable key, not the value
 	}
-	out, err := json.Marshal(m) // json.Marshal map → ключи отсортированы (детерминизм)
+	out, err := json.Marshal(m) // json.Marshal map → keys are sorted (determinism)
 	if err != nil {
 		t.Fatalf("re-marshal: %v", err)
 	}
 	return string(out)
 }
 
-// assertHumaProblem проверяет Content-Type=application/problem+json и type-URN.
+// assertHumaProblem checks Content-Type=application/problem+json and the type URN.
 func assertHumaProblem(t *testing.T, rec *httptest.ResponseRecorder, wantType string) {
 	t.Helper()
 	if ct := rec.Header().Get("Content-Type"); ct != problem.ContentType {
@@ -309,8 +309,8 @@ func assertHumaProblem(t *testing.T, rec *httptest.ResponseRecorder, wantType st
 	}
 }
 
-// strictDenyAll — deny-all PermissionChecker (RBAC-deny guard). Любой не-nil error
-// от Check → RequirePermission отдаёт 403 (см. rbac.go).
+// strictDenyAll — deny-all PermissionChecker (RBAC-deny guard). Any non-nil error
+// from Check → RequirePermission returns 403 (see rbac.go).
 type strictDenyAll struct{}
 
 func (strictDenyAll) Check(string, string, string, map[string]string) error {

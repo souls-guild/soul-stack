@@ -1,25 +1,25 @@
-// Доказательный гейт выравнивания имён SOUL-схем (+ errand-exec) под committed-рукопись
-// (тираж-батч N5, по эталонам huma_voyage_schema_test.go / huma_incarnation_schema_test.go).
-// Собирает агрегированную huma-спеку (HumaFullSpecYAML) и проверяет, что схемы soul-домена
-// названы ТОЧНО как контракт (docs/keeper/openapi.yaml), технические huma-Go-имена отсутствуют,
-// enum SoulStatus/SoulTransport вынесены как named-$ref, nested SoulSshTarget сведён (КЛАСС A),
-// а list-envelope SoulListReply несёт КОНТРАКТНУЮ CURSOR-форму (6 полей).
+// Evidence gate for aligning SOUL schema names (+ errand-exec) with the committed hand-written spec
+// (rollout batch N5, following the huma_voyage_schema_test.go / huma_incarnation_schema_test.go references).
+// Assembles the aggregated huma spec (HumaFullSpecYAML) and checks that the soul-domain schemas
+// are named EXACTLY like the contract (docs/keeper/openapi.yaml), technical huma-Go names are absent,
+// enum SoulStatus/SoulTransport are extracted as named $ref, nested SoulSshTarget is unified (CLASS A),
+// and the list-envelope SoulListReply carries the CONTRACT CURSOR shape (6 fields).
 //
-// МЕХАНИЗМЫ для soul (сверены с рукописью):
+// MECHANISMS for soul (checked against the hand-written spec):
 //   - REQUEST-RENAME: soulCreateHumaBody → SoulCreateRequest, soulCovenAssignHumaBody →
 //     SoulCovenAssignRequest, soulCovenAssignSelectorBody → SoulCovenAssignSelector (input-only
-//     КЛАСС C), errandExecHumaBody → ErrandRunRequest (request-схема exec, рукопись :1668).
-//   - ENUM-ALIAS: SoulStatus + SoulTransport объявлены standalone в рукописи (:4198/:4207) с
-//     $ref → вынесены как named-схемы (huma_soul_status.go).
-//   - NESTED КЛАСС A: SoulSshTarget — единый тип input(PUT body)↔output(SoulSshTargetReply.
-//     ssh_target через alias SoulSSHTarget→SoulSshTarget). required:[ssh_port,ssh_user,
-//     soul_path] (рукопись :6394).
-//   - ENVELOPE CURSOR: SoulListReply — 6 полей (items/offset/limit/total + next_cursor +
-//     total_approximate), НЕ 4-поля-форма incarnation (huma_soul_envelope.go).
-//   - REPLY-RENAME (батч N6): SoulCovenAssignResponse→SoulCovenAssignReply (:7140, alias
+//     CLASS C), errandExecHumaBody → ErrandRunRequest (the exec request schema, hand-written spec :1668).
+//   - ENUM-ALIAS: SoulStatus + SoulTransport are declared standalone in the hand-written spec (:4198/:4207) with
+//     $ref → extracted as named schemas (huma_soul_status.go).
+//   - NESTED CLASS A: SoulSshTarget — a single type input(PUT body)↔output(SoulSshTargetReply.
+//     ssh_target via alias SoulSSHTarget→SoulSshTarget). required:[ssh_port,ssh_user,
+//     soul_path] (hand-written spec :6394).
+//   - ENVELOPE CURSOR: SoulListReply — 6 fields (items/offset/limit/total + next_cursor +
+//     total_approximate), NOT the 4-field incarnation shape (huma_soul_envelope.go).
+//   - REPLY-RENAME (batch N6): SoulCovenAssignResponse→SoulCovenAssignReply (:7140, alias
 //     handler-wire-body → api-named-struct) + SoulSSHTargetReply→SoulSshTargetReply (:6399,
-//     класс A alias генерёного SoulSSHTargetReply → api-named-struct). Оба — только
-//     OpenAPI-имя/форма, wire (custom MarshalJSON / тот же oapi-тип) не меняется.
+//     class A alias of the generated SoulSSHTargetReply → api-named-struct). Both are only
+//     the OpenAPI name/shape; the wire (custom MarshalJSON / the same oapi type) does not change.
 package api
 
 import (
@@ -30,8 +30,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// soulContractSchemas — request/selector/view/envelope/enum-имена soul-домена + errand-exec
-// request ровно как в committed-рукописи. Все обязаны присутствовать в собранной спеке.
+// soulContractSchemas — request/selector/view/envelope/enum names of the soul domain + the errand-exec
+// request exactly as in the committed hand-written spec. All must be present in the assembled spec.
 var soulContractSchemas = []string{
 	"SoulCreateRequest",
 	"SoulCovenAssignRequest",
@@ -45,10 +45,10 @@ var soulContractSchemas = []string{
 	"SoulStatus",
 	"SoulTransport",
 	"ErrandRunRequest",
-	// Class C доэмиссия typed-soulprint (ADR-018): typed_facts=json.RawMessage не
-	// выводил вложенные типы reflect-обходом → SoulprintFacts + 6 под-схем отсутствовали.
-	// Alias на typed *SoulprintFacts (huma_soul_soulprint.go) эмитит их. ★ Имя
-	// SoulprintCpuFacts (НЕ дрейф SoulprintCPUFacts от oapi-капитализации).
+	// Class C re-emission of typed-soulprint (ADR-018): typed_facts=json.RawMessage did not
+	// derive nested types via reflect traversal → SoulprintFacts + 6 sub-schemas were absent.
+	// An alias to typed *SoulprintFacts (huma_soul_soulprint.go) emits them. ★ Name
+	// SoulprintCpuFacts (NOT the SoulprintCPUFacts drift from oapi capitalization).
 	"SoulprintFacts",
 	"SoulprintOsFacts",
 	"SoulprintKernelFacts",
@@ -58,28 +58,28 @@ var soulContractSchemas = []string{
 	"SoulprintNetworkInterface",
 }
 
-// soulForbiddenSchemas — технические huma-Go-имена, которые DefaultSchemaNamer дал БЫ из старых
-// имён структур. Ни одно не должно остаться после выравнивания.
+// soulForbiddenSchemas — technical huma-Go names that DefaultSchemaNamer WOULD give from the old
+// struct names. None should remain after the alignment.
 var soulForbiddenSchemas = []string{
 	"SoulCreateHumaBody",
 	"SoulCovenAssignHumaBody",
 	"SoulCovenAssignSelectorBody",
 	"SoulSshTargetHumaBody",
 	"ErrandExecHumaBody",
-	// Generic-имя неаласенного PagedResponse[SoulListEntry] — envelope-alias обязан его
-	// вытеснить контрактным SoulListReply.
+	// The generic name of an un-aliased PagedResponse[SoulListEntry] — the envelope alias must
+	// displace it with the contract SoulListReply.
 	"PagedResponseSoulListEntry",
-	// REPLY-RENAME (батч N6): дрейф-имена reply-схем, вытесненные контрактными.
+	// REPLY-RENAME (batch N6): drift names of reply schemas, displaced by contract ones.
 	"SoulCovenAssignResponse", // → SoulCovenAssignReply
-	"SoulSSHTargetReply",      // капитализационный дрейф oapi-генератора → SoulSshTargetReply
+	"SoulSSHTargetReply",      // capitalization drift of the oapi generator → SoulSshTargetReply
 	"SoulprintResponse",       // → SoulprintReadReply
-	// Class C: дрейф-имя CPU-под-факта от oapi-капитализации аббревиатуры (CPU), которое
-	// DefaultSchemaNamer дал БЫ из SoulprintCPUFacts — alias обязан вытеснить его
-	// контрактным SoulprintCpuFacts.
+	// Class C: the drift name of the CPU sub-fact from oapi capitalization of the acronym (CPU), which
+	// DefaultSchemaNamer WOULD give from SoulprintCPUFacts — the alias must displace it
+	// with the contract SoulprintCpuFacts.
 	"SoulprintCPUFacts",
 }
 
-// TestSchemaNames_Soul — гейт N5. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Soul — gate N5. Contract names present, technical ones absent.
 func TestSchemaNames_Soul(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range soulContractSchemas {
@@ -94,9 +94,9 @@ func TestSchemaNames_Soul(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_SoulStatusEnum — гейт N5 (ENUM). SoulStatus и SoulTransport вынесены как
-// named-схемы (string + enum), а status/transport-поля reply-структур ссылаются на них через
-// $ref (не инлайн `type: string`). Состав enum — доменная истина (6 статусов / 2 транспорта).
+// TestSchemaNames_SoulStatusEnum — gate N5 (ENUM). SoulStatus and SoulTransport are extracted as
+// named schemas (string + enum), and the status/transport fields of reply structs reference them via
+// $ref (not inline `type: string`). The enum's members are domain truth (6 statuses / 2 transports).
 func TestSchemaNames_SoulStatusEnum(t *testing.T) {
 	y, doc := loadFullSpecDoc(t)
 	comp, _ := doc["components"].(map[string]any)
@@ -114,10 +114,10 @@ func TestSchemaNames_SoulStatusEnum(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_SoulSshTargetNested — гейт N5 (NESTED КЛАСС A). SoulSshTarget — единая схема
-// input↔output: PUT ssh-target body И SoulSshTargetReply.ssh_target ссылаются на неё. Форма
-// сверена с рукописью :6394 (required:[ssh_port,ssh_user,soul_path]; 4 поля). Мутация (убрать
-// alias → output тянет SoulSSHTarget / сменить required-набор) краснит.
+// TestSchemaNames_SoulSshTargetNested — gate N5 (NESTED CLASS A). SoulSshTarget — a single schema
+// input↔output: the PUT ssh-target body AND SoulSshTargetReply.ssh_target reference it. The shape is
+// checked against the hand-written spec :6394 (required:[ssh_port,ssh_user,soul_path]; 4 fields). A mutation (removing the
+// alias → output pulls SoulSSHTarget / changing the required set) reddens.
 func TestSchemaNames_SoulSshTargetNested(t *testing.T) {
 	_, doc := loadFullSpecDoc(t)
 	comp, _ := doc["components"].(map[string]any)
@@ -125,15 +125,15 @@ func TestSchemaNames_SoulSshTargetNested(t *testing.T) {
 
 	const targetRef = "#/components/schemas/SoulSshTarget"
 
-	// output SoulSshTargetReply.ssh_target → единая SoulSshTarget (через alias). Имя output-
-	// reply-схемы выровнено на контрактное SoulSshTargetReply (батч N6: класс A alias генерёного
-	// SoulSSHTargetReply → api-named-struct soulSshTargetReply). Капитализационный дрейф
-	// SoulSSHTargetReply вытеснен (в forbidden-наборе).
+	// output SoulSshTargetReply.ssh_target → the single SoulSshTarget (via alias). The output
+	// reply-schema name is aligned to the contract SoulSshTargetReply (batch N6: class A alias of the generated
+	// SoulSSHTargetReply → api-named-struct soulSshTargetReply). The capitalization drift
+	// SoulSSHTargetReply is displaced (in the forbidden set).
 	if got := propRef(t, schemas, "SoulSshTargetReply", "ssh_target"); got != targetRef {
 		t.Errorf("SoulSshTargetReply.ssh_target → %q, ожидался %q (output не сведён на единую SoulSshTarget — alias не сработал)", got, targetRef)
 	}
 
-	// Форма SoulSshTarget сверена с рукописью :6394.
+	// The SoulSshTarget shape is checked against the hand-written spec :6394.
 	tgt, _ := schemas["SoulSshTarget"].(map[string]any)
 	if tgt == nil {
 		t.Fatal("SoulSshTarget отсутствует в components.schemas")
@@ -142,11 +142,11 @@ func TestSchemaNames_SoulSshTargetNested(t *testing.T) {
 	assertProps(t, tgt, "SoulSshTarget", "ssh_port", "ssh_user", "soul_path", "ssh_provider")
 }
 
-// TestSchemaNames_SoulListEnvelope — гейт N5 (ENVELOPE CURSOR). ★ soul — единственный cursor-
-// домен: SoulListReply несёт РОВНО 6 полей (items/offset/limit/total + next_cursor +
-// total_approximate), НЕ 4-поля-форму incarnation. items.$ref на контрактный element
-// SoulListEntry; offset/limit/total — int32; required:[items,offset,limit,total]. Мутация
-// (4-поля-форма / убрать cursor-поля / неверный $ref) краснит.
+// TestSchemaNames_SoulListEnvelope — gate N5 (ENVELOPE CURSOR). ★ soul is the only cursor
+// domain: SoulListReply carries EXACTLY 6 fields (items/offset/limit/total + next_cursor +
+// total_approximate), NOT the 4-field incarnation shape. items.$ref to the contract element
+// SoulListEntry; offset/limit/total — int32; required:[items,offset,limit,total]. A mutation
+// (4-field shape / removing cursor fields / wrong $ref) reddens.
 func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 	_, doc := loadFullSpecDoc(t)
 	comp, _ := doc["components"].(map[string]any)
@@ -161,7 +161,7 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 		t.Fatal("SoulListReply без properties")
 	}
 
-	// ★ Ровно 6 полей — cursor-поля ОБЯЗАНЫ присутствовать (отличие от 4-поля incarnation).
+	// ★ Exactly 6 fields — cursor fields MUST be present (differs from the 4-field incarnation).
 	wantFields := []string{"items", "offset", "limit", "total", "next_cursor", "total_approximate"}
 	if len(props) != len(wantFields) {
 		var got []string
@@ -199,7 +199,7 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 		t.Errorf("SoulListReply.total_approximate.type=%v, ожидалось boolean", ta["type"])
 	}
 
-	// items — array с $ref на контрактный element SoulListEntry.
+	// items — an array with a $ref to the contract element SoulListEntry.
 	items, _ := props["items"].(map[string]any)
 	if items == nil {
 		t.Fatal("SoulListReply.items отсутствует")
@@ -217,22 +217,22 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_SoulprintFactsTyped — гейт Class C (typed-soulprint). Доказывает, что
-// SoulprintReadReply.typed_facts ссылается на $ref SoulprintFacts (а НЕ free-form object),
-// SoulprintFacts ссылается на 6 под-схем через $ref, а CPU-под-факт назван контрактно
-// (SoulprintCpuFacts, НЕ дрейф SoulprintCPUFacts). Мутация (убрать registerSoulprintFacts →
-// typed_facts становится free-form object без $ref, под-схемы исчезают) краснит.
+// TestSchemaNames_SoulprintFactsTyped — gate Class C (typed-soulprint). Proves that
+// SoulprintReadReply.typed_facts references $ref SoulprintFacts (and NOT a free-form object),
+// SoulprintFacts references 6 sub-schemas via $ref, and the CPU sub-fact is named per contract
+// (SoulprintCpuFacts, NOT the SoulprintCPUFacts drift). A mutation (removing registerSoulprintFacts →
+// typed_facts becomes a free-form object without $ref, sub-schemas disappear) reddens.
 func TestSchemaNames_SoulprintFactsTyped(t *testing.T) {
 	_, doc := loadFullSpecDoc(t)
 	comp, _ := doc["components"].(map[string]any)
 	schemas, _ := comp["schemas"].(map[string]any)
 
-	// typed_facts → $ref SoulprintFacts (типизирован, не free-form object).
+	// typed_facts → $ref SoulprintFacts (typed, not a free-form object).
 	if got := propRef(t, schemas, "SoulprintReadReply", "typed_facts"); got != "#/components/schemas/SoulprintFacts" {
 		t.Errorf("SoulprintReadReply.typed_facts.$ref=%q, ожидался #/components/schemas/SoulprintFacts (alias не сработал — typed_facts остался free-form object)", got)
 	}
 
-	// SoulprintFacts.{os,kernel,cpu,memory,network} → $ref на контрактные под-схемы.
+	// SoulprintFacts.{os,kernel,cpu,memory,network} → $ref to the contract sub-schemas.
 	wantFactRefs := map[string]string{
 		"os":      "#/components/schemas/SoulprintOsFacts",
 		"kernel":  "#/components/schemas/SoulprintKernelFacts",
@@ -246,7 +246,7 @@ func TestSchemaNames_SoulprintFactsTyped(t *testing.T) {
 		}
 	}
 
-	// SoulprintNetworkFacts.interfaces — array $ref на контрактный SoulprintNetworkInterface.
+	// SoulprintNetworkFacts.interfaces — array $ref to the contract SoulprintNetworkInterface.
 	net, _ := schemas["SoulprintNetworkFacts"].(map[string]any)
 	if net == nil {
 		t.Fatal("SoulprintNetworkFacts отсутствует в components/schemas")
@@ -262,7 +262,7 @@ func TestSchemaNames_SoulprintFactsTyped(t *testing.T) {
 	}
 }
 
-// loadFullSpecDoc собирает агрегатор-спеку и парсит её в map (для assert-ов по форме схем).
+// loadFullSpecDoc assembles the aggregator spec and parses it into a map (for schema-shape asserts).
 func loadFullSpecDoc(t *testing.T) (string, map[string]any) {
 	t.Helper()
 	y, err := HumaFullSpecYAML()
@@ -276,7 +276,7 @@ func loadFullSpecDoc(t *testing.T) (string, map[string]any) {
 	return y, doc
 }
 
-// assertStringEnum проверяет, что схема name — string c enum, содержащим ровно want-значения.
+// assertStringEnum checks that schema name is a string with an enum containing exactly the want values.
 func assertStringEnum(t *testing.T, schemas map[string]any, name string, want ...string) {
 	t.Helper()
 	sch, ok := schemas[name].(map[string]any)

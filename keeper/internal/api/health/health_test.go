@@ -17,8 +17,8 @@ type stubPinger struct {
 
 func (s stubPinger) Ping(ctx context.Context) error { return s.err }
 
-// slowPinger — никогда не возвращает ok сам, ждёт ctx.Done. Используется
-// для проверки per-check timeout-а в Readyz.
+// slowPinger never returns ok on its own; it waits for ctx.Done. Used
+// to exercise the per-check timeout in Readyz.
 type slowPinger struct{}
 
 func (slowPinger) Ping(ctx context.Context) error {
@@ -71,8 +71,8 @@ func TestReadyz_AllUp(t *testing.T) {
 	}
 }
 
-// TestReadyz_RedisDown — Redis обязательная зависимость: её недоступность
-// валит readiness (503), чтобы LB увёл трафик с инстанса без cluster-state.
+// TestReadyz_RedisDown — Redis is a required dependency: its unavailability
+// fails readiness (503) so the LB drains traffic from an instance without cluster state.
 func TestReadyz_RedisDown(t *testing.T) {
 	h := NewHandler(Deps{PG: stubPinger{}, Redis: stubPinger{err: errors.New("connection refused")}, Vault: stubPinger{}})
 	rec := httptest.NewRecorder()
@@ -97,8 +97,8 @@ func TestReadyz_RedisDown(t *testing.T) {
 	}
 }
 
-// TestReadyz_RedisSkippedWhenNil — Redis-Pinger nil (dev-fallback без Redis):
-// check пропускается, в response не упоминается, readiness не валится из-за него.
+// TestReadyz_RedisSkippedWhenNil — Redis Pinger is nil (dev fallback without Redis):
+// the check is skipped, not mentioned in the response, and does not fail readiness.
 func TestReadyz_RedisSkippedWhenNil(t *testing.T) {
 	h := NewHandler(Deps{PG: stubPinger{}, Vault: stubPinger{}})
 	rec := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func TestReadyz_NilPingerSkipped(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.Readyz(rec, req)
 
-	// Без зависимостей checks пустой → ok=true → 200.
+	// No dependencies → checks empty → ok=true → 200.
 	if rec.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", rec.Code)
 	}
@@ -172,8 +172,8 @@ func TestReadyz_NilPingerSkipped(t *testing.T) {
 	}
 }
 
-// TestReadyz_BothDown — оба зависимых сервиса возвращают ошибку. В
-// `checks{}` должны быть оба статуса (не early-return на первой ошибке),
+// TestReadyz_BothDown — both dependent services return an error. `checks{}`
+// must carry both statuses (no early-return on the first error),
 // overall — 503.
 func TestReadyz_BothDown(t *testing.T) {
 	h := NewHandler(Deps{
@@ -203,10 +203,10 @@ func TestReadyz_BothDown(t *testing.T) {
 	}
 }
 
-// TestReadyz_PerCheckTimeout — медленный pinger не должен превышать
-// per-check timeout. Проверяем, что overall-latency Readyz укладывается
-// в (timeout + небольшой запас) и check помечен как timeout, не
-// «unreachable».
+// TestReadyz_PerCheckTimeout — a slow pinger must not exceed the
+// per-check timeout. We verify that overall Readyz latency stays within
+// (timeout + small margin) and the check is marked timeout, not
+// "unreachable".
 func TestReadyz_PerCheckTimeout(t *testing.T) {
 	h := NewHandler(Deps{PG: slowPinger{}, Vault: stubPinger{}})
 	rec := httptest.NewRecorder()
@@ -235,8 +235,8 @@ func TestReadyz_PerCheckTimeout(t *testing.T) {
 	}
 }
 
-// TestReadyz_Parallel — две slow-проверки выполняются параллельно
-// (overall = max, а не sum). Если параллели нет, тест провалится по
+// TestReadyz_Parallel — two slow checks run in parallel
+// (overall = max, not sum). If they don't run in parallel, the test fails on
 // elapsed.
 func TestReadyz_Parallel(t *testing.T) {
 	h := NewHandler(Deps{PG: slowPinger{}, Vault: slowPinger{}})
@@ -247,8 +247,8 @@ func TestReadyz_Parallel(t *testing.T) {
 	h.Readyz(rec, req)
 	elapsed := time.Since(start)
 
-	// Sequential: ~2*timeout = 4s. Parallel: ~timeout = 2s. Берём
-	// границу с запасом, ловим явный sequential-regress.
+	// Sequential: ~2*timeout = 4s. Parallel: ~timeout = 2s. Take a
+	// margin bound, catch an obvious sequential regression.
 	if elapsed > perCheckTimeout+1*time.Second {
 		t.Errorf("Readyz elapsed %s — looks sequential, want parallel (~%s)", elapsed, perCheckTimeout)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// captureWriter — audit.Writer-stub: захватывает все записанные события.
+// captureWriter — an audit.Writer stub: captures all written events.
 type captureWriter struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -25,7 +25,7 @@ func (c *captureWriter) Write(_ context.Context, ev *audit.Event) error {
 	if c.err != nil {
 		return c.err
 	}
-	// Копия, чтобы caller-овский Event не мутировался.
+	// A copy so the caller's Event isn't mutated.
 	cp := *ev
 	c.events = append(c.events, &cp)
 	return nil
@@ -133,7 +133,7 @@ func TestAudit_NoClaimsSkips(t *testing.T) {
 	})
 	h := Audit(w, audit.EventOperatorCreated, nil, discardLogger())(next)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/operators", nil) // без claims
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", nil) // without claims
 	h.ServeHTTP(rec, req)
 	if len(w.Events()) != 0 {
 		t.Errorf("event written without claims: %d", len(w.Events()))
@@ -141,7 +141,7 @@ func TestAudit_NoClaimsSkips(t *testing.T) {
 }
 
 func TestAudit_StatusRecorderImplicit200(t *testing.T) {
-	// handler ничего не вызвал у WriteHeader — Write() из stdlib делает 200.
+	// the handler didn't call WriteHeader — stdlib's Write() sets 200.
 	w := &captureWriter{}
 	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		_, _ = rw.Write([]byte("ok"))

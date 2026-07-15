@@ -1,13 +1,14 @@
-// Operator API handler `GET /v1/audit` — read-only-лента audit-events
-// для UI iteration 2 (placeholder /audit). Read-only: сам факт чтения в
-// audit_log НЕ пишется (избежать рекурсии — каждый запрос удваивал бы
-// таблицу). RBAC — `audit.read`, селектор NoSelector (фильтр по
-// archon_aid передаётся query-param-ом, не RBAC-scope).
+// Operator API handler `GET /v1/audit` — read-only feed of audit events
+// for UI iteration 2 (placeholder /audit). Read-only: the read itself is NOT
+// written to audit_log (avoids recursion — every request would double the
+// table). RBAC — `audit.read`, selector NoSelector (the archon_aid filter is
+// passed as a query param, not an RBAC scope).
 //
-// T5d (handler-native): домен audit отвязан от legacy-генерата. ListTyped возвращает
-// доменный [AuditListPage] с ПЛОСКИМИ wire-полями; native wire-DTO (схему
-// OpenAPI + сериализацию) строит пакет api из этих полей (register-func).
-// (w,r)-оболочка снята — HTTP обслуживает huma full-typed (api/huma_audit_endpoint.go).
+// T5d (handler-native): the audit domain is decoupled from the legacy generator.
+// ListTyped returns a domain [AuditListPage] with FLAT wire fields; the native
+// wire-DTO (OpenAPI schema + serialization) is built by package api from those
+// fields (register func). The (w,r) wrapper is gone — HTTP is served by huma
+// full-typed (api/huma_audit_endpoint.go).
 package handlers
 
 import (
@@ -22,17 +23,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// AuditHandler — `GET /v1/audit`. Делегирует чтение в [auditpg.Reader]
-// (узкий QueryRower-клиент над `audit_log`). Все зависимости immutable;
+// AuditHandler — `GET /v1/audit`. Delegates reads to [auditpg.Reader]
+// (a narrow QueryRower client over `audit_log`). All dependencies are immutable;
 // safe for concurrent use.
 type AuditHandler struct {
 	reader *auditpg.Reader
 	logger *slog.Logger
 }
 
-// NewAuditHandler конструирует handler. reader обязателен; nil-router
-// `router.go` подключает audit-роут только при non-nil reader-е (паттерн
-// PushHandler/ErrandHandler), поэтому handler сам не валидирует nil-deps.
+// NewAuditHandler constructs the handler. reader is required; router.go wires
+// the audit route only when reader is non-nil (the PushHandler/ErrandHandler
+// pattern), so the handler does not validate nil deps itself.
 func NewAuditHandler(reader *auditpg.Reader, logger *slog.Logger) *AuditHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -40,20 +41,21 @@ func NewAuditHandler(reader *auditpg.Reader, logger *slog.Logger) *AuditHandler 
 	return &AuditHandler{reader: reader, logger: logger}
 }
 
-// AuditSpecStub — непустой *AuditHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaAuditSpecYAML): при dump доменный handler не вызывается (huma.
-// Register его не исполняет), но register-функция требует non-nil для no-op-проверки.
-// reader/logger nil — handler никогда не исполняется в spec-режиме.
+// AuditSpecStub — a non-nil *AuditHandler stub for generating the huma OpenAPI
+// fragment (HumaAuditSpecYAML): on dump the domain handler is not called (huma.
+// Register does not execute it), but the register function requires non-nil for
+// its no-op check. reader/logger nil — the handler never executes in spec mode.
 func AuditSpecStub() *AuditHandler {
 	return &AuditHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// AuditEventView — ПЛОСКАЯ доменная проекция одной записи audit_log
-// (element AuditListPage.Items), handler-native T5d. Пакет api проецирует её в
-// native-схему AuditEvent (register-func). ArchonAID/CorrelationID — `*string`
-// (nil → ключ опущен в native-wire); Source — RAW string домена (native-тип в api
-// держит enum-форму); CreatedAt — уже усечён до секунд (parity легаси-wire).
-// `keeper_kid` поля нет (миграция 001 без колонки; always-null — поле опущено).
+// AuditEventView — a FLAT domain projection of one audit_log row
+// (element AuditListPage.Items), handler-native T5d. Package api projects it into
+// the native AuditEvent schema (register func). ArchonAID/CorrelationID — `*string`
+// (nil → key omitted in native wire); Source — RAW domain string (the native type
+// in api holds the enum form); CreatedAt — already truncated to seconds (parity
+// with the legacy wire). There is no `keeper_kid` field (migration 001 has no
+// column; always-null — field omitted).
 type AuditEventView struct {
 	ArchonAID     *string
 	CorrelationID *string
@@ -64,8 +66,8 @@ type AuditEventView struct {
 	Type          string
 }
 
-// AuditListPage — доменный результат `GET /v1/audit` (handler-native T5d). Пакет
-// api проецирует {Items, Offset, Limit, Total} → native AuditEventListReply.
+// AuditListPage — the domain result of `GET /v1/audit` (handler-native T5d).
+// Package api projects {Items, Offset, Limit, Total} → native AuditEventListReply.
 type AuditListPage struct {
 	Items  []AuditEventView
 	Offset int
@@ -73,12 +75,13 @@ type AuditListPage struct {
 	Total  int
 }
 
-// AuditListFilter — доменные параметры `GET /v1/audit` (typed-query четвёртого tier
-// ADR-054). Симметрия с auditpg.ListFilter, но несёт ещё пагинацию (Offset/Limit) и
-// отделён от read-side слоя: huma-handler (huma_audit_endpoint.go) и legacy
-// (w,r)-оболочка собирают ОДИН этот тип, ListTyped — единственная доменная функция.
-// Пустые строковые/slice-поля = «фильтр не применять»; zero-time StartedAfter/Before
-// = «без временной границы» (parity легаси `if param != ""`).
+// AuditListFilter — the domain parameters of `GET /v1/audit` (typed query, the
+// fourth tier of ADR-054). Symmetric with auditpg.ListFilter but also carries
+// pagination (Offset/Limit) and is decoupled from the read-side layer: the huma
+// handler (huma_audit_endpoint.go) and the legacy (w,r) wrapper both assemble
+// THIS one type, and ListTyped is the single domain function. Empty string/slice
+// fields = "do not apply the filter"; zero-time StartedAfter/Before = "no time
+// bound" (parity with legacy `if param != ""`).
 type AuditListFilter struct {
 	Types         []string
 	Sources       []string
@@ -92,25 +95,28 @@ type AuditListFilter struct {
 	Limit         int
 }
 
-// ListTyped — доменная функция `GET /v1/audit` (ADR-054 §Pattern шаг 2): валидирует
-// source-enum, строит auditpg.ListFilter, читает страницу через Reader, проецирует в
-// typed envelope {items, offset, limit, total}. Без http.ResponseWriter/*http.Request
-// — общий код huma-handler-а и legacy (w,r)-оболочки.
+// ListTyped — the domain function of `GET /v1/audit` (ADR-054 §Pattern step 2):
+// validates the source enum, builds auditpg.ListFilter, reads a page via Reader,
+// projects into the typed envelope {items, offset, limit, total}. No
+// http.ResponseWriter/*http.Request — shared code for the huma handler and the
+// legacy (w,r) wrapper.
 //
-// Ошибки — *problemError (через AsProblemDetails доставляются обоими путями тем же
-// error-контрактом): невалидный source → 422 TypeValidationFailed (string-enum-
-// семантика остаётся 422 даже когда huma-query enum уже отбил бы её на 422 — defense-
-// in-depth для прямого вызова); БД-сбой → 500 TypeInternalError.
+// Errors are *problemError (delivered by both paths through AsProblemDetails with
+// the same error contract): invalid source → 422 TypeValidationFailed (the
+// string-enum semantics stay 422 even when the huma query enum would already have
+// rejected it with 422 — defense in depth for a direct call); DB failure → 500
+// TypeInternalError.
 func (h *AuditHandler) ListTyped(ctx context.Context, f AuditListFilter) (AuditListPage, error) {
 	var zero AuditListPage
 	if h.reader == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "audit reader is not configured")}
 	}
 
-	// Диапазон пагинации (offset≥0, limit∈[1,1000]) — ЕДИНЫЙ источник границ
-	// api.CheckPageBounds (тот же, что у ParsePage). Out-of-range → 400
-	// TypeMalformedRequest (контракт-инвариант: huma typed-int НЕ несёт schema-
-	// minimum/maximum, иначе вернул бы 422 — wire-change против легаси/strict 400).
+	// Pagination range (offset≥0, limit∈[1,1000]) — a SINGLE source of bounds,
+	// api.CheckPageBounds (same as ParsePage). Out-of-range → 400
+	// TypeMalformedRequest (contract invariant: the huma typed-int carries NO
+	// schema minimum/maximum, otherwise it would return 422 — a wire change vs the
+	// legacy/strict 400).
 	if err := api.CheckPageBounds(f.Offset, f.Limit); err != nil {
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
 	}
@@ -159,10 +165,11 @@ func (h *AuditHandler) ListTyped(ctx context.Context, f AuditListFilter) (AuditL
 	}, nil
 }
 
-// auditEventView проецирует [auditpg.Row] в плоскую доменную [AuditEventView].
-// Source — RAW string домена ([audit.Source]); CreatedAt — UTC, обрезан до секунд
-// (прежний `.Format(time.RFC3339)` тоже отбрасывал дробную часть — секундный wire).
-// ArchonAID / CorrelationID — pointer-optional (nil → поле опущено native-типом).
+// auditEventView projects [auditpg.Row] into the flat domain [AuditEventView].
+// Source — RAW domain string ([audit.Source]); CreatedAt — UTC, truncated to
+// seconds (the former `.Format(time.RFC3339)` also dropped the fractional part —
+// a second-granular wire). ArchonAID / CorrelationID — pointer-optional (nil →
+// field omitted by the native type).
 func auditEventView(row *auditpg.Row) AuditEventView {
 	return AuditEventView{
 		ID:            row.AuditID,

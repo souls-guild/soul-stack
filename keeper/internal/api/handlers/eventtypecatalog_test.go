@@ -44,22 +44,22 @@ func TestEventTypeCatalog_List(t *testing.T) {
 		t.Fatal("point_events пусты")
 	}
 
-	// Ожидаемые области прогонов в area-glob-форме (ADR-052(b)): каталог отдаёт
-	// `<area>.*`, а не голое имя области (голое имя невалидно для подписки).
+	// Expected run areas in area-glob form (ADR-052(b)): the catalog returns
+	// `<area>.*`, not the bare area name (a bare name is invalid for subscription).
 	for _, want := range []string{"scenario_run.*", "command_run.*", "voyage.*", "cadence.*"} {
 		if !containsName(areaNames(resp.Areas), want) {
 			t.Errorf("область %q отсутствует в каталоге areas", want)
 		}
 	}
 
-	// Точечные типы: drift-чек + терминал run_completed (T4a/T4b-подписки).
+	// Point types: drift check + terminal run_completed (T4a/T4b subscriptions).
 	for _, want := range []string{"incarnation.drift_checked", "incarnation.run_completed"} {
 		if !containsName(pointNames(resp.PointEvents), want) {
 			t.Errorf("точечный тип %q отсутствует в каталоге point_events", want)
 		}
 	}
 
-	// Детерминированный порядок: оба списка отсортированы по name.
+	// Deterministic order: both lists are sorted by name.
 	assertSorted(t, "areas", areaNames(resp.Areas))
 	assertSorted(t, "point_events", pointNames(resp.PointEvents))
 }
@@ -73,14 +73,14 @@ func assertSorted(t *testing.T, label string, names []string) {
 	}
 }
 
-// TestEventTypeCatalog_SingleSourceOfTruth — каталог отдаёт РОВНО то, что
-// herald-валидатор считает допустимым scope (один источник правды): расширение
-// runScope* в herald автоматически отражается в каталоге, рассинхрон невозможен.
+// TestEventTypeCatalog_SingleSourceOfTruth — the catalog returns EXACTLY what the
+// herald validator considers a valid scope (single source of truth): extending
+// runScope* in herald is automatically reflected in the catalog, drift is impossible.
 func TestEventTypeCatalog_SingleSourceOfTruth(t *testing.T) {
 	resp := buildEventTypeCatalog()
 
-	// Каталог отдаёт area-glob `<area>.*`; источник правды herald.RunScopeAreas()
-	// — голые имена областей. Сверяем, сняв суффикс `.*` с отданных значений.
+	// The catalog returns area-glob `<area>.*`; the source of truth herald.RunScopeAreas()
+	// returns bare area names. Compare after stripping the `.*` suffix from returned values.
 	wantAreas := herald.RunScopeAreas()
 	gotAreas := areaNames(resp.Areas)
 	sort.Strings(gotAreas)
@@ -99,9 +99,9 @@ func TestEventTypeCatalog_SingleSourceOfTruth(t *testing.T) {
 		t.Errorf("point_events=%v, herald.RunScopePointEvents()=%v", gotPoints, wantPoints)
 	}
 
-	// КАЖДЫЙ отданный каталогом тип ДОЛЖЕН проходить herald-валидатор as-is —
-	// и area-glob, и точечный — без какой-либо доработки потребителем. Это и есть
-	// контракт: UI кладёт значения дословно. Прогоняем ровно то, что в выдаче.
+	// EVERY type returned by the catalog MUST pass the herald validator as-is —
+	// both area-glob and point — with no consumer-side rework. That is the
+	// contract: the UI submits values verbatim. We run exactly what the output contains.
 	for _, a := range gotAreas {
 		if err := herald.ValidateEventTypes([]string{a}); err != nil {
 			t.Errorf("area-glob %q отвергнут валидатором: %v", a, err)

@@ -1,10 +1,10 @@
 package api
 
-// FULL-TYPED форма PROVISIONING-POLICY-домена (runtime-политика способов СОЗДАНИЯ
-// операторов, ADR-058 Часть B; code-first источник OpenAPI). GET — read (БЕЗ
+// FULL-TYPED form of the PROVISIONING-POLICY domain (runtime policy for operator
+// CREATION methods, ADR-058 Part B; code-first OpenAPI source). GET — read (no
 // audit, permission provisioning.read); PUT — WRITE+AUDIT (provisioning.policy_changed,
-// permission provisioning.update). Go-типы — единственный источник схемы +
-// валидации + typed-output.
+// permission provisioning.update). The Go types are the single source of schema +
+// validation + typed output.
 
 import (
 	"net/http"
@@ -12,20 +12,20 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// === GET /v1/provisioning-policy (read) — READ (БЕЗ audit) ===
+// === GET /v1/provisioning-policy (read) — READ (no audit) ===
 
-// provisioningPolicyGetInput — huma-input GET /v1/provisioning-policy. Параметров нет.
+// provisioningPolicyGetInput — huma input GET /v1/provisioning-policy. No parameters.
 type provisioningPolicyGetInput struct{}
 
-// provisioningPolicyGetOutput — huma-output GET. Body — native 200-тело
+// provisioningPolicyGetOutput — huma output GET. Body — native 200 body
 // (ProvisioningPolicyReply: allowed_methods + policy_set).
 type provisioningPolicyGetOutput struct {
 	Body ProvisioningPolicyReply
 }
 
-// provisioningPolicyGetOperation — метаданные GET /v1/provisioning-policy.
-// Path = "/" относительно chi-группы /v1/provisioning-policy. DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Permission provisioning.read — на группе. Errors:
+// provisioningPolicyGetOperation — metadata of GET /v1/provisioning-policy.
+// Path = "/" relative to the chi group /v1/provisioning-policy. DefaultStatus=200.
+// READ route: audit not wired. Permission provisioning.read — on the group. Errors:
 // 403 RBAC, 500.
 func provisioningPolicyGetOperation() huma.Operation {
 	return huma.Operation{
@@ -42,32 +42,32 @@ func provisioningPolicyGetOperation() huma.Operation {
 
 // === PUT /v1/provisioning-policy (update) — WRITE+AUDIT provisioning.policy_changed ===
 
-// provisioningPolicyPutInput — huma-input PUT /v1/provisioning-policy. Body —
-// typed тело (новый список разрешённых методов, replace-семантика).
+// provisioningPolicyPutInput — huma input PUT /v1/provisioning-policy. Body —
+// typed body (new list of allowed methods, replace semantics).
 type provisioningPolicyPutInput struct {
 	Body ProvisioningPolicyUpdateRequest
 }
 
-// ProvisioningPolicyUpdateRequest — Go-форма тела PUT /v1/provisioning-policy.
-// allowed_methods — список разрешённых способов СОЗДАНИЯ оператора (enum
-// {user,ldap,oidc}); minItems:1 — anti-lockout (нельзя запретить ВСЕ методы и
-// залочить заведение операторов). Доменная валидация (домен/dedup) — в PutTyped.
-// Имя структуры = контрактное имя схемы в OpenAPI.
+// ProvisioningPolicyUpdateRequest — Go form of the PUT /v1/provisioning-policy body.
+// allowed_methods — list of allowed operator CREATION methods (enum
+// {user,ldap,oidc}); minItems:1 — anti-lockout (can't forbid ALL methods and
+// lock out operator creation). Domain validation (domain/dedup) — in PutTyped.
+// Struct name = contract schema name in OpenAPI.
 type ProvisioningPolicyUpdateRequest struct {
 	AllowedMethods []string `json:"allowed_methods" required:"true" minItems:"1" enum:"user,ldap,oidc" doc:"разрешённые способы создания оператора (anti-lockout: непустой список из {user,ldap,oidc})"`
 }
 
-// provisioningPolicyPutOutput — huma-output PUT. Status=200 С ТЕЛОМ (native
-// ProvisioningPolicyReply — обновлённая политика).
+// provisioningPolicyPutOutput — huma output PUT. Status=200 WITH BODY (native
+// ProvisioningPolicyReply — the updated policy).
 type provisioningPolicyPutOutput struct {
 	Status int `json:"-"`
 	Body   ProvisioningPolicyReply
 }
 
-// provisioningPolicyPutOperation — метаданные PUT /v1/provisioning-policy.
+// provisioningPolicyPutOperation — metadata of PUT /v1/provisioning-policy.
 // DefaultStatus=200. Permission provisioning.update + audit provisioning.policy_changed.
-// Errors: 400 unknown/malformed, 403 RBAC, 404 caller-not-found (FK), 422 пустой/
-// невалидный метод (anti-lockout), 500.
+// Errors: 400 unknown/malformed, 403 RBAC, 404 caller-not-found (FK), 422 empty/
+// invalid method (anti-lockout), 500.
 func provisioningPolicyPutOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "updateProvisioningPolicy",

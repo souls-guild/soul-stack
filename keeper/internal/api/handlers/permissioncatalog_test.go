@@ -33,8 +33,8 @@ func TestPermissionCatalog_List(t *testing.T) {
 		t.Fatal("каталог permissions пуст")
 	}
 
-	// Сумма actions по всем resource == размеру AllowedPermissions (ни одного
-	// permission не потеряли, ни одного лишнего не добавили).
+	// Sum of actions across all resources == size of AllowedPermissions (we lost no
+	// permission and added none extra).
 	total := 0
 	for _, it := range resp.Items {
 		total += len(it.Actions)
@@ -43,7 +43,7 @@ func TestPermissionCatalog_List(t *testing.T) {
 		t.Errorf("сумма actions=%d, в каталоге rbac.AllowedPermissions=%d", total, len(rbac.AllowedPermissions))
 	}
 
-	// Детерминированный порядок: resource отсортированы, внутри — actions.
+	// Deterministic order: resources are sorted, actions within them too.
 	for i := 1; i < len(resp.Items); i++ {
 		if resp.Items[i-1].Resource >= resp.Items[i].Resource {
 			t.Fatalf("resource не отсортированы или дубль: %q >= %q", resp.Items[i-1].Resource, resp.Items[i].Resource)
@@ -62,8 +62,8 @@ func TestPermissionCatalog_List(t *testing.T) {
 func TestPermissionCatalog_KnownPermissionsPresent(t *testing.T) {
 	resp := PermissionCatalog{Items: buildPermissionCatalog()}
 
-	// Реальные имена из rbac.catalog.go (НЕ мифический soul.read). Чтение soul —
-	// это soul.list (одно read-permission покрывает list+get+soulprint, router.go).
+	// Real names from rbac.catalog.go (NOT the mythical soul.read). Reading a soul is
+	// soul.list (one read permission covers list+get+soulprint, router.go).
 	cases := []struct{ resource, action string }{
 		{"soul", "list"},
 		{"soul", "create"},
@@ -83,8 +83,8 @@ func TestPermissionCatalog_KnownPermissionsPresent(t *testing.T) {
 		}
 	}
 
-	// soul.read — мифическое имя (баг UI-хардкода); его в каталоге БЫТЬ не
-	// должно (фиксируем причину бага в тесте).
+	// soul.read is a mythical name (UI hardcode bug); it MUST NOT be in the
+	// catalog (this test pins the root cause of the bug).
 	if soul, ok := findResource(resp.Items, "soul"); ok && hasAction(soul.Actions, "read") {
 		t.Error("soul.read не должен присутствовать (нет в rbac.catalog.go — источник unknown_permission)")
 	}
@@ -98,8 +98,8 @@ func TestPermissionCatalog_SelectorKeysCommon(t *testing.T) {
 		t.Fatal("rbac.SelectorKeys() пуст — тест не сможет проверить")
 	}
 
-	// selector_keys — ОДИН И ТОТ ЖЕ общий список для каждого action (per-
-	// permission-метаданных в каталоге MVP нет).
+	// selector_keys is the SAME common list for every action (there is no
+	// per-permission metadata in the MVP catalog).
 	for _, res := range resp.Items {
 		for _, a := range res.Actions {
 			got := append([]string(nil), a.SelectorKeys...)

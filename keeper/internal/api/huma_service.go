@@ -1,13 +1,13 @@
 package api
 
-// Регистрация и spec-dump SERVICE-домена (реестр Service-ов) на huma full-typed
-// (ТИРАЖ-БАТЧ-2d по эталонам role/operator/augur/herald, ADR-054 §Pattern).
-// register/update/deregister — WRITE+AUDIT (вариант B, huma-audit-middleware;
-// события service.registered/.updated/.deregistered); list/get + refs/scenarios/
-// state-schema/dependencies — read (БЕЗ audit). Доменные *Typed-функции
-// (handlers/service.go) извлечены из (w,r); старый (w,r) — тонкая strict-оболочка
-// (service-MCP-tools зовут serviceregistry.Service напрямую, мимо handler —
-// извлечение не затрагивает).
+// Registration and spec-dump of the SERVICE domain (the Service registry) on huma
+// full-typed (ROLLOUT BATCH 2d, modeled on role/operator/augur/herald, ADR-054 §Pattern).
+// register/update/deregister — WRITE+AUDIT (variant B, huma audit middleware; events
+// service.registered/.updated/.deregistered); list/get + refs/scenarios/state-schema/
+// dependencies — read (no audit). The domain *Typed functions (handlers/service.go) are
+// extracted from (w,r); the old (w,r) is a thin strict shell (the service MCP tools call
+// serviceregistry.Service directly, bypassing the handler — the extraction does not affect
+// them).
 
 import (
 	"context"
@@ -23,9 +23,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaServiceRegister монтирует POST /v1/services через huma (WRITE+AUDIT
-// вариант B — event service.registered). serviceH nil → no-op. Handler: claims →
-// RegisterTyped → audit-payload на huma-ctx (SetHumaAuditPayload) → 201 typed output.
+// registerHumaServiceRegister mounts POST /v1/services via huma (WRITE+AUDIT variant B —
+// event service.registered). serviceH nil → no-op. Handler: claims → RegisterTyped →
+// audit payload on the huma ctx (SetHumaAuditPayload) → 201 typed output.
 func registerHumaServiceRegister(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -49,9 +49,8 @@ func registerHumaServiceRegister(humaAPI huma.API, serviceH *handlers.ServiceHan
 	})
 }
 
-// registerHumaServiceList монтирует GET /v1/services через huma (READ, БЕЗ audit).
-// serviceH nil → no-op. Handler: ListTyped → typed envelope-output. RBAC
-// service.list — на группе.
+// registerHumaServiceList mounts GET /v1/services via huma (READ, no audit). serviceH nil
+// → no-op. Handler: ListTyped → typed envelope output. RBAC service.list — on the group.
 func registerHumaServiceList(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -65,9 +64,9 @@ func registerHumaServiceList(humaAPI huma.API, serviceH *handlers.ServiceHandler
 	})
 }
 
-// registerHumaServiceGet монтирует GET /v1/services/{name} через huma (READ-with-
-// path, БЕЗ audit). serviceH nil → no-op. Handler: GetTyped(name) → typed output
-// (404 через problem). RBAC service.list — на группе.
+// registerHumaServiceGet mounts GET /v1/services/{name} via huma (READ with path, no
+// audit). serviceH nil → no-op. Handler: GetTyped(name) → typed output (404 via problem).
+// RBAC service.list — on the group.
 func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -81,9 +80,9 @@ func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler)
 	})
 }
 
-// registerHumaServiceUpdate монтирует PATCH /v1/services/{name} через huma (WRITE+AUDIT
-// вариант B — event service.updated). serviceH nil → no-op. Handler: claims →
-// UpdateTyped (replace + invalidate) → audit-payload → 200 С ТЕЛОМ.
+// registerHumaServiceUpdate mounts PATCH /v1/services/{name} via huma (WRITE+AUDIT variant
+// B — event service.updated). serviceH nil → no-op. Handler: claims → UpdateTyped
+// (replace + invalidate) → audit payload → 200 WITH BODY.
 func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -106,9 +105,9 @@ func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandl
 	})
 }
 
-// registerHumaServiceDeregister монтирует DELETE /v1/services/{name} через huma
-// (WRITE+AUDIT вариант B — event service.deregistered). serviceH nil → no-op.
-// Handler: DeregisterTyped (удаление + invalidate) → audit-payload → пустой 204-output.
+// registerHumaServiceDeregister mounts DELETE /v1/services/{name} via huma (WRITE+AUDIT
+// variant B — event service.deregistered). serviceH nil → no-op. Handler: DeregisterTyped
+// (deletion + invalidate) → audit payload → empty 204 output.
 func registerHumaServiceDeregister(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -123,9 +122,9 @@ func registerHumaServiceDeregister(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
-// registerHumaServiceRefs монтирует GET /v1/services/{name}/refs через huma (READ-
-// with-path, БЕЗ audit). serviceH nil → no-op. Handler: ListRefsTyped(name) → typed
-// output (404/502 через problem). RBAC service.list — на группе.
+// registerHumaServiceRefs mounts GET /v1/services/{name}/refs via huma (READ with path, no
+// audit). serviceH nil → no-op. Handler: ListRefsTyped(name) → typed output (404/502 via
+// problem). RBAC service.list — on the group.
 func registerHumaServiceRefs(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -139,9 +138,9 @@ func registerHumaServiceRefs(humaAPI huma.API, serviceH *handlers.ServiceHandler
 	})
 }
 
-// registerHumaServiceScenarios монтирует GET /v1/services/{name}/scenarios через huma
-// (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler: ListScenariosTyped
-// (name + опц. ref) → typed output (404/502 через problem). RBAC service.list — на группе.
+// registerHumaServiceScenarios mounts GET /v1/services/{name}/scenarios via huma (READ with
+// path+query, no audit). serviceH nil → no-op. Handler: ListScenariosTyped (name + optional
+// ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceScenarios(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -155,10 +154,9 @@ func registerHumaServiceScenarios(humaAPI huma.API, serviceH *handlers.ServiceHa
 	})
 }
 
-// registerHumaServiceStateSchema монтирует GET /v1/services/{name}/state-schema через
-// huma (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler:
-// ListStateSchemaTyped (name + опц. ref) → typed output (404/502 через problem).
-// RBAC service.list — на группе.
+// registerHumaServiceStateSchema mounts GET /v1/services/{name}/state-schema via huma (READ
+// with path+query, no audit). serviceH nil → no-op. Handler: ListStateSchemaTyped (name +
+// optional ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceStateSchema(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -172,10 +170,9 @@ func registerHumaServiceStateSchema(humaAPI huma.API, serviceH *handlers.Service
 	})
 }
 
-// registerHumaServiceDependencies монтирует GET /v1/services/{name}/dependencies через
-// huma (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler:
-// ListDependenciesTyped (name + опц. ref) → typed output (404/502 через problem).
-// RBAC service.list — на группе.
+// registerHumaServiceDependencies mounts GET /v1/services/{name}/dependencies via huma
+// (READ with path+query, no audit). serviceH nil → no-op. Handler: ListDependenciesTyped
+// (name + optional ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -189,11 +186,11 @@ func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.Servic
 	})
 }
 
-// registerHumaServiceDirectives монтирует GET /v1/services/{name}/directives через huma
-// (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler: ListDirectivesTyped
-// (name + опц. ref/version) → typed output (404/502 через problem) + ETag/Cache-Control
-// (каталог immutable на git-ref); If-None-Match совпал с SHA1 → 304 без тела. RBAC
-// service.list — на группе.
+// registerHumaServiceDirectives mounts GET /v1/services/{name}/directives via huma (READ
+// with path+query, no audit). serviceH nil → no-op. Handler: ListDirectivesTyped (name +
+// optional ref/version) → typed output (404/502 via problem) + ETag/Cache-Control (the
+// catalog is immutable per git-ref); If-None-Match matched SHA1 → 304 without a body. RBAC
+// service.list — on the group.
 func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
@@ -205,7 +202,7 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 		}
 		out := &serviceDirectivesOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
 		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
-			out.Status = http.StatusNotModified // huma пропускает тело на 304
+			out.Status = http.StatusNotModified // huma skips the body on 304
 			return out, nil
 		}
 		out.Status = http.StatusOK
@@ -214,15 +211,14 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
-// serviceMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// serviceMissingClaims — a defensive response when claims are absent from the ctx
+// (unreachable: RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func serviceMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// serviceProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
-// roleProblem).
+// serviceProblem delivers a *Typed function's error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; non-problem → 500 (parity roleProblem).
 func serviceProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -230,18 +226,17 @@ func serviceProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaServiceAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// service (register/update/deregister) монтируется на СВОЕЙ chi-группе с собственным
-// event-типом.
+// newHumaServiceAPI assembles a huma.API over a chi group with the huma audit middleware
+// (variant B) for the given event type (parity newHumaRoleAPI). Each service write route
+// (register/update/deregister) is mounted on ITS OWN chi group with its own event type.
 func newHumaServiceAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaServiceSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma service-
-// роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-
-// таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaServiceSpecYAML assembles the OpenAPI fragment of ALL migrated-to-huma service routes
+// as a YAML string, WITHOUT mounting on a real router. A hook for the rollout's spec merge
+// target and the guard test. Delegates to the generic [humaDumpSpec] via the same register
+// functions (single register path). Returns a 3.1.0 spec (huma default).
 func HumaServiceSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ServiceSpecStub()

@@ -1,21 +1,21 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2c разворота ERRAND-домена (list + get + cancel) на huma
-// full-typed (ADR-054 §Pattern, эталоны augur/audit-endpoint/role). list — read-with-
-// typed-query, get — read-with-path (200 терминал / 202 running), cancel — WRITE+AUDIT
-// (вариант B, huma-audit-middleware; event errand.cancelled). Доказывают инварианты
-// кластера поверх chi:
+// Guard tests for ROLLOUT-BATCH-2c turning the ERRAND domain (list + get + cancel) onto huma
+// full-typed (ADR-054 §Pattern, references augur/audit-endpoint/role). list — read-with-
+// typed-query, get — read-with-path (200 terminal / 202 running), cancel — WRITE+AUDIT
+// (variant B, huma audit middleware; event errand.cancelled). They prove the cluster
+// invariants on top of chi:
 //
-//   - wire/golden: list 200 envelope (status голая enum-строка, started_at секундный
-//     UTC); get 200 ErrandResult терминал; get 202 ErrandAccepted running; cancel 204
-//     пустое (byte-exact);
-//   - bad pagination → 400 (BadOffset/BadLimit на этом ловили блокер!); bad started_after
+//   - wire/golden: list 200 envelope (status a bare enum string, started_at second-precision
+//     UTC); get 200 ErrandResult terminal; get 202 ErrandAccepted running; cancel 204
+//     empty (byte-exact);
+//   - bad pagination → 400 (BadOffset/BadLimit is where we caught the blocker!); bad started_after
 //     date-time → 400; bad status enum → 422; bad sid format → 422; not-found → 404;
 //     terminal → 409; RBAC-deny → 403;
-//   - S6-GUARD на cancel (единственный write): полная huma-навеска пишет audit-event с
-//     НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type errand.cancelled на 204 и НЕ пишет на
-//     404/409/403. dispatcher self-audit ОТКЛЮЧЁН (Audit=nil) — проверяется именно
-//     middleware-путь.
+//   - S6-GUARD on cancel (the only write): the full huma wiring writes an audit event with
+//     a NON-EMPTY payload + the CORRECT event-type errand.cancelled on 204 and does NOT write on
+//     404/409/403. dispatcher self-audit is DISABLED (Audit=nil) — the middleware path is
+//     exactly what is tested.
 
 import (
 	"context"
@@ -43,14 +43,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// errandAt — фиксированный started_at/ttl_at, который все errand-success-пути отдают
-// (детерминированный golden wire). Секундная точность (wire — RFC3339 секундный).
+// errandAt — fixed started_at/ttl_at that all errand success paths return
+// (deterministic golden wire). Second precision (wire — RFC3339 seconds).
 var errandAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// hErrandPool — узкий мок ExecQueryRower для errand.Store (List/Get).
-// Классифицирует SQL по подстроке и отдаёт детерминированный success-исход.
+// hErrandPool — a narrow ExecQueryRower mock for errand.Store (List/Get).
+// Classifies SQL by substring and returns a deterministic success outcome.
 type hErrandPool struct {
-	getStatus  string // статус GET-строки (running → 202, иначе 200); "" → ErrNotFound
+	getStatus  string // status of the GET row (running → 202, otherwise 200); "" → ErrNotFound
 	listRows   [][]any
 	getMissing bool
 }
@@ -79,10 +79,10 @@ func (p *hErrandPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 	return nil, &hErrandErr{"hErrandPool: unexpected Query: " + sql}
 }
 
-// errandScanRow — колонки scanRow: errand_id, sid, module, input(jsonb), status,
+// errandScanRow — scanRow columns: errand_id, sid, module, input(jsonb), status,
 // exit_code, stdout, stderr, stdout_truncated, stderr_truncated, duration_ms,
 // error_message, output(jsonb), started_by_aid, started_by_kid, started_at,
-// finished_at, ttl_at. success-терминал: exit_code=0, finished_at=errandAt.
+// finished_at, ttl_at. success terminal: exit_code=0, finished_at=errandAt.
 func errandScanRow(id, status string) []any {
 	var exit *int32
 	var finished *time.Time
@@ -104,7 +104,7 @@ type hErrandErr struct{ s string }
 
 func (e *hErrandErr) Error() string { return e.s }
 
-// hErrandRow — staticRow для errand-колонок.
+// hErrandRow — a staticRow for errand columns.
 type hErrandRow struct {
 	values []any
 	err    error
@@ -235,8 +235,8 @@ func (hErrandBus) SubscribeWithBridge(context.Context, string, bool) <-chan appl
 	return make(chan applybus.Event)
 }
 
-// buildHErrandDispatcher — in-memory Dispatcher. Audit=nil → dispatcher НЕ пишет
-// self-audit (S6-guard проверяет именно middleware-путь, не дубль).
+// buildHErrandDispatcher — in-memory Dispatcher. Audit=nil → the dispatcher does NOT write
+// self-audit (the S6-guard checks the middleware path specifically, not a duplicate).
 func buildHErrandDispatcher(t *testing.T, statuses map[string]errand.Status) *errand.Dispatcher {
 	t.Helper()
 	d, err := errand.NewDispatcher(errand.Deps{
@@ -252,10 +252,10 @@ func buildHErrandDispatcher(t *testing.T, statuses map[string]errand.Status) *er
 	return d
 }
 
-// humaErrandRouter собирает chi-роутер со ВСЕМИ errand-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(errand.<action>) + (cancel)
-// huma-audit-middleware вариант B + huma-операция. dispatcher/store инжектятся
-// раздельно (read через Store, cancel через Dispatcher). injectClaims заменяет
+// humaErrandRouter assembles a chi router with ALL errand routes via huma —
+// the production wiring from router.go: RequirePermission(errand.<action>) + (cancel)
+// huma audit middleware variant B + huma operation. dispatcher/store are injected
+// separately (read via Store, cancel via Dispatcher). injectClaims replaces
 // RequireJWT.
 func humaErrandRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *errand.Store, dispatcher *errand.Dispatcher) *chi.Mux {
 	t.Helper()
@@ -285,7 +285,7 @@ func humaErrandRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, au
 
 func hErrandStore(pool *hErrandPool) *errand.Store { return errand.NewStore(pool) }
 
-// === ERRAND LIST (READ-with-typed-query, БЕЗ audit) ===
+// === ERRAND LIST (READ with typed query, no audit) ===
 
 func TestHumaErrand_List_GoldenWire(t *testing.T) {
 	pool := &hErrandPool{listRows: [][]any{errandScanRow("ERR-01", "success")}}
@@ -406,7 +406,7 @@ func TestHumaErrand_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === ERRAND GET (READ-with-path, 200 терминал / 202 running) ===
+// === ERRAND GET (READ with path, 200 terminal / 202 running) ===
 
 func TestHumaErrand_Get_GoldenWire_Terminal(t *testing.T) {
 	r := humaErrandRouter(t, strictAllowAll{}, nil, hErrandStore(&hErrandPool{getStatus: "success"}), nil)
@@ -551,7 +551,7 @@ func TestHumaAudit_ErrandCancel_NoAudit_OnTerminal(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ errand-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL errand operations from FULL-TYPED Go types ===
 
 func TestHumaErrand_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaErrandSpecYAML()

@@ -1,13 +1,13 @@
 package api
 
-// FULL-TYPED форма PROVIDER-домена (Cloud Provider CRUD, ADR-017, код — источник
-// OpenAPI). Операции: create (WRITE+AUDIT provider.created), list
+// FULL-TYPED shape of the PROVIDER domain (Cloud Provider CRUD, ADR-017, code is the
+// OpenAPI source). Operations: create (WRITE+AUDIT provider.created), list
 // (read-with-typed-query), get (read-with-path), delete (WRITE+AUDIT
-// provider.deleted). БЕЗ update: Provider иммутабелен (смена параметров =
-// delete+create, защита от частичной мутации live cloud-spec).
+// provider.deleted). No update: Provider is immutable (changing parameters =
+// delete+create, protection against a partial mutation of a live cloud-spec).
 //
-// credentials_ref — ПУТЬ (`vault:<path>`), pattern на входе `^vault:` (parity
-// MCP schemaProviderCreateInput); сам секрет НЕ резолвится.
+// credentials_ref — a PATH (`vault:<path>`), input pattern `^vault:` (parity with
+// MCP schemaProviderCreateInput); the secret itself is NOT resolved.
 
 import (
 	"net/http"
@@ -21,17 +21,19 @@ type providerCreateInput struct {
 	Body ProviderCreateRequest
 }
 
-// ProviderCreateRequest — Go-форма тела POST /v1/providers (code-first схема +
-// валидация). name/type — kebab (формат CloudDriver-плагина); region —
-// произвольная строка; credentials_ref — vault-ref. additionalProperties=false
-// (huma-дефолт) → unknown поле → 400. Доменная валидация формата — в CreateTyped (422).
+// ProviderCreateRequest — the Go shape of the POST /v1/providers body (code-first
+// schema + validation). name/type — kebab (the CloudDriver plugin format); region —
+// an arbitrary string; credentials_ref — a vault-ref. additionalProperties=false
+// (huma default) → an unknown field → 400. Domain format validation is in
+// CreateTyped (422).
 type ProviderCreateRequest struct {
 	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
 	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
 	Region string `json:"region" required:"true" doc:"регион провайдера"`
-	// credentials_ref XOR credentials (dual-mode, ADR-064): ровно одно. ref —
-	// vault-путь (значение НЕ резолвится); credentials — plaintext (keeper пишет
-	// в Vault сам). Формат/XOR валидирует сервис (422); pattern снят (условная валидация).
+	// credentials_ref XOR credentials (dual-mode, ADR-064): exactly one. ref — a
+	// vault path (the value is NOT resolved); credentials — plaintext (keeper writes
+	// it to Vault itself). The service validates format/XOR (422); pattern dropped
+	// (conditional validation).
 	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref до credentials (vault:<path>); XOR с credentials. Значение НЕ резолвится"`
 	Credentials    map[string]any `json:"credentials,omitempty" doc:"опц. plaintext cloud-credentials (dual-mode, ADR-064): напр. {access_key, secret_key}; keeper пишет их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
 	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"`
@@ -55,7 +57,7 @@ func providerCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/providers (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/providers (list) — READ with typed query (no audit) ===
 
 type providerListInput struct {
 	Offset int32 `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
@@ -79,7 +81,7 @@ func providerListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/providers/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/providers/{name} (get) — READ with path (no audit) ===
 
 type providerGetInput struct {
 	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а"`
@@ -108,7 +110,7 @@ type providerDeleteInput struct {
 	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а"`
 }
 
-// providerNoContentOutput — 204 No Content (без Body).
+// providerNoContentOutput — 204 No Content (no Body).
 type providerNoContentOutput struct {
 	Status int `json:"-"`
 }

@@ -1,14 +1,14 @@
 package handlers
 
-// Guard-тесты read-view прогонов инкарнации на handler-границе (RunsTyped /
-// RunDetailTyped): scope-гейт (deny/nil-scoper/cross-incarnation → 404), валидация
-// входа (bad name → 422, bad apply_id → 400) и happy-path (empty list + per-host
-// проекция store→View). Точный per-task маппинг из реальной apply_runs-строки
-// (task_idx/plan_index/error) покрыт integration-тестом applyrun.SelectRunDetail —
-// здесь проверяем именно handler-слой: доменная функция + inScope-предикат + проекция.
+// Guard tests for the incarnation runs read view at the handler boundary (RunsTyped /
+// RunDetailTyped): scope gate (deny/nil-scoper/cross-incarnation → 404), input
+// validation (bad name → 422, bad apply_id → 400) and happy-path (empty list + per-host
+// projection store→View). The exact per-task mapping from a real apply_runs row
+// (task_idx/plan_index/error) is covered by the integration test applyrun.SelectRunDetail —
+// here we test the handler layer specifically: domain function + inScope predicate + projection.
 //
-// Доменные функции принимают inScope-предикат НАПРЯМУЮ (тот же, что huma-слой
-// собирает через GetInScopeFor(claims, "history")); тестируем их без HTTP-обёртки.
+// The domain functions take the inScope predicate DIRECTLY (the same one the huma layer
+// assembles via GetInScopeFor(claims, "history")); we test them without the HTTP wrapper.
 
 import (
 	"context"
@@ -22,17 +22,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// allowScope / denyScope — inScope-предикаты для scope-гейта (замена GetInScopeFor
-// в прямом вызове доменной функции). Unrestricted-оператор → allow, out-of-scope →
-// deny (handler отдаёт 404, не палит существование).
+// allowScope / denyScope — inScope predicates for the scope gate (replacing GetInScopeFor
+// in a direct domain-function call). Unrestricted operator → allow, out-of-scope →
+// deny (the handler returns 404, does not leak existence).
 func allowScope(*incarnation.Incarnation) bool { return true }
 func denyScope(*incarnation.Incarnation) bool  { return false }
 
-// validApplyID — синтаксически валидный ULID (26 символов Crockford-base32,
-// алфавит 0-9A-HJKMNP-TV-Z без I/L/O/U) для путей, где apply_id проходит IsValidULID.
+// validApplyID — a syntactically valid ULID (26 Crockford-base32 characters,
+// alphabet 0-9A-HJKMNP-TV-Z without I/L/O/U) for paths where apply_id passes IsValidULID.
 const validApplyID = "01HZZZ00000000000000000000"
 
-// --- RunsTyped (список прогонов) --------------------------------------
+// --- RunsTyped (list of runs) --------------------------------------
 
 func TestRunsTyped_BadName_422(t *testing.T) {
 	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -46,8 +46,8 @@ func TestRunsTyped_BadLimit_400(t *testing.T) {
 	requireProblemStatus(t, err, 400)
 }
 
-// TestRunsTyped_OutOfScope_404 — incarnation существует, но inScope деньит →
-// 404 (existence-probe не палит чужую инкарнацию как 403).
+// TestRunsTyped_OutOfScope_404 — the incarnation exists, but inScope denies →
+// 404 (the existence probe does not leak someone else's incarnation as 403).
 func TestRunsTyped_OutOfScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -55,8 +55,8 @@ func TestRunsTyped_OutOfScope_404(t *testing.T) {
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunsTyped_NilScope_404 — nil inScope (fail-closed мис-wire-up) → 404, store
-// не трогаем.
+// TestRunsTyped_NilScope_404 — nil inScope (fail-closed mis-wire-up) → 404, store
+// untouched.
 func TestRunsTyped_NilScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -64,8 +64,8 @@ func TestRunsTyped_NilScope_404(t *testing.T) {
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunsTyped_IncarnationNotFound_404 — инкарнации нет (SelectByName → ErrNoRows)
-// → 404 ещё на existence-probe, до захода в apply_runs.
+// TestRunsTyped_IncarnationNotFound_404 — the incarnation is absent (SelectByName → ErrNoRows)
+// → 404 already at the existence probe, before touching apply_runs.
 func TestRunsTyped_IncarnationNotFound_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(string) pgx.Row { return errRow{err: pgx.ErrNoRows} }}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -73,13 +73,13 @@ func TestRunsTyped_IncarnationNotFound_404(t *testing.T) {
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunsTyped_Empty_OK — инкарнация в scope, прогонов нет: успех (nil error),
-// пустой список, Total=0. Доказывает, что после scope-гейта RunsTyped доходит до
-// store и корректно проецирует пустой набор.
+// TestRunsTyped_Empty_OK — the incarnation is in scope, no runs: success (nil error),
+// empty list, Total=0. Proves that after the scope gate RunsTyped reaches the
+// store and correctly projects an empty set.
 func TestRunsTyped_Empty_OK(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
-		// COUNT(DISTINCT apply_id)→0 + apply_runs Query→emptyRows (дефолт fake).
+		// COUNT(DISTINCT apply_id)→0 + apply_runs Query→emptyRows (default fake).
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	reply, err := h.RunsTyped(context.Background(), "redis-prod", 0, 50, allowScope)
@@ -97,7 +97,7 @@ func TestRunsTyped_Empty_OK(t *testing.T) {
 	}
 }
 
-// --- RunDetailTyped (детали прогона) ----------------------------------
+// --- RunDetailTyped (run detail) ----------------------------------
 
 func TestRunDetailTyped_BadName_422(t *testing.T) {
 	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -105,16 +105,16 @@ func TestRunDetailTyped_BadName_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestRunDetailTyped_BadApplyID_400 — не-ULID apply_id отбивается 400 ДО
-// existence-probe (валидация раньше store).
+// TestRunDetailTyped_BadApplyID_400 — a non-ULID apply_id is rejected with 400 BEFORE
+// the existence probe (validation before the store).
 func TestRunDetailTyped_BadApplyID_400(t *testing.T) {
 	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "redis-prod", "not-a-ulid", allowScope)
 	requireProblemStatus(t, err, 400)
 }
 
-// TestRunDetailTyped_OutOfScope_404 — incarnation есть, inScope деньит → 404
-// (store не трогаем, existence-probe отбил).
+// TestRunDetailTyped_OutOfScope_404 — the incarnation exists, inScope denies → 404
+// (store untouched, the existence probe rejected it).
 func TestRunDetailTyped_OutOfScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -122,24 +122,24 @@ func TestRunDetailTyped_OutOfScope_404(t *testing.T) {
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunDetailTyped_RunNotFound_404 — инкарнация в scope, но apply_id не
-// принадлежит ей (SelectRunDetail → 0 строк → ErrApplyRunNotFound): 404. Зеркалит
-// cross-incarnation-изоляцию store-слоя на handler-границе.
+// TestRunDetailTyped_RunNotFound_404 — the incarnation is in scope, but apply_id does not
+// belong to it (SelectRunDetail → 0 rows → ErrApplyRunNotFound): 404. Mirrors the
+// cross-incarnation isolation of the store layer at the handler boundary.
 func TestRunDetailTyped_RunNotFound_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
-		applyRunsRows:   func() (pgx.Rows, error) { return &emptyRows{}, nil }, // 0 host-строк
+		applyRunsRows:   func() (pgx.Rows, error) { return &emptyRows{}, nil }, // 0 host rows
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunDetailTyped_PerHostMapping_OK — happy-path проекции store→View на
-// handler-границе: два хоста прогона, host-a упал (task_idx/plan_index/error
-// заполнены), host-b успех (nil-детали). Проверяем, что RunHostStatusView несёт
-// per-host поля и агрегатный статус — failed. Реальный per-task Scan из PG —
-// в integration TestIntegration_SelectRunDetail; здесь именно handler-проекция.
+// TestRunDetailTyped_PerHostMapping_OK — happy-path of the store→View projection at
+// the handler boundary: two run hosts, host-a failed (task_idx/plan_index/error
+// filled in), host-b succeeded (nil details). We check that RunHostStatusView carries
+// per-host fields and the aggregate status is failed. The real per-task Scan from PG —
+// in integration TestIntegration_SelectRunDetail; here it's the handler projection.
 func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	failedIdx, failedPlan := 2, 5
 	errSummary := "task 2 core.pkg.installed: boom"
@@ -148,13 +148,13 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		applyRunsRows: func() (pgx.Rows, error) {
 			return &applyRunsHostRows{rows: []applyRunHostRow{
-				{ // host-a: упал
+				{ // host-a: failed
 					sid: "host-a", status: "failed", passage: 0,
 					taskIdx: &failedIdx, failedPlan: &failedPlan, errorSummary: &errSummary,
 					attempt: 1, cancelRequested: false,
 					scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
 				},
-				{ // host-b: успех
+				{ // host-b: succeeded
 					sid: "host-b", status: "success", passage: 0,
 					attempt: 1, cancelRequested: false,
 					scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
@@ -176,7 +176,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	if len(d.Hosts) != 2 {
 		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
 	}
-	// host-a: несёт адрес упавшей задачи.
+	// host-a: carries the address of the failed task.
 	ha := d.Hosts[0]
 	if ha.SID != "host-a" || ha.Status != "failed" {
 		t.Errorf("Hosts[0] = {%q,%q}, want {host-a,failed}", ha.SID, ha.Status)
@@ -190,7 +190,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	if ha.ErrorSummary == nil || *ha.ErrorSummary != errSummary {
 		t.Errorf("Hosts[0].ErrorSummary = %v, want %q", ha.ErrorSummary, errSummary)
 	}
-	// host-b: успех, детали упавшей задачи nil.
+	// host-b: success, failed-task details nil.
 	hb := d.Hosts[1]
 	if hb.SID != "host-b" || hb.Status != "success" {
 		t.Errorf("Hosts[1] = {%q,%q}, want {host-b,success}", hb.SID, hb.Status)
@@ -200,8 +200,8 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	}
 }
 
-// requireProblemStatus проверяет, что err — доменный *problemError с ожидаемым
-// HTTP-статусом (маппинг problem-type → код). t.Helper для читаемого стека.
+// requireProblemStatus checks that err is a domain *problemError with the expected
+// HTTP status (problem-type → code mapping). t.Helper for a readable stack.
 func requireProblemStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	if err == nil {
@@ -216,8 +216,8 @@ func requireProblemStatus(t *testing.T, err error, want int) {
 	}
 }
 
-// applyRunHostRow — одна host-строка apply_runs для detail-rows-stub (порядок и
-// типы колонок selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
+// applyRunHostRow — one apply_runs host row for the detail-rows-stub (column order and
+// types of selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
 // error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by).
 type applyRunHostRow struct {
 	sid             string
@@ -234,9 +234,9 @@ type applyRunHostRow struct {
 	startedBy       *string
 }
 
-// applyRunsHostRows — pgx.Rows-stub над набором apply_runs host-строк. Scan
-// поддерживает ровно типы колонок selectRunHostsSQL (в т.ч. *int32/*bool/**int/
-// **time.Time/**string, которые общий staticRow не покрывает).
+// applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
+// supports exactly the column types of selectRunHostsSQL (incl. *int32/*bool/**int/
+// **time.Time/**string, which the generic staticRow does not cover).
 type applyRunsHostRows struct {
 	rows []applyRunHostRow
 	idx  int
@@ -272,8 +272,8 @@ func (r *applyRunsHostRows) Values() ([]any, error)                       { retu
 func (r *applyRunsHostRows) RawValues() [][]byte                          { return nil }
 func (r *applyRunsHostRows) Conn() *pgx.Conn                              { return nil }
 
-// scanApplyRunCol присваивает v в dest-указатель нужного типа (узкий набор колонок
-// apply_runs; неизвестный тип → ошибка, чтобы дрейф схемы был виден).
+// scanApplyRunCol assigns v to a dest pointer of the right type (a narrow set of apply_runs
+// columns; an unknown type → error, so schema drift is visible).
 func scanApplyRunCol(dest, v any) error {
 	switch d := dest.(type) {
 	case *string:

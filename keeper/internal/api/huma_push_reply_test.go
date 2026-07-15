@@ -1,7 +1,7 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO PUSH-домена (handler-native T5d). push
-// больше НЕ зависит от legacy-генерата — golden сверяет json native-значения с ЗАФИКСИРОВАННОЙ
-// строкой-эталоном (pinned). Покрыты ОБА указательных состояния (nil/non-nil) — omitempty-
-// и nullable-ветки. Мутация формы native-struct краснит case.
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the PUSH domain (handler-native T5d). push
+// no longer depends on the legacy generator — golden compares the native JSON values against a PINNED
+// reference string. Both pointer states (nil/non-nil) are covered — omitempty
+// and nullable branches. A shape mutation of the native struct reddens the case.
 package api
 
 import (
@@ -36,7 +36,7 @@ func TestGoldenWire_PushReply(t *testing.T) {
 		PushApplyReply{ApplyID: apply},
 		`{"apply_id":"01J0PUSHULID"}`)
 
-	// --- PushApplyView: все omitempty-ветки заполнены ---
+	// --- PushApplyView: all omitempty branches filled ---
 	goldenPushWire(t, "PushApplyView/full",
 		PushApplyView{
 			ApplyID: apply, CleanupStale: true, DestinyRef: "redis@v2.0.0",
@@ -45,7 +45,7 @@ func TestGoldenWire_PushReply(t *testing.T) {
 			Status: PushApplyViewStatus("success"), Summary: &summaryMap,
 		},
 		`{"apply_id":"01J0PUSHULID","cleanup_stale":true,"destiny_ref":"redis@v2.0.0","finished_at":"2026-06-14T12:34:56.789012345Z","input":{"port":6379},"inventory_sids":["web1.example.com"],"ssh_provider":"openssh","started_at":"2026-06-13T01:02:03.456789012Z","started_by_aid":"archon-alice","status":"success","summary":{"fail_count":1,"success_count":2,"total":3}}`)
-	// nil-ветка: finished_at/input/ssh_provider/started_by_aid/summary → ключ опущен.
+	// nil branch: finished_at/input/ssh_provider/started_by_aid/summary → key omitted.
 	goldenPushWire(t, "PushApplyView/nil_optionals",
 		PushApplyView{
 			ApplyID: apply, CleanupStale: false, DestinyRef: "redis@main",
@@ -55,7 +55,7 @@ func TestGoldenWire_PushReply(t *testing.T) {
 		},
 		`{"apply_id":"01J0PUSHULID","cleanup_stale":false,"destiny_ref":"redis@main","inventory_sids":["web1.example.com","web2.example.com"],"started_at":"2026-06-13T01:02:03.456789012Z","status":"running"}`)
 
-	// --- PushSummaryCounts (nested): omitempty обе ветки ---
+	// --- PushSummaryCounts (nested): omitempty both branches ---
 	goldenPushWire(t, "PushSummaryCounts/full",
 		PushSummaryCounts{FailCount: &cnt, SuccessCount: &cnt, Total: &cnt},
 		`{"fail_count":2,"success_count":2,"total":2}`)
@@ -80,11 +80,11 @@ func TestGoldenWire_PushReply(t *testing.T) {
 		},
 		`{"apply_id":"01J0PUSHULID","cleanup_stale":false,"destiny_ref":"redis@main","inventory_sids":["web1.example.com"],"started_at":"2026-06-13T01:02:03.456789012Z","status":"pending"}`)
 
-	// --- PushRunListReply (envelope как top-level reply-DTO): items non-nil + offset/limit/total ---
+	// --- PushRunListReply (envelope as a top-level reply-DTO): items non-nil + offset/limit/total ---
 	goldenPushWire(t, "PushRunListReply/full",
 		PushRunListReply{Items: []PushRunListEntry{entN}, Limit: 50, Offset: 0, Total: 1},
 		`{"items":[{"apply_id":"01J0PUSHULID","cleanup_stale":true,"destiny_ref":"redis@v2.0.0","finished_at":"2026-06-14T12:34:56.789012345Z","inventory_sids":["web1.example.com"],"ssh_provider":"openssh","started_at":"2026-06-13T01:02:03.456789012Z","started_by_aid":"archon-alice","status":"success","summary_counts":{"fail_count":2,"success_count":2,"total":2}}],"limit":50,"offset":0,"total":1}`)
-	// items empty []: byte-exact `[]` (не null).
+	// items empty []: byte-exact `[]` (not null).
 	goldenPushWire(t, "PushRunListReply/empty_items",
 		PushRunListReply{Items: []PushRunListEntry{}, Limit: 50, Offset: 10, Total: 0},
 		`{"items":[],"limit":50,"offset":10,"total":0}`)

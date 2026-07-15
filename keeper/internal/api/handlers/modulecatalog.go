@@ -1,17 +1,17 @@
-// Module-catalog-handler Operator API (`GET /v1/modules`) — публикует доступные
-// для прогона модули + input-метаданные. Назначение — module-search в UI
-// Run→Command (замена free-text «custom module»): оператор выбирает модуль из
-// каталога вместо ручного ввода имени.
+// Module-catalog handler for the Operator API (`GET /v1/modules`) — publishes the
+// modules available for a run + their input metadata. Purpose — module search in
+// the Run→Command UI (replacing the free-text "custom module"): the operator picks
+// a module from the catalog instead of typing a name by hand.
 //
-// Два источника:
-//   - core — статическая doc-таблица [coreModuleDocs] (keeper не видит
-//     soul/internal/coremod по ADR-011; реализации не несут декларативной
-//     input-схемы — params core пусты, см. modulecatalog_coredata.go);
-//   - plugin — активные (не отозванные) записи plugin_sigils, params читаются
-//     из manifest `spec.states[*].input` (shared/plugin-парсер).
+// Two sources:
+//   - core — the static doc table [coreModuleDocs] (keeper does not see
+//     soul/internal/coremod per ADR-011; the implementations carry no declarative
+//     input schema — core params are empty, see modulecatalog_coredata.go);
+//   - plugin — active (non-revoked) plugin_sigils records, params read from the
+//     manifest `spec.states[*].input` (shared/plugin parser).
 //
-// RBAC — service.list (read-only-каталог; read без audit, паттерн service.list /
-// role.list / plugin.list). Permission переиспользована, не заводится новая.
+// RBAC — service.list (read-only catalog; read without audit, the service.list /
+// role.list / plugin.list pattern). The permission is reused, no new one is added.
 package handlers
 
 import (
@@ -25,8 +25,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// PluginCatalogEntry — активный plugin-допуск для каталога: координаты +
-// byte-exact manifest (для разбора params). Возвращается [ModuleCatalogPlugins].
+// PluginCatalogEntry — an active plugin grant for the catalog: coordinates +
+// byte-exact manifest (for parsing params). Returned by [ModuleCatalogPlugins].
 type PluginCatalogEntry struct {
 	Namespace   string
 	Name        string
@@ -34,27 +34,28 @@ type PluginCatalogEntry struct {
 	ManifestRaw []byte
 }
 
-// ModuleCatalogPlugins — поверхность чтения активных plugin-допусков для
-// каталога. Реализуется адаптером поверх sigil-store (production-wire-up). При
-// nil в [ModuleCatalogHandler] каталог отдаёт только core (plugin-секция
-// пуста) — keeper без Sigil остаётся рабочим (паттерн опциональных Deps).
+// ModuleCatalogPlugins — the read surface for active plugin grants for the
+// catalog. Implemented by an adapter over the sigil store (production wire-up). If
+// nil in [ModuleCatalogHandler], the catalog returns core only (the plugin section
+// is empty) — a keeper without Sigil stays functional (the optional-Deps pattern).
 type ModuleCatalogPlugins interface {
-	// ActivePlugins возвращает активные (не отозванные) plugin-допуски. Порядок
-	// не важен — handler сортирует выдачу сам.
+	// ActivePlugins returns the active (non-revoked) plugin grants. Order does not
+	// matter — the handler sorts the output itself.
 	ActivePlugins(ctx context.Context) ([]PluginCatalogEntry, error)
 }
 
 // ModuleCatalogHandler — `GET /v1/modules` + `GET /v1/modules/{name}`.
 //
-// Зависимости immutable; safe for concurrent use — состояние между запросами не
-// держит (core-таблица read-only, plugin-lister thread-safe по контракту).
+// Dependencies are immutable; safe for concurrent use — it holds no state between
+// requests (the core table is read-only, the plugin lister is thread-safe by
+// contract).
 type ModuleCatalogHandler struct {
 	plugins ModuleCatalogPlugins
 	logger  *slog.Logger
 }
 
-// NewModuleCatalogHandler создаёт handler. plugins опционален (nil → только
-// core). logger nil → io.Discard.
+// NewModuleCatalogHandler creates the handler. plugins is optional (nil → core
+// only). logger nil → io.Discard.
 func NewModuleCatalogHandler(plugins ModuleCatalogPlugins, logger *slog.Logger) *ModuleCatalogHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -62,10 +63,10 @@ func NewModuleCatalogHandler(plugins ModuleCatalogPlugins, logger *slog.Logger) 
 	return &ModuleCatalogHandler{plugins: plugins, logger: logger}
 }
 
-// moduleParam — один параметр модуля в выдаче. Заполняется из manifest-схемы:
-// для plugin — из manifest.yaml, для core — из coremanifest-реестра. Поля
-// Enum/Pattern/Format/Source отражают [plugin.InputParamDef] (ADR-045) — backend
-// строит из них UI-форму модуля.
+// moduleParam — one module parameter in the output. Filled from the manifest
+// schema: for plugin — from manifest.yaml, for core — from the coremanifest
+// registry. The Enum/Pattern/Format/Source fields mirror [plugin.InputParamDef]
+// (ADR-045) — the backend builds the module's UI form from them.
 type moduleParam struct {
 	Name        string `json:"name"`
 	Type        string `json:"type,omitempty"`
@@ -73,27 +74,27 @@ type moduleParam struct {
 	Secret      bool   `json:"secret,omitempty"`
 	Description string `json:"description,omitempty"`
 
-	// Поля UI-формы (ADR-045 S2). omitempty — параметры без расширенной схемы
-	// остаются компактными.
+	// UI-form fields (ADR-045 S2). omitempty — params without an extended schema
+	// stay compact.
 	Enum    []any              `json:"enum,omitempty"`
 	Pattern string             `json:"pattern,omitempty"`
 	Format  string             `json:"format,omitempty"`
 	Source  *moduleInputSource `json:"source,omitempty"`
 
-	// Multiline/Example — декларативные UI-подсказки (ADR-045 B3): большое
-	// textarea + placeholder. omitempty — поля без подсказок остаются компактными.
+	// Multiline/Example — declarative UI hints (ADR-045 B3): a large textarea +
+	// placeholder. omitempty — fields without hints stay compact.
 	Multiline bool   `json:"multiline,omitempty"`
 	Example   string `json:"example,omitempty"`
 
-	// Items — тип элементов списка (ADR-045 S7). Для type=list/array сообщает
-	// UI, что строить типизированный список (напр. list[int]), а не свободный
-	// список строк.
+	// Items — the list element type (ADR-045 S7). For type=list/array it tells the
+	// UI to build a typed list (e.g. list[int]) rather than a free-form list of
+	// strings.
 	Items *moduleParam `json:"items,omitempty"`
 }
 
-// moduleCatalogItem — одна запись каталога. Имя типа = контрактное имя схемы рукописи
-// (docs/keeper/openapi.yaml :5392 → ModuleCatalogItem): huma DefaultSchemaNamer
-// капитализирует первую букву → "ModuleCatalogItem".
+// moduleCatalogItem — one catalog entry. The type name = the contract schema name
+// from the hand-written spec (docs/keeper/openapi.yaml :5392 → ModuleCatalogItem):
+// huma DefaultSchemaNamer capitalizes the first letter → "ModuleCatalogItem".
 type moduleCatalogItem struct {
 	Name        string        `json:"name"`
 	Kind        string        `json:"kind"` // "core" | "plugin"
@@ -104,34 +105,37 @@ type moduleCatalogItem struct {
 	Params      []moduleParam `json:"params"`
 }
 
-// moduleCatalogReply — тело `GET /v1/modules`. Имя типа = контрактное имя схемы рукописи
-// (docs/keeper/openapi.yaml :5424 → ModuleCatalogReply): huma DefaultSchemaNamer
-// капитализирует первую букву → "ModuleCatalogReply".
+// moduleCatalogReply — the body of `GET /v1/modules`. The type name = the contract
+// schema name from the hand-written spec (docs/keeper/openapi.yaml :5424 →
+// ModuleCatalogReply): huma DefaultSchemaNamer capitalizes the first letter →
+// "ModuleCatalogReply".
 type moduleCatalogReply struct {
 	Items []moduleCatalogItem `json:"items"`
 }
 
-// ModuleCatalogItem / ModuleCatalogReply — экспортированные алиасы на внутренние wire-
-// типы каталога, через которые huma-роуты (пакет api) типизируют output без
-// форка wire-формы (поля несут те же json-теги; huma строит из них схему 200-
-// тела). Категория C-эквивалент module-домена: локальные типы остаются
-// unexported для теста handler-а, алиасы дают доступ извне.
+// ModuleCatalogItem / ModuleCatalogReply — exported aliases for the catalog's
+// internal wire types, through which the huma routes (package api) type the output
+// without forking the wire shape (the fields carry the same json tags; huma builds
+// the 200-body schema from them). The category-C equivalent of the module domain:
+// the local types stay unexported for the handler test, the aliases give access
+// from outside.
 type (
 	ModuleCatalogItem  = moduleCatalogItem
 	ModuleCatalogReply = moduleCatalogReply
 )
 
-// ModuleCatalogSpecStub — непустой *ModuleCatalogHandler-заглушка для генерации
-// huma-OpenAPI-фрагмента (HumaModuleSpecYAML): при dump доменный handler не
-// вызывается, но huma.Register требует non-nil для nil-проверки (parity
-// [RoleSpecStub]). plugins nil — handler в spec-режиме не исполняется.
+// ModuleCatalogSpecStub — a non-nil *ModuleCatalogHandler stub for generating the
+// huma OpenAPI fragment (HumaModuleSpecYAML): on dump the domain handler is not
+// called, but huma.Register requires non-nil for its nil check (parity with
+// [RoleSpecStub]). plugins nil — the handler never executes in spec mode.
 func ModuleCatalogSpecStub() *ModuleCatalogHandler {
 	return &ModuleCatalogHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ListTyped — извлечённая доменная функция `GET /v1/modules` (FULL-TYPED разворот
-// ADR-054 §Pattern): каталог без http.ResponseWriter/*http.Request. onlyErrandSafe
-// — фильтр `?errand_safe=true`. Ошибка чтения plugin-реестра → *problemError (500).
+// ListTyped — the extracted domain function of `GET /v1/modules` (FULL-TYPED unfold
+// of ADR-054 §Pattern): the catalog without http.ResponseWriter/*http.Request.
+// onlyErrandSafe — the `?errand_safe=true` filter. A plugin-registry read error →
+// *problemError (500).
 func (h *ModuleCatalogHandler) ListTyped(ctx context.Context, onlyErrandSafe bool) (ModuleCatalogReply, error) {
 	items, err := h.buildCatalog(ctx)
 	if err != nil {
@@ -148,8 +152,8 @@ func (h *ModuleCatalogHandler) ListTyped(ctx context.Context, onlyErrandSafe boo
 	return ModuleCatalogReply{Items: out}, nil
 }
 
-// GetTyped — извлечённая доменная функция `GET /v1/modules/{name}`. Ошибки —
-// *problemError (404 нет модуля / 500 сбой реестра); успех — [ModuleCatalogItem].
+// GetTyped — the extracted domain function of `GET /v1/modules/{name}`. Errors —
+// *problemError (404 no module / 500 registry failure); success — [ModuleCatalogItem].
 func (h *ModuleCatalogHandler) GetTyped(ctx context.Context, name string) (ModuleCatalogItem, error) {
 	items, err := h.buildCatalog(ctx)
 	if err != nil {
@@ -164,8 +168,8 @@ func (h *ModuleCatalogHandler) GetTyped(ctx context.Context, name string) (Modul
 	return ModuleCatalogItem{}, &problemError{problem.New(problem.TypeNotFound, "", "no such module: "+name)}
 }
 
-// buildCatalog собирает полный каталог (core + plugin), отсортированный по name.
-// Возвращает ошибку только при сбое чтения plugin-реестра (core — статика).
+// buildCatalog assembles the full catalog (core + plugin), sorted by name.
+// Returns an error only on a plugin-registry read failure (core is static).
 func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalogItem, error) {
 	items := make([]moduleCatalogItem, 0, len(coreModuleDocs))
 	for _, c := range coreModuleDocs {
@@ -199,10 +203,11 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 	return items, nil
 }
 
-// pluginCatalogItem строит запись каталога из активного plugin-допуска. Имя —
-// `<namespace>.<name>` (адресная форма Soul Stack). States и params читаются из
-// manifest; невалидный/нечитаемый manifest даёт запись с пустыми states/params
-// (плагин допущен → виден в каталоге, но без метаданных, чем молча скрывать).
+// pluginCatalogItem builds a catalog entry from an active plugin grant. The name is
+// `<namespace>.<name>` (the Soul Stack address form). States and params are read
+// from the manifest; an invalid/unreadable manifest yields an entry with empty
+// states/params (the plugin is granted → visible in the catalog, but without
+// metadata, rather than silently hiding it).
 func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 	it := moduleCatalogItem{
 		Name:      e.Namespace + "." + e.Name,
@@ -214,9 +219,9 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 
 	m, _ := plugin.LoadFromBytes(plugin.FileName, e.ManifestRaw)
 	if m == nil || m.Kind != plugin.KindSoulModule {
-		// soul_module-каталог: cloud_driver/ssh_provider/soul_beacon не
-		// применяются как Destiny-шаг в Run→Command. Manifest нечитаем →
-		// запись без states/params (координаты допуска остаются).
+		// soul_module catalog: cloud_driver/ssh_provider/soul_beacon are not
+		// applied as a Destiny step in Run→Command. Manifest unreadable →
+		// an entry without states/params (the grant coordinates remain).
 		return it
 	}
 
@@ -230,13 +235,13 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 	return it
 }
 
-// manifestToParams сводит input-схему всех state-ов manifest-а в плоский
-// дедуплицированный список параметров каталога. Общая для core (coremanifest) и
-// plugin: один param может встречаться в нескольких state-ах (vault-secret в
-// installed и promoted) — в каталог выносим его один раз. required/secret =
-// true, если он такой хотя бы в одном state; Type/Description/Pattern/Format/
-// Enum/Source берутся из первого state-а, где они заданы (детерминизм за счёт
-// сортировки порядка). Возвращает non-nil срез (пустой при отсутствии input).
+// manifestToParams flattens the input schema of all manifest states into a flat,
+// deduplicated list of catalog params. Shared by core (coremanifest) and plugin: a
+// single param may appear in several states (a vault-secret in installed and
+// promoted) — we surface it in the catalog once. required/secret = true if it is so
+// in at least one state; Type/Description/Pattern/Format/Enum/Source are taken from
+// the first state where they are set (determinism thanks to sorting the order).
+// Returns a non-nil slice (empty when there is no input).
 func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	type pdef struct {
 		typ, desc, pattern, format, example string
@@ -307,8 +312,8 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 	return params
 }
 
-// toModuleParamItems рекурсивно прокидывает тип элементов списка (ADR-045 S7)
-// в DTO. Имя элемента в форме смысла не несёт — оставляем пустым.
+// toModuleParamItems recursively propagates the list element type (ADR-045 S7)
+// into the DTO. The element's name carries no meaning in the form — left empty.
 func toModuleParamItems(it *plugin.InputParamDef) *moduleParam {
 	if it == nil {
 		return nil
@@ -328,25 +333,27 @@ func toModuleParamItems(it *plugin.InputParamDef) *moduleParam {
 	}
 }
 
-// moduleInputSource — NATIVE wire-форма source-дискриминатора параметра (handler-native
-// T5d-2c-full, заменяет ModuleInputSource). Форма 1:1 с прежней: choir (*string
-// omitempty) — SID-ы конкретной Choir-партии; incarnation_hosts (*bool omitempty) — все SID
-// текущей инкарнации. Имя типа = контрактное имя схемы рукописи (huma DefaultSchemaNamer
-// капитализирует → "ModuleInputSource").
+// moduleInputSource — the NATIVE wire shape of a param's source discriminator
+// (handler-native T5d-2c-full, replaces ModuleInputSource). Shape 1:1 with the
+// former one: choir (*string omitempty) — the SIDs of a specific Choir part;
+// incarnation_hosts (*bool omitempty) — all SIDs of the current incarnation. The
+// type name = the contract schema name from the hand-written spec (huma
+// DefaultSchemaNamer capitalizes → "ModuleInputSource").
 type moduleInputSource struct {
 	Choir            *string `json:"choir,omitempty"`
 	IncarnationHosts *bool   `json:"incarnation_hosts,omitempty"`
 }
 
-// ModuleInputSource — экспортированный алиас на wire-тип source-дискриминатора, через
-// который huma-роут (пакет api) ссылается на схему без форка wire-формы.
+// ModuleInputSource — an exported alias for the source-discriminator wire type,
+// through which the huma route (package api) references the schema without forking
+// the wire shape.
 type ModuleInputSource = moduleInputSource
 
-// toModuleInputSource проецирует доменный [plugin.InputSource] (value-поля) в
-// wire-тип [moduleInputSource] (pointer-optional, ADR-051(c) категория C).
-// nil source → nil (omitempty). Пустые под-ключи опускаются: false/"" не
-// выносятся в wire, симметрично json-omitempty доменной формы — оператор видит
-// ровно тот под-ключ, что задан в манифесте.
+// toModuleInputSource projects the domain [plugin.InputSource] (value fields) into
+// the wire type [moduleInputSource] (pointer-optional, ADR-051(c) category C).
+// nil source → nil (omitempty). Empty sub-keys are omitted: false/"" are not
+// surfaced in the wire, symmetric with the domain form's json-omitempty — the
+// operator sees exactly the sub-key set in the manifest.
 func toModuleInputSource(s *plugin.InputSource) *moduleInputSource {
 	if s == nil {
 		return nil

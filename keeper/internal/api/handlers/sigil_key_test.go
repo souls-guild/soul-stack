@@ -14,17 +14,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// validKeyID — 64 hex (формат key_id). Используется в path-param-ах тестов.
+// validKeyID — 64 hex (key_id format). Used in test path params.
 const validKeyID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// --- fake VaultWriter / pool под sigil.KeyService ---
+// --- fake VaultWriter / pool for sigil.KeyService ---
 
 type fkVault struct{ err error }
 
 func (v fkVault) WriteKV(context.Context, string, map[string]any) error { return v.err }
 
-// fkPool — настраиваемый sigil.KeyStorePool. txFactory строит tx под мутацию;
-// nil-tx → BeginTx-ошибка не нужна (вернём fkTx, дающий sentinel).
+// fkPool is a configurable sigil.KeyStorePool. txFactory builds a tx for the mutation;
+// nil tx → no BeginTx error needed (we return fkTx yielding the sentinel).
 type fkPool struct {
 	tx *fkTx
 }
@@ -42,13 +42,13 @@ type scanErrRow struct{ err error }
 
 func (r scanErrRow) Scan(...any) error { return r.err }
 
-// fkTx — pgx.Tx, чьи QueryRow управляются per-SQL hook-ами:
-//   - insert → insertScan (id, introduced_at) либо insertErr (sentinel);
-//   - select-for-update → selectErr (напр. pgx.ErrNoRows → ErrKeyNotFound).
+// fkTx is a pgx.Tx whose QueryRow is driven by per-SQL hooks:
+//   - insert → insertScan (id, introduced_at) or insertErr (sentinel);
+//   - select-for-update → selectErr (e.g. pgx.ErrNoRows → ErrKeyNotFound).
 type fkTx struct {
 	pgx.Tx
-	insertErr  error // не-nil → insert-QueryRow.Scan вернёт это
-	selectErr  error // не-nil → select-for-update QueryRow.Scan вернёт это
+	insertErr  error // non-nil → insert-QueryRow.Scan returns this
+	selectErr  error // non-nil → select-for-update QueryRow.Scan returns this
 	insertID   int64
 	insertTime time.Time
 }
@@ -109,8 +109,8 @@ func TestSigilKeyHandler_Introduce_201_NoPrivateKey(t *testing.T) {
 	if !strings.Contains(reply.View.PubkeyPEM, "BEGIN PUBLIC KEY") {
 		t.Errorf("pubkey_pem не SPKI: %q", reply.View.PubkeyPEM)
 	}
-	// SECURITY: проекция не несёт приватник (KeyService его не возвращает; форма
-	// View не имеет private-поля by construction).
+	// SECURITY: the projection carries no private key (KeyService doesn't return it;
+	// the View form has no private field by construction).
 	if strings.Contains(reply.View.PubkeyPEM, "PRIVATE KEY") {
 		t.Errorf("private key leaked into reply: %q", reply.View.PubkeyPEM)
 	}
@@ -142,9 +142,9 @@ func TestSigilKeyHandler_SetPrimary_BadKeyID_422(t *testing.T) {
 // --- RetireTyped ---
 
 func TestSigilKeyHandler_Retire_NotFound_404(t *testing.T) {
-	// Retire-путь keys.go: countLockedActive (tx.Query → 2 строки) → select-for-
-	// update (tx.QueryRow → ErrNoRows → ErrKeyNotFound → 404). retirePool/retireTx
-	// моделируют эти два DB-обращения.
+	// Retire path keys.go: countLockedActive (tx.Query → 2 rows) → select-for-update
+	// (tx.QueryRow → ErrNoRows → ErrKeyNotFound → 404). retirePool/retireTx model these
+	// two DB calls.
 	h := newKeyHandler(t, &retirePool{selectErr: pgx.ErrNoRows, activeCount: 2}, fkVault{})
 	_, err := h.RetireTyped(context.Background(), claimsFor("archon-a"), validKeyID)
 	wantProblem(t, err, problem.TypeSigilKeyNotFound)
@@ -156,9 +156,9 @@ func TestSigilKeyHandler_Retire_BadKeyID_422(t *testing.T) {
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
-// retirePool/retireTx — fake под Retire-путь keys.go (countLockedActive Query →
-// select-for-update QueryRow). Возвращает activeCount строк из Query и selectErr
-// из select-QueryRow.
+// retirePool/retireTx — fake for the Retire path keys.go (countLockedActive Query →
+// select-for-update QueryRow). Returns activeCount rows from Query and selectErr from
+// the select-QueryRow.
 type retirePool struct {
 	selectErr   error
 	activeCount int
@@ -195,7 +195,7 @@ func (tx *retireTx) QueryRow(context.Context, string, ...any) pgx.Row {
 func (tx *retireTx) Commit(context.Context) error   { return nil }
 func (tx *retireTx) Rollback(context.Context) error { return nil }
 
-// countRows — pgx.Rows, отдающий n строк (для countLockedActive).
+// countRows is a pgx.Rows returning n rows (for countLockedActive).
 type countRows struct {
 	pgx.Rows
 	n   int

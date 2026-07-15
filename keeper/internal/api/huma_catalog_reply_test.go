@@ -1,8 +1,8 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO CATALOG-домена (handler-native T5d;
-// permissions / event-types / me-permissions). catalog больше НЕ зависит от legacy-генерата
-// (0 legacy-генерата в catalog-файлах), поэтому golden сверяет json native-значения с
-// ЗАФИКСИРОВАННОЙ строкой-эталоном. Покрыты nested-цепочки (Reply→Item→Action;
-// MyPermission→Scope) и обе указательные ветки (scope nil/non-nil, измерения nil/non-nil).
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO CATALOG domain (handler-native T5d;
+// permissions / event-types / me-permissions). catalog no longer depends on the legacy generator
+// (0 legacy generator in catalog files), so golden compares json native values against a
+// pinned reference string. Nested chains (Reply→Item→Action; MyPermission→Scope) and both
+// pointer branches (scope nil/non-nil, dimensions nil/non-nil) are covered.
 package api
 
 import (
@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// goldenCatalogWire сверяет json.Marshal(native) байт-в-байт с зафиксированным эталоном.
+// goldenCatalogWire compares json.Marshal(native) byte-for-byte against a pinned reference.
 func goldenCatalogWire(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -40,12 +40,12 @@ func TestGoldenWire_CatalogReply(t *testing.T) {
 		`{"areas":null,"point_events":null}`)
 
 	// --- HeraldTypeCatalogReply: types + nested fields (ADR-052 amendment) ---
-	// secret_required присутствует всегда (bool БЕЗ omitempty); enum_values опущен
-	// у не-enum-поля (vault_ref) через omitempty.
+	// secret_required is always present (bool with no omitempty); enum_values is omitted
+	// for the non-enum field (vault_ref) via omitempty.
 	goldenCatalogWire(t, "HeraldTypeCatalogReply/full",
 		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "telegram", Fields: []HeraldTypeFieldSpec{{Name: "bot_token_ref", Label: "Vault-ref токена бота", Required: true, Secret: true, Kind: "vault_ref"}}}}},
 		`{"types":[{"type":"telegram","fields":[{"name":"bot_token_ref","label":"Vault-ref токена бота","required":true,"secret":true,"kind":"vault_ref"}],"secret_required":false}]}`)
-	// enum-поле → enum_values присутствует (select-рендер); webhook → secret_required=true.
+	// enum field → enum_values present (select render); webhook → secret_required=true.
 	goldenCatalogWire(t, "HeraldTypeCatalogReply/enum_and_secret_required",
 		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "webhook", SecretRequired: true, Fields: []HeraldTypeFieldSpec{{Name: "parse_mode", Label: "Формат текста", Kind: "enum", EnumValues: []string{"", "MarkdownV2", "HTML"}}}}}},
 		`{"types":[{"type":"webhook","fields":[{"name":"parse_mode","label":"Формат текста","required":false,"secret":false,"kind":"enum","enum_values":["","MarkdownV2","HTML"]}],"secret_required":true}]}`)
@@ -53,7 +53,7 @@ func TestGoldenWire_CatalogReply(t *testing.T) {
 		HeraldTypeCatalogReply{Types: nil},
 		`{"types":null}`)
 
-	// --- MyPermissionsReply: scope set/nil, измерения set/nil, wildcard ---
+	// --- MyPermissionsReply: scope set/nil, dimensions set/nil, wildcard ---
 	res := "soul"
 	act := "list"
 	wild := true

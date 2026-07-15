@@ -1,29 +1,29 @@
 package handlers
 
-// Form-prefill-handler Operator API (`POST /v1/incarnations/{name}/scenarios/
-// {scenario}/form-prefill`) — day-2 pre-fill UI-формы сценария ТЕКУЩИМИ
-// значениями incarnation.state (docs/input.md → «Pre-fill из state»).
+// Form-prefill handler of the Operator API (`POST /v1/incarnations/{name}/scenarios/
+// {scenario}/form-prefill`) — day-2 pre-fill of the scenario's UI form with the CURRENT
+// incarnation.state values (docs/input.md → "Pre-fill from state").
 //
-// Поля схемы сценария, объявившие `prefill_from_state: state.<path>`, в форме
-// должны открываться не пустыми, а с текущим значением соответствующего
-// state-поля (оператор правит дельту, не вводит всё заново). Этот эндпоинт —
-// единственный резолвер таких prefill-hint-ов: читает state ОДНОЙ инкарнации
-// {name} и отдаёт `{values: {field: current-value}}`.
+// Scenario-schema fields that declare `prefill_from_state: state.<path>` must open in the
+// form not empty but with the current value of the corresponding state field (the operator
+// edits the delta, does not re-enter everything). This endpoint is the sole resolver of such
+// prefill hints: it reads the state of ONE incarnation {name} and returns
+// `{values: {field: current-value}}`.
 //
-// Инварианты безопасности (blocker):
-//   - path-whitelist: резолвятся СТРОГО пути, объявленные `prefill_from_state` в
-//     схеме сценария. Клиент путь НЕ передаёт — backend читает схему сценария,
-//     строит множество объявленных путей и резолвит только их. Произвольный
-//     state-доступ через эндпоинт невозможен;
-//   - secret-исключение: поля, помеченные secret-схемой сервиса
-//     (secretSchemaForIncarnation), из ответа ИСКЛЮЧАЮТСЯ полностью (pre-fill
-//     маски бесполезен), а оставшиеся значения дополнительно прогоняются через
-//     maskWithSchema (defense-in-depth: nested secret внутри prefill-значения
-//     гасится тем же декларативным слоем ADR-010 §7.4).
+// Security invariants (blocker):
+//   - path-whitelist: STRICTLY the paths declared via `prefill_from_state` in the
+//     scenario schema are resolved. The client does NOT pass a path — the backend reads
+//     the scenario schema, builds the set of declared paths and resolves only those.
+//     Arbitrary state access through the endpoint is impossible;
+//   - secret-exclusion: fields marked by the service secret schema
+//     (secretSchemaForIncarnation) are EXCLUDED from the response entirely (pre-filling a
+//     mask is useless), and the remaining values are additionally run through
+//     maskWithSchema (defense-in-depth: a nested secret inside a prefill value is
+//     suppressed by the same declarative layer, ADR-010 §7.4).
 //
-// RBAC — incarnation.get (read одной инкарнации: кто видит инкарнацию, тот и
-// получает prefill её формы). Новая permission НЕ заводится, scope-селектор —
-// тот же inScope, что у GetTyped/HistoryTyped (ADR-047). Read-only, без audit.
+// RBAC — incarnation.get (read of a single incarnation: whoever sees the incarnation
+// also gets the prefill of its form). No new permission is introduced, the scope selector
+// is the same inScope as GetTyped/HistoryTyped (ADR-047). Read-only, no audit.
 
 import (
 	"context"
@@ -36,32 +36,32 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 )
 
-// FormPrefillResult — NATIVE результат POST .../form-prefill (handler-native).
-// Values — карта `field → current-value`: только поля схемы сценария, у которых
-// объявлен `prefill_from_state` И путь покрыт текущим incarnation.state И поле
-// НЕ secret. Поля с непокрытым путём / secret опускаются. Non-nil (пустая карта
-// при отсутствии prefill-полей). Пакет api проецирует в native reply-DTO.
+// FormPrefillResult — NATIVE result of POST .../form-prefill (handler-native).
+// Values — a map `field → current-value`: only scenario-schema fields that declare
+// `prefill_from_state` AND whose path is covered by the current incarnation.state AND that
+// are NOT secret. Fields with an uncovered path / secret are omitted. Non-nil (empty map
+// when there are no prefill fields). The api package projects this into a native reply-DTO.
 type FormPrefillResult struct {
 	Values map[string]any
 }
 
-// FormPrefillTyped — доменная функция POST /v1/incarnations/{name}/scenarios/
-// {scenario}/form-prefill (READ, без audit). inScope — RBAC scope-предикат
-// (ADR-047, action=get): вне scope → 404 (как GetTyped, не палим чужую
-// инкарнацию).
+// FormPrefillTyped — domain function for POST /v1/incarnations/{name}/scenarios/
+// {scenario}/form-prefill (READ, no audit). inScope — the RBAC scope predicate
+// (ADR-047, action=get): out of scope → 404 (like GetTyped, we do not reveal someone
+// else's incarnation).
 //
-// Версия схемы — ВСЕГДА inc.ServiceVersion (версия развёрнутой инкарнации):
-// клиент версию НЕ задаёт. Это критично для безопасности — иначе path-whitelist
-// объявленных prefill-путей и secret-set резолвились бы из РАЗНЫХ версий
-// (whitelist с клиентского ref, secret-set всегда с ServiceVersion в
-// secretSchemaForIncarnation), и крафт ref на версию, где sensitive-поле ещё не
-// помечено secret, вернул бы его значение. Единая авторитетная версия закрывает
-// version-craft вектор; maskWithSchema остаётся 2-м слоем defense-in-depth.
+// The schema version is ALWAYS inc.ServiceVersion (the deployed incarnation's version):
+// the client does NOT set the version. This is security-critical — otherwise the path
+// whitelist of declared prefill paths and the secret-set would resolve from DIFFERENT
+// versions (whitelist from the client ref, secret-set always from ServiceVersion in
+// secretSchemaForIncarnation), and crafting a ref to a version where a sensitive field is
+// not yet marked secret would return its value. A single authoritative version closes the
+// version-craft vector; maskWithSchema remains the 2nd defense-in-depth layer.
 //
-// Ошибки — *problemError (422 невалидный path-сегмент / 404 нет инкарнации или
-// вне scope / 500 сбой резолва сервиса). Best-effort по схеме: нет loader-а /
-// сервис не зарегистрирован / scenario не парсится → пустой values (форма
-// откроется без prefill, не 500 — prefill необязателен).
+// Errors — *problemError (422 invalid path segment / 404 no incarnation or out of scope /
+// 500 service-resolve failure). Best-effort over the schema: no loader / service not
+// registered / scenario does not parse → empty values (the form opens without prefill, not
+// 500 — prefill is optional).
 func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenarioName string, inScope func(*incarnation.Incarnation) bool) (FormPrefillResult, error) {
 	zero := FormPrefillResult{Values: map[string]any{}}
 
@@ -81,57 +81,58 @@ func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenari
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "select incarnation failed")}
 	}
 	if inScope == nil || !inScope(inc) {
-		// Вне scope — 404 (parity GetTyped: не раскрываем существование чужой
-		// инкарнации различием 403/404).
+		// Out of scope — 404 (parity GetTyped: we do not reveal the existence of someone
+		// else's incarnation via a 403/404 distinction).
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "incarnation "+name+" not found")}
 	}
 
-	// path-whitelist: множество объявленных в схеме сценария prefill-путей.
-	// Клиент путь не передаёт — берём из схемы версии инкарнации (inc.ServiceVersion),
-	// той же, что secretSchemaForIncarnation. Best-effort: схема недоступна → пустой values.
+	// path-whitelist: the set of prefill paths declared in the scenario schema.
+	// The client does not pass a path — we take it from the schema of the incarnation
+	// version (inc.ServiceVersion), the same as secretSchemaForIncarnation. Best-effort:
+	// schema unavailable → empty values.
 	fields := h.prefillFieldsForScenario(ctx, inc, scenarioName)
 	if len(fields) == 0 {
 		return zero, nil
 	}
 
-	// secret-исключение (blocker): secret-поля исключаются из prefill полностью.
-	// Схема сервиса (state + create-input) материализуется единожды; nil →
-	// деградация к vault+regex defense-in-depth ниже (maskWithSchema).
+	// secret-exclusion (blocker): secret fields are excluded from prefill entirely.
+	// The service schema (state + create-input) is materialized once; nil →
+	// degrade to the vault+regex defense-in-depth below (maskWithSchema).
 	secretSchema := h.secretSchemaForIncarnation(ctx, inc)
 
 	values := make(map[string]any, len(fields))
 	for field, path := range fields {
 		val, ok := resolveStatePath(inc.State, path)
 		if !ok {
-			continue // путь не покрыт текущим state — поле опускается.
+			continue // path not covered by the current state — field is omitted.
 		}
-		// secret-поле целиком исключаем (pre-fill маски бессмыслен). Пути
-		// state-секретов в secretSchemaForIncarnation хранятся ОТНОСИТЕЛЬНО корня
-		// state (collectStateSchemaSecrets: `admin_token`, `tls.key`) — без
-		// `state.`-префикса; сверяем tail-форму пути.
+		// exclude the secret field entirely (pre-filling a mask is meaningless). The paths
+		// of state secrets in secretSchemaForIncarnation are stored RELATIVE to the state
+		// root (collectStateSchemaSecrets: `admin_token`, `tls.key`) — without the
+		// `state.` prefix; we compare against the tail form of the path.
 		if secretSchema != nil && secretSchema.IsSecret(statePathTail(path)) {
 			continue
 		}
 		values[field] = val
 	}
 
-	// defense-in-depth (ADR-010 §7.4): nested secret внутри prefill-значения
-	// (map/list с secret-leaf) гасится декларативным+vault+regex-слоем, как
-	// read-path GET incarnation. Top-level secret-поля уже исключены выше; здесь
-	// страхуемся от вложенных секретов в составном значении. Замаскированный
-	// leaf остаётся в форме плейсхолдером — лучше маска, чем утечка.
+	// defense-in-depth (ADR-010 §7.4): a nested secret inside a prefill value
+	// (map/list with a secret leaf) is suppressed by the declarative+vault+regex layer, as
+	// in the read-path GET incarnation. Top-level secret fields are already excluded above;
+	// here we guard against nested secrets in a composite value. A masked leaf stays in the
+	// form as a placeholder — better a mask than a leak.
 	masked := maskWithSchema(values, secretSchema)
 	return FormPrefillResult{Values: masked}, nil
 }
 
-// prefillFieldsForScenario строит множество объявленных prefill-полей схемы
-// сценария: `field → state.<path>` (path-whitelist). Материализует снапшот
-// сервиса на версии инкарнации (inc.ServiceVersion — ТА ЖЕ авторитетная версия,
-// что secretSchemaForIncarnation, клиент её НЕ задаёт), читает `scenario/<name>/
-// main.yml`, парсит input-схему и собирает поля с непустым `prefill_from_state`.
-// Best-effort (parity collectCreateInputSecrets): любой сбой → nil (форма без
-// prefill, не ошибка). state-предикат-доступ к произвольным путям невозможен —
-// только объявленное автором схемы.
+// prefillFieldsForScenario builds the set of declared prefill fields of the scenario
+// schema: `field → state.<path>` (path-whitelist). It materializes the service snapshot at
+// the incarnation version (inc.ServiceVersion — the SAME authoritative version as
+// secretSchemaForIncarnation, the client does NOT set it), reads `scenario/<name>/
+// main.yml`, parses the input schema and collects fields with a non-empty
+// `prefill_from_state`. Best-effort (parity collectCreateInputSecrets): any failure → nil
+// (form without prefill, not an error). Predicate access to arbitrary state paths is
+// impossible — only what the schema author declared.
 func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *incarnation.Incarnation, scenarioName string) map[string]string {
 	if h.loader == nil || h.services == nil || inc == nil {
 		return nil
@@ -140,10 +141,10 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	if !ok {
 		return nil
 	}
-	// Версия — та, на которой инкарнация создана/мигрирована (та же схема, что
-	// отдал ListScenarios форме И что использует secretSchemaForIncarnation).
-	// Клиентский override отсутствует: единая версия whitelist+secret-set — анти
-	// version-craft инвариант (см. doc-комментарий FormPrefillTyped).
+	// The version is the one the incarnation was created/migrated at (the same schema that
+	// ListScenarios handed the form AND that secretSchemaForIncarnation uses).
+	// There is no client override: a single version for whitelist+secret-set is the anti
+	// version-craft invariant (see the FormPrefillTyped doc comment).
 	if inc.ServiceVersion != "" {
 		serviceRef.Ref = inc.ServiceVersion
 	}
@@ -172,11 +173,11 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	return out
 }
 
-// resolveStatePath навигирует incarnation.state по dot-пути `state.<seg>[.<seg>…]`
-// (форма провалидирована схемой rePrefillFromStatePath). Возвращает (значение,
-// найдено). Промежуточный не-map сегмент / отсутствие ключа → (nil, false) —
-// fail-closed (поле опускается из prefill, parity statepredicate no-such-key).
-// Корневой токен `state` отбрасывается (путь стартует в самой incarnation.state).
+// resolveStatePath navigates incarnation.state by the dot-path `state.<seg>[.<seg>…]`
+// (the form is validated by the rePrefillFromStatePath schema). Returns (value, found).
+// An intermediate non-map segment / missing key → (nil, false) — fail-closed (the field is
+// omitted from prefill, parity statepredicate no-such-key). The root token `state` is
+// dropped (the path starts inside incarnation.state itself).
 func resolveStatePath(state map[string]any, path string) (any, bool) {
 	segs := statePathSegments(path)
 	if len(segs) == 0 {
@@ -200,8 +201,8 @@ func resolveStatePath(state map[string]any, path string) (any, bool) {
 	return nil, false
 }
 
-// statePathSegments разбивает `state.<seg>[.<seg>…]` в список сегментов БЕЗ
-// корневого `state` (путь адресует поля внутри самой incarnation.state).
+// statePathSegments splits `state.<seg>[.<seg>…]` into a list of segments WITHOUT the
+// root `state` (the path addresses fields inside incarnation.state itself).
 func statePathSegments(path string) []string {
 	tail := statePathTail(path)
 	if tail == "" {
@@ -210,10 +211,10 @@ func statePathSegments(path string) []string {
 	return splitDot(tail)
 }
 
-// statePathTail отбрасывает корневой `state.` префикс, возвращая адрес внутри
-// state (`state.redis_users` → `redis_users`). path провалидирован схемой как
-// `state.<...>`, поэтому префикс всегда присутствует; defensive: без префикса —
-// пустая строка (resolveStatePath вернёт not-found, поле опустится).
+// statePathTail drops the root `state.` prefix, returning the address inside state
+// (`state.redis_users` → `redis_users`). path is validated by the schema as `state.<...>`,
+// so the prefix is always present; defensive: without the prefix → empty string
+// (resolveStatePath returns not-found, the field is omitted).
 func statePathTail(path string) string {
 	const root = "state."
 	if len(path) <= len(root) || path[:len(root)] != root {
@@ -222,8 +223,8 @@ func statePathTail(path string) string {
 	return path[len(root):]
 }
 
-// splitDot — дешёвый split по `.` без аллокации regexp (сегменты уже
-// провалидированы snake_case-формой схемой).
+// splitDot — cheap split on `.` without allocating a regexp (segments are already
+// validated as snake_case by the schema).
 func splitDot(s string) []string {
 	var out []string
 	start := 0

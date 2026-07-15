@@ -1,15 +1,15 @@
 package api
 
-// Регистрация и spec-dump VOYAGE-домена на huma full-typed (БАТЧ-2f WRITE-SELF-AUDIT
-// по эталону cadence pilot + audit-endpoint read-with-query + soul dual-status, ADR-054
-// §Pattern). create/cancel — WRITE-SELF-AUDIT: handler пишет scenario_run.started/
-// command_run.invoked/.cancelled ВНУТРИ извлечённых CreateTyped/CancelTyped (emitCreated/
-// emitCancelled), audit-middleware НЕ навешан (отличие от middleware-audit-доменов role/
-// operator). preview — read-like dry-resolve БЕЗ audit. list/get/targets — read (БЕЗ audit).
-// ВСЕ роуты монтируются через newHumaCadenceAPI (self-audit НЕ нужен audit-middleware).
-// RBAC-by-kind (ADR-043 §6) — ВНУТРИ handler-а; router навешивает base auth + Tempo
-// (create/preview). MCP voyage-tools зовут (w,r)-handler через httptest-recorder (keeper/
-// internal/mcp/voyage.go) — извлечение НЕ затрагивает: (w,r) остался тонкой оболочкой.
+// Registration and spec-dump of the VOYAGE domain on huma full-typed (BATCH-2f WRITE-SELF-AUDIT
+// following the cadence pilot reference + audit-endpoint read-with-query + soul dual-status, ADR-054
+// §Pattern). create/cancel — WRITE-SELF-AUDIT: the handler writes scenario_run.started/
+// command_run.invoked/.cancelled INSIDE the extracted CreateTyped/CancelTyped (emitCreated/
+// emitCancelled), the audit middleware is NOT wired (unlike the middleware-audit domains role/
+// operator). preview — read-like dry-resolve, no audit. list/get/targets — read (no audit).
+// ALL routes are mounted via newHumaCadenceAPI (self-audit does not need the audit middleware).
+// RBAC-by-kind (ADR-043 §6) — INSIDE the handler; the router wires base auth + Tempo
+// (create/preview). MCP voyage tools call the (w,r) handler via an httptest recorder (keeper/
+// internal/mcp/voyage.go) — the extraction does not affect them: (w,r) stayed a thin shell.
 
 import (
 	"context"
@@ -23,10 +23,10 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// registerHumaVoyageCreate монтирует POST /v1/voyages через huma (WRITE-SELF-AUDIT:
-// scenario_run.started/command_run.invoked пишет САМ handler внутри CreateTyped).
-// voyageH nil → no-op. Handler: claims → конверт typed-body → CreateTyped (RBAC-by-kind
-// + resolve + persist + self-audit) → 202 С ТЕЛОМ + Location.
+// registerHumaVoyageCreate mounts POST /v1/voyages via huma (WRITE-SELF-AUDIT:
+// scenario_run.started/command_run.invoked is written by the handler itself inside CreateTyped).
+// voyageH nil → no-op. Handler: claims → convert typed body → CreateTyped (RBAC-by-kind
+// + resolve + persist + self-audit) → 202 WITH BODY + Location.
 func registerHumaVoyageCreate(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -45,8 +45,8 @@ func registerHumaVoyageCreate(humaAPI huma.API, voyageH *handlers.VoyageHandler)
 	})
 }
 
-// registerHumaVoyagePreview монтирует POST /v1/voyages/preview через huma (READ-like,
-// БЕЗ audit). voyageH nil → no-op. Handler: claims → конверт → PreviewTyped → 200 С ТЕЛОМ.
+// registerHumaVoyagePreview mounts POST /v1/voyages/preview via huma (READ-like,
+// no audit). voyageH nil → no-op. Handler: claims → convert → PreviewTyped → 200 WITH BODY.
 func registerHumaVoyagePreview(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -65,8 +65,8 @@ func registerHumaVoyagePreview(humaAPI huma.API, voyageH *handlers.VoyageHandler
 	})
 }
 
-// registerHumaVoyageList монтирует GET /v1/voyages через huma (READ-with-typed-query, БЕЗ
-// audit). CheckPageBounds → 400 (диапазон enforce-ит ДОМЕН, parity (w,r) ParsePage).
+// registerHumaVoyageList mounts GET /v1/voyages via huma (READ with typed query, no
+// audit). CheckPageBounds → 400 (the range is enforced by the DOMAIN, parity with (w,r) ParsePage).
 func registerHumaVoyageList(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -87,7 +87,7 @@ func registerHumaVoyageList(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	})
 }
 
-// registerHumaVoyageGet монтирует GET /v1/voyages/{id} через huma (READ-with-path, БЕЗ audit).
+// registerHumaVoyageGet mounts GET /v1/voyages/{id} via huma (READ with path, no audit).
 func registerHumaVoyageGet(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -101,8 +101,8 @@ func registerHumaVoyageGet(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	})
 }
 
-// registerHumaVoyageTargets монтирует GET /v1/voyages/{id}/targets через huma (READ-with-
-// path, БЕЗ audit).
+// registerHumaVoyageTargets mounts GET /v1/voyages/{id}/targets via huma (READ with
+// path, no audit).
 func registerHumaVoyageTargets(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -116,8 +116,8 @@ func registerHumaVoyageTargets(humaAPI huma.API, voyageH *handlers.VoyageHandler
 	})
 }
 
-// registerHumaVoyageCancel монтирует DELETE /v1/voyages/{id} через huma (WRITE-SELF-AUDIT:
-// scenario_run.cancelled/command_run.cancelled пишет САМ handler внутри CancelTyped).
+// registerHumaVoyageCancel mounts DELETE /v1/voyages/{id} via huma (WRITE-SELF-AUDIT:
+// scenario_run.cancelled/command_run.cancelled is written by the handler itself inside CancelTyped).
 func registerHumaVoyageCancel(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 	if voyageH == nil {
 		return
@@ -135,11 +135,11 @@ func registerHumaVoyageCancel(humaAPI huma.API, voyageH *handlers.VoyageHandler)
 	})
 }
 
-// toVoyageCreateRequest — конверт typed huma-body → доменная модель
-// handlers.VoyageCreateRequest (FULL-TYPED §Pattern шаг 3). Поле-в-поле; вложенные
-// target/notify — доменные VoyageTargetRequest/VoyageNotifyRequest (общие с Cadence;
-// notify-форма несёт []byte annotations — marshal через marshalAnnotations, derefBool
-// для *bool→bool, как cadence-конверт).
+// toVoyageCreateRequest — converts the typed huma body → domain model
+// handlers.VoyageCreateRequest (FULL-TYPED §Pattern step 3). Field-by-field; the nested
+// target/notify — domain VoyageTargetRequest/VoyageNotifyRequest (shared with Cadence;
+// the notify shape carries []byte annotations — marshalled via marshalAnnotations, derefBool
+// for *bool→bool, like the cadence converter).
 func toVoyageCreateRequest(b VoyageCreateRequest) handlers.VoyageCreateRequest {
 	return handlers.VoyageCreateRequest{
 		Kind:         b.Kind,
@@ -170,8 +170,8 @@ func toVoyageCreateRequest(b VoyageCreateRequest) handlers.VoyageCreateRequest {
 	}
 }
 
-// toVoyageNotifyRequests конвертит huma notify[] в доменную форму (ephemeral). nil/пусто
-// → nil (без уведомлений). annotations: map → []byte (marshalAnnotations, parity cadence);
+// toVoyageNotifyRequests converts huma notify[] into the domain shape (ephemeral). nil/empty
+// → nil (no notifications). annotations: map → []byte (marshalAnnotations, parity cadence);
 // *bool → bool (derefBool).
 func toVoyageNotifyRequests(in []VoyageNotify) []handlers.VoyageNotifyRequest {
 	if len(in) == 0 {
@@ -191,14 +191,14 @@ func toVoyageNotifyRequests(in []VoyageNotify) []handlers.VoyageNotifyRequest {
 	return out
 }
 
-// voyageMissingClaims — defensive-ответ при отсутствии claims (недостижим: RequireJWT
-// кладёт claims до huma). problem+json (parity cadenceMissingClaims).
+// voyageMissingClaims — defensive response when claims are absent (unreachable: RequireJWT
+// puts claims in before huma). problem+json (parity cadenceMissingClaims).
 func voyageMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// voyageProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity cadenceProblem).
+// voyageProblem delivers a *Typed function error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; non-problem → 500 (parity cadenceProblem).
 func voyageProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -206,10 +206,10 @@ func voyageProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaVoyageSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma voyage-роутов
-// (create/preview/list/get/targets/cancel) как YAML-строку, БЕЗ монтирования на реальный
-// router. Хук для спека-мерж-таргета тиража и guard-теста. Делегирует generic
-// [humaDumpSpec]. Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaVoyageSpecYAML assembles the OpenAPI fragment of ALL voyage routes migrated to huma
+// (create/preview/list/get/targets/cancel) as a YAML string, without mounting on a real
+// router. Hook for the rollout spec merge target and the guard test. Delegates to the generic
+// [humaDumpSpec]. Returns a 3.1.0 spec (huma default).
 func HumaVoyageSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.VoyageSpecStub()

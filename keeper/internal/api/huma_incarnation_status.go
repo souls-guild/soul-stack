@@ -1,32 +1,32 @@
 package api
 
-// Named-схема IncarnationStatus ($ref) для components/schemas — общая истина enum-набора.
+// Named IncarnationStatus schema ($ref) for components/schemas — the shared truth of the enum set.
 //
-// huma DefaultSchemaNamer выносит в components/schemas (getsRef=true) ТОЛЬКО struct-типы;
-// string-based named-тип huma всегда ИНЛАЙНИТ как `type: string`. Рукопись (docs/keeper/
-// openapi.yaml) объявляет IncarnationStatus отдельной схемой с enum-значениями и ссылается на
-// неё через $ref в каждом status-поле — UI ждёт именно named-схему.
+// huma DefaultSchemaNamer hoists into components/schemas (getsRef=true) ONLY struct types;
+// a string-based named type huma always INLINES as `type: string`. The spec (docs/keeper/
+// openapi.yaml) declares IncarnationStatus as a separate schema with enum values and references
+// it via $ref in every status field — the UI expects exactly the named schema.
 //
-// handler-native T5d: native enum-тип IncarnationStatus (huma_enums.go) сам реализует
-// huma.SchemaProvider — его метод Schema() читает константы этого файла (schemaName/Ref/Enum/
-// Description), регистрирует named-схему "IncarnationStatus" и возвращает $ref. Reply/get/list/
-// unlock-Body несут native IncarnationStatus НАПРЯМУЮ (поля проецируются из доменных
-// handlers.*View плоских string-ов), поэтому отдельный RegisterTypeAlias IncarnationStatus
-// → native более НЕ нужен (нет ни одного IncarnationStatus-поля в reflected-Body).
+// handler-native T5d: the native enum type IncarnationStatus (huma_enums.go) implements
+// huma.SchemaProvider itself — its Schema() method reads the constants in this file (schemaName/Ref/Enum/
+// Description), registers the named schema "IncarnationStatus" and returns a $ref. Reply/get/list/
+// unlock Body carry native IncarnationStatus DIRECTLY (fields projected from the domain
+// handlers.*View flat strings), so a separate RegisterTypeAlias IncarnationStatus
+// → native is no longer needed (there is no IncarnationStatus field in any reflected Body).
 
-// incarnationStatusSchemaName — имя named-схемы в components/schemas (контрактное имя
-// из рукописи; UI ссылается на него по $ref).
+// incarnationStatusSchemaName — the name of the named schema in components/schemas (the contract name
+// from the spec; the UI references it by $ref).
 const incarnationStatusSchemaName = "IncarnationStatus"
 
-// incarnationStatusSchemaRef — стандартный huma-prefix компонент-схем (huma.DefaultConfig
-// конфигурирует registry с этим prefix) + имя. Возвращается из SchemaProvider как $ref.
+// incarnationStatusSchemaRef — the standard huma component-schema prefix (huma.DefaultConfig
+// configures the registry with this prefix) + the name. Returned from SchemaProvider as a $ref.
 const incarnationStatusSchemaRef = "#/components/schemas/" + incarnationStatusSchemaName
 
-// incarnationStatusEnum — допустимые значения статуса runtime-инстанса (ADR-009/031/
-// S-D). Порядок и состав — по committed-рукописи docs/keeper/openapi.yaml
-// (IncarnationStatus.enum), которая авторитетна для OpenAPI-контракта. `provisioning` —
-// пост-MVP значение каталога (см. internal/incarnation.Status: там его ещё нет, но
-// контракт его уже резервирует).
+// incarnationStatusEnum — the allowed status values of a runtime instance (ADR-009/031/
+// S-D). Order and contents follow the committed hand-written spec docs/keeper/openapi.yaml
+// (IncarnationStatus.enum), which is authoritative for the OpenAPI contract. `provisioning` —
+// a post-MVP catalog value (see internal/incarnation.Status: not there yet, but
+// the contract already reserves it).
 var incarnationStatusEnum = []any{
 	"provisioning",
 	"ready",
@@ -38,7 +38,7 @@ var incarnationStatusEnum = []any{
 	"destroy_failed",
 }
 
-// incarnationStatusDescription — описание схемы (parity рукописи).
+// incarnationStatusDescription — the schema description (parity with the spec).
 const incarnationStatusDescription = "Статус runtime-инстанса. В proto константы имеют " +
 	"family-prefix (INCARNATION_STATUS_READY), в JSON API — короткие формы. `drift` — " +
 	"информационный статус Scry (ADR-031), НЕ блокирующий: remediation = обычный apply, " +

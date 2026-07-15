@@ -1,9 +1,9 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO SYNOD-домена (handler-native T5d).
-// synod больше НЕ зависит от legacy-генерата (0 legacy-генерата в synod-файлах), поэтому golden сверяет
-// json native-значения с ЗАФИКСИРОВАННОЙ строкой-эталоном. Единственный reply-роут с
-// телом — GET /v1/synods (SynodListReply.Items []SynodView); create/update/delete/
-// add/remove-operator/grant/revoke-role — 201/204 БЕЗ тела. Покрыты обе ветки
-// description (nil/non-nil) + []-vs-null для operators/roles.
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO SYNOD domain (handler-native T5d).
+// synod no longer depends on the legacy generator (0 legacy generator in synod files), so golden
+// compares json native values against a pinned reference string. The only reply route with a
+// body is GET /v1/synods (SynodListReply.Items []SynodView); create/update/delete/
+// add/remove-operator/grant/revoke-role — 201/204 with no body. Both description
+// branches (nil/non-nil) + []-vs-null for operators/roles are covered.
 package api
 
 import (
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// goldenSynodWire сверяет json.Marshal(native) байт-в-байт с зафиксированным эталоном.
+// goldenSynodWire compares json.Marshal(native) byte-for-byte against a pinned reference.
 func goldenSynodWire(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -26,20 +26,20 @@ func goldenSynodWire(t *testing.T, name string, native any, want string) {
 func TestGoldenWire_SynodReply(t *testing.T) {
 	desc := "группа ops"
 
-	// --- SynodView: description omitempty (обе ветки) + []-vs-null ---
+	// --- SynodView: description omitempty (both branches) + []-vs-null ---
 	goldenSynodWire(t, "SynodView/full",
 		SynodView{Builtin: true, Description: &desc, Name: "ops-group", Operators: []string{"archon-alice"}, Roles: []string{"cluster-admin", "viewer"}},
 		`{"builtin":true,"description":"группа ops","name":"ops-group","operators":["archon-alice"],"roles":["cluster-admin","viewer"]}`)
-	// description опущен (nil); operators/roles пустые массивы (non-nil) → `[]`.
+	// description omitted (nil); operators/roles empty arrays (non-nil) → `[]`.
 	goldenSynodWire(t, "SynodView/nil_desc_empty_lists",
 		SynodView{Builtin: false, Description: nil, Name: "empty-group", Operators: []string{}, Roles: []string{}},
 		`{"builtin":false,"name":"empty-group","operators":[],"roles":[]}`)
-	// nil-слайс ветка (на wire `null`).
+	// nil-slice branch (on wire `null`).
 	goldenSynodWire(t, "SynodView/nil_lists",
 		SynodView{Builtin: false, Name: "x", Operators: nil, Roles: nil},
 		`{"builtin":false,"name":"x","operators":null,"roles":null}`)
 
-	// --- SynodListReply: items наполнен / пустой / nil ---
+	// --- SynodListReply: items filled / empty / nil ---
 	sv := SynodView{Builtin: true, Name: "ops", Operators: []string{}, Roles: []string{}}
 	goldenSynodWire(t, "SynodListReply/items",
 		SynodListReply{Items: []SynodView{sv}},

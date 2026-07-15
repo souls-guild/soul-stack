@@ -1,12 +1,12 @@
 package api
 
-// Guard-тесты cadence-rest (PATCH/DELETE/enable/disable) на huma, FULL-TYPED форма
-// WRITE-SELF-AUDIT (батч-2f, ADR-054). Эти роуты пишут audit ВНУТРИ handler-а
+// Guard tests for cadence-rest (PATCH/DELETE/enable/disable) on huma, the FULL-TYPED
+// WRITE-SELF-AUDIT form (batch-2f, ADR-054). These routes write audit INSIDE the handler
 // (PatchTyped→emitWrite / DeleteTyped→emitDeleted / SetEnabledTyped→emitEnabledToggle),
-// БЕЗ audit-middleware — отличие от middleware-audit-доменов role/operator. Guard-ы
-// доказывают: wire 200/204, S6-SELF-AUDIT (handler РЕАЛЬНО пишет event с непустым
-// payload на 2xx — как cadence pilot create), NoAudit на 404/403, golden-JSON byte-
-// exact, RBAC-deny→403.
+// WITHOUT audit middleware — unlike the middleware-audit domains role/operator. The guards
+// prove: wire 200/204, S6-SELF-AUDIT (the handler REALLY writes an event with a non-empty
+// payload on 2xx — like the cadence pilot create), NoAudit on 404/403, golden-JSON
+// byte-exact, RBAC-deny→403.
 
 import (
 	"encoding/json"
@@ -25,27 +25,26 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestHumaCadence_RestReachable_ChiCoexistence — guard на ДОСТИЖИМОСТЬ
-// cadence-rest huma-роутов (PATCH/DELETE + GET/{id}+/runs) на РЕАЛЬНОМ
-// buildRouter с НЕ-nil cadenceH (и choirH заодно). Прогон через реальный
-// chi-mux (НЕ изолированную тест-топологию humaCadenceRestRouter): chi ДОЛЖЕН
-// диспатчить запрос узла /{id} в huma-handler по методу (PATCH/DELETE/GET),
-// а не отдавать 405. До фикса блокера sibling-саброутер r.Route("/{id}") c
-// GET / + GET /runs затенял весь /{id}-узел → chi отдавал ему PATCH/DELETE → 405
-// (huma-op никогда не вызывался). Тест ловит регресс топологии: чужой chi.Route
-// на bare-параметре-узле /{id} рядом с huma-op на том же узле.
+// TestHumaCadence_RestReachable_ChiCoexistence — a guard on the REACHABILITY of the
+// cadence-rest huma routes (PATCH/DELETE + GET/{id}+/runs) on the REAL buildRouter with a
+// non-nil cadenceH (and choirH along with it). Run through the real chi-mux (NOT the
+// isolated test topology humaCadenceRestRouter): chi MUST dispatch a request on the /{id}
+// node to the huma handler by method (PATCH/DELETE/GET), rather than return 405. Before the
+// blocker fix, the sibling subrouter r.Route("/{id}") with GET / + GET /runs shadowed the
+// whole /{id} node → chi gave it PATCH/DELETE → 405 (the huma op was never called). The test
+// catches a topology regression: a foreign chi.Route on the bare param node /{id} next to a
+// huma op on the same node.
 //
-// Проверка через chi.Walk (обход router-tree), НЕ Match/ServeHTTP: enforcer=nil +
-// verifier=nil (как TestHumaSoul_Exec_ChiCoexistence) — request-путь упёрся бы в
-// 401 (auth-chain без verifier) ДО RBAC/huma, а chi.Routes.Match даёт FALSE-TRUE на
-// затенённом узле (узел /{id} существует от sibling-саброутера, Match рапортует
-// его pattern, но фактический handler-узла отвечает только методам саброутера →
-// в ServeHTTP это 405). Достоверный сигнал — РЕГИСТРАЦИЯ метода в дереве: chi.Walk
-// перечисляет именно зарегистрированные method+pattern. Если PATCH/DELETE
-// /v1/cadences/{id} не в обходе — huma-op не смонтирован → в проде 405. Тест
-// требует все четыре /{id}-метода (GET/{id}, GET/{id}/runs, PATCH, DELETE) ровно
-// по разу. До фикса блокера PATCH/DELETE отсутствуют в обходе (sibling chi.Route
-// поглотил /{id}-узел) → тест КРАСНЫЙ.
+// Checked via chi.Walk (a router-tree walk), NOT Match/ServeHTTP: enforcer=nil +
+// verifier=nil (like TestHumaSoul_Exec_ChiCoexistence) — the request path would hit 401
+// (auth chain without a verifier) BEFORE RBAC/huma, and chi.Routes.Match gives a FALSE-TRUE
+// on the shadowed node (the /{id} node exists from the sibling subrouter, Match reports its
+// pattern, but the node's actual handler answers only the subrouter's methods → in ServeHTTP
+// that is 405). The reliable signal is METHOD REGISTRATION in the tree: chi.Walk enumerates
+// exactly the registered method+pattern. If PATCH/DELETE /v1/cadences/{id} is not in the
+// walk — the huma op is not mounted → 405 in prod. The test requires all four /{id} methods
+// (GET/{id}, GET/{id}/runs, PATCH, DELETE) exactly once. Before the blocker fix PATCH/DELETE
+// are absent from the walk (the sibling chi.Route swallowed the /{id} node) → the test is RED.
 func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 	cadenceH := handlers.NewCadenceHandler(foundCadenceStore(), nil, nil, nil, nil, nil, 0, nil)
 	h := buildRouter(
@@ -62,9 +61,9 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		nil,                                     // profileH
 		nil,                                     // errandH
 		nil,                                     // voyageH
-		cadenceH,                                // cadenceH non-nil → cadence /{id}-роуты монтируются
+		cadenceH,                                // cadenceH non-nil → cadence /{id} routes are mounted
 		nil,                                     // auditH
-		handlers.NewChoirHandler(nil, nil, nil), // choirH non-nil заодно
+		handlers.NewChoirHandler(nil, nil, nil), // choirH non-nil along with it
 		nil,                                     // heraldH
 		handlers.NewModuleCatalogHandler(nil, nil),
 		handlers.NewModuleFormPrepHandler(nil, nil),
@@ -72,7 +71,7 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewHeraldTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil,                                  // enforcer (nil: RBAC не дёргается — проверка через router-tree)
+		nil,                                  // enforcer (nil: RBAC is not invoked — checked via the router tree)
 		nil,                                  // auditWriter
 		nil,                                  // metricsHTTP
 		nil,                                  // tollDegraded
@@ -80,14 +79,14 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui вне интереса cadence-роутинг-теста
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		false,                                // webUIEnabled — /ui is out of scope for the cadence routing test
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
-		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
-		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
+		nil,                                  // soulStatsStaleFn (default 90s in the test)
+		nil,                                  // clusterH (cluster view not mounted in the test)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
 		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)
@@ -95,11 +94,11 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		t.Fatalf("buildRouter вернул %T, не chi.Routes", h)
 	}
 
-	// chi.Walk: каждый /{id}-метод зарегистрирован ровно по разу. Отсутствие
-	// PATCH/DELETE = блокер (затенение sibling chi.Route); дубль = коллизия mount-а.
-	// Teardown T1: GET /v1/cadences (list) на руте группы — отдельная huma-op; не
-	// затеняет /{id}-узел и не конфликтует с POST / (create). getListCount=1 +
-	// /{id}-узлы целы = list смонтирован достижимо БЕЗ shadow.
+	// chi.Walk: each /{id} method is registered exactly once. Missing PATCH/DELETE = the
+	// blocker (sibling chi.Route shadowing); a duplicate = a mount collision. Teardown T1:
+	// GET /v1/cadences (list) on the group root is a separate huma op; it does not shadow
+	// the /{id} node and does not conflict with POST / (create). getListCount=1 + intact
+	// /{id} nodes = list is mounted reachably WITHOUT a shadow.
 	var patchCount, deleteCount, getIDCount, getRunsCount, getListCount int
 	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		switch {
@@ -135,13 +134,13 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 	}
 }
 
-// cadenceRestTestID — валидный ULID (26 Crockford-base32) для path-{id} guard-ов.
+// cadenceRestTestID — a valid ULID (26 Crockford-base32) for the path-{id} guards.
 const cadenceRestTestID = "01HZ0000000000000000000000"
 
-// cadenceRestStoredRow — pgx.Row под cadence.scanCadence (27 dest, parity
-// handler-теста cadenceFullRow): минимальная stored-строка command-kind (cron +
-// service-target), достаточная для round-trip PATCH/Get. service-target +
-// incReader=nil → per-target scope пропущен после bare-check (parity newCadenceHandler).
+// cadenceRestStoredRow — a pgx.Row for cadence.scanCadence (27 dest, parity with the
+// handler test's cadenceFullRow): the minimal stored command-kind row (cron +
+// service-target), enough for a PATCH/Get round-trip. service-target + incReader=nil →
+// per-target scope is skipped after the bare-check (parity newCadenceHandler).
 type cadenceRestStoredRow struct{ id string }
 
 func (r cadenceRestStoredRow) Scan(dest ...any) error {
@@ -178,10 +177,10 @@ func (r cadenceRestStoredRow) Scan(dest ...any) error {
 	return nil
 }
 
-// humaCadenceRestRouter монтирует cadence-rest huma-роуты (PATCH/DELETE/enable/
-// disable) ровно по навеске router.go: RequirePermission на каждой группе +
-// huma-операция с ПОЛНЫМ путём /{id}[/...] на группе /v1/cadences. store/enforcer/
-// auditW параметризованы; selectByID настраивается под кейс (found/not-found).
+// humaCadenceRestRouter mounts the cadence-rest huma routes (PATCH/DELETE/enable/disable)
+// exactly per the router.go wiring: RequirePermission on each group + a huma operation with
+// the FULL path /{id}[/...] on the /v1/cadences group. store/enforcer/auditW are
+// parameterized; selectByID is tuned per case (found/not-found).
 func humaCadenceRestRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *strictFakeCadenceStore) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -213,14 +212,14 @@ func humaCadenceRestRouter(t *testing.T, enforcer apimiddleware.PermissionChecke
 	return r
 }
 
-// foundCadenceStore — store, отдающий stored-строку на Get (PATCH/enable/delete OK).
+// foundCadenceStore — a store that returns a stored row on Get (PATCH/enable/delete OK).
 func foundCadenceStore() *strictFakeCadenceStore {
 	return &strictFakeCadenceStore{selectByID: func(id string) pgx.Row { return cadenceRestStoredRow{id: id} }}
 }
 
 // --- PATCH ---
 
-// TestHumaCadenceRest_Patch_WireOK — PATCH 200 + cadenceDTO (read-modify-write через
+// TestHumaCadenceRest_Patch_WireOK — PATCH 200 + cadenceDTO (read-modify-write via
 // PatchTyped).
 func TestHumaCadenceRest_Patch_WireOK(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
@@ -244,8 +243,8 @@ func TestHumaCadenceRest_Patch_WireOK(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Patch_SelfAuditRecorded — S6-SELF-AUDIT-GUARD: PATCH через huma
-// пишет cadence.updated с непустым payload ВНУТРИ PatchTyped (handler, НЕ middleware).
+// TestHumaCadenceRest_Patch_SelfAuditRecorded — S6-SELF-AUDIT-GUARD: PATCH via huma writes
+// cadence.updated with a non-empty payload INSIDE PatchTyped (handler, NOT middleware).
 func TestHumaCadenceRest_Patch_SelfAuditRecorded(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRestRouter(t, strictAllowAll{}, auditCap, foundCadenceStore())
@@ -259,8 +258,8 @@ func TestHumaCadenceRest_Patch_SelfAuditRecorded(t *testing.T) {
 	assertSelfAudit(t, auditCap, audit.EventCadenceUpdated, "cadence_id")
 }
 
-// TestHumaCadenceRest_Patch_NotFound_NoAudit — 404 (cadence нет) НЕ пишет audit
-// (PatchTyped не доходит до emitWrite).
+// TestHumaCadenceRest_Patch_NotFound_NoAudit — 404 (no cadence) does NOT write audit
+// (PatchTyped never reaches emitWrite).
 func TestHumaCadenceRest_Patch_NotFound_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRestRouter(t, strictAllowAll{}, auditCap, &strictFakeCadenceStore{}) // selectByID=nil → 404
@@ -276,8 +275,8 @@ func TestHumaCadenceRest_Patch_NotFound_NoAudit(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Patch_RBACDeny_403 — RequirePermission(cadence.update) отбивает
-// до huma-handler-а → 403, без audit.
+// TestHumaCadenceRest_Patch_RBACDeny_403 — RequirePermission(cadence.update) rejects
+// before the huma handler → 403, no audit.
 func TestHumaCadenceRest_Patch_RBACDeny_403(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRestRouter(t, strictDenyAll{}, auditCap, foundCadenceStore())
@@ -294,7 +293,7 @@ func TestHumaCadenceRest_Patch_RBACDeny_403(t *testing.T) {
 }
 
 // TestHumaCadenceRest_Patch_UnknownField_400 — additionalProperties:false (huma) →
-// unknown-поле → 400.
+// unknown field → 400.
 func TestHumaCadenceRest_Patch_UnknownField_400(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
 	rec := httptest.NewRecorder()
@@ -323,8 +322,8 @@ func TestHumaCadenceRest_Delete_WireOK_204(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Delete_SelfAuditRecorded — S6-SELF-AUDIT-GUARD: DELETE пишет
-// cadence.deleted ВНУТРИ DeleteTyped.
+// TestHumaCadenceRest_Delete_SelfAuditRecorded — S6-SELF-AUDIT-GUARD: DELETE writes
+// cadence.deleted INSIDE DeleteTyped.
 func TestHumaCadenceRest_Delete_SelfAuditRecorded(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaCadenceRestRouter(t, strictAllowAll{}, auditCap, foundCadenceStore())
@@ -338,7 +337,7 @@ func TestHumaCadenceRest_Delete_SelfAuditRecorded(t *testing.T) {
 	assertSelfAudit(t, auditCap, audit.EventCadenceDeleted, "cadence_id")
 }
 
-// TestHumaCadenceRest_Delete_NotFound_NoAudit — DELETE 0 строк → 404, без audit.
+// TestHumaCadenceRest_Delete_NotFound_NoAudit — DELETE 0 rows → 404, no audit.
 func TestHumaCadenceRest_Delete_NotFound_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	store := &strictFakeCadenceStore{deleteNoRow: true}
@@ -403,7 +402,7 @@ func TestHumaCadenceRest_Disable_WireAndAudit(t *testing.T) {
 	assertSelfAudit(t, auditCap, audit.EventCadenceUpdated, "cadence_id")
 }
 
-// TestHumaCadenceRest_Enable_NotFound_NoAudit — enable несуществующего → 404, без audit.
+// TestHumaCadenceRest_Enable_NotFound_NoAudit — enable of a nonexistent one → 404, no audit.
 func TestHumaCadenceRest_Enable_NotFound_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	store := &strictFakeCadenceStore{setEnabledNoRow: true}
@@ -439,8 +438,8 @@ func TestHumaCadenceRest_Enable_GoldenWire(t *testing.T) {
 
 // --- GET /{id} (read) ---
 
-// TestHumaCadenceRest_Get_WireOK — GET /{id} 200 + cadenceDTO (read-tier huma,
-// БЕЗ audit). Доказывает достижимость read-роута на huma (часть фикса блокера).
+// TestHumaCadenceRest_Get_WireOK — GET /{id} 200 + cadenceDTO (read-tier huma, no audit).
+// Proves the read route is reachable on huma (part of the blocker fix).
 func TestHumaCadenceRest_Get_WireOK(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
 	rec := httptest.NewRecorder()
@@ -462,7 +461,7 @@ func TestHumaCadenceRest_Get_WireOK(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Get_NotFound_404 — GET /{id} несуществующего → 404 (read-роут).
+// TestHumaCadenceRest_Get_NotFound_404 — GET /{id} of a nonexistent one → 404 (read route).
 func TestHumaCadenceRest_Get_NotFound_404(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, &strictFakeCadenceStore{}) // selectByID=nil → 404
 	rec := httptest.NewRecorder()
@@ -474,10 +473,10 @@ func TestHumaCadenceRest_Get_NotFound_404(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Get_GoldenWire — golden-JSON byte-exact GET /{id} 200-reply.
-// Ключи/omitempty/отсутствие $schema зафиксированы. Недетерминированные поля
-// (created_at/updated_at) нормализованы; cadence_id фиксирован (path-{id}). Эталон
-// совпадает с legacy strict GetCadence (та же toCadenceDTO-форма).
+// TestHumaCadenceRest_Get_GoldenWire — golden-JSON byte-exact GET /{id} 200 reply.
+// Keys/omitempty/absence of $schema are pinned. Non-deterministic fields
+// (created_at/updated_at) are normalized; cadence_id is fixed (path-{id}). The reference
+// matches legacy strict GetCadence (the same toCadenceDTO shape).
 func TestHumaCadenceRest_Get_GoldenWire(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
 	rec := httptest.NewRecorder()
@@ -494,9 +493,9 @@ func TestHumaCadenceRest_Get_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Runs_GoldenWire — golden-JSON byte-exact GET /{id}/runs 200
-// (пустой набор: store отдаёт 0 прогонов). Фиксирует envelope-форму
-// items/offset/limit/total (sharedapi.PagedResponse) == legacy strict ListCadenceRuns.
+// TestHumaCadenceRest_Runs_GoldenWire — golden-JSON byte-exact GET /{id}/runs 200 (empty
+// set: the store returns 0 runs). Pins the envelope shape items/offset/limit/total
+// (sharedapi.PagedResponse) == legacy strict ListCadenceRuns.
 func TestHumaCadenceRest_Runs_GoldenWire(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
 	rec := httptest.NewRecorder()
@@ -513,8 +512,8 @@ func TestHumaCadenceRest_Runs_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_Runs_BadLimit_400 — out-of-range limit → 400 (CheckPageBounds в
-// RunsTyped, parity legacy ParsePage; НЕ huma min/max).
+// TestHumaCadenceRest_Runs_BadLimit_400 — out-of-range limit → 400 (CheckPageBounds in
+// RunsTyped, parity legacy ParsePage; NOT huma min/max).
 func TestHumaCadenceRest_Runs_BadLimit_400(t *testing.T) {
 	r := humaCadenceRestRouter(t, strictAllowAll{}, nil, foundCadenceStore())
 	rec := httptest.NewRecorder()
@@ -528,9 +527,9 @@ func TestHumaCadenceRest_Runs_BadLimit_400(t *testing.T) {
 
 // --- GET / (list) — Teardown T1 ---
 
-// humaCadenceListRouter монтирует GET /v1/cadences (list) ровно по навеске router.go:
-// RequirePermission(cadence.list) на группе + huma-операция с path "/" на группе
-// /v1/cadences. store/enforcer параметризованы.
+// humaCadenceListRouter mounts GET /v1/cadences (list) exactly per the router.go wiring:
+// RequirePermission(cadence.list) on the group + a huma operation with path "/" on the
+// /v1/cadences group. store/enforcer are parameterized.
 func humaCadenceListRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, store *strictFakeCadenceStore) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -552,10 +551,10 @@ func humaCadenceListRouter(t *testing.T, enforcer apimiddleware.PermissionChecke
 	return r
 }
 
-// TestHumaCadenceRest_List_GoldenWire — golden-JSON byte-exact GET /v1/cadences 200
-// (пустой набор: store отдаёт 0 строк/COUNT=0). Фиксирует envelope-форму
-// items/offset/limit/total (sharedapi.PagedResponse) == legacy strict ListCadences:
-// items non-nil [], никакого $schema, дефолтные offset=0/limit=50.
+// TestHumaCadenceRest_List_GoldenWire — golden-JSON byte-exact GET /v1/cadences 200 (empty
+// set: the store returns 0 rows/COUNT=0). Pins the envelope shape items/offset/limit/total
+// (sharedapi.PagedResponse) == legacy strict ListCadences: items non-nil [], no $schema,
+// default offset=0/limit=50.
 func TestHumaCadenceRest_List_GoldenWire(t *testing.T) {
 	r := humaCadenceListRouter(t, strictAllowAll{}, &strictFakeCadenceStore{})
 	rec := httptest.NewRecorder()
@@ -572,8 +571,8 @@ func TestHumaCadenceRest_List_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_List_BadLimit_400 — out-of-range limit → 400 (CheckPageBounds в
-// ListTyped, parity legacy ParsePage; НЕ huma min/max).
+// TestHumaCadenceRest_List_BadLimit_400 — out-of-range limit → 400 (CheckPageBounds in
+// ListTyped, parity legacy ParsePage; NOT huma min/max).
 func TestHumaCadenceRest_List_BadLimit_400(t *testing.T) {
 	r := humaCadenceListRouter(t, strictAllowAll{}, &strictFakeCadenceStore{})
 	rec := httptest.NewRecorder()
@@ -585,8 +584,8 @@ func TestHumaCadenceRest_List_BadLimit_400(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_List_BadEnabledEnum_422 — enabled вне {true,false} → 422
-// (huma schema-validate enum-mismatch; parity legacy "query 'enabled' must be …").
+// TestHumaCadenceRest_List_BadEnabledEnum_422 — enabled outside {true,false} → 422
+// (huma schema-validate enum mismatch; parity legacy "query 'enabled' must be …").
 func TestHumaCadenceRest_List_BadEnabledEnum_422(t *testing.T) {
 	r := humaCadenceListRouter(t, strictAllowAll{}, &strictFakeCadenceStore{})
 	rec := httptest.NewRecorder()
@@ -598,8 +597,8 @@ func TestHumaCadenceRest_List_BadEnabledEnum_422(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_List_BadKindEnum_422 — kind вне {scenario,command} → 422
-// (huma schema-validate enum-mismatch; parity legacy ValidKind → 422).
+// TestHumaCadenceRest_List_BadKindEnum_422 — kind outside {scenario,command} → 422
+// (huma schema-validate enum mismatch; parity legacy ValidKind → 422).
 func TestHumaCadenceRest_List_BadKindEnum_422(t *testing.T) {
 	r := humaCadenceListRouter(t, strictAllowAll{}, &strictFakeCadenceStore{})
 	rec := httptest.NewRecorder()
@@ -611,8 +610,8 @@ func TestHumaCadenceRest_List_BadKindEnum_422(t *testing.T) {
 	}
 }
 
-// TestHumaCadenceRest_List_RBACDeny_403 — RequirePermission(cadence.list) отбивает до
-// huma-handler-а → 403.
+// TestHumaCadenceRest_List_RBACDeny_403 — RequirePermission(cadence.list) rejects before
+// the huma handler → 403.
 func TestHumaCadenceRest_List_RBACDeny_403(t *testing.T) {
 	r := humaCadenceListRouter(t, strictDenyAll{}, &strictFakeCadenceStore{})
 	rec := httptest.NewRecorder()
@@ -624,10 +623,10 @@ func TestHumaCadenceRest_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// normalizeCadenceTimestamps заменяет недетерминированные created_at/updated_at на
-// плейсхолдер "TS" и переливает через map → sorted-marshal (golden byte-exact с
-// фиксированным набором ключей; created_at/updated_at в эталоне = "TS"). Плейсхолдер
-// без спец-символов — json.Marshal не HTML-эскейпит его.
+// normalizeCadenceTimestamps replaces the non-deterministic created_at/updated_at with the
+// placeholder "TS" and re-pours through a map → sorted-marshal (golden byte-exact with a
+// fixed key set; created_at/updated_at = "TS" in the reference). The placeholder has no
+// special characters — json.Marshal does not HTML-escape it.
 func normalizeCadenceTimestamps(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any
@@ -646,9 +645,10 @@ func normalizeCadenceTimestamps(t *testing.T, raw []byte) string {
 	return string(out)
 }
 
-// assertSelfAudit — общий S6-SELF-AUDIT-GUARD: capture-writer получил РОВНО event
-// нужного типа с непустым payload, содержащим requiredKey, от archon-alice. Доказывает,
-// что huma-роут довёл self-audit (emit ВНУТРИ handler-а) до writer-а на 2xx.
+// assertSelfAudit — the shared S6-SELF-AUDIT-GUARD: the capture writer received EXACTLY an
+// event of the required type with a non-empty payload containing requiredKey, from
+// archon-alice. Proves the huma route carried the self-audit (emit INSIDE the handler)
+// through to the writer on 2xx.
 func assertSelfAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType, requiredKey string) {
 	t.Helper()
 	evs := cap.Events()
@@ -670,9 +670,9 @@ func assertSelfAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType
 	}
 }
 
-// normalizeJSONKeys перекладывает JSON-object через map → канонический marshal
-// (ключи отсортированы детерминированно), сохраняя присутствие/отсутствие ключей и
-// любые лишние поля (например, $schema — всплывёт в diff).
+// normalizeJSONKeys re-pours a JSON object through a map → a canonical marshal (keys sorted
+// deterministically), preserving key presence/absence and any extra fields (e.g. $schema —
+// it will surface in the diff).
 func normalizeJSONKeys(t *testing.T, raw []byte) string {
 	t.Helper()
 	var m map[string]any

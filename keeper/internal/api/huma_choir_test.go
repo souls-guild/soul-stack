@@ -1,13 +1,13 @@
 package api
 
-// Guard-тесты CHOIR/VOICE на huma, FULL-TYPED форма WRITE-SELF-AUDIT (батч-2f,
-// ADR-054). Эти роуты пишут audit ВНУТРИ handler-а (CreateTyped/DeleteTyped/
-// AddVoiceTyped/RemoveVoiceTyped → writeAuditCtx), БЕЗ audit-middleware. Guard-ы
-// доказывают: wire 201/204/200, S6-SELF-AUDIT (handler РЕАЛЬНО пишет event с
-// непустым payload на 2xx), NoAudit на 403/422/404, golden-JSON byte-exact,
-// RBAC-deny→403, multi-resource voices sub-resource. RBAC navigates через
-// RequirePermissionMulti(choir, ..., incScope) — но в guard-ах enforcer allow/deny-all,
-// selector incScope не дёргается (предмет — huma-обвязка, не RBAC-scope).
+// Guard tests for CHOIR/VOICE on huma, FULL-TYPED WRITE-SELF-AUDIT form (batch-2f,
+// ADR-054). These routes write audit INSIDE the handler (CreateTyped/DeleteTyped/
+// AddVoiceTyped/RemoveVoiceTyped → writeAuditCtx), without audit middleware. The guards
+// prove: wire 201/204/200, S6-SELF-AUDIT (the handler REALLY writes an event with a
+// non-empty payload on 2xx), NoAudit on 403/422/404, golden-JSON byte-exact,
+// RBAC-deny→403, multi-resource voices sub-resource. RBAC routes through
+// RequirePermissionMulti(choir, ..., incScope) — but in the guards the enforcer is allow/deny-all,
+// and the incScope selector is not invoked (the subject is the huma wiring, not RBAC scope).
 
 import (
 	"context"
@@ -28,14 +28,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeChoirDB — минимальный мок handlers.ChoirDB (choir.ExecQueryRower +
-// choir.TxBeginner) для api-package huma-guard-ов. Диспетчер по подстроке SQL.
-// Дефолт — happy-path (create/add-voice success, member-SID-проверка проходит).
+// fakeChoirDB — minimal mock of handlers.ChoirDB (choir.ExecQueryRower +
+// choir.TxBeginner) for the api-package huma guards. Dispatches by SQL substring.
+// Default is happy-path (create/add-voice success, the member-SID check passes).
 type fakeChoirDB struct {
 	insertChoirErr  error
 	insertVoiceErr  error
-	memberSIDs      []string // SID-ы, реально члены инкарнации (AddVoice membership-чек)
-	choirLockRow    pgx.Row  // FOR UPDATE: nil → найден (1); errRow → ErrChoirNotFound
+	memberSIDs      []string // SIDs that are actual members of the incarnation (AddVoice membership check)
+	choirLockRow    pgx.Row  // FOR UPDATE: nil → found (1); errRow → ErrChoirNotFound
 	deleteChoirRows int
 	deleteVoiceRows int
 }
@@ -111,7 +111,7 @@ func (t *fakeChoirTx) QueryRow(ctx context.Context, sql string, args ...any) pgx
 }
 func (t *fakeChoirTx) Conn() *pgx.Conn { return nil }
 
-// choirTimeRow — Scan(&CreatedAt|&AddedAt) (одна time.Time).
+// choirTimeRow — Scan(&CreatedAt|&AddedAt) (a single time.Time).
 type choirTimeRow struct{}
 
 func (choirTimeRow) Scan(dest ...any) error {
@@ -123,7 +123,7 @@ func (choirTimeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// choirStrRows — pgx.Rows над [][]any (string-only, для membership-чека).
+// choirStrRows — pgx.Rows over [][]any (string-only, for the membership check).
 type choirStrRows struct {
 	rows [][]any
 	idx  int
@@ -160,10 +160,10 @@ func choirItoa(n int) string {
 	return "1"
 }
 
-// humaChoirRouter монтирует choir/voice huma-роуты ровно по навеске router.go
-// (RequirePermissionMulti на каждой группе + huma-op с ПОЛНЫМ путём /{name}/choirs
-// [/...] на группе /v1/incarnations). enforcer/auditW/db параметризованы. incScope
-// (RBAC-селектор) не дёргается guard-ами — enforcer allow/deny-all.
+// humaChoirRouter mounts the choir/voice huma routes exactly per the router.go wiring
+// (RequirePermissionMulti on each group + a huma op with the FULL path /{name}/choirs
+// [/...] on the /v1/incarnations group). enforcer/auditW/db are parameterized. incScope
+// (the RBAC selector) is not invoked by the guards — the enforcer is allow/deny-all.
 func humaChoirRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, db handlers.ChoirDB) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -284,8 +284,8 @@ func TestHumaChoir_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
-	// nullable-поля choir (created_by_aid/description/min_size/max_size) — null (без
-	// omitempty, parity legacy Choir). created_at нормализуем (epoch-0 фикс).
+	// nullable choir fields (created_by_aid/description/min_size/max_size) — null (no
+	// omitempty, parity legacy Choir). created_at is normalized (epoch-0 fix).
 	const golden = `{"choir_name":"primary","created_at":"1970-01-01T00:00:00Z","created_by_aid":"archon-alice","description":null,"incarnation_name":"redis-prod","max_size":null,"min_size":null}`
 	if got != golden {
 		t.Errorf("GOLDEN wire-дрейф choir create-reply:\n got  = %s\n want = %s\n(набор ключей/null/$schema изменился — проверь choirCreateOutput/toChoirDTO)", got, golden)
@@ -348,7 +348,7 @@ func TestHumaVoice_Add_WireAndAudit(t *testing.T) {
 
 func TestHumaVoice_Add_NotMember_422_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	db := &fakeChoirDB{memberSIDs: nil} // SID не член инкарнации → ErrNotMembers → 422
+	db := &fakeChoirDB{memberSIDs: nil} // SID is not a member of the incarnation → ErrNotMembers → 422
 	r := humaChoirRouter(t, strictAllowAll{}, auditCap, db)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, voiceAddURL, strings.NewReader(`{"sid":"node-1.example.com"}`))

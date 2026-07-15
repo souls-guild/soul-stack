@@ -1,35 +1,35 @@
 package api
 
-// Вынос enum SoulStatus и SoulTransport в components/schemas как named-схемы с $ref
-// (тираж-батч N5, ENUM-механизм по эталону huma_incarnation_status.go).
+// Emitting the SoulStatus and SoulTransport enums into components/schemas as named schemas with
+// $ref (rollout batch N5, ENUM mechanism modeled on huma_incarnation_status.go).
 //
-// ПРОБЛЕМА. huma DefaultSchemaNamer выносит в components/schemas (getsRef=true) ТОЛЬКО
-// struct-типы; string-based named-тип (SoulStatus / SoulTransport) huma всегда
-// ИНЛАЙНИТ как `type: string` БЕЗ $ref. Рукопись (docs/keeper/openapi.yaml :4198/:4207)
-// объявляет SoulTransport и SoulStatus отдельными схемами с enum-значениями и ссылается на
-// них через $ref (SoulListEntry.status/.transport, SoulCreateReply.status/.transport,
-// SoulCovenAssignSelector.status) — UI ждёт именно named-схемы.
+// PROBLEM. huma's DefaultSchemaNamer emits into components/schemas (getsRef=true) ONLY struct
+// types; a string-based named type (SoulStatus / SoulTransport) huma always INLINES as
+// `type: string` WITHOUT $ref. The hand-written spec (docs/keeper/openapi.yaml :4198/:4207)
+// declares SoulTransport and SoulStatus as separate schemas with enum values and references them
+// via $ref (SoulListEntry.status/.transport, SoulCreateReply.status/.transport,
+// SoulCovenAssignSelector.status) — the UI expects exactly named schemas.
 //
-// МЕХАНИЗМ (huma-чистый, без правки генерёного oapi-пакета): на каждый enum — string-тип в
-// пакете api с huma.SchemaProvider, регистрирующий named-схему и возвращающий $ref на неё, +
-// RegisterTypeAlias доменного oapi-типа на наш SchemaProvider. wire-тип (строка) НЕ меняется,
-// меняется лишь OpenAPI-схема: status/transport становятся $ref вместо инлайн `type: string`.
-// Регистрация идемпотентна. Оба alias вызываются в newHumaCadenceAPI (общая фабрика всех
-// huma.API).
+// MECHANISM (huma-only, no edits to the generated oapi package): for each enum — a string type in
+// the api package with huma.SchemaProvider that registers the named schema and returns a $ref to
+// it, + a RegisterTypeAlias of the domain oapi type to our SchemaProvider. The wire type (string)
+// does NOT change, only the OpenAPI schema: status/transport become $ref instead of inline
+// `type: string`. Registration is idempotent. Both aliases are called in newHumaCadenceAPI (the
+// shared factory for all huma.API).
 //
-// ENUM-СОСТАВ. Значения берутся из ДОМЕННОЙ истины (internal/soul: Status*/Transport*,
-// validStatus/validTransport) — те же 6 статусов / 2 транспорта, что код уже эмитит инлайном
-// на status-полях и валидирует доменно. Рукопись :4207 объявляет SoulStatus урезанным набором
-// (pending/connected/disconnected/expired — без revoked/destroyed) — это пред-существующий
-// контент-дрейф рукописи, НЕ наименование (см. отчёт N5); named-схема несёт полный доменный
-// набор, как существующая инлайн-схема.
+// ENUM SET. The values come from the DOMAIN truth (internal/soul: Status*/Transport*,
+// validStatus/validTransport) — the same 6 statuses / 2 transports the code already emits inline
+// on status fields and validates in the domain. The hand-written spec :4207 declares SoulStatus
+// with a trimmed set (pending/connected/disconnected/expired — without revoked/destroyed) — this
+// is a pre-existing content drift in the hand-written spec, NOT a naming one (see report N5); the
+// named schema carries the full domain set, like the existing inline schema.
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// soulStatusSchemaName / soulTransportSchemaName — контрактные имена named-схем (из рукописи;
-// UI ссылается по $ref).
+// soulStatusSchemaName / soulTransportSchemaName — the contract names of the named schemas (from
+// the hand-written spec; the UI references them by $ref).
 const (
 	soulStatusSchemaName    = "SoulStatus"
 	soulTransportSchemaName = "SoulTransport"
@@ -40,8 +40,9 @@ const (
 	soulTransportSchemaRef = "#/components/schemas/" + soulTransportSchemaName
 )
 
-// soulStatusEnum — статусы Soul в реестре. Состав — доменная истина (internal/soul.validStatus):
-// 6 значений. Рукопись :4207 несёт урезанный набор — named-схема следует домену (см. шапку).
+// soulStatusEnum — Soul statuses in the registry. The set is the domain truth
+// (internal/soul.validStatus): 6 values. The hand-written spec :4207 carries a trimmed set — the
+// named schema follows the domain (see the header).
 var soulStatusEnum = []any{
 	string(soul.StatusPending),
 	string(soul.StatusConnected),
@@ -51,7 +52,7 @@ var soulStatusEnum = []any{
 	string(soul.StatusDestroyed),
 }
 
-// soulTransportEnum — способ доставки конфигурации. Состав — доменная истина
+// soulTransportEnum — the configuration delivery method. The set is the domain truth
 // (internal/soul.validTransport): agent / ssh.
 var soulTransportEnum = []any{
 	string(soul.TransportAgent),
@@ -63,11 +64,13 @@ const soulStatusDescription = "Статус Soul в реестре."
 const soulTransportDescription = "Способ доставки конфигурации. agent — демон soul поверх " +
 	"mTLS gRPC stream; ssh — push без агента."
 
-	// SchemaProvider-цели — NATIVE enum-типы SoulStatus / SoulTransport (huma_enums.go, T5d-2c-full
-	// Phase 1). native enum-типы сами реализуют huma.SchemaProvider (выносят named-схемы "SoulStatus"/
-	// "SoulTransport" с доменным enum-набором и $ref). Константы schemaName/Ref/Enum/Description выше —
-	// общая истина, читаемая методами Schema() native-типов.
+	// SchemaProvider targets — the NATIVE enum types SoulStatus / SoulTransport (huma_enums.go,
+	// T5d-2c-full Phase 1). The native enum types implement huma.SchemaProvider themselves (emitting
+	// the named schemas "SoulStatus"/"SoulTransport" with the domain enum set and $ref). The
+	// schemaName/Ref/Enum/Description constants above are the shared truth read by the native types'
+	// Schema() methods.
 	//
-	// handler-native T5d: reply/get/list-Body несут native SoulStatus/SoulTransport НАПРЯМУЮ (поля
-	// проецируются из доменных Soul*View плоских string-ов), поэтому отдельный RegisterTypeAlias
-	// SoulStatus → native более НЕ нужен (нет ни одного SoulStatus-поля в reflected-Body).
+	// handler-native T5d: reply/get/list Body carry native SoulStatus/SoulTransport DIRECTLY (fields
+	// are projected from the domain Soul*View flat strings), so a separate RegisterTypeAlias
+	// SoulStatus → native is no longer needed (there is not a single SoulStatus field in the
+	// reflected Body).

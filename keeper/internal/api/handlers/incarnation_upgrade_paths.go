@@ -1,9 +1,9 @@
 package handlers
 
-// GET /v1/incarnations/{name}/upgrade-paths (ADR-0068 §6) — READ-анализ путей
-// апгрейда инкарнации. Отдельный файл (не incarnation_typed.go), чтобы не
-// конфликтовать с upgrade-флоу Slice 2. Read-only переиспользование строительных
-// блоков incarnation.PrepareUpgrade (резолв+загрузка+анализ) БЕЗ смены пина/запуска.
+// GET /v1/incarnations/{name}/upgrade-paths (ADR-0068 §6) — READ analysis of
+// incarnation upgrade paths. A separate file (not incarnation_typed.go) to avoid
+// conflicting with the Slice 2 upgrade flow. Read-only reuse of the
+// incarnation.PrepareUpgrade building blocks (resolve+load+analyze) without changing the pin or running.
 
 import (
 	"context"
@@ -17,36 +17,36 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
 )
 
-// Направления перехода (ADR-0068 §6, on-demand анализ одной цели).
+// Transition directions (ADR-0068 §6, on-demand analysis of a single target).
 const (
-	upgradeDirectionNoop       = "no-op"       // to==пин И схема цели==текущая
-	upgradeDirectionDowngrade  = "downgrade"   // схема цели < текущей (forward-only, ADR-019)
-	upgradeDirectionForward    = "forward"     // схема цели > текущей
-	upgradeDirectionSameSchema = "same-schema" // схемы равны, ref другой (ref-bump)
+	upgradeDirectionNoop       = "no-op"       // to==pin AND target schema==current
+	upgradeDirectionDowngrade  = "downgrade"   // target schema < current (forward-only, ADR-019)
+	upgradeDirectionForward    = "forward"     // target schema > current
+	upgradeDirectionSameSchema = "same-schema" // schemas equal, different ref (ref-bump)
 )
 
-// Режимы наличия upgrade-сценария для перехода (ADR-0068 §5).
+// Modes for whether an upgrade scenario exists for the transition (ADR-0068 §5).
 const (
-	upgradeModeFound  = "found"  // есть upgrade-сценарий, чей from ⊇ текущего пина
-	upgradeModeLegacy = "legacy" // нет — апгрейд ушёл бы в drift без host-оркестрации
+	upgradeModeFound  = "found"  // an upgrade scenario exists whose from ⊇ current pin
+	upgradeModeLegacy = "legacy" // none — the upgrade would drift without host orchestration
 )
 
-// IncarnationUpgradePathsView — ПЛОСКАЯ доменная проекция GET .../upgrade-paths.
-// Два режима одного эндпоинта (ADR-0068 §6):
-//   - дешёвый (toRef==""): заполнен Paths — теги реестра сервиса + пометка is_current;
-//     направление/found НЕ вычисляем (ADR-007 запрет semver-парсинга — по именам тегов
-//     направление недостоверно).
-//   - on-demand (toRef!=""): заполнен Target — анализ ОДНОЙ цели (direction/mode/slug/
+// IncarnationUpgradePathsView — a FLAT domain projection of GET .../upgrade-paths.
+// Two modes of one endpoint (ADR-0068 §6):
+//   - cheap (toRef==""): Paths is filled — service registry tags + an is_current mark;
+//     direction/found are NOT computed (ADR-007 bans semver parsing — direction is
+//     unreliable from tag names).
+//   - on-demand (toRef!=""): Target is filled — analysis of a SINGLE target (direction/mode/slug/
 //     state_migrations).
 type IncarnationUpgradePathsView struct {
-	CurrentVersion            string                 // inc.ServiceVersion (текущий пин)
+	CurrentVersion            string                 // inc.ServiceVersion (current pin)
 	CurrentStateSchemaVersion int                    // inc.StateSchemaVersion
-	Paths                     []UpgradePathRefView   // дешёвый режим (nil в on-demand)
-	Target                    *UpgradePathTargetView // on-demand (nil в дешёвом)
+	Paths                     []UpgradePathRefView   // cheap mode (nil in on-demand)
+	Target                    *UpgradePathTargetView // on-demand (nil in cheap)
 }
 
-// UpgradePathRefView — один git-ref реестра сервиса (дешёвый режим). IsCurrent —
-// no-op-пометка ref == inc.ServiceVersion (ADR-0068 §6).
+// UpgradePathRefView — one git ref of the service registry (cheap mode). IsCurrent —
+// a no-op mark ref == inc.ServiceVersion (ADR-0068 §6).
 type UpgradePathRefView struct {
 	Ref       string
 	Type      string // tag | branch (artifact.GitRef.Type)
@@ -54,37 +54,37 @@ type UpgradePathRefView struct {
 	IsCurrent bool
 }
 
-// UpgradePathTargetView — read-only анализ одной цели (on-demand). Срез
-// incarnation.PrepareUpgrade без смены пина/запуска (ADR-0068 §6).
+// UpgradePathTargetView — read-only analysis of a single target (on-demand). A slice of
+// incarnation.PrepareUpgrade without changing the pin or running (ADR-0068 §6).
 type UpgradePathTargetView struct {
 	To                       string
-	ResolvedCommit           string // art.SHA1 снапшота цели
+	ResolvedCommit           string // art.SHA1 of the target snapshot
 	TargetStateSchemaVersion int
 	Direction                string // no-op | downgrade | forward | same-schema
 	Mode                     string // found | legacy
-	Slug                     string // slug upgrade-сценария при found
-	Downgrade                bool   // цель ниже по схеме → цепочку НЕ грузим (forward-only)
-	// Reachable — цель достижима апгрейдом. false ТОЛЬКО при структурно битой цепочке
-	// миграций (unreachable_reason); downgrade/no-op — reachable=true (это другое
-	// направление, сигналится Direction, а не «недостижимость»).
+	Slug                     string // slug of the upgrade scenario when found
+	Downgrade                bool   // target is lower by schema → chain NOT loaded (forward-only)
+	// Reachable — the target is reachable by upgrade. false ONLY when the migration
+	// chain is structurally broken (unreachable_reason); downgrade/no-op → reachable=true
+	// (that is a different direction, signaled by Direction, not "unreachability").
 	Reachable bool
-	// UnreachableReason — машинная причина недостижимости (пусто при reachable=true).
+	// UnreachableReason — machine-readable reason for unreachability (empty when reachable=true).
 	UnreachableReason string
-	// StateMigrations — применяемая цепочка current→target (форма {from,to,path}).
-	// При downgrade / битой цепочке — пусто (не грузим / собрать нельзя).
+	// StateMigrations — the applied current→target chain (shape {from,to,path}).
+	// On downgrade / broken chain — empty (not loaded / cannot be assembled).
 	StateMigrations []artifact.Migration
 }
 
-// UpgradePathsTyped — GET /v1/incarnations/{name}/upgrade-paths (READ, без audit,
-// ADR-0068 §6). toRef=="" → дешёвый список тегов; toRef!="" → on-demand анализ цели.
-// inScope — scope-предикат оператора (как GetTyped): вне scope → 404 (не палим
-// существование). Read-only: пин НЕ меняется, апгрейд НЕ выполняется.
+// UpgradePathsTyped — GET /v1/incarnations/{name}/upgrade-paths (READ, no audit,
+// ADR-0068 §6). toRef=="" → cheap tag list; toRef!="" → on-demand target analysis.
+// inScope — operator scope predicate (like GetTyped): out of scope → 404 (do not leak
+// existence). Read-only: the pin is NOT changed, the upgrade is NOT executed.
 func (h *IncarnationHandler) UpgradePathsTyped(ctx context.Context, name, toRef string, inScope func(*incarnation.Incarnation) bool) (IncarnationUpgradePathsView, error) {
 	var zero IncarnationUpgradePathsView
 	if !incarnation.ValidName(name) {
 		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
 	}
-	// existence-probe + scope: not-found / вне scope → 404 (не палим существование).
+	// existence-probe + scope: not-found / out of scope → 404 (do not leak existence).
 	inc, err := h.existenceProbeInScope(ctx, name, inScope, "upgrade-paths")
 	if err != nil {
 		return zero, err
@@ -110,10 +110,10 @@ func (h *IncarnationHandler) UpgradePathsTyped(ctx context.Context, name, toRef 
 	return view, nil
 }
 
-// upgradePathsCheap — дешёвый режим (ADR-0068 §6): ls-remote тегов реестра сервиса +
-// пометка is_current. Тот же источник, что ServiceHandler.ListRefsTyped (h.services.
-// Resolve → git-координаты, h.refs.ListRefs → теги). Направление/found НЕ вычисляем
-// (ADR-007 запрет semver-парсинга; недостоверно по именам тегов) — это on-demand ?to=.
+// upgradePathsCheap — cheap mode (ADR-0068 §6): ls-remote of service registry tags +
+// an is_current mark. Same source as ServiceHandler.ListRefsTyped (h.services.
+// Resolve → git coordinates, h.refs.ListRefs → tags). Direction/found are NOT computed
+// (ADR-007 bans semver parsing; unreliable from tag names) — that is on-demand ?to=.
 func (h *IncarnationHandler) upgradePathsCheap(ctx context.Context, inc *incarnation.Incarnation) ([]UpgradePathRefView, error) {
 	if h.refs == nil {
 		return nil, incProblem(problem.TypeInternalError, "service refs lister is not configured")
@@ -143,9 +143,9 @@ func (h *IncarnationHandler) upgradePathsCheap(ctx context.Context, inc *incarna
 	return out, nil
 }
 
-// upgradePathsTarget — on-demand анализ ОДНОЙ цели (ADR-0068 §6): загрузка снапшота
-// toRef → direction / mode(found|legacy) / state_migrations. Read-only срез
-// incarnation.PrepareUpgrade — пин НЕ меняется, апгрейд НЕ выполняется.
+// upgradePathsTarget — on-demand analysis of a SINGLE target (ADR-0068 §6): load the
+// toRef snapshot → direction / mode(found|legacy) / state_migrations. Read-only slice of
+// incarnation.PrepareUpgrade — the pin is NOT changed, the upgrade is NOT executed.
 func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarnation.Incarnation, toRef string) (*UpgradePathTargetView, error) {
 	if h.services == nil || h.loader == nil {
 		return nil, incProblem(problem.TypeInternalError, "service loader is not configured")
@@ -171,7 +171,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		To:                       toRef,
 		ResolvedCommit:           art.SHA1,
 		TargetStateSchemaVersion: target,
-		Reachable:                true, // сбрасывается в false только на битой цепочке
+		Reachable:                true, // reset to false only on a broken chain
 	}
 	switch {
 	case target < current:
@@ -185,10 +185,10 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		tgt.Direction = upgradeDirectionSameSchema
 	}
 
-	// mode found/legacy — ТОЛЬКО для апгрейд-направлений (forward/same-schema): при
-	// downgrade/no-op семантически бессмыслен, ListUpgrades не дёргаем. Скан upgrade/
-	// цели, матч from ⊇ текущего пина (ResolveUpgradeScenario). Сбой скана уводим в
-	// legacy (ADR-0068 §5★ fail-open): upgrade-paths честно показывает, ЧТО произойдёт.
+	// mode found/legacy — ONLY for upgrade directions (forward/same-schema): on
+	// downgrade/no-op it is semantically meaningless, so ListUpgrades is skipped. Scan the
+	// target's upgrade/, match from ⊇ current pin (ResolveUpgradeScenario). A scan failure
+	// falls back to legacy (ADR-0068 §5★ fail-open): upgrade-paths honestly shows WHAT would happen.
 	if tgt.Direction == upgradeDirectionForward || tgt.Direction == upgradeDirectionSameSchema {
 		upgrades, uerr := h.loader.ListUpgrades(art)
 		if uerr != nil {
@@ -203,25 +203,25 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		}
 	}
 
-	// state_migrations — применяемая цепочка current→target. При downgrade НЕ грузим
-	// (forward-only, ADR-019; LoadMigrationChain на from>to вернул бы ошибку).
+	// state_migrations — the applied current→target chain. On downgrade it is NOT loaded
+	// (forward-only, ADR-019; LoadMigrationChain on from>to would return an error).
 	if !tgt.Downgrade {
 		chain, cerr := h.loader.LoadMigrationChain(art, current, target)
 		if cerr != nil {
 			if errors.Is(cerr, artifact.ErrMigrationChainBroken) {
-				// Preview-эндпоинт (ADR-0068 §6): структурно битая цепочка — недостижимая
-				// цель как ДАННЫЕ, НЕ HTTP-ошибка. direction/mode уже вычислены (forward,
-				// found/legacy), цепочку собрать нельзя → reachable=false + причина,
-				// state_migrations пуст. Оператор видит «сюда перейти нельзя», не 4xx.
+				// Preview endpoint (ADR-0068 §6): a structurally broken chain — an unreachable
+				// target as DATA, NOT an HTTP error. direction/mode are already computed (forward,
+				// found/legacy), the chain cannot be assembled → reachable=false + reason,
+				// state_migrations empty. The operator sees "cannot move here", not a 4xx.
 				h.logger.Warn("incarnation.upgrade-paths: target unreachable — migration chain broken",
 					slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
 				tgt.Reachable = false
 				tgt.UnreachableReason = "migration chain to " + toRef + " is broken: " + cerr.Error()
 				return tgt, nil
 			}
-			// Прочий сбой (парс кривого migrations/-файла / I/O уже материализованного
-			// снапшота) = keeper-internal дефект → 500 (parity UpgradeTyped default). 502
-			// оставлен ТОЛЬКО за loader.Load — там виновник реально внешний git.
+			// Any other failure (parsing a malformed migrations/ file / I/O of an already
+			// materialized snapshot) = keeper-internal defect → 500 (parity UpgradeTyped default). 502
+			// is reserved ONLY for loader.Load — there the culprit is genuinely external git.
 			h.logger.Error("incarnation.upgrade-paths: load migration chain failed",
 				slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
 			return nil, incProblem(problem.TypeInternalError, "load migration chain to "+toRef+" failed")
@@ -231,10 +231,10 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 	return tgt, nil
 }
 
-// upgradeMigrationSteps проецирует применяемую цепочку в {from,to,path}-форму
-// ([artifact.Migration]). Path — каноническое имя файла миграции (docs/migrations.md,
-// migrations/<NNN>_to_<MMM>.yml) из собственных версий шага (display-путь, не
-// дублирование логики LoadMigrationChain).
+// upgradeMigrationSteps projects the applied chain into the {from,to,path} shape
+// ([artifact.Migration]). Path — the canonical migration file name (docs/migrations.md,
+// migrations/<NNN>_to_<MMM>.yml) from the step's own versions (a display path, not a
+// duplication of LoadMigrationChain logic).
 func upgradeMigrationSteps(chain statemigrate.Chain) []artifact.Migration {
 	steps := make([]artifact.Migration, 0, len(chain))
 	for _, m := range chain {

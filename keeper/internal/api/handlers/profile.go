@@ -14,18 +14,18 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// ProfileHandler — endpoints CRUD реестра Cloud-Profile-ей (`profiles`,
-// ADR-017, docs/keeper/cloud.md). Тонкая обёртка над [profile.Service] (один
-// источник правды REST↔MCP). Profile — VM-spec поверх Provider-а.
+// ProfileHandler — CRUD endpoints for the Cloud Profile registry (`profiles`,
+// ADR-017, docs/keeper/cloud.md). A thin wrapper over [profile.Service] (single
+// source of truth REST↔MCP). Profile is a VM spec on top of a Provider.
 //
-// Секрет-гигиена: VALUE params в audit НЕ кладутся (только ключи); freeform
-// VM-spec может нести чувствительные значения.
+// Secret hygiene: VALUE params are NOT put into audit (keys only); a freeform
+// VM spec may carry sensitive values.
 type ProfileHandler struct {
 	svc    *profile.Service
 	logger *slog.Logger
 }
 
-// NewProfileHandler создаёт handler. svc обязателен (panic при nil).
+// NewProfileHandler builds the handler. svc is required (panics on nil).
 func NewProfileHandler(svc *profile.Service, logger *slog.Logger) *ProfileHandler {
 	if svc == nil {
 		panic("handlers.NewProfileHandler: profile.Service is nil")
@@ -36,13 +36,13 @@ func NewProfileHandler(svc *profile.Service, logger *slog.Logger) *ProfileHandle
 	return &ProfileHandler{svc: svc, logger: logger}
 }
 
-// ProfileSpecStub — непустая заглушка для генерации huma-OpenAPI-фрагмента.
+// ProfileSpecStub — a non-empty stub for generating the huma OpenAPI fragment.
 func ProfileSpecStub() *ProfileHandler {
 	return &ProfileHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ProfileCreateInput — NATIVE request-форма POST /v1/profiles (handler-native).
-// Params — опц. указатель (nil → {}); CloudInit — опц. userdata.
+// ProfileCreateInput — the NATIVE request shape of POST /v1/profiles (handler-native).
+// Params — optional pointer (nil → {}); CloudInit — optional userdata.
 type ProfileCreateInput struct {
 	Name      string
 	Provider  string
@@ -50,9 +50,9 @@ type ProfileCreateInput struct {
 	CloudInit *string
 }
 
-// ProfileView — ПЛОСКАЯ wire-форма Profile-а (Create-201 / Get-200 / list-element).
-// params нормализован nil→{}; cloud_init / created_by_aid — опц. указатели;
-// created_at — наносекундный time-wire.
+// ProfileView — the FLAT wire shape of a Profile (Create-201 / Get-200 / list element).
+// params normalized nil→{}; cloud_init / created_by_aid — optional pointers;
+// created_at — nanosecond time-wire.
 type ProfileView struct {
 	Name         string
 	Provider     string
@@ -62,7 +62,7 @@ type ProfileView struct {
 	CreatedByAID *string
 }
 
-// ProfileListPage — доменный paged-результат GET /v1/profiles (handler-native).
+// ProfileListPage — the domain paged result of GET /v1/profiles (handler-native).
 type ProfileListPage struct {
 	Items  []ProfileView
 	Offset int
@@ -85,8 +85,8 @@ func toProfileView(p *profile.Profile) ProfileView {
 	}
 }
 
-// ProfileWriteReply — результат CreateTyped: 201-тело + audit-поля (name +
-// provider + params_keys без values).
+// ProfileWriteReply — the result of CreateTyped: 201 body + audit fields (name +
+// provider + params_keys without values).
 type ProfileWriteReply struct {
 	Body       ProfileView
 	Name       string
@@ -94,7 +94,7 @@ type ProfileWriteReply struct {
 	ParamsKeys []string
 }
 
-// AuditPayload собирает audit-payload create-роута. VALUE params НЕ пишутся.
+// AuditPayload builds the audit payload of the create route. VALUE params are NOT written.
 func (r ProfileWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":        r.Name,
@@ -103,19 +103,19 @@ func (r ProfileWriteReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// ProfileDeleteReply — результат DeleteTyped (audit-поля; HTTP-ответ 204).
+// ProfileDeleteReply — the result of DeleteTyped (audit fields; HTTP response 204).
 type ProfileDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload delete-роута.
+// AuditPayload builds the audit payload of the delete route.
 func (r ProfileDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// CreateTyped — доменная функция POST /v1/profiles (handler-native): валидация
-// name/provider + svc.Create + sentinel→problem. 409 на дубль name; 422 на
-// ссылку на несуществующий Provider (FK) или битый name/provider.
+// CreateTyped — the domain function POST /v1/profiles (handler-native): validates
+// name/provider + svc.Create + sentinel→problem. 409 on duplicate name; 422 on
+// a reference to a nonexistent Provider (FK) or a bad name/provider.
 func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req ProfileCreateInput) (ProfileWriteReply, error) {
 	var zero ProfileWriteReply
 	if req.Name == "" {
@@ -167,7 +167,7 @@ func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Clai
 	}
 }
 
-// GetTyped — доменная функция GET /v1/profiles/{name} (read, БЕЗ audit).
+// GetTyped — the domain function GET /v1/profiles/{name} (read, no audit).
 func (h *ProfileHandler) GetTyped(ctx context.Context, name string) (ProfileView, error) {
 	var zero ProfileView
 	if !profile.ValidName(name) {
@@ -186,7 +186,7 @@ func (h *ProfileHandler) GetTyped(ctx context.Context, name string) (ProfileView
 	}
 }
 
-// DeleteTyped — доменная функция DELETE /v1/profiles/{name}: 404 на отсутствие.
+// DeleteTyped — the domain function DELETE /v1/profiles/{name}: 404 when absent.
 func (h *ProfileHandler) DeleteTyped(ctx context.Context, name string) (ProfileDeleteReply, error) {
 	var zero ProfileDeleteReply
 	if !profile.ValidName(name) {
@@ -205,8 +205,8 @@ func (h *ProfileHandler) DeleteTyped(ctx context.Context, name string) (ProfileD
 	}
 }
 
-// ListTyped — доменная функция GET /v1/profiles (read-with-typed-query, БЕЗ
-// audit). providerFilter непуст → список профилей одного Provider-а.
+// ListTyped — the domain function GET /v1/profiles (read with typed query, no
+// audit). providerFilter non-empty → profiles of a single Provider.
 func (h *ProfileHandler) ListTyped(ctx context.Context, providerFilter string, offset, limit int) (ProfileListPage, error) {
 	var zero ProfileListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {

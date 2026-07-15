@@ -26,95 +26,95 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// VoyageStore — узкая поверхность CRUD-а пакета [voyage] для S5 HTTP/MCP
-// handler-а:
+// VoyageStore — a narrow CRUD surface of the [voyage] package for the S5 HTTP/MCP
+// handler:
 //
-//   - ExecQueryRower — read (SelectByID/List/SelectTargets) + cancel-UPDATE без
-//     транзакции;
-//   - BeginTx — atomic Insert + InsertTargets (snapshot-scope в одной PG-tx,
-//     ADR-043: набор единиц не «дрожит» между INSERT-ами).
+//   - ExecQueryRower — read (SelectByID/List/SelectTargets) + cancel-UPDATE without
+//     a transaction;
+//   - BeginTx — atomic Insert + InsertTargets (snapshot-scope in one PG tx,
+//     ADR-043: the unit set does not "jitter" between INSERTs).
 //
-// Claim/Lease/Finalize живут в [voyageorch.VoyageWorker]. Реальный *pgxpool.Pool
-// удовлетворяет; unit-тесты — fake.
+// Claim/Lease/Finalize live in [voyageorch.VoyageWorker]. A real *pgxpool.Pool
+// satisfies it; unit tests use a fake.
 type VoyageStore interface {
 	voyage.ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// TidingInvalidator — узкая поверхность двухуровневой инвалидации снимка
-// Tiding-правил dispatcher-а (in-process InvalidateRules + cross-keeper Redis
-// publish). Нужна voyage.create-пути, который вставляет ephemeral-Tiding-и из
-// notify прямым herald.InsertTiding в свою voyage-tx, В ОБХОД
-// herald.Service-CRUD (и его инвалидации). Без явного вызова после commit
-// dispatcher держит правило за TTL-снимком (DefaultRuleCacheTTL=15s) и быстрый
-// прогон (~5s) диспетчит терминал против устаревшего снимка → разовое
-// уведомление молча промахивается (race, подтверждён architect-ом).
+// TidingInvalidator — a narrow surface for two-level invalidation of the
+// dispatcher's Tiding-rule snapshot (in-process InvalidateRules + cross-keeper Redis
+// publish). Needed by the voyage.create path, which inserts ephemeral Tidings from
+// notify via a direct herald.InsertTiding into its own voyage-tx, BYPASSING
+// herald.Service CRUD (and its invalidation). Without an explicit call after commit
+// the dispatcher holds the rule behind a TTL snapshot (DefaultRuleCacheTTL=15s) and a fast
+// run (~5s) dispatches the terminal against a stale snapshot → the one-shot
+// notification silently misses (race, confirmed by the architect).
 //
-// Реализуется [*herald.Service] (метод InvalidateTidings) — single source of
-// truth по инвалидатору/Redis-publisher. nil → no-op (dev без herald/Redis:
-// деградация на TTL-сходимость, как было).
+// Implemented by [*herald.Service] (method InvalidateTidings) — single source of
+// truth for the invalidator/Redis publisher. nil → no-op (dev without herald/Redis:
+// degrades to TTL convergence, as before).
 type TidingInvalidator interface {
 	InvalidateTidings(ctx context.Context, name string)
 }
 
-// VoyageHandler — handler-ы endpoints Voyage (ADR-043, S5):
+// VoyageHandler — handlers for the Voyage endpoints (ADR-043, S5):
 //
-//	POST   /v1/voyages              — создать Voyage (kind=scenario|command).
+//	POST   /v1/voyages              — create a Voyage (kind=scenario|command).
 //	GET    /v1/voyages              — paged list (filter kind/status).
 //	GET    /v1/voyages/{id}         — snapshot (detail + summary).
 //	GET    /v1/voyages/{id}/targets — All-runs drill (per-target batch/status/back-link).
 //	DELETE /v1/voyages/{id}         — cancel pending/scheduled (running-cancel — post-MVP).
 //
-// RBAC-by-kind (ADR-043 §6, security-критичный fail-closed guard): POST
-// выбирает permission ПО kind из ТЕЛА — scenario→incarnation.run,
-// command→errand.run. Middleware-route это сделать не может (kind виден только
-// после декода body), поэтому permission-проверка живёт ВНУТРИ Create (router
-// навешивает только RequireJWT). GET/list — read-permission по соответствующему
-// пространству (incarnation.history для scenario-read parity Tide; общий вход —
-// см. router.go: list/detail/targets гейтятся incarnation.history, как Tide).
+// RBAC-by-kind (ADR-043 §6, security-critical fail-closed guard): POST
+// picks the permission BY kind from the BODY — scenario→incarnation.run,
+// command→errand.run. A middleware route cannot do this (kind is visible only
+// after decoding the body), so the permission check lives INSIDE Create (the router
+// only wires RequireJWT). GET/list — read permission on the corresponding
+// namespace (incarnation.history for scenario-read parity with Tide; common entry —
+// see router.go: list/detail/targets are gated by incarnation.history, like Tide).
 //
-// Зависимости опциональны (паттерн TideHandler / ErrandRunHandler): router.go
-// проверяет handler==nil. enforcer/store/scenarioResolver/commandResolver —
-// обязательны для production-маршрутов; incReader нужен RBAC-by-kind scenario-
-// gate-у. auditW может быть nil (dev без audit).
+// Dependencies are optional (TideHandler / ErrandRunHandler pattern): router.go
+// checks handler==nil. enforcer/store/scenarioResolver/commandResolver are
+// required for production routes; incReader is needed by the RBAC-by-kind scenario
+// gate. auditW may be nil (dev without audit).
 type VoyageHandler struct {
 	store            VoyageStore
 	scenarioResolver VoyageScenarioResolver
 	commandResolver  VoyageCommandResolver
 	incReader        IncarnationContextReader
 	enforcer         middleware.PermissionChecker
-	// scoper — read-поверхность scope-границы оператора (ADR-047 S4). Используется
-	// command-путём для пересечения target ∩ Purview (errand.run): тот же резолвер,
-	// что фильтрует `GET /v1/souls`. nil → command-резолв деградирует на cluster-
-	// wide (backcompat unit-тестов без БД-scope; production-wire-up передаёт
+	// scoper — the read surface of the operator's scope boundary (ADR-047 S4). Used by
+	// the command path to intersect target ∩ Purview (errand.run): the same resolver
+	// that filters `GET /v1/souls`. nil → command resolve degrades to cluster-
+	// wide (backcompat for unit tests without DB scope; production wire-up passes
 	// rbac.Holder).
 	scoper PurviewResolver
 	auditW audit.Writer
-	// tidingInvalidator сбрасывает TTL-снимок Tiding-правил dispatcher-а после
-	// commit voyage-tx с ephemeral-notify (ADR-052(g) race-fix). nil → no-op
-	// (dev без herald: деградация на TTL-сходимость).
+	// tidingInvalidator flushes the dispatcher's TTL Tiding-rule snapshot after
+	// committing a voyage-tx with ephemeral notify (ADR-052(g) race-fix). nil → no-op
+	// (dev without herald: degrades to TTL convergence).
 	tidingInvalidator TidingInvalidator
-	// maxScope — верхний лимит размера резолвнутого scope (DoS-guard S-med-3).
-	// 0 → безлимит. Резолвится из cfg.Voyage.ResolvedMaxScope() в конструкторе.
+	// maxScope — upper limit on the resolved scope size (DoS-guard S-med-3).
+	// 0 → unlimited. Resolved from cfg.Voyage.ResolvedMaxScope() in the constructor.
 	maxScope int
-	// maxBatchSize — верхний предел эффективного размера батча/окна (DoS-guard
-	// S-W4): batch_size для barrier, concurrency для window. 0 → без предела.
-	// Резолвится из cfg.Voyage.ResolvedMaxBatchSize() в конструкторе.
+	// maxBatchSize — upper bound on the effective batch/window size (DoS-guard
+	// S-W4): batch_size for barrier, concurrency for window. 0 → no limit.
+	// Resolved from cfg.Voyage.ResolvedMaxBatchSize() in the constructor.
 	maxBatchSize int
 	logger       *slog.Logger
 }
 
-// NewVoyageHandler собирает handler. logger=nil → discard. store /
-// scenarioResolver / commandResolver / enforcer — обязательны для production-
-// маршрутов; incReader нужен RBAC-by-kind scenario-gate-у (без него scenario-
-// create fail-closed отвергает scoped-роли). scoper нужен command-пути для
-// target ∩ Purview (ADR-047 S4); nil → command-резолв cluster-wide (backcompat
-// unit-тестов). auditW допускает nil. tidingInvalidator сбрасывает TTL-снимок
-// dispatcher-а после commit voyage-tx с ephemeral-notify (ADR-052(g) race-fix);
-// nil → no-op (dev без herald). maxScope —
-// верхний лимит размера резолвнутого scope (DoS-guard S-med-3); 0 → безлимит
-// (caller передаёт cfg.Voyage.ResolvedMaxScope()). maxBatchSize — верхний предел
-// размера батча/окна (DoS-guard S-W4); 0 → без предела
+// NewVoyageHandler builds the handler. logger=nil → discard. store /
+// scenarioResolver / commandResolver / enforcer are required for production
+// routes; incReader is needed by the RBAC-by-kind scenario gate (without it
+// scenario-create fail-closed rejects scoped roles). scoper is needed by the command path for
+// target ∩ Purview (ADR-047 S4); nil → command resolve cluster-wide (backcompat
+// for unit tests). auditW may be nil. tidingInvalidator flushes the dispatcher's
+// TTL snapshot after committing a voyage-tx with ephemeral notify (ADR-052(g) race-fix);
+// nil → no-op (dev without herald). maxScope —
+// upper limit on the resolved scope size (DoS-guard S-med-3); 0 → unlimited
+// (caller passes cfg.Voyage.ResolvedMaxScope()). maxBatchSize — upper bound on the
+// batch/window size (DoS-guard S-W4); 0 → no limit
 // (cfg.Voyage.ResolvedMaxBatchSize()).
 func NewVoyageHandler(
 	store VoyageStore,
@@ -147,43 +147,43 @@ func NewVoyageHandler(
 	}
 }
 
-// Конфигурационные лимиты POST-валидации (parity ErrandRun / Tide).
+// Configuration limits for POST validation (parity ErrandRun / Tide).
 const (
-	// voyageDefaultConcurrency — default степень параллелизма внутри Leg (parity
+	// voyageDefaultConcurrency — default parallelism within a Leg (parity
 	// errandRunDefaultConcurrency).
 	voyageDefaultConcurrency = 50
-	// voyageMaxConcurrency — верхняя граница concurrency (parity ErrandRun
-	// MaxConcurrency = 500; CHECK voyages_concurrency_positive не ограничивает
-	// сверху, cap — invariant handler-а).
+	// voyageMaxConcurrency — upper bound on concurrency (parity ErrandRun
+	// MaxConcurrency = 500; CHECK voyages_concurrency_positive does not cap from
+	// above, the cap is a handler invariant).
 	voyageMaxConcurrency = 500
-	// voyageMaxWhereBytes — DoS-guard для CEL-предиката command-target.where
+	// voyageMaxWhereBytes — DoS-guard for the CEL predicate of command-target.where
 	// (parity errandRunMaxWhereBytes = 4 KiB).
 	voyageMaxWhereBytes = 4096
 )
 
 // --- POST /v1/voyages ---
 
-// voyageCreateRequest — POST body. snake_case. unknown-поля отвергаем.
+// voyageCreateRequest — POST body. snake_case. Unknown fields are rejected.
 //
-// НЕ alias на [VoyageCreateRequest] (ADR-051 — соображения soulCreateRequest):
-// несёт server-only computed-поле `maxFailuresPercent` (не wire-поле — стешится в
-// applyMaxFailures, резолвится по scope) и мутируется in-place всей цепочкой
-// валидации (applyBatchSpec пишет BatchSize/BatchPercent, applyMaxFailures —
-// FailThreshold). Pure-alias на gen-тип (typed-enum Kind/BatchMode/OnFailure +
-// pointer-optional Target/Input) потребовал бы переписать security-критичный
-// kind-RBAC и batch-резолв ради нулевой wire-выгоды — структура побайтово
-// совпадает со схемой VoyageCreateRequest. Wire-shape сверен с oapi (categories
-// A: kind/scenario_name/module/scheduling/batch* — те же ключи и типы).
+// NOT an alias of [VoyageCreateRequest] (ADR-051 — soulCreateRequest reasoning):
+// carries the server-only computed field `maxFailuresPercent` (not a wire field — stashed in
+// applyMaxFailures, resolved by scope) and is mutated in-place by the whole
+// validation chain (applyBatchSpec writes BatchSize/BatchPercent, applyMaxFailures —
+// FailThreshold). A pure alias of the gen type (typed-enum Kind/BatchMode/OnFailure +
+// pointer-optional Target/Input) would require rewriting the security-critical
+// kind-RBAC and batch resolve for zero wire benefit — the struct is byte-for-byte
+// identical to the VoyageCreateRequest schema. Wire shape verified against oapi (categories
+// A: kind/scenario_name/module/scheduling/batch* — same keys and types).
 type voyageCreateRequest struct {
 	Kind         string               `json:"kind"`
 	ScenarioName string               `json:"scenario_name,omitempty"`
 	Module       string               `json:"module,omitempty"`
 	Input        map[string]any       `json:"input,omitempty"`
 	Target       *voyageTargetRequest `json:"target"`
-	// Batch — строковый размер батча ("N" хостов / "N%" от scope), S1 строковых
-	// batch-полей. Маппится на batch_size|batch_percent (см. applyBatchSpec).
-	// Конфликтует с batch_size/batch_percent (нельзя оба формата). nil ⇒ старый
-	// путь (batch_size/batch_percent как раньше).
+	// Batch — string batch size ("N" hosts / "N%" of scope), S1 of the string
+	// batch fields. Maps to batch_size|batch_percent (see applyBatchSpec).
+	// Conflicts with batch_size/batch_percent (cannot use both formats). nil ⇒ old
+	// path (batch_size/batch_percent as before).
 	Batch                *string    `json:"batch,omitempty"`
 	BatchSize            *int       `json:"batch_size,omitempty"`
 	BatchPercent         *int       `json:"batch_percent,omitempty"`
@@ -193,54 +193,54 @@ type voyageCreateRequest struct {
 	ScheduleAt           *time.Time `json:"schedule_at,omitempty"`
 	InterBatchIntervalMS *int       `json:"inter_batch_interval_ms,omitempty"`
 	InterUnitIntervalMS  *int       `json:"inter_unit_interval_ms,omitempty"`
-	// MaxFailures — строковый порог провалов ("N" абсолют / "N%" процент от единиц
-	// прогона), S2 строковых batch-полей (ADR-043 amendment 2026-06-09). На резолве
-	// распадается в FailThreshold (см. applyMaxFailures / resolveMaxFailuresPercent).
-	// Конфликтует с fail_threshold (нельзя оба формата). nil ⇒ старый путь
-	// (fail_threshold как раньше).
+	// MaxFailures — string failure threshold ("N" absolute / "N%" percent of run
+	// units), S2 of the string batch fields (ADR-043 amendment 2026-06-09). At resolve
+	// it decomposes into FailThreshold (see applyMaxFailures / resolveMaxFailuresPercent).
+	// Conflicts with fail_threshold (cannot use both formats). nil ⇒ old path
+	// (fail_threshold as before).
 	MaxFailures   *string `json:"max_failures,omitempty"`
 	FailThreshold *int    `json:"fail_threshold,omitempty"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     string  `json:"on_failure,omitempty"`
 
-	// Notify — разовые подписки на ЭТОТ прогон (ADR-052(g) amendment N2). Каждый
-	// элемент keeper материализует в ephemeral-Tiding (ephemeral=true, voyage_id=
-	// <новый voyage_id>) в ТОЙ ЖЕ транзакции, что создаёт Voyage. Атомарность даёт
-	// наличие правила в БД к коммиту, но не его видимость TTL-снимку dispatcher-а
-	// — после commit persist явно инвалидирует кэш (см. persist). nil/пусто ⇒ без
-	// уведомлений. НЕ alias на [VoyageNotify]: keeper выводит event_types из
-	// On по kind прогона (server-side маппинг), хранит annotations как сырой
-	// json.RawMessage для object-валидации (ValidateAnnotationsJSON).
+	// Notify — one-shot subscriptions to THIS run (ADR-052(g) amendment N2). keeper
+	// materializes each element into an ephemeral Tiding (ephemeral=true, voyage_id=
+	// <new voyage_id>) in the SAME transaction that creates the Voyage. Atomicity gives
+	// the rule's presence in the DB by commit, but not its visibility to the dispatcher's TTL snapshot
+	// — after commit, persist explicitly invalidates the cache (see persist). nil/empty ⇒ no
+	// notifications. NOT an alias of [VoyageNotify]: keeper derives event_types from
+	// On by run kind (server-side mapping), stores annotations as raw
+	// json.RawMessage for object validation (ValidateAnnotationsJSON).
 	Notify []voyageNotifyRequest `json:"notify,omitempty"`
 
-	// maxFailuresPercent — необёрнутый процент из max_failures="N%", застешенный
-	// applyMaxFailures для пост-scope резолва в абсолютный FailThreshold (зависит от
-	// числа единиц прогона, известного только после резолва target-а). nil ⇒ percent
-	// не задан (max_failures отсутствует, пуст либо абсолют — уже в FailThreshold).
+	// maxFailuresPercent — the unwrapped percent from max_failures="N%", stashed by
+	// applyMaxFailures for post-scope resolve into an absolute FailThreshold (depends on
+	// the number of run units, known only after target resolve). nil ⇒ percent
+	// not set (max_failures absent, empty, or absolute — already in FailThreshold).
 	maxFailuresPercent *int
 }
 
-// voyageTargetRequest — declarative target (резолвится в snapshot единиц).
-// scenario-режим читает Incarnations/Service/Coven; command-режим — SIDs/Coven/
-// Where. Поля, нерелевантные для kind, игнорируются (handler валидирует
-// непустоту нужного набора по kind).
+// voyageTargetRequest — a declarative target (resolved into a unit snapshot).
+// scenario mode reads Incarnations/Service/Coven; command mode — SIDs/Coven/
+// Where. Fields irrelevant to the kind are ignored (the handler validates that the
+// required set for the kind is non-empty).
 type voyageTargetRequest struct {
-	// scenario-режим:
+	// scenario mode:
 	Incarnations []string `json:"incarnations,omitempty"`
 	Service      string   `json:"service,omitempty"`
-	// command-режим:
+	// command mode:
 	SIDs  []string `json:"sids,omitempty"`
 	Where string   `json:"where,omitempty"`
-	// общий (env-тег incarnation для scenario / coven-метка хоста для command):
+	// shared (incarnation env tag for scenario / host coven label for command):
 	Coven []string `json:"coven,omitempty"`
 }
 
-// voyageNotifyRequest — один элемент блока notify: разовая подписка на этот
-// прогон (ADR-052(g)/(h)). Поля фильтров/тела совпадают с постоянным Tiding;
-// event_types НЕ задаётся клиентом — выводится keeper-ом из On по kind прогона
-// (см. notifyEventTypes). Annotations держим сырым json.RawMessage, чтобы
-// провалидировать «верхний уровень — object» (herald.ValidateAnnotationsJSON)
-// ДО распаковки в map.
+// voyageNotifyRequest — one element of the notify block: a one-shot subscription to this
+// run (ADR-052(g)/(h)). The filter/body fields match a permanent Tiding;
+// event_types is NOT set by the client — it is derived by keeper from On by run kind
+// (see notifyEventTypes). Annotations is kept as raw json.RawMessage to
+// validate "top level is an object" (herald.ValidateAnnotationsJSON)
+// BEFORE unpacking into a map.
 type voyageNotifyRequest struct {
 	Herald       string          `json:"herald"`
 	On           []string        `json:"on,omitempty"`
@@ -250,8 +250,8 @@ type voyageNotifyRequest struct {
 	Projection   []string        `json:"projection,omitempty"`
 }
 
-// voyageNotifyTerminal — допустимые значения notify.on (терминалы прогона,
-// маппятся в event_types по kind, см. notifyEventTypes). Closed-enum, зеркало
+// voyageNotifyTerminal — allowed values of notify.on (run terminals,
+// mapped to event_types by kind, see notifyEventTypes). Closed enum, mirror of
 // oapi VoyageNotifyOn.
 const (
 	notifyOnCompleted = "completed"
@@ -259,10 +259,10 @@ const (
 	notifyOnPartial   = "partial"
 )
 
-// voyageCreateReply — native 202 body (handler-native T5d). Плоская форма 1:1 с
-// прежним VoyageCreateReply (все required-скаляры; kind/status — plain string,
-// wire-байт идентичен string-named-enum). Сериализуется напрямую (MCP (w,r) writeJSON)
-// и проецируется в api.VoyageCreateReply (huma-schema). Конвертация из row — в
+// voyageCreateReply — native 202 body (handler-native T5d). Flat shape 1:1 with
+// the former VoyageCreateReply (all required scalars; kind/status — plain string,
+// wire byte identical to a string-named enum). Serialized directly (MCP (w,r) writeJSON)
+// and projected into api.VoyageCreateReply (huma schema). Conversion from a row — in
 // [VoyageHandler.newCreateReply].
 type voyageCreateReply struct {
 	Kind      string `json:"kind"`
@@ -272,47 +272,47 @@ type voyageCreateReply struct {
 	VoyageID  string `json:"voyage_id"`
 }
 
-// VoyageCreateReply / VoyagePreviewReply — экспортируемые алиасы reply-форм POST
-// /v1/voyages[/preview] для FULL-TYPED huma-конверта (ADR-054, батч-2f self-audit):
-// api-пакет (huma_voyage_op.go) собирает Body из reply-типа извлечённых CreateTyped/
-// PreviewTyped. Алиасы (не новые типы) — те же oapi-формы, что отдаёт легаси (w,r).
+// VoyageCreateReply / VoyagePreviewReply — exported aliases of the reply shapes of POST
+// /v1/voyages[/preview] for the FULL-TYPED huma envelope (ADR-054, batch-2f self-audit):
+// the api package (huma_voyage_op.go) builds Body from the reply type of the extracted CreateTyped/
+// PreviewTyped. Aliases (not new types) — the same oapi shapes the legacy (w,r) returns.
 type (
 	VoyageCreateReply  = voyageCreateReply
 	VoyagePreviewReply = voyagePreviewReply
-	// VoyageCreateRequest — экспортируемый алиас доменной формы тела POST
-	// /v1/voyages[/preview] для FULL-TYPED huma-конверта (ADR-054, батч-2f self-audit):
-	// api-пакет собирает её из typed huma-body и зовёт CreateTyped/PreviewTyped. Поля
-	// экспортированы (та же форма, что декодит легаси (w,r)); вложенные target/notify —
-	// [VoyageTargetRequest]/[VoyageNotifyRequest] (общие с Cadence). Computed-поле
-	// maxFailuresPercent — не wire, заполняется applyMaxFailures внутри валидации.
+	// VoyageCreateRequest — an exported alias of the domain body shape of POST
+	// /v1/voyages[/preview] for the FULL-TYPED huma envelope (ADR-054, batch-2f self-audit):
+	// the api package builds it from the typed huma body and calls CreateTyped/PreviewTyped. Fields
+	// are exported (the same shape the legacy (w,r) decodes); nested target/notify —
+	// [VoyageTargetRequest]/[VoyageNotifyRequest] (shared with Cadence). The computed field
+	// maxFailuresPercent — not wire, filled by applyMaxFailures during validation.
 	VoyageCreateRequest = voyageCreateRequest
 )
 
-// VoyageSpecStub — непустой *VoyageHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaVoyageSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки. Все зависимости nil — handler
-// никогда не исполняется в spec-режиме.
+// VoyageSpecStub — a non-empty *VoyageHandler stub for generating the huma OpenAPI
+// fragment (HumaVoyageSpecYAML): during dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op check. All dependencies nil — the handler
+// never executes in spec mode.
 func VoyageSpecStub() *VoyageHandler { return &VoyageHandler{} }
 
-// Create — POST /v1/voyages (ADR-043 §6 RBAC-by-kind, §4 target-резолв).
+// Create — POST /v1/voyages (ADR-043 §6 RBAC-by-kind, §4 target resolve).
 //
-// Контракт:
+// Contract:
 //   - 202 + {voyage_id, kind, scope_size, status, location}.
-//   - 400 — невалидный JSON.
-//   - 403 — RBAC deny по kind (scenario без incarnation.run / command без
-//     errand.run, либо хоть одна резолвнутая инкарнация вне scope).
-//   - 404 — явная инкарнация (scenario.incarnations[]) не существует.
-//   - 422 — невалидный kind / пустой scenario_name|module по kind / нет target /
-//     невалидный SID/coven/имя / where > 4 KiB / on_failure не из {abort,
-//     continue} / batch_size|concurrency <= 0 либо concurrency > max / пустой
-//     резолв (voyage_empty_target) / резолвнутый scope > voyage.max_scope
+//   - 400 — invalid JSON.
+//   - 403 — RBAC deny by kind (scenario without incarnation.run / command without
+//     errand.run, or at least one resolved incarnation out of scope).
+//   - 404 — an explicit incarnation (scenario.incarnations[]) does not exist.
+//   - 422 — invalid kind / empty scenario_name|module for the kind / no target /
+//     invalid SID/coven/name / where > 4 KiB / on_failure not in {abort,
+//     continue} / batch_size|concurrency <= 0 or concurrency > max / empty
+//     resolve (voyage_empty_target) / resolved scope > voyage.max_scope
 //     (voyage_scope_too_large, DoS-guard S-med-3).
-//   - 500 — store/resolver/enforcer не сконфигурирован / БД-сбой.
+//   - 500 — store/resolver/enforcer not configured / DB failure.
 //
-// RBAC-by-kind — fail-closed (ADR-043 §6): permission выбирается по kind ДО
-// резолва target-а (дешёвый bare-check), затем для scenario — per-incarnation
-// scope-check над резолвнутым набором (нельзя стартовать на инкарнации вне
-// permission-скоупа = privilege escalation).
+// RBAC-by-kind is fail-closed (ADR-043 §6): the permission is picked by kind BEFORE
+// target resolve (a cheap bare-check), then for scenario — a per-incarnation
+// scope-check over the resolved set (cannot start on an incarnation outside the
+// permission scope = privilege escalation).
 func (h *VoyageHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
@@ -338,12 +338,12 @@ func (h *VoyageHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, reply, h.logger)
 }
 
-// CreateTyped — извлечённая доменная функция POST /v1/voyages (FULL-TYPED ADR-054
-// §Pattern, батч-2f self-audit): kind-независимый guard (validateVoyageRequest) +
-// kind-ветка (createScenarioTyped/createCommandTyped) без http.ResponseWriter/*http.
-// Request. RBAC-by-kind (ADR-043 §6) и self-audit (scenario_run.started / command_run.
-// invoked) живут ВНУТРИ kind-веток. Декод тела — на вызывающем слое. req мутируется
-// in-place (валидация). *problemError при отказе, успех — voyageCreateReply (202).
+// CreateTyped — the extracted domain function POST /v1/voyages (FULL-TYPED ADR-054
+// §Pattern, batch-2f self-audit): kind-independent guard (validateVoyageRequest) +
+// kind branch (createScenarioTyped/createCommandTyped) without http.ResponseWriter/*http.
+// Request. RBAC-by-kind (ADR-043 §6) and self-audit (scenario_run.started / command_run.
+// invoked) live INSIDE the kind branches. Body decode — on the calling layer. req is mutated
+// in-place (validation). *problemError on failure, success — voyageCreateReply (202).
 func (h *VoyageHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest) (voyageCreateReply, error) {
 	var zero voyageCreateReply
 	if h.store == nil || h.scenarioResolver == nil || h.commandResolver == nil || h.enforcer == nil {
@@ -356,13 +356,13 @@ func (h *VoyageHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req
 	switch vc.kind {
 	case voyage.KindScenario:
 		return h.createScenarioTyped(ctx, claims, req, vc.onFailure, vc.concurrency, vc.batchMode)
-	default: // voyage.KindCommand (validateVoyageRequest гарантировал валидный kind)
+	default: // voyage.KindCommand (validateVoyageRequest guaranteed a valid kind)
 		return h.createCommandTyped(ctx, claims, req, vc.onFailure, vc.concurrency, vc.batchMode)
 	}
 }
 
-// voyageRequestCommon — kind-независимые параметры, резолвнутые на общем prelude
-// декода/валидации (см. decodeAndValidateRequest). Шарится Create и Preview.
+// voyageRequestCommon — kind-independent parameters resolved in the common decode/
+// validation prelude (see decodeAndValidateRequest). Shared by Create and Preview.
 type voyageRequestCommon struct {
 	kind        voyage.Kind
 	onFailure   voyage.OnFailure
@@ -370,25 +370,25 @@ type voyageRequestCommon struct {
 	batchMode   voyage.BatchMode
 }
 
-// decodeAndValidateRequest — общий prelude POST /v1/voyages и POST
-// /v1/voyages/preview: декод body (DisallowUnknownFields), нормализация
-// on_failure/batch_mode, трансляция строковых batch/max_failures (S1/S2), весь
-// kind-независимый guard (window-несовместимость batch_size/percent, XOR,
-// диапазоны, concurrency-cap, max_batch_size для window). Preview переиспользует
-// ровно тот же путь — гарантия консистентности 422 (preview отказывает там же,
-// где Create). При любой ошибке пишет problem и возвращает ok=false.
+// decodeAndValidateRequest — the common prelude of POST /v1/voyages and POST
+// /v1/voyages/preview: decode body (DisallowUnknownFields), normalize
+// on_failure/batch_mode, translate string batch/max_failures (S1/S2), the whole
+// kind-independent guard (window incompatibility of batch_size/percent, XOR,
+// ranges, concurrency-cap, max_batch_size for window). Preview reuses
+// exactly the same path — a consistency guarantee for 422 (preview rejects where
+// Create does). On any error it writes a problem and returns ok=false.
 //
-// Поля, нерелевантные preview (dry_run / schedule_at / inter_*_interval_ms /
-// on_failure / input), декодируются как обычно — preview их просто не читает в
-// reply (на резолв/арифметику scope они не влияют). target / kind / batch* /
-// concurrency / max_failures / require_alive — влияют и учитываются обоими.
-// validateVoyageRequest — error-возвращающий kind-независимый guard POST /v1/voyages
-// (FULL-TYPED ADR-054 §Pattern, батч-2f self-audit): нормализация on_failure/batch_mode,
-// трансляция строковых batch/max_failures (S1/S2), window-несовместимость / XOR /
-// диапазоны / concurrency-cap / max_batch_size для window. Декод тела — на вызывающем
-// слое (huma typed Body / (w,r) json.Decode). req мутируется in-place (applyBatchSpec/
-// applyMaxFailures). Возвращает voyageRequestCommon при успехе, *problemError при отказе
-// (та же 400/422-классификация, что (w,r)-вариант).
+// Fields irrelevant to preview (dry_run / schedule_at / inter_*_interval_ms /
+// on_failure / input) are decoded as usual — preview simply does not read them into the
+// reply (they do not affect resolve/scope arithmetic). target / kind / batch* /
+// concurrency / max_failures / require_alive — affect and are honored by both.
+// validateVoyageRequest — an error-returning kind-independent guard for POST /v1/voyages
+// (FULL-TYPED ADR-054 §Pattern, batch-2f self-audit): normalize on_failure/batch_mode,
+// translate string batch/max_failures (S1/S2), window incompatibility / XOR /
+// ranges / concurrency-cap / max_batch_size for window. Body decode — on the calling
+// layer (huma typed Body / (w,r) json.Decode). req is mutated in-place (applyBatchSpec/
+// applyMaxFailures). Returns voyageRequestCommon on success, *problemError on failure
+// (the same 400/422 classification as the (w,r) variant).
 func (h *VoyageHandler) validateVoyageRequest(req *voyageCreateRequest) (voyageRequestCommon, error) {
 	var zero voyageRequestCommon
 	kind := voyage.Kind(req.Kind)
@@ -444,9 +444,9 @@ func (h *VoyageHandler) validateVoyageRequest(req *voyageCreateRequest) (voyageR
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			fmt.Sprintf("field 'concurrency' must be in [1, %d]", voyageMaxConcurrency))}
 	}
-	// max_batch_size для window (ADR-043 amendment §6): потолок — concurrency (=
-	// ширина окна), известен до резолва. Для barrier потолок зависит от len(scope) →
-	// проверяется после резолва (scopeтого же batchSizeExceedsCapErr).
+	// max_batch_size for window (ADR-043 amendment §6): the cap is concurrency (=
+	// window width), known before resolve. For barrier the cap depends on len(scope) →
+	// checked after resolve (the same batchSizeExceedsCapErr).
 	if batchMode == voyage.BatchModeWindow {
 		if err := h.batchSizeExceedsCapErr(concurrency, "concurrency"); err != nil {
 			return zero, err
@@ -463,23 +463,23 @@ func (h *VoyageHandler) validateVoyageRequest(req *voyageCreateRequest) (voyageR
 
 // --- POST /v1/voyages/preview ---
 
-// voyagePreviewReply — 200 body POST /v1/voyages/preview (ADR-043 amendment
-// 2026-06-09 §4). Dry-resolve scope БЕЗ создания Voyage и БЕЗ раскрытия SID-
-// списка (только числа — предпоказ числа батчей для late-binding target-а).
+// voyagePreviewReply — 200 body of POST /v1/voyages/preview (ADR-043 amendment
+// 2026-06-09 §4). Dry-resolve scope WITHOUT creating a Voyage and WITHOUT exposing the SID
+// list (numbers only — a preview of the batch count for a late-binding target).
 //
-// batch_mode присутствует ВСЕГДА (barrier/window) — он объясняет семантику
-// остальных полей и снимает двусмысленность null-а:
-//   - barrier → effective_batch_size = резолвнутый размер Leg (ceil scope*pct/100
-//     для percent, либо явный batch_size, либо весь scope одним Leg); total_batches
-//     = число Leg-ов = ceil(scope/effective_batch_size);
-//   - window → effective_batch_size НЕПРИМЕНИМ (ширина окна = concurrency, не Leg) →
-//     поле опущено (nil/omitempty), а не null-мусор; total_batches = 1 (плоский
-//     прогон одной волной-окном, parity voyageTotalBatches). batch_mode=window
-//     явно говорит UI «смотри concurrency, не effective_batch_size».
+// batch_mode is ALWAYS present (barrier/window) — it explains the semantics of the
+// other fields and removes null ambiguity:
+//   - barrier → effective_batch_size = the resolved Leg size (ceil scope*pct/100
+//     for percent, or an explicit batch_size, or the whole scope as one Leg); total_batches
+//     = the Leg count = ceil(scope/effective_batch_size);
+//   - window → effective_batch_size is INAPPLICABLE (window width = concurrency, not a Leg) →
+//     the field is omitted (nil/omitempty), not null garbage; total_batches = 1 (a flat
+//     run in one window wave, parity voyageTotalBatches). batch_mode=window
+//     explicitly tells the UI "look at concurrency, not effective_batch_size".
 //
-// Handler-native (T5d): плоская форма 1:1 с прежним VoyagePreviewReply.
-// kind/batch_mode — plain string (wire-байт идентичен string-named-enum);
-// effective_batch_size — *int с omitempty (опущен в window).
+// Handler-native (T5d): a flat shape 1:1 with the former VoyagePreviewReply.
+// kind/batch_mode — plain string (wire byte identical to a string-named enum);
+// effective_batch_size — *int with omitempty (omitted in window).
 type voyagePreviewReply struct {
 	BatchMode          string `json:"batch_mode"`
 	EffectiveBatchSize *int   `json:"effective_batch_size,omitempty"`
@@ -489,22 +489,22 @@ type voyagePreviewReply struct {
 }
 
 // Preview — POST /v1/voyages/preview (ADR-043 amendment 2026-06-09 §4, ADR-050
-// amendment 2026-06-17 — собственный bucket voyage_preview, ADR-047 §S4).
-// Dry-resolve scope: отвечает РОВНО то, что сделал бы
-// Create (та же валидация / резолв / гейты — общий decodeAndValidateRequest +
-// resolveScenarioScope/resolveCommandScope), но БЕЗ persist (не зовёт
-// BeginTx/Insert) и БЕЗ раскрытия SID-списка.
+// amendment 2026-06-17 — its own voyage_preview bucket, ADR-047 §S4).
+// Dry-resolve scope: answers EXACTLY what Create would do
+// (the same validation / resolve / gates — shared decodeAndValidateRequest +
+// resolveScenarioScope/resolveCommandScope), but WITHOUT persist (does not call
+// BeginTx/Insert) and WITHOUT exposing the SID list.
 //
-// Контракт (консистентность с Create — preview отказывает там же):
+// Contract (consistency with Create — preview rejects in the same places):
 //   - 200 + {kind, scope_size, total_batches, batch_mode, effective_batch_size?}.
-//   - 400 — невалидный JSON.
-//   - 403 — RBAC deny по kind / явный чужой хост (command) / инкарнация вне scope
+//   - 400 — invalid JSON.
+//   - 403 — RBAC deny by kind / an explicit foreign host (command) / an incarnation out of scope
 //     (scenario).
-//   - 404 — явная инкарнация не существует (scenario).
-//   - 422 — невалидный kind/target/batch* / пустой резолв (voyage_empty_target) /
+//   - 404 — an explicit incarnation does not exist (scenario).
+//   - 422 — invalid kind/target/batch* / empty resolve (voyage_empty_target) /
 //     scope > voyage.max_scope (voyage_scope_too_large) / batch_size-cap.
-//   - 429 — Tempo per-AID rate-limit (middleware, bucket voyage_preview).
-//   - 500 — store/resolver/enforcer не сконфигурирован / БД-сбой.
+//   - 429 — Tempo per-AID rate-limit (middleware, voyage_preview bucket).
+//   - 500 — store/resolver/enforcer not configured / DB failure.
 func (h *VoyageHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
@@ -529,12 +529,12 @@ func (h *VoyageHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply, h.logger)
 }
 
-// PreviewTyped — извлечённая доменная функция POST /v1/voyages/preview (FULL-TYPED
-// ADR-054 §Pattern, батч-2f): dry-resolve scope БЕЗ persist и БЕЗ audit (read-like
-// POST — preview не пишет audit-event, в отличие от Create). Та же валидация/резолв/
-// гейты, что Create (validateVoyageRequest + resolveScenarioScopeErr/
-// resolveCommandScopeErr) → консистентность 422 (preview отказывает там же). Декод
-// тела — на вызывающем слое. *problemError при отказе, успех — voyagePreviewReply (200).
+// PreviewTyped — the extracted domain function POST /v1/voyages/preview (FULL-TYPED
+// ADR-054 §Pattern, batch-2f): dry-resolve scope WITHOUT persist and WITHOUT audit (a read-like
+// POST — preview writes no audit event, unlike Create). The same validation/resolve/
+// gates as Create (validateVoyageRequest + resolveScenarioScopeErr/
+// resolveCommandScopeErr) → 422 consistency (preview rejects in the same places). Body decode
+// — on the calling layer. *problemError on failure, success — voyagePreviewReply (200).
 func (h *VoyageHandler) PreviewTyped(ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest) (voyagePreviewReply, error) {
 	var zero voyagePreviewReply
 	if h.store == nil || h.scenarioResolver == nil || h.commandResolver == nil || h.enforcer == nil {
@@ -556,9 +556,9 @@ func (h *VoyageHandler) PreviewTyped(ctx context.Context, claims *jwt.Claims, re
 		return zero, err
 	}
 
-	// Эффективный batch_size + max_batch_size-cap (barrier) — та же арифметика и тот
-	// же гейт, что Create (parity воркера). resolveMaxFailuresPercent в preview не
-	// нужен: max_failures на число батчей/scope не влияет (порог провалов — runtime).
+	// Effective batch_size + max_batch_size-cap (barrier) — the same arithmetic and the
+	// same gate as Create (parity with the worker). resolveMaxFailuresPercent is not
+	// needed in preview: max_failures does not affect batch count/scope (the failure threshold is runtime).
 	effBatchSize := effectiveBatchSize(req.BatchSize, req.BatchPercent, len(resolved))
 	if vc.batchMode == voyage.BatchModeBarrier && effBatchSize != nil {
 		if err := h.batchSizeExceedsCapErr(*effBatchSize, "batch_size"); err != nil {
@@ -572,25 +572,25 @@ func (h *VoyageHandler) PreviewTyped(ctx context.Context, claims *jwt.Claims, re
 		TotalBatches: voyageTotalBatches(len(resolved), effBatchSize, vc.batchMode),
 		BatchMode:    string(vc.batchMode),
 	}
-	// effective_batch_size осмыслен только в barrier. В window поле опускаем
-	// (ширина окна = concurrency, не Leg-размер) — null-мусора в ответе нет.
+	// effective_batch_size is meaningful only in barrier. In window the field is omitted
+	// (window width = concurrency, not a Leg size) — no null garbage in the response.
 	if vc.batchMode == voyage.BatchModeBarrier {
 		reply.EffectiveBatchSize = effBatchSize
 	}
 	return reply, nil
 }
 
-// resolveScenarioScope — kind=scenario резолв scope + гейты (RBAC bare-check
+// resolveScenarioScope — kind=scenario scope resolve + gates (RBAC bare-check
 // incarnation.run, per-incarnation scope-check fail-closed, max_scope-cap),
-// общий для Create и Preview. Возвращает отсортированный snapshot имён
-// инкарнаций; при любом отказе пишет problem и возвращает ok=false. Persist —
-// дело caller-а (Create), Preview только читает len(resolved).
-// resolveScenarioScopeErr — error-возвращающий резолв kind=scenario scope + гейты
-// (FULL-TYPED ADR-054 §Pattern, батч-2f self-audit): RBAC bare-check incarnation.run,
-// per-incarnation scope-check fail-closed (ADR-043 §6), max_scope-cap. Общий для
-// Create и Preview. nil-error → отсортированный snapshot имён инкарнаций; *problemError
-// при отказе (та же 403/404/422/500-классификация, что (w,r)-вариант). ctx — request-
-// context (резолв/scope-select читают его).
+// shared by Create and Preview. Returns a sorted snapshot of incarnation
+// names; on any failure it writes a problem and returns ok=false. Persist —
+// the caller's job (Create), Preview only reads len(resolved).
+// resolveScenarioScopeErr — an error-returning kind=scenario scope resolve + gates
+// (FULL-TYPED ADR-054 §Pattern, batch-2f self-audit): RBAC bare-check incarnation.run,
+// per-incarnation scope-check fail-closed (ADR-043 §6), max_scope-cap. Shared by
+// Create and Preview. nil error → a sorted snapshot of incarnation names; *problemError
+// on failure (the same 403/404/422/500 classification as the (w,r) variant). ctx — request
+// context (resolve/scope-select read it).
 func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest) ([]string, error) {
 	if req.ScenarioName == "" {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -610,9 +610,9 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 				"target.incarnations: name "+name+" must match "+incarnation.NamePattern)}
 		}
 	}
-	// scenario использует один env-тег фильтра (coven[0]); список — приём UI,
-	// но резолв (ListFilter.Coven exact any-of) принимает одну метку. Берём
-	// первую непустую; остальные валидируем по формату.
+	// scenario uses a single filter env tag (coven[0]); the list is a UI convenience,
+	// but resolve (ListFilter.Coven exact any-of) accepts one label. Take the
+	// first non-empty; validate the rest by format.
 	var covenFilter string
 	for _, c := range req.Target.Coven {
 		if !incarnationCovenLabelValid(c) {
@@ -624,7 +624,7 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 		}
 	}
 
-	// RBAC bare-check incarnation.run (быстрый отказ до резолва).
+	// RBAC bare-check incarnation.run (fast rejection before resolve).
 	if err := h.checkPermissionErr(claims.Subject, "incarnation", "run", nil); err != nil {
 		return nil, err
 	}
@@ -647,11 +647,11 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 			"voyage_empty_target: resolved target is empty")}
 	}
 
-	// Per-incarnation scope-check (ADR-043 §6 fail-closed): оператор обязан иметь
-	// incarnation.run на КАЖДОЙ резолвнутой инкарнации (её covens ∪ {name}).
-	// Иначе старт на инкарнации вне permission-скоупа = privilege escalation.
-	// incReader=nil (unit-тест без БД-scope) → пропускаем per-incarnation scope,
-	// bare-check выше уже гарантировал базовое право (cluster-admin / bare-роль).
+	// Per-incarnation scope-check (ADR-043 §6 fail-closed): the operator must have
+	// incarnation.run on EVERY resolved incarnation (its covens ∪ {name}).
+	// Otherwise starting on an incarnation outside the permission scope = privilege escalation.
+	// incReader=nil (unit test without DB scope) → skip per-incarnation scope,
+	// the bare-check above already guaranteed the base right (cluster-admin / bare role).
 	if h.incReader != nil {
 		for _, name := range resolved {
 			inc, sErr := incarnation.SelectByName(ctx, h.incReader, name)
@@ -675,10 +675,10 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 	return resolved, nil
 }
 
-// createScenarioTyped — kind=scenario ветка Create (FULL-TYPED ADR-054 §Pattern,
-// батч-2f self-audit). Резолв scope + гейты — resolveScenarioScopeErr; затем
-// batch-арифметика, persist, self-audit scenario_run.started ВНУТРИ функции, reply.
-// ctx — request-context. *problemError при отказе.
+// createScenarioTyped — the kind=scenario branch of Create (FULL-TYPED ADR-054 §Pattern,
+// batch-2f self-audit). Scope resolve + gates — resolveScenarioScopeErr; then
+// batch arithmetic, persist, self-audit scenario_run.started INSIDE the function, reply.
+// ctx — request context. *problemError on failure.
 func (h *VoyageHandler) createScenarioTyped(
 	ctx context.Context, claims *jwt.Claims,
 	req *voyageCreateRequest, onFailure voyage.OnFailure, concurrency int, batchMode voyage.BatchMode,
@@ -689,22 +689,22 @@ func (h *VoyageHandler) createScenarioTyped(
 		return zero, err
 	}
 
-	// notify → ephemeral-Tiding-шаблоны (ADR-052(g)): валидация + herald.read-guard
-	// ДО открытия tx. voyage_id/name стемпятся в persist после генерации row.
+	// notify → ephemeral-Tiding templates (ADR-052(g)): validation + herald.read-guard
+	// BEFORE opening the tx. voyage_id/name are stamped in persist after generating the row.
 	notifyTidings, err := h.prepareNotifyErr(ctx, claims, req, voyage.KindScenario)
 	if err != nil {
 		return zero, err
 	}
 
-	// Эффективный batch_size: batch_percent → ceil(scope * pct/100); иначе
-	// req.BatchSize (как есть). Зависит от len(scope), поэтому считается после
-	// резолва (ADR-043 amendment §2).
+	// Effective batch_size: batch_percent → ceil(scope * pct/100); otherwise
+	// req.BatchSize (as is). Depends on len(scope), so computed after
+	// resolve (ADR-043 amendment §2).
 	effBatchSize := effectiveBatchSize(req.BatchSize, req.BatchPercent, len(resolved))
-	// max_failures="N%" → абсолютный fail_threshold по числу ИНКАРНАЦИЙ (единица
-	// прогона scenario): ceil(scope*pct/100), clamp [1,scope] (ADR-043 amendment
-	// 2026-06-09 §2). Та же база scope=len(resolved), что и effectiveBatchSize.
+	// max_failures="N%" → absolute fail_threshold by the number of INCARNATIONS (the scenario
+	// run unit): ceil(scope*pct/100), clamp [1,scope] (ADR-043 amendment
+	// 2026-06-09 §2). The same base scope=len(resolved) as effectiveBatchSize.
 	resolveMaxFailuresPercent(req, len(resolved))
-	// max_batch_size для barrier — потолок эффективного batch_size (S-W4).
+	// max_batch_size for barrier — the cap on the effective batch_size (S-W4).
 	if batchMode == voyage.BatchModeBarrier && effBatchSize != nil {
 		if err := h.batchSizeExceedsCapErr(*effBatchSize, "batch_size"); err != nil {
 			return zero, err
@@ -731,17 +731,17 @@ func (h *VoyageHandler) createScenarioTyped(
 	return h.newCreateReply(row, len(resolved)), nil
 }
 
-// resolveCommandScope — kind=command резолв scope + гейты (RBAC errand.run +
-// target ∩ Purview гибрид-семантика, max_scope-cap), общий для Create и Preview.
-// Возвращает SID-snapshot (AND-merge sids/coven, урезанный до Purview оператора);
-// при отказе пишет problem и возвращает ok=false. Гибрид-ветки (ADR-047 S4):
-// явный чужой SID → 403, широкий target урезан в ноль → 422 voyage_empty_target.
-// Persist — дело caller-а (Create), Preview только читает len(resolved).
-// resolveCommandScopeErr — error-возвращающий резолв kind=command scope + гейты
-// (FULL-TYPED ADR-054 §Pattern, батч-2f self-audit): RBAC errand.run + target ∩
-// Purview гибрид-семантика, max_scope-cap. Общий для Create и Preview. nil-error → SID-
-// snapshot; *problemError при отказе. Гибрид-ветки (ADR-047 S4): явный чужой SID →
-// 403, широкий target урезан в ноль → 422 voyage_empty_target. ctx — request-context.
+// resolveCommandScope — kind=command scope resolve + gates (RBAC errand.run +
+// target ∩ Purview hybrid semantics, max_scope-cap), shared by Create and Preview.
+// Returns a SID snapshot (AND-merge of sids/coven, trimmed to the operator's Purview);
+// on failure it writes a problem and returns ok=false. Hybrid branches (ADR-047 S4):
+// an explicit foreign SID → 403, a broad target trimmed to zero → 422 voyage_empty_target.
+// Persist — the caller's job (Create), Preview only reads len(resolved).
+// resolveCommandScopeErr — an error-returning kind=command scope resolve + gates
+// (FULL-TYPED ADR-054 §Pattern, batch-2f self-audit): RBAC errand.run + target ∩
+// Purview hybrid semantics, max_scope-cap. Shared by Create and Preview. nil error → a SID
+// snapshot; *problemError on failure. Hybrid branches (ADR-047 S4): an explicit foreign SID →
+// 403, a broad target trimmed to zero → 422 voyage_empty_target. ctx — request context.
 func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest) ([]string, error) {
 	if req.Module == "" {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -755,12 +755,12 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"kind=command target requires one of sids[]/coven/where")}
 	}
-	// S-med-1 (security): where: пока НЕ вычисляется (MVP, no-op в резолвере —
-	// сохраняется лишь в target_origin). where-only target (нет ни sids, ни coven)
-	// поэтому молча резолвится на ВЕСЬ флот — сужающий предикат превращается в
-	// расширитель, нарушая инвариант «invocation сужает scope, не расширяет».
-	// Отвергаем единственный опасный кейс. where как ДОПОЛНЕНИЕ к sids/coven
-	// допустимо: scope уже сужен ими, where не расширяет.
+	// S-med-1 (security): where: is NOT evaluated yet (MVP, a no-op in the resolver —
+	// only stored in target_origin). A where-only target (no sids, no coven)
+	// therefore silently resolves to the WHOLE fleet — a narrowing predicate turns into
+	// an expander, violating the invariant "invocation narrows scope, does not expand".
+	// We reject the single dangerous case. where as an ADDITION to sids/coven
+	// is allowed: scope is already narrowed by them, where does not expand.
 	if req.Target.Where != "" && len(req.Target.SIDs) == 0 && len(req.Target.Coven) == 0 {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"voyage_where_not_evaluated: target where: пока не вычисляется (MVP); "+
@@ -791,11 +791,11 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	}
 
 	var resolved []string
-	// RBAC + target ∩ Purview (ADR-047 S4, security-fix). scoper=nil (unit-тест без
-	// БД-scope) → cluster-wide резолв + nil-context bare-check (backcompat). Иначе:
-	// один ResolvePurview(errand.run) даёт И existence-gate (держит ли право хоть в
-	// каком scope — иначе nil-context Check ложно денит scoped-роль, как souls G1),
-	// И scope-границу для пересечения с резолвнутым target-ом.
+	// RBAC + target ∩ Purview (ADR-047 S4, security-fix). scoper=nil (unit test without
+	// DB scope) → cluster-wide resolve + nil-context bare-check (backcompat). Otherwise:
+	// a single ResolvePurview(errand.run) gives BOTH the existence-gate (does the operator hold the right in
+	// any scope — otherwise a nil-context Check falsely denies a scoped role, like souls G1)
+	// AND the scope boundary for intersecting with the resolved target.
 	if h.scoper == nil {
 		if err := h.checkPermissionErr(claims.Subject, "errand", "run", nil); err != nil {
 			return nil, err
@@ -808,22 +808,22 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 		}
 		resolved = out
 	} else {
-		// Existence-gate errand.run: оператор обязан держать право хоть в КАКОМ-ТО
-		// scope (или Unrestricted). Пустой Purview (нет права / ревокнут → Deny) →
-		// 403. Сужение по scope делает резолвер (parity souls HoldsAction).
+		// Existence-gate errand.run: the operator must hold the right in AT LEAST SOME
+		// scope (or Unrestricted). Empty Purview (no right / revoked → Deny) →
+		// 403. Narrowing by scope is done by the resolver (parity souls HoldsAction).
 		pv := h.scoper.ResolvePurview(claims.Subject, "errand", "run")
 		scope := soulpurview.Resolve(pv)
 		if scope.Empty {
-			// scope.Empty не несёт причину (revoke vs no-perm слиты в Resolve).
-			// Классифицируем причину через enforcer для парити error-семантики со
-			// scenario-путём и scoper==nil-веткой (revoked → TypeOperatorRevokedToken,
-			// no-perm → 403). nil-context здесь безопасен: scope пуст в ЛЮБОМ
-			// контексте (Empty это уже доказал), ложного деная scoped-роли быть не
-			// может — checkPermissionErr тут только КЛАССИФИКАТОР причины, не второй gate.
+			// scope.Empty carries no reason (revoke vs no-perm are merged in Resolve).
+			// We classify the reason via the enforcer for error-semantics parity with the
+			// scenario path and the scoper==nil branch (revoked → TypeOperatorRevokedToken,
+			// no-perm → 403). A nil-context here is safe: scope is empty in ANY
+			// context (Empty already proved it), a false deny of a scoped role is
+			// impossible — checkPermissionErr here is only a reason CLASSIFIER, not a second gate.
 			if err := h.checkPermissionErr(claims.Subject, "errand", "run", nil); err != nil {
 				return nil, err
 			}
-			// Недостижимая подстраховка: Empty без deny от enforcer невозможен.
+			// Unreachable safety net: Empty without a deny from the enforcer is impossible.
 			return nil, &problemError{problem.New(problem.TypeForbidden, "",
 				"operator lacks required permission errand.run")}
 		}
@@ -833,17 +833,17 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 			return nil, &problemError{problem.New(problem.TypeInternalError, "",
 				"resolve voyage command target failed")}
 		}
-		// Гибрид ветка 1 (anti-escalation): явно-указанный чужой хост в sids[] →
-		// 403 (parity per-incarnation scope-check scenario-пути). Молчаливое
-		// урезание тут было бы маскировкой попытки эскалации.
+		// Hybrid branch 1 (anti-escalation): an explicitly listed foreign host in sids[] →
+		// 403 (parity with the per-incarnation scope-check of the scenario path). Silent
+		// trimming here would mask an escalation attempt.
 		if len(scoped.DeniedExplicit) > 0 {
 			return nil, &problemError{problem.New(problem.TypeForbidden, "",
 				"operator lacks errand.run on target host "+scoped.DeniedExplicit[0])}
 		}
 		resolved = scoped.SIDs
 	}
-	// Гибрид ветка 3: пустое пересечение (широкий target урезан в ноль) → 422,
-	// отличаем от 403-эскалации (валидный запрос, но нечего исполнять).
+	// Hybrid branch 3: an empty intersection (a broad target trimmed to zero) → 422,
+	// distinguished from a 403 escalation (a valid request, but nothing to execute).
 	if len(resolved) == 0 {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"voyage_empty_target: resolved target is empty")}
@@ -855,9 +855,9 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	return resolved, nil
 }
 
-// createCommandTyped — kind=command ветка Create (FULL-TYPED ADR-054 §Pattern,
-// батч-2f self-audit). Резолв scope + гейты — resolveCommandScopeErr; затем
-// batch-арифметика, persist, self-audit command_run.invoked ВНУТРИ функции, reply.
+// createCommandTyped — the kind=command branch of Create (FULL-TYPED ADR-054 §Pattern,
+// batch-2f self-audit). Scope resolve + gates — resolveCommandScopeErr; then
+// batch arithmetic, persist, self-audit command_run.invoked INSIDE the function, reply.
 func (h *VoyageHandler) createCommandTyped(
 	ctx context.Context, claims *jwt.Claims,
 	req *voyageCreateRequest, onFailure voyage.OnFailure, concurrency int, batchMode voyage.BatchMode,
@@ -868,19 +868,19 @@ func (h *VoyageHandler) createCommandTyped(
 		return zero, err
 	}
 
-	// notify → ephemeral-Tiding-шаблоны (ADR-052(g)): валидация + herald.read-guard
-	// ДО открытия tx. voyage_id/name стемпятся в persist после генерации row.
+	// notify → ephemeral-Tiding templates (ADR-052(g)): validation + herald.read-guard
+	// BEFORE opening the tx. voyage_id/name are stamped in persist after generating the row.
 	notifyTidings, err := h.prepareNotifyErr(ctx, claims, req, voyage.KindCommand)
 	if err != nil {
 		return zero, err
 	}
 
-	// Эффективный batch_size: batch_percent → ceil(scope * pct/100); иначе
-	// req.BatchSize. Зависит от len(scope) (ADR-043 amendment §2).
+	// Effective batch_size: batch_percent → ceil(scope * pct/100); otherwise
+	// req.BatchSize. Depends on len(scope) (ADR-043 amendment §2).
 	effBatchSize := effectiveBatchSize(req.BatchSize, req.BatchPercent, len(resolved))
-	// max_failures="N%" → абсолютный fail_threshold по числу ХОСТОВ (единица
-	// прогона command): ceil(scope*pct/100), clamp [1,scope] (ADR-043 amendment
-	// 2026-06-09 §2). Та же база scope=len(resolved), что и effectiveBatchSize.
+	// max_failures="N%" → absolute fail_threshold by the number of HOSTS (the command
+	// run unit): ceil(scope*pct/100), clamp [1,scope] (ADR-043 amendment
+	// 2026-06-09 §2). The same base scope=len(resolved) as effectiveBatchSize.
 	resolveMaxFailuresPercent(req, len(resolved))
 	if batchMode == voyage.BatchModeBarrier && effBatchSize != nil {
 		if err := h.batchSizeExceedsCapErr(*effBatchSize, "batch_size"); err != nil {
@@ -908,14 +908,14 @@ func (h *VoyageHandler) createCommandTyped(
 	return h.newCreateReply(row, len(resolved)), nil
 }
 
-// scopeExceedsCap проверяет резолвнутый scope против maxScope (DoS-guard
-// S-med-3). maxScope=0 → безлимит. При превышении пишет 422
-// voyage_scope_too_large и возвращает true (caller прекращает обработку).
-// Вызывается ПОСЛЕ резолва target-а в []VoyageTarget, ДО InsertTargets: один
-// POST не должен резолвнуть весь флот (100k per-row INSERT в одной транзакции +
-// неконтролируемый blast-radius).
-// scopeExceedsCapErr — DoS-guard размера резолвнутого scope против maxScope (S-med-3,
-// FULL-TYPED ADR-054 §Pattern). nil → в пределах лимита; иначе 422 voyage_scope_too_large.
+// scopeExceedsCap checks the resolved scope against maxScope (DoS-guard
+// S-med-3). maxScope=0 → unlimited. On excess it writes 422
+// voyage_scope_too_large and returns true (the caller stops processing).
+// Called AFTER resolving the target into []VoyageTarget, BEFORE InsertTargets: one
+// POST must not resolve the whole fleet (100k per-row INSERT in one transaction +
+// an uncontrolled blast-radius).
+// scopeExceedsCapErr — DoS-guard on the resolved scope size against maxScope (S-med-3,
+// FULL-TYPED ADR-054 §Pattern). nil → within the limit; otherwise 422 voyage_scope_too_large.
 func (h *VoyageHandler) scopeExceedsCapErr(size int) error {
 	if h.maxScope <= 0 || size <= h.maxScope {
 		return nil
@@ -926,13 +926,13 @@ func (h *VoyageHandler) scopeExceedsCapErr(size int) error {
 			size, h.maxScope))}
 }
 
-// batchSizeExceedsCap проверяет размер батча/окна против maxBatchSize (DoS-guard
-// S-W4, ADR-043 amendment §6). maxBatchSize=0 → без предела. При превышении пишет
-// 422 voyage_batch_size_too_large (parity voyage_scope_too_large) и возвращает
-// true. field — имя поля в detail ("batch_size" для barrier / "concurrency" для
+// batchSizeExceedsCap checks the batch/window size against maxBatchSize (DoS-guard
+// S-W4, ADR-043 amendment §6). maxBatchSize=0 → no limit. On excess it writes
+// 422 voyage_batch_size_too_large (parity voyage_scope_too_large) and returns
+// true. field — the field name in the detail ("batch_size" for barrier / "concurrency" for
 // window).
-// batchSizeExceedsCapErr — DoS-guard размера батча/окна против maxBatchSize (S-W4,
-// FULL-TYPED ADR-054 §Pattern). nil → в пределах; иначе 422 voyage_batch_size_too_large.
+// batchSizeExceedsCapErr — DoS-guard on the batch/window size against maxBatchSize (S-W4,
+// FULL-TYPED ADR-054 §Pattern). nil → within the limit; otherwise 422 voyage_batch_size_too_large.
 func (h *VoyageHandler) batchSizeExceedsCapErr(size int, field string) error {
 	if h.maxBatchSize <= 0 || size <= h.maxBatchSize {
 		return nil
@@ -943,12 +943,12 @@ func (h *VoyageHandler) batchSizeExceedsCapErr(size int, field string) error {
 			field, size, h.maxBatchSize, field))}
 }
 
-// effectiveBatchSize резолвит эффективный размер пачки (ADR-043 amendment §2):
-//   - batch_percent задан → ceil(scope * pct/100), но не меньше 1 и не больше
-//     scope (пачка не может превышать весь scope);
-//   - иначе → batchSize как есть (включая nil = весь прогон одним Leg).
+// effectiveBatchSize resolves the effective batch size (ADR-043 amendment §2):
+//   - batch_percent set → ceil(scope * pct/100), but at least 1 and at most
+//     scope (a batch cannot exceed the whole scope);
+//   - otherwise → batchSize as is (including nil = the whole run in one Leg).
 //
-// scope <= 0 (защита, в норме caller отсёк пустой резолв) → возвращает batchSize.
+// scope <= 0 (a guard; normally the caller rejected an empty resolve) → returns batchSize.
 func effectiveBatchSize(batchSize, batchPercent *int, scope int) *int {
 	if batchPercent == nil {
 		return batchSize
@@ -956,7 +956,7 @@ func effectiveBatchSize(batchSize, batchPercent *int, scope int) *int {
 	if scope <= 0 {
 		return batchSize
 	}
-	// ceil(scope * pct / 100) целочисленно.
+	// ceil(scope * pct / 100), integer.
 	eff := (scope*(*batchPercent) + 99) / 100
 	if eff < 1 {
 		eff = 1
@@ -967,17 +967,17 @@ func effectiveBatchSize(batchSize, batchPercent *int, scope int) *int {
 	return &eff
 }
 
-// buildVoyageRow собирает *voyage.Voyage из request-а. target_resolved
-// сериализуется в JSONB-массив единиц (имена / SID-ы); target_origin —
-// declarative-форма для audit/UI. total_batches вычисляется из числа единиц и
-// эффективного batch_size. effBatchSize — резолвнутый batch_size (из batch_size
-// или batch_percent, ADR-043 amendment §2); nil → весь прогон одним Leg.
+// buildVoyageRow assembles a *voyage.Voyage from the request. target_resolved
+// is serialized into a JSONB array of units (names / SIDs); target_origin —
+// the declarative shape for audit/UI. total_batches is computed from the unit count and
+// the effective batch_size. effBatchSize — the resolved batch_size (from batch_size
+// or batch_percent, ADR-043 amendment §2); nil → the whole run in one Leg.
 func (h *VoyageHandler) buildVoyageRow(
 	kind voyage.Kind, req *voyageCreateRequest, startedByAID string,
 	scenarioName, module *string, resolved []string, onFailure voyage.OnFailure, concurrency int, batchMode voyage.BatchMode,
 	effBatchSize *int,
 ) *voyage.Voyage {
-	resolvedJSON, _ := json.Marshal(resolved) // []string всегда сериализуется
+	resolvedJSON, _ := json.Marshal(resolved) // []string always serializes
 	originJSON, _ := json.Marshal(req.Target)
 
 	var inputJSON []byte
@@ -1002,15 +1002,15 @@ func (h *VoyageHandler) buildVoyageRow(
 		FailThreshold:  req.FailThreshold,
 		RequireAlive:   req.RequireAlive,
 	}
-	// batch_mode пишем только при window — barrier остаётся NULL (forward-compat:
-	// «не задано» = barrier, отличимо от явного значения в audit/UI).
+	// batch_mode is written only for window — barrier stays NULL (forward-compat:
+	// "not set" = barrier, distinguishable from an explicit value in audit/UI).
 	if batchMode == voyage.BatchModeWindow {
 		bm := batchMode
 		row.BatchMode = &bm
 	}
-	// window: batch_size / batch_percent не используются (ширина окна =
-	// concurrency) — не пишем. barrier: пишем эффективный batch_size (резолвнутый
-	// из percent или явный), а batch_percent сохраняем как есть для audit/UI.
+	// window: batch_size / batch_percent are unused (window width =
+	// concurrency) — not written. barrier: write the effective batch_size (resolved
+	// from percent or explicit), and keep batch_percent as is for audit/UI.
 	if batchMode != voyage.BatchModeWindow {
 		row.BatchSize = effBatchSize
 		row.BatchPercent = req.BatchPercent
@@ -1019,8 +1019,8 @@ func (h *VoyageHandler) buildVoyageRow(
 		d := time.Duration(*req.InterBatchIntervalMS) * time.Millisecond
 		row.InterBatchInterval = &d
 	}
-	// inter_unit_interval — per-unit пауза, осмыслена только в window (parity:
-	// inter_batch_interval только в barrier). В barrier не пишем.
+	// inter_unit_interval — a per-unit pause, meaningful only in window (parity:
+	// inter_batch_interval only in barrier). Not written in barrier.
 	if batchMode == voyage.BatchModeWindow && req.InterUnitIntervalMS != nil && *req.InterUnitIntervalMS > 0 {
 		d := time.Duration(*req.InterUnitIntervalMS) * time.Millisecond
 		row.InterUnitInterval = &d
@@ -1028,20 +1028,20 @@ func (h *VoyageHandler) buildVoyageRow(
 	return row
 }
 
-// persist пишет targets + voyage + ephemeral-Tiding-и (notify, ADR-052(g)) в
-// ОДНОЙ PG-транзакции (snapshot-scope не «дрожит» между INSERT-ами, ADR-043).
-// Атомарность гарантирует НАЛИЧИЕ ephemeral-правил в БД к моменту коммита, но
-// НЕ их видимость TTL-снимку dispatcher-а (DefaultRuleCacheTTL=15s) — поэтому
-// после commit при наличии notify-правил нужна явная двухуровневая инвалидация
-// (in-process + cross-keeper), иначе быстрый прогон диспетчит терминал против
-// устаревшего снимка и разовое уведомление молча промахивается.
-// Возвращает false и пишет problem при ошибке. При откате tx — нет ни Voyage,
-// ни ephemeral-правил (и инвалидировать нечего — звать СТРОГО после commit).
-// persistErr — error-возвращающий persist Voyage (FULL-TYPED ADR-054 §Pattern,
-// батч-2f self-audit): targets + voyage + ephemeral-Tiding-и (notify, ADR-052(g)) в
-// ОДНОЙ PG-транзакции. nil-error → успех; *problemError при сбое (500). При откате tx
-// — нет ни Voyage, ни ephemeral-правил. ctx — request-context (rollback на
-// background-ctx, инвалидация TTL-снимка читает ctx).
+// persist writes targets + voyage + ephemeral Tidings (notify, ADR-052(g)) in
+// ONE PG transaction (snapshot-scope does not "jitter" between INSERTs, ADR-043).
+// Atomicity guarantees the PRESENCE of ephemeral rules in the DB by commit time, but
+// NOT their visibility to the dispatcher's TTL snapshot (DefaultRuleCacheTTL=15s) — so
+// after commit, when notify rules are present, an explicit two-level invalidation
+// is needed (in-process + cross-keeper), otherwise a fast run dispatches the terminal against
+// a stale snapshot and the one-shot notification silently misses.
+// Returns false and writes a problem on error. On tx rollback there is neither a Voyage
+// nor ephemeral rules (and nothing to invalidate — call STRICTLY after commit).
+// persistErr — an error-returning persist of a Voyage (FULL-TYPED ADR-054 §Pattern,
+// batch-2f self-audit): targets + voyage + ephemeral Tidings (notify, ADR-052(g)) in
+// ONE PG transaction. nil error → success; *problemError on failure (500). On tx rollback
+// — no Voyage and no ephemeral rules. ctx — request context (rollback on a
+// background ctx, TTL-snapshot invalidation reads ctx).
 func (h *VoyageHandler) persistErr(ctx context.Context, row *voyage.Voyage, targets []voyage.VoyageTarget, notifyTidings []herald.Tiding) error {
 	tx, err := h.store.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -1049,7 +1049,7 @@ func (h *VoyageHandler) persistErr(ctx context.Context, row *voyage.Voyage, targ
 			slog.String("voyage_id", row.VoyageID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "insert voyage failed")}
 	}
-	// Insert самого Voyage сначала (FK voyage_targets → voyages); затем targets.
+	// Insert the Voyage itself first (FK voyage_targets → voyages); then targets.
 	committed := false
 	defer func() {
 		if !committed {
@@ -1067,10 +1067,10 @@ func (h *VoyageHandler) persistErr(ctx context.Context, row *voyage.Voyage, targ
 			slog.String("voyage_id", row.VoyageID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "insert voyage targets failed")}
 	}
-	// Ephemeral-Tiding-и notify-блока — в ТОЙ ЖЕ tx (ADR-052(g)). Любой сбой
-	// (включая нарушение инварианта ephemeral⟺voyage_id или гонку имён) откатывает
-	// весь Voyage — атомарность by construction. herald.InsertTiding принимает
-	// ту же pgx.Tx (herald.ExecQueryRower ⊂ интерфейса tx).
+	// The notify block's ephemeral Tidings — in the SAME tx (ADR-052(g)). Any failure
+	// (including violating the ephemeral⟺voyage_id invariant or a name race) rolls back
+	// the whole Voyage — atomicity by construction. herald.InsertTiding accepts
+	// the same pgx.Tx (herald.ExecQueryRower ⊂ the tx interface).
 	for i := range notifyTidings {
 		if err := herald.InsertTiding(ctx, tx, &notifyTidings[i]); err != nil {
 			h.logger.Error("voyage.create: insert ephemeral tiding failed",
@@ -1086,20 +1086,20 @@ func (h *VoyageHandler) persistErr(ctx context.Context, row *voyage.Voyage, targ
 		return &problemError{problem.New(problem.TypeInternalError, "", "insert voyage failed")}
 	}
 	committed = true
-	// Ephemeral-Tiding-и вставлены прямым InsertTiding в обход herald.Service-CRUD
-	// (и его инвалидации) — сбрасываем TTL-снимок dispatcher-а ЯВНО, строго после
-	// commit (двухуровнево: in-process + cross-keeper, HA-финализация прогона может
-	// идти на другом keeper-е). Без notify правил не создано — инвалидировать
-	// нечего. nil-safe: dev без herald → no-op, деградация на TTL.
+	// The ephemeral Tidings were inserted via direct InsertTiding, bypassing herald.Service CRUD
+	// (and its invalidation) — flush the dispatcher's TTL snapshot EXPLICITLY, strictly after
+	// commit (two-level: in-process + cross-keeper, HA run finalization may
+	// run on another keeper). Without notify no rules were created — nothing
+	// to invalidate. nil-safe: dev without herald → no-op, degrades to TTL.
 	if len(notifyTidings) > 0 && h.tidingInvalidator != nil {
 		h.tidingInvalidator.InvalidateTidings(ctx, row.VoyageID)
 	}
 	return nil
 }
 
-// newCreateReply собирает 202-reply (voyageCreateReply) из row + scope_size
-// (FULL-TYPED ADR-054 §Pattern). Location = относительный URL ресурса (его же ставит
-// Create(w,r)/huma в Location-header).
+// newCreateReply assembles the 202 reply (voyageCreateReply) from row + scope_size
+// (FULL-TYPED ADR-054 §Pattern). Location = the relative resource URL (the same one
+// Create(w,r)/huma puts in the Location header).
 func (h *VoyageHandler) newCreateReply(row *voyage.Voyage, scopeSize int) voyageCreateReply {
 	location := "/v1/voyages/" + row.VoyageID
 	return voyageCreateReply{
@@ -1111,9 +1111,9 @@ func (h *VoyageHandler) newCreateReply(row *voyage.Voyage, scopeSize int) voyage
 	}
 }
 
-// checkPermissionErr — error-возвращающий RBAC.Check (FULL-TYPED ADR-054 §Pattern,
-// батч-2f self-audit). nil → разрешено. revoked → 401-эквивалент
-// (TypeOperatorRevokedToken), no-perm → 403. Маппинг как middleware.RequirePermission.
+// checkPermissionErr — an error-returning RBAC.Check (FULL-TYPED ADR-054 §Pattern,
+// batch-2f self-audit). nil → allowed. revoked → 401 equivalent
+// (TypeOperatorRevokedToken), no-perm → 403. Mapping as in middleware.RequirePermission.
 func (h *VoyageHandler) checkPermissionErr(aid, resource, action string, ctx map[string]string) error {
 	if err := h.enforcer.Check(aid, resource, action, ctx); err != nil {
 		if errors.Is(err, rbac.ErrOperatorRevoked) {
@@ -1128,8 +1128,8 @@ func (h *VoyageHandler) checkPermissionErr(aid, resource, action string, ctx map
 	return nil
 }
 
-// allowedAnyContext OR-проверяет permission по набору контекстов (parity
-// RequirePermissionMulti). Пустой набор → одна попытка с nil-context (bare/`*`).
+// allowedAnyContext OR-checks a permission across a set of contexts (parity
+// RequirePermissionMulti). Empty set → a single attempt with nil-context (bare/`*`).
 func (h *VoyageHandler) allowedAnyContext(aid, resource, action string, contexts []map[string]string) bool {
 	if len(contexts) == 0 {
 		return h.enforcer.Check(aid, resource, action, nil) == nil
@@ -1144,13 +1144,13 @@ func (h *VoyageHandler) allowedAnyContext(aid, resource, action string, contexts
 
 // --- GET /v1/voyages ---
 
-// voyageDTO — native response-форма для GET/List (handler-native T5d). Плоская
-// форма 1:1 с прежним Voyage: ПОРЯДОК ПОЛЕЙ алфавитный (как oapi-codegen),
-// чтобы json.Marshal эмитил ключи byte-exact; kind/status/batch_mode/on_failure —
-// plain string (wire идентичен string-named-enum); pointer-optional с omitempty —
-// все nullable. target_resolved (имена/SID-ы) НЕ кладётся (UI читает scope_size).
-// Сериализуется напрямую (MCP/cadence-runs writeJSON), проецируется в api.Voyage
-// (huma-schema). Конвертация из row — [toVoyageDTO].
+// voyageDTO — the native response shape for GET/List (handler-native T5d). A flat
+// shape 1:1 with the former Voyage: FIELD ORDER is alphabetical (like oapi-codegen),
+// so json.Marshal emits keys byte-exact; kind/status/batch_mode/on_failure —
+// plain string (wire identical to a string-named enum); pointer-optional with omitempty —
+// all nullable. target_resolved (names/SIDs) is NOT included (the UI reads scope_size).
+// Serialized directly (MCP/cadence-runs writeJSON), projected into api.Voyage
+// (huma schema). Conversion from a row — [toVoyageDTO].
 type voyageDTO struct {
 	Attempt           int               `json:"attempt"`
 	BatchMode         *string           `json:"batch_mode,omitempty"`
@@ -1178,10 +1178,10 @@ type voyageDTO struct {
 	VoyageID          string            `json:"voyage_id"`
 }
 
-// voyageTargetDTO — native declarative-target reply-форма (origin, handler-native
-// T5d). Все поля pointer-optional с omitempty (1:1 VoyageTarget); ПОРЯДОК
-// алфавитный (coven/incarnations/service/sids/where), wire-ключ `sids` совпадает.
-// Заполняется unmarshal-ом target_origin JSONB.
+// voyageTargetDTO — the native declarative-target reply shape (origin, handler-native
+// T5d). All fields pointer-optional with omitempty (1:1 VoyageTarget); ORDER
+// alphabetical (coven/incarnations/service/sids/where), wire key `sids` matches.
+// Filled by unmarshaling the target_origin JSONB.
 type voyageTargetDTO struct {
 	Coven        *[]string `json:"coven,omitempty"`
 	Incarnations *[]string `json:"incarnations,omitempty"`
@@ -1190,8 +1190,8 @@ type voyageTargetDTO struct {
 	Where        *string   `json:"where,omitempty"`
 }
 
-// voyageSummaryDTO — native агрегаты прогона (handler-native T5d). no_match — *int
-// с omitempty (0 → ключ опущен, как noMatchPtr); прочие — int required.
+// voyageSummaryDTO — native run aggregates (handler-native T5d). no_match — *int
+// with omitempty (0 → key omitted, like noMatchPtr); the rest — int required.
 type voyageSummaryDTO struct {
 	Cancelled int  `json:"cancelled"`
 	Failed    int  `json:"failed"`
@@ -1200,9 +1200,9 @@ type voyageSummaryDTO struct {
 	Total     int  `json:"total"`
 }
 
-// voyageTargetEntryDTO — native строка voyage_targets (All-runs drill, handler-native
+// voyageTargetEntryDTO — a native voyage_targets row (All-runs drill, handler-native
 // T5d). target_kind/status — plain string; apply_id/errand_id/finished_at —
-// pointer-optional с omitempty. ПОРЯДОК полей алфавитный (как oapi-codegen).
+// pointer-optional with omitempty. Field ORDER alphabetical (like oapi-codegen).
 type voyageTargetEntryDTO struct {
 	ApplyID    *string    `json:"apply_id,omitempty"`
 	BatchIndex int        `json:"batch_index"`
@@ -1213,8 +1213,8 @@ type voyageTargetEntryDTO struct {
 	TargetKind string     `json:"target_kind"`
 }
 
-// scopeSizeOf декодирует target_resolved JSONB-массив и считает его длину.
-// Невалидный/пустой → 0 (graceful; терминальные счётчики берутся из summary).
+// scopeSizeOf decodes the target_resolved JSONB array and counts its length.
+// Invalid/empty → 0 (graceful; terminal counters come from summary).
 func scopeSizeOf(raw json.RawMessage) int {
 	if len(raw) == 0 {
 		return 0
@@ -1226,17 +1226,17 @@ func scopeSizeOf(raw json.RawMessage) int {
 	return len(items)
 }
 
-// toVoyageDTO проецирует domain [voyage.Voyage] в wire-тип [Voyage]
-// (категория C). Typed-enum Kind/Status [VoyageKind]/[VoyageStatus] —
-// wire та же строка. scenario_name/module/batch_mode/on_failure — pointer-optional
-// с omitempty: домен несёт `*string`/`*BatchMode`/`*OnFailure`, gen — те же
-// `*string`/`*enum` (nil → ключ опущен, байт-в-байт со старым `string ...,omitempty`
-// при пустом значении). target_origin — typed-struct JSONB (НЕ byte-passthrough):
-// unmarshal в [VoyageTarget] (домен-`SIDs` → gen-`Sids`, wire-ключ `sids`
-// совпадает); невалидный → target опущен (graceful, как раньше). date-time
-// created_at/started_at/finished_at/schedule_at — наносекундный wire (домен —
-// голый time.Time): присваиваем как есть БЕЗ .UTC()/Truncate, сохраняя байт-в-байт
-// с прежней прямой сериализацией v.CreatedAt.
+// toVoyageDTO projects domain [voyage.Voyage] into the wire type [Voyage]
+// (category C). Typed-enum Kind/Status [VoyageKind]/[VoyageStatus] —
+// wire is the same string. scenario_name/module/batch_mode/on_failure — pointer-optional
+// with omitempty: the domain carries `*string`/`*BatchMode`/`*OnFailure`, gen — the same
+// `*string`/`*enum` (nil → key omitted, byte-for-byte with the old `string ...,omitempty`
+// on an empty value). target_origin — a typed-struct JSONB (NOT byte-passthrough):
+// unmarshal into [VoyageTarget] (domain `SIDs` → gen `Sids`, wire key `sids`
+// matches); invalid → target omitted (graceful, as before). date-time
+// created_at/started_at/finished_at/schedule_at — nanosecond wire (the domain is
+// a bare time.Time): assigned as is WITHOUT .UTC()/Truncate, keeping byte-for-byte
+// parity with the former direct serialization of v.CreatedAt.
 func toVoyageDTO(v *voyage.Voyage) voyageDTO {
 	dto := voyageDTO{
 		VoyageID:          v.VoyageID,
@@ -1286,10 +1286,10 @@ func toVoyageDTO(v *voyage.Voyage) voyageDTO {
 	return dto
 }
 
-// noMatchPtr оборачивает summary.no_match в pointer-optional [VoyageSummary].
-// Старый DTO нёс `int json:"no_match,omitempty"` (0 → ключ опущен); gen — `*int`
-// с omitempty. Сохраняем байт-в-байт: 0 → nil-указатель (ключ опущен), иначе —
-// указатель на значение.
+// noMatchPtr wraps summary.no_match into a pointer-optional [VoyageSummary].
+// The old DTO carried `int json:"no_match,omitempty"` (0 → key omitted); gen — `*int`
+// with omitempty. We keep byte-for-byte: 0 → nil pointer (key omitted), otherwise —
+// a pointer to the value.
 func noMatchPtr(n int) *int {
 	if n == 0 {
 		return nil
@@ -1299,7 +1299,7 @@ func noMatchPtr(n int) *int {
 
 // List — GET /v1/voyages (ADR-043 §5).
 //
-// Query-фильтры: kind (exact), status (multi-value OR). Pagination —
+// Query filters: kind (exact), status (multi-value OR). Pagination —
 // sharedapi.ParsePage (max=1000). Sort created_at DESC.
 func (h *VoyageHandler) List(w http.ResponseWriter, r *http.Request) {
 	page, err := sharedapi.ParsePage(r.URL.Query())
@@ -1320,18 +1320,18 @@ func (h *VoyageHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply, h.logger)
 }
 
-// VoyageListInput — typed-вход [VoyageHandler.ListTyped] (FULL-TYPED ADR-054 §Pattern,
-// батч-2f). Kind/Statuses — query-фильтры (валидация enum — в ListTyped → 422); Page —
-// уже распарсенная пагинация (диапазон проверяет caller через ParsePage/CheckPageBounds
-// → 400). Пустые → фильтр не применять.
+// VoyageListInput — the typed input of [VoyageHandler.ListTyped] (FULL-TYPED ADR-054 §Pattern,
+// batch-2f). Kind/Statuses — query filters (enum validation — in ListTyped → 422); Page —
+// already-parsed pagination (the caller checks the range via ParsePage/CheckPageBounds
+// → 400). Empty → filter not applied.
 type VoyageListInput struct {
 	Kind     string
 	Statuses []string
 	Page     sharedapi.Page
 }
 
-// VoyageListReply — native typed-выход list (handler-native T5d). Плоская форма 1:1
-// с прежним VoyageListReply (items/offset/limit/total). items — native voyageDTO.
+// VoyageListReply — the native typed output of list (handler-native T5d). A flat shape 1:1
+// with the former VoyageListReply (items/offset/limit/total). items — native voyageDTO.
 type VoyageListReply struct {
 	Items  []voyageDTO `json:"items"`
 	Limit  int         `json:"limit"`
@@ -1339,8 +1339,8 @@ type VoyageListReply struct {
 	Total  int         `json:"total"`
 }
 
-// ListTyped — извлечённая доменная функция GET /v1/voyages (READ, БЕЗ audit; FULL-TYPED
-// ADR-054 §Pattern). enum-валидация kind/status → 422; БД-сбой → 500.
+// ListTyped — the extracted domain function GET /v1/voyages (READ, no audit; FULL-TYPED
+// ADR-054 §Pattern). enum validation of kind/status → 422; DB failure → 500.
 func (h *VoyageHandler) ListTyped(ctx context.Context, in VoyageListInput) (VoyageListReply, error) {
 	var zero VoyageListReply
 	if h.store == nil {
@@ -1388,9 +1388,9 @@ func (h *VoyageHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto, h.logger)
 }
 
-// VoyageDTO / VoyageSummaryDTO / VoyageTargetDTO / VoyageTargetEntryDTO — экспортируемые
-// alias-ы native handler-DTO (handler-native T5d). Нужны huma-projection (huma_voyage_reply.go
-// строит api-native из этих типов) и cadence-runs envelope-alias (PagedResponse[VoyageDTO]).
+// VoyageDTO / VoyageSummaryDTO / VoyageTargetDTO / VoyageTargetEntryDTO — exported
+// aliases of the native handler DTOs (handler-native T5d). Needed by the huma projection (huma_voyage_reply.go
+// builds api-native from these types) and the cadence-runs envelope alias (PagedResponse[VoyageDTO]).
 type (
 	VoyageDTO            = voyageDTO
 	VoyageSummaryDTO     = voyageSummaryDTO
@@ -1398,8 +1398,8 @@ type (
 	VoyageTargetEntryDTO = voyageTargetEntryDTO
 )
 
-// GetTyped — извлечённая доменная функция GET /v1/voyages/{id} (READ, БЕЗ audit;
-// FULL-TYPED ADR-054 §Pattern). 404 not-found, 422 bad id, 500 БД-сбой.
+// GetTyped — the extracted domain function GET /v1/voyages/{id} (READ, no audit;
+// FULL-TYPED ADR-054 §Pattern). 404 not-found, 422 bad id, 500 DB failure.
 func (h *VoyageHandler) GetTyped(ctx context.Context, id string) (VoyageDTO, error) {
 	var zero VoyageDTO
 	if h.store == nil {
@@ -1430,15 +1430,15 @@ func (h *VoyageHandler) Targets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply, h.logger)
 }
 
-// VoyageTargetsReply — native typed-выход targets (handler-native T5d). Плоская форма
-// 1:1 с прежним VoyageTargetsReply (voyage_id + targets[], оба required).
+// VoyageTargetsReply — the native typed output of targets (handler-native T5d). A flat shape
+// 1:1 with the former VoyageTargetsReply (voyage_id + targets[], both required).
 type VoyageTargetsReply struct {
 	Targets  []voyageTargetEntryDTO `json:"targets"`
 	VoyageID string                 `json:"voyage_id"`
 }
 
-// TargetsTyped — извлечённая доменная функция GET /v1/voyages/{id}/targets (READ, БЕЗ
-// audit; FULL-TYPED ADR-054 §Pattern). Existence-probe → 404; 422 bad id; 500 БД-сбой.
+// TargetsTyped — the extracted domain function GET /v1/voyages/{id}/targets (READ, no
+// audit; FULL-TYPED ADR-054 §Pattern). Existence-probe → 404; 422 bad id; 500 DB failure.
 func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTargetsReply, error) {
 	var zero VoyageTargetsReply
 	if h.store == nil {
@@ -1448,8 +1448,8 @@ func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTarg
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'id' must be a Crockford-base32 ULID (26 chars)")}
 	}
-	// Existence-probe: 404 если Voyage не существует (иначе пустой список
-	// неотличим от «несуществующего id»).
+	// Existence-probe: 404 if the Voyage does not exist (otherwise an empty list
+	// is indistinguishable from a "nonexistent id").
 	if _, err := voyage.SelectByID(ctx, h.store, id); err != nil {
 		if errors.Is(err, voyage.ErrVoyageNotFound) {
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", "voyage "+id+" not found")}
@@ -1480,16 +1480,16 @@ func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTarg
 
 // --- DELETE /v1/voyages/{id} ---
 
-// Cancel — DELETE /v1/voyages/{id} (ADR-043 §«отложено»: cancel pending/
-// scheduled — простой перевод в cancelled; running-cancel — post-MVP, см. ниже).
+// Cancel — DELETE /v1/voyages/{id} (ADR-043 §"deferred": cancel pending/
+// scheduled — a simple transition to cancelled; running-cancel — post-MVP, see below).
 //
-// Контракт:
-//   - 202 + {voyage_id, status:"cancelled"} — pending/scheduled-прогон отменён.
-//   - 404 — voyage_id не существует.
-//   - 409 — running-прогон (`voyage_running_cancel_unsupported`) либо уже
-//     терминальный (`voyage_already_terminal`). Сложный abort running-прогона
-//     отложен post-MVP (наследует deferred Tide/ErrandRun).
-//   - 500 — store не сконфигурирован / БД-сбой.
+// Contract:
+//   - 202 + {voyage_id, status:"cancelled"} — a pending/scheduled run is cancelled.
+//   - 404 — voyage_id does not exist.
+//   - 409 — a running run (`voyage_running_cancel_unsupported`) or an already
+//     terminal one (`voyage_already_terminal`). A complex abort of a running run is
+//     deferred post-MVP (inherits deferred Tide/ErrandRun).
+//   - 500 — store not configured / DB failure.
 func (h *VoyageHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
@@ -1504,18 +1504,18 @@ func (h *VoyageHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, reply, h.logger)
 }
 
-// VoyageCancelReply — native typed-выход cancel (handler-native T5d). Плоская форма
-// 1:1 с прежним VoyageCancelReply (voyage_id + status:cancelled, оба required).
+// VoyageCancelReply — the native typed output of cancel (handler-native T5d). A flat shape
+// 1:1 with the former VoyageCancelReply (voyage_id + status:cancelled, both required).
 type VoyageCancelReply struct {
 	Status   string `json:"status"`
 	VoyageID string `json:"voyage_id"`
 }
 
-// CancelTyped — извлечённая доменная функция DELETE /v1/voyages/{id} (FULL-TYPED
-// ADR-054 §Pattern, батч-2f self-audit): cancel pending/scheduled. RBAC-by-kind
-// (ADR-043 §6 fail-closed) ПОСЛЕ загрузки строки (kind виден из БД). self-audit
-// scenario_run.cancelled / command_run.cancelled пишется ВНУТРИ функции. *problemError
-// при отказе (404 нет, 409 running/terminal, 422 bad id), успех — 202 reply.
+// CancelTyped — the extracted domain function DELETE /v1/voyages/{id} (FULL-TYPED
+// ADR-054 §Pattern, batch-2f self-audit): cancel pending/scheduled. RBAC-by-kind
+// (ADR-043 §6 fail-closed) AFTER loading the row (kind is visible from the DB). self-audit
+// scenario_run.cancelled / command_run.cancelled is written INSIDE the function. *problemError
+// on failure (404 not-found, 409 running/terminal, 422 bad id), success — 202 reply.
 func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id string) (VoyageCancelReply, error) {
 	var zero VoyageCancelReply
 	if h.store == nil {
@@ -1533,9 +1533,9 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 		h.logger.Error("voyage.cancel: select failed", slog.String("voyage_id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "cancel voyage failed")}
 	}
-	// RBAC-by-kind (ADR-043 §6, fail-closed): cancel — mutating, требует то же
-	// право, что create по kind. Проверяем ПОСЛЕ загрузки строки (kind виден
-	// только из БД). scenario→incarnation.run, command→errand.run.
+	// RBAC-by-kind (ADR-043 §6, fail-closed): cancel is mutating, requires the same
+	// right as create by kind. Checked AFTER loading the row (kind is visible
+	// only from the DB). scenario→incarnation.run, command→errand.run.
 	resource, action := "errand", "run"
 	if v.Kind == voyage.KindScenario {
 		resource, action = "incarnation", "run"
@@ -1555,11 +1555,11 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 			"voyage_running_cancel_unsupported: running-Voyage cancel is post-MVP")}
 	}
 
-	// pending / scheduled → cancelled (простой перевод; running-abort — post-MVP).
+	// pending / scheduled → cancelled (a simple transition; running-abort — post-MVP).
 	prev := string(v.Status)
 	if err := cancelNonRunningVoyage(ctx, h.store, id); err != nil {
 		if errors.Is(err, errVoyageCancelRaceLost) {
-			// Между SELECT и UPDATE Voyage подобран VoyageWorker-ом (стал running).
+			// Between SELECT and UPDATE the Voyage was claimed by a VoyageWorker (became running).
 			return zero, &problemError{problem.New(problem.TypeErrandNotCancellable, "",
 				"voyage_running_cancel_unsupported: voyage was claimed by a worker")}
 		}
@@ -1581,9 +1581,9 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 
 // --- audit emitters ---
 
-// emitCreated пишет scenario_run.started / command_run.invoked (source=api/mcp,
-// archon_aid=JWT.sub). Background-ctx — HTTP-server мог отменить r.Context()
-// после write-response. `input` НЕ кладётся (инвариант A ADR-027).
+// emitCreated writes scenario_run.started / command_run.invoked (source=api/mcp,
+// archon_aid=JWT.sub). Background ctx — the HTTP server may have canceled r.Context()
+// after the write response. `input` is NOT included (invariant A ADR-027).
 func (h *VoyageHandler) emitCreated(aid string, source audit.Source, eventType audit.EventType, row *voyage.Voyage, target *voyageTargetRequest, scopeSize int) {
 	if h.auditW == nil {
 		return
@@ -1621,7 +1621,7 @@ func (h *VoyageHandler) emitCreated(aid string, source audit.Source, eventType a
 	}
 }
 
-// emitCancelled пишет scenario_run.cancelled / command_run.cancelled.
+// emitCancelled writes scenario_run.cancelled / command_run.cancelled.
 func (h *VoyageHandler) emitCancelled(aid string, source audit.Source, eventType audit.EventType, v *voyage.Voyage, prevStatus string) {
 	if h.auditW == nil {
 		return
@@ -1643,7 +1643,7 @@ func (h *VoyageHandler) emitCancelled(aid string, source audit.Source, eventType
 	}
 }
 
-// targetAuditPayload собирает declarative-target-форму для audit (без чувств.).
+// targetAuditPayload builds the declarative-target shape for audit (without sensitive data).
 func targetAuditPayload(t *voyageTargetRequest) map[string]any {
 	if t == nil {
 		return nil
@@ -1676,8 +1676,8 @@ func derefOnFailure(p *voyage.OnFailure) string {
 	return string(*p)
 }
 
-// normalizeVoyageOnFailure: "" → continue (parity ErrandRun default), валидное →
-// само, иначе detail-ошибка.
+// normalizeVoyageOnFailure: "" → continue (parity ErrandRun default), a valid value →
+// itself, otherwise a detail error.
 func normalizeVoyageOnFailure(s string) (voyage.OnFailure, string) {
 	switch s {
 	case "", string(voyage.OnFailureContinue):
@@ -1689,20 +1689,20 @@ func normalizeVoyageOnFailure(s string) (voyage.OnFailure, string) {
 	}
 }
 
-// applyBatchSpec транслирует строковое поле `batch` (S1) в req.BatchSize /
-// req.BatchPercent, переиспользуя весь существующий downstream (window-guard /
-// XOR / диапазоны / effectiveBatchSize / max_batch_size). Возвращает detail
-// 422-ошибки либо "" (ok / поле не задано).
+// applyBatchSpec translates the string field `batch` (S1) into req.BatchSize /
+// req.BatchPercent, reusing the whole existing downstream (window-guard /
+// XOR / ranges / effectiveBatchSize / max_batch_size). Returns the detail
+// of a 422 error or "" (ok / field not set).
 //
-// Семантика:
-//   - req.Batch == nil → no-op (старый путь batch_size/batch_percent).
-//   - trim(*req.Batch) == "" → «не задано»: весь scope одним Leg (no-op, не 422).
-//   - непустой + (batch_size|batch_percent заданы) → конфликт (нельзя оба формата).
-//   - "N%" → percent (как batch_percent=N); "N" → hosts (как batch_size=N).
-//   - malformed → человекочитаемый detail с показом исходной строки.
+// Semantics:
+//   - req.Batch == nil → no-op (old path batch_size/batch_percent).
+//   - trim(*req.Batch) == "" → "not set": the whole scope in one Leg (no-op, not 422).
+//   - non-empty + (batch_size|batch_percent set) → conflict (cannot use both formats).
+//   - "N%" → percent (as batch_percent=N); "N" → hosts (as batch_size=N).
+//   - malformed → a human-readable detail showing the source string.
 //
-// Поле уже разобрано через [voyage.ParseBatchSpec] (fail-closed грамматика);
-// window-несовместимость и потолок max_batch_size проверяются ниже по общему пути.
+// The field is already parsed via [voyage.ParseBatchSpec] (fail-closed grammar);
+// window incompatibility and the max_batch_size cap are checked below on the common path.
 func applyBatchSpec(req *voyageCreateRequest) (detail string) {
 	if req.Batch == nil {
 		return ""
@@ -1710,11 +1710,11 @@ func applyBatchSpec(req *voyageCreateRequest) (detail string) {
 	raw := *req.Batch
 	mode, value, err := voyage.ParseBatchSpec(raw)
 	if errors.Is(err, voyage.ErrBatchSpecEmpty) {
-		// Пустая строка-явно — «не задано», весь scope одним Leg. Не ошибка.
+		// An explicit empty string — "not set", the whole scope in one Leg. Not an error.
 		return ""
 	}
-	// Конфликт двух форматов отвергаем ДО разбора значения: непустой batch вместе
-	// с числовыми batch_size/batch_percent — противоречивый payload.
+	// Reject the two-format conflict BEFORE parsing the value: a non-empty batch together
+	// with numeric batch_size/batch_percent is a contradictory payload.
 	if req.BatchSize != nil || req.BatchPercent != nil {
 		return "voyage_batch_spec_conflict: field 'batch' is mutually exclusive with 'batch_size'/'batch_percent' (set one format)"
 	}
@@ -1730,22 +1730,22 @@ func applyBatchSpec(req *voyageCreateRequest) (detail string) {
 	return ""
 }
 
-// applyMaxFailures транслирует строковое поле `max_failures` (S2) в порог провалов
-// req.FailThreshold, переиспользуя fail-closed грамматику [voyage.ParseBatchSpec]
-// (`N`|`N%`, та же что у batch). Возвращает detail 422-ошибки либо "" (ok / поле не
-// задано). ADR-043 amendment 2026-06-09 §2/§3.
+// applyMaxFailures translates the string field `max_failures` (S2) into the failure threshold
+// req.FailThreshold, reusing the fail-closed grammar of [voyage.ParseBatchSpec]
+// (`N`|`N%`, the same as batch). Returns the detail of a 422 error or "" (ok / field not
+// set). ADR-043 amendment 2026-06-09 §2/§3.
 //
-// Семантика (симметрия с applyBatchSpec):
-//   - req.MaxFailures == nil → no-op (старый путь fail_threshold).
-//   - trim(*req.MaxFailures) == "" → «не задано» (no-op, не 422).
-//   - непустой + fail_threshold задан → конфликт (нельзя оба формата).
-//   - "N" → абсолют: пишет req.FailThreshold = N (ведёт себя как fail_threshold:N).
-//   - "N%" → percent: стешит N в req.maxFailuresPercent; абсолютный порог
-//     резолвится позже по scope (resolveMaxFailuresPercent после резолва target-а).
-//   - malformed → человекочитаемый detail с показом исходной строки.
+// Semantics (symmetric with applyBatchSpec):
+//   - req.MaxFailures == nil → no-op (old path fail_threshold).
+//   - trim(*req.MaxFailures) == "" → "not set" (no-op, not 422).
+//   - non-empty + fail_threshold set → conflict (cannot use both formats).
+//   - "N" → absolute: writes req.FailThreshold = N (behaves like fail_threshold:N).
+//   - "N%" → percent: stashes N in req.maxFailuresPercent; the absolute threshold
+//     is resolved later by scope (resolveMaxFailuresPercent after target resolve).
+//   - malformed → a human-readable detail showing the source string.
 //
-// Грамматика batch разделяет с порогом hosts/percent-семантику: hosts-режим здесь =
-// абсолютное число провалов, percent-режим = процент от единиц прогона.
+// The batch grammar shares the hosts/percent semantics with the threshold: hosts mode here =
+// an absolute failure count, percent mode = a percent of run units.
 func applyMaxFailures(req *voyageCreateRequest) (detail string) {
 	if req.MaxFailures == nil {
 		return ""
@@ -1753,12 +1753,12 @@ func applyMaxFailures(req *voyageCreateRequest) (detail string) {
 	raw := *req.MaxFailures
 	mode, value, err := voyage.ParseBatchSpec(raw)
 	if errors.Is(err, voyage.ErrBatchSpecEmpty) {
-		// Пустая строка — «не задано» (no-op, не ошибка ввода).
+		// An empty string — "not set" (no-op, not an input error).
 		return ""
 	}
-	// Конфликт двух форматов отвергаем ДО разбора значения: непустой max_failures
-	// вместе с int-овым fail_threshold — противоречивый payload (тот же error-code,
-	// что у batch, ADR-043 amendment 2026-06-09 §3).
+	// Reject the two-format conflict BEFORE parsing the value: a non-empty max_failures
+	// together with an int fail_threshold is a contradictory payload (the same error code
+	// as batch, ADR-043 amendment 2026-06-09 §3).
 	if req.FailThreshold != nil {
 		return "voyage_batch_spec_conflict: field 'max_failures' is mutually exclusive with 'fail_threshold' (set one format)"
 	}
@@ -1768,17 +1768,17 @@ func applyMaxFailures(req *voyageCreateRequest) (detail string) {
 	switch mode {
 	case voyage.BatchSpecPercent:
 		req.maxFailuresPercent = &value
-	default: // BatchSpecHosts → абсолютное число провалов
+	default: // BatchSpecHosts → an absolute failure count
 		req.FailThreshold = &value
 	}
 	return ""
 }
 
-// resolveMaxFailuresPercent дорезолвивает max_failures="N%" в абсолютный
-// req.FailThreshold ПОСЛЕ резолва scope (ADR-043 amendment 2026-06-09 §2): порог
-// считается по единицам прогона (инкарнации для scenario / хосты для command — та
-// же база scope, что у effectiveBatchSize). ceil(scope*pct/100), clamp [1, scope].
-// No-op, если percent не задан (req.maxFailuresPercent == nil) либо scope <= 0.
+// resolveMaxFailuresPercent resolves max_failures="N%" into an absolute
+// req.FailThreshold AFTER scope resolve (ADR-043 amendment 2026-06-09 §2): the threshold
+// is computed by run units (incarnations for scenario / hosts for command — the
+// same scope base as effectiveBatchSize). ceil(scope*pct/100), clamp [1, scope].
+// No-op if percent is unset (req.maxFailuresPercent == nil) or scope <= 0.
 func resolveMaxFailuresPercent(req *voyageCreateRequest, scope int) {
 	if req.maxFailuresPercent == nil || scope <= 0 {
 		return
@@ -1793,8 +1793,8 @@ func resolveMaxFailuresPercent(req *voyageCreateRequest, scope int) {
 	req.FailThreshold = &eff
 }
 
-// normalizeVoyageBatchMode: "" → barrier (default, ADR-043 amendment), валидное →
-// само, иначе detail-ошибка.
+// normalizeVoyageBatchMode: "" → barrier (default, ADR-043 amendment), a valid value →
+// itself, otherwise a detail error.
 func normalizeVoyageBatchMode(s string) (voyage.BatchMode, string) {
 	switch s {
 	case "", string(voyage.BatchModeBarrier):
@@ -1806,8 +1806,8 @@ func normalizeVoyageBatchMode(s string) (voyage.BatchMode, string) {
 	}
 }
 
-// voyageBatchIndex — batch_index единицы при Insert-е. barrier → Leg-индекс
-// (chunk по batch_size); window → 0 для всех (плоский прогон, нет Leg-ов; ADR-043
+// voyageBatchIndex — a unit's batch_index at Insert time. barrier → Leg index
+// (chunk by batch_size); window → 0 for all (a flat run, no Legs; ADR-043
 // amendment §7).
 func voyageBatchIndex(i int, batchSize *int, batchMode voyage.BatchMode) int {
 	if batchMode == voyage.BatchModeWindow {
@@ -1816,9 +1816,9 @@ func voyageBatchIndex(i int, batchSize *int, batchMode voyage.BatchMode) int {
 	return batchIndexFor(i, batchSize)
 }
 
-// batchIndexFor — 0-based индекс Leg-а для i-й единицы (chunk по batch_size).
-// batch_size nil/<=0 → весь прогон один Leg (batch_index=0), parity
-// chunkIncarnations/chunkSIDs воркера.
+// batchIndexFor — the 0-based Leg index for the i-th unit (chunk by batch_size).
+// batch_size nil/<=0 → the whole run in one Leg (batch_index=0), parity
+// chunkIncarnations/chunkSIDs of the worker.
 func batchIndexFor(i int, batchSize *int) int {
 	if batchSize == nil || *batchSize <= 0 {
 		return 0
@@ -1826,8 +1826,8 @@ func batchIndexFor(i int, batchSize *int) int {
 	return i / *batchSize
 }
 
-// voyageTotalBatches — total_batches при Insert-е. barrier → число Leg-ов; window
-// → 1 (плоский прогон одной волной-окном, batch_index=0 у всех единиц).
+// voyageTotalBatches — total_batches at Insert time. barrier → the Leg count; window
+// → 1 (a flat run in one window wave, batch_index=0 for all units).
 func voyageTotalBatches(n int, batchSize *int, batchMode voyage.BatchMode) int {
 	if n == 0 {
 		return 0
@@ -1838,7 +1838,7 @@ func voyageTotalBatches(n int, batchSize *int, batchMode voyage.BatchMode) int {
 	return totalBatches(n, batchSize)
 }
 
-// totalBatches — число Leg-ов для n единиц при заданном batch_size.
+// totalBatches — the Leg count for n units at a given batch_size.
 func totalBatches(n int, batchSize *int) int {
 	if n == 0 {
 		return 0
@@ -1850,18 +1850,18 @@ func totalBatches(n int, batchSize *int) int {
 	return (n + bs - 1) / bs
 }
 
-// incarnationCovenLabelValid — формат env-тега incarnation совпадает с
-// coven-меткой хоста (ADR-008 amendment a использует тот же предикат).
+// incarnationCovenLabelValid — the incarnation env-tag format matches the
+// host coven label (ADR-008 amendment a uses the same predicate).
 func incarnationCovenLabelValid(label string) bool { return soul.ValidCoven(label) }
 
-// errVoyageCancelRaceLost — CAS-cancel вернул 0 строк: между SELECT и UPDATE
-// Voyage подобран VoyageWorker-ом (pending/scheduled → running). Caller трактует
-// как 409 «running-cancel unsupported».
+// errVoyageCancelRaceLost — CAS-cancel returned 0 rows: between SELECT and UPDATE
+// the Voyage was claimed by a VoyageWorker (pending/scheduled → running). The caller treats it
+// as 409 "running-cancel unsupported".
 var errVoyageCancelRaceLost = errors.New("voyage: cancel race lost (claimed by worker)")
 
-// cancelNonRunningVoyageSQL — CAS-перевод pending/scheduled → cancelled.
-// WHERE сужено до non-running-статусов (idempotent + race-safe): если Voyage
-// успел стать running между SELECT и UPDATE, 0 строк → errVoyageCancelRaceLost.
+// cancelNonRunningVoyageSQL — CAS transition pending/scheduled → cancelled.
+// WHERE narrowed to non-running statuses (idempotent + race-safe): if the Voyage
+// became running between SELECT and UPDATE, 0 rows → errVoyageCancelRaceLost.
 // finished_at = NOW() (CHECK voyages_terminal_finished_at: cancelled — terminal).
 const cancelNonRunningVoyageSQL = `
 UPDATE voyages
@@ -1871,9 +1871,9 @@ WHERE voyage_id = $1
   AND status IN ('pending', 'scheduled')
 `
 
-// cancelNonRunningVoyage переводит pending/scheduled Voyage в cancelled. 0 строк
-// (Voyage стал running / уже terminal — последнее caller отсёк probe-ом) →
-// errVoyageCancelRaceLost. running-abort — post-MVP (наследует deferred
+// cancelNonRunningVoyage transitions a pending/scheduled Voyage to cancelled. 0 rows
+// (the Voyage became running / is already terminal — the latter the caller rejected via probe) →
+// errVoyageCancelRaceLost. running-abort — post-MVP (inherits deferred
 // Tide/ErrandRun).
 func cancelNonRunningVoyage(ctx context.Context, db voyage.ExecQueryRower, id string) error {
 	tag, err := db.Exec(ctx, cancelNonRunningVoyageSQL, id)

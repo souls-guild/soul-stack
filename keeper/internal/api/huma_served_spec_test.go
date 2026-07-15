@@ -1,10 +1,10 @@
-// Гейт served-механизма GET /openapi.yaml. Доказывает, что servedOpenAPIHandler
-// отдаёт runtime-дамп huma-агрегатора (3.1) — а не embed committed-рукопись 3.0.3.
+// Gate for the served mechanism of GET /openapi.yaml. Proves that servedOpenAPIHandler
+// serves the runtime dump of the huma aggregator (3.1) — not the embedded committed hand-written 3.0.3.
 //
-// ВНИМАНИЕ: тест зовёт servedOpenAPIHandler НАПРЯМУЮ (мимо router-а), поэтому
-// JWT-гейт здесь не участвует — он навешан middleware-ом RequireJWT на router-
-// уровне (механизм A, ADR-054). Auth-гейт /openapi.yaml проверяет
-// meta_routes_test (TestMetaRoutes_OpenAPI_RequiresJWT: 401 без / 200 с JWT).
+// NOTE: the test calls servedOpenAPIHandler DIRECTLY (bypassing the router), so
+// the JWT gate is not involved here — it is attached by the RequireJWT middleware at the router
+// level (mechanism A, ADR-054). The /openapi.yaml auth gate is checked by
+// meta_routes_test (TestMetaRoutes_OpenAPI_RequiresJWT: 401 without / 200 with JWT).
 package api
 
 import (
@@ -17,16 +17,16 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// TestServedOpenAPI_HandlerHuma31 — гейт самого servedOpenAPIHandler (мимо
-// router-а, без auth-цепочки):
-//   - 200 (handler сам auth не проверяет — JWT-гейт на router-уровне);
+// TestServedOpenAPI_HandlerHuma31 — a gate for servedOpenAPIHandler itself (bypassing
+// the router, without the auth chain):
+//   - 200 (the handler does not check auth itself — the JWT gate is at the router level);
 //   - Content-Type application/yaml;
-//   - тело — OpenAPI 3.1.0 (huma-генерат, не 3.0.3-рукопись);
-//   - тело несёт контрактные схемы (IncarnationCreateRequest / SoulListReply /
-//     SoulprintFacts) — доказательство, что served-дамп = полная агрегат-спека.
+//   - the body — OpenAPI 3.1.0 (a huma generate, not the 3.0.3 hand-written);
+//   - the body carries the contract schemas (IncarnationCreateRequest / SoulListReply /
+//     SoulprintFacts) — proof that the served dump = the full aggregate spec.
 func TestServedOpenAPI_HandlerHuma31(t *testing.T) {
 	rec := httptest.NewRecorder()
-	// Зовём handler напрямую — JWT-гейт на router-уровне (механизм A), не здесь.
+	// Call the handler directly — the JWT gate is at the router level (mechanism A), not here.
 	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
 	servedOpenAPIHandler(rec, req)
 
@@ -43,8 +43,8 @@ func TestServedOpenAPI_HandlerHuma31(t *testing.T) {
 	body, _ := io.ReadAll(rec.Body)
 	s := string(body)
 
-	// huma сортирует top-level YAML-ключи (openapi не обязан быть первым) —
-	// проверяем поле через парс, не префиксом строки.
+	// huma sorts top-level YAML keys (openapi need not be first) —
+	// check the field via parsing, not by a line prefix.
 	var doc map[string]any
 	if err := yaml.Unmarshal(body, &doc); err != nil {
 		t.Fatalf("served-спека не парсится как YAML: %v", err)
@@ -60,8 +60,8 @@ func TestServedOpenAPI_HandlerHuma31(t *testing.T) {
 	}
 }
 
-// TestServedOpenAPI_CacheStable — кеш-механизм: повторные вызовы отдают идентичный
-// буфер (sync.Once собирает один раз; дамп неизменен за процесс).
+// TestServedOpenAPI_CacheStable — the cache mechanism: repeated calls return an identical
+// buffer (sync.Once builds once; the dump is unchanged for the process lifetime).
 func TestServedOpenAPI_CacheStable(t *testing.T) {
 	first, err := openAPISpecBytes()
 	if err != nil {
@@ -71,7 +71,7 @@ func TestServedOpenAPI_CacheStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openAPISpecBytes (2): %v", err)
 	}
-	// Тот же backing-массив (кеш, не пересборка).
+	// The same backing array (cache, not a rebuild).
 	if len(first) == 0 || &first[0] != &second[0] {
 		t.Error("повторный вызов вернул иной буфер — кеш не сработал (пересборка на каждый запрос?)")
 	}

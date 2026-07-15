@@ -1,17 +1,18 @@
 package api
 
-// FULL-TYPED форма READ-каталогов Operator API (code-first источник OpenAPI,
-// ADR-054 §Pattern, READ-вариант pilot-1 БЕЗ audit). БАТЧ-1 read-tier тиража:
-// три bare-GET-каталога без входных параметров — `GET /v1/permissions`,
-// `GET /v1/event-types`, `GET /v1/me/permissions`. Go-типы — единственный источник
-// правды: huma строит из них И JSON Schema OpenAPI-фрагмента, И typed-output.
+// FULL-TYPED shape of the Operator API READ catalogs (code-first OpenAPI source,
+// ADR-054 §Pattern, the READ variant of pilot-1, no audit). The read-tier rollout
+// batch: bare-GET catalogs with no input parameters — `GET /v1/permissions`,
+// `GET /v1/event-types`, `GET /v1/herald-types`, `GET /v1/me/permissions`. The Go
+// types are the single source of truth: huma builds both the OpenAPI-fragment JSON
+// Schema and the typed output from them.
 //
-// Все три — READ без фильтров: input — пустая структура (huma не требует Body/
-// Path/Query-полей для bare-GET, как roleListInput). Output — typed Body = alias на
-// сгенерированный oapi-reply (тот же тип, что отдавал legacy writeJSON), поэтому
-// wire-байты идентичны; huma лишь сериализует уже собранный handler-ом срез.
-// omitempty/[]-vs-null держат сами oapi-типы — golden-JSON snapshot фиксирует это
-// байт-в-байт (главный guard read-tier).
+// All are READ without filters: input — an empty struct (huma requires no
+// Body/Path/Query fields for a bare-GET, like roleListInput). Output — a typed Body
+// = alias for the generated oapi-reply (the same type the legacy writeJSON emitted),
+// so the wire bytes are identical; huma merely serializes the slice the handler has
+// already assembled. omitempty/[]-vs-null are held by the oapi types themselves — a
+// golden-JSON snapshot pins this byte-for-byte (the main read-tier guard).
 
 import (
 	"net/http"
@@ -19,26 +20,27 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// === GET /v1/permissions — каталог RBAC-permissions ===
+// === GET /v1/permissions — RBAC permissions catalog ===
 
-// permissionsListInput — huma-input GET /v1/permissions. Параметров нет (каталог
-// без фильтров) — пустая структура (parity roleListInput).
+// permissionsListInput — huma input for GET /v1/permissions. No parameters (a
+// catalog without filters) — an empty struct (parity with roleListInput).
 type permissionsListInput struct{}
 
-// permissionsListOutput — huma-output GET /v1/permissions (FULL-TYPED). Body —
-// typed 200-тело (huma-native api.PermissionCatalogReply, T5b — конверт legacy-генерата→native
-// в register-func). Wire-форма (items non-nil, сортировка resource/action,
-// selector_keys) зафиксирована golden-JSON snapshot-тестом.
+// permissionsListOutput — huma output for GET /v1/permissions (FULL-TYPED). Body —
+// the typed 200 body (huma-native api.PermissionCatalogReply, T5b — the
+// legacy-generator→native envelope in the register func). The wire shape (items
+// non-nil, resource/action sorting, selector_keys) is pinned by a golden-JSON
+// snapshot test.
 type permissionsListOutput struct {
 	Body PermissionCatalogReply
 }
 
-// permissionsListOperation — метаданные GET /v1/permissions. Path = "/permissions"
-// относительно chi-группы /v1 (huma.API смонтирован на ней; chi.Walk видит роут
-// /v1/permissions, drift-test зелёный). Абсолютный (а не "/") — три каталога живут
-// на ОДНОЙ huma.API/спека-дампе, distinct-path исключает коллизию операций (в
-// отличие от cadence/role, где distinct-path даёт сама форма `/`+`/{name}`).
-// DefaultStatus=200. READ-роут: audit НЕ навешан.
+// permissionsListOperation — metadata for GET /v1/permissions. Path = "/permissions"
+// relative to the /v1 chi group (huma.API is mounted on it; chi.Walk sees the route
+// /v1/permissions, the drift-test is green). Absolute (not "/") — the catalogs live
+// on ONE huma.API/spec dump, and a distinct path rules out an operation collision
+// (unlike cadence/role, where the `/`+`/{name}` shape gives a distinct path by
+// itself). DefaultStatus=200. READ route: audit not wired.
 func permissionsListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listPermissions",
@@ -52,23 +54,24 @@ func permissionsListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/event-types — каталог event-types для Tiding-подписки ===
+// === GET /v1/event-types — event-types catalog for Tiding subscriptions ===
 
-// eventTypesListInput — huma-input GET /v1/event-types. Параметров нет — пустая
-// структура (parity roleListInput).
+// eventTypesListInput — huma input for GET /v1/event-types. No parameters — an
+// empty struct (parity with roleListInput).
 type eventTypesListInput struct{}
 
-// eventTypesListOutput — huma-output GET /v1/event-types (FULL-TYPED). Body —
-// typed 200-тело (huma-native api.EventTypeCatalogReply). Wire-форма (areas/
-// point_events non-nil, area-glob `<name>.*`) зафиксирована golden-JSON snapshot-
-// тестом.
+// eventTypesListOutput — huma output for GET /v1/event-types (FULL-TYPED). Body —
+// the typed 200 body (huma-native api.EventTypeCatalogReply). The wire shape
+// (areas/point_events non-nil, area-glob `<name>.*`) is pinned by a golden-JSON
+// snapshot test.
 type eventTypesListOutput struct {
 	Body EventTypeCatalogReply
 }
 
-// eventTypesListOperation — метаданные GET /v1/event-types. Path = "/event-types"
-// относительно chi-группы /v1 (абсолютный — distinct-path на общей huma.API/дампе,
-// см. permissionsListOperation). DefaultStatus=200. READ-роут: audit НЕ навешан.
+// eventTypesListOperation — metadata for GET /v1/event-types. Path = "/event-types"
+// relative to the /v1 chi group (absolute — a distinct path on the shared
+// huma.API/dump, see permissionsListOperation). DefaultStatus=200. READ route:
+// audit not wired.
 func eventTypesListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listEventTypes",
@@ -82,23 +85,24 @@ func eventTypesListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/herald-types — каталог типов Herald-канала ===
+// === GET /v1/herald-types — Herald channel types catalog ===
 
-// heraldTypesListInput — huma-input GET /v1/herald-types. Параметров нет — пустая
-// структура (parity roleListInput).
+// heraldTypesListInput — huma input for GET /v1/herald-types. No parameters — an
+// empty struct (parity with roleListInput).
 type heraldTypesListInput struct{}
 
-// heraldTypesListOutput — huma-output GET /v1/herald-types (FULL-TYPED). Body —
-// typed 200-тело (huma-native api.HeraldTypeCatalogReply). Wire-форма (types/fields
-// non-nil, сортировка типов как AllHeraldTypes) зафиксирована golden-JSON snapshot-
-// тестом.
+// heraldTypesListOutput — huma output for GET /v1/herald-types (FULL-TYPED). Body —
+// the typed 200 body (huma-native api.HeraldTypeCatalogReply). The wire shape
+// (types/fields non-nil, types sorted like AllHeraldTypes) is pinned by a
+// golden-JSON snapshot test.
 type heraldTypesListOutput struct {
 	Body HeraldTypeCatalogReply
 }
 
-// heraldTypesListOperation — метаданные GET /v1/herald-types. Path = "/herald-types"
-// относительно chi-группы /v1 (абсолютный — distinct-path на общей huma.API/дампе,
-// см. permissionsListOperation). DefaultStatus=200. READ-роут: audit НЕ навешан.
+// heraldTypesListOperation — metadata for GET /v1/herald-types. Path =
+// "/herald-types" relative to the /v1 chi group (absolute — a distinct path on the
+// shared huma.API/dump, see permissionsListOperation). DefaultStatus=200. READ
+// route: audit not wired.
 func heraldTypesListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listHeraldTypes",
@@ -112,24 +116,26 @@ func heraldTypesListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/me/permissions — эффективные права текущего Архонта ===
+// === GET /v1/me/permissions — effective permissions of the current Archon ===
 
-// myPermissionsListInput — huma-input GET /v1/me/permissions. Параметров нет (AID
-// берётся из claims, НЕ из query) — пустая структура (parity roleListInput).
+// myPermissionsListInput — huma input for GET /v1/me/permissions. No parameters (the
+// AID comes from claims, NOT from the query) — an empty struct (parity with
+// roleListInput).
 type myPermissionsListInput struct{}
 
-// myPermissionsListOutput — huma-output GET /v1/me/permissions (FULL-TYPED). Body —
-// typed 200-тело (huma-native api.MyPermissionsReply). Wire-форма (permissions
-// non-nil, pointer-optional, snake_case scope-ключи) зафиксирована golden-JSON
-// snapshot-тестом.
+// myPermissionsListOutput — huma output for GET /v1/me/permissions (FULL-TYPED).
+// Body — the typed 200 body (huma-native api.MyPermissionsReply). The wire shape
+// (permissions non-nil, pointer-optional, snake_case scope keys) is pinned by a
+// golden-JSON snapshot test.
 type myPermissionsListOutput struct {
 	Body MyPermissionsReply
 }
 
-// myPermissionsListOperation — метаданные GET /v1/me/permissions. Path =
-// "/me/permissions" относительно chi-группы /v1 (абсолютный — distinct-path на общей
-// huma.API/дампе, см. permissionsListOperation). DefaultStatus=200. READ-роут: audit
-// НЕ навешан. 500 — claims нет в context (auth-chain не собрана, серверная ошибка).
+// myPermissionsListOperation — metadata for GET /v1/me/permissions. Path =
+// "/me/permissions" relative to the /v1 chi group (absolute — a distinct path on the
+// shared huma.API/dump, see permissionsListOperation). DefaultStatus=200. READ
+// route: audit not wired. 500 — no claims in the context (the auth chain is not
+// assembled, a server error).
 func myPermissionsListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listMyPermissions",

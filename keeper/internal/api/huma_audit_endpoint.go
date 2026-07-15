@@ -1,11 +1,11 @@
 package api
 
-// Регистрация и spec-dump GET /v1/audit на huma full-typed (ADR-054 §Pattern
-// ЧЕТВЁРТЫЙ tier — read-with-typed-query). READ-вариант (БЕЗ audit-middleware:
-// чтение audit_log само audit-event не порождает). huma валидирует typed-query →
-// конверт в доменный handlers.AuditListFilter → ListTyped → typed envelope-output.
-// Доменные problem-ошибки (невалидный source → 422) доставляются через
-// humaProblemError тем же error-контрактом, что huma-bind (bad date-time/int → 400).
+// Registration and spec-dump of GET /v1/audit on huma full-typed (ADR-054 §Pattern
+// FOURTH tier — read-with-typed-query). A READ variant (WITHOUT audit-middleware:
+// reading audit_log produces no audit event itself). huma validates the typed query →
+// convert into the domain handlers.AuditListFilter → ListTyped → typed envelope output.
+// Domain problem errors (invalid source → 422) are delivered via
+// humaProblemError with the same error contract as huma-bind (bad date-time/int → 400).
 
 import (
 	"context"
@@ -16,15 +16,15 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// registerHumaAuditList монтирует GET /v1/audit через huma на переданный chi.Router
-// (та группа, что уже несёт RequireJWT/RequirePermission(audit.read)/maxBody/metrics).
-// auditH — доменный handler; nil → no-op (паттерн opt-in-домена router.go: роут
-// подключается только при non-nil auditH).
+// registerHumaAuditList mounts GET /v1/audit via huma on the passed chi.Router
+// (the group already carrying RequireJWT/RequirePermission(audit.read)/maxBody/metrics).
+// auditH — the domain handler; nil → no-op (the opt-in-domain pattern of router.go: the route
+// is wired only when auditH is non-nil).
 //
-// READ-вариант tier-а: huma биндит/валидирует typed-query (bad date-time/int → 400
-// через error-override; bad source-enum → 422), конвертит в handlers.AuditListFilter
-// → ListTyped → typed output. Без claims-чтения (audit.read навешан на группе; AID-
-// фильтр идёт query-параметром, не из JWT).
+// The READ variant of the tier: huma binds/validates the typed query (bad date-time/int → 400
+// via error-override; bad source-enum → 422), converts into handlers.AuditListFilter
+// → ListTyped → typed output. Without reading claims (audit.read is attached on the group; the AID
+// filter comes as a query parameter, not from the JWT).
 func registerHumaAuditList(humaAPI huma.API, auditH *handlers.AuditHandler) {
 	if auditH == nil {
 		return
@@ -38,13 +38,13 @@ func registerHumaAuditList(humaAPI huma.API, auditH *handlers.AuditHandler) {
 	})
 }
 
-// toAuditListFilter — конверт typed huma-input → доменный handlers.AuditListFilter
-// (ADR-054 §Pattern шаг 3, тонкий клей). zero-time StartedAfter/Before huma выставляет
-// при опущенном параметре (он не вызывает parseInto) → доменная ListTyped трактует
-// IsZero как «без временной границы» (parity легаси `if param != ""`). Offset/Limit
-// huma уже подставил default (0 / 50) при опущенных — совпадает с ParsePage.
-// int32→int — расширяющий каст без потери (пагинация ≤ int32-диапазона); границы
-// (offset≥0, limit∈[1,1000]) проверяет доменная CheckPageBounds → 400 (НЕ huma).
+// toAuditListFilter — converts the typed huma input → domain handlers.AuditListFilter
+// (ADR-054 §Pattern step 3, thin glue). huma sets a zero-time StartedAfter/Before
+// when the parameter is omitted (it does not call parseInto) → the domain ListTyped treats
+// IsZero as "no time boundary" (parity with the legacy `if param != ""`). huma already
+// substituted the default Offset/Limit (0 / 50) when omitted — matching ParsePage.
+// int32→int — a widening cast without loss (pagination ≤ int32 range); the bounds
+// (offset≥0, limit∈[1,1000]) are checked by the domain CheckPageBounds → 400 (NOT huma).
 func toAuditListFilter(in *auditListInput) handlers.AuditListFilter {
 	return handlers.AuditListFilter{
 		Types:         in.Types,
@@ -60,9 +60,9 @@ func toAuditListFilter(in *auditListInput) handlers.AuditListFilter {
 	}
 }
 
-// auditProblem доставляет ошибку ListTyped через huma как problem+json. Доменная
-// *handlers.problemError → humaProblemError (его Details, статус из таблицы: невалидный
-// source → 422; БД-сбой → 500). Не-problem (нештатный путь) → 500 internal (parity
+// auditProblem delivers a ListTyped error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError (its Details, status from the table: invalid
+// source → 422; DB failure → 500). Non-problem (an unexpected path) → 500 internal (parity
 // roleProblem / cadenceProblem).
 func auditProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -71,11 +71,11 @@ func auditProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaAuditSpecYAML собирает OpenAPI-фрагмент мигрированного-на-huma GET /v1/audit как
-// YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-таргета тиража
-// и guard-теста. Делегирует generic [humaDumpSpec], регистрируя операцию через тот же
-// registerHumaAuditList (единый register-путь — нет дубля dump-vs-mount): handler при
-// dump не вызывается. Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaAuditSpecYAML builds the OpenAPI fragment of the huma-migrated GET /v1/audit as
+// a YAML string, WITHOUT mounting on the real router. A hook for the rollout spec-merge target
+// and a guard test. Delegates to the generic [humaDumpSpec], registering the operation via the same
+// registerHumaAuditList (a single register path — no dump-vs-mount duplication): the handler is
+// not called during dump. Returns a 3.1.0 spec (huma default).
 func HumaAuditSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		registerHumaAuditList(api, handlers.AuditSpecStub())

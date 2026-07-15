@@ -1,6 +1,6 @@
 package handlers
 
-// HANDLER-NATIVE тесты RerunLastTyped: прямой вызов доменной функции вместо
+// HANDLER-NATIVE tests for RerunLastTyped: a direct call to the domain function instead of
 // httptest+(w,r). 202 → err==nil + view.{ApplyID,Incarnation,Scenario}; 404/409/422 → wantProblem.
 
 import (
@@ -15,15 +15,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newRerunHandler собирает handler со всеми deps для rerun-last
-// (runner + resolver + auditWriter). loader не нужен (rerun не валидирует input).
+// newRerunHandler assembles a handler with all deps for rerun-last
+// (runner + resolver + auditWriter). loader is not needed (rerun does not validate input).
 func newRerunHandler(db *fakeIncDB, starter *fakeStarter, aw *fakeAuditWriter) *IncarnationHandler {
 	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, nil, aw, nil, nil)
 }
 
-// rerunDB конструирует fakeIncDB под rerun-поток: SelectByName (status) +
-// UnlockForRerun SELECT FOR UPDATE (state, status) тот же status. Дефолтный
-// last-run probe → create (create-путь: последний упавший == created).
+// rerunDB constructs a fakeIncDB for the rerun flow: SelectByName (status) +
+// UnlockForRerun SELECT FOR UPDATE (state, status) the same status. The default
+// last-run probe → create (create path: last failed == created).
 func rerunDB(status string) *fakeIncDB {
 	return &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, status) },
@@ -31,10 +31,10 @@ func rerunDB(status string) *fakeIncDB {
 	}
 }
 
-// TestRerunLast_202_FromErrorLocked — happy path: из error_locked снимается
-// блок (UnlockForRerun: applying) и запускается ровно один scenario `create`
-// с общим apply_id; ответ 202 {apply_id, incarnation, scenario}; audit rerun_last
-// с reason + previous_status + scenario.
+// TestRerunLast_202_FromErrorLocked — happy path: the lock is removed from error_locked
+// (UnlockForRerun: applying) and exactly one scenario `create` is started
+// with a shared apply_id; response 202 {apply_id, incarnation, scenario}; audit rerun_last
+// with reason + previous_status + scenario.
 func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}
@@ -54,7 +54,7 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	if !audit.IsValidULID(out.ApplyID) {
 		t.Errorf("apply_id not ULID: %q", out.ApplyID)
 	}
-	// Ровно один новый create-прогон с тем же apply_id.
+	// Exactly one new create run with the same apply_id.
 	if starter.calls != 1 {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
@@ -67,7 +67,7 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	if starter.gotSpec.ServiceRef.Ref != "v1" {
 		t.Errorf("ServiceRef.Ref = %q, want v1 (развёрнутая версия)", starter.gotSpec.ServiceRef.Ref)
 	}
-	// audit rerun_last с reason + previous_status=error_locked + scenario.
+	// audit rerun_last with reason + previous_status=error_locked + scenario.
 	if !hasEvent(aw, audit.EventIncarnationRerunLast) {
 		t.Fatalf("ожидался audit incarnation.rerun_last")
 	}
@@ -89,17 +89,17 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	if ev.Payload["apply_id"] != out.ApplyID {
 		t.Errorf("audit apply_id = %v, want %q", ev.Payload["apply_id"], out.ApplyID)
 	}
-	// НЕ переиспользует incarnation.unlocked.
+	// Does NOT reuse incarnation.unlocked.
 	if hasEvent(aw, audit.EventIncarnationUnlocked) {
 		t.Errorf("rerun не должен писать incarnation.unlocked")
 	}
 }
 
-// TestRerunLast_ReusesStoredInput_202 — create-путь GUARD: rerun-last инкарнации
-// с сохранённым в spec.input оператор-input (redis cluster: version + shards) →
-// этот input проброшен в RunSpec.Input перезапускаемого bootstrap-прогона (НЕ nil,
-// НЕ дефолты). Регресс: RunSpec без Input → nil → перезапуск падает на required-
-// валидации (version/shards) либо применяет дефолты.
+// TestRerunLast_ReusesStoredInput_202 — create-path GUARD: rerun-last of an incarnation
+// with operator input stored in spec.input (redis cluster: version + shards) →
+// that input is passed into RunSpec.Input of the restarted bootstrap run (NOT nil,
+// NOT defaults). Regression: RunSpec without Input → nil → the restart fails on required
+// validation (version/shards) or applies defaults.
 func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	specJSON := []byte(`{"input":{"version":"8.6.1","shards":3,"connection_mode":"cluster"}}`)
 	db := &fakeIncDB{
@@ -126,7 +126,7 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	if gotInput["version"] != "8.6.1" {
 		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
 	}
-	// jsonb-числа десериализуются как float64 — сверяем по значению.
+	// jsonb numbers deserialize as float64 — we compare by value.
 	if shards, ok := gotInput["shards"].(float64); !ok || shards != 3 {
 		t.Errorf("RunSpec.Input[shards] = %v (%T), want 3", gotInput["shards"], gotInput["shards"])
 	}
@@ -135,12 +135,12 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_NoStoredInput_NilInput_202 — create-путь контраст: инкарнация БЕЗ
-// сохранённого input (spec.input отсутствует) → RunSpec.Input nil (input не
-// задавался), прогон стартует штатно. Регресс = пустой spec даёт `{}`-input или
-// панику на извлечении.
+// TestRerunLast_NoStoredInput_NilInput_202 — create-path contrast: an incarnation WITHOUT
+// stored input (spec.input absent) → RunSpec.Input nil (input was not
+// set), the run starts normally. Regression = an empty spec yields `{}` input or
+// panics on extraction.
 func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
-	db := rerunDB("error_locked") // makeUnlockSelectRow → spec=`{}` (нет input)
+	db := rerunDB("error_locked") // makeUnlockSelectRow → spec=`{}` (no input)
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
@@ -156,14 +156,14 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_ReusesRecipeInput_202 — day-2 happy-path: последний упавший
-// — add_user (≠ created `create`), его input берётся из recipe apply_run → 202,
-// RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (не spec.input),
+// TestRerunLast_Day2_ReusesRecipeInput_202 — day-2 happy-path: the last failed one
+// — add_user (≠ created `create`), its input is taken from the recipe apply_run → 202,
+// RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (not spec.input),
 // reply.Scenario=="add_user", audit scenario=="add_user".
 func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
-		// spec.input несёт version — НЕ должен просочиться на day-2-пути.
+		// spec.input carries version — it must NOT leak onto the day-2 path.
 		unlockSelectRow: func(_ string) pgx.Row {
 			return makeUnlockSelectRowSpec("error_locked", []byte(`{"input":{"version":"8.6.1"}}`))
 		},
@@ -207,17 +207,17 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	if ev == nil || ev.Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", ev)
 	}
-	// day-2 recipe без from_upgrade → RunSpec.FromUpgrade=false (перезапуск из scenario/).
+	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false (restart from scenario/).
 	if starter.gotSpec.FromUpgrade {
 		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
 	}
 }
 
-// TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last
-// прогона, чей recipe.from_upgrade=true (упавший found-автозапуск upgrade-сценария),
-// обязан пробросить FromUpgrade=true в RunSpec — иначе перезапуск ищет scenario/<slug>/
-// (которого нет, §3) и падает 500. Проверяет проводку UnlockResult.FromUpgrade →
-// RunSpec.FromUpgrade на уровне ХЕНДЛЕРА (DB-слой это не ловит).
+// TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last of
+// a run whose recipe.from_upgrade=true (a failed auto-started upgrade scenario)
+// must pass FromUpgrade=true into RunSpec — otherwise the restart looks for scenario/<slug>/
+// (which does not exist, §3) and fails with 500. Checks the wiring UnlockResult.FromUpgrade →
+// RunSpec.FromUpgrade at the HANDLER level (the DB layer does not catch it).
 func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
@@ -253,9 +253,9 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_BareIncarnation_202 — bare-инкарнация (created_scenario IS
-// NULL) залочена day-2-сценарием → rerun-last применим через recipe-путь (было:
-// 409). ScenarioName из last-run, Input из recipe.
+// TestRerunLast_Day2_BareIncarnation_202 — a bare incarnation (created_scenario IS
+// NULL) locked by a day-2 scenario → rerun-last is applicable via the recipe path (was:
+// 409). ScenarioName from last-run, Input from recipe.
 func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
@@ -285,10 +285,10 @@ func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_RecipeUnavailable_409 — day-2, но recipe отсутствует (recipe
-// IS NULL / apply_run вычищен → ErrNoRows): fail-closed 409 rerun-input-unavailable
-// (отдельный problem-type от incarnation-locked — machine-readable отличие от
-// «статус не error_locked»), прогон НЕ стартует (без silent bootstrap-input).
+// TestRerunLast_Day2_RecipeUnavailable_409 — day-2, but the recipe is absent (recipe
+// IS NULL / apply_run purged → ErrNoRows): fail-closed 409 rerun-input-unavailable
+// (a distinct problem-type from incarnation-locked — a machine-readable difference from
+// "status is not error_locked"), the run does NOT start (no silent bootstrap-input).
 func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
@@ -296,7 +296,7 @@ func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
 		lastScenarioRow: func(_ string) pgx.Row {
 			return staticRow{values: []any{"add_user", "01HFAILEDADDUSER0000000000"}}
 		},
-		// recipeRow nil → recipe-probe вернёт ErrNoRows (fail-closed).
+		// recipeRow nil → the recipe probe returns ErrNoRows (fail-closed).
 	}
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
@@ -308,8 +308,8 @@ func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
 	}
 }
 
-// TestRerunLast_RejectNonErrorLocked — из ready/applying/migration_failed
-// rerun отклонён (409 incarnation-locked), прогон НЕ стартует.
+// TestRerunLast_RejectNonErrorLocked — from ready/applying/migration_failed
+// rerun is rejected (409 incarnation-locked), the run does NOT start.
 func TestRerunLast_RejectNonErrorLocked(t *testing.T) {
 	for _, status := range []string{"ready", "applying", "migration_failed", "destroy_failed", "drift"} {
 		t.Run(status, func(t *testing.T) {
@@ -326,7 +326,7 @@ func TestRerunLast_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestRerunLast_NotFound_404 — несуществующая incarnation → 404.
+// TestRerunLast_NotFound_404 — non-existent incarnation → 404.
 func TestRerunLast_NotFound_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
@@ -341,7 +341,7 @@ func TestRerunLast_NotFound_404(t *testing.T) {
 	}
 }
 
-// TestRerunLast_EmptyReason_422 — пустой reason → 422 (явное подтверждение).
+// TestRerunLast_EmptyReason_422 — empty reason → 422 (explicit confirmation).
 func TestRerunLast_EmptyReason_422(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}
@@ -354,15 +354,15 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 	}
 }
 
-// TestRerunLast_InvalidName_422 — невалидное имя в path → 422.
+// TestRerunLast_InvalidName_422 — invalid name in path → 422.
 func TestRerunLast_InvalidName_422(t *testing.T) {
 	h := newRerunHandler(rerunDB("error_locked"), &fakeStarter{}, &fakeAuditWriter{})
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "Bad_Name", "x")
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
-// TestRerunLast_ReasonAtMax_202 — reason ровно ReasonMaxLen символов проходит
-// (граница включительно): rerun-last стартует, scenario start вызван.
+// TestRerunLast_ReasonAtMax_202 — reason of exactly ReasonMaxLen characters passes
+// (inclusive boundary): rerun-last starts, scenario start is called.
 func TestRerunLast_ReasonAtMax_202(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}
@@ -381,8 +381,8 @@ func TestRerunLast_ReasonAtMax_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_ReasonOverMax_422 — reason длиннее ReasonMaxLen → 422 ДО старта
-// (верхняя граница reason, поведенческий инвариант).
+// TestRerunLast_ReasonOverMax_422 — reason longer than ReasonMaxLen → 422 BEFORE start
+// (upper reason boundary, behavioral invariant).
 func TestRerunLast_ReasonOverMax_422(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}
@@ -396,16 +396,16 @@ func TestRerunLast_ReasonOverMax_422(t *testing.T) {
 	}
 }
 
-// TestRerunLast_ReasonMultibyteAtMax_202 — ЛОК рунной семантики (спека↔рантайм):
-// reason из ReasonMaxLen кириллических рун — это 2*ReasonMaxLen БАЙТ, но ровно
-// ReasonMaxLen рун. JSON-Schema maxLength считает руны, значит ДОЛЖЕН пройти, хотя
-// по байтам это >maxLen. Ловит регресс len(reason)↔utf8.RuneCountInString.
+// TestRerunLast_ReasonMultibyteAtMax_202 — LOCK of rune semantics (spec↔runtime):
+// a reason of ReasonMaxLen Cyrillic runes is 2*ReasonMaxLen BYTES, but exactly
+// ReasonMaxLen runes. JSON-Schema maxLength counts runes, so it MUST pass, even though
+// by bytes it is >maxLen. Catches the len(reason)↔utf8.RuneCountInString regression.
 func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	reason := strings.Repeat("я", incarnation.ReasonMaxLen) // ReasonMaxLen рун, 2*ReasonMaxLen байт
+	reason := strings.Repeat("я", incarnation.ReasonMaxLen) // ReasonMaxLen runes, 2*ReasonMaxLen bytes
 	if len(reason) <= incarnation.ReasonMaxLen {
 		t.Fatalf("предусловие теста нарушено: %d байт не превышает лимит %d — кейс не различает байты/руны",
 			len(reason), incarnation.ReasonMaxLen)
@@ -422,8 +422,8 @@ func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_ReasonMultibyteOverMax_422 — обратная граница рунной семантики:
-// ReasonMaxLen+1 кириллических рун → 422 ДО старта (по рунам превышено).
+// TestRerunLast_ReasonMultibyteOverMax_422 — the reverse boundary of rune semantics:
+// ReasonMaxLen+1 Cyrillic runes → 422 BEFORE start (exceeded by runes).
 func TestRerunLast_ReasonMultibyteOverMax_422(t *testing.T) {
 	db := rerunDB("error_locked")
 	starter := &fakeStarter{}

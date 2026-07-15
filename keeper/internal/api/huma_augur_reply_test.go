@@ -1,17 +1,17 @@
-// GOLDEN byte-exact wire-guard для huma-native reply-DTO AUGUR-домена (handler-native
-// T5d-2c). Для КАЖДОГО reply-роута маршалит наполненное native-значение и пинит байты
-// против ЗАФИКСИРОВАННОЙ golden-строки (legacy-генерата удалён — пин против фиксированной формы,
-// не против генерёного типа). Гарантирует, что wire-форма native reply-DTO не уехала:
+// GOLDEN byte-exact wire-guard for the huma-native reply-DTO of the AUGUR domain (handler-native
+// T5d-2c). For EVERY reply route it marshals a populated native value and pins the bytes
+// against a FIXED golden string (the legacy generator is gone — pin against a fixed shape,
+// not against a generated type). Guarantees the native reply-DTO wire shape has not drifted:
 //
-//   - категория A (date-time): created_at → RFC3339Nano-байт;
-//   - категория B ([]-vs-null): items БЕЗ omitempty (nil → null, [] → []) — обе ветки envelope;
-//   - категория C (omitempty): created_by_aid/coven/sid/token_* — ключ опущен при nil;
-//   - категория D (byte-passthrough): RiteView.allow — json.RawMessage as-is;
-//   - FIELD-ORDER: порядок ключей под прежний oapi byte-order (auth_ref/created_at/… для
-//     OmenView, allow/coven/created_at/… для RiteView — лексикографический по json-тегу).
+//   - category A (date-time): created_at → RFC3339Nano bytes;
+//   - category B ([]-vs-null): items without omitempty (nil → null, [] → []) — both envelope branches;
+//   - category C (omitempty): created_by_aid/coven/sid/token_* — key omitted when nil;
+//   - category D (byte-passthrough): RiteView.allow — json.RawMessage as-is;
+//   - FIELD-ORDER: key order matching the former oapi byte-order (auth_ref/created_at/… for
+//     OmenView, allow/coven/created_at/… for RiteView — lexicographic by json tag).
 //
-// Мутация формы native-struct (убрать omitempty / сменить json-тег / сменить тип поля /
-// переставить поле) краснит.
+// Mutating the native-struct shape (drop omitempty / change json tag / change field type /
+// reorder a field) turns this red.
 package api
 
 import (
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// goldenAugur маршалит native-значение и сверяет байты против ожидаемой golden-строки.
+// goldenAugur marshals a native value and checks the bytes against the expected golden string.
 func goldenAugur(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -41,7 +41,7 @@ func TestGoldenWire_AugurReply(t *testing.T) {
 	nuses := 5
 	allow := json.RawMessage(`{"metrics":["up","node_load1"]}`)
 
-	// --- OmenView: created_by_aid omitempty (обе ветки) + inline enum ---
+	// --- OmenView: created_by_aid omitempty (both branches) + inline enum ---
 	goldenAugur(t, "OmenView/full",
 		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: &aid, Endpoint: "https://prom:9090", Name: "prom-eu", SourceType: OmenViewSourceType("prometheus")},
 		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","endpoint":"https://prom:9090","name":"prom-eu","source_type":"prometheus"}`)
@@ -49,7 +49,7 @@ func TestGoldenWire_AugurReply(t *testing.T) {
 		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: nil, Endpoint: "https://prom:9090", Name: "prom-eu", SourceType: OmenViewSourceType("vault")},
 		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"https://prom:9090","name":"prom-eu","source_type":"vault"}`)
 
-	// --- OmenListReply: items non-nil / nil (категория B) ---
+	// --- OmenListReply: items non-nil / nil (category B) ---
 	goldenAugur(t, "OmenListReply/full",
 		OmenListReply{Items: []OmenView{{Name: "a", SourceType: "elk", CreatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
 		`{"items":[{"auth_ref":"","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"","name":"a","source_type":"elk"}],"limit":50,"offset":0,"total":1}`)
@@ -57,7 +57,7 @@ func TestGoldenWire_AugurReply(t *testing.T) {
 		OmenListReply{Items: nil, Limit: 50, Offset: 10, Total: 0},
 		`{"items":null,"limit":50,"offset":10,"total":0}`)
 
-	// --- RiteView: allow byte-passthrough + coven/sid/token_* omitempty (обе ветки) ---
+	// --- RiteView: allow byte-passthrough + coven/sid/token_* omitempty (both branches) ---
 	goldenAugur(t, "RiteView/full",
 		RiteView{Allow: allow, Coven: &coven, CreatedAt: ts, CreatedByAID: &aid, Delegate: true, ID: 42, Omen: "prom-eu", SID: nil, TokenNumUses: &nuses, TokenTTL: &ttl},
 		`{"allow":{"metrics":["up","node_load1"]},"coven":"prod","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","delegate":true,"id":42,"omen":"prom-eu","token_num_uses":5,"token_ttl":"30m"}`)

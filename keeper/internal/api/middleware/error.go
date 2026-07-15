@@ -1,6 +1,6 @@
-// Convenience-обёртки для записи RFC 7807 problem+json в HTTP-ответ.
-// Маршрутизация type→status вынесена в [problem]; здесь — short-cut-ы
-// для наиболее частых случаев (auth/404/500/malformed).
+// Convenience wrappers for writing RFC 7807 problem+json to an HTTP response.
+// type→status routing lives in [problem]; here — shortcuts for the most
+// common cases (auth/404/500/malformed).
 package middleware
 
 import (
@@ -10,39 +10,39 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// WriteUnauthenticated пишет 401 problem+json для случаев, когда
-// аутентификация требуется, но не предоставлена/невалидна. Не
-// использовать для отказа в authorization — для этого WriteForbidden.
+// WriteUnauthenticated writes 401 problem+json for cases where
+// authentication is required but not provided/invalid. Do not
+// use for an authorization denial — use WriteForbidden for that.
 func WriteUnauthenticated(w http.ResponseWriter, r *http.Request, detail string) {
 	problem.Write(w, problem.New(problem.TypeUnauthenticated, r.URL.Path, detail))
 }
 
-// WriteForbidden пишет 403 problem+json. Используется RBAC-middleware
-// (M0.6b) для permission-failure.
+// WriteForbidden writes 403 problem+json. Used by the RBAC middleware
+// (M0.6b) for permission failures.
 func WriteForbidden(w http.ResponseWriter, r *http.Request, detail string) {
 	problem.Write(w, problem.New(problem.TypeForbidden, r.URL.Path, detail))
 }
 
-// WriteNotFound пишет 404 problem+json. Используется для несуществующих
-// path-ов (default chi-handler) и для несуществующих ресурсов в endpoint-ах.
+// WriteNotFound writes 404 problem+json. Used for nonexistent
+// paths (default chi handler) and for nonexistent resources in endpoints.
 func WriteNotFound(w http.ResponseWriter, r *http.Request, detail string) {
 	problem.Write(w, problem.New(problem.TypeNotFound, r.URL.Path, detail))
 }
 
-// WriteMalformed пишет 400 problem+json (плохой JSON, неверные query-
-// params, и т.п.).
+// WriteMalformed writes 400 problem+json (bad JSON, invalid query
+// params, etc.).
 func WriteMalformed(w http.ResponseWriter, r *http.Request, detail string) {
 	problem.Write(w, problem.New(problem.TypeMalformedRequest, r.URL.Path, detail))
 }
 
-// Write405 пишет 405 problem+json с заголовком `Allow` (RFC 7231 §6.5.5
-// требует Allow для 405). allowedMethods — список допустимых методов
-// для данного path-а; пустой допустим, если caller не знает (тогда
-// Allow не пишется).
+// Write405 writes 405 problem+json with an `Allow` header (RFC 7231 §6.5.5
+// requires Allow for 405). allowedMethods — the list of allowed methods
+// for the given path; empty is acceptable if the caller does not know (then
+// Allow is not written).
 //
-// Используется chi.MethodNotAllowed-handler-ом: семантически POST на
-// GET-only endpoint — это «метод недопустим», а не «синтаксическая
-// ошибка запроса» (4xx ≠ 400).
+// Used by the chi.MethodNotAllowed handler: semantically a POST to a
+// GET-only endpoint is "method not allowed", not a "request syntax
+// error" (4xx ≠ 400).
 func Write405(w http.ResponseWriter, r *http.Request, allowedMethods ...string) {
 	if len(allowedMethods) > 0 {
 		w.Header().Set("Allow", strings.Join(allowedMethods, ", "))
@@ -54,9 +54,9 @@ func Write405(w http.ResponseWriter, r *http.Request, allowedMethods ...string) 
 	))
 }
 
-// WriteInternal пишет 500 problem+json. Никакой детальной диагностики в
-// `detail` — клиент получает generic-сообщение, реальная причина уезжает
-// в логи/OTel-trace (M0.6+).
+// WriteInternal writes 500 problem+json. No detailed diagnostics in
+// `detail` — the client gets a generic message, the real cause goes
+// to logs/OTel-trace (M0.6+).
 func WriteInternal(w http.ResponseWriter, r *http.Request) {
 	problem.Write(w, problem.New(
 		problem.TypeInternalError,

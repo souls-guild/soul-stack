@@ -1,11 +1,12 @@
-// GOLDEN byte-exact wire-guard для huma-native reply-DTO HERALD-домена (handler-native
-// T5d-2c). Для КАЖДОГО reply-роута маршалит наполненное native-значение и пинит байты
-// против ЗАФИКСИРОВАННОЙ golden-строки (legacy-генерата удалён — пин против фиксированной формы,
-// не против генерёного типа). Гарантирует, что wire-форма native reply-DTO не уехала
-// (date-time / []-vs-null / omitempty / nullable — категории A-D ADR-051). Покрыты обе
-// указательные ветки (nil и non-nil). ENVELOPE сверяется ЯВНО: herald/tiding list —
-// прямой named-struct, на wire участвует native-envelope. Мутация формы native-struct
-// (убрать omitempty / сменить тег / тип) краснит case.
+// GOLDEN byte-exact wire-guard for the huma-native reply-DTOs of the HERALD domain
+// (handler-native T5d-2c). For EACH reply route it marshals a populated native value
+// and pins the bytes against a FIXED golden string (the legacy generator is gone —
+// pinned against a fixed shape, not against a generated type). Guarantees the wire
+// shape of a native reply-DTO has not drifted (date-time / []-vs-null / omitempty /
+// nullable — categories A-D of ADR-051). Both pointer branches (nil and non-nil) are
+// covered. The ENVELOPE is checked EXPLICITLY: herald/tiding list — a direct
+// named-struct, the native envelope participates on the wire. A mutation of the
+// native-struct shape (drop omitempty / change a tag / a type) turns the case red.
 package api
 
 import (
@@ -14,7 +15,7 @@ import (
 	"time"
 )
 
-// goldenHerald маршалит native-значение и сверяет байты против ожидаемой golden-строки.
+// goldenHerald marshals a native value and checks the bytes against the expected golden string.
 func goldenHerald(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -32,7 +33,7 @@ func TestGoldenWire_HeraldReply(t *testing.T) {
 	ref := "vault:secret/hook"
 	cfg := map[string]interface{}{"url": "https://hook.test/notify"}
 
-	// --- Herald: full (created_by_aid/secret_ref set) и nil-ветки omitempty ---
+	// --- Herald: full (created_by_aid/secret_ref set) and nil branches omitempty ---
 	goldenHerald(t, "Herald/full",
 		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: &aid, Enabled: true, Name: "ops", SecretRef: &ref, Type: HeraldTypeWebhook, UpdatedAt: ts},
 		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","enabled":true,"name":"ops","secret_ref":"vault:secret/hook","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
@@ -40,7 +41,7 @@ func TestGoldenWire_HeraldReply(t *testing.T) {
 		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: nil, Enabled: false, Name: "ops", SecretRef: nil, Type: HeraldTypeWebhook, UpdatedAt: ts},
 		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":false,"name":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
 
-	// --- HeraldListReply: non-nil items, пустой items ([]), nil items (null) ---
+	// --- HeraldListReply: non-nil items, empty items ([]), nil items (null) ---
 	goldenHerald(t, "HeraldListReply/full",
 		HeraldListReply{Items: []Herald{{Config: cfg, CreatedAt: ts, Enabled: true, Name: "ops", Type: HeraldTypeWebhook, UpdatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
 		`{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":true,"name":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}],"limit":50,"offset":0,"total":1}`)
@@ -51,7 +52,7 @@ func TestGoldenWire_HeraldReply(t *testing.T) {
 		HeraldListReply{Items: nil, Limit: 50, Offset: 0, Total: 0},
 		`{"items":null,"limit":50,"offset":0,"total":0}`)
 
-	// --- Tiding: full (все опц. указатели набиты) и nil-ветки ---
+	// --- Tiding: full (all optional pointers populated) and nil branches ---
 	ann := map[string]interface{}{"env": "prod"}
 	proj := []string{"summary.succeeded"}
 	yes := true

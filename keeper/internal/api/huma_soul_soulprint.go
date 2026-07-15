@@ -1,32 +1,32 @@
 package api
 
-// Доэмиссия typed-схемы SoulprintFacts (+ 6 под-схем) в агрегатор-спеку — Class C
-// выравнивания (ADR-018 typed soulprint). По эталону ALIAS-механизма cadence-target
-// (huma_cadence_envelope.go) / soul-envelope (huma_soul_envelope.go).
+// Additional emission of the typed SoulprintFacts schema (+ 6 sub-schemas) into the aggregate
+// spec — a Class C alignment (ADR-018 typed soulprint). Following the ALIAS mechanism reference
+// of cadence-target (huma_cadence_envelope.go) / soul-envelope (huma_soul_envelope.go).
 //
-// ПРОБЛЕМА. GET /v1/souls/{sid}/soulprint несёт в Body handlers.SoulprintReadReply,
-// поле typed_facts которого — json.RawMessage (byte-passthrough JSONB, категория D,
-// ADR-051: сырые байты souls.soulprint_facts отдаются as-is, без unmarshal→map→
-// re-marshal — forward-compat без рекомпиляции Keeper-а). reflect-обход huma по
-// json.RawMessage не выводит вложенные типы → SoulprintFacts и 6 под-схем НЕ
-// попадают в components/schemas, хотя рукопись (docs/keeper/openapi.yaml :6950) их
-// объявляет, а UI keeper.ts на них ссылается.
+// PROBLEM. GET /v1/souls/{sid}/soulprint carries handlers.SoulprintReadReply in the Body,
+// whose typed_facts field is json.RawMessage (byte-passthrough JSONB, category D,
+// ADR-051: the raw bytes of souls.soulprint_facts are returned as-is, without unmarshal→map→
+// re-marshal — forward-compat without recompiling the Keeper). huma's reflect walk over
+// json.RawMessage does not surface the nested types → SoulprintFacts and the 6 sub-schemas do
+// NOT land in components/schemas, even though the hand-written spec (docs/keeper/openapi.yaml :6950)
+// declares them and the UI keeper.ts references them.
 //
-// МЕХАНИЗМ (alias, как cadence-target — WIRE-БЕЗОПАСЕН).
-// RegisterTypeAlias(handlers.SoulprintReadReply → soulprintReadReply): при встрече
-// wire-типа в OUTPUT-структуре huma строит OpenAPI-схему через api-named-struct
-// soulprintReadReply, поле typed_facts которого типизировано *SoulprintFacts (NATIVE) →
-// huma РЕКУРСИВНО регистрирует SoulprintFacts + под-схемы (SoulprintOsFacts/
+// MECHANISM (alias, like cadence-target — WIRE-SAFE).
+// RegisterTypeAlias(handlers.SoulprintReadReply → soulprintReadReply): on encountering the
+// wire type in an OUTPUT struct, huma builds the OpenAPI schema via the api-named struct
+// soulprintReadReply, whose typed_facts field is typed *SoulprintFacts (NATIVE) →
+// huma RECURSIVELY registers SoulprintFacts + the sub-schemas (SoulprintOsFacts/
 // SoulprintKernelFacts/SoulprintMemoryFacts/SoulprintNetworkFacts/SoulprintNetworkInterface/
-// SoulprintCpuFacts) под их контрактными именами. Сериализация остаётся на handler-типе
-// (json.RawMessage as-is) → wire-байты typed_facts НЕ меняются (golden TestGetSoulprint_
-// BytePassthrough_Exact цел). Меняется ТОЛЬКО OpenAPI: схема SoulprintReadReply.typed_facts
-// ссылается на $ref SoulprintFacts вместо free-form object, и 7 типизированных схем доезжают
-// в components.
+// SoulprintCpuFacts) under their contract names. Serialization stays on the handler type
+// (json.RawMessage as-is) → the wire bytes of typed_facts do NOT change (golden TestGetSoulprint_
+// BytePassthrough_Exact intact). ONLY the OpenAPI changes: the SoulprintReadReply.typed_facts schema
+// references $ref SoulprintFacts instead of a free-form object, and the 7 typed schemas make it
+// into components.
 //
-// handler-native T5d: native soulprint-типы определены ЗДЕСЬ (а не реюзятся из oapi/) —
-// форма 1:1 с proto SoulprintFacts (ADR-018). Имя SoulprintCpuFacts — контрактное (рукопись
-// :7009); прочие 6 имён совпадают с рукописью. wire не затронут (typed_facts byte-passthrough).
+// handler-native T5d: the native soulprint types are defined HERE (not reused from oapi/) —
+// shape 1:1 with proto SoulprintFacts (ADR-018). The name SoulprintCpuFacts is the contract one
+// (hand-written spec :7009); the other 6 names match the hand-written spec. The wire is untouched (typed_facts byte-passthrough).
 
 import (
 	"encoding/json"
@@ -38,11 +38,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === NATIVE typed-схемы SoulprintFacts (+ 6 под-схем), форма 1:1 с proto SoulprintFacts ===
-// Используются ТОЛЬКО как source формы для OpenAPI-эмиссии (typed_facts на wire — byte-
-// passthrough json.RawMessage; эти типы не сериализуются на горячем пути).
+// === NATIVE typed SoulprintFacts schemas (+ 6 sub-schemas), shape 1:1 with proto SoulprintFacts ===
+// Used ONLY as the shape source for OpenAPI emission (typed_facts on the wire is byte-
+// passthrough json.RawMessage; these types are not serialized on the hot path).
 
-// SoulprintFacts — typed-факты Soulprint (ADR-018). Имя = контрактное имя схемы рукописи.
+// SoulprintFacts — typed Soulprint facts (ADR-018). Name = the contract schema name from the hand-written spec.
 type SoulprintFacts struct {
 	CPU      *SoulprintCpuFacts     `json:"cpu,omitempty"`
 	Hostname *string                `json:"hostname,omitempty" doc:"короткое имя хоста, uname -n"`
@@ -53,35 +53,35 @@ type SoulprintFacts struct {
 	SID      *string                `json:"sid,omitempty" doc:"echo SID для логов; authority — mTLS peer cert"`
 }
 
-// SoulprintCpuFacts — под-факт CPU под КОНТРАКТНЫМ именем (рукопись :7009; oapi-генератор
-// капитализировал бы аббревиатуру в SoulprintCPUFacts — здесь имя сразу контрактное).
+// SoulprintCpuFacts — the CPU sub-fact under the CONTRACT name (hand-written spec :7009; the oapi
+// generator would capitalize the acronym into SoulprintCPUFacts — here the name is contract from the start).
 type SoulprintCpuFacts struct {
 	Count  *int32  `json:"count,omitempty" doc:"количество logical CPUs (с учётом HT/SMT)"`
 	Model  *string `json:"model,omitempty"`
 	Vendor *string `json:"vendor,omitempty"`
 }
 
-// SoulprintKernelFacts — факты ядра.
+// SoulprintKernelFacts — kernel facts.
 type SoulprintKernelFacts struct {
 	Release *string `json:"release,omitempty" doc:"только версия ядра (5.15.0)"`
 	Version *string `json:"version,omitempty" doc:"полная версия с dist-suffix (5.15.0-101-generic)"`
 }
 
-// SoulprintMemoryFacts — объёмы памяти в МБ.
+// SoulprintMemoryFacts — memory amounts in MB.
 type SoulprintMemoryFacts struct {
 	AvailableMb *int64 `json:"available_mb,omitempty"`
 	SwapMb      *int64 `json:"swap_mb,omitempty"`
 	TotalMb     *int64 `json:"total_mb,omitempty"`
 }
 
-// SoulprintNetworkFacts — сетевые факты.
+// SoulprintNetworkFacts — network facts.
 type SoulprintNetworkFacts struct {
 	Fqdn       *string                      `json:"fqdn,omitempty"`
 	Interfaces *[]SoulprintNetworkInterface `json:"interfaces,omitempty"`
 	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"основной IPv4 (интерфейс с default-route)"`
 }
 
-// SoulprintNetworkInterface — один сетевой интерфейс.
+// SoulprintNetworkInterface — a single network interface.
 type SoulprintNetworkInterface struct {
 	Ipv4 *[]string `json:"ipv4,omitempty" doc:"IPv4-адреса в CIDR (10.0.0.1/24)"`
 	Ipv6 *[]string `json:"ipv6,omitempty"`
@@ -90,7 +90,7 @@ type SoulprintNetworkInterface struct {
 	Name *string   `json:"name,omitempty"`
 }
 
-// SoulprintOsFacts — факты об операционной системе (ADR-018).
+// SoulprintOsFacts — operating-system facts (ADR-018).
 type SoulprintOsFacts struct {
 	Arch       *string `json:"arch,omitempty" doc:"amd64 / arm64"`
 	Codename   *string `json:"codename,omitempty"`
@@ -101,12 +101,12 @@ type SoulprintOsFacts struct {
 	Version    *string `json:"version,omitempty"`
 }
 
-// soulprintReadReply — alias-цель схемы GET /v1/souls/{sid}/soulprint 200-тела. Форма
-// сверена с committed-рукописью (docs/keeper/openapi.yaml :6858 → SoulprintReadReply):
-// sid/typed_facts (required) + collected_at/received_at (optional). ★ typed_facts здесь
-// типизирован *SoulprintFacts (а НЕ json.RawMessage handler-типа) — ИМЕННО ради эмиссии
-// SoulprintFacts + под-схем в components. Wire-тело сериализует handler-тип (json.RawMessage
-// byte-passthrough), этот тип — только source формы для OpenAPI.
+// soulprintReadReply — the alias target of the GET /v1/souls/{sid}/soulprint 200-body schema. The shape
+// is checked against the committed hand-written spec (docs/keeper/openapi.yaml :6858 → SoulprintReadReply):
+// sid/typed_facts (required) + collected_at/received_at (optional). ★ typed_facts here is
+// typed *SoulprintFacts (NOT the json.RawMessage of the handler type) — PRECISELY to emit
+// SoulprintFacts + the sub-schemas into components. The wire body is serialized by the handler type
+// (json.RawMessage byte-passthrough); this type is only the shape source for OpenAPI.
 type soulprintReadReply struct {
 	SID         string          `json:"sid" doc:"SID (FQDN) Soul-а"`
 	TypedFacts  *SoulprintFacts `json:"typed_facts" doc:"typed-факты Soulprint (ADR-018); byte-passthrough JSONB на wire, форма по proto SoulprintFacts"`
@@ -114,10 +114,10 @@ type soulprintReadReply struct {
 	ReceivedAt  *time.Time      `json:"received_at,omitempty" doc:"Keeper-side timestamp приёма стрима"`
 }
 
-// registerSoulprintFacts вешает alias доэмиссии typed-soulprint на registry. Вызывается в
-// newHumaCadenceAPI для каждой собранной huma.API. Wire-тип GET soulprint (handlers.
-// SoulprintReadReply с typed_facts=json.RawMessage) НЕ меняется — меняется ТОЛЬКО OpenAPI-
-// схема (typed_facts → $ref SoulprintFacts) + эмиссия 7 типизированных схем (native).
+// registerSoulprintFacts hangs the typed-soulprint additional-emission alias on the registry. Called in
+// newHumaCadenceAPI for each assembled huma.API. The wire type of GET soulprint (handlers.
+// SoulprintReadReply with typed_facts=json.RawMessage) does NOT change — ONLY the OpenAPI
+// schema changes (typed_facts → $ref SoulprintFacts) + emission of the 7 typed schemas (native).
 func registerSoulprintFacts(api huma.API) {
 	api.OpenAPI().Components.Schemas.RegisterTypeAlias(
 		reflect.TypeFor[handlers.SoulprintReadReply](),
@@ -125,7 +125,7 @@ func registerSoulprintFacts(api huma.API) {
 	)
 }
 
-// _ — guard wire-инварианта: handler-тип typed_facts остаётся json.RawMessage (alias
-// меняет ТОЛЬКО схему, не сериализацию). Если рефактор сменит wire-поле на typed-struct,
-// эта строка перестанет компилироваться → сигнал «wire-форма GET soulprint затронута».
+// _ — a wire-invariant guard: the handler type's typed_facts stays json.RawMessage (the alias
+// changes ONLY the schema, not serialization). If a refactor switches the wire field to a typed struct,
+// this line stops compiling → a signal that "the GET soulprint wire shape is affected".
 var _ = json.RawMessage(handlers.SoulprintReadReply{}.TypedFacts)

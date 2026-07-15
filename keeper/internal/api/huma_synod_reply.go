@@ -1,41 +1,41 @@
 package api
 
-// HUMA-NATIVE wire-DTO SYNOD-домена (handler-native T5d). Reply/output Body huma-
-// операций — native Go-struct в пакете api, БЕЗ legacy-генерата. Handler (handlers/synod.go)
-// возвращает доменные result-ы с плоскими полями; register-func (huma_synod.go)
-// проецирует их В ЭТИ типы напрямую — конвертеров legacy-генерата → native больше нет.
+// HUMA-NATIVE wire-DTO of the SYNOD domain (handler-native T5d). The Reply/output Body of the huma
+// operations is a native Go struct in package api, no legacy generator. The handler (handlers/synod.go)
+// returns domain results with flat fields; the register func (huma_synod.go)
+// projects them INTO THESE types directly — there are no more legacy-generator → native converters.
 //
-//   - ИМЯ СХЕМЫ = контрактное (SynodListReply / SynodView): huma DefaultSchemaNamer
-//     берёт reflect.Type.Name() → схема под тем же именем, что давал legacy-генерата.
-//   - Единственный reply домена с телом — GET /v1/synods (SynodListReply.Items []SynodView).
-//     create/update/delete/add/remove-operator/grant/revoke-role — 201/204 БЕЗ тела.
-//   - description — `*string` С omitempty (nil → ключ опущен); operators/roles — `[]string`
-//     БЕЗ omitempty (handler даёт non-nil пустой массив → `[]`).
-//   - ФОРМА wire (категории A-D ADR-051) — golden byte-exact фиксирует huma_synod_reply_test.go.
+//   - THE SCHEMA NAME = the contract one (SynodListReply / SynodView): huma DefaultSchemaNamer
+//     takes reflect.Type.Name() → a schema under the same name the legacy generator produced.
+//   - The only domain reply with a body is GET /v1/synods (SynodListReply.Items []SynodView).
+//     create/update/delete/add/remove-operator/grant/revoke-role — 201/204 with no body.
+//   - description — `*string` WITH omitempty (nil → key omitted); operators/roles — `[]string`
+//     without omitempty (the handler yields a non-nil empty array → `[]`).
+//   - The wire SHAPE (categories A-D ADR-051) is pinned byte-exact by huma_synod_reply_test.go.
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). operators[] — per-element AID (член
-// группы) ← operator.AIDPattern; huma кладёт pattern в items[]. Формат для клиент-
-// кодогена; pattern не влияет на json.Marshal (golden byte-exact цел).
+// OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). operators[] — per-element AID (group
+// member) ← operator.AIDPattern; huma puts the pattern in items[]. A format for client
+// codegen; the pattern does not affect json.Marshal (golden byte-exact intact).
 //
-// OUTPUT-PATTERN ИМЁН (батч 5): name + roles[] (per-element) ← rbac.RoleNamePattern
-// (синод-имя единым reRoleName с role-name по решению synod.go; roles[] — имена ролей).
-// huma кладёт per-element pattern в items[]. SynodView output-only (synod.list — отдельный
-// *Request на create) → input-422-риска нет.
+// OUTPUT-PATTERN FOR NAMES (batch 5): name + roles[] (per-element) ← rbac.RoleNamePattern
+// (the synod name shares reRoleName with role-name per the synod.go decision; roles[] — role names).
+// huma puts a per-element pattern in items[]. SynodView is output-only (synod.list — a separate
+// *Request on create) → no input-422 risk.
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// SynodListReply — native 200-тело GET /v1/synods (items под `items`, БЕЗ
-// offset/limit/total). items — native SynodView. Форма 1:1 с прежним SynodListReply.
+// SynodListReply — the native 200 body of GET /v1/synods (items under `items`, no
+// offset/limit/total). items — native SynodView. Shape 1:1 with the former SynodListReply.
 type SynodListReply struct {
 	Items []SynodView `json:"items"`
 }
 
-// SynodView — native проекция Synod-группы (element SynodListReply.items). Форма 1:1 с
-// прежним SynodView: builtin (bool), description — `*string` С omitempty (nil → ключ
-// опущен), operators/roles — `[]string` БЕЗ omitempty (пустой массив, не nil).
+// SynodView — the native projection of a Synod group (element of SynodListReply.items). Shape 1:1 with
+// the former SynodView: builtin (bool), description — `*string` WITH omitempty (nil → key
+// omitted), operators/roles — `[]string` without omitempty (empty array, not nil).
 type SynodView struct {
 	Builtin     bool     `json:"builtin"`
 	Description *string  `json:"description,omitempty"`
@@ -44,11 +44,11 @@ type SynodView struct {
 	Roles       []string `json:"roles" pattern:"^[a-z][a-z0-9-]*$"`                 // ← rbac.RoleNamePattern (per-element)
 }
 
-// === проекция доменного handlers.SynodView (плоские поля) → native wire-DTO ===
+// === projection of domain handlers.SynodView (flat fields) → native wire-DTO ===
 
-// newSynodView проецирует плоскую доменную handlers.SynodView в native SynodView.
-// Description отдаётся всегда (даже пустой "" — поле без omitempty в прежнем wire),
-// поэтому указатель безусловный.
+// newSynodView projects the flat domain handlers.SynodView into native SynodView.
+// Description is always emitted (even empty "" — a field without omitempty in the former wire),
+// so the pointer is unconditional.
 func newSynodView(v handlers.SynodView) SynodView {
 	desc := v.Description
 	return SynodView{
@@ -60,9 +60,9 @@ func newSynodView(v handlers.SynodView) SynodView {
 	}
 }
 
-// newSynodListReply проецирует доменный handlers.SynodListPage в native SynodListReply.
-// Сохраняет nil-vs-empty input 1:1 (nil → null, [] → []) ради byte-exact wire каталога
-// (категория B ADR-051).
+// newSynodListReply projects the domain handlers.SynodListPage into native SynodListReply.
+// Preserves nil-vs-empty input 1:1 (nil → null, [] → []) for the byte-exact catalog wire
+// (category B ADR-051).
 func newSynodListReply(p handlers.SynodListPage) SynodListReply {
 	if p.Items == nil {
 		return SynodListReply{Items: nil}

@@ -10,9 +10,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
-// sidPairRows — pgx.Rows над (sid, coven)-парами (Scan(*string, *[]string)).
-// Резолвер теперь читает coven для scope-eval (ADR-047 S4); cluster-wide путь
-// отбрасывает coven.
+// sidPairRows — pgx.Rows over (sid, coven) pairs (Scan(*string, *[]string)).
+// The resolver now reads coven for scope eval (ADR-047 S4); the cluster-wide path
+// drops coven.
 type sidPairRows struct {
 	pgx.Rows
 	sids   []string
@@ -35,9 +35,9 @@ func (r *sidPairRows) Scan(dest ...any) error {
 	return nil
 }
 
-// fakeResolverDB — voyageResolverDB, отдающий фиксированный набор (sid, coven) на
-// Query (SELECT sid, coven FROM souls ...). covens опционален (nil → пустые
-// covens у всех).
+// fakeResolverDB — a voyageResolverDB returning a fixed set of (sid, coven) on
+// Query (SELECT sid, coven FROM souls ...). covens is optional (nil → empty
+// covens for all).
 type fakeResolverDB struct {
 	sids   []string
 	covens [][]string
@@ -53,7 +53,7 @@ func (f *fakeResolverDB) Exec(context.Context, string, ...any) (pgconn.CommandTa
 	return pgconn.CommandTag{}, nil
 }
 
-// require_alive=true с presence-чекером отсекает SID-ы без живого lease.
+// require_alive=true with a presence checker drops SIDs without a live lease.
 func TestVoyageCommandResolver_RequireAlive_FiltersDead(t *testing.T) {
 	db := &fakeResolverDB{sids: []string{"a.example.com", "b.example.com", "c.example.com"}}
 	presence := &fakePresence{alive: aliveSet("a.example.com", "c.example.com")}
@@ -74,10 +74,10 @@ func TestVoyageCommandResolver_RequireAlive_FiltersDead(t *testing.T) {
 	}
 }
 
-// require_alive=false → presence не применяется (все SQL-presence SID-ы остаются).
+// require_alive=false → presence is not applied (all SQL-presence SIDs remain).
 func TestVoyageCommandResolver_RequireAliveFalse_NoFilter(t *testing.T) {
 	db := &fakeResolverDB{sids: []string{"a.example.com", "b.example.com"}}
-	presence := &fakePresence{alive: aliveSet("a.example.com")} // b мёртв по lease.
+	presence := &fakePresence{alive: aliveSet("a.example.com")} // b is dead by lease.
 	r := NewVoyageCommandPGResolverWithPresence(db, presence)
 
 	out, err := r.ResolveSIDs(context.Background(), VoyageCommandFilter{RequireAlive: false})
@@ -89,8 +89,8 @@ func TestVoyageCommandResolver_RequireAliveFalse_NoFilter(t *testing.T) {
 	}
 }
 
-// require_alive=true без presence-чекера (nil) → деградация на SQL-presence (без
-// дополнительной фильтрации).
+// require_alive=true without a presence checker (nil) → degrades to SQL-presence (no
+// extra filtering).
 func TestVoyageCommandResolver_RequireAlive_NilPresence_Degrades(t *testing.T) {
 	db := &fakeResolverDB{sids: []string{"a.example.com", "b.example.com"}}
 	r := NewVoyageCommandPGResolver(db) // presence=nil
@@ -106,7 +106,7 @@ func TestVoyageCommandResolver_RequireAlive_NilPresence_Degrades(t *testing.T) {
 
 // --- ADR-047 S4: ResolveSIDsInScope (target ∩ Purview) ---
 
-// Unrestricted scope → полный резолв без урезания (backcompat cluster-admin).
+// Unrestricted scope → full resolve without trimming (backcompat cluster-admin).
 func TestResolveSIDsInScope_Unrestricted_FullResolve(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"a.example.com", "b.example.com"},
@@ -127,7 +127,7 @@ func TestResolveSIDsInScope_Unrestricted_FullResolve(t *testing.T) {
 	}
 }
 
-// Coven-scope урезает широкий target до видимого подмножества (НЕ весь target).
+// Coven-scope trims a wide target to the visible subset (NOT the whole target).
 func TestResolveSIDsInScope_CovenScope_TrimsWide(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"a.example.com", "b.example.com", "c.example.com"},
@@ -135,8 +135,8 @@ func TestResolveSIDsInScope_CovenScope_TrimsWide(t *testing.T) {
 	}
 	r := NewVoyageCommandPGResolver(db)
 
-	// Широкий target (covens-фильтр, нет явных sids) + scope coven=prod →
-	// видимы только prod-хосты (a, c), b урезан молча (∉ explicit).
+	// Wide target (covens filter, no explicit sids) + scope coven=prod →
+	// only prod hosts are visible (a, c), b is trimmed silently (∉ explicit).
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{Covens: []string{"prod", "staging"}},
 		soulpurview.Scope{Covens: []string{"prod"}})
@@ -151,7 +151,7 @@ func TestResolveSIDsInScope_CovenScope_TrimsWide(t *testing.T) {
 	}
 }
 
-// Явно-указанный чужой SID (вне scope) → DeniedExplicit (handler → 403).
+// An explicitly listed foreign SID (out of scope) → DeniedExplicit (handler → 403).
 func TestResolveSIDsInScope_ExplicitForeignSID_Denied(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"a.example.com", "b.example.com"},
@@ -159,7 +159,7 @@ func TestResolveSIDsInScope_ExplicitForeignSID_Denied(t *testing.T) {
 	}
 	r := NewVoyageCommandPGResolver(db)
 
-	// Явно перечислены a (prod, виден) и b (staging, чужой). scope coven=prod.
+	// a (prod, visible) and b (staging, foreign) are listed explicitly. scope coven=prod.
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{SIDs: []string{"a.example.com", "b.example.com"}},
 		soulpurview.Scope{Covens: []string{"prod"}})
@@ -174,7 +174,7 @@ func TestResolveSIDsInScope_ExplicitForeignSID_Denied(t *testing.T) {
 	}
 }
 
-// Regex-scope: видимость по regexMatch (host-измерение Purview через Visible).
+// Regex-scope: visibility by regexMatch (the host dimension of Purview via Visible).
 func TestResolveSIDsInScope_RegexScope_TrimsToMatching(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"web-01.example.com", "db-01.example.com", "web-02.example.com"},
@@ -183,7 +183,7 @@ func TestResolveSIDsInScope_RegexScope_TrimsToMatching(t *testing.T) {
 	r := NewVoyageCommandPGResolver(db)
 
 	got, err := r.ResolveSIDsInScope(context.Background(),
-		VoyageCommandFilter{Covens: []string{"prod"}}, // широкий target
+		VoyageCommandFilter{Covens: []string{"prod"}}, // wide target
 		soulpurview.Scope{Regexes: []string{"^web-"}})
 	if err != nil {
 		t.Fatalf("ResolveSIDsInScope: %v", err)
@@ -193,7 +193,7 @@ func TestResolveSIDsInScope_RegexScope_TrimsToMatching(t *testing.T) {
 	}
 }
 
-// Empty scope (fail-closed) → пустой SIDs; явные SID-ы → DeniedExplicit.
+// Empty scope (fail-closed) → empty SIDs; explicit SIDs → DeniedExplicit.
 func TestResolveSIDsInScope_EmptyScope_FailClosed(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"a.example.com"},
@@ -215,8 +215,8 @@ func TestResolveSIDsInScope_EmptyScope_FailClosed(t *testing.T) {
 	}
 }
 
-// Partial scope (soulprint/state не вычисляются): coven работает, soulprint —
-// под-показ. Хост, доступный ТОЛЬКО по soulprint, не показывается (fail-closed).
+// Partial scope (soulprint/state not evaluated): coven works, soulprint is
+// under-shown. A host reachable ONLY via soulprint is not shown (fail-closed).
 func TestResolveSIDsInScope_PartialScope_CovenWorksSoulprintUndershown(t *testing.T) {
 	db := &fakeResolverDB{
 		sids:   []string{"a.example.com", "b.example.com"},
@@ -224,9 +224,9 @@ func TestResolveSIDsInScope_PartialScope_CovenWorksSoulprintUndershown(t *testin
 	}
 	r := NewVoyageCommandPGResolver(db)
 
-	// scope: coven=prod + Partial (soulprint-измерение не вычисляется).
-	// a (prod) виден по coven; b (staging) доступен был бы только по soulprint —
-	// под-показ, не зацеплен (fail-closed, никогда over-show).
+	// scope: coven=prod + Partial (the soulprint dimension is not evaluated).
+	// a (prod) is visible by coven; b (staging) would be reachable only via soulprint —
+	// under-shown, not picked up (fail-closed, never over-show).
 	got, err := r.ResolveSIDsInScope(context.Background(),
 		VoyageCommandFilter{Covens: []string{"prod", "staging"}},
 		soulpurview.Scope{Covens: []string{"prod"}, Partial: true})

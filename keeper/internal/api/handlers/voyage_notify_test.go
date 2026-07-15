@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// TestNotifyEventTypes_MappingByKind — guard маппинга on→event_types (ADR-052(g)):
-// terminals × kind дают корректный area-prefix и action.
+// TestNotifyEventTypes_MappingByKind — guard for the on→event_types mapping (ADR-052(g)):
+// terminals × kind yield the correct area prefix and action.
 func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 	cases := []struct {
 		name string
@@ -64,8 +64,8 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("notifyEventTypes = %v, want %v", got, tc.want)
 			}
-			// Каждый выведенный event_type обязан проходить ValidateEventTypes
-			// (иначе InsertTiding отверг бы его CHECK-ом в tx).
+			// Every derived event_type must pass ValidateEventTypes
+			// (otherwise InsertTiding would reject it via the CHECK in the tx).
 			if err := herald.ValidateEventTypes(got); err != nil {
 				t.Fatalf("выведенные event_types не проходят ValidateEventTypes: %v", err)
 			}
@@ -73,8 +73,8 @@ func TestNotifyEventTypes_MappingByKind(t *testing.T) {
 	}
 }
 
-// TestNotifyEventTypes_UnknownTerminal — неизвестное значение on → ошибка
-// (закрытый enum completed/failed/partial).
+// TestNotifyEventTypes_UnknownTerminal — an unknown on value → error
+// (closed enum completed/failed/partial).
 func TestNotifyEventTypes_UnknownTerminal(t *testing.T) {
 	_, errMsg := notifyEventTypes(voyage.KindScenario, []string{"started"})
 	if errMsg == "" {
@@ -85,8 +85,8 @@ func TestNotifyEventTypes_UnknownTerminal(t *testing.T) {
 	}
 }
 
-// TestStampEphemeralTidings_NameAndVoyageID — стемп проставляет уникальные имена
-// (валидные по NamePattern) и общий voyage_id всем шаблонам.
+// TestStampEphemeralTidings_NameAndVoyageID — the stamp assigns unique names
+// (valid per NamePattern) and a shared voyage_id to all templates.
 func TestStampEphemeralTidings_NameAndVoyageID(t *testing.T) {
 	const vid = "01HZZZZZZZZZZZZZZZZZZZZZZZZ"
 	tpls := []herald.Tiding{
@@ -110,7 +110,7 @@ func TestStampEphemeralTidings_NameAndVoyageID(t *testing.T) {
 			t.Fatalf("имя %q повторилось — нарушена уникальность (коллизия имён ephemeral)", tpls[i].Name)
 		}
 		names[tpls[i].Name] = struct{}{}
-		// Стемпленный шаблон обязан проходить domain-инвариант ephemeral⟺voyage_id.
+		// A stamped template must satisfy the domain invariant ephemeral⟺voyage_id.
 		if !tpls[i].Ephemeral || tpls[i].VoyageID == nil {
 			t.Errorf("tpls[%d] нарушает ephemeral⟺voyage_id", i)
 		}

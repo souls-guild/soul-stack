@@ -1,10 +1,10 @@
 package api
 
-// Регистрация глобального RUNS-read-view на huma full-typed (GET /v1/runs +
-// /v1/runs/stats). Оба роута — READ (БЕЗ audit, newHumaCadenceAPI), одна chi-группа
-// /v1/runs под RequireAction(incarnation.history) (router.go); huma наследует
-// chi-middleware. Доменные функции — на IncarnationHandler (scope-резолв и store —
-// его зона: прогоны принадлежат инкарнациям).
+// Registers the global RUNS read view on huma full-typed (GET /v1/runs +
+// /v1/runs/stats). Both routes are READ (no audit, newHumaCadenceAPI), one chi group
+// /v1/runs under RequireAction(incarnation.history) (router.go); huma inherits the
+// chi middleware. Domain functions live on IncarnationHandler (scope resolution and
+// store are its zone: runs belong to incarnations).
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// registerHumaRunsList монтирует GET /v1/runs (READ-with-typed-query, БЕЗ audit).
+// registerHumaRunsList mounts GET /v1/runs (READ with typed query, no audit).
 // Purview-scope — in-handler (fail-closed). incH nil → no-op.
 func registerHumaRunsList(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -49,7 +49,7 @@ func registerHumaRunsList(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	})
 }
 
-// registerHumaRunsStats монтирует GET /v1/runs/stats (READ-агрегат, БЕЗ audit).
+// registerHumaRunsStats mounts GET /v1/runs/stats (READ aggregate, no audit).
 // incH nil → no-op.
 func registerHumaRunsStats(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {

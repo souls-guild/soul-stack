@@ -1,11 +1,11 @@
 package api
 
-// FULL-TYPED форма глобального RUNS-read-view (GET /v1/runs + /v1/runs/stats,
-// страница «All Runs» UI; ADR-054 §Pattern). READ-домен: audit НЕ пишется,
-// newHumaCadenceAPI. Permission incarnation.history (reuse read-tier per-incarnation
-// runs) — RequireAction-гейт на chi-группе /v1/runs (router.go); сужение по
-// Purview — in-handler (fail-closed, parity souls/stats). Op-Path относителен
-// группе r.Route("/runs").
+// FULL-TYPED form of the global RUNS read view (GET /v1/runs + /v1/runs/stats, the
+// "All Runs" UI page; ADR-054 §Pattern). READ domain: no audit is written,
+// newHumaCadenceAPI. Permission incarnation.history (reuse the read-tier per-incarnation
+// runs) — a RequireAction gate on the /v1/runs chi group (router.go); Purview narrowing
+// is in-handler (fail-closed, parity souls/stats). Op-Path is relative to the
+// r.Route("/runs") group.
 
 import (
 	"net/http"
@@ -16,10 +16,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === GET /v1/runs (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/runs (list) — READ with typed query (no audit) ===
 
-// runsListInput — huma-input GET /v1/runs. Фильтры опциональны (валидацию значений
-// ведёт AllRunsTyped: невалидный status/incarnation → 422); offset/limit — int32 с
+// runsListInput — huma input for GET /v1/runs. Filters are optional (value validation is
+// done by AllRunsTyped: invalid status/incarnation → 422); offset/limit are int32 with a
 // default (out-of-range/limit>100 → 400).
 type runsListInput struct {
 	Status        string `query:"status" doc:"фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422"`
@@ -34,8 +34,8 @@ type runsListInput struct {
 	Limit         int32  `query:"limit" default:"50" doc:"размер страницы 1..100 (out-of-range → 400)"`
 }
 
-// runsListOutput — huma-output GET /v1/runs (FULL-TYPED). Body — native envelope
-// runsListReply (items.$ref на GlobalRunEntry: snake_case-wire).
+// runsListOutput — huma output for GET /v1/runs (FULL-TYPED). Body — the native envelope
+// runsListReply (items.$ref to GlobalRunEntry: snake_case wire).
 type runsListOutput struct {
 	Body runsListReply
 }
@@ -53,14 +53,14 @@ func runsListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/runs/stats (stats) — READ-агрегат (БЕЗ audit) ===
+// === GET /v1/runs/stats (stats) — READ aggregate (no audit) ===
 
-// runsStatsInput — huma-input GET /v1/runs/stats. Параметров нет: агрегат в
-// границах Purview-scope оператора.
+// runsStatsInput — huma input for GET /v1/runs/stats. No parameters: an aggregate within
+// the operator's Purview scope.
 type runsStatsInput struct{}
 
-// runsStatsOutput — huma-output GET /v1/runs/stats (FULL-TYPED). Body — native
-// агрегат-DTO (RunsStatsReply: корзины all/last_24h по агрегатным статусам).
+// runsStatsOutput — huma output for GET /v1/runs/stats (FULL-TYPED). Body — the native
+// aggregate DTO (RunsStatsReply: all/last_24h buckets by aggregate status).
 type runsStatsOutput struct {
 	Body RunsStatsReply
 }
@@ -80,9 +80,9 @@ func runsStatsOperation() huma.Operation {
 
 // === reply-DTO ===
 
-// GlobalRunEntry — native элемент items GET /v1/runs. Форма — RunSummaryEntry
-// (per-incarnation runs) + incarnation (владелец прогона: глобальный список без
-// него нечитаем). finished_at / started_by_aid — omitempty (nil → ключ опущен).
+// GlobalRunEntry — the native items element of GET /v1/runs. Shape — RunSummaryEntry
+// (per-incarnation runs) + incarnation (the run's owner: the global list is unreadable
+// without it). finished_at / started_by_aid — omitempty (nil → key omitted).
 type GlobalRunEntry struct {
 	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
 	Incarnation  string     `json:"incarnation"`
@@ -94,9 +94,9 @@ type GlobalRunEntry struct {
 	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
 }
 
-// runsListReply — envelope GET /v1/runs (контрактная 4-полевая форма
-// items/offset/limit/total, parity incarnationRunsReply). Имя типа = контрактное
-// имя схемы (huma DefaultSchemaNamer капитализирует → "RunsListReply").
+// runsListReply — the GET /v1/runs envelope (the contract 4-field form
+// items/offset/limit/total, parity with incarnationRunsReply). The type name = the
+// contract schema name (huma DefaultSchemaNamer capitalizes → "RunsListReply").
 type runsListReply struct {
 	Items  []GlobalRunEntry `json:"items" doc:"страница прогонов через все инкарнации (свёртка apply_runs)"`
 	Offset int32            `json:"offset" doc:"сдвиг от начала набора"`
@@ -104,8 +104,8 @@ type runsListReply struct {
 	Total  int32            `json:"total" doc:"общее число прогонов под фильтрами/scope"`
 }
 
-// RunsStatsBucket — одна корзина сводки прогонов (за всё время либо за 24 часа):
-// total + счётчик каждого агрегатного статуса (нули включены — enum закрыт).
+// RunsStatsBucket — one run-summary bucket (all time or the last 24 hours): total +
+// a counter for each aggregate status (zeros included — the enum is closed).
 type RunsStatsBucket struct {
 	Total     int `json:"total" doc:"всего прогонов в корзине"`
 	Applying  int `json:"applying" doc:"прогоны в процессе"`
@@ -114,13 +114,13 @@ type RunsStatsBucket struct {
 	Cancelled int `json:"cancelled" doc:"отменённые прогоны"`
 }
 
-// RunsStatsReply — native тело GET /v1/runs/stats: две корзины одинаковой формы.
+// RunsStatsReply — the native body of GET /v1/runs/stats: two buckets of the same shape.
 type RunsStatsReply struct {
 	All     RunsStatsBucket `json:"all" doc:"за всё время"`
 	Last24h RunsStatsBucket `json:"last_24h" doc:"прогоны, стартовавшие за последние 24 часа"`
 }
 
-// newGlobalRunEntry проецирует доменный handlers.RunSummaryView в native.
+// newGlobalRunEntry projects the domain handlers.RunSummaryView into native.
 func newGlobalRunEntry(v handlers.RunSummaryView) GlobalRunEntry {
 	return GlobalRunEntry{
 		ApplyID:      v.ApplyID,
@@ -134,7 +134,7 @@ func newGlobalRunEntry(v handlers.RunSummaryView) GlobalRunEntry {
 	}
 }
 
-// newRunsStatsReply проецирует доменный handlers.RunsStatsView в native.
+// newRunsStatsReply projects the domain handlers.RunsStatsView into native.
 func newRunsStatsReply(v handlers.RunsStatsView) RunsStatsReply {
 	return RunsStatsReply{
 		All:     newRunsStatsBucket(v.All),

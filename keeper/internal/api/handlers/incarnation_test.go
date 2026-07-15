@@ -28,17 +28,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeIncDB — мок [IncarnationDB] (ExecQueryRower + TxBeginner). Минимальный
-// set, нужный endpoint-ам Create / Get / List / History / Run / Unlock.
+// fakeIncDB — a mock [IncarnationDB] (ExecQueryRower + TxBeginner). The minimal
+// set needed by the Create / Get / List / History / Run / Unlock endpoints.
 type fakeIncDB struct {
 	// Create-path
 	insertRow   func() pgx.Row
 	insertCalls int
-	// insertArgs — последние аргументы INSERT INTO incarnation (spec=$5, traits=$11)
-	// для проверки прокидки spec.traits на create-пути (ADR-060 amend R1).
+	// insertArgs — the last arguments of INSERT INTO incarnation (spec=$5, traits=$11)
+	// to verify threading of spec.traits on the create path (ADR-060 amend R1).
 	insertArgs []any
-	// updateTraitsArg — jsonb-арг $2 UPDATE incarnation SET traits (PUT .../traits,
-	// ADR-060 amend R1): целостная замена incarnation.traits.
+	// updateTraitsArg — jsonb arg $2 of UPDATE incarnation SET traits (PUT .../traits,
+	// ADR-060 amend R1): a wholesale replacement of incarnation.traits.
 	updateTraitsArg []byte
 
 	// Get/History/Run existence-probe + Unlock SELECT FOR UPDATE
@@ -47,57 +47,57 @@ type fakeIncDB struct {
 	// List
 	countRow func(sql string) pgx.Row
 	listRows func() (pgx.Rows, error)
-	// captureListSQL — hook на текст list-SELECT (ORDER BY pushdown-проверка).
+	// captureListSQL — a hook on the list-SELECT text (ORDER BY pushdown check).
 	captureListSQL func(sql string)
-	// lastCountArgs / lastListArgs — bind-args COUNT/SELECT list-запросов
-	// (scope-pushdown проверка S3b-3). listCalled — был ли вызван SelectAll
-	// (fail-closed: при пустом scope SelectAll не должен вызываться).
+	// lastCountArgs / lastListArgs — bind-args of the COUNT/SELECT list queries
+	// (scope-pushdown check S3b-3). listCalled — whether SelectAll was called
+	// (fail-closed: on an empty scope SelectAll must not be called).
 	lastCountArgs []any
 	lastListArgs  []any
 	listCalled    bool
 
-	// Unlock-path: SELECT FOR UPDATE (state, status) + Exec-учёт.
+	// Unlock path: SELECT FOR UPDATE (state, status) + Exec accounting.
 	unlockSelectRow func(name string) pgx.Row
 	execCalls       []string
 
-	// Rerun-last-path: last-run probe в UnlockForRerun
+	// Rerun-last path: the last-run probe in UnlockForRerun
 	// `SELECT scenario, apply_id FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
-	// nil → дефолт [create, <applyID>] (create-путь: последний упавший = create).
+	// nil → default [create, <applyID>] (create path: the last failed = create).
 	lastScenarioRow func(name string) pgx.Row
-	// Rerun-last day-2-path: recipe probe `SELECT recipe FROM apply_runs WHERE
+	// Rerun-last day-2 path: the recipe probe `SELECT recipe FROM apply_runs WHERE
 	// apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil → ErrNoRows (fail-closed:
-	// recipe недоступен). Задать для day-2 happy-path.
+	// recipe unavailable). Set for the day-2 happy path.
 	recipeRow func(applyID string) pgx.Row
 
-	// Upgrade-path: SELECT FOR UPDATE (state, state_schema_version, status).
+	// Upgrade path: SELECT FOR UPDATE (state, state_schema_version, status).
 	upgradeSelectRow func(name string) pgx.Row
 
-	// Destroy-path: RowsAffected для single-winner `DELETE FROM incarnation`
-	// (DeleteAfterTeardown). zero-value → "DELETE 1" (строка снесена); задать
-	// "DELETE 0" для no-op-гонки. archive-INSERT-ы возвращают пустой тег.
+	// Destroy path: RowsAffected for the single-winner `DELETE FROM incarnation`
+	// (DeleteAfterTeardown). zero-value → "DELETE 1" (row deleted); set
+	// "DELETE 0" for a no-op race. archive INSERTs return an empty tag.
 	deleteTag pgconn.CommandTag
 
-	// UpdateHosts-path: SELECT FROM souls WHERE sid = ANY($1) — набор SID-ов,
-	// которые «существуют» в реестре `souls`. nil → ни одного (для теста
-	// UnknownSID). UpdateHosts SQL `UPDATE incarnation SET spec = ...` ловится
-	// общим Exec — фиксирует факт записи в execCalls.
+	// UpdateHosts path: SELECT FROM souls WHERE sid = ANY($1) — the set of SIDs
+	// that "exist" in the `souls` registry. nil → none (for the
+	// UnknownSID test). The UpdateHosts SQL `UPDATE incarnation SET spec = ...` is caught
+	// by the generic Exec — recording the write in execCalls.
 	soulsExisting map[string]struct{}
 
-	// Runs read-view (GET .../runs[/{apply_id}]): count-строка списка прогонов
-	// (COUNT(DISTINCT apply_id) FROM apply_runs) и rows list/detail (SELECT ...
-	// FROM apply_runs). nil → пустой список / 0 (для scope-gate/empty-тестов).
+	// Runs read-view (GET .../runs[/{apply_id}]): the count row of the runs list
+	// (COUNT(DISTINCT apply_id) FROM apply_runs) and the list/detail rows (SELECT ...
+	// FROM apply_runs). nil → empty list / 0 (for scope-gate/empty tests).
 	applyRunsCountRow func(sql string) pgx.Row
 	applyRunsRows     func() (pgx.Rows, error)
 
-	// Run-tasks read-view (GET .../runs/{apply_id}/tasks, NIM-37): EXISTS-probe
-	// принадлежности прогона инкарнации (runExistsRow, nil → true = «принадлежит»)
-	// и строки плана apply_run_plan (runPlanRows, nil → пустой план).
+	// Run-tasks read-view (GET .../runs/{apply_id}/tasks, NIM-37): the EXISTS probe
+	// of whether the run belongs to the incarnation (runExistsRow, nil → true = "belongs")
+	// and the apply_run_plan plan rows (runPlanRows, nil → empty plan).
 	runExistsRow func(applyID, name string) pgx.Row
 	runPlanRows  func() (pgx.Rows, error)
 
-	// Global runs read-view (GET /v1/runs[/stats]): COUNT(*) по свёртке apply_runs.
-	// runsCalled/lastRunsSQL/lastRunsArgs — факт и содержимое count-запроса
-	// (fail-closed- и scope-pushdown-проверки). nil runsCountRow → 0.
+	// Global runs read-view (GET /v1/runs[/stats]): COUNT(*) over the apply_runs rollup.
+	// runsCalled/lastRunsSQL/lastRunsArgs — the fact and contents of the count query
+	// (fail-closed and scope-pushdown checks). nil runsCountRow → 0.
 	runsCountRow func(sql string) pgx.Row
 	lastRunsSQL  string
 	lastRunsArgs []any
@@ -140,7 +140,7 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		if f.lastScenarioRow != nil {
 			return f.lastScenarioRow(args[0].(string))
 		}
-		// Дефолт: последний упавший = create (create-путь), apply_id — заглушка.
+		// Default: the last failed = create (create path), apply_id is a stub.
 		return staticRow{values: []any{"create", "01HFAILEDRUN00000000000000"}}
 	}
 	if strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL") {
@@ -150,10 +150,10 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return errRow{err: pgx.ErrNoRows}
 	}
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
-	// Этот UPDATE-with-RETURNING приходит ДО общего match-а "WHERE name = $1"
-	// (тот же предикат стоит и здесь), поэтому обрабатывается отдельной веткой
-	// и возвращает свежий timestamp на Scan(*time.Time). UpdateTraits (SET traits)
-	// — тот же RETURNING updated_at, фиксируем его jsonb-арг $2 в updateTraitsArg.
+	// This UPDATE-with-RETURNING arrives BEFORE the generic "WHERE name = $1" match
+	// (the same predicate is here too), so it is handled by a separate branch
+	// and returns a fresh timestamp to Scan(*time.Time). UpdateTraits (SET traits)
+	// — the same RETURNING updated_at; we record its jsonb arg $2 in updateTraitsArg.
 	if strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at") {
 		if strings.Contains(sql, "SET traits") && len(args) >= 2 {
 			f.updateTraitsArg, _ = args[1].([]byte)
@@ -176,8 +176,8 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return staticRow{values: []any{int(0)}}
 	}
-	// Run-tasks scope-probe: EXISTS(SELECT 1 FROM apply_runs ...) — принадлежит ли
-	// прогон инкарнации (RunExistsForIncarnation, NIM-37). nil hook → true.
+	// Run-tasks scope-probe: EXISTS(SELECT 1 FROM apply_runs ...) — whether the
+	// run belongs to the incarnation (RunExistsForIncarnation, NIM-37). nil hook → true.
 	if strings.Contains(sql, "EXISTS(SELECT 1") && strings.Contains(sql, "FROM apply_runs") {
 		if f.runExistsRow != nil {
 			return f.runExistsRow(args[0].(string), args[1].(string))
@@ -185,14 +185,14 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return staticRow{values: []any{true}}
 	}
 	// Runs read-view (GET .../runs): COUNT(DISTINCT apply_id) FROM apply_runs.
-	// applyRunsCountRow контролирует значение; nil → 0 (пустой список прогонов).
+	// applyRunsCountRow controls the value; nil → 0 (empty runs list).
 	if strings.Contains(sql, "COUNT(DISTINCT apply_id) FROM apply_runs") {
 		if f.applyRunsCountRow != nil {
 			return f.applyRunsCountRow(sql)
 		}
 		return staticRow{values: []any{int(0)}}
 	}
-	// Global runs read-view (GET /v1/runs): COUNT(*) по свёртке apply_runs.
+	// Global runs read-view (GET /v1/runs): COUNT(*) over the apply_runs rollup.
 	if strings.Contains(sql, "COUNT(*)") && strings.Contains(sql, "FROM apply_runs") {
 		f.runsCalled = true
 		f.lastRunsSQL = sql
@@ -206,8 +206,8 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 }
 
 func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	// UpdateHosts: SELECT sid FROM souls WHERE sid = ANY($1) — отдаём
-	// существующие SID-ы из soulsExisting (контролирует тест).
+	// UpdateHosts: SELECT sid FROM souls WHERE sid = ANY($1) — return the
+	// existing SIDs from soulsExisting (the test controls it).
 	if strings.Contains(sql, "FROM souls WHERE sid = ANY") {
 		sids, _ := args[0].([]string)
 		var found []string
@@ -218,17 +218,17 @@ func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 		}
 		return &stringRows{values: found}, nil
 	}
-	// Run-tasks: SELECT ... FROM apply_run_plan (план задач прогона, NIM-37). Стоит
-	// ПЕРЕД apply_runs-веткой: "FROM apply_run_plan" не содержит "FROM apply_runs",
-	// но держим порядок явным. nil hook → пустой план.
+	// Run-tasks: SELECT ... FROM apply_run_plan (the run's task plan, NIM-37). It stands
+	// BEFORE the apply_runs branch: "FROM apply_run_plan" does not contain "FROM apply_runs",
+	// but we keep the order explicit. nil hook → empty plan.
 	if strings.Contains(sql, "FROM apply_run_plan") {
 		if f.runPlanRows != nil {
 			return f.runPlanRows()
 		}
 		return &emptyRows{}, nil
 	}
-	// Runs read-view: SELECT ... FROM apply_runs (list прогонов / detail per-host).
-	// Отдельный hook от listRows (тот — incarnation-list), nil → пустой набор.
+	// Runs read-view: SELECT ... FROM apply_runs (runs list / per-host detail).
+	// A separate hook from listRows (that one is the incarnation list), nil → empty set.
 	if strings.Contains(sql, "FROM apply_runs") {
 		if f.applyRunsRows != nil {
 			return f.applyRunsRows()
@@ -247,16 +247,16 @@ func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 	return &emptyRows{}, nil
 }
 
-// BeginTx возвращает fakeIncTx, проксирующую обратно в fakeIncDB. Tx-методы
-// Commit/Rollback — no-op (unit-тест не проверяет транзакционную семантику
-// PG, только маршрут handler → CRUD).
+// BeginTx returns a fakeIncTx proxying back into fakeIncDB. The Tx methods
+// Commit/Rollback are no-ops (the unit test does not check PG transactional
+// semantics, only the handler → CRUD route).
 func (f *fakeIncDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	return &fakeIncTx{db: f}, nil
 }
 
-// fakeIncTx — pgx.Tx-обёртка над fakeIncDB. Делегирует Exec/Query/QueryRow;
-// Commit/Rollback — no-op; прочие методы pgx.Tx panic-ают при обращении
-// (Unlock их не использует).
+// fakeIncTx — a pgx.Tx wrapper over fakeIncDB. Delegates Exec/Query/QueryRow;
+// Commit/Rollback are no-ops; the other pgx.Tx methods panic when called
+// (Unlock does not use them).
 type fakeIncTx struct{ db *fakeIncDB }
 
 func (t *fakeIncTx) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -286,7 +286,7 @@ func (t *fakeIncTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.R
 }
 func (t *fakeIncTx) Conn() *pgx.Conn { return nil }
 
-// emptyRows — pgx.Rows-stub без значений.
+// emptyRows — a pgx.Rows stub with no values.
 type emptyRows struct{}
 
 func (r *emptyRows) Next() bool                                   { return false }
@@ -299,9 +299,8 @@ func (r *emptyRows) Values() ([]any, error)                       { return nil, 
 func (r *emptyRows) RawValues() [][]byte                          { return nil }
 func (r *emptyRows) Conn() *pgx.Conn                              { return nil }
 
-// makeIncarnationRow конструирует pgx.Row-stub под SelectByName с
-// преднастроенными полями. Используется для теста Get/History
-// existence-probe.
+// makeIncarnationRow builds a pgx.Row stub for SelectByName with
+// preset fields. Used for the Get/History existence-probe test.
 func makeIncarnationRow(name string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -311,7 +310,7 @@ func makeIncarnationRow(name string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits (ADR-060 amend R1)
 		any(nil), []byte(nil), // last_drift_check_at, last_drift_summary (ADR-031 Slice C)
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
@@ -329,9 +328,9 @@ func TestIncarnation_Create_202(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// Декодируем в map, чтобы проверить ОТСУТСТВИЕ поля `status` в JSON
-	// (createIncarnationResponse его не объявляет, но проверка через
-	// raw-map ловит регресс, если поле случайно вернут).
+	// Decode into a map to verify the ABSENCE of the `status` field in the JSON
+	// (createIncarnationResponse does not declare it, but a check via a
+	// raw map catches a regression if the field is accidentally returned).
 	var raw map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -351,9 +350,9 @@ func TestIncarnation_Create_202(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_Covens_Accepted — covens в теле принимается (не
-// unknown-field strict-декодером) и доходит до insert. Прокидывание covens до
-// INSERT-арга $10 покрыто domain-тестом TestCreate_CovensPassedThrough.
+// TestIncarnation_Create_Covens_Accepted — covens in the body is accepted (not an
+// unknown-field for the strict decoder) and reaches insert. Threading covens to
+// INSERT arg $10 is covered by the domain test TestCreate_CovensPassedThrough.
 func TestIncarnation_Create_Covens_Accepted(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -482,7 +481,7 @@ func TestIncarnation_Get_InvalidName_422(t *testing.T) {
 	}
 }
 
-// --- Secret masking on GET output (вариант D) -------------------------
+// --- Secret masking on GET output (variant D) -------------------------
 
 func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 	pwd := "s3cr3t"
@@ -518,7 +517,7 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 		t.Errorf("spec.public_option = %v, want visible", got)
 	}
 
-	// Хранимый incarnation не мутирован — маскируется только ответ.
+	// The stored incarnation is not mutated — only the response is masked.
 	if inc.State["admin_token"] != pwd {
 		t.Errorf("исходный inc.State мутирован: %v", inc.State["admin_token"])
 	}
@@ -527,10 +526,10 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 	}
 }
 
-// TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario — handler-проекция
-// читает traits (ADR-060 operator-set метки) и created_scenario (механизм нескольких
-// create) из доменной incarnation-строки. Источник bug-а: оба поля не отдавались в
-// GET → UI traits-modal открывался без prefill, оператор не видел стартовый сценарий.
+// TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario — the handler projection
+// reads traits (ADR-060 operator-set labels) and created_scenario (the multi-create
+// mechanism) from the domain incarnation row. Bug source: both fields were not returned in
+// GET → the UI traits-modal opened without prefill, the operator didn't see the start scenario.
 func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
 	cs := "create_cluster"
 	inc := &incarnation.Incarnation{
@@ -551,7 +550,7 @@ func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
 		t.Errorf("Traits[az] = %v, want list len 2 (Trait полиморфен)", view.Traits["az"])
 	}
 
-	// Пустые домен-значения проходят как есть (omitempty опускает их в wire-проекции).
+	// Empty domain values pass through as-is (omitempty drops them in the wire projection).
 	empty := &incarnation.Incarnation{Name: "x", Status: incarnation.StatusReady, Traits: map[string]any{}}
 	emptyView := toIncarnationGetView(empty, nil)
 	if emptyView.CreatedScenario != "" {
@@ -580,15 +579,15 @@ func TestToHistoryDTO_MasksSecretsInStateSnapshots(t *testing.T) {
 	if got := dto.StateBefore["replicas"]; got != float64(1) {
 		t.Errorf("state_before.replicas = %v, want 1 (несекретное)", got)
 	}
-	// Хранимый snapshot не мутирован.
+	// The stored snapshot is not mutated.
 	if e.StateBefore["admin_token"] != "old" {
 		t.Errorf("исходный StateBefore мутирован")
 	}
 }
 
 func TestIncarnation_Get_200_StateMasked(t *testing.T) {
-	// End-to-end через handler: state с секретом → в JSON-ответе замаскирован,
-	// несекретное поле — как есть.
+	// End-to-end through the handler: a state with a secret → masked in the JSON response,
+	// a non-secret field — as-is.
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
 			now := time.Now()
@@ -601,7 +600,7 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				now, now, []string(nil),
 				[]byte("{}"),          // traits
 				any(nil), []byte(nil), // ADR-031 Slice C
-				"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+				"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 				any(nil), // applying_apply_id (ADR-068 §A1)
 			}}
 		},
@@ -670,22 +669,22 @@ func TestIncarnation_List_BadStatusFilter_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_CovenFilter_PassesToSQL — coven query-param доходит
-// до SQL-арга (а не отсекается на client-side). Аргументы COUNT(*) — это
-// готовый args[] для filter.Coven (см. buildListWhere → `$1 = ANY(covens)`).
+// TestIncarnation_List_CovenFilter_PassesToSQL — the coven query-param reaches
+// the SQL arg (not dropped client-side). The COUNT(*) arguments are the
+// ready args[] for filter.Coven (see buildListWhere → `$1 = ANY(covens)`).
 func TestIncarnation_List_CovenFilter_PassesToSQL(t *testing.T) {
 	var capturedArgs []any
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	// Перехватываем countRow с аргументами — у тестового fake нет hook-а для
-	// args[]; матчер по SQL содержит COUNT(*) FROM incarnation, а сам args
-	// доходит как параметр в QueryRow. Подменяем countRow на closure с
-	// побочным эффектом.
+	// Intercept countRow with arguments — the test fake has no hook for
+	// args[]; the SQL matcher contains COUNT(*) FROM incarnation, while args itself
+	// arrives as a parameter to QueryRow. Replace countRow with a closure that has
+	// a side effect.
 	db.countRow = func(sql string) pgx.Row {
-		// SQL содержит WHERE-предикат — но самих args здесь нет. Достаточно
-		// проверить, что SQL включает $1 = ANY(covens) (фильтр сработал).
+		// The SQL contains the WHERE predicate — but args itself is not here. It's enough
+		// to check that the SQL includes $1 = ANY(covens) (the filter fired).
 		capturedArgs = append(capturedArgs, sql)
 		return staticRow{values: []any{int(0)}}
 	}
@@ -705,8 +704,8 @@ func TestIncarnation_List_CovenFilter_PassesToSQL(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_InvalidCoven_422 — невалидная coven-метка отсекается
-// до SQL (kebab-case-формат).
+// TestIncarnation_List_InvalidCoven_422 — an invalid coven label is rejected
+// before SQL (kebab-case format).
 func TestIncarnation_List_InvalidCoven_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -717,8 +716,8 @@ func TestIncarnation_List_InvalidCoven_422(t *testing.T) {
 	}
 }
 
-// listSQLCapture перехватывает SQL списка (Query) и COUNT (countRow) —
-// нужно убедиться, что query-param долетел до WHERE/ORDER BY pushdown.
+// listSQLCapture intercepts the list SQL (Query) and COUNT (countRow) —
+// to confirm that the query-param reached the WHERE/ORDER BY pushdown.
 func listSQLCapture() (*fakeIncDB, *string) {
 	var captured string
 	db := &fakeIncDB{
@@ -731,8 +730,8 @@ func listSQLCapture() (*fakeIncDB, *string) {
 	return db, &captured
 }
 
-// TestIncarnation_List_StateFilter_PassesToSQL — query `state.redis_version=8.0`
-// долетает до jsonb-pushdown (->>) в COUNT-SQL.
+// TestIncarnation_List_StateFilter_PassesToSQL — the query `state.redis_version=8.0`
+// reaches the jsonb pushdown (->>) in the COUNT SQL.
 func TestIncarnation_List_StateFilter_PassesToSQL(t *testing.T) {
 	db, captured := listSQLCapture()
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
@@ -746,8 +745,8 @@ func TestIncarnation_List_StateFilter_PassesToSQL(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_StateFilter_NumericOp — query `state.memory_mb=gt:1000`
-// разбирается в числовое сравнение (->>)::numeric.
+// TestIncarnation_List_StateFilter_NumericOp — the query `state.memory_mb=gt:1000`
+// parses into a numeric comparison (->>)::numeric.
 func TestIncarnation_List_StateFilter_NumericOp(t *testing.T) {
 	db, captured := listSQLCapture()
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
@@ -761,8 +760,8 @@ func TestIncarnation_List_StateFilter_NumericOp(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_StateFilter_InjectionPath_422 — спецсимволы/SQL в
-// state-path отбиваются форматной валидацией ([a-z0-9_]) до запроса в БД.
+// TestIncarnation_List_StateFilter_InjectionPath_422 — special chars/SQL in the
+// state-path are rejected by format validation ([a-z0-9_]) before the DB query.
 func TestIncarnation_List_StateFilter_InjectionPath_422(t *testing.T) {
 	for _, raw := range []string{
 		"state.redis_version'%20OR%201=1=x",
@@ -779,9 +778,9 @@ func TestIncarnation_List_StateFilter_InjectionPath_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_StateFilter_NumericOp_NonNumericValue_422 — нечисловое
-// значение при числовом операторе (`state.memory_mb=gt:abc`) → 422
-// (опечатка оператора), а не 500 от PG cast-ошибки 22P02.
+// TestIncarnation_List_StateFilter_NumericOp_NonNumericValue_422 — a non-numeric
+// value with a numeric operator (`state.memory_mb=gt:abc`) → 422
+// (operator typo), not a 500 from a PG cast error 22P02.
 func TestIncarnation_List_StateFilter_NumericOp_NonNumericValue_422(t *testing.T) {
 	for _, raw := range []string{
 		"state.memory_mb=gt:abc",
@@ -799,8 +798,8 @@ func TestIncarnation_List_StateFilter_NumericOp_NonNumericValue_422(t *testing.T
 	}
 }
 
-// TestIncarnation_List_SortStateField_PassesToSQL — sort=state.<field> уходит
-// в jsonb ORDER BY (перехват list-SQL через captureListSQL).
+// TestIncarnation_List_SortStateField_PassesToSQL — sort=state.<field> goes
+// into a jsonb ORDER BY (list-SQL intercepted via captureListSQL).
 func TestIncarnation_List_SortStateField_PassesToSQL(t *testing.T) {
 	var listSQL string
 	db := &fakeIncDB{
@@ -819,7 +818,7 @@ func TestIncarnation_List_SortStateField_PassesToSQL(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_BadSortField_422 — неизвестное sort-поле → 422.
+// TestIncarnation_List_BadSortField_422 — an unknown sort field → 422.
 func TestIncarnation_List_BadSortField_422(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
@@ -833,7 +832,7 @@ func TestIncarnation_List_BadSortField_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_BadSortDir_422 — неизвестное направление → 422.
+// TestIncarnation_List_BadSortDir_422 — an unknown direction → 422.
 func TestIncarnation_List_BadSortDir_422(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
@@ -864,7 +863,7 @@ func TestIncarnation_History_200_Empty(t *testing.T) {
 }
 
 func TestIncarnation_History_NotFound_404(t *testing.T) {
-	// Existence-probe не находит → 404 без захода в HistorySelectByName.
+	// The existence-probe finds nothing → 404 without entering HistorySelectByName.
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
@@ -887,7 +886,7 @@ func TestIncarnation_History_InvalidName_422(t *testing.T) {
 }
 
 func TestIncarnation_History_ApplyIDFilter_200(t *testing.T) {
-	// Валидный ULID-фильтр → 200, existence-probe + COUNT + SELECT.
+	// A valid ULID filter → 200, existence-probe + COUNT + SELECT.
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		countRow:        func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
@@ -915,7 +914,7 @@ func TestIncarnation_History_ApplyIDInvalid_400(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
-	// Не-ULID: lowercase, неверная длина.
+	// Non-ULID: lowercase, wrong length.
 	req := newChiRequest(http.MethodGet,
 		"/v1/incarnations/redis-prod/history?apply_id=not-a-ulid", nil,
 		"name", "redis-prod")
@@ -931,8 +930,8 @@ func TestIncarnation_History_ApplyIDInvalid_400(t *testing.T) {
 }
 
 func TestIncarnation_History_ApplyIDEmpty_OK(t *testing.T) {
-	// Пустой `apply_id` (e.g. `?apply_id=`) — фильтр игнорируется,
-	// поведение как без query-param (backward-compat).
+	// Empty `apply_id` (e.g. `?apply_id=`) — the filter is ignored,
+	// behavior as without the query-param (backward-compat).
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		countRow:        func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
@@ -963,9 +962,9 @@ func TestIncarnation_Create_InvalidService_422(t *testing.T) {
 	}
 }
 
-// Capture-fake — перехватывает args INSERT-а, чтобы тест видел, какой spec
-// ушёл в БД. Имитирует только INSERT-path (Create); остальные SQL-сценарии
-// падают в errRow.
+// Capture-fake — intercepts the INSERT args so the test sees which spec
+// went to the DB. Mimics only the INSERT path (Create); the other SQL scenarios
+// fall into errRow.
 type captureInsertDB struct {
 	*fakeIncDB
 	gotArgs []any
@@ -979,7 +978,7 @@ func (f *captureInsertDB) QueryRow(ctx context.Context, sql string, args ...any)
 }
 
 func TestIncarnation_Create_NilInput_SpecEmpty(t *testing.T) {
-	// Body без `input` — spec должен пойти в БД как `{}`, не `{"input": null}`.
+	// Body without `input` — spec must go to the DB as `{}`, not `{"input": null}`.
 	db := &captureInsertDB{fakeIncDB: &fakeIncDB{}}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
@@ -990,7 +989,7 @@ func TestIncarnation_Create_NilInput_SpecEmpty(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// args[4] (1-based $5) — specBytes. См. insertSQL в crud.go.
+	// args[4] (1-based $5) — specBytes. See insertSQL in crud.go.
 	if len(db.gotArgs) < 5 {
 		t.Fatalf("insert args len = %d, want >= 5", len(db.gotArgs))
 	}
@@ -1004,7 +1003,7 @@ func TestIncarnation_Create_NilInput_SpecEmpty(t *testing.T) {
 }
 
 func TestIncarnation_List_OffsetBeyondTotal_200_EmptyItems(t *testing.T) {
-	// COUNT возвращает 7, listRows — пусто (имитация offset=100 при total=7).
+	// COUNT returns 7, listRows — empty (mimics offset=100 at total=7).
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(7)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
@@ -1032,11 +1031,11 @@ func TestIncarnation_List_OffsetBeyondTotal_200_EmptyItems(t *testing.T) {
 	}
 }
 
-// --- List/Get scoped-видимость (ADR-047 S3b-3) ------------------------
+// --- List/Get scoped visibility (ADR-047 S3b-3) ------------------------
 
-// incRows — pgx.Rows-stub, прогоняющий staticRow за staticRow (multi-row list-
-// результат для scanIncarnation). Аналог incarnation-пакетного fakeRows; в
-// handlers-тестах был только emptyRows/stringRows.
+// incRows — a pgx.Rows stub iterating staticRow after staticRow (a multi-row list
+// result for scanIncarnation). Analogous to the incarnation package's fakeRows; the
+// handlers tests had only emptyRows/stringRows.
 type incRows struct {
 	rows []staticRow
 	idx  int
@@ -1058,8 +1057,8 @@ func (r *incRows) Values() ([]any, error)                       { return nil, ni
 func (r *incRows) RawValues() [][]byte                          { return nil }
 func (r *incRows) Conn() *pgx.Conn                              { return nil }
 
-// incListRow конструирует staticRow под SelectAll-list (15 колонок порядка
-// scanIncarnation) с заданными name/covens/state.
+// incListRow builds a staticRow for the SelectAll list (15 columns in scanIncarnation
+// order) with the given name/covens/state.
 func incListRow(name string, covens []string, state map[string]any) staticRow {
 	now := time.Now()
 	stateBytes := []byte("{}")
@@ -1078,12 +1077,12 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		now, now, covenArg,
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
-// doIncList выполняет List под scoper с claims=archon-alice.
+// doIncList runs List under the scoper with claims=archon-alice.
 func doIncList(t *testing.T, h *IncarnationHandler, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/v1/incarnations"
@@ -1095,8 +1094,8 @@ func doIncList(t *testing.T, h *IncarnationHandler, query string) *httptest.Resp
 	return rec
 }
 
-// scopeArgHas — есть ли среди bind-args []string-аргумент, равный want (порядок
-// учитывается; scope-covens/state-names биндятся как []string).
+// scopeArgHas — whether the bind-args include a []string argument equal to want (order
+// matters; scope-covens/state-names bind as []string).
 func scopeArgHas(args []any, want []string) bool {
 	for _, a := range args {
 		if got, ok := a.([]string); ok && len(got) == len(want) {
@@ -1115,11 +1114,11 @@ func scopeArgHas(args []any, want []string) bool {
 	return false
 }
 
-// TestIncarnation_List_EmptyPurview_FailClosed — ГЛАВНЫЙ security-инвариант
-// (ADR-047): оператор с пустым Purview (default-deny, нет coven/state измерений)
-// видит ПУСТОЙ список, НЕ все incarnation. fakeIncDB отдал бы строки — handler
-// обязан вернуть 0 и НЕ обратиться к SelectAll. Регресс = оператор видит чужие
-// incarnation.
+// TestIncarnation_List_EmptyPurview_FailClosed — the MAIN security invariant
+// (ADR-047): an operator with an empty Purview (default-deny, no coven/state dimensions)
+// sees an EMPTY list, NOT all incarnations. fakeIncDB would return rows — the handler
+// must return 0 and NOT touch SelectAll. Regress = the operator sees others'
+// incarnations.
 func TestIncarnation_List_EmptyPurview_FailClosed(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(5)}} },
@@ -1148,8 +1147,8 @@ func TestIncarnation_List_EmptyPurview_FailClosed(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_NoClaims_FailClosed — нет claims (защитный инвариант,
-// route под RequireJWT) → пустой список.
+// TestIncarnation_List_NoClaims_FailClosed — no claims (a defensive invariant,
+// the route is under RequireJWT) → empty list.
 func TestIncarnation_List_NoClaims_FailClosed(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(3)}} },
@@ -1159,7 +1158,7 @@ func TestIncarnation_List_NoClaims_FailClosed(t *testing.T) {
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations", nil) // БЕЗ claims
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations", nil) // no claims
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
@@ -1173,8 +1172,8 @@ func TestIncarnation_List_NoClaims_FailClosed(t *testing.T) {
 	}
 }
 
-// incListRowBare — как incListRow, но created_scenario = NULL (bare-инкарнация,
-// миграция 090). scanIncarnation проецирует 16-ю колонку в **string → nil.
+// incListRowBare — like incListRow, but created_scenario = NULL (a bare incarnation,
+// migration 090). scanIncarnation projects the 16th column into **string → nil.
 func incListRowBare(name string) staticRow {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -1184,19 +1183,19 @@ func incListRowBare(name string) staticRow {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // created_scenario = NULL (bare, migration 090)
 		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
-// TestIncarnation_List_BareIncarnation_NoPanic — GUARD Фаза 2 (handler-level,
-// реальная NULL-проекция scanIncarnation в list-пути): list со строкой bare-
-// инкарнации (created_scenario IS NULL) → 200, без паники, элемент доезжает.
-// scanIncarnation читает 16-ю колонку в **string → nil; регресс = NULL ломает
-// list-проекцию (паника/ошибка scan). omitempty-семантику created_scenario на
-// реальной NULL-строке проверяет TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario
-// (huma-reply несёт это поле; тест-шим list его не проецирует — на нём omitempty
-// тривиально и неинформативно).
+// TestIncarnation_List_BareIncarnation_NoPanic — GUARD Phase 2 (handler-level,
+// the real NULL projection of scanIncarnation on the list path): a list with a bare
+// incarnation row (created_scenario IS NULL) → 200, no panic, the element arrives.
+// scanIncarnation reads the 16th column into **string → nil; regress = NULL breaks
+// the list projection (panic/scan error). The omitempty semantics of created_scenario on
+// a real NULL row are checked by TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario
+// (the huma-reply carries this field; the list test-shim does not project it — omitempty there
+// is trivial and uninformative).
 func TestIncarnation_List_BareIncarnation_NoPanic(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(1)}} },
@@ -1225,8 +1224,8 @@ func TestIncarnation_List_BareIncarnation_NoPanic(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_NilScoper_FailClosed — scoper не сконфигурирован → пустой
-// список (защита от мис-wire-up-а, не раскрывать все incarnation).
+// TestIncarnation_List_NilScoper_FailClosed — the scoper is not configured → empty
+// list (protection against mis-wire-up, don't expose all incarnations).
 func TestIncarnation_List_NilScoper_FailClosed(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(3)}} },
@@ -1243,8 +1242,8 @@ func TestIncarnation_List_NilScoper_FailClosed(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_Unrestricted_All — `*`/bare-без-default Purview → весь
-// список без scope-предиката (scope-args в SQL не добавляются).
+// TestIncarnation_List_Unrestricted_All — `*`/bare-without-default Purview → the whole
+// list without a scope predicate (scope-args are not added to the SQL).
 func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(2)}} },
@@ -1268,7 +1267,7 @@ func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 	if out.Total != 2 || len(out.Items) != 2 {
 		t.Fatalf("unrestricted total/len = %d/%d, want 2/2", out.Total, len(out.Items))
 	}
-	// Unrestricted → НЕ должно быть scope-args ([]string) в COUNT.
+	// Unrestricted → there must be NO scope-args ([]string) in COUNT.
 	for _, a := range db.lastCountArgs {
 		if _, ok := a.([]string); ok {
 			t.Errorf("unrestricted scope добавил scope-args в SQL: %v", db.lastCountArgs)
@@ -1276,8 +1275,8 @@ func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_CovenScope_ReachesSQL — coven-scoped оператор: covens
-// доходят до SQL как []string-аргумент coven∪{name}-pushdown-а.
+// TestIncarnation_List_CovenScope_ReachesSQL — a coven-scoped operator: covens
+// reach the SQL as the []string argument of the coven∪{name} pushdown.
 func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 	var listSQL string
 	db := &fakeIncDB{
@@ -1295,21 +1294,21 @@ func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-prod"}) {
 		t.Errorf("coven-scope [redis-prod] не дошёл до SQL-args: %v", db.lastCountArgs)
 	}
-	// coven∪{name}: SQL обязан содержать оба плеча (covens && + name = ANY).
+	// coven∪{name}: the SQL must contain both arms (covens && + name = ANY).
 	if !strings.Contains(listSQL, "covens &&") || !strings.Contains(listSQL, "name = ANY") {
 		t.Errorf("coven∪{name} SQL неполон (нужны covens && И name = ANY): %q", listSQL)
 	}
 }
 
-// TestIncarnation_List_StateScope_ResolvedNamesReachSQL — state-измерение Purview
-// (StateExprs): handler предрезолвит имена incarnation-ов через statepredicate и
-// прокинет их как `name = ANY($n)`-pushdown. fakeIncDB: state-резолв-pass (page-
-// lister) находит redis-a (redis_version==8.0) → его имя приходит в scope.
+// TestIncarnation_List_StateScope_ResolvedNamesReachSQL — the state dimension of Purview
+// (StateExprs): the handler pre-resolves incarnation names via statepredicate and
+// threads them as a `name = ANY($n)` pushdown. fakeIncDB: the state-resolve pass (page
+// lister) finds redis-a (redis_version==8.0) → its name reaches scope.
 func TestIncarnation_List_StateScope_ResolvedNamesReachSQL(t *testing.T) {
-	// Один fakeIncDB обслуживает И state-резолв (page-lister SelectAll), И
-	// финальный list-SelectAll. Оба идут через Query/QueryRow по тем же SQL-
-	// сигнатурам; state-lister отдаёт реальные строки (для CEL-eval), финальный
-	// list — пусто (нам важны лишь scope-args).
+	// One fakeIncDB serves BOTH the state-resolve (page-lister SelectAll) AND
+	// the final list-SelectAll. Both go through Query/QueryRow on the same SQL
+	// signatures; the state-lister returns real rows (for CEL eval), the final
+	// list — empty (we only care about scope-args).
 	resolveRows := []staticRow{
 		incListRow("redis-a", nil, map[string]any{"redis_version": "8.0"}),
 		incListRow("redis-b", nil, map[string]any{"redis_version": "7.2"}),
@@ -1321,10 +1320,10 @@ func TestIncarnation_List_StateScope_ResolvedNamesReachSQL(t *testing.T) {
 	db.listRows = func() (pgx.Rows, error) {
 		queryCall++
 		if queryCall == 1 {
-			// Первый Query — page-lister state-резолва: отдаём строки для CEL.
+			// The first Query — the page-lister state-resolve: return rows for CEL.
 			return &incRows{rows: resolveRows}, nil
 		}
-		// Последующие — финальный list: пусто (нас интересуют scope-args).
+		// The rest — the final list: empty (we care about scope-args).
 		return &emptyRows{}, nil
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
@@ -1334,15 +1333,15 @@ func TestIncarnation_List_StateScope_ResolvedNamesReachSQL(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// Имя redis-a (state-matched) должно прийти в финальный list как scope-арг.
+	// The name redis-a (state-matched) must reach the final list as a scope-arg.
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-a"}) {
 		t.Errorf("state-резолв: имя redis-a не дошло до финального list-SQL как scope-name: %v", db.lastCountArgs)
 	}
 }
 
-// TestIncarnation_List_OR_CovenAndState_Union — OR измерений: coven ∪ state =
-// union. coven=prod + state redis8 → в финальный list уходят И scope-covens [prod],
-// И state-резолвнутые имена. Оба плеча присутствуют в args.
+// TestIncarnation_List_OR_CovenAndState_Union — OR of dimensions: coven ∪ state =
+// union. coven=prod + state redis8 → the final list receives BOTH scope-covens [prod]
+// AND the state-resolved names. Both arms are present in args.
 func TestIncarnation_List_OR_CovenAndState_Union(t *testing.T) {
 	resolveRows := []staticRow{incListRow("redis-8", nil, map[string]any{"redis_version": "8.0"})}
 	var queryCall int
@@ -1380,8 +1379,8 @@ func doIncGet(t *testing.T, h *IncarnationHandler, name string) *httptest.Respon
 	return rec
 }
 
-// TestIncarnation_Get_EmptyPurview_404 — fail-closed: пустой Purview → 404 (не
-// палим существование чужой incarnation), хотя строка в БД есть.
+// TestIncarnation_Get_EmptyPurview_404 — fail-closed: an empty Purview → 404 (don't
+// leak the existence of another's incarnation), even though the row exists in the DB.
 func TestIncarnation_Get_EmptyPurview_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
@@ -1393,7 +1392,7 @@ func TestIncarnation_Get_EmptyPurview_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_NilScoper_404 — nil-scoper → 404 (fail-closed мис-wire-up).
+// TestIncarnation_Get_NilScoper_404 — nil-scoper → 404 (fail-closed mis-wire-up).
 func TestIncarnation_Get_NilScoper_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
@@ -1417,7 +1416,7 @@ func TestIncarnation_Get_Unrestricted_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_CovenMatch_200 — incarnation в scope-ковене (по covens[]) →
+// TestIncarnation_Get_CovenMatch_200 — an incarnation in a scope-coven (by covens[]) →
 // 200.
 func TestIncarnation_Get_CovenMatch_200(t *testing.T) {
 	db := &fakeIncDB{
@@ -1433,13 +1432,13 @@ func TestIncarnation_Get_CovenMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_NameMatch_200 — coven∪{name}: incarnation БЕЗ совпадающих
-// covens[], но её ИМЯ = scope-coven (ADR-008 корневая метка) → 200. Регресс =
-// оператор со scope coven=redis-prod не видит incarnation redis-prod.
+// TestIncarnation_Get_NameMatch_200 — coven∪{name}: an incarnation WITHOUT matching
+// covens[], but whose NAME = a scope-coven (ADR-008 root label) → 200. Regress =
+// an operator with scope coven=redis-prod does not see incarnation redis-prod.
 func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
-			return incListRow(name, []string{"other-coven"}, nil) // covens НЕ содержат redis-prod
+			return incListRow(name, []string{"other-coven"}, nil) // covens do NOT contain redis-prod
 		},
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
@@ -1450,8 +1449,8 @@ func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_CovenMismatch_404 — incarnation вне scope-ковенов и имя не
-// совпадает → 404.
+// TestIncarnation_Get_CovenMismatch_404 — an incarnation outside the scope-covens and whose name doesn't
+// match → 404.
 func TestIncarnation_Get_CovenMismatch_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -1466,8 +1465,8 @@ func TestIncarnation_Get_CovenMismatch_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_StateMatch_200 — state-измерение: incarnation, чей state
-// удовлетворяет StateExpr scope → 200 (без coven-совпадения).
+// TestIncarnation_Get_StateMatch_200 — the state dimension: an incarnation whose state
+// satisfies a scope StateExpr → 200 (without a coven match).
 func TestIncarnation_Get_StateMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -1482,8 +1481,8 @@ func TestIncarnation_Get_StateMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_StateMismatch_404 — state не удовлетворяет ни одному
-// StateExpr и нет coven-совпадения → 404.
+// TestIncarnation_Get_StateMismatch_404 — state satisfies no
+// StateExpr and there is no coven match → 404.
 func TestIncarnation_Get_StateMismatch_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -1498,8 +1497,8 @@ func TestIncarnation_Get_StateMismatch_404(t *testing.T) {
 	}
 }
 
-// doIncHistory — handler-direct History с claims (зеркало doIncGet). Возвращает
-// recorder; db должна отдать selectByNameRow (existence-probe + scope), count/list.
+// doIncHistory — handler-direct History with claims (mirror of doIncGet). Returns
+// a recorder; db must provide selectByNameRow (existence-probe + scope), count/list.
 func doIncHistory(t *testing.T, h *IncarnationHandler, name string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := withClaims(newChiRequest(http.MethodGet, "/v1/incarnations/"+name+"/history", nil, "name", name), "archon-alice")
@@ -1507,9 +1506,9 @@ func doIncHistory(t *testing.T, h *IncarnationHandler, name string) *httptest.Re
 	return rec
 }
 
-// fakeIncHistoryDB — fakeIncDB для History scope-тестов: existence-probe несёт
-// covens/state (через incListRow), COUNT=0 + пустой list (scope-ветка проверяется
-// до раскрытия timeline, наполнять историю незачем).
+// fakeIncHistoryDB — a fakeIncDB for History scope tests: the existence-probe carries
+// covens/state (via incListRow), COUNT=0 + empty list (the scope branch is checked
+// before revealing the timeline, so filling history is pointless).
 func fakeIncHistoryDB(name string, covens []string, state map[string]any) *fakeIncDB {
 	row := incListRow(name, covens, state)
 	return &fakeIncDB{
@@ -1519,11 +1518,11 @@ func fakeIncHistoryDB(name string, covens []string, state map[string]any) *fakeI
 	}
 }
 
-// TestIncarnation_History_StateMatch_200 — History gate переведён на existence-
-// only RequireAction (ADR-047 §г): state-scoped оператор достигает handler-а,
-// сужение через getInScope("history"). state матчит StateExpr → 200. Регресс
-// (до Фикс 2) = state-scoped оператор ловил 403 на route-gate Multi (state-
-// измерение не резолвится в incarnation-context → deny ДО handler-а).
+// TestIncarnation_History_StateMatch_200 — the History gate moved to existence-
+// only RequireAction (ADR-047 §d): a state-scoped operator reaches the handler,
+// narrowing via getInScope("history"). state matches a StateExpr → 200. Regress
+// (before Fix 2) = a state-scoped operator got 403 at the Multi route-gate (the state
+// dimension does not resolve in the incarnation context → deny BEFORE the handler).
 func TestIncarnation_History_StateMatch_200(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"staging"}, map[string]any{"redis_version": "8.0"})
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
@@ -1534,8 +1533,8 @@ func TestIncarnation_History_StateMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_History_StateMismatch_404 — state не матчит ни StateExpr, нет
-// coven-совпадения → 404 (история чужой incarnation не раскрывается).
+// TestIncarnation_History_StateMismatch_404 — state matches no StateExpr, no
+// coven match → 404 (another's incarnation history is not revealed).
 func TestIncarnation_History_StateMismatch_404(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"staging"}, map[string]any{"redis_version": "7.2"})
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
@@ -1546,9 +1545,9 @@ func TestIncarnation_History_StateMismatch_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_History_CovenMatch_200 — coven-scoped оператор видит историю
-// incarnation своего coven (паритет Get; coven-scope раньше матчил и через Multi-
-// gate, теперь — через getInScope("history")).
+// TestIncarnation_History_CovenMatch_200 — a coven-scoped operator sees the history of
+// an incarnation in its coven (parity with Get; coven-scope used to match via the Multi
+// gate too, now — via getInScope("history")).
 func TestIncarnation_History_CovenMatch_200(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"prod"}, nil)
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
@@ -1559,8 +1558,8 @@ func TestIncarnation_History_CovenMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_History_EmptyPurview_404 — fail-closed: пустой Purview → 404
-// (история существующей-но-чужой incarnation не раскрывается).
+// TestIncarnation_History_EmptyPurview_404 — fail-closed: an empty Purview → 404
+// (the history of an existing-but-foreign incarnation is not revealed).
 func TestIncarnation_History_EmptyPurview_404(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"prod"}, nil)
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
@@ -1572,8 +1571,8 @@ func TestIncarnation_History_EmptyPurview_404(t *testing.T) {
 
 // --- RBAC scope selectors (ADR-008 amendment a) -----------------------
 
-// hasCovenCtx — есть ли в наборе контекст с заданным coven (+ service, если
-// задан); incarnation-ключ проверяется на совпадение с name.
+// hasCovenCtx — whether the set contains a context with the given coven (+ service, if
+// set); the incarnation key is checked to match name.
 func hasCovenCtx(ctxs []map[string]string, name, service, coven string) bool {
 	for _, c := range ctxs {
 		if c["incarnation"] == name && c["coven"] == coven && c["service"] == service {
@@ -1585,7 +1584,7 @@ func hasCovenCtx(ctxs []map[string]string, name, service, coven string) bool {
 
 func TestIncarnationCovenContexts_DeclaredPlusName(t *testing.T) {
 	ctxs := incarnationCovenContexts("redis-prod", "redis", []string{"prod", "dc1"})
-	// covens ∪ {name} = {prod, dc1, redis-prod}, service во всех.
+	// covens ∪ {name} = {prod, dc1, redis-prod}, service in all.
 	if len(ctxs) != 3 {
 		t.Fatalf("len = %d, want 3: %v", len(ctxs), ctxs)
 	}
@@ -1597,7 +1596,7 @@ func TestIncarnationCovenContexts_DeclaredPlusName(t *testing.T) {
 }
 
 func TestIncarnationCovenContexts_NameDedup(t *testing.T) {
-	// name уже в covens → не дублируется.
+	// name is already in covens → not duplicated.
 	ctxs := incarnationCovenContexts("prod", "redis", []string{"prod"})
 	if len(ctxs) != 1 {
 		t.Fatalf("len = %d, want 1 (dedup): %v", len(ctxs), ctxs)
@@ -1619,8 +1618,8 @@ func TestIncarnationCovenContexts_EmptyName_Nil(t *testing.T) {
 
 func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row {
-		// service=redis, covens=[prod] (см. makeIncStatusRow service=redis;
-		// дополняем covens вручную).
+		// service=redis, covens=[prod] (see makeIncStatusRow service=redis;
+		// we add covens manually).
 		now := time.Now()
 		return staticRow{values: []any{
 			name, "redis", "v1", int(1),
@@ -1629,7 +1628,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			now, now, []string{"prod"},
 			[]byte("{}"),          // traits
 			any(nil), []byte(nil), // ADR-031 Slice C
-			"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+			"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 			any(nil), // applying_apply_id (ADR-068 §A1)
 		}}
 	}}
@@ -1670,7 +1669,7 @@ func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
 			t.Errorf("missing coven=%q in %v", coven, ctxs)
 		}
 	}
-	// Тело восстановлено для handler-а.
+	// The body is restored for the handler.
 	rest, _ := io.ReadAll(req.Body)
 	if !strings.Contains(string(rest), "redis-prod") {
 		t.Errorf("body not restored for handler: %q", rest)
@@ -1695,8 +1694,8 @@ func TestIncarnationCreateScopeSelector_BadJSON_Nil(t *testing.T) {
 
 // --- Run / Unlock fakes -----------------------------------------------
 
-// fakeStarter — мок [ScenarioStarter]. Перехватывает RunSpec и возвращает
-// заданную ошибку (nil → успех).
+// fakeStarter — a mock [ScenarioStarter]. Captures RunSpec and returns
+// the given error (nil → success).
 type fakeStarter struct {
 	gotSpec scenario.RunSpec
 	calls   int
@@ -1709,7 +1708,7 @@ func (f *fakeStarter) Start(_ context.Context, spec scenario.RunSpec) error {
 	return f.err
 }
 
-// fakeResolver — мок [ServiceResolver]. ok=false → сервис не зарегистрирован.
+// fakeResolver — a mock [ServiceResolver]. ok=false → service not registered.
 type fakeResolver struct {
 	ok bool
 }
@@ -1718,10 +1717,10 @@ func (f *fakeResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 	return artifact.ServiceRef{Name: service, Ref: "v1"}, f.ok
 }
 
-// fakeIncScoper — мок [PurviewResolver] для scoped List/Get-тестов (ADR-047
-// S3b-3). Поля мапятся в [rbac.Purview]: covens → Covens, stateExprs → StateExprs,
-// traitExprs → TraitExprs (ADR-060 п.7 slice 1, `key:value`-пары).
-// empty=true → Purview{} (fail-closed). Симметрично soul_test.fakeScoper.
+// fakeIncScoper — a mock [PurviewResolver] for scoped List/Get tests (ADR-047
+// S3b-3). The fields map into [rbac.Purview]: covens → Covens, stateExprs → StateExprs,
+// traitExprs → TraitExprs (ADR-060 §7 slice 1, `key:value` pairs).
+// empty=true → Purview{} (fail-closed). Symmetric with soul_test.fakeScoper.
 type fakeIncScoper struct {
 	covens       []string
 	stateExprs   []string
@@ -1742,13 +1741,13 @@ func (s fakeIncScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 	}
 }
 
-// unrestrictedScoper — типовой Unrestricted-scoper для существующих List/Get-
-// тестов, которые проверяют не scope, а filter/sort SQL-путь (scope снят →
-// поведение без изменений). Помогает не плодить литерал в каждом тесте.
+// unrestrictedScoper — a typical Unrestricted scoper for existing List/Get
+// tests that check not scope but the filter/sort SQL path (scope removed →
+// unchanged behavior). Avoids duplicating the literal in every test.
 func unrestrictedScoper() fakeIncScoper { return fakeIncScoper{unrestricted: true} }
 
-// newChiRequestScenario строит request с двумя chi-URL-params (name +
-// scenario) для Run-handler-а — он читает оба через chi.URLParam.
+// newChiRequestScenario builds a request with two chi URL params (name +
+// scenario) for the Run handler — it reads both via chi.URLParam.
 func newChiRequestScenario(method, path string, body *bytes.Reader, name, scenarioName string) *http.Request {
 	var b *bytes.Reader
 	if body != nil {
@@ -1764,8 +1763,8 @@ func newChiRequestScenario(method, path string, body *bytes.Reader, name, scenar
 	return r
 }
 
-// makeIncStatusRow конструирует staticRow под SelectByName с заданным
-// статусом (для Run-probe error_locked).
+// makeIncStatusRow builds a staticRow for SelectByName with a given
+// status (for the Run-probe error_locked).
 func makeIncStatusRow(name, status string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -1775,26 +1774,26 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
-// makeUnlockSelectRow конструирует staticRow под FOR UPDATE-select unlock-семейства.
-// Несёт 4 колонки (state, status, created_scenario, spec): plain Unlock / Destroy
-// сканируют первые две, UnlockForRerun — все четыре.
+// makeUnlockSelectRow builds a staticRow for the FOR UPDATE select of the unlock family.
+// Carries 4 columns (state, status, created_scenario, spec): plain Unlock / Destroy
+// scan the first two, UnlockForRerun — all four.
 func makeUnlockSelectRow(status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, "create", []byte("{}")}}
 }
 
-// makeUnlockSelectRowSpec — как makeUnlockSelectRow, но spec несёт заданный jsonb
-// (проверка проброса spec.input в RunSpec.Input на create-пути).
+// makeUnlockSelectRowSpec — like makeUnlockSelectRow, but spec carries the given jsonb
+// (checks threading spec.input into RunSpec.Input on the create path).
 func makeUnlockSelectRowSpec(status string, specJSON []byte) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, "create", specJSON}}
 }
 
-// makeUnlockSelectRowBare — как makeUnlockSelectRow, но created_scenario = NULL
-// (bare-инкарнация): 3-й scan-dest **string получит nil.
+// makeUnlockSelectRowBare — like makeUnlockSelectRow, but created_scenario = NULL
+// (a bare incarnation): the 3rd scan-dest **string gets nil.
 func makeUnlockSelectRowBare(status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, any(nil), []byte("{}")}}
 }
@@ -1906,7 +1905,7 @@ func TestIncarnation_Run_UnknownService_422(t *testing.T) {
 }
 
 func TestIncarnation_Run_NoBody_202(t *testing.T) {
-	// Scenario без input: пустое тело → 202 (input опционален).
+	// Scenario without input: empty body → 202 (input is optional).
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
 	}
@@ -1936,9 +1935,9 @@ func TestIncarnation_Run_NoRunner_500(t *testing.T) {
 	}
 }
 
-// makeIncStatusRowBare — как makeIncStatusRow, но created_scenario = NULL (bare-
-// инкарнация, миграция 090: создана без bootstrap-сценария). scanIncarnation читает
-// 16-ю колонку в **string → nil.
+// makeIncStatusRowBare — like makeIncStatusRow, but created_scenario = NULL (a bare
+// incarnation, migration 090: created without a bootstrap scenario). scanIncarnation reads
+// the 16th column into **string → nil.
 func makeIncStatusRowBare(name, status string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -1948,17 +1947,17 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
-		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // created_scenario = NULL (bare, migration 090)
 		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
-// TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Фаза 2: bare-инкарнация
-// (created_scenario IS NULL) запускает ОБЫЧНЫЙ operational-сценарий (day-2) через
-// RunTyped штатно — 202, прогон стартует. RunTyped резолвит инкарнацию по
-// SelectByName и НЕ читает created_scenario для day-2-запуска (он нужен только
-// rerun-last на create-пути). Регресс = day-2-путь начинает требовать created_scenario не-NULL
-// (или паникует на NULL-проекции) → bare-инкарнации лишаются day-2-операций.
+// TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Phase 2: a bare incarnation
+// (created_scenario IS NULL) runs an ORDINARY operational scenario (day-2) via
+// RunTyped normally — 202, the run starts. RunTyped resolves the incarnation by
+// SelectByName and does NOT read created_scenario for a day-2 run (it is needed only for
+// rerun-last on the create path). Regress = the day-2 path starts requiring created_scenario non-NULL
+// (or panics on the NULL projection) → bare incarnations lose day-2 operations.
 func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRowBare(name, "ready") },
@@ -2019,7 +2018,7 @@ func TestIncarnation_Unlock_200(t *testing.T) {
 	if out.Name != "redis-prod" {
 		t.Errorf("name = %q", out.Name)
 	}
-	// Unlock пишет state_history INSERT + UPDATE → 2 Exec-а.
+	// Unlock writes a state_history INSERT + UPDATE → 2 Execs.
 	if len(db.execCalls) != 2 {
 		t.Errorf("execCalls = %d, want 2 (history INSERT + status UPDATE)", len(db.execCalls))
 	}
@@ -2077,8 +2076,8 @@ func TestIncarnation_Unlock_NoReason_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Unlock_ReasonAtMax_200 — reason ровно ReasonMaxLen символов
-// проходит (граница включительно): unlock выполняется, 200 + 2 Exec-а.
+// TestIncarnation_Unlock_ReasonAtMax_200 — a reason of exactly ReasonMaxLen characters
+// passes (inclusive boundary): unlock proceeds, 200 + 2 Execs.
 func TestIncarnation_Unlock_ReasonAtMax_200(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
@@ -2099,8 +2098,8 @@ func TestIncarnation_Unlock_ReasonAtMax_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Unlock_ReasonOverMax_422 — reason длиннее ReasonMaxLen → 422
-// ДО транзакции (верхняя граница reason, поведенческий инвариант).
+// TestIncarnation_Unlock_ReasonOverMax_422 — a reason longer than ReasonMaxLen → 422
+// BEFORE the transaction (the upper reason boundary, a behavioral invariant).
 func TestIncarnation_Unlock_ReasonOverMax_422(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
@@ -2123,9 +2122,9 @@ func TestIncarnation_Unlock_ReasonOverMax_422(t *testing.T) {
 
 // --- Upgrade ----------------------------------------------------------
 
-// fakeLoader — мок [ServiceSnapshotLoader]. Load возвращает снапшот с
-// заданной target schema-версией; LoadMigrationChain отдаёт chain/err из
-// преднастроенных полей. git-стек не поднимается.
+// fakeLoader — a mock [ServiceSnapshotLoader]. Load returns a snapshot with
+// the given target schema version; LoadMigrationChain returns chain/err from
+// preset fields. The git stack is not brought up.
 type fakeLoader struct {
 	targetSchema int
 	loadErr      error
@@ -2134,35 +2133,35 @@ type fakeLoader struct {
 	chainErr error
 
 	// destroy pre-check (ReadFile): hasDestroyScenario=true → scenario `destroy`
-	// «есть» в снапшоте; false → os.ErrNotExist. readErr перекрывает (I/O-сбой).
+	// "exists" in the snapshot; false → os.ErrNotExist. readErr overrides (I/O failure).
 	hasDestroyScenario bool
 	readErr            error
 
-	// scenarioYAML — для sync input-валидации (scenario.ValidateInput):
-	// непустое → ReadFile отдаёт этот YAML как scenario/<name>/main.yml.
-	// Перекрывает hasDestroyScenario-ветку.
+	// scenarioYAML — for sync input validation (scenario.ValidateInput):
+	// non-empty → ReadFile returns this YAML as scenario/<name>/main.yml.
+	// Overrides the hasDestroyScenario branch.
 	scenarioYAML string
 
-	// localDir — корень реального снапшота на диске (temp). Непустое → Load
-	// проставляет его в ServiceArtifact.LocalDir, а ReadFile читает запрошенный
-	// файл с диска (path-aware). Нужно для механизма нескольких create-сценариев:
-	// scenario.ResolveCreateScenarios сканирует art.LocalDir (artifact.ListScenarios),
-	// а scenario.ValidateInput читает scenario/<chosen>/main.yml — обе фазы должны
-	// видеть один и тот же снапшот, поэтому per-path-ответ обязателен. Зеркало
-	// dirInputLoader из scenario/validate_input_types_test.go. Перекрывает
-	// scenarioYAML/hasDestroyScenario-ветки в ReadFile.
+	// localDir — the root of a real on-disk snapshot (temp). Non-empty → Load
+	// sets it in ServiceArtifact.LocalDir, and ReadFile reads the requested
+	// file from disk (path-aware). Needed for the multi-create-scenario mechanism:
+	// scenario.ResolveCreateScenarios scans art.LocalDir (artifact.ListScenarios),
+	// and scenario.ValidateInput reads scenario/<chosen>/main.yml — both phases must
+	// see the same snapshot, so a per-path response is required. Mirrors
+	// dirInputLoader from scenario/validate_input_types_test.go. Overrides the
+	// scenarioYAML/hasDestroyScenario branches in ReadFile.
 	localDir string
 
-	// lifecycle — блок lifecycle манифеста снапшота (S3: auto_create/auto_destroy).
-	// nil → манифест без lifecycle (оба флага дефолтно true, backcompat).
+	// lifecycle — the lifecycle block of the snapshot manifest (S3: auto_create/auto_destroy).
+	// nil → a manifest without lifecycle (both flags default to true, backcompat).
 	lifecycle *config.LifecycleConfig
 
-	// stateSchema — flat state_schema манифеста снапшота (seal read-path:
-	// secretSchemaForIncarnation обходит его на secret:true). nil → без state_schema.
+	// stateSchema — the flat state_schema of the snapshot manifest (seal read-path:
+	// secretSchemaForIncarnation walks it for secret:true). nil → no state_schema.
 	stateSchema map[string]any
 
-	// revealableSecrets — секция revealable_secrets манифеста снапшота (NIM-74):
-	// revealableSecretsFor читает её на reveal-эндпоинте. nil → без reveal-деклараций.
+	// revealableSecrets — the revealable_secrets section of the snapshot manifest (NIM-74):
+	// revealableSecretsFor reads it on the reveal endpoint. nil → no reveal declarations.
 	revealableSecrets []config.RevealableSecret
 
 	loadCalls     int
@@ -2170,12 +2169,12 @@ type fakeLoader struct {
 	readFileCalls int
 	upgradesCalls int
 
-	// loadedRefs фиксирует ref.Ref каждого Load (порядок вызовов) — guard-тесты
-	// version-pin сверяют, на какой версии сервиса материализовался снапшот.
+	// loadedRefs records the ref.Ref of each Load (call order) — the version-pin
+	// guard tests verify which service version the snapshot materialized on.
 	loadedRefs []string
 
-	// upgrades — результат ListUpgrades (ADR-0068): непустой список с FromVersions,
-	// матчащий текущий пин, → found-ветвь UpgradeTyped. nil → legacy.
+	// upgrades — the result of ListUpgrades (ADR-0068): a non-empty list with FromVersions
+	// matching the current pin → the found branch of UpgradeTyped. nil → legacy.
 	upgrades []artifact.Scenario
 }
 
@@ -2205,11 +2204,11 @@ func (f *fakeLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scena
 	return f.upgrades, nil
 }
 
-// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`)
-// и sync input-валидации. localDir (если задан) — path-aware чтение с диска
-// (read scenario/<name>/main.yml реального снапшота); иначе scenarioYAML/
-// hasDestroyScenario-заглушки. hasDestroyScenario=true → файл «есть»; false →
-// os.ErrNotExist (нет scenario). readErr (если задан) перекрывает всё — для теста I/O-сбоя.
+// ReadFile — for the destroy PrepareDestroy pre-check (presence of scenario `destroy`)
+// and sync input validation. localDir (if set) — path-aware read from disk
+// (reads scenario/<name>/main.yml of the real snapshot); otherwise the scenarioYAML/
+// hasDestroyScenario stubs. hasDestroyScenario=true → the file "exists"; false →
+// os.ErrNotExist (no scenario). readErr (if set) overrides everything — for the I/O-failure test.
 func (f *fakeLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	f.readFileCalls++
 	if f.readErr != nil {
@@ -2227,8 +2226,8 @@ func (f *fakeLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte,
 	return nil, os.ErrNotExist
 }
 
-// makeIncRowVer конструирует staticRow под SelectByName с заданными
-// service_version и state_schema_version (для Upgrade resolve `from`).
+// makeIncRowVer builds a staticRow for SelectByName with given
+// service_version and state_schema_version (for the Upgrade `from` resolve).
 func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
@@ -2238,12 +2237,12 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
-// makeUpgradeSelectRow конструирует staticRow под Upgrade SELECT FOR UPDATE
+// makeUpgradeSelectRow builds a staticRow for the Upgrade SELECT FOR UPDATE
 // (state, state_schema_version, status).
 func makeUpgradeSelectRow(schema int, status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), schema, status}}
@@ -2254,8 +2253,8 @@ func newUpgradeHandler(db *fakeIncDB, loader *fakeLoader) *IncarnationHandler {
 }
 
 func TestIncarnation_Upgrade_202(t *testing.T) {
-	// Реальный апгрейд v1→v2, схема 1→2: chain c одной миграцией. Happy path
-	// (статус ready) → 202 + apply_id.
+	// A real upgrade v1→v2, schema 1→2: a chain with one migration. Happy path
+	// (status ready) → 202 + apply_id.
 	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
@@ -2287,9 +2286,9 @@ func TestIncarnation_Upgrade_202(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Upgrade_FoundAutostart_202 — found-ветвь (ADR-0068 §5): для
-// перехода v1→v2 есть upgrade-сценарий → 202 несёт run_apply_id=R (≠ M), Runner
-// получил RunSpec{FromUpgrade:true, FromLocked:true, ApplyID:R, ScenarioName:slug,
+// TestIncarnation_Upgrade_FoundAutostart_202 — the found branch (ADR-0068 §5): for
+// the v1→v2 transition there is an upgrade scenario → 202 carries run_apply_id=R (≠ M), the Runner
+// got RunSpec{FromUpgrade:true, FromLocked:true, ApplyID:R, ScenarioName:slug,
 // ServiceRef.Ref:to_version}.
 func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
@@ -2346,17 +2345,17 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 	if sp.StartedByAID != "archon-alice" {
 		t.Errorf("RunSpec.StartedByAID = %q, want archon-alice", sp.StartedByAID)
 	}
-	// ADR-0068 §7 инвариант: upgrade-сценарий работает со state, НЕ с input —
-	// input НЕ мигрируется. RunSpec.Input обязан быть nil (регресс, если кто-то
-	// начнёт протаскивать spec.input в upgrade-прогон).
+	// ADR-0068 §7 invariant: the upgrade scenario works with state, NOT input —
+	// input is NOT migrated. RunSpec.Input must be nil (regress if someone
+	// starts smuggling spec.input into the upgrade run).
 	if sp.Input != nil {
 		t.Errorf("RunSpec.Input = %v, want nil (input НЕ мигрируется, ADR-0068 §7)", sp.Input)
 	}
 }
 
-// TestIncarnation_Upgrade_FoundNilRunner_500 — found-ветвь (upgrade-сценарий есть),
-// но runner не сконфигурирован → 500 ДО резервирования applying (анти-зомби, ADR-0068
-// §5: инкарнация не должна зависнуть в applying без Runner-прогона).
+// TestIncarnation_Upgrade_FoundNilRunner_500 — the found branch (an upgrade scenario exists),
+// but the runner is not configured → 500 BEFORE reserving applying (anti-zombie, ADR-0068
+// §5: the incarnation must not hang in applying without a Runner run).
 func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
 	if err != nil {
@@ -2372,7 +2371,7 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 		chain:        statemigrate.Chain{mig},
 		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v1"}}},
 	}
-	// runner=nil (2-й арг) при найденном upgrade-сценарии.
+	// runner=nil (2nd arg) with an upgrade scenario found.
 	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
 		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
@@ -2382,8 +2381,8 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("Code = %d, want 500 (found + runner=nil); body=%s", rec.Code, rec.Body.String())
 	}
-	// Анти-зомби: applying НЕ резервировался (UpgradeStateSchema SELECT FOR UPDATE
-	// не вызван, никакой tx не открыт) — проверка runner=nil ДО смены статуса.
+	// Anti-zombie: applying was NOT reserved (UpgradeStateSchema SELECT FOR UPDATE
+	// not called, no tx opened) — the runner=nil check is BEFORE the status change.
 	if selectCalled {
 		t.Error("UpgradeStateSchema SELECT FOR UPDATE вызван — applying зарезервирован ДО проверки runner (анти-зомби нарушен)")
 	}
@@ -2392,8 +2391,8 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Upgrade_LegacyNoRun_202 — legacy (upgrade-сценарий не найден):
-// 202 БЕЗ run_apply_id, Runner НЕ вызван (drift + WARN, host-раскатка вручную).
+// TestIncarnation_Upgrade_LegacyNoRun_202 — legacy (no upgrade scenario found):
+// 202 WITHOUT run_apply_id, the Runner is NOT called (drift + WARN, host rollout is manual).
 func TestIncarnation_Upgrade_LegacyNoRun_202(t *testing.T) {
 	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
 	if err != nil {
@@ -2427,8 +2426,8 @@ func TestIncarnation_Upgrade_LegacyNoRun_202(t *testing.T) {
 }
 
 func TestIncarnation_Upgrade_RefBump_202(t *testing.T) {
-	// Смена ref при той же схеме (target == current, to_version != текущего
-	// service_version) — легитимный ref-bump: пустой chain, 202.
+	// A ref change at the same schema (target == current, to_version != the current
+	// service_version) — a legitimate ref-bump: empty chain, 202.
 	db := &fakeIncDB{
 		selectByNameRow:  func(name string) pgx.Row { return makeIncRowVer(name, "v1", 1) },
 		upgradeSelectRow: func(_ string) pgx.Row { return makeUpgradeSelectRow(1, "ready") },
@@ -2446,8 +2445,8 @@ func TestIncarnation_Upgrade_RefBump_202(t *testing.T) {
 }
 
 func TestIncarnation_Upgrade_NoOpSameVersion_422(t *testing.T) {
-	// Полное совпадение: to_version == текущий service_version И схема та же
-	// → 422 (апгрейдить нечего). Не доходит до LoadMigrationChain.
+	// Full match: to_version == the current service_version AND the same schema
+	// → 422 (nothing to upgrade). Does not reach LoadMigrationChain.
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowVer(name, "v2", 2) },
 	}
@@ -2467,13 +2466,13 @@ func TestIncarnation_Upgrade_NoOpSameVersion_422(t *testing.T) {
 }
 
 func TestIncarnation_Upgrade_DowngradeViaRef_409(t *testing.T) {
-	// Downgrade через git-ref: incarnation на схеме 3, целевой ref несёт
-	// схему 2 (target < current). Ранний guard в handler-е возвращает 409
-	// (forward-only, ADR-019) ДО вызова LoadMigrationChain — реальный путь,
-	// который раньше падал в 500 (загрузчик на from>to отдаёт обычную ошибку,
-	// не ErrMigrationChainBroken). Отличается от downgrade-кейса в
-	// SentinelMapping: там SelectByName видит совместимую схему, а downgrade
-	// детектится позже под FOR UPDATE (защита гонки).
+	// Downgrade via git-ref: the incarnation is on schema 3, the target ref carries
+	// schema 2 (target < current). An early guard in the handler returns 409
+	// (forward-only, ADR-019) BEFORE calling LoadMigrationChain — the real path,
+	// which used to fall into 500 (the loader on from>to returns a plain error,
+	// not ErrMigrationChainBroken). Differs from the downgrade case in
+	// SentinelMapping: there SelectByName sees a compatible schema, and downgrade
+	// is detected later under FOR UPDATE (race protection).
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowVer(name, "v3", 3) },
 	}
@@ -2570,9 +2569,9 @@ func TestIncarnation_Upgrade_LoadFailed_500(t *testing.T) {
 	}
 }
 
-// upgradeSentinelCase — table-параметризация маппинга sentinel-ошибок
-// incarnation.UpgradeStateSchema на HTTP-коды. Sentinel приходит из
-// upgradeSelectRow (gate статуса) или downgrade (target < current schema).
+// upgradeSentinelCase — table parameterization of the mapping of sentinel errors from
+// incarnation.UpgradeStateSchema to HTTP codes. The sentinel comes from
+// upgradeSelectRow (the status gate) or downgrade (target < current schema).
 func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -2607,7 +2606,7 @@ func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 			wantType:     problem.TypeIncarnationLocked,
 		},
 		{
-			// FOR UPDATE видит схему 3, target 2 < 3 → downgrade.
+			// FOR UPDATE sees schema 3, target 2 < 3 → downgrade.
 			name:         "downgrade→409",
 			upgradeRow:   func(_ string) pgx.Row { return makeUpgradeSelectRow(3, "ready") },
 			targetSchema: 2,
@@ -2616,8 +2615,8 @@ func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 			wantType:     problem.TypeIncarnationLocked,
 		},
 		{
-			// SelectByName видит схему 1, FOR UPDATE видит 5 (гонка resolve↔lock)
-			// при пустом chain → schema-mismatch.
+			// SelectByName sees schema 1, FOR UPDATE sees 5 (a resolve↔lock race)
+			// with an empty chain → schema-mismatch.
 			name:         "schema_mismatch→409",
 			upgradeRow:   func(_ string) pgx.Row { return makeUpgradeSelectRow(5, "ready") },
 			targetSchema: 1,
@@ -2651,15 +2650,15 @@ func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 	}
 }
 
-// chi-routing helper для unit-тестов — newChiRequest определён в
-// operator_test.go и переиспользуется здесь напрямую (один пакет
-// handlers, общая видимость).
+// chi-routing helper for the unit tests — newChiRequest is defined in
+// operator_test.go and reused here directly (one package
+// handlers, shared visibility).
 
 // --- CheckDrift -------------------------------------------------------
 
-// fakeDriftChecker — мок [DriftChecker] (CheckDrift + MarkDriftStatus).
-// Фиксирует переданный spec, число вызовов и аргументы MarkDriftStatus; report
-// / err — что вернуть из CheckDrift; markErr — что вернуть из MarkDriftStatus.
+// fakeDriftChecker — a mock [DriftChecker] (CheckDrift + MarkDriftStatus).
+// Records the passed spec, the call count and the MarkDriftStatus arguments; report
+// / err — what to return from CheckDrift; markErr — what to return from MarkDriftStatus.
 type fakeDriftChecker struct {
 	gotSpec      scenario.CheckDriftSpec
 	calls        int
@@ -2684,8 +2683,8 @@ func (f *fakeDriftChecker) MarkDriftStatus(_ context.Context, name string, hasDr
 	return f.markErr
 }
 
-// sampleDriftReportH — образец отчёта с одним drifted-хостом для проверки
-// тела ответа и aggregate-summary.
+// sampleDriftReportH — a sample report with one drifted host to check the
+// response body and the aggregate summary.
 func sampleDriftReportH() *scenario.DriftReport {
 	return &scenario.DriftReport{
 		CheckedAt:       time.Now().UTC(),
@@ -2754,8 +2753,8 @@ func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
 		t.Errorf("apply_id len = %d, want 26 (ULID)", len(drift.gotSpec.ApplyID))
 	}
 
-	// MarkDriftStatus вызван с hasDrift=true (есть drifted-хост) — паритет
-	// с MCP-handler-ом.
+	// MarkDriftStatus called with hasDrift=true (there is a drifted host) — parity
+	// with the MCP handler.
 	if !drift.marked {
 		t.Fatal("MarkDriftStatus не вызван")
 	}
@@ -2764,7 +2763,7 @@ func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
 			drift.markName, drift.markHasDrift)
 	}
 
-	// Audit-trail: EventIncarnationDriftChecked с correlation_id=apply_id и
+	// Audit-trail: EventIncarnationDriftChecked with correlation_id=apply_id and
 	// source=api.
 	if !hasEvent(aw, audit.EventIncarnationDriftChecked) {
 		t.Fatal("audit: incarnation.drift_checked не записан")
@@ -2834,7 +2833,7 @@ func TestIncarnation_CheckDrift_InputMissing_422(t *testing.T) {
 }
 
 func TestIncarnation_CheckDrift_NotConfigured_500(t *testing.T) {
-	// drift=nil → endpoint не сконфигурирован, симметрично Run/Upgrade/Destroy.
+	// drift=nil → the endpoint is not configured, symmetric with Run/Upgrade/Destroy.
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 
@@ -2878,9 +2877,9 @@ func TestIncarnation_CheckDrift_InvalidName_422(t *testing.T) {
 }
 
 func TestIncarnation_CheckDrift_NoDrift_MarksReady(t *testing.T) {
-	// Чистый отчёт (нет drifted/failed) → MarkDriftStatus(name, false): handler
-	// сбрасывает incarnation в ready (если была в drift). Паритет с
-	// информационной семантикой ADR-031(d).
+	// A clean report (no drifted/failed) → MarkDriftStatus(name, false): the handler
+	// resets the incarnation to ready (if it was in drift). Parity with the
+	// informational semantics of ADR-031(d).
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
 	}
@@ -2908,9 +2907,9 @@ func TestIncarnation_CheckDrift_NoDrift_MarksReady(t *testing.T) {
 
 // --- UpdateHosts (PATCH /v1/incarnations/{name}/hosts) -----------------
 
-// makeIncRowWithHosts — staticRow для SelectByName / FOR UPDATE с заданными
-// hosts в spec.hosts[]. Зеркалит [makeIncarnationRow], но даёт контроль над
-// jsonb-spec.
+// makeIncRowWithHosts — a staticRow for SelectByName / FOR UPDATE with given
+// hosts in spec.hosts[]. Mirrors [makeIncarnationRow], but gives control over
+// the jsonb-spec.
 func makeIncRowWithHosts(name, status string, hosts []map[string]any) pgx.Row {
 	specMap := map[string]any{}
 	if hosts != nil {
@@ -2929,7 +2928,7 @@ func makeIncRowWithHosts(name, status string, hosts []map[string]any) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
@@ -2961,7 +2960,7 @@ func TestUpdateHosts_200_Replace(t *testing.T) {
 	if dto.Name != "redis-prod" {
 		t.Errorf("Name = %q", dto.Name)
 	}
-	// Spec в DTO должен содержать новые hosts.
+	// Spec in the DTO must contain the new hosts.
 	hostsRaw, _ := dto.Spec["hosts"].([]any)
 	if len(hostsRaw) != 2 {
 		t.Errorf("dto.spec.hosts len = %d, want 2 (raw=%v)", len(hostsRaw), dto.Spec["hosts"])
@@ -3001,7 +3000,7 @@ func TestUpdateHosts_200_Remove(t *testing.T) {
 				{"sid": "b.example"},
 			})
 		},
-		// Для remove всё равно проверяется существование SID.
+		// For remove, SID existence is still checked.
 		soulsExisting: map[string]struct{}{"b.example": {}},
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -3023,7 +3022,7 @@ func TestUpdateHosts_200_Remove(t *testing.T) {
 func TestUpdateHosts_UnknownSID_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowWithHosts(name, "ready", nil) },
-		// b.example отсутствует в souls.
+		// b.example is absent from souls.
 		soulsExisting: map[string]struct{}{"a.example": {}},
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -3138,8 +3137,8 @@ func TestUpdateHosts_Mode_Boundaries(t *testing.T) {
 	}
 }
 
-// TestUpdateHosts_EmptyReplace_Clears — replace с пустым hosts[] = осознанная
-// очистка declared-spec (документированное решение, см. doc-comment UpdateHosts).
+// TestUpdateHosts_EmptyReplace_Clears — replace with an empty hosts[] = a deliberate
+// clear of the declared-spec (a documented decision, see the UpdateHosts doc-comment).
 func TestUpdateHosts_EmptyReplace_Clears(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -3164,8 +3163,8 @@ func TestUpdateHosts_EmptyReplace_Clears(t *testing.T) {
 	}
 }
 
-// TestUpdateHosts_Role_Boundaries — role kebab-case или пустая: пустая → ok,
-// валидная kebab → ok, 63 символа → ok, 64 → 422, uppercase → 422.
+// TestUpdateHosts_Role_Boundaries — role kebab-case or empty: empty → ok,
+// valid kebab → ok, 63 chars → ok, 64 → 422, uppercase → 422.
 func TestUpdateHosts_Role_Boundaries(t *testing.T) {
 	cases := []struct {
 		name string
@@ -3201,7 +3200,7 @@ func TestUpdateHosts_Role_Boundaries(t *testing.T) {
 	}
 }
 
-// TestUpdateHosts_EmptySID_422 — hosts[].sid non-empty: пустой SID → 422.
+// TestUpdateHosts_EmptySID_422 — hosts[].sid non-empty: an empty SID → 422.
 func TestUpdateHosts_EmptySID_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowWithHosts(name, "ready", nil) },
@@ -3242,8 +3241,8 @@ func TestUpdateHosts_InvalidRole_422(t *testing.T) {
 	}
 }
 
-// TestUpdateHosts_AuditEmitted — на 200-исход handler пишет
-// `incarnation.hosts_updated` с правильным source / archon / payload.
+// TestUpdateHosts_AuditEmitted — on a 200 outcome the handler writes
+// `incarnation.hosts_updated` with the correct source / archon / payload.
 func TestUpdateHosts_AuditEmitted(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowWithHosts(name, "ready", nil) },
@@ -3276,7 +3275,7 @@ func TestUpdateHosts_AuditEmitted(t *testing.T) {
 	}
 }
 
-// recordingAuditWriter — простой in-memory audit.Writer для проверки payload.
+// recordingAuditWriter — a simple in-memory audit.Writer for checking the payload.
 type recordingAuditWriter struct{ events []*audit.Event }
 
 func (a *recordingAuditWriter) Write(_ context.Context, e *audit.Event) error {
@@ -3284,10 +3283,10 @@ func (a *recordingAuditWriter) Write(_ context.Context, e *audit.Event) error {
 	return nil
 }
 
-// --- Sync input-validation (fix: required-input dyra) ------------------
+// --- Sync input validation (fix: required-input gap) ------------------
 
-// scenarioCreateRequiredInput — scenario `create` с required-полем `name`
-// (string, без default) и опциональным `replicas` (integer, default 1).
+// scenarioCreateRequiredInput — scenario `create` with a required field `name`
+// (string, no default) and an optional `replicas` (integer, default 1).
 const scenarioCreateRequiredInput = `name: create
 create: true
 state_changes: {}
@@ -3306,10 +3305,10 @@ tasks:
     changed_when: "false"
 `
 
-// writeCreateScenarioDir пишет scenario/create/main.yml (yaml) в новый temp-корень
-// и возвращает его. Фаза 2: ResolveCreateScenarios сканирует localDir, поэтому
-// create-сценарий обязан лежать на диске. Если yaml не несёт `create: true` —
-// префиксуем флагом (чтобы он попал в create-набор), сохраняя имя строки `create`.
+// writeCreateScenarioDir writes scenario/create/main.yml (yaml) into a new temp root
+// and returns it. Phase 2: ResolveCreateScenarios scans localDir, so the
+// create scenario must live on disk. If the yaml does not carry `create: true` —
+// we prefix the flag (so it lands in the create set), keeping the string name `create`.
 func writeCreateScenarioDir(t *testing.T, yaml string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -3326,10 +3325,10 @@ func writeCreateScenarioDir(t *testing.T, yaml string) string {
 	return root
 }
 
-// newCreateHandlerWithSchema — Create-handler с runner+services+loader
-// (production-конфигурация), где loader отдаёт scenario `create` (yaml) с диска.
-// Фаза 2: тесты-callers передают create_scenario=create (выбор обязателен при
-// наличии create-сценариев).
+// newCreateHandlerWithSchema — a Create handler with runner+services+loader
+// (production config), where the loader returns scenario `create` (yaml) from disk.
+// Phase 2: the test callers pass create_scenario=create (the choice is required when
+// create scenarios are present).
 func newCreateHandlerWithSchema(t *testing.T, db *fakeIncDB, yaml string) (*IncarnationHandler, *fakeStarter) {
 	t.Helper()
 	starter := &fakeStarter{}
@@ -3338,9 +3337,9 @@ func newCreateHandlerWithSchema(t *testing.T, db *fakeIncDB, yaml string) (*Inca
 	return h, starter
 }
 
-// TestIncarnation_Create_RequiredInputMissing_422 — ROOT-CAUSE баг "ba":
-// create без required-поля теперь отвергается СИНХРОННО (422), incarnation-
-// строка НЕ создаётся, scenario НЕ запускается.
+// TestIncarnation_Create_RequiredInputMissing_422 — ROOT-CAUSE bug "ba":
+// create without a required field is now rejected SYNCHRONOUSLY (422), the incarnation
+// row is NOT created, the scenario is NOT launched.
 func TestIncarnation_Create_RequiredInputMissing_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
@@ -3360,8 +3359,8 @@ func TestIncarnation_Create_RequiredInputMissing_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_RequiredInputMissing_NilInput_422 — отсутствие ключа
-// `input` вовсе (nil) даёт тот же 422, что и пустой `{}`.
+// TestIncarnation_Create_RequiredInputMissing_NilInput_422 — a missing `input` key
+// entirely (nil) yields the same 422 as an empty `{}`.
 func TestIncarnation_Create_RequiredInputMissing_NilInput_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
@@ -3378,8 +3377,8 @@ func TestIncarnation_Create_RequiredInputMissing_NilInput_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_RequiredInputProvided_202 — required-поле передано →
-// проходит, incarnation создаётся, scenario запускается.
+// TestIncarnation_Create_RequiredInputProvided_202 — the required field is provided →
+// passes, the incarnation is created, the scenario is launched.
 func TestIncarnation_Create_RequiredInputProvided_202(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
@@ -3399,8 +3398,8 @@ func TestIncarnation_Create_RequiredInputProvided_202(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_TypeMismatch_422 — required передан, но опциональное
-// поле неверного типа → 422 до мутации.
+// TestIncarnation_Create_TypeMismatch_422 — required is provided, but an optional
+// field of the wrong type → 422 before mutation.
 func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, _ := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
@@ -3417,8 +3416,8 @@ func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_NoSchema_202 — scenario `create` без `input:` блока:
-// любой input проходит (как у сервиса без обязательных полей).
+// TestIncarnation_Create_NoSchema_202 — scenario `create` without an `input:` block:
+// any input passes (like a service with no required fields).
 func TestIncarnation_Create_NoSchema_202(t *testing.T) {
 	db := &fakeIncDB{}
 	h, _ := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
@@ -3435,12 +3434,12 @@ func TestIncarnation_Create_NoSchema_202(t *testing.T) {
 	}
 }
 
-// boolPtr — helper для *bool lifecycle-флагов в тестах.
+// boolPtr — a helper for *bool lifecycle flags in tests.
 func boolPtr(b bool) *bool { return &b }
 
 // TestIncarnation_Create_AutoCreateFalse_NoRun — lifecycle.auto_create=false:
-// инкарнация создаётся (insert), НО scenario `create` НЕ запускается; ответ 202
-// БЕЗ apply_id (omitted), status остаётся ready.
+// the incarnation is created (insert), BUT scenario `create` is NOT launched; the response is 202
+// WITHOUT apply_id (omitted), status stays ready.
 func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -3463,12 +3462,12 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	if starter.calls != 0 {
 		t.Errorf("starter.calls = %d, want 0 (auto_create=false → прогона нет)", starter.calls)
 	}
-	// created_scenario при auto_create=false НЕ NULL: bootstrap-сценарий есть (create),
-	// прогон лишь отложен (отличие от bare). $12 = create.
+	// created_scenario at auto_create=false is NOT NULL: the bootstrap scenario exists (create),
+	// the run is merely deferred (unlike bare). $12 = create.
 	if got, _ := db.insertArgs[11].(string); got != "create" {
 		t.Errorf("INSERT created_scenario ($12) = %q, want create (auto_create=false ≠ bare)", got)
 	}
-	// apply_id отсутствует в JSON (nullable, omitempty).
+	// apply_id is absent from the JSON (nullable, omitempty).
 	var raw map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -3482,7 +3481,7 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 }
 
 // TestIncarnation_Create_AutoCreateTrueExplicit_Run — lifecycle.auto_create=true
-// (явно) → прогон стартует, apply_id присутствует (паритет default).
+// (explicit) → the run starts, apply_id is present (parity with default).
 func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -3509,11 +3508,11 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_NoLifecycleBlock_Run — манифест без lifecycle-блока
-// (nil) → backcompat: прогон стартует (auto_create дефолтно true).
+// TestIncarnation_Create_NoLifecycleBlock_Run — a manifest without a lifecycle block
+// (nil) → backcompat: the run starts (auto_create defaults to true).
 func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 	db := &fakeIncDB{}
-	// lifecycle=nil в fakeLoader (манифест без блока) → auto_create дефолтно true.
+	// lifecycle=nil in fakeLoader (a manifest without the block) → auto_create defaults to true.
 	h, starter := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
@@ -3527,8 +3526,8 @@ func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 	}
 }
 
-// newRunHandlerWithSchema — Run-handler с loader, отдающим scenario с
-// required-input (production-конфигурация Run).
+// newRunHandlerWithSchema — a Run handler with a loader that returns a scenario with
+// required-input (production Run config).
 func newRunHandlerWithSchema(db *fakeIncDB, yaml string) (*IncarnationHandler, *fakeStarter) {
 	starter := &fakeStarter{}
 	loader := &fakeLoader{scenarioYAML: yaml}
@@ -3536,8 +3535,8 @@ func newRunHandlerWithSchema(db *fakeIncDB, yaml string) (*IncarnationHandler, *
 	return h, starter
 }
 
-// TestIncarnation_Run_RequiredInputMissing_422 — scenario-run без required-
-// поля отвергается sync (422), прогон НЕ стартует.
+// TestIncarnation_Run_RequiredInputMissing_422 — a scenario run without a required
+// field is rejected sync (422), the run does NOT start.
 func TestIncarnation_Run_RequiredInputMissing_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
@@ -3558,8 +3557,8 @@ func TestIncarnation_Run_RequiredInputMissing_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Run_RequiredInputProvided_202 — required передан → прогон
-// стартует.
+// TestIncarnation_Run_RequiredInputProvided_202 — required is provided → the run
+// starts.
 func TestIncarnation_Run_RequiredInputProvided_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
@@ -3580,13 +3579,13 @@ func TestIncarnation_Run_RequiredInputProvided_202(t *testing.T) {
 	}
 }
 
-// --- Golden wire-guard (oapi-миграция, байт-в-байт) -------------------
+// --- Golden wire-guard (oapi migration, byte-for-byte) -------------------
 
-// TestIncarnationGetReply_GoldenNullFields — wire-инвариант после миграции на
-// сгенерированные oapi-типы: nullable+required поля (created_by_aid / state /
-// spec / status_details) при nil ОБЯЗАНЫ присутствовать в JSON со значением
-// `null` (НЕ опускаться). Ловит регресс, если на любое из них вернётся
-// omitempty (тогда ключ исчезнет и контракт сломается — клиент/UI ждёт null).
+// TestIncarnationGetReply_GoldenNullFields — the wire invariant after migrating to
+// generated oapi types: nullable+required fields (created_by_aid / state /
+// spec / status_details) at nil MUST be present in the JSON with the value
+// `null` (NOT omitted). Catches a regression if omitempty comes back on any of
+// them (the key would then disappear and the contract would break — the client/UI expects null).
 func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 	inc := &incarnation.Incarnation{
 		Name:               "redis-prod",
@@ -3594,7 +3593,7 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 		ServiceVersion:     "v1",
 		StateSchemaVersion: 1,
 		Status:             incarnation.StatusReady,
-		// Spec / State / StatusDetails / CreatedByAID — все nil.
+		// Spec / State / StatusDetails / CreatedByAID — all nil.
 		CreatedAt: time.Unix(0, 0).UTC(),
 		UpdatedAt: time.Unix(0, 0).UTC(),
 	}
@@ -3615,11 +3614,11 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 	}
 }
 
-// TestIncarnationGetReply_DriftSummaryTyped — wire-инвариант typed
-// last_drift_summary (уход от opaque-passthrough): заполненная колонка едет на
-// проволоку typed-объектом с counts-ключами (integer, НЕ float-строки) и
-// scanned_at в RFC3339Nano. Ловит регресс возврата к map-passthrough или
-// потерю/переименование полей DriftScanSummary.
+// TestIncarnationGetReply_DriftSummaryTyped — the wire invariant for typed
+// last_drift_summary (moving away from opaque passthrough): a populated column goes onto
+// the wire as a typed object with counts keys (integer, NOT float strings) and
+// scanned_at in RFC3339Nano. Catches a regression back to map-passthrough or
+// loss/rename of DriftScanSummary fields.
 func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 	scannedAt := time.Date(2026, 5, 26, 12, 0, 0, 123456789, time.UTC)
 	inc := &incarnation.Incarnation{
@@ -3653,7 +3652,7 @@ func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 			t.Errorf("wire НЕ содержит %s (typed-drift-регресс?)\nwire: %s", want, got)
 		}
 	}
-	// Round-trip через wire-форму — counts/scanned_at читаются обратно typed без потерь.
+	// Round-trip through the wire form — counts/scanned_at read back typed without loss.
 	var reply struct {
 		LastDriftSummary *struct {
 			HostsDrifted int       `json:"hosts_drifted"`
@@ -3675,9 +3674,9 @@ func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 	}
 }
 
-// TestIncarnationGetReply_DriftSummaryOmittedWhenNil — NULL-колонка
-// (incarnation ни разу не сканировалась): ключ last_drift_summary ОТСУТСТВУЕТ
-// на wire (omit, не null) — прежняя omit-семантика сохранена после типизации.
+// TestIncarnationGetReply_DriftSummaryOmittedWhenNil — a NULL column
+// (the incarnation was never scanned): the last_drift_summary key is ABSENT
+// on the wire (omit, not null) — the former omit semantics preserved after typing.
 func TestIncarnationGetReply_DriftSummaryOmittedWhenNil(t *testing.T) {
 	inc := &incarnation.Incarnation{
 		Name:               "redis-prod",
@@ -3698,15 +3697,15 @@ func TestIncarnationGetReply_DriftSummaryOmittedWhenNil(t *testing.T) {
 	}
 }
 
-// TestStateHistoryEntry_GoldenChangedByAIDOmitted — симметричный инвариант для
-// changed_by_aid: при пустом (nil) значении ключ ОБЯЗАН ОТСУТСТВОВАТЬ (omit, не
-// null). Текущий wire = omit при пустом; регресс на nullable-без-omitempty
-// добавил бы `"changed_by_aid":null` и сломал байт-в-байт.
+// TestStateHistoryEntry_GoldenChangedByAIDOmitted — the symmetric invariant for
+// changed_by_aid: at an empty (nil) value the key MUST be ABSENT (omit, not
+// null). The current wire = omit when empty; a regression to nullable-without-omitempty
+// would add `"changed_by_aid":null` and break byte-for-byte.
 func TestStateHistoryEntry_GoldenChangedByAIDOmitted(t *testing.T) {
 	e := &incarnation.HistoryEntry{
 		HistoryID: "01HX",
 		Scenario:  "rotate",
-		// StateBefore / StateAfter — nil (присутствуют как null), ChangedByAID — nil.
+		// StateBefore / StateAfter — nil (present as null), ChangedByAID — nil.
 		ApplyID: "01HABCDEFGHJKMNPQRSTVWXYZ0",
 		At:      time.Unix(0, 0).UTC(),
 	}
@@ -3718,7 +3717,7 @@ func TestStateHistoryEntry_GoldenChangedByAIDOmitted(t *testing.T) {
 	if strings.Contains(got, "changed_by_aid") {
 		t.Errorf("wire содержит changed_by_aid при пустом значении (должен быть опущен)\nwire: %s", got)
 	}
-	// state_before/state_after — наоборот, ПРИСУТСТВУЮТ как null (required+nullable).
+	// state_before/state_after — conversely, PRESENT as null (required+nullable).
 	for _, want := range []string{`"state_before":null`, `"state_after":null`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wire НЕ содержит %s (omitempty-регресс?)\nwire: %s", want, got)

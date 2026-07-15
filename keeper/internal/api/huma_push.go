@@ -1,11 +1,11 @@
 package api
 
-// Регистрация и spec-dump PUSH-домена на huma full-typed (ТИРАЖ-БАТЧ-2e по эталонам
-// operator issue-token + audit-endpoint, ADR-054 §Pattern). apply — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; событие push.applied; 202+body async); get — read (БЕЗ audit);
-// push-runs — read-with-typed-query (БЕЗ audit). Доменные *Typed-функции (handlers/push.go)
-// извлечены из (w,r); старый (w,r) — тонкая strict-оболочка (MCP push-tool keeper.push.apply
-// зовёт pushorch.PushRun напрямую, мимо handler — извлечение не затрагивает).
+// Registration and spec-dump of the PUSH domain on huma full-typed (ROLLOUT-BATCH-2e following
+// operator issue-token + audit-endpoint, ADR-054 §Pattern). apply — WRITE+AUDIT (variant B,
+// huma-audit-middleware; event push.applied; 202+body async); get — read (no audit);
+// push-runs — read-with-typed-query (no audit). The domain *Typed functions (handlers/push.go)
+// are extracted from (w,r); the old (w,r) — a thin strict wrapper (the MCP push-tool keeper.push.apply
+// calls pushorch.PushRun directly, bypassing the handler — extraction does not affect it).
 
 import (
 	"context"
@@ -20,13 +20,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// === проекция доменных view-ов handler-а push → native wire-DTO (handler-native:
-// граница api↔handlers строит wire-тело из плоских доменных полей; oapi-генерёные типы
-// не участвуют). ===
+// === projection of the push handler's domain views → native wire-DTO (handler-native:
+// the api↔handlers boundary builds the wire body from flat domain fields; oapi-generated types
+// are not involved). ===
 
-// newPushApplyView проецирует плоский handlers.PushApplyResultView в native PushApplyView
-// (200-тело GET /v1/push/{apply_id}). status — native enum PushApplyViewStatus; указатели/
-// таймстампы пробрасываются как есть (handler уже усёк date-time до секунды).
+// newPushApplyView projects the flat handlers.PushApplyResultView into the native PushApplyView
+// (the 200 body of GET /v1/push/{apply_id}). status — native enum PushApplyViewStatus; pointers/
+// timestamps are passed through as is (the handler already truncated date-time to the second).
 func newPushApplyView(v handlers.PushApplyResultView) PushApplyView {
 	return PushApplyView{
 		ApplyID:       v.ApplyID,
@@ -43,7 +43,7 @@ func newPushApplyView(v handlers.PushApplyResultView) PushApplyView {
 	}
 }
 
-// newPushSummaryCounts проецирует плоский *handlers.PushSummaryCountsView в native
+// newPushSummaryCounts projects the flat *handlers.PushSummaryCountsView into the native
 // *PushSummaryCounts (nil → nil).
 func newPushSummaryCounts(v *handlers.PushSummaryCountsView) *PushSummaryCounts {
 	if v == nil {
@@ -52,8 +52,8 @@ func newPushSummaryCounts(v *handlers.PushSummaryCountsView) *PushSummaryCounts 
 	return &PushSummaryCounts{FailCount: v.FailCount, SuccessCount: v.SuccessCount, Total: v.Total}
 }
 
-// newPushRunListEntry проецирует плоский handlers.PushRunListEntryView в native
-// PushRunListEntry (element list-envelope). status — native enum PushRunListEntryStatus.
+// newPushRunListEntry projects the flat handlers.PushRunListEntryView into the native
+// PushRunListEntry (a list-envelope element). status — native enum PushRunListEntryStatus.
 func newPushRunListEntry(v handlers.PushRunListEntryView) PushRunListEntry {
 	return PushRunListEntry{
 		ApplyID:       v.ApplyID,
@@ -69,9 +69,9 @@ func newPushRunListEntry(v handlers.PushRunListEntryView) PushRunListEntry {
 	}
 }
 
-// newPushRunListReply проецирует доменный handlers.PushRunListPage в native envelope
-// PushRunListReply. Items: nil → nil, иначе non-nil срез (handler делает make([]…, 0, n),
-// поэтому на success Items всегда non-nil [] — byte-exact с прежним legacy-генерата).
+// newPushRunListReply projects the domain handlers.PushRunListPage into the native envelope
+// PushRunListReply. Items: nil → nil, otherwise a non-nil slice (the handler does make([]…, 0, n),
+// so on success Items is always a non-nil [] — byte-exact with the former legacy generator).
 func newPushRunListReply(p handlers.PushRunListPage) PushRunListReply {
 	var items []PushRunListEntry
 	if p.Items != nil {
@@ -83,9 +83,9 @@ func newPushRunListReply(p handlers.PushRunListPage) PushRunListReply {
 	return PushRunListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// registerHumaPushApply монтирует POST /v1/push/apply через huma (WRITE+AUDIT вариант B —
-// event push.applied). pushH nil → no-op. Handler: claims → конверт typed-body → ApplyTyped →
-// audit-payload на huma-ctx (SetHumaAuditPayload) → 202 С ТЕЛОМ (apply_id, async).
+// registerHumaPushApply mounts POST /v1/push/apply via huma (WRITE+AUDIT variant B —
+// event push.applied). pushH nil → no-op. Handler: claims → convert typed-body → ApplyTyped →
+// audit payload on the huma-ctx (SetHumaAuditPayload) → 202 WITH A BODY (apply_id, async).
 func registerHumaPushApply(humaAPI huma.API, pushH *handlers.PushHandler) {
 	if pushH == nil {
 		return
@@ -104,9 +104,9 @@ func registerHumaPushApply(humaAPI huma.API, pushH *handlers.PushHandler) {
 	})
 }
 
-// registerHumaPushGet монтирует GET /v1/push/{apply_id} через huma (READ-with-path, БЕЗ
-// audit). pushH nil → no-op. Handler: GetTyped(apply_id) → typed output (404/422 через
-// problem). RBAC push.read — на группе.
+// registerHumaPushGet mounts GET /v1/push/{apply_id} via huma (READ-with-path, no
+// audit). pushH nil → no-op. Handler: GetTyped(apply_id) → typed output (404/422 via
+// problem). RBAC push.read — on the group.
 func registerHumaPushGet(humaAPI huma.API, pushH *handlers.PushHandler) {
 	if pushH == nil {
 		return
@@ -120,10 +120,10 @@ func registerHumaPushGet(humaAPI huma.API, pushH *handlers.PushHandler) {
 	})
 }
 
-// registerHumaPushRunsList монтирует GET /v1/push-runs через huma (READ-with-typed-query,
-// БЕЗ audit). pushH nil → no-op. Handler: typed-query → ListRunsTyped → typed envelope-output.
-// RBAC incarnation.history — на группе. CheckPageBounds → 400 на out-of-range (диапазон
-// enforce-ит ДОМЕН, не huma-min/max).
+// registerHumaPushRunsList mounts GET /v1/push-runs via huma (READ-with-typed-query,
+// no audit). pushH nil → no-op. Handler: typed-query → ListRunsTyped → typed envelope output.
+// RBAC incarnation.history — on the group. CheckPageBounds → 400 on out-of-range (the range
+// is enforced by the DOMAIN, not huma min/max).
 func registerHumaPushRunsList(humaAPI huma.API, pushH *handlers.PushHandler) {
 	if pushH == nil {
 		return
@@ -137,14 +137,14 @@ func registerHumaPushRunsList(humaAPI huma.API, pushH *handlers.PushHandler) {
 	})
 }
 
-// pushMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим: RequireJWT
-// кладёт claims до huma). problem+json (parity roleMissingClaims).
+// pushMissingClaims — a defensive response when claims are missing in ctx (unreachable: RequireJWT
+// puts claims before huma). problem+json (parity roleMissingClaims).
 func pushMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// pushProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity roleProblem).
+// pushProblem delivers a *Typed-function error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; non-problem → 500 (parity roleProblem).
 func pushProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -152,17 +152,17 @@ func pushProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaPushAPI собирает huma.API поверх chi-группы с huma-audit-middleware (вариант B)
-// под переданный event-тип (parity newHumaRoleAPI). Единственный write-роут push (apply)
-// монтируется на СВОЕЙ chi-группе с event-типом push.applied.
+// newHumaPushAPI builds a huma.API over a chi group with the huma-audit-middleware (variant B)
+// for the given event type (parity newHumaRoleAPI). The single write route of push (apply)
+// is mounted on ITS OWN chi group with the event type push.applied.
 func newHumaPushAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaPushSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma push-роутов
-// (apply/get/push-runs) как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaPushSpecYAML builds the OpenAPI fragment of ALL huma-migrated push routes
+// (apply/get/push-runs) as a YAML string, WITHOUT mounting on the real router. A hook for
+// the rollout spec-merge target and a guard test. Delegates to the generic [humaDumpSpec] via the same
+// register functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaPushSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.PushSpecStub()

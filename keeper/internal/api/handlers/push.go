@@ -14,40 +14,40 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// pushApplier — узкая поверхность orchestrator-а для ApplyTyped: единственный
-// метод Apply (accept push-прогон → apply_id). Сужение нужно ради S6-теста
-// happy-path: `*pushorch.PushRun` держит реальный `*Store` на PG, поэтому
-// happy-path Apply через конкретную структуру требует testcontainers. Этот
-// интерфейс позволяет внедрить fake-orchestrator со статичным apply_id и
-// доказать 202→audit-путь (carrier→middleware) unit-level. Прод по-прежнему
-// передаёт `*pushorch.PushRun` (удовлетворяет интерфейс автоматически) — wire
-// и MCP push не меняются.
+// pushApplier is the narrow orchestrator surface for ApplyTyped: the single
+// Apply method (accept push run → apply_id). The narrowing exists for the S6
+// happy-path test: `*pushorch.PushRun` holds a real `*Store` on PG, so a
+// happy-path Apply through the concrete struct needs testcontainers. This
+// interface lets a fake orchestrator with a static apply_id be injected and
+// proves the 202→audit path (carrier→middleware) at unit level. Prod still
+// passes `*pushorch.PushRun` (satisfies the interface automatically) — wire
+// and MCP push are unchanged.
 type pushApplier interface {
 	Apply(ctx context.Context, req pushorch.ApplyRequest) (applyID string, err error)
 }
 
-// PushHandler — endpoints push-прогона Destiny по SSH (`POST /v1/push/apply` +
+// PushHandler exposes the Destiny push-run endpoints over SSH (`POST /v1/push/apply` +
 // `GET /v1/push/{apply_id}`, ADR-004 push-flow + Variant C orchestrator
-// docs/keeper/push.md). svc — `*pushorch.PushRun` (опц. поле api.Deps): при
-// nil роуты не подключаются router-ом (паттерн SigilSvc/AugurSvc). Вся бизнес-
-// логика — в pushorch. applier — узкая Apply-поверхность (== svc в проде; fake в
-// S6-тесте); read-пути (GetTyped/ListRunsTyped) ходят в svc напрямую.
+// docs/keeper/push.md). svc is `*pushorch.PushRun` (optional api.Deps field): when
+// nil the router does not mount the routes (SigilSvc/AugurSvc pattern). All business
+// logic lives in pushorch. applier is the narrow Apply surface (== svc in prod; fake in
+// the S6 test); read paths (GetTyped/ListRunsTyped) hit svc directly.
 //
-// T5d-2c-full (handler-native): домен push отвязан от legacy-генерата. *Typed-функции
-// принимают/возвращают NATIVE типы с плоскими wire-полями (PushApplyInput /
-// PushApplyResultView / PushRunListPage); native wire-DTO (схему OpenAPI) строит
-// пакет api из этих полей (register-func huma_push.go). HTTP обслуживает huma
-// full-typed, MCP зовёт pushorch.PushRun напрямую (мимо handler).
+// T5d-2c-full (handler-native): the push domain is decoupled from the legacy generator.
+// The *Typed functions accept/return NATIVE types with flat wire fields (PushApplyInput /
+// PushApplyResultView / PushRunListPage); the api package builds the native wire-DTO
+// (OpenAPI schema) from these fields (register func huma_push.go). HTTP is served by huma
+// full-typed, MCP calls pushorch.PushRun directly (bypassing the handler).
 type PushHandler struct {
 	svc     *pushorch.PushRun
 	applier pushApplier
 	logger  *slog.Logger
 }
 
-// NewPushHandler конструирует handler. svc nil → caller (api.NewServer) сам
-// решает не подключать push-роуты (см. router.go), здесь nil допустим только
-// для unit-тестов конструктора. applier == svc (orchestrator реализует Apply);
-// при nil-svc applier остаётся nil → ApplyTyped отдаёт 500 «not configured».
+// NewPushHandler constructs the handler. svc nil → the caller (api.NewServer)
+// decides not to mount the push routes (see router.go); nil is allowed here only
+// for constructor unit tests. applier == svc (the orchestrator implements Apply);
+// with nil svc, applier stays nil → ApplyTyped returns 500 "not configured".
 func NewPushHandler(svc *pushorch.PushRun, logger *slog.Logger) *PushHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -59,9 +59,9 @@ func NewPushHandler(svc *pushorch.PushRun, logger *slog.Logger) *PushHandler {
 	return h
 }
 
-// NewPushHandlerWithApplier — test-only конструктор: внедряет fake-orchestrator
-// в Apply-путь (S6 RecordsOnSuccess happy-path без PG). svc остаётся nil →
-// read-пути недоступны, но Apply идёт через applier. НЕ использовать в проде.
+// NewPushHandlerWithApplier is a test-only constructor: injects a fake orchestrator
+// into the Apply path (S6 RecordsOnSuccess happy-path without PG). svc stays nil →
+// read paths are unavailable, but Apply goes through applier. Do NOT use in prod.
 func NewPushHandlerWithApplier(applier pushApplier, logger *slog.Logger) *PushHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -69,18 +69,18 @@ func NewPushHandlerWithApplier(applier pushApplier, logger *slog.Logger) *PushHa
 	return &PushHandler{applier: applier, logger: logger}
 }
 
-// PushSpecStub — непустой *PushHandler-заглушка для генерации huma-OpenAPI-фрагмента
-// (HumaPushSpecYAML): при dump доменный handler не вызывается, но huma.Register
-// требует non-nil для nil-проверки (parity [RoleSpecStub]). svc nil — handler в
-// spec-режиме не исполняется.
+// PushSpecStub is a non-empty *PushHandler stub for generating the huma OpenAPI
+// fragment (HumaPushSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its nil check (parity [RoleSpecStub]). svc nil —
+// the handler never executes in spec mode.
 func PushSpecStub() *PushHandler {
 	return &PushHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// PushApplyInput — NATIVE request-форма POST /v1/push/apply (handler-native T5d-2c-full).
-// Заменяет PushApplyRequest: huma-input (пакет api) биндит/валидирует тело и проецирует
-// его в эти поля перед вызовом ApplyTyped. Опциональные поля — указатели (Input/SSHProvider/
-// CleanupStaleVersions), handler разыменовывает их в pushorch.ApplyRequest.
+// PushApplyInput is the NATIVE request shape of POST /v1/push/apply (handler-native T5d-2c-full).
+// Replaces PushApplyRequest: the huma input (api package) binds/validates the body and projects
+// it into these fields before calling ApplyTyped. Optional fields are pointers (Input/SSHProvider/
+// CleanupStaleVersions); the handler dereferences them into pushorch.ApplyRequest.
 type PushApplyInput struct {
 	Inventory            []string
 	Destiny              string
@@ -89,12 +89,12 @@ type PushApplyInput struct {
 	CleanupStaleVersions *bool
 }
 
-// PushApplyReply — извлечённый результат [PushHandler.ApplyTyped] (handler-native).
-// Несёт apply_id (202-тело строит из него native api.PushApplyReply) + audit-payload
-// (выставляется middleware варианта B). Apply — async: 202 Accepted, дальше клиент
-// опрашивает GET по apply_id.
+// PushApplyReply is the extracted result of [PushHandler.ApplyTyped] (handler-native).
+// Carries apply_id (the 202 body builds the native api.PushApplyReply from it) + the audit
+// payload (set by the Variant B middleware). Apply is async: 202 Accepted, then the client
+// polls GET by apply_id.
 type PushApplyReply struct {
-	// audit-поля + 202-тело (parity легаси SetAuditPayload; SID-ы целиком НЕ кладутся).
+	// audit fields + 202 body (parity legacy SetAuditPayload; full SIDs are NOT included).
 	ApplyID       string
 	Destiny       string
 	InventorySize int
@@ -102,7 +102,7 @@ type PushApplyReply struct {
 	CleanupStale  bool
 }
 
-// AuditPayload собирает audit-поля 202-Apply (parity легаси).
+// AuditPayload assembles the audit fields of the 202 Apply (parity legacy).
 func (r PushApplyReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"apply_id":       r.ApplyID,
@@ -113,11 +113,11 @@ func (r PushApplyReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// ApplyTyped — доменная функция POST /v1/push/apply (handler-native): orchestrator-call
-// без http-границы. claims/req — аргументы; req — native request-форма (huma пакет api
-// биндит/валидирует тело и проецирует в неё; huma отбивает unknown → 400 до вызова).
-// Ошибки — *problemError (422 пустой inventory / битый destiny-ref; 500 svc nil / PG-сбой);
-// успех — [PushApplyReply] (apply_id + audit-поля).
+// ApplyTyped is the domain function for POST /v1/push/apply (handler-native): an orchestrator
+// call without the http boundary. claims/req are arguments; req is the native request shape (the
+// huma api package binds/validates the body and projects into it; huma rejects unknown → 400
+// before the call). Errors are *problemError (422 empty inventory / bad destiny-ref; 500 svc nil /
+// PG failure); success is [PushApplyReply] (apply_id + audit fields).
 func (h *PushHandler) ApplyTyped(ctx context.Context, claims *jwt.Claims, req PushApplyInput) (PushApplyReply, error) {
 	var zero PushApplyReply
 	if h.applier == nil {
@@ -169,8 +169,8 @@ func (h *PushHandler) ApplyTyped(ctx context.Context, claims *jwt.Claims, req Pu
 	}, nil
 }
 
-// GetTyped — доменная функция GET /v1/push/{apply_id}. Ошибки — *problemError (422 пустой
-// id / 404 нет записи / 500 svc nil / PG-сбой); успех — [PushApplyResultView].
+// GetTyped is the domain function for GET /v1/push/{apply_id}. Errors are *problemError (422 empty
+// id / 404 no record / 500 svc nil / PG failure); success is [PushApplyResultView].
 func (h *PushHandler) GetTyped(ctx context.Context, applyID string) (PushApplyResultView, error) {
 	var zero PushApplyResultView
 	if h.svc == nil {
@@ -190,10 +190,10 @@ func (h *PushHandler) GetTyped(ctx context.Context, applyID string) (PushApplyRe
 	return rowToPushApplyResultView(row), nil
 }
 
-// ListRunsTyped — доменная функция GET /v1/push-runs (handler-native). Фильтры status[]
-// (multi-value OR) / ssh_provider (exact) приходят аргументами; offset/limit диапазон
-// enforce-ит CheckPageBounds → 400 (НЕ huma min/max — parity легаси ParsePage). Ошибки —
-// *problemError (400 out-of-range / 422 невалидный status / 500 svc nil / PG-сбой); успех —
+// ListRunsTyped is the domain function for GET /v1/push-runs (handler-native). The status[]
+// (multi-value OR) / ssh_provider (exact) filters arrive as arguments; the offset/limit range is
+// enforced by CheckPageBounds → 400 (NOT huma min/max — parity legacy ParsePage). Errors are
+// *problemError (400 out-of-range / 422 invalid status / 500 svc nil / PG failure); success is
 // [PushRunListPage].
 func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshProvider string, offset, limit int) (PushRunListPage, error) {
 	var zero PushRunListPage
@@ -217,7 +217,7 @@ func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshP
 		filter.SSHProvider = sshProvider
 	}
 
-	// nil-check ПОСЛЕ валидации (детерминированный 400/422 независимо от svc).
+	// nil check AFTER validation (deterministic 400/422 regardless of svc).
 	if h.svc == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "push orchestrator is not configured")}
 	}
@@ -234,12 +234,12 @@ func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshP
 	return PushRunListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// PushApplyResultView — ПЛОСКАЯ wire-форма GET /v1/push/{apply_id} (handler-native,
-// заменяет PushApplyView). Зеркало push_runs-строки + summary как opaque jsonb.
-// Опц. поля (ssh_provider/input/started_by_aid/summary/finished_at) — nil при пустом;
-// status — плоская строка домен-статуса; started_at/finished_at — UTC+Truncate(Second)
-// (byte-exact с прежним секундным RFC3339). Пакет api проецирует её в native PushApplyView
-// (register-func huma_push.go), порядок полей wire фиксирует native-тип.
+// PushApplyResultView is the FLAT wire shape of GET /v1/push/{apply_id} (handler-native,
+// replaces PushApplyView). Mirror of the push_runs row + summary as opaque jsonb.
+// Optional fields (ssh_provider/input/started_by_aid/summary/finished_at) are nil when empty;
+// status is a flat domain-status string; started_at/finished_at are UTC+Truncate(Second)
+// (byte-exact with the former second-granularity RFC3339). The api package projects it into the
+// native PushApplyView (register func huma_push.go); the native type pins the wire field order.
 type PushApplyResultView struct {
 	ApplyID       string
 	CleanupStale  bool
@@ -254,8 +254,8 @@ type PushApplyResultView struct {
 	Summary       *map[string]interface{}
 }
 
-// PushSummaryCountsView — ПЛОСКИЙ агрегат counts (PushRunListEntryView.SummaryCounts).
-// Все поля — `*int` (nil → ключ опущен). Проецируется в native PushSummaryCounts.
+// PushSummaryCountsView is the FLAT counts aggregate (PushRunListEntryView.SummaryCounts).
+// All fields are `*int` (nil → key omitted). Projected into the native PushSummaryCounts.
 type PushSummaryCountsView struct {
 	FailCount    *int
 	SuccessCount *int

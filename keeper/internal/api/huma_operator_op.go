@@ -1,10 +1,10 @@
 package api
 
-// FULL-TYPED форма OPERATOR-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// ТИРАЖ-БАТЧ-2a (operator целиком на huma по 5 эталонам): create (write-middleware-
+// FULL-TYPED shape of the OPERATOR domain (code-first source of OpenAPI, ADR-054 §Pattern).
+// ROLLOUT-BATCH-2a (operator fully on huma per the 5 references): create (write-middleware-
 // audit), list (read-with-typed-query), get (read-with-path), revoke + issue-token
-// (write-middleware-audit). Go-типы — единственный источник правды: huma строит из
-// них И JSON Schema OpenAPI-фрагмента, И валидацию/typed-bind входа, И typed-output.
+// (write-middleware-audit). Go types are the single source of truth: huma builds from
+// them BOTH the OpenAPI fragment's JSON Schema AND input validation/typed-bind AND typed-output.
 
 import (
 	"net/http"
@@ -16,42 +16,42 @@ import (
 
 // === POST /v1/operators (create) — WRITE+AUDIT operator.created ===
 
-// operatorCreateInput — huma-input POST /v1/operators (FULL-TYPED). Body —
-// типизированное тело: huma декодит и валидирует по схеме из huma-тегов
-// OperatorCreateRequest. Конверт в доменную модель — в registerHumaOperatorCreate.
+// operatorCreateInput — huma input for POST /v1/operators (FULL-TYPED). Body —
+// a typed body: huma decodes and validates it against the schema from the huma tags of
+// OperatorCreateRequest. Conversion to the domain model happens in registerHumaOperatorCreate.
 type operatorCreateInput struct {
 	Body OperatorCreateRequest
 }
 
-// OperatorCreateRequest — native Go-форма тела POST /v1/operators (code-first
-// источник схемы И валидации, handler-native PILOT). AID нового Архонта + опц.
-// display_name + опц. roles[] для atomic create+grant. Register-func проецирует в
-// доменный handlers.OperatorCreateInput.
+// OperatorCreateRequest — native Go shape of the POST /v1/operators body (code-first
+// source of schema AND validation, handler-native PILOT). AID of the new Archon + optional
+// display_name + optional roles[] for atomic create+grant. The register func projects it into
+// the domain handlers.OperatorCreateInput.
 //
-// huma-теги: `required:"true"` — обязательное (missing → 422); display_name/roles —
-// опциональные. additionalProperties:false (huma-дефолт) → unknown-поле → 400
-// (error-override). Формат AID (operator.ValidAID) и существование ролей — доменная
-// валидация в CreateTyped (422/404), не huma-схема. Имя структуры = контрактное имя
-// схемы в OpenAPI (huma DefaultSchemaNamer берёт reflect.Type.Name()) — выровнено под
-// committed-рукопись (docs/keeper/openapi.yaml → OperatorCreateRequest).
+// huma tags: `required:"true"` — mandatory (missing → 422); display_name/roles —
+// optional. additionalProperties:false (huma default) → unknown field → 400
+// (error-override). AID format (operator.ValidAID) and role existence are domain
+// validation in CreateTyped (422/404), not the huma schema. The struct name = the contractual
+// schema name in OpenAPI (huma's DefaultSchemaNamer takes reflect.Type.Name()) — aligned with the
+// committed hand-written spec (docs/keeper/openapi.yaml → OperatorCreateRequest).
 type OperatorCreateRequest struct {
 	AID         string   `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID нового Архонта (naming-rules.md)"`
 	DisplayName string   `json:"display_name,omitempty" doc:"человекочитаемое имя для UI/аудита"`
 	Roles       []string `json:"roles,omitempty" doc:"опц. список ролей для atomic create+grant (онбординг одним вызовом); ошибка роли → rollback"`
 }
 
-// operatorCreateOutput — huma-output POST /v1/operators (FULL-TYPED). Status=201;
-// Body — native 201-тело (OperatorCreateReply: aid/display_name/created_at/jwt/
-// created_by_aid + опц. roles). JWT SENSITIVE (secret-masking на выходе логов/OTel).
+// operatorCreateOutput — huma output for POST /v1/operators (FULL-TYPED). Status=201;
+// Body — native 201 body (OperatorCreateReply: aid/display_name/created_at/jwt/
+// created_by_aid + optional roles). JWT SENSITIVE (secret-masking on the way out to logs/OTel).
 type operatorCreateOutput struct {
 	Status int `json:"-"`
 	Body   OperatorCreateReply
 }
 
-// operatorCreateOperation — метаданные POST /v1/operators. Path = "/" относительно
-// chi-группы /v1/operators. DefaultStatus=201. Permission operator.create + audit
+// operatorCreateOperation — metadata for POST /v1/operators. Path = "/" relative to
+// the chi group /v1/operators. DefaultStatus=201. Permission operator.create + audit
 // operator.created. Errors: 400 unknown/malformed, 403 RBAC, 404 role-grant-target,
-// 409 aid-exists, 422 валидация aid/role-name, 500.
+// 409 aid-exists, 422 aid/role-name validation, 500.
 func operatorCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createOperator",
@@ -65,27 +65,27 @@ func operatorCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/operators (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/operators (list) — READ with typed query (no audit) ===
 
-// operatorListInput — huma-input GET /v1/operators (FULL-TYPED typed-query). Каждое
-// поле несёт `query:"<name>"` → huma биндит из url.Values и валидирует по схеме.
+// operatorListInput — huma input for GET /v1/operators (FULL-TYPED typed-query). Each
+// field carries `query:"<name>"` → huma binds from url.Values and validates against the schema.
 //
-// Семантика bind-фазы (parity легаси List → ListTyped):
-//   - AuthMethod несёт `enum:"jwt,mtls,combined,ldap,oidc"` — значение вне набора → 422
-//     (schema-validate enum-mismatch, НЕ parse) → error-override классифицирует как
-//     TypeValidationFailed (КЛЮЧЕВОЙ контракт: enum→422, как audit source). Пустой →
-//     фильтр не применяется. enum-набор = доменный operator.AuthMethod{JWT,MTLS,Combined,
-//     LDAP,OIDC}; ldap/oidc — федеративная аутентификация (ADR-058), only-add к прежнему;
-//   - Revoked — bool: huma parseInto на bad-value даёт "invalid boolean …" → 400
-//     (hasQueryParseError). Опущен → false (только активные, parity легаси);
-//   - Q — свободный substring-поиск (ILIKE) по display_name/aid, регистронезависимо;
-//     пусто → фильтр не применяется (parity /v1/runs q);
-//   - Offset/Limit — int32 (НЕ Go-int: huma на int эмитит int64, committed-спека
-//     несёт int32) с `default` (offset 0, limit 50, совпадает с shared/api.ParsePage).
-//     bad-int → 400 (parseInto). ГРАНИЦЫ диапазона (offset≥0, limit∈[1,1000]) НЕ
-//     выражены huma-тегами minimum/maximum СОЗНАТЕЛЬНО (huma отбивал бы out-of-range
-//     на 422, а легаси ParsePage даёт 400) — enforce-ит ДОМЕННАЯ ListTyped через
-//     CheckPageBounds тем же сообщением → 400.
+// Bind-phase semantics (parity with legacy List → ListTyped):
+//   - AuthMethod carries `enum:"jwt,mtls,combined,ldap,oidc"` — a value outside the set → 422
+//     (schema-validate enum-mismatch, NOT parse) → error-override classifies it as
+//     TypeValidationFailed (KEY contract: enum→422, as an audit source). Empty →
+//     no filter applied. enum set = domain operator.AuthMethod{JWT,MTLS,Combined,
+//     LDAP,OIDC}; ldap/oidc — federated authentication (ADR-058), only-add to the former;
+//   - Revoked — bool: huma parseInto on a bad value yields "invalid boolean …" → 400
+//     (hasQueryParseError). Omitted → false (active only, parity with legacy);
+//   - Q — free substring search (ILIKE) over display_name/aid, case-insensitive;
+//     empty → no filter applied (parity with /v1/runs q);
+//   - Offset/Limit — int32 (NOT Go int: huma emits int64 for int, the committed spec
+//     carries int32) with `default` (offset 0, limit 50, matches shared/api.ParsePage).
+//     bad-int → 400 (parseInto). The range BOUNDS (offset≥0, limit∈[1,1000]) are NOT
+//     expressed via huma minimum/maximum tags DELIBERATELY (huma would reject out-of-range
+//     with 422, whereas legacy ParsePage returns 400) — enforced by the DOMAIN ListTyped via
+//     CheckPageBounds with the same message → 400.
 type operatorListInput struct {
 	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"фильтр по форме credential; значение вне enum → 422"`
 	Revoked    bool   `query:"revoked" doc:"включать ревокнутых (false — только активные); bad-value → 400"`
@@ -94,27 +94,27 @@ type operatorListInput struct {
 	Limit      int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
 
-// operatorListOutput — huma-output GET /v1/operators (FULL-TYPED). Body — typed
-// 200-envelope (sharedapi.PagedResponse[Operator] с NATIVE element: items/offset/
-// limit/total). Wire-форма (items non-nil [], created_by_aid/revoked_at nullable,
-// created_at секундной точности) зафиксирована golden-JSON byte-exact-тестом.
+// operatorListOutput — huma output for GET /v1/operators (FULL-TYPED). Body — typed
+// 200-envelope (sharedapi.PagedResponse[Operator] with a NATIVE element: items/offset/
+// limit/total). The wire shape (items non-nil [], created_by_aid/revoked_at nullable,
+// created_at at second precision) is pinned by a golden-JSON byte-exact test.
 //
-// known-gap: envelope-поля Offset/Limit/Total — Go int → huma эмитит int64 в
-// huma-схему, тогда как committed-спека несёт их как int32. На served-wire не
-// влияет (huma-фрагмент не мержится в served OpenAPI), синхронизируется при
-// мерж-батче huma-фрагментов (подъём заголовка спеки до 3.1). Query-вход
-// (Offset/Limit в operatorListInput) — int32 СОЗНАТЕЛЬНО. Это общий для всех
-// list-доменов envelope (sharedapi.PagedResponse), не operator-локальный.
-// Alias PagedResponse[Operator] → named-схема OperatorListReply в
+// known gap: envelope fields Offset/Limit/Total — Go int → huma emits int64 in the
+// huma schema, whereas the committed spec carries them as int32. Does not affect the
+// served wire (the huma fragment is not merged into the served OpenAPI); synchronized during
+// the huma-fragment merge batch (raising the spec header to 3.1). The query input
+// (Offset/Limit in operatorListInput) is int32 DELIBERATELY. This is the envelope shared by all
+// list domains (sharedapi.PagedResponse), not operator-local.
+// Alias PagedResponse[Operator] → named schema OperatorListReply in
 // registerOperatorEnvelopes (huma_operator_envelope.go).
 type operatorListOutput struct {
 	Body sharedapi.PagedResponse[Operator]
 }
 
-// operatorListOperation — метаданные GET /v1/operators. Path = "/" относительно
-// chi-группы /v1/operators. DefaultStatus=200. READ-роут: audit НЕ навешан.
+// operatorListOperation — metadata for GET /v1/operators. Path = "/" relative to
+// the chi group /v1/operators. DefaultStatus=200. READ route: audit not wired.
 // Errors: 400 (bad typed-query bind / out-of-range pagination), 422 (bad
-// auth_method enum), 500 (БД).
+// auth_method enum), 500 (DB).
 func operatorListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listOperators",
@@ -128,25 +128,25 @@ func operatorListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/operators/{aid} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/operators/{aid} (get) — READ with path (no audit) ===
 
-// operatorGetInput — huma-input GET /v1/operators/{aid}. AID — path-параметр
-// (huma извлекает по `path:"aid"`). Формат AID (operator.ValidAID) — доменная
-// валидация в GetTyped (422), не huma-схема.
+// operatorGetInput — huma input for GET /v1/operators/{aid}. AID — path parameter
+// (huma extracts it via `path:"aid"`). AID format (operator.ValidAID) — domain
+// validation in GetTyped (422), not the huma schema.
 type operatorGetInput struct {
 	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта"`
 }
 
-// operatorGetOutput — huma-output GET /v1/operators/{aid} (FULL-TYPED). Body —
-// native 200-тело (Operator). Wire-форма (nullable created_by_aid/revoked_at,
-// bootstrap_initial derived, metadata omitempty) зафиксирована golden-тестом.
+// operatorGetOutput — huma output for GET /v1/operators/{aid} (FULL-TYPED). Body —
+// native 200 body (Operator). The wire shape (nullable created_by_aid/revoked_at,
+// bootstrap_initial derived, metadata omitempty) is pinned by a golden test.
 type operatorGetOutput struct {
 	Body Operator
 }
 
-// operatorGetOperation — метаданные GET /v1/operators/{aid}. DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Permission operator.list (read покрыт list-правом,
-// см. router.go). Errors: 404 (AID не найден), 422 (bad path-AID), 500.
+// operatorGetOperation — metadata for GET /v1/operators/{aid}. DefaultStatus=200.
+// READ route: audit not wired. Permission operator.list (read is covered by the list right,
+// see router.go). Errors: 404 (AID not found), 422 (bad path-AID), 500.
 func operatorGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getOperator",
@@ -162,31 +162,31 @@ func operatorGetOperation() huma.Operation {
 
 // === POST /v1/operators/{aid}/revoke (revoke) — WRITE+AUDIT operator.revoked ===
 
-// operatorRevokeInput — huma-input POST /v1/operators/{aid}/revoke. AID — path;
-// Body — typed тело (опц. reason). aid в теле (echo для MCP) НЕ читается huma-путём.
+// operatorRevokeInput — huma input for POST /v1/operators/{aid}/revoke. AID — path;
+// Body — typed body (optional reason). aid in the body (echo for MCP) is NOT read by huma.
 type operatorRevokeInput struct {
 	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта для отзыва"`
 	Body OperatorRevokeRequest
 }
 
-// OperatorRevokeRequest — Go-форма тела POST /v1/operators/{aid}/revoke.
-// Reason — опц. свободный текст для audit-trail. aid из тела не несём (huma path-{aid}
-// — авторитет; echo-поле тела было только для MCP). Имя структуры = контрактное имя
-// схемы в OpenAPI (committed-рукопись → OperatorRevokeRequest).
+// OperatorRevokeRequest — Go shape of the POST /v1/operators/{aid}/revoke body.
+// Reason — optional free text for the audit trail. We do not carry aid from the body (huma path-{aid}
+// is authoritative; the body echo field was only for MCP). The struct name = the contractual
+// schema name in OpenAPI (committed hand-written spec → OperatorRevokeRequest).
 type OperatorRevokeRequest struct {
 	Reason string `json:"reason,omitempty" doc:"свободный текст причины для audit-trail (optional)"`
 }
 
-// operatorNoContentOutput — huma-output 204-write-роута revoke. БЕЗ Body
-// (легаси-контракт: 204 No Content). huma на output без Body → SetStatus(204) →
-// пустое тело (wire-идентично прежнему WriteHeader(204)).
+// operatorNoContentOutput — huma output for the 204 write route revoke. No Body
+// (legacy contract: 204 No Content). huma on an output without Body → SetStatus(204) →
+// empty body (wire-identical to the former WriteHeader(204)).
 type operatorNoContentOutput struct {
 	Status int `json:"-"`
 }
 
 // operatorRevokeOperation — POST /v1/operators/{aid}/revoke. DefaultStatus=204.
 // Permission operator.revoke + audit operator.revoked. Errors: 403 RBAC, 404
-// AID-не-найден, 409 already-revoked/last-admin-lockout, 422 bad path-AID, 500.
+// AID-not-found, 409 already-revoked/last-admin-lockout, 422 bad path-AID, 500.
 func operatorRevokeOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "revokeOperator",
@@ -202,15 +202,15 @@ func operatorRevokeOperation() huma.Operation {
 
 // === POST /v1/operators/{aid}/issue-token (issue) — WRITE+AUDIT operator.token-issued ===
 
-// operatorIssueTokenInput — huma-input POST /v1/operators/{aid}/issue-token. AID —
-// path-параметр. Body нет (выпуск нового JWT не несёт тела).
+// operatorIssueTokenInput — huma input for POST /v1/operators/{aid}/issue-token. AID —
+// path parameter. No Body (issuing a new JWT carries no body).
 type operatorIssueTokenInput struct {
 	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID Архонта, для которого выпускается новый JWT"`
 }
 
-// operatorIssueTokenOutput — huma-output POST /v1/operators/{aid}/issue-token
-// (FULL-TYPED). Status=200; Body — native 200-тело (IssueTokenReply: aid/jwt/
-// expires_at). JWT SENSITIVE. Отличие от прочих write-роутов: 200 С ТЕЛОМ (не 204).
+// operatorIssueTokenOutput — huma output for POST /v1/operators/{aid}/issue-token
+// (FULL-TYPED). Status=200; Body — native 200 body (IssueTokenReply: aid/jwt/
+// expires_at). JWT SENSITIVE. Unlike other write routes: 200 WITH BODY (not 204).
 type operatorIssueTokenOutput struct {
 	Status int `json:"-"`
 	Body   IssueTokenReply
@@ -218,7 +218,7 @@ type operatorIssueTokenOutput struct {
 
 // operatorIssueTokenOperation — POST /v1/operators/{aid}/issue-token. DefaultStatus=200.
 // Permission operator.issue-token + audit operator.token-issued. Errors: 403 RBAC,
-// 404 AID-не-найден, 409 revoked, 422 bad path-AID, 500.
+// 404 AID-not-found, 409 revoked, 422 bad path-AID, 500.
 func operatorIssueTokenOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "issueOperatorToken",

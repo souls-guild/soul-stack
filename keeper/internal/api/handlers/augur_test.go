@@ -1,13 +1,13 @@
 package handlers
 
-// T5d-2c handler-native: augur (w,r)-оболочки сняты — HTTP обслуживает huma
+// T5d-2c handler-native: augur (w,r) wrappers removed — HTTP is served by huma
 // full-typed (huma_augur_test.go: golden-wire / unknown-field-400 / missing-required-422 /
 // bad-source_type-enum-422 / bad-pagination-400 / missing-omen-422 / RBAC-403 /
-// S6-audit на реальной huma-навеске). Эти unit-тесты проверяют то, что huma-
-// integration НЕ покрывает: ДОМЕННУЮ классификацию ошибок *Typed-функций
-// (sentinel→problem.Type) и byte-passthrough allow. Зовут *Typed напрямую, без
-// httptest(w,r) — bind/decode-фазу (JSON-decode / enum-validate / int-parse) держит
-// huma на границе, не handler.
+// S6-audit on real huma wiring). These unit tests cover what the huma
+// integration does NOT: DOMAIN classification of *Typed-function errors
+// (sentinel→problem.Type) and byte-passthrough allow. They call *Typed directly, without
+// httptest(w,r) — the bind/decode phase (JSON-decode / enum-validate / int-parse) is held
+// by huma at the boundary, not the handler.
 
 import (
 	"context"
@@ -29,31 +29,31 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// augurClaims конструирует keeperjwt.Claims для вызова *Typed напрямую.
+// augurClaims builds a keeperjwt.Claims for calling *Typed directly.
 func augurClaims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: subject} }
 
-// augurFakePool — узкий мок [augur.ServicePool] для unit-тестов AugurHandler-а.
-// Классифицирует SQL по подстроке (omens / rites) и отдаёт заданный тестом
-// исход. Покрывает ДОМЕННУЮ классификацию (sentinel→problem) + byte-passthrough;
-// консистентность SQL-логики валидируют augur/integration_test.go.
+// augurFakePool — narrow mock of [augur.ServicePool] for AugurHandler unit tests.
+// Classifies SQL by substring (omens / rites) and returns the test-provided
+// outcome. Covers DOMAIN classification (sentinel→problem) + byte-passthrough;
+// SQL-logic consistency is validated by augur/integration_test.go.
 type augurFakePool struct {
-	// omenInsertErr — ошибка RETURNING-scan-а INSERT omens: pgErr 23505 → 409.
+	// omenInsertErr — error from the RETURNING scan of INSERT omens: pgErr 23505 → 409.
 	omenInsertErr error
-	// omenGetValues — исход SELECT … FROM omens WHERE name (резолв для GetOmen и
-	// для InsertRite); nil → ErrNoRows (404). Используется и rite-insert-ом.
+	// omenGetValues — outcome of SELECT … FROM omens WHERE name (resolve for GetOmen and
+	// for InsertRite); nil → ErrNoRows (404). Also used by rite-insert.
 	omenGetValues []any
 	omenGetErr    error
-	// omenListValues — строки SELECT … FROM omens ORDER BY … (List).
+	// omenListValues — rows of SELECT … FROM omens ORDER BY … (List).
 	omenListValues [][]any
 	omenCount      int
-	// omenDeleteRows — RowsAffected DELETE omens (0 → ErrNotFound).
+	// omenDeleteRows — RowsAffected of DELETE omens (0 → ErrNotFound).
 	omenDeleteRows int64
 
-	// riteInsertErr — ошибка RETURNING-scan-а INSERT rites.
+	// riteInsertErr — error from the RETURNING scan of INSERT rites.
 	riteInsertErr error
-	// riteListValues — строки SELECT … FROM rites WHERE omen (ListRites).
+	// riteListValues — rows of SELECT … FROM rites WHERE omen (ListRites).
 	riteListValues [][]any
-	// riteDeleteRows — RowsAffected DELETE rites (0 → ErrNotFound).
+	// riteDeleteRows — RowsAffected of DELETE rites (0 → ErrNotFound).
 	riteDeleteRows int64
 }
 
@@ -105,8 +105,8 @@ func (p *augurFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows
 
 func errAugurUnexpected(sql string) error { return &svcErr{"augurFakePool: unexpected SQL: " + sql} }
 
-// augurRow — staticRow для augur-колонок (string/time/int/int64/bool/[]byte +
-// nullable-указатели). Отдельный от shared staticRow, который не покрывает
+// augurRow — staticRow for augur columns (string/time/int/int64/bool/[]byte +
+// nullable pointers). Separate from the shared staticRow, which does not cover
 // int64/bool/**int.
 type augurRow struct {
 	values []any
@@ -176,7 +176,7 @@ func newAugurHandler(t *testing.T, pool *augurFakePool) *AugurHandler {
 	return NewAugurHandler(svc, nil)
 }
 
-// wantAugurProblem проверяет, что err — доменный *problemError с ожидаемым problem.Type.
+// wantAugurProblem checks that err is a domain *problemError with the expected problem.Type.
 func wantAugurProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -191,13 +191,13 @@ func wantAugurProblem(t *testing.T, err error, want string) {
 	}
 }
 
-// omenRow — строка omens (scanOmen: name, source_type, endpoint, auth_ref,
+// omenRow — an omens row (scanOmen: name, source_type, endpoint, auth_ref,
 // created_by_aid, created_at).
 func omenRow(name, src, endpoint, authRef string) []any {
 	return []any{name, src, endpoint, authRef, nil, time.Now()}
 }
 
-// riteRow — строка rites (scanRite: id, omen, coven, sid, allow, delegate,
+// riteRow — a rites row (scanRite: id, omen, coven, sid, allow, delegate,
 // token_ttl, token_num_uses, created_by_aid, created_at).
 func riteRow(id int64, omen string, coven *string, allow []byte) []any {
 	return []any{id, omen, anyStr(coven), nil, allow, false, nil, nil, nil, time.Now()}
@@ -210,7 +210,7 @@ func anyStr(s *string) any {
 	return *s
 }
 
-// --- Omen CreateOmenTyped: доменная классификация ---
+// --- Omen CreateOmenTyped: domain classification ---
 
 func TestAugurHandler_CreateOmenTyped_201(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{})
@@ -226,7 +226,7 @@ func TestAugurHandler_CreateOmenTyped_201(t *testing.T) {
 	if reply.CallerAID != "archon-alice" {
 		t.Errorf("CallerAID = %q", reply.CallerAID)
 	}
-	// audit-payload без секретов: auth_ref логируется (vault-ref не секрет), allow отсутствует.
+	// audit-payload without secrets: auth_ref is logged (a vault-ref is not a secret), allow is absent.
 	p := reply.AuditPayload()
 	if p["auth_ref"] != "vault:secret/keeper/ar" || p["created_by_aid"] != "archon-alice" {
 		t.Errorf("audit payload = %v", p)
@@ -259,7 +259,7 @@ func TestAugurHandler_CreateOmenTyped_Duplicate_409(t *testing.T) {
 	wantAugurProblem(t, err, problem.TypeOmenExists)
 }
 
-// --- Omen List / Get / Delete: доменная классификация ---
+// --- Omen List / Get / Delete: domain classification ---
 
 func TestAugurHandler_ListOmensTyped_200(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
@@ -335,7 +335,7 @@ func TestAugurHandler_DeleteOmenTyped_NotFound_404(t *testing.T) {
 	wantAugurProblem(t, err, problem.TypeNotFound)
 }
 
-// --- Rite CreateRiteTyped: доменная классификация + byte-passthrough allow ---
+// --- Rite CreateRiteTyped: domain classification + byte-passthrough allow ---
 
 func TestAugurHandler_CreateRiteTyped_201(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
@@ -351,23 +351,23 @@ func TestAugurHandler_CreateRiteTyped_201(t *testing.T) {
 	if reply.View.Omen != "vault-prod" || reply.View.ID != 42 || reply.Subject != "coven=web" {
 		t.Errorf("reply = %+v", reply)
 	}
-	// audit-payload: allow НЕ кладётся (augur.md §8).
+	// audit-payload: allow is NOT included (augur.md §8).
 	if _, ok := reply.AuditPayload()["allow"]; ok {
 		t.Errorf("allow-list НЕ должен попадать в audit-payload")
 	}
 }
 
-// TestAugurHandler_CreateRiteTyped_AllowByteExact — guard byte-passthrough JSONB
-// (ADR-051 категория D). allow с НЕ-лексикографическим порядком ключей
-// (`policies` ПЕРЕД `paths`) должен вернуться в RiteView.Allow БАЙТ-В-БАЙТ, без
-// переупорядочивания. Ловит регресс возврата map-конвертера: unmarshal→map→marshal
-// отсортировал бы ключи. vault-Omen + форма {paths?, policies?} (strict-схема) →
-// ValidateAllow пропускает.
+// TestAugurHandler_CreateRiteTyped_AllowByteExact — guards byte-passthrough JSONB
+// (ADR-051 category D). allow with a NON-lexicographic key order
+// (`policies` BEFORE `paths`) must come back in RiteView.Allow BYTE-FOR-BYTE, without
+// reordering. Catches a regression to a map-converter return: unmarshal→map→marshal
+// would sort the keys. vault-Omen + shape {paths?, policies?} (strict schema) →
+// ValidateAllow passes.
 func TestAugurHandler_CreateRiteTyped_AllowByteExact(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
 		omenGetValues: omenRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
-	// policies ПЕРЕД paths — намеренно обратный лексикографическому порядок.
+	// policies BEFORE paths — deliberately the reverse of lexicographic order.
 	const allow = `{"policies":["app-ro"],"paths":["secret/app","secret/db"]}`
 	cov := "web"
 	reply, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
@@ -376,14 +376,14 @@ func TestAugurHandler_CreateRiteTyped_AllowByteExact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRiteTyped: %v", err)
 	}
-	// allow в RiteView — сырые байты as-is, порядок ключей не тронут.
+	// allow in RiteView is raw bytes as-is, key order untouched.
 	if string(reply.View.Allow) != allow {
 		t.Fatalf("allow должен сохраниться байт-в-байт (порядок ключей as-is); got = %s", reply.View.Allow)
 	}
 }
 
 func TestAugurHandler_CreateRiteTyped_SubjectXOR_422(t *testing.T) {
-	// coven и sid одновременно — нарушение XOR (проверяется до резолва Omen-а).
+	// coven and sid together — an XOR violation (checked before the Omen resolve).
 	h := newAugurHandler(t, &augurFakePool{})
 	cov, sid := "web", "h1.example"
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
@@ -393,7 +393,7 @@ func TestAugurHandler_CreateRiteTyped_SubjectXOR_422(t *testing.T) {
 }
 
 func TestAugurHandler_CreateRiteTyped_OmenNotFound_404(t *testing.T) {
-	h := newAugurHandler(t, &augurFakePool{omenGetValues: nil}) // резолв Omen-а → ErrNoRows
+	h := newAugurHandler(t, &augurFakePool{omenGetValues: nil}) // Omen resolve → ErrNoRows
 	cov := "web"
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
 		Omen: "ghost", Coven: &cov, Allow: json.RawMessage(`{"paths":["x"]}`),
@@ -402,7 +402,7 @@ func TestAugurHandler_CreateRiteTyped_OmenNotFound_404(t *testing.T) {
 }
 
 func TestAugurHandler_CreateRiteTyped_BadAllowShape_422(t *testing.T) {
-	// vault-Omen, allow с prometheus-формой {queries} → ValidateAllow отвергает.
+	// vault-Omen, allow with the prometheus shape {queries} → ValidateAllow rejects.
 	h := newAugurHandler(t, &augurFakePool{
 		omenGetValues: omenRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
@@ -424,7 +424,7 @@ func TestAugurHandler_CreateRiteTyped_TokenWithoutDelegate_422(t *testing.T) {
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
 
-// --- Rite List / Delete: доменная классификация ---
+// --- Rite List / Delete: domain classification ---
 
 func TestAugurHandler_ListRitesTyped_200(t *testing.T) {
 	cov := "web"
@@ -469,9 +469,9 @@ func TestAugurHandler_DeleteRiteTyped_BadID_422(t *testing.T) {
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
 
-// --- shared audit-middleware test-helpers (используются и oracle_test.go) ---
+// --- shared audit-middleware test-helpers (also used by oracle_test.go) ---
 
-// captureAuditWriter — fake audit.Writer, перехватывающий записанный Event.
+// captureAuditWriter — fake audit.Writer that captures the written Event.
 type captureAuditWriter struct{ ev *audit.Event }
 
 func (w *captureAuditWriter) Write(_ context.Context, ev *audit.Event) error {
@@ -479,10 +479,10 @@ func (w *captureAuditWriter) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// runWithAudit прогоняет (w,r)-handler через Audit-middleware (тот же путь, что
-// router.go) и возвращает перехваченный payload. Так payload читается через
-// реальный production-контракт (SetAuditPayload → middleware), без внутренних
-// accessor-ов. Используется доменами, чьи (w,r)-роуты ещё не на handler-native.
+// runWithAudit runs a (w,r) handler through the Audit middleware (the same path as
+// router.go) and returns the captured payload. This reads the payload through
+// the real production contract (SetAuditPayload → middleware), without internal
+// accessors. Used by domains whose (w,r) routes are not yet handler-native.
 func runWithAudit(t *testing.T, eventType audit.EventType, handler http.HandlerFunc, req *http.Request, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	w := &captureAuditWriter{}

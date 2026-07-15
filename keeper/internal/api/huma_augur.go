@@ -1,13 +1,13 @@
 package api
 
-// Регистрация и spec-dump AUGUR-домена (omens + rites) на huma full-typed
+// Registration and spec-dump of the AUGUR domain (omens + rites) on huma full-typed
 // (handler-native T5d-2c, ADR-054 §Pattern). omen create/delete + rite
-// create/delete — WRITE+AUDIT (вариант B, huma-audit-middleware; события
+// create/delete — WRITE+AUDIT (variant B, huma-audit-middleware; events
 // omen.created/omen.revoked/rite.created/rite.revoked); omen list/get + rite list —
-// read (БЕЗ audit). Доменные *Typed-функции (handlers/augur.go) принимают NATIVE
-// request-типы и возвращают доменные result-ы с плоскими wire-полями; register-
-// func проецирует их в native wire-DTO (huma_augur_reply.go) НАПРЯМУЮ — legacy-генерата не
-// участвует. MCP augur-tools зовут augur.Service напрямую (мимо handler).
+// read (no audit). The domain *Typed functions (handlers/augur.go) take NATIVE
+// request types and return domain results with flat wire fields; the register
+// funcs project them into native wire-DTO (huma_augur_reply.go) DIRECTLY — the legacy generator is
+// not involved. MCP augur-tools call augur.Service directly (bypassing the handler).
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaOmenCreate монтирует POST /v1/augur/omens через huma (WRITE+AUDIT
-// вариант B — event omen.created). augurH nil → no-op. Handler: claims →
-// CreateOmenTyped → audit-payload на huma-ctx (SetHumaAuditPayload) → 201 typed output.
+// registerHumaOmenCreate mounts POST /v1/augur/omens via huma (WRITE+AUDIT
+// variant B — event omen.created). augurH nil → no-op. Handler: claims →
+// CreateOmenTyped → audit payload on the huma ctx (SetHumaAuditPayload) → 201 typed output.
 func registerHumaOmenCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -48,9 +48,9 @@ func registerHumaOmenCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenList монтирует GET /v1/augur/omens через huma (READ-with-typed-
-// query, БЕЗ audit). augurH nil → no-op. Handler: typed-query → ListOmensTyped →
-// typed envelope-output. RBAC omen.list — на группе.
+// registerHumaOmenList mounts GET /v1/augur/omens via huma (READ with typed
+// query, no audit). augurH nil → no-op. Handler: typed-query → ListOmensTyped →
+// typed envelope output. RBAC omen.list — on the group.
 func registerHumaOmenList(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -64,9 +64,9 @@ func registerHumaOmenList(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenGet монтирует GET /v1/augur/omens/{name} через huma (READ-with-
-// path, БЕЗ audit). augurH nil → no-op. Handler: GetOmenTyped(name) → typed output
-// (404/422 через problem). RBAC omen.list (read покрыт list-правом) — на группе.
+// registerHumaOmenGet mounts GET /v1/augur/omens/{name} via huma (READ with
+// path, no audit). augurH nil → no-op. Handler: GetOmenTyped(name) → typed output
+// (404/422 via problem). RBAC omen.list (read is covered by the list permission) — on the group.
 func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -80,9 +80,9 @@ func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenDelete монтирует DELETE /v1/augur/omens/{name} через huma
-// (WRITE+AUDIT вариант B — event omen.revoked). augurH nil → no-op. Handler:
-// DeleteOmenTyped(name) → audit-payload → пустой 204-output.
+// registerHumaOmenDelete mounts DELETE /v1/augur/omens/{name} via huma
+// (WRITE+AUDIT variant B — event omen.revoked). augurH nil → no-op. Handler:
+// DeleteOmenTyped(name) → audit payload → empty 204 output.
 func registerHumaOmenDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -97,9 +97,9 @@ func registerHumaOmenDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaRiteCreate монтирует POST /v1/augur/rites через huma (WRITE+AUDIT
-// вариант B — event rite.created). augurH nil → no-op. Handler: claims →
-// CreateRiteTyped → audit-payload → 201 typed output.
+// registerHumaRiteCreate mounts POST /v1/augur/rites via huma (WRITE+AUDIT
+// variant B — event rite.created). augurH nil → no-op. Handler: claims →
+// CreateRiteTyped → audit payload → 201 typed output.
 func registerHumaRiteCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -126,10 +126,10 @@ func registerHumaRiteCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaRiteList монтирует GET /v1/augur/rites?omen=<name> через huma (READ-
-// with-typed-query, БЕЗ audit). augurH nil → no-op. Handler: omen-query →
-// ListRitesTyped (обязательный omen, пустой/битый → 422) → typed output. RBAC
-// rite.list — на группе.
+// registerHumaRiteList mounts GET /v1/augur/rites?omen=<name> via huma (READ
+// with typed query, no audit). augurH nil → no-op. Handler: omen-query →
+// ListRitesTyped (omen required, empty/malformed → 422) → typed output. RBAC
+// rite.list — on the group.
 func registerHumaRiteList(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -143,9 +143,9 @@ func registerHumaRiteList(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaRiteDelete монтирует DELETE /v1/augur/rites/{id} через huma
-// (WRITE+AUDIT вариант B — event rite.revoked). augurH nil → no-op. Handler:
-// DeleteRiteTyped(id) → audit-payload → пустой 204-output.
+// registerHumaRiteDelete mounts DELETE /v1/augur/rites/{id} via huma
+// (WRITE+AUDIT variant B — event rite.revoked). augurH nil → no-op. Handler:
+// DeleteRiteTyped(id) → audit payload → empty 204 output.
 func registerHumaRiteDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
@@ -160,11 +160,11 @@ func registerHumaRiteDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// === проекция доменных result-ов handler-а → native wire-DTO (handler-native:
-// граница api↔handlers строит схему-тело из плоских доменных полей; OpenAPI-схему
-// huma выводит из этих native-типов, генерёные типы не участвуют). ===
+// === projection of the handler's domain results → native wire-DTO (handler-native:
+// the api↔handlers boundary builds the schema body from flat domain fields; huma derives
+// the OpenAPI schema from these native types, generated types are not involved). ===
 
-// newOmenView проецирует доменный handlers.OmenView (плоские поля) в native
+// newOmenView projects the domain handlers.OmenView (flat fields) into the native
 // OmenView (create-201 / get-200 / element list). source_type — native enum
 // OmenViewSourceType (inline string-enum); created_by_aid — *string omitempty.
 func newOmenView(v handlers.OmenView) OmenView {
@@ -178,7 +178,7 @@ func newOmenView(v handlers.OmenView) OmenView {
 	}
 }
 
-// newOmenListReply проецирует доменный handlers.OmenListPage в native envelope
+// newOmenListReply projects the domain handlers.OmenListPage into the native envelope
 // OmenListReply (items non-nil [], offset/limit/total int32).
 func newOmenListReply(p handlers.OmenListPage) OmenListReply {
 	items := make([]OmenView, 0, len(p.Items))
@@ -193,7 +193,7 @@ func newOmenListReply(p handlers.OmenListPage) OmenListReply {
 	}
 }
 
-// newRiteView проецирует доменный handlers.RiteView в native RiteView (create-201 /
+// newRiteView projects the domain handlers.RiteView into the native RiteView (create-201 /
 // element list). allow — byte-passthrough JSONB (as-is); coven/sid/token_*/
 // created_by_aid — *-optional omitempty.
 func newRiteView(v handlers.RiteView) RiteView {
@@ -211,8 +211,8 @@ func newRiteView(v handlers.RiteView) RiteView {
 	}
 }
 
-// newRiteListReply проецирует доменный handlers.RiteListResult в native тело
-// RiteListReply (items non-nil [], list-by-omen без пагинации).
+// newRiteListReply projects the domain handlers.RiteListResult into the native body
+// RiteListReply (items non-nil [], list-by-omen without pagination).
 func newRiteListReply(res handlers.RiteListResult) RiteListReply {
 	items := make([]RiteView, 0, len(res.Items))
 	for _, v := range res.Items {
@@ -221,14 +221,14 @@ func newRiteListReply(res handlers.RiteListResult) RiteListReply {
 	return RiteListReply{Items: items}
 }
 
-// augurMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity operatorMissingClaims).
+// augurMissingClaims — a defensive response when claims are absent from ctx (unreachable:
+// RequireJWT puts claims in before huma). problem+json (parity operatorMissingClaims).
 func augurMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// augurProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// augurProblem delivers a *Typed-function error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; non-problem → 500 (parity
 // operatorProblem).
 func augurProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -237,18 +237,18 @@ func augurProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaAugurAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaOperatorAPI). Каждый write-
-// роут augur (omen create/delete, rite create/delete) монтируется на СВОЕЙ chi-
-// группе с собственным event-типом.
+// newHumaAugurAPI builds a huma.API over the chi group with huma-audit-middleware
+// (variant B) for the given event type (parity newHumaOperatorAPI). Each write
+// route of augur (omen create/delete, rite create/delete) is mounted on its OWN chi
+// group with its own event type.
 func newHumaAugurAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaAugurSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma augur-роутов
-// как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-таргета
-// тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же register-
-// функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaAugurSpecYAML assembles the OpenAPI fragment of ALL migrated-to-huma augur routes
+// as a YAML string, without mounting on a real router. A hook for the rollout spec-merge
+// target and the guard test. Delegates to generic [humaDumpSpec] via the same register
+// functions (single register path). Returns a 3.1.0 spec (huma default).
 func HumaAugurSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.AugurSpecStub()

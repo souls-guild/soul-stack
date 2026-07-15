@@ -1,15 +1,15 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2a разворота SIGIL-домена (plugins/sigils) ЦЕЛИКОМ на huma
-// full-typed (ADR-054 §Pattern, эталоны role). allow/revoke — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; события plugin.allowed/plugin.revoked); list — read-bare
-// (БЕЗ audit). Доказывают инварианты кластера поверх chi:
+// Guard tests of ROLLOUT BATCH 2a moving the SIGIL domain (plugins/sigils) ENTIRELY onto huma
+// full-typed (ADR-054 §Pattern, role patterns). allow/revoke — WRITE+AUDIT (variant B,
+// huma-audit-middleware; events plugin.allowed/plugin.revoked); list — read-bare
+// (no audit). They prove the cluster invariants over chi:
 //
 //   - wire/golden: allow 201 {namespace,name,ref,sha256}; list 200 items[]; revoke 204
-//     пустое (byte-exact);
-//   - unknown-field → 400; missing-required → 422; bad ref-сегмент → 422; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут (allow/revoke): полная huma-навеска пишет audit-
-//     event с НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//     empty (byte-exact);
+//   - unknown-field → 400; missing-required → 422; bad ref segment → 422; RBAC-deny → 403;
+//   - S6-GUARD on EVERY write route (allow/revoke): full huma wiring writes an audit
+//     event with a NON-EMPTY payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -34,13 +34,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// sigilFixtureSHA — детерминированный sha256 фикстурного бинаря (golden allow).
+// sigilFixtureSHA — the deterministic sha256 of the fixture binary (golden allow).
 var sigilFixtureSHA = func() string {
 	d := sha256.Sum256([]byte("cloud-binary"))
 	return hex.EncodeToString(d[:])
 }()
 
-// hsigilStore — мок [sigil.Store] для huma-теста (Insert/Revoke/ListActive).
+// hsigilStore — a mock [sigil.Store] for the huma test (Insert/Revoke/ListActive).
 type hsigilStore struct {
 	revokeErr  error
 	listResult []*sigil.Sigil
@@ -52,7 +52,7 @@ func (s *hsigilStore) Revoke(context.Context, string, string, string, string) er
 }
 func (s *hsigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return s.listResult, nil }
 
-// hsigilSlots — мок [sigil.SlotReader]: успешный слот (cloud/hetzner) + commit_sha.
+// hsigilSlots — a mock [sigil.SlotReader]: a successful slot (cloud/hetzner) + commit_sha.
 type hsigilSlots struct{}
 
 func (hsigilSlots) ReadSlot(string, string) (*pluginhost.SlotContents, error) {
@@ -66,10 +66,10 @@ func (hsigilSlots) SlotCommitSHA(string, string) (string, error) {
 	return "0123456789abcdef0123456789abcdef01234567", nil
 }
 
-// humaSigilRouter собирает chi-роутер со ВСЕМИ sigil-роутами через huma — продакшен-
-// навеска из router.go: RequirePermission(plugin.<action>) на каждой группе + (для
-// write) huma-audit-middleware вариант B + huma-операция. injectClaims заменяет
-// RequireJWT. store параметризован (revoke list-result).
+// humaSigilRouter assembles a chi router with ALL sigil routes through huma — the production
+// wiring from router.go: RequirePermission(plugin.<action>) on each group + (for
+// write) huma-audit-middleware variant B + the huma operation. injectClaims replaces
+// RequireJWT. store is parameterized (revoke list-result).
 func humaSigilRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *hsigilStore) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -192,7 +192,7 @@ func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
 	}
 }
 
-// === LIST (READ-bare, БЕЗ audit) ===
+// === LIST (READ-bare, no audit) ===
 
 func TestHumaSigil_List_GoldenWire(t *testing.T) {
 	allowedAt := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
@@ -293,7 +293,7 @@ func TestHumaAudit_SigilRevoke_NoAudit_OnBadRef(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaSigilRouter(t, strictAllowAll{}, auditCap, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	// ref с пробелом → невалидный path-сегмент → 422 (доменная validateSigilTriple).
+	// ref with a space → invalid path segment → 422 (domain validateSigilTriple).
 	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/cloud/hetzner/bad%20ref", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -304,7 +304,7 @@ func TestHumaAudit_SigilRevoke_NoAudit_OnBadRef(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ sigil-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL sigil operations from FULL-TYPED Go types ===
 
 func TestHumaSigil_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaSigilSpecYAML()

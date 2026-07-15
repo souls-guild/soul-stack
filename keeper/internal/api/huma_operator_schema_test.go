@@ -1,9 +1,10 @@
-// Доказательный гейт выравнивания имён OPERATOR-схем под committed-рукопись (тираж-
-// батч N1, по эталону huma_incarnation_schema_test.go). Собирает агрегированную
-// huma-спеку (HumaFullSpecYAML) и проверяет, что схемы operator-домена названы ТОЧНО
-// как контракт (docs/keeper/openapi.yaml), а технические huma-Go-имена
-// (operatorCreateHumaBody / PagedResponseOperator) в спеке ОТСУТСТВУЮТ. Мутация
-// (вернуть старое имя структуры / снять envelope-alias) краснит этот тест.
+// A proof gate that OPERATOR schema names are aligned with the committed hand-written
+// spec (rollout batch N1, following the huma_incarnation_schema_test.go reference
+// pattern). Assembles the aggregated huma spec (HumaFullSpecYAML) and checks that the
+// operator-domain schemas are named EXACTLY as the contract (docs/keeper/openapi.yaml),
+// and that the technical huma-Go names (operatorCreateHumaBody / PagedResponseOperator)
+// are ABSENT from the spec. A mutation (restore the old struct name / drop the
+// envelope alias) turns this test red.
 package api
 
 import (
@@ -12,8 +13,9 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// operatorContractSchemas — request/reply/view/envelope-имена operator-домена ровно
-// как в committed-рукописи. Все обязаны присутствовать в собранной спеке.
+// operatorContractSchemas — the request/reply/view/envelope names of the operator
+// domain exactly as in the committed hand-written spec. All must be present in the
+// assembled spec.
 var operatorContractSchemas = []string{
 	"OperatorCreateRequest",
 	"OperatorCreateReply",
@@ -23,17 +25,18 @@ var operatorContractSchemas = []string{
 	"IssueTokenReply",
 }
 
-// operatorForbiddenSchemas — технические huma-Go-имена, которые DefaultSchemaNamer дал
-// БЫ из старых имён структур / неаласенного generic PagedResponse[Operator]. Ни
-// одно не должно остаться в спеке после выравнивания.
+// operatorForbiddenSchemas — the technical huma-Go names that DefaultSchemaNamer
+// WOULD produce from the old struct names / an un-aliased generic
+// PagedResponse[Operator]. None must remain in the spec after alignment.
 var operatorForbiddenSchemas = []string{
 	"OperatorCreateHumaBody",
 	"OperatorRevokeHumaBody",
 	"PagedResponseOperator",
 }
 
-// TestSchemaNames_Operator — гейт N1. Доказывает, что собранная агрегатор-спека несёт
-// operator-схемы под КОНТРАКТНЫМИ именами и не несёт технических huma-имён.
+// TestSchemaNames_Operator — the N1 gate. Proves the assembled aggregator spec
+// carries the operator schemas under CONTRACT names and carries no technical huma
+// names.
 func TestSchemaNames_Operator(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range operatorContractSchemas {
@@ -48,10 +51,11 @@ func TestSchemaNames_Operator(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_OperatorEnvelope — гейт N1 (ENVELOPE). OperatorListReply вынесен как
-// named-схема под КОНТРАКТНЫМ именем с КОНТРАКТНОЙ offset-формой (ровно 4 поля int32
-// items/offset/limit/total БЕЗ cursor-полей; items.$ref на контрактный Operator). Мутация
-// (убрать registerOperatorEnvelopes) краснит: huma эмитит generic-имя PagedResponseOperator.
+// TestSchemaNames_OperatorEnvelope — the N1 gate (ENVELOPE). OperatorListReply is
+// surfaced as a named schema under the CONTRACT name with the CONTRACT offset shape
+// (exactly 4 int32 fields items/offset/limit/total with NO cursor fields; items.$ref
+// to the contract Operator). A mutation (remove registerOperatorEnvelopes) turns it
+// red: huma emits the generic name PagedResponseOperator.
 func TestSchemaNames_OperatorEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -66,8 +70,9 @@ func TestSchemaNames_OperatorEnvelope(t *testing.T) {
 	assertEnvelopeShape(t, schemas, "OperatorListReply", "Operator")
 }
 
-// loadFullSpecSchemas собирает агрегатор-спеку и возвращает её components/schemas-карту
-// (общий хелпер per-доменных schema-гейтов тиража N1).
+// loadFullSpecSchemas assembles the aggregator spec and returns its
+// components/schemas map (a shared helper for the per-domain schema gates of rollout
+// N1).
 func loadFullSpecSchemas(t *testing.T) map[string]yaml.Node {
 	t.Helper()
 	y, err := HumaFullSpecYAML()

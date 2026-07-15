@@ -1,15 +1,16 @@
 package api
 
-// FULL-TYPED форма POST /v1/roles (code-first источник OpenAPI, ADR-054 PILOT-2
-// §Pattern (б) тонкий-конверт). Go-типы — единственный источник правды: huma
-// строит из них И JSON Schema OpenAPI-фрагмента, И валидацию входа
-// (required/additionalProperties:false ЧЕСТНЫЙ), И typed-output. RawBody-моста нет.
+// FULL-TYPED shape of POST /v1/roles (code-first OpenAPI source, ADR-054 PILOT-2
+// §Pattern (b) thin-envelope). The Go types are the single source of truth: huma
+// builds from them the OpenAPI-fragment JSON Schema, the input validation
+// (required/additionalProperties:false HONEST), and the typed output. There is no
+// RawBody bridge.
 //
-// 201-тело role.create ПУСТОЕ (легаси-контракт: openapi.yaml `POST /v1/roles`
-// отдаёт 201 без `content` — handler писал лишь w.WriteHeader(201)). Поэтому
-// roleCreateOutput НЕ несёт Body-поля: huma на output без Body вызывает
-// ctx.SetStatus(DefaultStatus) → пустое 201-тело (wire-идентично легаси,
-// golden-guard это фиксирует).
+// The 201 body of role.create is EMPTY (legacy contract: openapi.yaml `POST
+// /v1/roles` returns 201 with no `content` — the handler only did
+// w.WriteHeader(201)). So roleCreateOutput carries no Body field: on an output with
+// no Body huma calls ctx.SetStatus(DefaultStatus) → an empty 201 body (wire-identical
+// to legacy, the golden-guard pins it).
 
 import (
 	"net/http"
@@ -17,22 +18,24 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// roleCreateInput — huma-input операции POST /v1/roles (FULL-TYPED). Body —
-// типизированное тело: huma декодит и валидирует по схеме из huma-тегов
-// RoleCreateRequest. Конверт в доменную модель — в registerHumaRole.
+// roleCreateInput — huma input for the POST /v1/roles operation (FULL-TYPED). Body —
+// a typed body: huma decodes and validates it against the schema from the huma tags
+// of RoleCreateRequest. The envelope into the domain model is in registerHumaRole.
 type roleCreateInput struct {
 	Body RoleCreateRequest
 }
 
-// RoleCreateRequest — Go-форма тела POST /v1/roles (code-first источник схемы И
-// валидации). Повторяет доменный RoleCreateRequest: имя роли + опц.
-// описание + набор permission-строк + опц. default_scope (ADR-047 S1).
+// RoleCreateRequest — the Go shape of the POST /v1/roles body (code-first source of
+// the schema AND validation). Mirrors the domain RoleCreateRequest: role name + an
+// optional description + a set of permission strings + an optional default_scope
+// (ADR-047 S1).
 //
-// huma-теги: `required:"true"` — обязательное поле (missing → 422); `doc:"…"` —
-// описание. omitempty/pointer — опциональные. additionalProperties:false (huma-
-// дефолт, НЕ снимается) → unknown-поле → error-override классифицирует как 400.
-// Семантика permission/default_scope (формат, RBAC subset-check) — в rbac.Service.
-// Имя структуры = контрактное имя схемы в OpenAPI (committed-рукопись → RoleCreateRequest).
+// huma tags: `required:"true"` — a required field (missing → 422); `doc:"…"` — the
+// description. omitempty/pointer — optional. additionalProperties:false (the huma
+// default, NOT removed) → an unknown field → the error-override classifies it as 400.
+// permission/default_scope semantics (format, RBAC subset-check) are in rbac.Service.
+// The struct name = the contract schema name in OpenAPI (committed hand-written spec
+// → RoleCreateRequest).
 type RoleCreateRequest struct {
 	Name         string   `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"имя роли (kebab-case), уникальное в кластере"`
 	Description  string   `json:"description,omitempty" doc:"человекочитаемое описание роли для UI/аудита"`
@@ -40,20 +43,21 @@ type RoleCreateRequest struct {
 	DefaultScope *string  `json:"default_scope,omitempty" doc:"селектор scope роли формы key=v1,v2,… (service/coven/incarnation/host); omitted/null → роль без scope"`
 }
 
-// roleCreateOutput — huma-output (FULL-TYPED). Status=201; БЕЗ Body (легаси-
-// контракт: 201 без тела). huma на output без Body-поля делает
-// ctx.SetStatus(201) → пустое тело (wire-идентично прежнему w.WriteHeader(201)).
+// roleCreateOutput — huma output (FULL-TYPED). Status=201; no Body (legacy contract:
+// 201 with no body). On an output with no Body field huma does ctx.SetStatus(201) →
+// an empty body (wire-identical to the former w.WriteHeader(201)).
 type roleCreateOutput struct {
 	Status int `json:"-"`
 }
 
-// roleCreateOperation — метаданные huma.Operation для POST /v1/roles. RequestBody
-// huma выводит АВТОМАТИЧЕСКИ из roleCreateInput.Body (FULL-TYPED — схема и
-// валидация из тех же Go-типов). Path = "/" — ОТНОСИТЕЛЬНЫЙ к chi-группе /v1/roles
-// (chi смонтирует роут как /v1/roles; chi.Walk видит его, drift-test зелёный).
-// DefaultStatus=201; ответ без тела (201 description без content — легаси-форма).
-// Errors фиксирует problem-коды (400 unknown/malformed, 403 RBAC/permission-not-
-// held, 409 role-exists, 422 валидация name/permission/default_scope, 500).
+// roleCreateOperation — the huma.Operation metadata for POST /v1/roles. huma derives
+// the RequestBody AUTOMATICALLY from roleCreateInput.Body (FULL-TYPED — schema and
+// validation from the same Go types). Path = "/" — RELATIVE to the /v1/roles chi
+// group (chi mounts the route as /v1/roles; chi.Walk sees it, the drift-test is
+// green). DefaultStatus=201; a response with no body (a 201 description with no
+// content — the legacy shape). Errors pins the problem codes (400 unknown/malformed,
+// 403 RBAC/permission-not-held, 409 role-exists, 422 name/permission/default_scope
+// validation, 500).
 func roleCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createRole",
@@ -67,32 +71,35 @@ func roleCreateOperation() huma.Operation {
 	}
 }
 
-// === READ: GET /v1/roles (list) — FULL-TYPED без audit (READ-вариант pilot-1) ===
+// === READ: GET /v1/roles (list) — FULL-TYPED, no audit (the READ variant of pilot-1) ===
 
-// roleListInput — huma-input GET /v1/roles. Параметров нет (каталог без фильтров) —
-// пустая структура. huma не требует Body/Path/Query-полей для bare-GET.
+// roleListInput — huma input for GET /v1/roles. No parameters (a catalog without
+// filters) — an empty struct. huma requires no Body/Path/Query fields for a bare-GET.
 type roleListInput struct{}
 
-// roleListOutput — huma-output GET /v1/roles (FULL-TYPED). Body — typed 200-тело
-// (RoleView[] под `items`). Конверт доменной listRolesResponse → этот тип — в
-// registerHumaRoleList. Wire-форма items (Description всегда, DefaultScope nil→
-// пропуск, []-vs-null) зафиксирована golden-JSON snapshot-тестом.
+// roleListOutput — huma output for GET /v1/roles (FULL-TYPED). Body — the typed 200
+// body (RoleView[] under `items`). The envelope from the domain listRolesResponse →
+// this type is in registerHumaRoleList. The items wire shape (Description always,
+// DefaultScope nil→omitted, []-vs-null) is pinned by a golden-JSON snapshot test.
 type roleListOutput struct {
 	Body RoleListReply
 }
 
-// RoleListReply — Go-форма 200-тела GET /v1/roles (источник схемы ответа И wire-формы).
-// Форма сверена с committed-рукописью (docs/keeper/openapi.yaml → RoleListReply): РОВНО
-// одно поле items (RoleView[], required), БЕЗ offset/limit/total — role.list отдаёт
-// весь каталог без пагинации. Items — native RoleView (T5b: reply-DTO отвязан от legacy-генерата;
-// форма 1:1, см. huma_role_reply.go). omitempty/[]-vs-null держит сам native RoleView.
-// Имя структуры = контрактное имя схемы в OpenAPI.
+// RoleListReply — the Go shape of the GET /v1/roles 200 body (the source of the
+// response schema AND the wire shape). The shape is verified against the committed
+// hand-written spec (docs/keeper/openapi.yaml → RoleListReply): EXACTLY one field
+// items (RoleView[], required), with NO offset/limit/total — role.list returns the
+// whole catalog without pagination. Items — native RoleView (T5b: the reply-DTO is
+// decoupled from the legacy generator; shape 1:1, see huma_role_reply.go).
+// omitempty/[]-vs-null is held by the native RoleView itself. The struct name = the
+// contract schema name in OpenAPI.
 type RoleListReply struct {
 	Items []RoleView `json:"items" doc:"каталог ролей (метаданные + permissions + operators)"`
 }
 
-// roleListOperation — метаданные GET /v1/roles. Path = "/" относительно chi-группы
-// /v1/roles. DefaultStatus=200. READ-роут: audit НЕ навешан (паттерн role.list).
+// roleListOperation — metadata for GET /v1/roles. Path = "/" relative to the
+// /v1/roles chi group. DefaultStatus=200. READ route: audit not wired (the role.list
+// pattern).
 func roleListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listRoles",
@@ -108,19 +115,20 @@ func roleListOperation() huma.Operation {
 
 // === WRITE+AUDIT: DELETE/PATCH/POST/DELETE /v1/roles/{name}[/...] ===
 //
-// Все четыре — full-typed (typed path/body) + huma-audit-middleware вариант B
-// (event-тип у каждого свой, см. newHumaAuditAPI в router.go). 204-output без Body
-// (легаси-контракт: no-content). path-параметры через `path:"…"`-тег huma.
+// All four are full-typed (typed path/body) + the huma audit-middleware variant B
+// (each has its own event type, see newHumaAuditAPI in router.go). 204 output with no
+// Body (legacy contract: no-content). path parameters via huma's `path:"…"` tag.
 
-// roleDeleteInput — huma-input DELETE /v1/roles/{name}. Name — path-параметр
-// (huma извлекает по `path:"name"`, передаёт в handler). Body нет.
+// roleDeleteInput — huma input for DELETE /v1/roles/{name}. Name — a path parameter
+// (huma extracts it by `path:"name"`, passes it to the handler). No Body.
 type roleDeleteInput struct {
 	Name string `path:"name" doc:"имя роли"`
 }
 
-// roleNoContentOutput — общий huma-output 204-write-роутов role (delete/update/
-// grant/revoke). БЕЗ Body (легаси-контракт: 204 No Content). huma на output без
-// Body делает SetStatus(204) → пустое тело (wire-идентично прежнему WriteHeader(204)).
+// roleNoContentOutput — a shared huma output for the role 204 write routes
+// (delete/update/grant/revoke). No Body (legacy contract: 204 No Content). On an
+// output with no Body huma does SetStatus(204) → an empty body (wire-identical to the
+// former WriteHeader(204)).
 type roleNoContentOutput struct {
 	Status int `json:"-"`
 }
@@ -140,22 +148,24 @@ func roleDeleteOperation() huma.Operation {
 	}
 }
 
-// roleUpdatePermissionsInput — huma-input PATCH /v1/roles/{name}/permissions. Name —
-// path; Body — typed тело. PATCH-presence ключа default_scope (omitted vs explicit
-// null → разная семантика) несёт сам тип Body.DefaultScope ([Optional]), а не сырой
-// RawBody []byte — последний тащил в OpenAPI-фрагмент octet-stream artifact (ADR-054
-// §Pattern третий tier; RawBody-мост ОТВЕРГНУТ).
+// roleUpdatePermissionsInput — huma input for PATCH /v1/roles/{name}/permissions.
+// Name — path; Body — a typed body. The PATCH-presence of the default_scope key
+// (omitted vs explicit null → different semantics) is carried by the Body.DefaultScope
+// type itself ([Optional]), not by a raw RawBody []byte — the latter dragged an
+// octet-stream artifact into the OpenAPI fragment (ADR-054 §Pattern third tier; the
+// RawBody bridge is REJECTED).
 type roleUpdatePermissionsInput struct {
 	Name string `path:"name" doc:"имя роли"`
 	Body RolePermissionsUpdateRequest
 }
 
-// RolePermissionsUpdateRequest — Go-форма тела PATCH /v1/roles/{name}/permissions
-// (replace-семантика). Permissions обязателен (полный новый набор); default_scope —
-// [Optional] с PATCH-presence-семантикой: presence несёт сам тип. `required:"false"`
-// держит поле опциональным в схеме (Optional — struct-value, omitempty его не снимает).
-// Имя структуры = контрактное имя схемы в OpenAPI (committed-рукопись →
-// RolePermissionsUpdateRequest — обрати внимание на порядок слов в имени контракта).
+// RolePermissionsUpdateRequest — the Go shape of the PATCH /v1/roles/{name}/permissions
+// body (replace semantics). Permissions is required (the full new set); default_scope
+// — [Optional] with PATCH-presence semantics: presence is carried by the type itself.
+// `required:"false"` keeps the field optional in the schema (Optional is a struct
+// value, omitempty does not drop it). The struct name = the contract schema name in
+// OpenAPI (committed hand-written spec → RolePermissionsUpdateRequest — note the word
+// order in the contract name).
 type RolePermissionsUpdateRequest struct {
 	Permissions  []string         `json:"permissions" required:"true" doc:"полный новый набор permission-строк (replace)"`
 	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"селектор scope: omitted → scope не трогается; присутствует (вкл. null) → заменяет (null снимает scope)"`
@@ -176,9 +186,10 @@ func roleUpdatePermissionsOperation() huma.Operation {
 	}
 }
 
-// roleGrantOperatorInput — huma-input POST /v1/roles/{name}/operators. Name — path;
-// Body — общий GrantOperatorRequest (AID). AID required:"true" в схеме, но пустой/
-// битый формат (доменная валидация operator.ValidAID) даёт 422 в GrantOperatorTyped.
+// roleGrantOperatorInput — huma input for POST /v1/roles/{name}/operators. Name —
+// path; Body — the shared GrantOperatorRequest (AID). AID required:"true" in the
+// schema, but an empty/malformed format (domain validation operator.ValidAID) yields
+// 422 in GrantOperatorTyped.
 type roleGrantOperatorInput struct {
 	Name string `path:"name" doc:"имя роли"`
 	Body GrantOperatorRequest
@@ -199,8 +210,8 @@ func roleGrantOperatorOperation() huma.Operation {
 	}
 }
 
-// roleRevokeOperatorInput — huma-input DELETE /v1/roles/{name}/operators/{aid}.
-// Оба параметра — path. Body нет.
+// roleRevokeOperatorInput — huma input for DELETE /v1/roles/{name}/operators/{aid}.
+// Both parameters are path. No Body.
 type roleRevokeOperatorInput struct {
 	Name string `path:"name" doc:"имя роли"`
 	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID оператора-члена роли"`

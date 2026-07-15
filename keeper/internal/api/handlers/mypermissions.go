@@ -1,16 +1,16 @@
-// My-permissions-handler Operator API (`GET /v1/me/permissions`) — публикует
-// эффективные права ТЕКУЩЕГО Архонта (из JWT-claims), для permission-aware UI:
-// показывать/прятать кнопки по «можно ли resource.action [в каком scope]».
+// My-permissions-handler Operator API (`GET /v1/me/permissions`) — publishes the
+// effective permissions of the CURRENT Archon (from JWT claims), for a permission-aware UI:
+// show/hide buttons based on "may I resource.action [in which scope]".
 //
-// Отличие от `GET /v1/permissions` ([PermissionCatalogHandler]): тот отдаёт ВЕСЬ
-// каталог возможных прав (источник rbac.catalog.go), этот — ПОДМНОЖЕСТВО,
-// реально выданное текущему оператору (распаковка его ролей через
+// Difference from `GET /v1/permissions` ([PermissionCatalogHandler]): that one returns the
+// WHOLE catalog of possible permissions (source rbac.catalog.go), this one — the SUBSET
+// actually granted to the current operator (unpacking its roles via
 // [rbac.Enforcer.PermissionsOf]).
 //
-// RBAC — только аутентификация (валидный JWT), БЕЗ отдельной permission: эндпоинт
-// само-описывающий «свои права» (любой аутентифицированный видит ИМЕННО СВОИ
-// права; чужие не отдаёт — AID берётся из claims, не из query). Симметрично
-// каталогу — read-only, без audit (паттерн health/meta / permissions-каталог).
+// RBAC — authentication only (valid JWT), no separate permission: the endpoint is
+// self-describing "own permissions" (any authenticated caller sees EXACTLY THEIR OWN
+// permissions; others are not returned — AID comes from claims, not from query). Symmetric to
+// the catalog — read-only, no audit (health/meta / permissions-catalog pattern).
 package handlers
 
 import (
@@ -20,23 +20,23 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// PermissionsLister — узкое подмножество rbac-поверхности, нужное handler-у:
-// распаковка эффективных прав AID. Реализуется [rbac.Enforcer] и [rbac.Holder]
-// (через RBACProvider в server.go). Узкий интерфейс (а не *rbac.Enforcer) —
-// чтобы handler-тест мог подставить лёгкий fake без сборки полного снимка
-// (паттерн PermissionChecker в middleware).
+// PermissionsLister — the narrow subset of the rbac surface the handler needs:
+// unpacking the effective permissions of an AID. Implemented by [rbac.Enforcer] and
+// [rbac.Holder] (via RBACProvider in server.go). A narrow interface (not *rbac.Enforcer)
+// lets a handler test substitute a lightweight fake without building a full snapshot
+// (the PermissionChecker pattern in middleware).
 type PermissionsLister interface {
 	PermissionsOf(aid string) []rbac.EffectivePermission
 }
 
-// MyPermissionsHandler — `GET /v1/me/permissions`. Состояние не держит (enforcer
-// immutable-снимок); safe for concurrent use.
+// MyPermissionsHandler — `GET /v1/me/permissions`. Holds no state (enforcer is an
+// immutable snapshot); safe for concurrent use.
 type MyPermissionsHandler struct {
 	enforcer PermissionsLister
 	logger   *slog.Logger
 }
 
-// NewMyPermissionsHandler создаёт handler. logger nil → io.Discard.
+// NewMyPermissionsHandler creates the handler. logger nil → io.Discard.
 func NewMyPermissionsHandler(enforcer PermissionsLister, logger *slog.Logger) *MyPermissionsHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -44,9 +44,9 @@ func NewMyPermissionsHandler(enforcer PermissionsLister, logger *slog.Logger) *M
 	return &MyPermissionsHandler{enforcer: enforcer, logger: logger}
 }
 
-// MyScope — ПЛОСКАЯ scope-сводка одного права (handler-native T5d): либо
-// unrestricted, либо набор конкретных ограничений по измерениям. Пакет api
-// проецирует пустые измерения в nil-указатели (omitempty).
+// MyScope — the FLAT scope summary of one permission (handler-native T5d): either
+// unrestricted, or a set of concrete restrictions per dimension. The api package
+// projects empty dimensions into nil pointers (omitempty).
 type MyScope struct {
 	Unrestricted bool
 	Covens       []string
@@ -55,9 +55,9 @@ type MyScope struct {
 	State        []string
 }
 
-// MyPermission — ПЛОСКОЕ доменное эффективное право (handler-native T5d). Wildcard=true
-// — cluster-admin (`*`): resource/action пусты, scope не несётся. Пакет api проецирует
-// в pointer-optional native-форму.
+// MyPermission — a FLAT domain effective permission (handler-native T5d). Wildcard=true
+// — cluster-admin (`*`): resource/action empty, scope not carried. The api package projects
+// it into the pointer-optional native shape.
 type MyPermission struct {
 	Wildcard bool
 	Resource string
@@ -65,17 +65,17 @@ type MyPermission struct {
 	Scope    *MyScope
 }
 
-// MyPermissions — ПЛОСКОЕ доменное тело `GET /v1/me/permissions` (handler-native T5d).
+// MyPermissions — the FLAT domain body of `GET /v1/me/permissions` (handler-native T5d).
 type MyPermissions struct {
 	Permissions []MyPermission
 }
 
-// GetTyped — доменная функция `GET /v1/me/permissions` (handler-native T5d, READ без
-// audit): распаковка эффективных прав AID без http.ResponseWriter/*http.Request. aid
-// приходит аргументом (извлечение из claims — на вызывающем слое). Ошибок нет →
-// возвращает только значение (native-проекция в api строит pointer-optional wire).
-// Wire-форма (permissions non-nil, snake_case scope-ключи) сохранена — golden
-// фиксирует её байт-в-байт.
+// GetTyped — the domain function `GET /v1/me/permissions` (handler-native T5d, READ without
+// audit): unpacks the effective permissions of an AID without http.ResponseWriter/*http.Request.
+// aid arrives as an argument (extraction from claims is on the calling layer). No errors →
+// returns only the value (the native projection in api builds the pointer-optional wire).
+// The wire shape (permissions non-nil, snake_case scope keys) is preserved — golden
+// pins it byte-for-byte.
 func (h *MyPermissionsHandler) GetTyped(aid string) MyPermissions {
 	eff := h.enforcer.PermissionsOf(aid)
 	perms := make([]MyPermission, 0, len(eff))
@@ -85,8 +85,8 @@ func (h *MyPermissionsHandler) GetTyped(aid string) MyPermissions {
 	return MyPermissions{Permissions: perms}
 }
 
-// toMyPermission конвертирует [rbac.EffectivePermission] в ПЛОСКУЮ доменную форму.
-// Wildcard → маркер без scope; иначе resource.action + scope-сводка.
+// toMyPermission converts [rbac.EffectivePermission] into the FLAT domain shape.
+// Wildcard → marker without scope; otherwise resource.action + scope summary.
 func toMyPermission(p rbac.EffectivePermission) MyPermission {
 	if p.Wildcard {
 		return MyPermission{Wildcard: true}

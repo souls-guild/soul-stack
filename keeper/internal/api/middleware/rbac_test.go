@@ -21,8 +21,8 @@ func newRBAC(t *testing.T, cfg *rbactest.Config) *rbac.Enforcer {
 	return e
 }
 
-// withClaims кладёт claims в context напрямую — мы не идём через
-// RequireJWT middleware, тестируем только RBAC-слой.
+// withClaims puts claims into the context directly — we do not go through the RequireJWT
+// middleware, testing only the RBAC layer.
 func withClaims(r *http.Request, subject string) *http.Request {
 	c := &keeperjwt.Claims{Subject: subject}
 	return r.WithContext(context.WithValue(r.Context(), claimsCtxKey{}, c))
@@ -77,7 +77,7 @@ func TestRequirePermission_Deny(t *testing.T) {
 }
 
 func TestRequirePermission_NoClaims500(t *testing.T) {
-	// Если RequireJWT не отработал — это конфиг-ошибка chain-а: 500, не 401.
+	// If RequireJWT did not run — this is a chain misconfiguration: 500, not 401.
 	e := newRBAC(t, nil)
 	h := RequirePermission(e, "operator", "create", NoSelector)(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -120,7 +120,7 @@ func TestRequirePermission_SelectorPassesContext(t *testing.T) {
 		t.Errorf("next should be called when context matches selector")
 	}
 
-	// И обратное — context не подходит к селектору.
+	// And the reverse — the context does not match the selector.
 	called = false
 	extractor2 := func(_ *http.Request) map[string]string {
 		return map[string]string{"service": "postgres"}
@@ -139,11 +139,11 @@ func TestRequirePermission_SelectorPassesContext(t *testing.T) {
 
 // --- RequirePermissionMulti (ADR-008 amendment a, per-Coven incarnation scope) ---
 
-// incCovenContexts реплицирует разворот coven-scope incarnation в набор
-// per-кандидат контекстов (covens ∪ {name}), как делает handler-экстрактор.
-// Дублируется здесь сознательно — middleware-тест проверяет ИМЕННО OR-Check
-// решение по набору контекстов, не импортируя handlers (циклическая
-// зависимость); построение контекста проверено в handlers/incarnation_test.go.
+// incCovenContexts replicates the expansion of an incarnation's coven scope into a set of
+// per-candidate contexts (covens ∪ {name}), as the handler extractor does. Duplicated here
+// deliberately — the middleware test checks EXACTLY the OR-Check decision over a set of
+// contexts, without importing handlers (a circular dependency); context construction is
+// tested in handlers/incarnation_test.go.
 func incCovenContexts(name, service string, covens []string) []map[string]string {
 	seen := map[string]struct{}{}
 	cand := []string{}
@@ -168,8 +168,8 @@ func incCovenContexts(name, service string, covens []string) []map[string]string
 	return out
 }
 
-// runMulti прогоняет RequirePermissionMulti с фиксированным набором контекстов
-// и возвращает (allowed, statusCode).
+// runMulti runs RequirePermissionMulti with a fixed set of contexts and returns
+// (allowed, statusCode).
 func runMulti(t *testing.T, e *rbac.Enforcer, subject, resource, action string, contexts []map[string]string) (bool, int) {
 	t.Helper()
 	called := false
@@ -189,7 +189,7 @@ func TestRequirePermissionMulti_CovenScope_Match(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "prod-runner", Operators: []string{"archon-prod"}, Permissions: []string{"incarnation.run on coven=prod"}},
 	}})
-	// incarnation declared covens=[prod] → context coven=prod есть → allow.
+	// incarnation declared covens=[prod] → context coven=prod present → allow.
 	allowed, code := runMulti(t, e, "archon-prod", "incarnation", "run",
 		incCovenContexts("redis-main", "redis", []string{"prod"}))
 	if !allowed || code != http.StatusOK {
@@ -201,7 +201,7 @@ func TestRequirePermissionMulti_CovenScope_NoMatch(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "prod-runner", Operators: []string{"archon-prod"}, Permissions: []string{"incarnation.run on coven=prod"}},
 	}})
-	// incarnation declared covens=[dev] → нет coven=prod → deny.
+	// incarnation declared covens=[dev] → no coven=prod → deny.
 	allowed, code := runMulti(t, e, "archon-prod", "incarnation", "run",
 		incCovenContexts("redis-dev", "redis", []string{"dev"}))
 	if allowed || code != http.StatusForbidden {
@@ -218,7 +218,7 @@ func TestRequirePermissionMulti_ServiceScope_Match(t *testing.T) {
 	if !allowed || code != http.StatusOK {
 		t.Errorf("service=redis role должна матчить inc сервиса redis; allowed=%v code=%d", allowed, code)
 	}
-	// service=postgres incarnation — не матчит.
+	// service=postgres incarnation — does not match.
 	allowed2, code2 := runMulti(t, e, "archon-r", "incarnation", "run",
 		incCovenContexts("pg-x", "postgres", []string{"any"}))
 	if allowed2 || code2 != http.StatusForbidden {
@@ -230,7 +230,7 @@ func TestRequirePermissionMulti_NameAsCoven_Match(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "named", Operators: []string{"archon-n"}, Permissions: []string{"incarnation.* on coven=redis-prod"}},
 	}})
-	// covens пуст — но имя incarnation = redis-prod является корневой Coven-меткой.
+	// covens is empty — but the incarnation name = redis-prod is the root Coven label.
 	allowed, code := runMulti(t, e, "archon-n", "incarnation", "upgrade",
 		incCovenContexts("redis-prod", "redis", nil))
 	if !allowed || code != http.StatusOK {
@@ -258,14 +258,14 @@ func TestRequirePermissionMulti_Negative_DevCannotCreateProd(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "dev-creator", Operators: []string{"archon-dev"}, Permissions: []string{"incarnation.create on coven=dev"}},
 	}})
-	// create incarnation name=redis-prod covens=[prod] → кандидаты {prod, redis-prod},
-	// coven=dev не среди них → deny.
+	// create incarnation name=redis-prod covens=[prod] → candidates {prod, redis-prod},
+	// coven=dev is not among them → deny.
 	allowed, code := runMulti(t, e, "archon-dev", "incarnation", "create",
 		incCovenContexts("redis-prod", "redis", []string{"prod"}))
 	if allowed || code != http.StatusForbidden {
 		t.Errorf("coven=dev оператор НЕ должен создать incarnation с covens=[prod]; allowed=%v code=%d", allowed, code)
 	}
-	// А в своём scope (covens=[dev]) — может.
+	// But within its own scope (covens=[dev]) — it can.
 	allowed2, code2 := runMulti(t, e, "archon-dev", "incarnation", "create",
 		incCovenContexts("redis-dev", "redis", []string{"dev"}))
 	if !allowed2 || code2 != http.StatusOK {
@@ -277,7 +277,7 @@ func TestRequirePermissionMulti_BarePermission_NoRegression(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "runner", Operators: []string{"archon-bare"}, Permissions: []string{"incarnation.run"}},
 	}})
-	// bare incarnation.run (без on) — игнорирует context, проходит на любой inc.
+	// bare incarnation.run (without on) — ignores context, passes on any inc.
 	allowed, code := runMulti(t, e, "archon-bare", "incarnation", "run",
 		incCovenContexts("redis-prod", "redis", []string{"prod"}))
 	if !allowed || code != http.StatusOK {
@@ -301,8 +301,8 @@ func TestRequirePermissionMulti_EmptyContexts_BareOnly(t *testing.T) {
 		{Name: "scoped", Operators: []string{"archon-s"}, Permissions: []string{"incarnation.run on coven=prod"}},
 		{Name: "bare", Operators: []string{"archon-b"}, Permissions: []string{"incarnation.run"}},
 	}})
-	// Пустой набор (extractor не приземлил данные: 404 / битый body) →
-	// fail-closed для scoped, pass для bare.
+	// An empty set (the extractor landed no data: 404 / broken body) →
+	// fail-closed for scoped, pass for bare.
 	allowedScoped, codeScoped := runMulti(t, e, "archon-s", "incarnation", "run", nil)
 	if allowedScoped || codeScoped != http.StatusForbidden {
 		t.Errorf("scoped роль при пустом наборе → deny; allowed=%v code=%d", allowedScoped, codeScoped)
@@ -328,15 +328,15 @@ func TestRequirePermissionMulti_NoClaims_500(t *testing.T) {
 	}
 }
 
-// --- RequireAnyPermission (any-of <resource>.<action>, backcompat-грант) ---
+// --- RequireAnyPermission (any-of <resource>.<action>, backcompat grant) ---
 //
-// Гейтит cadence.enable/disable с OR по правам: enable требует
-// `cadence.enable` ИЛИ `cadence.update`, disable — `cadence.disable` ИЛИ
-// `cadence.update`. cadence.update остаётся валиден для toggle (роли со старым
-// правом не теряют доступ).
+// Gates cadence.enable/disable with an OR over rights: enable requires
+// `cadence.enable` OR `cadence.update`, disable — `cadence.disable` OR
+// `cadence.update`. cadence.update stays valid for the toggle (roles with the old
+// right do not lose access).
 
-// runAny прогоняет RequireAnyPermission(resource, actions...) с NoSelector и
-// возвращает (allowed, statusCode).
+// runAny runs RequireAnyPermission(resource, actions...) with NoSelector and returns
+// (allowed, statusCode).
 func runAny(t *testing.T, e *rbac.Enforcer, subject, resource string, actions ...string) (bool, int) {
 	t.Helper()
 	called := false
@@ -352,7 +352,7 @@ func runAny(t *testing.T, e *rbac.Enforcer, subject, resource string, actions ..
 }
 
 func TestRequireAnyPermission_EnableGrantsEnableNotDisable(t *testing.T) {
-	// Роль с cadence.enable → может /enable, НЕ может /disable.
+	// A role with cadence.enable → can /enable, can NOT /disable.
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "enabler", Operators: []string{"archon-e"}, Permissions: []string{"cadence.enable"}},
 	}})
@@ -365,7 +365,7 @@ func TestRequireAnyPermission_EnableGrantsEnableNotDisable(t *testing.T) {
 }
 
 func TestRequireAnyPermission_DisableGrantsDisableNotEnable(t *testing.T) {
-	// Роль с cadence.disable → может /disable, НЕ может /enable.
+	// A role with cadence.disable → can /disable, can NOT /enable.
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "disabler", Operators: []string{"archon-d"}, Permissions: []string{"cadence.disable"}},
 	}})
@@ -378,7 +378,7 @@ func TestRequireAnyPermission_DisableGrantsDisableNotEnable(t *testing.T) {
 }
 
 func TestRequireAnyPermission_UpdateBackcompat(t *testing.T) {
-	// Роль со старым cadence.update → может И /enable И /disable (backcompat).
+	// A role with the old cadence.update → can BOTH /enable AND /disable (backcompat).
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "updater", Operators: []string{"archon-u"}, Permissions: []string{"cadence.update"}},
 	}})
@@ -391,7 +391,7 @@ func TestRequireAnyPermission_UpdateBackcompat(t *testing.T) {
 }
 
 func TestRequireAnyPermission_NoneDenied(t *testing.T) {
-	// Роль без cadence.enable/disable/update → 403 на оба.
+	// A role without cadence.enable/disable/update → 403 on both.
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "reader", Operators: []string{"archon-r"}, Permissions: []string{"cadence.list"}},
 	}})
@@ -418,10 +418,10 @@ func TestRequireAnyPermission_NoClaims_500(t *testing.T) {
 	}
 }
 
-// --- RequireAction (existence-gate read-эндпоинтов, ADR-047 §г amendment) ---
+// --- RequireAction (existence gate for read endpoints, ADR-047 §d amendment) ---
 //
-// runAction прогоняет RequireAction(resource, action) и возвращает (allowed,
-// statusCode). Subject="" → claims в context не кладутся (проверка missing-claims).
+// runAction runs RequireAction(resource, action) and returns (allowed, statusCode).
+// Subject="" → claims are not put into the context (a missing-claims check).
 func runAction(t *testing.T, e *rbac.Enforcer, subject, resource, action string) (bool, int) {
 	t.Helper()
 	called := false
@@ -439,8 +439,8 @@ func runAction(t *testing.T, e *rbac.Enforcer, subject, resource, action string)
 	return called, rec.Code
 }
 
-// Держатель действия (любого scope) → gate пускает в handler. Scoped-оператор,
-// которого RequirePermission/Check резал бы при пустом контексте, проходит.
+// A holder of the action (of any scope) → the gate lets it into the handler. A scoped
+// operator, whom RequirePermission/Check would cut off on an empty context, passes.
 func TestRequireAction_ScopedHolder_PassesToHandler(t *testing.T) {
 	for _, perm := range []string{
 		"soul.list",

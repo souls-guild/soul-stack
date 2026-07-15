@@ -1,16 +1,16 @@
-// Role-handler-ы Operator API (RBAC Фаза 2, Slice 2a) — доменный слой над
-// [rbac.Service]. *Typed-функции несут бизнес-логику без http.ResponseWriter/
-// *http.Request; HTTP обслуживает huma full-typed (api/huma_role.go), MCP зовёт
-// rbac.Service напрямую (мимо handler).
+// Role handlers of the Operator API (RBAC Phase 2, Slice 2a) — the domain layer over
+// [rbac.Service]. *Typed functions carry business logic without http.ResponseWriter/
+// *http.Request; HTTP is served by huma full-typed (api/huma_role.go), MCP calls
+// rbac.Service directly (bypassing the handler).
 //
-// T5d (handler-native): домен role отвязан от legacy-генерата. *Typed-функции принимают
-// NATIVE request-типы (огранизованы huma-input-ом в пакете api) и возвращают
-// доменные result-ы с ПЛОСКИМИ wire-полями — native wire-DTO (схему OpenAPI)
-// строит пакет api из этих полей. (w,r)-оболочки сняты.
+// T5d (handler-native): the role domain is decoupled from the legacy generator. *Typed
+// functions accept NATIVE request types (organized by the huma-input in the api package) and
+// return domain results with FLAT wire fields — the native wire-DTO (the OpenAPI schema) is
+// built by the api package from these fields. The (w,r) wrappers are removed.
 //
-// Бизнес-логика (builtin-граница, self-lockout, валидация name/permission) —
-// в [rbac.Service]; handler только маппит sentinel-ошибки в RFC 7807. RBAC-
-// проверка — в middleware (см. api/router.go), здесь её нет.
+// Business logic (builtin boundary, self-lockout, name/permission validation) is
+// in [rbac.Service]; the handler only maps sentinel errors to RFC 7807. The RBAC
+// check is in middleware (see api/router.go), not here.
 package handlers
 
 import (
@@ -27,18 +27,18 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// RoleHandler — шесть endpoint-ов RBAC-CRUD (роли / permissions / membership).
-// Делегирует бизнес-логику в [rbac.Service].
+// RoleHandler — the six RBAC-CRUD endpoints (roles / permissions / membership).
+// Delegates business logic to [rbac.Service].
 //
-// Все зависимости immutable; safe for concurrent use — состояние между
-// запросами не держит.
+// All dependencies immutable; safe for concurrent use — holds no state between
+// requests.
 type RoleHandler struct {
 	svc    *rbac.Service
 	logger *slog.Logger
 }
 
-// NewRoleHandler создаёт handler. svc обязателен (паника при nil —
-// единственная точка misconfiguration, caller обязан передать non-nil).
+// NewRoleHandler creates the handler. svc is required (panic on nil —
+// the only misconfiguration point, the caller must pass non-nil).
 func NewRoleHandler(svc *rbac.Service, logger *slog.Logger) *RoleHandler {
 	if svc == nil {
 		panic("handlers.NewRoleHandler: rbac.Service is nil")
@@ -49,12 +49,12 @@ func NewRoleHandler(svc *rbac.Service, logger *slog.Logger) *RoleHandler {
 	return &RoleHandler{svc: svc, logger: logger}
 }
 
-// RoleCreateInput — NATIVE request-форма POST /v1/roles (handler-native T5d).
-// Заменяет RoleCreateRequest: huma-input (пакет api) биндит и валидирует
-// тело по своим полям, затем зовёт CreateTyped с этой плоской моделью.
-// default_scope опционален (ADR-047 S1): nil → роль без scope-ограничения
-// (bare-perms unrestricted). Description/Permissions — value/slice (пустые
-// трактуются как «не задано», parity легаси-декода).
+// RoleCreateInput — NATIVE request form of POST /v1/roles (handler-native T5d).
+// Replaces RoleCreateRequest: the huma-input (api package) binds and validates
+// the body by its own fields, then calls CreateTyped with this flat model.
+// default_scope is optional (ADR-047 S1): nil → a role without a scope restriction
+// (bare-perms unrestricted). Description/Permissions — value/slice (empty ones are
+// treated as "not set", parity with the legacy decode).
 type RoleCreateInput struct {
 	Name         string
 	Description  string
@@ -62,10 +62,10 @@ type RoleCreateInput struct {
 	DefaultScope *string
 }
 
-// RoleView — ПЛОСКАЯ доменная проекция роли (GET /v1/roles items[]), handler-
-// native T5d. Пакет api проецирует её в native-схему RoleView (register-func).
-// DefaultScope/Description — RAW string из домена (пустая = NULL/без значения);
-// nullable-форму wire (omitempty) держит native-тип в api.
+// RoleView — the FLAT domain projection of a role (GET /v1/roles items[]), handler-
+// native T5d. The api package projects it into the native RoleView schema (register-func).
+// DefaultScope/Description — a RAW string from the domain (empty = NULL/no value);
+// the nullable wire form (omitempty) is held by the native type in api.
 type RoleView struct {
 	Name         string
 	Description  string
@@ -75,35 +75,35 @@ type RoleView struct {
 	DefaultScope string
 }
 
-// RoleListPage — доменный список ролей GET /v1/roles (handler-native T5d). Пакет
-// api проецирует Items → native RoleListReply (БЕЗ пагинации, role.list отдаёт
-// весь каталог).
+// RoleListPage — the domain list of roles for GET /v1/roles (handler-native T5d). The api
+// package projects Items → native RoleListReply (no pagination, role.list returns
+// the whole catalog).
 type RoleListPage struct {
 	Items []RoleView
 }
 
-// RoleSpecStub — непустой *RoleHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaRoleSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [CadenceSpecStub]).
+// RoleSpecStub — a non-empty *RoleHandler stub for generating the huma-OpenAPI
+// fragment (HumaRoleSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op nil check. svc is nil — the handler
+// never executes in spec mode (parity [CadenceSpecStub]).
 func RoleSpecStub() *RoleHandler {
 	return &RoleHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// RoleCreateReply — результат успешного [RoleHandler.CreateTyped] (handler-native
-// T5d). 201-тело role.create ПУСТОЕ (легаси-контракт: openapi.yaml `POST /v1/roles`
-// отдаёт 201 без `content`), поэтому reply несёт не wire-поля ответа, а МЕТАДАННЫЕ
-// для audit-payload (имя роли, набор permissions, AID создателя) — huma-обёртка
-// кладёт их на huma-ctx через [middleware.SetHumaAuditPayload], а humaAuditMiddleware
-// пишет в audit-event после успешного next (вариант B, см. api/huma_audit.go).
+// RoleCreateReply — the result of a successful [RoleHandler.CreateTyped] (handler-native
+// T5d). The role.create 201 body is EMPTY (legacy contract: openapi.yaml `POST /v1/roles`
+// returns 201 without `content`), so the reply carries not response wire fields but METADATA
+// for the audit-payload (role name, permission set, creator AID) — the huma wrapper
+// puts them on the huma-ctx via [middleware.SetHumaAuditPayload], and humaAuditMiddleware
+// writes the audit event after a successful next (variant B, see api/huma_audit.go).
 type RoleCreateReply struct {
 	Name         string
 	Permissions  []string
 	CreatedByAID string
 }
 
-// AuditPayload собирает audit-payload create-роута (parity легаси SetAuditPayload).
-// ЕДИНЫЙ источник для huma-варианта B.
+// AuditPayload assembles the audit-payload of the create route (parity with the legacy
+// SetAuditPayload). The SINGLE source for huma variant B.
 func (r RoleCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
@@ -112,14 +112,14 @@ func (r RoleCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateTyped — доменная функция POST /v1/roles (handler-native T5d): бизнес-логика
-// без http.ResponseWriter/*http.Request. claims и req приходят аргументами; ошибки —
-// *problemError (доставляются huma-обёрткой через [AsProblemDetails]), успех —
+// CreateTyped — domain function for POST /v1/roles (handler-native T5d): business logic
+// without http.ResponseWriter/*http.Request. claims and req arrive as arguments; errors —
+// *problemError (delivered by the huma wrapper via [AsProblemDetails]), success —
 // [RoleCreateReply].
 //
-// Шаги: required name → svc.CreateRole (валидация name/permission/default_scope +
-// RBAC subset-check + persist) → sentinel→problem. Audit-payload НЕ пишется здесь —
-// его несёт reply; запись делает huma-audit-middleware. 201-тело пустое.
+// Steps: required name → svc.CreateRole (name/permission/default_scope validation +
+// RBAC subset-check + persist) → sentinel→problem. The audit-payload is NOT written here —
+// the reply carries it; the huma-audit-middleware does the write. The 201 body is empty.
 func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req RoleCreateInput) (RoleCreateReply, error) {
 	var zero RoleCreateReply
 	if req.Name == "" {
@@ -161,11 +161,11 @@ func (h *RoleHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req R
 	}, nil
 }
 
-// ListTyped — доменная функция GET /v1/roles (handler-native T5d, READ без audit):
-// читает каталог ролей и собирает [RoleListPage] (плоские RoleView) без http.
-// ResponseWriter/*http.Request. Ошибка чтения каталога → *problemError (500);
-// huma-обёртка доставляет её через [AsProblemDetails]. Wire-форму items (Description
-// всегда, DefaultScope nil→пропуск, []-vs-null) строит native-проекция в api.
+// ListTyped — domain function for GET /v1/roles (handler-native T5d, READ no audit):
+// reads the role catalog and assembles [RoleListPage] (flat RoleView) without
+// http.ResponseWriter/*http.Request. A catalog read error → *problemError (500);
+// the huma wrapper delivers it via [AsProblemDetails]. The items wire form (Description
+// always, DefaultScope nil→omitted, []-vs-null) is built by the native projection in api.
 func (h *RoleHandler) ListTyped(ctx context.Context) (RoleListPage, error) {
 	views, err := h.svc.ListRoles(ctx)
 	if err != nil {
@@ -180,17 +180,17 @@ func (h *RoleHandler) ListTyped(ctx context.Context) (RoleListPage, error) {
 	return RoleListPage{Items: items}, nil
 }
 
-// RoleNameReply — результат write-операций, чей audit-payload несёт лишь имя роли
-// (delete). 204-тело пустое; reply — МЕТАДАННЫЕ для audit (huma-обёртка кладёт на
-// huma-ctx, middleware пишет после успеха; (w,r)-оболочка — через SetAuditPayload).
+// RoleNameReply — the result of write operations whose audit-payload carries only the role
+// name (delete). The 204 body is empty; the reply is METADATA for audit (the huma wrapper puts
+// it on the huma-ctx, the middleware writes after success; the (w,r) wrapper via SetAuditPayload).
 type RoleNameReply struct {
 	Name string
 }
 
-// DeleteTyped — извлечённая доменная функция DELETE /v1/roles/{name} (FULL-TYPED
-// разворот ADR-054 §Pattern (б)): бизнес-логика без http.ResponseWriter/*http.
-// Request. name приходит аргументом (path-извлечение — на вызывающем слое); ошибки
-// — *problemError, успех — [RoleNameReply] (audit-payload). 204-тело пустое.
+// DeleteTyped — the extracted domain function DELETE /v1/roles/{name} (FULL-TYPED
+// rollout of ADR-054 §Pattern (b)): business logic without http.ResponseWriter/
+// *http.Request. name arrives as an argument (path extraction is on the calling layer);
+// errors — *problemError, success — [RoleNameReply] (audit-payload). The 204 body is empty.
 func (h *RoleHandler) DeleteTyped(ctx context.Context, name string) (RoleNameReply, error) {
 	var zero RoleNameReply
 	err := h.svc.DeleteRole(ctx, name)
@@ -213,12 +213,12 @@ func (h *RoleHandler) DeleteTyped(ctx context.Context, name string) (RoleNameRep
 	return RoleNameReply{Name: name}, nil
 }
 
-// UpdatePermissionsInput — параметры [RoleHandler.UpdatePermissionsTyped]
-// (FULL-TYPED разворот ADR-054 §Pattern). SetDefaultScope несёт presence-флаг
-// ключа default_scope (omitted vs explicit null → разная PATCH-семантика): true →
-// заменить scope значением DefaultScope (nil снимает); false → scope не трогать.
-// Вычисление presence — на вызывающем слое (huma-конверт по raw body, (w,r)-
-// оболочка по jsonHasKey).
+// UpdatePermissionsInput — the parameters of [RoleHandler.UpdatePermissionsTyped]
+// (FULL-TYPED rollout of ADR-054 §Pattern). SetDefaultScope carries the presence flag
+// of the default_scope key (omitted vs explicit null → different PATCH semantics): true →
+// replace scope with the DefaultScope value (nil clears it); false → leave scope untouched.
+// Presence computation is on the calling layer (the huma convert by raw body, the (w,r)
+// wrapper by jsonHasKey).
 type UpdatePermissionsInput struct {
 	Name            string
 	Permissions     []string
@@ -226,18 +226,18 @@ type UpdatePermissionsInput struct {
 	DefaultScope    *string
 }
 
-// RolePermissionsReply — результат [RoleHandler.UpdatePermissionsTyped]:
-// МЕТАДАННЫЕ для audit-payload (имя роли + новый набор permissions). 204-тело пустое.
+// RolePermissionsReply — the result of [RoleHandler.UpdatePermissionsTyped]:
+// METADATA for the audit-payload (role name + new permission set). The 204 body is empty.
 type RolePermissionsReply struct {
 	Name        string
 	Permissions []string
 }
 
-// UpdatePermissionsTyped — извлечённая доменная функция PATCH /v1/roles/{name}/
-// permissions (FULL-TYPED разворот ADR-054 §Pattern (б)): replace-семантика
-// permissions + опц. замена default_scope, без http.ResponseWriter/*http.Request.
-// claims/in приходят аргументами (декод/presence-детект/auth — на вызывающем слое);
-// ошибки — *problemError, успех — [RolePermissionsReply] (audit-payload).
+// UpdatePermissionsTyped — the extracted domain function PATCH /v1/roles/{name}/
+// permissions (FULL-TYPED rollout of ADR-054 §Pattern (b)): replace semantics for
+// permissions + optional default_scope replacement, without http.ResponseWriter/*http.Request.
+// claims/in arrive as arguments (decode/presence-detect/auth on the calling layer);
+// errors — *problemError, success — [RolePermissionsReply] (audit-payload).
 func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Claims, in UpdatePermissionsInput) (RolePermissionsReply, error) {
 	var zero RolePermissionsReply
 	err := h.svc.UpdateRolePermissions(ctx, rbac.UpdateRolePermissionsInput{
@@ -270,20 +270,20 @@ func (h *RoleHandler) UpdatePermissionsTyped(ctx context.Context, claims *jwt.Cl
 	return RolePermissionsReply{Name: in.Name, Permissions: in.Permissions}, nil
 }
 
-// RoleOperatorReply — результат grant/revoke-operator: МЕТАДАННЫЕ для audit-payload
-// (имя роли + AID; grant дополнительно несёт GrantedByAID). 204-тело пустое.
+// RoleOperatorReply — the result of grant/revoke-operator: METADATA for the audit-payload
+// (role name + AID; grant additionally carries GrantedByAID). The 204 body is empty.
 type RoleOperatorReply struct {
 	Name         string
 	AID          string
 	GrantedByAID string
 }
 
-// GrantOperatorTyped — извлечённая доменная функция POST /v1/roles/{name}/operators
-// (FULL-TYPED разворот ADR-054 §Pattern (б)): валидация AID (required + формат) +
-// привязка оператора к роли, без http.ResponseWriter/*http.Request. CallerAID
-// (granted_by_aid) — из claims. claims/name/aid приходят аргументами; ошибки —
-// *problemError, успех — [RoleOperatorReply] (audit-payload). Идемпотентно (повтор —
-// no-op в service).
+// GrantOperatorTyped — the extracted domain function POST /v1/roles/{name}/operators
+// (FULL-TYPED rollout of ADR-054 §Pattern (b)): AID validation (required + format) +
+// binding an operator to the role, without http.ResponseWriter/*http.Request. CallerAID
+// (granted_by_aid) — from claims. claims/name/aid arrive as arguments; errors —
+// *problemError, success — [RoleOperatorReply] (audit-payload). Idempotent (a repeat is a
+// no-op in the service).
 func (h *RoleHandler) GrantOperatorTyped(ctx context.Context, claims *jwt.Claims, name, aid string) (RoleOperatorReply, error) {
 	var zero RoleOperatorReply
 	if aid == "" {
@@ -320,11 +320,11 @@ func (h *RoleHandler) GrantOperatorTyped(ctx context.Context, claims *jwt.Claims
 	return RoleOperatorReply{Name: name, AID: aid, GrantedByAID: callerAID}, nil
 }
 
-// RevokeOperatorTyped — извлечённая доменная функция DELETE /v1/roles/{name}/
-// operators/{aid} (FULL-TYPED разворот ADR-054 §Pattern (б)): валидация path-AID +
-// снятие membership-строки, без http.ResponseWriter/*http.Request. name/aid
-// приходят аргументами; ошибки — *problemError, успех — [RoleOperatorReply]
-// (audit-payload; GrantedByAID пуст — revoke его не несёт).
+// RevokeOperatorTyped — the extracted domain function DELETE /v1/roles/{name}/
+// operators/{aid} (FULL-TYPED rollout of ADR-054 §Pattern (b)): path-AID validation +
+// removing the membership row, without http.ResponseWriter/*http.Request. name/aid
+// arrive as arguments; errors — *problemError, success — [RoleOperatorReply]
+// (audit-payload; GrantedByAID empty — revoke does not carry it).
 func (h *RoleHandler) RevokeOperatorTyped(ctx context.Context, name, aid string) (RoleOperatorReply, error) {
 	var zero RoleOperatorReply
 	if !operator.ValidAID(aid) {
@@ -355,26 +355,26 @@ func (h *RoleHandler) RevokeOperatorTyped(ctx context.Context, name, aid string)
 	return RoleOperatorReply{Name: name, AID: aid}, nil
 }
 
-// isInvalidPermission — true, если err — ошибка [rbac.ParsePermission]
-// (битый permission в CreateRole / UpdateRolePermissions). Sentinel-а у
-// неё нет (диагностику несёт текст), поэтому распознаём по wrapped-обёртке
-// «invalid permission» из service-а. Маппится в 422.
+// isInvalidPermission — true if err is an [rbac.ParsePermission] error
+// (a malformed permission in CreateRole / UpdateRolePermissions). It has no
+// sentinel (the text carries the diagnostic), so we recognize it by the wrapped
+// "invalid permission" from the service. Maps to 422.
 func isInvalidPermission(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid permission")
 }
 
-// isInvalidDefaultScope — true, если err — ошибка [rbac.ParseDefaultScope]
-// (битый default_scope в CreateRole / UpdateRolePermissions). Sentinel-а нет
-// (диагностику несёт текст ParseDefaultScope), распознаём по wrapped-обёртке
-// «invalid default_scope». Маппится в 422.
+// isInvalidDefaultScope — true if err is an [rbac.ParseDefaultScope] error
+// (a malformed default_scope in CreateRole / UpdateRolePermissions). No sentinel
+// (the ParseDefaultScope text carries the diagnostic), we recognize it by the wrapped
+// "invalid default_scope". Maps to 422.
 func isInvalidDefaultScope(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "invalid default_scope")
 }
 
-// toRoleView переводит [rbac.RoleView] в ПЛОСКУЮ доменную [RoleView] (handler-
-// native T5d): поле-в-поле passthrough; nullable/omitempty wire-форму
-// (Description всегда, DefaultScope ""→пропуск, []-vs-null) строит native-проекция
-// в api (newRoleView). Permissions/Operators — non-nil слайс (`[]`, не `null`).
+// toRoleView converts [rbac.RoleView] into the FLAT domain [RoleView] (handler-
+// native T5d): field-by-field passthrough; the nullable/omitempty wire form
+// (Description always, DefaultScope ""→omitted, []-vs-null) is built by the native projection
+// in api (newRoleView). Permissions/Operators — a non-nil slice (`[]`, not `null`).
 func toRoleView(v rbac.RoleView) RoleView {
 	return RoleView{
 		Name:         v.Name,
@@ -386,9 +386,9 @@ func toRoleView(v rbac.RoleView) RoleView {
 	}
 }
 
-// emptyIfNil гарантирует non-nil slice для JSON (`[]` вместо `null`) —
-// permissions/operators роли без записей сериализуются пустым массивом. Общий
-// helper role/synod-доменов (synod.toSynodResponse тоже использует).
+// emptyIfNil guarantees a non-nil slice for JSON (`[]` instead of `null`) —
+// a role's permissions/operators with no entries serialize as an empty array. A shared
+// helper of the role/synod domains (synod.toSynodResponse uses it too).
 func emptyIfNil(s []string) []string {
 	if s == nil {
 		return []string{}

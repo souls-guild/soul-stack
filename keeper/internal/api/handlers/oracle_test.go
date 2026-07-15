@@ -1,12 +1,12 @@
 package handlers
 
-// T5d-2c handler-native: oracle (w,r)-оболочки сняты — HTTP обслуживает huma
+// T5d-2c handler-native: the oracle (w,r) wrappers are gone — HTTP is served by huma
 // full-typed (huma_oracle_test.go: golden-wire / unknown-field-400 / missing-required-
-// 422 / bad-pagination-400 / RBAC-403 / S6-audit на реальной huma-навеске). Эти unit-
-// тесты проверяют то, что huma-integration НЕ покрывает: ДОМЕННУЮ классификацию ошибок
-// *Typed-функций (sentinel→problem.Type) + byte-passthrough params/action_input + audit-
-// payload. Зовут *Typed напрямую, без httptest(w,r) — bind/decode-фазу (JSON-decode /
-// int-parse) держит huma на границе, не handler.
+// 422 / bad-pagination-400 / RBAC-403 / S6-audit on the real huma wiring). These unit
+// tests cover what the huma integration does NOT: the DOMAIN classification of errors in
+// the Typed functions (sentinel→problem.Type) + byte-passthrough params/action_input + audit
+// payload. They call Typed directly, without httptest(w,r) — the bind/decode phase (JSON-decode
+// / int-parse) is held by huma at the boundary, not the handler.
 
 import (
 	"context"
@@ -22,13 +22,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 )
 
-// oracleClaims конструирует keeperjwt.Claims для вызова *Typed напрямую.
+// oracleClaims constructs keeperjwt.Claims for calling Typed directly.
 func oracleClaims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: subject} }
 
-// oracleFakePool — узкий мок [oracle.ServicePool] для unit-тестов
-// OracleHandler-а. Классифицирует SQL по подстроке (vigils / decrees) и отдаёт
-// заданный тестом исход. Покрывает ДОМЕННУЮ классификацию (sentinel→problem) +
-// byte-passthrough; консистентность SQL — oracle/integration_test.go.
+// oracleFakePool — a narrow mock of [oracle.ServicePool] for OracleHandler unit
+// tests. Classifies SQL by substring (vigils / decrees) and returns the outcome
+// set by the test. Covers the DOMAIN classification (sentinel→problem) +
+// byte-passthrough; SQL consistency is in oracle/integration_test.go.
 type oracleFakePool struct {
 	vigilInsertErr  error
 	vigilGetValues  []any
@@ -101,8 +101,8 @@ func (p *oracleFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Row
 	return nil, &svcErr{"oracleFakePool: unexpected Query: " + sql}
 }
 
-// oracleRow — staticRow для oracle-колонок: добавляет *[]string (coven) и
-// json.RawMessage (params/action_input через *[]byte) к augur-набору.
+// oracleRow — a staticRow for oracle columns: adds *[]string (coven) and
+// json.RawMessage (params/action_input via *[]byte) to the augur set.
 type oracleRow struct {
 	values []any
 	err    error
@@ -176,7 +176,7 @@ func newOracleHandler(t *testing.T, pool *oracleFakePool) *OracleHandler {
 	return NewOracleHandler(svc, nil)
 }
 
-// wantOracleProblem проверяет, что err — доменный *problemError с ожидаемым problem.Type.
+// wantOracleProblem checks that err is a domain *problemError with the expected problem.Type.
 func wantOracleProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -193,14 +193,14 @@ func wantOracleProblem(t *testing.T, err error, want string) {
 
 func covenPtr(v ...string) *[]string { s := append([]string{}, v...); return &s }
 
-// vigilRow — строка vigils (collectVigils: name, coven, sid, interval_spec,
+// vigilRow — a vigils row (collectVigils: name, coven, sid, interval_spec,
 // check_addr, params, enabled, created_at, updated_at, created_by_aid).
 func vigilRow(name, interval, check string, coven []string) []any {
 	now := time.Now()
 	return []any{name, coven, nil, interval, check, []byte("{}"), true, now, now, nil}
 }
 
-// decreeRow — строка decrees (collectDecrees: name, on_beacon, where_cel,
+// decreeRow — a decrees row (collectDecrees: name, on_beacon, where_cel,
 // subject_coven, subject_sid, incarnation_name, action_scenario, action_input,
 // cooldown, enabled, created_at, updated_at, created_by_aid).
 func decreeRow(name, onBeacon, incarnation, scenario string, coven []string) []any {
@@ -208,7 +208,7 @@ func decreeRow(name, onBeacon, incarnation, scenario string, coven []string) []a
 	return []any{name, onBeacon, nil, coven, nil, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil}
 }
 
-// --- Vigil CreateVigilTyped: доменная классификация ---
+// --- Vigil CreateVigilTyped: domain classification ---
 
 func TestOracleHandler_CreateVigilTyped_201(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
@@ -261,12 +261,12 @@ func TestOracleHandler_CreateVigilTyped_Duplicate_409(t *testing.T) {
 	wantOracleProblem(t, err, problem.TypeVigilExists)
 }
 
-// TestOracleHandler_CreateVigilTyped_ParamsByteExact — guard byte-passthrough JSONB
-// (ADR-051 категория D). params с НЕ-лексикографическим порядком ключей (`zzz`
-// ПЕРЕД `a`/`mmm`) должны вернуться в VigilView.Params БАЙТ-В-БАЙТ, без
-// переупорядочивания. Ловит регресс возврата map-конвертера: unmarshal→map→marshal
-// отсортировал бы ключи. INSERT...RETURNING отдаёт лишь created_at/updated_at →
-// params в reply = сырые байты тела запроса.
+// TestOracleHandler_CreateVigilTyped_ParamsByteExact — guards byte-passthrough JSONB
+// (ADR-051 category D). params with a NON-lexicographic key order (`zzz` BEFORE
+// `a`/`mmm`) must come back in VigilView.Params BYTE-FOR-BYTE, without reordering.
+// Catches a regression to a map converter: unmarshal→map→marshal would sort the keys.
+// INSERT...RETURNING returns only created_at/updated_at → params in the reply = the raw
+// bytes of the request body.
 func TestOracleHandler_CreateVigilTyped_ParamsByteExact(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	const params = `{"zzz":1,"a":2,"mmm":3}`
@@ -282,7 +282,7 @@ func TestOracleHandler_CreateVigilTyped_ParamsByteExact(t *testing.T) {
 	}
 }
 
-// --- Vigil List / Get / Delete: доменная классификация ---
+// --- Vigil List / Get / Delete: domain classification ---
 
 func TestOracleHandler_ListVigilsTyped_200(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{
@@ -360,7 +360,7 @@ func TestOracleHandler_DeleteVigilTyped_NotFound_404(t *testing.T) {
 	wantOracleProblem(t, err, problem.TypeNotFound)
 }
 
-// --- Decree CreateDecreeTyped: доменная классификация ---
+// --- Decree CreateDecreeTyped: domain classification ---
 
 func TestOracleHandler_CreateDecreeTyped_201(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
@@ -429,10 +429,10 @@ func TestOracleHandler_CreateDecreeTyped_Duplicate_409(t *testing.T) {
 	wantOracleProblem(t, err, problem.TypeDecreeExists)
 }
 
-// TestOracleHandler_CreateDecreeTyped_ActionInputByteExact — guard byte-passthrough
-// JSONB (ADR-051 категория D). action_input с НЕ-лексикографическим порядком ключей
-// должен вернуться в DecreeView.ActionInput БАЙТ-В-БАЙТ. INSERT...RETURNING отдаёт лишь
-// cooldown/created_at/updated_at → action_input в reply = сырые байты тела запроса.
+// TestOracleHandler_CreateDecreeTyped_ActionInputByteExact — guards byte-passthrough
+// JSONB (ADR-051 category D). action_input with a NON-lexicographic key order must come
+// back in DecreeView.ActionInput BYTE-FOR-BYTE. INSERT...RETURNING returns only
+// cooldown/created_at/updated_at → action_input in the reply = the raw bytes of the request body.
 func TestOracleHandler_CreateDecreeTyped_ActionInputByteExact(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	const actionInput = `{"zzz":1,"a":2,"mmm":3}`
@@ -489,10 +489,10 @@ func TestOracleHandler_DeleteDecreeTyped_NotFound_404(t *testing.T) {
 	wantOracleProblem(t, err, problem.TypeNotFound)
 }
 
-// --- audit-payload без секретов ---
+// --- audit payload without secrets ---
 
-// TestOracleHandler_CreateVigilTyped_AuditPayload — payload vigil.created несёт
-// name/check/interval/subject/created_by_aid; params в payload отсутствует.
+// TestOracleHandler_CreateVigilTyped_AuditPayload — the vigil.created payload carries
+// name/check/interval/subject/created_by_aid; params is absent from the payload.
 func TestOracleHandler_CreateVigilTyped_AuditPayload(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	reply, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
@@ -516,9 +516,9 @@ func TestOracleHandler_CreateVigilTyped_AuditPayload(t *testing.T) {
 	}
 }
 
-// TestOracleHandler_CreateDecreeTyped_AuditPayload — payload decree.created несёт
-// name/on_beacon/incarnation/action_scenario/subject; where-CEL и action_input
-// в payload отсутствуют (action_input может транзитом нести vault-ref).
+// TestOracleHandler_CreateDecreeTyped_AuditPayload — the decree.created payload carries
+// name/on_beacon/incarnation/action_scenario/subject; where-CEL and action_input are
+// absent from the payload (action_input may carry a vault-ref in transit).
 func TestOracleHandler_CreateDecreeTyped_AuditPayload(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	where := `event.data.severity == "critical"`

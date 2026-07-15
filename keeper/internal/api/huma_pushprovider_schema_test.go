@@ -1,16 +1,16 @@
-// Доказательный гейт выравнивания имён PUSH-PROVIDER-схем под committed-рукопись (тираж-
-// батч N3, по эталону huma_operator_schema_test.go). Собирает агрегированную huma-спеку
-// (HumaFullSpecYAML) и проверяет, что схемы push-provider-домена названы ТОЧНО как
-// контракт (docs/keeper/openapi.yaml), а технические huma-Go-имена (PushProviderCreate-
-// HumaBody / PushProviderUpdateHumaBody) ОТСУТСТВУЮТ.
+// Evidence gate aligning PUSH-PROVIDER schema names to the committed hand-written spec
+// (rollout batch N3, following the huma_operator_schema_test.go pattern). Assembles the
+// aggregated huma spec (HumaFullSpecYAML) and checks that push-provider domain schemas are
+// named EXACTLY as the contract (docs/keeper/openapi.yaml), and that technical huma-Go names
+// (PushProviderCreateHumaBody / PushProviderUpdateHumaBody) are ABSENT.
 //
-// МЕХАНИЗМЫ для push-provider (сверены с рукописью):
+// MECHANISMS for push-provider (checked against the hand-written spec):
 //   - REQUEST-RENAME: pushProviderCreateHumaBody → PushProviderCreateRequest;
-//     pushProviderUpdateHumaBody → PushProviderUpdateRequest. Применён.
-//   - ENUM-ALIAS: НЕ применяется (домен без enum-полей в схеме).
-//   - ENVELOPE: уже named oapi-тип (PushProviderListReply — генерёная struct, НЕ
-//     generic PagedResponse) → DefaultSchemaNamer даёт контрактное имя сам; alias не
-//     нужен. СВЕРЯЕМ форму: 4-поля-offset plain `integer`, items.$ref на PushProvider.
+//     pushProviderUpdateHumaBody → PushProviderUpdateRequest. Applied.
+//   - ENUM-ALIAS: NOT applied (domain has no enum fields in the schema).
+//   - ENVELOPE: already a named oapi type (PushProviderListReply — a generated struct, NOT
+//     generic PagedResponse) → DefaultSchemaNamer produces the contract name itself; no alias
+//     needed. We verify the shape: 4-field-offset plain `integer`, items.$ref to PushProvider.
 package api
 
 import (
@@ -19,8 +19,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// pushProviderContractSchemas — request/view/envelope-имена push-provider-домена ровно
-// как в committed-рукописи. Все обязаны присутствовать в собранной спеке.
+// pushProviderContractSchemas — request/view/envelope names of the push-provider domain exactly
+// as in the committed hand-written spec. All must be present in the assembled spec.
 var pushProviderContractSchemas = []string{
 	"PushProviderCreateRequest",
 	"PushProviderUpdateRequest",
@@ -28,14 +28,14 @@ var pushProviderContractSchemas = []string{
 	"PushProviderListReply",
 }
 
-// pushProviderForbiddenSchemas — технические huma-Go-имена старых структур. Ни одно не
-// должно остаться в спеке после выравнивания.
+// pushProviderForbiddenSchemas — technical huma-Go names of the old structs. None must
+// remain in the spec after alignment.
 var pushProviderForbiddenSchemas = []string{
 	"PushProviderCreateHumaBody",
 	"PushProviderUpdateHumaBody",
 }
 
-// TestSchemaNames_PushProvider — гейт N3. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_PushProvider — gate N3. Contract names present, technical ones absent.
 func TestSchemaNames_PushProvider(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range pushProviderContractSchemas {
@@ -50,9 +50,9 @@ func TestSchemaNames_PushProvider(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_PushProviderEnvelope — гейт N3 (ENVELOPE). PushProviderListReply несёт
-// КОНТРАКТНУЮ 4-поля-offset форму (items/offset/limit/total; items.$ref на PushProvider).
-// Format-agnostic (рукопись — plain `integer`). Мутация (item-only/cursor/неверный $ref) краснит.
+// TestSchemaNames_PushProviderEnvelope — gate N3 (ENVELOPE). PushProviderListReply carries
+// the CONTRACT 4-field-offset shape (items/offset/limit/total; items.$ref to PushProvider).
+// Format-agnostic (hand-written spec — plain `integer`). A mutation (item-only/cursor/wrong $ref) fails it.
 func TestSchemaNames_PushProviderEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {

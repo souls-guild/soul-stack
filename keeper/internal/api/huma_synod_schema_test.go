@@ -1,7 +1,7 @@
-// Доказательный гейт выравнивания имён SYNOD-схем под committed-рукопись (тираж-батч
-// N1). Контрактные имена присутствуют; технические huma-Go-имена отсутствуют;
-// add-operator несёт ОБЩУЮ схему GrantOperatorRequest (как role.grant-operator);
-// items-only форма SynodListReply сверена с рукописью.
+// Proof gate that SYNOD schema names align with the committed hand-written spec
+// (rollout batch N1). Contract names are present; technical huma-Go names are absent;
+// add-operator carries the SHARED GrantOperatorRequest schema (like role.grant-operator);
+// the items-only shape of SynodListReply is checked against the hand-written spec.
 package api
 
 import (
@@ -10,18 +10,18 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// synodContractSchemas — request/view/envelope-имена synod-домена ровно как в committed-
-// рукописи. add-operator описан той же GrantOperatorRequest, что role.grant-operator.
+// synodContractSchemas — request/view/envelope names of the synod domain exactly as in the
+// committed hand-written spec. add-operator is described by the same GrantOperatorRequest as role.grant-operator.
 var synodContractSchemas = []string{
 	"SynodCreateRequest",
 	"SynodUpdateRequest",
 	"SynodGrantRoleRequest",
-	"GrantOperatorRequest", // synod.add-operator + role.grant-operator (общая)
+	"GrantOperatorRequest", // synod.add-operator + role.grant-operator (shared)
 	"SynodView",
 	"SynodListReply",
 }
 
-// synodForbiddenSchemas — технические huma-Go-имена старых структур.
+// synodForbiddenSchemas — technical huma-Go names of the old structs.
 var synodForbiddenSchemas = []string{
 	"SynodCreateHumaBody",
 	"SynodUpdateHumaBody",
@@ -29,7 +29,7 @@ var synodForbiddenSchemas = []string{
 	"SynodGrantRoleHumaBody",
 }
 
-// TestSchemaNames_Synod — гейт N1. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Synod — gate N1. Contract names present, technical ones absent.
 func TestSchemaNames_Synod(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range synodContractSchemas {
@@ -44,8 +44,8 @@ func TestSchemaNames_Synod(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_SynodListEnvelope — гейт N1 (ENVELOPE). SynodListReply (уже oapi-тип с
-// контрактным именем) несёт items-only форму (items.$ref на SynodView, БЕЗ пагинации).
+// TestSchemaNames_SynodListEnvelope — gate N1 (ENVELOPE). SynodListReply (already an oapi type
+// with a contract name) carries the items-only shape (items.$ref to SynodView, no pagination).
 func TestSchemaNames_SynodListEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {

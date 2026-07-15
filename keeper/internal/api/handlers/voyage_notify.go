@@ -17,12 +17,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// prepareNotifyErr — валидация/авторизация блока notify ДО открытия tx (ADR-052(g)
-// amendment N2; FULL-TYPED ADR-054 §Pattern, батч-2f self-audit) без http.ResponseWriter/
-// *http.Request. Собирает шаблоны ephemeral-Tiding; voyage_id/name стемпятся позже в
-// stampEphemeralTidings (после генерации voyage_id). nil notify → (nil, nil). store=nil
-// → fail-closed 500. Делегирует общему ядру [prepareNotifyTidingsErr] (единый источник
-// с Cadence-permanent путём); *problemError при отказе. ctx — request-context.
+// prepareNotifyErr — validation/authorization of the notify block BEFORE opening the tx (ADR-052(g)
+// amendment N2; FULL-TYPED ADR-054 §Pattern, batch-2f self-audit) without http.ResponseWriter/
+// *http.Request. Builds ephemeral Tiding templates; voyage_id/name are stamped later in
+// stampEphemeralTidings (after generating voyage_id). nil notify → (nil, nil). store=nil
+// → fail-closed 500. Delegates to the shared core [prepareNotifyTidingsErr] (single source
+// with the Cadence-permanent path); *problemError on failure. ctx — request context.
 func (h *VoyageHandler) prepareNotifyErr(
 	ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest, kind voyage.Kind,
 ) ([]herald.Tiding, error) {
@@ -45,10 +45,10 @@ func (h *VoyageHandler) prepareNotifyErr(
 	return tidings, nil
 }
 
-// prepareNotifyDeps — зависимости общего [prepareNotifyTidingsErr], извлечённые из
-// конкретного handler-а (Voyage/Cadence). store — herald-CRUD-пул (existence-
-// чек канала), enforcer — RBAC (herald.read-guard), logName — префикс лога
-// источника ("voyage.notify"/"cadence.notify").
+// prepareNotifyDeps — dependencies of the shared [prepareNotifyTidingsErr], extracted from
+// a concrete handler (Voyage/Cadence). store — the herald-CRUD pool (channel existence
+// check), enforcer — RBAC (herald.read-guard), logName — the source log prefix
+// ("voyage.notify"/"cadence.notify").
 type prepareNotifyDeps struct {
 	store    herald.ExecQueryRower
 	enforcer middleware.PermissionChecker
@@ -56,41 +56,41 @@ type prepareNotifyDeps struct {
 	logger   *slog.Logger
 }
 
-// notifyTidingShape — форма результирующего Tiding-а, различающая ephemeral
-// (Voyage: разовое правило, привязка voyage_id ставится позже) от permanent
-// (Cadence: постоянное правило с origin-маркером created_from_cadence_id и
-// cadence-селектором, привязанными СРАЗУ по ULID расписания).
+// notifyTidingShape — the shape of the resulting Tiding, distinguishing ephemeral
+// (Voyage: a one-shot rule, the voyage_id binding is set later) from permanent
+// (Cadence: a permanent rule with the origin marker created_from_cadence_id and a
+// cadence selector, both bound IMMEDIATELY by the schedule ULID).
 type notifyTidingShape struct {
-	// ephemeral=true → Voyage-путь (Ephemeral=true, voyage_id/name стемпятся в
-	// stampEphemeralTidings). false → Cadence-путь (постоянное правило).
+	// ephemeral=true → Voyage path (Ephemeral=true, voyage_id/name are stamped in
+	// stampEphemeralTidings). false → Cadence path (a permanent rule).
 	ephemeral bool
-	// cadenceID — ULID расписания (cadences.id), привязка постоянного правила: в
-	// Ephemeral=false-режиме проставляется И в Cadence-селектор (фильтр подписки
-	// «слать только про прогоны этого расписания»), И в CreatedFromCadenceID
-	// (origin-маркер для каскад-удаления). Пусто в ephemeral-режиме.
+	// cadenceID — the schedule ULID (cadences.id), binding of a permanent rule: in
+	// Ephemeral=false mode it is set BOTH in the Cadence selector (a subscription filter
+	// "notify only about runs of this schedule") AND in CreatedFromCadenceID
+	// (an origin marker for cascade deletion). Empty in ephemeral mode.
 	cadenceID string
-	// namePrefix — детерминированный префикс имени постоянного правила
-	// (<cadence-name>-notify, уникальный суффикс добавляет caller). Пусто в
-	// ephemeral-режиме (имя — eph-<ULID> в stampEphemeralTidings).
+	// namePrefix — the deterministic name prefix of a permanent rule
+	// (<cadence-name>-notify, the caller adds a unique suffix). Empty in
+	// ephemeral mode (the name is eph-<ULID> in stampEphemeralTidings).
 	namePrefix string
 }
 
-// prepareNotifyTidingsErr — общий валидатор/авторизатор/строитель notify-блока
-// (ADR-052(g)/(m); FULL-TYPED ADR-054 §Pattern), единый для Voyage-ephemeral и
-// Cadence-permanent путей. Чтобы форма/валидация/RBAC двух точек не разъехались, вся
-// логика блока notify живёт здесь; различие ephemeral⟺permanent — в [notifyTidingShape]
-// (caller выбирает). Без http.ResponseWriter/*http.Request — возвращает
-// (*problem.Details) вместо problem.Write (вызывающий слой решает, как доставить:
-// huma-конверт / (w,r)-оболочка); instance в Details пуст (caller проставит путь).
+// prepareNotifyTidingsErr — the shared validator/authorizer/builder of the notify block
+// (ADR-052(g)/(m); FULL-TYPED ADR-054 §Pattern), common to the Voyage-ephemeral and
+// Cadence-permanent paths. So the shape/validation/RBAC of the two call sites do not diverge, all
+// notify-block logic lives here; the ephemeral⟺permanent difference is in [notifyTidingShape]
+// (the caller chooses). Without http.ResponseWriter/*http.Request — returns
+// (*problem.Details) instead of problem.Write (the calling layer decides how to deliver:
+// huma envelope / (w,r) wrapper); instance in Details is empty (the caller sets the path).
 //
-// Порядок проверок (fail-closed, security-критичный, идентичен для обоих путей):
-//   - синтаксис (herald-name / on-enum / annotations-object / projection-paths)
-//     → 422 ДО любого похода в БД;
-//   - existence канала (несуществующий herald) → 422 (а не FK-500 при insert в tx);
-//   - RBAC herald.read на КАЖДЫЙ канал (нельзя подписать уведомление на канал
-//     без доступа, ADR-052(g)) → 403.
+// Check order (fail-closed, security-critical, identical for both paths):
+//   - syntax (herald-name / on-enum / annotations-object / projection-paths)
+//     → 422 BEFORE any DB access;
+//   - channel existence (a nonexistent herald) → 422 (not an FK-500 on insert in the tx);
+//   - RBAC herald.read on EVERY channel (cannot subscribe a notification to a channel
+//     without access, ADR-052(g)) → 403.
 //
-// kind определяет маппинг On→event_types (scenario_run.* / command_run.*).
+// kind determines the On→event_types mapping (scenario_run.* / command_run.*).
 func prepareNotifyTidingsErr(
 	deps prepareNotifyDeps, ctx context.Context, claims *jwt.Claims,
 	notify []voyageNotifyRequest, kind voyage.Kind, shape notifyTidingShape,
@@ -118,8 +118,8 @@ func prepareNotifyTidingsErr(
 				idx+".projection: "+publicErr(err))
 		}
 
-		// Existence канала: несуществующий herald → 422 (а не FK-500 при insert в
-		// tx). Тот же store-pool, что родительский CRUD (herald.ExecQueryRower ⊂
+		// Channel existence: a nonexistent herald → 422 (not an FK-500 on insert in
+		// the tx). The same store pool as the parent CRUD (herald.ExecQueryRower ⊂
 		// voyage/cadence.ExecQueryRower).
 		if _, err := herald.SelectHeraldByName(ctx, deps.store, n.Herald); err != nil {
 			if errors.Is(err, herald.ErrHeraldNotFound) {
@@ -130,8 +130,8 @@ func prepareNotifyTidingsErr(
 			return nil, problemDetailsPtr(problem.TypeInternalError, "notify herald check failed")
 		}
 
-		// RBAC herald.read на канал (ADR-052(g)): нельзя подписать уведомление на
-		// канал без доступа. bare-check (herald-каналы не scoped по контексту в MVP).
+		// RBAC herald.read on the channel (ADR-052(g)): cannot subscribe a notification to
+		// a channel without access. bare-check (herald channels are not context-scoped in MVP).
 		if perr := checkHeraldReadPermissionErr(deps.enforcer, claims.Subject); perr != nil {
 			return nil, perr
 		}
@@ -147,14 +147,14 @@ func prepareNotifyTidingsErr(
 			CreatedByAID: aidPtr(claims.Subject),
 		}
 		if shape.ephemeral {
-			// Voyage-путь: разовое правило. voyage_id/name стемпятся позже
-			// (stampEphemeralTidings), здесь только Ephemeral-флаг.
+			// Voyage path: a one-shot rule. voyage_id/name are stamped later
+			// (stampEphemeralTidings), here only the Ephemeral flag.
 			t.Ephemeral = true
 		} else {
-			// Cadence-путь: постоянное правило, привязанное СРАЗУ по ULID расписания
-			// (rename-safe). Cadence-селектор фильтрует подписку на прогоны ЭТОГО
-			// расписания; CreatedFromCadenceID — origin-маркер каскад-удаления (ADR-052
-			// §m / ADR-046 §9). Имя детерминированно-уникально (caller — addNotifyName).
+			// Cadence path: a permanent rule, bound IMMEDIATELY by the schedule ULID
+			// (rename-safe). The Cadence selector filters the subscription to runs of THIS
+			// schedule; CreatedFromCadenceID — the origin marker for cascade deletion (ADR-052
+			// §m / ADR-046 §9). The name is deterministically unique (caller — addNotifyName).
 			cadenceID := shape.cadenceID
 			t.Cadence = &cadenceID
 			t.CreatedFromCadenceID = &cadenceID
@@ -165,16 +165,16 @@ func prepareNotifyTidingsErr(
 	return templates, nil
 }
 
-// problemDetailsPtr — хелпер: [problem.Details] на куче для возврата из *Err-
-// функций (instance пуст — caller проставит). Сокращает шум &-литералов.
+// problemDetailsPtr — a helper: a heap [problem.Details] for returning from *Err
+// functions (instance empty — the caller sets it). Reduces &-literal noise.
 func problemDetailsPtr(typ, detail string) *problem.Details {
 	d := problem.New(typ, "", detail)
 	return &d
 }
 
-// checkHeraldReadPermissionErr — bare-check RBAC herald.read (ADR-052(g)), общий
-// для Voyage/Cadence notify-путей (FULL-TYPED ADR-054 §Pattern). nil → разрешено;
-// при deny — *problem.Details (revoked → TypeOperatorRevokedToken, no-perm → 403).
+// checkHeraldReadPermissionErr — bare-check RBAC herald.read (ADR-052(g)), shared
+// by the Voyage/Cadence notify paths (FULL-TYPED ADR-054 §Pattern). nil → allowed;
+// on deny — *problem.Details (revoked → TypeOperatorRevokedToken, no-perm → 403).
 func checkHeraldReadPermissionErr(enforcer middleware.PermissionChecker, aid string) *problem.Details {
 	if err := enforcer.Check(aid, "herald", "read", nil); err != nil {
 		if errors.Is(err, rbac.ErrOperatorRevoked) {
@@ -185,11 +185,11 @@ func checkHeraldReadPermissionErr(enforcer middleware.PermissionChecker, aid str
 	return nil
 }
 
-// permanentNotifyName строит детерминированно-уникальное имя постоянного
-// notify-правила Cadence: первый элемент — `<prefix>-notify`, последующие —
-// `<prefix>-notify-<i+1>` (i — индекс в массиве notify). Tiding.Name — PK,
-// коллизия недопустима; индекс в стабильном массиве уникален by construction.
-// prefix уже усечён caller-ом (cappedNotifyPrefix) до допустимой длины
+// permanentNotifyName builds a deterministically unique name for a permanent
+// Cadence notify rule: the first element — `<prefix>-notify`, subsequent ones —
+// `<prefix>-notify-<i+1>` (i — the index in the notify array). Tiding.Name — PK,
+// a collision is not allowed; the index in a stable array is unique by construction.
+// prefix is already truncated by the caller (cappedNotifyPrefix) to the allowed length
 // (NamePattern ^[a-z0-9-]{1,63}$).
 func permanentNotifyName(prefix string, i int) string {
 	name := prefix + "-notify"
@@ -199,12 +199,12 @@ func permanentNotifyName(prefix string, i int) string {
 	return name
 }
 
-// stampEphemeralTidings проставляет в шаблоны (из prepareNotify) сгенерированный
-// voyage_id и детерминированно-уникальное имя — после того, как voyage_id
-// известен (buildVoyageRow). Имя — `eph-<lowercase-ULID>` (свежий ULID на
-// правило): уникально, матчит NamePattern (^[a-z0-9-]{1,63}$, ULID Crockford
-// lowercased ⊂ [a-z0-9]). Свежий ULID на каждое правило исключает коллизию имён
-// при нескольких notify-элементах на один herald.
+// stampEphemeralTidings sets the generated voyage_id and a deterministically unique
+// name into the templates (from prepareNotify) — after voyage_id is
+// known (buildVoyageRow). The name — `eph-<lowercase-ULID>` (a fresh ULID per
+// rule): unique, matches NamePattern (^[a-z0-9-]{1,63}$, a Crockford ULID
+// lowercased ⊂ [a-z0-9]). A fresh ULID per rule prevents name collisions
+// when several notify elements target one herald.
 func stampEphemeralTidings(templates []herald.Tiding, voyageID string) {
 	for i := range templates {
 		vid := voyageID
@@ -213,8 +213,8 @@ func stampEphemeralTidings(templates []herald.Tiding, voyageID string) {
 	}
 }
 
-// notifyEventTypes маппит notify.on (терминалы прогона) в audit-event-types по
-// kind (ADR-052(g)). Пустой on ⇒ все три терминала. Неизвестное значение → err.
+// notifyEventTypes maps notify.on (run terminals) to audit event types by
+// kind (ADR-052(g)). Empty on ⇒ all three terminals. An unknown value → err.
 //
 //	completed → scenario_run.completed       / command_run.completed
 //	failed    → scenario_run.failed          / command_run.failed
@@ -252,22 +252,22 @@ func notifyEventTypes(kind voyage.Kind, on []string) (eventTypes []string, errMs
 	return out, ""
 }
 
-// decodeAnnotations распаковывает сырой JSON annotations в map (object-форму уже
-// гарантировал ValidateAnnotationsJSON). Пустой/null → nil (= нет статических
-// полей).
+// decodeAnnotations unpacks raw JSON annotations into a map (the object shape is already
+// guaranteed by ValidateAnnotationsJSON). Empty/null → nil (= no static
+// fields).
 func decodeAnnotations(raw json.RawMessage) map[string]any {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
 		return nil
 	}
 	var m map[string]any
-	// Безопасно: ValidateAnnotationsJSON уже подтвердил валидный JSON-object.
+	// Safe: ValidateAnnotationsJSON already confirmed a valid JSON object.
 	_ = json.Unmarshal(raw, &m)
 	return m
 }
 
-// publicErr — public-safe текст ошибки herald-валидатора (он уже формирует
-// сообщение без internal SQL/stack; срезаем только pkg-префикс `herald: `).
+// publicErr — public-safe text of a herald validator error (it already forms
+// a message without internal SQL/stack; we strip only the pkg prefix `herald: `).
 func publicErr(err error) string {
 	return strings.TrimPrefix(err.Error(), "herald: ")
 }

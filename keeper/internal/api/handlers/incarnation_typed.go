@@ -1,22 +1,22 @@
 package handlers
 
-// FULL-TYPED извлечения incarnation-домена (ADR-054 §Pattern, батч-2g). Каждая
-// *Typed-функция несёт всю бизнес-логику соответствующего (w,r)-handler-а БЕЗ
-// http.ResponseWriter/*http.Request: декод/auth — на huma-слое (api-пакет), ошибки —
-// *problemError, успех — typed reply.
+// FULL-TYPED extractions of the incarnation domain (ADR-054 §Pattern, batch-2g). Each
+// *Typed function carries the entire business logic of the corresponding (w,r) handler
+// WITHOUT http.ResponseWriter/*http.Request: decode/auth on the huma layer (api package),
+// errors as *problemError, success as a typed reply.
 //
-// Два класса audit (СВЕРЕНЫ по router.go + handler-коду, перепутать = S6-регрессия):
+// Two audit classes (VERIFIED against router.go + handler code; mixing them up = S6 regression):
 //
-//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): audit пишет huma-audit-
-//     middleware (вариант B) СНАРУЖИ. *Typed возвращает reply, НЕСУЩИЙ audit-payload
-//     (поле AuditPayload) — huma-register-func кладёт его через SetHumaAuditPayload.
-//     Сами *Typed audit НЕ пишут.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): audit пишет
-//     САМ handler через h.auditW.Write ВНУТРИ *Typed (payload собирается только после
-//     доменной операции — previous_status / drift_summary / old-new snapshot). audit-
-//     middleware на этих роутах НЕ навешан.
+//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): the huma-audit middleware
+//     (variant B) writes audit from OUTSIDE. *Typed returns a reply CARRYING the audit-payload
+//     (field AuditPayload) — the huma register func sets it via SetHumaAuditPayload.
+//     The *Typed functions do NOT write audit themselves.
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): the handler writes
+//     audit ITSELF via h.auditW.Write INSIDE *Typed (the payload is built only after
+//     the domain operation — previous_status / drift_summary / old-new snapshot). audit
+//     middleware is NOT wired on these routes.
 //
-// read (get / list / history) — audit НЕ пишут вообще.
+// read (get / list / history) — do NOT write audit at all.
 
 import (
 	"context"
@@ -41,57 +41,57 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// IncarnationSpecStub — непустой *IncarnationHandler-заглушка для генерации huma-
-// OpenAPI-фрагмента (HumaIncarnationSpecYAML): при dump доменный handler не
-// вызывается, но huma.Register требует non-nil. Все зависимости nil.
+// IncarnationSpecStub — a non-empty *IncarnationHandler stub for generating the huma
+// OpenAPI fragment (HumaIncarnationSpecYAML): the domain handler is not called during
+// dump, but huma.Register requires non-nil. All dependencies are nil.
 func IncarnationSpecStub() *IncarnationHandler { return &IncarnationHandler{} }
 
 // --- Create (MIDDLEWARE-AUDIT incarnation.created) --------------------
 
-// IncarnationCreateView — ПЛОСКАЯ доменная проекция 202-тела POST /v1/incarnations (handler-
-// native). Пакет api проецирует её в native IncarnationCreateReply. ApplyID — pointer-optional
-// (lifecycle.auto_create:false → инкарнация в ready без прогона, apply_id опущен).
+// IncarnationCreateView — FLAT domain projection of the 202 body of POST /v1/incarnations
+// (handler-native). Package api projects it into native IncarnationCreateReply. ApplyID is
+// pointer-optional (lifecycle.auto_create:false → incarnation is ready without a run, apply_id omitted).
 type IncarnationCreateView struct {
 	ApplyID     *string
 	Incarnation string
 }
 
-// IncarnationCreateRequestInput — NATIVE request-форма POST /v1/incarnations (handler-native).
-// Заменяет IncarnationCreateRequest: huma-input (пакет api) биндит тело по своим полям и
-// зовёт CreateTyped с этой плоской моделью. Covens/Input — nil = «не задано» (parity legacy
-// omitempty-декода).
+// IncarnationCreateRequestInput — NATIVE request form for POST /v1/incarnations (handler-native).
+// Replaces IncarnationCreateRequest: the huma-input (package api) binds the body against its
+// fields and calls CreateTyped with this flat model. Covens/Input — nil = "not set" (parity with
+// the legacy omitempty decode).
 type IncarnationCreateRequestInput struct {
 	Name    string
 	Service string
 	Covens  []string
 	Input   map[string]any
-	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): кладутся в
-	// spec.traits → incarnation.traits (источник истины) + проекция в souls.traits
-	// хостов-членов. nil = «не задано» (parity legacy omitempty-декода).
+	// Traits — operator-set trait labels of the incarnation (ADR-060 amend R1): stored in
+	// spec.traits → incarnation.traits (source of truth) + projected into souls.traits of
+	// member hosts. nil = "not set" (parity with the legacy omitempty decode).
 	Traits map[string]any
-	// CreateScenario — выбор стартового сценария (механизм нескольких create,
-	// Вариант A). Контракт пустого выбора (Фаза 2): сервис ПРЕДЛАГАЕТ create-
-	// сценарии (≥1 `create: true`) + пусто → 422 create_scenario_required; сервис
-	// БЕЗ create-сценариев + пусто → bare-инкарнация (StatusReady без прогона).
-	// Непустое имя обязано входить в create-набор, иначе 422; выбор сохраняется в
-	// incarnation.created_scenario (NULL для bare; rerun-last использует его на create-пути).
+	// CreateScenario — choice of the starting scenario (multi-create mechanism,
+	// Variant A). Empty-choice contract (Phase 2): the service OFFERS create
+	// scenarios (≥1 `create: true`) + empty → 422 create_scenario_required; a service
+	// WITHOUT create scenarios + empty → bare incarnation (StatusReady without a run).
+	// A non-empty name must belong to the create set, else 422; the choice is stored in
+	// incarnation.created_scenario (NULL for bare; rerun-last uses it on the create path).
 	CreateScenario string
 }
 
-// IncarnationCreateReply — typed reply CreateTyped. Body — плоская доменная проекция 202-тела;
-// AuditPayload — данные для huma-audit-middleware (name/service/covens/apply_id).
+// IncarnationCreateReply — typed reply of CreateTyped. Body is the flat domain projection of
+// the 202 body; AuditPayload is data for the huma-audit middleware (name/service/covens/apply_id).
 type IncarnationCreateReply struct {
 	Body         IncarnationCreateView
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// CreateTyped — извлечённая доменная функция POST /v1/incarnations (MIDDLEWARE-AUDIT).
-// Parity (w,r)-Create: валидация name/service/covens → resolve service-ref + выбор
-// create-сценария (Фаза 2: required при наличии / bare при отсутствии) + sync
-// input-validation + lifecycle.auto_create → insert row → опц. запуск bootstrap →
-// 202 + apply_id. Bare-инкарнация (сервис без create-сценариев) создаётся StatusReady
-// БЕЗ прогона, без apply_id, created_scenario=NULL. audit НЕ пишет (middleware-
-// вариант B): возвращает payload в reply.
+// CreateTyped — extracted domain function POST /v1/incarnations (MIDDLEWARE-AUDIT).
+// Parity with (w,r)-Create: name/service/covens validation → resolve service-ref + choice of
+// create scenario (Phase 2: required if present / bare if absent) + sync
+// input-validation + lifecycle.auto_create → insert row → optional bootstrap start →
+// 202 + apply_id. A bare incarnation (service without create scenarios) is created StatusReady
+// WITHOUT a run, without apply_id, created_scenario=NULL. Does NOT write audit (middleware
+// variant B): returns the payload in the reply.
 func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req IncarnationCreateRequestInput) (IncarnationCreateReply, error) {
 	var zero IncarnationCreateReply
 
@@ -119,18 +119,18 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	var serviceRef artifact.ServiceRef
 	runScenario := h.runner != nil && h.services != nil
 	autoCreate := true
-	// bareNoScenario — сервис не предлагает ни одного create-сценария (нет
-	// `create: true`): инкарнация создаётся StatusReady БЕЗ прогона (готова к
-	// day-2). created_scenario пишется NULL (см. createScenarioCol). Отлично от
-	// autoCreate=false: там bootstrap-сценарий ЕСТЬ (chosen), но прогон отложен —
-	// created_scenario непустое. Оба не запускают runner.Start → bare (ниже).
+	// bareNoScenario — the service offers no create scenario (no
+	// `create: true`): the incarnation is created StatusReady WITHOUT a run (ready for
+	// operations). created_scenario is written NULL (see createScenarioCol). Different from
+	// autoCreate=false: there a bootstrap scenario EXISTS (chosen) but the run is deferred —
+	// created_scenario is non-empty. Neither triggers runner.Start → bare (below).
 	bareNoScenario := false
-	// createScenario — фактический стартовый сценарий (механизм нескольких create).
-	// Дефолт CreateScenarioName (`create`) удерживает legacy-поведение БЕЗ loader-а
-	// (stub-режим: набор не резолвится, bare не определить → запускаем `create` как
-	// раньше). При наличии loader-а перезаписывается выбором оператора либо bare-
-	// признаком. Используется во всех фазах bootstrap-прогона (через createScenario
-	// в runner.Start); created_scenario пишется через createScenarioCol (NULL при
+	// createScenario — the actual starting scenario (multi-create mechanism).
+	// The default CreateScenarioName (`create`) preserves legacy behavior WITHOUT a loader
+	// (stub mode: the set is not resolved, bare cannot be determined → run `create` as
+	// before). With a loader present it is overwritten by the operator's choice or the bare
+	// marker. Used in all bootstrap-run phases (via createScenario
+	// in runner.Start); created_scenario is written via createScenarioCol (NULL when
 	// bareNoScenario).
 	createScenario := scenario.CreateScenarioName
 	if runScenario {
@@ -142,10 +142,10 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		serviceRef = ref
 		serviceVersion = ref.Ref
 
-		// Общий резолв стартового сценария + input-валидация + pre-flight-assert
-		// (R2: единый scenario.ResolveCreatePlan с MCP callIncarnationCreate). h.loader
-		// nil → stub-план (`create`, не bare, auto_create=true). preflighter — h.runner
-		// (type-assertion на scenario.AssertPreflighter внутри; ScenarioStarter-фейк →
+		// Shared resolve of the starting scenario + input validation + pre-flight assert
+		// (R2: single scenario.ResolveCreatePlan with MCP callIncarnationCreate). h.loader
+		// nil → stub plan (`create`, not bare, auto_create=true). preflighter is h.runner
+		// (type-assertion to scenario.AssertPreflighter inside; a ScenarioStarter fake →
 		// no-op).
 		plan, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject)
 		if perr != nil {
@@ -164,20 +164,20 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		spec["traits"] = req.Traits
 	}
 
-	// Trait per-incarnation (ADR-060 amend, R1): operator-set traits живут в
-	// incarnation.spec.traits (top-level API-поле `traits`, прокинуто в spec
-	// выше). На create-пути извлекаем их в колонку incarnation.traits — она
-	// источник истины, проецируемый в souls.traits хостов-членов sync-hook-ом
-	// ниже. Невалидный набор (формат ключа/значения) → 422 ДО insert.
+	// Trait per-incarnation (ADR-060 amend, R1): operator-set traits live in
+	// incarnation.spec.traits (top-level API field `traits`, passed into spec
+	// above). On the create path we extract them into the incarnation.traits column — it is
+	// the source of truth, projected into souls.traits of member hosts by the sync-hook
+	// below. An invalid set (key/value format) → 422 BEFORE insert.
 	traits, err := incarnation.TraitsFromSpec(spec)
 	if err != nil {
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
 	}
 
-	// createScenarioCol — значение колонки created_scenario: NULL для bare-
-	// инкарнации (нет bootstrap-сценария), иначе указатель на выбранное имя.
-	// autoCreate=false НЕ делает её NULL — bootstrap-сценарий есть (chosen),
-	// просто прогон отложен; rerun-last использует его на create-пути.
+	// createScenarioCol — value of the created_scenario column: NULL for a bare
+	// incarnation (no bootstrap scenario), otherwise a pointer to the chosen name.
+	// autoCreate=false does NOT make it NULL — a bootstrap scenario exists (chosen),
+	// the run is merely deferred; rerun-last uses it on the create path.
 	var createScenarioCol *string
 	if !bareNoScenario {
 		createScenarioCol = &createScenario
@@ -207,13 +207,13 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		return zero, incProblem(problem.TypeInternalError, "insert incarnation failed")
 	}
 
-	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits хостов-
-	// членов. Гейтится непустыми traits — иначе на каждом create без traits
-	// проекция затирала бы per-soul traits в `{}` (footgun переходного периода).
-	// На create обычно 0 членов (онбординг идёт в scenario create) → no-op;
-	// bind-хук в keeper-dispatch добьёт хосты, привязавшиеся в прогоне. Не валим
-	// create на сбое проекции (best-effort, лог): инкарнация уже создана, sync
-	// до-сойдётся при следующем bind/create-повторе.
+	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits of member
+	// hosts. Gated on non-empty traits — otherwise every create without traits
+	// would wipe per-soul traits to `{}` (a transitional footgun).
+	// On create there are usually 0 members (onboarding happens in scenario create) → no-op;
+	// the bind hook in keeper-dispatch catches up the hosts bound during the run. We don't fail
+	// create on a projection error (best-effort, logged): the incarnation is already created, sync
+	// converges on the next bind/create retry.
 	if len(traits) > 0 {
 		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, req.Name, traits); serr != nil {
 			h.logger.Warn("incarnation.create: sync traits → souls провален (best-effort)",
@@ -221,13 +221,13 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		}
 	}
 
-	// bareReady — живой runner-стек, но прогон сознательно НЕ стартует: bare-
-	// инкарнация (нет create-сценария) ИЛИ autoCreate=false (прогон отложен). Тогда
-	// инкарнация остаётся StatusReady без прогона, apply_id опущен. В stub-режиме
-	// (!runScenario, M0.6c-1 insert-only) apply_id выдаётся как прежде — это НЕ bare.
+	// bareReady — a live runner stack, but the run is deliberately NOT started: bare
+	// incarnation (no create scenario) OR autoCreate=false (run deferred). In that case the
+	// incarnation stays StatusReady without a run, apply_id omitted. In stub mode
+	// (!runScenario, M0.6c-1 insert-only) apply_id is issued as before — that is NOT bare.
 	bareReady := runScenario && (bareNoScenario || !autoCreate)
-	// runCreate — стартует ли bootstrap-прогон (нужен живой стек, сценарий и
-	// autoCreate). Отдельно от bareReady: stub-режим тоже не запускает Start.
+	// runCreate — whether a bootstrap run starts (needs a live stack, a scenario and
+	// autoCreate). Separate from bareReady: stub mode also does not call Start.
 	runCreate := runScenario && !bareNoScenario && autoCreate
 
 	var applyID string
@@ -269,25 +269,25 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 
 // --- Run (MIDDLEWARE-AUDIT incarnation.scenario_started) --------------
 
-// IncarnationRunView — ПЛОСКАЯ доменная проекция 202-тела POST .../scenarios/{scenario}
-// (handler-native). Пакет api проецирует её в native IncarnationRunReply.
+// IncarnationRunView — FLAT domain projection of the 202 body of POST .../scenarios/{scenario}
+// (handler-native). Package api projects it into native IncarnationRunReply.
 type IncarnationRunView struct {
 	ApplyID     string
 	Incarnation string
 	Scenario    string
 }
 
-// IncarnationRunReply — typed reply RunTyped. Body — плоская доменная проекция 202-тела;
-// AuditPayload — для huma-audit-middleware (name/scenario/apply_id).
+// IncarnationRunReply — typed reply of RunTyped. Body is the flat domain projection of the
+// 202 body; AuditPayload is for the huma-audit middleware (name/scenario/apply_id).
 type IncarnationRunReply struct {
 	Body         IncarnationRunView
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// RunTyped — извлечённая доменная функция POST /v1/incarnations/{name}/scenarios/
-// {scenario} (MIDDLEWARE-AUDIT). Parity (w,r)-Run: резолв incarnation → secondary
-// error_locked-probe → resolve service-ref + sync input-validation → runner.Start →
-// 202 + apply_id. name/scenarioName приходят аргументами (path-bind на huma-слое).
+// RunTyped — extracted domain function POST /v1/incarnations/{name}/scenarios/
+// {scenario} (MIDDLEWARE-AUDIT). Parity with (w,r)-Run: resolve incarnation → secondary
+// error_locked probe → resolve service-ref + sync input-validation → runner.Start →
+// 202 + apply_id. name/scenarioName arrive as arguments (path-bind on the huma layer).
 func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, name, scenarioName string, input map[string]any) (IncarnationRunReply, error) {
 	var zero IncarnationRunReply
 
@@ -364,9 +364,9 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 
 // --- Unlock (MIDDLEWARE-AUDIT incarnation.unlocked) -------------------
 
-// IncarnationUnlockView — ПЛОСКАЯ доменная проекция 200-тела POST .../unlock (handler-native).
-// Пакет api проецирует её в native IncarnationUnlockReply. PreviousStatus/Status — RAW string
-// домена (native-тип в api держит enum-форму). UnlockedAt — наносекундный time-wire.
+// IncarnationUnlockView — FLAT domain projection of the 200 body of POST .../unlock (handler-native).
+// Package api projects it into native IncarnationUnlockReply. PreviousStatus/Status are the domain's
+// RAW string (the native type in api holds the enum form). UnlockedAt is a nanosecond time-wire.
 type IncarnationUnlockView struct {
 	Name           string
 	PreviousStatus string
@@ -375,15 +375,15 @@ type IncarnationUnlockView struct {
 	UnlockedByAID  string
 }
 
-// IncarnationUnlockReply — typed reply UnlockTyped. Body — плоская доменная проекция 200-тела;
-// AuditPayload — для huma-audit-middleware (name/previous_status/reason).
+// IncarnationUnlockReply — typed reply of UnlockTyped. Body is the flat domain projection of the
+// 200 body; AuditPayload is for the huma-audit middleware (name/previous_status/reason).
 type IncarnationUnlockReply struct {
 	Body         IncarnationUnlockView
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// UnlockTyped — извлечённая доменная функция POST /v1/incarnations/{name}/unlock
-// (MIDDLEWARE-AUDIT). Parity (w,r)-Unlock: снятие error_locked/migration_failed под
+// UnlockTyped — extracted domain function POST /v1/incarnations/{name}/unlock
+// (MIDDLEWARE-AUDIT). Parity with (w,r)-Unlock: clearing error_locked/migration_failed under
 // FOR UPDATE → 200 {name, previous_status, status, unlocked_by_aid, unlocked_at}.
 func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationUnlockReply, error) {
 	var zero IncarnationUnlockReply
@@ -394,8 +394,8 @@ func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims
 	if reason == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'reason' is required")
 	}
-	// JSON-Schema maxLength считает Unicode code points (руны), не байты —
-	// сверяем рунами, иначе кириллический reason отбивается 422 вдвое раньше лимита.
+	// JSON-Schema maxLength counts Unicode code points (runes), not bytes —
+	// we check in runes, otherwise a Cyrillic reason is rejected with 422 at half the limit.
 	if utf8.RuneCountInString(reason) > incarnation.ReasonMaxLen {
 		return zero, incProblem(problem.TypeValidationFailed,
 			fmt.Sprintf("field 'reason' must be at most %d characters", incarnation.ReasonMaxLen))
@@ -435,26 +435,26 @@ func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims
 
 // --- Upgrade (MIDDLEWARE-AUDIT incarnation.upgrade_started) -----------
 
-// IncarnationUpgradeView — ПЛОСКАЯ доменная проекция 202-тела POST .../upgrade (handler-native).
-// Пакет api проецирует её в native IncarnationUpgradeReply.
+// IncarnationUpgradeView — FLAT domain projection of the 202 body of POST .../upgrade (handler-native).
+// Package api projects it into native IncarnationUpgradeReply.
 type IncarnationUpgradeView struct {
-	// ApplyID — M: ULID state-миграции (back-compat, присутствует всегда).
+	// ApplyID — M: ULID of the state migration (back-compat, always present).
 	ApplyID string
-	// RunApplyID — R: ULID автозапущенного upgrade-прогона (ADR-0068 §5, found-ветвь).
-	// nil в legacy (upgrade-сценарий не найден → drift без host-оркестрации).
+	// RunApplyID — R: ULID of the auto-started upgrade run (ADR-0068 §5, found branch).
+	// nil in legacy (no upgrade scenario found → drift without host orchestration).
 	RunApplyID *string
 }
 
-// IncarnationUpgradeReply — typed reply UpgradeTyped. Body — плоская доменная проекция 202-тела;
-// AuditPayload — для huma-audit-middleware (name/to_version/apply_id).
+// IncarnationUpgradeReply — typed reply of UpgradeTyped. Body is the flat domain projection of
+// the 202 body; AuditPayload is for the huma-audit middleware (name/to_version/apply_id).
 type IncarnationUpgradeReply struct {
 	Body         IncarnationUpgradeView
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// UpgradeTyped — извлечённая доменная функция POST /v1/incarnations/{name}/upgrade
-// (MIDDLEWARE-AUDIT). Parity (w,r)-Upgrade: SelectByName → PrepareUpgrade →
-// UpgradeStateSchema (sync под 202) → 202 + apply_id.
+// UpgradeTyped — extracted domain function POST /v1/incarnations/{name}/upgrade
+// (MIDDLEWARE-AUDIT). Parity with (w,r)-Upgrade: SelectByName → PrepareUpgrade →
+// UpgradeStateSchema (sync under 202) → 202 + apply_id.
 func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claims, name, toVersion string) (IncarnationUpgradeReply, error) {
 	var zero IncarnationUpgradeReply
 
@@ -499,10 +499,10 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		}
 	}
 
-	// found-режим (ADR-0068 §5): upgrade-сценарий найден → генерим R (ULID
-	// Runner-прогона, ОТДЕЛЬНЫЙ от M) и коммитим автозапуск (upgradeTx зарезервирует
-	// applying вместо drift). Runner обязателен — проверяем ДО резервирования
-	// applying, иначе incarnation завис бы в applying без прогона.
+	// found mode (ADR-0068 §5): an upgrade scenario was found → generate R (ULID of the
+	// Runner run, SEPARATE from M) and commit the auto-start (upgradeTx reserves
+	// applying instead of drift). The runner is required — we check it BEFORE reserving
+	// applying, otherwise the incarnation would hang in applying without a run.
 	var runApplyID string
 	if upIn.UpgradeSlug != "" {
 		if h.runner == nil {
@@ -536,12 +536,12 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		}
 	}
 
-	// Found → автозапуск upgrade-сценария Runner-ом на новом пине (upIn.TargetRef.Ref
-	// = to_version). FromLocked: applying уже зарезервирован upgradeTx (иначе lockRun
-	// упрётся в applying); FromUpgrade: грузить upgrade/<slug>/. Input пуст —
-	// upgrade-сценарий работает со state, НЕ input (ADR-0068 §7). Ошибку Start
-	// зеркалим RerunLastTyped (applying зарезервирован в tx; при сбое старта
-	// incarnation остаётся в applying, триаж/rerun-last доведут).
+	// Found → auto-start of the upgrade scenario by the Runner on the new pin (upIn.TargetRef.Ref
+	// = to_version). FromLocked: applying is already reserved by upgradeTx (otherwise lockRun
+	// would hit applying); FromUpgrade: load upgrade/<slug>/. Input is empty —
+	// the upgrade scenario operates on state, NOT input (ADR-0068 §7). We mirror the Start
+	// error as in RerunLastTyped (applying is reserved in the tx; on a start failure the
+	// incarnation stays in applying, triage/rerun-last will drive it).
 	if upIn.UpgradeSlug != "" {
 		if err := h.runner.Start(ctx, scenario.RunSpec{
 			ApplyID:         runApplyID,
@@ -558,9 +558,9 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 			return zero, incProblem(problem.TypeInternalError, "start upgrade scenario "+upIn.UpgradeSlug+" failed")
 		}
 	} else {
-		// Legacy (ADR-0068 §5): перехода без upgrade-сценария → drift без host-
-		// оркестрации, оператор доводит обычным apply. from = pre-upgrade пин
-		// (inc не перезагружался после tx).
+		// Legacy (ADR-0068 §5): a transition without an upgrade scenario → drift without host
+		// orchestration, the operator drives it with a regular apply. from = pre-upgrade pin
+		// (inc was not reloaded after the tx).
 		h.logger.Warn("incarnation.upgrade: no upgrade scenario for transition — legacy drift, manual apply required",
 			slog.String("incarnation", name),
 			slog.String("from", inc.ServiceVersion),
@@ -582,20 +582,20 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 
 // --- RerunLast (SELF-AUDIT incarnation.rerun_last) --------------------
 
-// IncarnationRerunLastView — ПЛОСКАЯ доменная проекция 202-тела POST .../rerun-last
-// (handler-native). Пакет api проецирует её в native IncarnationRerunLastReply.
+// IncarnationRerunLastView — FLAT domain projection of the 202 body of POST .../rerun-last
+// (handler-native). Package api projects it into native IncarnationRerunLastReply.
 type IncarnationRerunLastView struct {
 	ApplyID     string
 	Incarnation string
-	// Scenario — имя перезапущенного сценария (последний упавший: bootstrap
-	// `create`/… ИЛИ day-2 add_user/…). UI показывает его лейблом.
+	// Scenario — name of the re-run scenario (the last failed one: bootstrap
+	// `create`/… OR an operational add_user/…). The UI shows it as a label.
 	Scenario string
 }
 
-// RerunLastTyped — извлечённая доменная функция POST /v1/incarnations/{name}/
-// rerun-last (SELF-AUDIT: incarnation.rerun_last пишет САМ handler внутри —
-// payload previous_status/scenario известны только после UnlockForRerun). Parity
-// (w,r)-RerunLast. source — ScenarioInvocationSource(ctx) (api / mcp). 202 +
+// RerunLastTyped — extracted domain function POST /v1/incarnations/{name}/
+// rerun-last (SELF-AUDIT: the handler writes incarnation.rerun_last ITSELF inside —
+// the previous_status/scenario payload is known only after UnlockForRerun). Parity with
+// (w,r)-RerunLast. source is ScenarioInvocationSource(ctx) (api / mcp). 202 +
 // apply_id + scenario.
 func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationRerunLastView, error) {
 	var zero IncarnationRerunLastView
@@ -606,8 +606,8 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	if reason == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'reason' is required")
 	}
-	// JSON-Schema maxLength считает Unicode code points (руны), не байты —
-	// сверяем рунами, иначе кириллический reason отбивается 422 вдвое раньше лимита.
+	// JSON-Schema maxLength counts Unicode code points (runes), not bytes —
+	// we check in runes, otherwise a Cyrillic reason is rejected with 422 at half the limit.
 	if utf8.RuneCountInString(reason) > incarnation.ReasonMaxLen {
 		return zero, incProblem(problem.TypeValidationFailed,
 			fmt.Sprintf("field 'reason' must be at most %d characters", incarnation.ReasonMaxLen))
@@ -654,10 +654,10 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 		}
 	}
 
-	// rerun-last перезапускает ПОСЛЕДНИЙ упавший сценарий (UnlockForRerun вернул его
-	// имя и input под FOR UPDATE): bootstrap `create`/… на create-пути ИЛИ day-2
-	// add_user/… — с ТЕМИ ЖЕ входными значениями (spec.input или recipe.input), а не
-	// с дефолтами.
+	// rerun-last re-runs the LAST failed scenario (UnlockForRerun returned its
+	// name and input under FOR UPDATE): bootstrap `create`/… on the create path OR an
+	// operational add_user/… — with the SAME input values (spec.input or recipe.input), not
+	// with defaults.
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: name,
@@ -666,8 +666,8 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
-		// Упавший прогон мог быть upgrade-сценарием (recipe.from_upgrade) — тогда
-		// перезапуск обязан идти из upgrade/<slug>/, а не scenario/ (ADR-0068).
+		// The failed run may have been an upgrade scenario (recipe.from_upgrade) — then
+		// the re-run must load from upgrade/<slug>/, not scenario/ (ADR-0068).
 		FromUpgrade: res.FromUpgrade,
 	}); err != nil {
 		h.logger.Error("incarnation.rerun-last: scenario start failed",
@@ -697,10 +697,10 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 
 // --- CheckDrift (SELF-AUDIT incarnation.drift_checked) ----------------
 
-// CheckDriftTyped — извлечённая доменная функция POST /v1/incarnations/{name}/
-// check-drift (SELF-AUDIT: incarnation.drift_checked пишет САМ handler — payload
-// drift_summary собирается после CheckDrift). Parity (w,r)-CheckDrift: sync
-// drift-проверка → 200 + *scenario.DriftReport.
+// CheckDriftTyped — extracted domain function POST /v1/incarnations/{name}/
+// check-drift (SELF-AUDIT: the handler writes incarnation.drift_checked ITSELF — the
+// drift_summary payload is built after CheckDrift). Parity with (w,r)-CheckDrift: sync
+// drift check → 200 + *scenario.DriftReport.
 func (h *IncarnationHandler) CheckDriftTyped(ctx context.Context, claims *jwt.Claims, name string, inputOverride map[string]any) (*scenario.DriftReport, error) {
 	if !incarnation.ValidName(name) {
 		return nil, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
@@ -774,18 +774,18 @@ func (h *IncarnationHandler) CheckDriftTyped(ctx context.Context, claims *jwt.Cl
 	return report, nil
 }
 
-// --- Destroy (SELF-AUDIT incarnation.destroy_started — пишет service-слой) ---
+// --- Destroy (SELF-AUDIT incarnation.destroy_started — written by the service layer) ---
 
-// IncarnationDestroyView — ПЛОСКАЯ доменная проекция 202-тела DELETE /v1/incarnations/{name}
-// (handler-native). Пакет api проецирует её в native IncarnationDestroyReply.
+// IncarnationDestroyView — FLAT domain projection of the 202 body of DELETE /v1/incarnations/{name}
+// (handler-native). Package api projects it into native IncarnationDestroyReply.
 type IncarnationDestroyView struct {
 	ApplyID string
 }
 
-// DestroyTyped — извлечённая доменная функция DELETE /v1/incarnations/{name}
-// (SELF-AUDIT: destroy_started пишет сам [incarnation.Destroy] / destroy_completed —
-// [DeleteAfterTeardown]; audit-middleware НЕ навешан). Parity (w,r)-Destroy: force —
-// allow_destroy (path-bind на huma-слое). 202 + apply_id.
+// DestroyTyped — extracted domain function DELETE /v1/incarnations/{name}
+// (SELF-AUDIT: destroy_started is written by [incarnation.Destroy] / destroy_completed by
+// [DeleteAfterTeardown]; audit middleware is NOT wired). Parity with (w,r)-Destroy: force is
+// allow_destroy (path-bind on the huma layer). 202 + apply_id.
 func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claims, name string, force bool) (IncarnationDestroyView, error) {
 	var zero IncarnationDestroyView
 
@@ -888,18 +888,18 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 
 // --- UpdateHosts (SELF-AUDIT incarnation.hosts_updated) ---------------
 
-// IncarnationSpecHostInput — NATIVE элемент hosts[] PATCH .../hosts (handler-native). Заменяет
-// IncarnationSpecHost: SID + опц. Role (пусто = не задано).
+// IncarnationSpecHostInput — NATIVE hosts[] element of PATCH .../hosts (handler-native). Replaces
+// IncarnationSpecHost: SID + optional Role (empty = not set).
 type IncarnationSpecHostInput struct {
 	SID  string
 	Role string
 }
 
-// UpdateHostsTyped — извлечённая доменная функция PATCH /v1/incarnations/{name}/hosts
-// (SELF-AUDIT: incarnation.hosts_updated пишет САМ handler — payload old/new snapshot
-// после UpdateHosts). Parity (w,r)-UpdateHosts: три mode над declared spec.hosts[] →
-// 200 + полный IncarnationGetView. mode/items приходят аргументами (native, биндятся
-// на huma-слое).
+// UpdateHostsTyped — extracted domain function PATCH /v1/incarnations/{name}/hosts
+// (SELF-AUDIT: the handler writes incarnation.hosts_updated ITSELF — old/new snapshot payload
+// after UpdateHosts). Parity with (w,r)-UpdateHosts: three modes over the declared spec.hosts[] →
+// 200 + a full IncarnationGetView. mode/items arrive as arguments (native, bound
+// on the huma layer).
 func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.Claims, name, mode string, items []IncarnationSpecHostInput) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
@@ -965,21 +965,21 @@ func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.C
 		})
 	}
 
-	// schema-aware маскинг spec/state в reply update-hosts (тот же детальный вид).
+	// schema-aware masking of spec/state in the update-hosts reply (the same detailed view).
 	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
 	return toIncarnationGetView(res.Incarnation, schema), nil
 }
 
 // --- SetTraits (SELF-AUDIT incarnation.traits_changed) ----------------
 
-// SetTraitsTyped — извлечённая доменная функция PUT /v1/incarnations/{name}/traits
-// (SELF-AUDIT: incarnation.traits_changed пишет САМ handler — payload old/new keys
-// после UpdateTraits). Зеркало per-soul bulk replace, но на источнике истины:
-// целиком заменяет incarnation.traits → персист (одна tx FOR UPDATE) → проекция в
-// souls.traits хостов-членов ([incarnation.SyncTraitsToHosts]) → 200 + полный
-// IncarnationGetView. traits приходит аргументом (native, биндится на huma-слое).
-// Невалидный набор (формат ключа/значения, nested) → 422 ДО записи. Пустой/nil
-// map = очистить метки.
+// SetTraitsTyped — extracted domain function PUT /v1/incarnations/{name}/traits
+// (SELF-AUDIT: the handler writes incarnation.traits_changed ITSELF — old/new keys payload
+// after UpdateTraits). Mirror of the per-soul bulk replace, but on the source of truth:
+// replaces incarnation.traits entirely → persist (one tx FOR UPDATE) → projection into
+// souls.traits of member hosts ([incarnation.SyncTraitsToHosts]) → 200 + a full
+// IncarnationGetView. traits arrives as an argument (native, bound on the huma layer).
+// An invalid set (key/value format, nested) → 422 BEFORE writing. An empty/nil
+// map = clear the labels.
 func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Claims, name string, traits map[string]any) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
@@ -1000,10 +1000,10 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		return zero, incProblem(problem.TypeInternalError, "update incarnation traits failed")
 	}
 
-	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits хостов-
-	// членов. Best-effort (лог, не валим запрос): incarnation.traits уже записан —
-	// проекция до-сойдётся при следующем bind/sync. Replace целиком, в т.ч. на
-	// пустом map (очистить метки хостов-членов).
+	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits of member
+	// hosts. Best-effort (logged, does not fail the request): incarnation.traits is already
+	// written — the projection converges on the next bind/sync. Full replace, including on
+	// an empty map (clear the member hosts' labels).
 	if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, res.Incarnation.Traits); serr != nil {
 		h.logger.Warn("incarnation.set-traits: sync traits → souls провален (best-effort)",
 			slog.String("name", name), slog.Any("error", serr))
@@ -1022,17 +1022,17 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		})
 	}
 
-	// schema-aware маскинг spec/state в reply (тот же детальный вид, что GET / update-hosts).
+	// schema-aware masking of spec/state in the reply (the same detailed view as GET / update-hosts).
 	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
 	return toIncarnationGetView(res.Incarnation, schema), nil
 }
 
-// --- Get / List / History (READ, без audit) ---------------------------
+// --- Get / List / History (READ, no audit) ---------------------------
 
-// GetTyped — извлечённая доменная функция GET /v1/incarnations/{name} (READ).
-// inScope — RBAC scope-предикат (ADR-047 S3b-3): вне scope → 404. Извлечён из
-// (w,r)-Get; scope-чек выполняет caller (huma-слой) через переданный предикат над
-// загруженной incarnation, чтобы не тащить *http.Request в доменную функцию.
+// GetTyped — extracted domain function GET /v1/incarnations/{name} (READ).
+// inScope is the RBAC scope predicate (ADR-047 S3b-3): out of scope → 404. Extracted from
+// (w,r)-Get; the caller (huma layer) performs the scope check via the passed predicate over
+// the loaded incarnation, so *http.Request need not be pulled into the domain function.
 func (h *IncarnationHandler) GetTyped(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
@@ -1050,20 +1050,20 @@ func (h *IncarnationHandler) GetTyped(ctx context.Context, name string, inScope 
 	if inScope == nil || !inScope(inc) {
 		return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 	}
-	// seal/декларатив (ADR-010 §7.4): материализуем secret-схему сервиса для
-	// schema-aware маскинга spec/state. Best-effort: nil → деградация к
-	// MaskSecrets (vault+regex). single-incarnation детальный вид — загрузка
-	// снапшота приемлема (в отличие от List, см. observations).
+	// seal/declarative (ADR-010 §7.4): materialize the service's secret schema for
+	// schema-aware masking of spec/state. Best-effort: nil → fallback to
+	// MaskSecrets (vault+regex). single-incarnation detailed view — loading the
+	// snapshot is acceptable (unlike List, see observations).
 	schema := h.secretSchemaForIncarnation(ctx, inc)
 	return toIncarnationGetView(inc, schema), nil
 }
 
-// IncarnationListReply — typed envelope GET /v1/incarnations (handler-native: element —
-// доменный IncarnationGetView). Пакет api проецирует его в native-envelope incarnationListReply
-// через RegisterTypeAlias на sharedapi.PagedResponse[handlers.IncarnationGetView].
+// IncarnationListReply — typed envelope of GET /v1/incarnations (handler-native: element is a
+// domain IncarnationGetView). Package api projects it into the native envelope incarnationListReply
+// via RegisterTypeAlias on sharedapi.PagedResponse[handlers.IncarnationGetView].
 type IncarnationListReply = sharedapi.PagedResponse[IncarnationGetView]
 
-// IncarnationListQuery — параметры List, биндённые на huma-слое (typed-query).
+// IncarnationListQuery — List parameters bound on the huma layer (typed query).
 type IncarnationListQuery struct {
 	Offset  int
 	Limit   int
@@ -1072,14 +1072,14 @@ type IncarnationListQuery struct {
 	Coven   string
 	SortBy  string
 	SortDir string
-	// StateParams — query-ключи `state.<field>` → их значения (предикат-фильтр).
+	// StateParams — query keys `state.<field>` → their values (predicate filter).
 	StateParams map[string][]string
 }
 
-// ListTyped — извлечённая доменная функция GET /v1/incarnations (READ, typed-query).
-// scope резолвится из Purview оператора (ADR-047 S3b-3): fail-closed → пустой список.
-// CheckPageBounds → 400 (parity ParsePage). Невалидный status/coven/state-path/sort →
-// 422. resolveScope — замыкание caller-а (huma-слой) над claims + serviceFilter.
+// ListTyped — extracted domain function GET /v1/incarnations (READ, typed query).
+// scope is resolved from the operator's Purview (ADR-047 S3b-3): fail-closed → empty list.
+// CheckPageBounds → 400 (parity ParsePage). Invalid status/coven/state-path/sort →
+// 422. resolveScope is the caller's closure (huma layer) over claims + serviceFilter.
 func (h *IncarnationHandler) ListTyped(ctx context.Context, q IncarnationListQuery, resolveScope func(serviceFilter string) (incarnation.ListScope, bool)) (IncarnationListReply, error) {
 	var zero IncarnationListReply
 
@@ -1139,24 +1139,24 @@ func (h *IncarnationHandler) ListTyped(ctx context.Context, q IncarnationListQue
 
 	replies := make([]IncarnationGetView, 0, len(items))
 	for _, inc := range items {
-		// List — bulk-вид: schema-прокидка НЕ применяется (материализация снапшота
-		// per-элемент — недопустимая стоимость на read-hot-path). nil-схема →
-		// MaskSecrets (vault+regex), БИТ-В-БИТ. Декларатив доступен на детальном
-		// GET/History (см. observations: schema-aware List — отдельный слайс с
-		// кешированием schema per-service).
+		// List — bulk view: schema pass-through is NOT applied (per-element snapshot
+		// materialization is an unacceptable cost on the read hot path). nil schema →
+		// MaskSecrets (vault+regex), BIT-FOR-BIT. Declarative masking is available on the detailed
+		// GET/History (see observations: schema-aware List is a separate slice with
+		// per-service schema caching).
 		replies = append(replies, toIncarnationGetView(inc, nil))
 	}
 	return IncarnationListReply{Items: replies, Offset: q.Offset, Limit: q.Limit, Total: total}, nil
 }
 
-// IncarnationHistoryReply — typed envelope GET /v1/incarnations/{name}/history (handler-native:
-// element — доменный StateHistoryView). Пакет api проецирует его в native-envelope
-// incarnationHistoryReply через RegisterTypeAlias на sharedapi.PagedResponse[handlers.StateHistoryView].
+// IncarnationHistoryReply — typed envelope of GET /v1/incarnations/{name}/history (handler-native:
+// element is a domain StateHistoryView). Package api projects it into the native envelope
+// incarnationHistoryReply via RegisterTypeAlias on sharedapi.PagedResponse[handlers.StateHistoryView].
 type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 
-// HistoryTyped — извлечённая доменная функция GET /v1/incarnations/{name}/history
-// (READ, typed-query). existence-probe (404) + scope-гейт (вне scope → 404, parity
-// Get) через переданный inScope-предикат. CheckPageBounds → 400; bad apply_id → 400.
+// HistoryTyped — extracted domain function GET /v1/incarnations/{name}/history
+// (READ, typed query). existence-probe (404) + scope gate (out of scope → 404, parity
+// Get) via the passed inScope predicate. CheckPageBounds → 400; bad apply_id → 400.
 func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID string, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
 	var zero IncarnationHistoryReply
 
@@ -1195,8 +1195,8 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 			slog.String("name", name), slog.String("apply_id", filter.ApplyID), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "list history failed")
 	}
-	// secret-схему сервиса материализуем ОДИН раз на запрос (history — single
-	// incarnation), переиспользуем для всех записей. Best-effort: nil → MaskSecrets.
+	// materialize the service's secret schema ONCE per request (history is single-
+	// incarnation), reuse it for all entries. Best-effort: nil → MaskSecrets.
 	schema := h.secretSchemaForIncarnation(ctx, inc)
 	entries := make([]StateHistoryView, 0, len(items))
 	for _, e := range items {
@@ -1205,25 +1205,25 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 	return IncarnationHistoryReply{Items: entries, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// --- Runs (READ) — прогоны инкарнации per-task view -------------------
+// --- Runs (READ) — incarnation runs, per-task view -------------------
 //
-// GET /v1/incarnations/{name}/runs         — список прогонов (свёртка apply_runs).
-// GET /v1/incarnations/{name}/runs/{apply} — детали одного прогона (срез по хостам,
-//                                            адрес упавшей задачи = «текущая джоба»).
+// GET /v1/incarnations/{name}/runs         — list of runs (rollup of apply_runs).
+// GET /v1/incarnations/{name}/runs/{apply} — details of one run (per-host slice,
+//                                            the failed task's address = "current job").
 //
-// scope-гейт — тот же inScope-предикат, что у History/Get (action=history):
-// эндпоинты в incarnation-домене, scope резолвится по incarnation. WHERE по
-// incarnation_name в store-слое дополнительно отсекает прогоны чужой инкарнации.
+// scope gate — the same inScope predicate as History/Get (action=history):
+// the endpoints are in the incarnation domain, scope is resolved by incarnation. A WHERE on
+// incarnation_name in the store layer additionally excludes runs of a different incarnation.
 
-// RunSummaryView — ПЛОСКАЯ доменная строка списка прогонов. Пакет api проецирует
-// её в native. Status — агрегатный статус прогона (applying/success/failed/cancelled).
-// Incarnation — владелец прогона: в per-incarnation wire не отдаётся (имплицитен),
-// в глобальном GET /v1/runs — отдельное поле entry.
+// RunSummaryView — FLAT domain row of the run list. Package api projects
+// it into native. Status is the aggregate run status (applying/success/failed/cancelled).
+// Incarnation is the run's owner: not returned in the per-incarnation wire (implicit),
+// a separate entry field in the global GET /v1/runs.
 type RunSummaryView struct {
 	ApplyID     string
 	Incarnation string
-	// Service — сервис инкарнации-владельца (глобальный GET /v1/runs; в per-
-	// incarnation wire не отдаётся). "" если недоступен.
+	// Service — service of the owning incarnation (global GET /v1/runs; not returned in the
+	// per-incarnation wire). "" if unavailable.
 	Service      string
 	Scenario     string
 	Status       string
@@ -1232,9 +1232,9 @@ type RunSummaryView struct {
 	StartedByAID *string
 }
 
-// RunHostStatusView — ПЛОСКАЯ доменная строка одного хоста в деталях прогона.
-// FailedTaskIdx/FailedPlanIndex/ErrorSummary заполнены только на упавшем хосте
-// (nil на success/ещё-running).
+// RunHostStatusView — FLAT domain row of one host in the run details.
+// FailedTaskIdx/FailedPlanIndex/ErrorSummary are filled only on the failed host
+// (nil on success/still-running).
 type RunHostStatusView struct {
 	SID             string
 	Status          string
@@ -1246,7 +1246,7 @@ type RunHostStatusView struct {
 	CancelRequested bool
 }
 
-// RunDetailView — ПЛОСКАЯ доменная проекция деталей прогона (шапка + срез по хостам).
+// RunDetailView — FLAT domain projection of the run details (header + per-host slice).
 type RunDetailView struct {
 	ApplyID      string
 	Scenario     string
@@ -1257,14 +1257,14 @@ type RunDetailView struct {
 	Hosts        []RunHostStatusView
 }
 
-// IncarnationRunsReply — typed envelope GET /v1/incarnations/{name}/runs (handler-native:
-// element — доменный RunSummaryView). Пакет api проецирует его в native-envelope через
-// RegisterTypeAlias на sharedapi.PagedResponse[handlers.RunSummaryView].
+// IncarnationRunsReply — typed envelope of GET /v1/incarnations/{name}/runs (handler-native:
+// element is a domain RunSummaryView). Package api projects it into the native envelope via
+// RegisterTypeAlias on sharedapi.PagedResponse[handlers.RunSummaryView].
 type IncarnationRunsReply = sharedapi.PagedResponse[RunSummaryView]
 
-// RunsTyped — доменная функция GET /v1/incarnations/{name}/runs (READ, typed-query).
-// existence-probe (404) + scope-гейт (вне scope → 404, parity History) через inScope.
-// CheckPageBounds → 400. Отдаёт страницу прогонов, новейшие сверху.
+// RunsTyped — domain function GET /v1/incarnations/{name}/runs (READ, typed query).
+// existence-probe (404) + scope gate (out of scope → 404, parity History) via inScope.
+// CheckPageBounds → 400. Returns a page of runs, newest first.
 func (h *IncarnationHandler) RunsTyped(ctx context.Context, name string, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationRunsReply, error) {
 	var zero IncarnationRunsReply
 
@@ -1291,8 +1291,8 @@ func (h *IncarnationHandler) RunsTyped(ctx context.Context, name string, offset,
 	return IncarnationRunsReply{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// newRunSummaryView проецирует store-строку [applyrun.RunSummary] в доменный view
-// (общая для per-incarnation Runs и глобального AllRuns).
+// newRunSummaryView projects the store row [applyrun.RunSummary] into a domain view
+// (shared by per-incarnation Runs and the global AllRuns).
 func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
 	return RunSummaryView{
 		ApplyID:      s.ApplyID,
@@ -1306,9 +1306,9 @@ func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
 	}
 }
 
-// RunDetailTyped — доменная функция GET /v1/incarnations/{name}/runs/{apply_id}
-// (READ). existence-probe (404) + scope-гейт (вне scope → 404) через inScope; bad
-// apply_id → 400; прогон не найден / принадлежит другой инкарнации → 404.
+// RunDetailTyped — domain function GET /v1/incarnations/{name}/runs/{apply_id}
+// (READ). existence-probe (404) + scope gate (out of scope → 404) via inScope; bad
+// apply_id → 400; run not found / belongs to a different incarnation → 404.
 func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunDetailView, error) {
 	var zero RunDetailView
 
@@ -1357,15 +1357,15 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 	}, nil
 }
 
-// RunTaskErrorView — error-часть per-host итога задачи (FAILED/TIMED_OUT).
+// RunTaskErrorView — error part of a per-host task result (FAILED/TIMED_OUT).
 type RunTaskErrorView struct {
 	Code    string
 	Module  string
 	Message string
 }
 
-// RunTaskHostView — per-host итог одной задачи прогона (проекция audit task.executed):
-// статус + output (register_data) + error. Output/Error — nil, если отсутствуют.
+// RunTaskHostView — per-host result of one run task (projection of audit task.executed):
+// status + output (register_data) + error. Output/Error are nil if absent.
 type RunTaskHostView struct {
 	SID    string
 	Status string
@@ -1373,10 +1373,10 @@ type RunTaskHostView struct {
 	Error  *RunTaskErrorView
 }
 
-// RunTaskView — план одной задачи прогона (host-инвариантные name/module/no_log/
-// passage) + per-host результаты. Params — операторские input-параметры задачи
-// (NIM-37 S1b), уже masked seal-aware механизмом на write-path-е (persistRunPlan);
-// nil для no_log-задач и задач без params.
+// RunTaskView — plan of one run task (host-invariant name/module/no_log/
+// passage) + per-host results. Params are the task's operator input parameters
+// (NIM-37 S1b), already masked by the seal-aware mechanism on the write path (persistRunPlan);
+// nil for no_log tasks and tasks without params.
 type RunTaskView struct {
 	PlanIndex int
 	Passage   int
@@ -1387,21 +1387,21 @@ type RunTaskView struct {
 	Hosts     []RunTaskHostView
 }
 
-// RunTasksView — плоская доменная проекция GET .../runs/{apply_id}/tasks: план
-// прогона + per-host результаты джойном из audit_log.
+// RunTasksView — flat domain projection of GET .../runs/{apply_id}/tasks: the run
+// plan + per-host results joined from audit_log.
 type RunTasksView struct {
 	Tasks []RunTaskView
 }
 
-// RunTasksTyped — доменная функция GET /v1/incarnations/{name}/runs/{apply_id}/tasks
-// (READ, NIM-37): план задач прогона (apply_run_plan) + per-host статус/output/error
-// из audit_log (`task.executed`) джойном по plan_index → sid. existence-probe (404) +
-// scope-гейт (вне scope → 404) через inScope; bad apply_id → 400; чужой/несуществующий
-// прогон → 404. RBAC — incarnation.history (как RunDetail), НЕ audit.read.
+// RunTasksTyped — domain function GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// (READ, NIM-37): the run task plan (apply_run_plan) + per-host status/output/error
+// from audit_log (`task.executed`) joined by plan_index → sid. existence-probe (404) +
+// scope gate (out of scope → 404) via inScope; bad apply_id → 400; foreign/non-existent
+// run → 404. RBAC — incarnation.history (like RunDetail), NOT audit.read.
 //
-// hosts[] задачи — ТОЛЬКО хосты с результатом в audit (pending-хосты не включаются,
-// фронт добьёт). no_log-задача: output/error.message подавлены на write-path-е → не
-// отдаются. Последний task.executed на (plan_index, sid) побеждает (retry).
+// A task's hosts[] — ONLY hosts with a result in audit (pending hosts are not included,
+// the frontend fills them in). no_log task: output/error.message are suppressed on the write
+// path → not returned. The last task.executed on (plan_index, sid) wins (retry).
 func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunTasksView, error) {
 	var zero RunTasksView
 
@@ -1416,8 +1416,8 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		return zero, err
 	}
 
-	// Scope-guard принадлежности прогона инкарнации: apply_run_plan не несёт
-	// incarnation_name — проверяем по apply_runs (чужой apply_id → 404, parity
+	// Scope-guard for the run's ownership by the incarnation: apply_run_plan does not carry
+	// incarnation_name — we check via apply_runs (foreign apply_id → 404, parity
 	// RunDetail SelectRunDetail).
 	ok, err := applyrun.RunExistsForIncarnation(ctx, h.db, applyID, name)
 	if err != nil {
@@ -1436,9 +1436,9 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		return zero, incProblem(problem.TypeInternalError, "get run tasks failed")
 	}
 
-	// per-host результаты из audit (task.executed), сгруппированные plan_index → sid.
-	// runTasksAudit=nil (unit без reader) → план БЕЗ hosts. Последний результат на
-	// (plan_index, sid) побеждает (execs упорядочены по времени, поздний перезаписывает).
+	// per-host results from audit (task.executed), grouped plan_index → sid.
+	// runTasksAudit=nil (unit without a reader) → plan WITHOUT hosts. The last result on
+	// (plan_index, sid) wins (execs are ordered by time, later overwrites).
 	byPlanHost := map[int]map[string]RunTaskHostView{}
 	if h.runTasksAudit != nil {
 		execs, aerr := h.runTasksAudit.SelectTaskExecutions(ctx, applyID)
@@ -1474,18 +1474,18 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			Name:      p.Name,
 			Module:    p.Module,
 			NoLog:     p.NoLog,
-			Params:    runPlanParams(p.Params), // S1b: masked params из apply_run_plan (NULL→nil)
+			Params:    runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
 			Hosts:     hosts,
 		})
 	}
 	return RunTasksView{Tasks: tasks}, nil
 }
 
-// runPlanParams десериализует masked params задачи из хранимого jsonb
-// (apply_run_plan.params, NIM-37 S1b) в object для DTO. Значения УЖЕ замаскированы
-// на write-path-е (persistRunPlan) — здесь только чтение. Пустой/NULL (no_log-
-// задача либо задача без params) → nil (omitempty на wire). Битый JSON → nil (best-
-// effort: одна кривая строка не роняет весь /tasks).
+// runPlanParams deserializes a task's masked params from the stored jsonb
+// (apply_run_plan.params, NIM-37 S1b) into an object for the DTO. The values are ALREADY masked
+// on the write path (persistRunPlan) — this is read-only. Empty/NULL (a no_log
+// task or a task without params) → nil (omitempty on the wire). Malformed JSON → nil (best-
+// effort: one bad row doesn't drop the whole /tasks).
 func runPlanParams(raw []byte) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -1497,9 +1497,9 @@ func runPlanParams(raw []byte) map[string]any {
 	return m
 }
 
-// existenceProbeInScope — общий existence-probe + scope-гейт для Runs/RunDetail:
-// SELECT incarnation, вне scope или отсутствие → единый 404 (parity History). action
-// — для лога. Возвращает найденную инкарнацию (nil → ошибка уже отдана).
+// existenceProbeInScope — shared existence-probe + scope gate for Runs/RunDetail:
+// SELECT incarnation, out of scope or absent → a single 404 (parity History). action
+// is for the log. Returns the found incarnation (nil → error already returned).
 func (h *IncarnationHandler) existenceProbeInScope(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool, action string) (*incarnation.Incarnation, error) {
 	inc, err := incarnation.SelectByName(ctx, h.db, name)
 	if err != nil {
@@ -1515,13 +1515,13 @@ func (h *IncarnationHandler) existenceProbeInScope(ctx context.Context, name str
 	return inc, nil
 }
 
-// mapCreatePlanError маппит ошибку [scenario.ResolveCreatePlan] в доменный
-// *problemError для CreateTyped (R2: общий резолв create-плана с MCP, но
-// HTTP-маппинг свой). Сохраняет дословные 422-детали исходного inline-кода
+// mapCreatePlanError maps a [scenario.ResolveCreatePlan] error to a domain
+// *problemError for CreateTyped (R2: shared create-plan resolve with MCP, but its own
+// HTTP mapping). Preserves the verbatim 422 details of the original inline code
 // (create_scenario_required / create_scenario_invalid / input_invalid /
-// validation_failed / assert_failed); прочие (load/parse снапшота, eval-сбой
-// pre-flight) → 500 с логом (стадия-specific текст исходного кода сведён к одному
-// generic-сообщению — HTTP-код 500 не меняется, оператор видит generic).
+// validation_failed / assert_failed); the rest (snapshot load/parse, pre-flight eval
+// failure) → 500 with a log (the stage-specific text of the original code is collapsed to a single
+// generic message — the 500 status is unchanged, the operator sees the generic one).
 func (h *IncarnationHandler) mapCreatePlanError(name, service string, err error) error {
 	switch {
 	case errors.Is(err, scenario.ErrCreateScenarioRequired):
@@ -1540,8 +1540,8 @@ func (h *IncarnationHandler) mapCreatePlanError(name, service string, err error)
 	return incProblem(problem.TypeInternalError, "resolve create plan failed")
 }
 
-// incProblem — конструктор доменного *problemError для incarnation *Typed-функций
-// (instance пуст, caller-huma-слой не нуждается в URL). Симметрично cadence-домену.
+// incProblem — constructor of a domain *problemError for the incarnation *Typed functions
+// (instance is empty, the caller huma layer needs no URL). Symmetric with the cadence domain.
 func incProblem(typ, detail string) error {
 	return &problemError{Details: problem.New(typ, "", detail)}
 }

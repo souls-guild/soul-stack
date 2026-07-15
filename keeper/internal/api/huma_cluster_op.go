@@ -1,10 +1,11 @@
 package api
 
-// FULL-TYPED форма CLUSTER-домена (GET /v1/cluster, code-first источник OpenAPI).
-// READ-роут (БЕЗ audit): HA-список Keeper-инстансов из Conclave (ADR-006 amend) +
-// self-health текущего инстанса. Permission soul.list (то же право чтения реестра;
-// нового права не заводим). Тонкий конверт: register-handler зовёт извлечённую
-// доменную ClusterHandler.GetTyped, проецирует reply → native wire-DTO.
+// FULL-TYPED shape of the CLUSTER domain (GET /v1/cluster, code-first OpenAPI
+// source). READ route (no audit): HA list of Keeper instances from the Conclave
+// (ADR-006 amend) + self-health of the current instance. Permission soul.list
+// (the same registry-read right; no new right is introduced). Thin envelope: the
+// register handler calls the extracted domain ClusterHandler.GetTyped and
+// projects reply → native wire-DTO.
 
 import (
 	"net/http"
@@ -12,19 +13,19 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// clusterGetInput — huma-input GET /v1/cluster. Параметров нет: view cluster-wide
-// (без per-SID scope), self определяется по конфигу инстанса.
+// clusterGetInput — huma input for GET /v1/cluster. No parameters: a cluster-wide
+// view (no per-SID scope), self is determined by the instance config.
 type clusterGetInput struct{}
 
-// clusterGetOutput — huma-output GET /v1/cluster (FULL-TYPED). Body — native DTO
-// (clusterReply: instances[] + self_kid + self_health).
+// clusterGetOutput — huma output for GET /v1/cluster (FULL-TYPED). Body — native
+// DTO (clusterReply: instances[] + self_kid + self_health).
 type clusterGetOutput struct {
 	Body clusterReply
 }
 
-// clusterGetOperation — метаданные GET /v1/cluster. Path = "/cluster" относительно
-// группы /v1. DefaultStatus=200. READ-роут: audit НЕ навешан. Permission soul.list.
-// Errors: 403 RBAC, 500.
+// clusterGetOperation — metadata for GET /v1/cluster. Path = "/cluster" relative
+// to the /v1 group. DefaultStatus=200. READ route: audit not wired. Permission
+// soul.list. Errors: 403 RBAC, 500.
 func clusterGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getCluster",

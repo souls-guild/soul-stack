@@ -8,7 +8,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
 )
 
-// fakeClusterRegistry — mock Conclave-реестра (LiveKIDs + per-KID meta).
+// fakeClusterRegistry — mock Conclave registry (LiveKIDs + per-KID meta).
 type fakeClusterRegistry struct {
 	kids    []string
 	meta    map[string]string
@@ -27,7 +27,7 @@ func (f *fakeClusterRegistry) InstanceMeta(_ context.Context, kid string) (strin
 	return v, ok, nil
 }
 
-// fakeLeaderReader — mock чтения holder-а ключа reaper:leader.
+// fakeLeaderReader — mock read of the reaper:leader key holder.
 type fakeLeaderReader struct {
 	holder string
 	ok     bool
@@ -38,7 +38,7 @@ func (f *fakeLeaderReader) ReaperLeaderHolder(_ context.Context) (string, bool, 
 	return f.holder, f.ok, f.err
 }
 
-// okPinger / failPinger — health.Pinger-ы для self_health.
+// okPinger / failPinger — health.Pingers for self_health.
 type okPinger struct{}
 
 func (okPinger) Ping(_ context.Context) error { return nil }
@@ -51,9 +51,9 @@ func metaJSON(startedAt string) string {
 	return `{"started_at":"` + startedAt + `","kid":"x"}`
 }
 
-// TestClusterGetTyped_ListsInstancesFromConclave — ГЛАВНЫЙ guard: список инстансов
-// строится из Conclave (mock LiveKIDs), started_at парсится из meta, self_kid и
-// self_health присутствуют. Инстансы отсортированы по KID.
+// TestClusterGetTyped_ListsInstancesFromConclave — MAIN guard: the instance list is
+// built from Conclave (mock LiveKIDs), started_at is parsed from meta, self_kid and
+// self_health are present. Instances are sorted by KID.
 func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 	reg := &fakeClusterRegistry{
 		kids: []string{"keeper-c", "keeper-a", "keeper-b"},
@@ -75,7 +75,7 @@ func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 	if len(reply.Body.Instances) != 3 {
 		t.Fatalf("Instances len = %d, want 3", len(reply.Body.Instances))
 	}
-	// Отсортированы по KID.
+	// Sorted by KID.
 	wantOrder := []string{"keeper-a", "keeper-b", "keeper-c"}
 	for i, inst := range reply.Body.Instances {
 		if inst.KID != wantOrder[i] {
@@ -88,7 +88,7 @@ func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 			t.Errorf("Instances[%d].StartedAt = nil, want распарсенный из meta", i)
 		}
 	}
-	// self_health переиспользует health.Check.
+	// self_health reuses health.Check.
 	if reply.Body.SelfHealth["postgres"] != "ok" || reply.Body.SelfHealth["redis"] != "ok" {
 		t.Errorf("SelfHealth = %v, want postgres:ok redis:ok", reply.Body.SelfHealth)
 	}
@@ -97,8 +97,8 @@ func TestClusterGetTyped_ListsInstancesFromConclave(t *testing.T) {
 	}
 }
 
-// TestClusterGetTyped_ReaperLeaderHolder — guard: is_reaper_leader выставлен ровно
-// у того KID, чей идентификатор = holder ключа reaper:leader.
+// TestClusterGetTyped_ReaperLeaderHolder — guard: is_reaper_leader is set on exactly
+// the KID whose identifier = holder of the reaper:leader key.
 func TestClusterGetTyped_ReaperLeaderHolder(t *testing.T) {
 	reg := &fakeClusterRegistry{kids: []string{"keeper-a", "keeper-b"}, meta: map[string]string{}}
 	h := NewClusterHandler(reg, &fakeLeaderReader{holder: "keeper-b", ok: true}, health.Deps{PG: okPinger{}}, "keeper-a", nil)
@@ -119,8 +119,8 @@ func TestClusterGetTyped_ReaperLeaderHolder(t *testing.T) {
 	}
 }
 
-// TestClusterGetTyped_NoReaperLeader — нет лидера (lease свободен) → ни у кого не
-// выставлен is_reaper_leader.
+// TestClusterGetTyped_NoReaperLeader — no leader (lease free) → is_reaper_leader is set
+// on nobody.
 func TestClusterGetTyped_NoReaperLeader(t *testing.T) {
 	reg := &fakeClusterRegistry{kids: []string{"keeper-a", "keeper-b"}, meta: map[string]string{}}
 	h := NewClusterHandler(reg, &fakeLeaderReader{ok: false}, health.Deps{PG: okPinger{}}, "keeper-a", nil)
@@ -136,8 +136,8 @@ func TestClusterGetTyped_NoReaperLeader(t *testing.T) {
 	}
 }
 
-// TestClusterGetTyped_LeaderReadError_FailSafe — ошибка чтения holder-а не роняет
-// view: is_reaper_leader=false у всех, список инстансов цел.
+// TestClusterGetTyped_LeaderReadError_FailSafe — a holder-read error does not crash the
+// view: is_reaper_leader=false for all, the instance list stays intact.
 func TestClusterGetTyped_LeaderReadError_FailSafe(t *testing.T) {
 	reg := &fakeClusterRegistry{kids: []string{"keeper-a"}, meta: map[string]string{}}
 	h := NewClusterHandler(reg, &fakeLeaderReader{err: errors.New("redis down")}, health.Deps{PG: okPinger{}}, "keeper-a", nil)
@@ -151,9 +151,9 @@ func TestClusterGetTyped_LeaderReadError_FailSafe(t *testing.T) {
 	}
 }
 
-// TestClusterGetTyped_ConclaveDown_SelfOnly — Conclave недоступен (LiveKIDs error):
-// НЕ 500, а self-only view (текущий инстанс всегда виден). self_health покажет
-// причину (redis down).
+// TestClusterGetTyped_ConclaveDown_SelfOnly — Conclave unavailable (LiveKIDs error):
+// not 500 but a self-only view (the current instance is always visible). self_health
+// shows the cause (redis down).
 func TestClusterGetTyped_ConclaveDown_SelfOnly(t *testing.T) {
 	reg := &fakeClusterRegistry{kidsErr: errors.New("redis unreachable")}
 	h := NewClusterHandler(reg, &fakeLeaderReader{}, health.Deps{PG: okPinger{}, Redis: failPinger{}}, "keeper-a", nil)
@@ -168,14 +168,14 @@ func TestClusterGetTyped_ConclaveDown_SelfOnly(t *testing.T) {
 	if !reply.Body.Instances[0].Alive {
 		t.Error("self-инстанс Alive=false, want true")
 	}
-	// self_health отражает падение Redis.
+	// self_health reflects the Redis failure.
 	if reply.Body.SelfHealth["redis"] == "ok" {
 		t.Errorf("SelfHealth[redis] = ok, want причину падения: %v", reply.Body.SelfHealth)
 	}
 }
 
-// TestClusterGetTyped_SelfMissingFromLiveKIDs — self отсутствует в LiveKIDs (гонка
-// регистрации на старте) → дописывается в список.
+// TestClusterGetTyped_SelfMissingFromLiveKIDs — self absent from LiveKIDs (registration
+// race at startup) → appended to the list.
 func TestClusterGetTyped_SelfMissingFromLiveKIDs(t *testing.T) {
 	reg := &fakeClusterRegistry{kids: []string{"keeper-b"}, meta: map[string]string{}}
 	h := NewClusterHandler(reg, &fakeLeaderReader{}, health.Deps{PG: okPinger{}}, "keeper-a", nil)
@@ -193,12 +193,12 @@ func TestClusterGetTyped_SelfMissingFromLiveKIDs(t *testing.T) {
 	}
 }
 
-// TestClusterGetTyped_BadMeta_StartedAtOmitted — не-JSON / битая meta → инстанс в
-// списке, но StartedAt=nil (fail-safe, не падение).
+// TestClusterGetTyped_BadMeta_StartedAtOmitted — non-JSON / corrupt meta → instance in
+// the list, but StartedAt=nil (fail-safe, not a crash).
 func TestClusterGetTyped_BadMeta_StartedAtOmitted(t *testing.T) {
 	reg := &fakeClusterRegistry{
 		kids: []string{"keeper-a"},
-		meta: map[string]string{"keeper-a": "keeper-a"}, // голый KID (fail-safe RegisterInstance), не JSON
+		meta: map[string]string{"keeper-a": "keeper-a"}, // bare KID (fail-safe RegisterInstance), not JSON
 	}
 	h := NewClusterHandler(reg, &fakeLeaderReader{}, health.Deps{PG: okPinger{}}, "keeper-a", nil)
 

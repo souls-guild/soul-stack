@@ -1,43 +1,43 @@
 package api
 
-// ВЫРАВНИВАНИЕ nested shared-схем voyage+cadence (target/notify) — единый Go-тип на
-// каждую вложенную форму, как committed-рукопись (docs/keeper/openapi.yaml :7455/:7612).
+// ALIGNMENT of the nested shared voyage+cadence schemas (target/notify) — a single Go type per
+// nested shape, as in the committed hand-written spec (docs/keeper/openapi.yaml :7455/:7612).
 //
-// До этого каждый input-домен нёс СВОЙ Go-тип одинаковой формы
+// Previously each input domain carried its OWN Go type of the same shape
 // (voyageTargetHumaBody/cadenceTargetHumaBody, voyageNotifyHumaBody/cadenceNotifyHumaBody)
-// → huma DefaultSchemaNamer давал в спеке 4 технические схемы (VoyageTargetHumaBody/
-// CadenceTargetHumaBody/VoyageNotifyHumaBody/CadenceNotifyHumaBody) вместо рукописных
-// VoyageTarget/VoyageNotify, а OUTPUT (Voyage.target/CadenceDTO.target) тянул генерёный
-// VoyageTarget — пятую схему той же формы. Здесь:
-//   - VoyageTarget — ЕДИНЫЙ тип для ВСЕХ input-потребителей (VoyageCreateRequest.Target /
-//     CadenceCreateRequest.Target / CadencePatchRequest.Target). Имя структуры =
-//     контрактное имя схемы. КЛАСС A (shared input↔output): alias VoyageTarget →
-//     VoyageTarget (aliasVoyageTarget) сводит и OUTPUT на ту же схему. Формы совместимы:
-//     VoyageTarget — все поля pointer-optional без required; рукопись — все optional;
-//     huma value-тип с omitempty без required:"true" — тоже optional. Одна валидная схема.
-//   - VoyageNotify — ЕДИНЫЙ тип для input-тел (VoyageCreateRequest.Notify[] /
-//     CadenceCreateRequest.Notify[]). КЛАСС B (shared между input-телами, НЕТ output-
-//     потребителя) → БЕЗ alias.
+// → huma DefaultSchemaNamer emitted 4 technical schemas (VoyageTargetHumaBody/
+// CadenceTargetHumaBody/VoyageNotifyHumaBody/CadenceNotifyHumaBody) instead of the spec's
+// VoyageTarget/VoyageNotify, and OUTPUT (Voyage.target/CadenceDTO.target) pulled the generated
+// VoyageTarget — a fifth schema of the same shape. Here:
+//   - VoyageTarget — a SINGLE type for ALL input consumers (VoyageCreateRequest.Target /
+//     CadenceCreateRequest.Target / CadencePatchRequest.Target). The struct name =
+//     the contract schema name. CLASS A (shared input↔output): alias VoyageTarget →
+//     VoyageTarget (aliasVoyageTarget) folds OUTPUT onto the same schema too. The shapes are
+//     compatible: VoyageTarget — all fields pointer-optional without required; the spec — all
+//     optional; a huma value type with omitempty and no required:"true" — also optional. One valid schema.
+//   - VoyageNotify — a SINGLE type for input bodies (VoyageCreateRequest.Notify[] /
+//     CadenceCreateRequest.Notify[]). CLASS B (shared between input bodies, NO output
+//     consumer) → no alias.
 //
-// json-теги/форма — побайтово как у схлопнутых voyageTargetHumaBody/voyageNotifyHumaBody:
-// wire не меняется (handlers/конверт читают те же поля), golden voyage+cadence цел.
+// json tags/shape — byte-for-byte as the collapsed voyageTargetHumaBody/voyageNotifyHumaBody:
+// the wire does not change (handlers/converters read the same fields), golden voyage+cadence holds.
 //
-// ★ HANDLER-NATIVE T5d: после перевода voyage+cadence на native прямых OUTPUT-потребителей
-// генерёного VoyageTarget в huma-схемах НЕ осталось (Voyage.target — native api.VoyageTarget
-// ниже; CadenceDTO.target — json.RawMessage). Прежний zero-net safety-alias aliasVoyageTarget
-// (VoyageTarget → VoyageTarget) удалён вместе с последней oapi-зависимостью этого файла.
-// Input-тела (VoyageCreateRequest.Target / CadenceCreateRequest.Target) ссылаются на api.VoyageTarget
-// напрямую — alias им не нужен.
+// ★ HANDLER-NATIVE T5d: after moving voyage+cadence to native, no direct OUTPUT consumers of the
+// generated VoyageTarget remain in huma schemas (Voyage.target — native api.VoyageTarget
+// below; CadenceDTO.target — json.RawMessage). The former zero-net safety-alias aliasVoyageTarget
+// (VoyageTarget → VoyageTarget) was removed along with this file's last oapi dependency.
+// Input bodies (VoyageCreateRequest.Target / CadenceCreateRequest.Target) reference api.VoyageTarget
+// directly — they need no alias.
 
-// VoyageTarget — декларативный таргет прогона (КЛАСС A, shared input↔output). scenario-
-// режим: incarnations/service; command-режим: sids/where; общий coven. Все поля optional
-// (рукопись :7455 — блока required НЕТ). Резолв в snapshot единиц — доменный (на спавне).
+// VoyageTarget — a declarative run target (CLASS A, shared input↔output). scenario
+// mode: incarnations/service; command mode: sids/where; shared coven. All fields optional
+// (spec :7455 — no required block). Resolution to a snapshot of units is domain-side (at spawn).
 //
-// ★ ПОРЯДОК ПОЛЕЙ = алфавитный (coven/incarnations/service/sids/where), как генерёный
-// VoyageTarget. Когда VoyageTarget стал OUTPUT-схемой (Voyage.target native, финал T5b
-// группа 4), json.Marshal эмитит ключи в порядке Go-полей — он ОБЯЗАН совпасть с прежним
-// Voyage.target-wire (oapi-codegen сортирует поля по алфавиту), иначе golden voyage
-// краснит на byte-order. Для INPUT порядок безразличен (unmarshal order-independent).
+// ★ FIELD ORDER = alphabetical (coven/incarnations/service/sids/where), like the generated
+// VoyageTarget. Once VoyageTarget became an OUTPUT schema (Voyage.target native, final of T5b
+// group 4), json.Marshal emits keys in Go-field order — it MUST match the former
+// Voyage.target wire (oapi-codegen sorts fields alphabetically), else golden voyage
+// fails on byte-order. For INPUT the order is irrelevant (unmarshal is order-independent).
 type VoyageTarget struct {
 	Coven        []string `json:"coven,omitempty" doc:"coven-метки (env-тег scenario / метка хоста command)"`
 	Incarnations []string `json:"incarnations,omitempty" doc:"имена инкарнаций (scenario-режим)"`
@@ -46,9 +46,9 @@ type VoyageTarget struct {
 	Where        string   `json:"where,omitempty" doc:"CEL-предикат как ДОПОЛНЕНИЕ к sids/coven (command-режим)"`
 }
 
-// VoyageNotify — разовая подписка на уведомления о прогоне (КЛАСС B, shared между input-
-// телами). Форма; рантайм-валидацию (herald existence / RBAC herald.read / on-enum) делает
-// доменный prepareNotifyErr. herald обязателен (рукопись :7612 — required:[herald]).
+// VoyageNotify — a one-off subscription to run notifications (CLASS B, shared between input
+// bodies). Shape only; runtime validation (herald existence / RBAC herald.read / on-enum) is done
+// by the domain prepareNotifyErr. herald is required (spec :7612 — required:[herald]).
 type VoyageNotify struct {
 	Herald       string         `json:"herald" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя канала-герольда"`
 	On           []string       `json:"on,omitempty" doc:"терминалы/типы событий: completed|failed|partial"`

@@ -55,10 +55,10 @@ func TestMyPermissions_Wildcard(t *testing.T) {
 	}
 }
 
-// TestMyPermissions_StateScope — guard на state-измерение scope (ADR-047 S2c):
-// permission с per-perm `state='...'`-селектором должен донести предикат до
-// доменной формы под полем State (native-проекция в api кладёт его под snake_case
-// `state`; wire byte-exact проверяет golden huma_catalog_reply_test.go).
+// TestMyPermissions_StateScope — guard for the state dimension of scope (ADR-047 S2c):
+// a permission with a per-perm `state='...'` selector must carry the predicate down to
+// the domain shape under the State field (the native projection in api puts it under
+// snake_case `state`; wire byte-exact is checked by golden huma_catalog_reply_test.go).
 func TestMyPermissions_StateScope(t *testing.T) {
 	e := rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{
@@ -83,7 +83,7 @@ func TestMyPermissions_StateScope(t *testing.T) {
 }
 
 func TestMyPermissions_ScopeIncluded(t *testing.T) {
-	// default_scope=coven=prod на роли → bare incarnation.run наследует scope:
+	// default_scope=coven=prod on the role → bare incarnation.run inherits scope:
 	// covens=[prod], unrestricted=false.
 	snap := rbactest.Snapshot(&rbactest.Config{Roles: []rbactest.Role{
 		{Name: "prod-runner", Operators: []string{"archon-prod"}, Permissions: []string{"incarnation.run"}},

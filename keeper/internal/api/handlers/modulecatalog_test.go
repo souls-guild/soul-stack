@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// fakeCatalogPlugins — мок [ModuleCatalogPlugins] для транспорт-тестов.
+// fakeCatalogPlugins — mock [ModuleCatalogPlugins] for the transport tests.
 type fakeCatalogPlugins struct {
 	entries []PluginCatalogEntry
 	err     error
@@ -23,8 +23,8 @@ func (f fakeCatalogPlugins) ActivePlugins(context.Context) ([]PluginCatalogEntry
 	return f.entries, nil
 }
 
-// soulModuleManifest — минимальный валидный soul_module manifest.yaml с двумя
-// state-ами и пересекающимся param-ом (vault-secret в обоих).
+// soulModuleManifest — a minimal valid soul_module manifest.yaml with two
+// states and an overlapping param (a vault secret in both).
 const soulModuleManifest = `kind: soul_module
 protocol_version: 1
 namespace: official
@@ -59,7 +59,7 @@ func findItem(items []moduleCatalogItem, name string) (moduleCatalogItem, bool) 
 	return moduleCatalogItem{}, false
 }
 
-// catalogProblemType извлекает problem.Type из ошибки ListTyped/GetTyped (nil → "").
+// catalogProblemType extracts problem.Type from a ListTyped/GetTyped error (nil → "").
 func catalogProblemType(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
@@ -84,12 +84,12 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 
-	// core: все 21 (18 soul-side + 3 keeper-side) присутствуют.
+	// core: all 21 (18 soul-side + 3 keeper-side) are present.
 	if len(resp.Items) != len(coreModuleDocs)+1 {
 		t.Fatalf("ожидали %d записей (core + 1 plugin), получили %d", len(coreModuleDocs)+1, len(resp.Items))
 	}
 
-	// Сортировка по name.
+	// Sorted by name.
 	for i := 1; i < len(resp.Items); i++ {
 		if resp.Items[i-1].Name > resp.Items[i].Name {
 			t.Fatalf("выдача не отсортирована: %q > %q", resp.Items[i-1].Name, resp.Items[i].Name)
@@ -106,8 +106,8 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 	if !cmd.ErrandSafe {
 		t.Error("core.cmd должен быть errand_safe (whitelist core.cmd.shell)")
 	}
-	// core params теперь читаются из coremanifest (ADR-045 S2): core.cmd несёт
-	// cmd/cwd/env/timeout/onlyif/unless; cmd — required.
+	// core params are now read from coremanifest (ADR-045 S2): core.cmd carries
+	// cmd/cwd/env/timeout/onlyif/unless; cmd is required.
 	if len(cmd.Params) == 0 {
 		t.Error("core.cmd params должны заполняться из coremanifest, получили 0")
 	}
@@ -120,7 +120,7 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 		t.Error("core.pkg НЕ errand_safe")
 	}
 
-	// plugin: имя <ns>.<name>, params из manifest, дедуп username.
+	// plugin: name <ns>.<name>, params from manifest, username dedup.
 	pg, ok := findItem(resp.Items, "official.postgres-user")
 	if !ok {
 		t.Fatal("plugin official.postgres-user отсутствует")
@@ -143,9 +143,9 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 	}
 }
 
-// sourceModuleManifest — soul_module manifest с обоими source-дискриминаторами
-// (ADR-044/ADR-045): incarnation_hosts (bool) и choir (string). Guard на
-// snake_case wire-сериализацию moduleParam.Source.
+// sourceModuleManifest — a soul_module manifest with both source discriminators
+// (ADR-044/ADR-045): incarnation_hosts (bool) and choir (string). Guard for the
+// snake_case wire serialization of moduleParam.Source.
 const sourceModuleManifest = `kind: soul_module
 protocol_version: 1
 namespace: official
@@ -165,11 +165,11 @@ spec:
             choir: alpha
 `
 
-// TestModuleCatalog_Source_SnakeCaseWire — guard на wire-контракт source-picker
-// формы модуля (BUG-FIX): сырой JSON ответа должен нести snake_case-ключи
-// `incarnation_hosts`/`choir`, а НЕ PascalCase-имена Go-полей. Регрессия (потеря
-// json-тегов на shared.InputSource) вернёт PascalCase и сломает форму — тест
-// ассертит на сырых байтах (marshal native reply), поэтому ловит её мутационно.
+// TestModuleCatalog_Source_SnakeCaseWire — guard for the wire contract of the module
+// source-picker form (BUG-FIX): the raw JSON response must carry snake_case keys
+// `incarnation_hosts`/`choir`, NOT the PascalCase Go field names. A regression (loss of
+// json tags on shared.InputSource) would return PascalCase and break the form — the test
+// asserts on raw bytes (marshal native reply), so it catches it mutationally.
 func TestModuleCatalog_Source_SnakeCaseWire(t *testing.T) {
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{
 		entries: []PluginCatalogEntry{
@@ -195,7 +195,7 @@ func TestModuleCatalog_Source_SnakeCaseWire(t *testing.T) {
 		}
 	}
 
-	// Семантика тоже на месте: значения source корректны.
+	// Semantics are in place too: the source values are correct.
 	mod, ok := findItem(resp.Items, "official.with-source")
 	if !ok {
 		t.Fatal("official.with-source отсутствует в каталоге")
@@ -259,8 +259,8 @@ func TestModuleCatalog_ListTyped_NoPlugins(t *testing.T) {
 }
 
 func TestModuleCatalog_ListTyped_RevokedPluginNotShown(t *testing.T) {
-	// ActivePlugins возвращает ТОЛЬКО активные (revoked отфильтрованы на уровне
-	// store.ListActive); каталог не должен изобретать revoked-плагины.
+	// ActivePlugins returns ONLY active plugins (revoked are filtered at the
+	// store.ListActive level); the catalog must not invent revoked plugins.
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{entries: nil}, nil)
 
 	resp, err := h.ListTyped(context.Background(), false)

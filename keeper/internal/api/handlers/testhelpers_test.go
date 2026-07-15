@@ -15,19 +15,19 @@ import (
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// Пакетные test-helper-ы handlers-домена. Извлечены из operator_test.go при
-// handler-native-развороте operator (T5d): operator больше не несёт (w,r)-тесты,
-// helper-ы остаются общими для остальных доменов (augur/oracle/role/soul/… —
-// (w,r)-handler-ы которых ещё на месте).
+// Package-level test helpers for the handlers domain. Extracted from operator_test.go
+// during the handler-native turn of operator (T5d): operator no longer carries (w,r)
+// tests; the helpers stay shared across the other domains (augur/oracle/role/soul/… —
+// whose (w,r) handlers are still in place).
 
-// withClaims кладёт keeperjwt.Claims в context напрямую, минуя RequireJWT.
+// withClaims puts keeperjwt.Claims directly into the context, bypassing RequireJWT.
 func withClaims(r *http.Request, subject string) *http.Request {
 	c := &keeperjwt.Claims{Subject: subject}
 	return r.WithContext(middleware.InjectClaimsForTest(r.Context(), c))
 }
 
-// newChiRequest строит request с chi-URL-params, чтобы chi.URLParam(r, key) в
-// handler-е работал в unit-тесте без поднятия роутера.
+// newChiRequest builds a request with chi URL params so chi.URLParam(r, key) in the
+// handler works in a unit test without standing up the router.
 func newChiRequest(method, path string, body *bytes.Reader, key, value string) *http.Request {
 	var b *bytes.Reader
 	if body != nil {
@@ -42,9 +42,9 @@ func newChiRequest(method, path string, body *bytes.Reader, key, value string) *
 	return r
 }
 
-// assertProblem проверяет, что ответ — problem+json с ожидаемыми статусом и type.
-// Общий helper для доменов с ещё-сохранёнными (w,r)-тестами (oracle/sigil-key/soul);
-// извлечён из sigil_test.go при handler-native-развороте sigil (T5d).
+// assertProblem checks the response is problem+json with the expected status and type.
+// Shared helper for domains that still keep (w,r) tests (oracle/sigil-key/soul);
+// extracted from sigil_test.go during the handler-native turn of sigil (T5d).
 func assertProblem(t *testing.T, w *httptest.ResponseRecorder, wantStatus int, wantType string) {
 	t.Helper()
 	if w.Code != wantStatus {

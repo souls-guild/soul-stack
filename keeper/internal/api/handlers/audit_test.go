@@ -14,14 +14,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeAuditPool — узкий мок [auditpg.queryRower] для unit-теста AuditHandler.
-// Не валидирует SQL точно — лежит на двух запросах (COUNT + SELECT). Возвращает
-// два detached случая через rows/total/err.
+// fakeAuditPool — a narrow mock of [auditpg.queryRower] for the AuditHandler unit test.
+// Does not validate SQL exactly — relies on the two queries (COUNT + SELECT). Returns
+// two detached cases via rows/total/err.
 type fakeAuditPool struct {
 	countSeen  bool
 	selectSeen bool
 
-	selectArgs []any // args SELECT-запроса (захват прокинутого фильтра)
+	selectArgs []any // args of the SELECT query (captures the forwarded filter)
 
 	total int
 	rows  []auditRow
@@ -101,8 +101,8 @@ func newAuditHandler(t *testing.T, pool *fakeAuditPool) *AuditHandler {
 	return NewAuditHandler(auditpg.NewReader(pool), nil)
 }
 
-// auditProblemStatus извлекает HTTP-статус из *problemError (T5d handler-native:
-// ListTyped возвращает доменную ошибку, статус берётся из problem-таблицы).
+// auditProblemStatus extracts the HTTP status from a *problemError (T5d handler-native:
+// ListTyped returns a domain error, the status comes from the problem table).
 func auditProblemStatus(t *testing.T, err error) int {
 	t.Helper()
 	d, ok := AsProblemDetails(err)
@@ -202,8 +202,8 @@ func TestAuditHandler_List_InvalidSource_422(t *testing.T) {
 
 func TestAuditHandler_List_InvalidPagination_400(t *testing.T) {
 	h := newAuditHandler(t, &fakeAuditPool{})
-	// limit=0 вне диапазона [1,1000] → CheckPageBounds 400 (контракт-инвариант
-	// сохранён в ListTyped; bad-int (нечисловое) теперь отбивает huma на bind).
+	// limit=0 out of range [1,1000] → CheckPageBounds 400 (contract invariant
+	// kept in ListTyped; bad-int (non-numeric) is now rejected by huma at bind).
 	_, err := h.ListTyped(context.Background(), AuditListFilter{Offset: 0, Limit: 0})
 	if got := auditProblemStatus(t, err); got != 400 {
 		t.Errorf("status = %d, want 400", got)

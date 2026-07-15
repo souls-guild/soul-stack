@@ -1,15 +1,15 @@
-// Guard, что OpenAPI-спека документирует Tempo-429 (ADR-050(d)/S-R4) на обоих
-// resolver-тяжёлых write-путях, каждый под СВОИМ bucket-ом (create→voyage_create,
+// Guard that the OpenAPI spec documents Tempo-429 (ADR-050(d)/S-R4) on both
+// resolver-heavy write paths, each under ITS OWN bucket (create→voyage_create,
 // preview→voyage_preview, ADR-050 amendment 2026-06-17): `POST /v1/voyages`
-// (create) и `POST /v1/voyages/preview` (ADR-043 amendment §4). Источник — huma-
-// агрегатор в коде (HumaFullSpecYAML), как и served /openapi.yaml: рукописи больше нет.
+// (create) and `POST /v1/voyages/preview` (ADR-043 amendment §4). Source — the huma
+// aggregator in code (HumaFullSpecYAML), like the served /openapi.yaml: the hand-written spec is gone.
 //
-// ★ huma-форма 429: huma эмитит ответ INLINE на операции (content
-// application/problem+json + description), а НЕ через reusable
-// `$ref #/components/responses/Problem429` и без отдельного Retry-After-header-узла
-// в спеке (header выставляется рантаймом RateLimit-middleware, не из аннотации).
-// Поэтому гейт проверяет именно НАЛИЧИЕ ответа 429 на обоих путях — инвариант
-// «Tempo-429 задокументирован» в той форме, в которой его описывает источник-код.
+// ★ huma 429 form: huma emits the response INLINE on the operation (content
+// application/problem+json + description), NOT via a reusable
+// `$ref #/components/responses/Problem429` and without a separate Retry-After header node
+// in the spec (the header is set at runtime by the RateLimit middleware, not from an annotation).
+// So the gate checks exactly the PRESENCE of a 429 response on both paths — the invariant
+// "Tempo-429 is documented" in the form the source code describes it.
 package api
 
 import (
@@ -24,8 +24,8 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 		t.Fatalf("HumaFullSpecYAML: %v", err)
 	}
 
-	// paths оставляем сырыми (yaml.Node), чтобы строгий тип не падал на
-	// path-item-сиблингах вроде `parameters:` (seq) у других путей.
+	// Keep paths raw (yaml.Node) so a strict type doesn't fail on
+	// path-item siblings like `parameters:` (seq) on other paths.
 	var doc struct {
 		Paths map[string]yaml.Node `yaml:"paths"`
 	}
@@ -33,8 +33,8 @@ func TestOpenAPI_VoyageWrite_Has429Tempo(t *testing.T) {
 		t.Fatalf("разбор huma-спеки: %v", err)
 	}
 
-	// Оба пути под Tempo, каждый под своим bucket-ом (create→voyage_create,
-	// preview→voyage_preview, ADR-050 amendment), обязаны объявлять 429.
+	// Both paths are under Tempo, each under its own bucket (create→voyage_create,
+	// preview→voyage_preview, ADR-050 amendment), and must declare 429.
 	for _, path := range []string{"/v1/voyages", "/v1/voyages/preview"} {
 		pathNode, ok := doc.Paths[path]
 		if !ok {

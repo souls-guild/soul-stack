@@ -1,56 +1,56 @@
 package api
 
-// Выравнивание имени/формы list-envelope SOUL-домена (CURSOR, 6-полей) под committed-рукопись +
-// сведение nested SoulSshTarget на единую схему (КЛАСС A) — тираж-батч N5 (ENVELOPE+CLASS-A
-// механизмы по эталонам huma_incarnation_envelope.go / huma_voyage_target.go).
+// Aligns the name/shape of the SOUL-domain list envelope (CURSOR, 6 fields) with the committed
+// hand-written spec + collapses the nested SoulSshTarget onto a single schema (CLASS A) — rollout batch N5
+// (ENVELOPE+CLASS-A mechanisms following huma_incarnation_envelope.go / huma_voyage_target.go).
 //
-// === ENVELOPE (CURSOR, 6 полей) ===
+// === ENVELOPE (CURSOR, 6 fields) ===
 //
-// ПРОБЛЕМА. GET /v1/souls несёт в Body тип handlers.SoulListReply — Go type-ALIAS на
-// sharedapi.PagedResponse[SoulListEntry] (handlers/soul.go). Go-alias прозрачен для
-// reflect → huma DefaultSchemaNamer видит инстанцированный generic и эмитит схему
-// "PagedResponseSoulListEntry". Рукопись (docs/keeper/openapi.yaml :6766) объявляет envelope
-// как "SoulListReply" — UI ждёт его.
+// PROBLEM. GET /v1/souls carries in Body the type handlers.SoulListReply — a Go type ALIAS to
+// sharedapi.PagedResponse[SoulListEntry] (handlers/soul.go). A Go alias is transparent to
+// reflect → huma DefaultSchemaNamer sees the instantiated generic and emits the schema
+// "PagedResponseSoulListEntry". The spec (docs/keeper/openapi.yaml :6766) declares the envelope
+// as "SoulListReply" — the UI expects it.
 //
-// ★ ОТЛИЧИЕ ОТ incarnation/operator/voyage (4-поля offset): soul — ЕДИНСТВЕННЫЙ cursor-домен.
-// Рукопись :6766 несёт ШЕСТЬ полей — items/offset/limit/total + next_cursor (string) +
-// total_approximate (boolean) — гибрид offset/keyset (ADR-047 S3b-2a, режим выбирает сервер из
-// Purview). named-struct soulListReply повторяет РОВНО эти 6 полей (НЕ 4-поля-форма incarnation),
-// сверено с рукописью. items.$ref на контрактный element SoulListEntry; required:[items,offset,
+// ★ DIFFERENCE FROM incarnation/operator/voyage (4-field offset): soul is the ONLY cursor domain.
+// The spec :6766 carries SIX fields — items/offset/limit/total + next_cursor (string) +
+// total_approximate (boolean) — an offset/keyset hybrid (ADR-047 S3b-2a, the server picks the mode from
+// Purview). The named struct soulListReply repeats EXACTLY these 6 fields (NOT the incarnation 4-field shape),
+// checked against the spec. items.$ref to the contract element SoulListEntry; required:[items,offset,
 // limit,total] (next_cursor/total_approximate — optional, omitempty).
 //
-// МЕХАНИЗМ. RegisterTypeAlias(PagedResponse[SoulListEntry] → soulListReply): huma строит
-// схему list-Body под контрактным именем/формой. Wire-тело (PagedResponse) НЕ меняется — json-
-// поля те же (next_cursor/total_approximate omitempty в offset-режиме опущены) → golden list
+// MECHANISM. RegisterTypeAlias(PagedResponse[SoulListEntry] → soulListReply): huma builds
+// the list-Body schema under the contract name/shape. The wire body (PagedResponse) does NOT change — the json
+// fields are the same (next_cursor/total_approximate omitempty are omitted in offset mode) → golden list
 // byte-exact.
 //
 // === CLASS A (SoulSshTarget shared input↔output) ===
 //
-// SoulSshTarget — единый api-тип ВСЕХ потребителей: input (PUT ssh-target body, см.
-// huma_soul_op.go) И output (SoulSshTargetReply.ssh_target несёт генерёный SoulSSHTarget).
-// aliasSoulSshTarget сводит OUTPUT на ту же named-схему SoulSshTarget, что input. Формы
-// совместимы: api.SoulSshTarget — required:[ssh_port,ssh_user,soul_path] (рукопись :6394),
-// ssh_provider optional; SoulSSHTarget — те же поля (ssh_provider *string omitempty). Одна
-// валидная схема SoulSshTarget; технический SoulSSHTarget (от генерёного output-типа) вытеснен.
+// SoulSshTarget — a single api type for ALL consumers: input (PUT ssh-target body, see
+// huma_soul_op.go) AND output (SoulSshTargetReply.ssh_target carries the generated SoulSSHTarget).
+// aliasSoulSshTarget collapses the OUTPUT onto the same named SoulSshTarget schema as the input. The shapes are
+// compatible: api.SoulSshTarget — required:[ssh_port,ssh_user,soul_path] (spec :6394),
+// ssh_provider optional; SoulSSHTarget — the same fields (ssh_provider *string omitempty). One
+// valid SoulSshTarget schema; the technical SoulSSHTarget (from the generated output type) is displaced.
 //
-// === REPLY-RENAME через ALIAS (SoulCovenAssignReply) — батч N6 ===
+// === REPLY-RENAME via ALIAS (SoulCovenAssignReply) — batch N6 ===
 //
-// Output-дрейф, имя которого нельзя выровнять простым rename Go-структуры:
+// Output drift whose name cannot be aligned by a simple Go-struct rename:
 //
-//   - SoulCovenAssignReply: wire-body POST /v1/souls/coven несёт handler-тип
-//     handlers.SoulCovenAssignResponse (custom MarshalJSON XOR label↔labels — переименовать
-//     unexported-структуру можно, но имя handlers.SoulCovenAssignReply УЖЕ занято внутренним
-//     контейнером {Body, AuditPayload}). DefaultSchemaNamer эмитил "SoulCovenAssignResponse".
-//     Рукопись (:7140) объявляет wire-body как "SoulCovenAssignReply". МЕХАНИЗМ (как service-
-//     envelope): api-named-struct soulCovenAssignReply (форма ровно по рукописи, matched/changed
+//   - SoulCovenAssignReply: the wire body of POST /v1/souls/coven carries the handler type
+//     handlers.SoulCovenAssignResponse (custom MarshalJSON XOR label↔labels — the
+//     unexported struct could be renamed, but the name handlers.SoulCovenAssignReply is ALREADY taken by the internal
+//     container {Body, AuditPayload}). DefaultSchemaNamer emitted "SoulCovenAssignResponse".
+//     The spec (:7140) declares the wire body as "SoulCovenAssignReply". MECHANISM (like the service
+//     envelope): api named struct soulCovenAssignReply (shape exactly per the spec, matched/changed
 //     int32, required:[mode,label,matched,changed,status,dry_run]) + alias
-//     handlers.SoulCovenAssignResponse → soulCovenAssignReply. Wire-тело (custom MarshalJSON)
-//     НЕ меняется — меняется лишь OpenAPI-схема/имя Body.
+//     handlers.SoulCovenAssignResponse → soulCovenAssignReply. The wire body (custom MarshalJSON)
+//     does NOT change — only the OpenAPI schema/name of Body does.
 //
-// SoulSshTargetReply (PUT ssh-target 200-тело) переведён на huma-native (huma_soul_reply.go,
-// финал T5b): Body — native SoulSshTargetReply, native-Body даёт схему сам → rename-alias
-// SoulSSHTargetReply → soulSshTargetReply СНЯТ. nested ssh_target — class-A reuse native
-// SoulSshTarget (aliasSoulSshTarget на SoulSSHTarget ОСТАЁТСЯ — input PUT-тела ещё legacy-генерата).
+// SoulSshTargetReply (PUT ssh-target 200 body) moved to huma-native (huma_soul_reply.go,
+// final T5b): Body — native SoulSshTargetReply, the native Body provides the schema itself → the rename alias
+// SoulSSHTargetReply → soulSshTargetReply is REMOVED. nested ssh_target — class-A reuse of native
+// SoulSshTarget (aliasSoulSshTarget on SoulSSHTarget REMAINS — the input PUT body is still legacy-generated).
 
 import (
 	"reflect"
@@ -61,49 +61,49 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// soulCovenAssignReply — alias-цель схемы POST /v1/souls/coven 200-тела. Форма сверена с
-// committed-рукописью (docs/keeper/openapi.yaml :7140 → SoulCovenAssignReply): mode/label/labels/
+// soulCovenAssignReply — the alias target schema for the POST /v1/souls/coven 200 body. The shape is checked against
+// the committed hand-written spec (docs/keeper/openapi.yaml :7140 → SoulCovenAssignReply): mode/label/labels/
 // matched/changed/status/dry_run; matched/changed — int32; required:[mode,label,matched,changed,
-// status,dry_run] (labels — optional). Имя типа = контрактное имя схемы (huma DefaultSchemaNamer
-// капитализирует первую букву → "SoulCovenAssignReply"). Wire-тело сериализует handler-тип
-// (custom MarshalJSON XOR label↔labels) — здесь только форма для схемы.
+// status,dry_run] (labels — optional). The type name = the contract schema name (huma DefaultSchemaNamer
+// capitalizes the first letter → "SoulCovenAssignReply"). The wire body is serialized by the handler type
+// (custom MarshalJSON XOR label↔labels) — here it is only the shape for the schema.
 //
-// OUTPUT-PATTERN ИМЁН (батч 5, документационный): labels[] — output-эхо применённого replace-
-// набора ← soul.CovenPattern (per-element); reply output-only (alias-цель, НЕ request-Body) →
-// input-422-риска нет. label (singular append/remove-эхо) НЕ тегируется: для replace-режима
-// он "" (XOR с labels), pattern бы ложно требовал coven у пустой строки.
+// OUTPUT-PATTERN FOR NAMES (batch 5, documentation-only): labels[] — the output echo of the applied replace
+// set ← soul.CovenPattern (per-element); the reply is output-only (an alias target, NOT a request Body) →
+// no input-422 risk. label (the singular append/remove echo) is NOT tagged: for replace mode
+// it is "" (XOR with labels), and a pattern would falsely require a coven on the empty string.
 type soulCovenAssignReply struct {
 	Mode    string   `json:"mode" doc:"тип операции над covens[]"`
 	Label   string   `json:"label" doc:"применённая метка для append/remove (зеркало input)"`
-	Labels  []string `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"применённый набор меток для replace (зеркало input)"` // ← soul.CovenPattern (per-element, output-эхо)
+	Labels  []string `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"применённый набор меток для replace (зеркало input)"` // ← soul.CovenPattern (per-element, output echo)
 	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
 	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
 	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`
 	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
 }
 
-// soulTraitsAssignReply — alias-цель схемы POST /v1/souls/traits 200-тела (ADR-060). Имя
-// типа = контрактное имя схемы (huma DefaultSchemaNamer капитализирует → "SoulTraitsAssignReply").
-// keys[] — output-эхо набора затронутых trait-ключей (per-element pattern = soul.TraitKeyPattern);
-// trait-ЗНАЧЕНИЯ в выдачу НЕ кладутся (секрет-гигиена, симметрия с audit). matched/changed —
-// int32 (соглашение envelope-домена soul). reply output-only → input-422-риска pattern нет.
+// soulTraitsAssignReply — the alias target schema for the POST /v1/souls/traits 200 body (ADR-060). The type
+// name = the contract schema name (huma DefaultSchemaNamer capitalizes → "SoulTraitsAssignReply").
+// keys[] — the output echo of the set of affected trait keys (per-element pattern = soul.TraitKeyPattern);
+// trait VALUES are NOT included in the output (secret hygiene, symmetric with audit). matched/changed —
+// int32 (the soul envelope-domain convention). The reply is output-only → no input-422 pattern risk.
 type soulTraitsAssignReply struct {
 	Mode    string   `json:"mode" doc:"режим операции (merge/replace/remove)"`
-	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output-эхо)
+	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output echo)
 	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
 	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
 	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`
 	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
 }
 
-// soulListReply — alias-цель схемы GET /v1/souls envelope (CURSOR, 6 полей). Форма сверена с
-// committed-рукописью (docs/keeper/openapi.yaml :6766 → SoulListReply): items/offset/limit/total
+// soulListReply — the alias target schema for the GET /v1/souls envelope (CURSOR, 6 fields). The shape is checked against
+// the committed hand-written spec (docs/keeper/openapi.yaml :6766 → SoulListReply): items/offset/limit/total
 // (required) + next_cursor (string, optional) + total_approximate (boolean, optional). offset/
-// limit/total — int32 (рукопись format:int32). items.$ref на КОНТРАКТНЫЙ element native
-// SoulListEntry (та же схема, что эмитит get-Body — финал T5b, иначе huma duplicate-name-паника
-// между api.SoulListEntry и SoulListEntry). Имя типа = контрактное имя схемы (huma
-// DefaultSchemaNamer капитализирует → "SoulListReply"). json-теги повторяют sharedapi.PagedResponse
-// (next_cursor/total_approximate omitempty) → wire не меняется.
+// limit/total — int32 (the spec's format:int32). items.$ref to the CONTRACT native element
+// SoulListEntry (the same schema the get-Body emits — final T5b, otherwise a huma duplicate-name panic
+// between api.SoulListEntry and SoulListEntry). The type name = the contract schema name (huma
+// DefaultSchemaNamer capitalizes → "SoulListReply"). The json tags repeat sharedapi.PagedResponse
+// (next_cursor/total_approximate omitempty) → the wire does not change.
 type soulListReply struct {
 	Items            []SoulListEntry `json:"items" doc:"страница реестра souls"`
 	Offset           int32           `json:"offset" doc:"сдвиг от начала набора (offset-режим)"`
@@ -113,31 +113,31 @@ type soulListReply struct {
 	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total НЕ точен (keyset-режим); в offset-режиме опущено"`
 }
 
-// registerSoulEnvelopes вешает на registry huma-alias инстанцированного generic
-// sharedapi.PagedResponse[SoulListEntry] → named-struct soulListReply (контрактное имя/
-// CURSOR-форма 6 полей) + reply-rename-алиас coven-assign (батч N6). Вызывается в
-// newHumaCadenceAPI для каждой собранной huma.API. Wire-тип (тело) НЕ меняется.
+// registerSoulEnvelopes registers on the registry a huma alias from the instantiated generic
+// sharedapi.PagedResponse[SoulListEntry] → named-struct soulListReply (contract name/
+// CURSOR shape, 6 fields) + the coven-assign reply-rename alias (batch N6). Called in
+// newHumaCadenceAPI for every assembled huma.API. The wire type (the body) does NOT change.
 //
-// ★ Alias-ключ PagedResponse[SoulListEntry] НЕ тронут (финал T5b): handler-list marshalит
-// именно этот wire-тип; element soulListReply.Items []SoulListEntry резолвится через ту же
-// схему SoulListEntry, что эмитит native get-Body (формы идентичны → дедуп безопасен).
+// ★ The alias key PagedResponse[SoulListEntry] is untouched (final T5b): the handler list marshals
+// exactly this wire type; the element soulListReply.Items []SoulListEntry resolves through the same
+// SoulListEntry schema the native get-Body emits (shapes identical → dedup safe).
 func registerSoulEnvelopes(api huma.API) {
 	schemas := api.OpenAPI().Components.Schemas
-	// ★ handler-native T5d: wire-тип list-Body — sharedapi.PagedResponse[handlers.SoulListView]
-	// (Go-alias handlers.SoulListReply). element-схема SoulListView сводится через тот же alias
-	// PagedResponse → soulListReply, чьё items.$ref указывает на КОНТРАКТНУЮ схему SoulListEntry
-	// (та же, что эмитит native get-Body) → дедуп безопасен, имя/CURSOR-форма стабильны.
+	// ★ handler-native T5d: the wire type of list-Body is sharedapi.PagedResponse[handlers.SoulListView]
+	// (Go alias handlers.SoulListReply). The SoulListView element schema is reduced through the same alias
+	// PagedResponse → soulListReply, whose items.$ref points to the CONTRACT schema SoulListEntry
+	// (the same one the native get-Body emits) → dedup is safe, the name/CURSOR shape is stable.
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.SoulListView]](),
 		reflect.TypeFor[soulListReply](),
 	)
-	// REPLY-RENAME (батч N6): handler-тип wire-body coven-assign → контрактное имя
-	// SoulCovenAssignReply. SoulSshTargetReply — native (huma_soul_reply.go), alias снят.
+	// REPLY-RENAME (batch N6): the coven-assign wire-body handler type → the contract name
+	// SoulCovenAssignReply. SoulSshTargetReply — native (huma_soul_reply.go), alias removed.
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[handlers.SoulCovenAssignResponse](),
 		reflect.TypeFor[soulCovenAssignReply](),
 	)
-	// traits-assign (ADR-060): handler-тип wire-body → контрактное имя SoulTraitsAssignReply.
+	// traits-assign (ADR-060): the wire-body handler type → the contract name SoulTraitsAssignReply.
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[handlers.SoulTraitsAssignResponse](),
 		reflect.TypeFor[soulTraitsAssignReply](),

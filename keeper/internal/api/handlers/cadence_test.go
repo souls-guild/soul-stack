@@ -25,21 +25,21 @@ import (
 
 // --- fakes ---
 
-// fakeCadenceStore — мок [CadenceStore]. SQL-роутер по подстрокам (parity
-// fakeVoyageStore). Считает write-вызовы; selectByID/list — настраиваемые.
-// voyages-запросы (FROM voyages) обслуживают `/runs`.
+// fakeCadenceStore — mock [CadenceStore]. SQL router by substring (parity
+// fakeVoyageStore). Counts write calls; selectByID/list are configurable.
+// voyages queries (FROM voyages) serve `/runs`.
 type fakeCadenceStore struct {
 	mu sync.Mutex
 
 	insertCalls    int
-	insertArgs     []any // последние позиционные args INSERT (для guard batch/percent-колонок)
+	insertArgs     []any // last positional INSERT args (for batch/percent-column guards)
 	updateCalls    int
-	updateArgs     []any // последние позиционные args UPDATE
+	updateArgs     []any // last positional UPDATE args
 	setEnabledArgs []bool
 	deleteCalls    int
 
-	// next возвращаемое значение write-операций.
-	insertErr       error // QueryRow Insert → этот err в Scan (nil → timestamps)
+	// next return value of write ops.
+	insertErr       error // QueryRow Insert → this err in Scan (nil → timestamps)
 	updateNoRows    bool  // Update → pgx.ErrNoRows (not-found)
 	setEnabledNoRow bool  // SetEnabled → RowsAffected 0 (not-found)
 	deleteNoRow     bool  // Delete → RowsAffected 0 (not-found)
@@ -52,13 +52,13 @@ type fakeCadenceStore struct {
 	voyageListRows  func() (pgx.Rows, error)
 	voyageListCount int
 
-	// notify (ADR-052 §m): tx-аспект Create с блоком notify.
-	committed         bool     // tx.Commit вызван
-	rolledBack        bool     // tx.Rollback вызван
-	insertTidingCalls int      // INSERT INTO tidings (постоянные правила notify)
-	insertTidingArgs  [][]any  // позиционные args каждого InsertTiding (порядок)
-	insertTidingErr   error    // следующий INSERT INTO tidings → этот err (атомарность)
-	heraldKnown       []string // существующие heralds (existence-чек prepareNotify); nil → любой существует
+	// notify (ADR-052 §m): tx aspect of Create with a notify block.
+	committed         bool     // tx.Commit called
+	rolledBack        bool     // tx.Rollback called
+	insertTidingCalls int      // INSERT INTO tidings (persistent notify rules)
+	insertTidingArgs  [][]any  // positional args of each InsertTiding (order)
+	insertTidingErr   error    // next INSERT INTO tidings → this err (atomicity)
+	heraldKnown       []string // existing heralds (prepareNotify existence check); nil → any exists
 }
 
 func (f *fakeCadenceStore) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -116,9 +116,9 @@ func (f *fakeCadenceStore) QueryRow(_ context.Context, sql string, args ...any) 
 		}
 		return cadenceErrRow{err: pgx.ErrNoRows}
 	case strings.Contains(sql, "INSERT INTO tidings"):
-		// Постоянное notify-правило Cadence (ADR-052 §m): RETURNING created_at,
-		// updated_at. Фиксируем порядок/args; insertTidingErr имитирует FK/коллизию
-		// для теста атомарности (rollback всей tx).
+		// Persistent Cadence notify rule (ADR-052 §m): RETURNING created_at,
+		// updated_at. Record order/args; insertTidingErr simulates an FK/collision
+		// for the atomicity test (rollback of the whole tx).
 		f.mu.Lock()
 		f.insertTidingCalls++
 		argsCopy := append([]any(nil), args...)
@@ -130,8 +130,8 @@ func (f *fakeCadenceStore) QueryRow(_ context.Context, sql string, args ...any) 
 		}
 		return cadenceScalarRow{vals: []any{time.Now().UTC(), time.Now().UTC()}}
 	case strings.Contains(sql, "FROM heralds"):
-		// Existence-чек канала в prepareNotify (SelectHeraldByName). heraldKnown=nil
-		// → любой herald существует (минимальная строка Herald). Иначе матч по имени.
+		// Channel existence check in prepareNotify (SelectHeraldByName). heraldKnown=nil
+		// → any herald exists (minimal Herald row). Otherwise match by name.
 		name, _ := args[0].(string)
 		if f.heraldKnown != nil {
 			found := false
@@ -155,14 +155,14 @@ func (f *fakeCadenceStore) QueryRow(_ context.Context, sql string, args ...any) 
 	return cadenceErrRow{err: errors.New("fakeCadenceStore.QueryRow: unexpected SQL: " + sql)}
 }
 
-// BeginTx возвращает tx-обёртку, маршрутизирующую Exec/QueryRow обратно в store
-// (ADR-052 §m Create-tx). Commit/Rollback отмечают флаги для guard-теста
-// атомарности.
+// BeginTx returns a tx wrapper routing Exec/QueryRow back into the store
+// (ADR-052 §m Create-tx). Commit/Rollback set flags for the atomicity
+// guard test.
 func (f *fakeCadenceStore) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	return &fakeCadenceTx{store: f}, nil
 }
 
-// fakeCadenceTx — pgx.Tx-обёртка над fakeCadenceStore (parity fakeVoyageTx).
+// fakeCadenceTx — pgx.Tx wrapper over fakeCadenceStore (parity fakeVoyageTx).
 type fakeCadenceTx struct{ store *fakeCadenceStore }
 
 func (t *fakeCadenceTx) Begin(context.Context) (pgx.Tx, error)                    { return t, nil }
@@ -214,7 +214,7 @@ func (f *fakeCadenceStore) Query(_ context.Context, sql string, _ ...any) (pgx.R
 	return &emptyRows{}, nil
 }
 
-// CopyFrom — voyage.ExecQueryRower-требование; в read-only `/runs`-пути не зовётся.
+// CopyFrom — voyage.ExecQueryRower requirement; not called on the read-only `/runs` path.
 func (f *fakeCadenceStore) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
 	return 0, errors.New("fakeCadenceStore.CopyFrom: unexpected (cadence CRUD не использует CopyFrom)")
 }
@@ -237,8 +237,8 @@ func (r cadenceScalarRow) Scan(dest ...any) error {
 	return nil
 }
 
-// cadenceFullRow — Row под cadence.scanCadence (26 колонок selectColumns в
-// порядке scanCadence). Минимальный набор для round-trip GET/list/PATCH.
+// cadenceFullRow — Row for cadence.scanCadence (26 selectColumns in
+// scanCadence order). Minimal set for a GET/list/PATCH round-trip.
 type cadenceFullRow struct {
 	id           string
 	name         string
@@ -249,8 +249,8 @@ type cadenceFullRow struct {
 	scenarioName *string
 	module       *string
 	intervalSecs *int
-	// Встречные поля взаимоисключающих пар (хранимое значение в БД) — для PATCH-
-	// тестов переключения формата (percent↔absolute). nil → колонка NULL.
+	// Counterpart fields of mutually-exclusive pairs (value stored in DB) — for
+	// PATCH format-switch tests (percent↔absolute). nil → column NULL.
 	batchSize            *int
 	batchPercent         *int
 	failThreshold        *int
@@ -294,24 +294,20 @@ func (r cadenceFullRow) Scan(dest ...any) error {
 
 // --- helpers ---
 
-// newCadenceHandler — bare-check-only handler (scenarioResolver/incReader=nil).
-// Существующие CRUD-тесты не упираются в per-target scope (target=service:web
-// резолвится при incReader=nil как «scoped пропущен после bare-check», parity
-// Voyage incReader=nil).
-// newCadenceHandler — handler с непустым дефолтным scenario-резолвом (одна
-// инкарнация), чтобы scenario-OK-тесты проходили empty-target-guard
-// (cadence_empty_target). incReader=nil → per-incarnation scope-loop
-// пропускается (parity Voyage). Тесты пустого scope создают handler с явным
-// out:nil-резолвером.
+// newCadenceHandler — handler with a non-empty default scenario resolve (one
+// incarnation) so scenario-OK tests pass the empty-target guard
+// (cadence_empty_target). incReader=nil → the per-incarnation scope loop is
+// skipped (parity Voyage). Empty-scope tests build a handler with an explicit
+// out:nil resolver.
 func newCadenceHandler(store *fakeCadenceStore, enf apimiddleware.PermissionChecker) *CadenceHandler {
-	// pollFloorSeconds=0 → floor-проверка выключена: существующие CRUD-тесты не
-	// упираются в floor-лимит (он проверяется отдельным newCadenceHandlerFloor).
-	// tidingInvalidator=nil → notify-инвалидация no-op (CRUD-тесты без notify).
+	// pollFloorSeconds=0 → floor check disabled: existing CRUD tests don't hit
+	// the floor limit (checked separately by newCadenceHandlerFloor).
+	// tidingInvalidator=nil → notify invalidation is a no-op (CRUD tests without notify).
 	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, nil, 0, nil)
 }
 
-// fakeTidingInvalidator — мок [TidingInvalidator]; считает вызовы и запоминает
-// аргумент (ADR-052 §m: инвалидация после commit с notify).
+// fakeTidingInvalidator — mock [TidingInvalidator]; counts calls and records the
+// argument (ADR-052 §m: invalidation after commit with notify).
 type fakeTidingInvalidator struct {
 	calls int
 	names []string
@@ -322,22 +318,22 @@ func (f *fakeTidingInvalidator) InvalidateTidings(_ context.Context, name string
 	f.names = append(f.names, name)
 }
 
-// newCadenceHandlerNotify — handler с tidingInvalidator для notify-тестов
-// (ADR-052 §m). bare-резолв scenario (одна инкарнация), incReader=nil.
+// newCadenceHandlerNotify — handler with a tidingInvalidator for notify tests
+// (ADR-052 §m). bare scenario resolve (one incarnation), incReader=nil.
 func newCadenceHandlerNotify(store *fakeCadenceStore, enf apimiddleware.PermissionChecker, inv TidingInvalidator) *CadenceHandler {
 	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, inv, 0, nil)
 }
 
-// newCadenceHandlerFloor — handler с floor-лимитом (ADR-046 Pass B): interval <
-// floorSeconds → 422 на Create/Patch. bare-check-only (scenarioResolver/incReader
-// как у newCadenceHandler).
+// newCadenceHandlerFloor — handler with a floor limit (ADR-046 Pass B): interval <
+// floorSeconds → 422 on Create/Patch. bare-check-only (scenarioResolver/incReader
+// as in newCadenceHandler).
 func newCadenceHandlerFloor(store *fakeCadenceStore, enf apimiddleware.PermissionChecker, floorSeconds int) *CadenceHandler {
 	return NewCadenceHandler(store, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, nil, enf, nil, nil, floorSeconds, nil)
 }
 
-// newCadenceHandlerScoped — handler с scenarioResolver + incReader для тестов
-// per-target coven-scope-check (ADR-046 §7). parity newVoyageHandler с непустым
-// incReader.
+// newCadenceHandlerScoped — handler with scenarioResolver + incReader for
+// per-target coven-scope-check tests (ADR-046 §7). parity newVoyageHandler with a
+// non-empty incReader.
 func newCadenceHandlerScoped(store *fakeCadenceStore, sc VoyageScenarioResolver, incReader IncarnationContextReader, enf apimiddleware.PermissionChecker) *CadenceHandler {
 	return NewCadenceHandler(store, sc, incReader, enf, nil, nil, 0, nil)
 }
@@ -359,7 +355,7 @@ func cadenceReqID(method, url, id, body string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
-// scenarioRow / scenarioStore — helper для selectByID, отдающий scenario-Cadence.
+// scenarioRow / scenarioStore — helper for selectByID returning a scenario Cadence.
 func scenarioStore() *fakeCadenceStore {
 	return &fakeCadenceStore{
 		selectByID: func(id string) pgx.Row {
@@ -421,11 +417,11 @@ func TestCadenceCreate_OK_Cron(t *testing.T) {
 	}
 }
 
-// --- tests: строковые batch-поля рецепта (ADR-043 amendment 2026-06-09, S3) ---
+// --- tests: recipe string batch fields (ADR-043 amendment 2026-06-09, S3) ---
 
-// Позиции batch/percent-колонок в insertSQL-args (id=args[0]; см. recipeArgs
-// порядок: batch_size $14, batch_percent $15, fail_threshold $17,
-// fail_threshold_percent $18 → 0-indexed args соответственно).
+// Positions of batch/percent columns in insertSQL args (id=args[0]; see recipeArgs
+// order: batch_size $14, batch_percent $15, fail_threshold $17,
+// fail_threshold_percent $18 → 0-indexed args respectively).
 const (
 	cadenceArgBatchSize            = 13
 	cadenceArgBatchPercent         = 14
@@ -433,8 +429,8 @@ const (
 	cadenceArgFailThresholdPercent = 17
 )
 
-// argInt извлекает int-аргумент позиционного INSERT/UPDATE (recipeArgs кладёт
-// разыменованный int либо nil-интерфейс для NULL).
+// argInt extracts an int argument of a positional INSERT/UPDATE (recipeArgs stores
+// a dereferenced int or a nil interface for NULL).
 func argInt(t *testing.T, args []any, idx int) (val int, isNull bool) {
 	t.Helper()
 	if idx >= len(args) {
@@ -450,8 +446,8 @@ func argInt(t *testing.T, args []any, idx int) (val int, isNull bool) {
 	return n, false
 }
 
-// TestCadenceCreate_BatchPercentString — `batch:"20%"` → колонка batch_percent=20,
-// batch_size NULL. Спавн-резолв на spawn-scope уже доезжает существующим путём
+// TestCadenceCreate_BatchPercentString — `batch:"20%"` → column batch_percent=20,
+// batch_size NULL. Spawn-scope resolve already reaches it via the existing path
 // (BuildVoyage effectiveBatchSize).
 func TestCadenceCreate_BatchPercentString(t *testing.T) {
 	store := &fakeCadenceStore{}
@@ -470,7 +466,7 @@ func TestCadenceCreate_BatchPercentString(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_BatchHostsString — `batch:"5"` → колонка batch_size=5,
+// TestCadenceCreate_BatchHostsString — `batch:"5"` → column batch_size=5,
 // batch_percent NULL.
 func TestCadenceCreate_BatchHostsString(t *testing.T) {
 	store := &fakeCadenceStore{}
@@ -489,9 +485,9 @@ func TestCadenceCreate_BatchHostsString(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_MaxFailuresPercentString — `max_failures:"25%"` → НОВАЯ колонка
-// fail_threshold_percent=25, fail_threshold NULL. Резолв в абсолют — на spawn-scope
-// (BuildVoyage), здесь проверяется только запись процента в колонку.
+// TestCadenceCreate_MaxFailuresPercentString — `max_failures:"25%"` → NEW column
+// fail_threshold_percent=25, fail_threshold NULL. Resolve to absolute happens at
+// spawn-scope (BuildVoyage); here only the percent column write is checked.
 func TestCadenceCreate_MaxFailuresPercentString(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -509,7 +505,7 @@ func TestCadenceCreate_MaxFailuresPercentString(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_MaxFailuresAbsoluteString — `max_failures:"3"` → колонка
+// TestCadenceCreate_MaxFailuresAbsoluteString — `max_failures:"3"` → column
 // fail_threshold=3, fail_threshold_percent NULL.
 func TestCadenceCreate_MaxFailuresAbsoluteString(t *testing.T) {
 	store := &fakeCadenceStore{}
@@ -528,8 +524,8 @@ func TestCadenceCreate_MaxFailuresAbsoluteString(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_BatchConflict422 — `batch` + числовой batch_percent → 422
-// (voyage_batch_spec_conflict), Insert не зовётся.
+// TestCadenceCreate_BatchConflict422 — `batch` + numeric batch_percent → 422
+// (voyage_batch_spec_conflict), Insert not called.
 func TestCadenceCreate_BatchConflict422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -547,8 +543,8 @@ func TestCadenceCreate_BatchConflict422(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_MaxFailuresConflict422 — `max_failures` + числовой
-// fail_threshold → 422, Insert не зовётся.
+// TestCadenceCreate_MaxFailuresConflict422 — `max_failures` + numeric
+// fail_threshold → 422, Insert not called.
 func TestCadenceCreate_MaxFailuresConflict422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -566,7 +562,7 @@ func TestCadenceCreate_MaxFailuresConflict422(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_BatchMalformed422 — мусорный `batch` → 422, Insert не зовётся.
+// TestCadenceCreate_BatchMalformed422 — garbage `batch` → 422, Insert not called.
 func TestCadenceCreate_BatchMalformed422(t *testing.T) {
 	for _, bad := range []string{`"2x"`, `"abc"`, `"50%%"`, `"-1"`, `"101%"`} {
 		store := &fakeCadenceStore{}
@@ -583,7 +579,7 @@ func TestCadenceCreate_BatchMalformed422(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_MaxFailuresMalformed422 — мусорный `max_failures` → 422.
+// TestCadenceCreate_MaxFailuresMalformed422 — garbage `max_failures` → 422.
 func TestCadenceCreate_MaxFailuresMalformed422(t *testing.T) {
 	for _, bad := range []string{`"3x"`, `"abc"`, `"0%"`, `"101%"`} {
 		store := &fakeCadenceStore{}
@@ -600,8 +596,8 @@ func TestCadenceCreate_MaxFailuresMalformed422(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_BackcompatNumericFields — старые числовые batch_size/
-// fail_threshold (без строковых полей) работают как раньше → корректные колонки.
+// TestCadenceCreate_BackcompatNumericFields — legacy numeric batch_size/
+// fail_threshold (without string fields) work as before → correct columns.
 func TestCadenceCreate_BackcompatNumericFields(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -622,8 +618,8 @@ func TestCadenceCreate_BackcompatNumericFields(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_MaxFailuresPercentString — PATCH `max_failures:"25%"` пишет
-// колонку fail_threshold_percent=25 (Update-args).
+// TestCadencePatch_MaxFailuresPercentString — PATCH `max_failures:"25%"` writes
+// column fail_threshold_percent=25 (Update args).
 func TestCadencePatch_MaxFailuresPercentString(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandler(store, allowAll())
@@ -638,8 +634,8 @@ func TestCadencePatch_MaxFailuresPercentString(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_BatchConflict422 — PATCH `batch` + числовой batch_size в одном
-// теле → 422, Update не зовётся.
+// TestCadencePatch_BatchConflict422 — PATCH `batch` + numeric batch_size in one
+// body → 422, Update not called.
 func TestCadencePatch_BatchConflict422(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandler(store, allowAll())
@@ -654,8 +650,8 @@ func TestCadencePatch_BatchConflict422(t *testing.T) {
 	}
 }
 
-// scenarioStoreWith — scenario-Cadence с заданными хранимыми batch/fail-полями
-// (для PATCH-тестов переключения формата взаимоисключающей пары, ревью Batch S3).
+// scenarioStoreWith — scenario Cadence with given stored batch/fail fields
+// (for PATCH format-switch tests of a mutually-exclusive pair, Batch S3 review).
 func scenarioStoreWith(row cadenceFullRow) *fakeCadenceStore {
 	return &fakeCadenceStore{
 		selectByID: func(id string) pgx.Row {
@@ -672,9 +668,9 @@ func scenarioStoreWith(row cadenceFullRow) *fakeCadenceStore {
 	}
 }
 
-// TestCadencePatch_MaxFailuresPercentToAbsolute — guard (ревью Batch S3): PATCH
-// `max_failures:"3"` поверх ХРАНИМОГО fail_threshold_percent=25 переключает на
-// absolute — обнуляет встречное percent-поле, не упирается в XOR-validate 422.
+// TestCadencePatch_MaxFailuresPercentToAbsolute — guard (Batch S3 review): PATCH
+// `max_failures:"3"` over a STORED fail_threshold_percent=25 switches to
+// absolute — clears the counterpart percent field, doesn't hit XOR-validate 422.
 func TestCadencePatch_MaxFailuresPercentToAbsolute(t *testing.T) {
 	store := scenarioStoreWith(cadenceFullRow{failThresholdPercent: intp(25)})
 	h := newCadenceHandler(store, allowAll())
@@ -692,9 +688,9 @@ func TestCadencePatch_MaxFailuresPercentToAbsolute(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_MaxFailuresAbsoluteToPercent — обратное направление: PATCH
-// `max_failures:"25%"` поверх ХРАНИМОГО fail_threshold=3 переключает на percent,
-// обнуляя встречное absolute-поле.
+// TestCadencePatch_MaxFailuresAbsoluteToPercent — reverse direction: PATCH
+// `max_failures:"25%"` over a STORED fail_threshold=3 switches to percent,
+// clearing the counterpart absolute field.
 func TestCadencePatch_MaxFailuresAbsoluteToPercent(t *testing.T) {
 	store := scenarioStoreWith(cadenceFullRow{failThreshold: intp(3)})
 	h := newCadenceHandler(store, allowAll())
@@ -712,8 +708,8 @@ func TestCadencePatch_MaxFailuresAbsoluteToPercent(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_BatchPercentToHosts — PATCH `batch:"5"` поверх хранимого
-// batch_percent=20 переключает на absolute size, обнуляя встречный percent.
+// TestCadencePatch_BatchPercentToHosts — PATCH `batch:"5"` over a stored
+// batch_percent=20 switches to absolute size, clearing the counterpart percent.
 func TestCadencePatch_BatchPercentToHosts(t *testing.T) {
 	store := scenarioStoreWith(cadenceFullRow{batchPercent: intp(20)})
 	h := newCadenceHandler(store, allowAll())
@@ -731,8 +727,8 @@ func TestCadencePatch_BatchPercentToHosts(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_BatchHostsToPercent — обратно: PATCH `batch:"20%"` поверх
-// хранимого batch_size=5 переключает на percent, обнуляя встречный size.
+// TestCadencePatch_BatchHostsToPercent — reverse: PATCH `batch:"20%"` over a
+// stored batch_size=5 switches to percent, clearing the counterpart size.
 func TestCadencePatch_BatchHostsToPercent(t *testing.T) {
 	store := scenarioStoreWith(cadenceFullRow{batchSize: intp(5)})
 	h := newCadenceHandler(store, allowAll())
@@ -750,9 +746,9 @@ func TestCadencePatch_BatchHostsToPercent(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_MaxFailuresKeepsUntouchedPair — guard на «nil-req ничего не
-// трогает»: PATCH без max_failures/fail_threshold НЕ обнуляет хранимый
-// fail_threshold_percent (только смена name).
+// TestCadencePatch_MaxFailuresKeepsUntouchedPair — guard for "nil-req touches
+// nothing": PATCH without max_failures/fail_threshold does NOT clear the stored
+// fail_threshold_percent (only a name change).
 func TestCadencePatch_MaxFailuresKeepsUntouchedPair(t *testing.T) {
 	store := scenarioStoreWith(cadenceFullRow{failThresholdPercent: intp(25)})
 	h := newCadenceHandler(store, allowAll())
@@ -767,11 +763,11 @@ func TestCadencePatch_MaxFailuresKeepsUntouchedPair(t *testing.T) {
 	}
 }
 
-// --- tests: floor-лимит периода (ADR-046 Pass B) ---
+// --- tests: period floor limit (ADR-046 Pass B) ---
 
-// TestCadenceCreate_IntervalBelowFloor422 — create interval-Cadence с
-// interval_seconds < poll_floor (30) → 422, Insert НЕ зовётся (reject до SQL).
-// Граница 29/30: 29 reject, 30 ok.
+// TestCadenceCreate_IntervalBelowFloor422 — create an interval Cadence with
+// interval_seconds < poll_floor (30) → 422, Insert NOT called (reject before SQL).
+// Boundary 29/30: 29 reject, 30 ok.
 func TestCadenceCreate_IntervalBelowFloor422(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -806,8 +802,8 @@ func TestCadenceCreate_IntervalBelowFloor422(t *testing.T) {
 	}
 }
 
-// TestCadenceCreate_CronUnaffectedByFloor — cron-Cadence (interval_seconds NULL)
-// не затрагивается floor-лимитом даже при `*/1` (минутная гранулярность ≥ floor).
+// TestCadenceCreate_CronUnaffectedByFloor — a cron Cadence (interval_seconds NULL)
+// is unaffected by the floor limit even at `*/1` (minute granularity ≥ floor).
 func TestCadenceCreate_CronUnaffectedByFloor(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandlerFloor(store, allowAll(), 30)
@@ -822,8 +818,8 @@ func TestCadenceCreate_CronUnaffectedByFloor(t *testing.T) {
 	}
 }
 
-// TestCadencePatch_IntervalBelowFloor422 — PATCH меняет interval_seconds на суб-floor
-// (10) → 422, Update НЕ зовётся. Текущая строка (scenarioStore) — interval 300.
+// TestCadencePatch_IntervalBelowFloor422 — PATCH changes interval_seconds to sub-floor
+// (10) → 422, Update NOT called. Current row (scenarioStore) is interval 300.
 func TestCadencePatch_IntervalBelowFloor422(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandlerFloor(store, allowAll(), 30)
@@ -839,7 +835,7 @@ func TestCadencePatch_IntervalBelowFloor422(t *testing.T) {
 	}
 }
 
-// interval + cron одновременно → 422 (XOR, cadence.validate).
+// interval + cron together → 422 (XOR, cadence.validate).
 func TestCadenceCreate_IntervalAndCron422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -856,7 +852,7 @@ func TestCadenceCreate_IntervalAndCron422(t *testing.T) {
 	}
 }
 
-// невалидный overlap_policy → 422.
+// invalid overlap_policy → 422.
 func TestCadenceCreate_BadOverlap422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -870,7 +866,7 @@ func TestCadenceCreate_BadOverlap422(t *testing.T) {
 	}
 }
 
-// kind=scenario без scenario_name → 422.
+// kind=scenario without scenario_name → 422.
 func TestCadenceCreate_ScenarioMissingName422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -884,7 +880,7 @@ func TestCadenceCreate_ScenarioMissingName422(t *testing.T) {
 	}
 }
 
-// kind=command, несущий scenario_name → 422.
+// kind=command carrying scenario_name → 422.
 func TestCadenceCreate_CommandWithScenarioName422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -898,7 +894,7 @@ func TestCadenceCreate_CommandWithScenarioName422(t *testing.T) {
 	}
 }
 
-// невалидный kind → 422 (до validate, в checkKindPermission).
+// invalid kind → 422 (before validate, in checkKindPermission).
 func TestCadenceCreate_InvalidKind422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -912,10 +908,10 @@ func TestCadenceCreate_InvalidKind422(t *testing.T) {
 	}
 }
 
-// scenario-target, резолвящийся в пустой scope (coven без инкарнаций) → 422 до
-// Insert (parity TestVoyageCreate_EmptyTarget422 / voyage_empty_target). Без
-// guard-а пустой резолв проходил scope-loop ноль раз → молчаливое 201 на «мёртвый»
-// рецепт. allowAll() проходит kind-guard+bare-check; resolver явно out=nil.
+// scenario-target resolving to an empty scope (coven with no incarnations) → 422
+// before Insert (parity TestVoyageCreate_EmptyTarget422 / voyage_empty_target).
+// Without the guard an empty resolve ran the scope loop zero times → a silent 201
+// on a "dead" recipe. allowAll() passes kind-guard+bare-check; resolver explicitly out=nil.
 func TestCadenceCreate_EmptyTarget422(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandlerScoped(store, &fakeVoyageScenarioResolver{out: nil}, nil, allowAll())
@@ -935,7 +931,7 @@ func TestCadenceCreate_EmptyTarget422(t *testing.T) {
 	}
 }
 
-// битый JSON → 400.
+// malformed JSON → 400.
 func TestCadenceCreate_BadJSON400(t *testing.T) {
 	store := &fakeCadenceStore{}
 	h := newCadenceHandler(store, allowAll())
@@ -948,12 +944,12 @@ func TestCadenceCreate_BadJSON400(t *testing.T) {
 	}
 }
 
-// --- tests: двухуровневый RBAC kind-guard ---
+// --- tests: two-tier RBAC kind-guard ---
 
-// kind=scenario без incarnation.run → 403 (двухуровневый guard, ADR-046 §7).
+// kind=scenario without incarnation.run → 403 (two-tier guard, ADR-046 §7).
 func TestCadenceCreate_ScenarioKindGuardDenied403(t *testing.T) {
 	store := &fakeCadenceStore{}
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // нет incarnation.run
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
 	h := newCadenceHandler(store, enf)
 
 	rec := httptest.NewRecorder()
@@ -968,10 +964,10 @@ func TestCadenceCreate_ScenarioKindGuardDenied403(t *testing.T) {
 	}
 }
 
-// kind=command без errand.run → 403.
+// kind=command without errand.run → 403.
 func TestCadenceCreate_CommandKindGuardDenied403(t *testing.T) {
 	store := &fakeCadenceStore{}
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"incarnation.run": true}} // нет errand.run
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"incarnation.run": true}} // no errand.run
 	h := newCadenceHandler(store, enf)
 
 	rec := httptest.NewRecorder()
@@ -988,23 +984,23 @@ func TestCadenceCreate_CommandKindGuardDenied403(t *testing.T) {
 
 // --- tests: per-target coven-scope (ADR-046 §7, security-fix S4) ---
 
-// fakeCadenceScopedEnforcer моделирует coven-scoped Архонта (parity реальной
-// rbac.Permission.Matches двухуровневого guard-а CadenceHandler): bare-check
-// (nil-context, [checkKindPermission]) для `incarnation.run` ПРОХОДИТ, но
+// fakeCadenceScopedEnforcer models a coven-scoped Archon (parity the real
+// rbac.Permission.Matches of CadenceHandler's two-tier guard): the bare-check
+// (nil context, [checkKindPermission]) for `incarnation.run` PASSES, but the
 // per-incarnation OR-context-check ([checkTargetScope] → allowedAnyContext)
-// разрешает только контексты с `coven` из allowedCovens. Так дискриминатором
-// scope становится именно scope-loop (security-смысл: bare проходит, coven=B
-// режется scope-проверкой), полная parity VoyageHandler.createScenario.
+// allows only contexts whose `coven` is in allowedCovens. So the scope
+// discriminator is the scope loop itself (security intent: bare passes, coven=B
+// is cut by the scope check), full parity VoyageHandler.createScenario.
 type fakeCadenceScopedEnforcer struct {
-	allowedCovens map[string]bool // coven-метки, на которые есть incarnation.run
+	allowedCovens map[string]bool // coven labels that hold incarnation.run
 }
 
 func (e *fakeCadenceScopedEnforcer) Check(_ string, resource, action string, ctx map[string]string) error {
 	if resource != "incarnation" || action != "run" {
 		return rbac.ErrPermissionDenied
 	}
-	// Bare-check (nil/без coven) — проходит (Архонт держит incarnation.run; чем
-	// он ограничен по coven, решает per-context scope-loop).
+	// Bare-check (nil/no coven) — passes (the Archon holds incarnation.run; the
+	// per-context scope loop decides which covens it's limited to).
 	if len(ctx) == 0 {
 		return nil
 	}
@@ -1014,8 +1010,8 @@ func (e *fakeCadenceScopedEnforcer) Check(_ string, resource, action string, ctx
 	return rbac.ErrPermissionDenied
 }
 
-// scopedIncReader — incReader, отдающий инкарнации с фиксированными covens по
-// имени (для per-incarnation scope-loop). incA→coven-a, incB→coven-b.
+// scopedIncReader — incReader returning incarnations with fixed covens by
+// name (for the per-incarnation scope loop). incA→coven-a, incB→coven-b.
 func scopedIncReader() *fakeIncDB {
 	return &fakeIncDB{selectByNameRow: func(name string) pgx.Row {
 		coven := "coven-b"
@@ -1030,14 +1026,14 @@ func scopedIncReader() *fakeIncDB {
 			now, now, []string{coven},
 			[]byte("{}"), // traits
 			any(nil), []byte(nil),
-			"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+			"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 			any(nil), // applying_apply_id (ADR-068 §A1)
 		}}
 	}}
 }
 
-// (a) scoped-Архонт «incarnation.run on coven=A» НЕ может создать Cadence с
-// target, резолвящимся в инкарнацию вне scope (coven=B) → 403 fail-closed.
+// (a) a scoped Archon "incarnation.run on coven=A" can NOT create a Cadence whose
+// target resolves to an incarnation outside scope (coven=B) → 403 fail-closed.
 // Parity TestVoyageCreate_ScenarioRBACDenied / scope-loop createScenario.
 func TestCadenceCreate_ScopeDenied_CovenB_403(t *testing.T) {
 	store := &fakeCadenceStore{}
@@ -1056,7 +1052,7 @@ func TestCadenceCreate_ScopeDenied_CovenB_403(t *testing.T) {
 	}
 }
 
-// (b) тот же Архонт МОЖЕТ создать Cadence на coven=A (в scope) → 201.
+// (b) the same Archon CAN create a Cadence on coven=A (in scope) → 201.
 func TestCadenceCreate_ScopeAllowed_CovenA_201(t *testing.T) {
 	store := &fakeCadenceStore{}
 	enf := &fakeCadenceScopedEnforcer{allowedCovens: map[string]bool{"coven-a": true}}
@@ -1074,14 +1070,14 @@ func TestCadenceCreate_ScopeAllowed_CovenA_201(t *testing.T) {
 	}
 }
 
-// (c) PATCH target A→B scoped-Архонтом → 403 (вторая дыра: PATCH меняет target
-// без kind/scope-проверки). Загруженная строка — scenario на coven-a (scopeStore
-// отдаёт target {"service":"web"}, но резолвер мокаем на inc-a; PATCH переносит
-// target на coven-b → резолвер отдаёт inc-b вне scope).
+// (c) PATCH target A→B by a scoped Archon → 403 (second hole: PATCH changes target
+// without kind/scope check). Loaded row is a scenario on coven-a (scopeStore
+// returns target {"service":"web"}, but we mock the resolver to inc-a; PATCH moves
+// target to coven-b → resolver returns inc-b outside scope).
 func TestCadencePatch_ScopeDenied_RetargetCovenB_403(t *testing.T) {
 	store := scenarioStore()
 	enf := &fakeCadenceScopedEnforcer{allowedCovens: map[string]bool{"coven-a": true}}
-	// Резолвер по пост-patch target-у: PATCH ставит coven-b → инкарнация inc-b.
+	// Resolver by post-patch target: PATCH sets coven-b → incarnation inc-b.
 	h := newCadenceHandlerScoped(store, &fakeVoyageScenarioResolver{out: []string{"inc-b"}}, scopedIncReader(), enf)
 	id := audit.NewULID()
 
@@ -1097,7 +1093,7 @@ func TestCadencePatch_ScopeDenied_RetargetCovenB_403(t *testing.T) {
 	}
 }
 
-// (c') PATCH target в пределах scope (coven=A) → 200 (PATCH-guard не ложно-режет).
+// (c') PATCH target within scope (coven=A) → 200 (PATCH guard doesn't false-cut).
 func TestCadencePatch_ScopeAllowed_RetargetCovenA_200(t *testing.T) {
 	store := scenarioStore()
 	enf := &fakeCadenceScopedEnforcer{allowedCovens: map[string]bool{"coven-a": true}}
@@ -1116,11 +1112,11 @@ func TestCadencePatch_ScopeAllowed_RetargetCovenA_200(t *testing.T) {
 	}
 }
 
-// (c”) PATCH без incarnation.run вообще (нет kind-permission) → 403. Закрывает
-// дыру «PATCH без kind-permission-проверки» (вторая дыра, kind-guard на PATCH).
+// (c") PATCH without incarnation.run at all (no kind-permission) → 403. Closes
+// the "PATCH without kind-permission check" hole (second hole, kind-guard on PATCH).
 func TestCadencePatch_NoKindPermission_403(t *testing.T) {
 	store := scenarioStore()
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // нет incarnation.run
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
 	h := newCadenceHandler(store, enf)
 	id := audit.NewULID()
 
@@ -1238,7 +1234,7 @@ func TestCadenceList_BadKind422(t *testing.T) {
 
 // --- tests: patch ---
 
-// PATCH меняет имя и enabled (без смены расписания → next_run не трогается).
+// PATCH changes name and enabled (no schedule change → next_run untouched).
 func TestCadencePatch_OK(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandler(store, allowAll())
@@ -1261,7 +1257,7 @@ func TestCadencePatch_OK(t *testing.T) {
 	}
 }
 
-// PATCH со сменой расписания (interval → cron) пересчитывает next_run_at.
+// PATCH with a schedule change (interval → cron) recomputes next_run_at.
 func TestCadencePatch_ScheduleChange_RecomputesNextRun(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandler(store, allowAll())
@@ -1282,7 +1278,7 @@ func TestCadencePatch_ScheduleChange_RecomputesNextRun(t *testing.T) {
 	if dto.NextRunAt == nil {
 		t.Error("next_run_at должен быть пересчитан при смене расписания")
 	}
-	// interval_seconds очищено при переходе на cron (validate-инвариант).
+	// interval_seconds cleared on switch to cron (validate invariant).
 	if dto.IntervalSeconds != nil {
 		t.Errorf("interval_seconds = %v, want nil (очищено при cron)", dto.IntervalSeconds)
 	}
@@ -1301,7 +1297,7 @@ func TestCadencePatch_NotFound404(t *testing.T) {
 	}
 }
 
-// PATCH с битым расписанием (interval_seconds=0) → 422 (validate в Update).
+// PATCH with a broken schedule (interval_seconds=0) → 422 (validate in Update).
 func TestCadencePatch_InvalidInterval422(t *testing.T) {
 	store := scenarioStore()
 	h := newCadenceHandler(store, allowAll())
@@ -1350,7 +1346,7 @@ func TestCadenceDisable_OK(t *testing.T) {
 }
 
 func TestCadenceEnable_NotFound404(t *testing.T) {
-	store := &fakeCadenceStore{setEnabledNoRow: true} // 0 строк → not-found
+	store := &fakeCadenceStore{setEnabledNoRow: true} // 0 rows → not-found
 	h := newCadenceHandler(store, allowAll())
 	id := audit.NewULID()
 

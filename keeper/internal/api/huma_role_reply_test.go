@@ -1,11 +1,11 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO ROLE-домена (handler-native T5d).
-// role больше НЕ зависит от legacy-генерата (0 legacy-генерата в role-файлах), поэтому golden сверяет
-// json native-значения с ЗАФИКСИРОВАННОЙ строкой-эталоном (а не с legacy-генерата-значением).
-// Это пиннит точные wire-байты: мутация формы (убрать omitempty / сменить json-тег /
-// тип поля / порядок) краснит соответствующий case. Единственный reply-роут с телом —
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the ROLE domain (handler-native T5d).
+// role no longer depends on the legacy generator (0 legacy generator in role files), so the golden
+// checks the json native values against a PINNED reference string (not against a legacy-generator value).
+// This pins the exact wire bytes: a shape mutation (drop omitempty / change a json tag /
+// field type / order) reddens the matching case. The only reply route with a body is
 // GET /v1/roles (RoleListReply.Items []RoleView); create/delete/update-permissions/
-// grant/revoke — 201/204 БЕЗ тела (golden им не нужен). Покрыты обе указательных
-// ветки (nil/non-nil) для default_scope/description + []-vs-null для operators/permissions.
+// grant/revoke are 201/204 with no body (no golden needed). Both pointer branches
+// (nil/non-nil) are covered for default_scope/description + []-vs-null for operators/permissions.
 package api
 
 import (
@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// goldenRoleWire сверяет json.Marshal(native) байт-в-байт с зафиксированным эталоном.
+// goldenRoleWire checks json.Marshal(native) byte-for-byte against a pinned reference.
 func goldenRoleWire(t *testing.T, name string, native any, want string) {
 	t.Helper()
 	got, err := json.Marshal(native)
@@ -29,21 +29,21 @@ func TestGoldenWire_RoleReply(t *testing.T) {
 	scope := "coven=prod,eu"
 	desc := "ops роль"
 
-	// --- RoleView: default_scope/description omitempty (обе ветки) + []-vs-null ---
+	// --- RoleView: default_scope/description omitempty (both branches) + []-vs-null ---
 	goldenRoleWire(t, "RoleView/full",
 		RoleView{Builtin: true, DefaultScope: &scope, Description: &desc, Name: "ops", Operators: []string{"archon-alice"}, Permissions: []string{"role.list", "service.list"}},
 		`{"builtin":true,"default_scope":"coven=prod,eu","description":"ops роль","name":"ops","operators":["archon-alice"],"permissions":["role.list","service.list"]}`)
-	// default_scope опущен (nil), description присутствует пустой; operators/permissions
-	// пустые массивы (non-nil) → `[]`.
+	// default_scope omitted (nil), description present and empty; operators/permissions
+	// empty arrays (non-nil) → `[]`.
 	goldenRoleWire(t, "RoleView/nil_scope_empty_lists",
 		RoleView{Builtin: false, DefaultScope: nil, Description: nil, Name: "viewer", Operators: []string{}, Permissions: []string{}},
 		`{"builtin":false,"name":"viewer","operators":[],"permissions":[]}`)
-	// nil-слайс ветка (на wire `null`).
+	// nil-slice branch (on the wire `null`).
 	goldenRoleWire(t, "RoleView/nil_lists",
 		RoleView{Builtin: false, Name: "x", Operators: nil, Permissions: nil},
 		`{"builtin":false,"name":"x","operators":null,"permissions":null}`)
 
-	// --- RoleListReply: items наполнен / пустой / nil ---
+	// --- RoleListReply: items populated / empty / nil ---
 	rv := RoleView{Builtin: true, Name: "ops", Operators: []string{}, Permissions: []string{}}
 	goldenRoleWire(t, "RoleListReply/items",
 		RoleListReply{Items: []RoleView{rv}},

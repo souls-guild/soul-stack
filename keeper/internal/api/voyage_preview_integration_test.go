@@ -2,17 +2,17 @@
 
 package api
 
-// E2E на реальной PG/роутере: POST /v1/voyages/preview (ADR-043 amendment §4) —
-// dry-resolve scope БЕЗ создания Voyage. Гарантии:
-//   - тот же резолв/гейты, что Create (RBAC-by-kind, target ∩ Purview для
-//     command, max_scope-cap) — preview отказывает ТАМ ЖЕ, где Create;
-//   - ответ НЕ раскрывает SID-список (только числа);
-//   - persist не происходит (тело Voyage в БД не появляется — проверяется через
-//     отсутствие 202/voyage_id и косвенно через consistency-кейс).
+// E2E against real PG/router: POST /v1/voyages/preview (ADR-043 amendment §4) —
+// dry-resolve scope without creating a Voyage. Guarantees:
+//   - the same resolve/gates as Create (RBAC-by-kind, target ∩ Purview for
+//     command, max_scope-cap) — preview rejects at the SAME points as Create;
+//   - the response does NOT reveal the SID list (only numbers);
+//   - no persist happens (no Voyage body appears in the DB — verified via
+//     the absence of 202/voyage_id and indirectly via the consistency case).
 //
-// max_scope-cap / window-арифметика / отсутствие SID-полей в DTO покрыты
-// дополнительно unit-тестами handler-а (TestVoyagePreview_* в handlers/), где
-// maxScope конфигурируем и резолвер детерминирован.
+// max_scope-cap / window arithmetic / absence of SID fields in the DTO are covered
+// additionally by handler unit tests (TestVoyagePreview_* in handlers/), where
+// maxScope is configurable and the resolver is deterministic.
 
 import (
 	"encoding/json"
@@ -24,7 +24,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// postPreviewVoyage — POST /v1/voyages/preview; возвращает статус + тело.
+// postPreviewVoyage — POST /v1/voyages/preview; returns status + body.
 func postPreviewVoyage(t *testing.T, base, tok, body string) (int, string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/voyages/preview", strings.NewReader(body))
@@ -39,7 +39,7 @@ func postPreviewVoyage(t *testing.T, base, tok, body string) (int, string) {
 	return resp.StatusCode, string(raw)
 }
 
-// previewReply — числовой ответ preview (без SID-списка).
+// previewReply — the numeric preview response (without the SID list).
 type previewReply struct {
 	Kind               string `json:"kind"`
 	ScopeSize          int    `json:"scope_size"`
@@ -57,8 +57,8 @@ func decodePreview(t *testing.T, body string) previewReply {
 	return r
 }
 
-// Guard: scenario preview — scope_size = число инкарнаций; total_batches и
-// effective_batch_size корректны при batch=N и batch=N%.
+// Guard: scenario preview — scope_size = the number of incarnations; total_batches and
+// effective_batch_size are correct for batch=N and batch=N%.
 func TestIntegration_VoyagePreview_Scenario_ScopeAndBatches(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
@@ -70,7 +70,7 @@ func TestIntegration_VoyagePreview_Scenario_ScopeAndBatches(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 
-	// batch=2 → 3 инкарнации, Leg-и [2,1] = 2 батча, effective_batch_size=2.
+	// batch=2 → 3 incarnations, Legs [2,1] = 2 batches, effective_batch_size=2.
 	code, body := postPreviewVoyage(t, base, tok,
 		`{"kind":"scenario","scenario_name":"deploy","target":{"service":"redis"},"batch":"2"}`)
 	if code != http.StatusOK {
@@ -105,9 +105,9 @@ func TestIntegration_VoyagePreview_Scenario_ScopeAndBatches(t *testing.T) {
 	}
 }
 
-// Guard: command preview — scope_size = число хостов; scoped-Архонт coven=A,
-// target coven=A∪B → scope_size = подмножество A (наследует Purview, НЕ весь
-// флот). Тот же резолвер, что у Create.
+// Guard: command preview — scope_size = the number of hosts; a scoped Archon coven=A,
+// target coven=A∪B → scope_size = a subset of A (inherits Purview, NOT all
+// souls). The same resolver as Create.
 func TestIntegration_VoyagePreview_Command_ScopedSubset(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
@@ -119,7 +119,7 @@ func TestIntegration_VoyagePreview_Command_ScopedSubset(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-a", []string{"cmd-ops"})
 
-	// Широкий target coven=shared (3 хоста); scope=A урезает до 2 (a-01,a-02).
+	// Wide target coven=shared (3 hosts); scope=A trims to 2 (a-01,a-02).
 	code, body := postPreviewVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["shared"]}}`)
 	if code != http.StatusOK {
@@ -134,7 +134,7 @@ func TestIntegration_VoyagePreview_Command_ScopedSubset(t *testing.T) {
 	}
 }
 
-// Guard: command preview — явный чужой SID → 403 (anti-escalation, parity Create).
+// Guard: command preview — an explicit foreign SID → 403 (anti-escalation, parity Create).
 func TestIntegration_VoyagePreview_Command_ExplicitForeignSID_403(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-a", "")
@@ -152,7 +152,7 @@ func TestIntegration_VoyagePreview_Command_ExplicitForeignSID_403(t *testing.T) 
 	}
 }
 
-// Guard: command preview — пустое пересечение (чужой coven урезан в ноль) → 422
+// Guard: command preview — empty intersection (a foreign coven trimmed to zero) → 422
 // voyage_empty_target (parity Create).
 func TestIntegration_VoyagePreview_Command_EmptyIntersection_422(t *testing.T) {
 	truncateOperators(t)
@@ -174,8 +174,8 @@ func TestIntegration_VoyagePreview_Command_EmptyIntersection_422(t *testing.T) {
 	}
 }
 
-// Guard: window-режим — корректный ответ (batch_mode=window, total_batches=1,
-// effective_batch_size опущен — без null-мусора). window только для command.
+// Guard: window mode — correct response (batch_mode=window, total_batches=1,
+// effective_batch_size omitted — no null junk). window is command-only.
 func TestIntegration_VoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-admin", "")
@@ -201,14 +201,14 @@ func TestIntegration_VoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 	if rep.EffectiveBatchSize != nil {
 		t.Errorf("effective_batch_size = %v, want отсутствие (window — поле неприменимо)", *rep.EffectiveBatchSize)
 	}
-	// Явная проверка: в сыром JSON нет ключа effective_batch_size (omitempty).
+	// Explicit check: the raw JSON has no effective_batch_size key (omitempty).
 	if strings.Contains(body, "effective_batch_size") {
 		t.Errorf("window-ответ содержит effective_batch_size (должен быть опущен): %s", body)
 	}
 }
 
-// Guard: ответ preview НЕ содержит SID-список / hosts / incarnations (раскрытие
-// узлов запрещено, ADR-043 amendment §4) — явная проверка сырого JSON.
+// Guard: the preview response does NOT contain a SID list / hosts / incarnations (node
+// disclosure is forbidden, ADR-043 amendment §4) — an explicit check of the raw JSON.
 func TestIntegration_VoyagePreview_NoSIDDisclosure(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-admin", "")
@@ -231,8 +231,8 @@ func TestIntegration_VoyagePreview_NoSIDDisclosure(t *testing.T) {
 	}
 }
 
-// Guard: консистентность Create↔Preview — тот же body даёт тот же scope_size.
-// Preview-числа = то, что Create реально зарезолвил бы (и зарезолвил).
+// Guard: Create↔Preview consistency — the same body yields the same scope_size.
+// The preview numbers = what Create would actually resolve (and did resolve).
 func TestIntegration_VoyagePreview_ConsistentWithCreate(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-admin", "")

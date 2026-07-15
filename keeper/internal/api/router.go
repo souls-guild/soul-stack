@@ -17,15 +17,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// buildRouter собирает chi-роутер Operator API.
+// buildRouter assembles the Operator API chi router.
 //
-// Маршрутизация:
+// Routing:
 //
-//	GET    /healthz                                  — liveness, без auth.
-//	GET    /readyz                                   — readiness (PG+Vault), без auth.
-//	GET    /openapi.yaml                             — served huma-дамп спеки (YAML), за JWT (вне /v1).
-//	GET    /openapi.json                             — served huma-дамп спеки (JSON, для /docs), за JWT.
-//	GET    /docs                                     — публичный RapiDoc-вьювер (shell, без auth).
+//	GET    /healthz                                  — liveness, no auth.
+//	GET    /readyz                                   — readiness (PG+Vault), no auth.
+//	GET    /openapi.yaml                             — served huma spec dump (YAML), behind JWT (outside /v1).
+//	GET    /openapi.json                             — served huma spec dump (JSON, for /docs), behind JWT.
+//	GET    /docs                                     — public RapiDoc viewer (shell, no auth).
 //	POST   /v1/operators                             — create Archon (M0.6b).
 //	GET    /v1/operators                              — list Archons (UI iter 2).
 //	GET    /v1/operators/{aid}                       — get Archon detail (UI iter 2).
@@ -51,28 +51,28 @@ import (
 //	GET    /v1/incarnations/{name}                   — get incarnation (M0.6c-1).
 //	GET    /v1/incarnations/{name}/history           — state_history (M0.6c-1).
 //	POST   /v1/incarnations/{name}/scenarios/{scenario} — run named scenario (M0.6c).
-//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 prefill формы из state (docs/input.md).
-//	POST   /v1/incarnations/{name}/unlock            — снять error_locked (M0.6c).
-//	POST   /v1/incarnations/{name}/upgrade           — перевод state_schema_version (ADR-019).
-//	GET    /v1/incarnations/{name}/upgrade-paths     — пути апгрейда: теги + on-demand ?to= (ADR-0068 §6).
+//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 form prefill from state (docs/input.md).
+//	POST   /v1/incarnations/{name}/unlock            — clear error_locked (M0.6c).
+//	POST   /v1/incarnations/{name}/upgrade           — migrate state_schema_version (ADR-019).
+//	GET    /v1/incarnations/{name}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
-//	PATCH  /v1/incarnations/{name}/hosts             — править declared spec.hosts[] (ADR-008).
-//	PUT    /v1/incarnations/{name}/traits            — заменить operator-set trait-метки (ADR-060).
-//	POST   /v1/voyages                               — создать Voyage (ADR-043 S5, RBAC-by-kind).
-//	POST   /v1/voyages/preview                       — dry-resolve scope без создания Voyage (ADR-043 amendment §4).
-//	GET    /v1/voyages                                — list Voyage-прогонов (ADR-043 S5).
+//	PATCH  /v1/incarnations/{name}/hosts             — edit declared spec.hosts[] (ADR-008).
+//	PUT    /v1/incarnations/{name}/traits            — replace operator-set trait labels (ADR-060).
+//	POST   /v1/voyages                               — create Voyage (ADR-043 S5, RBAC-by-kind).
+//	POST   /v1/voyages/preview                       — dry-resolve scope without creating a Voyage (ADR-043 amendment §4).
+//	GET    /v1/voyages                                — list Voyage runs (ADR-043 S5).
 //	GET    /v1/voyages/{id}                          — snapshot Voyage (ADR-043 S5).
 //	GET    /v1/voyages/{id}/targets                  — All-runs drill (ADR-043 S5).
 //	DELETE /v1/voyages/{id}                          — cancel pending/scheduled Voyage (ADR-043 S5).
-//	POST   /v1/cadences                              — создать Cadence (ADR-046 S4, двухуровневый RBAC-by-kind).
-//	GET    /v1/cadences                              — list Cadence-расписаний (ADR-046 S4).
-//	GET    /v1/cadences/{id}                         — деталь Cadence (ADR-046 S4).
-//	PATCH  /v1/cadences/{id}                         — обновить Cadence (ADR-046 S4).
-//	DELETE /v1/cadences/{id}                         — снять Cadence (ADR-046 S4).
-//	POST   /v1/cadences/{id}/enable                  — включить Cadence (ADR-046 S4).
-//	POST   /v1/cadences/{id}/disable                 — выключить Cadence (ADR-046 S4).
-//	GET    /v1/cadences/{id}/runs                    — дочерние Voyage Cadence (ADR-046 S4).
-//	GET    /v1/push-runs                              — глобальный list push-прогонов (UI-4).
+//	POST   /v1/cadences                              — create Cadence (ADR-046 S4, two-level RBAC-by-kind).
+//	GET    /v1/cadences                              — list Cadence schedules (ADR-046 S4).
+//	GET    /v1/cadences/{id}                         — Cadence detail (ADR-046 S4).
+//	PATCH  /v1/cadences/{id}                         — update Cadence (ADR-046 S4).
+//	DELETE /v1/cadences/{id}                         — remove Cadence (ADR-046 S4).
+//	POST   /v1/cadences/{id}/enable                  — enable Cadence (ADR-046 S4).
+//	POST   /v1/cadences/{id}/disable                 — disable Cadence (ADR-046 S4).
+//	GET    /v1/cadences/{id}/runs                    — child Voyages of a Cadence (ADR-046 S4).
+//	GET    /v1/push-runs                              — global list of push runs (UI-4).
 //	POST   /v1/souls                                 — register soul + token.
 //	GET    /v1/souls                                  — list souls (filters: coven/status/transport).
 //	GET    /v1/souls/{sid}                           — get one soul (detail-page).
@@ -121,118 +121,118 @@ import (
 //	GET    /v1/profiles                              — list Cloud-Profiles (ADR-017).
 //	GET    /v1/profiles/{name}                       — read Cloud-Profile (ADR-017).
 //	DELETE /v1/profiles/{name}                       — delete Cloud-Profile (ADR-017).
-//	POST   /v1/modules/{name}/form-prep              — резолвер source-каталогов UI-формы модуля (ADR-045 S3).
-//	GET    /v1/permissions                           — каталог RBAC-permissions (auth-only, фикс UI hardcode).
-//	GET    /v1/event-types                           — каталог event-types для Tiding-подписки (auth-only, фикс UI hardcode).
-//	GET    /v1/herald-types                          — каталог типов Herald-канала и config-полей (auth-only, фикс UI hardcode).
-//	GET    /v1/me/permissions                        — эффективные права текущего Архонта (auth-only, permission-aware UI).
-//	/v1/*                                            — catch-all 404 за auth-chain.
+//	POST   /v1/modules/{name}/form-prep              — resolver of source catalogs for the module UI form (ADR-045 S3).
+//	GET    /v1/permissions                           — catalog of RBAC permissions (auth-only, fixes UI hardcode).
+//	GET    /v1/event-types                           — catalog of event-types for Tiding subscription (auth-only, fixes UI hardcode).
+//	GET    /v1/herald-types                          — catalog of Herald channel types and config fields (auth-only, fixes UI hardcode).
+//	GET    /v1/me/permissions                        — effective permissions of the current Archon (auth-only, permission-aware UI).
+//	/v1/*                                            — catch-all 404 behind the auth chain.
 //
-// tempoBucketVoyageCreate / tempoBucketVoyagePreview — логические имена
-// Tempo-bucket-ов resolver-тяжёлых voyage-write-путей (ADR-050(c) + amendment
-// 2026-06-17). Совпадают с лейблом метрики `endpoint` и config-ключами
+// tempoBucketVoyageCreate / tempoBucketVoyagePreview — logical names of the
+// Tempo buckets for the resolver-heavy voyage-write paths (ADR-050(c) + amendment
+// 2026-06-17). They match the metric label `endpoint` and the config keys
 // `tempo.voyage_create` / `tempo.voyage_preview`.
 //
-// ОТДЕЛЬНЫЕ bucket-ключи (per-AID Redis-ключ `tempo:<aid>:<bucket>`): preview
-// и create НЕ делят квоту — исчерпание одного не 429-ит другой. До amendment-а
-// preview реюзил voyage_create (единый лимит), но preview read-like по эффекту
-// (без persist/audit) и заслуживает более мягкого собственного лимита, оставаясь
-// при этом resolver-heavy → не безлимит.
+// SEPARATE bucket keys (per-AID Redis key `tempo:<aid>:<bucket>`): preview
+// and create do NOT share a quota — exhausting one does not 429 the other. Before the
+// amendment preview reused voyage_create (a single limit), but preview is read-like in
+// effect (no persist/audit) and deserves a softer limit of its own, while still being
+// resolver-heavy → not unlimited.
 const (
 	tempoBucketVoyageCreate  = "voyage_create"
 	tempoBucketVoyagePreview = "voyage_preview"
 )
 
-// Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
-// chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
-// чтобы 404/405 не приходили в text/plain default-формате stdlib.
+// Health/meta are placed outside `/v1/*` per operator-api.md § Health / Meta.
+// chi.NotFound and chi.MethodNotAllowed are replaced with problem+json handlers,
+// so 404/405 do not arrive in the stdlib default text/plain format.
 func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
-	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
-	// наш problem+json. ЕДИНАЯ ТОЧКА install — здесь, при сборке router-а (не в
-	// фабрике каждой huma.API): для тиража ~20 доменов один install, не на домен.
+	// huma error-override (ADR-054, FULL-TYPED): global huma.NewError →
+	// our problem+json. The SINGLE install POINT is here, at router assembly (not in
+	// each huma.API factory): one install for the ~20-domain rollout, not per domain.
 	installHumaErrorOverride()
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		apimiddleware.WriteNotFound(w, req, "no such endpoint")
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
-		// chi автоматически фильтрует методы для маршрутов, у которых
-		// есть зарегистрированные handler-ы; для POST-only /v1/operators
-		// GET → 405. Allow-header не выставляем (chi не отдаёт список
-		// allowed-методов сам); опустить допустимо по RFC 7231.
+		// chi automatically filters methods for routes that have registered
+		// handlers; for POST-only /v1/operators a GET → 405. We do not set the
+		// Allow header (chi does not provide the list of allowed methods itself);
+		// omitting it is permitted by RFC 7231.
 		apimiddleware.Write405(w, req)
 	})
 
-	// Health / Meta / Docs — вне /v1.
+	// Health / Meta / Docs — outside /v1.
 	//
-	// `/metrics` здесь НЕ монтируется: Prometheus-эндпоинт вынесен на
-	// выделенный listener (`listen.metrics.addr`, ADR-024, см.
-	// keeper/cmd/keeper) с опц. basic-auth. keeper_http_*-метрики при этом
-	// остаются — их собирает middleware на /v1/* (ниже), а экспонирует тот
-	// же *obs.Registry на metrics-listener-е.
+	// `/metrics` is NOT mounted here: the Prometheus endpoint lives on a
+	// dedicated listener (`listen.metrics.addr`, ADR-024, see
+	// keeper/cmd/keeper) with optional basic-auth. The keeper_http_* metrics still
+	// remain — collected by the middleware on /v1/* (below) and exposed by the
+	// same *obs.Registry on the metrics listener.
 	//
-	// БЕЗОПАСНОСТЬ (механизм A, ADR-054 doc-viewer):
-	//   - /healthz, /readyz — ПУБЛИЧНЫЕ (liveness/readiness, не пишутся в audit).
-	//   - /docs + /docs/assets/* — ПУБЛИЧНЫЙ shell + статика RapiDoc (не несут
-	//     данных/описания API; чувствительное приходит лишь после fetch спеки за
-	//     JWT). См. docs_viewer.go.
-	//   - /openapi.yaml + /openapi.json — ЗА JWT. Раньше /openapi.yaml был
-	//     публичным, но раскрывал полную API-поверхность всем; теперь оба
-	//     required Bearer (тот же RequireJWT, что и /v1), но БЕЗ /v1-обвязки
-	//     (maxBody/metrics/audit/RBAC): спека статична, mount ВНЕ /v1. Страница
-	//     /docs фетчит .json с Bearer-заголовком (RapiDoc рендерит объект инлайн).
+	// SECURITY (mechanism A, ADR-054 doc-viewer):
+	//   - /healthz, /readyz — PUBLIC (liveness/readiness, not written to audit).
+	//   - /docs + /docs/assets/* — PUBLIC shell + RapiDoc static (they carry no
+	//     API data/description; the sensitive part arrives only after fetching the spec
+	//     behind JWT). See docs_viewer.go.
+	//   - /openapi.yaml + /openapi.json — BEHIND JWT. /openapi.yaml used to be
+	//     public but exposed the full API surface to everyone; now both
+	//     require Bearer (the same RequireJWT as /v1), but WITHOUT the /v1 wiring
+	//     (maxBody/metrics/audit/RBAC): the spec is static, mounted OUTSIDE /v1. The
+	//     /docs page fetches .json with a Bearer header (RapiDoc renders the object inline).
 	//
-	// /openapi.yaml и /openapi.json отдают runtime-дамп huma-агрегатора (3.1,
-	// «правда в коде») из ОДНОГО source-of-truth (servedOpenAPIHandler /
-	// servedOpenAPIJSONHandler) — кеш собирается один раз. YAML — людям/тулам,
-	// JSON — вьюверу /docs. Committed docs/keeper/openapi.yaml — производный
-	// huma-генерат для UI-vendor (make gen-openapi), он НЕ served и НЕ embed-ится.
+	// /openapi.yaml and /openapi.json serve the runtime dump of the huma aggregator (3.1,
+	// "truth in code") from a SINGLE source-of-truth (servedOpenAPIHandler /
+	// servedOpenAPIJSONHandler) — the cache is built once. YAML for humans/tools,
+	// JSON for the /docs viewer. The committed docs/keeper/openapi.yaml is a derived
+	// huma artifact for the UI vendor (make gen-openapi); it is NOT served and NOT embedded.
 	r.Get("/healthz", healthH.Healthz)
 	r.Get("/readyz", healthH.Readyz)
 	r.With(apimiddleware.RequireJWT(verifier)).Get("/openapi.yaml", servedOpenAPIHandler)
 	r.With(apimiddleware.RequireJWT(verifier)).Get("/openapi.json", servedOpenAPIJSONHandler)
 	mountDocsViewer(r)
 
-	// /ui — встроенный UI (ADR-055), публичный mount ВНЕ /v1 (parity /docs):
-	// статика go:embed без JWT/RBAC/audit; защищён API, не статика. Монтируется
-	// ТОЛЬКО при включённом тоггле web_ui_enabled (default-ON, резолв
-	// [config.KeeperConfig.WebUIMounted]); при явном `false` /ui не подключается
-	// → 404 (API-периметр /v1 не затрагивается ни в одном случае).
+	// /ui — the embedded UI (ADR-055), a public mount OUTSIDE /v1 (parity with /docs):
+	// go:embed static without JWT/RBAC/audit; the API is protected, not the static. Mounted
+	// ONLY when the web_ui_enabled toggle is on (default-ON, resolved via
+	// [config.KeeperConfig.WebUIMounted]); with an explicit `false` /ui is not attached
+	// → 404 (the /v1 API perimeter is not affected in any case).
 	if webUIEnabled {
 		webui.Mount(r)
 	}
 
-	// /auth/* — федеративная аутентификация (ADR-058) ВНЕ /v1: публичный вход
-	// (сам логин, JWT ещё нет — RequireJWT неприменим, parity /healthz). Монтируется
-	// при non-nil ldapAuth (POST /auth/ldap/login) И/ИЛИ non-nil oidcAuth
-	// (GET /auth/oidc/{login,callback}); иначе способ логина недоступен (ADR-053
-	// OPTIONAL-tier). Anti-DoS body-limit стоит (credentials/callback-query — малые),
-	// но без metrics/RBAC/audit-middleware (/v1-обвязка): audit логина пишет сам
-	// handler (operator.login).
+	// /auth/* — federated authentication (ADR-058) OUTSIDE /v1: public login
+	// (the login itself, no JWT yet — RequireJWT does not apply, parity with /healthz). Mounted
+	// when ldapAuth is non-nil (POST /auth/ldap/login) AND/OR oidcAuth is non-nil
+	// (GET /auth/oidc/{login,callback}); otherwise the login method is unavailable (ADR-053
+	// OPTIONAL tier). The anti-DoS body-limit is in place (credentials/callback-query are small),
+	// but without metrics/RBAC/audit-middleware (the /v1 wiring): the login audit is written by the
+	// handler itself (operator.login).
 	//
 	// ANTI-BRUTEFORCE (ADR-058(g), HIGH-3): AuthLoginLimit per-IP+per-username
-	// throttle + lockout (loginGuard, fail-closed на lockout, fail-open на throttle).
-	// loginGuard=nil (нет Redis) → passthrough. Каждый способ — СВОЯ chi-подгруппа,
-	// чтобы навесить разный экстрактор username (LDAP — из тела; OIDC — нет) и
-	// общий guard; раздельные dump-таргеты huma.API в fullSpecGroups.
+	// throttle + lockout (loginGuard, fail-closed on lockout, fail-open on throttle).
+	// loginGuard=nil (no Redis) → passthrough. Each method has its OWN chi subgroup,
+	// to attach a different username extractor (LDAP — from the body; OIDC — none) and
+	// a shared guard; separate huma.API dump targets in fullSpecGroups.
 	if ldapAuth != nil || oidcAuth != nil {
 		r.Route("/auth", func(r chi.Router) {
 			r.Use(maxBodyMiddleware(v1RequestBodyLimit))
 			if ldapAuth != nil {
-				// LDAP: throttle+lockout с per-username (из JSON-тела) + запись
-				// неудач (401/403). Своя chi-группа под middleware.
+				// LDAP: throttle+lockout with per-username (from the JSON body) + recording
+				// of failures (401/403). Its own chi group under the middleware.
 				r.Group(func(r chi.Router) {
 					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.LDAPUsernameExtractor, true, logger))
 					registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
 				})
 			}
 			if oidcAuth != nil {
-				// OIDC: throttle+lockout per-IP (username приходит от IdP, не из
-				// запроса → extractUsername=nil). recordFailures=true: на /login
-				// (302) неудачи нет (isAuthFailure(302)=false → no-op), на /callback
-				// 401/403 пишется счётчик. /login-throttle гасит flow-state-flood.
+				// OIDC: throttle+lockout per-IP (the username comes from the IdP, not from
+				// the request → extractUsername=nil). recordFailures=true: on /login
+				// (302) there is no failure (isAuthFailure(302)=false → no-op), on /callback
+				// a 401/403 increments the counter. The /login throttle dampens the flow-state flood.
 				r.Group(func(r chi.Router) {
 					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, nil, true, logger))
 					registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
@@ -241,37 +241,37 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		})
 	}
 
-	// /v1/* — auth + RBAC + audit. Selector-extractor для operator
-	// endpoints — NoSelector (rbac.md не определяет селекторы для
+	// /v1/* — auth + RBAC + audit. The selector-extractor for operator
+	// endpoints is NoSelector (rbac.md does not define selectors for
 	// permission `operator.*`).
 	r.Route("/v1", func(r chi.Router) {
-		// Anti-DoS: лимит на body Request-а. Operator endpoints — JSON
-		// объёмом ~200 байт; ставим v1RequestBodyLimit с запасом и
-		// одновременно отсекаем «отправлю гигабайт мусора».
-		// MaxBytesReader при превышении лимита подменяет Read на
-		// http.MaxBytesError; json.Decoder получит её и handler вернёт
+		// Anti-DoS: a limit on the Request body. Operator endpoints are JSON
+		// of ~200 bytes; we set v1RequestBodyLimit with headroom and
+		// at the same time cut off "I'll send a gigabyte of junk".
+		// on exceeding the limit MaxBytesReader substitutes Read with
+		// http.MaxBytesError; json.Decoder receives it and the handler returns
 		// 400 problem+json (TypeMalformedRequest).
 		r.Use(maxBodyMiddleware(v1RequestBodyLimit))
-		// HTTP-метрики — внутри /v1, чтобы chi уже знал RoutePattern
-		// (без него label `path` = raw URL → cardinality-blow-up). path-
-		// extractor читает chi.RouteContext, заполненный chi-router-ом
-		// после match-а; для catch-all `/v1/*` ниже RoutePattern будет
-		// `/v1/*` — это допустимо (cardinality стабильная).
+		// HTTP metrics — inside /v1, so chi already knows the RoutePattern
+		// (without it the `path` label = raw URL → cardinality blow-up). The path
+		// extractor reads chi.RouteContext, filled by the chi router
+		// after the match; for the catch-all `/v1/*` below the RoutePattern will be
+		// `/v1/*` — that is acceptable (cardinality is stable).
 		if metricsHTTP != nil {
 			r.Use(metricsHTTP.MiddlewareForPath(routePatternFromChi))
 		}
 		r.Use(apimiddleware.RequireJWT(verifier))
 
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2a домена operator целиком по 5
-		// эталонам): create/revoke/issue-token — WRITE+AUDIT вариант B (huma-audit-
-		// middleware: full-typed huma САМ пишет ответ, StatusRecorder из
-		// apimiddleware.Audit неприменим — audit держит hctx.Status() + carrier-
-		// payload, иначе рецидив S6); list — read-with-typed-query (БЕЗ audit, bad
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2a of the entire operator domain over 5
+		// references): create/revoke/issue-token — WRITE+AUDIT variant B (huma-audit-
+		// middleware: full-typed huma writes the response ITSELF, the StatusRecorder from
+		// apimiddleware.Audit does not apply — audit holds hctx.Status() + a carrier
+		// payload, otherwise an S6 relapse); list — read with typed query (no audit, bad
 		// auth_method enum→422, revoked bool→400, pagination int32→400); get —
-		// read-with-path. Каждый write-роут — СВОЯ chi-группа с собственным event-
-		// типом (newHumaOperatorAPI(evt)). RequirePermission — chi-middleware группы
-		// (huma наследует). Все operator-роуты обслуживает huma. MCP operator-tools
-		// зовут operator.Service напрямую (мимо handler).
+		// read with path. Each write route has its OWN chi group with its own event
+		// type (newHumaOperatorAPI(evt)). RequirePermission is the group chi-middleware
+		// (huma inherits it). huma serves all operator routes. MCP operator-tools
+		// call operator.Service directly (bypassing the handler).
 		r.Route("/operators", func(r chi.Router) {
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "operator", "create", apimiddleware.NoSelector),
@@ -280,18 +280,18 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			// GET /v1/operators — list (UI iteration 2 /archons-list).
-			// Permission operator.list, NoSelector. Read-only — без audit.
+			// Permission operator.list, NoSelector. Read-only — no audit.
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "operator", "list", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaOperatorList(newHumaCadenceAPI(r), opH)
 			})
 
-			// GET /v1/operators/{aid} — detail. Permission operator.list (одна
-			// permission покрывает list+get, паттерн soul.list/service.list — read
-			// без отдельного operator.read в MVP). Read-only — без audit. huma-op
-			// несёт полный путь /{aid} (НЕ вложен в r.Route("/{aid}") — иначе chi
-			// удвоил бы префикс).
+			// GET /v1/operators/{aid} — detail. Permission operator.list (one
+			// permission covers list+get, the soul.list/service.list pattern — read
+			// without a separate operator.read in MVP). Read-only — no audit. The huma op
+			// carries the full path /{aid} (NOT nested in r.Route("/{aid}") — otherwise chi
+			// would double the prefix).
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "operator", "list", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
@@ -333,21 +333,21 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/roles — RBAC-CRUD (роли / permissions / membership), Slice 2a.
-		// Подключается только при non-nil roleH (Deps.RBACSvc прокинут).
-		// Selector-extractor — NoSelector: rbac.md не определяет селекторы для
-		// permission `role.*` (как и для `operator.*`).
+		// /v1/roles — RBAC CRUD (roles / permissions / membership), Slice 2a.
+		// Mounted only when roleH is non-nil (Deps.RBACSvc wired in).
+		// The selector-extractor is NoSelector: rbac.md does not define selectors for
+		// the `role.*` permission (nor for `operator.*`).
 		//
-		// FULL-TYPED huma (ADR-054, ПЕРВЫЙ ТИРАЖ-БАТЧ домена целиком по двум
-		// эталонам pilot-1/pilot-2): ВСЕ role-роуты на huma. READ (list) — по
-		// READ-варианту pilot-1 (typed output, БЕЗ audit). WRITE (create/delete/
-		// update-permissions/grant/revoke-operator) — по pilot-2 (typed I/O +
-		// huma-audit-middleware вариант B: full-typed huma САМ пишет ответ, поэтому
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
-		// humaAuditMiddleware, читающий hctx.Status() + carrier-payload, иначе
-		// рецидив S6). Каждый write-роут — СВОЯ chi-группа с собственным event-типом
-		// (newHumaRoleAPI(evt)). RequirePermission — chi-middleware группы (huma
-		// наследует). Все role-роуты обслуживает huma.
+		// FULL-TYPED huma (ADR-054, the FIRST ROLLOUT BATCH of the entire domain over the two
+		// references pilot-1/pilot-2): ALL role routes on huma. READ (list) — per the
+		// pilot-1 READ variant (typed output, no audit). WRITE (create/delete/
+		// update-permissions/grant/revoke-operator) — per pilot-2 (typed I/O +
+		// huma-audit-middleware variant B: full-typed huma writes the response ITSELF, so
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
+		// humaAuditMiddleware, which reads hctx.Status() + a carrier payload, otherwise
+		// an S6 relapse). Each write route has its OWN chi group with its own event type
+		// (newHumaRoleAPI(evt)). RequirePermission is the group chi-middleware (huma
+		// inherits it). huma serves all role routes.
 		if roleH != nil {
 			r.Route("/roles", func(r chi.Router) {
 				r.With(
@@ -356,7 +356,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaRole(newHumaRoleAPI(r, auditWriter, audit.EventRoleCreated, logger), roleH)
 				})
 
-				// GET /v1/roles — READ, без audit (паттерн role.list).
+				// GET /v1/roles — READ, no audit (the role.list pattern).
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "role", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
@@ -389,26 +389,26 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/synods — Synod-CRUD (группы / membership / bundle), ADR-049.
-		// Подключается только при non-nil synodH (Deps.RBACSvc прокинут).
-		// Selector — NoSelector: synod.* — кластер-уровневая операция без scope
-		// по coven/host (как role.* / operator.*; group-scope ADR-049 НЕ вводит).
+		// /v1/synods — Synod CRUD (groups / membership / bundle), ADR-049.
+		// Mounted only when synodH is non-nil (Deps.RBACSvc wired in).
+		// Selector — NoSelector: synod.* is a cluster-level operation with no scope
+		// by coven/host (like role.* / operator.*; ADR-049 does NOT introduce group-scope).
 		//
-		// Audit-middleware на 7 мутирующих роутах (RBAC-топология аудируется,
-		// ADR-022). `synod.list` — read-only, без audit. Бизнес-логика
-		// (builtin-граница, least-privilege subset на add-operator/grant-role,
-		// self-lockout на delete/remove-operator/revoke-role) — в rbac.Service.
+		// Audit-middleware on the 7 mutating routes (the RBAC topology is audited,
+		// ADR-022). `synod.list` — read-only, no audit. The business logic
+		// (builtin boundary, least-privilege subset on add-operator/grant-role,
+		// self-lockout on delete/remove-operator/revoke-role) — in rbac.Service.
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2d домена synod целиком по эталонам
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2d of the entire synod domain over the
 		// role/operator/augur/herald): create/update/delete + add/remove-operator +
-		// grant/revoke-role — WRITE+AUDIT вариант B (huma-audit-middleware: full-typed
-		// huma САМ пишет ответ, StatusRecorder из apimiddleware.Audit неприменим —
-		// audit держит hctx.Status() + carrier-payload, иначе рецидив S6); list —
-		// read (БЕЗ audit). Sub-resource роуты (/operators, /roles[/...]) несут полный
-		// путь в huma-операции (форма role-домена: единый resource-group). Каждый
-		// write-роут — СВОЯ chi-группа с собственным event-типом (newHumaSynodAPI(evt)).
-		// RequirePermission — chi-middleware группы (huma наследует). Все synod-роуты
-		// обслуживает huma. MCP synod-tools зовут rbac.Service напрямую (мимо handler).
+		// grant/revoke-role — WRITE+AUDIT variant B (huma-audit-middleware: full-typed
+		// huma writes the response ITSELF, the StatusRecorder from apimiddleware.Audit does not apply —
+		// audit holds hctx.Status() + a carrier payload, otherwise an S6 relapse); list —
+		// read (no audit). Sub-resource routes (/operators, /roles[/...]) carry the full
+		// path in the huma operation (the role-domain form: a single resource-group). Each
+		// write route has its OWN chi group with its own event type (newHumaSynodAPI(evt)).
+		// RequirePermission is the group chi-middleware (huma inherits it). huma serves all synod
+		// routes. MCP synod-tools call rbac.Service directly (bypassing the handler).
 		if synodH != nil {
 			r.Route("/synods", func(r chi.Router) {
 				r.With(
@@ -463,42 +463,42 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 
 		// /v1/incarnations — Create + Get + List + History + Run/Unlock/Upgrade/Destroy.
 		//
-		// Selector-стратегия RBAC (ADR-008 amendment a + ADR-047 §г):
-		//   - List/Get/History — [RequireAction] existence-gate (ADR-047 §г):
-		//     scope-aware [RequirePermission]/[RequirePermissionMulti] деньит
-		//     scoped-оператора, когда selector-измерение НЕ резолвится в
-		//     request-контексте (state/regex/soulprint вообще не извлекаются из
-		//     incarnation-строки; coven-scoped матчит, но state-scoped — нет),
-		//     отрезая оператора от собственной видимости ДО handler-а. RequireAction
-		//     спрашивает лишь о НАЛИЧИИ права (`incarnation.{list,get,history}`);
-		//     сужение по scope делает handler после фетча строки
-		//     (ResolveListScopeFor для list, GetInScopeFor для get/history —
-		//     coven∪{name} + state-CEL). Revoked-покрытие — через тот же
+		// RBAC selector strategy (ADR-008 amendment a + ADR-047 §d):
+		//   - List/Get/History — [RequireAction] existence-gate (ADR-047 §d):
+		//     the scope-aware [RequirePermission]/[RequirePermissionMulti] denies a
+		//     scoped operator when the selector dimension does NOT resolve in the
+		//     request context (state/regex/soulprint are not extracted from the
+		//     incarnation row at all; coven-scoped matches, but state-scoped does not),
+		//     cutting the operator off from their own visibility BEFORE the handler. RequireAction
+		//     only asks whether the permission EXISTS (`incarnation.{list,get,history}`);
+		//     the scope narrowing is done by the handler after fetching the row
+		//     (ResolveListScopeFor for list, GetInScopeFor for get/history —
+		//     coven∪{name} + state-CEL). Revoked coverage — via the same
 		//     revoked-aware [rbac.Enforcer.ResolvePurview] (gate HoldsAction→Deny
 		//     →403, handler Deny→Empty→404).
-		//   - Create — [handlers.IncarnationCreateScopeSelector]: scope из тела
-		//     (service= + multi-value coven= из declared covens ∪ {name}) —
-		//     coven-scoped оператор не создаст incarnation с тегом вне scope.
+		//   - Create — [handlers.IncarnationCreateScopeSelector]: scope from the body
+		//     (service= + multi-value coven= from declared covens ∪ {name}) —
+		//     a coven-scoped operator cannot create an incarnation with a tag outside its scope.
 		//   - Run/Unlock/Upgrade/Destroy/… — [handlers.IncarnationScopeSelector]
-		//     (multi-context): читает incarnation по path-{name} и приземляет
+		//     (multi-context): reads the incarnation by path-{name} and lands
 		//     incarnation= + service= + multi-value coven= (covens ∪ {name}).
-		//     RequirePermissionMulti OR-ит контексты — роли `incarnation.* on
-		//     coven=…` / `on service=…` матчат (mutate-роуты не имеют state-scoped-
-		//     дыры read-а: их scope в MVP — coven/service/incarnation, не state).
+		//     RequirePermissionMulti ORs the contexts — roles `incarnation.* on
+		//     coven=…` / `on service=…` match (mutate routes have no state-scoped
+		//     read hole: their scope in MVP is coven/service/incarnation, not state).
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2g домена incarnation ЦЕЛИКОМ — MIXED
-		// audit-класс): create/run/unlock/upgrade — WRITE-MIDDLEWARE-AUDIT вариант B
-		// (newHumaIncarnationAPI(evt) — huma САМ пишет ответ, audit держит hctx.Status()
-		// + carrier-payload из *Typed-reply.AuditPayload, иначе рецидив S6); rerun-last/
-		// check-drift/destroy/update-hosts — WRITE-SELF-AUDIT (audit пишет САМ handler
-		// ВНУТРИ *Typed через h.auditW.Write — payload собирается после доменной операции;
-		// audit-middleware НЕ навешан, newHumaCadenceAPI); list/get/history — read (БЕЗ
-		// audit). ТОПОЛОГИЯ: chi.Route("/{name}") СНЯТ — все incarnation-op несут ПОЛНЫЙ
-		// путь /{name}[/...] на группе /v1/incarnations (иначе sibling-затенение узла
-		// /{name} → 405, блокер батча-2f). Сосуществует с choir-mount (батч-2f) на ТОЙ ЖЕ
-		// группе. Каждый write-роут — СВОЯ chi-группа со своим RBAC/event (Toll на run);
-		// huma наследует chi-middleware. MCP incarnation-tools зовут incarnation.*
-		// домен напрямую (мимо handler) — целостность сохранена.
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2g of the ENTIRE incarnation domain — MIXED
+		// audit class): create/run/unlock/upgrade — WRITE-MIDDLEWARE-AUDIT variant B
+		// (newHumaIncarnationAPI(evt) — huma writes the response ITSELF, audit holds hctx.Status()
+		// + a carrier payload from *Typed-reply.AuditPayload, otherwise an S6 relapse); rerun-last/
+		// check-drift/destroy/update-hosts — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
+		// INSIDE *Typed via h.auditW.Write — the payload is assembled after the domain operation;
+		// audit-middleware is NOT wired, newHumaCadenceAPI); list/get/history — read (no
+		// audit). TOPOLOGY: chi.Route("/{name}") is REMOVED — all incarnation ops carry the FULL
+		// path /{name}[/...] on the /v1/incarnations group (otherwise sibling-shadowing of the
+		// /{name} node → 405, the blocker of batch-2f). Coexists with the choir-mount (batch-2f) on the SAME
+		// group. Each write route has its OWN chi group with its own RBAC/event (Toll on run);
+		// huma inherits the chi-middleware. MCP incarnation-tools call the incarnation.*
+		// domain directly (bypassing the handler) — integrity preserved.
 		incScope := handlers.IncarnationScopeSelector(incH.ContextReader())
 		r.Route("/incarnations", func(r chi.Router) {
 			r.With(
@@ -521,45 +521,45 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
-			// pre-fill UI-формы сценария из incarnation.state (docs/input.md). READ-
-			// резолв (не мутация): audit НЕ навешан, newHumaCadenceAPI. Permission
-			// incarnation.get (reuse: кто читает инкарнацию, тот и получает prefill её
-			// формы); per-{name} scope — in-handler inScope-предикат (GetInScopeFor,
-			// action=get), как у Get/History. Path-whitelist и secret-исключение —
-			// внутри FormPrefillTyped.
+			// pre-fill of the scenario UI form from incarnation.state (docs/input.md). A READ
+			// resolve (not a mutation): audit is NOT wired, newHumaCadenceAPI. Permission
+			// incarnation.get (reuse: whoever reads the incarnation also gets the prefill of its
+			// form); per-{name} scope — the in-handler inScope predicate (GetInScopeFor,
+			// action=get), as in Get/History. The path-whitelist and secret exclusion —
+			// are inside FormPrefillTyped.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "get"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationFormPrefill(newHumaCadenceAPI(r), incH)
 			})
 
-			// POST /v1/incarnations/{name}/secrets/reveal — раскрытие plaintext секрета
-			// (NIM-74). WRITE-SELF-AUDIT: incarnation.secret_revealed пишет сам handler
-			// внутри RevealSecretTyped ПОСЛЕ ReadKV (значение НЕ в payload; audit-middleware
-			// НЕ навешан, newHumaCadenceAPI). Permission incarnation.view-secrets (снятие
-			// маски, привилегированнее incarnation.get), scope incScope.
+			// POST /v1/incarnations/{name}/secrets/reveal — reveal a plaintext secret
+			// (NIM-74). WRITE-SELF-AUDIT: incarnation.secret_revealed is written by the handler itself
+			// inside RevealSecretTyped AFTER ReadKV (the value is NOT in the payload; audit-middleware
+			// is NOT wired, newHumaCadenceAPI). Permission incarnation.view-secrets (unmasking,
+			// more privileged than incarnation.get), scope incScope.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "view-secrets", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/secrets/revealable — discovery раскрываемых
-			// секретов + keys из state (NIM-74). READ (БЕЗ audit, newHumaCadenceAPI).
+			// GET /v1/incarnations/{name}/secrets/revealable — discovery of revealable
+			// secrets + keys from state (NIM-74). READ (no audit, newHumaCadenceAPI).
 			// Existence-gate RequireAction(view-secrets); per-{name} scope — in-handler
-			// inScope (GetInScopeFor, action=view-secrets), как get/form-prefill.
+			// inScope (GetInScopeFor, action=view-secrets), as get/form-prefill.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRevealableSecrets(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/upgrade-paths — read-анализ путей апгрейда
-			// (ADR-0068 §6): дешёвый список тегов реестра + on-demand ?to= per-target.
-			// READ (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.upgrade (read-
-			// грань, тот же, что POST .../upgrade); existence-gate RequireAction(action=
+			// GET /v1/incarnations/{name}/upgrade-paths — read analysis of upgrade paths
+			// (ADR-0068 §6): a cheap list of registry tags + on-demand ?to= per-target.
+			// READ (no audit, newHumaCadenceAPI). Permission incarnation.upgrade (the read
+			// facet, the same as POST .../upgrade); existence-gate RequireAction(action=
 			// upgrade), per-{name} scope — in-handler inScope (GetInScopeFor, action=
-			// upgrade), как get/form-prefill.
+			// upgrade), as get/form-prefill.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "upgrade"),
 			).Group(func(r chi.Router) {
@@ -572,42 +572,42 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationHistory(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/runs[/{apply_id}] — read-view прогонов
-			// (apply_runs), под UI «статус выполнения / текущая джоба». Прогон
-			// (apply_run) — НЕ Voyage: закрывает UI-баг apply_id→/voyages/ 404. READ
-			// (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.history (reuse
-			// read-tier: кто видит историю инкарнации, тот видит и её прогоны); per-
-			// {name} scope — in-handler inScope-предикат (GetInScopeFor, action=history),
-			// как у History; WHERE по incarnation_name в store-слое отсекает прогоны
-			// чужой инкарнации (cross-incarnation apply_id → 404).
+			// GET /v1/incarnations/{name}/runs[/{apply_id}] — read-view of runs
+			// (apply_runs), for the UI "execution status / current job". A run
+			// (apply_run) is NOT a Voyage: closes the UI bug apply_id→/voyages/ 404. READ
+			// (no audit, newHumaCadenceAPI). Permission incarnation.history (reuse of the
+			// read-tier: whoever sees the incarnation history also sees its runs); per-
+			// {name} scope — the in-handler inScope predicate (GetInScopeFor, action=history),
+			// as in History; a WHERE on incarnation_name in the store layer cuts off runs
+			// of another incarnation (cross-incarnation apply_id → 404).
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "history"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRuns(newHumaCadenceAPI(r), incH)
 				registerHumaIncarnationRunDetail(newHumaCadenceAPI(r), incH)
-				// GET .../runs/{apply_id}/tasks — план задач прогона + per-host
-				// результаты из audit (NIM-37). Та же incarnation.history-группа/scope,
-				// что RunDetail (in-handler inScope, action=history).
+				// GET .../runs/{apply_id}/tasks — the run's task plan + per-host
+				// results from audit (NIM-37). The same incarnation.history group/scope
+				// as RunDetail (in-handler inScope, action=history).
 				registerHumaIncarnationRunTasks(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/runs/{apply_id}/events — live-SSE прогона
-			// (ADR-068 §A3). БЕЗ chi-RequireAction: RBAC «инициатор ИЛИ incarnation.get/
-			// history» не выражается existence-gate-ом (инициатор может не иметь права) —
-			// вся авторизация in-handler (parity /mcp/events authorizeSSE). Наследует
-			// только /v1 RequireJWT (query-token */events из канона). runEventsDeps nil →
-			// route не монтируется (opt-in, паттерн voyageH; в pathAllowlist drift-теста).
+			// GET /v1/incarnations/{name}/runs/{apply_id}/events — live SSE of a run
+			// (ADR-068 §A3). NO chi-RequireAction: the RBAC "initiator OR incarnation.get/
+			// history" is not expressible via an existence-gate (the initiator may lack the permission) —
+			// all authorization is in-handler (parity with /mcp/events authorizeSSE). Inherits
+			// only /v1 RequireJWT (query-token */events per the canon). runEventsDeps nil →
+			// the route is not mounted (opt-in, the voyageH pattern; in the drift-test pathAllowlist).
 			if runEventsDeps != nil {
 				r.Group(func(r chi.Router) {
 					registerHumaIncarnationRunEvents(newHumaCadenceAPI(r), runEventsDeps)
 				})
 			}
 
-			// POST /v1/incarnations/{name}/scenarios/{scenario} — запуск именованного
-			// scenario. Блокируется Toll-middleware при cluster:degraded (ADR-038):
-			// 503 + Retry-After. Toll-middleware ПЕРВЫМ в chain (outermost), чтобы 503
-			// на degraded-кластере вернулся ДО RBAC/Audit: блокированный запрос не
-			// должен ни тратить permission-check, ни писать audit-event scenario_started.
+			// POST /v1/incarnations/{name}/scenarios/{scenario} — run a named
+			// scenario. Blocked by the Toll-middleware on cluster:degraded (ADR-038):
+			// 503 + Retry-After. The Toll-middleware is FIRST in the chain (outermost), so a 503
+			// on a degraded cluster returns BEFORE RBAC/Audit: a blocked request must
+			// neither spend a permission-check nor write the scenario_started audit event.
 			r.With(
 				toll.DegradedMiddleware(tollDegraded, logger),
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "run", incScope),
@@ -627,10 +627,10 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationUpgrade(newHumaIncarnationAPI(r, auditWriter, audit.EventIncarnationUpgradeStarted, logger), incH)
 			})
 
-			// POST /v1/incarnations/{name}/rerun-last — снять error_locked + перезапустить
-			// последний упавший сценарий. WRITE-SELF-AUDIT: incarnation.rerun_last пишет сам
-			// handler (payload известен только после UnlockForRerun; audit-middleware НЕ
-			// навешан). Permission incarnation.rerun-last, scope incScope.
+			// POST /v1/incarnations/{name}/rerun-last — clear error_locked + rerun the
+			// last failed scenario. WRITE-SELF-AUDIT: incarnation.rerun_last is written by the handler
+			// itself (the payload is known only after UnlockForRerun; audit-middleware is NOT
+			// wired). Permission incarnation.rerun-last, scope incScope.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "rerun-last", incScope),
 			).Group(func(r chi.Router) {
@@ -638,8 +638,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			// POST /v1/incarnations/{name}/check-drift — Scry on-demand (ADR-031, Slice B).
-			// WRITE-SELF-AUDIT: incarnation.drift_checked пишет сам handler (payload —
-			// drift_summary — после CheckDrift; audit-middleware НЕ навешан). Permission
+			// WRITE-SELF-AUDIT: incarnation.drift_checked is written by the handler itself (the payload —
+			// drift_summary — after CheckDrift; audit-middleware is NOT wired). Permission
 			// incarnation.check-drift, scope incScope.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "check-drift", incScope),
@@ -648,58 +648,58 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			// DELETE /v1/incarnations/{name} — destroy (S-D4). WRITE-SELF-AUDIT:
-			// destroy_started пишет сам service-слой [incarnation.Destroy] (нужны
-			// source/previous_status/force, недоступные middleware-у однообразно);
-			// audit-middleware НЕ навешан. Permission incarnation.destroy, scope incScope.
+			// destroy_started is written by the service layer [incarnation.Destroy] itself (it needs
+			// source/previous_status/force, not uniformly available to the middleware);
+			// audit-middleware is NOT wired. Permission incarnation.destroy, scope incScope.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "destroy", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
 			})
 
-			// PATCH /v1/incarnations/{name}/hosts — редактирование declared spec.hosts[]
-			// (ADR-008). Permission incarnation.update-hosts (сужена с incarnation.update,
-			// PM-decision 2026-06-02; backcompat-alias канонизируется на load снимка), scope
-			// incScope. WRITE-SELF-AUDIT: incarnation.hosts_updated пишет сам handler (payload
-			// old/new snapshot после UpdateHosts; audit-middleware НЕ навешан).
+			// PATCH /v1/incarnations/{name}/hosts — edit declared spec.hosts[]
+			// (ADR-008). Permission incarnation.update-hosts (narrowed from incarnation.update,
+			// PM-decision 2026-06-02; the backcompat alias is canonicalized on snapshot load), scope
+			// incScope. WRITE-SELF-AUDIT: incarnation.hosts_updated is written by the handler itself (payload
+			// old/new snapshot after UpdateHosts; audit-middleware is NOT wired).
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "update-hosts", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
 			})
 
-			// PUT /v1/incarnations/{name}/traits — целостная замена operator-set
-			// trait-меток (ADR-060 amend R1, релокация per-soul → per-incarnation).
-			// incarnation.traits — источник истины, проецируемый в souls.traits
-			// хостов-членов. Permission incarnation.traits-set, scope incScope.
-			// WRITE-SELF-AUDIT: incarnation.traits_changed пишет сам handler (payload
-			// old/new keys после UpdateTraits; audit-middleware НЕ навешан).
+			// PUT /v1/incarnations/{name}/traits — wholesale replacement of operator-set
+			// trait labels (ADR-060 amend R1, relocation per-soul → per-incarnation).
+			// incarnation.traits is the source of truth, projected into souls.traits of
+			// the member hosts. Permission incarnation.traits-set, scope incScope.
+			// WRITE-SELF-AUDIT: incarnation.traits_changed is written by the handler itself (payload
+			// old/new keys after UpdateTraits; audit-middleware is NOT wired).
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "traits-set", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationSetTraits(newHumaCadenceAPI(r), incH)
 			})
 
-			// /v1/incarnations/{name}/choirs — CRUD топологии Choir/Voice (ADR-044,
-			// S-T3). Choir принадлежит инкарнации → тот же scope-селектор incScope
-			// (incarnation/service/coven по path-{name}), что у incarnation-мутаций.
+			// /v1/incarnations/{name}/choirs — CRUD of the Choir/Voice topology (ADR-044,
+			// S-T3). A Choir belongs to an incarnation → the same scope selector incScope
+			// (incarnation/service/coven by path-{name}) as incarnation mutations.
 			// resource — `choir`; actions — create / delete / list + add-voice /
-			// remove-voice. Подключается ТОЛЬКО при non-nil choirH (паттерн errandH):
-			// keeper без ChoirDB-пула отдаёт 404, drift-test держит пути в
+			// remove-voice. Mounted ONLY when choirH is non-nil (the errandH pattern):
+			// a keeper without a ChoirDB pool returns 404, the drift-test keeps the paths in
 			// pathAllowlist.
 			//
-			// FULL-TYPED huma (ADR-054, БАТЧ-2f WRITE-SELF-AUDIT): create/delete/
-			// add-voice/remove-voice пишут audit (choir.created/.deleted/.voice_added/
-			// .voice_removed) САМ handler через writeAuditCtx ВНУТРИ CreateTyped/
-			// DeleteTyped/AddVoiceTyped/RemoveVoiceTyped — audit-middleware НЕ навешан
-			// (отличие от middleware-audit-доменов role/operator). newHumaCadenceAPI
-			// (БЕЗ audit-навески). Multi-resource: voices — sub-resource; huma-op несёт
-			// ПОЛНЫЙ путь /{name}/choirs[/...] относительно группы /v1/incarnations (НЕ
-			// вложен в chi.Route("/{name}") — иначе chi удвоил бы {name}-префикс,
-			// паттерн soul/synod multi-resource; huma биндит {name}/{choir}/{sid} сам,
-			// chi-RBAC-селектор incScope читает их из humachi-паттерна). list/list-voices
-			// — read (БЕЗ audit). Каждый роут — СВОЯ chi-группа со своим RBAC; huma
-			// наследует. MCP choir НЕТ.
+			// FULL-TYPED huma (ADR-054, BATCH-2f WRITE-SELF-AUDIT): create/delete/
+			// add-voice/remove-voice write audit (choir.created/.deleted/.voice_added/
+			// .voice_removed) by the handler ITSELF via writeAuditCtx INSIDE CreateTyped/
+			// DeleteTyped/AddVoiceTyped/RemoveVoiceTyped — audit-middleware is NOT wired
+			// (unlike the middleware-audit domains role/operator). newHumaCadenceAPI
+			// (no audit wiring). Multi-resource: voices — a sub-resource; the huma op carries
+			// the FULL path /{name}/choirs[/...] relative to the /v1/incarnations group (NOT
+			// nested in chi.Route("/{name}") — otherwise chi would double the {name} prefix,
+			// the soul/synod multi-resource pattern; huma binds {name}/{choir}/{sid} itself,
+			// the chi-RBAC selector incScope reads them from the humachi pattern). list/list-voices
+			// — read (no audit). Each route has its OWN chi group with its own RBAC; huma
+			// inherits. No MCP choir.
 			if choirH != nil {
 				r.With(
 					apimiddleware.RequirePermissionMulti(enforcer, "choir", "create", incScope),
@@ -725,8 +725,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaVoiceRemove(newHumaCadenceAPI(r), choirH)
 				})
 
-				// list (choirs) + list-voices — read под одним choir.list RBAC, общая
-				// huma.API (distinct-path исключает коллизию двух GET-ов).
+				// list (choirs) + list-voices — read under a single choir.list RBAC, a shared
+				// huma.API (the distinct path rules out a collision of the two GETs).
 				r.With(
 					apimiddleware.RequirePermissionMulti(enforcer, "choir", "list", incScope),
 				).Group(func(r chi.Router) {
@@ -737,12 +737,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			}
 		})
 
-		// /v1/runs — глобальный read-view прогонов (страница «All Runs» UI):
-		// свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации + сводные счётчики
-		// /stats. READ (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.history
+		// /v1/runs — global read-view of runs (the UI "All Runs" page):
+		// a rollup of apply_runs by apply_id ACROSS ALL incarnations + summary counters
+		// /stats. READ (no audit, newHumaCadenceAPI). Permission incarnation.history
 		// (reuse read-tier per-incarnation runs, RequireAction existence-gate);
-		// сужение по Purview — in-handler (fail-closed: пустой scope → пустой
-		// список / нулевой агрегат, parity souls/stats).
+		// Purview narrowing — in-handler (fail-closed: empty scope → empty
+		// list / zero aggregate, parity with souls/stats).
 		r.Route("/runs", func(r chi.Router) {
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "history"),
@@ -753,27 +753,27 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		})
 
-		// /v1/souls — онбординг + реестр (M2.x): Create + List + issue-token.
+		// /v1/souls — onboarding + registry (M2.x): Create + List + issue-token.
 		//
-		// Selector-стратегия:
-		//   - Create — NoSelector (RBAC решает bare permission; coven-селектор
-		//     придёт при появлении per-coven-RBAC на регистрацию).
+		// Selector strategy:
+		//   - Create — NoSelector (RBAC decides on the bare permission; a coven selector
+		//     will come once per-coven RBAC on registration exists).
 		//   - List / Get / soulprint / history — [RequireAction] existence-gate
-		//     (ADR-047 §г G1): scope-aware [RequirePermission] деньит scoped-
-		//     оператора при пустом контексте (селектор-ключа нет в nil-контексте),
-		//     отрезая его от собственного списка ДО handler-а. RequireAction
-		//     спрашивает лишь о НАЛИЧИИ `soul.list`; сужение по scope делает handler
-		//     после фетча строк (resolveListScope / readScope + soulpurview).
+		//     (ADR-047 §d G1): the scope-aware [RequirePermission] denies a scoped
+		//     operator on an empty context (there is no selector key in a nil context),
+		//     cutting them off from their own list BEFORE the handler. RequireAction
+		//     only asks whether `soul.list` EXISTS; the scope narrowing is done by the handler
+		//     after fetching the rows (resolveListScope / readScope + soulpurview).
 		//   - issue-token — [handlers.SoulSIDSelector] (`host=<sid>`), RBAC
-		//     может ограничить ре-выписку по конкретному хосту.
+		//     can restrict re-issuance to a specific host.
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2e домена soul по эталонам role/operator +
-		// audit-endpoint): create/coven-assign/issue-token/ssh-target/exec — WRITE+AUDIT
-		// вариант B (newHumaSoulAPI(evt)); list/get/soulprint/history — read (БЕЗ audit).
-		// Каждый write-роут — СВОЯ chi-группа со своим RBAC+event; reads группируются по
-		// RBAC. huma наследует chi-middleware группы. ВСЕ soul-detail-роуты
-		// (/souls/{sid}/*) на huma. MCP soul-tools зовут soul.Service/bootstraptoken
-		// напрямую (мимо handler). POST /souls/{sid}/exec — теперь huma (errand.invoked,
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2e of the soul domain over the role/operator +
+		// audit-endpoint references): create/coven-assign/issue-token/ssh-target/exec — WRITE+AUDIT
+		// variant B (newHumaSoulAPI(evt)); list/get/soulprint/history — read (no audit).
+		// Each write route has its OWN chi group with its own RBAC+event; reads are grouped by
+		// RBAC. huma inherits the group chi-middleware. ALL soul-detail routes
+		// (/souls/{sid}/*) on huma. MCP soul-tools call soul.Service/bootstraptoken
+		// directly (bypassing the handler). POST /souls/{sid}/exec — now huma (errand.invoked,
 		// dual-status 200/202 + Location, handler *handlers.ErrandHandler.ExecTyped).
 		r.Route("/souls", func(r chi.Router) {
 			r.With(
@@ -787,26 +787,26 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			).Group(func(r chi.Router) {
 				soulListReadAPI := newHumaCadenceAPI(r)
 				registerHumaSoulList(soulListReadAPI, soulH)
-				// GET /v1/souls/stats — агрегат Souls Overview. Тот же existence-gate
-				// `RequireAction(soul, list)` и та же read-API-группа, что list/get:
-				// одно право чтения реестра (soul.list) покрывает и агрегат; scope-
-				// сужение делает handler (StatsTyped через тот же Purview-резолв, что
-				// список). staleFn — hot-reload-провайдер порога disconnect-а из
-				// свежего конфига (nil в unit-тестах → дефолт 90s).
+				// GET /v1/souls/stats — the Souls Overview aggregate. The same existence-gate
+				// `RequireAction(soul, list)` and the same read-API group as list/get:
+				// one registry-read permission (soul.list) covers the aggregate too; the scope
+				// narrowing is done by the handler (StatsTyped via the same Purview resolve as
+				// the list). staleFn — a hot-reload provider of the disconnect threshold from
+				// fresh config (nil in unit tests → default 90s).
 				registerHumaSoulStats(soulListReadAPI, soulH, soulStatsStaleFn)
 			})
 
-			// POST /v1/souls/coven — bulk coven-assign (ТЗ-пилот). Двухслойная
-			// авторизация:
-			//   1. middleware RequirePermission(soul, coven-assign) — первый
-			//      гейт «есть ли право вообще». Селектор — SoulCovenLabelSelector
-			//      (`coven=<label>` из body): scope-проверка назначаемой метки
-			//      (гейт b) — coven-scoped оператор проходит только для метки в
-			//      своём scope; bare/`*` — для любой.
-			//   2. service-слой soul.BulkAssignCoven — scope-intersection (гейт a):
-			//      целевые хосты ⊆ coven-scope оператора (CovenScope из enforcer).
-			// Audit — EventSoulCovenChanged с source=api (различение от scenario-
-			// пути по source); payload handler выставляет через SetAuditPayload.
+			// POST /v1/souls/coven — bulk coven-assign (pilot spec). Two-layer
+			// authorization:
+			//   1. middleware RequirePermission(soul, coven-assign) — the first
+			//      gate "is there the permission at all". Selector — SoulCovenLabelSelector
+			//      (`coven=<label>` from the body): a scope check of the assigned label
+			//      (gate b) — a coven-scoped operator passes only for a label in
+			//      their scope; bare/`*` — for any.
+			//   2. service layer soul.BulkAssignCoven — scope-intersection (gate a):
+			//      target hosts ⊆ the operator's coven-scope (CovenScope from the enforcer).
+			// Audit — EventSoulCovenChanged with source=api (distinguished from the scenario
+			// path by source); the payload is set by the handler via SetAuditPayload.
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "soul", "coven-assign", handlers.SoulCovenLabelSelector),
 			).Group(func(r chi.Router) {
@@ -814,33 +814,33 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			// POST /v1/souls/traits — bulk trait-assign (ADR-060, write-path Slice 2).
-			// Existence-gate `RequireAction(soul, traits-assign)` — «есть ли право в
-			// ЛЮБОМ scope-измерении», БЕЗ селектора: trait-КЛЮЧ НЕ является RBAC-
-			// измерением scope (в отличие от Coven-метки — у той гейт b через
-			// SoulCovenLabelSelector с `{coven: label}`). Селекторный RequirePermission
-			// здесь отрезал бы coven-scoped оператора (его `coven=dev`-permission не
-			// сматчила бы запрос без coven-контекста), хотя он ВПРАВЕ менять traits на
-			// своих dev-хостах. Поэтому паттерн `soul.list`: existence-gate на наличие
-			// права, а least-privilege сужает ОДИН гейт (a) — service-слой
-			// (soul.BulkAssignTraits/BulkReplaceTraits) пересекает целевые хосты с
-			// coven-scope оператора (тот же BulkScope, что coven-assign). Audit —
-			// EventSoulTraitsChanged с source=api; payload — вариант B (SetHumaAuditPayload).
+			// Existence-gate `RequireAction(soul, traits-assign)` — "is there the permission in
+			// ANY scope dimension", WITHOUT a selector: a trait KEY is NOT an RBAC
+			// scope dimension (unlike a Coven label — which has gate b via
+			// SoulCovenLabelSelector with `{coven: label}`). A selector RequirePermission
+			// here would cut off a coven-scoped operator (their `coven=dev` permission would not
+			// match a request without a coven context), even though they ARE entitled to change traits on
+			// their dev hosts. Hence the `soul.list` pattern: an existence-gate on the presence of
+			// the permission, while least-privilege narrows ONE gate (a) — the service layer
+			// (soul.BulkAssignTraits/BulkReplaceTraits) intersects the target hosts with the
+			// operator's coven-scope (the same BulkScope as coven-assign). Audit —
+			// EventSoulTraitsChanged with source=api; payload — variant B (SetHumaAuditPayload).
 			r.With(
 				apimiddleware.RequireAction(enforcer, "soul", "traits-assign"),
 			).Group(func(r chi.Router) {
 				registerHumaSoulTraitsAssign(newHumaSoulAPI(r, auditWriter, audit.EventSoulTraitsChanged, logger), soulH)
 			})
 
-			// GET /v1/souls/{sid} + /soulprint + /history — single-soul read для UI
-			// detail-page. Permission `soul.list` покрывает list+get+soulprint+history
-			// (паттерн service.list / omen.list — одно permission на чтение реестра;
-			// `soul.get` сознательно отложен, rbac.md §Souls). [RequireAction] existence-gate
-			// (ADR-047 §г G1): scope-aware gate отрезал бы scoped-оператора (host-контекст
-			// резолвится из строки БД, которой нет до фетча); сужение по scope делает handler
-			// (readScopeForClaims + soulpurview.InScope → 404 вне scope). Read-only — без
-			// Audit. huma-ops несут полный путь /{sid}[/…] (НЕ вложены в r.Route("/{sid}") —
-			// иначе chi удвоил бы {sid}-префикс, паттерн operator-домена); huma биндит {sid}
-			// сам, chi-RBAC-селекторы читают его из зарегистрированного humachi-паттерна.
+			// GET /v1/souls/{sid} + /soulprint + /history — single-soul read for the UI
+			// detail-page. Permission `soul.list` covers list+get+soulprint+history
+			// (the service.list / omen.list pattern — one permission for reading the registry;
+			// `soul.get` is deliberately deferred, rbac.md §Souls). [RequireAction] existence-gate
+			// (ADR-047 §d G1): a scope-aware gate would cut off a scoped operator (the host context
+			// resolves from a DB row that does not exist before the fetch); the scope narrowing is done by the handler
+			// (readScopeForClaims + soulpurview.InScope → 404 outside scope). Read-only — no
+			// Audit. The huma ops carry the full path /{sid}[/…] (NOT nested in r.Route("/{sid}") —
+			// otherwise chi would double the {sid} prefix, the operator-domain pattern); huma binds {sid}
+			// itself, the chi-RBAC selectors read it from the registered humachi pattern.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "soul", "list"),
 			).Group(func(r chi.Router) {
@@ -856,10 +856,10 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaSoulIssueToken(newHumaSoulAPI(r, auditWriter, audit.EventSoulTokenIssued, logger), soulH)
 			})
 
-			// PUT /v1/souls/{sid}/ssh-target — обновить per-host SSH-реквизиты push-flow
+			// PUT /v1/souls/{sid}/ssh-target — update per-host SSH credentials for the push-flow
 			// (ADR-032 amendment 2026-05-26, S7-1). Permission `soul.ssh-target-update`
-			// (action — hyphenated). Селектор SoulSIDSelector — `host=<sid>`. Audit
-			// EventSoulSshTargetUpdated; payload — huma-вариант B (SetHumaAuditPayload).
+			// (action — hyphenated). Selector SoulSIDSelector — `host=<sid>`. Audit
+			// EventSoulSshTargetUpdated; payload — huma variant B (SetHumaAuditPayload).
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "soul", "ssh-target-update", handlers.SoulSIDSelector),
 			).Group(func(r chi.Router) {
@@ -868,14 +868,14 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 
 			// POST /v1/souls/{sid}/exec — pull-ad-hoc Errand (ADR-033, slice E2). Permission
 			// errand.run, selector `host=<sid>` (rbac.md §Errand). FULL-TYPED huma (ADR-054,
-			// БАТЧ-2e): WRITE+AUDIT вариант B (newHumaSoulAPI с event errand.invoked) с dual-
-			// status 200 sync / 202 async + Location-header. Audit-middleware пишет
-			// EventTypeErrandInvoked на ОБА 2xx; dispatcher сам пишет audit-event внутри
-			// Dispatch (single source of truth) — middleware-event navigation-trail. При nil
-			// errandH не подключается. huma-op несёт полный путь /{sid}/exec (НЕ вложен в
-			// r.Route("/{sid}") — иначе chi удвоил бы {sid}-префикс; huma биндит {sid} сам,
-			// chi-RBAC-селектор ErrandSIDSelector читает его из humachi-паттерна). Все
-			// soul-detail-роуты на huma.
+			// BATCH-2e): WRITE+AUDIT variant B (newHumaSoulAPI with event errand.invoked) with dual-
+			// status 200 sync / 202 async + Location header. The audit-middleware writes
+			// EventTypeErrandInvoked on BOTH 2xx; the dispatcher itself writes the audit event inside
+			// Dispatch (single source of truth) — the middleware event is a navigation-trail. When
+			// errandH is nil it is not mounted. The huma op carries the full path /{sid}/exec (NOT nested in
+			// r.Route("/{sid}") — otherwise chi would double the {sid} prefix; huma binds {sid} itself,
+			// the chi-RBAC selector ErrandSIDSelector reads it from the humachi pattern). All
+			// soul-detail routes on huma.
 			if errandH != nil {
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "errand", "run", handlers.ErrandSIDSelector),
@@ -885,23 +885,23 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			}
 		})
 
-		// /v1/plugins/sigils — Sigil allow-list целостности плагинов
-		// (plugin.allow/revoke/list, ADR-026 S4a). Подключается только при
-		// non-nil sigilH (Deps.SigilSvc прокинут). Selector — NoSelector:
-		// rbac.md не определяет селекторы для plugin.* (как operator.*/role.*).
+		// /v1/plugins/sigils — Sigil allow-list for plugin integrity
+		// (plugin.allow/revoke/list, ADR-026 S4a). Mounted only when
+		// sigilH is non-nil (Deps.SigilSvc wired in). Selector — NoSelector:
+		// rbac.md does not define selectors for plugin.* (like operator.*/role.*).
 		//
-		// Audit на allow/revoke (supply-chain-мутации обязательно аудируются).
-		// list — read-only, без audit. payload handler-ы выставляют через
-		// SetAuditPayload (caller AID, namespace/name/ref, sha256; без
+		// Audit on allow/revoke (supply-chain mutations are always audited).
+		// list — read-only, no audit. the handlers set the payload via
+		// SetAuditPayload (caller AID, namespace/name/ref, sha256; without
 		// signature/manifest).
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2a домена sigil целиком по эталонам
-		// role): allow/revoke — WRITE+AUDIT вариант B (huma-audit-middleware; event-
-		// домен permission `plugin`, события plugin.allowed/plugin.revoked); list —
-		// read-bare (БЕЗ audit). Каждый write-роут — СВОЯ chi-группа с собственным
-		// event-типом (newHumaSigilAPI(evt)). RequirePermission — chi-middleware
-		// группы (huma наследует). MCP plugin-tools зовут sigil.Service напрямую
-		// (мимо handler).
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2a of the entire sigil domain over the
+		// role reference): allow/revoke — WRITE+AUDIT variant B (huma-audit-middleware; event
+		// domain — permission `plugin`, events plugin.allowed/plugin.revoked); list —
+		// read-bare (no audit). Each write route has its OWN chi group with its own
+		// event type (newHumaSigilAPI(evt)). RequirePermission is the group chi-
+		// middleware (huma inherits it). MCP plugin-tools call sigil.Service directly
+		// (bypassing the handler).
 		if sigilH != nil {
 			r.Route("/plugins/sigils", func(r chi.Router) {
 				r.With(
@@ -924,23 +924,23 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/sigil/keys — ротация trust-anchor-ключей ПОДПИСИ Sigil (ADR-026(h),
-		// R3-S7). Отдельная зона от /v1/plugins/sigils (тот про допуски бинарей,
-		// этот — про ключи их подписи). Подключается только при non-nil sigilKeyH
-		// (Deps.SigilKeySvc прокинут — production-wire-up при включённом Sigil).
-		// Selector — NoSelector (как plugin.*/operator.*).
+		// /v1/sigil/keys — rotation of the Sigil SIGNING trust-anchor keys (ADR-026(h),
+		// R3-S7). A separate area from /v1/plugins/sigils (that one is about binary allow-lists,
+		// this one is about their signing keys). Mounted only when sigilKeyH is non-nil
+		// (Deps.SigilKeySvc wired in — production wire-up when Sigil is enabled).
+		// Selector — NoSelector (like plugin.*/operator.*).
 		//
-		// Audit на introduce/set-primary/retire (ротация ключей подписи —
-		// supply-chain-критично). list — read-only, без audit. payload handler-ы
-		// выставляют через SetAuditPayload (key_id + caller AID; БЕЗ приватника).
+		// Audit on introduce/set-primary/retire (signing-key rotation is
+		// supply-chain-critical). list — read-only, no audit. the handlers set the
+		// payload via SetAuditPayload (key_id + caller AID; WITHOUT the private key).
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2a домена sigil-key целиком по
-		// эталонам role): introduce/set-primary/retire — WRITE+AUDIT вариант B
-		// (huma-audit-middleware; события sigil.key-introduced/sigil.key-primary-set/
-		// sigil.key-retired); list — read-bare (БЕЗ audit). Каждый write-роут — СВОЯ
-		// chi-группа с собственным event-типом (newHumaSigilKeyAPI(evt)).
-		// RequirePermission — chi-middleware группы (huma наследует). MCP
-		// sigil-key-tools зовут sigil.KeyService напрямую (мимо handler).
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2a of the entire sigil-key domain over
+		// the role reference): introduce/set-primary/retire — WRITE+AUDIT variant B
+		// (huma-audit-middleware; events sigil.key-introduced/sigil.key-primary-set/
+		// sigil.key-retired); list — read-bare (no audit). Each write route has its OWN
+		// chi group with its own event type (newHumaSigilKeyAPI(evt)).
+		// RequirePermission is the group chi-middleware (huma inherits it). MCP
+		// sigil-key-tools call sigil.KeyService directly (bypassing the handler).
 		if sigilKeyH != nil {
 			r.Route("/sigil/keys", func(r chi.Router) {
 				r.With(
@@ -969,31 +969,31 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/services — реестр Service-ов (service.register/update/list/
-		// deregister, ADR-028-паттерн RBAC-storage). Подключается только при
-		// non-nil serviceH (Deps.ServiceSvc прокинут). Selector — NoSelector:
-		// service.* CRUD оперирует самим реестром (register/list/deregister
-		// записи), без таргетинга по имени-сервиса в S3 (как operator.*/role.*).
+		// /v1/services — Service registry (service.register/update/list/
+		// deregister, the ADR-028 RBAC-storage pattern). Mounted only when
+		// serviceH is non-nil (Deps.ServiceSvc wired in). Selector — NoSelector:
+		// service.* CRUD operates on the registry itself (register/list/deregister
+		// entries), without targeting by service name in S3 (like operator.*/role.*).
 		//
-		// Audit на 3 мутирующих роутах (register/update/deregister). list/get —
-		// read-only, без audit (как role.list / plugin.list). payload handler-ы
-		// выставляют через SetAuditPayload (name + git/ref + caller AID; git-URL
-		// не секрет).
+		// Audit on the 3 mutating routes (register/update/deregister). list/get —
+		// read-only, no audit (like role.list / plugin.list). the handlers set the
+		// payload via SetAuditPayload (name + git/ref + caller AID; the git URL
+		// is not a secret).
 		//
-		// Permission-маппинг: POST→service.register, GET→service.list (и для
-		// list, и для get-{name}), PATCH→service.update, DELETE→service.deregister.
+		// Permission mapping: POST→service.register, GET→service.list (both for
+		// list and for get-{name}), PATCH→service.update, DELETE→service.deregister.
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2d домена service целиком по эталонам
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2d of the entire service domain over the
 		// role/operator/augur/herald): register/update/deregister — WRITE+AUDIT
-		// вариант B (huma-audit-middleware: full-typed huma САМ пишет ответ,
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
-		// hctx.Status() + carrier-payload, иначе рецидив S6; register/update — 201/200
-		// С ТЕЛОМ); list/get + refs/scenarios/state-schema/dependencies — read (БЕЗ
-		// audit; sub-reads несут полный путь /{name}/<...> в huma-операции + опц.
-		// ?ref=, tier 502 на git-loader). Каждый write-роут — СВОЯ chi-группа с
-		// собственным event-типом (newHumaServiceAPI(evt)). RequirePermission —
-		// chi-middleware группы (huma наследует). Все service-роуты обслуживает huma.
-		// MCP service-tools зовут serviceregistry.Service напрямую (мимо handler).
+		// variant B (huma-audit-middleware: full-typed huma writes the response ITSELF,
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
+		// hctx.Status() + a carrier payload, otherwise an S6 relapse; register/update — 201/200
+		// WITH BODY); list/get + refs/scenarios/state-schema/dependencies — read (no
+		// audit; sub-reads carry the full path /{name}/<...> in the huma operation + optional
+		// ?ref=, tier 502 on the git-loader). Each write route has its OWN chi group with
+		// its own event type (newHumaServiceAPI(evt)). RequirePermission is the
+		// group chi-middleware (huma inherits it). huma serves all service routes.
+		// MCP service-tools call serviceregistry.Service directly (bypassing the handler).
 		if serviceH != nil {
 			r.Route("/services", func(r chi.Router) {
 				r.With(
@@ -1009,8 +1009,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				// GET /v1/services/{name} — detail. Permission service.list (read
-				// покрыт list-правом). huma-op несёт полный путь /{name} (НЕ вложен в
-				// r.Route("/{name}") — иначе chi удвоил бы префикс).
+				// covered by the list permission). The huma op carries the full path /{name} (NOT nested in
+				// r.Route("/{name}") — otherwise chi would double the prefix).
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
@@ -1029,45 +1029,45 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaServiceDeregister(newHumaServiceAPI(r, auditWriter, audit.EventServiceDeregistered, logger), serviceH)
 				})
 
-				// /refs — git-tag-и + branch-и для UI Upgrade-modal (read-only,
-				// permission service.list — refs суть проекция Service-записи, без
-				// audit, как Get/List). 502 → внешний git-источник упал.
+				// /refs — git tags + branches for the UI Upgrade-modal (read-only,
+				// permission service.list — refs are a projection of the Service record, no
+				// audit, like Get/List). 502 → the external git source failed.
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceRefs(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// /scenarios — listing scenario из материализованного снапшота git-репо
-				// Service-а для UI Run-modal dropdown. permission service.list. 502 →
-				// loader (git-clone / parse) упал.
+				// /scenarios — listing scenarios from the materialized snapshot of the Service
+				// git repo for the UI Run-modal dropdown. permission service.list. 502 →
+				// the loader (git-clone / parse) failed.
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceScenarios(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// /state-schema — state_schema-метаданные сервиса для UI Schema
-				// explorer-а. permission service.list. 502 → loader упал.
+				// /state-schema — the service state_schema metadata for the UI Schema
+				// explorer. permission service.list. 502 → the loader failed.
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceStateSchema(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// /dependencies — git-зависимости сервиса (destiny-кирпичики + custom-
-				// модули из service.yml) для UI Service Detail. permission service.list.
-				// 502 → loader упал.
+				// /dependencies — the service git dependencies (destiny building-blocks + custom
+				// modules from service.yml) for the UI Service Detail. permission service.list.
+				// 502 → the loader failed.
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceDependencies(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// /directives — каталог валидных директив redis.conf по версиям
-				// (essence.redis_directives) для UI-редактора redis_settings.
+				// /directives — catalog of valid redis.conf directives by version
+				// (essence.redis_directives) for the redis_settings UI editor.
 				// permission service.list. ETag=snapshot SHA1 + immutable. 502 →
-				// loader упал.
+				// the loader failed.
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
@@ -1076,16 +1076,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/provisioning-policy — runtime-политика способов СОЗДАНИЯ операторов
-		// (provisioning_allowed_methods, ADR-058 Часть B). Подключается только при
+		// /v1/provisioning-policy — runtime policy for the methods of CREATING operators
+		// (provisioning_allowed_methods, ADR-058 Part B). Mounted only when
 		// non-nil provisioningPolicyH (Deps.ProvisioningPolicyReader + ServiceSvc
-		// прокинуты). Selector — NoSelector: политика кластер-уровневая (как
+		// are wired in). Selector — NoSelector: the policy is cluster-level (like
 		// operator.* / role.*).
 		//
-		// GET — read (permission provisioning.read, БЕЗ audit, паттерн service.list).
-		// PUT — WRITE+AUDIT вариант B (permission provisioning.update, event
-		// provisioning.policy_changed; huma-audit-middleware на своей chi-группе,
-		// как service.update). Каждый роут — СВОЯ chi-группа со своим RBAC; huma
+		// GET — read (permission provisioning.read, no audit, the service.list pattern).
+		// PUT — WRITE+AUDIT variant B (permission provisioning.update, event
+		// provisioning.policy_changed; huma-audit-middleware on its own chi group,
+		// like service.update). Each route has its OWN chi group with its own RBAC; huma
 		// наследует chi-middleware группы.
 		if provisioningPolicyH != nil {
 			r.Route("/provisioning-policy", func(r chi.Router) {
@@ -1103,19 +1103,19 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/modules — module-catalog (core registry doc-data + активные plugin-
-		// допуски), UI Run→Command module-search. Permission service.list (read-
-		// only-каталог, без audit — паттерн service.list / plugin.list); новая
-		// permission не заводится (reuse предпочтительнее). Selector — NoSelector
-		// (каталог глобальный, не per-resource). moduleCatalogH non-nil всегда
-		// (core-каталог не требует внешних зависимостей), поэтому роуты в спеке и
-		// роутере совпадают без allowlist (в отличие от opt-in plugin.*).
+		// /v1/modules — module-catalog (core registry doc-data + active plugin
+		// allow-lists), UI Run→Command module-search. Permission service.list (read-only
+		// catalog, no audit — the service.list / plugin.list pattern); a new
+		// permission is not created (reuse is preferred). Selector — NoSelector
+		// (the catalog is global, not per-resource). moduleCatalogH is always non-nil
+		// (the core catalog needs no external dependencies), so the routes in the spec and
+		// the router match without an allowlist (unlike the opt-in plugin.*).
 		//
-		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2e домена module целиком по эталону
-		// catalog read-bare + form-prep read-with-body): list/get — read-каталог; form-prep
-		// — read-резолв SID под форму. ВСЕ ТРИ — READ-only, audit НЕ навешивается. Каждый
-		// роут — СВОЯ chi-группа со своим RBAC; huma наследует chi-middleware группы. MCP
-		// module-домена НЕТ (каталог без MCP-tool-ов).
+		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2e of the entire module domain over the
+		// catalog read-bare + form-prep read-with-body reference): list/get — read the catalog; form-prep
+		// — a read-resolve of SIDs for the form. ALL THREE — READ-only, audit is NOT wired. Each
+		// route has its OWN chi group with its own RBAC; huma inherits the group chi-middleware. MCP
+		// module domain — none (the catalog has no MCP tools).
 		if moduleCatalogH != nil {
 			r.Route("/modules", func(r chi.Router) {
 				r.With(
@@ -1126,16 +1126,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaModuleGet(moduleReadAPI, moduleCatalogH)
 				})
 
-				// /{name}/form-prep — резолвер source-каталогов UI-формы модуля
-				// (ADR-045 S3): source incarnation_hosts/choir → живые SID-ы для
-				// автокомплита формы Run→Command. Permission incarnation.run —
-				// эндпоинт обслуживает подготовку прогона команды (кто запускает
-				// прогон, тот и резолвит SID-ы под его поля); reuse под-прогонной
-				// permission, новая не заводится. Selector — NoSelector (резолв
-				// cluster-wide по souls, не per-resource RBAC-scope). Без audit
-				// (read-only-резолв, паттерн soul.list / service.list).
-				// Монтируется только при non-nil moduleFormPrepH (Deps.Pool
-				// прокинут); drift-test собирает router с nil → роут в allowlist.
+				// /{name}/form-prep — resolver of source catalogs for the module UI form
+				// (ADR-045 S3): source incarnation_hosts/choir → live SIDs for
+				// autocomplete of the Run→Command form. Permission incarnation.run —
+				// the endpoint serves command-run preparation (whoever runs the
+				// run also resolves the SIDs for its fields); reuse of the run-related
+				// permission, a new one is not created. Selector — NoSelector (the resolve is
+				// cluster-wide over souls, not a per-resource RBAC scope). No audit
+				// (a read-only resolve, the soul.list / service.list pattern).
+				// Mounted only when moduleFormPrepH is non-nil (Deps.Pool
+				// wired in); the drift-test assembles the router with nil → the route is in the allowlist.
 				if moduleFormPrepH != nil {
 					r.With(
 						apimiddleware.RequirePermission(enforcer, "incarnation", "run", apimiddleware.NoSelector),
@@ -1146,34 +1146,34 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		}
 
-		// /v1/permissions — машиночитаемый каталог RBAC-permissions (источник —
-		// rbac.catalog.go). UI фетчит реальные имена для назначения прав роли
-		// (фикс бага hardcoded-permission → unknown_permission). RBAC — ТОЛЬКО
-		// auth (RequireJWT на /v1/* выше), БЕЗ RequirePermission: каталог само-
-		// описывающий, требование права на чтение списка прав = курица-яйцо
-		// (architect-вердикт). Read-only, без audit (паттерн health/meta). permCatalogH
-		// non-nil всегда (статика из пакета rbac, без внешних зависимостей),
-		// поэтому роут в спеке и роутере совпадают без allowlist (как /v1/modules).
+		// /v1/permissions — machine-readable catalog of RBAC permissions (source —
+		// rbac.catalog.go). The UI fetches the real names for assigning permissions to a role
+		// (fixes the hardcoded-permission → unknown_permission bug). RBAC — auth-ONLY
+		// (RequireJWT on /v1/* above), WITHOUT RequirePermission: the catalog is self-
+		// describing, requiring a permission to read the permission list = chicken-and-egg
+		// (architect verdict). Read-only, no audit (the health/meta pattern). permCatalogH
+		// is always non-nil (static from the rbac package, no external dependencies),
+		// so the route in the spec and the router match without an allowlist (like /v1/modules).
 		//
-		// FULL-TYPED huma (ADR-054, БАТЧ-1 read-tier): три READ-каталога
-		// (permissions / event-types / me-permissions) на ОДНОЙ huma.API поверх
-		// группы /v1 (auth-only — RequireJWT на /v1/* выше, БЕЗ RequirePermission:
-		// само-описывающие, требование права на чтение списка = «курица-яйцо»,
-		// architect-вердикт). Операции несут абсолютные-под-/v1 пути
-		// (/permissions / /event-types / /me/permissions) → chi.Walk видит
-		// /v1/<path>, drift-test зелёный; distinct-path исключает коллизию трёх
-		// операций на общей API. Read-only — БЕЗ audit-middleware. Strict-методы
-		// ListPermissions/ListEventTypes/ListMyPermissions остаются generated (до
-		// финального сноса), из mount сняты.
+		// FULL-TYPED huma (ADR-054, BATCH-1 read-tier): three READ catalogs
+		// (permissions / event-types / me-permissions) on ONE huma.API over
+		// the /v1 group (auth-only — RequireJWT on /v1/* above, WITHOUT RequirePermission:
+		// self-describing, requiring a permission to read the list = "chicken-and-egg",
+		// architect verdict). The operations carry absolute-under-/v1 paths
+		// (/permissions / /event-types / /me/permissions) → chi.Walk sees
+		// /v1/<path>, drift-test green; the distinct path rules out a collision of the three
+		// operations on the shared API. Read-only — WITHOUT audit-middleware. The strict methods
+		// ListPermissions/ListEventTypes/ListMyPermissions remain generated (until
+		// the final removal), unmounted.
 		//
-		// /v1/permissions — каталог RBAC-permissions (источник rbac.catalog.go); UI
-		// фетчит реальные имена для назначения прав роли (фикс unknown_permission).
-		// /v1/event-types — каталог event-types для Tiding-подписки (источник
-		// herald/eventtypes.go; фикс ADR-042 UI-хардкода).
-		// /v1/me/permissions — эффективные права ТЕКУЩЕГО Архонта (AID из claims, не
-		// query; чужие не отдаёт), для permission-aware UI; nil-claims → 500
-		// problem+json (parity доменного Get). Все три handler-а non-nil всегда
-		// (статика rbac/herald + enforcer-снимок), поэтому роуты в спеке и роутере
+		// /v1/permissions — catalog of RBAC permissions (source rbac.catalog.go); the UI
+		// fetches the real names for assigning permissions to a role (fixes unknown_permission).
+		// /v1/event-types — catalog of event-types for Tiding subscription (source
+		// herald/eventtypes.go; fixes the ADR-042 UI hardcode).
+		// /v1/me/permissions — effective permissions of the CURRENT Archon (AID from claims, not
+		// query; does not return others'), for a permission-aware UI; nil-claims → 500
+		// problem+json (parity with the domain Get). All three handlers are always non-nil
+		// (static rbac/herald + an enforcer snapshot), so the routes in the spec and the router
 		// совпадают без allowlist (как /v1/modules).
 		catalogAPI := newHumaCadenceAPI(r)
 		registerHumaPermissionsList(catalogAPI, permCatalogH)
@@ -1181,13 +1181,13 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		registerHumaHeraldTypesList(catalogAPI, heraldTypeCatalogH)
 		registerHumaMyPermissionsList(catalogAPI, meH)
 
-		// GET /v1/cluster — HA-топология Keeper-кластера из Conclave (ADR-006 amend)
-		// + self-health текущего инстанса (Souls Overview UI). Read-only, без audit
-		// (паттерн health/meta + catalog). Existence-gate `RequireAction(soul, list)`:
-		// переиспользуем существующее право чтения реестра (нового не заводим) — тот,
-		// кому видны Souls, видит и инстансы кластера. clusterH nil (dev/тесты без
-		// Redis-wire-up) → роут не монтируется (register-func no-op). Собственная
-		// chi-группа с RBAC-гейтом; huma наследует middleware.
+		// GET /v1/cluster — HA topology of the Keeper cluster from Conclave (ADR-006 amend)
+		// + self-health of the current instance (Souls Overview UI). Read-only, no audit
+		// (the health/meta + catalog pattern). Existence-gate `RequireAction(soul, list)`:
+		// we reuse the existing registry-read permission (no new one) — whoever
+		// can see Souls also sees the cluster instances. clusterH nil (dev/tests without
+		// a Redis wire-up) → the route is not mounted (register-func no-op). Its own
+		// chi group with an RBAC gate; huma inherits the middleware.
 		if clusterH != nil {
 			r.With(
 				apimiddleware.RequireAction(enforcer, "soul", "list"),
@@ -1214,7 +1214,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2b домена augur целиком по эталонам
 		// role/operator): omen create/delete + rite create/delete — WRITE+AUDIT
 		// вариант B (huma-audit-middleware; full-typed huma САМ пишет ответ, поэтому
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
 		// hctx.Status() + carrier-payload, иначе рецидив S6). omen list/get + rite
 		// list — read (БЕЗ audit; list — read-with-typed-query int32-пагинация→400,
 		// rite list — обязательный omen=query→422). Каждый write-роут — СВОЯ chi-группа
@@ -1290,7 +1290,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2b домена oracle целиком по эталонам
 		// role/operator/augur): vigil create/delete + decree create/delete — WRITE+AUDIT
 		// вариант B (huma-audit-middleware; full-typed huma САМ пишет ответ, поэтому
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
 		// hctx.Status() + carrier-payload, иначе рецидив S6). vigil/decree list/get —
 		// read (БЕЗ audit; list — read-with-typed-query int32-пагинация→400). Каждый
 		// write-роут — СВОЯ chi-группа с собственным event-типом (newHumaOracleAPI(evt)).
@@ -1421,12 +1421,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2b домена push-provider целиком по
 		// эталонам role/operator): create/update/delete — WRITE+AUDIT вариант B
 		// (huma-audit-middleware; full-typed huma САМ пишет ответ, поэтому
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
 		// hctx.Status() + carrier-payload, иначе рецидив S6). list/get — read (БЕЗ
 		// audit; list — read-with-typed-query int32-пагинация→400 + name_pattern;
 		// update — PUT replace-семантика, НЕ presence-tier). Каждый write-роут — СВОЯ
 		// chi-группа с собственным event-типом (newHumaPushProviderAPI(evt)).
-		// RequirePermission — chi-middleware группы (huma наследует). MCP
+		// RequirePermission is the group chi-middleware (huma inherits it). MCP
 		// push-provider-tools зовут pushprovider.Service напрямую (мимо handler).
 		if pushProviderH != nil {
 			r.Route("/push-providers", func(r chi.Router) {
@@ -1542,7 +1542,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2c домена herald целиком по эталонам
 		// role/operator/augur/push-provider): create/update/delete — WRITE+AUDIT
 		// вариант B (huma-audit-middleware; full-typed huma САМ пишет ответ, поэтому
-		// StatusRecorder из apimiddleware.Audit неприменим — audit держит
+		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
 		// hctx.Status() + carrier-payload, иначе рецидив S6). list/get — read (БЕЗ
 		// audit; list — read-with-typed-query int32-пагинация→400, tiding-list +
 		// include_ephemeral bool→400; update — PUT replace-семантика, НЕ presence-tier).
@@ -1631,7 +1631,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// →422; sid format→422); get — read-with-path (200 ErrandResult / 202 running
 		// ErrandAccepted, двойной success-код); cancel — WRITE+AUDIT вариант B (huma-
 		// audit-middleware; full-typed huma САМ пишет ответ, StatusRecorder из
-		// apimiddleware.Audit неприменим — audit держит hctx.Status() + carrier-payload,
+		// apimiddleware.Audit does not apply — audit holds hctx.Status() + a carrierpayload,
 		// иначе рецидив S6; dispatcher также пишет свой audit-event внутри Cancel,
 		// middleware-event — security navigation-trail). huma-op несёт ПОЛНЫЙ путь
 		// /errands[/{errand_id}] → группы монтируются прямо на /v1 (distinct-path для

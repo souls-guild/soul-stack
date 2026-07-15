@@ -1,44 +1,44 @@
 package handlers
 
-// Doc-данные core-модулей для module-catalog (`GET /v1/modules`).
+// Doc data for core modules, for the module-catalog (`GET /v1/modules`).
 //
-// Почему таблица, а не интроспекция реестра: keeper НЕ импортирует
-// soul/internal/coremod (изоляция Soul по ADR-011 — soul-side core статически
-// встроен в `soul`-бинарь, keeper его не видит компилятором). Сами реализации
-// модулей не несут ни описания, ни input-схемы в коде (params валидируются
-// императивно внутри Apply/Validate, не декларативно). Поэтому каталог core
-// публикует то, что РЕАЛЬНО доступно как статический факт: имя, kind, описание,
-// допустимые state-ы и errand-safe-маркер. Полная input-схема НЕ формализована
-// (это новая сущность — см. отчёт; stop-rule), params core-модулей здесь пусты.
+// Why a table and not registry introspection: keeper does NOT import
+// soul/internal/coremod (Soul isolation per ADR-011 — soul-side core is statically
+// built into the `soul` binary; the compiler does not expose it to keeper). The module
+// implementations themselves carry neither a description nor an input schema in code
+// (params are validated imperatively inside Apply/Validate, not declaratively). So the
+// core catalog publishes what is ACTUALLY available as a static fact: name, kind,
+// description, allowed states and the errand-safe marker. The full input schema is NOT
+// formalized (a new entity — see the report; stop-rule), core-module params are empty here.
 //
-// Источник правды для имён/state-ов — Validate-свитчи soul-side core-модулей
-// (soul/internal/coremod/<m>/<m>.go) и docs/module/core/<m>/. Источник правды
-// для errand-safe — soul/internal/runtime/errandrunner/whitelist.go (жёсткий
-// список core.cmd.shell / core.exec.run) + marker sdk/module.ErrandReadSafe
-// (core.http.probe). Любое расхождение со списком state-ов в реализации обязано
-// синхронизироваться вручную — это doc-data, а не интроспекция.
+// Source of truth for names/states — the Validate switches of soul-side core modules
+// (soul/internal/coremod/<m>/<m>.go) and docs/module/core/<m>/. Source of truth
+// for errand-safe — soul/internal/runtime/errandrunner/whitelist.go (the hard
+// list core.cmd.shell / core.exec.run) + marker sdk/module.ErrandReadSafe
+// (core.http.probe). Any divergence from the state list in the implementation must
+// be synced by hand — this is doc-data, not introspection.
 
-// coreModuleDoc — статическая запись одного core-модуля каталога.
+// coreModuleDoc — a static catalog entry for one core module.
 type coreModuleDoc struct {
-	// Name — каноническое имя модуля без state-суффикса (`core.cmd`).
+	// Name — the canonical module name without the state suffix (`core.cmd`).
 	Name string
-	// Description — человекочитаемое описание (русский, как остальные сообщения).
+	// Description — human-readable description.
 	Description string
-	// States — допустимые state-/verb-суффиксы модуля (полный адрес —
+	// States — the module's allowed state/verb suffixes (full address —
 	// `<Name>.<state>`).
 	States []string
-	// ErrandSafeStates — подмножество States, безопасное к ad-hoc-вызову через
-	// Errand pull-контур (ADR-033). Пусто = модуль не errand-safe ни в одном
+	// ErrandSafeStates — the subset of States safe for ad-hoc invocation via the
+	// Errand pull contour (ADR-033). Empty = the module is not errand-safe in any
 	// state.
 	ErrandSafeStates []string
 }
 
-// coreModuleDocs — таблица 18 soul-side core-модулей MVP (ADR-015) +
-// keeper-side core (core.cloud/core.soul/core.vault по ADR-017, core.choir по
-// ADR-044). Соответствует soul/internal/coremod.Default (18) и
-// keeper/internal/coremod.Default (core.choir регистрируется условно — при
-// наличии Deps.ChoirStore, но в каталоге публикуется всегда). Порядок —
-// алфавитный по Name для детерминированной выдачи.
+// coreModuleDocs — the table of 18 soul-side core modules of the MVP (ADR-015) +
+// keeper-side core (core.cloud/core.soul/core.vault per ADR-017, core.choir per
+// ADR-044). Matches soul/internal/coremod.Default (18) and
+// keeper/internal/coremod.Default (core.choir is registered conditionally — when
+// Deps.ChoirStore is present, but is always published in the catalog). Order is
+// alphabetical by Name for deterministic output.
 var coreModuleDocs = []coreModuleDoc{
 	// --- soul-side (ADR-015) ---
 	{
@@ -136,8 +136,8 @@ var coreModuleDocs = []coreModuleDoc{
 	},
 
 	// --- keeper-side (ADR-017/ADR-044, on: keeper) ---
-	// Name — base-имя без state-суффикса (как у Soul-side core); полный
-	// author-адрес = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
+	// Name — base name without the state suffix (like Soul-side core); the full
+	// author address = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
 	{
 		Name:        "core.choir",
 		Description: "Управление членством Voice в Choir текущей инкарнации (params: incarnation, choir, sid, optional role/position; keeper-side, on: keeper).",

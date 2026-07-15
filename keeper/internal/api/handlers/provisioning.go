@@ -1,15 +1,15 @@
-// Provisioning-policy-handler Operator API (ADR-058 Часть B) — runtime-чтение и
-// смена политики `provisioning_allowed_methods` (keeper_settings): список
-// разрешённых способов СОЗДАНИЯ оператора ({user,ldap,oidc}). GET — read (БЕЗ
+// Provisioning-policy handler, Operator API (ADR-058 Part B) — runtime read and
+// change of the `provisioning_allowed_methods` policy (keeper_settings): the list
+// of allowed operator-CREATION methods ({user,ldap,oidc}). GET — read (no
 // audit, permission provisioning.read); PUT — write+audit (event
 // provisioning.policy_changed, permission provisioning.update).
 //
-// Доменный слой над serviceregistry: GET читает текущий снимок политики через
-// [ProvisioningPolicyReader] (Holder, cluster-консистентный atomic-снимок); PUT
-// валидирует список → CSV → [serviceregistry.Service.SetSetting] (upsert +
-// cluster-wide Redis-invalidate, тот же канал service-invalidate — Holder.refresh
-// перечитает политику на всех нодах). RBAC — в middleware (router.go); здесь —
-// маппинг ошибок в RFC 7807 + сборка audit-payload.
+// Domain layer over serviceregistry: GET reads the current policy snapshot via
+// [ProvisioningPolicyReader] (Holder, a cluster-consistent atomic snapshot); PUT
+// validates the list → CSV → [serviceregistry.Service.SetSetting] (upsert +
+// cluster-wide Redis invalidate, the same service-invalidate channel — Holder.refresh
+// re-reads the policy on all nodes). RBAC lives in middleware (router.go); here —
+// error mapping to RFC 7807 + building the audit-payload.
 package handlers
 
 import (
@@ -26,27 +26,27 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// ProvisioningPolicyReader — узкая read-поверхность текущей политики из снимка
-// (cluster-консистентный, atomic). Реализуется *serviceregistry.Holder; объявлена
-// интерфейсом, чтобы handler тестировался без подъёма Holder. ProvisioningPolicy
-// возвращает отсортированный список разрешённых методов + флаг set (задана ли
-// политика; set=false → дефолт «всё разрешено», methods=nil).
+// ProvisioningPolicyReader — narrow read surface of the current policy from the snapshot
+// (cluster-consistent, atomic). Implemented by *serviceregistry.Holder; declared as an
+// interface so the handler can be tested without spinning up a Holder. ProvisioningPolicy
+// returns a sorted list of allowed methods + a set flag (whether the policy is
+// set; set=false → default "everything allowed", methods=nil).
 type ProvisioningPolicyReader interface {
 	ProvisioningPolicy() (methods []string, set bool)
 }
 
-// ProvisioningPolicyHandler — GET/PUT /v1/provisioning-policy. reader читает
-// снимок политики (GET), svc пишет её (PUT через SetSetting + invalidate). Обе
-// зависимости обязательны (handler монтируется только при non-nil обеих, см.
-// router.go). Состояние не держит; safe for concurrent use.
+// ProvisioningPolicyHandler — GET/PUT /v1/provisioning-policy. reader reads the
+// policy snapshot (GET), svc writes it (PUT via SetSetting + invalidate). Both
+// dependencies are required (the handler mounts only when both are non-nil, see
+// router.go). Holds no state; safe for concurrent use.
 type ProvisioningPolicyHandler struct {
 	reader ProvisioningPolicyReader
 	svc    *serviceregistry.Service
 	logger *slog.Logger
 }
 
-// NewProvisioningPolicyHandler создаёт handler. reader/svc обязательны (паника при
-// nil — единственная точка misconfiguration, caller обязан передать non-nil).
+// NewProvisioningPolicyHandler builds the handler. reader/svc are required (panic on
+// nil — the only misconfiguration point; caller must pass non-nil).
 func NewProvisioningPolicyHandler(reader ProvisioningPolicyReader, svc *serviceregistry.Service, logger *slog.Logger) *ProvisioningPolicyHandler {
 	if reader == nil {
 		panic("handlers.NewProvisioningPolicyHandler: reader is nil")
@@ -60,37 +60,37 @@ func NewProvisioningPolicyHandler(reader ProvisioningPolicyReader, svc *servicer
 	return &ProvisioningPolicyHandler{reader: reader, svc: svc, logger: logger}
 }
 
-// ProvisioningPolicySpecStub — непустой заглушка для генерации huma-OpenAPI-
-// фрагмента (handler при dump не вызывается, нужен лишь non-nil для no-op-проверки
-// register-функций; reader/svc nil — handler в spec-режиме не исполняется, parity
+// ProvisioningPolicySpecStub — a non-empty stub for generating the huma OpenAPI
+// fragment (the handler is not called during dump, only non-nil is needed for the register
+// functions' no-op check; reader/svc nil — the handler does not execute in spec mode, parity
 // ServiceSpecStub).
 func ProvisioningPolicySpecStub() *ProvisioningPolicyHandler {
 	return &ProvisioningPolicyHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ProvisioningPolicyView — ПЛОСКОЕ доменное тело GET/PUT-ответа (handler-native).
-// AllowedMethods — отсортированный список разрешённых методов (при PolicySet=false
-// — nil, пакет api проецирует в `[]`); PolicySet=false → политика не задана (дефолт
-// «всё разрешено»).
+// ProvisioningPolicyView — FLAT domain body of the GET/PUT response (handler-native).
+// AllowedMethods — sorted list of allowed methods (when PolicySet=false
+// — nil, package api projects it to `[]`); PolicySet=false → policy not set (default
+// "everything allowed").
 type ProvisioningPolicyView struct {
 	AllowedMethods []string
 	PolicySet      bool
 }
 
-// GetTyped — доменная функция GET /v1/provisioning-policy (READ без audit): читает
-// текущую политику из снимка reader-а. Ошибок нет (snapshot-чтение).
+// GetTyped — domain function GET /v1/provisioning-policy (READ, no audit): reads the
+// current policy from the reader's snapshot. No errors (snapshot read).
 func (h *ProvisioningPolicyHandler) GetTyped() ProvisioningPolicyView {
 	methods, set := h.reader.ProvisioningPolicy()
 	return ProvisioningPolicyView{AllowedMethods: methods, PolicySet: set}
 }
 
-// ProvisioningPolicyUpdateInput — NATIVE request-форма PUT /v1/provisioning-policy.
+// ProvisioningPolicyUpdateInput — NATIVE request form for PUT /v1/provisioning-policy.
 type ProvisioningPolicyUpdateInput struct {
 	AllowedMethods []string
 }
 
-// ProvisioningPolicyUpdateReply — результат PutTyped: 200-тело (новая политика) +
-// audit-поля (новый список + прежний, если был).
+// ProvisioningPolicyUpdateReply — result of PutTyped: 200 body (new policy) +
+// audit fields (new list + the previous one, if any).
 type ProvisioningPolicyUpdateReply struct {
 	Body           ProvisioningPolicyView
 	AllowedMethods []string
@@ -98,9 +98,9 @@ type ProvisioningPolicyUpdateReply struct {
 	PreviousSet    bool
 }
 
-// AuditPayload собирает audit-payload PUT-роута (provisioning.policy_changed):
-// новый список allowed_methods + previous (прежний список, если политика была
-// задана). Без секретов (имена методов публичны).
+// AuditPayload builds the audit-payload for the PUT route (provisioning.policy_changed):
+// the new allowed_methods list + previous (the prior list, if the policy was
+// set). No secrets (method names are public).
 func (r ProvisioningPolicyUpdateReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{"allowed_methods": r.AllowedMethods}
 	if r.PreviousSet {
@@ -109,21 +109,21 @@ func (r ProvisioningPolicyUpdateReply) AuditPayload() middleware.AuditPayload {
 	return p
 }
 
-// PutTyped — доменная функция PUT /v1/provisioning-policy (WRITE+AUDIT): валидирует
-// список (непустой, каждый ∈ {user,ldap,oidc}), соединяет в CSV, пишет через
-// serviceregistry.Service.SetSetting (upsert + cluster-wide invalidate). claims —
-// callerAID для updated_by_aid. Ошибки — *problemError (422 anti-lockout/невалидный
-// метод, 404 caller-not-found, 500), успех — [ProvisioningPolicyUpdateReply].
+// PutTyped — domain function PUT /v1/provisioning-policy (WRITE+AUDIT): validates
+// the list (non-empty, each ∈ {user,ldap,oidc}), joins it into CSV, writes via
+// serviceregistry.Service.SetSetting (upsert + cluster-wide invalidate). claims provides
+// the callerAID for updated_by_aid. Errors are *problemError (422 anti-lockout/invalid
+// method, 404 caller-not-found, 500), success is [ProvisioningPolicyUpdateReply].
 //
-// Anti-lockout: пустой список → 422 (нельзя запретить ВСЕ методы). Валидация и
-// нормализация делегируется serviceregistry.ParseProvisioningMethods (единый
-// источник домена методов и семантики), чтобы PUT и PoolSource.Load не разъехались.
+// Anti-lockout: empty list → 422 (cannot forbid ALL methods). Validation and
+// normalization are delegated to serviceregistry.ParseProvisioningMethods (the single
+// source for the method domain and semantics), so PUT and PoolSource.Load don't diverge.
 func (h *ProvisioningPolicyHandler) PutTyped(ctx context.Context, claims *jwt.Claims, req ProvisioningPolicyUpdateInput) (ProvisioningPolicyUpdateReply, error) {
 	var zero ProvisioningPolicyUpdateReply
 
-	// Нормализация + валидация через единый парсер (lowercase/trim/dedup + домен
-	// {user,ldap,oidc} + anti-lockout «непустой»). CSV из входного списка — тот же
-	// формат, что хранит keeper_settings и читает PoolSource.Load.
+	// Normalization + validation via the single parser (lowercase/trim/dedup + domain
+	// {user,ldap,oidc} + anti-lockout "non-empty"). CSV from the input list is the same
+	// format that keeper_settings stores and PoolSource.Load reads.
 	csv := joinMethodsCSV(req.AllowedMethods)
 	methods, err := serviceregistry.ParseProvisioningMethods(csv)
 	switch {
@@ -138,11 +138,11 @@ func (h *ProvisioningPolicyHandler) PutTyped(ctx context.Context, claims *jwt.Cl
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "update provisioning policy failed")}
 	}
 
-	// Прежнее значение для audit-payload (best-effort; снимок reader-а — cluster-
-	// консистентный текущий статус).
+	// Previous value for the audit-payload (best-effort; the reader's snapshot is the
+	// cluster-consistent current status).
 	prev, prevSet := h.reader.ProvisioningPolicy()
 
-	// Каноническая нормализованная форма для записи: отсортированный set → CSV.
+	// Canonical normalized form for writing: sorted set → CSV.
 	normalized := sortedMethods(methods)
 	callerAID := claims.Subject
 	if _, err := h.svc.SetSetting(ctx, serviceregistry.SetSettingInput{
@@ -155,7 +155,7 @@ func (h *ProvisioningPolicyHandler) PutTyped(ctx context.Context, claims *jwt.Cl
 			return zero, &problemError{problem.New(problem.TypeNotFound, "",
 				"caller AID "+callerAID+" not found in operators registry")}
 		case errors.Is(err, serviceregistry.ErrInvalidSettingKey):
-			// Недостижимо (ключ — well-known const), defensive.
+			// Unreachable (the key is a well-known const), defensive.
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 		default:
 			h.logger.Error("provisioning.policy: set setting failed",
@@ -172,7 +172,7 @@ func (h *ProvisioningPolicyHandler) PutTyped(ctx context.Context, claims *jwt.Cl
 	}, nil
 }
 
-// sortedMethods переводит set разрешённых методов в отсортированный список.
+// sortedMethods turns the set of allowed methods into a sorted list.
 func sortedMethods(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
 	for m := range set {
@@ -182,7 +182,7 @@ func sortedMethods(set map[string]bool) []string {
 	return out
 }
 
-// joinMethodsCSV соединяет список методов в CSV-форму keeper_settings (через ',').
+// joinMethodsCSV joins the list of methods into the keeper_settings CSV form (with ',').
 func joinMethodsCSV(methods []string) string {
 	return strings.Join(methods, ",")
 }

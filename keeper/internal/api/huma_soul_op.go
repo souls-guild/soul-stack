@@ -1,17 +1,17 @@
 package api
 
-// FULL-TYPED форма SOUL-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// ТИРАЖ-БАТЧ-2e (soul read+write на huma по эталонам role/operator + audit-endpoint):
+// FULL-TYPED form of the SOUL domain (code-first OpenAPI source, ADR-054 §Pattern).
+// ROLLOUT-BATCH-2e (soul read+write on huma per the role/operator references + audit endpoint):
 // create — WRITE+AUDIT (soul.created, 201+body); coven-assign — WRITE+AUDIT (soul.coven-changed,
-// 200+body custom XOR); issue-token — WRITE+AUDIT (soul.token-issued, 200+body как operator
+// 200+body custom XOR); issue-token — WRITE+AUDIT (soul.token-issued, 200+body like operator
 // issue-token); ssh-target — WRITE+AUDIT (soul.ssh-target.updated, 200+body); list — read-with-
 // typed-query (coven/status/transport + offset/limit/cursor); get/soulprint — read-with-path;
 // history — read-with-typed-query (type[]/since/offset/limit, paginated → CheckPageBounds).
 //
-// POST /v1/souls/{sid}/exec (ErrandExec) — WRITE+AUDIT (errand.invoked) с ДВУМЯ
-// success-кодами: 200 sync ErrandResult (терминал до server-cap) / 202 async
-// ErrandAccepted + Location-header (escalation). Body пред-маршалится в
-// json.RawMessage (форма errand GET), Status/Location — field-конвенция huma.
+// POST /v1/souls/{sid}/exec (ErrandExec) — WRITE+AUDIT (errand.invoked) with TWO
+// success codes: 200 sync ErrandResult (terminal up to server-cap) / 202 async
+// ErrandAccepted + Location header (escalation). Body is pre-marshaled into
+// json.RawMessage (errand GET shape), Status/Location — huma field convention.
 
 import (
 	"encoding/json"
@@ -23,9 +23,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// huma-output Body-алиасы на доменные wire-типы (handlers). Через них huma строит схему
-// 200-тел и сериализует уже собранные handler-ом значения (custom MarshalJSON / paged-
-// envelope / byte-passthrough typed_facts сохраняются).
+// huma-output Body aliases for the domain wire types (handlers). Through them huma builds the
+// schema of the 200 bodies and serializes the values already assembled by the handler (custom
+// MarshalJSON / paged envelope / byte-passthrough typed_facts are preserved).
 type (
 	soulCovenAssignReplyBody = handlers.SoulCovenAssignResponse
 	soulSoulprintReplyBody   = handlers.SoulprintReadReply
@@ -33,18 +33,18 @@ type (
 
 // === POST /v1/souls (create) — WRITE+AUDIT soul.created (201+body) ===
 
-// soulCreateInput — huma-input POST /v1/souls (FULL-TYPED). Body — типизированное тело.
+// soulCreateInput — huma input POST /v1/souls (FULL-TYPED). Body — a typed body.
 type soulCreateInput struct {
 	Body SoulCreateRequest
 }
 
-// SoulCreateRequest — Go-форма тела POST /v1/souls (code-first источник схемы И валидации).
-// Имя структуры = контрактное имя схемы рукописи (docs/keeper/openapi.yaml → SoulCreateRequest):
-// huma DefaultSchemaNamer берёт reflect.Type.Name() напрямую. sid + transport + опц. covens +
-// server-only note (запись в souls.note; рукописный SoulCreateRequest поля note НЕ объявляет —
-// здесь оно присутствует как code-first расширение тела, не wire-затрагивающее golden). Формат
-// sid/transport/coven — доменная валидация (422 в CreateTyped). additionalProperties:false
-// (huma-дефолт) → unknown поле тела → 400.
+// SoulCreateRequest — Go form of the POST /v1/souls body (code-first source of schema AND validation).
+// Struct name = contract schema name of the reference (docs/keeper/openapi.yaml → SoulCreateRequest):
+// huma DefaultSchemaNamer takes reflect.Type.Name() directly. sid + transport + opt. covens +
+// server-only note (written to souls.note; the reference SoulCreateRequest does NOT declare a note field —
+// here it's present as a code-first body extension, not wire-affecting for golden). The format of
+// sid/transport/coven — domain validation (422 in CreateTyped). additionalProperties:false
+// (huma default) → unknown body field → 400.
 type SoulCreateRequest struct {
 	SID       string   `json:"sid" required:"true" doc:"SID нового хоста = FQDN"`
 	Transport string   `json:"transport" required:"true" enum:"agent,ssh" doc:"способ доставки: agent (mTLS gRPC stream) / ssh (push без агента)"`
@@ -52,18 +52,18 @@ type SoulCreateRequest struct {
 	Note      string   `json:"note,omitempty" doc:"server-only заметка (souls.note)"`
 }
 
-// soulCreateOutput — huma-output POST /v1/souls (FULL-TYPED). Status=201; Body — huma-native
-// 201-тело (SoulCreateReply, форма 1:1 с SoulCreateReply; bootstrap_token только для
-// transport=agent). Wire-форма зафиксирована golden-JSON byte-exact-тестом
+// soulCreateOutput — huma output POST /v1/souls (FULL-TYPED). Status=201; Body — huma-native
+// 201 body (SoulCreateReply, shape 1:1 with SoulCreateReply; bootstrap_token only for
+// transport=agent). Wire shape is pinned by a golden-JSON byte-exact test
 // (huma_soul_reply_test.go).
 type soulCreateOutput struct {
 	Status int `json:"-"`
 	Body   SoulCreateReply
 }
 
-// soulCreateOperation — метаданные POST /v1/souls. Path = "/" относительно chi-группы
+// soulCreateOperation — metadata of POST /v1/souls. Path = "/" relative to the chi group
 // /v1/souls. DefaultStatus=201. Permission soul.create + audit soul.created. Errors: 400
-// unknown/malformed, 403 RBAC, 409 soul-exists, 422 валидация sid/transport/coven, 500.
+// unknown/malformed, 403 RBAC, 409 soul-exists, 422 sid/transport/coven validation, 500.
 func soulCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createSoul",
@@ -79,17 +79,17 @@ func soulCreateOperation() huma.Operation {
 
 // === POST /v1/souls/coven (coven-assign) — WRITE+AUDIT soul.coven-changed (200+body) ===
 
-// soulCovenAssignInput — huma-input POST /v1/souls/coven (FULL-TYPED). Body — typed тело
-// (mode + label/labels XOR + selector). DryRun также из query (?dry_run=true, OR с body).
+// soulCovenAssignInput — huma input POST /v1/souls/coven (FULL-TYPED). Body — typed body
+// (mode + label/labels XOR + selector). DryRun also from query (?dry_run=true, OR with body).
 type soulCovenAssignInput struct {
 	Body   SoulCovenAssignRequest
 	DryRun bool `query:"dry_run" doc:"посчитать matched без UPDATE (OR с body.dry_run)"`
 }
 
-// SoulCovenAssignRequest — Go-форма тела POST /v1/souls/coven. Имя структуры = контрактное имя
-// схемы рукописи (docs/keeper/openapi.yaml → SoulCovenAssignRequest). mode (append/remove/
-// replace) + XOR label↔labels (домен валидирует XOR → 422) + selector (хотя бы один критерий) +
-// опц. dry_run. additionalProperties:false → unknown поле → 400.
+// SoulCovenAssignRequest — Go form of the POST /v1/souls/coven body. Struct name = contract name of
+// the reference schema (docs/keeper/openapi.yaml → SoulCovenAssignRequest). mode (append/remove/
+// replace) + XOR label↔labels (the domain validates the XOR → 422) + selector (at least one criterion) +
+// opt. dry_run. additionalProperties:false → unknown field → 400.
 type SoulCovenAssignRequest struct {
 	Mode     string                  `json:"mode" required:"true" enum:"append,remove,replace" doc:"append — добавить метку; remove — снять; replace — заменить набор"`
 	Label    string                  `json:"label,omitempty" maxLength:"63" doc:"метка для append/remove (запрещена для replace)"`
@@ -98,8 +98,8 @@ type SoulCovenAssignRequest struct {
 	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"таргетинг (хотя бы один критерий; комбинации AND)"`
 }
 
-// SoulCovenAssignSelector — Go-форма селектора (all/sids/coven/incarnation/status). Имя
-// структуры = контрактное имя схемы рукописи (SoulCovenAssignSelector; input-only — КЛАСС C).
+// SoulCovenAssignSelector — Go form of the selector (all/sids/coven/incarnation/status). Struct
+// name = contract name of the reference schema (SoulCovenAssignSelector; input-only — CLASS C).
 type SoulCovenAssignSelector struct {
 	All         bool     `json:"all,omitempty" doc:"без host-фильтра (весь реестр ∩ scope)"`
 	Sids        []string `json:"sids,omitempty" doc:"точечный список хостов (SID = FQDN)"`
@@ -108,16 +108,16 @@ type SoulCovenAssignSelector struct {
 	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"статус Soul в реестре"`
 }
 
-// soulCovenAssignOutput — huma-output POST /v1/souls/coven (FULL-TYPED). Status=200; Body —
-// typed 200-тело (handlers.SoulCovenAssignBody; custom MarshalJSON XOR label↔labels).
+// soulCovenAssignOutput — huma output POST /v1/souls/coven (FULL-TYPED). Status=200; Body —
+// typed 200 body (handlers.SoulCovenAssignBody; custom MarshalJSON XOR label↔labels).
 type soulCovenAssignOutput struct {
 	Status int `json:"-"`
 	Body   soulCovenAssignReplyBody
 }
 
-// soulCovenAssignOperation — метаданные POST /v1/souls/coven. DefaultStatus=200. Permission
+// soulCovenAssignOperation — metadata of POST /v1/souls/coven. DefaultStatus=200. Permission
 // soul.coven-assign + audit soul.coven-changed. Errors: 400 unknown/malformed, 403 RBAC,
-// 422 валидация mode/label(s)/selector/scope, 500.
+// 422 mode/label(s)/selector/scope validation, 500.
 func soulCovenAssignOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "assignSoulCoven",
@@ -133,18 +133,18 @@ func soulCovenAssignOperation() huma.Operation {
 
 // === POST /v1/souls/traits (traits-assign) — WRITE+AUDIT soul.traits-changed (200+body) ===
 
-// soulTraitsAssignInput — huma-input POST /v1/souls/traits (FULL-TYPED). Body — typed тело
-// (mode + traits/keys XOR + selector). DryRun также из query (?dry_run=true, OR с body).
+// soulTraitsAssignInput — huma input POST /v1/souls/traits (FULL-TYPED). Body — typed body
+// (mode + traits/keys XOR + selector). DryRun also from query (?dry_run=true, OR with body).
 type soulTraitsAssignInput struct {
 	Body   SoulTraitsAssignRequest
 	DryRun bool `query:"dry_run" doc:"посчитать matched без UPDATE (OR с body.dry_run)"`
 }
 
-// SoulTraitsAssignRequest — Go-форма тела POST /v1/souls/traits (code-first источник схемы И
-// валидации; ADR-060). Имя структуры = контрактное имя схемы (huma DefaultSchemaNamer). mode
-// (merge/replace/remove, дефолт merge) + XOR traits↔keys (домен валидирует → 422) + selector
-// (хотя бы один критерий) + опц. dry_run. traits — map ключ→(scalar|list of scalars); вложенные
-// объекты/массивы отвергаются доменом. additionalProperties:false → unknown поле → 400.
+// SoulTraitsAssignRequest — Go form of the POST /v1/souls/traits body (code-first source of schema AND
+// validation; ADR-060). Struct name = contract schema name (huma DefaultSchemaNamer). mode
+// (merge/replace/remove, default merge) + XOR traits↔keys (the domain validates → 422) + selector
+// (at least one criterion) + opt. dry_run. traits — map key→(scalar|list of scalars); nested
+// objects/arrays are rejected by the domain. additionalProperties:false → unknown field → 400.
 type SoulTraitsAssignRequest struct {
 	Mode     string                  `json:"mode,omitempty" enum:"merge,replace,remove" doc:"merge (дефолт) — set/overwrite ключи; replace — заменить весь map; remove — удалить ключи из keys"`
 	Traits   map[string]any          `json:"traits,omitempty" doc:"набор ключ→значение для merge/replace (значение — scalar или list of scalars); запрещён для remove"`
@@ -153,27 +153,27 @@ type SoulTraitsAssignRequest struct {
 	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"таргетинг (хотя бы один критерий; комбинации AND)"`
 }
 
-// soulTraitsAssignOutput — huma-output POST /v1/souls/traits (FULL-TYPED). Status=200; Body —
-// typed 200-тело (handlers.SoulTraitsAssignResponse).
+// soulTraitsAssignOutput — huma output POST /v1/souls/traits (FULL-TYPED). Status=200; Body —
+// typed 200 body (handlers.SoulTraitsAssignResponse).
 type soulTraitsAssignOutput struct {
 	Status int `json:"-"`
 	Body   handlers.SoulTraitsAssignResponse
 }
 
-// soulTraitsAssignOperation — метаданные POST /v1/souls/traits. DefaultStatus=200. Permission
+// soulTraitsAssignOperation — metadata of POST /v1/souls/traits. DefaultStatus=200. Permission
 // soul.traits-assign + audit soul.traits-changed. Errors: 400 unknown/malformed, 403 RBAC,
-// 422 валидация mode/traits/keys/selector, 500.
+// 422 mode/traits/keys/selector validation, 500.
 func soulTraitsAssignOperation() huma.Operation {
 	return huma.Operation{
 		OperationID: "assignSoulTraits",
 		Method:      http.MethodPost,
 		Path:        "/traits",
 		Summary:     "Массовое назначение trait-меток (deprecated)",
-		// DEPRECATED (ADR-060 amend R1): operator-set trait-управление перенесено
-		// per-soul → per-incarnation. Источник истины — incarnation.traits
-		// (PUT /v1/incarnations/{name}/traits), проецируемый в souls.traits
-		// sync-hook-ом. Per-soul write здесь перетирается следующей проекцией.
-		// Эндпоинт сохранён forward-compat (НЕ удалён); вызов пишет warn-лог.
+		// DEPRECATED (ADR-060 amend R1): operator-set trait management moved
+		// per-soul → per-incarnation. The source of truth is incarnation.traits
+		// (PUT /v1/incarnations/{name}/traits), projected into souls.traits
+		// by a sync hook. A per-soul write here is overwritten by the next projection.
+		// The endpoint is kept forward-compat (NOT removed); a call writes a warn log.
 		Deprecated:    true,
 		Description:   "DEPRECATED (ADR-060): используйте PUT /v1/incarnations/{name}/traits (incarnation.traits — источник истины, проецируется в souls.traits). Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb) на хостах под selector ∩ coven-scope. Per-soul write перетирается проекцией incarnation.traits. Permission soul.traits-assign. partial → 200 status:partial.",
 		Tags:          []string{"soul"},
@@ -184,24 +184,24 @@ func soulTraitsAssignOperation() huma.Operation {
 
 // === POST /v1/souls/{sid}/issue-token (issue-token) — WRITE+AUDIT soul.token-issued (200+body) ===
 
-// soulIssueTokenInput — huma-input POST /v1/souls/{sid}/issue-token. SID — path; Force —
-// query (?force=true). Body нет.
+// soulIssueTokenInput — huma input POST /v1/souls/{sid}/issue-token. SID — path; Force —
+// query (?force=true). No Body.
 type soulIssueTokenInput struct {
 	SID   string `path:"sid" doc:"SID (FQDN) Soul-а"`
 	Force bool   `query:"force" doc:"истечь активный токен и выписать новый"`
 }
 
-// soulIssueTokenOutput — huma-output POST /v1/souls/{sid}/issue-token (FULL-TYPED). Status=200;
-// Body — huma-native 200-тело (SoulIssueTokenReply: sid/bootstrap_token/expires_at). Отличие от
-// 204-write-роутов — issue-token возвращает выпущенный токен (parity operator issue-token).
+// soulIssueTokenOutput — huma output POST /v1/souls/{sid}/issue-token (FULL-TYPED). Status=200;
+// Body — huma-native 200 body (SoulIssueTokenReply: sid/bootstrap_token/expires_at). Unlike the
+// 204 write routes, issue-token returns the issued token (parity operator issue-token).
 type soulIssueTokenOutput struct {
 	Status int `json:"-"`
 	Body   SoulIssueTokenReply
 }
 
-// soulIssueTokenOperation — метаданные POST /v1/souls/{sid}/issue-token. DefaultStatus=200.
-// Permission soul.issue-token + audit soul.token-issued. Errors: 403 RBAC, 404 нет soul,
-// 409 активный токен без force, 422 невалидный sid / transport=ssh, 500.
+// soulIssueTokenOperation — metadata of POST /v1/souls/{sid}/issue-token. DefaultStatus=200.
+// Permission soul.issue-token + audit soul.token-issued. Errors: 403 RBAC, 404 no soul,
+// 409 active token without force, 422 invalid sid / transport=ssh, 500.
 func soulIssueTokenOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "issueSoulToken",
@@ -217,24 +217,24 @@ func soulIssueTokenOperation() huma.Operation {
 
 // === PUT /v1/souls/{sid}/ssh-target (ssh-target) — WRITE+AUDIT soul.ssh-target.updated (200+body) ===
 
-// soulSshTargetInput — huma-input PUT /v1/souls/{sid}/ssh-target. SID — path; Body — typed тело.
+// soulSshTargetInput — huma input PUT /v1/souls/{sid}/ssh-target. SID — path; Body — typed body.
 type soulSshTargetInput struct {
 	SID  string `path:"sid" doc:"SID (FQDN) Soul-а"`
 	Body SoulSshTarget
 }
 
-// SoulSshTarget — Go-форма тела PUT /v1/souls/{sid}/ssh-target (КЛАСС A, shared input↔output).
-// Имя структуры = контрактное имя схемы рукописи (docs/keeper/openapi.yaml → SoulSshTarget;
-// рукописный SoulSshTargetRequest — $ref на SoulSshTarget). Все поля required, кроме
-// ssh_provider (optional 3-tier routing) — required-набор [ssh_port,ssh_user,soul_path] сверен
-// с рукописью :6394. OUTPUT (SoulSshTargetReply.ssh_target) сведён на ту же схему через
-// aliasSoulSshTarget (SoulSSHTarget → SoulSshTarget). Диапазон ssh_port / абсолютность
-// soul_path / формат ssh_provider — доменная валидация (422). additionalProperties:false →
+// SoulSshTarget — Go form of the PUT /v1/souls/{sid}/ssh-target body (CLASS A, shared input↔output).
+// Struct name = contract schema name of the reference (docs/keeper/openapi.yaml → SoulSshTarget;
+// the reference SoulSshTargetRequest is a $ref to SoulSshTarget). All fields required except
+// ssh_provider (optional 3-tier routing) — the required set [ssh_port,ssh_user,soul_path] is verified
+// against the reference :6394. OUTPUT (SoulSshTargetReply.ssh_target) is collapsed onto the same schema via
+// aliasSoulSshTarget (SoulSSHTarget → SoulSshTarget). ssh_port range / soul_path absoluteness /
+// ssh_provider format — domain validation (422). additionalProperties:false →
 // unknown → 400.
-// ★ Порядок полей повторяет SoulSSHTarget (soul_path, ssh_port, ssh_provider, ssh_user):
-// encoding/json маршалит в порядке объявления → выровненный порядок даёт byte-exact wire
-// nested ssh_target в SoulSshTargetReply (output) vs legacy legacy-генерата. Для input-парсинга порядок
-// JSON-ключей нерелевантен.
+// ★ Field order mirrors SoulSSHTarget (soul_path, ssh_port, ssh_provider, ssh_user):
+// encoding/json marshals in declaration order → the aligned order gives a byte-exact wire
+// nested ssh_target in SoulSshTargetReply (output) vs the former legacy generator. For input parsing the order
+// of JSON keys is irrelevant.
 type SoulSshTarget struct {
 	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"абсолютный путь установки soul-бинаря (начинается с /)"`
 	SSHPort     int    `json:"ssh_port" required:"true" minimum:"1" maximum:"65535" doc:"SSH-порт [1..65535]"`
@@ -242,18 +242,18 @@ type SoulSshTarget struct {
 	SSHUser     string `json:"ssh_user" required:"true" minLength:"1" doc:"SSH-пользователь"`
 }
 
-// soulSshTargetOutput — huma-output PUT /v1/souls/{sid}/ssh-target (FULL-TYPED). Status=200;
-// Body — huma-native 200-тело (SoulSshTargetReply: snapshot сохранённого target-а; nested
-// ssh_target — class-A reuse native SoulSshTarget). Wire-форма зафиксирована golden-JSON
-// byte-exact-тестом (huma_soul_reply_test.go).
+// soulSshTargetOutput — huma output PUT /v1/souls/{sid}/ssh-target (FULL-TYPED). Status=200;
+// Body — huma-native 200 body (SoulSshTargetReply: snapshot of the saved target; nested
+// ssh_target — class-A reuse of native SoulSshTarget). Wire shape is pinned by a golden-JSON
+// byte-exact test (huma_soul_reply_test.go).
 type soulSshTargetOutput struct {
 	Status int `json:"-"`
 	Body   SoulSshTargetReply
 }
 
-// soulSshTargetOperation — метаданные PUT /v1/souls/{sid}/ssh-target. DefaultStatus=200.
+// soulSshTargetOperation — metadata of PUT /v1/souls/{sid}/ssh-target. DefaultStatus=200.
 // Permission soul.ssh-target-update + audit soul.ssh-target.updated. Errors: 400 unknown/
-// malformed, 403 RBAC, 404 нет soul, 422 валидация sid/port/user/path/provider, 500.
+// malformed, 403 RBAC, 404 no soul, 422 sid/port/user/path/provider validation, 500.
 func soulSshTargetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "updateSoulSSHTarget",
@@ -267,15 +267,15 @@ func soulSshTargetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/souls (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/souls (list) — READ with typed query (no audit) ===
 
-// soulListInput — huma-input GET /v1/souls (FULL-TYPED typed-query). coven/transport — string-
-// фильтры; status — enum закрытого набора (вне набора → 422). cursor — keyset-курсор (string).
-// offset/limit — int32 с default; bad-int → 400; диапазон / offset+cursor-конфликт / битый
-// cursor разрешаются в (w,r)-обёртке через ParsePageWithCursor (huma-роут зовёт ListTyped с
-// уже-распарсенными page/cursor). Здесь offset/limit/cursor биндятся для схемы;
-// бизнес-разбор пагинации делает register-handler через ParsePageWithCursor над теми же
-// query-значениями.
+// soulListInput — huma input GET /v1/souls (FULL-TYPED typed query). coven/transport — string
+// filters; status — a closed-set enum (out of set → 422). cursor — a keyset cursor (string).
+// offset/limit — int32 with default; bad-int → 400; range / offset+cursor conflict / broken
+// cursor are resolved in the (w,r) wrapper via ParsePageWithCursor (the huma route calls ListTyped with
+// already-parsed page/cursor). Here offset/limit/cursor are bound for the schema;
+// the business pagination parse is done by the register handler via ParsePageWithCursor over the same
+// query values.
 type soulListInput struct {
 	Coven     string `query:"coven" doc:"фильтр по Coven-метке (AND внутри scope)"`
 	Status    string `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"фильтр по статусу; вне enum → 422"`
@@ -285,20 +285,20 @@ type soulListInput struct {
 	Limit     int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// soulListOutput — huma-output GET /v1/souls (FULL-TYPED). Body — TAGGED native envelope
-// soulListReply (CURSOR, 6 полей: items.$ref на native SoulListEntry с json-тегами +
-// next_cursor/total_approximate omitempty). Прежде Body был handlers.SoulListReply (=
-// PagedResponse[SoulListView]) — untagged View → PascalCase-wire (контракт-баг #7).
-// Register-func проецирует reply.Items через newSoulListEntry и ПЕРЕНОСИТ cursor-поля
-// (next_cursor/total_approximate) byte-exact. Схема OpenAPI не меняется (та же alias-цель
+// soulListOutput — huma output GET /v1/souls (FULL-TYPED). Body — a TAGGED native envelope
+// soulListReply (CURSOR, 6 fields: items.$ref to native SoulListEntry with json tags +
+// next_cursor/total_approximate omitempty). Body used to be handlers.SoulListReply (=
+// PagedResponse[SoulListView]) — untagged View → PascalCase wire (contract bug #7).
+// The register func projects reply.Items through newSoulListEntry and CARRIES the cursor fields
+// (next_cursor/total_approximate) byte-exact. The OpenAPI schema doesn't change (same alias target
 // soulListReply).
 type soulListOutput struct {
 	Body soulListReply
 }
 
-// soulListOperation — метаданные GET /v1/souls. Path = "/" относительно chi-группы /v1/souls.
-// DefaultStatus=200. READ-роут: audit НЕ навешан. Permission soul.list. Errors: 400 (bad
-// pagination / битый cursor), 403 RBAC, 422 (bad status/transport enum / offset+cursor), 500.
+// soulListOperation — metadata of GET /v1/souls. Path = "/" relative to the chi group /v1/souls.
+// DefaultStatus=200. READ route: audit not wired. Permission soul.list. Errors: 400 (bad
+// pagination / broken cursor), 403 RBAC, 422 (bad status/transport enum / offset+cursor), 500.
 func soulListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listSouls",
@@ -312,21 +312,21 @@ func soulListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/souls/stats (stats) — READ-агрегат (БЕЗ audit) ===
+// === GET /v1/souls/stats (stats) — READ aggregate (no audit) ===
 
-// soulStatsInput — huma-input GET /v1/souls/stats. Параметров нет: агрегат
-// считается по всему видимому scope-у оператора (границу даёт Purview, НЕ query).
+// soulStatsInput — huma input GET /v1/souls/stats. No parameters: the aggregate is
+// computed over the operator's entire visible scope (the boundary comes from Purview, NOT the query).
 type soulStatsInput struct{}
 
-// soulStatsOutput — huma-output GET /v1/souls/stats (FULL-TYPED). Body — native
-// агрегат-DTO (soulStatsReply: by_status/by_transport/by_coven/total/stale_count).
+// soulStatsOutput — huma output GET /v1/souls/stats (FULL-TYPED). Body — a native
+// aggregate DTO (soulStatsReply: by_status/by_transport/by_coven/total/stale_count).
 type soulStatsOutput struct {
 	Body soulStatsReply
 }
 
-// soulStatsOperation — метаданные GET /v1/souls/stats. Path = "/stats" относительно
-// chi-группы /v1/souls. DefaultStatus=200. READ-роут: audit НЕ навешан. Permission
-// soul.list (то же право чтения реестра, что list/get). Errors: 403 RBAC, 500.
+// soulStatsOperation — metadata of GET /v1/souls/stats. Path = "/stats" relative to
+// the chi group /v1/souls. DefaultStatus=200. READ route: audit not wired. Permission
+// soul.list (the same registry-read right as list/get). Errors: 403 RBAC, 500.
 func soulStatsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getSoulsStats",
@@ -340,21 +340,21 @@ func soulStatsOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/souls/{sid} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/souls/{sid} (get) — READ with path (no audit) ===
 
-// soulGetInput — huma-input GET /v1/souls/{sid}. SID — path.
+// soulGetInput — huma input GET /v1/souls/{sid}. SID — path.
 type soulGetInput struct {
 	SID string `path:"sid" doc:"SID (FQDN) Soul-а"`
 }
 
-// soulGetOutput — huma-output GET /v1/souls/{sid} (FULL-TYPED). Body — huma-native 200-тело
-// (SoulListEntry — та же проекция, что element list-envelope; shared get-Body + envelope-element).
+// soulGetOutput — huma output GET /v1/souls/{sid} (FULL-TYPED). Body — huma-native 200 body
+// (SoulListEntry — the same projection as the list-envelope element; shared get Body + envelope element).
 type soulGetOutput struct {
 	Body SoulListEntry
 }
 
-// soulGetOperation — метаданные GET /v1/souls/{sid}. DefaultStatus=200. READ-роут: audit НЕ
-// навешан. Permission soul.list. Errors: 403, 404 (нет soul / вне scope), 422 bad sid, 500.
+// soulGetOperation — metadata of GET /v1/souls/{sid}. DefaultStatus=200. READ route: audit not
+// wired. Permission soul.list. Errors: 403, 404 (no soul / out of scope), 422 bad sid, 500.
 func soulGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getSoul",
@@ -368,22 +368,22 @@ func soulGetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/souls/{sid}/soulprint (soulprint) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/souls/{sid}/soulprint (soulprint) — READ with path (no audit) ===
 
-// soulSoulprintInput — huma-input GET /v1/souls/{sid}/soulprint. SID — path.
+// soulSoulprintInput — huma input GET /v1/souls/{sid}/soulprint. SID — path.
 type soulSoulprintInput struct {
 	SID string `path:"sid" doc:"SID (FQDN) Soul-а"`
 }
 
-// soulSoulprintOutput — huma-output GET /v1/souls/{sid}/soulprint (FULL-TYPED). Body — typed
-// 200-тело (handlers.SoulprintReadReply: sid/typed_facts/collected_at/received_at).
+// soulSoulprintOutput — huma output GET /v1/souls/{sid}/soulprint (FULL-TYPED). Body — typed
+// 200 body (handlers.SoulprintReadReply: sid/typed_facts/collected_at/received_at).
 type soulSoulprintOutput struct {
 	Body soulSoulprintReplyBody
 }
 
-// soulSoulprintOperation — метаданные GET /v1/souls/{sid}/soulprint. DefaultStatus=200. READ-
-// роут: audit НЕ навешан. Permission soul.list. Errors: 403, 404 (нет soul / вне scope),
-// 410 (soulprint не получен), 422 bad sid, 500.
+// soulSoulprintOperation — metadata of GET /v1/souls/{sid}/soulprint. DefaultStatus=200. READ
+// route: audit not wired. Permission soul.list. Errors: 403, 404 (no soul / out of scope),
+// 410 (soulprint not received), 422 bad sid, 500.
 func soulSoulprintOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getSoulprint",
@@ -397,11 +397,11 @@ func soulSoulprintOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/souls/{sid}/history (history) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/souls/{sid}/history (history) — READ with typed query (no audit) ===
 
-// soulHistoryInput — huma-input GET /v1/souls/{sid}/history (FULL-TYPED typed-query). SID —
-// path. Types — multi-value (?type=X&type=Y) OR (explode:true ОБЯЗАТЕЛЕН). Since — date-time
-// (bad value → 400). offset/limit — int32 с default; диапазон → CheckPageBounds 400.
+// soulHistoryInput — huma input GET /v1/souls/{sid}/history (FULL-TYPED typed query). SID —
+// path. Types — multi-value (?type=X&type=Y) OR (explode:true is MANDATORY). Since — date-time
+// (bad value → 400). offset/limit — int32 with default; range → CheckPageBounds 400.
 type soulHistoryInput struct {
 	SID    string    `path:"sid" doc:"SID (FQDN) Soul-а"`
 	Types  []string  `query:"type,explode" enum:"scenario,errand" doc:"multi-value ?type=X&type=Y — OR по источнику; вне enum → 422"`
@@ -410,16 +410,16 @@ type soulHistoryInput struct {
 	Limit  int32     `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// soulHistoryOutput — huma-output GET /v1/souls/{sid}/history (FULL-TYPED). Body — huma-native
-// 200-envelope (SoulHistoryReply: sid/items/offset/limit/total + nested SoulHistoryItem;
-// самостоятельный envelope, НЕ generic PagedResponse).
+// soulHistoryOutput — huma output GET /v1/souls/{sid}/history (FULL-TYPED). Body — a huma-native
+// 200 envelope (SoulHistoryReply: sid/items/offset/limit/total + nested SoulHistoryItem;
+// a standalone envelope, NOT generic PagedResponse).
 type soulHistoryOutput struct {
 	Body SoulHistoryReply
 }
 
-// soulHistoryOperation — метаданные GET /v1/souls/{sid}/history. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Permission soul.list. Errors: 400 (out-of-range pagination / bad since),
-// 403, 404 (нет soul / вне scope), 422 (bad sid / type enum), 500.
+// soulHistoryOperation — metadata of GET /v1/souls/{sid}/history. DefaultStatus=200. READ route:
+// audit not wired. Permission soul.list. Errors: 400 (out-of-range pagination / bad since),
+// 403, 404 (no soul / out of scope), 422 (bad sid / type enum), 500.
 func soulHistoryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getSoulHistory",
@@ -435,19 +435,19 @@ func soulHistoryOperation() huma.Operation {
 
 // === POST /v1/souls/{sid}/exec (exec) — WRITE+AUDIT errand.invoked (200 sync / 202 async) ===
 
-// errandExecInput — huma-input POST /v1/souls/{sid}/exec. SID — path; Body — typed
-// тело (module required + опц. input/timeout_seconds/dry_run). additionalProperties:false
-// (huma-дефолт) → unknown поле тела → 400.
+// errandExecInput — huma input POST /v1/souls/{sid}/exec. SID — path; Body — a typed
+// body (module required + opt. input/timeout_seconds/dry_run). additionalProperties:false
+// (huma default) → unknown body field → 400.
 type errandExecInput struct {
 	SID  string `path:"sid" doc:"SID (FQDN) целевого Soul-а"`
 	Body ErrandRunRequest
 }
 
-// ErrandRunRequest — Go-форма тела POST /v1/souls/{sid}/exec (code-first источник схемы И
-// валидации). Имя структуры = контрактное имя request-схемы рукописи (docs/keeper/openapi.yaml
-// → ErrandRunRequest, $ref у requestBody exec). module — required (пустой → 422 в ExecTyped
-// через dispatcher); input/timeout_seconds/dry_run — optional-pointer (handler разыменовывает).
-// Диапазон timeout / dry_run-для-verb / формат module — доменная валидация (422/400 в ExecTyped).
+// ErrandRunRequest — Go form of the POST /v1/souls/{sid}/exec body (code-first source of schema AND
+// validation). Struct name = contract request-schema name of the reference (docs/keeper/openapi.yaml
+// → ErrandRunRequest, $ref at requestBody exec). module — required (empty → 422 in ExecTyped
+// via dispatcher); input/timeout_seconds/dry_run — optional-pointer (the handler dereferences).
+// timeout range / dry_run-for-verb / module format — domain validation (422/400 in ExecTyped).
 type ErrandRunRequest struct {
 	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state> (core.cmd.shell / core.exec.run / ErrandReadSafe-модуль)"`
 	Input          *map[string]any `json:"input,omitempty" doc:"input для модуля (валидируется против input_schema)"`
@@ -455,24 +455,24 @@ type ErrandRunRequest struct {
 	DryRun         *bool           `json:"dry_run,omitempty" doc:"только для PlanReadSafe-модулей; verb-модуль (shell/exec) → 400"`
 }
 
-// errandExecOutput — huma-output POST /v1/souls/{sid}/exec с ДВУМЯ success-кодами под
-// одним OperationID (200 sync ErrandResult / 202 async ErrandAccepted — разные тела +
-// Location только на 202). Status — field-конвенция huma (override response-кода).
-// Location — header-поле: пустая строка НЕ пишется (нативный omitempty huma), ставится
-// ТОЛЬКО на 202. Body — json.RawMessage: handler пред-маршалит выбранное тело (форма
-// errand GET; схема во фрагменте = `{}`, committed openapi.yaml несёт типизированные
-// 200/ErrandResult + 202/ErrandAccepted — авторитет). Wire-байты тела идентичны легаси.
+// errandExecOutput — huma output POST /v1/souls/{sid}/exec with TWO success codes under
+// one OperationID (200 sync ErrandResult / 202 async ErrandAccepted — different bodies +
+// Location only on 202). Status — huma field convention (response-code override).
+// Location — a header field: an empty string is NOT written (huma native omitempty), set
+// ONLY on 202. Body — json.RawMessage: the handler pre-marshals the chosen body (errand GET
+// shape; the schema in the fragment = `{}`, committed openapi.yaml carries the typed
+// 200/ErrandResult + 202/ErrandAccepted — authoritative). The wire body bytes are identical to legacy.
 type errandExecOutput struct {
 	Status   int             `json:"-"`
 	Location string          `header:"Location" json:"-"`
 	Body     json.RawMessage `json:"body"`
 }
 
-// errandExecOperation — метаданные POST /v1/souls/{sid}/exec. DefaultStatus=200 (sync
-// терминал). 202 (async escalation) — дополнительный success-код (handler сам ставит
-// Status=202 + Location). Permission errand.run + audit errand.invoked. Errors: 202
+// errandExecOperation — metadata of POST /v1/souls/{sid}/exec. DefaultStatus=200 (sync
+// terminal). 202 (async escalation) — an additional success code (the handler sets
+// Status=202 + Location itself). Permission errand.run + audit errand.invoked. Errors: 202
 // async, 400 unknown/malformed/dry_run-verb, 403 RBAC, 404 soul-not-connected, 422
-// невалидный sid/module/timeout, 500.
+// invalid sid/module/timeout, 500.
 func errandExecOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "ErrandExec",

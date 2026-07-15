@@ -1,18 +1,18 @@
 package handlers
 
-// Сквозные guard-тесты trait-scoped видимости инкарнации на handler-слое (ADR-047
-// amendment / ADR-060 п.7 slice 1). Составные куски покрыты порознь
+// End-to-end guard tests for trait-scoped incarnation visibility at the handler layer (ADR-047
+// amendment / ADR-060 §7 slice 1). The constituent pieces are covered separately
 // (traitScalarEquals unit / incarnation.appendScopeClause integration / Purview),
-// но e2e через handler — List (ResolveListScopeFor → scope.Traits → SQL) и Get
-// (GetInScopeFor → traitScalarEquals) — отсутствовал.
+// but the e2e through the handler — List (ResolveListScopeFor → scope.Traits → SQL) and Get
+// (GetInScopeFor → traitScalarEquals) — was missing.
 //
-// КЛЮЧЕВОЙ инвариант (BUG#1 — консистентность List↔Get на handler-уровне):
-//   - scalar-метка {env:"prod"}  + scope trait=env:prod → ВИДНА  (Get 200; List
-//     отдаёт scalar-equality `traits->>$ = $` в SQL, НЕ containment `@>`);
-//   - list-метка {env:[prod,stage]} + тот же scope → НЕ видна (Get 404; List —
-//     тот же scalar-equality SQL, который для массива даёт его ТЕКСТ ≠ "prod").
-// Рассинхрон был бы: List через `@>` показывает list-метку (array-contains-
-// primitive PG §8.14.3), а Get её НЕ видит. Оба плеча обязаны быть scalar-only.
+// KEY invariant (BUG#1 — List↔Get consistency at the handler level):
+//   - scalar label {env:"prod"}  + scope trait=env:prod → VISIBLE  (Get 200; List
+//     emits scalar-equality `traits->>$ = $` in SQL, NOT containment `@>`);
+//   - list label {env:[prod,stage]} + the same scope → not visible (Get 404; List —
+//     the same scalar-equality SQL, which for an array yields its TEXT ≠ "prod").
+// The mismatch would be: List via `@>` shows the list label (array-contains-
+// primitive PG §8.14.3), while Get does NOT see it. Both arms must be scalar-only.
 
 import (
 	"encoding/json"
@@ -24,9 +24,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// incTraitRow — staticRow под SelectByName/SelectAll (16 колонок scanIncarnation)
-// с заданным traits-map (колонка $13 / index 12). Зеркало incListRow, но с
-// произвольными traits (incListRow хардкодит `{}`); covens/state опускаем (nil).
+// incTraitRow — a staticRow for SelectByName/SelectAll (16 scanIncarnation columns)
+// with a given traits map (column $13 / index 12). Mirror of incListRow, but with
+// arbitrary traits (incListRow hardcodes `{}`); covens/state are omitted (nil).
 func incTraitRow(name string, traits map[string]any) staticRow {
 	now := time.Now()
 	traitsBytes := []byte("{}")
@@ -48,8 +48,8 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 
 // --- Get trait-scoped (GetInScopeFor → traitScalarEquals) -------------------
 
-// TestIncarnation_Get_TraitScalarMatch_200 — scalar-метка {env:prod} + scope
-// trait=env:prod → 200 (видна). Базовое плечо trait-scope на GET-пути.
+// TestIncarnation_Get_TraitScalarMatch_200 — scalar label {env:prod} + scope
+// trait=env:prod → 200 (visible). The base trait-scope arm on the GET path.
 func TestIncarnation_Get_TraitScalarMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -64,8 +64,8 @@ func TestIncarnation_Get_TraitScalarMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitScalarMismatch_404 — scalar-метка {env:stage} + scope
-// trait=env:prod → 404 (другое значение).
+// TestIncarnation_Get_TraitScalarMismatch_404 — scalar label {env:stage} + scope
+// trait=env:prod → 404 (different value).
 func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -80,10 +80,10 @@ func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitListLabel_404 — ★BUG#1: list-метка {env:[prod,stage]}
-// + scope trait=env:prod → 404 (НЕ видна). traitScalarEquals на массиве → false
-// (scalar-only): оператор со scalar-scope НЕ видит инкарнацию с list-меткой,
-// содержащей это значение как элемент. Консистентно с List-плечом ниже.
+// TestIncarnation_Get_TraitListLabel_404 — ★BUG#1: list label {env:[prod,stage]}
+// + scope trait=env:prod → 404 (not visible). traitScalarEquals on an array → false
+// (scalar-only): an operator with a scalar scope does NOT see an incarnation with a list
+// label that contains this value as an element. Consistent with the List arm below.
 func TestIncarnation_Get_TraitListLabel_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -98,7 +98,7 @@ func TestIncarnation_Get_TraitListLabel_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitMissingKey_404 — ключ scope отсутствует в traits → 404.
+// TestIncarnation_Get_TraitMissingKey_404 — the scope key is absent from traits → 404.
 func TestIncarnation_Get_TraitMissingKey_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -113,8 +113,8 @@ func TestIncarnation_Get_TraitMissingKey_404(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitNumberMatch_200 — числовая scalar-метка {shard:3}
-// (jsonb→float64) + scope trait=shard:3 → 200 (строковая форма float64 == "3").
+// TestIncarnation_Get_TraitNumberMatch_200 — numeric scalar label {shard:3}
+// (jsonb→float64) + scope trait=shard:3 → 200 (string form of float64 == "3").
 func TestIncarnation_Get_TraitNumberMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
@@ -129,12 +129,12 @@ func TestIncarnation_Get_TraitNumberMatch_200(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Get_TraitOR_CovenAndTrait — OR-измерений: trait не матчит, но
-// coven матчит → 200 (union coven ∪ trait, как остальные измерения Purview).
+// TestIncarnation_Get_TraitOR_CovenAndTrait — dimension OR: trait does not match, but
+// coven matches → 200 (union coven ∪ trait, like the other Purview dimensions).
 func TestIncarnation_Get_TraitOR_CovenMatch_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row {
-			// traits.env=stage (не матчит scope env=prod), но coven=prod матчит.
+			// traits.env=stage (does not match scope env=prod), but coven=prod matches.
 			r := incTraitRow(name, map[string]any{"env": "stage"})
 			r.values[11] = []string{"prod"} // covens (index 11)
 			return r
@@ -150,8 +150,8 @@ func TestIncarnation_Get_TraitOR_CovenMatch_200(t *testing.T) {
 
 // --- List trait-scoped (ResolveListScopeFor → scope.Traits → SQL) -----------
 
-// listTraitSQLHandler собирает List-handler с trait-scope и перехватом COUNT-SQL +
-// list-SQL. Один fakeIncDB обслуживает обе ветки.
+// listTraitSQLHandler assembles a List handler with a trait scope and interception of the
+// COUNT SQL + list SQL. One fakeIncDB serves both branches.
 func listTraitSQLHandler(traitExprs []string) (*fakeIncDB, *string, *IncarnationHandler) {
 	var sql string
 	db := &fakeIncDB{
@@ -164,11 +164,11 @@ func listTraitSQLHandler(traitExprs []string) (*fakeIncDB, *string, *Incarnation
 	return db, &sql, h
 }
 
-// TestIncarnation_List_TraitScope_ScalarEqualitySQL — ★BUG#1: trait-scope доходит
-// до SQL как scalar-equality `traits->>$N = $N`, НЕ jsonb-containment `@>`. Это
-// плечо консистентности: тот же предикат на массиве даёт ТЕКСТ массива ≠ "prod"
-// (list-метка НЕ матчится в List, как и в Get). Регресс на `@>` вернул бы
-// рассинхрон (List показывает list-метку, Get — нет).
+// TestIncarnation_List_TraitScope_ScalarEqualitySQL — ★BUG#1: the trait scope reaches
+// SQL as scalar-equality `traits->>$N = $N`, NOT jsonb-containment `@>`. This is the
+// consistency arm: the same predicate on an array yields the array's TEXT ≠ "prod"
+// (the list label does NOT match in List, just like in Get). A regression to `@>` would bring
+// back the mismatch (List shows the list label, Get does not).
 func TestIncarnation_List_TraitScope_ScalarEqualitySQL(t *testing.T) {
 	db, sql, h := listTraitSQLHandler([]string{"env:prod"})
 
@@ -182,19 +182,19 @@ func TestIncarnation_List_TraitScope_ScalarEqualitySQL(t *testing.T) {
 	if strings.Contains(*sql, "@>") {
 		t.Errorf("trait-scope использует jsonb-containment @> (BUG#1: матчит list-метку, рассинхрон с Get):\n%s", *sql)
 	}
-	// scope-pushdown активен (не fail-closed FALSE): SelectAll вызван.
+	// scope pushdown is active (not fail-closed FALSE): SelectAll is called.
 	if !db.listCalled {
 		t.Errorf("trait-scope: SelectAll не вызван (ожидался scope-pushdown, не fail-closed)")
 	}
-	// Ключ и значение — раздельные bind-args (env / prod), не конкатенация в текст.
+	// key and value are separate bind-args (env / prod), not concatenated into text.
 	if !argsHasString(db.lastCountArgs, "env") || !argsHasString(db.lastCountArgs, "prod") {
 		t.Errorf("trait key/value не пришли раздельными bind-args (env, prod): %v", db.lastCountArgs)
 	}
 }
 
-// TestIncarnation_List_TraitScope_ValueBound — значение trait-scope биндится как
-// параметр (а не в SQL-текст): инъекция через значение невозможна. Подаём
-// «опасное» значение, проверяем, что оно в args, а НЕ в тексте SQL.
+// TestIncarnation_List_TraitScope_ValueBound — the trait-scope value is bound as a
+// parameter (not into SQL text): injection via the value is impossible. We feed a
+// "dangerous" value and check it is in args, NOT in the SQL text.
 func TestIncarnation_List_TraitScope_ValueBound(t *testing.T) {
 	db, sql, h := listTraitSQLHandler([]string{"env:prod' OR '1'='1"})
 
@@ -210,9 +210,9 @@ func TestIncarnation_List_TraitScope_ValueBound(t *testing.T) {
 	}
 }
 
-// TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed — trait-измерение само по
-// себе делает Purview непустым (scopeEmpty=false): List НЕ fail-closed, идёт в
-// SelectAll. Регресс = trait-only оператор молча получает пустой список.
+// TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed — a trait dimension by
+// itself makes the Purview non-empty (scopeEmpty=false): List is NOT fail-closed, it goes to
+// SelectAll. Regression = a trait-only operator silently gets an empty list.
 func TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed(t *testing.T) {
 	db := &fakeIncDB{
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(1)}} },
@@ -233,8 +233,8 @@ func TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed(t *testing.T) {
 }
 
 // TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL — OR-union coven ∪ trait:
-// оба измерения уходят в SQL (coven-плечо covens && / name = ANY; trait-плечо
-// traits->>). Симметрично state∪coven-union.
+// both dimensions reach SQL (coven arm covens && / name = ANY; trait arm
+// traits->>). Symmetric to the state∪coven union.
 func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 	var sql string
 	db := &fakeIncDB{
@@ -257,7 +257,7 @@ func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 	}
 }
 
-// argsHasString — есть ли среди bind-args строковый аргумент, равный want.
+// argsHasString — whether the bind-args contain a string argument equal to want.
 func argsHasString(args []any, want string) bool {
 	for _, a := range args {
 		if s, ok := a.(string); ok && s == want {

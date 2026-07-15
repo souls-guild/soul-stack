@@ -27,87 +27,88 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// CadenceStore — поверхность пакета [cadence] для S4 HTTP/MCP handler-а.
+// CadenceStore is the [cadence] package surface for the S4 HTTP/MCP handler.
 //
-//   - cadence.ExecQueryRower — read + одношаговые write (Get/List/Update/Delete/
-//     SetEnabled без транзакции: одна строка cadences, FK voyages.cadence_id на
-//     дочерней строке).
-//   - voyage.ExecQueryRower — `GET /v1/cadences/{id}/runs` делает read-only
-//     voyage.List по тому же пулу (CopyFrom в read-пути не вызывается, но входит
-//     в voyage-интерфейс).
-//   - BeginTx — atomic Create с блоком notify (ADR-052 §m): Insert Cadence +
-//     InsertTiding постоянных правил из notify[] в ОДНОЙ PG-tx (либо обе записи,
-//     либо rollback — иначе осиротевшее правило/расписание без второй половины).
+//   - cadence.ExecQueryRower — read + single-step writes (Get/List/Update/Delete/
+//     SetEnabled without a transaction: one cadences row, FK voyages.cadence_id on
+//     the child row).
+//   - voyage.ExecQueryRower — `GET /v1/cadences/{id}/runs` does a read-only
+//     voyage.List over the same pool (CopyFrom is not called on the read path but
+//     is part of the voyage interface).
+//   - BeginTx — atomic Create with a notify block (ADR-052 §m): Insert Cadence +
+//     InsertTiding of the permanent rules from notify[] in ONE PG tx (both rows or
+//     rollback — otherwise an orphaned rule/schedule missing its other half).
 //
-// Реальный *pgxpool.Pool удовлетворяет всем; unit-тесты — fake.
+// A real *pgxpool.Pool satisfies all of them; unit tests use a fake.
 type CadenceStore interface {
 	cadence.ExecQueryRower
 	voyage.ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// CadenceHandler — handler-ы endpoints Cadence (ADR-046 §6, S4):
+// CadenceHandler serves the Cadence endpoints (ADR-046 §6, S4):
 //
-//	POST   /v1/cadences              — создать Cadence (двухуровневый RBAC-by-kind).
+//	POST   /v1/cadences              — create a Cadence (two-tier RBAC by kind).
 //	GET    /v1/cadences              — paged list (filter enabled/kind).
-//	GET    /v1/cadences/{id}         — деталь.
-//	PATCH  /v1/cadences/{id}         — обновить (рецепт/расписание/enabled-toggle).
-//	DELETE /v1/cadences/{id}         — снять расписание (дети-Voyage остаются).
-//	POST   /v1/cadences/{id}/enable  — включить (пауза/возобновление, ADR-046 §6).
-//	POST   /v1/cadences/{id}/disable — выключить.
-//	GET    /v1/cadences/{id}/runs    — дочерние Voyage (reuse Voyage-DTO).
+//	GET    /v1/cadences/{id}         — detail.
+//	PATCH  /v1/cadences/{id}         — update (recipe/schedule/enabled toggle).
+//	DELETE /v1/cadences/{id}         — remove the schedule (child Voyages remain).
+//	POST   /v1/cadences/{id}/enable  — enable (pause/resume, ADR-046 §6).
+//	POST   /v1/cadences/{id}/disable — disable.
+//	GET    /v1/cadences/{id}/runs    — child Voyages (reuse Voyage DTO).
 //
-// Двухуровневый RBAC (ADR-046 §7, security-критичный fail-closed): право
-// `cadence.*` управляет самим расписанием, но рецепт спавнит Voyage, поэтому при
-// СОЗДАНИИ создатель обязан иметь и Voyage-permission по `kind` рецепта
-// (scenario→incarnation.run, command→errand.run, ADR-043 §6) — иначе Cadence
-// стала бы privilege-escalation-обходом RBAC. `cadence.create` гейтится в router-е
-// (middleware), Voyage-permission по kind виден только из тела → проверяется
-// ВНУТРИ Create. list/get/update/delete/enable/disable гейтятся middleware-route-ом
-// (cadence.list / cadence.update / cadence.delete). `/runs` — incarnation.history
-// (read runtime-состояния прогонов, parity Voyage-list).
+// Two-tier RBAC (ADR-046 §7, security-critical fail-closed): `cadence.*` governs
+// the schedule itself, but the recipe spawns a Voyage, so on CREATE the creator
+// must also hold the Voyage permission for the recipe `kind`
+// (scenario→incarnation.run, command→errand.run, ADR-043 §6) — otherwise a Cadence
+// would be a privilege-escalation bypass of RBAC. `cadence.create` is gated in the
+// router (middleware); the Voyage permission by kind is visible only from the body
+// → checked INSIDE Create. list/get/update/delete/enable/disable are gated by the
+// middleware route (cadence.list / cadence.update / cadence.delete). `/runs` is
+// incarnation.history (read runtime run state, parity with Voyage list).
 //
-// store/enforcer обязательны для production-маршрутов; auditW допускает nil
-// (dev без audit). Резолв next_run_at — чистая [cadence.NextRun] (без БД).
+// store/enforcer are required for production routes; auditW may be nil (dev
+// without audit). Resolving next_run_at is pure [cadence.NextRun] (no DB).
 //
-// scenarioResolver/incReader — per-target coven-scope-check рецепта kind=scenario
-// (ADR-046 §7, security-критичный fail-closed): target Cadence обязан лежать в
-// RBAC-скоупе создателя на момент создания/правки, иначе scoped-Архонт «run on
-// coven=A» создал бы Cadence на coven=B (вне scope) и фоновый спавн (от
-// created_by_aid) исполнил бы вне scope = RBAC-bypass. Полная parity
-// VoyageHandler.createScenario: тот же резолв инкарнаций + per-incarnation
-// scope-loop. incReader=nil → fail-closed (как Voyage): scoped-роли отвергаются,
-// проходит лишь bare/`*`-право из checkKindPermission. command-kind scope —
-// bare-check (parity Voyage errand.run NoSelector в MVP).
+// scenarioResolver/incReader — per-target coven scope-check for a kind=scenario
+// recipe (ADR-046 §7, security-critical fail-closed): the Cadence target must lie
+// in the creator's RBAC scope at create/edit time, otherwise a scoped Archon "run
+// on coven=A" would create a Cadence on coven=B (out of scope) and the background
+// spawn (as created_by_aid) would execute out of scope = RBAC bypass. Full parity
+// with VoyageHandler.createScenario: the same incarnation resolve + per-incarnation
+// scope loop. incReader=nil → fail-closed (like Voyage): scoped roles are rejected,
+// only a bare/`*` right from checkKindPermission passes. command-kind scope is a
+// bare-check (parity with Voyage errand.run NoSelector in MVP).
 type CadenceHandler struct {
 	store            CadenceStore
 	scenarioResolver VoyageScenarioResolver
 	incReader        IncarnationContextReader
 	enforcer         middleware.PermissionChecker
 	auditW           audit.Writer
-	// tidingInvalidator сбрасывает TTL-снимок Tiding-правил dispatcher-а после
-	// commit cadence-tx с блоком notify (ADR-052 §m, тот же race-fix, что у Voyage-
-	// ephemeral): постоянные правила вставлены прямым herald.InsertTiding в обход
-	// herald.Service-CRUD (и его инвалидации), поэтому dispatcher держит их за TTL-
-	// снимком (15s) — без явного сброса быстрый/cross-keeper спавн диспетчит
-	// терминал против устаревшего снимка и уведомление молча промахивается. Тот же
-	// *herald.Service-инстанс, что у VoyageHandler. nil (dev без herald) → no-op.
+	// tidingInvalidator resets the dispatcher's TTL snapshot of Tiding rules after
+	// the cadence-tx with a notify block commits (ADR-052 §m, the same race-fix as
+	// Voyage-ephemeral): the permanent rules are inserted via a direct
+	// herald.InsertTiding, bypassing herald.Service CRUD (and its invalidation), so
+	// the dispatcher holds them behind a TTL snapshot (15s) — without an explicit
+	// reset a fast/cross-keeper spawn dispatches the terminal against a stale
+	// snapshot and the notification silently misses. Same *herald.Service instance
+	// as VoyageHandler. nil (dev without herald) → no-op.
 	tidingInvalidator TidingInvalidator
-	// pollFloorSeconds — нижний предел периода interval-Cadence (floor-лимит,
-	// ADR-046 Pass B). Единый источник с адаптивным опросом Conductor
-	// (cfg.CadenceScheduler.ResolvedPollFloor()). 0 → floor-проверка выключена.
+	// pollFloorSeconds is the lower bound on the period of an interval Cadence
+	// (floor limit, ADR-046 Pass B). Single source with the Conductor's adaptive
+	// poll (cfg.CadenceScheduler.ResolvedPollFloor()). 0 → floor check disabled.
 	pollFloorSeconds int
 	logger           *slog.Logger
 }
 
-// NewCadenceHandler собирает handler. logger=nil → discard. store/enforcer —
-// обязательны для production-маршрутов; auditW допускает nil. scenarioResolver/
-// incReader — те же экземпляры, что у [VoyageHandler], для per-target scope-check
-// рецепта kind=scenario (ADR-046 §7). incReader=nil → fail-closed: scoped-роли
-// scenario-create/patch отвергаются (как у Voyage). tidingInvalidator — тот же
-// *herald.Service, что у VoyageHandler: сбрасывает TTL-снимок dispatcher-а после
-// commit cadence-tx с блоком notify (ADR-052 §m race-fix); nil → no-op (dev без
-// herald).
+// NewCadenceHandler assembles the handler. logger=nil → discard. store/enforcer
+// are required for production routes; auditW may be nil. scenarioResolver/incReader
+// are the same instances as [VoyageHandler], for the per-target scope-check of a
+// kind=scenario recipe (ADR-046 §7). incReader=nil → fail-closed: scoped roles are
+// rejected for scenario create/patch (like Voyage). tidingInvalidator is the same
+// *herald.Service as VoyageHandler: it resets the dispatcher's TTL snapshot after
+// the cadence-tx with a notify block commits (ADR-052 §m race-fix); nil → no-op
+// (dev without herald).
 func NewCadenceHandler(
 	store CadenceStore,
 	scenarioResolver VoyageScenarioResolver,
@@ -135,10 +136,10 @@ func NewCadenceHandler(
 
 // --- POST /v1/cadences ---
 
-// cadenceCreateRequest — POST body. snake_case, unknown-поля отвергаем. Рецепт
-// прогона — то же множество, что [voyageCreateRequest] (kind/scenario_name|module/
-// target/input/batch-настройки) + правило повторения + overlap_policy. target
-// сериализуется в jsonb as-is (резолв — на спавне, не на создании, ADR-046 §3).
+// cadenceCreateRequest — POST body. snake_case, unknown fields rejected. The run
+// recipe is the same set as [voyageCreateRequest] (kind/scenario_name|module/
+// target/input/batch settings) + a repeat rule + overlap_policy. target is
+// serialized into jsonb as-is (resolved on spawn, not on create, ADR-046 §3).
 type cadenceCreateRequest struct {
 	Name            string `json:"name"`
 	Enabled         *bool  `json:"enabled,omitempty"`
@@ -147,28 +148,28 @@ type cadenceCreateRequest struct {
 	CronExpr        string `json:"cron_expr,omitempty"`
 	OverlapPolicy   string `json:"overlap_policy"`
 
-	// Рецепт прогона (parity voyageCreateRequest).
+	// Run recipe (parity with voyageCreateRequest).
 	Kind         string               `json:"kind"`
 	ScenarioName string               `json:"scenario_name,omitempty"`
 	Module       string               `json:"module,omitempty"`
 	Input        map[string]any       `json:"input,omitempty"`
 	Target       *voyageTargetRequest `json:"target"`
-	// Batch — строковый размер батча ("N" хостов/инкарнаций / "N%" от spawn-scope),
-	// parity voyageCreateRequest.Batch (ADR-043 amendment). Маппится на
-	// batch_size|batch_percent колонки (см. applyCadenceBatchSpec): "N%" →
-	// batch_percent (резолвится на spawn-scope в BuildVoyage), "N" → batch_size.
-	// Конфликтует с batch_size/batch_percent → 422.
+	// Batch — string batch size ("N" hosts/incarnations / "N%" of spawn-scope),
+	// parity with voyageCreateRequest.Batch (ADR-043 amendment). Maps onto the
+	// batch_size|batch_percent columns (see applyCadenceBatchSpec): "N%" →
+	// batch_percent (resolved on spawn-scope in BuildVoyage), "N" → batch_size.
+	// Conflicts with batch_size/batch_percent → 422.
 	Batch        *string `json:"batch,omitempty"`
 	BatchSize    *int    `json:"batch_size,omitempty"`
 	BatchPercent *int    `json:"batch_percent,omitempty"`
 	Concurrency  *int    `json:"concurrency,omitempty"`
 	BatchMode    string  `json:"batch_mode,omitempty"`
-	// MaxFailures — строковый порог провалов ("N" абсолют / "N%" процент от
-	// spawn-scope), parity voyageCreateRequest.MaxFailures (ADR-043 amendment
-	// 2026-06-09). Маппится на fail_threshold|fail_threshold_percent колонки (см.
-	// applyCadenceMaxFailures): "N%" → fail_threshold_percent (резолвится на
-	// spawn-scope в BuildVoyage — у Cadence scope неизвестен на создании, в отличие
-	// от Voyage), "N" → fail_threshold. Конфликтует с fail_threshold → 422.
+	// MaxFailures — string failure threshold ("N" absolute / "N%" percent of
+	// spawn-scope), parity with voyageCreateRequest.MaxFailures (ADR-043 amendment
+	// 2026-06-09). Maps onto the fail_threshold|fail_threshold_percent columns (see
+	// applyCadenceMaxFailures): "N%" → fail_threshold_percent (resolved on
+	// spawn-scope in BuildVoyage — a Cadence's scope is unknown at create, unlike
+	// Voyage), "N" → fail_threshold. Conflicts with fail_threshold → 422.
 	MaxFailures          *string `json:"max_failures,omitempty"`
 	FailThreshold        *int    `json:"fail_threshold,omitempty"`
 	InterBatchIntervalMS *int    `json:"inter_batch_interval_ms,omitempty"`
@@ -176,27 +177,28 @@ type cadenceCreateRequest struct {
 	RequireAlive         *bool   `json:"require_alive,omitempty"`
 	OnFailure            string  `json:"on_failure,omitempty"`
 
-	// Notify — подписки на уведомления о прогонах ЭТОГО расписания (ADR-052 §m).
-	// В отличие от voyage.notify[] (разовое ephemeral-правило на один прогон),
-	// здесь каждый элемент материализуется в ПОСТОЯННЫЙ Tiding (ephemeral=false),
-	// привязанный по ULID расписания (cadences.id) — селектором Cadence (фильтр
-	// «слать только про прогоны этого расписания») + origin-маркером
-	// created_from_cadence_id (каскад-снос при удалении Cadence, ADR-046 §9).
-	// Insert правил идёт в ТОЙ ЖЕ tx, что Insert Cadence. nil/пусто ⇒ без
-	// уведомлений. Форма элемента — та же [voyageNotifyRequest] (herald/on/
-	// only_failures/only_changes/annotations/projection), reuse валидации/RBAC.
+	// Notify — subscriptions for notifications about runs of THIS schedule (ADR-052
+	// §m). Unlike voyage.notify[] (a one-off ephemeral rule for a single run), here
+	// each element materializes into a PERMANENT Tiding (ephemeral=false), bound by
+	// the schedule ULID (cadences.id) — with a Cadence selector (filter "only send
+	// for runs of this schedule") + an origin marker created_from_cadence_id
+	// (cascade removal when the Cadence is deleted, ADR-046 §9). Rules are inserted
+	// in the SAME tx as the Cadence. nil/empty ⇒ no notifications. Element shape is
+	// the same [voyageNotifyRequest] (herald/on/only_failures/only_changes/
+	// annotations/projection), reusing validation/RBAC.
 	Notify []voyageNotifyRequest `json:"notify,omitempty"`
 
-	// failThresholdPercent — необёрнутый процент из max_failures="N%",
-	// заполняется applyCadenceMaxFailures для записи в колонку
-	// fail_threshold_percent (резолв в абсолют — на spawn-scope в BuildVoyage).
-	// Не JSON-поле: задаётся только через max_failures.
+	// failThresholdPercent — the bare percent from max_failures="N%", filled by
+	// applyCadenceMaxFailures for writing into the fail_threshold_percent column
+	// (resolved to an absolute on spawn-scope in BuildVoyage). Not a JSON field:
+	// set only via max_failures.
 	failThresholdPercent *int
 }
 
-// cadenceCreateReply — native 201 body (handler-native T5d). Плоская форма 1:1 с
-// прежним CadenceCreateReply (все скаляры; next_run_at — *time.Time с omitempty).
-// Сериализуется напрямую и проецируется в api.CadenceCreateReply (huma-schema).
+// cadenceCreateReply — native 201 body (handler-native T5d). Flat shape 1:1 with
+// the former CadenceCreateReply (all scalars; next_run_at is *time.Time with
+// omitempty). Serialized directly and projected into api.CadenceCreateReply (huma
+// schema).
 type cadenceCreateReply struct {
 	CadenceID string     `json:"cadence_id"`
 	Enabled   bool       `json:"enabled"`
@@ -205,63 +207,64 @@ type cadenceCreateReply struct {
 	NextRunAt *time.Time `json:"next_run_at,omitempty"`
 }
 
-// CadenceCreateReply / CadenceCreateRequest — экспортируемые алиасы доменных
-// форм POST /v1/cadences для FULL-TYPED huma-конверта (ADR-054 §Pattern): api-
-// пакет (huma_cadence.go) собирает CadenceCreateRequest из typed huma-body и
-// зовёт [CadenceHandler.CreateTyped], получая CadenceCreateReply. Алиасы (не
-// новые типы) — та же форма, что декодит legacy (w,r)-Create; вложенные
-// target/notify — [VoyageTargetRequest]/[VoyageNotifyRequest] (общие с Voyage).
+// CadenceCreateReply / CadenceCreateRequest — exported aliases of the domain
+// forms of POST /v1/cadences for the FULL-TYPED huma envelope (ADR-054 §Pattern):
+// the api package (huma_cadence.go) assembles CadenceCreateRequest from the typed
+// huma body and calls [CadenceHandler.CreateTyped], receiving CadenceCreateReply.
+// Aliases (not new types) — the same shape decoded by the legacy (w,r) Create;
+// nested target/notify are [VoyageTargetRequest]/[VoyageNotifyRequest] (shared
+// with Voyage).
 type (
 	CadenceCreateReply   = cadenceCreateReply
 	CadenceCreateRequest = cadenceCreateRequest
 	VoyageTargetRequest  = voyageTargetRequest
 	VoyageNotifyRequest  = voyageNotifyRequest
-	// CadencePatchRequest / CadenceDTO / CadenceEnabledReply — экспортируемые
-	// алиасы доменных форм cadence-rest-роутов (PATCH/DELETE/enable/disable) для
-	// FULL-TYPED huma-конверта (ADR-054, батч-2f self-audit): api-пакет
-	// (huma_cadence_op.go) собирает CadencePatchRequest из typed huma-body и зовёт
-	// [CadenceHandler.PatchTyped], получая CadenceDTO; SetEnabledTyped возвращает
-	// CadenceEnabledReply. Алиасы (не новые типы) — та же форма, что декодит легаси
-	// (w,r)-Patch/setEnabled.
+	// CadencePatchRequest / CadenceDTO / CadenceEnabledReply — exported aliases of
+	// the domain forms of the cadence REST routes (PATCH/DELETE/enable/disable) for
+	// the FULL-TYPED huma envelope (ADR-054, batch-2f self-audit): the api package
+	// (huma_cadence_op.go) assembles CadencePatchRequest from the typed huma body
+	// and calls [CadenceHandler.PatchTyped], receiving CadenceDTO; SetEnabledTyped
+	// returns CadenceEnabledReply. Aliases (not new types) — the same shape decoded
+	// by the legacy (w,r) Patch/setEnabled.
 	CadencePatchRequest = cadencePatchRequest
 	CadenceDTO          = cadenceDTO
 	CadenceEnabledReply = cadenceEnabledReply
 )
 
-// cadenceEnabledReply — native 200 body POST /v1/cadences/{id}/enable|/disable
-// (handler-native T5d). Плоская форма 1:1 с прежним CadenceEnabledReply
-// (cadence_id + enabled). Сериализуется напрямую и проецируется в api.CadenceEnabledReply.
+// cadenceEnabledReply — native 200 body for POST /v1/cadences/{id}/enable|/disable
+// (handler-native T5d). Flat shape 1:1 with the former CadenceEnabledReply
+// (cadence_id + enabled). Serialized directly and projected into api.CadenceEnabledReply.
 type cadenceEnabledReply struct {
 	CadenceID string `json:"cadence_id"`
 	Enabled   bool   `json:"enabled"`
 }
 
-// CadenceListReply — typed-выход GET /v1/cadences: paged cadenceDTO той же wire-формы,
-// что legacy (w,r)-List (items/offset/limit/total через sharedapi.PagedResponse →
-// byte-exact). Alias (не новый тип) — экспортируется для FULL-TYPED huma-конверта
-// (huma_cadence_list_op.go).
+// CadenceListReply — typed output of GET /v1/cadences: paged cadenceDTO of the
+// same wire shape as the legacy (w,r) List (items/offset/limit/total via
+// sharedapi.PagedResponse → byte-exact). Alias (not a new type) — exported for the
+// FULL-TYPED huma envelope (huma_cadence_list_op.go).
 type CadenceListReply = sharedapi.PagedResponse[cadenceDTO]
 
-// problemError — typed-обёртка над [problem.Details] для возврата из извлечённых
-// доменных функций (FULL-TYPED разворот ADR-054, §Pattern (б)). Доменная функция
-// (например, [CadenceHandler.CreateTyped]) вместо problem.Write(w, …) возвращает
-// (zeroReply, &problemError{<details>}); вызывающий слой решает, как его доставить:
+// problemError — typed wrapper over [problem.Details] returned from the extracted
+// domain functions (FULL-TYPED unfolding, ADR-054 §Pattern (b)). A domain function
+// (e.g. [CadenceHandler.CreateTyped]) returns (zeroReply, &problemError{<details>})
+// instead of problem.Write(w, …); the caller decides how to deliver it:
 //
-//   - huma-конверт (api-пакет) извлекает .Details и отдаёт через humaProblemError
-//     (единый problem+json huma-error-override);
-//   - тонкая (w,r)-оболочка handler-а (для strict-моста/прочих вызовов) пишет
-//     problem.Write(w, pe.Details) с проставленным instance=r.URL.Path.
+//   - the huma envelope (api package) extracts .Details and returns it via
+//     humaProblemError (the single problem+json huma error override);
+//   - the thin (w,r) handler shell (for the strict bridge / other callers) writes
+//     problem.Write(w, pe.Details) with instance=r.URL.Path set.
 //
-// Тип семейства humaProblemError (тоже несёт problem.Details) — общий контракт
-// «ошибка = problem.Details» по обе стороны границы.
+// The humaProblemError family type (also carrying problem.Details) shares the
+// contract "error = problem.Details" on both sides of the boundary.
 type problemError struct {
 	Details problem.Details
 }
 
 func (e *problemError) Error() string { return e.Details.Detail }
 
-// asProblemError извлекает [problem.Details] из ошибки доменной функции. ok=false —
-// ошибка не доменная problem (нештатный путь): вызывающий слой маппит в 500.
+// asProblemError extracts [problem.Details] from a domain-function error. ok=false
+// — the error is not a domain problem (unexpected path): the caller maps it to 500.
 func asProblemError(err error) (problem.Details, bool) {
 	var pe *problemError
 	if errors.As(err, &pe) {
@@ -270,32 +273,34 @@ func asProblemError(err error) (problem.Details, bool) {
 	return problem.Details{}, false
 }
 
-// AsProblemDetails — экспортируемый извлекатель [problem.Details] из ошибки
-// извлечённой доменной функции (FULL-TYPED ADR-054 §Pattern): huma-конверт
-// (api-пакет) маппит доменный *problemError в problem+json. ok=false — не-problem
-// ошибка → caller отдаёт 500.
+// AsProblemDetails — exported extractor of [problem.Details] from an extracted
+// domain-function error (FULL-TYPED ADR-054 §Pattern): the huma envelope (api
+// package) maps a domain *problemError into problem+json. ok=false — a non-problem
+// error → the caller returns 500.
 func AsProblemDetails(err error) (problem.Details, bool) {
 	return asProblemError(err)
 }
 
-// CadenceSpecStub — непустой *CadenceHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaCadenceSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки. Все зависимости nil — handler
-// никогда не исполняется в spec-режиме.
+// CadenceSpecStub — a non-nil *CadenceHandler stub for generating the huma OpenAPI
+// fragment (HumaCadenceSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op check. All dependencies nil — the
+// handler never executes in spec mode.
 func CadenceSpecStub() *CadenceHandler {
 	return &CadenceHandler{}
 }
 
-// CreateTyped — извлечённая доменная функция POST /v1/cadences (FULL-TYPED разворот
-// ADR-054 §Pattern (б)): вся бизнес-логика без http.ResponseWriter/*http.Request.
-// claims и req приходят аргументами (декод/auth — на вызывающем слое); ошибки
-// возвращаются как *problemError (problem.Write → return), успех — cadenceCreateReply.
+// CreateTyped — extracted domain function for POST /v1/cadences (FULL-TYPED
+// unfolding, ADR-054 §Pattern (b)): all business logic without
+// http.ResponseWriter/*http.Request. claims and req arrive as arguments
+// (decode/auth on the caller); errors are returned as *problemError (problem.Write
+// → return), success as cadenceCreateReply.
 //
-// Шаги (parity прежнего Create(w,r)): RBAC-by-kind + per-target scope → buildCadence
-// → floor-лимит → next_run_at → notify[] → persist (tx + notify + invalidation) →
-// audit-emit (self-audit ВНУТРИ функции, до возврата reply — huma-обёртка его не
-// задевает, §Audit). ctx — request-context (persist/scope-check читают его; audit
-// пишется на background-ctx внутри emitWrite, как и прежде).
+// Steps (parity with the former Create(w,r)): RBAC by kind + per-target scope →
+// buildCadence → floor limit → next_run_at → notify[] → persist (tx + notify +
+// invalidation) → audit emit (self-audit INSIDE the function, before returning the
+// reply — the huma wrapper does not touch it, §Audit). ctx is the request context
+// (persist/scope-check read it; audit is written on a background ctx inside
+// emitWrite, as before).
 func (h *CadenceHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req CadenceCreateRequest) (CadenceCreateReply, error) {
 	var zero CadenceCreateReply
 	if h.store == nil || h.enforcer == nil {
@@ -305,9 +310,10 @@ func (h *CadenceHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'target' is required")}
 	}
 
-	// Строковые batch-поля (ADR-043 amendment): `batch`/`max_failures` транслируем в
-	// batch_size|batch_percent / fail_threshold|fail_threshold_percent ДО RBAC и
-	// buildCadence. Конфликт строкового формата с числовыми колонками и malformed → 422.
+	// String batch fields (ADR-043 amendment): translate `batch`/`max_failures` into
+	// batch_size|batch_percent / fail_threshold|fail_threshold_percent BEFORE RBAC
+	// and buildCadence. A string-format conflict with the numeric columns and
+	// malformed input → 422.
 	if bErr := applyCadenceBatchSpec(&req); bErr != "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", bErr)}
 	}
@@ -315,29 +321,29 @@ func (h *CadenceHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", mfErr)}
 	}
 
-	// Двухуровневый guard (ADR-046 §7): Voyage-permission по kind рецепта.
+	// Two-tier guard (ADR-046 §7): Voyage permission by recipe kind.
 	if err := h.checkKindPermissionErr(claims.Subject, req.Kind); err != nil {
 		return zero, err
 	}
-	// Per-target coven-scope-check (ADR-046 §7, fail-closed).
+	// Per-target coven scope-check (ADR-046 §7, fail-closed).
 	if err := h.checkTargetScopeErr(ctx, claims.Subject, req.Kind, req.Target); err != nil {
 		return zero, err
 	}
 
 	c := h.buildCadence(&req, audit.NewULID(), claims.Subject)
 
-	// Floor-лимит периода interval-Cadence (ADR-046 Pass B).
+	// Floor limit on the interval Cadence period (ADR-046 Pass B).
 	if err := cadence.ValidateIntervalFloor(c, h.pollFloorSeconds); err != nil {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	}
 
-	// next_run_at — чистая функция от расписания (ADR-046 §4).
+	// next_run_at — a pure function of the schedule (ADR-046 §4).
 	if next, err := cadence.NextRun(c, time.Now().UTC()); err == nil {
 		c.NextRunAt = &next
 	}
 
-	// notify[] → постоянные Tiding-шаблоны (ADR-052 §m): валидация + herald.read-guard
-	// ДО открытия tx.
+	// notify[] → permanent Tiding templates (ADR-052 §m): validation + herald
+	// read-guard BEFORE opening the tx.
 	notifyTidings, err := h.prepareNotifyErr(ctx, claims, &req, c)
 	if err != nil {
 		return zero, err
@@ -361,17 +367,17 @@ func (h *CadenceHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, re
 
 // Create — POST /v1/cadences (ADR-046 §6/§7).
 //
-// Контракт:
+// Contract:
 //   - 201 + {cadence_id, name, enabled, next_run_at, location}.
-//   - 400 — невалидный JSON.
-//   - 403 — двухуровневый RBAC deny: нет Voyage-permission по kind рецепта
-//     (scenario без incarnation.run / command без errand.run).
-//   - 422 — невалидный рецепт/расписание (XOR interval/cron, enum overlap/kind/
-//     batch_mode/on_failure, kind↔scenario_name/module, битый cron, sane-bounds) —
-//     прогоняется через [cadence.validate] (Insert).
-//   - 500 — store/enforcer не сконфигурирован / БД-сбой.
+//   - 400 — invalid JSON.
+//   - 403 — two-tier RBAC deny: no Voyage permission for the recipe kind
+//     (scenario without incarnation.run / command without errand.run).
+//   - 422 — invalid recipe/schedule (XOR interval/cron, enum overlap/kind/
+//     batch_mode/on_failure, kind↔scenario_name/module, broken cron, sane bounds) —
+//     run through [cadence.validate] (Insert).
+//   - 500 — store/enforcer not configured / DB failure.
 //
-// next_run_at вычисляется при создании ([cadence.NextRun] от now). created_by_aid
+// next_run_at is computed at create ([cadence.NextRun] from now). created_by_aid
 // = JWT.sub. audit cadence.created.
 func (h *CadenceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
@@ -403,11 +409,11 @@ func (h *CadenceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, reply, h.logger)
 }
 
-// writeProblemError доставляет ошибку извлечённой доменной функции через
-// problem.Write (тонкая (w,r)-оболочка, FULL-TYPED ADR-054 §Pattern). Доменная
-// *problemError → его Details с проставленным instance=r.URL.Path (доменная
-// функция оставляет instance пустым — она не знает путь). Не-problem ошибка
-// (нештатный путь) → 500 internal.
+// writeProblemError delivers an extracted domain-function error via problem.Write
+// (thin (w,r) shell, FULL-TYPED ADR-054 §Pattern). A domain *problemError → its
+// Details with instance=r.URL.Path set (the domain function leaves instance empty
+// — it does not know the path). A non-problem error (unexpected path) → 500
+// internal.
 func writeProblemError(w http.ResponseWriter, r *http.Request, err error) {
 	if d, ok := asProblemError(err); ok {
 		d.Instance = r.URL.Path
@@ -417,26 +423,28 @@ func writeProblemError(w http.ResponseWriter, r *http.Request, err error) {
 	problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "internal error"))
 }
 
-// prepareNotifyErr валидирует и авторизует блок notify[] формы Cadence (ADR-052 §m),
-// собирая шаблоны ПОСТОЯННЫХ Tiding-правил ДО открытия транзакции (FULL-TYPED
-// ADR-054 §Pattern; при отказе → *problemError, cadence НЕ создаётся). Cap/store-
-// проверки — явные *problemError; форму/валидацию/RBAC notify[] делегирует общему
-// извлечённому ядру [prepareNotifyTidingsErr] (единый источник с Voyage-ephemeral
-// путём). Отличие от Voyage: ephemeral=false, привязка СРАЗУ по ULID расписания
-// (c.ID — селектор Cadence + origin-маркер created_from_cadence_id) и
-// детерминированное имя <name>-notify[-N]. kind берётся из рецепта Cadence
-// (scenario/command — те же значения, что voyage.Kind).
+// prepareNotifyErr validates and authorizes the Cadence notify[] block (ADR-052
+// §m), assembling the templates for the PERMANENT Tiding rules BEFORE opening the
+// transaction (FULL-TYPED ADR-054 §Pattern; on rejection → *problemError, the
+// cadence is NOT created). Cap/store checks are explicit *problemError; the notify[]
+// shape/validation/RBAC is delegated to the shared extracted core
+// [prepareNotifyTidingsErr] (single source with the Voyage-ephemeral path).
+// Differences from Voyage: ephemeral=false, binding IMMEDIATELY by the schedule
+// ULID (c.ID — Cadence selector + origin marker created_from_cadence_id) and a
+// deterministic name <name>-notify[-N]. kind is taken from the Cadence recipe
+// (scenario/command — the same values as voyage.Kind).
 func (h *CadenceHandler) prepareNotifyErr(
 	ctx context.Context, claims *jwt.Claims, req *cadenceCreateRequest, c *cadence.Cadence,
 ) ([]herald.Tiding, error) {
 	if len(req.Notify) == 0 {
 		return nil, nil
 	}
-	// Cap на длину notify[] (ADR-052 §m): имя постоянного правила —
-	// <prefix>-notify-<N> (permanentNotifyName), prefix усечён cappedNotifyPrefix
-	// с запасом под -NNN (3 цифры). Без явного cap массив ≥1000 дал бы суффикс
-	// -1000 (4 цифры) → имя > 63 символов NamePattern → validateTiding отвергает
-	// внутри tx → мутный rollback-500. Явный cap — чистый 422 ДО открытия tx.
+	// Cap on notify[] length (ADR-052 §m): the permanent rule name is
+	// <prefix>-notify-<N> (permanentNotifyName), with prefix truncated by
+	// cappedNotifyPrefix leaving room for -NNN (3 digits). Without an explicit cap
+	// an array ≥1000 would give the suffix -1000 (4 digits) → name > 63 chars of
+	// NamePattern → validateTiding rejects it inside the tx → a murky rollback-500.
+	// An explicit cap is a clean 422 BEFORE opening the tx.
 	if len(req.Notify) > maxNotifyChannels {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
 			fmt.Sprintf("field 'notify' exceeds %d channels", maxNotifyChannels))}
@@ -461,20 +469,21 @@ func (h *CadenceHandler) prepareNotifyErr(
 	return tidings, nil
 }
 
-// persistErr пишет Cadence + постоянные Tiding-и (блок notify) в ОДНОЙ PG-tx
-// (ADR-052 §m, тот же атомарный паттерн, что voyage.persist; FULL-TYPED ADR-054
-// §Pattern — ошибки через *problemError). Cadence сначала (FK
-// tidings.created_from_cadence_id → cadences(id)), затем правила. Любой сбой
-// (включая FK/коллизию имени Tiding) откатывает весь Create — нет ни Cadence, ни
-// правил (атомарность by construction). После commit с notify — двухуровневая
-// инвалидация TTL-снимка dispatcher-а (in-process + cross-keeper): постоянные
-// правила вставлены прямым InsertTiding в обход herald.Service-CRUD, и без сброса
-// быстрый/cross-keeper спавн диспетчит терминал против устаревшего снимка
-// (DefaultRuleCacheTTL=15s) → уведомление молча промахивается.
+// persistErr writes the Cadence + the permanent Tidings (notify block) in ONE PG
+// tx (ADR-052 §m, the same atomic pattern as voyage.persist; FULL-TYPED ADR-054
+// §Pattern — errors via *problemError). Cadence first (FK
+// tidings.created_from_cadence_id → cadences(id)), then the rules. Any failure
+// (including an FK / Tiding name collision) rolls back the whole Create — neither
+// Cadence nor rules (atomic by construction). After a commit with notify — a
+// two-level invalidation of the dispatcher's TTL snapshot (in-process +
+// cross-keeper): the permanent rules are inserted via a direct InsertTiding
+// bypassing herald.Service CRUD, and without a reset a fast/cross-keeper spawn
+// dispatches the terminal against a stale snapshot (DefaultRuleCacheTTL=15s) → the
+// notification silently misses.
 //
-// notify=пусто → одна tx с единственным Insert Cadence (поведение, эквивалентное
-// прежнему прямому cadence.Insert по пулу — та же 422/404/500-классификация через
-// writeWriteErrorPtr). ctx — request-context (rollback на background-ctx).
+// notify=empty → one tx with a single Insert Cadence (behavior equivalent to the
+// former direct cadence.Insert over the pool — the same 422/404/500 classification
+// via writeWriteErrorPtr). ctx is the request context (rollback on a background ctx).
 func (h *CadenceHandler) persistErr(ctx context.Context, c *cadence.Cadence, notifyTidings []herald.Tiding) error {
 	tx, err := h.store.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -489,15 +498,17 @@ func (h *CadenceHandler) persistErr(ctx context.Context, c *cadence.Cadence, not
 		}
 	}()
 
-	// Insert Cadence сначала (FK tidings.created_from_cadence_id → cadences). Его
-	// validate-ошибки (422) и PG-сбои (500) классифицирует writeWriteErrorPtr — та
-	// же семантика, что прежний прямой Insert по пулу.
+	// Insert Cadence first (FK tidings.created_from_cadence_id → cadences). Its
+	// validate errors (422) and PG failures (500) are classified by
+	// writeWriteErrorPtr — the same semantics as the former direct Insert over the
+	// pool.
 	if err := cadence.Insert(ctx, tx, c); err != nil {
 		return &problemError{h.writeWriteErrorPtr("create", c.ID, err)}
 	}
-	// Постоянные Tiding-и notify-блока — в ТОЙ ЖЕ tx. Сбой (FK/коллизия имени/
-	// валидация) откатывает весь Create. herald.InsertTiding принимает ту же
-	// pgx.Tx (herald.ExecQueryRower ⊂ интерфейса tx).
+	// The permanent Tidings of the notify block — in the SAME tx. A failure
+	// (FK / name collision / validation) rolls back the whole Create.
+	// herald.InsertTiding accepts the same pgx.Tx (herald.ExecQueryRower ⊂ the tx
+	// interface).
 	for i := range notifyTidings {
 		if err := herald.InsertTiding(ctx, tx, &notifyTidings[i]); err != nil {
 			h.logger.Error("cadence.create: insert notify tiding failed",
@@ -513,31 +524,32 @@ func (h *CadenceHandler) persistErr(ctx context.Context, c *cadence.Cadence, not
 		return &problemError{problem.New(problem.TypeInternalError, "", "cadence create failed")}
 	}
 	committed = true
-	// Постоянные правила вставлены прямым InsertTiding в обход herald.Service-CRUD
-	// — сбрасываем TTL-снимок dispatcher-а ЯВНО, строго после commit (двухуровнево:
-	// in-process + cross-keeper, спавн Cadence идёт на любом keeper-е). Без notify
-	// правил не создано — инвалидировать нечего. nil-safe: dev без herald → no-op.
+	// The permanent rules are inserted via a direct InsertTiding bypassing
+	// herald.Service CRUD — reset the dispatcher's TTL snapshot EXPLICITLY, strictly
+	// after commit (two-level: in-process + cross-keeper, a Cadence spawn may run on
+	// any keeper). Without notify no rules were created — nothing to invalidate.
+	// nil-safe: dev without herald → no-op.
 	if len(notifyTidings) > 0 && h.tidingInvalidator != nil {
 		h.tidingInvalidator.InvalidateTidings(ctx, c.ID)
 	}
 	return nil
 }
 
-// maxNotifyChannels — потолок числа каналов notify[] на одно расписание (ADR-052
-// §m). Cap нужен, чтобы суффикс имени постоянного правила (-<N>, см.
-// permanentNotifyName) не раздувался: при 64 каналах максимум — 2 цифры (-64),
-// под которые cappedNotifyPrefix держит запас. Превышение → 422 ДО открытия tx
-// (без cap имя ≥1000-го правила вышло бы за NamePattern и упало мутным
-// rollback-500 внутри транзакции).
+// maxNotifyChannels — the ceiling on the number of notify[] channels per schedule
+// (ADR-052 §m). The cap keeps the permanent rule name suffix (-<N>, see
+// permanentNotifyName) from bloating: with 64 channels the max is 2 digits (-64),
+// for which cappedNotifyPrefix reserves room. Exceeding it → 422 BEFORE opening the
+// tx (without the cap the name of the ≥1000th rule would exceed NamePattern and
+// fail with a murky rollback-500 inside the transaction).
 const maxNotifyChannels = 64
 
-// cappedNotifyPrefix приводит человекочитаемое имя расписания к безопасному
-// префиксу имени Tiding-правила (NamePattern ^[a-z0-9-]{1,63}$): lowercase,
-// недопустимые символы → `-`, схлопывание повторных `-`, trim краёв. Усекается с
-// запасом под суффикс `-notify` (7) + `-<N>` (≤3, индекс < maxNotifyChannels),
-// чтобы permanentNotifyName уложился в 63 символа. Пустой/деградировавший в ничто
-// результат → "cadence" (детерминированный фолбэк; коллизию имён всё равно
-// разрулит суффикс -<N>, а UNIQUE-PK при гонке — rollback всей tx).
+// cappedNotifyPrefix reduces a human-readable schedule name to a safe Tiding rule
+// name prefix (NamePattern ^[a-z0-9-]{1,63}$): lowercase, disallowed chars → `-`,
+// collapse repeated `-`, trim edges. Truncated leaving room for the suffix
+// `-notify` (7) + `-<N>` (≤3, index < maxNotifyChannels), so permanentNotifyName
+// fits in 63 chars. An empty / degraded-to-nothing result → "cadence" (a
+// deterministic fallback; a name collision is still resolved by the -<N> suffix,
+// and a UNIQUE-PK race by a rollback of the whole tx).
 func cappedNotifyPrefix(name string) string {
 	const maxPrefix = 52 // 63 - len("-notify") - len("-NNN")
 	var b strings.Builder
@@ -564,11 +576,11 @@ func cappedNotifyPrefix(name string) string {
 	return out
 }
 
-// buildCadence собирает *cadence.Cadence из request-а (без валидации — её делает
-// cadence.Insert/Update). target сериализуется в jsonb as-is; input — отдельным
-// json.Marshal; ms-интервалы → time.Duration. enabled по умолчанию true
-// (расписание без планировщика бессмысленно, ADR-046 §4 default-ON). createdByAID
-// фиксируется на created_by_aid.
+// buildCadence assembles a *cadence.Cadence from the request (no validation — that
+// is cadence.Insert/Update's job). target is serialized into jsonb as-is; input via
+// a separate json.Marshal; ms intervals → time.Duration. enabled defaults to true
+// (a schedule without a scheduler is pointless, ADR-046 §4 default-ON). createdByAID
+// is pinned to created_by_aid.
 func (h *CadenceHandler) buildCadence(req *cadenceCreateRequest, id, createdByAID string) *cadence.Cadence {
 	enabled := true
 	if req.Enabled != nil {
@@ -626,18 +638,18 @@ func (h *CadenceHandler) buildCadence(req *cadenceCreateRequest, id, createdByAI
 	return c
 }
 
-// applyCadenceBatchSpec транслирует строковое поле `batch` рецепта Cadence в
-// req.BatchSize / req.BatchPercent (parity handlers.applyBatchSpec для Voyage,
-// ADR-043 amendment). Грамматика — fail-closed [voyage.ParseBatchSpec] (`N`|`N%`).
-// "N%" → BatchPercent (резолвится на spawn-scope в cadence.BuildVoyage); "N" →
-// BatchSize. Возвращает detail 422-ошибки либо "" (ok / поле не задано).
+// applyCadenceBatchSpec translates the string field `batch` of a Cadence recipe
+// into req.BatchSize / req.BatchPercent (parity with handlers.applyBatchSpec for
+// Voyage, ADR-043 amendment). Grammar — fail-closed [voyage.ParseBatchSpec]
+// (`N`|`N%`). "N%" → BatchPercent (resolved on spawn-scope in cadence.BuildVoyage);
+// "N" → BatchSize. Returns the detail of a 422 error or "" (ok / field not set).
 //
-// Семантика:
-//   - req.Batch == nil → no-op (старый путь batch_size/batch_percent).
-//   - trim == "" → «не задано» (no-op, не 422).
-//   - непустой + batch_size|batch_percent заданы → конфликт (тот же error-code
-//     voyage_batch_spec_conflict, что у Voyage).
-//   - malformed → человекочитаемый detail с показом исходной строки.
+// Semantics:
+//   - req.Batch == nil → no-op (old batch_size/batch_percent path).
+//   - trim == "" → "not set" (no-op, not 422).
+//   - non-empty + batch_size|batch_percent set → conflict (the same error code
+//     voyage_batch_spec_conflict as Voyage).
+//   - malformed → a human-readable detail showing the source string.
 func applyCadenceBatchSpec(req *cadenceCreateRequest) (detail string) {
 	if req.Batch == nil {
 		return ""
@@ -661,21 +673,22 @@ func applyCadenceBatchSpec(req *cadenceCreateRequest) (detail string) {
 	return ""
 }
 
-// applyCadenceMaxFailures транслирует строковое поле `max_failures` рецепта Cadence
-// в req.FailThreshold (абсолют) / req.failThresholdPercent (percent), parity
-// handlers.applyMaxFailures (ADR-043 amendment 2026-06-09). Ключевое отличие от
-// Voyage: percent НЕ резолвится в абсолют на create — scope Cadence неизвестен,
-// процент стешится в req.failThresholdPercent → колонку fail_threshold_percent и
-// резолвится на spawn-scope в cadence.BuildVoyage (effectiveFailThreshold).
+// applyCadenceMaxFailures translates the string field `max_failures` of a Cadence
+// recipe into req.FailThreshold (absolute) / req.failThresholdPercent (percent),
+// parity with handlers.applyMaxFailures (ADR-043 amendment 2026-06-09). Key
+// difference from Voyage: the percent is NOT resolved to an absolute on create —
+// the Cadence scope is unknown, so the percent is stashed in
+// req.failThresholdPercent → the fail_threshold_percent column and resolved on
+// spawn-scope in cadence.BuildVoyage (effectiveFailThreshold).
 //
-// Семантика:
-//   - req.MaxFailures == nil → no-op (старый путь fail_threshold).
-//   - trim == "" → «не задано» (no-op, не 422).
-//   - непустой + fail_threshold задан → конфликт (тот же error-code
-//     voyage_batch_spec_conflict, что у Voyage/batch).
-//   - "N" → абсолют: req.FailThreshold = N.
-//   - "N%" → percent: req.failThresholdPercent = N (колонка fail_threshold_percent).
-//   - malformed → человекочитаемый detail с показом исходной строки.
+// Semantics:
+//   - req.MaxFailures == nil → no-op (old fail_threshold path).
+//   - trim == "" → "not set" (no-op, not 422).
+//   - non-empty + fail_threshold set → conflict (the same error code
+//     voyage_batch_spec_conflict as Voyage/batch).
+//   - "N" → absolute: req.FailThreshold = N.
+//   - "N%" → percent: req.failThresholdPercent = N (fail_threshold_percent column).
+//   - malformed → a human-readable detail showing the source string.
 func applyCadenceMaxFailures(req *cadenceCreateRequest) (detail string) {
 	if req.MaxFailures == nil {
 		return ""
@@ -693,14 +706,14 @@ func applyCadenceMaxFailures(req *cadenceCreateRequest) (detail string) {
 	switch mode {
 	case voyage.BatchSpecPercent:
 		req.failThresholdPercent = &value
-	default: // BatchSpecHosts → абсолютное число провалов
+	default: // BatchSpecHosts → absolute failure count
 		req.FailThreshold = &value
 	}
 	return ""
 }
 
-// applyCadencePatchBatchSpec — PATCH-вариант [applyCadenceBatchSpec] над
-// cadencePatchRequest (та же грамматика/конфликт-семантика, ADR-043 amendment).
+// applyCadencePatchBatchSpec — the PATCH variant of [applyCadenceBatchSpec] over
+// cadencePatchRequest (same grammar/conflict semantics, ADR-043 amendment).
 func applyCadencePatchBatchSpec(req *cadencePatchRequest) (detail string) {
 	if req.Batch == nil {
 		return ""
@@ -724,9 +737,9 @@ func applyCadencePatchBatchSpec(req *cadencePatchRequest) (detail string) {
 	return ""
 }
 
-// applyCadencePatchMaxFailures — PATCH-вариант [applyCadenceMaxFailures] над
-// cadencePatchRequest. percent → req.failThresholdPercent (колонка
-// fail_threshold_percent, резолв на spawn-scope), абсолют → req.FailThreshold.
+// applyCadencePatchMaxFailures — the PATCH variant of [applyCadenceMaxFailures] over
+// cadencePatchRequest. percent → req.failThresholdPercent (fail_threshold_percent
+// column, resolved on spawn-scope), absolute → req.FailThreshold.
 func applyCadencePatchMaxFailures(req *cadencePatchRequest) (detail string) {
 	if req.MaxFailures == nil {
 		return ""
@@ -750,9 +763,9 @@ func applyCadencePatchMaxFailures(req *cadencePatchRequest) (detail string) {
 	return ""
 }
 
-// checkKindPermissionErr — error-возвращающий guard Voyage-permission по kind
-// (FULL-TYPED ADR-054 §Pattern). nil → разрешено. Неизвестный kind → 422,
-// revoked → 401, no-perm → 403 (как (w,r)-вариант).
+// checkKindPermissionErr — an error-returning guard of the Voyage permission by
+// kind (FULL-TYPED ADR-054 §Pattern). nil → allowed. Unknown kind → 422, revoked →
+// 401, no-perm → 403 (like the (w,r) variant).
 func (h *CadenceHandler) checkKindPermissionErr(aid, kind string) error {
 	resource, action := "", ""
 	switch cadence.Kind(kind) {
@@ -774,37 +787,39 @@ func (h *CadenceHandler) checkKindPermissionErr(aid, kind string) error {
 	return nil
 }
 
-// checkTargetScopeErr — error-возвращающий per-target coven-scope-check рецепта
-// Cadence (ADR-046 §7, fail-closed; FULL-TYPED ADR-054 §Pattern). nil → разрешено.
-// Полная parity [VoyageHandler.resolveScenarioScope] (scope-loop): для kind=scenario
-// резолвит declared target → имена инкарнаций → проверяет, что создатель имеет
-// incarnation.run на КАЖДОЙ резолвнутой инкарнации (её covens ∪ {name}). Иначе
-// scoped-Архонт «run on coven=A» создал бы Cadence на coven=B (вне scope) → фоновый
-// спавн исполнил бы вне scope = privilege escalation. Вызывается ПОСЛЕ
-// [checkKindPermissionErr] (bare-check уже пройден).
+// checkTargetScopeErr — an error-returning per-target coven scope-check of a
+// Cadence recipe (ADR-046 §7, fail-closed; FULL-TYPED ADR-054 §Pattern). nil →
+// allowed. Full parity with [VoyageHandler.resolveScenarioScope] (scope loop): for
+// kind=scenario it resolves the declared target → incarnation names → checks that
+// the creator holds incarnation.run on EACH resolved incarnation (its covens ∪
+// {name}). Otherwise a scoped Archon "run on coven=A" would create a Cadence on
+// coven=B (out of scope) → the background spawn would execute out of scope =
+// privilege escalation. Called AFTER [checkKindPermissionErr] (bare-check already
+// passed).
 //
-//   - kind=command — bare-check достаточно (parity Voyage errand.run NoSelector в
-//     MVP: per-host selectors отложены пост-MVP); scope здесь не уточняется.
-//   - incReader=nil → fail-closed: scenario с непустым target отвергается (как
-//     Voyage без incReader пропускает per-incarnation scope, но Voyage там уже
-//     гарантировал bare-право; для Cadence та же логика — bare-check выше прошёл,
-//     scoped-роли без БД-scope deny). scenarioResolver=nil → 500.
+//   - kind=command — bare-check is enough (parity with Voyage errand.run NoSelector
+//     in MVP: per-host selectors deferred post-MVP); scope is not refined here.
+//   - incReader=nil → fail-closed: a scenario with a non-empty target is rejected
+//     (like Voyage without incReader skips per-incarnation scope, but Voyage has
+//     already guaranteed the bare right there; for Cadence the same logic — the
+//     bare-check above passed, scoped roles without a DB scope deny).
+//     scenarioResolver=nil → 500.
 //
-// target — declarative-форма рецепта (тот же [voyageTargetRequest], что у Voyage).
-// ctx — request-context (резолв/scope-select читают его).
+// target — the declarative recipe form (the same [voyageTargetRequest] as Voyage).
+// ctx is the request context (resolve/scope-select read it).
 func (h *CadenceHandler) checkTargetScopeErr(ctx context.Context, aid, kind string, target *voyageTargetRequest) error {
 	if cadence.Kind(kind) != cadence.KindScenario {
 		return nil
 	}
 	if target == nil {
-		// kind=scenario без target — поймает cadence.validate (422 на Insert);
-		// здесь нечего скоупить.
+		// kind=scenario without a target — caught by cadence.validate (422 on
+		// Insert); nothing to scope here.
 		return nil
 	}
 
-	// Резолв declared target → имена инкарнаций (parity createScenario:
-	// incarnations[] ∪ service/coven-фильтр). covenFilter — первая непустая метка
-	// (резолвер принимает одну, как Voyage).
+	// Resolve the declared target → incarnation names (parity with createScenario:
+	// incarnations[] ∪ service/coven filter). covenFilter is the first non-empty
+	// label (the resolver takes one, like Voyage).
 	var covenFilter string
 	for _, c := range target.Coven {
 		if !incarnationCovenLabelValid(c) {
@@ -839,21 +854,22 @@ func (h *CadenceHandler) checkTargetScopeErr(ctx context.Context, aid, kind stri
 		return &problemError{problem.New(problem.TypeInternalError, "",
 			"resolve cadence scenario target failed")}
 	}
-	// Пустой резолв declared target (coven/service ни во что не попал) — 422 до
-	// создания (parity VoyageHandler voyage_empty_target, voyage.go: тот же
-	// TypeValidationFailed). Эскалации нет (фоновый спавн пустой scope отсёк бы),
-	// но честный отказ на CREATE/PATCH вместо молчаливого 201 на «мёртвый» рецепт.
-	// command-kind сюда не доходит (ранний return для не-scenario выше).
+	// An empty resolve of the declared target (coven/service matched nothing) — 422
+	// before creation (parity with VoyageHandler voyage_empty_target, voyage.go: the
+	// same TypeValidationFailed). No escalation (the background spawn would drop an
+	// empty scope), but an honest reject on CREATE/PATCH instead of a silent 201 on a
+	// "dead" recipe. command-kind never reaches here (early return for non-scenario
+	// above).
 	if len(resolved) == 0 {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
 			"cadence_empty_target: resolved target is empty")}
 	}
 
-	// Per-incarnation scope-check (fail-closed, parity createScenario): оператор
-	// обязан иметь incarnation.run на КАЖДОЙ резолвнутой инкарнации. incReader=nil
-	// (unit-тест без БД-scope) → scoped-роли deny (пустой scope), но bare/`*` уже
-	// прошёл checkKindPermission — пропускаем per-incarnation проверку (parity
-	// Voyage incReader=nil).
+	// Per-incarnation scope-check (fail-closed, parity with createScenario): the
+	// operator must hold incarnation.run on EACH resolved incarnation. incReader=nil
+	// (unit test without a DB scope) → scoped roles deny (empty scope), but bare/`*`
+	// already passed checkKindPermission — skip the per-incarnation check (parity
+	// with Voyage incReader=nil).
 	if h.incReader == nil {
 		return nil
 	}
@@ -874,9 +890,9 @@ func (h *CadenceHandler) checkTargetScopeErr(ctx context.Context, aid, kind stri
 	return nil
 }
 
-// allowedAnyContext OR-проверяет permission по набору контекстов (parity
-// [VoyageHandler.allowedAnyContext] / [middleware.RequirePermissionMulti]).
-// Пустой набор → одна попытка с nil-context (bare/`*`).
+// allowedAnyContext OR-checks a permission across a set of contexts (parity with
+// [VoyageHandler.allowedAnyContext] / [middleware.RequirePermissionMulti]). An
+// empty set → a single attempt with a nil context (bare/`*`).
 func (h *CadenceHandler) allowedAnyContext(aid, resource, action string, contexts []map[string]string) bool {
 	if len(contexts) == 0 {
 		return h.enforcer.Check(aid, resource, action, nil) == nil
@@ -891,9 +907,9 @@ func (h *CadenceHandler) allowedAnyContext(aid, resource, action string, context
 
 // --- GET /v1/cadences ---
 
-// cadenceDTO — response-форма для GET/list. target отдаётся as-is (declarative,
-// малый объём — в отличие от Voyage target_resolved). input НЕ кладётся (инвариант
-// A ADR-027: параметры прогона не светим в read-API).
+// cadenceDTO — response form for GET/list. target is returned as-is (declarative,
+// small — unlike Voyage target_resolved). input is NOT included (invariant A
+// ADR-027: run parameters are not exposed in the read API).
 type cadenceDTO struct {
 	CadenceID            string          `json:"cadence_id"`
 	Name                 string          `json:"name"`
@@ -961,13 +977,14 @@ func toCadenceDTO(c *cadence.Cadence) cadenceDTO {
 	return dto
 }
 
-// ListTyped — извлечённая доменная функция GET /v1/cadences (READ, БЕЗ audit;
-// FULL-TYPED ADR-054 §Pattern четвёртый tier). Зеркало (w,r)-List: фильтры enabled
-// (true → только enabled; false → без фильтра; иное → 422) + kind (exact, иное → 422);
-// offset/limit диапазон enforce-ит CheckPageBounds → 400 (parity legacy ParsePage).
-// Ошибки — *problemError: 422 bad enabled/kind / 400 out-of-range pagination / 500
-// БД-сбой / не сконфигурирован. Успех — [CadenceListReply] (та же wire-форма
-// items/offset/limit/total, что legacy → byte-exact).
+// ListTyped — extracted domain function for GET /v1/cadences (READ, no audit;
+// FULL-TYPED ADR-054 §Pattern fourth tier). Mirror of the (w,r) List: enabled
+// filters (true → enabled only; false → no filter; else → 422) + kind (exact, else
+// → 422); the offset/limit range is enforced by CheckPageBounds → 400 (parity with
+// legacy ParsePage). Errors — *problemError: 422 bad enabled/kind / 400
+// out-of-range pagination / 500 DB failure / not configured. Success —
+// [CadenceListReply] (the same wire shape items/offset/limit/total as legacy →
+// byte-exact).
 func (h *CadenceHandler) ListTyped(ctx context.Context, enabled, kind string, offset, limit int) (CadenceListReply, error) {
 	var zero CadenceListReply
 	if h.store == nil {
@@ -980,11 +997,11 @@ func (h *CadenceHandler) ListTyped(ctx context.Context, enabled, kind string, of
 	var filter cadence.ListFilter
 	switch enabled {
 	case "":
-		// фильтр по enabled не применять.
+		// do not apply the enabled filter.
 	case "true":
 		filter.EnabledOnly = true
 	case "false":
-		// false → без фильтра по enabled (показать все); явный contract.
+		// false → no enabled filter (show all); explicit contract.
 	default:
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"query 'enabled' must be 'true' or 'false'")}
@@ -1010,10 +1027,10 @@ func (h *CadenceHandler) ListTyped(ctx context.Context, enabled, kind string, of
 	return CadenceListReply{Items: dtos, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// List — GET /v1/cadences (ADR-046 §6). Тонкая (w,r)-оболочка над [ListTyped]
-// (FULL-TYPED ADR-054): парсит offset/limit через sharedapi.ParsePage (тот же 400-
-// контракт, что CheckPageBounds в ListTyped) и делегирует. Сохранена для прочих
-// (w,r)-вызовов; huma-роут зовёт ListTyped напрямую.
+// List — GET /v1/cadences (ADR-046 §6). Thin (w,r) shell over [ListTyped]
+// (FULL-TYPED ADR-054): parses offset/limit via sharedapi.ParsePage (the same 400
+// contract as CheckPageBounds in ListTyped) and delegates. Kept for other (w,r)
+// callers; the huma route calls ListTyped directly.
 func (h *CadenceHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, err := sharedapi.ParsePage(q)
@@ -1034,7 +1051,7 @@ func (h *CadenceHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reply, h.logger)
 }
 
-// Get — GET /v1/cadences/{id} (деталь).
+// Get — GET /v1/cadences/{id} (detail).
 func (h *CadenceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "cadence registry is not configured"))
@@ -1054,10 +1071,10 @@ func (h *CadenceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toCadenceDTO(c), h.logger)
 }
 
-// GetTyped — извлечённая доменная функция GET /v1/cadences/{id} (READ, БЕЗ audit;
-// FULL-TYPED ADR-054 §Pattern). Зеркало (w,r)-Get: 422 bad id, 404 not-found, 500
-// БД-сбой/не сконфигурирован. Успех — [CadenceDTO] (та же wire-форма, что legacy
-// toCadenceDTO → byte-exact с GET {id} на strict).
+// GetTyped — extracted domain function for GET /v1/cadences/{id} (READ, no audit;
+// FULL-TYPED ADR-054 §Pattern). Mirror of the (w,r) Get: 422 bad id, 404 not-found,
+// 500 DB failure / not configured. Success — [CadenceDTO] (the same wire shape as
+// legacy toCadenceDTO → byte-exact with GET {id} on strict).
 func (h *CadenceHandler) GetTyped(ctx context.Context, id string) (CadenceDTO, error) {
 	var zero CadenceDTO
 	if h.store == nil {
@@ -1076,12 +1093,12 @@ func (h *CadenceHandler) GetTyped(ctx context.Context, id string) (CadenceDTO, e
 
 // --- PATCH /v1/cadences/{id} ---
 
-// cadencePatchRequest — PATCH body. Все поля опциональны: заданное → перезапись,
-// опущенное → текущее значение сохраняется (read-modify-write поверх full-replace
-// cadence.Update). Указатели на nullable-поля рецепта семантически
-// «не различают» «опущено» и «явный null» — для MVP PATCH трактует присутствие
-// ключа как перезапись (отсутствие → keep). enabled-toggle тоже здесь (можно и
-// через /enable+/disable).
+// cadencePatchRequest — PATCH body. All fields optional: present → overwrite,
+// omitted → the current value is kept (read-modify-write over the full-replace
+// cadence.Update). Pointers to nullable recipe fields cannot semantically
+// distinguish "omitted" from "explicit null" — for MVP PATCH treats key presence as
+// an overwrite (absence → keep). The enabled toggle lives here too (also available
+// via /enable+/disable).
 type cadencePatchRequest struct {
 	Name            *string              `json:"name,omitempty"`
 	Enabled         *bool                `json:"enabled,omitempty"`
@@ -1093,10 +1110,10 @@ type cadencePatchRequest struct {
 	Module          *string              `json:"module,omitempty"`
 	Input           map[string]any       `json:"input,omitempty"`
 	Target          *voyageTargetRequest `json:"target,omitempty"`
-	// Batch/MaxFailures — строковые batch-поля (parity create, ADR-043 amendment).
-	// Транслируются applyCadencePatchBatchSpec/applyCadencePatchMaxFailures в
-	// batch_size|batch_percent / fail_threshold|fail_threshold_percent перед
-	// applyCadencePatch. Конфликт с числовыми колонками в том же PATCH → 422.
+	// Batch/MaxFailures — string batch fields (parity with create, ADR-043
+	// amendment). Translated by applyCadencePatchBatchSpec/applyCadencePatchMaxFailures
+	// into batch_size|batch_percent / fail_threshold|fail_threshold_percent before
+	// applyCadencePatch. Conflict with the numeric columns in the same PATCH → 422.
 	Batch         *string `json:"batch,omitempty"`
 	BatchSize     *int    `json:"batch_size,omitempty"`
 	BatchPercent  *int    `json:"batch_percent,omitempty"`
@@ -1107,25 +1124,26 @@ type cadencePatchRequest struct {
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     *string `json:"on_failure,omitempty"`
 
-	// failThresholdPercent — стешенный процент из max_failures="N%" (parity create);
-	// заполняется applyCadencePatchMaxFailures, переносится в строку applyCadencePatch.
+	// failThresholdPercent — the stashed percent from max_failures="N%" (parity with
+	// create); filled by applyCadencePatchMaxFailures, carried into applyCadencePatch.
 	failThresholdPercent *int
 }
 
-// scheduleChanged сообщает, затрагивает ли PATCH расписание (требует пересчёта
-// next_run_at).
+// scheduleChanged reports whether the PATCH touches the schedule (requires
+// recomputing next_run_at).
 func (p *cadencePatchRequest) scheduleChanged() bool {
 	return p.ScheduleKind != nil || p.IntervalSeconds != nil || p.CronExpr != nil
 }
 
-// Patch — PATCH /v1/cadences/{id} (ADR-046 §6). Read-modify-write: читает текущую
-// строку, накладывает заданные поля, прогоняет cadence.Update (full-replace +
-// validate). Пересчёт next_run_at при смене расписания. audit cadence.updated.
+// Patch — PATCH /v1/cadences/{id} (ADR-046 §6). Read-modify-write: reads the
+// current row, applies the given fields, runs cadence.Update (full-replace +
+// validate). Recomputes next_run_at on a schedule change. audit cadence.updated.
 //
-// Контракт: 200 + cadenceDTO; 400 невалидный JSON; 404 cadence_not_found; 422
-// невалидный рецепт/расписание; 500 БД-сбой. kind НЕ меняется (kind-смена = другая
-// сущность рецепта; запрещаем неявно — поле не в PATCH-body; смена kind = delete +
-// create). created_by_aid фиксирован (cadence.Update не пишет).
+// Contract: 200 + cadenceDTO; 400 invalid JSON; 404 cadence_not_found; 422 invalid
+// recipe/schedule; 500 DB failure. kind is NOT changed (a kind change = a different
+// recipe entity; disallowed implicitly — the field is not in the PATCH body; a kind
+// change = delete + create). created_by_aid is fixed (cadence.Update does not write
+// it).
 func (h *CadenceHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
@@ -1155,16 +1173,17 @@ func (h *CadenceHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto, h.logger)
 }
 
-// PatchTyped — извлечённая доменная функция PATCH /v1/cadences/{id} (FULL-TYPED
-// разворот ADR-054 §Pattern (б), батч-2f self-audit): read-modify-write поверх
-// full-replace cadence.Update без http.ResponseWriter/*http.Request. claims/id/req
-// приходят аргументами (декод/auth/{id}-bind — на вызывающем слое); ошибки —
-// *problemError, успех — cadenceDTO. self-audit cadence.updated пишется ВНУТРИ
-// функции (до возврата DTO — huma-обёртка его не задевает, §Audit).
+// PatchTyped — extracted domain function for PATCH /v1/cadences/{id} (FULL-TYPED
+// unfolding, ADR-054 §Pattern (b), batch-2f self-audit): read-modify-write over the
+// full-replace cadence.Update without http.ResponseWriter/*http.Request.
+// claims/id/req arrive as arguments (decode/auth/{id}-bind on the caller); errors —
+// *problemError, success — cadenceDTO. self-audit cadence.updated is written INSIDE
+// the function (before returning the DTO — the huma wrapper does not touch it,
+// §Audit).
 //
-// Шаги (parity прежнего Patch(w,r)): id-валидация → строковые batch-поля → Get →
-// applyCadencePatch → RBAC PATCH-guard (двухуровневый, ADR-046 §7) → floor-лимит →
-// next_run_at → Update → audit-emit.
+// Steps (parity with the former Patch(w,r)): id validation → string batch fields →
+// Get → applyCadencePatch → RBAC PATCH-guard (two-tier, ADR-046 §7) → floor limit →
+// next_run_at → Update → audit emit.
 func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id string, req CadencePatchRequest) (CadenceDTO, error) {
 	var zero CadenceDTO
 	if h.store == nil {
@@ -1175,9 +1194,10 @@ func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id 
 			"path 'id' must be a Crockford-base32 ULID (26 chars)")}
 	}
 
-	// Строковые batch-поля PATCH (parity create): транслируем `batch`/`max_failures`
-	// в числовые поля до Get/applyCadencePatch. Конфликт строкового формата с
-	// числовой колонкой в том же PATCH и malformed → 422.
+	// String batch fields on PATCH (parity with create): translate
+	// `batch`/`max_failures` into numeric fields before Get/applyCadencePatch. A
+	// string-format conflict with a numeric column in the same PATCH and malformed
+	// input → 422.
 	if bErr := applyCadencePatchBatchSpec(&req); bErr != "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", bErr)}
 	}
@@ -1193,12 +1213,13 @@ func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id 
 	scheduleChanged := req.scheduleChanged()
 	applyCadencePatch(c, &req)
 
-	// RBAC PATCH-guard (ADR-046 §7, security-критичный — была вторая дыра): PATCH
-	// меняет target/scenario_name, поэтому требует тот же двухуровневый guard, что
-	// CREATE — иначе scoped-Архонт создал бы Cadence на разрешённом coven=A, затем
-	// PATCH-ом перенаправил target на coven=B (вне scope) без проверки. kind в PATCH
-	// не меняется (берётся из загруженной строки c.Kind). Сначала bare-check
-	// Voyage-permission по kind, затем per-target scope нового (пост-patch) target-а.
+	// RBAC PATCH-guard (ADR-046 §7, security-critical — this was the second hole):
+	// PATCH changes target/scenario_name, so it needs the same two-tier guard as
+	// CREATE — otherwise a scoped Archon would create a Cadence on the allowed
+	// coven=A, then PATCH the target to coven=B (out of scope) without a check. kind
+	// is not changed on PATCH (taken from the loaded row c.Kind). First a bare-check
+	// of the Voyage permission by kind, then the per-target scope of the new
+	// (post-patch) target.
 	if err := h.checkKindPermissionErr(claims.Subject, string(c.Kind)); err != nil {
 		return zero, err
 	}
@@ -1206,16 +1227,18 @@ func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id 
 		return zero, err
 	}
 
-	// Floor-лимит периода (ADR-046 Pass B): PATCH может перевести расписание на
-	// interval или поменять interval_seconds — тот же floor-инвариант, что Create.
-	// После scope-check (RBAC-deny приоритетнее, не светим валидность interval).
+	// Floor limit on the period (ADR-046 Pass B): PATCH may switch the schedule to
+	// interval or change interval_seconds — the same floor invariant as Create.
+	// After the scope-check (RBAC deny takes priority, do not leak interval
+	// validity).
 	if err := cadence.ValidateIntervalFloor(c, h.pollFloorSeconds); err != nil {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	}
 
-	// Пересчёт next_run_at при смене расписания (ADR-046 §6): новое правило
-	// → новый next от now. Битый cron вернёт ошибку из NextRun, но cadence.Update
-	// её и так поймает (validate.ParseCron) → 422; здесь next просто не трогаем.
+	// Recompute next_run_at on a schedule change (ADR-046 §6): a new rule → a new
+	// next from now. A broken cron returns an error from NextRun, but cadence.Update
+	// catches it anyway (validate.ParseCron) → 422; here we just leave next
+	// untouched.
 	if scheduleChanged {
 		if next, nErr := cadence.NextRun(c, time.Now().UTC()); nErr == nil {
 			c.NextRunAt = &next
@@ -1230,11 +1253,11 @@ func (h *CadenceHandler) PatchTyped(ctx context.Context, claims *jwt.Claims, id 
 	return toCadenceDTO(c), nil
 }
 
-// cadenceTargetRequest декодирует declarative-target Cadence (jsonb, тот же shape,
-// что [voyageTargetRequest]) для scope-check-а (ADR-046 §7). Пустой/битый jsonb →
-// nil (caller трактует как «нечего скоупить» — kind=scenario без валидного target
-// поймает cadence.validate). Read-only декод (target в БД пишет
-// buildCadence/applyCadencePatch из того же типа).
+// cadenceTargetRequest decodes the declarative Cadence target (jsonb, the same
+// shape as [voyageTargetRequest]) for the scope-check (ADR-046 §7). Empty/broken
+// jsonb → nil (the caller treats this as "nothing to scope" — a kind=scenario
+// without a valid target is caught by cadence.validate). Read-only decode (target
+// is written to the DB by buildCadence/applyCadencePatch from the same type).
 func cadenceTargetRequest(raw []byte) *voyageTargetRequest {
 	if len(raw) == 0 {
 		return nil
@@ -1246,12 +1269,12 @@ func cadenceTargetRequest(raw []byte) *voyageTargetRequest {
 	return &t
 }
 
-// applyCadencePatch накладывает заданные PATCH-поля на загруженную строку
-// (read-modify-write). Опущенное поле → текущее значение сохраняется. Указательные
-// nullable-поля рецепта: присутствие ключа → перезапись, в т.ч. на null
-// (json-decoder положит nil-указатель при `"field": null` — но omitempty в DTO
-// неотличим, поэтому для MVP трактуем непустой указатель как set; cron/scenario/
-// module очищаются пустой строкой).
+// applyCadencePatch applies the given PATCH fields onto the loaded row
+// (read-modify-write). An omitted field → the current value is kept. Pointer
+// nullable recipe fields: key presence → overwrite, including to null (the JSON
+// decoder puts a nil pointer for `"field": null` — but omitempty in the DTO is
+// indistinguishable, so for MVP a non-nil pointer is treated as set; cron/scenario/
+// module are cleared with an empty string).
 func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 	if req.Name != nil {
 		c.Name = *req.Name
@@ -1275,8 +1298,8 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 	if req.OverlapPolicy != nil {
 		c.OverlapPolicy = cadence.OverlapPolicy(*req.OverlapPolicy)
 	}
-	// При смене schedule_kind очищаем «чужое» поле расписания, иначе validate
-	// отвергнет (interval не должен нести cron_expr и наоборот).
+	// On a schedule_kind change, clear the "foreign" schedule field, otherwise
+	// validate rejects it (interval must not carry cron_expr and vice versa).
 	switch c.ScheduleKind {
 	case cadence.ScheduleKindInterval:
 		c.CronExpr = nil
@@ -1305,10 +1328,10 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 		targetJSON, _ := json.Marshal(req.Target)
 		c.Target = targetJSON
 	}
-	// batch_size / batch_percent — взаимоисключающая пара. PATCH одного формата
-	// поверх хранимого встречного: обнуляем встречное, иначе оператор не сможет
-	// переключить формат без явного сброса (ревью Batch S3). nil-req → keep (поле
-	// не задано) — обнуление НЕ срабатывает.
+	// batch_size / batch_percent — a mutually exclusive pair. A PATCH of one format
+	// over the stored counterpart: null out the counterpart, otherwise the operator
+	// cannot switch format without an explicit reset (Batch S3 review). nil req →
+	// keep (field not set) — the null-out does NOT fire.
 	if req.BatchSize != nil {
 		c.BatchSize = req.BatchSize
 		c.BatchPercent = nil
@@ -1328,11 +1351,11 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 			c.BatchMode = &bm
 		}
 	}
-	// fail_threshold / fail_threshold_percent — взаимоисключающая пара (validate
-	// бьёт XOR). PATCH одного формата (max_failures="N" → absolute, "N%" → percent)
-	// поверх хранимого встречного: обнуляем встречное, иначе validate вернёт 422 и
-	// оператор не переключит формат без явного сброса (ревью Batch S3). nil-req →
-	// keep — обнуление НЕ срабатывает.
+	// fail_threshold / fail_threshold_percent — a mutually exclusive pair (validate
+	// enforces XOR). A PATCH of one format (max_failures="N" → absolute, "N%" →
+	// percent) over the stored counterpart: null out the counterpart, otherwise
+	// validate returns 422 and the operator cannot switch format without an explicit
+	// reset (Batch S3 review). nil req → keep — the null-out does NOT fire.
 	if req.FailThreshold != nil {
 		c.FailThreshold = req.FailThreshold
 		c.FailThresholdPercent = nil
@@ -1356,19 +1379,19 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 
 // --- POST /v1/cadences/{id}/enable | /disable ---
 
-// Enable — POST /v1/cadences/{id}/enable (возобновление расписания).
+// Enable — POST /v1/cadences/{id}/enable (resume the schedule).
 func (h *CadenceHandler) Enable(w http.ResponseWriter, r *http.Request) {
 	h.setEnabled(w, r, true)
 }
 
-// Disable — POST /v1/cadences/{id}/disable (пауза расписания).
+// Disable — POST /v1/cadences/{id}/disable (pause the schedule).
 func (h *CadenceHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	h.setEnabled(w, r, false)
 }
 
-// setEnabled — общая ветка enable/disable: lightweight toggle без перезаписи
-// рецепта ([cadence.SetEnabled]). audit cadence.updated (изменение состояния
-// расписания). 200 + {cadence_id, enabled}.
+// setEnabled — the shared enable/disable branch: a lightweight toggle without
+// rewriting the recipe ([cadence.SetEnabled]). audit cadence.updated (schedule
+// state change). 200 + {cadence_id, enabled}.
 func (h *CadenceHandler) setEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
 	if !ok {
@@ -1388,11 +1411,11 @@ func (h *CadenceHandler) setEnabled(w http.ResponseWriter, r *http.Request, enab
 	writeJSON(w, http.StatusOK, reply, h.logger)
 }
 
-// SetEnabledTyped — извлечённая доменная функция enable/disable (FULL-TYPED
-// ADR-054 §Pattern, батч-2f self-audit): lightweight toggle без перезаписи рецепта
-// ([cadence.SetEnabled]) без http.ResponseWriter/*http.Request. self-audit
-// cadence.updated (изменение состояния расписания) пишется ВНУТРИ функции.
-// 200-body — сгенерированный CadenceEnabledReply.
+// SetEnabledTyped — extracted domain function for enable/disable (FULL-TYPED
+// ADR-054 §Pattern, batch-2f self-audit): a lightweight toggle without rewriting
+// the recipe ([cadence.SetEnabled]) without http.ResponseWriter/*http.Request.
+// self-audit cadence.updated (schedule state change) is written INSIDE the
+// function. 200 body — the generated CadenceEnabledReply.
 func (h *CadenceHandler) SetEnabledTyped(ctx context.Context, claims *jwt.Claims, id string, enabled bool) (CadenceEnabledReply, error) {
 	var zero CadenceEnabledReply
 	if h.store == nil {
@@ -1411,9 +1434,9 @@ func (h *CadenceHandler) SetEnabledTyped(ctx context.Context, claims *jwt.Claims
 
 // --- DELETE /v1/cadences/{id} ---
 
-// Delete — DELETE /v1/cadences/{id} (ADR-046 §9). Снимает расписание; порождённые
-// Voyage остаются (FK voyages.cadence_id ON DELETE SET NULL — ручные прогоны и
-// история детей сохраняются). audit cadence.deleted. 204 No Content; 404
+// Delete — DELETE /v1/cadences/{id} (ADR-046 §9). Removes the schedule; the spawned
+// Voyages remain (FK voyages.cadence_id ON DELETE SET NULL — manual runs and child
+// history are preserved). audit cadence.deleted. 204 No Content; 404
 // cadence_not_found.
 func (h *CadenceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFromContext(r.Context())
@@ -1430,11 +1453,11 @@ func (h *CadenceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DeleteTyped — извлечённая доменная функция DELETE /v1/cadences/{id} (FULL-TYPED
-// ADR-054 §Pattern, батч-2f self-audit): снимает расписание; порождённые Voyage
-// остаются (FK voyages.cadence_id ON DELETE SET NULL). self-audit cadence.deleted
-// пишется ВНУТРИ функции. ctx — request-context (delete + инвалидация TTL-снимка
-// dispatcher-а читают его).
+// DeleteTyped — extracted domain function for DELETE /v1/cadences/{id} (FULL-TYPED
+// ADR-054 §Pattern, batch-2f self-audit): removes the schedule; the spawned Voyages
+// remain (FK voyages.cadence_id ON DELETE SET NULL). self-audit cadence.deleted is
+// written INSIDE the function. ctx is the request context (delete + the dispatcher
+// TTL-snapshot invalidation read it).
 func (h *CadenceHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, id string) error {
 	if h.store == nil {
 		return &problemError{problem.New(problem.TypeInternalError, "", "cadence registry is not configured")}
@@ -1447,14 +1470,15 @@ func (h *CadenceHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, id
 		return &problemError{h.writeWriteErrorPtr("delete", id, err)}
 	}
 
-	// Каскад FK (tidings.created_from_cadence_id ON DELETE CASCADE, миграция 074)
-	// снёс постоянные notify-правила на БД-уровне В ОБХОД herald.Service-CRUD —
-	// сбрасываем TTL-снимок dispatcher-а ЯВНО, строго после удаления (parity с
-	// Create-инвалидацией после notify-insert и HeraldHandler.DeleteHerald).
-	// Инвалидация БЕЗУСЛОВНА: handler не знает, были ли form-rules (каскад
-	// БД-side), а InvalidateRules() сбрасывает весь снимок — id лишь
-	// диагностический лейбл для cross-keeper publish; delete редкий, лишний
-	// сброс TTL-снимка дёшев. nil-safe: dev без herald → no-op.
+	// The FK cascade (tidings.created_from_cadence_id ON DELETE CASCADE, migration
+	// 074) removed the permanent notify rules at the DB level BYPASSING
+	// herald.Service CRUD — reset the dispatcher's TTL snapshot EXPLICITLY, strictly
+	// after deletion (parity with the Create invalidation after notify-insert and
+	// HeraldHandler.DeleteHerald). The invalidation is UNCONDITIONAL: the handler
+	// does not know whether there were form rules (DB-side cascade), and
+	// InvalidateRules() resets the whole snapshot — id is only a diagnostic label for
+	// the cross-keeper publish; delete is rare, an extra TTL-snapshot reset is cheap.
+	// nil-safe: dev without herald → no-op.
 	if h.tidingInvalidator != nil {
 		h.tidingInvalidator.InvalidateTidings(ctx, id)
 	}
@@ -1465,10 +1489,10 @@ func (h *CadenceHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, id
 
 // --- GET /v1/cadences/{id}/runs ---
 
-// Runs — GET /v1/cadences/{id}/runs (ADR-046 §6). Дочерние Voyage расписания
-// (voyages WHERE cadence_id=$1), reuse Voyage-DTO/list. Существование Cadence
-// проверяется probe-ом (404 если нет — пустой список неотличим от
-// несуществующего id). Pagination + status-фильтр (parity VoyageHandler.List).
+// Runs — GET /v1/cadences/{id}/runs (ADR-046 §6). The schedule's child Voyages
+// (voyages WHERE cadence_id=$1), reusing the Voyage DTO/list. Cadence existence is
+// checked by a probe (404 if absent — an empty list is indistinguishable from a
+// nonexistent id). Pagination + status filter (parity with VoyageHandler.List).
 func (h *CadenceHandler) Runs(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "cadence registry is not configured"))
@@ -1523,17 +1547,17 @@ func (h *CadenceHandler) Runs(w http.ResponseWriter, r *http.Request) {
 	}, h.logger)
 }
 
-// CadenceRunsReply — typed-выход GET /v1/cadences/{id}/runs: paged voyageDTO той же
-// wire-формы, что legacy (w,r)-Runs (items/offset/limit/total через
+// CadenceRunsReply — typed output of GET /v1/cadences/{id}/runs: paged voyageDTO of
+// the same wire shape as the legacy (w,r) Runs (items/offset/limit/total via
 // sharedapi.PagedResponse → byte-exact). voyageDTO = Voyage.
 type CadenceRunsReply = sharedapi.PagedResponse[voyageDTO]
 
-// RunsTyped — извлечённая доменная функция GET /v1/cadences/{id}/runs (READ, БЕЗ
-// audit; FULL-TYPED ADR-054 §Pattern). Зеркало (w,r)-Runs: проверяет существование
-// расписания (404, если нет), фильтрует Voyage по cadence_id + опц. status[]. offset/
-// limit диапазон enforce-ит CheckPageBounds → 400 (parity legacy ParsePage). Ошибки —
-// *problemError: 422 bad id / 400 out-of-range pagination / 422 bad status / 404 нет
-// расписания / 500 БД-сбой. Успех — [CadenceRunsReply].
+// RunsTyped — extracted domain function for GET /v1/cadences/{id}/runs (READ, no
+// audit; FULL-TYPED ADR-054 §Pattern). Mirror of the (w,r) Runs: checks the
+// schedule exists (404 if not), filters Voyages by cadence_id + optional status[].
+// The offset/limit range is enforced by CheckPageBounds → 400 (parity with legacy
+// ParsePage). Errors — *problemError: 422 bad id / 400 out-of-range pagination / 422
+// bad status / 404 no schedule / 500 DB failure. Success — [CadenceRunsReply].
 func (h *CadenceHandler) RunsTyped(ctx context.Context, id string, statuses []string, offset, limit int) (CadenceRunsReply, error) {
 	var zero CadenceRunsReply
 	if h.store == nil {
@@ -1577,16 +1601,16 @@ func (h *CadenceHandler) RunsTyped(ctx context.Context, id string, statuses []st
 
 // --- error mapping ---
 
-// writeReadError маппит ошибку read-операции (Get): not-found → 404, иначе 500.
+// writeReadError maps a read-operation error (Get): not-found → 404, else 500.
 func (h *CadenceHandler) writeReadError(w http.ResponseWriter, r *http.Request, op, id string, err error) {
 	d := h.readErrPtr(op, id, err)
 	d.Instance = r.URL.Path
 	problem.Write(w, d)
 }
 
-// readErrPtr — классификатор read-ошибки (Get) → [problem.Details] (FULL-TYPED
-// ADR-054 §Pattern): not-found→404, иначе 500. instance пуст (caller проставит).
-// Извлечённое ядро [writeReadError] для error-возвращающих путей (PatchTyped).
+// readErrPtr — classifier of a read error (Get) → [problem.Details] (FULL-TYPED
+// ADR-054 §Pattern): not-found→404, else 500. instance empty (the caller sets it).
+// The extracted core of [writeReadError] for error-returning paths (PatchTyped).
 func (h *CadenceHandler) readErrPtr(op, id string, err error) problem.Details {
 	if errors.Is(err, cadence.ErrCadenceNotFound) {
 		return problem.New(problem.TypeNotFound, "", "cadence_not_found: "+id)
@@ -1595,10 +1619,10 @@ func (h *CadenceHandler) readErrPtr(op, id string, err error) problem.Details {
 	return problem.New(problem.TypeInternalError, "", "cadence "+op+" failed")
 }
 
-// writeWriteErrorPtr — классификатор write-ошибки → [problem.Details] (FULL-TYPED
-// ADR-054 §Pattern): not-found→404, validate→422, PG→500. instance пуст (caller
-// проставит). Извлечённое ядро [writeWriteError] для error-возвращающих путей
-// (persistErr). Семантика классификации идентична (w,r)-варианту.
+// writeWriteErrorPtr — classifier of a write error → [problem.Details] (FULL-TYPED
+// ADR-054 §Pattern): not-found→404, validate→422, PG→500. instance empty (the
+// caller sets it). The extracted core of [writeWriteError] for error-returning
+// paths (persistErr). Classification semantics identical to the (w,r) variant.
 func (h *CadenceHandler) writeWriteErrorPtr(op, id string, err error) problem.Details {
 	switch {
 	case errors.Is(err, cadence.ErrCadenceNotFound):
@@ -1611,18 +1635,19 @@ func (h *CadenceHandler) writeWriteErrorPtr(op, id string, err error) problem.De
 	}
 }
 
-// isCadenceValidationError отличает validate-ошибку рецепта (422) от PG-сбоя
-// (500). cadence.validate возвращает голые fmt.Errorf("cadence: …") ДО SQL;
-// PG-сбои оборачиваются mapWriteError в "cadence: write: …" / FK / CHECK / Exists.
-// Сигнатура validate-ошибки — НЕ Exists/NotFound и не несёт PG-обёртку. Простой и
-// надёжный признак: это не sentinel-ошибки CRUD и не "cadence: write:"-обёртка.
+// isCadenceValidationError distinguishes a recipe validate error (422) from a PG
+// failure (500). cadence.validate returns bare fmt.Errorf("cadence: …") BEFORE SQL;
+// PG failures are wrapped by mapWriteError into "cadence: write: …" / FK / CHECK /
+// Exists. A validate error's signature is NOT Exists/NotFound and carries no PG
+// wrapper. Simple and reliable test: it is neither a CRUD sentinel error nor a
+// "cadence: write:" wrapper.
 func isCadenceValidationError(err error) bool {
 	if errors.Is(err, cadence.ErrCadenceExists) || errors.Is(err, cadence.ErrCadenceNotFound) {
 		return false
 	}
-	// PG-CHECK/FK/write-ошибки прошли через mapWriteError → их текст начинается с
+	// PG CHECK/FK/write errors went through mapWriteError → their text starts with
 	// "cadence: write:" / "cadence: FK violation" / "cadence: CHECK violation".
-	// validate-ошибки — любой другой "cadence: …" из validate (нет SQL-обёртки).
+	// validate errors — any other "cadence: …" from validate (no SQL wrapper).
 	msg := err.Error()
 	for _, pgPrefix := range []string{"cadence: write:", "cadence: FK violation", "cadence: CHECK violation"} {
 		if len(msg) >= len(pgPrefix) && msg[:len(pgPrefix)] == pgPrefix {
@@ -1634,9 +1659,9 @@ func isCadenceValidationError(err error) bool {
 
 // --- audit emitters ---
 
-// emitWrite пишет cadence.created / cadence.updated (source=api/mcp, archon_aid=
-// JWT.sub). Background-ctx — HTTP-server мог отменить r.Context() после write-
-// response. `input` рецепта НЕ кладётся (инвариант A ADR-027).
+// emitWrite writes cadence.created / cadence.updated (source=api/mcp, archon_aid=
+// JWT.sub). Background ctx — the HTTP server may cancel r.Context() after the write
+// response. The recipe `input` is NOT included (invariant A ADR-027).
 func (h *CadenceHandler) emitWrite(aid string, source audit.Source, eventType audit.EventType, c *cadence.Cadence) {
 	if h.auditW == nil {
 		return
@@ -1664,7 +1689,7 @@ func (h *CadenceHandler) emitWrite(aid string, source audit.Source, eventType au
 	})
 }
 
-// emitEnabledToggle пишет cadence.updated для enable/disable toggle.
+// emitEnabledToggle writes cadence.updated for the enable/disable toggle.
 func (h *CadenceHandler) emitEnabledToggle(aid string, source audit.Source, id string, enabled bool) {
 	if h.auditW == nil {
 		return
@@ -1678,7 +1703,7 @@ func (h *CadenceHandler) emitEnabledToggle(aid string, source audit.Source, id s
 	})
 }
 
-// emitDeleted пишет cadence.deleted.
+// emitDeleted writes cadence.deleted.
 func (h *CadenceHandler) emitDeleted(aid string, source audit.Source, id string) {
 	if h.auditW == nil {
 		return

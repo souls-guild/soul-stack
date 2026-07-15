@@ -1,9 +1,9 @@
 package api
 
-// Регистрация и spec-dump PROFILE-домена (Cloud Profile CRUD, ADR-017) на huma
-// full-typed по эталону push-provider/provider. create/delete — WRITE+AUDIT
-// (события profile.created/.deleted); list/get — read (БЕЗ audit). MCP
-// profile-tools зовут profile.Service напрямую.
+// Registration and spec-dump of the PROFILE domain (Cloud Profile CRUD, ADR-017)
+// on huma full-typed, following the push-provider/provider pattern. create/delete —
+// WRITE+AUDIT (profile.created/.deleted events); list/get — read (no audit). MCP
+// profile-tools call profile.Service directly.
 
 import (
 	"context"
@@ -18,8 +18,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newProfile проецирует плоский handlers.ProfileView в native Profile. params
-// нормализован handler-ом nil→{}.
+// newProfile projects the flat handlers.ProfileView into a native Profile. params
+// is normalized by the handler nil→{}.
 func newProfile(v handlers.ProfileView) Profile {
 	return Profile{
 		CloudInit:    v.CloudInit,
@@ -31,7 +31,7 @@ func newProfile(v handlers.ProfileView) Profile {
 	}
 }
 
-// newProfileListReply проецирует доменный ProfileListPage в native envelope.
+// newProfileListReply projects the domain ProfileListPage into a native envelope.
 func newProfileListReply(p handlers.ProfileListPage) ProfileListReply {
 	var items []Profile
 	if p.Items != nil {
@@ -43,7 +43,7 @@ func newProfileListReply(p handlers.ProfileListPage) ProfileListReply {
 	return ProfileListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// registerHumaProfileCreate монтирует POST /v1/profiles (WRITE+AUDIT —
+// registerHumaProfileCreate mounts POST /v1/profiles (WRITE+AUDIT —
 // profile.created). profileH nil → no-op.
 func registerHumaProfileCreate(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
@@ -72,8 +72,8 @@ func registerHumaProfileCreate(humaAPI huma.API, profileH *handlers.ProfileHandl
 	})
 }
 
-// registerHumaProfileList монтирует GET /v1/profiles (READ-with-typed-query,
-// БЕЗ audit). RBAC profile.read — на группе.
+// registerHumaProfileList mounts GET /v1/profiles (READ with typed query,
+// no audit). RBAC profile.read — on the group.
 func registerHumaProfileList(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
 		return
@@ -87,8 +87,8 @@ func registerHumaProfileList(humaAPI huma.API, profileH *handlers.ProfileHandler
 	})
 }
 
-// registerHumaProfileGet монтирует GET /v1/profiles/{name} (READ-with-path,
-// БЕЗ audit). RBAC profile.read — на группе.
+// registerHumaProfileGet mounts GET /v1/profiles/{name} (READ with path,
+// no audit). RBAC profile.read — on the group.
 func registerHumaProfileGet(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
 		return
@@ -102,7 +102,7 @@ func registerHumaProfileGet(humaAPI huma.API, profileH *handlers.ProfileHandler)
 	})
 }
 
-// registerHumaProfileDelete монтирует DELETE /v1/profiles/{name} (WRITE+AUDIT —
+// registerHumaProfileDelete mounts DELETE /v1/profiles/{name} (WRITE+AUDIT —
 // profile.deleted). profileH nil → no-op.
 func registerHumaProfileDelete(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
@@ -129,14 +129,14 @@ func profileProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaProfileAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// под переданный event-тип.
+// newHumaProfileAPI builds a huma.API over the chi group with huma-audit-middleware
+// for the given event type.
 func newHumaProfileAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaProfileSpecYAML собирает OpenAPI-фрагмент всех profile-роутов как
-// YAML-строку без монтирования.
+// HumaProfileSpecYAML assembles the OpenAPI fragment of all profile routes as
+// a YAML string without mounting.
 func HumaProfileSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ProfileSpecStub()

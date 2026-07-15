@@ -1,10 +1,10 @@
-// Доказательный гейт выравнивания имён ORACLE-схем (vigils + decrees) под committed-
-// рукопись (тираж-батч N2, по эталону huma_operator_schema_test.go). Собирает
-// агрегированную huma-спеку (HumaFullSpecYAML) и проверяет, что схемы oracle-домена
-// названы ТОЧНО как контракт (docs/keeper/openapi.yaml), а технические huma-Go-имена
-// (VigilCreateHumaBody / DecreeCreateHumaBody) в спеке ОТСУТСТВУЮТ. Форма обоих
-// envelope сверена с рукописью: VigilListReply и DecreeListReply — 4-поля-offset
-// (int32 items/offset/limit/total). Мутация краснит.
+// Evidence gate for aligning ORACLE schema names (vigils + decrees) to the committed
+// hand-written spec (rollout batch N2, following huma_operator_schema_test.go). It assembles
+// the aggregated huma spec (HumaFullSpecYAML) and checks that the oracle-domain schemas are
+// named EXACTLY as the contract (docs/keeper/openapi.yaml), while the technical huma Go names
+// (VigilCreateHumaBody / DecreeCreateHumaBody) are ABSENT from the spec. The shape of both
+// envelopes is checked against the hand-written spec: VigilListReply and DecreeListReply are
+// 4-field-offset (int32 items/offset/limit/total). A mutation reddens.
 package api
 
 import (
@@ -13,8 +13,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// oracleContractSchemas — request/view/envelope-имена oracle-домена ровно как в
-// committed-рукописи. Все обязаны присутствовать в собранной спеке.
+// oracleContractSchemas — request/view/envelope names of the oracle domain exactly as in
+// the committed hand-written spec. All must be present in the assembled spec.
 var oracleContractSchemas = []string{
 	"VigilCreateRequest",
 	"DecreeCreateRequest",
@@ -24,14 +24,14 @@ var oracleContractSchemas = []string{
 	"DecreeListReply",
 }
 
-// oracleForbiddenSchemas — технические huma-Go-имена старых структур. Ни одно не должно
-// остаться в спеке после выравнивания.
+// oracleForbiddenSchemas — technical huma Go names of the old structs. None must
+// remain in the spec after the alignment.
 var oracleForbiddenSchemas = []string{
 	"VigilCreateHumaBody",
 	"DecreeCreateHumaBody",
 }
 
-// TestSchemaNames_Oracle — гейт N2. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Oracle — gate N2. Contract names present, technical names absent.
 func TestSchemaNames_Oracle(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range oracleContractSchemas {
@@ -46,9 +46,9 @@ func TestSchemaNames_Oracle(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_OracleEnvelopes — гейт N2 (ENVELOPE). Оба envelope несут КОНТРАКТНУЮ
-// 4-поля-offset форму (int32 items/offset/limit/total; items.$ref на контрактный
-// element). Сверено с рукописью VigilListReply/DecreeListReply. Мутация краснит.
+// TestSchemaNames_OracleEnvelopes — gate N2 (ENVELOPE). Both envelopes carry the CONTRACT
+// 4-field-offset shape (int32 items/offset/limit/total; items.$ref to the contract
+// element). Checked against hand-written VigilListReply/DecreeListReply. A mutation reddens.
 func TestSchemaNames_OracleEnvelopes(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {

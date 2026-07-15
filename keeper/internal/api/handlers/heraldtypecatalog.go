@@ -1,16 +1,16 @@
-// Herald-type-catalog-handler Operator API (`GET /v1/herald-types`, ADR-052
-// amendment) — публикует машиночитаемый каталог типов Herald-канала и их config-
-// полей. Назначение — UI Herald-формы (`POST /v1/heralds`): UI строит форму
-// per-type (какие поля, что обязательно, что секрет) из каталога вместо хардкода
-// (паттерн permission/event-type/module-каталога).
+// Herald-type-catalog handler, Operator API (`GET /v1/herald-types`, ADR-052
+// amendment) — publishes a machine-readable catalog of Herald channel types and their
+// config fields. Its purpose is the Herald form UI (`POST /v1/heralds`): the UI builds the
+// form per-type (which fields, what is required, what is secret) from the catalog instead of
+// hardcoding it (the permission/event-type/module catalog pattern).
 //
-// Источник правды — herald.TypeCatalog (те же [herald.HeraldFieldSpec], что
-// валидируют CRUD Herald через herald.ValidateConfig). Handler НЕ дублирует
-// набор: расширение типа (правка channelDrivers/emailFields) автоматически
-// отражается в выдаче — рассинхрон каталога и валидатора невозможен.
+// Source of truth is herald.TypeCatalog (the same [herald.HeraldFieldSpec] that
+// validate Herald CRUD via herald.ValidateConfig). The handler does NOT duplicate the
+// set: extending a type (editing channelDrivers/emailFields) is automatically
+// reflected in the output — catalog/validator drift is impossible.
 //
-// RBAC — только аутентификация (валидный JWT), БЕЗ отдельной permission: каталог
-// само-описывающий (паттерн event-type-каталога). Read-only, без audit.
+// RBAC — authentication only (a valid JWT), no dedicated permission: the catalog is
+// self-describing (the event-type catalog pattern). Read-only, no audit.
 package handlers
 
 import (
@@ -20,13 +20,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 )
 
-// HeraldTypeCatalogHandler — `GET /v1/herald-types`. Состояние не держит (каталог
-// read-only-статика из пакета herald); safe for concurrent use.
+// HeraldTypeCatalogHandler — `GET /v1/herald-types`. Holds no state (the catalog is
+// read-only static data from package herald); safe for concurrent use.
 type HeraldTypeCatalogHandler struct {
 	logger *slog.Logger
 }
 
-// NewHeraldTypeCatalogHandler создаёт handler. logger nil → io.Discard.
+// NewHeraldTypeCatalogHandler builds the handler. logger nil → io.Discard.
 func NewHeraldTypeCatalogHandler(logger *slog.Logger) *HeraldTypeCatalogHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -34,10 +34,10 @@ func NewHeraldTypeCatalogHandler(logger *slog.Logger) *HeraldTypeCatalogHandler 
 	return &HeraldTypeCatalogHandler{logger: logger}
 }
 
-// HeraldFieldView — ПЛОСКАЯ доменная запись одного config-поля типа (name/label/
-// required/secret/kind/enum_values). kind — строка ([herald.FieldKind]) для form-
-// рендера UI. EnumValues непуст только у kind=enum (набор допустимых строк, вкл.
-// "" = «поле опущено/plain») — UI рендерит такое поле как select, не text-input.
+// HeraldFieldView — FLAT domain record of one type's config field (name/label/
+// required/secret/kind/enum_values). kind is a string ([herald.FieldKind]) for the UI
+// form render. EnumValues is non-empty only for kind=enum (the set of allowed strings, incl.
+// "" = "field omitted/plain") — the UI renders such a field as a select, not a text input.
 type HeraldFieldView struct {
 	Name       string
 	Label      string
@@ -47,29 +47,29 @@ type HeraldFieldView struct {
 	EnumValues []string
 }
 
-// HeraldTypeView — ПЛОСКИЙ доменный дескриптор одного типа канала (type + fields +
-// secret_required). SecretRequired=true ⟹ у типа есть top-level secret_ref
-// (webhook) — UI показывает поле по этому признаку, не по хардкоду типа.
+// HeraldTypeView — FLAT domain descriptor of one channel type (type + fields +
+// secret_required). SecretRequired=true ⟹ the type has a top-level secret_ref
+// (webhook) — the UI shows the field by this flag, not by hardcoding the type.
 type HeraldTypeView struct {
 	Type           string
 	Fields         []HeraldFieldView
 	SecretRequired bool
 }
 
-// HeraldTypeCatalog — ПЛОСКОЕ доменное тело `GET /v1/herald-types` (handler-native).
+// HeraldTypeCatalog — FLAT domain body of `GET /v1/herald-types` (handler-native).
 type HeraldTypeCatalog struct {
 	Types []HeraldTypeView
 }
 
-// ListTyped — доменная функция `GET /v1/herald-types` (READ без audit): собирает
-// каталог из единого источника правды (herald.TypeCatalog). Ошибки невозможны →
-// возвращает только значение (native-проекция в api строит wire).
+// ListTyped — domain function `GET /v1/herald-types` (READ, no audit): assembles the
+// catalog from the single source of truth (herald.TypeCatalog). Errors are impossible →
+// returns only the value (the native projection in api builds the wire).
 func (h *HeraldTypeCatalogHandler) ListTyped() HeraldTypeCatalog {
 	return buildHeraldTypeCatalog()
 }
 
-// buildHeraldTypeCatalog проецирует herald.TypeCatalog в плоские view. Срезы
-// non-nil (native-проекция отдаёт `[]`, не `null`).
+// buildHeraldTypeCatalog projects herald.TypeCatalog into flat views. Slices are
+// non-nil (the native projection returns `[]`, not `null`).
 func buildHeraldTypeCatalog() HeraldTypeCatalog {
 	descriptors := herald.TypeCatalog()
 	types := make([]HeraldTypeView, 0, len(descriptors))

@@ -1,14 +1,14 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2e разворота MODULE-домена ЦЕЛИКОМ на huma full-typed
-// (ADR-054 §Pattern, эталон catalog read-bare + form-prep read-with-body). ВСЕ три
-// роута — READ-only (audit НЕ навешан). Доказывают инварианты кластера поверх chi:
+// Guard tests of ROLLOUT-BATCH-2e moving the MODULE domain WHOLESALE onto huma full-typed
+// (ADR-054 §Pattern, reference catalog read-bare + form-prep read-with-body). ALL three
+// routes are READ-only (audit not wired). They prove cluster invariants over chi:
 //
 //   - wire/golden: list 200 envelope; get 200 item; form-prep 200 {sids,truncated} —
-//     huma-200-reply == legacy-200-reply ТОГО ЖЕ handler-а (byte-exact после ремаршала);
+//     huma-200-reply == legacy-200-reply of the SAME handler (byte-exact after remarshal);
 //   - get unknown → 404; form-prep unknown-field → 400; form-prep bad source → 422;
 //     RBAC-deny → 403;
-//   - no-audit: READ-домен не пишет audit (нет middleware) — capture-writer даёт 0 событий.
+//   - no-audit: the READ domain writes no audit (no middleware) — capture-writer yields 0 events.
 
 import (
 	"context"
@@ -26,7 +26,7 @@ import (
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// hFormPrepResolver — мок [handlers.FormPrepSIDResolver] для huma-теста form-prep.
+// hFormPrepResolver — mock [handlers.FormPrepSIDResolver] for the huma form-prep test.
 type hFormPrepResolver struct {
 	sids      []string
 	truncated bool
@@ -37,10 +37,10 @@ func (r *hFormPrepResolver) ResolveSIDs(_ context.Context, _ handlers.FormPrepFi
 	return r.sids, r.truncated, r.err
 }
 
-// humaModuleRouter собирает chi-роутер со ВСЕМИ module-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission на каждой группе (list/get →
-// service.list, form-prep → incarnation.run) БЕЗ audit (READ-домен). injectClaims
-// заменяет RequireJWT. auditW (если не nil) навешивается, чтобы доказать no-audit.
+// humaModuleRouter assembles a chi router with ALL module routes via huma —
+// the production wiring from router.go: RequirePermission on each group (list/get →
+// service.list, form-prep → incarnation.run) with no audit (READ domain). injectClaims
+// replaces RequireJWT. auditW (if non-nil) is wired to prove no-audit.
 func humaModuleRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, catalogH *handlers.ModuleCatalogHandler, formPrepH *handlers.ModuleFormPrepHandler) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -68,8 +68,8 @@ func humaModuleRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, ca
 	return r
 }
 
-// remarshalModule нормализует JSON через map (ключи сортируются) — golden фиксирует
-// набор ключей/форму, не порядок.
+// remarshalModule normalizes JSON through a map (keys sorted) — golden pins the
+// key set/shape, not the order.
 func remarshalModule(t *testing.T, raw []byte) string {
 	t.Helper()
 	var v any
@@ -83,15 +83,15 @@ func remarshalModule(t *testing.T, raw []byte) string {
 	return string(out)
 }
 
-// === LIST (READ, БЕЗ audit) ===
+// === LIST (READ, no audit) ===
 
-// TestHumaModule_List_GoldenWire — huma-200-reply форма envelope + byte-exact одной
-// детерминированной записи (core.archive — single-state, описания params стабильны).
-// Полный каталог не сравниваем byte-to-byte: manifestToParams выбирает описание
-// param-а из ПЕРВОГО state-а в порядке map-итерации (Go-недетерминизм между двумя
-// buildCatalog-вызовами для multi-state модулей — core.choir и т.п.; это
-// pre-existing свойство handler-а, см. observations). Envelope-форма + стабильная
-// запись фиксируют wire huma-роута без ложного дрейфа на недетерминированных описаниях.
+// TestHumaModule_List_GoldenWire — the huma-200-reply envelope shape + byte-exact of one
+// deterministic record (core.archive — single-state, param descriptions stable).
+// We don't compare the full catalog byte-to-byte: manifestToParams picks a param's
+// description from the FIRST state in map-iteration order (Go non-determinism between two
+// buildCatalog calls for multi-state modules — core.choir etc.; this is a
+// pre-existing property of the handler, see observations). The envelope shape + a stable
+// record pin the wire of the huma route without false drift on non-deterministic descriptions.
 func TestHumaModule_List_GoldenWire(t *testing.T) {
 	catalogH := handlers.NewModuleCatalogHandler(nil, nil)
 	r := humaModuleRouter(t, strictAllowAll{}, catalogH, nil)
@@ -114,7 +114,7 @@ func TestHumaModule_List_GoldenWire(t *testing.T) {
 	if len(got.Items) == 0 {
 		t.Fatal("items пуст — core-каталог обязан быть непустым")
 	}
-	// Byte-exact одной детерминированной записи (core.archive — single-state).
+	// Byte-exact of one deterministic record (core.archive — single-state).
 	var archive map[string]any
 	for _, it := range got.Items {
 		if it["name"] == "core.archive" {
@@ -140,8 +140,8 @@ func TestHumaModule_List_ErrandSafeFilter(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	// Source of truth — доменный ListTyped того же handler-а ((w,r)-оболочка снята);
-	// huma-200-байты обязаны совпасть после ремаршала.
+	// Source of truth — the domain ListTyped of the same handler (the (w,r) wrapper removed);
+	// the huma-200 bytes must match after remarshal.
 	reply, err := catalogH.ListTyped(context.Background(), true)
 	if err != nil {
 		t.Fatalf("ListTyped(errand_safe): %v", err)
@@ -161,7 +161,7 @@ func TestHumaModule_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === GET (READ, БЕЗ audit) ===
+// === GET (READ, no audit) ===
 
 func TestHumaModule_Get_GoldenWire(t *testing.T) {
 	catalogH := handlers.NewModuleCatalogHandler(nil, nil)
@@ -173,8 +173,8 @@ func TestHumaModule_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Source of truth — доменный GetTyped того же handler-а (legacy Get лишь
-	// оборачивает его); huma-200-байты обязаны совпасть после ремаршала.
+	// Source of truth — the domain GetTyped of the same handler (legacy Get just
+	// wraps it); the huma-200 bytes must match after remarshal.
 	item, err := catalogH.GetTyped(context.Background(), "core.cmd")
 	if err != nil {
 		t.Fatalf("GetTyped(core.cmd): %v", err)
@@ -195,7 +195,7 @@ func TestHumaModule_Get_NotFound_404(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeNotFound)
 }
 
-// === FORM-PREP (READ-резолв, БЕЗ audit) ===
+// === FORM-PREP (READ resolve, no audit) ===
 
 func TestHumaModule_FormPrep_GoldenWire(t *testing.T) {
 	resolver := &hFormPrepResolver{sids: []string{"host-a.example.com", "host-b.example.com"}, truncated: true}
@@ -232,7 +232,7 @@ func TestHumaModule_FormPrep_BadSource_422(t *testing.T) {
 	formPrepH := handlers.NewModuleFormPrepHandler(&hFormPrepResolver{}, nil)
 	r := humaModuleRouter(t, strictAllowAll{}, handlers.NewModuleCatalogHandler(nil, nil), formPrepH)
 	rec := httptest.NewRecorder()
-	// Ни incarnation_hosts, ни choir → source не задан → 422 (домен toFilter).
+	// Neither incarnation_hosts nor choir → source not set → 422 (domain toFilter).
 	req := httptest.NewRequest(http.MethodPost, "/v1/modules/core.cmd/form-prep",
 		strings.NewReader(`{"source":{}}`))
 	r.ServeHTTP(rec, req)
@@ -254,16 +254,16 @@ func TestHumaModule_FormPrep_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === NO-AUDIT (READ-домен) ===
+// === NO-AUDIT (READ domain) ===
 
-// TestHumaModule_ReadNoAudit — READ-домен не пишет ни одного audit-event ни на одном
-// из трёх роутов (нет audit-middleware). capture-writer навешен лишь как ловушка.
+// TestHumaModule_ReadNoAudit — the READ domain writes no audit event on any of the
+// three routes (no audit middleware). capture-writer is wired only as a trap.
 func TestHumaModule_ReadNoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	catalogH := handlers.NewModuleCatalogHandler(nil, nil)
 	formPrepH := handlers.NewModuleFormPrepHandler(&hFormPrepResolver{sids: []string{"x.example.com"}}, nil)
 	r := humaModuleRouter(t, strictAllowAll{}, catalogH, formPrepH)
-	_ = auditCap // module-домен audit-writer вообще не получает — навески нет; явный 0-чек ниже.
+	_ = auditCap // the module domain gets no audit writer at all — no wiring; explicit 0-check below.
 
 	for _, tc := range []struct {
 		method, path, body string
@@ -289,14 +289,14 @@ func TestHumaModule_ReadNoAudit(t *testing.T) {
 	}
 }
 
-// TestHumaModule_SpecYAML — huma генерит 3.1-спеку из FULL-TYPED Go-типов module-домена.
+// TestHumaModule_SpecYAML — huma generates the 3.1 spec from the FULL-TYPED Go types of the module domain.
 func TestHumaModule_SpecYAML(t *testing.T) {
 	frag, err := HumaModuleSpecYAML()
 	if err != nil {
 		t.Fatalf("HumaModuleSpecYAML: %v", err)
 	}
-	// Пути ОТНОСИТЕЛЬНЫ chi-группы /v1/modules (mount даёт /v1/modules{path});
-	// spec-dump на голом router эмитит "/", "/{name}", "/{name}/form-prep".
+	// Paths are RELATIVE to the chi group /v1/modules (mount gives /v1/modules{path});
+	// the spec dump on a bare router emits "/", "/{name}", "/{name}/form-prep".
 	for _, want := range []string{"listModules", "getModule", "moduleFormPrep", "/{name}/form-prep"} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("спека не содержит %q:\n%s", want, frag)

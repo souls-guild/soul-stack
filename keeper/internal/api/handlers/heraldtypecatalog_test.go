@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 )
 
-// TestHeraldTypeCatalog_CoversAllTypes — каталог отдаёт РОВНО herald.AllHeraldTypes
-// (единый источник): каждый известный тип канала присутствует, лишних нет.
+// TestHeraldTypeCatalog_CoversAllTypes — catalog returns EXACTLY herald.AllHeraldTypes
+// (single source): every known channel type is present, none extra.
 func TestHeraldTypeCatalog_CoversAllTypes(t *testing.T) {
 	resp := NewHeraldTypeCatalogHandler(nil).ListTyped()
 	if len(resp.Types) == 0 {
@@ -37,9 +37,9 @@ func TestHeraldTypeCatalog_CoversAllTypes(t *testing.T) {
 	}
 }
 
-// TestHeraldTypeCatalog_FieldsAndSecrets — каждый тип несёт непустой набор полей;
-// каждый тип каталога валиден по herald.ValidHeraldType (контракт: UI кладёт type
-// дословно); секрет-поля помечены kind=vault_ref (разводка ADR-052 amendment).
+// TestHeraldTypeCatalog_FieldsAndSecrets — each type carries a non-empty field set;
+// each catalog type is valid per herald.ValidHeraldType (contract: UI sends type
+// verbatim); secret fields are marked kind=vault_ref (ADR-052 amendment wiring).
 func TestHeraldTypeCatalog_FieldsAndSecrets(t *testing.T) {
 	resp := buildHeraldTypeCatalog()
 	for _, ty := range resp.Types {
@@ -60,9 +60,9 @@ func TestHeraldTypeCatalog_FieldsAndSecrets(t *testing.T) {
 	}
 }
 
-// TestHeraldTypeCatalog_KnownFields — адресная фиксация ключевых полей пилотных
-// типов (drift-чек формы каталога): webhook.url, telegram.bot_token_ref(secret),
-// email.smtp_host/to, custom.method. Ловит случайное переименование/пропажу поля.
+// TestHeraldTypeCatalog_KnownFields — targeted pinning of key fields of the pilot
+// types (catalog shape drift check): webhook.url, telegram.bot_token_ref(secret),
+// email.smtp_host/to, custom.method. Catches accidental rename/loss of a field.
 func TestHeraldTypeCatalog_KnownFields(t *testing.T) {
 	resp := buildHeraldTypeCatalog()
 	byType := map[string]map[string]HeraldFieldView{}
@@ -99,9 +99,9 @@ func TestHeraldTypeCatalog_KnownFields(t *testing.T) {
 	assertField("email", "password_ref", false, true)
 }
 
-// TestHeraldTypeCatalog_EnumValues — enum-поля несут набор допустимых значений
-// (kind=enum ⟹ EnumValues непуст), не-enum — пуст. UI рендерит enum как select
-// вместо text-input, поэтому набор обязан доезжать до каталога из домена.
+// TestHeraldTypeCatalog_EnumValues — enum fields carry the set of allowed values
+// (kind=enum ⟹ EnumValues non-empty), non-enum are empty. The UI renders enum as a
+// select instead of a text input, so the set must reach the catalog from the domain.
 func TestHeraldTypeCatalog_EnumValues(t *testing.T) {
 	resp := buildHeraldTypeCatalog()
 	byType := map[string]map[string]HeraldFieldView{}
@@ -136,7 +136,7 @@ func TestHeraldTypeCatalog_EnumValues(t *testing.T) {
 	assertEnum("custom", "method", []string{"", "POST", "PUT", "PATCH"})
 	assertEnum("email", "tls_mode", []string{"", "starttls", "tls", "none"})
 
-	// Не-enum-поля не несут набор (иначе UI отрендерит select там, где нужен input).
+	// Non-enum fields carry no set (otherwise the UI would render a select where an input is needed).
 	if got := byType["webhook"]["url"].EnumValues; len(got) != 0 {
 		t.Errorf("webhook.url (kind=url) enum_values=%v, want empty", got)
 	}
@@ -145,10 +145,10 @@ func TestHeraldTypeCatalog_EnumValues(t *testing.T) {
 	}
 }
 
-// TestHeraldTypeCatalog_SecretRequired — признак top-level secret_ref доезжает до
-// каталога из [herald.channelDriver.secretRequired]: true только у webhook, false
-// у мессенджеров/custom/email. UI показывает поле secret_ref по этому признаку, а
-// не по хардкоду type==='webhook' (иначе 2-й secret-тип молча не покажет поле).
+// TestHeraldTypeCatalog_SecretRequired — the top-level secret_ref flag reaches the
+// catalog from [herald.channelDriver.secretRequired]: true only for webhook, false
+// for messengers/custom/email. The UI shows the secret_ref field by this flag, not
+// by a hardcoded type==='webhook' (otherwise a 2nd secret type silently hides the field).
 func TestHeraldTypeCatalog_SecretRequired(t *testing.T) {
 	resp := buildHeraldTypeCatalog()
 	byType := map[string]bool{}

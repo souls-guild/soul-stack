@@ -1,9 +1,9 @@
 package handlers
 
-// derefStrings разыменовывает optional []string из request-тела (oapi/native даёт
-// *[]string для omitempty-поля); nil → nil-срез («без значений»). Пакетный helper
-// request-декодинга. Извлечён из operator.go при handler-native-развороте operator
-// (T5d): остаётся общим для остальных доменов (oracle и др.).
+// derefStrings dereferences an optional []string from the request body (oapi/native
+// yields *[]string for an omitempty field); nil → nil slice ("no values"). Package
+// request-decoding helper. Extracted from operator.go during the handler-native
+// rollout of operator (T5d): stays shared across the other domains (oracle etc.).
 func derefStrings(in *[]string) []string {
 	if in == nil {
 		return nil
@@ -11,7 +11,7 @@ func derefStrings(in *[]string) []string {
 	return *in
 }
 
-// derefString разыменовывает optional string из request-тела; nil → "".
+// derefString dereferences an optional string from the request body; nil → "".
 func derefString(in *string) string {
 	if in == nil {
 		return ""
@@ -19,10 +19,10 @@ func derefString(in *string) string {
 	return *in
 }
 
-// slicePtrIfNotEmpty возвращает nil для пустого/nil-среза (паритет json omitempty
-// над массивом), иначе указатель на срез. Пакетный helper reply-проекции; извлечён
-// из mypermissions.go при handler-native-развороте catalog (T5d): остаётся общим
-// для остальных доменов (oracle и др.).
+// slicePtrIfNotEmpty returns nil for an empty/nil slice (json omitempty parity over
+// an array), otherwise a pointer to the slice. Package reply-projection helper;
+// extracted from mypermissions.go during the handler-native rollout of catalog (T5d):
+// stays shared across the other domains (oracle etc.).
 func slicePtrIfNotEmpty(s []string) *[]string {
 	if len(s) == 0 {
 		return nil

@@ -14,26 +14,26 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// PushProviderHandler — endpoints CRUD push_providers (ADR-032 amendment
-// 2026-05-26, S7-2). Тонкая обёртка над [pushprovider.Service]: тот же service
-// вызывается MCP-tool-handler-ом, что гарантирует один источник правды для пяти
-// push-provider.*-эндпоинтов.
+// PushProviderHandler — CRUD endpoints for push_providers (ADR-032 amendment
+// 2026-05-26, S7-2). A thin wrapper over [pushprovider.Service]: the same service
+// is called by the MCP tool handler, which guarantees a single source of truth for the five
+// push-provider.* endpoints.
 //
-// RBAC-проверка делается в middleware (см. api/router.go); handler
-// выполняет только маппинг ошибок в RFC 7807.
+// The RBAC check happens in middleware (see api/router.go); the handler
+// only maps errors to RFC 7807.
 //
-// T5d-2c-full (handler-native): домен отвязан от legacy-генерата. *Typed-функции
-// принимают/возвращают NATIVE типы с плоскими wire-полями (PushProviderCreateInput /
-// PushProviderUpdateInput / PushProviderView / PushProviderListPage); native wire-DTO
-// (схему OpenAPI) строит пакет api из этих полей (register-func huma_pushprovider.go).
-// HTTP обслуживает huma full-typed, MCP зовёт pushprovider.Service напрямую (мимо handler).
+// T5d-2c-full (handler-native): the domain is detached from the legacy generator. The *Typed functions
+// accept/return NATIVE types with flat wire fields (PushProviderCreateInput /
+// PushProviderUpdateInput / PushProviderView / PushProviderListPage); the native wire-DTO
+// (OpenAPI schema) is built by package api from these fields (register func huma_pushprovider.go).
+// HTTP is served by huma full-typed, MCP calls pushprovider.Service directly (bypassing the handler).
 type PushProviderHandler struct {
 	svc    *pushprovider.Service
 	logger *slog.Logger
 }
 
-// NewPushProviderHandler создаёт handler. svc обязателен (panic при nil —
-// единственная точка misconfiguration, caller обязан передать non-nil).
+// NewPushProviderHandler creates the handler. svc is required (panic on nil —
+// the only misconfiguration point, the caller must pass non-nil).
 func NewPushProviderHandler(svc *pushprovider.Service, logger *slog.Logger) *PushProviderHandler {
 	if svc == nil {
 		panic("handlers.NewPushProviderHandler: pushprovider.Service is nil")
@@ -44,35 +44,35 @@ func NewPushProviderHandler(svc *pushprovider.Service, logger *slog.Logger) *Pus
 	return &PushProviderHandler{svc: svc, logger: logger}
 }
 
-// PushProviderSpecStub — непустой *PushProviderHandler-заглушка для генерации huma-
-// OpenAPI-фрагмента (HumaPushProviderSpecYAML): при dump доменный handler не
-// вызывается, но huma.Register требует non-nil для no-op-проверки на nil. svc nil —
-// handler никогда не исполняется в spec-режиме (parity [SigilSpecStub]).
+// PushProviderSpecStub — a non-empty *PushProviderHandler stub for generating the huma
+// OpenAPI fragment (HumaPushProviderSpecYAML): on dump the domain handler is never
+// called, but huma.Register requires non-nil for its no-op nil check. svc nil —
+// the handler never executes in spec mode (parity with [SigilSpecStub]).
 func PushProviderSpecStub() *PushProviderHandler {
 	return &PushProviderHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// PushProviderCreateInput — NATIVE request-форма POST /v1/push-providers (handler-native).
-// Заменяет PushProviderCreateRequest: huma-input (пакет api) биндит/валидирует тело и
-// проецирует его в эти поля. Params — опциональный указатель (*map), handler разыменовывает
-// его в pushprovider.CreateInput.
+// PushProviderCreateInput — the NATIVE request form of POST /v1/push-providers (handler-native).
+// Replaces PushProviderCreateRequest: the huma input (package api) binds/validates the body and
+// projects it into these fields. Params — an optional pointer (*map), the handler dereferences
+// it into pushprovider.CreateInput.
 type PushProviderCreateInput struct {
 	Name   string
 	Params *map[string]any
 }
 
-// PushProviderUpdateInput — NATIVE request-форма PUT /v1/push-providers/{name} (handler-
-// native). Заменяет PushProviderUpdateRequest. Replace-семантика: params полностью
-// заменяет существующий набор.
+// PushProviderUpdateInput — the NATIVE request form of PUT /v1/push-providers/{name} (handler-
+// native). Replaces PushProviderUpdateRequest. Replace semantics: params fully
+// replaces the existing set.
 type PushProviderUpdateInput struct {
 	Params map[string]any
 }
 
-// PushProviderView — ПЛОСКАЯ wire-форма Push-Provider-а (Create-201, Get-200, List-items,
-// Update-200), handler-native (заменяет PushProvider). params нормализован nil→{};
-// updated_by_aid — опц. указатель; created_at/updated_at — наносекундный time-wire.
-// Пакет api проецирует её в native PushProvider (register-func huma_pushprovider.go),
-// порядок полей wire фиксирует native-тип.
+// PushProviderView — the FLAT wire form of a Push Provider (Create-201, Get-200, List items,
+// Update-200), handler-native (replaces PushProvider). params normalized nil→{};
+// updated_by_aid — optional pointer; created_at/updated_at — nanosecond time-wire.
+// Package api projects it into native PushProvider (register func huma_pushprovider.go),
+// the native type fixes the wire field order.
 type PushProviderView struct {
 	Name         string
 	Params       map[string]any
@@ -82,9 +82,9 @@ type PushProviderView struct {
 	UpdatedByAID *string
 }
 
-// PushProviderListPage — доменный paged-результат GET /v1/push-providers (handler-native).
-// Плоские offset/limit/total + срез PushProviderView; пакет api проецирует его в native-
-// envelope PushProviderListReply (register-func huma_pushprovider.go).
+// PushProviderListPage — the domain paged result of GET /v1/push-providers (handler-native).
+// Flat offset/limit/total + a slice of PushProviderView; package api projects it into the native
+// envelope PushProviderListReply (register func huma_pushprovider.go).
 type PushProviderListPage struct {
 	Items  []PushProviderView
 	Offset int
@@ -92,10 +92,10 @@ type PushProviderListPage struct {
 	Total  int
 }
 
-// toPushProviderView проецирует [pushprovider.PushProvider] в плоский view.
-// date-time: прежняя сериализация — голый time.Time-field (RFC3339Nano через MarshalJSON),
-// поэтому `.UTC()` БЕЗ Truncate сохраняет байт-в-байт. nil-params нормализуются в пустую
-// карту (паритет с прежним поведением).
+// toPushProviderView projects [pushprovider.PushProvider] into the flat view.
+// date-time: the former serialization was a bare time.Time field (RFC3339Nano via MarshalJSON),
+// so `.UTC()` without Truncate keeps it byte-for-byte. nil params normalize to an empty
+// map (parity with the former behavior).
 func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 	params := p.Params
 	if params == nil {
@@ -111,18 +111,18 @@ func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 	}
 }
 
-// PushProviderWriteReply — извлечённый результат write-роутов Push-Provider-а
-// (CreateTyped/UpdateTyped/DeleteTyped). Несёт тело (для create/update — 201/200
-// PushProviderView; для delete — пустое) + name/params_keys (для audit-payload; VALUE
-// params в audit НЕ кладутся — sensitive-инвариант).
+// PushProviderWriteReply — the extracted result of the Push Provider write routes
+// (CreateTyped/UpdateTyped/DeleteTyped). Carries the body (create/update — 201/200
+// PushProviderView; delete — empty) + name/params_keys (for the audit payload; the params
+// VALUEs are NOT put into audit — sensitive invariant).
 type PushProviderWriteReply struct {
 	Body       PushProviderView
 	Name       string
 	ParamsKeys []string
 }
 
-// AuditPayload собирает audit-payload write-роутов Push-Provider-а (parity легаси:
-// name + params_keys без values). Источник для huma-варианта B.
+// AuditPayload assembles the audit payload for the Push Provider write routes (legacy parity:
+// name + params_keys without values). Source for huma variant B.
 func (r PushProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":        r.Name,
@@ -130,9 +130,9 @@ func (r PushProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateTyped — доменная функция POST /v1/push-providers (handler-native): валидация name +
-// svc.Create + sentinel→problem. Ошибки — *problemError; успех — [PushProviderWriteReply]
-// (201-тело + audit-поля).
+// CreateTyped — the domain function for POST /v1/push-providers (handler-native): name validation +
+// svc.Create + sentinel→problem. Errors — *problemError; success — [PushProviderWriteReply]
+// (201 body + audit fields).
 func (h *PushProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req PushProviderCreateInput) (PushProviderWriteReply, error) {
 	var zero PushProviderWriteReply
 	if req.Name == "" {
@@ -169,10 +169,10 @@ func (h *PushProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt
 	}
 }
 
-// UpdateTyped — доменная функция PUT /v1/push-providers/{name} (handler-native):
-// replace-семантика (req.Params полностью заменяет существующий набор — read-modify-write
-// на клиенте, НЕ presence-tier). Валидация path-name + svc.Update + sentinel→problem.
-// Ошибки — *problemError; успех — [PushProviderWriteReply] (200-тело + audit-поля).
+// UpdateTyped — the domain function for PUT /v1/push-providers/{name} (handler-native):
+// replace semantics (req.Params fully replaces the existing set — read-modify-write
+// on the client, NOT presence-tier). path-name validation + svc.Update + sentinel→problem.
+// Errors — *problemError; success — [PushProviderWriteReply] (200 body + audit fields).
 func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt.Claims, name string, req PushProviderUpdateInput) (PushProviderWriteReply, error) {
 	var zero PushProviderWriteReply
 	if !pushprovider.ValidName(name) {
@@ -200,19 +200,19 @@ func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt
 	}
 }
 
-// PushProviderDeleteReply — извлечённый результат [PushProviderHandler.DeleteTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// PushProviderDeleteReply — the extracted result of [PushProviderHandler.DeleteTyped]
+// (handler-native). Carries audit fields (the HTTP response is an empty 204 body).
 type PushProviderDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload delete-роута (parity легаси: name).
+// AuditPayload assembles the audit payload for the delete route (legacy parity: name).
 func (r PushProviderDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteTyped — доменная функция DELETE /v1/push-providers/{name} (handler-native):
-// валидация path-name + svc.Delete + sentinel→problem. Ошибки — *problemError; успех —
+// DeleteTyped — the domain function for DELETE /v1/push-providers/{name} (handler-native):
+// path-name validation + svc.Delete + sentinel→problem. Errors — *problemError; success —
 // [PushProviderDeleteReply].
 func (h *PushProviderHandler) DeleteTyped(ctx context.Context, name string) (PushProviderDeleteReply, error) {
 	var zero PushProviderDeleteReply
@@ -234,10 +234,10 @@ func (h *PushProviderHandler) DeleteTyped(ctx context.Context, name string) (Pus
 	}
 }
 
-// ListTyped — доменная функция GET /v1/push-providers (handler-native, read-with-typed-
-// query, БЕЗ audit). namePattern (LIKE-prefix) + offset/limit приходят уже
-// провалидированными (huma-bind int32; диапазон enforce-ит CheckPageBounds → 400). Ошибка
-// чтения → *problemError (500). Wire-форма items (toPushProviderView) сохранена.
+// ListTyped — the domain function for GET /v1/push-providers (handler-native, read with typed
+// query, no audit). namePattern (LIKE prefix) + offset/limit arrive already
+// validated (huma binds int32; CheckPageBounds enforces the range → 400). A read
+// error → *problemError (500). The items wire shape (toPushProviderView) is preserved.
 func (h *PushProviderHandler) ListTyped(ctx context.Context, namePattern string, offset, limit int) (PushProviderListPage, error) {
 	var zero PushProviderListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
@@ -263,9 +263,9 @@ func (h *PushProviderHandler) ListTyped(ctx context.Context, namePattern string,
 	}, nil
 }
 
-// GetTyped — доменная функция GET /v1/push-providers/{name} (handler-native, read-with-path,
-// БЕЗ audit): валидация path-name + svc.Get + sentinel→problem (404/422/500). Ошибки —
-// *problemError; успех — [PushProviderView].
+// GetTyped — the domain function for GET /v1/push-providers/{name} (handler-native, read with path,
+// no audit): path-name validation + svc.Get + sentinel→problem (404/422/500). Errors —
+// *problemError; success — [PushProviderView].
 func (h *PushProviderHandler) GetTyped(ctx context.Context, name string) (PushProviderView, error) {
 	var zero PushProviderView
 	if !pushprovider.ValidName(name) {
@@ -285,10 +285,10 @@ func (h *PushProviderHandler) GetTyped(ctx context.Context, name string) (PushPr
 	}
 }
 
-// paramKeysSorted возвращает отсортированный список ключей params для audit-
-// payload. Симметрично patterns role.* (`permissions` пишутся в audit, но
-// VALUE Param-ов считаются «opaque payload», поэтому фиксируем только ключи —
-// факт мутации без раскрытия значений; sensitive-инвариант обеспечивает
+// paramKeysSorted returns the sorted list of params keys for the audit
+// payload. Like the role.* patterns (`permissions` are written to audit, but
+// the Param VALUEs are treated as an "opaque payload", so we record only the keys —
+// the fact of mutation without exposing values; the sensitive invariant is enforced by
 // service.validateSensitive).
 func paramKeysSorted(params map[string]any) []string {
 	if len(params) == 0 {
@@ -298,8 +298,8 @@ func paramKeysSorted(params map[string]any) []string {
 	for k := range params {
 		keys = append(keys, k)
 	}
-	// Малый сорт; повторно сортируется на каждой записи аудита (десятки/секунду —
-	// не hot path). strings.SortStrings не делается, чтобы не тянуть sort.
+	// Small sort; re-sorted on every audit write (tens per second —
+	// not a hot path). We avoid strings.SortStrings so as not to pull in sort.
 	for i := 1; i < len(keys); i++ {
 		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
 			keys[j-1], keys[j] = keys[j], keys[j-1]

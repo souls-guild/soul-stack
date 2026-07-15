@@ -14,8 +14,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// provPool — fake ServicePool: SetSetting (upsert) успешен; QueryRow на upsert
-// сканит RETURNING updated_at.
+// provPool — fake ServicePool: SetSetting (upsert) succeeds; QueryRow on upsert
+// scans RETURNING updated_at.
 type provPool struct {
 	setSQLSeen *string
 	setValue   *string
@@ -54,12 +54,12 @@ func (provScanRow) Scan(dest ...any) error {
 	return nil
 }
 
-// countingInv — счётчик cluster-invalidate.
+// countingInv — cluster-invalidate counter.
 type countingInv struct{ calls atomic.Int64 }
 
 func (c *countingInv) Invalidate(context.Context) { c.calls.Add(1) }
 
-// provReader — fake ProvisioningPolicyReader (для previous-payload + GET).
+// provReader — fake ProvisioningPolicyReader (for previous-payload + GET).
 type provReader struct {
 	methods []string
 	set     bool
@@ -69,11 +69,11 @@ func (r provReader) ProvisioningPolicy() ([]string, bool) { return r.methods, r.
 
 func provClaims(aid string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: aid} }
 
-// TestProvisioningPut_InvalidateAndAuditPayload — B5 кейс 6: PUT записывает CSV
-// через Service.SetSetting (invalidate вызван — counting-invalidator) + AuditPayload
-// несёт allowed_methods + previous. Сам event provisioning.policy_changed пишет
-// huma-audit-middleware (вариант B) из этого AuditPayload — здесь проверяем, что
-// payload корректен и непустой (S6-инвариант «есть что писать»).
+// TestProvisioningPut_InvalidateAndAuditPayload — B5 case 6: PUT writes the CSV
+// via Service.SetSetting (invalidate called — counting-invalidator) + AuditPayload
+// carries allowed_methods + previous. The provisioning.policy_changed event itself is
+// written by huma-audit-middleware (variant B) from this AuditPayload — here we check
+// the payload is correct and non-empty (S6 invariant "there's something to write").
 func TestProvisioningPut_InvalidateAndAuditPayload(t *testing.T) {
 	var seenValue string
 	pool := &provPool{setValue: &seenValue}
@@ -84,7 +84,7 @@ func TestProvisioningPut_InvalidateAndAuditPayload(t *testing.T) {
 	inv := &countingInv{}
 	svc.SetInvalidator(inv)
 
-	reader := provReader{methods: []string{"oidc"}, set: true} // прежняя политика
+	reader := provReader{methods: []string{"oidc"}, set: true} // previous policy
 	h := NewProvisioningPolicyHandler(reader, svc, nil)
 
 	reply, err := h.PutTyped(context.Background(), provClaims("archon-alice"),
@@ -93,16 +93,16 @@ func TestProvisioningPut_InvalidateAndAuditPayload(t *testing.T) {
 		t.Fatalf("PutTyped: %v", err)
 	}
 
-	// invalidate вызван ровно один раз (cluster-wide refresh снимка).
+	// invalidate called exactly once (cluster-wide snapshot refresh).
 	if got := inv.calls.Load(); got != 1 {
 		t.Errorf("invalidate calls = %d, want 1", got)
 	}
-	// записан нормализованный CSV (отсортированный set).
+	// normalized CSV written (sorted set).
 	if seenValue != "ldap,user" {
 		t.Errorf("SetSetting value = %q, want %q", seenValue, "ldap,user")
 	}
 
-	// AuditPayload: новый список + previous.
+	// AuditPayload: new list + previous.
 	p := reply.AuditPayload()
 	am, ok := p["allowed_methods"].([]string)
 	if !ok || len(am) != 2 {
@@ -113,14 +113,14 @@ func TestProvisioningPut_InvalidateAndAuditPayload(t *testing.T) {
 		t.Errorf("audit previous = %v, want [oidc]", p["previous"])
 	}
 
-	// 200-тело: policy_set=true, список нормализован.
+	// 200 body: policy_set=true, list normalized.
 	if !reply.Body.PolicySet {
 		t.Error("reply.Body.PolicySet = false, want true")
 	}
 }
 
-// TestProvisioningPut_EmptyList_422 — B5 anti-lockout: пустой список → 422
-// validation-failed, SetSetting НЕ вызван.
+// TestProvisioningPut_EmptyList_422 — B5 anti-lockout: empty list → 422
+// validation-failed, SetSetting NOT called.
 func TestProvisioningPut_EmptyList_422(t *testing.T) {
 	var seenValue string
 	pool := &provPool{setValue: &seenValue}
@@ -149,7 +149,7 @@ func TestProvisioningPut_EmptyList_422(t *testing.T) {
 	}
 }
 
-// TestProvisioningPut_InvalidMethod_422 — метод вне домена → 422, без записи.
+// TestProvisioningPut_InvalidMethod_422 — method outside the domain → 422, no write.
 func TestProvisioningPut_InvalidMethod_422(t *testing.T) {
 	pool := &provPool{}
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
@@ -166,8 +166,8 @@ func TestProvisioningPut_InvalidMethod_422(t *testing.T) {
 	}
 }
 
-// TestProvisioningGet_DefaultPolicySetFalse — GET при не заданной политике →
-// policy_set=false. B5 кейс 7 (handler-проекция).
+// TestProvisioningGet_DefaultPolicySetFalse — GET with no policy set →
+// policy_set=false. B5 case 7 (handler projection).
 func TestProvisioningGet_DefaultPolicySetFalse(t *testing.T) {
 	pool := &provPool{}
 	svc, _ := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})

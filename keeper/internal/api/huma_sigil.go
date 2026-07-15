@@ -1,11 +1,11 @@
 package api
 
-// Регистрация и spec-dump SIGIL-домена (plugins/sigils) на huma full-typed (ТИРАЖ-
-// БАТЧ-2a по эталонам role, ADR-054 §Pattern). allow/revoke — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; event-типы plugin.allowed / plugin.revoked — permission-
-// домен `plugin`, НЕ `sigil`). list — read-bare (БЕЗ audit). Доменные *Typed-функции
-// (handlers/sigil.go) извлечены из (w,r); старый (w,r) — тонкая strict-оболочка (MCP
-// sigil-tools зовут sigil.Service напрямую, мимо handler — извлечение не затрагивает).
+// Registration and spec dump of the SIGIL domain (plugins/sigils) on huma full-typed (ROLLOUT-
+// BATCH-2a per the role references, ADR-054 §Pattern). allow/revoke — WRITE+AUDIT (variant B,
+// huma-audit-middleware; event types plugin.allowed / plugin.revoked — permission
+// domain `plugin`, NOT `sigil`). list — read-bare (no audit). The domain *Typed functions
+// (handlers/sigil.go) are extracted from (w,r); the old (w,r) is a thin strict wrapper (MCP
+// sigil-tools call sigil.Service directly, bypassing the handler — the extraction doesn't affect them).
 
 import (
 	"context"
@@ -20,9 +20,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaSigilAllow монтирует POST /v1/plugins/sigils через huma (WRITE+AUDIT
-// вариант B — event plugin.allowed). sigilH nil → no-op. Handler: claims →
-// AllowTyped → audit-payload на huma-ctx → 201 typed output.
+// registerHumaSigilAllow mounts POST /v1/plugins/sigils via huma (WRITE+AUDIT
+// variant B — event plugin.allowed). sigilH nil → no-op. Handler: claims →
+// AllowTyped → audit payload on the huma ctx → 201 typed output.
 func registerHumaSigilAllow(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	if sigilH == nil {
 		return
@@ -45,9 +45,9 @@ func registerHumaSigilAllow(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	})
 }
 
-// registerHumaSigilList монтирует GET /v1/plugins/sigils через huma (READ-bare, БЕЗ
+// registerHumaSigilList mounts GET /v1/plugins/sigils via huma (READ-bare, no
 // audit). sigilH nil → no-op. Handler: ListTyped → typed output. RBAC plugin.list —
-// на группе.
+// on the group.
 func registerHumaSigilList(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	if sigilH == nil {
 		return
@@ -61,9 +61,9 @@ func registerHumaSigilList(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	})
 }
 
-// registerHumaSigilRevoke монтирует DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}
-// через huma (WRITE+AUDIT вариант B — event plugin.revoked). sigilH nil → no-op.
-// Handler: claims → RevokeTyped(тройка) → audit-payload → пустой 204-output.
+// registerHumaSigilRevoke mounts DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}
+// via huma (WRITE+AUDIT variant B — event plugin.revoked). sigilH nil → no-op.
+// Handler: claims → RevokeTyped(triple) → audit payload → empty 204 output.
 func registerHumaSigilRevoke(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	if sigilH == nil {
 		return
@@ -82,14 +82,14 @@ func registerHumaSigilRevoke(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	})
 }
 
-// sigilMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// sigilMissingClaims — a defensive response when claims are absent in ctx (unreachable:
+// RequireJWT places claims before huma). problem+json (parity roleMissingClaims).
 func sigilMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// sigilProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// sigilProblem delivers a *Typed function error via huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; non-problem → 500 (parity
 // roleProblem).
 func sigilProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -98,17 +98,17 @@ func sigilProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaSigilAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// sigil (allow/revoke) монтируется на СВОЕЙ chi-группе с собственным event-типом.
+// newHumaSigilAPI assembles a huma.API over a chi group with huma-audit-middleware
+// (variant B) for the given event type (parity newHumaRoleAPI). Each sigil write route
+// (allow/revoke) is mounted on its OWN chi group with its own event type.
 func newHumaSigilAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaSigilSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma sigil-роутов
-// как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-таргета
-// тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же register-
-// функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaSigilSpecYAML assembles the OpenAPI fragment of ALL sigil routes migrated to huma
+// as a YAML string, WITHOUT mounting on a real router. A hook for the rollout spec-merge target
+// and the guard test. Delegates to generic [humaDumpSpec] through the same register
+// functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaSigilSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.SigilSpecStub()

@@ -8,9 +8,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// sealSchemaHandler собирает IncarnationHandler с loader+services для seal
-// read-path-тестов secretSchemaForIncarnation. db/прочее nil — тест зовёт только
-// schema-builder.
+// sealSchemaHandler builds an IncarnationHandler with loader+services for the seal
+// read-path tests of secretSchemaForIncarnation. db/etc are nil — the test calls only
+// the schema-builder.
 func sealSchemaHandler(loader *fakeLoader) *IncarnationHandler {
 	return &IncarnationHandler{
 		loader:   loader,
@@ -18,7 +18,7 @@ func sealSchemaHandler(loader *fakeLoader) *IncarnationHandler {
 	}
 }
 
-// collectStateSchemaSecrets обходит flat state_schema на secret:true (вложенность
+// collectStateSchemaSecrets walks a flat state_schema for secret:true (nesting via
 // properties/items/additionalProperties).
 func TestCollectStateSchemaSecrets(t *testing.T) {
 	schema := map[string]any{
@@ -58,11 +58,11 @@ func TestCollectStateSchemaSecrets(t *testing.T) {
 	}
 }
 
-// secret НА САМОМ additionalProperties-узле (значение произвольного ключа map —
-// secret) НЕ попадает в SecretPathSet: ни `map_field` (пометил бы всю map →
-// over-mask на read-path), ни `map_field.*` (IsSecret такой путь не запрашивает →
-// запись мёртвая). Деградация к vault+regex-слою маскинга намеренна (★-ограничение
-// schema-слоя). Регрессия на ap-secret-ветку collectStateSchemaSecrets.
+// secret ON THE additionalProperties node itself (the value of an arbitrary map key is
+// secret) does NOT enter SecretPathSet: neither `map_field` (would mark the whole map →
+// over-mask on read-path) nor `map_field.*` (IsSecret never asks for such a path →
+// dead entry). Degradation to the vault+regex masking layer is intentional (★ limitation
+// of the schema layer). Regression guard for the ap-secret branch of collectStateSchemaSecrets.
 func TestCollectStateSchemaSecrets_AdditionalPropertiesSecretLeaf(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
@@ -87,8 +87,8 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesSecretLeaf(t *testing.T) 
 	}
 }
 
-// ap-узел БЕЗ secret, но с вложенными конкретными `properties` под secret: schema-
-// слой ДОЛЖЕН покрыть точные имена (рекурсия в ap ведётся), а сам ap-узел — нет.
+// ap node WITHOUT secret but with nested concrete `properties` that are secret: the schema
+// layer MUST cover the exact names (recursion into ap runs), but not the ap node itself.
 func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
@@ -108,7 +108,7 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T
 	set := audit.SecretPathSet{}
 	collectStateSchemaSecrets(schema, "", set)
 
-	// ap-путь = имя map (`users`), вложенный конкретный `password` → `users.password`.
+	// ap-path = map name (`users`), nested concrete `password` → `users.password`.
 	if !set["users.password"] {
 		t.Errorf("вложенный конкретный secret под ap не собран: %v", set)
 	}
@@ -117,16 +117,16 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T
 	}
 }
 
-// ★ Документирует ПРОБЕЛ (nit seal-review, НЕ фикс): собранный schema-путь
-// `users.password` НЕ матчит реальный путь ячейки `users.<dynamic-key>.password`.
-// Рекурсия в ap не вставляет сегмента под произвольный ключ → собирается
-// `users.password`, а maskMapLayered ведёт путь по КОНКРЕТНОМУ ключу map
-// (`users.alice.password`). [audit.SecretPathSet.IsSecret] сверяет точную форму И
-// normalizeIdx — но normalizeIdx обобщает только индексы среза (`[N]`→`[]`), не
-// map-ключи → совпадения нет. Schema-слой такой secret НЕ маскирует (деградация к
-// vault+regex по имени `password`). Тест фиксирует ТЕКУЩЕЕ поведение: при появлении
-// dynamic-key матчинга в IsSecret (отдельный слайс) ассерт `!IsSecret(...)` упадёт —
-// сигнал обновить ограничение в collectStateSchemaSecrets.
+// ★ Documents a GAP (seal-review nit, NOT a fix): the collected schema path
+// `users.password` does NOT match the real cell path `users.<dynamic-key>.password`.
+// Recursion into ap does not insert a segment for an arbitrary key → `users.password`
+// is collected, while maskMapLayered walks the path by the CONCRETE map key
+// (`users.alice.password`). [audit.SecretPathSet.IsSecret] compares the exact shape AND
+// normalizeIdx — but normalizeIdx only generalizes slice indices (`[N]`→`[]`), not
+// map keys → no match. The schema layer does NOT mask such a secret (degradation to
+// vault+regex by the name `password`). The test pins CURRENT behavior: once dynamic-key
+// matching lands in IsSecret (a separate slice), the `!IsSecret(...)` assert will fail —
+// a signal to update the limitation in collectStateSchemaSecrets.
 func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGap(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
@@ -145,23 +145,23 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGa
 	set := audit.SecretPathSet{}
 	collectStateSchemaSecrets(schema, "", set)
 
-	// Собирается ap-путь без dynamic-key сегмента.
+	// The ap-path is collected without a dynamic-key segment.
 	if !set["users.password"] {
 		t.Fatalf("ожидался собранный путь `users.password`: %v", set)
 	}
-	// ★ Текущее поведение: реальный путь ячейки с КОНКРЕТНЫМ ключом map НЕ матчится
-	// schema-слоем (dynamic-key сегмент `alice` не покрыт; normalizeIdx его не трогает).
+	// ★ Current behavior: the real cell path with a CONCRETE map key does NOT match the
+	// schema layer (the dynamic-key segment `alice` is not covered; normalizeIdx leaves it alone).
 	if set.IsSecret("users.alice.password") {
 		t.Errorf("IsSecret(users.alice.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
 	}
-	// Контроль: обобщение idx не помогает — map-ключ не индекс среза.
+	// Control: idx generalization does not help — a map key is not a slice index.
 	if set.IsSecret("users.bob.password") {
 		t.Errorf("IsSecret(users.bob.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
 	}
 }
 
-// secretSchemaForIncarnation материализует снапшот и объединяет state_schema
-// secret + create-scenario input secret под input.<name>.
+// secretSchemaForIncarnation materializes the snapshot and merges state_schema
+// secret + create-scenario input secret under input.<name>.
 func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
 	loader := &fakeLoader{
 		stateSchema: map[string]any{
@@ -170,7 +170,7 @@ func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
 				"admin_token": map[string]any{"type": "string", "secret": true},
 			},
 		},
-		// create-scenario с secret input db_password.
+		// create-scenario with a secret input db_password.
 		scenarioYAML: "name: create\ninput:\n  db_password: { type: string, secret: true }\n  hostname: { type: string }\n",
 	}
 	h := sealSchemaHandler(loader)
@@ -191,7 +191,7 @@ func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
 	}
 }
 
-// loader-ошибка → nil-схема (best-effort, GET не падает).
+// loader error → nil schema (best-effort, GET does not fail).
 func TestSecretSchemaForIncarnation_LoadErrorNil(t *testing.T) {
 	loader := &fakeLoader{loadErr: context.DeadlineExceeded}
 	h := sealSchemaHandler(loader)
@@ -201,7 +201,7 @@ func TestSecretSchemaForIncarnation_LoadErrorNil(t *testing.T) {
 	}
 }
 
-// nil-loader → nil-схема (деградация к MaskSecrets).
+// nil loader → nil schema (degradation to MaskSecrets).
 func TestSecretSchemaForIncarnation_NilDeps(t *testing.T) {
 	h := &IncarnationHandler{}
 	inc := &incarnation.Incarnation{Service: "redis"}
@@ -210,16 +210,15 @@ func TestSecretSchemaForIncarnation_NilDeps(t *testing.T) {
 	}
 }
 
-// (e) schema-объявленное secret-поле state → MASKED на read-path-проекции
-// (toIncarnationGetView через секрет-схему сервиса).
+// (e) schema-declared secret state field → MASKED on the read-path projection
+// (toIncarnationGetView via the service secret schema).
 func TestToIncarnationGetView_SchemaMasksDeclaredState(t *testing.T) {
 	loader := &fakeLoader{
 		stateSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				// admin_secret НЕ ловится regex по имени (нет secret-фрагмента в
-				// `admin_secret`? — содержит `secret` → regex поймал бы). Берём имя БЕЗ
-				// regex-фрагмента, чтобы доказать именно schema-слой.
+				// Use a field name the name-based regex would NOT catch (no `secret`/`token`
+				// fragment), to prove the schema layer itself does the masking.
 				"join_value": map[string]any{"type": "string", "secret": true},
 				"replicas":   map[string]any{"type": "integer"},
 			},
@@ -243,14 +242,14 @@ func TestToIncarnationGetView_SchemaMasksDeclaredState(t *testing.T) {
 	if view.State["replicas"] != float64(3) {
 		t.Errorf("несекретный state.replicas = %v, want passthrough (нет over-masking)", view.State["replicas"])
 	}
-	// Хранимый state не мутирован.
+	// The stored state is not mutated.
 	if inc.State["join_value"] != "plaintext-secret-value" {
 		t.Errorf("исходный inc.State мутирован: %v", inc.State["join_value"])
 	}
 }
 
-// (f) generic-поле state с конфигом → НЕ MASKED (нет over-masking) при пустой
-// схеме секретов.
+// (f) generic state field with config → NOT MASKED (no over-masking) when the
+// secret schema is empty.
 func TestToIncarnationGetView_GenericStateNotMasked(t *testing.T) {
 	loader := &fakeLoader{
 		stateSchema: map[string]any{
@@ -266,7 +265,7 @@ func TestToIncarnationGetView_GenericStateNotMasked(t *testing.T) {
 			"redis_config": map[string]any{"maxmemory": "256mb", "loglevel": "notice"},
 		},
 	}
-	schema := h.secretSchemaForIncarnation(context.Background(), inc) // nil (нет secret)
+	schema := h.secretSchemaForIncarnation(context.Background(), inc) // nil (no secret)
 	view := toIncarnationGetView(inc, schema)
 
 	cfg := view.State["redis_config"].(map[string]any)

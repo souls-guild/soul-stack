@@ -1,13 +1,13 @@
 package api
 
-// Регистрация и spec-dump OPERATOR-домена на huma full-typed (ТИРАЖ-БАТЧ-2a по 5
-// эталонам, ADR-054 §Pattern). create/revoke/issue-token — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; full-typed huma САМ пишет ответ, StatusRecorder неприменим —
-// audit держит hctx.Status() + carrier-payload, иначе рецидив S6). list — read-with-
-// typed-query (БЕЗ audit). get — read-with-path (БЕЗ audit). Доменные *Typed-функции
-// (handlers/operator.go) извлечены из (w,r); старый (w,r) — тонкая strict-оболочка
-// (MCP operator-tools зовут operator.Service напрямую, мимо handler — извлечение их
-// не затрагивает).
+// Registration and spec-dump of the OPERATOR domain on huma full-typed (ROLLOUT BATCH 2a
+// against the 5 references, ADR-054 §Pattern). create/revoke/issue-token — WRITE+AUDIT (variant B,
+// huma-audit-middleware; full-typed huma writes the response ITSELF, StatusRecorder does not
+// apply — audit holds hctx.Status() + carrier-payload, otherwise S6 recurs). list — read-with-
+// typed-query (no audit). get — read-with-path (no audit). The domain *Typed functions
+// (handlers/operator.go) are extracted from (w,r); the old (w,r) is a thin strict wrapper
+// (MCP operator-tools call operator.Service directly, bypassing the handler — their extraction
+// does not affect them).
 
 import (
 	"context"
@@ -24,10 +24,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaOperatorCreate монтирует POST /v1/operators через huma (WRITE+AUDIT
-// вариант B — event operator.created). opH nil → no-op (паттерн opt-in-домена).
-// Handler: claims → CreateTyped → audit-payload на huma-ctx (SetHumaAuditPayload) →
-// 201 typed output. Доменные problem-ошибки — через humaProblemError.
+// registerHumaOperatorCreate mounts POST /v1/operators via huma (WRITE+AUDIT
+// variant B — event operator.created). opH nil → no-op (opt-in-domain pattern).
+// Handler: claims → CreateTyped → audit-payload on the huma-ctx (SetHumaAuditPayload) →
+// 201 typed output. Domain problem errors — via humaProblemError.
 func registerHumaOperatorCreate(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
@@ -45,25 +45,25 @@ func registerHumaOperatorCreate(humaAPI huma.API, opH *handlers.OperatorHandler)
 		if err != nil {
 			return nil, operatorProblem(err)
 		}
-		// Audit-payload на huma-ctx — ЕДИНЫЙ источник reply.AuditPayload() (тот же
-		// метод, что и у revoke/issue-token).
+		// Audit-payload on the huma-ctx — the SINGLE source reply.AuditPayload() (the same
+		// method as revoke/issue-token).
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		return &operatorCreateOutput{Status: 201, Body: newOperatorCreateReply(reply)}, nil
 	})
 }
 
-// registerHumaOperatorList монтирует GET /v1/operators через huma (READ-with-typed-
-// query, БЕЗ audit). opH nil → no-op. Handler: typed-query → конверт в доменный
-// фильтр → ListTyped → typed envelope-output. RBAC operator.list — на группе.
+// registerHumaOperatorList mounts GET /v1/operators via huma (READ-with-typed-
+// query, no audit). opH nil → no-op. Handler: typed-query → convert to the domain
+// filter → ListTyped → typed envelope-output. RBAC operator.list — on the group.
 func registerHumaOperatorList(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
 	}
 	huma.Register(humaAPI, operatorListOperation(), func(ctx context.Context, in *operatorListInput) (*operatorListOutput, error) {
 		filter := operator.ListFilter{
-			AuthMethod:     operator.AuthMethod(in.AuthMethod), // пустой → фильтр не применяется; enum huma уже отбил вне набора (422)
+			AuthMethod:     operator.AuthMethod(in.AuthMethod), // empty → filter not applied; the huma enum already rejected out-of-set (422)
 			IncludeRevoked: in.Revoked,
-			Q:              in.Q, // pass-through: пусто → без фильтра (parity /v1/runs)
+			Q:              in.Q, // pass-through: empty → no filter (parity /v1/runs)
 		}
 		page, err := opH.ListTyped(ctx, filter, int(in.Offset), int(in.Limit))
 		if err != nil {
@@ -73,9 +73,9 @@ func registerHumaOperatorList(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	})
 }
 
-// registerHumaOperatorGet монтирует GET /v1/operators/{aid} через huma (READ-with-
-// path, БЕЗ audit). opH nil → no-op. Handler: GetTyped(aid) → typed output (404/422
-// через problem). RBAC operator.list (read покрыт list-правом) — на группе.
+// registerHumaOperatorGet mounts GET /v1/operators/{aid} via huma (READ-with-
+// path, no audit). opH nil → no-op. Handler: GetTyped(aid) → typed output (404/422
+// via problem). RBAC operator.list (read is covered by the list right) — on the group.
 func registerHumaOperatorGet(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
@@ -89,9 +89,9 @@ func registerHumaOperatorGet(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	})
 }
 
-// registerHumaOperatorRevoke монтирует POST /v1/operators/{aid}/revoke через huma
-// (WRITE+AUDIT вариант B — event operator.revoked). opH nil → no-op. Handler:
-// claims → RevokeTyped(aid, reason) → audit-payload → пустой 204-output.
+// registerHumaOperatorRevoke mounts POST /v1/operators/{aid}/revoke via huma
+// (WRITE+AUDIT variant B — event operator.revoked). opH nil → no-op. Handler:
+// claims → RevokeTyped(aid, reason) → audit-payload → empty 204 output.
 func registerHumaOperatorRevoke(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
@@ -110,10 +110,10 @@ func registerHumaOperatorRevoke(humaAPI huma.API, opH *handlers.OperatorHandler)
 	})
 }
 
-// registerHumaOperatorIssueToken монтирует POST /v1/operators/{aid}/issue-token через
-// huma (WRITE+AUDIT вариант B — event operator.token-issued). opH nil → no-op.
-// Handler: claims → IssueTokenTyped(aid) → audit-payload → 200 С ТЕЛОМ (jwt; отличие
-// от 204-write-роутов — issue-token возвращает выпущенный токен).
+// registerHumaOperatorIssueToken mounts POST /v1/operators/{aid}/issue-token via
+// huma (WRITE+AUDIT variant B — event operator.token-issued). opH nil → no-op.
+// Handler: claims → IssueTokenTyped(aid) → audit-payload → 200 WITH BODY (jwt; unlike
+// the 204 write routes — issue-token returns the issued token).
 func registerHumaOperatorIssueToken(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
@@ -132,13 +132,13 @@ func registerHumaOperatorIssueToken(humaAPI huma.API, opH *handlers.OperatorHand
 	})
 }
 
-// === проекция доменных result-ов handler-а → native wire-DTO (handler-native
-// PILOT: граница api↔handlers строит схему-тело из плоских доменных полей; OpenAPI-
-// схему huma выводит из этих native-типов, генерёные типы не участвуют). ===
+// === projection of the handler's domain results → native wire-DTO (handler-native
+// PILOT: the api↔handlers boundary builds the schema body from flat domain fields; huma
+// derives the OpenAPI schema from these native types, generated types are not involved). ===
 
-// newOperatorCreateReply проецирует доменный handlers.OperatorCreateReply (плоские
-// поля) в native 201-тело. roles — `*[]string` С omitempty: пустой granted-набор →
-// nil (поле опущено, backward-compat запрос-без-roles).
+// newOperatorCreateReply projects the domain handlers.OperatorCreateReply (flat
+// fields) into the native 201 body. roles — `*[]string` with omitempty: an empty granted set →
+// nil (field omitted, backward-compat with a request-without-roles).
 func newOperatorCreateReply(r handlers.OperatorCreateReply) OperatorCreateReply {
 	out := OperatorCreateReply{
 		AID:          r.AID,
@@ -154,15 +154,15 @@ func newOperatorCreateReply(r handlers.OperatorCreateReply) OperatorCreateReply 
 	return out
 }
 
-// newIssueTokenReply проецирует доменный handlers.OperatorIssueTokenReply в native
-// 200-тело issue-token.
+// newIssueTokenReply projects the domain handlers.OperatorIssueTokenReply into the native
+// issue-token 200 body.
 func newIssueTokenReply(r handlers.OperatorIssueTokenReply) IssueTokenReply {
 	return IssueTokenReply{AID: r.AID, ExpiresAt: r.ExpiresAt, JWT: r.JWT}
 }
 
-// newOperator проецирует доменный handlers.OperatorView в native Operator (get-200 /
-// list-element). auth_method — native enum OperatorAuthMethod; metadata — `*map`
-// С omitempty (пустая → nil, ключ опущен).
+// newOperator projects the domain handlers.OperatorView into the native Operator (get-200 /
+// list-element). auth_method — the native enum OperatorAuthMethod; metadata — `*map`
+// with omitempty (empty → nil, key omitted).
 func newOperator(v handlers.OperatorView) Operator {
 	out := Operator{
 		AID:              v.AID,
@@ -181,7 +181,7 @@ func newOperator(v handlers.OperatorView) Operator {
 	return out
 }
 
-// newOperatorListBody проецирует доменный handlers.OperatorListPage в native
+// newOperatorListBody projects the domain handlers.OperatorListPage into the native
 // list-envelope PagedResponse[Operator] (items non-nil [], offset/limit/total).
 func newOperatorListBody(p handlers.OperatorListPage) sharedapi.PagedResponse[Operator] {
 	items := make([]Operator, 0, len(p.Items))
@@ -196,14 +196,14 @@ func newOperatorListBody(p handlers.OperatorListPage) sharedapi.PagedResponse[Op
 	}
 }
 
-// operatorMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// operatorMissingClaims — a defensive response when claims are absent from ctx (unreachable:
+// RequireJWT puts claims before huma). problem+json (parity roleMissingClaims).
 func operatorMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// operatorProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// operatorProblem delivers a *Typed function error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; non-problem → 500 (parity
 // roleProblem / auditProblem).
 func operatorProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -212,18 +212,18 @@ func operatorProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaOperatorAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// operator (create/revoke/issue-token) монтируется на СВОЕЙ chi-группе с собственным
-// event-типом.
+// newHumaOperatorAPI assembles a huma.API over a chi group with the huma-audit-middleware
+// (variant B) under the given event type (parity newHumaRoleAPI). Each operator write route
+// (create/revoke/issue-token) is mounted on ITS OWN chi group with its own
+// event type.
 func newHumaOperatorAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaOperatorSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma operator-
-// роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-
-// таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaOperatorSpecYAML assembles the OpenAPI fragment of ALL operator routes migrated to
+// huma as a YAML string, WITHOUT mounting on a real router. A hook for the rollout spec-merge
+// target and the guard test. Delegates to the generic [humaDumpSpec] through the same
+// register functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaOperatorSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.OperatorSpecStub()

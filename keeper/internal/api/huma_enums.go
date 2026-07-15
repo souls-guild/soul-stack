@@ -1,41 +1,43 @@
 package api
 
-// NATIVE enum-каталог huma-слоя (единственный источник enum-типов контракта).
+// NATIVE enum catalog of the huma layer (the single source of the contract's enum types).
 //
-// ЗАЧЕМ. huma НЕ генерит enum-значения-константы (только OpenAPI-валидацию из struct-тегов),
-// поэтому каталог enum-типов+констант определяется здесь явно. Enum-типы — SHARED между
-// доменами (status/kind/mode встречаются в reply, request, handler), поэтому определяются ОДИН
-// раз здесь (foundation), иначе домены передекларируют один тип → компиляционная коллизия.
+// WHY. huma does NOT generate enum value constants (only OpenAPI validation from struct
+// tags), so the catalog of enum types + constants is defined here explicitly. Enum types are
+// SHARED across domains (status/kind/mode appear in reply, request, handler), so they are
+// defined ONCE here (foundation), otherwise domains would re-declare the same type → a
+// compile collision.
 //
-// ИНВАРИАНТЫ.
-//   - ★ WIRE BYTE-EXACT. Каждый enum-тип — `type <Name> string`; enum-значение на wire = строка.
-//     Точные wire-байты каждой const-константы запинены в huma_enums_test.go (per-value
-//     string-equality) + покрыты golden reply-тестами доменов.
-//   - ★ SCHEMA-COUNT СТАБИЛЕН (159 схем). Два режима эмиссии схемы:
-//       (a) INLINE-enum (огромное большинство): свойство объявляет enum INLINE
-//           (`type: string` + `enum:`), huma инлайнит string-named-тип → отдельной
-//           named-схемы НЕТ. Native-тип для них — ТОЛЬКО `type`+const, БЕЗ huma.SchemaProvider
-//           (иначе появилась бы лишняя named-схема и schema-count поехал бы).
-//       (b) NAMED-схема ($ref): только SoulStatus / SoulTransport / IncarnationStatus —
-//           объявлены standalone-схемой, UI ссылается по $ref. Для них native-тип
-//           реализует huma.SchemaProvider (выносит ту же named-схему с тем же enum-набором),
-//           а alias-функции (aliasSoulStatusTransport / aliasIncarnationStatus) перенаправлены
-//           на эти native-типы.
+// INVARIANTS.
+//   - ★ WIRE BYTE-EXACT. Each enum type is `type <Name> string`; an enum value on the wire =
+//     a string. The exact wire bytes of every const are pinned in huma_enums_test.go
+//     (per-value string equality) + covered by the domains' golden reply tests.
+//   - ★ SCHEMA COUNT IS STABLE (159 schemas). Two schema emission modes:
+//       (a) INLINE enum (the vast majority): the property declares the enum INLINE
+//           (`type: string` + `enum:`), huma inlines the string-named type → there is NO
+//           separate named schema. The native type for these is ONLY `type`+const, WITHOUT
+//           huma.SchemaProvider (otherwise an extra named schema would appear and the schema
+//           count would drift).
+//       (b) NAMED schema ($ref): only SoulStatus / SoulTransport / IncarnationStatus — declared
+//           as a standalone schema, the UI references them by $ref. For these the native type
+//           implements huma.SchemaProvider (emitting the same named schema with the same enum
+//           set), and the alias functions (aliasSoulStatusTransport / aliasIncarnationStatus)
+//           are redirected to these native types.
 //
-// ВНИМАНИЕ ПО SOULSTATUS. SoulStatus const-блок несёт 4 значения (connected/disconnected/
-// expired/pending) — урезанный контрактный набор; named-схема же (SchemaProvider) несёт ПОЛНЫЙ
-// доменный набор из internal/soul (6 значений). Это пред-существующий контент-дрейф
-// (см. huma_soul_status.go), НЕ наименование. Тест сверяет const-набор (4); enum-набор
-// named-схемы — отдельный инвариант SchemaProvider.
+// NOTE ON SOULSTATUS. The SoulStatus const block carries 4 values (connected/disconnected/
+// expired/pending) — the trimmed contract set; the named schema (SchemaProvider) carries the
+// FULL domain set from internal/soul (6 values). This is a pre-existing content drift (see
+// huma_soul_status.go), NOT a naming one. The test checks the const set (4); the named
+// schema's enum set is a separate SchemaProvider invariant.
 
 import "github.com/danielgtaylor/huma/v2"
 
 // ───────────────────────────────────────────────────────────────────────────
-// (a) INLINE-enum — `type`+const, БЕЗ SchemaProvider (huma инлайнит как legacy-генерата).
-//     Значения 1:1 с oapi/types.gen.go (const-блоки «Defines values for <Name>»).
+// (a) INLINE enum — `type`+const, WITHOUT SchemaProvider (huma inlines it like the legacy generator).
+//     Values 1:1 with oapi/types.gen.go (the "Defines values for <Name>" const blocks).
 // ───────────────────────────────────────────────────────────────────────────
 
-// AuditEventSource — источник audit-события. INLINE-enum (рукопись инлайнит на свойстве).
+// AuditEventSource — the source of an audit event. INLINE enum (the hand-written spec inlines it on the property).
 type AuditEventSource string
 
 const (
@@ -47,8 +49,8 @@ const (
 	AuditEventSourceSoulGRPC       AuditEventSource = "soul_grpc"
 )
 
-// SoulHistoryItemType — тип записи истории Soul. INLINE-enum (рукопись инлайнит внутри
-// SoulHistoryItem).
+// SoulHistoryItemType — the type of a Soul history entry. INLINE enum (the hand-written spec
+// inlines it inside SoulHistoryItem).
 type SoulHistoryItemType string
 
 const (
@@ -56,7 +58,7 @@ const (
 	SoulHistoryItemTypeScenario SoulHistoryItemType = "scenario"
 )
 
-// OmenViewSourceType — тип источника Omen (Augur). INLINE-enum.
+// OmenViewSourceType — the type of an Omen source (Augur). INLINE enum.
 type OmenViewSourceType string
 
 const (
@@ -65,14 +67,14 @@ const (
 	OmenViewSourceTypeVault      OmenViewSourceType = "vault"
 )
 
-// OperatorAuthMethod — метод аутентификации оператора (ADR-014). INLINE-enum.
+// OperatorAuthMethod — the operator's authentication method (ADR-014). INLINE enum.
 //
-// ADR-058 (LDAP-часть принята) добавил only-add значения `ldap`/`oidc`
-// (федеративная аутентификация, см. operator.AuthMethodLDAP/OIDC). Пара к этому
-// расширению — OpenAPI-enum struct-тег `enum:"jwt,mtls,combined,ldap,oidc"`
-// (huma_operator_op.go list-фильтр) + committed openapi.yaml: const-набор
-// huma-слоя обязан совпадать с wire-enum фильтра. `oidc` заведён сразу (стадия 2
-// ADR-058), чтобы дальнейшая имплементация OIDC не трогала контракт повторно.
+// ADR-058 (LDAP part accepted) added the only-add values `ldap`/`oidc` (federated
+// authentication, see operator.AuthMethodLDAP/OIDC). The counterpart to this
+// extension is the OpenAPI enum struct tag `enum:"jwt,mtls,combined,ldap,oidc"`
+// (huma_operator_op.go list filter) + committed openapi.yaml: the huma-layer const
+// set must match the filter's wire enum. `oidc` was added up front (ADR-058 stage 2),
+// so a later OIDC implementation does not touch the contract again.
 type OperatorAuthMethod string
 
 const (
@@ -83,7 +85,7 @@ const (
 	OperatorAuthMethodOIDC     OperatorAuthMethod = "oidc"
 )
 
-// HeraldType — тип канала уведомлений (Herald, ADR-052). INLINE-enum.
+// HeraldType — the notification channel type (Herald, ADR-052). INLINE enum.
 type HeraldType string
 
 const (
@@ -96,7 +98,7 @@ const (
 	HeraldTypeEmail      HeraldType = "email"
 )
 
-// GitRefType — тип git-ref (ADR-007). INLINE-enum.
+// GitRefType — the git ref type (ADR-007). INLINE enum.
 type GitRefType string
 
 const (
@@ -104,7 +106,7 @@ const (
 	GitRefTypeTag    GitRefType = "tag"
 )
 
-// ErrandResultStatus — статус результата Errand. INLINE-enum.
+// ErrandResultStatus — the Errand result status. INLINE enum.
 type ErrandResultStatus string
 
 const (
@@ -116,7 +118,7 @@ const (
 	ErrandResultStatusTimedOut         ErrandResultStatus = "timed_out"
 )
 
-// PushApplyViewStatus — статус push-apply (детальный вид). INLINE-enum.
+// PushApplyViewStatus — the push-apply status (detail view). INLINE enum.
 type PushApplyViewStatus string
 
 const (
@@ -128,7 +130,7 @@ const (
 	PushApplyViewStatusSuccess       PushApplyViewStatus = "success"
 )
 
-// PushRunListEntryStatus — статус строки push-run списка. INLINE-enum.
+// PushRunListEntryStatus — the status of a push-run list row. INLINE enum.
 type PushRunListEntryStatus string
 
 const (
@@ -140,7 +142,7 @@ const (
 	PushRunListEntryStatusSuccess       PushRunListEntryStatus = "success"
 )
 
-// SigilKeyIntroduceReplyStatus — статус ключа в ответе на introduce. INLINE-enum.
+// SigilKeyIntroduceReplyStatus — the key status in the introduce reply. INLINE enum.
 type SigilKeyIntroduceReplyStatus string
 
 const (
@@ -148,7 +150,7 @@ const (
 	SigilKeyIntroduceReplyStatusRetired SigilKeyIntroduceReplyStatus = "retired"
 )
 
-// SigilKeyViewStatus — статус ключа (детальный вид). INLINE-enum.
+// SigilKeyViewStatus — the key status (detail view). INLINE enum.
 type SigilKeyViewStatus string
 
 const (
@@ -156,7 +158,7 @@ const (
 	SigilKeyViewStatusRetired SigilKeyViewStatus = "retired"
 )
 
-// VoyageKind — род Voyage (scenario/command, ADR-043). INLINE-enum.
+// VoyageKind — the Voyage kind (scenario/command, ADR-043). INLINE enum.
 type VoyageKind string
 
 const (
@@ -164,7 +166,7 @@ const (
 	VoyageKindScenario VoyageKind = "scenario"
 )
 
-// VoyageStatus — статус Voyage. INLINE-enum.
+// VoyageStatus — the Voyage status. INLINE enum.
 type VoyageStatus string
 
 const (
@@ -177,7 +179,7 @@ const (
 	VoyageStatusSucceeded     VoyageStatus = "succeeded"
 )
 
-// VoyageBatchMode — режим батчинга Voyage. INLINE-enum.
+// VoyageBatchMode — the Voyage batching mode. INLINE enum.
 type VoyageBatchMode string
 
 const (
@@ -185,7 +187,7 @@ const (
 	VoyageBatchModeWindow  VoyageBatchMode = "window"
 )
 
-// VoyageOnFailure — политика при провале в Voyage. INLINE-enum.
+// VoyageOnFailure — the on-failure policy in a Voyage. INLINE enum.
 type VoyageOnFailure string
 
 const (
@@ -193,7 +195,7 @@ const (
 	VoyageOnFailureContinue VoyageOnFailure = "continue"
 )
 
-// VoyageTargetEntryStatus — статус строки voyage_targets. INLINE-enum.
+// VoyageTargetEntryStatus — the status of a voyage_targets row. INLINE enum.
 type VoyageTargetEntryStatus string
 
 const (
@@ -205,7 +207,7 @@ const (
 	VoyageTargetEntryStatusSucceeded VoyageTargetEntryStatus = "succeeded"
 )
 
-// VoyageTargetEntryTargetKind — род цели строки voyage_targets. INLINE-enum.
+// VoyageTargetEntryTargetKind — the target kind of a voyage_targets row. INLINE enum.
 type VoyageTargetEntryTargetKind string
 
 const (
@@ -213,7 +215,7 @@ const (
 	VoyageTargetEntryTargetKindSID         VoyageTargetEntryTargetKind = "sid"
 )
 
-// VoyageCreateReplyKind — род Voyage в ответе на create. INLINE-enum.
+// VoyageCreateReplyKind — the Voyage kind in the create reply. INLINE enum.
 type VoyageCreateReplyKind string
 
 const (
@@ -221,7 +223,7 @@ const (
 	VoyageCreateReplyKindScenario VoyageCreateReplyKind = "scenario"
 )
 
-// VoyageCreateReplyStatus — статус Voyage в ответе на create. INLINE-enum.
+// VoyageCreateReplyStatus — the Voyage status in the create reply. INLINE enum.
 type VoyageCreateReplyStatus string
 
 const (
@@ -229,7 +231,7 @@ const (
 	VoyageCreateReplyStatusScheduled VoyageCreateReplyStatus = "scheduled"
 )
 
-// VoyagePreviewReplyBatchMode — режим батчинга в preview-ответе. INLINE-enum.
+// VoyagePreviewReplyBatchMode — the batching mode in the preview reply. INLINE enum.
 type VoyagePreviewReplyBatchMode string
 
 const (
@@ -237,7 +239,7 @@ const (
 	VoyagePreviewReplyBatchModeWindow  VoyagePreviewReplyBatchMode = "window"
 )
 
-// VoyagePreviewReplyKind — род Voyage в preview-ответе. INLINE-enum.
+// VoyagePreviewReplyKind — the Voyage kind in the preview reply. INLINE enum.
 type VoyagePreviewReplyKind string
 
 const (
@@ -245,20 +247,21 @@ const (
 	VoyagePreviewReplyKindScenario VoyagePreviewReplyKind = "scenario"
 )
 
-// VoyageCancelReplyStatus — статус Voyage в ответе на cancel. INLINE-enum.
+// VoyageCancelReplyStatus — the Voyage status in the cancel reply. INLINE enum.
 type VoyageCancelReplyStatus string
 
 const VoyageCancelReplyStatusCancelled VoyageCancelReplyStatus = "cancelled"
 
 // ───────────────────────────────────────────────────────────────────────────
-// (b) NAMED-схема ($ref) — реализуют huma.SchemaProvider; alias-цели.
-//     SoulStatus / SoulTransport / IncarnationStatus. const-блок = oapi const (byte-exact),
-//     SchemaProvider-enum = доменный набор (как прежние lowercase-провайдеры).
+// (b) NAMED schema ($ref) — implement huma.SchemaProvider; alias targets.
+//     SoulStatus / SoulTransport / IncarnationStatus. const block = oapi const (byte-exact),
+//     SchemaProvider enum = the domain set (like the former lowercase providers).
 // ───────────────────────────────────────────────────────────────────────────
 
-// SoulStatus — статус Soul в реестре. NAMED-схема "SoulStatus" ($ref). const-блок 1:1 с
-// SoulStatus (4 значения рукописи); SchemaProvider несёт полный доменный набор (6, из
-// internal/soul) — пред-существующий контент-дрейф рукописи (см. huma_soul_status.go).
+// SoulStatus — the Soul status in the registry. NAMED schema "SoulStatus" ($ref). The const
+// block is 1:1 with SoulStatus (4 hand-written values); SchemaProvider carries the full domain
+// set (6, from internal/soul) — a pre-existing content drift in the hand-written spec (see
+// huma_soul_status.go).
 type SoulStatus string
 
 const (
@@ -268,8 +271,8 @@ const (
 	SoulStatusPending      SoulStatus = "pending"
 )
 
-// Schema реализует huma.SchemaProvider: регистрирует named-схему "SoulStatus" (string+enum,
-// полный доменный набор) и возвращает $ref. Идемпотентна. wire-тип (строка) НЕ меняется.
+// Schema implements huma.SchemaProvider: registers the named schema "SoulStatus" (string+enum,
+// the full domain set) and returns a $ref. Idempotent. The wire type (string) does NOT change.
 func (SoulStatus) Schema(r huma.Registry) *huma.Schema {
 	if _, ok := r.Map()[soulStatusSchemaName]; !ok {
 		r.Map()[soulStatusSchemaName] = &huma.Schema{
@@ -281,8 +284,8 @@ func (SoulStatus) Schema(r huma.Registry) *huma.Schema {
 	return &huma.Schema{Ref: soulStatusSchemaRef}
 }
 
-// SoulTransport — способ доставки конфигурации. NAMED-схема "SoulTransport" ($ref). const-блок
-// 1:1 с SoulTransport; SchemaProvider-enum = доменный набор (agent/ssh).
+// SoulTransport — the configuration delivery method. NAMED schema "SoulTransport" ($ref). The
+// const block is 1:1 with SoulTransport; SchemaProvider enum = the domain set (agent/ssh).
 type SoulTransport string
 
 const (
@@ -290,8 +293,8 @@ const (
 	SoulTransportSSH   SoulTransport = "ssh"
 )
 
-// Schema реализует huma.SchemaProvider: регистрирует named-схему "SoulTransport" и возвращает
-// $ref. Идемпотентна.
+// Schema implements huma.SchemaProvider: registers the named schema "SoulTransport" and returns
+// a $ref. Idempotent.
 func (SoulTransport) Schema(r huma.Registry) *huma.Schema {
 	if _, ok := r.Map()[soulTransportSchemaName]; !ok {
 		r.Map()[soulTransportSchemaName] = &huma.Schema{
@@ -303,8 +306,9 @@ func (SoulTransport) Schema(r huma.Registry) *huma.Schema {
 	return &huma.Schema{Ref: soulTransportSchemaRef}
 }
 
-// IncarnationStatus — статус runtime-инстанса (ADR-009/031). NAMED-схема "IncarnationStatus"
-// ($ref). const-блок 1:1 с IncarnationStatus; SchemaProvider-enum = набор рукописи (8).
+// IncarnationStatus — the runtime instance status (ADR-009/031). NAMED schema
+// "IncarnationStatus" ($ref). The const block is 1:1 with IncarnationStatus; SchemaProvider
+// enum = the hand-written set (8).
 type IncarnationStatus string
 
 const (
@@ -318,8 +322,8 @@ const (
 	IncarnationStatusReady           IncarnationStatus = "ready"
 )
 
-// Schema реализует huma.SchemaProvider: регистрирует named-схему "IncarnationStatus" и
-// возвращает $ref. Идемпотентна.
+// Schema implements huma.SchemaProvider: registers the named schema "IncarnationStatus" and
+// returns a $ref. Idempotent.
 func (IncarnationStatus) Schema(r huma.Registry) *huma.Schema {
 	if _, ok := r.Map()[incarnationStatusSchemaName]; !ok {
 		r.Map()[incarnationStatusSchemaName] = &huma.Schema{

@@ -1,32 +1,32 @@
-// Доказательный гейт выравнивания имён CADENCE-схем под committed-рукопись (тираж-батч
-// N4, по эталону huma_voyage_schema_test.go / huma_herald_schema_test.go). Собирает
-// агрегированную huma-спеку (HumaFullSpecYAML) и проверяет, что схемы cadence-домена
-// названы ТОЧНО как контракт (docs/keeper/openapi.yaml), а технические huma-Go-имена
-// тел/реплик ОТСУТСТВУЮТ.
+// Proof gate for aligning CADENCE schema names to the committed hand-written spec (rollout batch
+// N4, following huma_voyage_schema_test.go / huma_herald_schema_test.go). Builds the
+// aggregated huma spec (HumaFullSpecYAML) and checks that the cadence-domain schemas are
+// named EXACTLY as the contract (docs/keeper/openapi.yaml), and that the technical huma-Go names
+// of bodies/replies are ABSENT.
 //
-// МЕХАНИЗМЫ для cadence (сверены с рукописью):
+// MECHANISMS for cadence (verified against the hand-written spec):
 //   - REQUEST-RENAME: cadenceCreateHumaBody → CadenceCreateRequest (:7853),
-//     cadencePatchHumaBody → CadencePatchRequest (:7973). Применён.
+//     cadencePatchHumaBody → CadencePatchRequest (:7973). Applied.
 //   - REPLY-RENAME: cadenceCreateReplyHumaBody → CadenceCreateReply (:8051) —
-//     контрактное имя 201-тела POST /v1/cadences. Применён.
-//   - ENVELOPE (runs): GET /v1/cadences/{id}/runs по рукописи (:2378) ссылается на
-//     VoyageListReply (дочерние Voyage переиспользуют Voyage-DTO). handlers.CadenceRunsReply
-//     = PagedResponse[voyageDTO] → huma эмитил PagedResponseVoyage; alias generic →
-//     VoyageListReply (registerCadenceEnvelopes) сводит runs на ту же named-схему
-//     VoyageListReply, что voyage list. Применён.
-//   - ENUM-ALIAS: НЕ применяется. Рукопись НЕ объявляет standalone ScheduleKind/
-//     OverlapPolicy — оба инлайнятся в CadenceCreateRequest/Cadence (`enum: […]`).
-//     Standalone enum-схемы нет → named-схему НЕ создаём.
-//   - NESTED (target/notify): сделано в nested-voyage-батче (VoyageTarget/VoyageNotify,
-//     shared voyage+cadence). Здесь НЕ трогается; ссылки cadence-input на них проверяет
-//     TestSchemaNames_VoyageNested (consumer CadenceCreateRequest, N4-выровнен).
+//     the contract name of the POST /v1/cadences 201 body. Applied.
+//   - ENVELOPE (runs): GET /v1/cadences/{id}/runs per the hand-written spec (:2378) references
+//     VoyageListReply (child Voyages reuse the Voyage DTO). handlers.CadenceRunsReply
+//     = PagedResponse[voyageDTO] → huma emitted PagedResponseVoyage; the generic alias →
+//     VoyageListReply (registerCadenceEnvelopes) reduces runs to the same named schema
+//     VoyageListReply as voyage list. Applied.
+//   - ENUM-ALIAS: NOT applied. The hand-written spec does NOT declare standalone ScheduleKind/
+//     OverlapPolicy — both are inlined into CadenceCreateRequest/Cadence (`enum: […]`).
+//     There is no standalone enum schema → we do NOT create a named schema.
+//   - NESTED (target/notify): done in the nested-voyage batch (VoyageTarget/VoyageNotify,
+//     shared voyage+cadence). NOT touched here; the cadence-input references to them are checked by
+//     TestSchemaNames_VoyageNested (consumer CadenceCreateRequest, N4-aligned).
 //
-// LIST + element (батч N6): GET /v1/cadences — element CadenceDTO→Cadence (:8078) и envelope
-// PagedResponseCadenceDTO→CadenceListReply (:8147) выровнены ИМЕНОВАНИЕМ через api-named-struct +
-// alias (huma_cadence_envelope.go). ★ target типизирован как $ref VoyageTarget (:8106) ТОЛЬКО в
-// схеме: alias подменяет схему, wire-тело cadenceDTO.target=json.RawMessage сериализуется тем же
-// путём → golden cadence get/list/patch byte-exact. CadenceDTO/PagedResponseCadenceDTO — теперь
-// в forbidden (дрейф вытеснен).
+// LIST + element (batch N6): GET /v1/cadences — element CadenceDTO→Cadence (:8078) and envelope
+// PagedResponseCadenceDTO→CadenceListReply (:8147) aligned by NAMING via an api-named-struct +
+// alias (huma_cadence_envelope.go). ★ target is typed as $ref VoyageTarget (:8106) ONLY in the
+// schema: the alias substitutes the schema, the wire body cadenceDTO.target=json.RawMessage serializes the
+// same way → golden cadence get/list/patch byte-exact. CadenceDTO/PagedResponseCadenceDTO — now
+// in forbidden (drift displaced).
 package api
 
 import (
@@ -35,32 +35,32 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// cadenceContractSchemas — request/reply-имена cadence-домена ровно как в committed-
-// рукописи. Все обязаны присутствовать в собранной спеке.
+// cadenceContractSchemas — the request/reply names of the cadence domain exactly as in the committed
+// hand-written spec. All must be present in the assembled spec.
 var cadenceContractSchemas = []string{
 	"CadenceCreateRequest",
 	"CadencePatchRequest",
 	"CadenceCreateReply",
-	// runs-envelope сведён на VoyageListReply (рукопись :2378); сам VoyageListReply
-	// присутствует от voyage-домена — здесь фиксируем как контрактный для runs.
+	// the runs envelope is reduced to VoyageListReply (hand-written spec :2378); VoyageListReply itself
+	// is present from the voyage domain — here we pin it as the contract for runs.
 	"VoyageListReply",
-	// LIST + element (батч N6).
+	// LIST + element (batch N6).
 	"Cadence",
 	"CadenceListReply",
 }
 
-// cadenceForbiddenSchemas — технические huma-Go-имена выровненных тел/реплик + generic-
-// envelope-ы. Ни одно не должно остаться.
+// cadenceForbiddenSchemas — the technical huma-Go names of the aligned bodies/replies + generic
+// envelopes. None should remain.
 var cadenceForbiddenSchemas = []string{
 	"CadenceCreateHumaBody",
 	"CadencePatchHumaBody",
 	"CadenceCreateReplyHumaBody",
-	"PagedResponseVoyage",     // runs-envelope сведён на VoyageListReply
-	"CadenceDTO",              // → Cadence (батч N6)
-	"PagedResponseCadenceDTO", // → CadenceListReply (батч N6)
+	"PagedResponseVoyage",     // runs envelope reduced to VoyageListReply
+	"CadenceDTO",              // → Cadence (batch N6)
+	"PagedResponseCadenceDTO", // → CadenceListReply (batch N6)
 }
 
-// TestSchemaNames_Cadence — гейт N4. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Cadence — gate N4. Contract names present, technical ones absent.
 func TestSchemaNames_Cadence(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range cadenceContractSchemas {
@@ -75,10 +75,10 @@ func TestSchemaNames_Cadence(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_CadenceCreateRequestShape — форма CadenceCreateRequest сверена с
-// рукописью (:7853): required name/schedule_kind/overlap_policy/kind/target; target —
-// $ref на VoyageTarget (nested-выравнивание); notify[] — $ref на VoyageNotify. Мутация
-// (потеря required / рассыпание target на per-домен тип) краснит.
+// TestSchemaNames_CadenceCreateRequestShape — the CadenceCreateRequest shape verified against the
+// hand-written spec (:7853): required name/schedule_kind/overlap_policy/kind/target; target —
+// $ref to VoyageTarget (nested alignment); notify[] — $ref to VoyageNotify. A mutation
+// (losing required / scattering target into a per-domain type) turns it red.
 func TestSchemaNames_CadenceCreateRequestShape(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -108,11 +108,11 @@ func TestSchemaNames_CadenceCreateRequestShape(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_CadenceRunsEnvelope — runs-response (GET /v1/cadences/{id}/runs) сведён
-// на named-схему VoyageListReply с контрактной 4-поля-offset формой (items.$ref на Voyage;
-// БЕЗ cursor-полей). Format-agnostic (рукопись plain `integer`). Мутация (cursor-протечка /
-// item-only / неверный $ref) краснит — гарантирует, что generic PagedResponseVoyage не
-// вернулся.
+// TestSchemaNames_CadenceRunsEnvelope — the runs response (GET /v1/cadences/{id}/runs) reduced
+// to the named schema VoyageListReply with the contract 4-field offset shape (items.$ref to Voyage;
+// WITHOUT cursor fields). Format-agnostic (hand-written spec plain `integer`). A mutation (cursor leak /
+// item-only / wrong $ref) turns it red — guarantees the generic PagedResponseVoyage did not
+// return.
 func TestSchemaNames_CadenceRunsEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -127,11 +127,11 @@ func TestSchemaNames_CadenceRunsEnvelope(t *testing.T) {
 	assertOffsetEnvelopeNoFormat(t, schemas, "VoyageListReply", "Voyage")
 }
 
-// TestSchemaNames_CadenceListEnvelope — гейт N6 (LIST + element). GET /v1/cadences сведён на
-// named-схему CadenceListReply (4-поля offset; items.$ref на element Cadence). Element Cadence
-// несёт required-набор рукописи (:8145) и target=$ref VoyageTarget (:8106 — типизирован, НЕ
-// free-form `{}`). Мутация (free-form target / item-only / неверный required-набор) краснит —
-// гарантирует, что generic PagedResponseCadenceDTO/CadenceDTO не вернулись.
+// TestSchemaNames_CadenceListEnvelope — gate N6 (LIST + element). GET /v1/cadences reduced to
+// the named schema CadenceListReply (4-field offset; items.$ref to element Cadence). Element Cadence
+// carries the hand-written spec's required set (:8145) and target=$ref VoyageTarget (:8106 — typed, NOT
+// free-form `{}`). A mutation (free-form target / item-only / wrong required set) turns it red —
+// guarantees the generic PagedResponseCadenceDTO/CadenceDTO did not return.
 func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {

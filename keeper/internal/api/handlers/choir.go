@@ -1,22 +1,23 @@
 package handlers
 
-// Operator API handler-ы CRUD топологии Choir/Voice внутри инкарнации (ADR-044,
-// S-T3). ОДИН [ChoirHandler] обслуживает ОБА ресурса (choirs + voices, sub-resource).
-// Оборачивает domain-CRUD пакета [choir] (S-T2), маппит его sentinel-ошибки в RFC 7807
-// и пишет audit на мутациях (handler-side self-audit, payload доступен только после
-// успешной операции). created_by_aid / added_by_aid берутся из JWT-контекста
-// (claims.Subject), НЕ из тела запроса.
+// Operator API handlers for CRUD of the Choir/Voice topology inside an incarnation
+// (ADR-044, S-T3). ONE [ChoirHandler] serves BOTH resources (choirs + voices, a
+// sub-resource). Wraps the domain CRUD of the [choir] package (S-T2), maps its sentinel
+// errors to RFC 7807 and writes audit on mutations (handler-side self-audit, payload is
+// available only after a successful operation). created_by_aid / added_by_aid come from
+// the JWT context (claims.Subject), NOT from the request body.
 //
-// T5d-2c (handler-native): домен choir+voice отвязан от legacy-генерата. *Typed-функции
-// принимают NATIVE request-типы (handlers.ChoirCreateInput / VoiceAddInput; huma-input
-// в пакете api биндит и валидирует тело по этим полям) и возвращают доменные result-ы
-// с ПЛОСКИМИ wire-полями (handlers.ChoirView / VoiceView) — НЕ legacy-генерата-Body. Native
-// wire-DTO (схему OpenAPI) строит пакет api из этих полей (register-func
-// huma_choir.go), oapi-генерёные типы в choir-домене не участвуют. (w,r)-оболочки
-// сняты: HTTP обслуживает huma full-typed (MCP choir-домена нет).
+// T5d-2c (handler-native): the choir+voice domain is detached from the legacy generator.
+// *Typed functions take NATIVE request types (handlers.ChoirCreateInput / VoiceAddInput;
+// the huma input in package api binds and validates the body against these fields) and
+// return domain results with FLAT wire fields (handlers.ChoirView / VoiceView) — NOT a
+// legacy-generator Body. The native wire-DTO (the OpenAPI schema) is built by package api
+// from these fields (register func huma_choir.go); oapi-generated types take no part in the
+// choir domain. The (w,r) wrappers are gone: HTTP is served by huma full-typed (no MCP for
+// the choir domain).
 //
-// auditW допускает nil: без него mutating-trail не пишется (unit-тесты). Все
-// зависимости immutable; safe for concurrent use.
+// auditW allows nil: without it the mutating trail is not written (unit tests). All
+// dependencies are immutable; safe for concurrent use.
 
 import (
 	"context"
@@ -33,27 +34,27 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// ChoirDB — узкая поверхность над pgxpool.Pool для CRUD-операций Choir/Voice
-// (ADR-044, S-T3). Объединяет [choir.ExecQueryRower] (Create/Get/List/Delete +
-// RemoveVoice) и [choir.TxBeginner] (AddVoice — atomic FOR UPDATE → membership-
-// validate → INSERT → commit). Реальный *pgxpool.Pool удовлетворяет
-// автоматически; unit-тесты передают fake. Симметрично [IncarnationDB].
+// ChoirDB is a narrow surface over pgxpool.Pool for Choir/Voice CRUD operations
+// (ADR-044, S-T3). Combines [choir.ExecQueryRower] (Create/Get/List/Delete +
+// RemoveVoice) and [choir.TxBeginner] (AddVoice — atomic FOR UPDATE → membership
+// validate → INSERT → commit). A real *pgxpool.Pool satisfies it automatically; unit
+// tests pass a fake. Symmetric to [IncarnationDB].
 type ChoirDB interface {
 	choir.ExecQueryRower
 	choir.TxBeginner
 }
 
-// ChoirHandler — handler-ы CRUD топологии Choir/Voice (ADR-044, S-T3). Делегирует
-// domain-CRUD пакету [choir], маппит sentinel-ы в RFC 7807, пишет self-audit на
-// мутациях.
+// ChoirHandler holds the CRUD handlers for the Choir/Voice topology (ADR-044, S-T3).
+// Delegates domain CRUD to the [choir] package, maps sentinels to RFC 7807, writes
+// self-audit on mutations.
 type ChoirHandler struct {
 	db     ChoirDB
 	auditW audit.Writer
 	logger *slog.Logger
 }
 
-// NewChoirHandler создаёт handler. auditW допускает nil (mutating-trail не
-// пишется — допустимо в unit-тестах).
+// NewChoirHandler creates the handler. auditW allows nil (the mutating trail is not
+// written — acceptable in unit tests).
 func NewChoirHandler(db ChoirDB, auditW audit.Writer, logger *slog.Logger) *ChoirHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -61,18 +62,18 @@ func NewChoirHandler(db ChoirDB, auditW audit.Writer, logger *slog.Logger) *Choi
 	return &ChoirHandler{db: db, auditW: auditW, logger: logger}
 }
 
-// ChoirSpecStub — непустой *ChoirHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaChoirSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки. db/auditW nil — handler
-// никогда не исполняется в spec-режиме.
+// ChoirSpecStub is a non-nil *ChoirHandler stub for generating the huma-OpenAPI
+// fragment (HumaChoirSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op check. db/auditW nil — the handler
+// never executes in spec mode.
 func ChoirSpecStub() *ChoirHandler { return &ChoirHandler{} }
 
 // --- DTO ---------------------------------------------------------------
 
-// ChoirView — ПЛОСКАЯ wire-форма Choir-записи (create-201 / list-item), handler-
-// native. description/min_size/max_size/created_by_aid — `*` БЕЗ omitempty (nil →
-// `null`); created_at — наносекундный time-wire `.UTC()` БЕЗ Truncate (паритет
-// легаси: прежний wire choir-а нёс наносекунды).
+// ChoirView is the FLAT wire form of a Choir record (create-201 / list-item),
+// handler-native. description/min_size/max_size/created_by_aid — `*` with no omitempty
+// (nil → `null`); created_at — nanosecond time-wire `.UTC()` without Truncate (legacy
+// parity: the former choir wire carried nanoseconds).
 type ChoirView struct {
 	IncarnationName string
 	ChoirName       string
@@ -95,9 +96,9 @@ func toChoirView(c *choir.Choir) ChoirView {
 	}
 }
 
-// VoiceView — ПЛОСКАЯ wire-форма Voice-членства (add-201 / list-item), handler-
-// native. added_by_aid/position/role — `*` БЕЗ omitempty (nil → `null`); added_at —
-// наносекундный time-wire `.UTC()` БЕЗ Truncate.
+// VoiceView is the FLAT wire form of a Voice membership (add-201 / list-item),
+// handler-native. added_by_aid/position/role — `*` with no omitempty (nil → `null`);
+// added_at — nanosecond time-wire `.UTC()` without Truncate.
 type VoiceView struct {
 	IncarnationName string
 	ChoirName       string
@@ -120,9 +121,9 @@ func toVoiceView(v *choir.Voice) VoiceView {
 	}
 }
 
-// ChoirCreateInput — NATIVE request-форма POST /v1/incarnations/{name}/choirs
-// (handler-native). created_by_aid из тела НЕ принимается — берётся из JWT-контекста.
-// Заменяет ChoirCreateRequest.
+// ChoirCreateInput is the NATIVE request form of POST /v1/incarnations/{name}/choirs
+// (handler-native). created_by_aid is NOT taken from the body — it comes from the JWT
+// context. Replaces ChoirCreateRequest.
 type ChoirCreateInput struct {
 	ChoirName   string
 	Description *string
@@ -130,8 +131,8 @@ type ChoirCreateInput struct {
 	MaxSize     *int
 }
 
-// VoiceAddInput — NATIVE request-форма POST /v1/incarnations/{name}/choirs/{choir}/
-// voices (handler-native). added_by_aid из тела НЕ принимается. Заменяет
+// VoiceAddInput is the NATIVE request form of POST /v1/incarnations/{name}/choirs/{choir}/
+// voices (handler-native). added_by_aid is NOT taken from the body. Replaces
 // VoiceAddRequest.
 type VoiceAddInput struct {
 	SID      string
@@ -141,10 +142,10 @@ type VoiceAddInput struct {
 
 // --- Create ------------------------------------------------------------
 
-// CreateTyped — доменная функция POST /v1/incarnations/{name}/choirs (handler-native,
-// self-audit): создание Choir. created_by_aid из claims (НЕ из тела). self-audit
-// choir.created пишется ВНУТРИ функции (payload доступен только после успешного
-// INSERT-а). Ошибки — *problemError, успех — [ChoirView].
+// CreateTyped is the domain function for POST /v1/incarnations/{name}/choirs (handler-native,
+// self-audit): create a Choir. created_by_aid from claims (NOT from the body). The
+// choir.created self-audit is written INSIDE the function (payload is available only after a
+// successful INSERT). Errors are *problemError, success is [ChoirView].
 func (h *ChoirHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, name string, req ChoirCreateInput) (ChoirView, error) {
 	var zero ChoirView
 	if !incarnation.ValidName(name) {
@@ -206,16 +207,15 @@ func (h *ChoirHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, name
 
 // --- List --------------------------------------------------------------
 
-// ChoirListPage — доменный результат GET /v1/incarnations/{name}/choirs (handler-
-// native, full list без серверной пагинации). Пакет api проецирует в native envelope
-// ChoirListReply.
+// ChoirListPage is the domain result of GET /v1/incarnations/{name}/choirs (handler-native,
+// full list with no server-side pagination). Package api projects it into the native
+// envelope ChoirListReply.
 type ChoirListPage struct {
 	Items []ChoirView
 }
 
-// ListChoirsTyped — доменная функция GET /v1/incarnations/{name}/choirs (handler-
-// native, READ, БЕЗ audit). Несуществующая incarnation → 200 + items=[] (parity domain
-// ListChoirs).
+// ListChoirsTyped is the domain function for GET /v1/incarnations/{name}/choirs (handler-native,
+// READ, no audit). A nonexistent incarnation → 200 + items=[] (parity with domain ListChoirs).
 func (h *ChoirHandler) ListChoirsTyped(ctx context.Context, name string) (ChoirListPage, error) {
 	var zero ChoirListPage
 	if !incarnation.ValidName(name) {
@@ -236,9 +236,9 @@ func (h *ChoirHandler) ListChoirsTyped(ctx context.Context, name string) (ChoirL
 
 // --- Delete ------------------------------------------------------------
 
-// DeleteTyped — доменная функция DELETE /v1/incarnations/{name}/choirs/{choir}
-// (handler-native, self-audit): удаление Choir (каскадом его Voice-ы). self-audit
-// choir.deleted пишется ВНУТРИ функции.
+// DeleteTyped is the domain function for DELETE /v1/incarnations/{name}/choirs/{choir}
+// (handler-native, self-audit): delete a Choir (cascading its Voices). The choir.deleted
+// self-audit is written INSIDE the function.
 func (h *ChoirHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, name, choirName string) error {
 	if !incarnation.ValidName(name) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -271,9 +271,9 @@ func (h *ChoirHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, name
 
 // --- AddVoice ----------------------------------------------------------
 
-// AddVoiceTyped — доменная функция POST /v1/incarnations/{name}/choirs/{choir}/voices
-// (handler-native, self-audit): добавление Voice (членство SID в Choir-е). added_by_aid
-// из claims (НЕ из тела). self-audit choir.voice_added пишется ВНУТРИ функции.
+// AddVoiceTyped is the domain function for POST /v1/incarnations/{name}/choirs/{choir}/voices
+// (handler-native, self-audit): add a Voice (membership of a SID in a Choir). added_by_aid
+// from claims (NOT from the body). The choir.voice_added self-audit is written INSIDE the function.
 func (h *ChoirHandler) AddVoiceTyped(ctx context.Context, claims *jwt.Claims, name, choirName string, req VoiceAddInput) (VoiceView, error) {
 	var zero VoiceView
 	if !incarnation.ValidName(name) {
@@ -350,15 +350,15 @@ func (h *ChoirHandler) AddVoiceTyped(ctx context.Context, claims *jwt.Claims, na
 
 // --- ListVoices --------------------------------------------------------
 
-// VoiceListPage — доменный результат GET /v1/incarnations/{name}/choirs/{choir}/voices
-// (handler-native, full list). Пакет api проецирует в native envelope VoiceListReply.
+// VoiceListPage is the domain result of GET /v1/incarnations/{name}/choirs/{choir}/voices
+// (handler-native, full list). Package api projects it into the native envelope VoiceListReply.
 type VoiceListPage struct {
 	Items []VoiceView
 }
 
-// ListVoicesTyped — доменная функция GET /v1/incarnations/{name}/choirs/{choir}/voices
-// (handler-native, READ, БЕЗ audit). Несуществующий Choir → 200 + items=[] (parity
-// domain ListVoices).
+// ListVoicesTyped is the domain function for GET /v1/incarnations/{name}/choirs/{choir}/voices
+// (handler-native, READ, no audit). A nonexistent Choir → 200 + items=[] (parity with domain
+// ListVoices).
 func (h *ChoirHandler) ListVoicesTyped(ctx context.Context, name, choirName string) (VoiceListPage, error) {
 	var zero VoiceListPage
 	if !incarnation.ValidName(name) {
@@ -384,9 +384,9 @@ func (h *ChoirHandler) ListVoicesTyped(ctx context.Context, name, choirName stri
 
 // --- RemoveVoice -------------------------------------------------------
 
-// RemoveVoiceTyped — доменная функция DELETE /v1/incarnations/{name}/choirs/{choir}/
-// voices/{sid} (handler-native, self-audit): удаление Voice. self-audit
-// choir.voice_removed пишется ВНУТРИ функции.
+// RemoveVoiceTyped is the domain function for DELETE /v1/incarnations/{name}/choirs/{choir}/
+// voices/{sid} (handler-native, self-audit): remove a Voice. The choir.voice_removed
+// self-audit is written INSIDE the function.
 func (h *ChoirHandler) RemoveVoiceTyped(ctx context.Context, claims *jwt.Claims, name, choirName, sid string) error {
 	if !incarnation.ValidName(name) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -425,9 +425,9 @@ func (h *ChoirHandler) RemoveVoiceTyped(ctx context.Context, claims *jwt.Claims,
 
 // --- helpers -----------------------------------------------------------
 
-// writeAuditCtx пишет audit-event best-effort (handler-side self-audit: payload
-// доступен только после успешной мутации). nil-auditW → no-op (unit-тесты). Ошибка
-// логируется, на response не влияет (паттерн UpdateHosts / CheckDrift).
+// writeAuditCtx writes an audit event best-effort (handler-side self-audit: payload is
+// available only after a successful mutation). nil auditW → no-op (unit tests). An error is
+// logged and does not affect the response (the UpdateHosts / CheckDrift pattern).
 func (h *ChoirHandler) writeAuditCtx(ctx context.Context, ev *audit.Event) {
 	if h.auditW == nil {
 		return
@@ -440,9 +440,9 @@ func (h *ChoirHandler) writeAuditCtx(ctx context.Context, ev *audit.Event) {
 	}
 }
 
-// derefInt — *int → any (nil → nil) для audit-payload (omitempty-семантика
-// на уровне map-ключа делается caller-ом при необходимости; для choir.created
-// min/max кладём как nil при отсутствии — payload-mask не трогает числа).
+// derefInt maps *int → any (nil → nil) for the audit payload (omitempty semantics at the
+// map-key level are done by the caller when needed; for choir.created we store min/max as
+// nil when absent — the payload mask does not touch numbers).
 func derefInt(i *int) any {
 	if i == nil {
 		return nil
@@ -450,7 +450,7 @@ func derefInt(i *int) any {
 	return *i
 }
 
-// joinSIDs склеивает SID-ы в человекочитаемую строку для problem-detail.
+// joinSIDs joins SIDs into a human-readable string for a problem detail.
 func joinSIDs(sids []string) string {
 	out := ""
 	for i, s := range sids {

@@ -9,34 +9,34 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// secret-схема read-path-маскинга ([ADR-010] §7.4, декларативный слой 1).
-// incarnation_view маскирует spec/state/history через [audit.MaskSecretsWithSchema]
-// по путям, объявленным secret:true в схеме сервиса:
+// secret schema for read-path masking ([ADR-010] §7.4, declarative layer 1).
+// incarnation_view masks spec/state/history via [audit.MaskSecretsWithSchema] along
+// the paths declared secret:true in the service schema:
 //
-//   - state — из flat state_schema манифеста (`properties.<field>.secret: true`,
-//     рекурсивно через properties/items, и через additionalProperties-ВЛОЖЕННЫЕ
-//     properties); путь — `<field>`, элемент массива — `<field>[].<...>`.
-//     ★ secret НА САМОМ additionalProperties-узле (значение произвольного ключа map)
-//     schema-слоем НЕ покрыт (TODO отдельным слайсом) — деградирует к vault+regex
-//     (см. ограничение в collectStateSchemaSecrets);
-//   - spec — из input_schema scenario `create` (spec несёт операторский input под
-//     ключом `input`); путь — `input.<name>` (config.InputSchema.Secret).
+//   - state — from the flat state_schema manifest (`properties.<field>.secret: true`,
+//     recursively through properties/items, and through additionalProperties-NESTED
+//     properties); path is `<field>`, an array element is `<field>[].<...>`.
+//     ★ secret ON the additionalProperties node ITSELF (the value of an arbitrary map key)
+//     is NOT covered by the schema layer (TODO as a separate slice) — degrades to vault+regex
+//     (see the limitation in collectStateSchemaSecrets);
+//   - spec — from the input_schema of scenario `create` (spec carries the operator input
+//     under the `input` key); path is `input.<name>` (config.InputSchema.Secret).
 //
-// Сборка best-effort: материализация снапшота сервиса (git) — НЕ на каждый
-// read-роут, а только в [IncarnationHandler.GetTyped]/History (single-incarnation
-// детальный вид). Ошибка загрузки/парса → nil-схема → деградация к
-// [audit.MaskSecrets] (vault+regex), GET не падает (наблюдаемость, не контракт).
+// Assembly is best-effort: materializing the service snapshot (git) happens NOT on every
+// read route, only in [IncarnationHandler.GetTyped]/History (single-incarnation detail
+// view). A load/parse error → nil schema → degradation to [audit.MaskSecrets]
+// (vault+regex), GET does not fail (observability, not contract).
 
-// secretSchemaForIncarnation материализует снапшот сервиса incarnation и строит
-// объединённую [audit.SecretPathSet] для state (state_schema) + spec
-// (create-scenario input_schema). nil → схема недоступна (loader/services nil,
-// ошибка загрузки) — caller деградирует к MaskSecrets.
+// secretSchemaForIncarnation materializes the incarnation's service snapshot and builds
+// a combined [audit.SecretPathSet] for state (state_schema) + spec (create-scenario
+// input_schema). nil → schema unavailable (loader/services nil, load error) — the caller
+// degrades to MaskSecrets.
 //
-// ctx прокидывается из read-handler-а (отмена/таймаут материализации снапшота).
-// Возврат — интерфейс [audit.SecretSchema]: при пустом наборе возвращается
-// ИМЕННО nil-интерфейс (а не SecretPathSet(nil)), чтобы caller-ова проверка
-// `schema == nil` отличала «схемы нет» от «схема пуста» — иначе непустой
-// интерфейс-обёртка над nil-map включила бы schema-слой вхолостую.
+// ctx is threaded from the read handler (cancel/timeout of the snapshot materialization).
+// The return is an [audit.SecretSchema] interface: for an empty set it returns EXACTLY a
+// nil interface (not SecretPathSet(nil)), so the caller's `schema == nil` check tells "no
+// schema" from "empty schema" — otherwise a non-nil interface wrapping a nil map would
+// engage the schema layer for nothing.
 func (h *IncarnationHandler) secretSchemaForIncarnation(ctx context.Context, inc *incarnation.Incarnation) audit.SecretSchema {
 	if h.loader == nil || h.services == nil || inc == nil {
 		return nil
@@ -45,8 +45,8 @@ func (h *IncarnationHandler) secretSchemaForIncarnation(ctx context.Context, inc
 	if !ok {
 		return nil
 	}
-	// Зафиксировать ref на версии incarnation (read-path сверяет тот снапшот, по
-	// которому incarnation создана/мигрирована).
+	// Pin ref to the incarnation's version (the read path checks the snapshot the
+	// incarnation was created/migrated against).
 	if inc.ServiceVersion != "" {
 		ref.Ref = inc.ServiceVersion
 	}
@@ -66,34 +66,32 @@ func (h *IncarnationHandler) secretSchemaForIncarnation(ctx context.Context, inc
 	return set
 }
 
-// collectStateSchemaSecrets рекурсивно обходит flat JSON-schema state_schema и
-// помечает в set dot/idx-пути полей с `secret: true`. Структура:
-//   - properties: map<field, schema> → рекурсия с path = join(path, field);
-//   - items: schema → рекурсия с path = path+"[]" (элемент массива);
-//   - additionalProperties: schema → рекурсия с path = path (БЕЗ `.*`-сегмента).
+// collectStateSchemaSecrets recursively walks the flat JSON-schema state_schema and
+// marks in set the dot/idx paths of fields with `secret: true`. Structure:
+//   - properties: map<field, schema> → recurse with path = join(path, field);
+//   - items: schema → recurse with path = path+"[]" (array element);
+//   - additionalProperties: schema → recurse with path = path (WITHOUT a `.*` segment).
 //
-// ★ Ограничение read-path schema-слоя для secret-leaf под additionalProperties
-// (TODO отдельным слайсом): когда `secret: true` стоит на САМОМ ap-узле (значение
-// любого ключа map секрет), schema-слой его НЕ покрывает. [audit.SecretPathSet.
-// IsSecret] сверяет запрашиваемый путь как есть или через normalizeIdx (конкретные
-// индексы → `[]`) — но НИКОГДА не подставляет `.*`-сегмент; запись вида `path.*` в
-// наборе ни с одним реальным запросом не совпала бы (мёртвая). Поэтому ap-secret-leaf
-// помечать бессмысленно — он деградирует к vault+regex-слою маскинга (MaskSecrets).
-// Рекурсию ВЕДЁМ (внутри ap могут быть вложенные `properties` с конкретными именами —
-// их пути schema-слой покрывает), а сам secret НА ap-узле пропускаем.
+// ★ Limitation of the read-path schema layer for a secret leaf under additionalProperties
+// (TODO as a separate slice): when `secret: true` sits on the ap node ITSELF (the value of
+// any map key is secret), the schema layer does NOT cover it. [audit.SecretPathSet.IsSecret]
+// checks the requested path as-is or via normalizeIdx (concrete indices → `[]`) — but NEVER
+// substitutes a `.*` segment; an entry like `path.*` in the set would match no real request
+// (dead). So marking an ap secret leaf is pointless — it degrades to the vault+regex masking
+// layer (MaskSecrets). We DO recurse (an ap may hold nested `properties` with concrete names —
+// the schema layer covers their paths), but skip the secret ON the ap node itself.
 //
-// ★ Сопутствующий gap (ВЛОЖЕННЫЙ secret под ap по ДИНАМИЧЕСКОМУ ключу, nit
-// seal-review, НЕ чиним — фикс = матчинг dynamic-key в IsSecret, отдельный слайс):
-// рекурсия в ap НЕ добавляет сегмента под произвольный ключ, поэтому
-// `users:{additionalProperties:{properties:{password:{secret}}}}` собирает путь
-// `users.password`. Реальный payload (incarnation.state) несёт КОНКРЕТНЫЙ ключ map —
-// `{users:{alice:{password:…}}}` → maskMapLayered ведёт путь ячейки `users.alice.
-// password`. [audit.SecretPathSet.IsSecret] сверяет `users.alice.password` И
-// normalizeIdx(того же) — а normalizeIdx обобщает ТОЛЬКО индексы среза (`[N]`→`[]`),
-// map-ключ `alice` не трогает → ни одна форма не совпадает с собранным `users.
-// password`. Schema-слой такой secret НЕ маскирует; он деградирует к vault+regex
-// (ключ `password` ловится sensitive-by-name regex-last-resort'ом — alarm-fallback,
-// не schema). Регрессию текущего поведения фиксирует тест
+// ★ Related gap (a NESTED secret under ap keyed by a DYNAMIC key, seal-review nit, NOT fixed —
+// the fix = dynamic-key matching in IsSecret, a separate slice): recursion into ap does NOT add
+// a segment for the arbitrary key, so
+// `users:{additionalProperties:{properties:{password:{secret}}}}` collects the path
+// `users.password`. The real payload (incarnation.state) carries a CONCRETE map key —
+// `{users:{alice:{password:…}}}` → maskMapLayered builds the cell path `users.alice.password`.
+// [audit.SecretPathSet.IsSecret] checks `users.alice.password` AND normalizeIdx(the same) — but
+// normalizeIdx generalizes ONLY slice indices (`[N]`→`[]`), it leaves the map key `alice` alone
+// → no form matches the collected `users.password`. The schema layer does NOT mask such a secret;
+// it degrades to vault+regex (the `password` key is caught by the sensitive-by-name regex last
+// resort — an alarm fallback, not schema). The current behavior is pinned by the test
 // TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGap.
 func collectStateSchemaSecrets(schema map[string]any, path string, set audit.SecretPathSet) {
 	if schema == nil {
@@ -113,12 +111,12 @@ func collectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 		collectStateSchemaSecrets(items, path+"[]", set)
 	}
 	if ap, ok := schema["additionalProperties"].(map[string]any); ok {
-		// secret НА САМОМ ap-узле не помечаем (см. ★-ограничение в doc-комментарии:
-		// путь `map_field` пометил бы ВСЮ map как secret — over-mask на read-path; а
-		// `map_field.*` IsSecret не запрашивает → запись мёртвая. Деградация к
-		// vault+regex намеренна). Рекурсию ведём, но БЕЗ secret-флага самого ap-узла:
-		// вложенные конкретные `properties` внутри ap schema-слой покрывает по точному
-		// пути, а secret НА ap-узле гасим, чтобы isSecretNode не пометил path.
+		// Do not mark secret ON the ap node itself (see the ★ limitation in the doc comment:
+		// the path `map_field` would mark the WHOLE map as secret — over-mask on the read path;
+		// and IsSecret never requests `map_field.*` → the entry is dead. Degradation to
+		// vault+regex is intentional). We recurse, but WITHOUT the secret flag of the ap node
+		// itself: the schema layer covers nested concrete `properties` inside ap by exact path,
+		// while we clear the secret ON the ap node so isSecretNode does not mark path.
 		recurse := ap
 		if isSecretNode(ap) {
 			recurse = mapWithoutSecret(ap)
@@ -127,16 +125,16 @@ func collectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 	}
 }
 
-// isSecretNode — JSON-schema-узел несёт `secret: true`.
+// isSecretNode reports whether the JSON-schema node carries `secret: true`.
 func isSecretNode(schema map[string]any) bool {
 	b, _ := schema["secret"].(bool)
 	return b
 }
 
-// mapWithoutSecret — поверхностная копия schema-узла без ключа `secret`, чтобы
-// рекурсия по additionalProperties не пометила сам ap-узел как secret-leaf (его
-// path = имя map, пометка дала бы over-mask всей map). Вложенные `properties`/
-// `items` копии не трогаются — рекурсия по ним идёт по своим точным путям.
+// mapWithoutSecret is a shallow copy of a schema node without the `secret` key, so
+// recursion over additionalProperties does not mark the ap node itself as a secret leaf
+// (its path = the map name, marking it would over-mask the whole map). Nested
+// `properties`/`items` copies are untouched — recursion over them follows their exact paths.
 func mapWithoutSecret(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for k, v := range schema {
@@ -148,10 +146,10 @@ func mapWithoutSecret(schema map[string]any) map[string]any {
 	return out
 }
 
-// collectCreateInputSecrets читает scenario `create`/main.yml снапшота, парсит
-// его input-схему (config.InputSchemaMap) и помечает `input.<name>` для
-// secret:true-параметров (spec несёт операторский input под ключом `input`).
-// Best-effort: нет create-scenario / парс упал → ничего не добавляет.
+// collectCreateInputSecrets reads the snapshot's scenario `create`/main.yml, parses its
+// input schema (config.InputSchemaMap) and marks `input.<name>` for secret:true params
+// (spec carries the operator input under the `input` key). Best-effort: no create-scenario /
+// parse failed → adds nothing.
 func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.ServiceArtifact, set audit.SecretPathSet) {
 	data, err := loader.ReadFile(art, "scenario/create/main.yml")
 	if err != nil || len(data) == 0 {
@@ -161,14 +159,14 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 	if perr != nil || scn == nil {
 		return
 	}
-	// fail-closed ТОЛЬКО на covenant-merge-ошибке (симметрично scenario.run/
-	// validate_input): при сбое слияния covenant смерженный scn.Input ЧАСТИЧЕН
-	// (covenant-поля могли не влиться) — строить secret-маскировку по нему нельзя,
-	// иначе secret-поле из covenant молча не замаскируется. Прочие schema-ошибки
-	// create-сценария (например `tasks is required` на неполной фикстуре) input НЕ
-	// обрезают — best-effort secret-схема по тому, что распарсилось (GET — не
-	// контракт-валидатор, см. doc-комментарий пакета). Деградация к vault+regex
-	// (caller получит nil-вклад в set) остаётся только для covenant-частичности.
+	// fail-closed ONLY on a covenant-merge error (symmetric to scenario.run/validate_input):
+	// when the covenant merge fails the merged scn.Input is PARTIAL (covenant fields may not
+	// have merged in) — building the secret mask from it is unsafe, or a secret field from the
+	// covenant would silently go unmasked. Other schema errors of the create scenario (e.g.
+	// `tasks is required` on an incomplete fixture) do NOT truncate input — best-effort secret
+	// schema from whatever parsed (GET is not a contract validator, see the package doc comment).
+	// Degradation to vault+regex (the caller gets a nil contribution to set) stays only for
+	// covenant partiality.
 	if hasCovenantMergeError(sdiags) {
 		return
 	}
@@ -179,12 +177,12 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 	}
 }
 
-// covenantMergeErrorCodes — коды диагностик config.ResolveScenarioCovenant/
-// MergeCovenant, означающие, что слияние covenant НЕ состоялось → смерженный input
-// частичен (covenant-поля не влились). ТОЛЬКО на них secret-схема fail-close-ится
-// (covenant-secret-поле иначе молча утекло бы немаскированным). Прочие schema-ошибки
-// сценария input не обрезают. Источник кодов — shared/config/covenant_resolve.go и
-// covenant.go (держать синхронно: новый covenant-merge-код добавлять и сюда).
+// covenantMergeErrorCodes are the diagnostic codes of config.ResolveScenarioCovenant/
+// MergeCovenant meaning the covenant merge did NOT happen → the merged input is partial
+// (covenant fields did not merge in). The secret schema fail-closes ONLY on these (a
+// covenant secret field would otherwise leak unmasked). Other scenario schema errors do
+// not truncate input. Source of the codes — shared/config/covenant_resolve.go and
+// covenant.go (keep in sync: add any new covenant-merge code here too).
 var covenantMergeErrorCodes = map[string]bool{
 	"covenant_extends_invalid":          true,
 	"covenant_extends_target_not_found": true,
@@ -194,9 +192,9 @@ var covenantMergeErrorCodes = map[string]bool{
 	"covenant_unexpected_key":           true,
 }
 
-// hasCovenantMergeError — среди diags есть error-уровня covenant-merge-код (см.
-// covenantMergeErrorCodes). True → смерженный input частичен, secret-схему по нему
-// строить нельзя.
+// hasCovenantMergeError reports whether diags contain an error-level covenant-merge code
+// (see covenantMergeErrorCodes). True → the merged input is partial, the secret schema
+// must not be built from it.
 func hasCovenantMergeError(diags []diag.Diagnostic) bool {
 	for _, d := range diags {
 		if d.Level == diag.LevelError && covenantMergeErrorCodes[d.Code] {
@@ -206,8 +204,8 @@ func hasCovenantMergeError(diags []diag.Diagnostic) bool {
 	return false
 }
 
-// joinSchemaPath — конкатенация dot-пути state_schema (БИТ-В-БИТ как audit.joinPath
-// / render.joinKey: пустой path → field без ведущей точки).
+// joinSchemaPath concatenates a state_schema dot path (BIT-FOR-BIT like audit.joinPath /
+// render.joinKey: empty path → field without a leading dot).
 func joinSchemaPath(path, field string) string {
 	if path == "" {
 		return field

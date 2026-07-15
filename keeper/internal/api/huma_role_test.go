@@ -1,20 +1,20 @@
 package api
 
-// Guard-тесты ПЕРВОГО ТИРАЖ-БАТЧА разворота ROLE-домена ЦЕЛИКОМ на huma full-typed
-// (ADR-054 §Audit). Все role-роуты на huma: READ (list — pilot-1 без audit) + WRITE
+// Guard tests of the FIRST ROLLOUT BATCH moving the ROLE domain WHOLESALE onto huma full-typed
+// (ADR-054 §Audit). All role routes on huma: READ (list — pilot-1 without audit) + WRITE
 // (create/delete/update-permissions/grant/revoke-operator — pilot-2 + huma-audit-
-// middleware вариант B). Доказывают, что huma-роуты поверх chi сохраняют инварианты
-// кластера:
+// middleware variant B). They prove that huma routes over chi preserve cluster
+// invariants:
 //
-//   - wire/golden: create 201 пустое тело; list 200 RoleView[] байт-в-байт
-//     (Description всегда, DefaultScope nil→пропуск, []-vs-null); write-204 пустое;
-//   - unknown-field → 400 problem+json (huma additionalProperties:false ЧЕСТНЫЙ);
+//   - wire/golden: create 201 empty body; list 200 RoleView[] byte-for-byte
+//     (Description always, DefaultScope nil→skip, []-vs-null); write-204 empty;
+//   - unknown-field → 400 problem+json (huma additionalProperties:false is HONEST);
 //   - missing-required → 422 problem+json (huma `required:"true"`);
-//   - RBAC-deny → 403 (навеска группы наследуется huma);
-//   - S6-GUARD на КАЖДЫЙ write-роут (КРИТ, рецидив урока S6): write через ПОЛНУЮ
-//     huma-навеску (RequirePermission + humaAuditMiddleware + huma-handler) пишет
-//     audit-event с НЕПУСТЫМ payload на 2xx и НЕ пишет на 4xx — huma САМ пишет ответ
-//     (StatusRecorder неприменим), audit держит hctx.Status() + carrier-payload.
+//   - RBAC-deny → 403 (the group wiring is inherited by huma);
+//   - S6-GUARD on EVERY write route (CRITICAL, recurrence of the S6 lesson): a write via the FULL
+//     huma wiring (RequirePermission + humaAuditMiddleware + huma-handler) writes an
+//     audit event with a NON-EMPTY payload on 2xx and does NOT write on 4xx — huma itself writes the response
+//     (StatusRecorder inapplicable), audit relies on hctx.Status() + carrier payload.
 
 import (
 	"context"
@@ -36,16 +36,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// strictRoleBody — валидное тело role.create (пустой набор permissions: subset-
-// check не читает БД, один INSERT в tx → 201 без реального Postgres).
+// strictRoleBody — a valid role.create body (empty permissions set: the subset
+// check doesn't read the DB, one INSERT in a tx → 201 without a real Postgres).
 const strictRoleBody = `{"name":"ops","permissions":[]}`
 
-// roleSuccessPool — узкий мок [rbac.ServicePool] для success-path всех role-write-
-// роутов huma-теста (delete/update/grant/revoke): lockRole=found+не-builtin,
-// rolePermissions=пусто (роль не даёт `*` → self-lockout-проба не дёргается),
-// lockRoleOperator=found, caller-perms=`*`. Покрывает ТОЛЬКО 2xx-путь (S6-guard:
-// audit пишется на успехе) — error-классификацию валидируют handler-unit-тесты
-// (handlers/role_test.go на rbacFakePool). Tx проксирует Exec/Query на pool.
+// roleSuccessPool — a narrow mock [rbac.ServicePool] for the success path of all role-write
+// routes of the huma test (delete/update/grant/revoke): lockRole=found+non-builtin,
+// rolePermissions=empty (the role doesn't grant `*` → the self-lockout probe isn't triggered),
+// lockRoleOperator=found, caller-perms=`*`. Covers ONLY the 2xx path (S6-guard:
+// audit written on success) — error classification is validated by handler unit tests
+// (handlers/role_test.go on rbacFakePool). Tx proxies Exec/Query to the pool.
 type roleSuccessPool struct{}
 
 func (roleSuccessPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -57,15 +57,15 @@ func (roleSuccessPool) QueryRow(context.Context, string, ...any) pgx.Row {
 func (roleSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "SELECT builtin FROM rbac_roles"):
-		return &roleBoolRows{values: []bool{false}}, nil // роль есть, не builtin
+		return &roleBoolRows{values: []bool{false}}, nil // role exists, not builtin
 	case strings.Contains(sql, "SELECT permission FROM rbac_role_permissions"):
-		return &roleStrRows{}, nil // роль не даёт `*` → self-lockout-проба не нужна
+		return &roleStrRows{}, nil // role doesn't grant `*` → self-lockout probe not needed
 	case strings.Contains(sql, "SELECT rp.permission"):
 		return &roleStrRows{values: []string{"*"}}, nil // caller=cluster-admin
 	case strings.Contains(sql, "SELECT default_scope FROM rbac_roles"):
 		return &roleNullStrRows{}, nil // NULL scope
 	case strings.Contains(sql, "SELECT 1 FROM rbac_role_operators"):
-		return &roleIntRows{values: []int{1}}, nil // membership есть (revoke)
+		return &roleIntRows{values: []int{1}}, nil // membership exists (revoke)
 	}
 	return nil, errStrictUnexpectedSQL
 }
@@ -77,8 +77,8 @@ type roleErrRow struct{ err error }
 
 func (r roleErrRow) Scan(...any) error { return r.err }
 
-// roleSuccessTx — pgx.Tx, проксирующий Exec/Query обратно на success-pool;
-// Commit/Rollback no-op. Встраивание nil-pgx.Tx даёт остальные (не-вызываемые) методы.
+// roleSuccessTx — a pgx.Tx proxying Exec/Query back to the success pool;
+// Commit/Rollback no-op. Embedding a nil pgx.Tx provides the remaining (uncalled) methods.
 type roleSuccessTx struct{ pgx.Tx }
 
 func (roleSuccessTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -90,7 +90,7 @@ func (roleSuccessTx) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 func (roleSuccessTx) Commit(context.Context) error   { return nil }
 func (roleSuccessTx) Rollback(context.Context) error { return nil }
 
-// --- минимальные pgx.Rows-обёртки (api-пакет; handlers-версии package-private) ---
+// --- minimal pgx.Rows wrappers (api package; the handlers versions are package-private) ---
 
 type roleBoolRows struct {
 	values []bool
@@ -158,11 +158,11 @@ func (r *roleNullStrRows) Values() ([]any, error)                       { return
 func (r *roleNullStrRows) RawValues() [][]byte                          { return nil }
 func (r *roleNullStrRows) Conn() *pgx.Conn                              { return nil }
 
-// humaRoleRouter собирает chi-роутер со ВСЕМИ role-роутами через huma —
-// продакшен-навеска буквально из router.go: RequirePermission(role.<action>) на
-// каждой группе + (для write) huma-audit-middleware варианта B + huma-операция.
-// installHumaErrorOverride вызывается явно. injectClaims заменяет RequireJWT.
-// pool параметризован: auditRolePool — create-путь, roleSuccessPool — все write.
+// humaRoleRouter assembles a chi router with ALL role routes via huma —
+// the production wiring literally from router.go: RequirePermission(role.<action>) on
+// each group + (for write) huma-audit-middleware variant B + the huma operation.
+// installHumaErrorOverride is called explicitly. injectClaims replaces RequireJWT.
+// pool is parameterized: auditRolePool — create path, roleSuccessPool — all writes.
 func humaRoleRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool rbac.ServicePool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -204,7 +204,7 @@ func humaRoleRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, audi
 	return r
 }
 
-// === CREATE (pilot-2, без изменений — sanity сосуществования всего домена) ===
+// === CREATE (pilot-2, unchanged — sanity of the whole domain coexisting) ===
 
 func TestHumaRole_Create_GoldenEmptyBody(t *testing.T) {
 	r := humaRoleRouter(t, strictAllowAll{}, nil, auditRolePool{})
@@ -216,7 +216,7 @@ func TestHumaRole_Create_GoldenEmptyBody(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	const golden = "" // легаси POST /v1/roles 201 — без тела
+	const golden = "" // legacy POST /v1/roles 201 — no body
 	if got := rec.Body.String(); got != golden {
 		t.Errorf("GOLDEN wire-дрейф role.create 201-тела: got=%q want=%q", got, golden)
 	}
@@ -275,11 +275,11 @@ func TestHumaAudit_RoleCreate_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventRoleCreated, map[string]any{"name": "ops", "created_by_aid": "archon-alice"})
 }
 
-// === LIST (READ pilot-1, БЕЗ audit) ===
+// === LIST (READ pilot-1, no audit) ===
 
-// listOnePool — минимальный pool для GET /v1/roles: одна роль `ops` с пустыми
-// permissions/operators, builtin=false, NULL default_scope. Доказывает wire-форму
-// toRoleView (Description="" присутствует, DefaultScope опущен, []-vs-null).
+// listOnePool — a minimal pool for GET /v1/roles: one role `ops` with empty
+// permissions/operators, builtin=false, NULL default_scope. Proves the wire shape of
+// toRoleView (Description="" present, DefaultScope omitted, []-vs-null).
 type listOnePool struct{}
 
 func (listOnePool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -293,9 +293,9 @@ func (listOnePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 	case strings.Contains(sql, "SELECT name, description, builtin, default_scope FROM rbac_roles"):
 		return &roleViewRows{}, nil
 	case strings.Contains(sql, "permission"):
-		return &roleStrRows{}, nil // у роли нет permissions
+		return &roleStrRows{}, nil // role has no permissions
 	case strings.Contains(sql, "operator"):
-		return &roleStrRows{}, nil // у роли нет operators
+		return &roleStrRows{}, nil // role has no operators
 	}
 	return nil, errStrictUnexpectedSQL
 }
@@ -303,7 +303,7 @@ func (listOnePool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return nil, errStrictUnexpectedSQL
 }
 
-// roleViewRows — один row LoadRoleViews-каталога: name=ops, description="",
+// roleViewRows — one row of the LoadRoleViews catalog: name=ops, description="",
 // builtin=false, default_scope=NULL.
 type roleViewRows struct{ done bool }
 
@@ -329,11 +329,11 @@ func (r *roleViewRows) Values() ([]any, error)                       { return ni
 func (r *roleViewRows) RawValues() [][]byte                          { return nil }
 func (r *roleViewRows) Conn() *pgx.Conn                              { return nil }
 
-// TestHumaRole_List_GoldenWire — GOLDEN wire-guard READ-роута: 200-тело
-// байт-в-байт. Фиксирует toRoleView-семантику: Description присутствует даже как
-// "" (без omitempty), DefaultScope опущен при NULL, permissions/operators —
-// []-not-null (emptyIfNil), items — массив. Дрейф (huma вмешает $schema / поле
-// потеряет []-форму) ломает байты.
+// TestHumaRole_List_GoldenWire — GOLDEN wire-guard of the READ route: 200 body
+// byte-for-byte. Pins toRoleView semantics: Description present even as
+// "" (no omitempty), DefaultScope omitted on NULL, permissions/operators —
+// []-not-null (emptyIfNil), items — an array. Drift (huma injecting $schema / a field
+// losing its [] form) breaks the bytes.
 func TestHumaRole_List_GoldenWire(t *testing.T) {
 	r := humaRoleRouter(t, strictAllowAll{}, nil, listOnePool{})
 
@@ -344,8 +344,8 @@ func TestHumaRole_List_GoldenWire(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	// Ремаршал через map → детерминированный порядок ключей; golden фиксирует
-	// набор/форму, не порядок.
+	// Remarshal through a map → deterministic key order; golden pins the
+	// set/shape, not the order.
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
@@ -357,8 +357,8 @@ func TestHumaRole_List_GoldenWire(t *testing.T) {
 	}
 }
 
-// TestHumaRole_List_NoAudit — READ-роут не пишет audit (нет middleware). Прогон с
-// capture-writer: 0 событий на 200.
+// TestHumaRole_List_NoAudit — the READ route writes no audit (no middleware). Run with
+// capture-writer: 0 events on 200.
 func TestHumaRole_List_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictAllowAll{}, auditCap, listOnePool{})
@@ -404,8 +404,8 @@ func TestHumaRole_Delete_204(t *testing.T) {
 	}
 }
 
-// TestHumaAudit_RoleDelete_RecordsOnSuccess — S6-GUARD role.deleted: 204 пишет
-// audit с payload {name}.
+// TestHumaAudit_RoleDelete_RecordsOnSuccess — S6-GUARD role.deleted: 204 writes
+// audit with payload {name}.
 func TestHumaAudit_RoleDelete_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictAllowAll{}, auditCap, roleSuccessPool{})
@@ -420,7 +420,7 @@ func TestHumaAudit_RoleDelete_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventRoleDeleted, map[string]any{"name": "ops"})
 }
 
-// TestHumaAudit_RoleDelete_NoAudit_OnRBACDeny — negative S6: 403 не пишет audit.
+// TestHumaAudit_RoleDelete_NoAudit_OnRBACDeny — negative S6: 403 writes no audit.
 func TestHumaAudit_RoleDelete_NoAudit_OnRBACDeny(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictDenyAll{}, auditCap, roleSuccessPool{})
@@ -466,7 +466,7 @@ func TestHumaAudit_RoleUpdatePermissions_RecordsOnSuccess(t *testing.T) {
 }
 
 // TestHumaRole_UpdatePermissions_MissingPermissions_422 — required permissions
-// (huma `required:"true"`) → 422, audit не пишется.
+// (huma `required:"true"`) → 422, no audit written.
 func TestHumaAudit_RoleUpdatePermissions_NoAudit_OnReject(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictAllowAll{}, auditCap, roleSuccessPool{})
@@ -483,15 +483,15 @@ func TestHumaAudit_RoleUpdatePermissions_NoAudit_OnReject(t *testing.T) {
 	}
 }
 
-// scopeCapturePool — success-pool PATCH /v1/roles/{name}/permissions, перехватывающий
-// эффект presence-конверта default_scope на доменном дне. UpdateRoleDefaultScope
-// (UPDATE rbac_roles SET default_scope = $2 WHERE name = $1) вызывается rbac.Service
-// ТОЛЬКО при SetDefaultScope=true (presence ключа в теле), с arg=NULL при сбросе (null)
-// или RAW-строкой при установке. Перехват args[1] этого Exec доказывает, что
-// (SetDefaultScope, DefaultScope) долетели до домена корректно из Optional[string].
+// scopeCapturePool — a success pool for PATCH /v1/roles/{name}/permissions, intercepting
+// the effect of the default_scope presence envelope at the domain floor. UpdateRoleDefaultScope
+// (UPDATE rbac_roles SET default_scope = $2 WHERE name = $1) is called by rbac.Service
+// ONLY when SetDefaultScope=true (key present in the body), with arg=NULL on reset (null)
+// or a RAW string on set. Intercepting args[1] of this Exec proves that
+// (SetDefaultScope, DefaultScope) reached the domain correctly from Optional[string].
 type scopeCapturePool struct {
-	scopeUpdateCalled bool // был ли Exec UPDATE default_scope (== SetDefaultScope)
-	scopeArg          any  // args[1] этого Exec: nil (NULL/сброс) либо строка (установка)
+	scopeUpdateCalled bool // whether the Exec UPDATE default_scope ran (== SetDefaultScope)
+	scopeArg          any  // args[1] of this Exec: nil (NULL/reset) or a string (set)
 }
 
 func (p *scopeCapturePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -513,8 +513,8 @@ func (p *scopeCapturePool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, erro
 	return &scopeCaptureTx{pool: p}, nil
 }
 
-// scopeCaptureTx проксирует Exec/Query обратно на capture-pool (чтобы UPDATE
-// default_scope, идущий внутри tx, был перехвачен).
+// scopeCaptureTx proxies Exec/Query back to the capture pool (so the UPDATE
+// default_scope inside the tx is intercepted).
 type scopeCaptureTx struct {
 	pgx.Tx
 	pool *scopeCapturePool
@@ -529,26 +529,26 @@ func (t *scopeCaptureTx) Query(ctx context.Context, sql string, args ...any) (pg
 func (t *scopeCaptureTx) Commit(context.Context) error   { return nil }
 func (t *scopeCaptureTx) Rollback(context.Context) error { return nil }
 
-// TestHumaRole_UpdatePermissions_ScopePresence — SECURITY-relevant guard (ADR-054
-// §Pattern третий tier; scope-narrowing RBAC, ADR-047): три ветки presence
-// default_scope долетают через РЕАЛЬНЫЙ PATCH-роут (huma input → Optional[string] →
-// optionalToPtr/Set → UpdatePermissionsInput → rbac.Service) в корректный доменный
+// TestHumaRole_UpdatePermissions_ScopePresence — a SECURITY-relevant guard (ADR-054
+// §Pattern third tier; scope-narrowing RBAC, ADR-047): three presence branches of
+// default_scope reach the domain through the REAL PATCH route (huma input → Optional[string] →
+// optionalToPtr/Set → UpdatePermissionsInput → rbac.Service) as the correct domain
 // (SetDefaultScope, DefaultScope):
 //
-//   - тело БЕЗ default_scope (omitted) → SetDefaultScope=false → UpdateRoleDefaultScope
-//     НЕ вызывается (scope роли не трогается);
+//   - body WITHOUT default_scope (omitted) → SetDefaultScope=false → UpdateRoleDefaultScope
+//     is NOT called (the role scope is untouched);
 //   - {"default_scope":null} (explicit null) → SetDefaultScope=true, DefaultScope=nil →
-//     UpdateRoleDefaultScope с NULL-arg (scope СБРАСЫВАЕТСЯ);
+//     UpdateRoleDefaultScope with a NULL arg (scope is RESET);
 //   - {"default_scope":"coven=prod"} (value) → SetDefaultScope=true → UpdateRoleDefaultScope
-//     с arg "coven=prod" (scope УСТАНАВЛИВАЕТСЯ).
+//     with arg "coven=prod" (scope is SET).
 //
-// Регресс presence-конверта = молчаливая RBAC scope-эскалация/деградация — потому guard.
+// A regression of the presence envelope = a silent RBAC scope escalation/degradation — hence the guard.
 func TestHumaRole_UpdatePermissions_ScopePresence(t *testing.T) {
 	cases := []struct {
 		name           string
 		body           string
-		wantScopeWrite bool // ожидаем ли UPDATE default_scope (== SetDefaultScope)
-		wantScopeArg   any  // ожидаемый args[1] при write (nil=NULL/сброс)
+		wantScopeWrite bool // whether we expect UPDATE default_scope (== SetDefaultScope)
+		wantScopeArg   any  // expected args[1] on write (nil=NULL/reset)
 	}{
 		{"omitted_не_трогать", `{"permissions":["incarnation.run"]}`, false, nil},
 		{"null_сброс", `{"permissions":["incarnation.run"],"default_scope":null}`, true, nil},
@@ -606,8 +606,8 @@ func TestHumaAudit_RoleGrantOperator_RecordsOnSuccess(t *testing.T) {
 	})
 }
 
-// TestHumaAudit_RoleGrantOperator_NoAudit_OnInvalidAID — пустой AID → 422
-// (доменная валидация в GrantOperatorTyped), audit не пишется.
+// TestHumaAudit_RoleGrantOperator_NoAudit_OnInvalidAID — empty AID → 422
+// (domain validation in GrantOperatorTyped), no audit written.
 func TestHumaAudit_RoleGrantOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictAllowAll{}, auditCap, roleSuccessPool{})
@@ -652,8 +652,8 @@ func TestHumaAudit_RoleRevokeOperator_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventRoleOperatorRevoked, map[string]any{"name": "ops", "aid": "archon-bob"})
 }
 
-// TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID — битый path-AID → 422,
-// audit не пишется.
+// TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID — broken path-AID → 422,
+// no audit written.
 func TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaRoleRouter(t, strictAllowAll{}, auditCap, roleSuccessPool{})
@@ -670,7 +670,7 @@ func TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ role-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL role operations from FULL-TYPED Go types ===
 
 func TestHumaRole_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaRoleSpecYAML()
@@ -688,35 +688,35 @@ func TestHumaRole_OpenAPIFragment_3_1(t *testing.T) {
 			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
 		}
 	}
-	// GOLDEN tier-инвариант (ADR-054 §Pattern третий tier): presence default_scope
-	// несёт Optional[string], а НЕ RawBody []byte — поэтому ни один role-роут НЕ
-	// тащит application/octet-stream в requestBody. Рецидив RawBody-моста сломал бы
-	// web-codegen при мерже спеки (явный ассерт отсутствия артефакта).
+	// GOLDEN tier invariant (ADR-054 §Pattern third tier): the default_scope presence
+	// carries Optional[string], NOT RawBody []byte — so no role route drags
+	// application/octet-stream into requestBody. A recurrence of the RawBody bridge would break
+	// web-codegen on spec merge (explicit assert of the artifact's absence).
 	if strings.Contains(frag, "octet-stream") {
 		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream (рецидив RawBody []byte-моста, ADR-054 §Pattern третий tier):\n%s", frag)
 	}
 }
 
-// TestHumaRole_PatchPermissions_RequestBody_JSONOnly — GOLDEN requestBody-guard
-// PATCH /v1/roles/{name}/permissions: тело — ТОЛЬКО application/json (presence
-// default_scope в типе Optional[string]), БЕЗ application/octet-stream. Локализован
-// на PATCH-роуте (а не на всём фрагменте), чтобы дрейф именно tier-эталона ловился
-// адресно. default_scope — nullable string (3.1 `type: [string, null]`).
+// TestHumaRole_PatchPermissions_RequestBody_JSONOnly — GOLDEN requestBody guard for
+// PATCH /v1/roles/{name}/permissions: the body is ONLY application/json (default_scope
+// presence in type Optional[string]), WITHOUT application/octet-stream. Localized
+// to the PATCH route (not the whole fragment) so drift of the tier reference is caught
+// precisely. default_scope — a nullable string (3.1 `type: [string, null]`).
 func TestHumaRole_PatchPermissions_RequestBody_JSONOnly(t *testing.T) {
 	frag, err := HumaRoleSpecYAML()
 	if err != nil {
 		t.Fatalf("HumaRoleSpecYAML: %v", err)
 	}
-	// Тело PATCH-операции описано схемой RolePermissionsUpdateRequest (контрактное имя
-	// рукописи после выравнивания N1); именно её requestBody-MIME сторожим. octet-stream
-	// в ЛЮБОМ месте фрагмента — провал tier-а.
+	// The PATCH operation body is described by schema RolePermissionsUpdateRequest (the contract
+	// reference name after N1 alignment); it's its requestBody MIME we guard. octet-stream
+	// ANYWHERE in the fragment is a tier failure.
 	if strings.Contains(frag, "octet-stream") {
 		t.Fatalf("PATCH-permissions requestBody несёт application/octet-stream (Optional[string] обязан давать чистый application/json):\n%s", frag)
 	}
 	if !strings.Contains(frag, "application/json") {
 		t.Errorf("PATCH-permissions requestBody не несёт application/json:\n%s", frag)
 	}
-	// default_scope — nullable string (presence-сброс через null), НЕ required.
+	// default_scope — a nullable string (presence reset via null), NOT required.
 	const bodySchemaName = "RolePermissionsUpdateRequest:"
 	bodyIdx := strings.Index(frag, bodySchemaName)
 	if bodyIdx < 0 {
@@ -728,8 +728,8 @@ func TestHumaRole_PatchPermissions_RequestBody_JSONOnly(t *testing.T) {
 	}
 }
 
-// assertAuditWritten — общий ассерт S6-guard: ровно одно событие нужного типа от
-// archon-alice (Source API) с НЕПУСТЫМ payload, содержащим заданные пары.
+// assertAuditWritten — a shared S6-guard assert: exactly one event of the required type from
+// archon-alice (Source API) with a NON-EMPTY payload containing the given pairs.
 func assertAuditWritten(t *testing.T, cap *auditCaptureWriter, evt audit.EventType, wantPayload map[string]any) {
 	t.Helper()
 	evs := cap.Events()

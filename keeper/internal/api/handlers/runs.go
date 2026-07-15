@@ -1,11 +1,12 @@
 package handlers
 
-// FULL-TYPED доменные функции глобального read-view прогонов (GET /v1/runs +
-// /v1/runs/stats, страница «All Runs» UI). READ, audit НЕ пишут. Permission —
-// incarnation.history (reuse read-tier per-incarnation runs, гейт RequireAction в
-// router.go); сужение по Purview — здесь, тем же resolveListScope, что у List
-// (action=history), fail-closed: нет claims / nil-scoper / пустой Purview →
-// пустой список / нулевой агрегат (200, не 403) — parity souls/stats.
+// FULL-TYPED domain functions for the global read view of runs (GET /v1/runs +
+// /v1/runs/stats, the "All Runs" UI page). READ, no audit. Permission —
+// incarnation.history (reuse the read-tier per-incarnation runs, gated by
+// RequireAction in router.go); Purview narrowing is here, via the same
+// resolveListScope as List (action=history), fail-closed: no claims / nil scoper /
+// empty Purview → empty list / zero aggregate (200, not 403) — parity with
+// souls/stats.
 
 import (
 	"context"
@@ -22,46 +23,47 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// maxAllRunsPageLimit — cap страницы GET /v1/runs (уже общего MaxPageLimit=1000:
-// глобальная свёртка apply_runs дороже плоского списка).
+// maxAllRunsPageLimit — page cap for GET /v1/runs (tighter than the shared
+// MaxPageLimit=1000: the global apply_runs rollup is costlier than a flat list).
 const maxAllRunsPageLimit = 100
 
-// maxRunsFilterLen — cap длины текстовых фильтров service/q (GET /v1/runs) в
-// СИМВОЛАХ (рунах): длиннее → 422. Ни service, ни q — не доменные валидаторы:
-// service — bound exact-match по incarnation.service (у колонки нет формат-CHECK,
-// миграция 005; домен реестра, миграция 034, без cap длины), q — свободный ILIKE;
-// сужаем только длину, чтобы не резать легитимные значения и кириллицу по байтам.
+// maxRunsFilterLen — length cap for the service/q text filters (GET /v1/runs) in
+// CHARACTERS (runes): longer → 422. Neither service nor q is a domain validator:
+// service is a bound exact-match on incarnation.service (the column has no format
+// CHECK, migration 005; registry domain, migration 034, no length cap), q is a free
+// ILIKE; we cap only length, so as not to cut legitimate values or Cyrillic by
+// bytes.
 const maxRunsFilterLen = 128
 
-// AllRunsInput — вход GET /v1/runs (huma-слой биндит typed-query и передаёт сюда).
+// AllRunsInput is the input for GET /v1/runs (the huma layer binds the typed query and passes it here).
 type AllRunsInput struct {
 	Status      string
 	Incarnation string
-	// Service — фильтр по сервису инкарнации-владельца ("" = все); точное
-	// совпадение (bound), не доменный валидатор; длиннее maxRunsFilterLen → 422.
+	// Service — filter by the owning incarnation's service ("" = all); exact match
+	// (bound), not a domain validator; longer than maxRunsFilterLen → 422.
 	Service string
-	// Q — свободный поиск (substring) по incarnation/scenario/service/started_by
-	// ("" = без поиска); длиннее maxRunsFilterLen символов → 422.
+	// Q — free-text search (substring) over incarnation/scenario/service/started_by
+	// ("" = no search); longer than maxRunsFilterLen characters → 422.
 	Q string
-	// StartedAfter/StartedBefore — RFC3339-границы по времени старта прогона
-	// (inclusive; "" = не задано). Невалидный формат → 422.
+	// StartedAfter/StartedBefore — RFC3339 bounds on the run's start time
+	// (inclusive; "" = not set). Invalid format → 422.
 	StartedAfter  string
 	StartedBefore string
-	// Sort — поле сортировки (started_at/finished_at/status/incarnation/service/
-	// scenario, "" = started_at); SortDir — asc|desc ("" = desc). Невалидное → 422. ADR-068 §B1.
+	// Sort — sort field (started_at/finished_at/status/incarnation/service/
+	// scenario, "" = started_at); SortDir — asc|desc ("" = desc). Invalid → 422. ADR-068 §B1.
 	Sort    string
 	SortDir string
 	Offset  int
 	Limit   int
 }
 
-// AllRunsReply — typed envelope GET /v1/runs (handler-native, element — доменный
-// RunSummaryView с заполненным Incarnation).
+// AllRunsReply — typed envelope for GET /v1/runs (handler-native, element — the
+// domain RunSummaryView with Incarnation populated).
 type AllRunsReply = sharedapi.PagedResponse[RunSummaryView]
 
-// AllRunsTyped — доменная функция GET /v1/runs: страница прогонов через все
-// инкарнации в границах Purview-scope оператора. Валидация: limit 1..100 → 400,
-// невалидный status/incarnation-фильтр → 422.
+// AllRunsTyped — domain function for GET /v1/runs: a page of runs across all
+// incarnations within the operator's Purview scope. Validation: limit 1..100 → 400,
+// invalid status/incarnation filter → 422.
 func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claims, in AllRunsInput) (AllRunsReply, error) {
 	var zero AllRunsReply
 
@@ -89,10 +91,10 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		filter.Incarnation = in.Incarnation
 	}
 	if in.Service != "" {
-		// service — bound exact-match по incarnation.service (i.service = $N), не
-		// доменный валидатор: домен реестра (миграция 034) без cap длины, у колонки
-		// формат-CHECK-а нет (005). Мусор безопасен (пустая выдача, не 500) —
-		// ограничиваем только длину (в рунах, как q).
+		// service — a bound exact-match on incarnation.service (i.service = $N), not
+		// a domain validator: registry domain (migration 034) with no length cap, the
+		// column has no format CHECK (005). Garbage is safe (empty output, not 500) —
+		// we cap only length (in runes, like q).
 		if utf8.RuneCountInString(in.Service) > maxRunsFilterLen {
 			return zero, incProblem(problem.TypeValidationFailed,
 				fmt.Sprintf("query 'service' too long: must be <= %d characters", maxRunsFilterLen))
@@ -106,8 +108,8 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		}
 		filter.Q = in.Q
 	}
-	// Время старта — RFC3339-границы по агрегату (after>before не валидируем жёстко:
-	// пустая выдача безвредна). Невалидный формат → 422.
+	// Start time — RFC3339 bounds on the aggregate (after>before is not strictly
+	// validated: empty output is harmless). Invalid format → 422.
 	if in.StartedAfter != "" {
 		tm, err := time.Parse(time.RFC3339, in.StartedAfter)
 		if err != nil {
@@ -124,13 +126,13 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		}
 		filter.StartedBefore = &tm
 	}
-	// Валидность sort/sort_dir — в store (whitelist), sentinel-ошибки → 422 ниже.
+	// sort/sort_dir validity is in the store (whitelist), sentinel errors → 422 below.
 	filter.Sort = in.Sort
 	filter.SortDir = in.SortDir
 
 	scope, ok := h.resolveListScope(ctx, claims, "history", "")
 	if !ok {
-		// fail-closed: scope не определён → пустая страница, НЕ прогоны всего флота.
+		// fail-closed: scope undefined → empty page, NOT runs across all incarnations.
 		return AllRunsReply{Items: []RunSummaryView{}, Offset: in.Offset, Limit: in.Limit}, nil
 	}
 
@@ -149,8 +151,8 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 	return AllRunsReply{Items: items, Offset: in.Offset, Limit: in.Limit, Total: total}, nil
 }
 
-// RunsStatsBucketView — счётчики прогонов по агрегатному статусу (одна корзина
-// сводки: за всё время либо за 24 часа).
+// RunsStatsBucketView — run counters by aggregate status (one summary bucket: all
+// time or the last 24 hours).
 type RunsStatsBucketView struct {
 	Total     int
 	Applying  int
@@ -159,19 +161,19 @@ type RunsStatsBucketView struct {
 	Cancelled int
 }
 
-// RunsStatsView — плоская доменная проекция 200-тела GET /v1/runs/stats. Пакет
-// api проецирует её в native wire-DTO.
+// RunsStatsView — flat domain projection of the 200 body of GET /v1/runs/stats. The
+// api package projects it into a native wire-DTO.
 type RunsStatsView struct {
 	All     RunsStatsBucketView
 	Last24h RunsStatsBucketView
 }
 
-// RunsStatsTyped — доменная функция GET /v1/runs/stats: сводные счётчики прогонов
-// в границах Purview-scope оператора (тот же fail-closed резолв, что AllRunsTyped).
+// RunsStatsTyped — domain function for GET /v1/runs/stats: summary run counters
+// within the operator's Purview scope (the same fail-closed resolve as AllRunsTyped).
 func (h *IncarnationHandler) RunsStatsTyped(ctx context.Context, claims *jwt.Claims) (RunsStatsView, error) {
 	scope, ok := h.resolveListScope(ctx, claims, "history", "")
 	if !ok {
-		// fail-closed: нулевой агрегат (200, не 403) — не палим прогоны вне scope.
+		// fail-closed: zero aggregate (200, not 403) — do not leak out-of-scope runs.
 		return RunsStatsView{}, nil
 	}
 	stats, err := applyrun.SelectRunsStats(ctx, h.db, scope)
@@ -185,7 +187,7 @@ func (h *IncarnationHandler) RunsStatsTyped(ctx context.Context, claims *jwt.Cla
 	}, nil
 }
 
-// runsStatsBucketView проецирует store-счётчики в доменный view.
+// runsStatsBucketView projects the store counters into a domain view.
 func runsStatsBucketView(c applyrun.RunsStatusCounts) RunsStatsBucketView {
 	return RunsStatsBucketView{
 		Total:     c.Total,

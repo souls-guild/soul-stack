@@ -1,16 +1,16 @@
 package api
 
-// Committed-снимок OpenAPI-спеки для UI-vendor + git-ревью. Источник правды —
-// huma-агрегатор ([HumaFullSpecYAML]); docs/keeper/openapi.yaml — его ПРОИЗВОДНЫЙ
-// дамп (НЕ рукопись). Два режима, симметрично protoc-gen-drift:
+// A committed snapshot of the OpenAPI spec for the UI vendor + git review. Source of truth —
+// the huma aggregator ([HumaFullSpecYAML]); docs/keeper/openapi.yaml — its DERIVED
+// dump (NOT hand-written). Two modes, symmetric with protoc-gen-drift:
 //
-//   - make gen-openapi (GEN_OPENAPI=1): перезаписать committed-файл текущим huma-дампом.
-//   - make check (по умолчанию): TestCommittedOpenAPI_NoDrift сверяет committed-файл
-//     с huma-дампом байт-в-байт; расхождение = «забыли make gen-openapi после правки
-//     huma-домена».
+//   - make gen-openapi (GEN_OPENAPI=1): overwrite the committed file with the current huma dump.
+//   - make check (default): TestCommittedOpenAPI_NoDrift compares the committed file
+//     with the huma dump byte-for-byte; a mismatch = "forgot make gen-openapi after editing
+//     a huma domain".
 //
-// Путь к committed-файлу — относительно директории пакета (keeper/internal/api):
-// docs/ лежит в корне репо, отсюда ../../../docs/keeper/openapi.yaml.
+// The path to the committed file is relative to the package directory (keeper/internal/api):
+// docs/ is at the repo root, hence ../../../docs/keeper/openapi.yaml.
 
 import (
 	"os"
@@ -18,15 +18,15 @@ import (
 	"testing"
 )
 
-// committedOpenAPIPath — committed-снимок относительно директории пакета.
+// committedOpenAPIPath — the committed snapshot relative to the package directory.
 var committedOpenAPIPath = filepath.Join("..", "..", "..", "docs", "keeper", "openapi.yaml")
 
 // TestCommittedOpenAPI_NoDrift — drift-guard: committed docs/keeper/openapi.yaml
-// должен байт-в-байт совпасть с текущим huma-дампом. При GEN_OPENAPI=1 тест вместо
-// сверки ПЕРЕЗАПИСЫВАЕТ файл (механизм make gen-openapi).
+// must match the current huma dump byte-for-byte. With GEN_OPENAPI=1 the test, instead of
+// comparing, OVERWRITES the file (the make gen-openapi mechanism).
 //
-// Если source-tree недоступен (custom-сборка без docs/) — drift-проверка
-// пропускается с t.Skip, как и прежний meta-drift-guard.
+// If the source tree is unavailable (a custom build without docs/) — the drift check
+// is skipped with t.Skip, like the former meta-drift-guard.
 func TestCommittedOpenAPI_NoDrift(t *testing.T) {
 	dump, err := HumaFullSpecYAML()
 	if err != nil {

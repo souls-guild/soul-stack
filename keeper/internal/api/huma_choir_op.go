@@ -1,12 +1,12 @@
 package api
 
-// FULL-TYPED форма CHOIR/VOICE-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// БАТЧ-2f WRITE-SELF-AUDIT (choir/voice пишут audit ВНУТРИ handler-а через writeAuditCtx,
-// БЕЗ audit-middleware — отличие от middleware-audit-доменов role/operator):
+// FULL-TYPED form of the CHOIR/VOICE domain (code-first source of OpenAPI, ADR-054 §Pattern).
+// BATCH-2f WRITE-SELF-AUDIT (choir/voice write audit INSIDE the handler via writeAuditCtx,
+// with no audit middleware — unlike the middleware-audit domains role/operator):
 // create — choir.created (201+body); delete — choir.deleted (204); add-voice — choir.
 // voice_added (201+body); remove-voice — choir.voice_removed (204); list/list-voices —
-// read (БЕЗ audit). Multi-resource: voices — sub-resource /choirs/{choir}/voices[/{sid}],
-// huma-op несёт ПОЛНЫЙ путь /{name}/choirs[/...] относительно группы /v1/incarnations.
+// read (no audit). Multi-resource: voices — a sub-resource /choirs/{choir}/voices[/{sid}],
+// the huma op carries the FULL path /{name}/choirs[/...] relative to the /v1/incarnations group.
 
 import (
 	"net/http"
@@ -16,18 +16,18 @@ import (
 
 // === POST /v1/incarnations/{name}/choirs (create) — WRITE-SELF-AUDIT choir.created (201+body) ===
 
-// choirCreateInput — huma-input POST .../choirs. Name — path (incarnation-имя);
-// Body — typed тело.
+// choirCreateInput — huma input for POST .../choirs. Name — path (incarnation name);
+// Body — typed body.
 type choirCreateInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
 	Body ChoirCreateRequest
 }
 
-// ChoirCreateRequest — Go-форма тела POST .../choirs (code-first источник схемы И
-// валидации). created_by_aid из тела НЕ принимается (берётся из JWT). Формат
-// choir_name / size-bounds — доменная валидация (422 в CreateTyped).
-// additionalProperties:false (huma-дефолт) → unknown поле → 400. Имя структуры =
-// контрактное имя схемы (huma DefaultSchemaNamer; рукопись ChoirCreateRequest, N4).
+// ChoirCreateRequest — Go form of the POST .../choirs body (code-first source of the schema
+// AND validation). created_by_aid is NOT taken from the body (it comes from JWT). The format
+// of choir_name / size-bounds is domain validation (422 in CreateTyped).
+// additionalProperties:false (huma default) → an unknown field → 400. The struct name = the
+// contract schema name (huma DefaultSchemaNamer; hand-written ChoirCreateRequest, N4).
 type ChoirCreateRequest struct {
 	ChoirName   string  `json:"choir_name" required:"true" pattern:"^[a-z][a-z0-9_-]*$" doc:"имя Choir-а (^[a-z][a-z0-9_-]*$)"`
 	Description *string `json:"description,omitempty" doc:"человекочитаемое описание"`
@@ -35,16 +35,16 @@ type ChoirCreateRequest struct {
 	MaxSize     *int    `json:"max_size,omitempty" doc:"верхний лимит размера партии (≥ min_size)"`
 }
 
-// choirCreateOutput — huma-output POST .../choirs (FULL-TYPED). Status=201; Body —
-// native 201-тело (Choir; nullable-поля без omitempty → null).
+// choirCreateOutput — huma output for POST .../choirs (FULL-TYPED). Status=201; Body —
+// native 201 body (Choir; nullable fields without omitempty → null).
 type choirCreateOutput struct {
 	Status int `json:"-"`
 	Body   Choir
 }
 
-// choirCreateOperation — метаданные POST .../choirs. DefaultStatus=201. WRITE-SELF-
-// AUDIT choir.created (пишет handler). Errors: 400 unknown/malformed, 403 RBAC, 404
-// incarnation, 409 choir-exists, 422 валидация choir_name/size, 500.
+// choirCreateOperation — metadata for POST .../choirs. DefaultStatus=201. WRITE-SELF-
+// AUDIT choir.created (written by the handler). Errors: 400 unknown/malformed, 403 RBAC, 404
+// incarnation, 409 choir-exists, 422 choir_name/size validation, 500.
 func choirCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createChoir",
@@ -58,7 +58,7 @@ func choirCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/choirs (list) — READ (БЕЗ audit) ===
+// === GET /v1/incarnations/{name}/choirs (list) — READ (no audit) ===
 
 // choirListInput — huma-input GET .../choirs. Name — path.
 type choirListInput struct {
@@ -71,8 +71,8 @@ type choirListOutput struct {
 	Body ChoirListReply
 }
 
-// choirListOperation — метаданные GET .../choirs. DefaultStatus=200. READ: audit НЕ
-// навешан. Permission choir.list. Errors: 403, 422 bad name, 500.
+// choirListOperation — metadata for GET .../choirs. DefaultStatus=200. READ: audit not
+// wired. Permission choir.list. Errors: 403, 422 bad name, 500.
 func choirListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listChoirs",
@@ -95,12 +95,12 @@ type choirDeleteInput struct {
 }
 
 // choirDeleteOutput — huma-output DELETE .../choirs/{choir} (FULL-TYPED). Status=204
-// (тела нет).
+// (no body).
 type choirDeleteOutput struct {
 	Status int `json:"-"`
 }
 
-// choirDeleteOperation — метаданные DELETE .../choirs/{choir}. DefaultStatus=204.
+// choirDeleteOperation — metadata for DELETE .../choirs/{choir}. DefaultStatus=204.
 // WRITE-SELF-AUDIT choir.deleted. Errors: 403, 404 choir, 422 bad path, 500.
 func choirDeleteOperation() huma.Operation {
 	return huma.Operation{
@@ -117,17 +117,17 @@ func choirDeleteOperation() huma.Operation {
 
 // === POST /v1/incarnations/{name}/choirs/{choir}/voices (add-voice) — WRITE-SELF-AUDIT choir.voice_added (201+body) ===
 
-// voiceAddInput — huma-input POST .../voices. Name/Choir — path; Body — typed тело.
+// voiceAddInput — huma-input POST .../voices. Name/Choir — path; Body — typed body.
 type voiceAddInput struct {
 	Name  string `path:"name" doc:"имя инкарнации"`
 	Choir string `path:"choir" doc:"имя Choir-а"`
 	Body  VoiceAddRequest
 }
 
-// VoiceAddRequest — Go-форма тела POST .../voices. added_by_aid из тела НЕ
-// принимается. Формат sid / role / position ≥0 — доменная валидация (422).
-// additionalProperties:false → unknown поле → 400. Имя структуры = контрактное имя
-// схемы (huma DefaultSchemaNamer; рукопись VoiceAddRequest, N4).
+// VoiceAddRequest — Go form of the POST .../voices body. added_by_aid is NOT taken from
+// the body. The format of sid / role / position ≥0 is domain validation (422).
+// additionalProperties:false → an unknown field → 400. The struct name = the contract
+// schema name (huma DefaultSchemaNamer; hand-written VoiceAddRequest, N4).
 type VoiceAddRequest struct {
 	SID      string  `json:"sid" required:"true" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) хоста — член инкарнации"`
 	Role     *string `json:"role,omitempty" doc:"declared-роль (kebab-case, 1..63)"`
@@ -135,15 +135,15 @@ type VoiceAddRequest struct {
 }
 
 // voiceAddOutput — huma-output POST .../voices (FULL-TYPED). Status=201; Body —
-// native 201-тело (Voice).
+// native 201 body (Voice).
 type voiceAddOutput struct {
 	Status int `json:"-"`
 	Body   Voice
 }
 
-// voiceAddOperation — метаданные POST .../voices. DefaultStatus=201. WRITE-SELF-AUDIT
+// voiceAddOperation — metadata for POST .../voices. DefaultStatus=201. WRITE-SELF-AUDIT
 // choir.voice_added. Errors: 400 unknown/malformed, 403, 404 choir, 409 voice-exists,
-// 422 валидация sid/role/position / SID-не-член, 500.
+// 422 sid/role/position validation / SID-not-a-member, 500.
 func voiceAddOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "addVoice",
@@ -157,7 +157,7 @@ func voiceAddOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/choirs/{choir}/voices (list-voices) — READ (БЕЗ audit) ===
+// === GET /v1/incarnations/{name}/choirs/{choir}/voices (list-voices) — READ (no audit) ===
 
 // voiceListInput — huma-input GET .../voices. Name/Choir — path.
 type voiceListInput struct {
@@ -171,8 +171,8 @@ type voiceListOutput struct {
 	Body VoiceListReply
 }
 
-// voiceListOperation — метаданные GET .../voices. DefaultStatus=200. READ: audit НЕ
-// навешан. Permission choir.list. Errors: 403, 422 bad path, 500.
+// voiceListOperation — metadata for GET .../voices. DefaultStatus=200. READ: audit not
+// wired. Permission choir.list. Errors: 403, 422 bad path, 500.
 func voiceListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listVoices",
@@ -200,7 +200,7 @@ type voiceRemoveOutput struct {
 	Status int `json:"-"`
 }
 
-// voiceRemoveOperation — метаданные DELETE .../voices/{sid}. DefaultStatus=204.
+// voiceRemoveOperation — metadata for DELETE .../voices/{sid}. DefaultStatus=204.
 // WRITE-SELF-AUDIT choir.voice_removed. Errors: 403, 404 voice, 422 bad path, 500.
 func voiceRemoveOperation() huma.Operation {
 	return huma.Operation{

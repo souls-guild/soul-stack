@@ -1,11 +1,13 @@
-// ДОКАЗАТЕЛЬНЫЙ guard NATIVE enum-каталога (huma_enums.go, T5d-2c-full). enum-значение на
-// wire = string → этот тест пиннит КАЖДУЮ native enum-константу к её точному wire-байту.
-// Мутация любого native-значения (опечатка/дрейф) краснит соответствующий case → каталог
-// контракта зафиксирован адресно, а не косвенно через дальние golden-тесты.
+// EVIDENCE guard for the NATIVE enum catalog (huma_enums.go, T5d-2c-full). An enum
+// value on the wire = string → this test pins EVERY native enum constant to its
+// exact wire byte. A mutation of any native value (typo/drift) reddens the matching
+// case → the contract catalog is pinned directly, not indirectly via distant golden
+// tests.
 //
-// СВЯЗЬ С GOLDEN. golden-reply-тесты (huma_<domain>_reply_test.go) сверяют wire структур
-// целиком (pinned-эталон) — это широкий byte-exact. Этот тест — узкий: сравнивает КАЖДУЮ
-// enum-константу 1:1, чтобы рассинхрон каталога был виден сразу и точечно.
+// RELATION TO GOLDEN. The golden-reply tests (huma_<domain>_reply_test.go) compare
+// whole struct wire (a pinned reference) — a broad byte-exact. This test is narrow:
+// it compares EVERY enum constant 1:1, so a catalog desync is visible immediately
+// and precisely.
 package api
 
 import "testing"

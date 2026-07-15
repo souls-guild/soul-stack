@@ -8,95 +8,94 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// AuditPayloadBuilder — функция, которая собирает payload audit-event-а
-// после успешного выполнения handler-а. Получает claims (через
-// [ClaimsFromContext]), request и response-status, возвращает map для
-// `Event.Payload`. Маскинг секретов делает audit.Writer-сторона
-// (через MaskSecrets), здесь можно класть raw-значения.
+// AuditPayloadBuilder — a function that assembles an audit event's payload
+// after the handler runs successfully. It receives claims (via
+// [ClaimsFromContext]), the request, and the response status, and returns a map for
+// `Event.Payload`. Secret masking is done by the audit.Writer side
+// (via MaskSecrets); raw values may be placed here.
 //
-// nil-возврат → пустой payload (event пишется, payload = `{}`).
+// nil return → empty payload (the event is written, payload = `{}`).
 //
-// Через builder, а не через захват response-body, чтобы не дублировать
-// streaming-логику ResponseRecorder-ов: handler-у дешевле положить
-// нужные поля прямо в context перед next() или вернуть из локальной
-// замыкаемой переменной.
+// Via a builder rather than capturing the response body, to avoid duplicating
+// the streaming logic of ResponseRecorders: it's cheaper for the handler to place
+// the needed fields directly in the context before next() or return them from a local
+// closed-over variable.
 type AuditPayloadBuilder func(r *http.Request, status int) map[string]any
 
-// auditCtxKey — non-exported context-key для payload-overrides от handler-а.
+// auditCtxKey — non-exported context key for handler payload overrides.
 type auditCtxKey struct{}
 
-// AuditPayload — payload, который handler хочет приложить к audit-event-у.
-// Используется через [SetAuditPayload] и сливается с тем, что вернёт
-// builder в [Audit].
+// AuditPayload — a payload the handler wants to attach to an audit event.
+// Used via [SetAuditPayload] and merged with what the builder returns
+// in [Audit].
 type AuditPayload map[string]any
 
-// SetAuditPayload кладёт payload в context. Handler вызывает её после
-// успешного выполнения; audit-middleware читает в after-handler-фазе.
+// SetAuditPayload places the payload in the context. The handler calls it after
+// running successfully; the audit middleware reads it in the after-handler phase.
 //
-// Идемпотентно перезаписывает: повторный вызов заменяет предыдущее
-// значение целиком.
+// Idempotent overwrite: a repeat call replaces the previous value entirely.
 func SetAuditPayload(r *http.Request, payload AuditPayload) {
 	ctx := context.WithValue(r.Context(), auditCtxKey{}, payload)
 	*r = *r.WithContext(ctx)
 }
 
-// auditPayloadFromContext возвращает payload, положенный handler-ом.
-// nil — handler не вызывал SetAuditPayload.
+// auditPayloadFromContext returns the payload placed by the handler.
+// nil — the handler didn't call SetAuditPayload.
 func auditPayloadFromContext(ctx context.Context) AuditPayload {
 	p, _ := ctx.Value(auditCtxKey{}).(AuditPayload)
 	return p
 }
 
-// HumaAuditCarrier — мутируемый носитель audit-payload для full-typed huma-роутов
-// (ADR-054 §Audit, вариант B). huma-middleware исполняется СНАРУЖИ handler-closure,
-// а huma.Context иммутабелен (huma.WithValue создаёт новый context), поэтому
-// классический [SetAuditPayload] (он делает *r.WithContext на *http.Request) к huma
-// неприменим. Вместо этого huma-audit-middleware seed-ит *HumaAuditCarrier в
-// request-context ДО next; huma-handler кладёт payload через [SetHumaAuditPayload];
-// middleware читает ТОТ ЖЕ указатель после next. Указатель общий → мутация видна.
+// HumaAuditCarrier — a mutable carrier of the audit payload for full-typed huma routes
+// (ADR-054 §Audit, variant B). huma middleware runs OUTSIDE the handler closure,
+// and huma.Context is immutable (huma.WithValue creates a new context), so the
+// classic [SetAuditPayload] (which does *r.WithContext on *http.Request) is inapplicable
+// to huma. Instead the huma-audit-middleware seeds a *HumaAuditCarrier into the
+// request context BEFORE next; the huma handler places the payload via [SetHumaAuditPayload];
+// the middleware reads the SAME pointer after next. The pointer is shared → the mutation is visible.
 type HumaAuditCarrier struct {
 	Payload AuditPayload
 }
 
-// HumaAuditCarrierKey — context-key для [HumaAuditCarrier]. Экспортирован: huma-
-// audit-middleware (пакет api) seed-ит carrier по нему, [SetHumaAuditPayload]
-// (тот же пакет middleware) читает по нему.
+// HumaAuditCarrierKey — the context key for [HumaAuditCarrier]. Exported: the huma-
+// audit-middleware (package api) seeds the carrier by it, [SetHumaAuditPayload]
+// (the same middleware package) reads by it.
 type HumaAuditCarrierKey struct{}
 
-// SetHumaAuditPayload кладёт audit-payload на huma-context (параллель
-// [SetAuditPayload] для full-typed huma-роутов, ADR-054 §Audit). huma-handler
-// вызывает её внутри своей closure; huma-audit-middleware seed-ит carrier ДО next
-// и читает payload после. carrier отсутствует (роут без huma-audit-навески / прямой
-// вызов handler-а) → no-op (payload не записывается, audit пишется без него).
+// SetHumaAuditPayload places the audit payload on the huma context (the parallel of
+// [SetAuditPayload] for full-typed huma routes, ADR-054 §Audit). The huma handler
+// calls it inside its closure; the huma-audit-middleware seeds the carrier BEFORE next
+// and reads the payload after. carrier absent (route without huma-audit wiring / a direct
+// handler call) → no-op (the payload isn't recorded, audit is written without it).
 //
-// Идемпотентно перезаписывает: повторный вызов заменяет предыдущее значение.
+// Idempotent overwrite: a repeat call replaces the previous value.
 func SetHumaAuditPayload(ctx context.Context, payload AuditPayload) {
 	if c, ok := ctx.Value(HumaAuditCarrierKey{}).(*HumaAuditCarrier); ok {
 		c.Payload = payload
 	}
 }
 
-// sourceCtxKey — non-exported context-key для audit-source, прокинутого в
-// REST-handler в обход HTTP-роутера (MCP-tool-ы вызывают handler in-memory
-// через httptest, минуя Operator-API chain, где source = api по умолчанию).
+// sourceCtxKey — non-exported context key for the audit source passed into a
+// REST handler bypassing the HTTP router (MCP tools call the handler in-memory
+// via httptest, bypassing the Operator-API chain where source = api by default).
 type sourceCtxKey struct{}
 
-// WithScenarioInvocationSource кладёт audit-source в context для REST-handler-ов,
-// вызванных не из HTTP-роутера, а напрямую (MCP-tool через httptest). Handler
-// читает значение через [ScenarioInvocationSource] и пишет его в audit-event
-// вместо дефолтного [audit.SourceAPI].
+// WithScenarioInvocationSource places the audit source in the context for REST handlers
+// called not from the HTTP router but directly (an MCP tool via httptest). The handler
+// reads the value via [ScenarioInvocationSource] and writes it into the audit event
+// instead of the default [audit.SourceAPI].
 //
-// Симметрично [SetAuditPayload]: тот же in-handler-context-идиом для метаданных
-// audit-а, только source задаётся ДО вызова handler-а (caller-сторона), а не
-// внутри (handler-сторона).
+// Symmetric to [SetAuditPayload]: the same in-handler-context idiom for audit
+// metadata, only source is set BEFORE the handler call (caller side), not
+// inside it (handler side).
 func WithScenarioInvocationSource(ctx context.Context, source audit.Source) context.Context {
 	return context.WithValue(ctx, sourceCtxKey{}, source)
 }
 
-// ScenarioInvocationSource возвращает audit-source из context. Fallback —
-// [audit.SourceAPI]: обычный HTTP-запрос через Operator-API chain не кладёт
-// ключ, и source остаётся `api` (поведение до правки сохранено). MCP-tool
-// проставляет [audit.SourceMCP] через [WithScenarioInvocationSource].
+// ScenarioInvocationSource returns the audit source from the context. Fallback —
+// [audit.SourceAPI]: a normal HTTP request through the Operator-API chain doesn't set
+// the key, and source stays `api` (behavior preserved). An MCP tool
+// sets [audit.SourceMCP] via [WithScenarioInvocationSource].
 func ScenarioInvocationSource(ctx context.Context) audit.Source {
 	if s, ok := ctx.Value(sourceCtxKey{}).(audit.Source); ok && s.Valid() {
 		return s
@@ -104,20 +103,20 @@ func ScenarioInvocationSource(ctx context.Context) audit.Source {
 	return audit.SourceAPI
 }
 
-// StatusRecorder — wrap для http.ResponseWriter, запоминающий статус,
-// фактически записанный handler-ом. Нужен audit-middleware, чтобы знать
-// success/failure после ServeHTTP без модификации handler-кода.
+// StatusRecorder — a wrap for http.ResponseWriter that records the status
+// actually written by the handler. Needed by the audit middleware to know
+// success/failure after ServeHTTP without modifying handler code.
 //
-// Экспортирован, чтобы [bridgeMiddleware] strict-слоя (пакет api) мог обернуть
-// входящий writer в ТОТ ЖЕ recorder, что читает Audit, и положить его в bridge-
-// контекст (br.w) — иначе доменный handler, пишущий в br.w, минует recorder
-// Audit-а, и rec.status остаётся 0 (регрессия S6: audit молча не пишется на
-// strict-роутах). Конструктор [NewStatusRecorder] + ctx-проброс
-// [WithStatusRecorder]/[StatusRecorderFromContext] делят ОДИН объект между
-// bridge (создал, отдал доменному handler-у) и Audit (читает статус из ctx).
+// Exported so the strict-layer [bridgeMiddleware] (package api) can wrap the
+// incoming writer in the SAME recorder that Audit reads, and place it in the bridge
+// context (br.w) — otherwise a domain handler writing into br.w bypasses Audit's
+// recorder, and rec.status stays 0 (S6 regression: audit silently isn't written on
+// strict routes). The constructor [NewStatusRecorder] + ctx passing
+// [WithStatusRecorder]/[StatusRecorderFromContext] share ONE object between
+// the bridge (created it, gave it to the domain handler) and Audit (reads status from ctx).
 //
-// Не буферизует body — это потенциально большие payload-ы (список
-// инстансов, JWT-токены). Audit пишет только status + handler-overridden
+// Does not buffer the body — those are potentially large payloads (instance
+// lists, JWT tokens). Audit writes only status + handler-overridden
 // payload.
 type StatusRecorder struct {
 	http.ResponseWriter
@@ -125,14 +124,14 @@ type StatusRecorder struct {
 	wroteHeader bool
 }
 
-// NewStatusRecorder оборачивает w. Идемпотентный WriteHeader (см. ниже)
-// исключает двойной WriteHeader при общем использовании bridge+Audit.
+// NewStatusRecorder wraps w. The idempotent WriteHeader (see below)
+// prevents a double WriteHeader when bridge+Audit share it.
 func NewStatusRecorder(w http.ResponseWriter) *StatusRecorder {
 	return &StatusRecorder{ResponseWriter: w}
 }
 
-// Status возвращает зафиксированный статус (0 — ничего не записано: panic /
-// заранний отказ до WriteHeader/Write).
+// Status returns the recorded status (0 — nothing written: panic /
+// early rejection before WriteHeader/Write).
 func (s *StatusRecorder) Status() int { return s.status }
 
 func (s *StatusRecorder) WriteHeader(code int) {
@@ -145,7 +144,7 @@ func (s *StatusRecorder) WriteHeader(code int) {
 
 func (s *StatusRecorder) Write(b []byte) (int, error) {
 	if !s.wroteHeader {
-		// stdlib делает implicit WriteHeader(200) перед первым Write.
+		// stdlib does an implicit WriteHeader(200) before the first Write.
 		s.status = http.StatusOK
 		s.wroteHeader = true
 	}
@@ -161,54 +160,54 @@ func (s *StatusRecorder) Flush() {
 	}
 }
 
-// recorderCtxKey — non-exported context-key для общего [StatusRecorder],
-// которым делятся bridge (strict-слой) и Audit.
+// recorderCtxKey — non-exported context key for the shared [StatusRecorder]
+// that the bridge (strict layer) and Audit share.
 type recorderCtxKey struct{}
 
-// WithStatusRecorder кладёт recorder в context. Вызывает [bridgeMiddleware]
-// strict-слоя: он оборачивает входящий writer в recorder, отдаёт ЭТОТ recorder
-// доменному handler-у (через br.w) и кладёт его в ctx — Audit ниже по цепочке
-// читает из ctx статус, фактически записанный доменным handler-ом.
+// WithStatusRecorder places the recorder in the context. Called by the strict-layer
+// [bridgeMiddleware]: it wraps the incoming writer in a recorder, gives THAT recorder
+// to the domain handler (via br.w) and places it in ctx — Audit further down the chain
+// reads from ctx the status actually written by the domain handler.
 func WithStatusRecorder(ctx context.Context, rec *StatusRecorder) context.Context {
 	return context.WithValue(ctx, recorderCtxKey{}, rec)
 }
 
-// StatusRecorderFromContext возвращает recorder, положенный [WithStatusRecorder]
-// (nil — ключа нет: не-strict-роут / прямой вызов handler-а). Audit при non-nil
-// читает статус из НЕГО, а не из собственного rec (тот на strict-роуте остался
-// бы 0 — доменный handler пишет в br.w=этот recorder, минуя обёртку Audit-а).
+// StatusRecorderFromContext returns the recorder placed by [WithStatusRecorder]
+// (nil — no key: a non-strict route / a direct handler call). When non-nil, Audit
+// reads the status from IT, not from its own rec (which on a strict route would stay
+// 0 — the domain handler writes into br.w=this recorder, bypassing Audit's wrapper).
 func StatusRecorderFromContext(ctx context.Context) *StatusRecorder {
 	rec, _ := ctx.Value(recorderCtxKey{}).(*StatusRecorder)
 	return rec
 }
 
-// Audit — middleware-фабрика, пишущая audit-event с eventType после
-// успешного выполнения handler-а.
+// Audit — a middleware factory that writes an audit event with eventType after
+// the handler runs successfully.
 //
-// Контракт:
-//   - Должен быть после [RequireJWT] (нужен claims.Subject для archon_aid).
-//   - Должен быть после [RequirePermission] (audit пишется только на
-//     прошедших RBAC-проверку запросах; иначе writer завалит audit_log
-//     событиями неавторизованных попыток — отдельный канал, post-MVP).
-//   - source = api (rbac.md → § Применение). archon_aid = claims.Subject.
+// Contract:
+//   - Must come after [RequireJWT] (needs claims.Subject for archon_aid).
+//   - Must come after [RequirePermission] (audit is written only on
+//     requests that passed the RBAC check; otherwise the writer would flood audit_log
+//     with unauthorized-attempt events — a separate channel, post-MVP).
+//   - source = api (rbac.md → § Usage). archon_aid = claims.Subject.
 //
-// builder вызывается только при «успешном» статусе (2xx); 4xx/5xx
-// пропускаются (RBAC-deny / validation-error / internal-error пишутся в
-// логи и проблем-response, не в audit). При status≥300 событие не
-// записывается.
+// builder is called only on a "success" status (2xx); 4xx/5xx are
+// skipped (RBAC-deny / validation-error / internal-error go to
+// logs and the problem response, not to audit). On status≥300 no event is
+// recorded.
 //
-// Ошибка writer.Write логируется через logger и НЕ влияет на response
-// (response уже улетел клиенту — слишком поздно). Audit-pipeline
-// best-effort на этом уровне (durability обеспечивает PG-COMMIT внутри
+// A writer.Write error is logged via logger and does NOT affect the response
+// (the response already left for the client — too late). The audit pipeline is
+// best-effort at this level (durability comes from the PG COMMIT inside
 // auditpg.Writer).
 func Audit(writer audit.Writer, eventType audit.EventType, builder AuditPayloadBuilder, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// На strict-роутах bridgeMiddleware УЖЕ обернул writer в общий
-			// StatusRecorder, положил его в br.w (доменный handler пишет в него)
-			// и в ctx. Тогда читаем статус из НЕГО — собственная обёртка увидела
-			// бы 0 (handler пишет мимо неё в br.w). На не-strict-роутах recorder в
-			// ctx нет — оборачиваем сами (legacy-путь сохранён).
+			// On strict routes bridgeMiddleware has ALREADY wrapped the writer in a shared
+			// StatusRecorder, placed it in br.w (the domain handler writes into it)
+			// and in ctx. Then we read the status from IT — our own wrapper would see
+			// 0 (the handler writes past it into br.w). On non-strict routes there's no recorder
+			// in ctx — we wrap it ourselves (legacy path preserved).
 			rec := StatusRecorderFromContext(r.Context())
 			if rec == nil {
 				rec = NewStatusRecorder(w)
@@ -216,8 +215,8 @@ func Audit(writer audit.Writer, eventType audit.EventType, builder AuditPayloadB
 			next.ServeHTTP(rec, r)
 
 			if rec.status >= 300 || rec.status == 0 {
-				// 0 = handler ничего не записал (panic, заранне отказ).
-				// 4xx/5xx — операция не выполнена, в audit_log не пишем.
+				// 0 = handler wrote nothing (panic, early rejection).
+				// 4xx/5xx — operation not performed, we don't write to audit_log.
 				return
 			}
 
@@ -237,12 +236,12 @@ func Audit(writer audit.Writer, eventType audit.EventType, builder AuditPayloadB
 				ArchonAID: claims.Subject,
 				Payload:   payload,
 			}
-			// Использовать r.Context() напрямую опасно: HTTP-сервер
-			// может отменить его сразу после write-response (клиент
-			// разорвал соединение). Audit не должен теряться по этой
-			// причине → используем Background. Trade-off: при shutdown
-			// 10s-grace не покроет audit-write дольше grace-а; для
-			// MVP-однотранзакционного INSERT-а это норма.
+			// Using r.Context() directly is dangerous: the HTTP server
+			// may cancel it right after the response is written (the client
+			// dropped the connection). Audit must not be lost for this
+			// reason → we use Background. Trade-off: on shutdown the
+			// 10s grace won't cover an audit write longer than the grace; for
+			// the MVP single-transaction INSERT that's fine.
 			if err := writer.Write(context.Background(), ev); err != nil {
 				logger.Error("audit middleware: write failed",
 					slog.String("event_type", string(eventType)),
@@ -254,8 +253,8 @@ func Audit(writer audit.Writer, eventType audit.EventType, builder AuditPayloadB
 	}
 }
 
-// mergeAuditPayload сливает payload из builder-а и payload-override-а
-// из context-а handler-а (handler-overrides выигрывают). nil/nil → nil.
+// mergeAuditPayload merges the builder payload with the payload override
+// from the handler context (handler overrides win). nil/nil → nil.
 func mergeAuditPayload(builder AuditPayloadBuilder, r *http.Request, status int, override AuditPayload) map[string]any {
 	var base map[string]any
 	if builder != nil {

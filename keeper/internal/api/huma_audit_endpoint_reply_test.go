@@ -1,8 +1,8 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO AUDIT-ENDPOINT-домена (handler-native T5d).
-// audit-endpoint больше НЕ зависит от legacy-генерата — golden сверяет json native-значения с
-// ЗАФИКСИРОВАННОЙ строкой-эталоном (pinned). Покрыты обе ветки archon_aid/correlation_id
-// (nil/non-nil), items non-nil [] и source enum-тип. TestGoldenWire_AuditProjection сверяет
-// byte-exact проекции доменной handlers.AuditListPage → native.
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO of the AUDIT-ENDPOINT domain (handler-native T5d).
+// audit-endpoint no longer depends on the legacy generator — the golden compares the native JSON values
+// against a PINNED reference string. Both archon_aid/correlation_id branches are covered
+// (nil/non-nil), plus items non-nil [] and the source enum type. TestGoldenWire_AuditProjection checks
+// byte-exact the projection of the domain handlers.AuditListPage → native.
 package api
 
 import (
@@ -25,33 +25,33 @@ func goldenAuditWire(t *testing.T, name string, native any, want string) {
 }
 
 func TestGoldenWire_AuditEventReply(t *testing.T) {
-	ts := time.Date(2026, 6, 14, 12, 34, 56, 0, time.UTC) // секундная точность (parity read-path)
+	ts := time.Date(2026, 6, 14, 12, 34, 56, 0, time.UTC) // second precision (parity read-path)
 	aid := "archon-alice"
 	corr := "01J0CORRELID"
 	payload := map[string]interface{}{"role": "operator", "permission": "incarnation.run"}
 
-	// --- AuditEvent: archon_aid/correlation_id наполнены ---
+	// --- AuditEvent: archon_aid/correlation_id populated ---
 	goldenAuditWire(t, "AuditEvent/full",
 		AuditEvent{ArchonAID: &aid, CorrelationID: &corr, CreatedAt: ts, ID: "01J0AUDITULID", Payload: payload, Source: AuditEventSourceAPI, Type: "role.create"},
 		`{"archon_aid":"archon-alice","correlation_id":"01J0CORRELID","created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{"permission":"incarnation.run","role":"operator"},"source":"api","type":"role.create"}`)
-	// archon_aid/correlation_id nil → ключи опущены (omitempty); payload пустой объект.
+	// archon_aid/correlation_id nil → keys omitted (omitempty); payload is an empty object.
 	goldenAuditWire(t, "AuditEvent/nil_optionals",
 		AuditEvent{ArchonAID: nil, CorrelationID: nil, CreatedAt: ts, ID: "01J0AUDITULID", Payload: map[string]interface{}{}, Source: AuditEventSourceSoulGRPC, Type: "soul.applied"},
 		`{"created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{},"source":"soul_grpc","type":"soul.applied"}`)
 
-	// --- AuditEventListReply (envelope как top-level reply-DTO): items non-nil + offset/limit/total ---
+	// --- AuditEventListReply (envelope as top-level reply-DTO): items non-nil + offset/limit/total ---
 	evN := AuditEvent{ArchonAID: &aid, CorrelationID: &corr, CreatedAt: ts, ID: "01J0AUDITULID", Payload: payload, Source: AuditEventSourceAPI, Type: "role.create"}
 	goldenAuditWire(t, "AuditEventListReply/full",
 		AuditEventListReply{Items: []AuditEvent{evN}, Limit: 50, Offset: 0, Total: 1},
 		`{"items":[{"archon_aid":"archon-alice","correlation_id":"01J0CORRELID","created_at":"2026-06-14T12:34:56Z","id":"01J0AUDITULID","payload":{"permission":"incarnation.run","role":"operator"},"source":"api","type":"role.create"}],"limit":50,"offset":0,"total":1}`)
-	// items пустой [] (ListTyped даёт non-nil []) → byte-exact `[]`, не null.
+	// items empty [] (ListTyped yields non-nil []) → byte-exact `[]`, not null.
 	goldenAuditWire(t, "AuditEventListReply/empty_items",
 		AuditEventListReply{Items: []AuditEvent{}, Limit: 50, Offset: 100, Total: 0},
 		`{"items":[],"limit":50,"offset":100,"total":0}`)
 }
 
-// TestGoldenWire_AuditProjection сверяет, что проекция доменной handlers.AuditListPage →
-// native (newAuditEventListReply) даёт байт-в-байт зафиксированный wire.
+// TestGoldenWire_AuditProjection checks that the projection of the domain handlers.AuditListPage →
+// native (newAuditEventListReply) yields the byte-for-byte pinned wire.
 func TestGoldenWire_AuditProjection(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	aid := "archon-bob"

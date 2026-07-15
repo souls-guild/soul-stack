@@ -14,112 +14,112 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
-// VoyageScenarioResolver — резолв target Voyage `kind=scenario` → snapshot ИМЁН
-// инкарнаций (ADR-043 §4, B1: единица батча = инкарнация). Out-of-incarnation
-// резолв: набор фиксируется на старте (snapshot-scope, parity Tide
+// VoyageScenarioResolver — resolves a Voyage `kind=scenario` target → a snapshot of
+// incarnation NAMES (ADR-043 §4, B1: the batch unit is an incarnation). Out-of-incarnation
+// resolve: the set is pinned at start (snapshot scope, parity with Tide
 // `target_resolved_souls`).
 //
-// Приём (любой непустой → OR-merge, затем дедуп):
-//   - явный incarnations[] (exact-match по имени, проверка существования);
-//   - фильтр service= / coven= → резолв в имена (parity GET /v1/incarnations
-//     с фильтром, [incarnation.SelectAll] / ListFilter).
+// Intake (any non-empty → OR-merge, then dedup):
+//   - explicit incarnations[] (exact-match by name, existence check);
+//   - service= / coven= filter → resolved to names (parity with GET /v1/incarnations
+//     with a filter, [incarnation.SelectAll] / ListFilter).
 //
-// Пустой результат — не ошибка (handler решает: 422 voyage_empty_target).
+// An empty result is not an error (the handler decides: 422 voyage_empty_target).
 type VoyageScenarioResolver interface {
 	ResolveIncarnations(ctx context.Context, filter VoyageScenarioFilter) ([]string, error)
 }
 
-// VoyageScenarioFilter — резолвленный target для [VoyageScenarioResolver].
-// Все поля опциональны; непустые объединяются по OR (как у list /v1/incarnations:
-// явные имена ∪ результат фильтра). AND-семантика была бы сужением,
-// несовместимым с use-case «возьми эти + всё из этого окружения».
+// VoyageScenarioFilter — a resolved target for [VoyageScenarioResolver].
+// All fields are optional; non-empty ones are OR-merged (like list /v1/incarnations:
+// explicit names ∪ filter result). AND semantics would be a narrowing, incompatible
+// with the "take these + everything from this environment" use case.
 type VoyageScenarioFilter struct {
-	Incarnations []string // exact-match имена; невалидное/несуществующее — ошибка.
-	Service      string   // фильтр incarnation.service (exact).
-	Coven        string   // env-тег incarnation.covens[] (any-of, ADR-008 amendment a).
+	Incarnations []string // exact-match names; invalid/nonexistent → error.
+	Service      string   // incarnation.service filter (exact).
+	Coven        string   // env tag incarnation.covens[] (any-of, ADR-008 amendment a).
 }
 
-// VoyageCommandResolver — резолв target Voyage `kind=command` → snapshot SID-ов
-// (ADR-043 §4: единица батча = хост). AND-merge sids/coven/where (security
-// invariant ADR-040 → ADR-043 §5): invocation сужает scope, не расширяет.
+// VoyageCommandResolver — resolves a Voyage `kind=command` target → a snapshot of SIDs
+// (ADR-043 §4: the batch unit is a host). AND-merge sids/coven/where (security
+// invariant ADR-040 → ADR-043 §5): an invocation narrows the scope, never widens it.
 //
-// ResolveSIDsInScope (ADR-047 S4) дополнительно пересекает резолвнутый target с
-// Purview оператора (верхняя граница, как list-видимость `GET /v1/souls`):
-// command-путь не должен раскрывать хосты вне scope Архонта. Preview и прочие
-// будущие потребители наследуют пересечение через тот же резолвер.
+// ResolveSIDsInScope (ADR-047 S4) additionally intersects the resolved target with
+// the operator Purview (upper bound, like the list visibility of `GET /v1/souls`):
+// the command path must not reveal hosts outside the Archon's scope. Preview and other
+// future consumers inherit the intersection via the same resolver.
 type VoyageCommandResolver interface {
 	ResolveSIDs(ctx context.Context, filter VoyageCommandFilter) ([]string, error)
 	ResolveSIDsInScope(ctx context.Context, filter VoyageCommandFilter, scope soulpurview.Scope) (ScopedSIDs, error)
 }
 
-// ScopedSIDs — результат [VoyageCommandResolver.ResolveSIDsInScope]: резолвнутый
-// target ∩ Purview оператора + явно-указанные чужие хосты (ADR-047 S4).
+// ScopedSIDs — the result of [VoyageCommandResolver.ResolveSIDsInScope]: the resolved
+// target ∩ operator Purview + explicitly-named foreign hosts (ADR-047 S4).
 //
-// Гибрид-семантика (выбор пользователя 2026-06-09, ADR-047 §S4): handler решает
-// по полям —
-//   - DeniedExplicit непуст → 403 (явный чужой хост в sids[] = попытка эскалации,
-//     parity per-incarnation scope-check scenario-пути);
-//   - иначе SIDs пуст → 422 voyage_empty_target (широкий target урезан в ноль);
-//   - иначе SIDs → snapshot прогона (урезанное подмножество, без отказа).
+// Hybrid semantics (user's choice 2026-06-09, ADR-047 §S4): the handler decides
+// by the fields —
+//   - DeniedExplicit non-empty → 403 (an explicit foreign host in sids[] = an escalation
+//     attempt, parity with the per-incarnation scope check of the scenario path);
+//   - else SIDs empty → 422 voyage_empty_target (a broad target trimmed to zero);
+//   - else SIDs → run snapshot (a trimmed subset, without refusal).
 type ScopedSIDs struct {
-	// SIDs — резолвнутый target ∩ Purview, отсортирован/дедуплицирован (snapshot
-	// прогона). Для Unrestricted = полный резолв (backcompat cluster-admin).
+	// SIDs — the resolved target ∩ Purview, sorted/deduplicated (run
+	// snapshot). For Unrestricted = the full resolve (backcompat cluster-admin).
 	SIDs []string
-	// DeniedExplicit — явно перечисленные в filter.SIDs хосты, существующие
-	// (прошли SQL-presence), но выпавшие из Purview оператора. Непустой список →
-	// 403 (anti-escalation): оператор назвал конкретный чужой SID. Отсортирован.
+	// DeniedExplicit — hosts explicitly listed in filter.SIDs that exist
+	// (passed SQL-presence) but fell out of the operator Purview. A non-empty list →
+	// 403 (anti-escalation): the operator named a specific foreign SID. Sorted.
 	DeniedExplicit []string
 }
 
-// VoyageCommandFilter — резолвленный target для [VoyageCommandResolver]
-// (kind=command). Все поля опциональны; AND-merge на стороне резолвера
-// (security invariant ADR-040: invocation сужает scope, не расширяет). where —
-// пока сохраняется в target_origin, NOT evaluated в MVP.
+// VoyageCommandFilter — a resolved target for [VoyageCommandResolver]
+// (kind=command). All fields are optional; AND-merge on the resolver side
+// (security invariant ADR-040: an invocation narrows the scope, never widens it). where —
+// for now stored in target_origin, NOT evaluated in the MVP.
 type VoyageCommandFilter struct {
 	SIDs   []string
 	Covens []string
 	Where  string
-	// RequireAlive — presence-фильтр (ADR-043 amendment §5): при true резолв
-	// дополнительно отсекает Soul-ы без живого presence-lease (SoulPresence).
-	// Снимок после фильтра фиксируется в target_resolved как обычно (snapshot не
-	// «дрожит» — фильтр на резолве). Применяется поверх SQL-presence (status IN
+	// RequireAlive — presence filter (ADR-043 amendment §5): when true the resolve
+	// additionally drops Souls without a live presence-lease (SoulPresence).
+	// The post-filter snapshot is pinned in target_resolved as usual (the snapshot does
+	// not "jitter" — the filter is at resolve time). Applied on top of SQL-presence (status IN
 	// connected/dormant).
 	RequireAlive bool
 }
 
-// --- production-реализации поверх pgxpool.Pool ---
+// --- production implementations over pgxpool.Pool ---
 
-// voyageResolverDB — узкая поверхность над PG для production-резолверов.
-// Реальный *pgxpool.Pool удовлетворяет.
+// voyageResolverDB — a narrow surface over PG for the production resolvers.
+// A real *pgxpool.Pool satisfies it.
 type voyageResolverDB interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// VoyageScenarioPGResolver — production-реализация [VoyageScenarioResolver].
+// VoyageScenarioPGResolver — production implementation of [VoyageScenarioResolver].
 type VoyageScenarioPGResolver struct {
 	db voyageResolverDB
 }
 
-// NewVoyageScenarioPGResolver конструирует resolver. db обязателен.
+// NewVoyageScenarioPGResolver constructs the resolver. db is required.
 func NewVoyageScenarioPGResolver(db voyageResolverDB) *VoyageScenarioPGResolver {
 	return &VoyageScenarioPGResolver{db: db}
 }
 
-// ResolveIncarnations резолвит target → отсортированный дедуплицированный slice
-// имён инкарнаций (детерминизм для audit/snapshot).
+// ResolveIncarnations resolves a target → a sorted, deduplicated slice of
+// incarnation names (deterministic for audit/snapshot).
 //
-// Алгоритм:
-//  1. Явные incarnations[] — каждое проверяется через [incarnation.SelectByName]
-//     (несуществующее → ошибка ErrIncarnationNotFound, handler маппит в 422:
-//     нельзя стартовать прогон на отсутствующей цели).
-//  2. Фильтр service= / coven= → [incarnation.SelectAll] с ListFilter (тот же
-//     резолв, что GET /v1/incarnations). Дренаж всех страниц через бескрайний
-//     limit-цикл по offset.
-//  3. Объединение (set), сортировка.
+// Algorithm:
+//  1. Explicit incarnations[] — each is checked via [incarnation.SelectByName]
+//     (nonexistent → ErrIncarnationNotFound, the handler maps to 422:
+//     a run cannot start on a missing target).
+//  2. service= / coven= filter → [incarnation.SelectAll] with ListFilter (the same
+//     resolve as GET /v1/incarnations). Drains all pages via an unbounded
+//     limit loop over offset.
+//  3. Union (set), sort.
 //
-// Empty result — не ошибка.
+// An empty result is not an error.
 func (r *VoyageScenarioPGResolver) ResolveIncarnations(ctx context.Context, filter VoyageScenarioFilter) ([]string, error) {
 	set := make(map[string]struct{})
 
@@ -140,9 +140,9 @@ func (r *VoyageScenarioPGResolver) ResolveIncarnations(ctx context.Context, filt
 		lf := incarnation.ListFilter{Service: filter.Service, Coven: filter.Coven}
 		const pageSize = 1000
 		for offset := 0; ; offset += pageSize {
-			// scope Unrestricted: voyage-target резолв оперирует полным
-			// множеством incarnation-ов (RBAC проверяется на уровне voyage-
-			// permission, не scoped-видимостью List). Поведение без изменений.
+			// scope Unrestricted: voyage-target resolve operates over the full
+			// set of incarnations (RBAC is checked at the voyage-permission
+			// level, not by the scoped List visibility). Behavior unchanged.
 			items, total, err := incarnation.SelectAll(ctx, r.db, lf, incarnation.ListScope{Unrestricted: true}, offset, pageSize)
 			if err != nil {
 				return nil, fmt.Errorf("voyage resolver: list incarnations: %w", err)
@@ -164,42 +164,42 @@ func (r *VoyageScenarioPGResolver) ResolveIncarnations(ctx context.Context, filt
 	return out, nil
 }
 
-// VoyageCommandPGResolver — production-реализация [VoyageCommandResolver] поверх
-// `souls`-таблицы (cluster-wide резолв target → SID[]-snapshot, parity
-// [ErrandRunSoulsPGResolver]). AND-merge sids/coven; where в MVP сохраняется
-// в target_origin, не evaluate-ится (CEL-evaluator — отдельный slice).
+// VoyageCommandPGResolver — production implementation of [VoyageCommandResolver] over
+// the `souls` table (cluster-wide resolve target → SID[] snapshot, parity with
+// [ErrandRunSoulsPGResolver]). AND-merge sids/coven; where in the MVP is stored
+// in target_origin, not evaluated (the CEL evaluator is a separate slice).
 //
-// presence — опциональный presence-lease-чекер (ADR-006(a), [SoulPresence]):
-// нужен только при filter.RequireAlive=true. nil → require_alive деградирует на
-// SQL-presence (status IN connected/dormant), без отдельной lease-проверки
-// (single-instance dev без Redis), симметрично topology-резолверу и `GET /v1/souls`.
+// presence — an optional presence-lease checker (ADR-006(a), [SoulPresence]):
+// needed only when filter.RequireAlive=true. nil → require_alive degrades to
+// SQL-presence (status IN connected/dormant), without a separate lease check
+// (single-instance dev without Redis), symmetric to the topology resolver and `GET /v1/souls`.
 type VoyageCommandPGResolver struct {
 	db       voyageResolverDB
 	presence SoulPresence
 }
 
-// NewVoyageCommandPGResolver конструирует resolver без presence-чекера
-// (require_alive деградирует на SQL-presence). db обязателен.
+// NewVoyageCommandPGResolver constructs the resolver without a presence checker
+// (require_alive degrades to SQL-presence). db is required.
 func NewVoyageCommandPGResolver(db voyageResolverDB) *VoyageCommandPGResolver {
 	return &VoyageCommandPGResolver{db: db}
 }
 
-// NewVoyageCommandPGResolverWithPresence конструирует resolver с presence-lease-
-// чекером (ADR-043 amendment §5): при filter.RequireAlive=true резолв отсекает
-// Soul-ы без живого presence-lease. db обязателен; presence nil → деградация на
-// SQL-presence (как [NewVoyageCommandPGResolver]).
+// NewVoyageCommandPGResolverWithPresence constructs the resolver with a presence-lease
+// checker (ADR-043 amendment §5): when filter.RequireAlive=true the resolve drops
+// Souls without a live presence-lease. db is required; presence nil → degradation to
+// SQL-presence (like [NewVoyageCommandPGResolver]).
 func NewVoyageCommandPGResolverWithPresence(db voyageResolverDB, presence SoulPresence) *VoyageCommandPGResolver {
 	return &VoyageCommandPGResolver{db: db, presence: presence}
 }
 
-// ResolveSIDs резолвит target → отсортированный slice SID-ов. AND-merge: все
-// непустые фильтры — пересечение (security invariant: сужение, не расширение).
-// При filter.RequireAlive — дополнительно presence-фильтр живых через
+// ResolveSIDs resolves a target → a sorted slice of SIDs. AND-merge: all non-empty
+// filters intersect (security invariant: narrowing, not widening). When
+// filter.RequireAlive — additionally a presence filter for live hosts via
 // [SoulPresence] (ADR-043 amendment §5).
 //
-// Cluster-wide (без Purview-пересечения): используется keeper-side потребителями,
-// которым scope-граница оператора не применима (например Cadence-спавн, где RBAC
-// проверен на уровне рецепта). HTTP-путь createCommand зовёт [ResolveSIDsInScope].
+// Cluster-wide (without Purview intersection): used by keeper-side consumers for whom
+// the operator scope boundary does not apply (e.g. Cadence spawn, where RBAC is
+// checked at the recipe level). The HTTP path createCommand calls [ResolveSIDsInScope].
 func (r *VoyageCommandPGResolver) ResolveSIDs(ctx context.Context, filter VoyageCommandFilter) ([]string, error) {
 	pairs, err := r.resolvePairs(ctx, filter)
 	if err != nil {
@@ -212,25 +212,25 @@ func (r *VoyageCommandPGResolver) ResolveSIDs(ctx context.Context, filter Voyage
 	return out, nil
 }
 
-// ResolveSIDsInScope резолвит target ∩ Purview оператора (ADR-047 S4). Тот же
-// AND-merge sids/coven + require_alive, что [ResolveSIDs], затем пересечение с
-// scope (верхняя граница видимости оператора):
-//   - Unrestricted → полный резолв (backcompat cluster-admin, поле SIDs без
-//     урезания, DeniedExplicit пуст);
-//   - Empty (fail-closed: оператору не положено ни одного хоста) → SIDs пуст,
-//     DeniedExplicit = все явно-указанные существующие SID-ы (→ 403, если их
-//     назвали; иначе 422 на пустом SIDs);
-//   - coven/regex-scope → видимость хоста = covenMatch OR regexMatch
-//     ([soulpurview.CompiledScope.Visible]); резолвнутый набор урезается до
-//     видимого. Явно-указанный (filter.SIDs) невидимый хост попадает в
-//     DeniedExplicit (anti-escalation), широкий (coven/where) — молча урезается.
+// ResolveSIDsInScope resolves target ∩ operator Purview (ADR-047 S4). The same
+// AND-merge sids/coven + require_alive as [ResolveSIDs], then intersection with
+// scope (the upper bound of operator visibility):
+//   - Unrestricted → full resolve (backcompat cluster-admin, SIDs field without
+//     trimming, DeniedExplicit empty);
+//   - Empty (fail-closed: the operator is entitled to no host) → SIDs empty,
+//     DeniedExplicit = all explicitly-named existing SIDs (→ 403 if they were
+//     named; otherwise 422 on empty SIDs);
+//   - coven/regex scope → host visibility = covenMatch OR regexMatch
+//     ([soulpurview.CompiledScope.Visible]); the resolved set is trimmed to the
+//     visible one. An explicitly-named (filter.SIDs) invisible host goes into
+//     DeniedExplicit (anti-escalation), a broad one (coven/where) is silently trimmed.
 //
-// soulprint/state-измерения (scope.Partial) НЕ вычисляются (S3b-2b отложен) —
-// под-показ (fail-closed: оператор скорее недосчитается своего хоста, доступного
-// ТОЛЬКО по soulprint, чем увидит чужой). coven/regex работают полноценно.
+// soulprint/state dimensions (scope.Partial) are NOT computed (S3b-2b deferred) —
+// under-display (fail-closed: the operator would rather miss their own host reachable
+// ONLY via soulprint than see a foreign one). coven/regex work fully.
 //
-// Битый/слишком длинный regex в Purview ([soulpurview.CompileScope] error) →
-// fail-closed: пустой набор + все явные SID-ы в DeniedExplicit (скрыть, не 500).
+// A broken/too-long regex in Purview ([soulpurview.CompileScope] error) →
+// fail-closed: empty set + all explicit SIDs in DeniedExplicit (hide, not 500).
 func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter VoyageCommandFilter, scope soulpurview.Scope) (ScopedSIDs, error) {
 	pairs, err := r.resolvePairs(ctx, filter)
 	if err != nil {
@@ -250,8 +250,8 @@ func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter
 		explicit[sid] = struct{}{}
 	}
 
-	// Empty (fail-closed) или scope-eval-error → ни одного видимого хоста. Явно-
-	// указанные существующие SID-ы становятся DeniedExplicit (handler → 403).
+	// Empty (fail-closed) or a scope-eval error → no visible host. Explicitly-named
+	// existing SIDs become DeniedExplicit (handler → 403).
 	if scope.Empty {
 		return scopedFromPairs(pairs, explicit, func(string, []string) bool { return false }), nil
 	}
@@ -262,10 +262,10 @@ func (r *VoyageCommandPGResolver) ResolveSIDsInScope(ctx context.Context, filter
 	return scopedFromPairs(pairs, explicit, compiled.Visible), nil
 }
 
-// scopedFromPairs делит резолвнутые (sid, covens)-пары по предикату видимости
-// visible: видимые → SIDs (отсортированы — pairs уже ORDER BY sid ASC), невидимые
-// и явно-указанные (∈ explicit) → DeniedExplicit. Невидимые широкие (coven/where,
-// ∉ explicit) молча отбрасываются (урезание без отказа, ADR-047 S4 ветка 2).
+// scopedFromPairs splits the resolved (sid, covens) pairs by the visibility predicate
+// visible: visible → SIDs (sorted — pairs are already ORDER BY sid ASC), invisible
+// and explicitly-named (∈ explicit) → DeniedExplicit. Invisible broad ones (coven/where,
+// ∉ explicit) are silently dropped (trimming without refusal, ADR-047 S4 branch 2).
 func scopedFromPairs(pairs []soulPair, explicit map[string]struct{}, visible func(sid string, covens []string) bool) ScopedSIDs {
 	var res ScopedSIDs
 	for i := range pairs {
@@ -281,16 +281,16 @@ func scopedFromPairs(pairs []soulPair, explicit map[string]struct{}, visible fun
 	return res
 }
 
-// soulPair — (sid, covens) одного хоста для scope-eval. covens нужны только в
-// regex/coven-режиме [soulpurview.CompiledScope.Visible].
+// soulPair — (sid, covens) of a single host for scope-eval. covens are needed only in
+// the regex/coven mode [soulpurview.CompiledScope.Visible].
 type soulPair struct {
 	sid    string
 	covens []string
 }
 
-// resolvePairs — общий резолв target → отсортированные (sid, covens)-пары
-// (AND-merge sids/coven + require_alive). База и для cluster-wide [ResolveSIDs]
-// (отбрасывает covens), и для [ResolveSIDsInScope] (scope-eval по covens).
+// resolvePairs — the shared resolve target → sorted (sid, covens) pairs
+// (AND-merge sids/coven + require_alive). The base for both cluster-wide [ResolveSIDs]
+// (drops covens) and [ResolveSIDsInScope] (scope-eval by covens).
 func (r *VoyageCommandPGResolver) resolvePairs(ctx context.Context, filter VoyageCommandFilter) ([]soulPair, error) {
 	for _, sid := range filter.SIDs {
 		if !soul.ValidSID(sid) {
@@ -335,10 +335,10 @@ ORDER BY sid ASC
 		return nil, fmt.Errorf("voyage resolver: iter: %w", err)
 	}
 
-	// require_alive (ADR-043 amendment §5): отсечь хосты без живого presence-lease.
-	// presence=nil → деградация на уже применённую SQL-presence (status IN
-	// connected/dormant) — без дополнительной фильтрации. Порядок SID-ов сохранён
-	// (фильтр-подмножество отсортированного среза).
+	// require_alive (ADR-043 amendment §5): drop hosts without a live presence-lease.
+	// presence=nil → degradation to the already-applied SQL-presence (status IN
+	// connected/dormant) — without extra filtering. SID order is preserved
+	// (a filtered subset of the sorted slice).
 	if filter.RequireAlive && r.presence != nil && len(out) > 0 {
 		sids := make([]string, len(out))
 		for i := range out {

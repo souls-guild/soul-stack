@@ -1,25 +1,24 @@
-// Operator API handler-ы реестров Oracle (Vigil — Soul-side проверка, Decree —
-// правило reactor; ADR-030, beacons S3). Тот же [oracle.Service] вызывает
-// MCP-tool-handler (keeper.oracle.vigil.* / keeper.oracle.decree.*), один источник
-// правды.
+// Operator API handlers for the Oracle registries (Vigil — a Soul-side check, Decree —
+// a reactor rule; ADR-030, beacons S3). The same [oracle.Service] backs the MCP tool
+// handlers (keeper.oracle.vigil.* / keeper.oracle.decree.*), one source of truth.
 //
-// T5d-2c (handler-native): домен oracle отвязан от legacy-генерата. *Typed-функции
-// принимают NATIVE request-типы (handlers.VigilCreateInput / DecreeCreateInput;
-// huma-input в пакете api биндит и валидирует тело по этим полям) и возвращают
-// доменные result-ы с ПЛОСКИМИ wire-полями (handlers.VigilView / DecreeView) — НЕ
-// legacy-генерата-Body. Native wire-DTO (схему OpenAPI) строит пакет api из этих полей
-// (register-func huma_oracle.go), oapi-генерёные типы в oracle-домене не участвуют.
-// (w,r)-оболочки сняты: HTTP обслуживает huma full-typed, MCP зовёт oracle.Service
-// напрямую (мимо handler — Service-direct, не httptest).
+// T5d-2c (handler-native): the oracle domain is detached from the legacy generator.
+// *Typed functions take NATIVE request types (handlers.VigilCreateInput / DecreeCreateInput;
+// the huma input in package api binds and validates the body against these fields) and
+// return domain results with FLAT wire fields (handlers.VigilView / DecreeView) — NOT a
+// legacy-generator Body. The native wire-DTO (the OpenAPI schema) is built by package api
+// from these fields (register func huma_oracle.go); oapi-generated types take no part in the
+// oracle domain. The (w,r) wrappers are gone: HTTP is served by huma full-typed, MCP calls
+// oracle.Service directly (bypassing the handler — Service-direct, not httptest).
 //
-// Бизнес-логика (валидация name/interval/check/субъект для Vigil; name/on_beacon/
-// incarnation_name/scenario/субъект/where-CEL для Decree) — в [oracle.Service];
-// handler делает path/query-валидацию и маппит sentinel-ы в RFC 7807. RBAC — в
+// Business logic (validation of name/interval/check/subject for Vigil; name/on_beacon/
+// incarnation_name/scenario/subject/where-CEL for Decree) lives in [oracle.Service]; the
+// handler does path/query validation and maps sentinels to RFC 7807. RBAC is in the
 // middleware (router.go).
 //
-// БЕЗОПАСНОСТЬ: params Vigil-а / action_input Decree-а — конфигурация проверки/
-// сценария, не секрет; vault-ref в action_input едет КАК ЕСТЬ (инвариант A
-// ADR-027), значения секретов через этот path не проходят.
+// SECURITY: a Vigil's params / a Decree's action_input are check/scenario configuration,
+// not a secret; a vault-ref in action_input travels AS-IS (invariant A of ADR-027), secret
+// values do not pass through this path.
 package handlers
 
 import (
@@ -38,20 +37,20 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// reOracleName — формат path-сегмента {name} Vigil / Decree (kebab 1..63,
-// oracle.NamePattern). Path-сегмент без слешей/`..` — безопасен от traversal.
+// reOracleName is the format of the {name} path segment for Vigil / Decree (kebab 1..63,
+// oracle.NamePattern). A path segment with no slashes/`..` is traversal-safe.
 var reOracleName = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
 
-// OracleHandler — REST-эндпоинты реестров Oracle (vigils + decrees). Делегирует
-// бизнес-логику в [oracle.Service]. Все зависимости immutable; safe for
+// OracleHandler holds the REST endpoints for the Oracle registries (vigils + decrees).
+// Delegates business logic to [oracle.Service]. All dependencies are immutable; safe for
 // concurrent use.
 type OracleHandler struct {
 	svc    *oracle.Service
 	logger *slog.Logger
 }
 
-// NewOracleHandler создаёт handler. svc обязателен (паника при nil —
-// единственная точка misconfiguration; caller обязан передать non-nil).
+// NewOracleHandler creates the handler. svc is required (panic on nil — the only
+// misconfiguration point; the caller must pass non-nil).
 func NewOracleHandler(svc *oracle.Service, logger *slog.Logger) *OracleHandler {
 	if svc == nil {
 		panic("handlers.NewOracleHandler: oracle.Service is nil")
@@ -62,22 +61,22 @@ func NewOracleHandler(svc *oracle.Service, logger *slog.Logger) *OracleHandler {
 	return &OracleHandler{svc: svc, logger: logger}
 }
 
-// OracleSpecStub — непустой *OracleHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaOracleSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [AugurSpecStub]).
+// OracleSpecStub is a non-nil *OracleHandler stub for generating the huma-OpenAPI
+// fragment (HumaOracleSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its nil no-op check. svc nil — the handler
+// never executes in spec mode (parity with [AugurSpecStub]).
 func OracleSpecStub() *OracleHandler {
 	return &OracleHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
 // --- Vigil ------------------------------------------------------------
 
-// VigilView — ПЛОСКАЯ wire-форма Vigil-а (create-201 / list-item / get-200),
-// handler-native. Coven — `*[]string` (nil при пустом, паритет omitempty); SID/
-// CreatedByAID — *string nullable (nil → ключ опущен). params — byte-passthrough
-// JSONB ([json.RawMessage], ADR-051 категория D): сырые байты отдаются as-is, БЕЗ
-// unmarshal→map→marshal (re-marshal переупорядочил бы ключи). created_at/updated_at —
-// UTC + Truncate(Second) (фиксируется здесь, как в эталоне oracle (w,r)).
+// VigilView is the FLAT wire form of a Vigil (create-201 / list-item / get-200),
+// handler-native. Coven — `*[]string` (nil when empty, omitempty parity); SID/
+// CreatedByAID — *string nullable (nil → key omitted). params — byte-passthrough
+// JSONB ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is, without
+// unmarshal→map→marshal (a re-marshal would reorder keys). created_at/updated_at —
+// UTC + Truncate(Second) (pinned here, as in the oracle (w,r) reference).
 type VigilView struct {
 	Name         string
 	Coven        *[]string
@@ -110,11 +109,10 @@ func toVigilView(v *oracle.Vigil) VigilView {
 	}
 }
 
-// VigilCreateInput — NATIVE request-форма POST /v1/vigils (handler-native).
-// Заменяет VigilCreateRequest: subject — XOR coven/sid; params —
-// `json.RawMessage` (byte-passthrough JSONB, ADR-051 категория D); enabled —
-// pointer-optional (опущено → true). XOR-субъект / форма interval/check/params
-// валидирует service.
+// VigilCreateInput is the NATIVE request form of POST /v1/vigils (handler-native).
+// Replaces VigilCreateRequest: subject — XOR coven/sid; params — `json.RawMessage`
+// (byte-passthrough JSONB, ADR-051 category D); enabled — pointer-optional (omitted →
+// true). The XOR subject / the form of interval/check/params are validated by the service.
 type VigilCreateInput struct {
 	Name     string
 	Coven    *[]string
@@ -125,9 +123,9 @@ type VigilCreateInput struct {
 	Enabled  *bool
 }
 
-// VigilCreateReply — извлечённый результат [OracleHandler.CreateVigilTyped]
-// (handler-native). Несёт плоский 201-вид (View) + check/interval/subject + caller
-// AID (для audit-payload; params в audit НЕ кладётся).
+// VigilCreateReply is the extracted result of [OracleHandler.CreateVigilTyped]
+// (handler-native). Carries the flat 201 view (View) + check/interval/subject + the caller
+// AID (for the audit payload; params is NOT put in audit).
 type VigilCreateReply struct {
 	View      VigilView
 	Check     string
@@ -136,8 +134,8 @@ type VigilCreateReply struct {
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload vigil.create-роута (parity легаси:
-// name/check/interval/subject/created_by_aid; params НЕ кладётся).
+// AuditPayload builds the audit payload for the vigil.create route (legacy parity:
+// name/check/interval/subject/created_by_aid; params is NOT included).
 func (r VigilCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.View.Name,
@@ -148,10 +146,10 @@ func (r VigilCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateVigilTyped — доменная функция POST /v1/vigils (handler-native):
+// CreateVigilTyped is the domain function for POST /v1/vigils (handler-native):
 // svc.CreateVigil + sentinel→problem. params — byte-passthrough JSONB (ADR-051
-// категория D). Ошибки — *problemError; успех — [VigilCreateReply] (плоский 201-вид
-// + audit-поля).
+// category D). Errors are *problemError; success is [VigilCreateReply] (the flat 201 view
+// + audit fields).
 func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.Claims, req VigilCreateInput) (VigilCreateReply, error) {
 	var zero VigilCreateReply
 	callerAID := claims.Subject
@@ -177,9 +175,9 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 	}, nil
 }
 
-// VigilListPage — доменный paged-результат GET /v1/vigils (handler-native). Плоские
-// offset/limit/total + срез VigilView; пакет api проецирует в native envelope
-// VigilListReply.
+// VigilListPage is the domain paged result of GET /v1/vigils (handler-native). Flat
+// offset/limit/total + a slice of VigilView; package api projects it into the native
+// envelope VigilListReply.
 type VigilListPage struct {
 	Items  []VigilView
 	Offset int
@@ -187,10 +185,9 @@ type VigilListPage struct {
 	Total  int
 }
 
-// ListVigilsTyped — доменная функция GET /v1/vigils (handler-native, read-with-
-// typed-query, БЕЗ audit). offset/limit приходят уже провалидированными (huma-bind
-// int32); диапазон enforce-ит CheckPageBounds → 400. Ошибка чтения → *problemError
-// (500).
+// ListVigilsTyped is the domain function for GET /v1/vigils (handler-native, read with
+// typed query, no audit). offset/limit arrive already validated (huma-bind int32); the
+// range is enforced by CheckPageBounds → 400. A read error → *problemError (500).
 func (h *OracleHandler) ListVigilsTyped(ctx context.Context, offset, limit int) (VigilListPage, error) {
 	var zero VigilListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
@@ -209,9 +206,9 @@ func (h *OracleHandler) ListVigilsTyped(ctx context.Context, offset, limit int) 
 	return VigilListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetVigilTyped — доменная функция GET /v1/vigils/{name} (handler-native, read-with-
-// path, БЕЗ audit): валидация path-name + svc.GetVigil + sentinel→problem
-// (404/422/500). Ошибки — *problemError; успех — [VigilView].
+// GetVigilTyped is the domain function for GET /v1/vigils/{name} (handler-native, read with
+// path, no audit): path-name validation + svc.GetVigil + sentinel→problem (404/422/500).
+// Errors are *problemError; success is [VigilView].
 func (h *OracleHandler) GetVigilTyped(ctx context.Context, name string) (VigilView, error) {
 	var zero VigilView
 	if !reOracleName.MatchString(name) {
@@ -231,20 +228,20 @@ func (h *OracleHandler) GetVigilTyped(ctx context.Context, name string) (VigilVi
 	}
 }
 
-// VigilDeleteReply — извлечённый результат [OracleHandler.DeleteVigilTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// VigilDeleteReply is the extracted result of [OracleHandler.DeleteVigilTyped]
+// (handler-native). Carries the audit fields (the HTTP response is an empty 204 body).
 type VigilDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload vigil.delete-роута (parity легаси: name).
+// AuditPayload builds the audit payload for the vigil.delete route (legacy parity: name).
 func (r VigilDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteVigilTyped — доменная функция DELETE /v1/vigils/{name} (handler-native):
-// валидация path-name + svc.DeleteVigil + sentinel→problem. Ошибки — *problemError;
-// успех — [VigilDeleteReply].
+// DeleteVigilTyped is the domain function for DELETE /v1/vigils/{name} (handler-native):
+// path-name validation + svc.DeleteVigil + sentinel→problem. Errors are *problemError;
+// success is [VigilDeleteReply].
 func (h *OracleHandler) DeleteVigilTyped(ctx context.Context, name string) (VigilDeleteReply, error) {
 	var zero VigilDeleteReply
 	if !reOracleName.MatchString(name) {
@@ -264,7 +261,7 @@ func (h *OracleHandler) DeleteVigilTyped(ctx context.Context, name string) (Vigi
 	}
 }
 
-// vigilError маппит sentinel-ы [oracle.Service] (Vigil create) в *problemError:
+// vigilError maps [oracle.Service] sentinels (Vigil create) to *problemError:
 //   - ErrValidation         → validation-failed (422).
 //   - ErrVigilAlreadyExists  → vigil-already-exists (409).
 func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error {
@@ -282,10 +279,10 @@ func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error 
 
 // --- Decree -----------------------------------------------------------
 
-// DecreeView — ПЛОСКАЯ wire-форма Decree-а (create-201 / list-item / get-200),
-// handler-native. Coven — `*[]string` (nil при пустом); Where/SID/CreatedByAID —
-// *string nullable (nil → ключ опущен). action_input — byte-passthrough JSONB
-// ([json.RawMessage], ADR-051 категория D): сырые байты отдаются as-is. created_at/
+// DecreeView is the FLAT wire form of a Decree (create-201 / list-item / get-200),
+// handler-native. Coven — `*[]string` (nil when empty); Where/SID/CreatedByAID —
+// *string nullable (nil → key omitted). action_input — byte-passthrough JSONB
+// ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is. created_at/
 // updated_at — UTC + Truncate(Second).
 type DecreeView struct {
 	Name            string
@@ -325,11 +322,10 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 	}
 }
 
-// DecreeCreateInput — NATIVE request-форма POST /v1/decrees (handler-native).
-// Заменяет DecreeCreateRequest: subject — XOR coven/sid; action_input —
-// `json.RawMessage` (byte-passthrough JSONB, ADR-051 категория D); cooldown/enabled —
-// pointer-optional (enabled опущено → true). XOR-субъект / where-CEL / cooldown
-// валидирует service.
+// DecreeCreateInput is the NATIVE request form of POST /v1/decrees (handler-native).
+// Replaces DecreeCreateRequest: subject — XOR coven/sid; action_input — `json.RawMessage`
+// (byte-passthrough JSONB, ADR-051 category D); cooldown/enabled — pointer-optional
+// (enabled omitted → true). The XOR subject / where-CEL / cooldown are validated by the service.
 type DecreeCreateInput struct {
 	Name            string
 	OnBeacon        string
@@ -343,19 +339,19 @@ type DecreeCreateInput struct {
 	Enabled         *bool
 }
 
-// DecreeCreateReply — извлечённый результат [OracleHandler.CreateDecreeTyped]
-// (handler-native). Несёт плоский 201-вид (View) + субъект и caller AID (для
-// audit-payload; where-CEL и action_input в audit НЕ кладутся — action_input может
-// транзитом нести vault-ref).
+// DecreeCreateReply is the extracted result of [OracleHandler.CreateDecreeTyped]
+// (handler-native). Carries the flat 201 view (View) + subject and caller AID (for the
+// audit payload; where-CEL and action_input are NOT put in audit — action_input may carry
+// a vault-ref in transit).
 type DecreeCreateReply struct {
 	View      DecreeView
 	Subject   string
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload decree.create-роута (parity легаси:
-// name/on_beacon/incarnation/action_scenario/subject/created_by_aid; where-CEL и
-// action_input НЕ кладутся).
+// AuditPayload builds the audit payload for the decree.create route (legacy parity:
+// name/on_beacon/incarnation/action_scenario/subject/created_by_aid; where-CEL and
+// action_input are NOT included).
 func (r DecreeCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":            r.View.Name,
@@ -367,10 +363,10 @@ func (r DecreeCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateDecreeTyped — доменная функция POST /v1/decrees (handler-native):
-// svc.CreateDecree + sentinel→problem. action_input — byte-passthrough JSONB
-// (ADR-051 категория D), едет в service напрямую. Ошибки — *problemError; успех —
-// [DecreeCreateReply] (плоский 201-вид + audit-поля).
+// CreateDecreeTyped is the domain function for POST /v1/decrees (handler-native):
+// svc.CreateDecree + sentinel→problem. action_input — byte-passthrough JSONB (ADR-051
+// category D), passed to the service directly. Errors are *problemError; success is
+// [DecreeCreateReply] (the flat 201 view + audit fields).
 func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt.Claims, req DecreeCreateInput) (DecreeCreateReply, error) {
 	var zero DecreeCreateReply
 	callerAID := claims.Subject
@@ -393,8 +389,8 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 	return DecreeCreateReply{View: toDecreeView(d), Subject: decreeSubject(d), CallerAID: callerAID}, nil
 }
 
-// DecreeListPage — доменный paged-результат GET /v1/decrees (handler-native). Пакет
-// api проецирует в native envelope DecreeListReply.
+// DecreeListPage is the domain paged result of GET /v1/decrees (handler-native). Package
+// api projects it into the native envelope DecreeListReply.
 type DecreeListPage struct {
 	Items  []DecreeView
 	Offset int
@@ -402,10 +398,9 @@ type DecreeListPage struct {
 	Total  int
 }
 
-// ListDecreesTyped — доменная функция GET /v1/decrees (handler-native, read-with-
-// typed-query, БЕЗ audit). offset/limit приходят уже провалидированными (huma-bind
-// int32); диапазон enforce-ит CheckPageBounds → 400. Ошибка чтения → *problemError
-// (500).
+// ListDecreesTyped is the domain function for GET /v1/decrees (handler-native, read with
+// typed query, no audit). offset/limit arrive already validated (huma-bind int32); the
+// range is enforced by CheckPageBounds → 400. A read error → *problemError (500).
 func (h *OracleHandler) ListDecreesTyped(ctx context.Context, offset, limit int) (DecreeListPage, error) {
 	var zero DecreeListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
@@ -424,9 +419,9 @@ func (h *OracleHandler) ListDecreesTyped(ctx context.Context, offset, limit int)
 	return DecreeListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetDecreeTyped — доменная функция GET /v1/decrees/{name} (handler-native, read-
-// with-path, БЕЗ audit): валидация path-name + svc.GetDecree + sentinel→problem
-// (404/422/500). Ошибки — *problemError; успех — [DecreeView].
+// GetDecreeTyped is the domain function for GET /v1/decrees/{name} (handler-native, read
+// with path, no audit): path-name validation + svc.GetDecree + sentinel→problem
+// (404/422/500). Errors are *problemError; success is [DecreeView].
 func (h *OracleHandler) GetDecreeTyped(ctx context.Context, name string) (DecreeView, error) {
 	var zero DecreeView
 	if !reOracleName.MatchString(name) {
@@ -446,20 +441,20 @@ func (h *OracleHandler) GetDecreeTyped(ctx context.Context, name string) (Decree
 	}
 }
 
-// DecreeDeleteReply — извлечённый результат [OracleHandler.DeleteDecreeTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// DecreeDeleteReply is the extracted result of [OracleHandler.DeleteDecreeTyped]
+// (handler-native). Carries the audit fields (the HTTP response is an empty 204 body).
 type DecreeDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload decree.delete-роута (parity легаси: name).
+// AuditPayload builds the audit payload for the decree.delete route (legacy parity: name).
 func (r DecreeDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteDecreeTyped — доменная функция DELETE /v1/decrees/{name} (handler-native):
-// валидация path-name + svc.DeleteDecree + sentinel→problem (каскад чистит
-// cooldown-state). Ошибки — *problemError; успех — [DecreeDeleteReply].
+// DeleteDecreeTyped is the domain function for DELETE /v1/decrees/{name} (handler-native):
+// path-name validation + svc.DeleteDecree + sentinel→problem (the cascade clears
+// cooldown-state). Errors are *problemError; success is [DecreeDeleteReply].
 func (h *OracleHandler) DeleteDecreeTyped(ctx context.Context, name string) (DecreeDeleteReply, error) {
 	var zero DecreeDeleteReply
 	if !reOracleName.MatchString(name) {
@@ -479,7 +474,7 @@ func (h *OracleHandler) DeleteDecreeTyped(ctx context.Context, name string) (Dec
 	}
 }
 
-// decreeError маппит sentinel-ы [oracle.Service] (Decree create) в *problemError:
+// decreeError maps [oracle.Service] sentinels (Decree create) to *problemError:
 //   - ErrValidation          → validation-failed (422).
 //   - ErrDecreeAlreadyExists   → decree-already-exists (409).
 func (h *OracleHandler) decreeError(op, name, callerAID string, err error) error {
@@ -495,8 +490,8 @@ func (h *OracleHandler) decreeError(op, name, callerAID string, err error) error
 	}
 }
 
-// enabledOrDefault: опущенный `enabled` → true (активная проверка/правило,
-// симметрично DEFAULT true в миграции 041).
+// enabledOrDefault: an omitted `enabled` → true (an active check/rule, symmetric to
+// DEFAULT true in migration 041).
 func enabledOrDefault(p *bool) bool {
 	if p == nil {
 		return true
@@ -504,11 +499,10 @@ func enabledOrDefault(p *bool) bool {
 	return *p
 }
 
-// derefRawMessage разыменовывает optional JSONB-поле из request-тела (huma даёт
-// `*json.RawMessage` для omitempty params/action_input); nil → nil ([json.RawMessage]).
-// Сырые байты НЕ копируются и НЕ переупорядочиваются (ADR-051 категория D,
-// byte-passthrough); пустой JSONB нормализует в `{}` уже reply-граница (toVigilView/
-// toDecreeView).
+// derefRawMessage dereferences an optional JSONB field from the request body (huma yields
+// `*json.RawMessage` for omitempty params/action_input); nil → nil ([json.RawMessage]).
+// Raw bytes are NOT copied or reordered (ADR-051 category D, byte-passthrough); an empty
+// JSONB is normalized to `{}` at the reply boundary (toVigilView/toDecreeView).
 func derefRawMessage(p *json.RawMessage) json.RawMessage {
 	if p == nil {
 		return nil
@@ -516,8 +510,8 @@ func derefRawMessage(p *json.RawMessage) json.RawMessage {
 	return *p
 }
 
-// vigilSubject / decreeSubject — человекочитаемая форма субъекта для
-// audit-payload (`coven=<v1,v2>` / `sid=<v>`). XOR гарантирован валидацией.
+// vigilSubject / decreeSubject — the human-readable subject form for the audit payload
+// (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
 func vigilSubject(v *oracle.Vigil) string { return subjectLabel(v.Coven, v.SID) }
 
 func decreeSubject(d *oracle.Decree) string { return subjectLabel(d.SubjectCoven, d.SubjectSID) }

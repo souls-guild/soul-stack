@@ -1,13 +1,13 @@
 package api
 
-// FULL-TYPED форма VOYAGE-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// БАТЧ-2f WRITE-SELF-AUDIT (create/cancel пишут audit ВНУТРИ handler-а через
-// emitCreated/emitCancelled, БЕЗ audit-middleware — отличие от middleware-audit-доменов
+// FULL-TYPED form of the VOYAGE domain (code-first source of OpenAPI, ADR-054 §Pattern).
+// BATCH 2f WRITE-SELF-AUDIT (create/cancel write audit INSIDE the handler via
+// emitCreated/emitCancelled, with no audit-middleware — differing from the middleware-audit domains
 // role/operator): create — scenario_run.started / command_run.invoked (202+body+Location);
 // cancel — scenario_run.cancelled / command_run.cancelled (202+body). preview — dry-resolve
-// БЕЗ audit (read-like POST, 200+body). list/get/targets — read (БЕЗ audit). RBAC-by-kind
-// (ADR-043 §6) живёт ВНУТРИ handler-а (kind виден только из тела/строки) — router навешивает
-// лишь base auth + Tempo (на create/preview).
+// with no audit (read-like POST, 200+body). list/get/targets — read (no audit). RBAC-by-kind
+// (ADR-043 §6) lives INSIDE the handler (kind is visible only from the body/path) — the router wires
+// only base auth + Tempo (on create/preview).
 
 import (
 	"net/http"
@@ -18,22 +18,22 @@ import (
 
 // === POST /v1/voyages (create) — WRITE-SELF-AUDIT scenario_run.started/command_run.invoked (202+body) ===
 
-// voyageCreateInput — huma-input POST /v1/voyages (FULL-TYPED). Body — типизированное
-// тело: huma декодит и валидирует его по схеме из huma-тегов VoyageCreateRequest.
+// voyageCreateInput — huma input POST /v1/voyages (FULL-TYPED). Body — the typed
+// body: huma decodes and validates it against the schema from the huma tags of VoyageCreateRequest.
 type voyageCreateInput struct {
 	Body VoyageCreateRequest
 }
 
-// VoyageCreateRequest — Go-форма тела POST /v1/voyages (code-first источник схемы И
-// валидации). Повторяет доменный voyageCreateRequest: рецепт прогона (kind/scenario_
-// name|module/target/input/scheduling/batch*) + notify[]. kind-зависимая валидация
-// (scenario↔scenario_name / command↔module, target-непустота, on_failure/batch_mode-enum,
-// диапазоны) — доменная (CreateTyped → 422). additionalProperties:false (huma-дефолт) →
-// unknown поле → 400. kind/batch_mode/on_failure — инлайн-enum (рукопись НЕ выносит их
-// standalone-схемой → enum-alias-механизм не применяется). Имя структуры = контрактное
-// имя схемы (huma DefaultSchemaNamer берёт reflect.Type.Name()) — выровнено под committed-
-// рукопись (тираж N3). Доменный VoyageCreateRequest в спеку не попадает (huma-input —
-// эта структура; oapi-тип не используется как huma-body).
+// VoyageCreateRequest — the Go form of the POST /v1/voyages body (code-first source of the schema AND
+// validation). Mirrors the domain voyageCreateRequest: the run recipe (kind/scenario_
+// name|module/target/input/scheduling/batch*) + notify[]. kind-dependent validation
+// (scenario↔scenario_name / command↔module, non-empty target, on_failure/batch_mode enum,
+// ranges) is domain (CreateTyped → 422). additionalProperties:false (huma default) →
+// unknown field → 400. kind/batch_mode/on_failure — inline enums (the spec does NOT hoist them
+// as a standalone schema → the enum-alias mechanism does not apply). The struct name = the contract
+// schema name (huma DefaultSchemaNamer takes reflect.Type.Name()) — aligned with the committed
+// hand-written spec (rollout N3). The domain VoyageCreateRequest does not reach the spec (the huma input is
+// this struct; the oapi type is not used as the huma body).
 type VoyageCreateRequest struct {
 	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"тип рецепта прогона"`
 	ScenarioName string         `json:"scenario_name,omitempty" doc:"имя сценария для kind=scenario"`
@@ -59,22 +59,22 @@ type VoyageCreateRequest struct {
 	Notify []VoyageNotify `json:"notify,omitempty" doc:"разовые подписки на ЭТОТ прогон (ephemeral)"`
 }
 
-// Вложенные target/notify — единые api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),
-// shared с cadence-доменом; форма выровнена под committed-рукопись (одна схема на каждую).
+// Nested target/notify — the single api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),
+// shared with the cadence domain; the shape is aligned with the committed hand-written spec (one schema each).
 
-// voyageCreateOutput — huma-output POST /v1/voyages (FULL-TYPED). Status=202; Location —
-// header; Body — huma-native 202-тело (api.VoyageCreateReply: voyage_id/kind/scope_size/
-// status/location). Конверт handler-reply (legacy-генерата) → native — в register-func.
+// voyageCreateOutput — huma output POST /v1/voyages (FULL-TYPED). Status=202; Location —
+// header; Body — the huma-native 202 body (api.VoyageCreateReply: voyage_id/kind/scope_size/
+// status/location). The handler-reply (legacy-generated) → native conversion is in the register func.
 type voyageCreateOutput struct {
 	Status   int    `json:"-"`
 	Location string `header:"Location" json:"-"`
 	Body     VoyageCreateReply
 }
 
-// voyageCreateOperation — метаданные POST /v1/voyages. DefaultStatus=202. WRITE-SELF-
-// AUDIT (handler пишет scenario_run.started/command_run.invoked). RBAC-by-kind — в handler-е.
-// Errors: 400 unknown/malformed, 403 RBAC-by-kind, 404 инкарнация, 422 валидация рецепта/
-// target/batch / пустой резолв / scope-cap, 429 Tempo, 500.
+// voyageCreateOperation — metadata for POST /v1/voyages. DefaultStatus=202. WRITE-SELF-
+// AUDIT (the handler writes scenario_run.started/command_run.invoked). RBAC-by-kind — in the handler.
+// Errors: 400 unknown/malformed, 403 RBAC-by-kind, 404 incarnation, 422 recipe/
+// target/batch validation / empty resolve / scope-cap, 429 Tempo, 500.
 func voyageCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createVoyage",
@@ -88,25 +88,25 @@ func voyageCreateOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/voyages/preview (preview) — READ-like (БЕЗ audit) dry-resolve (200+body) ===
+// === POST /v1/voyages/preview (preview) — READ-like (no audit) dry-resolve (200+body) ===
 
-// voyagePreviewInput — huma-input POST /v1/voyages/preview (FULL-TYPED). Body — то же
-// типизированное тело, что create (та же валидация/резолв).
+// voyagePreviewInput — huma input POST /v1/voyages/preview (FULL-TYPED). Body — the same
+// typed body as create (the same validation/resolve).
 type voyagePreviewInput struct {
 	Body VoyageCreateRequest
 }
 
-// voyagePreviewOutput — huma-output POST /v1/voyages/preview (FULL-TYPED). Status=200;
-// Body — huma-native 200-тело (api.VoyagePreviewReply: kind/scope_size/total_batches/
-// batch_mode/effective_batch_size?). Конверт — в register-func.
+// voyagePreviewOutput — huma output POST /v1/voyages/preview (FULL-TYPED). Status=200;
+// Body — the huma-native 200 body (api.VoyagePreviewReply: kind/scope_size/total_batches/
+// batch_mode/effective_batch_size?). The conversion is in the register func.
 type voyagePreviewOutput struct {
 	Body VoyagePreviewReply
 }
 
-// voyagePreviewOperation — метаданные POST /v1/voyages/preview. DefaultStatus=200.
-// READ-like: audit НЕ навешан (preview не пишет audit-event, в отличие от Create — он
-// dry-resolve без создания Voyage). RBAC-by-kind — в handler-е. Errors: 400, 403, 404,
-// 422 (консистентно с Create — preview отказывает там же), 429 Tempo, 500.
+// voyagePreviewOperation — metadata for POST /v1/voyages/preview. DefaultStatus=200.
+// READ-like: audit not wired (preview writes no audit event, unlike Create — it is a
+// dry-resolve without creating a Voyage). RBAC-by-kind — in the handler. Errors: 400, 403, 404,
+// 422 (consistent with Create — preview rejects at the same points), 429 Tempo, 500.
 func voyagePreviewOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "previewVoyage",
@@ -120,12 +120,12 @@ func voyagePreviewOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/voyages (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/voyages (list) — READ with typed query (no audit) ===
 
-// voyageListInput — huma-input GET /v1/voyages (FULL-TYPED typed-query). kind — enum-
-// фильтр; status — multi-value enum (explode:true ОБЯЗАТЕЛЕН); offset/limit — int32 с
-// default (диапазон enforce-ит ДОМЕН через ParsePage/CheckPageBounds → 400, НЕ huma-
-// schema-min/max → иначе out-of-range дало бы 422 вместо контрактного 400).
+// voyageListInput — huma input GET /v1/voyages (FULL-TYPED typed query). kind — an enum
+// filter; status — multi-value enum (explode:true is MANDATORY); offset/limit — int32 with a
+// default (the DOMAIN enforces the range via ParsePage/CheckPageBounds → 400, NOT a huma
+// schema min/max → otherwise out-of-range would give 422 instead of the contract 400).
 type voyageListInput struct {
 	Kind     string   `query:"kind" enum:"scenario,command" doc:"фильтр по kind; вне enum → 422"`
 	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y OR; вне enum → 422"`
@@ -133,15 +133,15 @@ type voyageListInput struct {
 	Limit    int32    `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// voyageListOutput — huma-output GET /v1/voyages (FULL-TYPED). Body — huma-native envelope
-// (api.VoyageListReply: items/offset/limit/total; items.$ref на native Voyage). ★ ОБЩИЙ
-// VoyageListReply/Voyage с cadence-runs (дедуп byte-identical). Конверт — в register-func.
+// voyageListOutput — huma output GET /v1/voyages (FULL-TYPED). Body — the huma-native envelope
+// (api.VoyageListReply: items/offset/limit/total; items.$ref to native Voyage). ★ SHARED
+// VoyageListReply/Voyage with cadence-runs (byte-identical dedup). The conversion is in the register func.
 type voyageListOutput struct {
 	Body VoyageListReply
 }
 
-// voyageListOperation — метаданные GET /v1/voyages. DefaultStatus=200. READ: audit НЕ
-// навешан. Permission incarnation.history. Errors: 400 (out-of-range pagination), 403,
+// voyageListOperation — metadata for GET /v1/voyages. DefaultStatus=200. READ: audit not
+// wired. Permission incarnation.history. Errors: 400 (out-of-range pagination), 403,
 // 422 (bad kind/status enum), 500.
 func voyageListOperation() huma.Operation {
 	return huma.Operation{
@@ -156,21 +156,21 @@ func voyageListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/voyages/{id} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/voyages/{id} (get) — READ with path (no audit) ===
 
-// voyageGetInput — huma-input GET /v1/voyages/{id}. ID — path (ULID-валидация — доменная).
+// voyageGetInput — huma input GET /v1/voyages/{id}. ID — path (ULID validation is domain).
 type voyageGetInput struct {
 	ID string `path:"id" doc:"ULID Voyage-прогона"`
 }
 
-// voyageGetOutput — huma-output GET /v1/voyages/{id} (FULL-TYPED). Body — huma-native
-// 200-тело (api.Voyage: detail + summary; shared с list/cadence-runs). Конверт — в register-func.
+// voyageGetOutput — huma output GET /v1/voyages/{id} (FULL-TYPED). Body — the huma-native
+// 200 body (api.Voyage: detail + summary; shared with list/cadence-runs). The conversion is in the register func.
 type voyageGetOutput struct {
 	Body Voyage
 }
 
-// voyageGetOperation — метаданные GET /v1/voyages/{id}. DefaultStatus=200. READ: audit НЕ
-// навешан. Permission incarnation.history. Errors: 403, 404, 422 bad id, 500.
+// voyageGetOperation — metadata for GET /v1/voyages/{id}. DefaultStatus=200. READ: audit not
+// wired. Permission incarnation.history. Errors: 403, 404, 422 bad id, 500.
 func voyageGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getVoyage",
@@ -184,21 +184,21 @@ func voyageGetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/voyages/{id}/targets (targets) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/voyages/{id}/targets (targets) — READ with path (no audit) ===
 
-// voyageTargetsInput — huma-input GET /v1/voyages/{id}/targets. ID — path.
+// voyageTargetsInput — huma input GET /v1/voyages/{id}/targets. ID — path.
 type voyageTargetsInput struct {
 	ID string `path:"id" doc:"ULID Voyage-прогона"`
 }
 
-// voyageTargetsOutput — huma-output GET /v1/voyages/{id}/targets (FULL-TYPED). Body —
-// huma-native 200-тело (api.VoyageTargetsReply: voyage_id + targets[]). Конверт — в register-func.
+// voyageTargetsOutput — huma output GET /v1/voyages/{id}/targets (FULL-TYPED). Body —
+// the huma-native 200 body (api.VoyageTargetsReply: voyage_id + targets[]). The conversion is in the register func.
 type voyageTargetsOutput struct {
 	Body VoyageTargetsReply
 }
 
-// voyageTargetsOperation — метаданные GET /v1/voyages/{id}/targets. DefaultStatus=200.
-// READ: audit НЕ навешан. Permission incarnation.history. Errors: 403, 404 (existence-
+// voyageTargetsOperation — metadata for GET /v1/voyages/{id}/targets. DefaultStatus=200.
+// READ: audit not wired. Permission incarnation.history. Errors: 403, 404 (existence
 // probe), 422 bad id, 500.
 func voyageTargetsOperation() huma.Operation {
 	return huma.Operation{
@@ -215,21 +215,21 @@ func voyageTargetsOperation() huma.Operation {
 
 // === DELETE /v1/voyages/{id} (cancel) — WRITE-SELF-AUDIT scenario_run.cancelled/command_run.cancelled (202+body) ===
 
-// voyageCancelInput — huma-input DELETE /v1/voyages/{id}. ID — path.
+// voyageCancelInput — huma input DELETE /v1/voyages/{id}. ID — path.
 type voyageCancelInput struct {
 	ID string `path:"id" doc:"ULID Voyage-прогона"`
 }
 
-// voyageCancelOutput — huma-output DELETE /v1/voyages/{id} (FULL-TYPED). Status=202; Body —
-// huma-native 202-тело (api.VoyageCancelReply: voyage_id + status:cancelled). Конверт — в register-func.
+// voyageCancelOutput — huma output DELETE /v1/voyages/{id} (FULL-TYPED). Status=202; Body —
+// the huma-native 202 body (api.VoyageCancelReply: voyage_id + status:cancelled). The conversion is in the register func.
 type voyageCancelOutput struct {
 	Status int `json:"-"`
 	Body   VoyageCancelReply
 }
 
-// voyageCancelOperation — метаданные DELETE /v1/voyages/{id}. DefaultStatus=202. WRITE-
-// SELF-AUDIT (handler пишет scenario_run.cancelled/command_run.cancelled). RBAC-by-kind —
-// в handler-е (kind виден из строки). Errors: 403, 404, 409 (running/terminal — не
+// voyageCancelOperation — metadata for DELETE /v1/voyages/{id}. DefaultStatus=202. WRITE-
+// SELF-AUDIT (the handler writes scenario_run.cancelled/command_run.cancelled). RBAC-by-kind —
+// in the handler (kind is visible from the path). Errors: 403, 404, 409 (running/terminal — not
 // cancellable), 422 bad id, 500.
 func voyageCancelOperation() huma.Operation {
 	return huma.Operation{

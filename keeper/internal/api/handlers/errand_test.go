@@ -19,9 +19,9 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeErrandPool — узкий мок ExecQueryRower для unit-теста ErrandHandler.ListTyped
-// в части query-фильтра `module`. Захватывает SQL и args последнего запроса,
-// чтобы assert-нуть форму `module IN ($n,…)` и значения.
+// fakeErrandPool — a narrow mock ExecQueryRower for the unit test of ErrandHandler.ListTyped
+// covering the `module` query filter. Captures the SQL and args of the last query
+// to assert the `module IN ($n,…)` shape and the values.
 type fakeErrandPool struct {
 	countSQL  string
 	countArgs []any
@@ -46,10 +46,10 @@ func (f *fakeErrandPool) Query(_ context.Context, sql string, args ...any) (pgx.
 	return &emptyRows{}, nil
 }
 
-// TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore — доменная функция
-// ListTyped пробрасывает multi-value module-фильтр в store как IN-предикат
-// (handler-native: HTTP/bind покрыт huma-integration в пакете api, здесь — чистая
-// доменная логика без (w,r)).
+// TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore — the domain function
+// ListTyped forwards the multi-value module filter into the store as an IN predicate
+// (handler-native: HTTP/bind is covered by huma-integration in package api, here — pure
+// domain logic without (w,r)).
 func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 	pool := &fakeErrandPool{}
 	store := errand.NewStore(pool)
@@ -64,7 +64,7 @@ func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 
-	// COUNT SQL должен нести IN-предикат с двумя плейсхолдерами и двумя args.
+	// COUNT SQL must carry an IN predicate with two placeholders and two args.
 	if !strings.Contains(pool.countSQL, "module IN") {
 		t.Errorf("count SQL не содержит module IN: %q", pool.countSQL)
 	}
@@ -75,7 +75,7 @@ func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 		t.Errorf("count args order: %v", pool.countArgs)
 	}
 
-	// SELECT SQL — то же IN + LIMIT/OFFSET добавлены справа.
+	// SELECT SQL — the same IN + LIMIT/OFFSET appended on the right.
 	if !strings.Contains(pool.selectSQL, "module IN") {
 		t.Errorf("select SQL не содержит module IN: %q", pool.selectSQL)
 	}
@@ -97,15 +97,15 @@ func TestErrandHandler_ListTyped_NoModule_NoINPredicate(t *testing.T) {
 	}
 }
 
-// --- Cancel (slice E5): sentinel→problem-классификация через CancelTyped напрямую ---
+// --- Cancel (slice E5): sentinel→problem classification via CancelTyped directly ---
 //
-// (w,r)-оболочка снята (HTTP обслуживает huma, MCP зовёт dispatcher напрямую). Тесты
-// бьют доменную CancelTyped и проверяют problem-Type извлечённой ошибки.
+// The (w,r) wrapper is removed (HTTP is served by huma, MCP calls the dispatcher directly). The tests
+// hit the domain CancelTyped and check the problem-Type of the extracted error.
 
-// claimsFor — минимальный jwt.Claims с заданным Subject.
+// claimsFor — a minimal jwt.Claims with the given Subject.
 func claimsFor(aid string) *jwt.Claims { return &jwt.Claims{Subject: aid} }
 
-// cancelProblemType извлекает problem.Type из ошибки CancelTyped (nil → "").
+// cancelProblemType extracts problem.Type from a CancelTyped error (nil → "").
 func cancelProblemType(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
@@ -119,7 +119,7 @@ func cancelProblemType(t *testing.T, err error) string {
 }
 
 func TestErrandHandler_CancelTyped_NotFound(t *testing.T) {
-	d := buildCancelDispatcher(t, nil) // пустой store
+	d := buildCancelDispatcher(t, nil) // empty store
 	h := NewErrandHandler(d, nil, nil)
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "MISSING-ID")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "not-found") {
@@ -156,10 +156,10 @@ func TestErrandHandler_CancelTyped_Happy(t *testing.T) {
 	}
 }
 
-// --- helpers для DELETE-теста ---
+// --- helpers for the DELETE test ---
 
-// fakeCancelStore — in-memory StoreAPI. Заполняется заранее (map status); Get
-// возвращает Row{SID, Module, Status} либо ErrNotFound.
+// fakeCancelStore — an in-memory StoreAPI. Prefilled (map status); Get
+// returns Row{SID, Module, Status} or ErrNotFound.
 type fakeCancelStore struct {
 	mu   sync.Mutex
 	rows map[string]errand.Row
@@ -214,7 +214,7 @@ func (s *fakeCancelStore) Get(_ context.Context, id string) (*errand.Row, error)
 	return &cp, nil
 }
 
-// fakeCancelOutbound — accept-all Outbound. Зачисляет SendCancelErrand-вызовы.
+// fakeCancelOutbound — an accept-all Outbound. Accepts SendCancelErrand calls.
 type fakeCancelOutbound struct{}
 
 func (fakeCancelOutbound) SendErrand(_ context.Context, _ string, _ *keeperv1.ErrandRequest) error {
@@ -230,8 +230,8 @@ func (fakeCancelOutbound) PublishCancelErrand(_ context.Context, _ string, _ str
 	return nil
 }
 
-// fakeBusCancel — applybus-stub: Subscribe возвращает empty-чанал. dispatcher
-// Cancel-flow его не использует (только Dispatch-flow), но интерфейс требует.
+// fakeBusCancel — an applybus stub: Subscribe returns an empty channel. The dispatcher
+// Cancel-flow does not use it (only Dispatch-flow), but the interface requires it.
 type fakeBusCancel struct{}
 
 func (b fakeBusCancel) Subscribe(ctx context.Context, applyID string) <-chan applybus.Event {
@@ -243,8 +243,8 @@ func (fakeBusCancel) SubscribeWithBridge(_ context.Context, _ string, _ bool) <-
 	return ch
 }
 
-// buildCancelDispatcher собирает Dispatcher с in-memory fake-зависимостями.
-// statuses — map errand_id → начальный статус (если nil → пустой store).
+// buildCancelDispatcher builds a Dispatcher with in-memory fake dependencies.
+// statuses — map errand_id → initial status (if nil → empty store).
 func buildCancelDispatcher(t *testing.T, statuses map[string]errand.Status) *errand.Dispatcher {
 	t.Helper()
 	store := newFakeCancelStore(statuses)
@@ -261,16 +261,16 @@ func buildCancelDispatcher(t *testing.T, statuses map[string]errand.Status) *err
 	return d
 }
 
-// --- guard-тесты доменной проекции (handler-native): rowToErrandResultView /
-// dispatchResultView / newErrandAcceptedView строят плоские view-ы; точные wire-байты
-// native ErrandResult/ErrandAccepted пинит golden в пакете api (huma_errand_reply_test.go).
-// Здесь проверяем доменную проекцию полей view-а (status-строка, секундный UTC date-time,
-// nil-при-пустом для опц.). ---
+// --- guard tests for the domain projection (handler-native): rowToErrandResultView /
+// dispatchResultView / newErrandAcceptedView build flat views; the exact wire bytes of
+// native ErrandResult/ErrandAccepted are pinned by golden in package api (huma_errand_reply_test.go).
+// Here we check the domain projection of view fields (status string, second-precision UTC date-time,
+// nil-when-empty for optionals). ---
 
-// TestRowToErrandResultView_FieldProjection фиксирует доменные инварианты проекции:
-// status — плоская строка домен-статуса; started_at/finished_at — секундный UTC
-// (Truncate(Second)); truncated-флаги — nil при false; пустые stdout/stderr/
-// error_message/output — nil; непустой stdout — указатель.
+// TestRowToErrandResultView_FieldProjection pins the domain invariants of the projection:
+// status — a flat domain-status string; started_at/finished_at — second-precision UTC
+// (Truncate(Second)); truncated flags — nil when false; empty stdout/stderr/
+// error_message/output — nil; non-empty stdout — a pointer.
 func TestRowToErrandResultView_FieldProjection(t *testing.T) {
 	fin := time.Date(2026, 6, 9, 10, 0, 5, 987654321, time.UTC)
 	row := &errand.Row{
@@ -305,8 +305,8 @@ func TestRowToErrandResultView_FieldProjection(t *testing.T) {
 	}
 }
 
-// TestRowToErrandResultView_TruncatedPresentWhenTrue — при true truncated-флаг
-// становится non-nil указателем (граница nil-при-false).
+// TestRowToErrandResultView_TruncatedPresentWhenTrue — when true the truncated flag
+// becomes a non-nil pointer (the nil-when-false boundary).
 func TestRowToErrandResultView_TruncatedPresentWhenTrue(t *testing.T) {
 	row := &errand.Row{
 		ErrandID:        "01J0000000000000000000001",
@@ -327,14 +327,14 @@ func TestRowToErrandResultView_TruncatedPresentWhenTrue(t *testing.T) {
 	}
 }
 
-// --- exec-путь sync-200 / 202-Accepted (handler-native): проекция DispatchResult /
-// Accepted из request-данных в плоский view. Точные wire-байты пинит golden в пакете api;
-// здесь — доменные инварианты полей (status-строка, реальный started_at секундный UTC,
-// sid/module/started_by_aid из request-а). ---
+// --- exec path sync-200 / 202-Accepted (handler-native): projection of DispatchResult /
+// Accepted from request data into a flat view. The exact wire bytes are pinned by golden in package api;
+// here — the domain field invariants (status string, real started_at second-precision UTC,
+// sid/module/started_by_aid from the request). ---
 
-// TestDispatchResultView_FieldProjection — sync-200 Exec-view: status-строка; started_at —
-// реальный момент старта из DispatchResult.StartedAt (НЕ zero, НЕ time.Now()-фабрикация),
-// усечённый до секунды; sid/module/started_by_aid берутся из request-а.
+// TestDispatchResultView_FieldProjection — sync-200 Exec view: status string; started_at —
+// the real start moment from DispatchResult.StartedAt (NOT zero, NOT a time.Now() fabrication),
+// truncated to the second; sid/module/started_by_aid taken from the request.
 func TestDispatchResultView_FieldProjection(t *testing.T) {
 	started := time.Date(2026, 6, 9, 10, 0, 0, 123456789, time.UTC)
 	res := &errand.DispatchResult{
@@ -365,7 +365,7 @@ func TestDispatchResultView_FieldProjection(t *testing.T) {
 	}
 }
 
-// TestNewErrandAcceptedView_FieldProjection — 202-view: errand_id + status-строка.
+// TestNewErrandAcceptedView_FieldProjection — 202 view: errand_id + status string.
 func TestNewErrandAcceptedView_FieldProjection(t *testing.T) {
 	v := newErrandAcceptedView("01J0000000000000000000003", errand.StatusRunning)
 	if v.ErrandID != "01J0000000000000000000003" || v.Status != "running" {

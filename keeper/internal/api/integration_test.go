@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration-тест HTTP-сервера Operator API: PG + Vault через
-// testcontainers-go, реальный listener на ephemeral port.
+// Integration test of the Operator API HTTP server: PG + Vault via
+// testcontainers-go, a real listener on an ephemeral port.
 //
-// Запуск:
+// Run:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 ./internal/api/...
 //
-// Один PG + один Vault per-package в TestMain.
+// One PG + one Vault per-package in TestMain.
 
 package api
 
@@ -147,9 +147,9 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// startServer запускает HTTP-сервер на ephemeral port и возвращает
-// фактический base URL + shutdown-функцию. rbacCfg — конфиг RBAC (nil →
-// пустой enforcer, любой Check вернёт deny).
+// startServer starts the HTTP server on an ephemeral port and returns the
+// actual base URL + a shutdown function. rbacCfg — the RBAC config (nil →
+// an empty enforcer, any Check returns deny).
 func startServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdown func()) {
 	t.Helper()
 
@@ -189,8 +189,8 @@ func startServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdo
 		SoulDB:        integrationPool,
 		TTLDefault:    time.Hour,
 		MetricsHTTP:   obs.RegisterHTTPMetrics(metricsReg),
-		// Voyage-контур: подключаем для ADR-047 S4 e2e (scoped command-таргет ∩
-		// Purview). Резолверы — production-PG поверх того же pool.
+		// Voyage circuit: wired for the ADR-047 S4 e2e (scoped command target ∩
+		// Purview). Resolvers — production-PG over the same pool.
 		VoyageDB:               integrationPool,
 		VoyageScenarioResolver: handlers.NewVoyageScenarioPGResolver(integrationPool),
 		VoyageCommandResolver:  handlers.NewVoyageCommandPGResolver(integrationPool),
@@ -208,8 +208,8 @@ func startServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdo
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 
-	// Дождаться, пока listener фактически забиндится. Start меняет
-	// srv.Addr на актуальный port; ждём появления непустого порта.
+	// Wait until the listener actually binds. Start updates srv.Addr to the
+	// real port; we wait for a non-empty port to appear.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if addr := srv.Addr(); addr != "" && addr != "127.0.0.1:0" {
@@ -234,7 +234,7 @@ func startServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdo
 	return baseURL, shutdown
 }
 
-// poolPinger — адаптер pgxpool.Pool к интерфейсу health.Pinger.
+// poolPinger — adapts pgxpool.Pool to the health.Pinger interface.
 type poolPinger struct{ pool *pgxpool.Pool }
 
 func (p poolPinger) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
@@ -244,9 +244,9 @@ func newValidToken(t *testing.T) string {
 	return newValidTokenFor(t, "archon-test", []string{"cluster-admin"})
 }
 
-// newValidTokenFor выпускает JWT для произвольного AID — нужен Operator
-// endpoint-тестам, где claims.Subject определяет audit-row и
-// permission-check.
+// newValidTokenFor issues a JWT for an arbitrary AID — needed by the Operator
+// endpoint tests, where claims.Subject determines the audit row and the
+// permission check.
 func newValidTokenFor(t *testing.T, aid string, roles []string) string {
 	t.Helper()
 	iss, err := keeperjwt.NewIssuer([]byte(integrationSigningKey), integrationIssuer)
@@ -260,15 +260,15 @@ func newValidTokenFor(t *testing.T, aid string, roles []string) string {
 	return tok
 }
 
-// truncateOperators чистит operators + audit_log + incarnation +
-// state_history + souls + bootstrap_tokens между тестами. Один pool на
-// пакет → состояние шарится между тестами; truncate в начале каждого теста
-// делает порядок независимым.
+// truncateOperators cleans operators + audit_log + incarnation +
+// state_history + souls + bootstrap_tokens between tests. One pool per
+// package → state is shared between tests; a truncate at the start of each test
+// makes the order independent.
 //
-// FK-зависимости (ADR-014): incarnation → operators(aid),
+// FK dependencies (ADR-014): incarnation → operators(aid),
 // state_history → operators(aid) + incarnation(name), souls →
 // operators(aid) (created_by_aid), bootstrap_tokens → souls(sid) +
-// operators(aid). CASCADE снимает зависимости автоматически.
+// operators(aid). CASCADE removes the dependencies automatically.
 func truncateOperators(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -278,12 +278,12 @@ func truncateOperators(t *testing.T) {
 	}
 }
 
-// truncateRBAC чистит RBAC-таблицы (роли / permissions / membership) до
-// чистого состояния для role.*-integration-тестов. Вызывается ПОСЛЕ
-// truncateOperators (тот через CASCADE сносит лишь membership/роли, ссылающиеся
-// на operators; builtin cluster-admin с created_by_aid=NULL переживает CASCADE).
+// truncateRBAC cleans the RBAC tables (roles / permissions / membership) to a
+// clean state for the role.* integration tests. Called AFTER truncateOperators
+// (which via CASCADE removes only the membership/roles referencing operators;
+// the builtin cluster-admin with created_by_aid=NULL survives CASCADE).
 //
-// CASCADE на rbac_roles снимает permissions + membership (ON DELETE CASCADE).
+// CASCADE on rbac_roles removes permissions + membership (ON DELETE CASCADE).
 func truncateRBAC(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -292,8 +292,8 @@ func truncateRBAC(t *testing.T) {
 	}
 }
 
-// seedRole создаёт роль с набором permissions напрямую в БД (минуя API) —
-// нужен тестам Delete/Update/Grant/Revoke, опирающимся на существующую роль.
+// seedRole creates a role with a set of permissions directly in the DB (bypassing
+// the API) — needed by the Delete/Update/Grant/Revoke tests that rely on an existing role.
 func seedRole(t *testing.T, name string, builtin bool, permissions ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -309,7 +309,7 @@ func seedRole(t *testing.T, name string, builtin bool, permissions ...string) {
 	}
 }
 
-// seedRoleMember привязывает AID к роли напрямую в БД.
+// seedRoleMember binds an AID to a role directly in the DB.
 func seedRoleMember(t *testing.T, roleName, aid string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -318,13 +318,13 @@ func seedRoleMember(t *testing.T, roleName, aid string) {
 	}
 }
 
-// seedClusterAdmin выдаёт caller-у membership builtin-роли cluster-admin (`*`)
-// в rbac_*-таблицах БД (модель-C). Config-RBAC enforcer (adminRBAC) лишь
-// пропускает caller-а через permission-gate middleware; сам Service делает
-// subset-check (least-privilege) и self-lockout-проверку по РЕАЛЬНОЙ membership
-// из rbac_role_operators. Без membership caller держит 0 эффективных
-// permissions → subset-check отказывает, а self-lockout видит 0 admin-ов.
-// truncateRBAC сносит и роли — поэтому ре-сидим cluster-admin с `*` идемпотентно.
+// seedClusterAdmin grants the caller membership of the builtin cluster-admin role (`*`)
+// in the DB rbac_* tables (model-C). The config-RBAC enforcer (adminRBAC) only
+// lets the caller through the permission-gate middleware; the Service itself does the
+// subset-check (least-privilege) and the self-lockout check against the REAL membership
+// from rbac_role_operators. Without membership the caller holds 0 effective
+// permissions → the subset-check refuses, and self-lockout sees 0 admins.
+// truncateRBAC also removes roles — so we re-seed cluster-admin with `*` idempotently.
 func seedClusterAdmin(t *testing.T, aid string) {
 	t.Helper()
 	ctx := context.Background()
@@ -345,8 +345,8 @@ func seedClusterAdmin(t *testing.T, aid string) {
 	}
 }
 
-// seedOperator вставляет AID в реестр для тестов, опирающихся на
-// существующего Архонта. Возвращает CreatedAt из БД.
+// seedOperator inserts an AID into the registry for tests that rely on an
+// existing Archon. Returns CreatedAt from the DB.
 func seedOperator(t *testing.T, aid, parent string) {
 	t.Helper()
 	op := &operator.Operator{
@@ -478,9 +478,9 @@ func TestIntegration_OpenAPI_200(t *testing.T) {
 	base, stop := startServer(t, nil)
 	defer stop()
 
-	// GET /openapi.yaml — ЗА JWT (ADR-054 doc-viewer / router.go): спека больше не
-	// публична, /docs фетчит её с Bearer-заголовком. Без токена → 401, поэтому шлём
-	// валидный JWT (как UI).
+	// GET /openapi.yaml — BEHIND the JWT (ADR-054 doc-viewer / router.go): the spec is
+	// no longer public, /docs fetches it with a Bearer header. Without a token → 401, so we
+	// send a valid JWT (like the UI).
 	req, _ := http.NewRequest(http.MethodGet, base+"/openapi.yaml", nil)
 	req.Header.Set("Authorization", "Bearer "+newValidToken(t))
 	resp, err := http.DefaultClient.Do(req)
@@ -495,20 +495,20 @@ func TestIntegration_OpenAPI_200(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/yaml prefix", got)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	// Served-эндпоинт отдаёт runtime-дамп huma-агрегатора (servedOpenAPIHandler) —
-	// это OpenAPI 3.1.0. Committed docs/keeper/openapi.yaml (3.0.3 для oapi-codegen)
-	// — производный снимок для UI-vendor, НЕ served. huma .YAML() сортирует ключи
-	// верхнего уровня по алфавиту (components/info/openapi/paths…), поэтому
-	// `openapi: 3.1.0` НЕ первая строка — ищем версию строкой по всему документу.
+	// The served endpoint returns a runtime dump of the huma aggregator (servedOpenAPIHandler)
+	// — this is OpenAPI 3.1.0. The committed docs/keeper/openapi.yaml (3.0.3 for oapi-codegen)
+	// — a derived snapshot for the UI vendor, NOT served. huma .YAML() sorts the top-level
+	// keys alphabetically (components/info/openapi/paths…), so
+	// `openapi: 3.1.0` is NOT the first line — we search for the version as a substring across the document.
 	if !strings.Contains(string(body), "openapi: 3.1.0") {
 		t.Errorf("body не содержит маркер OpenAPI 3.1.0; first 64 bytes: %q", string(body[:min(64, len(body))]))
 	}
 }
 
-// TestIntegration_Metrics_NotOnOpenAPI — после ADR-024 / Slice 1 `/metrics`
-// снят с openapi-роутера (вынесен на выделенный listener). На openapi-порту
-// эндпоинт за auth-chain `/v1/*` не висит — bare `/metrics` отдаёт 404
-// (catch-all NotFound), не Prometheus-вывод.
+// TestIntegration_Metrics_NotOnOpenAPI — after ADR-024 / Slice 1 `/metrics`
+// is removed from the openapi router (moved to a dedicated listener). On the openapi port
+// no endpoint hangs behind the `/v1/*` auth-chain — a bare `/metrics` returns 404
+// (catch-all NotFound), not Prometheus output.
 func TestIntegration_Metrics_NotOnOpenAPI(t *testing.T) {
 	base, stop := startServer(t, nil)
 	defer stop()
@@ -523,9 +523,9 @@ func TestIntegration_Metrics_NotOnOpenAPI(t *testing.T) {
 	}
 }
 
-// TestIntegration_Metrics_RecordsV1Requests — наводит трафик на /v1/* через
-// openapi-порт и проверяет, что keeper_http_*-метрики (записанные middleware
-// на /v1/*) видны на ВЫДЕЛЕННОМ metrics-listener-е (тот же *obs.Registry).
+// TestIntegration_Metrics_RecordsV1Requests — drives traffic to /v1/* via the
+// openapi port and checks that the keeper_http_* metrics (recorded by middleware
+// on /v1/*) are visible on the DEDICATED metrics listener (the same *obs.Registry).
 func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
 	if err != nil {
@@ -540,8 +540,8 @@ func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 		t.Fatalf("NewEnforcer: %v", err)
 	}
 
-	// Один registry шарится между HTTP-middleware (инструментация /v1/*) и
-	// metrics-listener-ом (exposition) — как в production-wire-up keeper/cmd.
+	// One registry is shared between the HTTP middleware (instrumentation of /v1/*) and
+	// the metrics listener (exposition) — as in the production wire-up of keeper/cmd.
 	metricsReg := obs.NewRegistry()
 	srv, err := NewServer(
 		config.KeeperListenSimple{Addr: "127.0.0.1:0"},
@@ -595,13 +595,13 @@ func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 	}()
 	metricsURL := "http://" + metricsSrv.Addr() + "/metrics"
 
-	// scrape должен содержать go-collector до любого /v1/-трафика.
+	// the scrape must contain the go-collector before any /v1/ traffic.
 	if body := httpGetBody(t, metricsURL); !strings.Contains(body, "go_goroutines") {
 		t.Errorf("metrics output не содержит go_goroutines (core-collector); len=%d", len(body))
 	}
 
-	// Любой запрос под /v1 без токена → 401, но pipeline проходит до
-	// metrics-middleware (он внутри /v1.Use до auth — см. router.go).
+	// Any request under /v1 without a token → 401, but the pipeline runs up to the
+	// metrics middleware (it is inside /v1.Use before auth — see router.go).
 	for i := 0; i < 3; i++ {
 		resp, err := http.Get(base + "/v1/anything")
 		if err != nil {
@@ -619,7 +619,7 @@ func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 	}
 }
 
-// httpGetBody — GET URL → string body (для metrics-scrape в тестах).
+// httpGetBody — GET URL → string body (for the metrics scrape in tests).
 func httpGetBody(t *testing.T, url string) string {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -646,7 +646,7 @@ func min(a, b int) int {
 
 // --- M0.6b: Operator endpoints ---
 
-// adminRBAC — RBAC-конфиг с одним cluster-admin (`archon-alice`).
+// adminRBAC — an RBAC config with one cluster-admin (`archon-alice`).
 func adminRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -655,7 +655,7 @@ func adminRBAC() *rbactest.Config {
 	}
 }
 
-// twoAdminsRBAC — два cluster-admin-а, для теста revoke без self-lockout.
+// twoAdminsRBAC — two cluster-admins, for the revoke-without-self-lockout test.
 func twoAdminsRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -664,7 +664,7 @@ func twoAdminsRBAC() *rbactest.Config {
 	}
 }
 
-// roReader — RBAC без operator.* permissions (для теста 403).
+// roReader — RBAC without operator.* permissions (for the 403 test).
 func roReaderRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -706,9 +706,9 @@ func TestIntegration_Operator_Create_201(t *testing.T) {
 		t.Errorf("jwt missing in response")
 	}
 
-	// Audit row + payload-структура (qa-coverage M0.6b): aid /
-	// display_name / created_by_aid должны попасть в payload, JWT и
-	// expires_at — НЕ должны (sensitive).
+	// Audit row + payload structure (qa-coverage M0.6b): aid /
+	// display_name / created_by_aid must appear in the payload, JWT and
+	// expires_at — must NOT (sensitive).
 	var (
 		auditCount   int64
 		payloadAID   string
@@ -738,7 +738,7 @@ func TestIntegration_Operator_Create_201(t *testing.T) {
 		t.Errorf("payload.created_by_aid = %q, want archon-alice", payloadByAID)
 	}
 
-	// JWT и expires_at — sensitive, в audit-payload НЕ пишутся.
+	// JWT and expires_at — sensitive, NOT written to the audit payload.
 	var jwtPresent, expPresent bool
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT payload ? 'jwt', payload ? 'expires_at'
@@ -789,9 +789,9 @@ func TestIntegration_Operator_Revoke_SingleAdmin_409Lockout(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	// revoke-контракт требует requestBody (committed openapi.yaml →
-	// requestBody.required: true; единственное поле reason — optional). Пустой
-	// JSON-объект удовлетворяет huma-валидацию, не задавая reason.
+	// the revoke contract requires a requestBody (committed openapi.yaml →
+	// requestBody.required: true; the single field reason — optional). An empty
+	// JSON object satisfies huma validation without setting reason.
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-alice/revoke", bytesReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -836,7 +836,7 @@ func TestIntegration_Operator_Revoke_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, raw)
 	}
 
-	// Bob ревокнут в БД.
+	// Bob is revoked in the DB.
 	op, err := operator.SelectByAID(context.Background(), integrationPool, "archon-bob")
 	if err != nil {
 		t.Fatalf("SelectByAID: %v", err)
@@ -860,7 +860,7 @@ func TestIntegration_Operator_IssueToken_RevokedOperator_409(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
 	seedOperator(t, "archon-bob", "archon-alice")
-	// Ревокнем Bob через crud напрямую (минуя HTTP).
+	// Revoke Bob via crud directly (bypassing HTTP).
 	if err := operator.Revoke(context.Background(), integrationPool, "archon-bob", "test"); err != nil {
 		t.Fatalf("Revoke seed: %v", err)
 	}
@@ -965,8 +965,8 @@ func TestIntegration_Operator_Revoke_AlreadyRevoked_409(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	// revoke-контракт требует requestBody (см. Revoke_SingleAdmin); пустой JSON-
-	// объект проходит валидацию, reason не задаётся.
+	// the revoke contract requires a requestBody (see Revoke_SingleAdmin); an empty
+	// JSON object passes validation, reason is not set.
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-bob/revoke", bytesReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -982,8 +982,8 @@ func TestIntegration_Operator_Revoke_AlreadyRevoked_409(t *testing.T) {
 
 // --- M0.6c-1: Incarnation endpoints ---
 
-// seedIncarnation вставляет incarnation-row через CRUD-слой для тестов
-// Get/History/List, опирающихся на существующие записи.
+// seedIncarnation inserts an incarnation row via the CRUD layer for the
+// Get/History/List tests that rely on existing records.
 func seedIncarnation(t *testing.T, name, service, creator string) {
 	t.Helper()
 	ctx := context.Background()
@@ -1029,8 +1029,8 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 	if out["incarnation"] != "redis-test" {
 		t.Errorf("incarnation = %v", out["incarnation"])
 	}
-	// Поле `status` НЕ должно быть в response (OpenAPI:
-	// IncarnationCreateReply объявляет только apply_id+incarnation).
+	// The `status` field must NOT be in the response (OpenAPI:
+	// IncarnationCreateReply declares only apply_id+incarnation).
 	if _, hasStatus := out["status"]; hasStatus {
 		t.Errorf("response contains 'status' field, want absent: %v", out)
 	}
@@ -1038,7 +1038,7 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 		t.Errorf("apply_id = %q (len=%d), want ULID 26 chars", s, len(s))
 	}
 
-	// Row в БД.
+	// Row in the DB.
 	got, err := incarnation.SelectByName(context.Background(), integrationPool, "redis-test")
 	if err != nil {
 		t.Fatalf("SelectByName: %v", err)
@@ -1050,9 +1050,9 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 		t.Errorf("CreatedByAID = %v", got.CreatedByAID)
 	}
 
-	// Audit-event записан с правильным payload (qa-coverage M0.6c-1):
-	// apply_id + name + service должны попасть в payload (apply_id для
-	// корреляции, name/service для аудит-фильтрации без join).
+	// The audit event is written with the correct payload (qa-coverage M0.6c-1):
+	// apply_id + name + service must appear in the payload (apply_id for
+	// correlation, name/service for audit filtering without a join).
 	var (
 		auditCount   int64
 		auditApplyID string
@@ -1136,15 +1136,15 @@ func TestIntegration_Incarnation_Get_200(t *testing.T) {
 	if dto["status"] != "ready" {
 		t.Errorf("status = %v", dto["status"])
 	}
-	// created_by_aid — required в OpenAPI, должен присутствовать (не omitted).
+	// created_by_aid — required in OpenAPI, must be present (not omitted).
 	if _, present := dto["created_by_aid"]; !present {
 		t.Errorf("response missing 'created_by_aid' (OpenAPI required): %v", dto)
 	}
 	if dto["created_by_aid"] != "archon-alice" {
 		t.Errorf("created_by_aid = %v, want \"archon-alice\"", dto["created_by_aid"])
 	}
-	// status_details — nullable в OpenAPI; для status=ready ожидаем null
-	// присутствующим (а не omitted-ключом).
+	// status_details — nullable in OpenAPI; for status=ready we expect null
+	// present (rather than an omitted key).
 	v, present := dto["status_details"]
 	if !present {
 		t.Errorf("response missing 'status_details' (must be null, not omitted)")
@@ -1154,17 +1154,17 @@ func TestIntegration_Incarnation_Get_200(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Get_CreatedByAID_NullAfterRevoke — после
-// удаления оператора FK `incarnation.created_by_aid` уходит в SET NULL
-// (ADR-014), и Get-response должен отдавать `"created_by_aid": null`,
-// а не omitted-ключ (qa coverage gap M0.6c-1).
+// TestIntegration_Incarnation_Get_CreatedByAID_NullAfterRevoke — after an
+// operator is deleted the FK `incarnation.created_by_aid` goes to SET NULL
+// (ADR-014), and the Get response must return `"created_by_aid": null`,
+// not an omitted key (qa coverage gap M0.6c-1).
 func TestIntegration_Incarnation_Get_CreatedByAID_NullAfterRevoke(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
 	seedOperator(t, "archon-bob", "archon-alice")
 	seedIncarnation(t, "redis-test", "redis", "archon-bob")
 
-	// Прямой DELETE operator-row → FK ON DELETE SET NULL на incarnation.created_by_aid.
+	// Direct DELETE of the operator row → FK ON DELETE SET NULL on incarnation.created_by_aid.
 	if _, err := integrationPool.Exec(context.Background(),
 		`DELETE FROM operators WHERE aid = 'archon-bob'`); err != nil {
 		t.Fatalf("DELETE operator: %v", err)
@@ -1232,7 +1232,7 @@ func TestIntegration_Incarnation_List_200(t *testing.T) {
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 
-	// Без фильтра — 3 элемента.
+	// Without a filter — 3 items.
 	req, _ := http.NewRequest(http.MethodGet, base+"/v1/incarnations", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
@@ -1257,11 +1257,11 @@ func TestIntegration_Incarnation_List_200(t *testing.T) {
 		t.Errorf("Total=%d len=%d, want 3/3", out.Total, len(out.Items))
 	}
 
-	// GUARD контракт-wire: items[]-элемент несёт snake_case-ключи (схема OpenAPI
-	// snake_case), НЕ PascalCase доменного *View. Positive — ключ присутствует;
-	// negative — PascalCase-двойник ОТСУТСТВУЕТ (без него тест зелёный при двойном
-	// присутствии обоих ключей). Регрессия: list-Body сериализовался через untagged
-	// IncarnationGetView → ApplyID/CreatedAt-ключи (контракт-баг #7).
+	// GUARD contract-wire: the items[] element carries snake_case keys (OpenAPI
+	// snake_case schema), NOT the PascalCase of the domain *View. Positive — the key is present;
+	// negative — the PascalCase twin is ABSENT (without it the test stays green when both
+	// keys are present). Regression: the list Body was serialized via the untagged
+	// IncarnationGetView → ApplyID/CreatedAt keys (contract bug #7).
 	first := out.Items[0]
 	if _, ok := first["created_at"]; !ok {
 		t.Errorf("items[0] missing snake_case ключ 'created_at': %v", first)
@@ -1336,7 +1336,7 @@ func TestIntegration_Incarnation_History_200(t *testing.T) {
 	seedOperator(t, "archon-alice", "")
 	seedIncarnation(t, "redis-test", "redis", "archon-alice")
 
-	// Seed history напрямую — handler-side write придёт в M0.6c-2.
+	// Seed history directly — the handler-side write comes in M0.6c-2.
 	ctx := context.Background()
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO state_history (history_id, incarnation_name, scenario,
@@ -1371,8 +1371,8 @@ VALUES ('01HFIRST', 'redis-test', 'create', '{}', '{"x":1}', 'archon-alice', '01
 	if out.Items[0]["history_id"] != "01HFIRST" {
 		t.Errorf("items[0].history_id = %v", out.Items[0]["history_id"])
 	}
-	// GUARD контракт-wire: positive snake_case + negative PascalCase-двойник
-	// (untagged StateHistoryView дал бы HistoryID/ApplyID — контракт-баг #7).
+	// GUARD contract-wire: positive snake_case + negative PascalCase twin
+	// (an untagged StateHistoryView would give HistoryID/ApplyID — contract bug #7).
 	if _, ok := out.Items[0]["apply_id"]; !ok {
 		t.Errorf("items[0] missing snake_case ключ 'apply_id': %v", out.Items[0])
 	}
@@ -1382,9 +1382,9 @@ VALUES ('01HFIRST', 'redis-test', 'create', '{}', '{"x":1}', 'archon-alice', '01
 	if _, ok := out.Items[0]["ApplyID"]; ok {
 		t.Fatalf("items[0] несёт PascalCase ключ 'ApplyID' (контракт-wire сломан): %v", out.Items[0])
 	}
-	// Timestamp обязан быть заполнен и парситься как RFC3339 (state_history.at
-	// через DEFAULT NOW()). Wire-ключ — created_at (общий с остальным Operator
-	// API). Регрессия: клиенты получали null/пустой timestamp.
+	// The timestamp must be filled and parse as RFC3339 (state_history.at
+	// via DEFAULT NOW()). The wire key is created_at (shared with the rest of the Operator
+	// API). Regression: clients received a null/empty timestamp.
 	atRaw, ok := out.Items[0]["created_at"].(string)
 	if !ok || atRaw == "" {
 		t.Fatalf("items[0].created_at = %v, want непустой RFC3339 timestamp", out.Items[0]["created_at"])
@@ -1403,7 +1403,7 @@ func TestIntegration_Incarnation_History_FilterByApplyID(t *testing.T) {
 	seedOperator(t, "archon-alice", "")
 	seedIncarnation(t, "redis-test", "redis", "archon-alice")
 
-	// Два state_history-row с разными apply_id — фильтр должен оставить один.
+	// Two state_history rows with different apply_id — the filter must keep one.
 	ctx := context.Background()
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO state_history (history_id, incarnation_name, scenario,
@@ -1445,8 +1445,8 @@ VALUES
 		t.Errorf("items[0].history_id = %v, want 01HSCND000000000000000000B", out.Items[0]["history_id"])
 	}
 
-	// Filter — non-matching ULID (валидный синтаксически, но нет такого
-	// apply_id в БД): 200 + items=[], total=0. НЕ 404.
+	// Filter — a non-matching ULID (syntactically valid, but there is no such
+	// apply_id in the DB): 200 + items=[], total=0. NOT 404.
 	req2, _ := http.NewRequest(http.MethodGet,
 		base+"/v1/incarnations/redis-test/history?apply_id=01HGHST00000000000000000ZZ", nil)
 	req2.Header.Set("Authorization", "Bearer "+tok)
@@ -1503,22 +1503,22 @@ func TestIntegration_Incarnation_History_404(t *testing.T) {
 	}
 }
 
-// snakeCaseKeyRe — контрактный wire-формат JSON-ключа (snake_case): начинается со
-// строчной буквы, дальше [a-z0-9_]. Любая заглавная (PascalCase untagged-View) → fail.
+// snakeCaseKeyRe — the contract wire format of a JSON key (snake_case): starts with
+// a lowercase letter, then [a-z0-9_]. Any uppercase (PascalCase untagged View) → fail.
 var snakeCaseKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// TestIntegration_ListEndpoints_SnakeCaseWire — guard класса контракт-wire: для
-// каждой paged-list-ручки первый items[]-элемент обязан нести ТОЛЬКО snake_case
-// ключи (схема OpenAPI snake_case). Ловит весь класс «доменный *View без json-тегов
-// уходит в Body напрямую, минуя проекцию → PascalCase-ключи» (контракт-баг #7) и для
-// будущих list-ручек тоже. Каждый sub-test сидит свои данные изолированно.
+// TestIntegration_ListEndpoints_SnakeCaseWire — a contract-wire class guard: for
+// each paged-list endpoint the first items[] element must carry ONLY snake_case
+// keys (OpenAPI snake_case schema). Catches the whole class of "a domain *View without json tags
+// goes into Body directly, bypassing the projection → PascalCase keys" (contract bug #7) and for
+// future list endpoints too. Each sub-test seeds its own data in isolation.
 func TestIntegration_ListEndpoints_SnakeCaseWire(t *testing.T) {
 	cases := []struct {
 		name  string
 		rbac  *rbactest.Config
 		seed  func(t *testing.T)
 		path  string
-		minOk int // минимум ожидаемых items (>=1 — иначе guard вхолостую)
+		minOk int // minimum expected items (>=1 — otherwise the guard is a no-op)
 	}{
 		{
 			name: "incarnation_list",
@@ -1595,9 +1595,9 @@ VALUES ('01HHIST000000000000000000A', 'redis-h', 'create', '{}', '{"x":1}', 'arc
 }
 
 // TestIntegration_Incarnation_Create_BodyTooLarge_413 — body > v1RequestBodyLimit
-// (1 MiB). huma-роут (incarnation Create мигрирован на huma) сам ограничивает тело
-// и на превышении отдаёт RFC-корректный 413 Payload Too Large (huma v2:
-// "request body is too large limit=… bytes"), а не 400. Тест проверяет именно 413.
+// (1 MiB). The huma route (incarnation Create migrated to huma) limits the body itself
+// and on overflow returns an RFC-correct 413 Payload Too Large (huma v2:
+// "request body is too large limit=… bytes"), not 400. The test checks exactly 413.
 func TestIntegration_Incarnation_Create_BodyTooLarge_413(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
@@ -1606,7 +1606,7 @@ func TestIntegration_Incarnation_Create_BodyTooLarge_413(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	// 2 MiB случайного валидного JSON (огромный input-объект).
+	// 2 MiB of random valid JSON (a huge input object).
 	big := strings.Repeat("a", 2<<20)
 	body := bytesReader(`{"name":"redis-test","service":"redis","input":{"x":"` + big + `"}}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/incarnations", body)
@@ -1646,8 +1646,8 @@ func TestIntegration_Incarnation_403_NoPermission(t *testing.T) {
 
 // --- M2.x: Soul onboarding endpoints ---
 
-// soulRBAC — cluster-admin + viewer с soul.create / soul.issue-token у
-// admin-а, чтобы покрыть и 201/200, и 403.
+// soulRBAC — cluster-admin + viewer with soul.create / soul.issue-token on the
+// admin, to cover both 201/200 and 403.
 func soulRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -1685,8 +1685,8 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 	if out["sid"] != "web-01.example.com" || out["status"] != "pending" {
 		t.Errorf("response = %v", out)
 	}
-	// covens из запроса персистятся в souls.coven (привязка при онбординге,
-	// GAP #3): без неё хост не таргетится сценарием, нужен прямой UPDATE в БД.
+	// covens from the request are persisted into souls.coven (binding at onboarding,
+	// GAP #3): without it the host is not targeted by a scenario, a direct UPDATE in the DB is needed.
 	if covens, _ := out["covens"].([]any); len(covens) != 1 || covens[0] != "prod" {
 		t.Errorf("response covens = %v, want [prod]", out["covens"])
 	}
@@ -1697,7 +1697,7 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 		t.Errorf("created_by_aid = %v", out["created_by_aid"])
 	}
 
-	// souls-row создан, status=pending.
+	// souls row created, status=pending.
 	got, err := soulSelectStatus(t, "web-01.example.com")
 	if err != nil {
 		t.Fatalf("soulSelectStatus: %v", err)
@@ -1706,8 +1706,8 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 		t.Errorf("souls.status = %q, want pending", got)
 	}
 
-	// requested_at проставлен (B1): нужен для Reaper-правила pending→expired
-	// по индексу souls_pending_requested_at_idx (docs/soul/onboarding.md:51).
+	// requested_at is set (B1): needed for the Reaper rule pending→expired
+	// via the index souls_pending_requested_at_idx (docs/soul/onboarding.md:51).
 	var requestedAt *time.Time
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT requested_at FROM souls WHERE sid='web-01.example.com'`).Scan(&requestedAt); err != nil {
@@ -1720,7 +1720,7 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 		t.Errorf("requested_at skew from now = %s, want within ~now", skew)
 	}
 
-	// souls.coven персистнут из covens-поля запроса (GAP #3).
+	// souls.coven is persisted from the request's covens field (GAP #3).
 	var savedCoven []string
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT coven FROM souls WHERE sid='web-01.example.com'`).Scan(&savedCoven); err != nil {
@@ -1730,7 +1730,7 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 		t.Errorf("souls.coven = %v, want [prod]", savedCoven)
 	}
 
-	// Активный bootstrap-токен в БД.
+	// An active bootstrap token in the DB.
 	var tokenCount int64
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM bootstrap_tokens WHERE sid='web-01.example.com' AND used_at IS NULL`).
@@ -1741,7 +1741,7 @@ func TestIntegration_Soul_Create_201(t *testing.T) {
 		t.Errorf("active token count = %d, want 1", tokenCount)
 	}
 
-	// Audit: token-plain НЕ должен попасть в payload (substring-mask H1).
+	// Audit: the plaintext token must NOT appear in the payload (substring-mask H1).
 	var auditCount int64
 	var tokenLeaked bool
 	if err := integrationPool.QueryRow(context.Background(),
@@ -1973,7 +1973,7 @@ func TestIntegration_Soul_IssueToken_Force_200(t *testing.T) {
 		t.Errorf("bootstrap_token missing in force-reissue: %v", out)
 	}
 
-	// Старый токен инвалидирован (used_at IS NOT NULL), новый — активный.
+	// The old token is invalidated (used_at IS NOT NULL), the new one — active.
 	var oldUsed bool
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT used_at IS NOT NULL FROM bootstrap_tokens WHERE token_id=$1`, oldTokenID).
@@ -1993,8 +1993,8 @@ func TestIntegration_Soul_IssueToken_Force_200(t *testing.T) {
 		t.Errorf("active token count after force = %d, want 1", activeCount)
 	}
 
-	// Audit: soul.token-issued записан, force=true, expired_previous=true.
-	// Идентификаторы токенов в payload отсутствуют (secret-mask H1).
+	// Audit: soul.token-issued written, force=true, expired_previous=true.
+	// Token identifiers are absent from the payload (secret-mask H1).
 	var auditCount int64
 	var force, expiredPrev bool
 	if err := integrationPool.QueryRow(context.Background(),
@@ -2010,12 +2010,12 @@ func TestIntegration_Soul_IssueToken_Force_200(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_Create_UnknownCreator_422 (B2): JWT с AID, которого нет
-// в реестре operators, но с RBAC-ролью, дающей soul.create. FK-violation на
-// souls_created_by_aid_fk должна маппиться в чистый 422, а не opaque 500.
+// TestIntegration_Soul_Create_UnknownCreator_422 (B2): a JWT with an AID that is not
+// in the operators registry, but with an RBAC role granting soul.create. An FK violation on
+// souls_created_by_aid_fk must map to a clean 422, not an opaque 500.
 func TestIntegration_Soul_Create_UnknownCreator_422(t *testing.T) {
 	truncateOperators(t)
-	// archon-alice намеренно НЕ сидируется в operators — только в RBAC-config.
+	// archon-alice is deliberately NOT seeded in operators — only in the RBAC config.
 
 	rbac := &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2046,7 +2046,7 @@ func TestIntegration_Soul_Create_UnknownCreator_422(t *testing.T) {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
 	}
 
-	// Осиротевшей souls-row не должно остаться (insert упал на FK).
+	// No orphaned souls row must remain (the insert failed on the FK).
 	var soulCount int64
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM souls WHERE sid='web-01.example.com'`).Scan(&soulCount); err != nil {
@@ -2058,13 +2058,13 @@ func TestIntegration_Soul_Create_UnknownCreator_422(t *testing.T) {
 }
 
 // TestIntegration_Soul_IssueToken_ForceNoActive_200 (coverage gap 1): force=true
-// когда активного токена нет — recovery-сценарий из onboarding.md. Должно вернуть
-// 200 + новый токен (ExpireActiveBySID → no-op, Insert проходит).
+// when there is no active token — the recovery scenario from onboarding.md. Must return
+// 200 + a new token (ExpireActiveBySID → no-op, Insert succeeds).
 func TestIntegration_Soul_IssueToken_ForceNoActive_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
 	seedSoul(t, "web-01.example.com", "agent", "archon-alice")
-	// Активный токен НЕ сидируется — force-recovery на голом pending-Soul-е.
+	// No active token is seeded — force-recovery on a bare pending Soul.
 
 	base, stop := startServer(t, soulRBAC())
 	defer stop()
@@ -2100,7 +2100,7 @@ func TestIntegration_Soul_IssueToken_ForceNoActive_200(t *testing.T) {
 		t.Errorf("active token count = %d, want 1", activeCount)
 	}
 
-	// expired_previous=false (нечего было истекать).
+	// expired_previous=false (there was nothing to expire).
 	var expiredPrev bool
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT bool_or((payload->>'expired_previous')::bool)
@@ -2112,15 +2112,15 @@ func TestIntegration_Soul_IssueToken_ForceNoActive_200(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_IssueToken_Concurrent (coverage gap 2): два одновременных
-// issue-token на один SID без force → ровно 1 успех (200) + 1 отказ (409
-// bootstrap-token-active), в БД ровно 1 активный токен. Защита — partial unique
+// TestIntegration_Soul_IssueToken_Concurrent (coverage gap 2): two concurrent
+// issue-token calls on one SID without force → exactly 1 success (200) + 1 refusal (409
+// bootstrap-token-active), exactly 1 active token in the DB. Protection — a partial unique
 // UNIQUE(sid) WHERE used_at IS NULL.
 func TestIntegration_Soul_IssueToken_Concurrent(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
 	seedSoul(t, "web-01.example.com", "agent", "archon-alice")
-	// Без предварительного активного токена: гонка двух чистых выписок.
+	// Without a prior active token: a race of two clean issuances.
 
 	base, stop := startServer(t, soulRBAC())
 	defer stop()
@@ -2188,8 +2188,8 @@ func TestIntegration_Soul_IssueToken_Concurrent(t *testing.T) {
 func TestIntegration_Soul_List_200_Filters(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
-	// Три Soul-а: agent/connected coven=[redis-prod], agent/pending coven=[redis-prod,cache],
-	// ssh/pending coven=[edge]. Покрывают coven / status / transport фильтры.
+	// Three Souls: agent/connected coven=[redis-prod], agent/pending coven=[redis-prod,cache],
+	// ssh/pending coven=[edge]. Cover the coven / status / transport filters.
 	seedSoulFull(t, "redis-01.example.com", "agent", soul.StatusConnected, []string{"redis-prod"}, "archon-alice")
 	seedSoulFull(t, "redis-02.example.com", "agent", soul.StatusPending, []string{"redis-prod", "cache"}, "archon-alice")
 	seedSoulFull(t, "edge-01.example.com", "ssh", soul.StatusPending, []string{"edge"}, "archon-alice")
@@ -2198,16 +2198,16 @@ func TestIntegration_Soul_List_200_Filters(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 
-	// Без фильтра — 3.
+	// Without a filter — 3.
 	if total, items := listSouls(t, base, tok, ""); total != 3 || items != 3 {
 		t.Errorf("no filter: total=%d items=%d, want 3/3", total, items)
 	}
 
-	// GUARD контракт-wire: items[]-элемент soul-list несёт snake_case-ключи
-	// (sid/last_seen_at/registered_at), НЕ PascalCase доменного SoulListView.
-	// Positive — ключ present; negative — PascalCase-двойник ОТСУТСТВУЕТ.
-	// Регрессия: list-Body сериализовался через untagged SoulListView →
-	// SID/LastSeenAt/RegisteredAt-ключи (контракт-баг #7).
+	// GUARD contract-wire: the soul-list items[] element carries snake_case keys
+	// (sid/last_seen_at/registered_at), NOT the PascalCase of the domain SoulListView.
+	// Positive — the key is present; negative — the PascalCase twin is ABSENT.
+	// Regression: the list Body was serialized via the untagged SoulListView →
+	// SID/LastSeenAt/RegisteredAt keys (contract bug #7).
 	first := firstSoulItem(t, base, tok)
 	for _, key := range []string{"sid", "last_seen_at", "registered_at"} {
 		if _, ok := first[key]; !ok {
@@ -2231,7 +2231,7 @@ func TestIntegration_Soul_List_200_Filters(t *testing.T) {
 	if total, items := listSouls(t, base, tok, "transport=ssh"); total != 1 || items != 1 {
 		t.Errorf("transport filter: total=%d items=%d, want 1/1", total, items)
 	}
-	// Комбинация: agent + pending + coven=cache → 1 (redis-02).
+	// Combination: agent + pending + coven=cache → 1 (redis-02).
 	if total, items := listSouls(t, base, tok, "transport=agent&status=pending&coven=cache"); total != 1 || items != 1 {
 		t.Errorf("combined filter: total=%d items=%d, want 1/1", total, items)
 	}
@@ -2268,9 +2268,9 @@ func TestIntegration_Soul_List_Empty_200(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_List_NoSecretsLeak — list-response не должен отдавать
-// fingerprint / token_hash и прочие секреты (DTO их не объявляет; проверяем
-// через raw-map ключи).
+// TestIntegration_Soul_List_NoSecretsLeak — the list response must not return
+// fingerprint / token_hash and other secrets (the DTO does not declare them; we check
+// via raw-map keys).
 func TestIntegration_Soul_List_NoSecretsLeak(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
@@ -2311,7 +2311,7 @@ func TestIntegration_Soul_List_403_NoPermission(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-nobody", "")
 
-	// RBAC без soul.list для archon-nobody.
+	// RBAC without soul.list for archon-nobody.
 	rbacCfg := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "no-list", Operators: []string{"archon-nobody"}, Permissions: []string{"soul.create"}},
@@ -2337,10 +2337,10 @@ func TestIntegration_Soul_List_403_NoPermission(t *testing.T) {
 	}
 }
 
-// --- ADR-047 S3b-2a: keyset-режим souls-list на реальной PG (regex-scope) ---
+// --- ADR-047 S3b-2a: keyset mode of souls-list on a real PG (regex-scope) ---
 
-// keysetPage — одна HTTP-страница keyset-режима souls-list (next_cursor /
-// total_approximate). SID-ы вынимаем для проверки покрытия обхода.
+// keysetPage — one HTTP page of the keyset mode of souls-list (next_cursor /
+// total_approximate). We extract the SIDs to verify the walk's coverage.
 type keysetPage struct {
 	Items []struct {
 		SID    string `json:"sid"`
@@ -2350,7 +2350,7 @@ type keysetPage struct {
 	NextCursor       *string `json:"next_cursor"`
 }
 
-// getSoulsPage — GET /v1/souls?<query> и decode в keysetPage. Падает на не-200.
+// getSoulsPage — GET /v1/souls?<query> and decode into keysetPage. Fails on non-200.
 func getSoulsPage(t *testing.T, base, tok, query string) keysetPage {
 	t.Helper()
 	url := base + "/v1/souls"
@@ -2375,9 +2375,9 @@ func getSoulsPage(t *testing.T, base, tok, query string) keysetPage {
 	return page
 }
 
-// walkSouls — полный keyset-обход souls-list через next_cursor round-trip,
-// собирает все SID-ы; падает на дубле или превышении лимита страниц. baseQuery —
-// фильтры/limit (без cursor).
+// walkSouls — a full keyset walk of souls-list via the next_cursor round-trip,
+// collects all SIDs; fails on a duplicate or on exceeding the page limit. baseQuery —
+// filters/limit (without cursor).
 func walkSouls(t *testing.T, base, tok, baseQuery string) map[string]struct{} {
 	t.Helper()
 	seen := map[string]struct{}{}
@@ -2411,8 +2411,8 @@ func walkSouls(t *testing.T, base, tok, baseQuery string) map[string]struct{} {
 	return seen
 }
 
-// regexScopeRBAC — роль с регекс-scoped soul.list (`on regex=<pat>`): оператор
-// видит только SID, матчащие паттерн (keyset-режим, ADR-047 S3b-2a).
+// regexScopeRBAC — a role with regex-scoped soul.list (`on regex=<pat>`): the operator
+// sees only SIDs matching the pattern (keyset mode, ADR-047 S3b-2a).
 func regexScopeRBAC(aid, pattern string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2421,8 +2421,8 @@ func regexScopeRBAC(aid, pattern string) *rbactest.Config {
 	}
 }
 
-// covenAndRegexScopeRBAC — две soul.list-permission: coven=<coven> + regex=<pat>.
-// Видимость = union (OR): хост в coven ИЛИ матчащий regex (keyset-режим).
+// covenAndRegexScopeRBAC — two soul.list permissions: coven=<coven> + regex=<pat>.
+// Visibility = union (OR): a host in the coven OR matching the regex (keyset mode).
 func covenAndRegexScopeRBAC(aid, coven, pattern string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2434,18 +2434,18 @@ func covenAndRegexScopeRBAC(aid, coven, pattern string) *rbactest.Config {
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_RegexScope — keyset HTTP-путь на реальной PG:
-// regex-scope `^web-`, флот web-*/db-* → обход через next_cursor собирает РОВНО
-// web-* (без дублей/пропусков), total_approximate:true, добор работает (limit
-// меньше числа web-хостов → многостраничный обход).
+// TestIntegration_Soul_List_Keyset_RegexScope — the keyset HTTP path on a real PG:
+// regex-scope `^web-`, souls web-*/db-* → the walk via next_cursor collects EXACTLY
+// web-* (no duplicates/gaps), total_approximate:true, top-up works (limit
+// less than the number of web hosts → a multi-page walk).
 func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
-	// ADR-047 G1: route-gate переведён на RequireAction (existence-gate) —
-	// regex-scoped оператор достигает handler-а (раньше rbac.Check(nil-ctx)
-	// деньил scoped soul.list ДО handler-а). Достижимо через РЕАЛЬНЫЙ route-gate.
+	// ADR-047 G1: the route-gate is switched to RequireAction (existence-gate) —
+	// a regex-scoped operator reaches the handler (previously rbac.Check(nil-ctx)
+	// denied scoped soul.list BEFORE the handler). Reachable through the REAL route-gate.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
-	// 3 web-* (видимы) + 2 db-* (вне scope). Разные registered_at —
-	// seedSoulFull проставляет NOW(); порядок вставки задаёт DESC-порядок.
+	// 3 web-* (visible) + 2 db-* (out of scope). Different registered_at —
+	// seedSoulFull sets NOW(); the insertion order determines the DESC order.
 	for _, s := range []string{"web-01.example.com", "web-02.example.com", "web-03.example.com"} {
 		seedSoulFull(t, s, "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
 		time.Sleep(2 * time.Millisecond)
@@ -2459,7 +2459,7 @@ func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-webops", []string{"web-ops"})
 
-	// limit=2 < 3 web-хостов → многостраничный обход с добором.
+	// limit=2 < 3 web hosts → a multi-page walk with top-up.
 	got := walkSouls(t, base, tok, "limit=2")
 	want := map[string]struct{}{
 		"web-01.example.com": {}, "web-02.example.com": {}, "web-03.example.com": {},
@@ -2479,16 +2479,16 @@ func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_CovenRegexUnion — смешанный scope coven=prod
-// + regex=^db- на реальной PG: видимость = union (OR). Хост-в-prod-не-db и
-// хост-db-не-prod оба видны на page-by-page обходе; хост-ни-ни скрыт.
+// TestIntegration_Soul_List_Keyset_CovenRegexUnion — a mixed scope coven=prod
+// + regex=^db- on a real PG: visibility = union (OR). A host-in-prod-not-db and a
+// host-db-not-prod are both visible on the page-by-page walk; a host-neither is hidden.
 func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
-	// ADR-047 G1: route-gate RequireAction (existence-gate) пускает scoped-
-	// оператора к handler-у; union OR + filter∩scope считаются в handler-е.
+	// ADR-047 G1: the route-gate RequireAction (existence-gate) admits the scoped
+	// operator to the handler; union OR + filter∩scope are computed in the handler.
 	truncateOperators(t)
 	seedOperator(t, "archon-mixed", "")
-	// app-01: prod, не db → виден по coven. db-01: staging, db-* → виден по regex.
-	// db-02: prod, db-* → виден обоими. noise-01: staging, не db → скрыт.
+	// app-01: prod, not db → visible by coven. db-01: staging, db-* → visible by regex.
+	// db-02: prod, db-* → visible by both. noise-01: staging, not db → hidden.
 	seedSoulFull(t, "app-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-mixed")
 	time.Sleep(2 * time.Millisecond)
 	seedSoulFull(t, "db-01.example.com", "agent", soul.StatusConnected, []string{"staging"}, "archon-mixed")
@@ -2515,13 +2515,13 @@ func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_List_Keyset_FilterIntersectsScope — BLOCKER-фикс на
-// реальной PG: regex-scope `^web-` + `?status=connected` → видны ТОЛЬКО
-// connected web-хосты (фильтр ∩ scope, AND). pending web-хост из scope скрыт
-// фильтром. До фикса keyset-режим игнорировал бы query-фильтр.
+// TestIntegration_Soul_List_Keyset_FilterIntersectsScope — a BLOCKER fix on
+// a real PG: regex-scope `^web-` + `?status=connected` → ONLY the
+// connected web hosts are visible (filter ∩ scope, AND). A pending web host in scope is hidden
+// by the filter. Before the fix the keyset mode would have ignored the query filter.
 func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
-	// ADR-047 G1: route-gate RequireAction (existence-gate) пускает regex-scoped
-	// оператора к handler-у; filter∩scope (AND) считается keyset-eval-ом.
+	// ADR-047 G1: the route-gate RequireAction (existence-gate) admits the regex-scoped
+	// operator to the handler; filter∩scope (AND) is computed by the keyset eval.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
 	seedSoulFull(t, "web-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
@@ -2529,7 +2529,7 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 	seedSoulFull(t, "web-02.example.com", "agent", soul.StatusPending, []string{"prod"}, "archon-webops")
 	time.Sleep(2 * time.Millisecond)
 	seedSoulFull(t, "web-03.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
-	// db-вне-scope с connected — не должен просочиться даже под фильтр.
+	// a db-out-of-scope host with connected — must not leak through even under the filter.
 	seedSoulFull(t, "db-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
 
 	base, stop := startServer(t, regexScopeRBAC("archon-webops", "^web-"))
@@ -2554,12 +2554,12 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 	}
 }
 
-// --- ADR-047 gate-fix: scoped-операторы достигают handler через РЕАЛЬНЫЙ
-// route-gate (NoSelector), scope деривируется из JWT, не из query. ---
+// --- ADR-047 gate-fix: scoped operators reach the handler through the REAL
+// route-gate (NoSelector), scope is derived from the JWT, not from the query. ---
 
-// covenScopeRBAC — роль с coven-scoped soul.list (`on coven=<label>`): оператор
-// видит только хосты своего coven. БЕЗ host/coven-контекста в query — gate
-// (NoSelector) пускает, сужает handler.
+// covenScopeRBAC — a role with coven-scoped soul.list (`on coven=<label>`): the operator
+// sees only the hosts of its own coven. WITHOUT host/coven context in the query — the gate
+// (NoSelector) admits, the handler narrows.
 func covenScopeRBAC(aid, coven string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2568,8 +2568,8 @@ func covenScopeRBAC(aid, coven string) *rbactest.Config {
 	}
 }
 
-// getSoulStatus — GET /v1/souls/{sid}, возвращает HTTP-статус (для scope-гейта
-// single-read: 200 видим / 404 вне scope).
+// getSoulStatus — GET /v1/souls/{sid}, returns the HTTP status (for the single-read
+// scope gate: 200 visible / 404 out of scope).
 func getSoulStatus(t *testing.T, base, tok, sid string) int {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, base+"/v1/souls/"+sid, nil)
@@ -2582,12 +2582,12 @@ func getSoulStatus(t *testing.T, base, tok, sid string) int {
 	return resp.StatusCode
 }
 
-// TestIntegration_Soul_List_CovenScope_NoQuery_200 — guard #1 (G1, главный
-// выигрыш): coven-scoped оператор делает GET /v1/souls БЕЗ ?coven= → 200 + только
-// хосты своего coven (НЕ 403). Раньше scope-aware gate (RequirePermission) деньил
-// coven-scoped без ?coven= (пустой context → селектор не сматчил → 403). G1 —
-// RequireAction existence-gate пускает, сужает handler. Регресс = scoped-оператор
-// снова 403 на собственный список (scoped-видимость через HTTP недостижима).
+// TestIntegration_Soul_List_CovenScope_NoQuery_200 — guard #1 (G1, the main
+// win): a coven-scoped operator does GET /v1/souls WITHOUT ?coven= → 200 + only
+// the hosts of its own coven (NOT 403). Previously the scope-aware gate (RequirePermission) denied
+// coven-scoped without ?coven= (empty context → the selector did not match → 403). G1 —
+// RequireAction existence-gate admits, the handler narrows. Regression = a scoped operator
+// again 403 on its own list (scoped visibility unreachable via HTTP).
 func TestIntegration_Soul_List_CovenScope_NoQuery_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")
@@ -2599,7 +2599,7 @@ func TestIntegration_Soul_List_CovenScope_NoQuery_200(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-coven", []string{"coven-ops"})
 
-	// БЕЗ ?coven= — раньше 403, теперь 200 + ровно 2 prod-хоста (coven-pushdown).
+	// WITHOUT ?coven= — previously 403, now 200 + exactly 2 prod hosts (coven-pushdown).
 	total, items := listSouls(t, base, tok, "")
 	if total != 2 || items != 2 {
 		t.Fatalf("coven-scoped list без ?coven=: total=%d items=%d, want 2/2 (только prod)", total, items)
@@ -2607,11 +2607,11 @@ func TestIntegration_Soul_List_CovenScope_NoQuery_200(t *testing.T) {
 }
 
 // TestIntegration_Soul_Get_CovenScope_InScope_200_OutOfScope_404 — guard #4/#6
-// (gate-fix + list↔get): coven-scoped оператор читает хост своего coven по
-// прямому GET /{sid} → 200; чужой coven → 404. list↔get консистентны.
+// (gate-fix + list↔get): a coven-scoped operator reads a host of its own coven by
+// a direct GET /{sid} → 200; a foreign coven → 404. list↔get are consistent.
 func TestIntegration_Soul_Get_CovenScope(t *testing.T) {
-	// ADR-047 G1: RequireAction existence-gate пускает coven-scoped к single-get;
-	// handler-сужение (readScope/InScope coven-match → 200/404) режет видимость.
+	// ADR-047 G1: the RequireAction existence-gate admits coven-scoped to single-get;
+	// the handler narrowing (readScope/InScope coven-match → 200/404) cuts visibility.
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")
 	seedSoulFull(t, "prod-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-coven")
@@ -2630,12 +2630,12 @@ func TestIntegration_Soul_Get_CovenScope(t *testing.T) {
 }
 
 // TestIntegration_Soul_Get_RegexScope_ListGetConsistency — guard #3/#6 (gate-fix
-// + InScope OR-regex): regex-scoped оператор. Хост, видимый в List (regex-eval),
-// доступен и по прямому GET /{sid} (200, не 404 — рассинхрон S3b-2a устранён);
-// не-матчащий хост → 404. Это ключевой list↔get-консистентность guard.
+// + InScope OR-regex): a regex-scoped operator. A host visible in List (regex-eval)
+// is also reachable by a direct GET /{sid} (200, not 404 — the S3b-2a mismatch is fixed);
+// a non-matching host → 404. This is the key list↔get consistency guard.
 func TestIntegration_Soul_Get_RegexScope_ListGetConsistency(t *testing.T) {
-	// ADR-047 G1: RequireAction existence-gate пускает regex-scoped и на list, и
-	// на single-get; list↔get консистентность (InScope OR-regex) считается handler-ом.
+	// ADR-047 G1: the RequireAction existence-gate admits regex-scoped both to list and
+	// to single-get; the list↔get consistency (InScope OR-regex) is computed by the handler.
 	truncateOperators(t)
 	seedOperator(t, "archon-webops", "")
 	seedSoulFull(t, "web-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-webops")
@@ -2645,25 +2645,25 @@ func TestIntegration_Soul_Get_RegexScope_ListGetConsistency(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-webops", []string{"web-ops"})
 
-	// web-01 виден в keyset-List…
+	// web-01 is visible in the keyset List…
 	seen := walkSouls(t, base, tok, "limit=10")
 	if _, ok := seen["web-01.example.com"]; !ok {
 		t.Fatal("web-01 не виден в regex-scoped List — предусловие consistency-теста нарушено")
 	}
-	// …и доступен по прямому GET (раньше InScope coven-only → 404 на видимый).
+	// …and reachable by a direct GET (previously InScope coven-only → 404 on a visible host).
 	if code := getSoulStatus(t, base, tok, "web-01.example.com"); code != http.StatusOK {
 		t.Errorf("GET web-01 (виден в List по regex ^web-) = %d, want 200 (list↔get консистентны)", code)
 	}
-	// db-01 НЕ матчит regex → 404 (вне Purview, не палит существование).
+	// db-01 does NOT match the regex → 404 (outside Purview, does not reveal existence).
 	if code := getSoulStatus(t, base, tok, "db-01.example.com"); code != http.StatusNotFound {
 		t.Errorf("GET db-01 (не матчит ^web-) = %d, want 404", code)
 	}
 }
 
-// TestIntegration_Soul_Get_403_NoPermission — guard #5 (security не-регресс):
-// оператор БЕЗ soul.list получает 403 и на single-get (gate всё ещё требует
-// держать permission — NoSelector ослабил scope-в-query, НЕ требование самого
-// permission). Регресс = чтение детали без права.
+// TestIntegration_Soul_Get_403_NoPermission — guard #5 (security non-regression):
+// an operator WITHOUT soul.list gets 403 on single-get too (the gate still requires
+// holding the permission — NoSelector relaxed scope-in-query, NOT the requirement of the
+// permission itself). Regression = reading the detail without the right.
 func TestIntegration_Soul_Get_403_NoPermission(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-nobody", "")
@@ -2683,8 +2683,8 @@ func TestIntegration_Soul_Get_403_NoPermission(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_Get_BareList_200 — guard #5 (bare-soul.list не сломан):
-// unrestricted-оператор (bare soul.list) видит любой хост по single-get.
+// TestIntegration_Soul_Get_BareList_200 — guard #5 (bare soul.list not broken):
+// an unrestricted operator (bare soul.list) sees any host via single-get.
 func TestIntegration_Soul_Get_BareList_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-viewer", "")
@@ -2704,9 +2704,9 @@ func TestIntegration_Soul_Get_BareList_200(t *testing.T) {
 	}
 }
 
-// getReadStatus — GET по произвольному read-souls-пути, возвращает HTTP-статус.
-// Используется revoked/expired-guard-ами для всех четырёх read-роутов
-// (list / {sid} / {sid}/soulprint / {sid}/history) единым helper-ом.
+// getReadStatus — GET on an arbitrary read-souls path, returns the HTTP status.
+// Used by the revoked/expired guards for all four read routes
+// (list / {sid} / {sid}/soulprint / {sid}/history) via a single helper.
 func getReadStatus(t *testing.T, base, tok, path string) int {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, base+path, nil)
@@ -2719,10 +2719,10 @@ func getReadStatus(t *testing.T, base, tok, path string) int {
 	return resp.StatusCode
 }
 
-// newExpiredTokenFor выпускает УЖЕ ИСТЁКШИЙ JWT — для guard-а «revoked-фикс не
-// сломал auth-слой»: expired-токен обязан давать 401 на read-souls (auth-слой ДО
-// RBAC-gate), а не проскальзывать в revoked-семантику. Issue не даёт negative
-// ttl, поэтому крафтим claims напрямую с exp в прошлом (как jwt/verifier_test).
+// newExpiredTokenFor issues an ALREADY EXPIRED JWT — for the guard "the revoked-fix did
+// not break the auth layer": an expired token must give 401 on read-souls (the auth layer BEFORE
+// the RBAC gate), rather than slipping into revoked semantics. Issue does not allow a negative
+// ttl, so we craft the claims directly with exp in the past (as in jwt/verifier_test).
 func newExpiredTokenFor(t *testing.T, aid string, roles []string) string {
 	t.Helper()
 	claims := jwtv5.MapClaims{
@@ -2739,21 +2739,21 @@ func newExpiredTokenFor(t *testing.T, aid string, roles []string) string {
 	return tok
 }
 
-// TestIntegration_Soul_Read_Revoked_403 — guard (ADR-047 G1 Фикс 2): revoked
-// Архонт С АКТИВНОЙ ролью soul.list НЕ видит флот. ResolvePurview → Deny отрезает
-// его в единой точке — на route-gate [RequireAction] (HoldsAction→Deny→false→403),
-// который стоит ПЕРЕД handler-ом и ловит ВСЕ четыре read-роута единообразно:
-// list / {sid} / soulprint / history → 403. handler-резолверы (readScope→Empty→
-// InScope false → 404) остаются недостижимым backstop при revoked — gate срабатывает
-// раньше; на покрытие 404-ветки от scope работают coven/regex-scope-тесты ниже.
-// 403 vs 404 здесь не утечка: оба = «нет доступа», 403 даже строже (не различает
-// существование). Контроль: та же роль БЕЗ revoked видит хост (НЕ 403).
+// TestIntegration_Soul_Read_Revoked_403 — guard (ADR-047 G1 Fix 2): a revoked
+// Archon WITH AN ACTIVE soul.list role does NOT see the souls. ResolvePurview → Deny cuts
+// it off at a single point — the route-gate [RequireAction] (HoldsAction→Deny→false→403),
+// which sits BEFORE the handler and catches ALL four read routes uniformly:
+// list / {sid} / soulprint / history → 403. The handler resolvers (readScope→Empty→
+// InScope false → 404) remain an unreachable backstop when revoked — the gate fires
+// earlier; the coven/regex-scope tests below cover the 404 branch from scope.
+// 403 vs 404 here is not a leak: both = "no access", 403 is even stricter (does not distinguish
+// existence). Control: the same role WITHOUT revoked sees the host (NOT 403).
 func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
 	seedSoulFull(t, "prod-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-fired")
 
-	// Контроль: НЕ-revoked с тем же bare soul.list видит хост.
+	// Control: a non-revoked operator with the same bare soul.list sees the host.
 	notRevoked := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "viewer", Operators: []string{"archon-fired"}, Permissions: []string{"soul.list"}},
@@ -2769,7 +2769,7 @@ func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
 	}
 	stopOK()
 
-	// Revoked: активная роль soul.list, но revoked_at выставлен.
+	// Revoked: an active soul.list role, but revoked_at is set.
 	revokedCfg := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "viewer", Operators: []string{"archon-fired"}, Permissions: []string{"soul.list"}},
@@ -2792,9 +2792,9 @@ func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
 	}
 }
 
-// TestIntegration_Soul_Read_Expired_401 — guard (ADR-047 G1): revoked-фикс НЕ
-// сломал auth-слой. Истёкший JWT даёт 401 на всех четырёх read-роутах ДО
-// RBAC-gate (expired ≠ revoked: 401 от RequireJWT, а не 403/404 от scope).
+// TestIntegration_Soul_Read_Expired_401 — guard (ADR-047 G1): the revoked-fix did NOT
+// break the auth layer. An expired JWT gives 401 on all four read routes BEFORE
+// the RBAC gate (expired ≠ revoked: 401 from RequireJWT, not 403/404 from scope).
 func TestIntegration_Soul_Read_Expired_401(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-viewer", "")
@@ -2821,10 +2821,10 @@ func TestIntegration_Soul_Read_Expired_401(t *testing.T) {
 	}
 }
 
-// postCovenAssign — POST /v1/souls/coven с переданным телом, возвращает
-// HTTP-статус. Используется coven-assign-revoked guard-ом (Пробел 2). dry_run
-// в теле делает запрос не-мутирующим (CountBulkMatched без UPDATE) — happy-path
-// 200 не зависит от наличия хостов.
+// postCovenAssign — POST /v1/souls/coven with the given body, returns the
+// HTTP status. Used by the coven-assign-revoked guard (Gap 2). dry_run
+// in the body makes the request non-mutating (CountBulkMatched without UPDATE) — the happy-path
+// 200 does not depend on the presence of hosts.
 func postCovenAssign(t *testing.T, base, tok, body string) int {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/souls/coven", bytesReader(body))
@@ -2838,30 +2838,30 @@ func postCovenAssign(t *testing.T, base, tok, body string) int {
 	return resp.StatusCode
 }
 
-// TestIntegration_Soul_CovenAssign_Revoked_401 — guard (ADR-047 G2, Пробел 2):
-// revoked Архонт С АКТИВНОЙ ролью soul.coven-assign НЕ может массово менять
-// Coven-метки. `POST /v1/souls/coven` — второй потребитель revoked-aware
-// ResolvePurview (через handler scope-intersection), но первым срабатывает
+// TestIntegration_Soul_CovenAssign_Revoked_401 — guard (ADR-047 G2, Gap 2): a
+// revoked Archon WITH AN ACTIVE soul.coven-assign role can NOT bulk-change
+// Coven labels. `POST /v1/souls/coven` — the second consumer of revoked-aware
+// ResolvePurview (via handler scope-intersection), but the first to fire is
 // route-gate RequirePermission → scope-aware Check → ErrOperatorRevoked → 401
-// (TypeOperatorRevokedToken, StatusUnauthorized), ДО handler-а. Service-слой
-// ResolvePurview→Deny — недостижимый fail-closed backstop. Этот тест фиксирует
-// фактическое корректное поведение (401, а НЕ 403/200), чтобы регресс
-// revoked-shortcut в Check/ResolvePurview не открыл escalation молча. Контроль:
-// та же роль БЕЗ revoked проходит gate и handler → 200 (dry_run).
+// (TypeOperatorRevokedToken, StatusUnauthorized), BEFORE the handler. The service-layer
+// ResolvePurview→Deny — an unreachable fail-closed backstop. This test pins the
+// actual correct behavior (401, NOT 403/200), so that a regression of the
+// revoked-shortcut in Check/ResolvePurview does not silently open an escalation. Control:
+// the same role WITHOUT revoked passes the gate and handler → 200 (dry_run).
 //
-// 401 здесь (а не 403 как на read-souls): mutate-роут ходит через scope-aware
-// Check (revoked → ErrOperatorRevoked → 401-паритет expired-JWT), тогда как
-// read-роуты — через existence-gate RequireAction (revoked → HoldsAction
-// false → 403). Разный статус — разные gate-механизмы, оба fail-closed.
+// 401 here (not 403 as on read-souls): the mutate route goes through the scope-aware
+// Check (revoked → ErrOperatorRevoked → 401, parity with an expired JWT), whereas
+// the read routes — through the existence-gate RequireAction (revoked → HoldsAction
+// false → 403). Different status — different gate mechanisms, both fail-closed.
 func TestIntegration_Soul_CovenAssign_Revoked_401(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
 
-	// append одной метки под selector all=true; dry_run → не-мутирующий
-	// CountBulkMatched, happy-path 200 без зависимости от наличия хостов.
+	// append a single label under selector all=true; dry_run → non-mutating
+	// CountBulkMatched, happy-path 200 with no dependence on the presence of hosts.
 	body := `{"mode":"append","label":"prod","selector":{"all":true},"dry_run":true}`
 
-	// Контроль: НЕ-revoked с активной ролью soul.coven-assign проходит gate +
+	// Control: a non-revoked operator with an active soul.coven-assign role passes the gate +
 	// handler → 200.
 	notRevoked := &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2875,7 +2875,7 @@ func TestIntegration_Soul_CovenAssign_Revoked_401(t *testing.T) {
 	}
 	stopOK()
 
-	// Revoked: та же активная роль soul.coven-assign, но revoked_at выставлен.
+	// Revoked: the same active soul.coven-assign role, but revoked_at is set.
 	revokedCfg := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "coven-op", Operators: []string{"archon-fired"}, Permissions: []string{"soul.coven-assign"}},
@@ -2891,17 +2891,17 @@ func TestIntegration_Soul_CovenAssign_Revoked_401(t *testing.T) {
 	}
 }
 
-// --- ADR-047 §г (S3b-G2): incarnations read-gate через РЕАЛЬНЫЙ router ---
+// --- ADR-047 §d (S3b-G2): incarnations read-gate through the REAL router ---
 //
-// Тираж souls-G1-паттерна на incarnations: read-роуты (list/get/history)
-// переведены с scope-aware RequirePermission(Multi) на existence-only
-// RequireAction; сужение по scope — handler (resolveListScope / getInScope).
-// Эти тесты бьют ПОЛНЫЙ router (route-gate + handler), а не handler напрямую —
-// именно через route-gate проявлялась дыра (scoped-оператор ловил 403/deny ДО
-// handler-а; unit-тесты по doIncList/h.History её не видели).
+// Rollout of the souls-G1 pattern to incarnations: the read routes (list/get/history)
+// are switched from scope-aware RequirePermission(Multi) to existence-only
+// RequireAction; scope narrowing — the handler (resolveListScope / getInScope).
+// These tests hit the FULL router (route-gate + handler), not the handler directly —
+// the hole appeared exactly through the route-gate (a scoped operator caught 403/deny BEFORE
+// the handler; the unit tests on doIncList/h.History did not see it).
 
-// seedIncarnationFull вставляет incarnation с произвольными covens + state (для
-// coven/state-scoped read-gate-тестов). seedIncarnation оставлен минимальным.
+// seedIncarnationFull inserts an incarnation with arbitrary covens + state (for the
+// coven/state-scoped read-gate tests). seedIncarnation is kept minimal.
 func seedIncarnationFull(t *testing.T, name, service, creator string, covens []string, state map[string]any) {
 	t.Helper()
 	c := creator
@@ -2920,7 +2920,7 @@ func seedIncarnationFull(t *testing.T, name, service, creator string, covens []s
 	}
 }
 
-// incCovenScopeRBAC — роль с coven-scoped incarnation read-правами (list+get+
+// incCovenScopeRBAC — a role with coven-scoped incarnation read rights (list+get+
 // history `on coven=<label>`).
 func incCovenScopeRBAC(aid, coven string) *rbactest.Config {
 	return &rbactest.Config{
@@ -2934,10 +2934,10 @@ func incCovenScopeRBAC(aid, coven string) *rbactest.Config {
 	}
 }
 
-// incStateScopeRBAC — роль с state-scoped incarnation read-правами (CEL по
-// incarnation.state). Это измерение НЕ резолвится в request-контексте route-gate
-// (state приходит только из строки БД), поэтому до Фикс 1/2 scope-aware gate
-// деньил такого оператора в 403 ДО handler-а — главная латентная дыра G2.
+// incStateScopeRBAC — a role with state-scoped incarnation read rights (CEL over
+// incarnation.state). This dimension does NOT resolve in the route-gate request context
+// (state comes only from the DB row), so before Fix 1/2 the scope-aware gate
+// denied such an operator with 403 BEFORE the handler — the main latent hole of G2.
 func incStateScopeRBAC(aid, expr string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -2950,8 +2950,8 @@ func incStateScopeRBAC(aid, expr string) *rbactest.Config {
 	}
 }
 
-// listIncarnations — GET /v1/incarnations?<query> → (total, len(items)). Падает
-// на не-200.
+// listIncarnations — GET /v1/incarnations?<query> → (total, len(items)). Fails
+// on non-200.
 func listIncarnations(t *testing.T, base, tok, query string) (total, items int) {
 	t.Helper()
 	url := base + "/v1/incarnations"
@@ -2979,16 +2979,16 @@ func listIncarnations(t *testing.T, base, tok, query string) (total, items int) 
 	return out.Total, len(out.Items)
 }
 
-// TestIntegration_Incarnation_List_StateScope_NoContext_200 — ГЛАВНЫЙ G2-выигрыш
-// (Фикс 1): state-scoped оператор делает GET /v1/incarnations БЕЗ доп.контекста →
-// 200 + только incarnation своего state-scope (НЕ 403). До Фикс 1 route-gate
-// RequirePermission(NoSelector) → Check(aid,incarnation,list,nil) → state-
-// измерение fail-closed → deny → 403 ДО handler-а. Регресс = scoped-оператор
-// снова невидим через HTTP.
+// TestIntegration_Incarnation_List_StateScope_NoContext_200 — the MAIN G2 win
+// (Fix 1): a state-scoped operator does GET /v1/incarnations WITHOUT extra context →
+// 200 + only the incarnations of its own state-scope (NOT 403). Before Fix 1 the route-gate
+// RequirePermission(NoSelector) → Check(aid,incarnation,list,nil) → the state
+// dimension fail-closed → deny → 403 BEFORE the handler. Regression = a scoped operator
+// again invisible via HTTP.
 func TestIntegration_Incarnation_List_StateScope_NoContext_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-state", "")
-	// redis-8: state.redis_version=8.0 (в scope). redis-7: 7.2 (вне scope).
+	// redis-8: state.redis_version=8.0 (in scope). redis-7: 7.2 (out of scope).
 	seedIncarnationFull(t, "redis-8", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "8.0"})
 	seedIncarnationFull(t, "redis-7", "redis", "archon-state", []string{"prod"}, map[string]any{"redis_version": "7.2"})
 
@@ -3002,10 +3002,10 @@ func TestIntegration_Incarnation_List_StateScope_NoContext_200(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_List_CovenScope_NoContext_200 — coven-scoped через
-// HTTP: route-gate existence-only пускает, handler сужает coven-pushdown-ом → 200
-// + только prod-incarnation (coven-scoped раньше тоже деньился NoSelector-gate-ом
-// при пустом контексте, как state).
+// TestIntegration_Incarnation_List_CovenScope_NoContext_200 — coven-scoped via
+// HTTP: the existence-only route-gate admits, the handler narrows via coven-pushdown → 200
+// + only the prod incarnation (coven-scoped was also previously denied by the NoSelector gate
+// on an empty context, like state).
 func TestIntegration_Incarnation_List_CovenScope_NoContext_200(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")
@@ -3023,22 +3023,22 @@ func TestIntegration_Incarnation_List_CovenScope_NoContext_200(t *testing.T) {
 	}
 }
 
-// getIncStatus — GET /v1/incarnations/{name} → HTTP-статус.
+// getIncStatus — GET /v1/incarnations/{name} → HTTP status.
 func getIncStatus(t *testing.T, base, tok, name string) int {
 	t.Helper()
 	return getReadStatus(t, base, tok, "/v1/incarnations/"+name)
 }
 
-// historyIncStatus — GET /v1/incarnations/{name}/history → HTTP-статус.
+// historyIncStatus — GET /v1/incarnations/{name}/history → HTTP status.
 func historyIncStatus(t *testing.T, base, tok, name string) int {
 	t.Helper()
 	return getReadStatus(t, base, tok, "/v1/incarnations/"+name+"/history")
 }
 
-// TestIntegration_Incarnation_Get_StateScope — Фикс 2: state-scoped оператор
-// читает get/history матчащей incarnation → 200; вне state-scope → 404. До Фикс 2
-// route-gate RequirePermissionMulti(incScope) НЕ нёс state-измерение → deny → 403
-// для оператора, который ДОЛЖЕН видеть incarnation. Теперь existence-gate +
+// TestIntegration_Incarnation_Get_StateScope — Fix 2: a state-scoped operator
+// reads get/history of a matching incarnation → 200; out of state-scope → 404. Before Fix 2
+// the route-gate RequirePermissionMulti(incScope) did NOT carry the state dimension → deny → 403
+// for an operator who SHOULD see the incarnation. Now the existence-gate +
 // getInScope(state-CEL).
 func TestIntegration_Incarnation_Get_StateScope(t *testing.T) {
 	truncateOperators(t)
@@ -3064,8 +3064,8 @@ func TestIntegration_Incarnation_Get_StateScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Get_CovenScope — coven-scoped get/history: свой
-// coven → 200, чужой → 404 (паритет souls Get_CovenScope; через полный router).
+// TestIntegration_Incarnation_Get_CovenScope — coven-scoped get/history: own
+// coven → 200, foreign → 404 (parity with souls Get_CovenScope; through the full router).
 func TestIntegration_Incarnation_Get_CovenScope(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-coven", "")
@@ -3090,17 +3090,17 @@ func TestIntegration_Incarnation_Get_CovenScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Read_Revoked — Фикс 3 (revoked-покрытие): revoked
-// Архонт С АКТИВНОЙ ролью incarnation-read НЕ видит флот. Единая revoked-aware
-// точка ResolvePurview→Deny отрезает на всех путях: route-gate (HoldsAction→Deny→
-// false→403 для list/get/history) ПЕРЕД handler-ом. 403 на list, 403/404 на
-// get/history — все = «нет доступа». Контроль: та же роль БЕЗ revoked видит.
+// TestIntegration_Incarnation_Read_Revoked — Fix 3 (revoked coverage): a revoked
+// Archon WITH AN ACTIVE incarnation-read role does NOT see the souls. The single revoked-aware
+// point ResolvePurview→Deny cuts off on all paths: the route-gate (HoldsAction→Deny→
+// false→403 for list/get/history) BEFORE the handler. 403 on list, 403/404 on
+// get/history — all = "no access". Control: the same role WITHOUT revoked sees.
 func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
 	seedIncarnationFull(t, "redis-prod", "redis", "archon-fired", []string{"prod"}, nil)
 
-	// Контроль: НЕ-revoked с bare incarnation-read видит.
+	// Control: a non-revoked operator with bare incarnation-read sees.
 	notRevoked := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "inc-viewer", Operators: []string{"archon-fired"}, Permissions: []string{
@@ -3121,7 +3121,7 @@ func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	}
 	stopOK()
 
-	// Revoked: те же активные права, но revoked_at выставлен.
+	// Revoked: the same active rights, but revoked_at is set.
 	revokedCfg := &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "inc-viewer", Operators: []string{"archon-fired"}, Permissions: []string{
@@ -3134,8 +3134,8 @@ func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-fired", []string{"inc-viewer"})
 
-	// list/get/history — все режутся route-gate-ом (HoldsAction→Deny→403). 403
-	// vs 404 не утечка: оба = «нет доступа», 403 строже (не различает существование).
+	// list/get/history — all cut off by the route-gate (HoldsAction→Deny→403). 403
+	// vs 404 is not a leak: both = "no access", 403 is stricter (does not distinguish existence).
 	if code := getReadStatus(t, base, tok, "/v1/incarnations"); code != http.StatusForbidden {
 		t.Errorf("revoked GET /v1/incarnations = %d, want 403 (gate HoldsAction→Deny)", code)
 	}
@@ -3147,9 +3147,9 @@ func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Read_Expired_401 — auth-слой не сломан: истёкший
-// JWT даёт 401 на всех read-роутах ДО RBAC-gate (expired ≠ revoked: 401 от
-// RequireJWT, а не 403/404 от scope).
+// TestIntegration_Incarnation_Read_Expired_401 — the auth layer is not broken: an expired
+// JWT gives 401 on all read routes BEFORE the RBAC gate (expired ≠ revoked: 401 from
+// RequireJWT, not 403/404 from scope).
 func TestIntegration_Incarnation_Read_Expired_401(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-viewer", "")
@@ -3177,10 +3177,10 @@ func TestIntegration_Incarnation_Read_Expired_401(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Read_403_NoPermission — security не-регресс:
-// оператор БЕЗ incarnation-read-прав получает 403 на list/get/history (gate всё
-// ещё требует держать право — existence-gate ослабил scope-в-контексте, НЕ само
-// требование permission).
+// TestIntegration_Incarnation_Read_403_NoPermission — security non-regression:
+// an operator WITHOUT incarnation-read rights gets 403 on list/get/history (the gate still
+// requires holding the right — the existence-gate relaxed scope-in-context, NOT the
+// permission requirement itself).
 func TestIntegration_Incarnation_Read_403_NoPermission(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-nobody", "")
@@ -3206,8 +3206,8 @@ func TestIntegration_Incarnation_Read_403_NoPermission(t *testing.T) {
 	}
 }
 
-// listSouls — helper: GET /v1/souls с опциональной query-строкой, возвращает
-// (total, len(items)). Падает на не-200.
+// listSouls — helper: GET /v1/souls with an optional query string, returns
+// (total, len(items)). Fails on non-200.
 func listSouls(t *testing.T, base, tok, query string) (total, items int) {
 	t.Helper()
 	url := base + "/v1/souls"
@@ -3235,8 +3235,8 @@ func listSouls(t *testing.T, base, tok, query string) (total, items int) {
 	return out.Total, len(out.Items)
 }
 
-// firstSoulItem возвращает первый items[]-элемент GET /v1/souls как raw-map (для
-// guard-ассертов wire-ключей). Fatal, если список пуст.
+// firstSoulItem returns the first items[] element of GET /v1/souls as a raw map (for
+// the wire-key guard asserts). Fatal if the list is empty.
 func firstSoulItem(t *testing.T, base, tok string) map[string]any {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, base+"/v1/souls", nil)
@@ -3262,8 +3262,8 @@ func firstSoulItem(t *testing.T, base, tok string) map[string]any {
 	return out.Items[0]
 }
 
-// seedSoulFull вставляет souls-row с произвольными status / coven (для
-// list-фильтр-тестов). seedSoul оставлен для issue-token-тестов (минимальный).
+// seedSoulFull inserts a souls row with arbitrary status / coven (for the
+// list-filter tests). seedSoul is kept for the issue-token tests (minimal).
 func seedSoulFull(t *testing.T, sid, transport string, status soul.Status, coven []string, creator string) {
 	t.Helper()
 	c := creator
@@ -3279,7 +3279,7 @@ func seedSoulFull(t *testing.T, sid, transport string, status soul.Status, coven
 	}
 }
 
-// soulSelectStatus читает souls.status напрямую из БД.
+// soulSelectStatus reads souls.status directly from the DB.
 func soulSelectStatus(t *testing.T, sid string) (string, error) {
 	t.Helper()
 	var status string
@@ -3288,7 +3288,7 @@ func soulSelectStatus(t *testing.T, sid string) (string, error) {
 	return status, err
 }
 
-// seedSoul вставляет souls-row через CRUD для тестов issue-token.
+// seedSoul inserts a souls row via CRUD for the issue-token tests.
 func seedSoul(t *testing.T, sid, transport, creator string) {
 	t.Helper()
 	c := creator
@@ -3303,7 +3303,7 @@ func seedSoul(t *testing.T, sid, transport, creator string) {
 	}
 }
 
-// seedActiveToken вставляет активный bootstrap-токен и возвращает его token_id.
+// seedActiveToken inserts an active bootstrap token and returns its token_id.
 func seedActiveToken(t *testing.T, sid, creator string) string {
 	t.Helper()
 	plain, err := bootstraptoken.Generate()
@@ -3319,8 +3319,8 @@ func seedActiveToken(t *testing.T, sid, creator string) string {
 	return rec.TokenID
 }
 
-// bytesReader — helper для inline-JSON в request body. Wrapping
-// strings.NewReader → io.ReadCloser, чтобы http.NewRequest принял.
+// bytesReader — helper for inline JSON in the request body. Wraps
+// strings.NewReader → io.ReadCloser so http.NewRequest accepts it.
 func bytesReader(s string) io.Reader { return io.NopCloser(strings.NewReader(s)) }
 
 // ============================ /v1/roles (RBAC Slice 2a) ============================
@@ -3349,7 +3349,7 @@ func TestIntegration_Role_Create_201(t *testing.T) {
 		t.Fatalf("status = %d, want 201, body=%s", resp.StatusCode, raw)
 	}
 
-	// Роль и permissions материализованы в БД.
+	// The role and permissions are materialized in the DB.
 	var permCount int64
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM rbac_role_permissions WHERE role_name='ops'`).Scan(&permCount); err != nil {
@@ -3367,8 +3367,8 @@ func TestIntegration_Role_Create_201(t *testing.T) {
 		t.Errorf("created_by_aid = %v, want archon-alice", createdBy)
 	}
 
-	// Audit row + payload: name / created_by_aid / permissions присутствуют
-	// (ADR-022: изменение авторизации обязательно аудируется).
+	// Audit row + payload: name / created_by_aid / permissions are present
+	// (ADR-022: an authorization change is always audited).
 	var (
 		cnt          int64
 		payloadName  string
@@ -3528,7 +3528,7 @@ func TestIntegration_Role_Delete_204(t *testing.T) {
 		t.Errorf("role still present after delete")
 	}
 
-	// Audit row: role.deleted с payload.name (ADR-022).
+	// Audit row: role.deleted with payload.name (ADR-022).
 	var auditCnt int64
 	var payloadName string
 	if err := integrationPool.QueryRow(context.Background(),
@@ -3620,7 +3620,7 @@ func TestIntegration_Role_UpdatePermissions_204(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, raw)
 	}
-	// Replace-семантика: старый soul.list ушёл, два новых пришли.
+	// Replace semantics: the old soul.list is gone, two new ones arrived.
 	rows, err := integrationPool.Query(context.Background(),
 		`SELECT permission FROM rbac_role_permissions WHERE role_name='ops' ORDER BY permission`)
 	if err != nil {
@@ -3637,7 +3637,7 @@ func TestIntegration_Role_UpdatePermissions_204(t *testing.T) {
 		t.Errorf("permissions after update = %v, want [incarnation.get incarnation.list]", got)
 	}
 
-	// Audit row: role.permissions-updated с payload.name + permissions (ADR-022).
+	// Audit row: role.permissions-updated with payload.name + permissions (ADR-022).
 	var auditCnt int64
 	var payloadName string
 	var permsPresent bool
@@ -3690,7 +3690,7 @@ func TestIntegration_Role_GrantThenRevokeOperator(t *testing.T) {
 		t.Errorf("granted_by_aid = %v, want archon-alice", grantedBy)
 	}
 
-	// Audit row: role.operator-granted с name / aid / granted_by_aid (ADR-022).
+	// Audit row: role.operator-granted with name / aid / granted_by_aid (ADR-022).
 	var gCnt int64
 	var gName, gAID, gBy string
 	if err := integrationPool.QueryRow(context.Background(),
@@ -3727,7 +3727,7 @@ func TestIntegration_Role_GrantThenRevokeOperator(t *testing.T) {
 		t.Errorf("membership still present after revoke")
 	}
 
-	// Audit row: role.operator-revoked с payload name / aid (ADR-022).
+	// Audit row: role.operator-revoked with payload name / aid (ADR-022).
 	var rCnt int64
 	var rName, rAID string
 	if err := integrationPool.QueryRow(context.Background(),
@@ -3795,11 +3795,11 @@ func TestIntegration_Role_RevokeOperator_NotFound_404(t *testing.T) {
 	}
 }
 
-// TestIntegration_Role_403_AllOperations — оператор без role.<action>-
-// permission получает 403 на КАЖДОЙ из шести role-операций (gap 2, REST-
-// поверхность; create уже покрыт TestIntegration_Role_Create_403_NoPermission,
-// здесь — list/delete/update/grant/revoke). RBAC даёт лишь soul.list →
-// любой role.* → deny.
+// TestIntegration_Role_403_AllOperations — an operator without a role.<action>
+// permission gets 403 on EACH of the six role operations (gap 2, the REST
+// surface; create is already covered by TestIntegration_Role_Create_403_NoPermission,
+// here — list/delete/update/grant/revoke). RBAC grants only soul.list →
+// any role.* → deny.
 func TestIntegration_Role_403_AllOperations(t *testing.T) {
 	truncateOperators(t)
 	truncateRBAC(t)
@@ -3847,17 +3847,17 @@ func TestIntegration_Role_403_AllOperations(t *testing.T) {
 	}
 }
 
-// TestIntegration_Role_SelfLockout — три lockout-мутации над последним
-// `*`-путём (alice через единственную wildcard-роль) дают 409
-// would-lock-out-cluster через полный роутер+middleware+реальный PG (gap 3);
-// БД остаётся нетронутой (tx откатилась). enforcer-config (adminRBAC) даёт
-// alice право на role.*; сама self-lockout-проверка читает rbac_*-таблицы.
+// TestIntegration_Role_SelfLockout — three lockout mutations on the last
+// `*` path (alice via the single wildcard role) give 409
+// would-lock-out-cluster through the full router+middleware+real PG (gap 3);
+// the DB stays untouched (the tx rolled back). The enforcer config (adminRBAC) grants
+// alice the role.* right; the self-lockout check itself reads the rbac_* tables.
 func TestIntegration_Role_SelfLockout(t *testing.T) {
 	base, stop := startServer(t, adminRBAC())
 	defer stop()
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 
-	// setup — единственный путь к `*`: alice через wildcard-role в rbac_*-таблицах.
+	// setup — the only path to `*`: alice via a wildcard-role in the rbac_* tables.
 	setup := func() {
 		truncateOperators(t)
 		truncateRBAC(t)
@@ -3940,10 +3940,10 @@ func TestIntegration_Role_SelfLockout(t *testing.T) {
 
 // --- Service registry endpoints (ADR-028 S3) ---
 
-// truncateServices чистит service_registry до чистого состояния для service.*-
-// integration-тестов. FK service_registry → operators(aid): вызывается ПОСЛЕ
-// truncateOperators (через CASCADE он не сносит service_registry-строки с
-// created_by_aid=NULL, но новые тесты создают записи с FK на seed-операторов).
+// truncateServices cleans service_registry to a clean state for the service.*
+// integration tests. FK service_registry → operators(aid): called AFTER
+// truncateOperators (via CASCADE it does not remove service_registry rows with
+// created_by_aid=NULL, but new tests create records with an FK to the seed operators).
 func truncateServices(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -3975,7 +3975,7 @@ func TestIntegration_Service_Register_201(t *testing.T) {
 		t.Fatalf("status = %d, want 201, body=%s", resp.StatusCode, raw)
 	}
 
-	// Запись материализована в БД с created_by_aid.
+	// The record is materialized in the DB with created_by_aid.
 	var createdBy *string
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT created_by_aid FROM service_registry WHERE name='web'`).Scan(&createdBy); err != nil {
@@ -3985,7 +3985,7 @@ func TestIntegration_Service_Register_201(t *testing.T) {
 		t.Errorf("created_by_aid = %v, want archon-alice", createdBy)
 	}
 
-	// Audit row + payload {name, git, ref, created_by_aid}. git-URL не секрет.
+	// Audit row + payload {name, git, ref, created_by_aid}. The git URL is not a secret.
 	var (
 		cnt          int64
 		payloadName  string
@@ -4071,7 +4071,7 @@ func TestIntegration_Service_Register_403_NoPermission(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 403, body=%s", resp.StatusCode, raw)
 	}
-	// 403 не аудируется как service.registered (операция не состоялась).
+	// 403 is not audited as service.registered (the operation did not happen).
 	var cnt int64
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM audit_log WHERE event_type='service.registered'`).Scan(&cnt); err != nil {
@@ -4264,7 +4264,7 @@ func TestIntegration_Service_Deregister_NotFound_404(t *testing.T) {
 	}
 }
 
-// Прямое использование health.Pinger из integration-теста — sanity check,
-// что интерфейс совместим с реальными зависимостями.
+// Direct use of health.Pinger from the integration test — a sanity check
+// that the interface is compatible with the real dependencies.
 var _ health.Pinger = poolPinger{}
 var _ health.Pinger = (*keepervault.Client)(nil)

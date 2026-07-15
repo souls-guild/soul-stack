@@ -1,19 +1,19 @@
 package api
 
-// Регистрация и spec-dump INCARNATION-домена на huma full-typed (батч-2g, ADR-054
-// §Pattern). MIXED домен по audit-классу:
+// Registration and spec-dump of the INCARNATION domain on huma full-typed (batch-2g, ADR-054
+// §Pattern). A MIXED domain by audit class:
 //
-//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): монтируются через
-//     newHumaIncarnationAPI(evt) (huma-audit-middleware вариант B); register-func
-//     кладёт payload из *Typed-reply.AuditPayload через SetHumaAuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): монтируются
-//     через newHumaCadenceAPI (БЕЗ audit-навески); audit пишет САМ handler ВНУТРИ
-//     *Typed (h.auditW.Write). Перепутать класс = S6-регрессия.
-//   - READ (get / list / history): newHumaCadenceAPI, audit НЕ пишут.
+//   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): mounted via
+//     newHumaIncarnationAPI(evt) (huma-audit-middleware variant B); the register func
+//     sets the payload from *Typed reply.AuditPayload via SetHumaAuditPayload.
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): mounted via
+//     newHumaCadenceAPI (no audit wiring); audit is written BY the handler ITSELF inside
+//     *Typed (h.auditW.Write). Confusing the class = an S6 regression.
+//   - READ (get / list / history): newHumaCadenceAPI, no audit written.
 //
-// ВСЕ incarnation-op несут ПОЛНЫЙ путь /{name}[/...] относительно группы
-// /v1/incarnations (chi.Route("/{name}") СНЯТ из router.go — иначе sibling-затенение
-// узла /{name} → 405). Сосуществует с choir-mount (батч-2f) на той же группе.
+// ALL incarnation ops carry the FULL path /{name}[/...] relative to the group
+// /v1/incarnations (chi.Route("/{name}") was REMOVED from router.go — otherwise the /{name}
+// node sibling-shadows → 405). Coexists with the choir-mount (batch-2f) on the same group.
 
 import (
 	"context"
@@ -31,18 +31,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newHumaIncarnationAPI собирает huma.API поверх chi-группы /v1/incarnations с huma-
-// audit-middleware (вариант B) под переданный event-тип. Параллель newHumaRoleAPI:
-// incarnation-MIDDLEWARE-audit-роуты (create/run/unlock/upgrade) пишут audit СНАРУЖИ
-// *Typed (через middleware) — SELF-audit-роуты пишут внутри (newHumaCadenceAPI).
+// newHumaIncarnationAPI builds a huma.API over the chi group /v1/incarnations with the huma
+// audit middleware (variant B) for the given event type. Parallel to newHumaRoleAPI:
+// incarnation MIDDLEWARE-audit routes (create/run/unlock/upgrade) write audit OUTSIDE
+// *Typed (via middleware) — SELF-audit routes write inside (newHumaCadenceAPI).
 func newHumaIncarnationAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
 // --- MIDDLEWARE-AUDIT ---
 
-// registerHumaIncarnationCreate монтирует POST /v1/incarnations (MIDDLEWARE-AUDIT
-// incarnation.created вариант B). incH nil → no-op.
+// registerHumaIncarnationCreate mounts POST /v1/incarnations (MIDDLEWARE-AUDIT
+// incarnation.created variant B). incH nil → no-op.
 func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -68,9 +68,9 @@ func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationH
 	})
 }
 
-// registerHumaIncarnationRun монтирует POST /v1/incarnations/{name}/scenarios/{scenario}
-// (MIDDLEWARE-AUDIT incarnation.scenario_started). incH nil → no-op. Toll-middleware
-// (503 на degraded) — chi-навеска группы (huma наследует).
+// registerHumaIncarnationRun mounts POST /v1/incarnations/{name}/scenarios/{scenario}
+// (MIDDLEWARE-AUDIT incarnation.scenario_started). incH nil → no-op. Toll middleware
+// (503 on degraded) — chi wiring of the group (huma inherits it).
 func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -93,7 +93,7 @@ func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHand
 	})
 }
 
-// registerHumaIncarnationUnlock монтирует POST /v1/incarnations/{name}/unlock
+// registerHumaIncarnationUnlock mounts POST /v1/incarnations/{name}/unlock
 // (MIDDLEWARE-AUDIT incarnation.unlocked). incH nil → no-op.
 func registerHumaIncarnationUnlock(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -113,7 +113,7 @@ func registerHumaIncarnationUnlock(humaAPI huma.API, incH *handlers.IncarnationH
 	})
 }
 
-// registerHumaIncarnationUpgrade монтирует POST /v1/incarnations/{name}/upgrade
+// registerHumaIncarnationUpgrade mounts POST /v1/incarnations/{name}/upgrade
 // (MIDDLEWARE-AUDIT incarnation.upgrade_started). incH nil → no-op.
 func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -135,9 +135,9 @@ func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.Incarnation
 
 // --- SELF-AUDIT ---
 
-// registerHumaIncarnationRerunLast монтирует POST /v1/incarnations/{name}/rerun-last
-// (SELF-AUDIT incarnation.rerun_last — пишет САМ handler внутри RerunLastTyped,
-// audit-middleware НЕ навешан). incH nil → no-op.
+// registerHumaIncarnationRerunLast mounts POST /v1/incarnations/{name}/rerun-last
+// (SELF-AUDIT incarnation.rerun_last — written BY the handler itself inside RerunLastTyped,
+// the audit middleware is not wired). incH nil → no-op.
 func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -155,8 +155,8 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 	})
 }
 
-// registerHumaIncarnationCheckDrift монтирует POST /v1/incarnations/{name}/check-drift
-// (SELF-AUDIT incarnation.drift_checked — пишет САМ handler внутри CheckDriftTyped).
+// registerHumaIncarnationCheckDrift mounts POST /v1/incarnations/{name}/check-drift
+// (SELF-AUDIT incarnation.drift_checked — written BY the handler itself inside CheckDriftTyped).
 // incH nil → no-op.
 func registerHumaIncarnationCheckDrift(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -179,9 +179,9 @@ func registerHumaIncarnationCheckDrift(humaAPI huma.API, incH *handlers.Incarnat
 	})
 }
 
-// registerHumaIncarnationDestroy монтирует DELETE /v1/incarnations/{name} (SELF-AUDIT
-// incarnation.destroy_started — пишет service-слой incarnation.Destroy; audit-middleware
-// НЕ навешан). incH nil → no-op. allow_destroy — required boolean query (huma bind:
+// registerHumaIncarnationDestroy mounts DELETE /v1/incarnations/{name} (SELF-AUDIT
+// incarnation.destroy_started — written by the service layer incarnation.Destroy; the audit
+// middleware is not wired). incH nil → no-op. allow_destroy — a required boolean query (huma bind:
 // missing/non-boolean → 400).
 func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -200,8 +200,8 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
-// registerHumaIncarnationUpdateHosts монтирует PATCH /v1/incarnations/{name}/hosts
-// (SELF-AUDIT incarnation.hosts_updated — пишет САМ handler внутри UpdateHostsTyped).
+// registerHumaIncarnationUpdateHosts mounts PATCH /v1/incarnations/{name}/hosts
+// (SELF-AUDIT incarnation.hosts_updated — written BY the handler itself inside UpdateHostsTyped).
 // incH nil → no-op.
 func registerHumaIncarnationUpdateHosts(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -228,8 +228,8 @@ func registerHumaIncarnationUpdateHosts(humaAPI huma.API, incH *handlers.Incarna
 	})
 }
 
-// registerHumaIncarnationSetTraits монтирует PUT /v1/incarnations/{name}/traits
-// (SELF-AUDIT incarnation.traits_changed — пишет САМ handler внутри SetTraitsTyped).
+// registerHumaIncarnationSetTraits mounts PUT /v1/incarnations/{name}/traits
+// (SELF-AUDIT incarnation.traits_changed — written BY the handler itself inside SetTraitsTyped).
 // incH nil → no-op.
 func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -250,8 +250,8 @@ func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.Incarnati
 
 // --- READ ---
 
-// registerHumaIncarnationGet монтирует GET /v1/incarnations/{name} (READ, БЕЗ audit).
-// scope-предикат (ADR-047) строится из claims (вне scope → 404). incH nil → no-op.
+// registerHumaIncarnationGet mounts GET /v1/incarnations/{name} (READ, no audit).
+// The scope predicate (ADR-047) is built from claims (out of scope → 404). incH nil → no-op.
 func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -266,9 +266,9 @@ func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHand
 	})
 }
 
-// registerHumaIncarnationUpgradePaths монтирует GET /v1/incarnations/{name}/upgrade-paths
-// (READ, БЕЗ audit; ADR-0068 §6). scope-предикат action=upgrade (read-грань, тот же
-// permission incarnation.upgrade, что POST .../upgrade) → вне scope 404. incH nil → no-op.
+// registerHumaIncarnationUpgradePaths mounts GET /v1/incarnations/{name}/upgrade-paths
+// (READ, no audit; ADR-0068 §6). The scope predicate action=upgrade (the read facet, the same
+// permission incarnation.upgrade as POST .../upgrade) → out of scope 404. incH nil → no-op.
 func registerHumaIncarnationUpgradePaths(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -283,9 +283,9 @@ func registerHumaIncarnationUpgradePaths(humaAPI huma.API, incH *handlers.Incarn
 	})
 }
 
-// registerHumaIncarnationList монтирует GET /v1/incarnations (READ-with-typed-query,
-// БЕЗ audit). state.<field>-фильтры huma как typed-параметры НЕ биндит (динамические
-// ключи) — извлекаем их из исходного query через humaQueryFromContext. incH nil → no-op.
+// registerHumaIncarnationList mounts GET /v1/incarnations (READ with typed query,
+// no audit). state.<field> filters are NOT bound by huma as typed parameters (dynamic
+// keys) — we extract them from the raw query via humaQueryFromContext. incH nil → no-op.
 func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -319,8 +319,8 @@ func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHan
 	})
 }
 
-// registerHumaIncarnationHistory монтирует GET /v1/incarnations/{name}/history (READ-
-// with-typed-query, БЕЗ audit). scope-предикат (action=history) → вне scope 404. incH
+// registerHumaIncarnationHistory mounts GET /v1/incarnations/{name}/history (READ with
+// typed query, no audit). The scope predicate (action=history) → out of scope 404. incH
 // nil → no-op.
 func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -345,8 +345,8 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
-// registerHumaIncarnationRuns монтирует GET /v1/incarnations/{name}/runs (READ-with-
-// typed-query, БЕЗ audit). scope-предикат тот же, что у History (action=history) → вне
+// registerHumaIncarnationRuns mounts GET /v1/incarnations/{name}/runs (READ with
+// typed query, no audit). The scope predicate is the same as History (action=history) → out of
 // scope 404. incH nil → no-op.
 func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -371,8 +371,8 @@ func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHan
 	})
 }
 
-// registerHumaIncarnationRunDetail монтирует GET /v1/incarnations/{name}/runs/{apply_id}
-// (READ-with-path, БЕЗ audit). scope-предикат тот же, что у History (action=history).
+// registerHumaIncarnationRunDetail mounts GET /v1/incarnations/{name}/runs/{apply_id}
+// (READ with path, no audit). The scope predicate is the same as History (action=history).
 // incH nil → no-op.
 func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -388,8 +388,8 @@ func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.Incarnati
 	})
 }
 
-// registerHumaIncarnationRunTasks монтирует GET /v1/incarnations/{name}/runs/{apply_id}/tasks
-// (READ-with-path, БЕЗ audit, NIM-37). scope-предикат тот же, что у History/RunDetail
+// registerHumaIncarnationRunTasks mounts GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// (READ with path, no audit, NIM-37). The scope predicate is the same as History/RunDetail
 // (action=history). incH nil → no-op.
 func registerHumaIncarnationRunTasks(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -407,15 +407,15 @@ func registerHumaIncarnationRunTasks(humaAPI huma.API, incH *handlers.Incarnatio
 
 // --- helpers ---
 
-// rawQueryCtxKey — context-key для raw url.Values, засташенного [stashRawQuery]-
-// middleware ДО huma (huma-typed-query НЕ умеет динамические ключи `state.<field>`).
+// rawQueryCtxKey — the context key for the raw url.Values stashed by the [stashRawQuery]
+// middleware BEFORE huma (huma typed-query cannot handle dynamic keys `state.<field>`).
 type rawQueryCtxKey struct{}
 
-// stashRawQuery — chi-middleware, кладущий r.URL.Query() в request-context ДО huma-
-// диспатча. Навешивается на List-группу /v1/incarnations (router.go): huma-handler
-// получает ctx = r.Context() и читает динамические `state.<field>`-фильтры через
-// [stateParamsFromContext]. Типизированные offset/limit/service/status/coven/sort
-// huma биндит сам — этот стэш нужен ТОЛЬКО для state.*-ключей.
+// stashRawQuery — a chi middleware that puts r.URL.Query() into the request context BEFORE
+// the huma dispatch. Wired on the List group /v1/incarnations (router.go): the huma handler
+// receives ctx = r.Context() and reads the dynamic `state.<field>` filters via
+// [stateParamsFromContext]. Typed offset/limit/service/status/coven/sort are bound by huma
+// itself — this stash is needed ONLY for state.* keys.
 func stashRawQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), rawQueryCtxKey{}, r.URL.Query())
@@ -423,8 +423,8 @@ func stashRawQuery(next http.Handler) http.Handler {
 	})
 }
 
-// stateParamsFromContext извлекает `state.<field>`-query-фильтры из raw query,
-// засташенного [stashRawQuery]. Ключи без префикса `state.` пропускаются. Пусто → nil.
+// stateParamsFromContext extracts the `state.<field>` query filters from the raw query
+// stashed by [stashRawQuery]. Keys without the `state.` prefix are skipped. Empty → nil.
 func stateParamsFromContext(ctx context.Context) map[string][]string {
 	q, _ := ctx.Value(rawQueryCtxKey{}).(url.Values)
 	if q == nil {
@@ -444,14 +444,14 @@ func stateParamsFromContext(ctx context.Context) map[string][]string {
 	return out
 }
 
-// incMissingClaims — defensive-ответ при отсутствии claims (недостижим: RequireJWT
-// кладёт claims до huma). problem+json (parity cadenceMissingClaims).
+// incMissingClaims — a defensive response when claims are absent (unreachable: RequireJWT
+// puts claims before huma). problem+json (parity with cadenceMissingClaims).
 func incMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// incProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity cadenceProblem).
+// incProblem delivers a *Typed-function error through huma as problem+json. A domain
+// *handlers.problemError → humaProblemError; a non-problem → 500 (parity with cadenceProblem).
 func incProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -459,9 +459,9 @@ func incProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaIncarnationSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma
-// incarnation-роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec].
+// HumaIncarnationSpecYAML assembles the OpenAPI fragment of ALL incarnation routes migrated
+// to huma as a YAML string, without mounting on a real router. A hook for the spec merge
+// target of the rollout and a guard test. Delegates to generic [humaDumpSpec].
 func HumaIncarnationSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.IncarnationSpecStub()

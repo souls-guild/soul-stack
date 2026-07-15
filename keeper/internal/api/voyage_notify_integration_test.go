@@ -2,10 +2,10 @@
 
 package api
 
-// E2E на реальной PG/роутере: блок notify в POST /v1/voyages (ADR-052(g) N2).
-// Атомарное создание ephemeral-Tiding в одной tx с Voyage + herald.read-guard +
-// маппинг on→event_types. Самый важный guard — атомарность (отказ ⇒ ни Voyage,
-// ни правил) и то, что pre-check (RBAC/existence) отрабатывает ДО persist.
+// E2E over a real PG/router: the notify block in POST /v1/voyages (ADR-052(g) N2).
+// Atomic creation of an ephemeral Tiding in one tx with the Voyage + a herald.read guard +
+// on→event_types mapping. The most important guard is atomicity (a failure ⇒ neither Voyage
+// nor rules) and that the pre-check (RBAC/existence) runs BEFORE persist.
 
 import (
 	"context"
@@ -16,10 +16,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// --- RBAC-конфиги для notify --------------------------------------------
+// --- RBAC configs for notify --------------------------------------------
 
-// notifyFullRBAC — errand.run (запуск command) + herald.read (право ссылаться на
-// канал). Архонт может и запустить прогон, и подписать его на уведомления.
+// notifyFullRBAC — errand.run (launching a command) + herald.read (the right to reference a
+// channel). The Archon can both start the run and subscribe it to notifications.
 func notifyFullRBAC(aid string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -30,8 +30,8 @@ func notifyFullRBAC(aid string) *rbactest.Config {
 	}
 }
 
-// notifyNoHeraldReadRBAC — errand.run БЕЗ herald.read: прогон запустить можно,
-// подписать на канал — нет (403 на notify).
+// notifyNoHeraldReadRBAC — errand.run WITHOUT herald.read: the run can be started,
+// subscribing it to a channel cannot (403 on notify).
 func notifyNoHeraldReadRBAC(aid string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -44,9 +44,9 @@ func notifyNoHeraldReadRBAC(aid string) *rbactest.Config {
 
 // --- helpers ------------------------------------------------------------
 
-// truncateHeralds чистит heralds/tidings (truncateOperators их НЕ сносит —
-// created_by_aid это ON DELETE SET NULL, не CASCADE). Вызывается ПОСЛЕ
-// truncateOperators в каждом notify-тесте.
+// truncateHeralds cleans heralds/tidings (truncateOperators does NOT remove them —
+// created_by_aid is ON DELETE SET NULL, not CASCADE). Called AFTER
+// truncateOperators in every notify test.
 func truncateHeralds(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -55,7 +55,7 @@ func truncateHeralds(t *testing.T) {
 	}
 }
 
-// seedHerald вставляет webhook-Herald напрямую в БД (минуя API).
+// seedHerald inserts a webhook Herald directly into the DB (bypassing the API).
 func seedHerald(t *testing.T, name, aid string) {
 	t.Helper()
 	cfg, _ := json.Marshal(map[string]any{"url": "https://hooks.example.com/" + name})
@@ -66,7 +66,7 @@ func seedHerald(t *testing.T, name, aid string) {
 	}
 }
 
-// ephemeralTidingRow — снимок строки tidings для assert-ов.
+// ephemeralTidingRow — a snapshot of a tidings row for asserts.
 type ephemeralTidingRow struct {
 	name         string
 	herald       string
@@ -80,7 +80,7 @@ type ephemeralTidingRow struct {
 	createdByAID *string
 }
 
-// selectTidingsByVoyage читает все ephemeral-Tiding-и, привязанные к voyage_id.
+// selectTidingsByVoyage reads all ephemeral Tidings bound to voyage_id.
 func selectTidingsByVoyage(t *testing.T, voyageID string) []ephemeralTidingRow {
 	t.Helper()
 	rows, err := integrationPool.Query(context.Background(),
@@ -103,7 +103,7 @@ func selectTidingsByVoyage(t *testing.T, voyageID string) []ephemeralTidingRow {
 	return out
 }
 
-// countVoyages / countTidings — счётчики для atomicity-assert-ов.
+// countVoyages / countTidings — counters for atomicity asserts.
 func countVoyages(t *testing.T) int {
 	t.Helper()
 	var n int
@@ -126,9 +126,9 @@ func countTidings(t *testing.T) int {
 
 // --- Tests --------------------------------------------------------------
 
-// Атомарность (happy-path): создание command-Voyage с notify → ephemeral-Tiding
-// в БД с правильными полями (voyage_id нового прогона, ephemeral=true, маппинг
-// on→event_types, annotations/projection, created_by_aid инициатора).
+// Atomicity (happy path): creating a command-Voyage with notify → an ephemeral Tiding
+// in the DB with the correct fields (voyage_id of the new run, ephemeral=true,
+// on→event_types mapping, annotations/projection, created_by_aid of the initiator).
 func TestIntegration_VoyageNotify_CreatesEphemeralTiding_202(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -194,7 +194,7 @@ func TestIntegration_VoyageNotify_CreatesEphemeralTiding_202(t *testing.T) {
 	}
 }
 
-// Маппинг default-on: пустой on → все три терминала по kind=command.
+// Default-on mapping: empty on → all three terminals for kind=command.
 func TestIntegration_VoyageNotify_DefaultOnAllTerminals_202(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -232,8 +232,8 @@ func TestIntegration_VoyageNotify_DefaultOnAllTerminals_202(t *testing.T) {
 	}
 }
 
-// RBAC 403: errand.run есть, herald.read НЕТ → 403, И ни Voyage, ни Tiding в БД
-// (guard ДО persist — атомарность отказа).
+// RBAC 403: errand.run present, herald.read ABSENT → 403, AND neither Voyage nor Tiding in the DB
+// (guard BEFORE persist — atomicity of the failure).
 func TestIntegration_VoyageNotify_NoHeraldRead_403_NoSideEffect(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -252,7 +252,7 @@ func TestIntegration_VoyageNotify_NoHeraldRead_403_NoSideEffect(t *testing.T) {
 	if code != 403 {
 		t.Fatalf("status = %d, want 403 (нет herald.read); body=%s", code, respBody)
 	}
-	// Атомарность отказа: guard сработал ДО persist — БД чистая.
+	// Atomicity of the failure: the guard fired BEFORE persist — the DB is clean.
 	if v := countVoyages(t); v != 0 {
 		t.Errorf("voyages = %d, want 0 (notify-403 не должен создать Voyage)", v)
 	}
@@ -261,7 +261,7 @@ func TestIntegration_VoyageNotify_NoHeraldRead_403_NoSideEffect(t *testing.T) {
 	}
 }
 
-// 422: канал не существует → 422, И ни Voyage, ни Tiding (guard ДО persist).
+// 422: the channel doesn't exist → 422, AND neither Voyage nor Tiding (guard BEFORE persist).
 func TestIntegration_VoyageNotify_HeraldNotFound_422_NoSideEffect(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -287,7 +287,7 @@ func TestIntegration_VoyageNotify_HeraldNotFound_422_NoSideEffect(t *testing.T) 
 	}
 }
 
-// 422: невалидное значение on (вне completed/failed/partial) → 422, БД чистая.
+// 422: an invalid on value (outside completed/failed/partial) → 422, the DB is clean.
 func TestIntegration_VoyageNotify_InvalidOn_422(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -311,12 +311,12 @@ func TestIntegration_VoyageNotify_InvalidOn_422(t *testing.T) {
 	}
 }
 
-// Атомарность (положительная сторона all-or-nothing): несколько notify-элементов
-// на ОДИН прогон ложатся все в одной tx с Voyage. Два notify → ровно два
-// ephemeral-Tiding на один voyage_id, имена уникальны. Отрицательную сторону
-// (отказ ⇒ ни Voyage, ни правил) закрывают тесты 403/422 выше: guard отрабатывает
-// ДО persist, half-write невозможен; единственная tx в persist (voyage+targets+
-// tidings) гарантирует, что in-tx-сбой любого INSERT-а откатил бы всё.
+// Atomicity (the positive side of all-or-nothing): several notify elements
+// on ONE run all land in one tx with the Voyage. Two notify → exactly two
+// ephemeral Tidings on one voyage_id, names unique. The negative side
+// (a failure ⇒ neither Voyage nor rules) is covered by the 403/422 tests above: the guard runs
+// BEFORE persist, a half-write is impossible; the single tx in persist (voyage+targets+
+// tidings) guarantees that an in-tx failure of any INSERT would roll everything back.
 func TestIntegration_VoyageNotify_MultipleAllOrNothing_202(t *testing.T) {
 	truncateOperators(t)
 	truncateHeralds(t)
@@ -341,7 +341,7 @@ func TestIntegration_VoyageNotify_MultipleAllOrNothing_202(t *testing.T) {
 	if len(tidings) != 2 {
 		t.Fatalf("ephemeral-Tiding-ов = %d, want 2 (оба notify в одной tx)", len(tidings))
 	}
-	// Имена уникальны (свежий ULID на правило), оба привязаны к одному voyage_id.
+	// Names are unique (a fresh ULID per rule), both bound to one voyage_id.
 	if tidings[0].name == tidings[1].name {
 		t.Errorf("имена ephemeral совпали: %q (нарушена уникальность)", tidings[0].name)
 	}
@@ -351,7 +351,7 @@ func TestIntegration_VoyageNotify_MultipleAllOrNothing_202(t *testing.T) {
 	}
 }
 
-// voyageIDFromReply вытаскивает voyage_id из 202-ответа Create.
+// voyageIDFromReply extracts voyage_id from the 202 Create response.
 func voyageIDFromReply(t *testing.T, body string) string {
 	t.Helper()
 	var r struct {

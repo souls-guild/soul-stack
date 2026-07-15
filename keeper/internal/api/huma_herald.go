@@ -1,15 +1,15 @@
 package api
 
-// Регистрация и spec-dump HERALD-домена (heralds + tidings) на huma full-typed
-// (handler-native T5d-2c по эталонам role/operator/augur/push-provider, ADR-054
-// §Pattern). ОДИН [handlers.HeraldHandler] обслуживает ОБА ресурса. herald create/
-// update/delete + tiding create/update/delete — WRITE+AUDIT (вариант B, huma-audit-
-// middleware; события herald.created/.updated/.deleted и tiding.created/.updated/
-// .deleted); herald/tiding list/get — read (БЕЗ audit). Доменные *Typed-функции
-// (handlers/herald.go) принимают NATIVE request-типы и возвращают доменные result-ы
-// с плоскими wire-полями; register-func проецирует их в native wire-DTO
-// (huma_herald_reply.go) НАПРЯМУЮ — legacy-генерата не участвует. MCP herald-tools зовут
-// herald.Service напрямую (мимо handler).
+// Registration and spec-dump of the HERALD domain (heralds + tidings) on huma full-typed
+// (handler-native T5d-2c following the role/operator/augur/push-provider references, ADR-054
+// §Pattern). ONE [handlers.HeraldHandler] serves BOTH resources. herald create/
+// update/delete + tiding create/update/delete — WRITE+AUDIT (variant B, huma-audit
+// middleware; events herald.created/.updated/.deleted and tiding.created/.updated/
+// .deleted); herald/tiding list/get — read (no audit). The domain *Typed functions
+// (handlers/herald.go) take NATIVE request types and return domain results
+// with flat wire fields; the register-func projects them into native wire-DTO
+// (huma_herald_reply.go) DIRECTLY — the legacy generator is not involved. MCP herald-tools call
+// herald.Service directly (bypassing the handler).
 
 import (
 	"context"
@@ -26,9 +26,9 @@ import (
 
 // --- Herald ----------------------------------------------------------
 
-// registerHumaHeraldCreate монтирует POST /v1/heralds через huma (WRITE+AUDIT
-// вариант B — event herald.created). heraldH nil → no-op. Handler: claims →
-// CreateHeraldTyped → audit-payload на huma-ctx (SetHumaAuditPayload) → 201 typed output.
+// registerHumaHeraldCreate mounts POST /v1/heralds via huma (WRITE+AUDIT
+// variant B — event herald.created). heraldH nil → no-op. Handler: claims →
+// CreateHeraldTyped → audit-payload on the huma ctx (SetHumaAuditPayload) → 201 typed output.
 func registerHumaHeraldCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -54,9 +54,9 @@ func registerHumaHeraldCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaHeraldList монтирует GET /v1/heralds через huma (READ-with-typed-query,
-// БЕЗ audit). heraldH nil → no-op. Handler: typed-query → ListHeraldsTyped → typed
-// envelope-output. RBAC herald.list — на группе.
+// registerHumaHeraldList mounts GET /v1/heralds via huma (READ with typed query,
+// no audit). heraldH nil → no-op. Handler: typed-query → ListHeraldsTyped → typed
+// envelope-output. RBAC herald.list — on the group.
 func registerHumaHeraldList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -70,9 +70,9 @@ func registerHumaHeraldList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaHeraldGet монтирует GET /v1/heralds/{name} через huma (READ-with-path,
-// БЕЗ audit). heraldH nil → no-op. Handler: GetHeraldTyped(name) → typed output
-// (404/422 через problem). RBAC herald.read — на группе.
+// registerHumaHeraldGet mounts GET /v1/heralds/{name} via huma (READ with path,
+// no audit). heraldH nil → no-op. Handler: GetHeraldTyped(name) → typed output
+// (404/422 via problem). RBAC herald.read — on the group.
 func registerHumaHeraldGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -86,9 +86,9 @@ func registerHumaHeraldGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaHeraldUpdate монтирует PUT /v1/heralds/{name} через huma (WRITE+AUDIT
-// вариант B — event herald.updated). heraldH nil → no-op. Handler: UpdateHeraldTyped
-// (replace) → audit-payload → 200 С ТЕЛОМ.
+// registerHumaHeraldUpdate mounts PUT /v1/heralds/{name} via huma (WRITE+AUDIT
+// variant B — event herald.updated). heraldH nil → no-op. Handler: UpdateHeraldTyped
+// (replace) → audit-payload → 200 WITH BODY.
 func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -109,9 +109,9 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaHeraldDelete монтирует DELETE /v1/heralds/{name} через huma (WRITE+AUDIT
-// вариант B — event herald.deleted). heraldH nil → no-op. Handler: DeleteHeraldTyped →
-// audit-payload → пустой 204-output.
+// registerHumaHeraldDelete mounts DELETE /v1/heralds/{name} via huma (WRITE+AUDIT
+// variant B — event herald.deleted). heraldH nil → no-op. Handler: DeleteHeraldTyped →
+// audit-payload → empty 204 output.
 func registerHumaHeraldDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -128,7 +128,7 @@ func registerHumaHeraldDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 
 // --- Tiding ----------------------------------------------------------
 
-// registerHumaTidingCreate монтирует POST /v1/tidings через huma (WRITE+AUDIT вариант B
+// registerHumaTidingCreate mounts POST /v1/tidings via huma (WRITE+AUDIT variant B
 // — event tiding.created). heraldH nil → no-op. Handler: claims → CreateTidingTyped →
 // audit-payload → 201 typed output.
 func registerHumaTidingCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -161,9 +161,9 @@ func registerHumaTidingCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaTidingList монтирует GET /v1/tidings через huma (READ-with-typed-query,
-// БЕЗ audit). heraldH nil → no-op. Handler: typed-query (offset/limit/include_ephemeral)
-// → ListTidingsTyped → typed envelope-output. RBAC tiding.list — на группе.
+// registerHumaTidingList mounts GET /v1/tidings via huma (READ with typed query,
+// no audit). heraldH nil → no-op. Handler: typed-query (offset/limit/include_ephemeral)
+// → ListTidingsTyped → typed envelope-output. RBAC tiding.list — on the group.
 func registerHumaTidingList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -177,9 +177,9 @@ func registerHumaTidingList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaTidingGet монтирует GET /v1/tidings/{name} через huma (READ-with-path,
-// БЕЗ audit). heraldH nil → no-op. Handler: GetTidingTyped(name) → typed output
-// (404/422 через problem). RBAC tiding.read — на группе.
+// registerHumaTidingGet mounts GET /v1/tidings/{name} via huma (READ with path,
+// no audit). heraldH nil → no-op. Handler: GetTidingTyped(name) → typed output
+// (404/422 via problem). RBAC tiding.read — on the group.
 func registerHumaTidingGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -193,9 +193,9 @@ func registerHumaTidingGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaTidingUpdate монтирует PUT /v1/tidings/{name} через huma (WRITE+AUDIT
-// вариант B — event tiding.updated). heraldH nil → no-op. Handler: UpdateTidingTyped
-// (replace) → audit-payload → 200 С ТЕЛОМ.
+// registerHumaTidingUpdate mounts PUT /v1/tidings/{name} via huma (WRITE+AUDIT
+// variant B — event tiding.updated). heraldH nil → no-op. Handler: UpdateTidingTyped
+// (replace) → audit-payload → 200 WITH BODY.
 func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -221,9 +221,9 @@ func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaTidingDelete монтирует DELETE /v1/tidings/{name} через huma (WRITE+AUDIT
-// вариант B — event tiding.deleted). heraldH nil → no-op. Handler: DeleteTidingTyped →
-// audit-payload → пустой 204-output.
+// registerHumaTidingDelete mounts DELETE /v1/tidings/{name} via huma (WRITE+AUDIT
+// variant B — event tiding.deleted). heraldH nil → no-op. Handler: DeleteTidingTyped →
+// audit-payload → empty 204 output.
 func registerHumaTidingDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
@@ -238,14 +238,14 @@ func registerHumaTidingDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// heraldMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// heraldMissingClaims — a defensive response when claims are absent from ctx (unreachable:
+// RequireJWT sets claims before huma). problem+json (parity roleMissingClaims).
 func heraldMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// heraldProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// heraldProblem delivers a *Typed-function error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; a non-problem → 500 (parity
 // roleProblem).
 func heraldProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -254,18 +254,18 @@ func heraldProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaHeraldAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// herald/tiding (create/update/delete) монтируется на СВОЕЙ chi-группе с собственным
-// event-типом.
+// newHumaHeraldAPI assembles a huma.API over a chi group with the huma-audit middleware
+// (variant B) under the given event type (parity newHumaRoleAPI). Each herald/tiding write
+// route (create/update/delete) is mounted on ITS OWN chi group with its own
+// event type.
 func newHumaHeraldAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaHeraldSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma herald-/
-// tiding-роутов как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те
-// же register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaHeraldSpecYAML assembles the OpenAPI fragment of ALL herald-/tiding routes migrated
+// to huma as a YAML string, WITHOUT mounting on a real router. A hook for the
+// rollout's spec-merge target and the guard-test. Delegates to the generic [humaDumpSpec] via the
+// same register functions (single register path). Returns a 3.1.0 spec (huma default).
 func HumaHeraldSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.HeraldSpecStub()

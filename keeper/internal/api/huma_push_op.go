@@ -1,11 +1,11 @@
 package api
 
-// FULL-TYPED форма PUSH-домена (code-first источник OpenAPI, ADR-054 §Pattern).
-// ТИРАЖ-БАТЧ-2e (push целиком на huma по эталонам operator issue-token + audit-endpoint):
-// apply — WRITE+AUDIT (вариант B, event push.applied; 202+body async — apply_id, симметрия
-// с operator issue-token 200+body, отличие лишь Status=202); get — read-with-path; push-runs —
-// read-with-typed-query (offset/limit→400, status enum→422, ssh_provider string). Go-типы —
-// единственный источник правды.
+// FULL-TYPED form of the PUSH domain (code-first source of OpenAPI, ADR-054 §Pattern).
+// ROLLOUT BATCH 2e (push entirely on huma following the operator issue-token + audit-endpoint patterns):
+// apply — WRITE+AUDIT (variant B, event push.applied; 202+body async — apply_id, symmetric
+// with operator issue-token 200+body, differing only in Status=202); get — read-with-path; push-runs —
+// read-with-typed-query (offset/limit→400, status enum→422, ssh_provider string). Go types —
+// the single source of truth.
 
 import (
 	"net/http"
@@ -17,18 +17,18 @@ import (
 
 // === POST /v1/push/apply (apply) — WRITE+AUDIT push.applied (202 async) ===
 
-// pushApplyInput — huma-input POST /v1/push/apply (FULL-TYPED). Body — типизированное тело.
+// pushApplyInput — huma input POST /v1/push/apply (FULL-TYPED). Body — the typed body.
 type pushApplyInput struct {
 	Body PushApplyRequest
 }
 
-// PushApplyRequest — Go-форма тела POST /v1/push/apply (code-first источник схемы И
-// валидации). inventory (SID[] target-хостов) + destiny (<name>@<ref>) + опц.
-// input/ssh_provider/cleanup_stale_versions. Пустой inventory / пустой destiny —
-// доменная валидация (422 в ApplyTyped). additionalProperties:false (huma-дефолт) →
-// unknown поле тела → 400. Имя структуры = контрактное имя схемы в OpenAPI (huma
-// DefaultSchemaNamer берёт reflect.Type.Name() напрямую) — выровнено под committed-
-// рукопись (тираж N3). Register-func проецирует в native handlers.PushApplyInput
+// PushApplyRequest — the Go form of the POST /v1/push/apply body (code-first source of the schema AND
+// validation). inventory (SID[] target hosts) + destiny (<name>@<ref>) + optional
+// input/ssh_provider/cleanup_stale_versions. Empty inventory / empty destiny is
+// domain validation (422 in ApplyTyped). additionalProperties:false (huma default) →
+// unknown body field → 400. The struct name = the contract schema name in OpenAPI (huma
+// DefaultSchemaNamer takes reflect.Type.Name() directly) — aligned with the committed
+// hand-written spec (rollout N3). The register func projects into native handlers.PushApplyInput
 // (toPushApplyInput).
 type PushApplyRequest struct {
 	Inventory            []string       `json:"inventory" required:"true" doc:"список SID (FQDN) target-хостов (transport: ssh)"`
@@ -38,18 +38,18 @@ type PushApplyRequest struct {
 	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"удалить устаревшие версии soul-бинаря/модулей в той же SSH-сессии"`
 }
 
-// pushApplyOutput — huma-output POST /v1/push/apply (FULL-TYPED). Status=202 (async
-// Accepted); Body — native PushApplyReply (apply_id). Клиент опрашивает
+// pushApplyOutput — huma output POST /v1/push/apply (FULL-TYPED). Status=202 (async
+// Accepted); Body — native PushApplyReply (apply_id). The client polls
 // GET /v1/push/{apply_id}.
 type pushApplyOutput struct {
 	Status int `json:"-"`
 	Body   PushApplyReply
 }
 
-// pushApplyOperation — метаданные POST /v1/push/apply. Path = "/apply" относительно
-// chi-группы /v1/push. DefaultStatus=202. Permission push.apply + audit push.applied.
-// Toll DegradedMiddleware (503 при cluster:degraded) — на chi-группе ДО huma (router.go).
-// Errors: 400 unknown/malformed, 403 RBAC, 422 пустой inventory/битый destiny-ref, 500.
+// pushApplyOperation — metadata for POST /v1/push/apply. Path = "/apply" relative to
+// the chi group /v1/push. DefaultStatus=202. Permission push.apply + audit push.applied.
+// Toll DegradedMiddleware (503 on cluster:degraded) — on the chi group BEFORE huma (router.go).
+// Errors: 400 unknown/malformed, 403 RBAC, 422 empty inventory/broken destiny-ref, 500.
 func pushApplyOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "pushApply",
@@ -63,21 +63,21 @@ func pushApplyOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/push/{apply_id} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/push/{apply_id} (get) — READ with path (no audit) ===
 
-// pushGetInput — huma-input GET /v1/push/{apply_id}. ApplyID — path (ULID; пустой → 422).
+// pushGetInput — huma input GET /v1/push/{apply_id}. ApplyID — path (ULID; empty → 422).
 type pushGetInput struct {
 	ApplyID string `path:"apply_id" doc:"ULID push-прогона"`
 }
 
-// pushGetOutput — huma-output GET /v1/push/{apply_id} (FULL-TYPED). Body — native 200-тело
+// pushGetOutput — huma output GET /v1/push/{apply_id} (FULL-TYPED). Body — the native 200 body
 // (PushApplyView).
 type pushGetOutput struct {
 	Body PushApplyView
 }
 
-// pushGetOperation — метаданные GET /v1/push/{apply_id}. DefaultStatus=200. READ-роут:
-// audit НЕ навешан. Permission push.read. Errors: 403, 404 (нет apply_id), 422 пустой id, 500.
+// pushGetOperation — metadata for GET /v1/push/{apply_id}. DefaultStatus=200. READ route:
+// audit not wired. Permission push.read. Errors: 403, 404 (no apply_id), 422 empty id, 500.
 func pushGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "pushGet",
@@ -91,14 +91,14 @@ func pushGetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/push-runs (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/push-runs (list) — READ with typed query (no audit) ===
 
-// pushRunsListInput — huma-input GET /v1/push-runs (FULL-TYPED typed-query). Statuses —
-// multi-value (?status=X&status=Y) exact-match OR; enum-набор = ПОЛНЫЙ домен
-// pushorch.PushRunStatus (значение вне набора → 422). explode:true ОБЯЗАТЕЛЕН (huma-дефолт
-// query-array — explode=false: читал бы comma-separated как одно значение → сломанный OR).
-// SSHProvider — exact-match string. offset/limit — int32 с default; диапазон enforce-ит
-// CheckPageBounds в ListRunsTyped → 400 (НЕ huma min/max — parity ParsePage); bad-int → 400.
+// pushRunsListInput — huma input GET /v1/push-runs (FULL-TYPED typed query). Statuses —
+// multi-value (?status=X&status=Y) exact-match OR; the enum set = the FULL domain
+// pushorch.PushRunStatus (a value outside the set → 422). explode:true is MANDATORY (the huma default
+// for a query array is explode=false: it would read comma-separated as one value → a broken OR).
+// SSHProvider — exact-match string. offset/limit — int32 with a default; CheckPageBounds
+// enforces the range in ListRunsTyped → 400 (NOT huma min/max — parity with ParsePage); bad-int → 400.
 type pushRunsListInput struct {
 	Statuses    []string `query:"status,explode" enum:"pending,running,success,partial_failed,failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; значение вне enum → 422"`
 	SSHProvider string   `query:"ssh_provider" doc:"exact-match по push_runs.ssh_provider"`
@@ -106,16 +106,16 @@ type pushRunsListInput struct {
 	Limit       int32    `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
 
-// pushRunsListOutput — huma-output GET /v1/push-runs (FULL-TYPED). Body — native
-// 200-envelope (PushRunListReply: items/offset/limit/total). Wire-форма зафиксирована
-// golden-тестом.
+// pushRunsListOutput — huma output GET /v1/push-runs (FULL-TYPED). Body — the native
+// 200 envelope (PushRunListReply: items/offset/limit/total). The wire shape is pinned by a
+// golden test.
 type pushRunsListOutput struct {
 	Body PushRunListReply
 }
 
-// pushRunsListOperation — метаданные GET /v1/push-runs. Path = "/push-runs" относительно
-// chi-группы /v1 (полный под-/v1 путь — distinct-path для spec-dump). DefaultStatus=200.
-// READ-роут: audit НЕ навешан. Permission incarnation.history. Errors: 400 (out-of-range
+// pushRunsListOperation — metadata for GET /v1/push-runs. Path = "/push-runs" relative to
+// the chi group /v1 (the full sub-/v1 path — a distinct path for the spec dump). DefaultStatus=200.
+// READ route: audit not wired. Permission incarnation.history. Errors: 400 (out-of-range
 // pagination), 403 RBAC, 422 (bad status enum), 500.
 func pushRunsListOperation() huma.Operation {
 	return huma.Operation{
@@ -130,9 +130,9 @@ func pushRunsListOperation() huma.Operation {
 	}
 }
 
-// toPushApplyInput — конверт typed huma-body → NATIVE request push-домена
-// (handlers.PushApplyInput). Доменный handler разыменовывает pointer-optional поля;
-// huma-форма — value/slice. Пустые → nil (handler трактует nil как «не задано», parity легаси).
+// toPushApplyInput — converts the typed huma body → NATIVE request of the push domain
+// (handlers.PushApplyInput). The domain handler dereferences pointer-optional fields;
+// the huma form is value/slice. Empty → nil (the handler treats nil as "not set", legacy parity).
 func toPushApplyInput(b PushApplyRequest) handlers.PushApplyInput {
 	out := handlers.PushApplyInput{
 		Inventory: b.Inventory,

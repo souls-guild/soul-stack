@@ -1,16 +1,16 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2b разворота ORACLE-домена (vigils + decrees) ЦЕЛИКОМ на
-// huma full-typed (ADR-054 §Pattern, эталоны role/operator/augur). vigil create/delete
-// + decree create/delete — WRITE+AUDIT (вариант B, huma-audit-middleware; события
+// Guard tests for ROLLOUT-BATCH-2b turning the ORACLE domain (vigils + decrees) ENTIRELY onto
+// huma full-typed (ADR-054 §Pattern, references role/operator/augur). vigil create/delete
+// + decree create/delete — WRITE+AUDIT (variant B, huma audit middleware; events
 // vigil.created/vigil.deleted/decree.created/decree.deleted); vigil/decree list/get —
-// read (БЕЗ audit). Доказывают инварианты кластера поверх chi:
+// read (no audit). They prove the cluster invariants on top of chi:
 //
 //   - wire/golden: vigil create 201 VigilView; vigil list 200 envelope; vigil get 200;
-//     vigil delete 204 пустое; decree симметрично (params/action_input byte-exact JSONB);
+//     vigil delete 204 empty; decree symmetrically (params/action_input byte-exact JSONB);
 //   - unknown-field → 400; missing-required → 422; bad pagination → 400; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут: полная huma-навеска пишет audit-event с НЕПУСТЫМ
-//     payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route: the full huma wiring writes an audit event with a NON-EMPTY
+//     payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -33,11 +33,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// oracleAt — фиксированный created/updated_at для детерминированного golden wire.
+// oracleAt — fixed created/updated_at for a deterministic golden wire.
 var oracleAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// hOraclePool — узкий мок [oracle.ServicePool] для huma-теста. Классифицирует SQL по
-// подстроке и отдаёт детерминированный success-исход; error-классификацию валидируют
+// hOraclePool — a narrow mock of [oracle.ServicePool] for the huma test. Classifies SQL by
+// substring and returns a deterministic success outcome; error classification is validated by
 // handlers/oracle_test.go.
 type hOraclePool struct {
 	vigilDeleteRows  int64
@@ -105,8 +105,8 @@ func hOracleItoa(n int64) string {
 	return "1"
 }
 
-// hOracleRow — staticRow для oracle-колонок (string/int/bool/time/[]string/[]byte +
-// nullable-указатели).
+// hOracleRow — a staticRow for oracle columns (string/int/bool/time/[]string/[]byte +
+// nullable pointers).
 type hOracleRow struct {
 	values []any
 	err    error
@@ -167,10 +167,10 @@ func (r *hOracleRows) Values() ([]any, error)                       { return nil
 func (r *hOracleRows) RawValues() [][]byte                          { return nil }
 func (r *hOracleRows) Conn() *pgx.Conn                              { return nil }
 
-// humaOracleRouter собирает chi-роутер со ВСЕМИ oracle-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(vigil/decree.<action>) на каждой
-// группе + (для write) huma-audit-middleware вариант B + huma-операция (полный путь).
-// injectClaims заменяет RequireJWT.
+// humaOracleRouter assembles a chi router with ALL oracle routes via huma —
+// the production wiring from router.go: RequirePermission(vigil/decree.<action>) on each
+// group + (for write) huma audit middleware variant B + huma operation (full path).
+// injectClaims replaces RequireJWT.
 func humaOracleRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool *hOraclePool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -323,7 +323,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 	}
 }
 
-// === VIGIL LIST (READ-with-typed-query, БЕЗ audit) ===
+// === VIGIL LIST (READ with typed query, no audit) ===
 
 func TestHumaVigil_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{vigilListRows: [][]any{
@@ -396,7 +396,7 @@ func TestHumaVigil_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === VIGIL GET (READ-with-path, БЕЗ audit) ===
+// === VIGIL GET (READ with path, no audit) ===
 
 func TestHumaVigil_Get_GoldenWire(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
@@ -553,7 +553,7 @@ func TestHumaAudit_DecreeCreate_RecordsOnSuccess(t *testing.T) {
 	})
 }
 
-// === DECREE LIST (READ-with-typed-query, БЕЗ audit) ===
+// === DECREE LIST (READ with typed query, no audit) ===
 
 func TestHumaDecree_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{decreeListRows: [][]any{
@@ -602,7 +602,7 @@ func TestHumaDecree_List_NoAudit(t *testing.T) {
 	}
 }
 
-// === DECREE GET (READ-with-path, БЕЗ audit) ===
+// === DECREE GET (READ with path, no audit) ===
 
 func TestHumaDecree_Get_NotFound_404(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{decreeGetMissing: true})
@@ -656,7 +656,7 @@ func TestHumaAudit_DecreeDelete_NoAudit_OnBadName(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ oracle-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL oracle operations from FULL-TYPED Go types ===
 
 func TestHumaOracle_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaOracleSpecYAML()

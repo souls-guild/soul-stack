@@ -14,8 +14,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 )
 
-// fakePushProviderPool — мок pushprovider.ExecQueryRower для handler-тестов.
-// Минимальная имитация поведения PG: name → entry в map, конкуренции нет
+// fakePushProviderPool — mock pushprovider.ExecQueryRower for the handler tests.
+// A minimal imitation of PG behavior: name → entry in a map, no concurrency
 // (unit-test single-thread).
 type fakePushProviderPool struct {
 	entries     map[string]*pushprovider.PushProvider
@@ -212,7 +212,7 @@ func newPushProviderHandler(t *testing.T) (*PushProviderHandler, *fakePushProvid
 	return NewPushProviderHandler(svc, nil), pool
 }
 
-// ppProblemType извлекает problem.Type из ошибки *Typed-функции (nil → "").
+// ppProblemType extracts problem.Type from a *Typed-function error (nil → "").
 func ppProblemType(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
@@ -225,7 +225,7 @@ func ppProblemType(t *testing.T, err error) string {
 	return d.Type
 }
 
-// pmap — указатель на map для request-Params (huma даёт *map для опц. поля).
+// pmap — a pointer to a map for request Params (huma gives *map for an optional field).
 func pmap(m map[string]any) *map[string]any { return &m }
 
 func TestPushProviderHandler_CreateTyped_Success(t *testing.T) {

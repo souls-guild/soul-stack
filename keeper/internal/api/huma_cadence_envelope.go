@@ -1,54 +1,54 @@
 package api
 
-// Выравнивание имени runs-envelope CADENCE-домена под committed-рукопись (ENVELOPE-
-// механизм, тираж-батч N4 по эталону huma_incarnation_envelope.go / huma_operator_envelope.go).
+// Aligns the CADENCE-domain runs-envelope name with the committed reference (ENVELOPE
+// mechanism, rollout batch N4 per huma_incarnation_envelope.go / huma_operator_envelope.go).
 //
-// ПРОБЛЕМА. GET /v1/cadences/{id}/runs несёт в Body тип handlers.CadenceRunsReply —
-// Go type-ALIAS на sharedapi.PagedResponse[voyageDTO] (handlers/cadence.go). Go-alias
-// прозрачен для reflect → huma DefaultSchemaNamer видит инстанцированный generic
-// sharedapi.PagedResponse[Voyage] и эмитит схему "PagedResponseVoyage". Рукопись
-// (docs/keeper/openapi.yaml :2378) объявляет runs-response как $ref на VoyageListReply
-// (тот же envelope, что list voyage — дочерние Voyage переиспользуют Voyage-DTO).
+// PROBLEM. GET /v1/cadences/{id}/runs carries in Body the type handlers.CadenceRunsReply —
+// a Go type ALIAS for sharedapi.PagedResponse[voyageDTO] (handlers/cadence.go). A Go alias is
+// transparent to reflect → huma DefaultSchemaNamer sees the instantiated generic
+// sharedapi.PagedResponse[Voyage] and emits schema "PagedResponseVoyage". The reference
+// (docs/keeper/openapi.yaml :2378) declares the runs-response as $ref to VoyageListReply
+// (the same envelope as voyage list — child Voyages reuse the Voyage DTO).
 //
-// МЕХАНИЗМ. RegisterTypeAlias(PagedResponse[Voyage] → api.VoyageListReply): при
-// встрече инстанцированного generic huma строит схему через NATIVE api.VoyageListReply
-// (huma_voyage_reply.go), который DefaultSchemaNamer именует "VoyageListReply" с контрактной
-// 4-поля-формой (items.$ref на native Voyage; БЕЗ cursor-полей — keyset у домена soul, не
-// cadence). Это ТА ЖЕ схема, что несёт voyage list (voyageListOutput.Body = api.VoyageListReply,
-// финал T5b группа 4) → runs и voyage-list сходятся на ОДНУ named-схему VoyageListReply.
+// MECHANISM. RegisterTypeAlias(PagedResponse[Voyage] → api.VoyageListReply): on
+// encountering the instantiated generic, huma builds the schema via NATIVE api.VoyageListReply
+// (huma_voyage_reply.go), which DefaultSchemaNamer names "VoyageListReply" with the contract
+// 4-field shape (items.$ref to native Voyage; NO cursor fields — keyset belongs to the soul
+// domain, not cadence). This is the SAME schema voyage list carries (voyageListOutput.Body =
+// api.VoyageListReply, T5b final group 4) → runs and voyage-list converge on ONE named schema VoyageListReply.
 //
-// ★ ДЕДУП voyage+cadence СИНХРОННО (architect major): TestFullSpec_NoSchemaCollision
-// дедуплицирует одноимённые Voyage/VoyageListReply/VoyageSummary/VoyageTarget ТОЛЬКО при
-// byte-identical теле. После перевода voyage-домена на native (api.Voyage) cadence-runs ОБЯЗАН
-// ссылаться на ТОТ ЖЕ native-набор — иначе два разных тела под именем Voyage → коллизия. Один
-// api.VoyageListReply (→ api.Voyage) для обоих → тело идентично by construction. Wire-тело runs
-// (handler marshalит PagedResponse[Voyage]) НЕ меняется — alias подменяет лишь OpenAPI-схему.
+// ★ DEDUP voyage+cadence IN SYNC (architect major): TestFullSpec_NoSchemaCollision
+// deduplicates same-named Voyage/VoyageListReply/VoyageSummary/VoyageTarget ONLY when the
+// body is byte-identical. After moving the voyage domain to native (api.Voyage) cadence-runs MUST
+// reference the SAME native set — otherwise two different bodies under the name Voyage → collision. One
+// api.VoyageListReply (→ api.Voyage) for both → the body is identical by construction. The runs wire body
+// (handler marshals PagedResponse[Voyage]) does NOT change — the alias swaps only the OpenAPI schema.
 //
-// ФОРМА-СОВМЕСТИМОСТЬ (alias generic→oapi-named допустим): wire-тело runs —
-// PagedResponse[voyageDTO], сериализует ровно 4 поля (next_cursor/total_approximate —
-// omitempty, в offset-режиме zero → опущены); VoyageListReply — ровно 4 поля. Schema
-// меняется (контрактное имя + форма без cursor-полей), wire-тело НЕ меняется → golden
+// SHAPE COMPATIBILITY (a generic→oapi-named alias is allowed): the runs wire body is
+// PagedResponse[voyageDTO], serializing exactly 4 fields (next_cursor/total_approximate —
+// omitempty, zero in offset mode → omitted); VoyageListReply — exactly 4 fields. The schema
+// changes (contract name + shape without cursor fields), the wire body does NOT change → golden
 // runs byte-exact.
 
-// === CADENCE-LIST + Cadence-DTO выравнивание (батч N6) ===
+// === CADENCE-LIST + Cadence-DTO alignment (batch N6) ===
 //
-// GET /v1/cadences несёт Body handlers.CadenceListReply = sharedapi.PagedResponse[cadenceDTO];
-// element cadenceDTO эмитил схему "CadenceDTO", а инстанцированный generic — "PagedResponseCadenceDTO".
-// Рукопись: list-envelope = "CadenceListReply" (:8147, items.$ref на element "Cadence", форма 4-поля
-// offset), element = "Cadence" (:8078, target=$ref VoyageTarget).
+// GET /v1/cadences carries Body handlers.CadenceListReply = sharedapi.PagedResponse[cadenceDTO];
+// element cadenceDTO emitted schema "CadenceDTO", and the instantiated generic — "PagedResponseCadenceDTO".
+// Reference: list-envelope = "CadenceListReply" (:8147, items.$ref to element "Cadence", 4-field
+// offset shape), element = "Cadence" (:8078, target=$ref VoyageTarget).
 //
-// ОБА имени выравниваются ИМЕНОВАНИЕМ (не трогая wire):
-//   - element: named-struct cadence (api-слой; huma DefaultSchemaNamer капитализирует → "Cadence")
-//     с формой рукописи Cadence + alias handlers.CadenceDTO → cadence. ★ ИМЯ "cadence" безопасно:
-//     пакет internal/cadence в api-слой НЕ импортируется (проверено) — коллизии идентификатора нет.
-//   - envelope: named-struct cadenceListReply (api-слой; → "CadenceListReply") 4-поля offset, items.$ref
-//     на element + alias generic PagedResponse[cadenceDTO] → cadenceListReply.
+// BOTH names are aligned by NAMING (without touching the wire):
+//   - element: named struct cadence (api layer; huma DefaultSchemaNamer capitalizes → "Cadence")
+//     with the reference Cadence shape + alias handlers.CadenceDTO → cadence. ★ The name "cadence" is safe:
+//     package internal/cadence is NOT imported into the api layer (verified) — no identifier collision.
+//   - envelope: named struct cadenceListReply (api layer; → "CadenceListReply") 4-field offset, items.$ref
+//     to element + alias generic PagedResponse[cadenceDTO] → cadenceListReply.
 //
-// ★ TARGET (WIRE-БЕЗОПАСНОСТЬ): wire-тело cadenceDTO.target = json.RawMessage сериализует сырой
-// JSON-объект as-is. Alias подменяет ТОЛЬКО OpenAPI-схему (huma строит её из полей named-struct
-// cadence), сериализация остаётся на handler-типе cadenceDTO → wire byte-exact НЕ меняется. Поэтому
-// named-struct cadence.target = *VoyageTarget (схема $ref VoyageTarget, рукопись :8106), а сами байты
-// ответа идут прежним RawMessage-путём. golden cadence get/list/patch остаётся byte-exact.
+// ★ TARGET (WIRE SAFETY): the cadenceDTO.target wire body = json.RawMessage serializes the raw
+// JSON object as-is. The alias swaps ONLY the OpenAPI schema (huma builds it from the fields of named
+// struct cadence), serialization stays on the handler type cadenceDTO → wire byte-exact does NOT change. So
+// named struct cadence.target = *VoyageTarget (schema $ref VoyageTarget, reference :8106), while the response
+// bytes themselves go via the former RawMessage path. golden cadence get/list/patch stays byte-exact.
 
 import (
 	"reflect"
@@ -60,12 +60,12 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// cadence — alias-цель схемы element Cadence (GET /v1/cadences[/{id}]). Форма сверена с
-// committed-рукописью (docs/keeper/openapi.yaml :8078 → Cadence): required:[cadence_id,name,enabled,
+// cadence — alias target of the element Cadence schema (GET /v1/cadences[/{id}]). Shape verified against
+// the committed reference (docs/keeper/openapi.yaml :8078 → Cadence): required:[cadence_id,name,enabled,
 // schedule_kind,overlap_policy,kind,created_by_aid,created_at,updated_at]; target — $ref VoyageTarget
-// (НЕ free-form). Имя типа = контрактное имя схемы (huma DefaultSchemaNamer капитализирует первую
-// букву → "Cadence"). Имя "cadence" не коллизирует — пакет internal/cadence в api-слой не импортируется.
-// json-теги повторяют handler-тип cadenceDTO (wire сериализует он, не этот тип) → wire byte-exact.
+// (NOT free-form). Type name = contract schema name (huma DefaultSchemaNamer capitalizes the first
+// letter → "Cadence"). The name "cadence" doesn't collide — package internal/cadence isn't imported into the api layer.
+// json tags mirror handler type cadenceDTO (it serializes the wire, not this type) → wire byte-exact.
 type cadence struct {
 	CadenceID            string        `json:"cadence_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID расписания"` // ULID (audit.NewULID)
 	Name                 string        `json:"name"`
@@ -93,9 +93,9 @@ type cadence struct {
 	UpdatedAt            time.Time     `json:"updated_at"`
 }
 
-// cadenceListReply — alias-цель схемы GET /v1/cadences envelope. Форма сверена с committed-
-// рукописью (:8147 → CadenceListReply): РОВНО 4 поля (items/offset/limit/total), required все, items.$ref
-// на element Cadence. Имя типа → "CadenceListReply". Wire-тело (PagedResponse[cadenceDTO]) НЕ меняется.
+// cadenceListReply — alias target of the GET /v1/cadences envelope schema. Shape verified against the
+// committed reference (:8147 → CadenceListReply): EXACTLY 4 fields (items/offset/limit/total), all required, items.$ref
+// to element Cadence. Type name → "CadenceListReply". The wire body (PagedResponse[cadenceDTO]) does NOT change.
 type cadenceListReply struct {
 	Items  []cadence `json:"items" doc:"страница расписаний"`
 	Offset int32     `json:"offset" doc:"сдвиг от начала набора"`
@@ -103,19 +103,19 @@ type cadenceListReply struct {
 	Total  int32     `json:"total" doc:"общее число записей в наборе"`
 }
 
-// registerCadenceEnvelopes вешает на registry huma-alias-ы cadence-домена. Вызывается в
-// newHumaCadenceAPI для каждой собранной huma.API. Wire-тела (PagedResponse / cadenceDTO) НЕ меняются —
-// меняются лишь OpenAPI-имена/формы схем:
-//   - runs-envelope: generic PagedResponse[Voyage] → NATIVE api.VoyageListReply (рукопись :2378,
-//     та же native-схема, что voyage list — дедуп byte-identical Voyage/VoyageListReply);
-//   - element: handlers.CadenceDTO → named-struct cadence ("Cadence", target=$ref VoyageTarget);
-//   - list-envelope: generic PagedResponse[cadenceDTO] → named-struct cadenceListReply ("CadenceListReply").
+// registerCadenceEnvelopes registers the cadence-domain huma aliases on the registry. Called in
+// newHumaCadenceAPI for each assembled huma.API. Wire bodies (PagedResponse / cadenceDTO) do NOT change —
+// only the OpenAPI schema names/shapes change:
+//   - runs-envelope: generic PagedResponse[Voyage] → NATIVE api.VoyageListReply (reference :2378,
+//     the same native schema as voyage list — dedup byte-identical Voyage/VoyageListReply);
+//   - element: handlers.CadenceDTO → named struct cadence ("Cadence", target=$ref VoyageTarget);
+//   - list-envelope: generic PagedResponse[cadenceDTO] → named struct cadenceListReply ("CadenceListReply").
 func registerCadenceEnvelopes(api huma.API) {
 	schemas := api.OpenAPI().Components.Schemas
-	// HANDLER-NATIVE T5d: cadence-runs wire-тело — PagedResponse[handlers.VoyageDTO]
-	// (native handler-DTO, плоский voyageDTO; handlers/voyage.go). Alias сводит его
-	// OpenAPI-схему на ТУ ЖЕ native api.VoyageListReply (→ api.Voyage), что несёт voyage
-	// list → дедуп byte-identical Voyage/VoyageListReply (★ инвариант architect).
+	// HANDLER-NATIVE T5d: cadence-runs wire body — PagedResponse[handlers.VoyageDTO]
+	// (native handler DTO, flat voyageDTO; handlers/voyage.go). The alias collapses its
+	// OpenAPI schema to the SAME native api.VoyageListReply (→ api.Voyage) that voyage
+	// list carries → dedup byte-identical Voyage/VoyageListReply (★ architect invariant).
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.VoyageDTO]](),
 		reflect.TypeFor[VoyageListReply](),

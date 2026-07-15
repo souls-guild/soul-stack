@@ -19,8 +19,8 @@ import (
 func alwaysInScope(*incarnation.Incarnation) bool { return true }
 func neverInScope(*incarnation.Incarnation) bool  { return false }
 
-// newUpPathsHandler собирает handler для upgrade-paths: db + resolver(ok) + loader,
-// refs — late-binding через SetServiceRefs (nil → не подключаем, дешёвый режим 500).
+// newUpPathsHandler builds a handler for upgrade-paths: db + resolver(ok) + loader,
+// refs — late-binding via SetServiceRefs (nil → not wired, cheap 500 mode).
 func newUpPathsHandler(db *fakeIncDB, loader *fakeLoader, refs ServiceRefsLister) *IncarnationHandler {
 	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	if refs != nil {
@@ -29,7 +29,7 @@ func newUpPathsHandler(db *fakeIncDB, loader *fakeLoader, refs ServiceRefsLister
 	return h
 }
 
-// wantUpPathsProblem проверяет, что err — problem с ожидаемыми status/type.
+// wantUpPathsProblem checks that err is a problem with the expected status/type.
 func wantUpPathsProblem(t *testing.T, err error, status int, typ string) {
 	t.Helper()
 	if err == nil {
@@ -51,8 +51,8 @@ func upPathsDB() *fakeIncDB {
 	return &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncRowVer(name, "v1", 1) }}
 }
 
-// TestUpgradePaths_Cheap_ListsRefs_IsCurrent — дешёвый режим (без ?to=): возвращает
-// теги реестра сервиса; текущий пин помечен is_current, остальные — нет. Target пуст.
+// TestUpgradePaths_Cheap_ListsRefs_IsCurrent — cheap mode (no ?to=): returns the
+// service registry tags; the current pin is marked is_current, the rest are not. Target empty.
 func TestUpgradePaths_Cheap_ListsRefs_IsCurrent(t *testing.T) {
 	refs := &fakeRefsLister{refs: []artifact.GitRef{
 		{Name: "v1", Type: artifact.GitRefTypeTag, Commit: "aaa"},
@@ -88,7 +88,7 @@ func TestUpgradePaths_Cheap_ListsRefs_IsCurrent(t *testing.T) {
 	if byRef["main"].Type != artifact.GitRefTypeBranch {
 		t.Errorf("main.Type = %q, want branch", byRef["main"].Type)
 	}
-	// Дешёвый режим не грузит снапшоты (ADR-0068 §6: только ls-remote).
+	// Cheap mode does not load snapshots (ADR-0068 §6: only ls-remote).
 	if loader.loadCalls != 0 {
 		t.Errorf("loadCalls = %d, want 0 (дешёвый режим не грузит снапшот)", loader.loadCalls)
 	}
@@ -97,15 +97,15 @@ func TestUpgradePaths_Cheap_ListsRefs_IsCurrent(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Cheap_NoRefsLister_500 — refs-lister не подключён → 500.
+// TestUpgradePaths_Cheap_NoRefsLister_500 — refs-lister not wired → 500.
 func TestUpgradePaths_Cheap_NoRefsLister_500(t *testing.T) {
 	h := newUpPathsHandler(upPathsDB(), &fakeLoader{}, nil) // refs nil
 	_, err := h.UpgradePathsTyped(context.Background(), "redis-prod", "", alwaysInScope)
 	wantUpPathsProblem(t, err, http.StatusInternalServerError, problem.TypeInternalError)
 }
 
-// TestUpgradePaths_Cheap_LsRemoteFail_502 — ls-remote git-источника упал → 502
-// (как ListRefsTyped: keeper исправен, внешний git — нет).
+// TestUpgradePaths_Cheap_LsRemoteFail_502 — ls-remote of the git source failed → 502
+// (like ListRefsTyped: keeper is healthy, the external git is not).
 func TestUpgradePaths_Cheap_LsRemoteFail_502(t *testing.T) {
 	refs := &fakeRefsLister{err: context.DeadlineExceeded}
 	h := newUpPathsHandler(upPathsDB(), &fakeLoader{}, refs)
@@ -113,8 +113,8 @@ func TestUpgradePaths_Cheap_LsRemoteFail_502(t *testing.T) {
 	wantUpPathsProblem(t, err, http.StatusBadGateway, problem.TypeBadGateway)
 }
 
-// TestUpgradePaths_Target_Found — ?to=v2 с upgrade-сценарием (from ⊇ пина) →
-// mode=found + slug, direction=forward, применяемая цепочка миграций.
+// TestUpgradePaths_Target_Found — ?to=v2 with an upgrade scenario (from ⊇ pin) →
+// mode=found + slug, direction=forward, the applied migration chain.
 func TestUpgradePaths_Target_Found(t *testing.T) {
 	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
 	if err != nil {
@@ -162,8 +162,8 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_Legacy — ?to=v2 без подходящего upgrade-сценария →
-// mode=legacy; direction=forward; миграции всё равно применятся (forward).
+// TestUpgradePaths_Target_Legacy — ?to=v2 with no matching upgrade scenario →
+// mode=legacy; direction=forward; migrations still apply (forward).
 func TestUpgradePaths_Target_Legacy(t *testing.T) {
 	mig, _ := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
 	loader := &fakeLoader{targetSchema: 2, chain: statemigrate.Chain{mig}} // upgrades nil → legacy
@@ -191,8 +191,8 @@ func TestUpgradePaths_Target_Legacy(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_Downgrade — цель со схемой ниже текущей → direction=
-// downgrade, признак downgrade, цепочку НЕ грузим (forward-only, ADR-019).
+// TestUpgradePaths_Target_Downgrade — target with a schema below the current → direction=
+// downgrade, downgrade flag set, the chain is NOT loaded (forward-only, ADR-019).
 func TestUpgradePaths_Target_Downgrade(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 0} // current schema=1 → 0<1 downgrade
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
@@ -214,7 +214,7 @@ func TestUpgradePaths_Target_Downgrade(t *testing.T) {
 	if loader.chainCalls != 0 {
 		t.Errorf("chainCalls = %d, want 0 (downgrade не зовёт LoadMigrationChain)", loader.chainCalls)
 	}
-	// mode бессмыслен при downgrade → пустой, ListUpgrades не дёргается.
+	// mode is meaningless for downgrade → empty, ListUpgrades is not called.
 	if tgt.Mode != "" {
 		t.Errorf("mode = %q, want empty (downgrade не вычисляет found/legacy)", tgt.Mode)
 	}
@@ -226,7 +226,7 @@ func TestUpgradePaths_Target_Downgrade(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_Noop — ?to==пин И схема равна текущей → direction=no-op.
+// TestUpgradePaths_Target_Noop — ?to==pin AND schema equals the current → direction=no-op.
 func TestUpgradePaths_Target_Noop(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 1, chain: statemigrate.Chain{}}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
@@ -238,7 +238,7 @@ func TestUpgradePaths_Target_Noop(t *testing.T) {
 	if view.Target == nil || view.Target.Direction != upgradeDirectionNoop {
 		t.Errorf("direction = %+v, want no-op", view.Target)
 	}
-	// mode бессмыслен при no-op → пустой, ListUpgrades не дёргается.
+	// mode is meaningless for no-op → empty, ListUpgrades is not called.
 	if view.Target.Mode != "" {
 		t.Errorf("mode = %q, want empty (no-op не вычисляет found/legacy)", view.Target.Mode)
 	}
@@ -250,8 +250,8 @@ func TestUpgradePaths_Target_Noop(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_SameSchema — схема равна текущей, но ref другой (ref-bump)
-// → direction=same-schema (не no-op).
+// TestUpgradePaths_Target_SameSchema — schema equals the current but the ref differs (ref-bump)
+// → direction=same-schema (not no-op).
 func TestUpgradePaths_Target_SameSchema(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 1, chain: statemigrate.Chain{}}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
@@ -271,10 +271,10 @@ func TestUpgradePaths_Target_SameSchema(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_BrokenChain_Unreachable_200 — структурно битая цепочка
-// миграций к цели → НЕ HTTP-ошибка, а 200 с reachable=false + unreachable_reason
-// (preview показывает недостижимую цель как ДАННЫЕ, ADR-0068 §6). direction/mode
-// ВСЁ РАВНО вычислены (цель — forward, found/legacy известны); state_migrations пуст.
+// TestUpgradePaths_Target_BrokenChain_Unreachable_200 — a structurally broken migration
+// chain to the target → NOT an HTTP error, but 200 with reachable=false + unreachable_reason
+// (preview shows the unreachable target as DATA, ADR-0068 §6). direction/mode
+// are STILL computed (the target is forward, found/legacy are known); state_migrations empty.
 func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 3, chainErr: artifact.ErrMigrationChainBroken}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
@@ -304,9 +304,9 @@ func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_Target_ChainError_500 — НЕ-битая ошибка LoadMigrationChain (парс
-// кривого migrations/NNN_to_MMM.yml уже материализованного снапшота = keeper-internal
-// дефект) → 500, НЕ 502 (502 только за loader.Load, где виновник — внешний git).
+// TestUpgradePaths_Target_ChainError_500 — a non-broken LoadMigrationChain error (parsing a
+// malformed migrations/NNN_to_MMM.yml of an already-materialized snapshot = keeper-internal
+// defect) → 500, NOT 502 (502 is only for loader.Load, where the external git is at fault).
 func TestUpgradePaths_Target_ChainError_500(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 2, chainErr: errors.New("parse migrations/001_to_002.yml: bad yaml")}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
@@ -314,7 +314,7 @@ func TestUpgradePaths_Target_ChainError_500(t *testing.T) {
 	wantUpPathsProblem(t, err, http.StatusInternalServerError, problem.TypeInternalError)
 }
 
-// TestUpgradePaths_Target_LoadFail_502 — снапшот цели не материализовался (git-сбой)
+// TestUpgradePaths_Target_LoadFail_502 — the target snapshot did not materialize (git failure)
 // → 502.
 func TestUpgradePaths_Target_LoadFail_502(t *testing.T) {
 	loader := &fakeLoader{loadErr: context.DeadlineExceeded}
@@ -323,8 +323,8 @@ func TestUpgradePaths_Target_LoadFail_502(t *testing.T) {
 	wantUpPathsProblem(t, err, http.StatusBadGateway, problem.TypeBadGateway)
 }
 
-// TestUpgradePaths_OutOfScope_404 — инкарнация вне scope оператора → 404 (не палим
-// существование), и в дешёвом, и в on-demand режиме.
+// TestUpgradePaths_OutOfScope_404 — incarnation outside the operator scope → 404 (do not
+// leak existence), in both cheap and on-demand modes.
 func TestUpgradePaths_OutOfScope_404(t *testing.T) {
 	for _, toRef := range []string{"", "v2"} {
 		refs := &fakeRefsLister{refs: []artifact.GitRef{{Name: "v1"}}}
@@ -334,7 +334,7 @@ func TestUpgradePaths_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestUpgradePaths_NotFound_404 — инкарнации нет → 404.
+// TestUpgradePaths_NotFound_404 — incarnation absent → 404.
 func TestUpgradePaths_NotFound_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} }}
 	h := newUpPathsHandler(db, &fakeLoader{}, &fakeRefsLister{})
@@ -342,7 +342,7 @@ func TestUpgradePaths_NotFound_404(t *testing.T) {
 	wantUpPathsProblem(t, err, http.StatusNotFound, problem.TypeNotFound)
 }
 
-// TestUpgradePaths_InvalidName_422 — невалидное имя → 422 до select/резолва.
+// TestUpgradePaths_InvalidName_422 — invalid name → 422 before select/resolution.
 func TestUpgradePaths_InvalidName_422(t *testing.T) {
 	h := newUpPathsHandler(&fakeIncDB{}, &fakeLoader{}, &fakeRefsLister{})
 	_, err := h.UpgradePathsTyped(context.Background(), "Bad_Name", "", alwaysInScope)

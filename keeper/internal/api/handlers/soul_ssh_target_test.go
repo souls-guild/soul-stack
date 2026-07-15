@@ -10,9 +10,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// doUpdateSshTarget разбирает JSON-тело строго (DisallowUnknownFields, как прежний
-// (w,r)-роут — bad/unknown JSON → 400) и вызывает UpdateSshTargetTyped напрямую
-// (handler-native T5d), сериализуя результат в recorder.
+// doUpdateSshTarget parses the JSON body strictly (DisallowUnknownFields, like the former
+// (w,r) route — bad/unknown JSON → 400) and calls UpdateSshTargetTyped directly
+// (handler-native T5d), serializing the result into the recorder.
 func doUpdateSshTarget(t *testing.T, h *SoulHandler, sid, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPut, "/v1/souls/"+sid+"/ssh-target", strings.NewReader(body))
@@ -44,8 +44,8 @@ func doUpdateSshTarget(t *testing.T, h *SoulHandler, sid, body string) *httptest
 	return rec
 }
 
-// soulSshTargetViewJSON проецирует доменный SoulSshTargetView в map с json-ключами native
-// SoulSshTargetReply (sid + nested ssh_target; ssh_provider omitempty).
+// soulSshTargetViewJSON projects the domain SoulSshTargetView into a map with the JSON keys of
+// the native SoulSshTargetReply (sid + nested ssh_target; ssh_provider omitempty).
 func soulSshTargetViewJSON(v SoulSshTargetView) map[string]any {
 	tgt := map[string]any{
 		"soul_path": v.SoulPath,
@@ -170,7 +170,7 @@ func TestUpdateSshTarget_RelativePath_422(t *testing.T) {
 }
 
 func TestUpdateSshTarget_UnknownField_400(t *testing.T) {
-	// DisallowUnknownFields на JSON-decoder → unknown поле → 400.
+	// DisallowUnknownFields on the JSON decoder → unknown field → 400.
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
 

@@ -1,44 +1,44 @@
 package api
 
-// HUMA-NATIVE reply-DTO PUSH-домена (handler-native T5d-2c-full). Reply/output Body
-// huma-операций — native Go-struct в пакете api, БЕЗ legacy-генерата. Register-func (huma_push.go)
-// проецирует плоские доменные view-ы handler-а (PushApplyResultView / PushRunListEntryView)
-// напрямую В ЭТИ типы — конвертеров legacy-генерата→native больше нет. Ключевое для push:
+// HUMA-NATIVE reply-DTO for the PUSH domain (handler-native T5d-2c-full). The reply/output Body
+// of huma operations is a native Go struct in package api, no legacy generator. The register func (huma_push.go)
+// projects the handler's flat domain views (PushApplyResultView / PushRunListEntryView)
+// directly INTO THESE types — there are no more legacy-generator→native converters. Key points for push:
 //
-//   - ФОРМА байт-в-байт = прежняя legacy-генерата (json-теги/omitempty/date-time/nullable категории A-D).
-//   - ИМЯ СХЕМЫ = контрактное (PushApplyReply / PushApplyView / PushRunListReply /
-//     PushRunListEntry / PushSummaryCounts): huma DefaultSchemaNamer берёт
-//     reflect.Type.Name() → схема под тем же именем, что давал прежний legacy-генерата.
-//   - ENUM-поля Status (PushApplyView.Status / PushRunListEntry.Status) — native
-//     PushApplyViewStatus / PushRunListEntryStatus (huma_enums.go, INLINE-enum): рукопись
-//     инлайнит статус как `type: string` + enum (standalone-схемы нет), huma инлайнит
-//     string-named-тип одинаково → schema byte-identical (parity ServiceView.GitRefType).
-//   - PushRunListReply — НЕ generic-envelope (не sharedapi.PagedResponse), а обычный
-//     reply с полем items[]PushRunListEntry + offset/limit/total (int) → `type: integer`
-//     без format (assertOffsetEnvelopeNoFormat). Top-level reply-DTO, не через alias.
+//   - SHAPE byte-for-byte = the former legacy generator (json tags/omitempty/date-time/nullable categories A-D).
+//   - SCHEMA NAME = contractual (PushApplyReply / PushApplyView / PushRunListReply /
+//     PushRunListEntry / PushSummaryCounts): huma's DefaultSchemaNamer takes
+//     reflect.Type.Name() → schema under the same name the former legacy generator produced.
+//   - Status enum fields (PushApplyView.Status / PushRunListEntry.Status) — native
+//     PushApplyViewStatus / PushRunListEntryStatus (huma_enums.go, INLINE enum): the hand-written
+//     code inlines status as `type: string` + enum (no standalone schema), huma inlines a
+//     string-named type the same way → schema byte-identical (parity ServiceView.GitRefType).
+//   - PushRunListReply — NOT a generic envelope (not sharedapi.PagedResponse) but a plain
+//     reply with items[]PushRunListEntry + offset/limit/total (int) → `type: integer`
+//     without format (assertOffsetEnvelopeNoFormat). Top-level reply-DTO, not via an alias.
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). apply_id — машинно ULID (audit.NewULID,
-// pushorch/run.go:182); started_by_aid ← operator.AIDPattern. Формат для клиент-
-// кодогена; pattern не влияет на json.Marshal. inventory_sids НЕ тегируется:
-// per-element pattern на массиве-output-поле не покрыт этим батчем.
+// OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). apply_id — machine ULID (audit.NewULID,
+// pushorch/run.go:182); started_by_aid ← operator.AIDPattern. Format for client
+// codegen; the pattern does not affect json.Marshal. inventory_sids is NOT tagged:
+// a per-element pattern on an array output field is not covered by this batch.
 
 import (
 	"time"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежней legacy-генерата-формой) ===
+// === top-level reply-DTO (shape 1:1 with the former legacy generator shape) ===
 
-// PushApplyReply — native 202-тело POST /v1/push/apply (apply_id async). Форма 1:1 с
+// PushApplyReply — native 202 body of POST /v1/push/apply (apply_id async). Shape 1:1 with
 // PushApplyReply.
 type PushApplyReply struct {
 	ApplyID string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// PushApplyView — native 200-тело GET /v1/push/{apply_id}. Форма 1:1 с PushApplyView:
-// finished_at/input/ssh_provider/started_by_aid/summary — `*`-поля С omitempty (nil → ключ
-// опущен); inventory_sids — массив; started_at — наносекундный time-wire; status — enum-тип
-// PushApplyViewStatus (wire-строка).
+// PushApplyView — native 200 body of GET /v1/push/{apply_id}. Shape 1:1 with PushApplyView:
+// finished_at/input/ssh_provider/started_by_aid/summary — `*` fields with omitempty (nil → key
+// omitted); inventory_sids — array; started_at — nanosecond time-wire; status — enum type
+// PushApplyViewStatus (wire string).
 type PushApplyView struct {
 	ApplyID       string                  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 	CleanupStale  bool                    `json:"cleanup_stale"`
@@ -53,9 +53,9 @@ type PushApplyView struct {
 	Summary       *map[string]interface{} `json:"summary,omitempty"`
 }
 
-// PushRunListReply — native 200-тело GET /v1/push-runs (offset-envelope: items/offset/
-// limit/total). items — native PushRunListEntry; offset/limit/total — int (parity legacy-генерата →
-// `type: integer` без format). Форма 1:1 с PushRunListReply.
+// PushRunListReply — native 200 body of GET /v1/push-runs (offset envelope: items/offset/
+// limit/total). items — native PushRunListEntry; offset/limit/total — int (parity with the legacy
+// generator → `type: integer` without format). Shape 1:1 with PushRunListReply.
 type PushRunListReply struct {
 	Items  []PushRunListEntry `json:"items"`
 	Limit  int                `json:"limit"`
@@ -65,10 +65,10 @@ type PushRunListReply struct {
 
 // === nested reply-DTO ===
 
-// PushRunListEntry — native compact-строка push_runs (element PushRunListReply.items).
-// Форма 1:1 с PushRunListEntry: finished_at/ssh_provider/started_by_aid/summary_counts —
-// `*`-поля С omitempty; inventory_sids — массив; started_at — наносекундный time-wire;
-// status — enum-тип PushRunListEntryStatus.
+// PushRunListEntry — native compact push_runs row (element of PushRunListReply.items).
+// Shape 1:1 with PushRunListEntry: finished_at/ssh_provider/started_by_aid/summary_counts —
+// `*` fields with omitempty; inventory_sids — array; started_at — nanosecond time-wire;
+// status — enum type PushRunListEntryStatus.
 type PushRunListEntry struct {
 	ApplyID       string                 `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 	CleanupStale  bool                   `json:"cleanup_stale"`
@@ -82,8 +82,8 @@ type PushRunListEntry struct {
 	SummaryCounts *PushSummaryCounts     `json:"summary_counts,omitempty"`
 }
 
-// PushSummaryCounts — native агрегат counts (PushRunListEntry.summary_counts). Все поля —
-// `*int` С omitempty (nil → ключ опущен). Форма 1:1 с прежней PushSummaryCounts.
+// PushSummaryCounts — native counts aggregate (PushRunListEntry.summary_counts). All fields —
+// `*int` with omitempty (nil → key omitted). Shape 1:1 with the former PushSummaryCounts.
 type PushSummaryCounts struct {
 	FailCount    *int `json:"fail_count,omitempty"`
 	SuccessCount *int `json:"success_count,omitempty"`

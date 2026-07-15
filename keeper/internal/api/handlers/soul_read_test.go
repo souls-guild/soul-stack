@@ -19,21 +19,21 @@ import (
 	"github.com/souls-guild/soul-stack/shared/api"
 )
 
-// fakeReadPool — узкий мок [SoulPool] для GET /v1/souls/{sid} и
-// GET /v1/souls/{sid}/soulprint. От расширенного [fakeSoulPool] отделён, чтобы
-// не плодить SQL-матчеры в общем fake — read-handler-ы лежат на двух запросах
-// (SelectBySID и SelectSoulprint).
+// fakeReadPool — a narrow [SoulPool] mock for GET /v1/souls/{sid} and
+// GET /v1/souls/{sid}/soulprint. Kept separate from the broader [fakeSoulPool] to
+// avoid multiplying SQL matchers in a shared fake — the read handlers rest on two
+// queries (SelectBySID and SelectSoulprint).
 type fakeReadPool struct {
 	soul         *soul.Soul
 	soulFactsRaw []byte
 	collectedAt  *time.Time
 	receivedAt   *time.Time
 
-	// Если задано, SelectSoulprint вернёт row, где `soulprint_facts IS NULL`
-	// (т.е. запись Soul-а есть, фактов нет) — ловит ветку 410.
+	// If set, SelectSoulprint returns a row where `soulprint_facts IS NULL`
+	// (i.e. the Soul record exists but there are no facts) — exercises the 410 branch.
 	soulprintEmpty bool
 
-	// soulMissing=true → SelectBySID и SelectSoulprint отвечают pgx.ErrNoRows.
+	// soulMissing=true → SelectBySID and SelectSoulprint return pgx.ErrNoRows.
 	soulMissing bool
 }
 
@@ -59,11 +59,10 @@ func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		if f.soul != nil {
 			sid = f.soul.SID
 		}
-		// staticRow.Scan(*[]byte) делает r.values[i].([]byte) без nil-проверки:
-		// для NULL-колонки эмулируем «пустые байты» (len==0), что эквивалентно
-		// pgx-поведению для NULL bytea/jsonb (см. SelectSoulprint → проверка
-		// len(factsJSON) == 0). Timestamp-указатели — nil допустимо (есть **time.Time
-		// case).
+		// staticRow.Scan(*[]byte) does r.values[i].([]byte) with no nil check: for a
+		// NULL column we emulate "empty bytes" (len==0), equivalent to pgx behavior
+		// for NULL bytea/jsonb (see SelectSoulprint → the len(factsJSON) == 0 check).
+		// Timestamp pointers — nil is allowed (there is a **time.Time case).
 		factsArg := []byte{}
 		if !f.soulprintEmpty {
 			if len(f.soulFactsRaw) > 0 {
@@ -103,8 +102,8 @@ func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		if s.Note != "" {
 			note = s.Note
 		}
-		// traits jsonb (ADR-060): nil Traits → NULL-bytes (scanSoul → пустой
-		// map); заданные метки маршалятся, как в реальном pgx-scan.
+		// traits jsonb (ADR-060): nil Traits → NULL bytes (scanSoul → an empty map);
+		// set traits are marshaled, as in a real pgx scan.
 		traitsArg := []byte(nil)
 		if len(s.Traits) > 0 {
 			b, err := json.Marshal(s.Traits)
@@ -122,9 +121,10 @@ func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 	return errRow{err: errors.New("fakeReadPool: unexpected SQL: " + sql)}
 }
 
-// recordGet вызывает GetTyped напрямую (handler-native T5d) и сериализует результат в
-// recorder через те же writeJSON/writeProblemError, что прежний (w,r)-роут — сохраняя
-// status/body-инварианты downstream-ассертов. claims=nil → fail-closed single-read.
+// recordGet calls GetTyped directly (handler-native T5d) and serializes the result
+// into the recorder through the same writeJSON/writeProblemError as the former (w,r)
+// route — preserving the status/body invariants of the downstream asserts. claims=nil
+// → fail-closed single-read.
 func recordGet(t *testing.T, h *SoulHandler, sid, aid string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/v1/souls/"+sid, nil)
@@ -142,19 +142,19 @@ func recordGet(t *testing.T, h *SoulHandler, sid, aid string) *httptest.Response
 	return rec
 }
 
-// doGetSoul собирает GET /v1/souls/{sid} (без claims — fail-closed).
+// doGetSoul assembles GET /v1/souls/{sid} (no claims — fail-closed).
 func doGetSoul(t *testing.T, h *SoulHandler, sid string) *httptest.ResponseRecorder {
 	t.Helper()
 	return recordGet(t, h, sid, "")
 }
 
-// doGetSoulScoped — doGetSoul с инжектом claims (scope-резолв single-read).
+// doGetSoulScoped — doGetSoul with injected claims (single-read scope resolution).
 func doGetSoulScoped(t *testing.T, h *SoulHandler, sid, aid string) *httptest.ResponseRecorder {
 	t.Helper()
 	return recordGet(t, h, sid, aid)
 }
 
-// recordGetSoulprint вызывает GetSoulprintTyped напрямую и сериализует результат в recorder.
+// recordGetSoulprint calls GetSoulprintTyped directly and serializes the result into the recorder.
 func recordGetSoulprint(t *testing.T, h *SoulHandler, sid, aid string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/v1/souls/"+sid+"/soulprint", nil)
@@ -172,21 +172,22 @@ func recordGetSoulprint(t *testing.T, h *SoulHandler, sid, aid string) *httptest
 	return rec
 }
 
-// doGetSoulprint собирает GET /v1/souls/{sid}/soulprint (без claims).
+// doGetSoulprint assembles GET /v1/souls/{sid}/soulprint (no claims).
 func doGetSoulprint(t *testing.T, h *SoulHandler, sid string) *httptest.ResponseRecorder {
 	t.Helper()
 	return recordGetSoulprint(t, h, sid, "")
 }
 
-// doGetSoulprintScoped — doGetSoulprint с инжектом claims (scope-резолв).
+// doGetSoulprintScoped — doGetSoulprint with injected claims (scope resolution).
 func doGetSoulprintScoped(t *testing.T, h *SoulHandler, sid, aid string) *httptest.ResponseRecorder {
 	t.Helper()
 	return recordGetSoulprint(t, h, sid, aid)
 }
 
-// soulListViewJSON проецирует доменный SoulListView в map с теми же json-ключами, что
-// прежний wire (для downstream-ассертов теста по полям ответа GET /v1/souls/{sid}).
-// Воспроизводит форму native SoulListEntry (covens/traits non-null, nullable как null).
+// soulListViewJSON projects the domain SoulListView into a map with the same json
+// keys as the former wire (for the test's downstream asserts on the fields of the
+// GET /v1/souls/{sid} response). Reproduces the native SoulListEntry shape
+// (covens/traits non-null, nullable as null).
 func soulListViewJSON(v SoulListView) map[string]any {
 	m := map[string]any{
 		"sid":              v.SID,
@@ -229,8 +230,8 @@ func TestGetSoul_Happy(t *testing.T) {
 	if len(covens) != 1 || covens[0] != "dev" {
 		t.Errorf("covens = %v, want [dev]", out["covens"])
 	}
-	// bare-soul без traits → `{}` (object), не null/отсутствие ключа (ADR-060
-	// read-path coalesceTraits): UI рендерит пустой набор без nil-проверки.
+	// bare-soul with no traits → `{}` (object), not null/a missing key (ADR-060
+	// read-path coalesceTraits): the UI renders an empty set without a nil check.
 	traits, ok := out["traits"].(map[string]any)
 	if !ok {
 		t.Fatalf("traits = %v (%T), want object {}", out["traits"], out["traits"])
@@ -240,8 +241,8 @@ func TestGetSoul_Happy(t *testing.T) {
 	}
 }
 
-// TestGetSoul_WithTraits — detail-ответ несёт operator-set traits как object
-// (ADR-060 read-path: souls.traits jsonb → SoulListView.Traits → SoulListEntry).
+// TestGetSoul_WithTraits — the detail response carries operator-set traits as an
+// object (ADR-060 read-path: souls.traits jsonb → SoulListView.Traits → SoulListEntry).
 func TestGetSoul_WithTraits(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pool := &fakeReadPool{soul: &soul.Soul{
@@ -293,9 +294,9 @@ func TestGetSoul_InvalidSID(t *testing.T) {
 	}
 }
 
-// --- single-read scope-гейт (ADR-047 S3b-1): out-of-scope → 404 ---
+// --- single-read scope gate (ADR-047 S3b-1): out-of-scope → 404 ---
 
-// scopedReadPool — узкий read-pool с хостом в covens=[prod] для scope-тестов.
+// scopedReadPool — a narrow read-pool with a host in covens=[prod] for scope tests.
 func scopedReadPool() *fakeReadPool {
 	return &fakeReadPool{soul: &soul.Soul{
 		SID:          "prod-01.example.com",
@@ -306,8 +307,8 @@ func scopedReadPool() *fakeReadPool {
 	}}
 }
 
-// TestGetSoul_InScope_CovenMatch — scoped-оператор (covens=[prod]) читает хост
-// своего coven → 200.
+// TestGetSoul_InScope_CovenMatch — a scoped operator (covens=[prod]) reads a host in
+// its own coven → 200.
 func TestGetSoul_InScope_CovenMatch(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{covens: []string{"prod"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-alice")
@@ -316,10 +317,10 @@ func TestGetSoul_InScope_CovenMatch(t *testing.T) {
 	}
 }
 
-// TestGetSoul_OutOfScope_404 — ГЛАВНЫЙ security-инвариант S3b-1: scoped-оператор
-// (covens=[staging]) читает ЧУЖОЙ хост (covens=[prod]) → 404 (НЕ 403, НЕ 200):
-// не палим существование чужого хоста. Регресс = scoped-оператор читает чужой
-// хост по прямому SID.
+// TestGetSoul_OutOfScope_404 — the MAIN security invariant S3b-1: a scoped operator
+// (covens=[staging]) reads ANOTHER's host (covens=[prod]) → 404 (NOT 403, NOT 200):
+// we do not reveal the existence of a foreign host. Regression = a scoped operator
+// reads a foreign host by direct SID.
 func TestGetSoul_OutOfScope_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{covens: []string{"staging"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-eve")
@@ -328,10 +329,10 @@ func TestGetSoul_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestGetSoul_InScope_RegexMatch_200 — regex-scoped оператор (regex=^prod-)
-// читает матчащий хост (prod-01) → 200. Закрывает list↔get рассинхрон gate-fix-а:
-// regex-видимый в List хост доступен и по прямому GET /{sid} (раньше InScope был
-// coven-only → 404 на видимый). Регресс = рассинхрон вернулся.
+// TestGetSoul_InScope_RegexMatch_200 — a regex-scoped operator (regex=^prod-) reads a
+// matching host (prod-01) → 200. Closes the list↔get mismatch of the gate-fix: a host
+// visible via regex in List is also reachable by a direct GET /{sid} (InScope used to
+// be coven-only → 404 on a visible host). Regression = the mismatch returned.
 func TestGetSoul_InScope_RegexMatch_200(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^prod-"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
@@ -340,8 +341,9 @@ func TestGetSoul_InScope_RegexMatch_200(t *testing.T) {
 	}
 }
 
-// TestGetSoul_OutOfRegexScope_404 — regex-scoped оператор (regex=^web-) читает
-// НЕ-матчащий хост (prod-01) → 404 (не палит существование вне regex-границы).
+// TestGetSoul_OutOfRegexScope_404 — a regex-scoped operator (regex=^web-) reads a
+// NON-matching host (prod-01) → 404 (does not reveal existence outside the regex
+// boundary).
 func TestGetSoul_OutOfRegexScope_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{regexes: []string{"^web-"}}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-webops")
@@ -350,8 +352,8 @@ func TestGetSoul_OutOfRegexScope_404(t *testing.T) {
 	}
 }
 
-// TestGetSoulprint_InScope_RegexMatch_200 — soulprint того же regex-предиката:
-// матчащий хост → 200, факты раскрыты.
+// TestGetSoulprint_InScope_RegexMatch_200 — soulprint under the same regex predicate:
+// a matching host → 200, facts revealed.
 func TestGetSoulprint_InScope_RegexMatch_200(t *testing.T) {
 	pool := scopedReadPool()
 	pool.soulFactsRaw = []byte(`{"sid":"prod-01.example.com","os":{"family":"debian"}}`)
@@ -362,7 +364,7 @@ func TestGetSoulprint_InScope_RegexMatch_200(t *testing.T) {
 	}
 }
 
-// TestGetSoul_Unrestricted_200 — Unrestricted-оператор читает любой хост → 200.
+// TestGetSoul_Unrestricted_200 — an Unrestricted operator reads any host → 200.
 func TestGetSoul_Unrestricted_200(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{unrestricted: true}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-root")
@@ -371,8 +373,8 @@ func TestGetSoul_Unrestricted_200(t *testing.T) {
 	}
 }
 
-// TestGetSoul_EmptyPurview_404 — Purview{} (нет прав, fail-closed) → 404 (не 200,
-// не 403): оператору не положено ни одного хоста.
+// TestGetSoul_EmptyPurview_404 — Purview{} (no rights, fail-closed) → 404 (not 200,
+// not 403): the operator is entitled to no host.
 func TestGetSoul_EmptyPurview_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{empty: true}, nil, nil)
 	rec := doGetSoulScoped(t, h, "prod-01.example.com", "archon-nobody")
@@ -381,18 +383,18 @@ func TestGetSoul_EmptyPurview_404(t *testing.T) {
 	}
 }
 
-// TestGetSoul_NoClaims_404 — нет claims (защитный инвариант, штатно route под
-// RequireJWT) → 404 (fail-closed, симметрично List no-claims).
+// TestGetSoul_NoClaims_404 — no claims (a defensive invariant; normally the route is
+// under RequireJWT) → 404 (fail-closed, symmetric with List no-claims).
 func TestGetSoul_NoClaims_404(t *testing.T) {
 	h := NewSoulHandler(scopedReadPool(), fakeScoper{unrestricted: true}, nil, nil)
-	rec := doGetSoul(t, h, "prod-01.example.com") // БЕЗ claims.
+	rec := doGetSoul(t, h, "prod-01.example.com") // no claims.
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (no claims → fail-closed); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-// TestGetSoulprint_OutOfScope_404 — scope-гейт того же измерения на soulprint-read:
-// чужой хост → 404 ДО раскрытия фактов.
+// TestGetSoulprint_OutOfScope_404 — the same-dimension scope gate on a soulprint read:
+// a foreign host → 404 BEFORE any facts are revealed.
 func TestGetSoulprint_OutOfScope_404(t *testing.T) {
 	pool := scopedReadPool()
 	pool.soulFactsRaw = []byte(`{"sid":"prod-01.example.com","os":{"family":"debian"}}`)
@@ -403,7 +405,7 @@ func TestGetSoulprint_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestGetSoulprint_InScope_200 — soulprint своего coven → 200.
+// TestGetSoulprint_InScope_200 — soulprint of one's own coven → 200.
 func TestGetSoulprint_InScope_200(t *testing.T) {
 	pool := scopedReadPool()
 	pool.soulFactsRaw = []byte(`{"sid":"prod-01.example.com","os":{"family":"debian"}}`)
@@ -414,7 +416,7 @@ func TestGetSoulprint_InScope_200(t *testing.T) {
 	}
 }
 
-// TestGetSoulprint_EmptyPurview_404 — нет прав → 404 (fail-closed).
+// TestGetSoulprint_EmptyPurview_404 — no rights → 404 (fail-closed).
 func TestGetSoulprint_EmptyPurview_404(t *testing.T) {
 	pool := scopedReadPool()
 	pool.soulFactsRaw = []byte(`{"sid":"prod-01.example.com","os":{"family":"debian"}}`)
@@ -501,15 +503,16 @@ func TestGetSoulprint_NotReceived_410(t *testing.T) {
 	}
 }
 
-// TestGetSoulprint_BytePassthrough_Exact — guard byte-passthrough (finding 2,
-// категория D ADR-051): сырые JSONB-байты `souls.soulprint_facts` доезжают на
-// wire в typed_facts БЕЗ unmarshal→map→re-marshal. Доказательство — байт-в-байт:
-// raw несёт неалфавитный порядок ключей (`sid` перед `os`, внутри os `pkg_mgr`
-// перед `init_system`); прежний map-путь пересортировал бы их лексикографически,
-// passthrough — отдаёт ровно как лежит. Ассертим точную под-строку сырья в теле.
+// TestGetSoulprint_BytePassthrough_Exact — a byte-passthrough guard (finding 2,
+// category D of ADR-051): the raw JSONB bytes of `souls.soulprint_facts` reach the
+// wire in typed_facts WITHOUT unmarshal→map→re-marshal. The proof is byte-for-byte:
+// raw carries a non-alphabetical key order (`sid` before `os`, and inside os
+// `pkg_mgr` before `init_system`); the former map path would have re-sorted them
+// lexicographically, passthrough returns them exactly as stored. We assert the exact
+// raw substring in the body.
 func TestGetSoulprint_BytePassthrough_Exact(t *testing.T) {
-	// Неалфавитный порядок: map-re-marshal дал бы init_system перед pkg_mgr и
-	// os перед sid — passthrough сохраняет исходный.
+	// Non-alphabetical order: a map-re-marshal would give init_system before pkg_mgr
+	// and os before sid — passthrough keeps the original.
 	raw := []byte(`{"sid":"soul.example.com","os":{"pkg_mgr":"apt","init_system":"systemd"}}`)
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
@@ -524,7 +527,7 @@ func TestGetSoulprint_BytePassthrough_Exact(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	// typed_facts в теле должен быть БАЙТ-В-БАЙТ равен raw (не пересортирован).
+	// typed_facts in the body must be BYTE-FOR-BYTE equal to raw (not re-sorted).
 	var out struct {
 		TypedFacts json.RawMessage `json:"typed_facts"`
 	}
@@ -536,12 +539,12 @@ func TestGetSoulprint_BytePassthrough_Exact(t *testing.T) {
 	}
 }
 
-// TestGetSoulprint_ForwardCompat_UnknownKey — guard forward-compat (finding 2):
-// extension-ключ, которого НЕТ в proto SoulprintFacts, ПРИСУТСТВУЕТ на wire.
-// Доказывает, что Keeper не парсит/не фильтрует содержимое typed_facts —
-// будущие proto-поля Soul-агента доезжают до клиента без рекомпиляции Keeper-а.
+// TestGetSoulprint_ForwardCompat_UnknownKey — a forward-compat guard (finding 2): an
+// extension key that is NOT in proto SoulprintFacts IS PRESENT on the wire. Proves
+// Keeper does not parse/filter the contents of typed_facts — future proto fields of
+// the Soul agent reach the client without recompiling Keeper.
 func TestGetSoulprint_ForwardCompat_UnknownKey(t *testing.T) {
-	// `future_field` отсутствует в SoulprintFacts (proto/keeper/v1/soulprint.proto).
+	// `future_field` is absent from SoulprintFacts (proto/keeper/v1/soulprint.proto).
 	raw := []byte(`{"sid":"soul.example.com","future_field":{"nested":42}}`)
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
@@ -573,19 +576,19 @@ func TestGetSoulprint_ForwardCompat_UnknownKey(t *testing.T) {
 
 // --- GET /v1/souls/{sid}/history (SelectHistory) ---
 
-// fakeHistoryPool — мок [SoulPool] для GET /v1/souls/{sid}/history. QueryRow
-// обслуживает ДВА запроса: scope-gate (SelectBySID — souls-row с covens, ADR-047
-// G1 Фикс 3) и count-SQL (total). Query — page-SQL (historyRows). Захватывает
-// SQL/args page-вызова для проверки фильтров (type/since/pagination).
+// fakeHistoryPool — a [SoulPool] mock for GET /v1/souls/{sid}/history. QueryRow serves
+// TWO queries: the scope-gate (SelectBySID — a souls row with covens, ADR-047 G1 Fix
+// 3) and the count SQL (total). Query — the page SQL (historyRows). Captures the
+// SQL/args of the page call to verify filters (type/since/pagination).
 type fakeHistoryPool struct {
 	total    int
 	items    []soul.HistoryItem
 	queryErr error
 
-	// hostCovens — covens хоста для scope-gate InScope (Фикс 3). nil → хост с
-	// пустыми covens (unrestricted-оператор видит, coven-scoped — нет).
+	// hostCovens — the host's covens for the scope-gate InScope (Fix 3). nil → a host
+	// with empty covens (an unrestricted operator sees it, a coven-scoped one does not).
 	hostCovens []string
-	// soulMissing=true → SelectBySID отвечает pgx.ErrNoRows (404 до history-фетча).
+	// soulMissing=true → SelectBySID returns pgx.ErrNoRows (404 before the history fetch).
 	soulMissing bool
 
 	querySQL  string
@@ -601,14 +604,14 @@ func (f *fakeHistoryPool) Exec(context.Context, string, ...any) (pgconn.CommandT
 }
 
 func (f *fakeHistoryPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	// scope-gate (SelectBySID) — souls-row с covens; идёт ПЕРЕД count-SQL history.
+	// scope-gate (SelectBySID) — a souls row with covens; runs BEFORE the history count SQL.
 	if strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid = $1") {
 		if f.soulMissing {
 			return errRow{err: pgx.ErrNoRows}
 		}
 		return staticRow{values: []any{
 			"soul.example.com", "agent", "connected", f.hostCovens,
-			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
+			[]byte(nil), // traits jsonb (ADR-060): NULL → an empty map in scanSoul
 			time.Now(), nil, nil, nil, nil, nil,
 		}}
 	}
@@ -624,9 +627,9 @@ func (f *fakeHistoryPool) Query(_ context.Context, sql string, args ...any) (pgx
 	return &historyRows{items: f.items}, nil
 }
 
-// historyRows — pgx.Rows над []soul.HistoryItem, эмулирует 9-колоночную
-// проекцию SelectHistory (type,id,incarnation,scenario,module,status,
-// started_at,finished_at,voyage_id) с nullable-указателями.
+// historyRows — pgx.Rows over []soul.HistoryItem, emulates the 9-column projection of
+// SelectHistory (type,id,incarnation,scenario,module,status,started_at,finished_at,
+// voyage_id) with nullable pointers.
 type historyRows struct {
 	items []soul.HistoryItem
 	idx   int
@@ -669,9 +672,10 @@ func (r *historyRows) Values() ([]any, error)                       { return nil
 func (r *historyRows) RawValues() [][]byte                          { return nil }
 func (r *historyRows) Conn() *pgx.Conn                              { return nil }
 
-// doGetHistory вызывает HistoryTyped напрямую (handler-native T5d), разбирая rawQuery
-// (type[]/since/offset/limit) так же, как прежний (w,r)-роут, и сериализуя результат в
-// recorder. scope-гейт History резолвит readScope из claims (ADR-047 G1 Фикс 3).
+// doGetHistory calls HistoryTyped directly (handler-native T5d), parsing rawQuery
+// (type[]/since/offset/limit) the same way as the former (w,r) route, and serializing
+// the result into the recorder. The History scope gate resolves readScope from claims
+// (ADR-047 G1 Fix 3).
 func doGetHistory(t *testing.T, h *SoulHandler, sid, rawQuery string) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/v1/souls/" + sid + "/history"
@@ -711,9 +715,10 @@ func doGetHistory(t *testing.T, h *SoulHandler, sid, rawQuery string) *httptest.
 	return rec
 }
 
-// soulHistoryViewJSON проецирует доменный SoulHistoryView в map с теми же json-ключами,
-// что прежний wire (для downstream-ассертов теста). Воспроизводит форму native
-// SoulHistoryReply (sid/items/offset/limit/total; per-item pointer-omitempty).
+// soulHistoryViewJSON projects the domain SoulHistoryView into a map with the same
+// json keys as the former wire (for the test's downstream asserts). Reproduces the
+// native SoulHistoryReply shape (sid/items/offset/limit/total; per-item
+// pointer-omitempty).
 func soulHistoryViewJSON(v SoulHistoryView) map[string]any {
 	items := make([]map[string]any, 0, len(v.Items))
 	for _, it := range v.Items {
@@ -774,9 +779,9 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 	pool := &fakeHistoryPool{
 		total: 2,
 		items: []soul.HistoryItem{
-			// errand с back-link на Voyage (ADR-043) — voyage_id присутствует.
+			// errand with a back-link to a Voyage (ADR-043) — voyage_id present.
 			{Type: soul.HistoryTypeErrand, ID: "e1", Module: "core.exec.run", Status: "success", StartedAt: now.Add(time.Hour), FinishedAt: &fin, VoyageID: &voyageID},
-			// прямой scenario-run без Voyage — voyage_id опускается.
+			// a direct scenario-run with no Voyage — voyage_id is omitted.
 			{Type: soul.HistoryTypeScenario, ID: "a1", Incarnation: "web", Scenario: "deploy", Status: "running", StartedAt: now},
 		},
 	}
@@ -793,7 +798,7 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 	if out.SID != "soul.example.com" || out.Total != 2 || len(out.Items) != 2 {
 		t.Fatalf("envelope = %+v", out)
 	}
-	// errand-строка: module есть, scenario-поля пусты (omitempty).
+	// errand row: module present, scenario fields empty (omitempty).
 	if out.Items[0].Type != "errand" || out.Items[0].Module != "core.exec.run" {
 		t.Errorf("item0 = %+v", out.Items[0])
 	}
@@ -803,11 +808,11 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 	if out.Items[0].FinishedAt == "" {
 		t.Errorf("item0 terminal — finished_at должен быть: %+v", out.Items[0])
 	}
-	// item0 — Voyage back-link (ADR-043) проброшен.
+	// item0 — the Voyage back-link (ADR-043) is forwarded.
 	if out.Items[0].VoyageID != "vy-1" {
 		t.Errorf("item0 voyage_id = %q, want vy-1", out.Items[0].VoyageID)
 	}
-	// scenario-строка: incarnation/scenario есть, module/finished_at (running) пусты.
+	// scenario row: incarnation/scenario present, module/finished_at (running) empty.
 	if out.Items[1].Type != "scenario" || out.Items[1].Incarnation != "web" ||
 		out.Items[1].Scenario != "deploy" {
 		t.Errorf("item1 = %+v", out.Items[1])
@@ -815,7 +820,7 @@ func TestHistory_Happy_MergeShape(t *testing.T) {
 	if out.Items[1].Module != "" || out.Items[1].FinishedAt != "" {
 		t.Errorf("item1 errand-поля/finished просочились: %+v", out.Items[1])
 	}
-	// item1 — прямой run без Voyage: voyage_id опущен (omitempty).
+	// item1 — a direct run with no Voyage: voyage_id omitted (omitempty).
 	if out.Items[1].VoyageID != "" {
 		t.Errorf("item1 voyage_id должен быть пуст (вне Voyage): %q", out.Items[1].VoyageID)
 	}
@@ -865,7 +870,7 @@ func TestHistory_FiltersForwarded(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	// since → $2; LIMIT/OFFSET — последние два arg-а (5, 10).
+	// since → $2; LIMIT/OFFSET — the last two args (5, 10).
 	if !strings.Contains(pool.querySQL, "started_at > $2") {
 		t.Errorf("since не проброшен в SQL: %s", pool.querySQL)
 	}
@@ -876,7 +881,7 @@ func TestHistory_FiltersForwarded(t *testing.T) {
 	if pool.queryArgs[n-2] != 5 || pool.queryArgs[n-1] != 10 {
 		t.Errorf("limit/offset args = %v, want [...,5,10]", pool.queryArgs)
 	}
-	// Оба источника (type=scenario+errand) → UNION ALL.
+	// Both sources (type=scenario+errand) → UNION ALL.
 	if !strings.Contains(pool.querySQL, "UNION ALL") {
 		t.Errorf("оба типа должны давать UNION ALL: %s", pool.querySQL)
 	}
@@ -907,8 +912,9 @@ func TestHistory_DBError_500(t *testing.T) {
 	}
 }
 
-// TestHistory_InScope_CovenMatch_200 — guard (ADR-047 G1 Фикс 3): coven-scoped
-// оператор читает timeline хоста СВОЕГО coven → 200 (scope-gate пропускает).
+// TestHistory_InScope_CovenMatch_200 — guard (ADR-047 G1 Fix 3): a coven-scoped
+// operator reads the timeline of a host in its OWN coven → 200 (the scope-gate lets
+// it through).
 func TestHistory_InScope_CovenMatch_200(t *testing.T) {
 	pool := &fakeHistoryPool{total: 0, hostCovens: []string{"prod"}}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"prod"}}, nil, nil)
@@ -918,10 +924,10 @@ func TestHistory_InScope_CovenMatch_200(t *testing.T) {
 	}
 }
 
-// TestHistory_OutOfScope_404 — guard (Фикс 3, закрытие утечки): coven-scoped
-// оператор читает timeline ЧУЖОГО хоста (covens=[prod], scope=[staging]) → 404
-// (не палит существование и не раскрывает timeline). До Фикс 3 History фетчила
-// SelectHistory по SID напрямую без scope-проверки — утечка истории прогонов.
+// TestHistory_OutOfScope_404 — guard (Fix 3, closing a leak): a coven-scoped operator
+// reads the timeline of ANOTHER's host (covens=[prod], scope=[staging]) → 404 (does
+// not reveal existence and does not expose the timeline). Before Fix 3, History
+// fetched SelectHistory by SID directly with no scope check — a leak of run history.
 func TestHistory_OutOfScope_404(t *testing.T) {
 	pool := &fakeHistoryPool{total: 5, hostCovens: []string{"prod"}}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"staging"}}, nil, nil)
@@ -931,8 +937,8 @@ func TestHistory_OutOfScope_404(t *testing.T) {
 	}
 }
 
-// TestHistory_OutOfRegexScope_404 — guard (Фикс 3, list↔get-консистентность по
-// regex): regex-scoped оператор (^web-) читает не-матчащий хост → 404.
+// TestHistory_OutOfRegexScope_404 — guard (Fix 3, list↔get consistency by regex): a
+// regex-scoped operator (^web-) reads a non-matching host → 404.
 func TestHistory_OutOfRegexScope_404(t *testing.T) {
 	pool := &fakeHistoryPool{total: 5, hostCovens: []string{"prod"}}
 	h := NewSoulHandler(pool, fakeScoper{regexes: []string{"^web-"}}, nil, nil)
@@ -942,8 +948,8 @@ func TestHistory_OutOfRegexScope_404(t *testing.T) {
 	}
 }
 
-// TestHistory_HostMissing_404 — guard (Фикс 3): несуществующий хост → 404 на
-// scope-gate (SelectBySID ErrNoRows), не доходя до SelectHistory.
+// TestHistory_HostMissing_404 — guard (Fix 3): a nonexistent host → 404 at the
+// scope-gate (SelectBySID ErrNoRows), without reaching SelectHistory.
 func TestHistory_HostMissing_404(t *testing.T) {
 	pool := &fakeHistoryPool{soulMissing: true}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)

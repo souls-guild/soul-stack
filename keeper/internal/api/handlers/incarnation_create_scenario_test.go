@@ -1,21 +1,21 @@
 package handlers
 
-// Guard-тесты механизма нескольких create-сценариев (Вариант A) на handler-слое:
-// POST /v1/incarnations с полем `create_scenario` (CreateTyped). Покрывают стык,
-// которого не было в *_test.go (составные куски — ResolveCreateScenarios /
-// ValidateCreateScenarioChoice / ValidateInput — покрыты в scenario-пакете, e2e
-// через handler с реальным снапшотом отсутствовал):
+// Guard tests for the multiple-create-scenarios mechanism (Variant A) at the handler
+// layer: POST /v1/incarnations with a `create_scenario` field (CreateTyped). They cover
+// the seam that was missing in *_test.go (the component pieces — ResolveCreateScenarios /
+// ValidateCreateScenarioChoice / ValidateInput — are covered in the scenario package;
+// an e2e through the handler with a real snapshot was missing):
 //
-//   (a) валидный create-kind выбор → стартует ИМЕННО выбранный сценарий
-//       (RunSpec.ScenarioName) + пишет incarnation.created_scenario (INSERT $12);
-//   (b) невалидное / non-create имя → 422 create_scenario_invalid
-//       (ErrCreateScenarioNotEligible), incarnation НЕ создаётся, прогон НЕ стартует;
-//   (c) input валидируется против ВЫБРАННОГО сценария (его required-поля), а не
-//       против дефолтного `create`.
+//   (a) a valid create-kind choice → starts EXACTLY the chosen scenario
+//       (RunSpec.ScenarioName) + writes incarnation.created_scenario (INSERT $12);
+//   (b) an invalid / non-create name → 422 create_scenario_invalid
+//       (ErrCreateScenarioNotEligible), the incarnation is NOT created, no run starts;
+//   (c) input is validated against the CHOSEN scenario (its required fields), not
+//       against the default `create`.
 //
-// Снапшот сервиса материализуется на диск (temp): ResolveCreateScenarios сканирует
-// art.LocalDir (artifact.ListScenarios), а ValidateInput читает scenario/<chosen>/
-// main.yml — обе фазы видят один снапшот через fakeLoader{localDir}.
+// The service snapshot is materialized to disk (temp): ResolveCreateScenarios scans
+// art.LocalDir (artifact.ListScenarios), and ValidateInput reads scenario/<chosen>/
+// main.yml — both phases see one snapshot via fakeLoader{localDir}.
 
 import (
 	"bytes"
@@ -29,19 +29,19 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// createScenarioSnapshot пишет temp-снапшот сервиса с тремя сценариями и
-// возвращает его корень (для fakeLoader.localDir):
+// createScenarioSnapshot writes a temp service snapshot with three scenarios and
+// returns its root (for fakeLoader.localDir):
 //
-//   - scenario/create/main.yml   — create: true, input БЕЗ required-полей;
-//   - scenario/restore/main.yml  — create: true, input с required `backup_id`
-//     (без default) — выбираемый стартовый сценарий с ОТЛИЧНОЙ от create схемой;
-//   - scenario/add_user/main.yml — operational (нет create:) — НЕ eligible.
+//   - scenario/create/main.yml   — create: true, input without required fields;
+//   - scenario/restore/main.yml  — create: true, input with a required `backup_id`
+//     (no default) — a selectable start scenario with a schema DIFFERENT from create;
+//   - scenario/add_user/main.yml — operational (no create:) — NOT eligible.
 //
-// Фаза 2: `create` тоже помечен `create: true` — имя больше не привилегировано,
-// в набор попадают РОВНО `create: true`-сценарии (здесь {create, restore}).
+// Phase 2: `create` is also marked `create: true` — the name is no longer privileged;
+// EXACTLY the `create: true` scenarios end up in the set (here {create, restore}).
 //
-// t.TempDir авто-чистится. Файлы минимальны (input + tasks: []), чтобы
-// config.LoadScenarioManifestFromBytes парсил без diag-ошибок.
+// t.TempDir auto-cleans. Files are minimal (input + tasks: []) so that
+// config.LoadScenarioManifestFromBytes parses without diag errors.
 func createScenarioSnapshot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -80,17 +80,17 @@ tasks: []
 	return root
 }
 
-// newCreateScenarioHandler собирает handler с runner+services+loader (полный
-// create-путь: runScenario=true, loader!=nil). starter перехватывает RunSpec.
+// newCreateScenarioHandler builds the handler with runner+services+loader (full
+// create path: runScenario=true, loader!=nil). starter captures the RunSpec.
 func newCreateScenarioHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: createScenarioSnapshot(t)}
 	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 }
 
-// bareScenarioSnapshot пишет снапшот сервиса БЕЗ единого create-сценария (только
-// operational restart) и возвращает корень. Набор create-сценариев пуст →
-// bare-инкарнация.
+// bareScenarioSnapshot writes a service snapshot WITHOUT a single create scenario (only
+// operational restart) and returns its root. The create-scenario set is empty →
+// bare incarnation.
 func bareScenarioSnapshot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -104,10 +104,10 @@ func bareScenarioSnapshot(t *testing.T) string {
 	return root
 }
 
-// TestIncarnation_Create_BareNoScenario_ReadyNoRun — GUARD Фаза 2: сервис БЕЗ
-// create-сценариев + пустой create_scenario → bare-инкарнация: 202, incarnation
-// создана (insert), прогон НЕ стартует, apply_id ОТСУТСТВУЕТ, created_scenario col
-// ($12) = NULL. Главный инвариант bare-ветки.
+// TestIncarnation_Create_BareNoScenario_ReadyNoRun — GUARD Phase 2: a service WITHOUT
+// create scenarios + empty create_scenario → bare incarnation: 202, incarnation
+// created (insert), no run starts, apply_id is ABSENT, created_scenario col ($12) =
+// NULL. The main invariant of the bare branch.
 func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -128,11 +128,11 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 	if starter.calls != 0 {
 		t.Errorf("starter.calls = %d, want 0 (bare без прогона)", starter.calls)
 	}
-	// created_scenario col ($12) = NULL (nil) — bare несёт NULL, не 'create'.
+	// created_scenario col ($12) = NULL (nil) — bare carries NULL, not 'create'.
 	if db.insertArgs[11] != nil {
 		t.Errorf("INSERT created_scenario ($12) = %v, want nil (NULL для bare)", db.insertArgs[11])
 	}
-	// apply_id отсутствует в JSON (bare без прогона).
+	// apply_id is absent from JSON (bare without a run).
 	var raw map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -142,12 +142,12 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 	}
 }
 
-// (a) валидный выбор не-дефолтного create-сценария --------------------------
+// (a) valid choice of a non-default create scenario --------------------------
 
 // TestIncarnation_Create_ChosenScenario_Starts_AndPersisted — create_scenario:
-// restore (create:true) → стартует restore (НЕ дефолтный create) + INSERT несёт
-// created_scenario=restore ($12). Регресс = выбор оператора игнорируется, всегда
-// запускается create.
+// restore (create:true) → starts restore (NOT the default create) + INSERT carries
+// created_scenario=restore ($12). Regression = operator choice is ignored, create
+// always runs.
 func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -167,7 +167,7 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	if starter.gotSpec.ScenarioName != "restore" {
 		t.Errorf("RunSpec.ScenarioName = %q, want restore (выбранный, НЕ дефолтный create)", starter.gotSpec.ScenarioName)
 	}
-	// created_scenario — $12 INSERT-а (insertArgs[11]); см. insertSQL crud.go.
+	// created_scenario — $12 of the INSERT (insertArgs[11]); see insertSQL crud.go.
 	if len(db.insertArgs) < 12 {
 		t.Fatalf("insertArgs len = %d, want ≥12", len(db.insertArgs))
 	}
@@ -176,10 +176,10 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_EmptyChoice_HasScenarios_422 — Фаза 2: сервис ПРЕДЛАГАЕТ
-// create-сценарии ({create, restore}), но выбор пуст → 422 create_scenario_required
-// с перечислением годных; incarnation НЕ создаётся, прогон НЕ стартует. Регресс =
-// вернулся back-compat-дефолт `create` при пустом выборе.
+// TestIncarnation_Create_EmptyChoice_HasScenarios_422 — Phase 2: the service OFFERS
+// create scenarios ({create, restore}), but the choice is empty → 422
+// create_scenario_required listing the eligible ones; the incarnation is NOT created,
+// no run starts. Regression = the back-compat default `create` returned on empty choice.
 func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -201,7 +201,7 @@ func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 	if !bytes.Contains([]byte(p.Detail), []byte("create_scenario_required")) {
 		t.Errorf("detail = %q, want содержит create_scenario_required", p.Detail)
 	}
-	// Перечисление годных сценариев — оператору видно, что выбрать.
+	// Listing the eligible scenarios — the operator sees what to choose.
 	if !bytes.Contains([]byte(p.Detail), []byte("create")) || !bytes.Contains([]byte(p.Detail), []byte("restore")) {
 		t.Errorf("detail = %q, want список {create, restore}", p.Detail)
 	}
@@ -210,9 +210,9 @@ func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_ExplicitCreate_Starts — явный create_scenario=create
-// (помечен create:true) → стартует create, created_scenario=create. Контраст к
-// _EmptyChoice_HasScenarios_422: имя `create` валидно как ЯВНЫЙ выбор.
+// TestIncarnation_Create_ExplicitCreate_Starts — explicit create_scenario=create
+// (marked create:true) → starts create, created_scenario=create. Contrast to
+// _EmptyChoice_HasScenarios_422: the name `create` is valid as an EXPLICIT choice.
 func TestIncarnation_Create_ExplicitCreate_Starts(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -234,12 +234,12 @@ func TestIncarnation_Create_ExplicitCreate_Starts(t *testing.T) {
 	}
 }
 
-// (b) невалидное / non-create имя → 422 create_scenario_invalid ---------------
+// (b) invalid / non-create name → 422 create_scenario_invalid ---------------
 
-// TestIncarnation_Create_NonCreateScenario_422 — operational-сценарий (add_user,
-// нет create:true) как create_scenario → 422 create_scenario_invalid; incarnation
-// НЕ создаётся, прогон НЕ стартует. Регресс = можно «создать» инкарнацию
-// operational-сценарием в обход bootstrap.
+// TestIncarnation_Create_NonCreateScenario_422 — an operational scenario (add_user,
+// no create:true) as create_scenario → 422 create_scenario_invalid; the incarnation is
+// NOT created, no run starts. Regression = one could "create" an incarnation with an
+// operational scenario, bypassing bootstrap.
 func TestIncarnation_Create_NonCreateScenario_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -258,7 +258,7 @@ func TestIncarnation_Create_NonCreateScenario_422(t *testing.T) {
 	if p.Type != problem.TypeValidationFailed {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
 	}
-	// detail несёт маркер create_scenario_invalid (handler-маппинг ErrCreateScenarioNotEligible).
+	// detail carries the create_scenario_invalid marker (handler mapping of ErrCreateScenarioNotEligible).
 	if !bytes.Contains([]byte(p.Detail), []byte("create_scenario_invalid")) {
 		t.Errorf("detail = %q, want содержит create_scenario_invalid", p.Detail)
 	}
@@ -270,8 +270,8 @@ func TestIncarnation_Create_NonCreateScenario_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_UnknownScenario_422 — несуществующий create_scenario →
-// 422 (не в наборе): тот же класс отказа, что и operational.
+// TestIncarnation_Create_UnknownScenario_422 — a nonexistent create_scenario →
+// 422 (not in the set): the same rejection class as operational.
 func TestIncarnation_Create_UnknownScenario_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -290,8 +290,9 @@ func TestIncarnation_Create_UnknownScenario_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_TraversalScenario_422 — мусорное имя (path-traversal по
-// ScenarioNamePattern) отбивается ДО резолва набора (не подставляем в путь) → 422.
+// TestIncarnation_Create_TraversalScenario_422 — a garbage name (path-traversal per
+// ScenarioNamePattern) is rejected BEFORE resolving the set (not substituted into a
+// path) → 422.
 func TestIncarnation_Create_TraversalScenario_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -310,11 +311,11 @@ func TestIncarnation_Create_TraversalScenario_422(t *testing.T) {
 	}
 }
 
-// (c) input валидируется против ВЫБРАННОГО сценария --------------------------
+// (c) input is validated against the CHOSEN scenario --------------------------
 
-// TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422 — выбран restore
-// (required backup_id), но input пуст → 422 input_invalid. Доказывает, что схема
-// берётся у ВЫБРАННОГО сценария (у дефолтного create такого required-поля нет).
+// TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422 — restore is chosen
+// (required backup_id), but input is empty → 422 input_invalid. Proves the schema is
+// taken from the CHOSEN scenario (the default create has no such required field).
 func TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -338,10 +339,10 @@ func TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422(t *testing.T
 	}
 }
 
-// TestIncarnation_Create_ChosenCreate_EmptyInputOK — КОНТРАСТ к
-// _InputValidatedAgainstChosen_Missing_422: тот же пустой input, но выбран create
-// (его схема НЕ требует backup_id) → 202. Пара тестов фиксирует: схема резолвится
-// по ВЫБРАННОМУ сценарию, не по статике.
+// TestIncarnation_Create_ChosenCreate_EmptyInputOK — CONTRAST to
+// _InputValidatedAgainstChosen_Missing_422: the same empty input, but create is chosen
+// (its schema does NOT require backup_id) → 202. The test pair pins: the schema is
+// resolved from the CHOSEN scenario, not statically.
 func TestIncarnation_Create_ChosenCreate_EmptyInputOK(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
@@ -357,9 +358,9 @@ func TestIncarnation_Create_ChosenCreate_EmptyInputOK(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_ChosenScenario_BadInputType_422 — выбран restore,
-// backup_id передан числом (схема: string) → 422 input_invalid (type-mismatch у
-// схемы выбранного сценария).
+// TestIncarnation_Create_ChosenScenario_BadInputType_422 — restore is chosen,
+// backup_id passed as a number (schema: string) → 422 input_invalid (type mismatch
+// against the chosen scenario's schema).
 func TestIncarnation_Create_ChosenScenario_BadInputType_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}

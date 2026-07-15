@@ -16,7 +16,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// stubAuthenticator — фиктивный LDAP-аутентификатор для endpoint-теста.
+// stubAuthenticator — a fake LDAP authenticator for the endpoint test.
 type stubAuthenticator struct {
 	ext auth.ExternalIdentity
 	err error
@@ -26,7 +26,7 @@ func (s stubAuthenticator) Authenticate(_ context.Context, _, _ string) (auth.Ex
 	return s.ext, s.err
 }
 
-// stubMapper — фиктивный Mapper.
+// stubMapper — a fake Mapper.
 type stubMapper struct {
 	mapped auth.MappedOperator
 	err    error
@@ -36,7 +36,7 @@ func (s stubMapper) Map(_ context.Context, _ auth.ExternalIdentity) (auth.Mapped
 	return s.mapped, s.err
 }
 
-// loginStubIssuer — фиктивный JWT issuer.
+// loginStubIssuer — a fake JWT issuer.
 type loginStubIssuer struct {
 	token    string
 	err      error
@@ -50,7 +50,7 @@ func (s *loginStubIssuer) Issue(aid string, roles []string, _ time.Duration, _ b
 	return s.token, s.err
 }
 
-// authTestAudit — in-memory audit.Writer для endpoint-теста.
+// authTestAudit — an in-memory audit.Writer for the endpoint test.
 type authTestAudit struct{ events []*audit.Event }
 
 func (a *authTestAudit) Write(_ context.Context, ev *audit.Event) error {
@@ -58,7 +58,7 @@ func (a *authTestAudit) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// mountLogin поднимает chi-router с /auth/ldap/login на переданных deps.
+// mountLogin brings up a chi router with /auth/ldap/login on the given deps.
 func mountLogin(d *LDAPAuthDeps) http.Handler {
 	r := chi.NewRouter()
 	r.Route("/auth", func(r chi.Router) {
@@ -76,8 +76,8 @@ func doLogin(h http.Handler) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestLDAPLogin_SetsSecureCookie — happy-path: cookie HttpOnly+Secure+SameSite=
-// Strict, тело пустое, audit operator.login записан, JWT выпущен с ролями.
+// TestLDAPLogin_SetsSecureCookie — happy path: cookie HttpOnly+Secure+SameSite=
+// Strict, empty body, audit operator.login written, JWT issued with roles.
 func TestLDAPLogin_SetsSecureCookie(t *testing.T) {
 	issuer := &loginStubIssuer{token: "ey.tok.jwt"}
 	aw := &authTestAudit{}
@@ -116,28 +116,28 @@ func TestLDAPLogin_SetsSecureCookie(t *testing.T) {
 	if c.Path != "/" {
 		t.Errorf("cookie Path = %q, want /", c.Path)
 	}
-	// JWT-токена в теле НЕТ (cookie-only доставка).
+	// The JWT token is NOT in the body (cookie-only delivery).
 	if strings.Contains(rec.Body.String(), "ey.tok.jwt") {
 		t.Errorf("JWT must NOT be in response body (cookie-only delivery)")
 	}
-	// audit operator.login записан.
+	// audit operator.login written.
 	if len(aw.events) != 1 || aw.events[0].EventType != audit.EventOperatorLogin {
 		t.Fatalf("expected exactly one operator.login audit event, got %v", aw.events)
 	}
 	if aw.events[0].ArchonAID != "alice" {
 		t.Errorf("audit ArchonAID = %q, want alice", aw.events[0].ArchonAID)
 	}
-	// payload без пароля.
+	// payload without the password.
 	if pw, ok := aw.events[0].Payload["password"]; ok {
 		t.Errorf("audit payload must NOT contain password, got %v", pw)
 	}
-	// JWT выпущен с ролями из mapping.
+	// JWT issued with roles from the mapping.
 	if issuer.gotAID != "alice" || len(issuer.gotRoles) != 1 || issuer.gotRoles[0] != "cluster-admin" {
 		t.Errorf("issuer got aid=%q roles=%v, want alice/[cluster-admin]", issuer.gotAID, issuer.gotRoles)
 	}
 }
 
-// TestLDAPLogin_AuthFailedIs401 — ErrAuthFailed → 401, без cookie, без audit.
+// TestLDAPLogin_AuthFailedIs401 — ErrAuthFailed → 401, no cookie, no audit.
 func TestLDAPLogin_AuthFailedIs401(t *testing.T) {
 	aw := &authTestAudit{}
 	d := &LDAPAuthDeps{
@@ -174,7 +174,7 @@ func TestLDAPLogin_NoRoleMappingIs403(t *testing.T) {
 	}
 }
 
-// TestLDAPLogin_RevokedIs403 — ErrOperatorRevoked → 403, JWT НЕ выпущен.
+// TestLDAPLogin_RevokedIs403 — ErrOperatorRevoked → 403, JWT NOT issued.
 func TestLDAPLogin_RevokedIs403(t *testing.T) {
 	issuer := &loginStubIssuer{token: "x"}
 	d := &LDAPAuthDeps{
@@ -193,7 +193,7 @@ func TestLDAPLogin_RevokedIs403(t *testing.T) {
 	}
 }
 
-// TestLDAPLogin_NilDepsNoMount — d=nil → роут не монтируется (404).
+// TestLDAPLogin_NilDepsNoMount — d=nil → the route is not mounted (404).
 func TestLDAPLogin_NilDepsNoMount(t *testing.T) {
 	var d *LDAPAuthDeps
 	rec := doLogin(mountLogin(d))
@@ -202,5 +202,5 @@ func TestLDAPLogin_NilDepsNoMount(t *testing.T) {
 	}
 }
 
-// compile-time: sentinel-набор покрыт (страховка от рефактора auth-ошибок).
+// compile-time: the sentinel set is covered (guard against refactoring the auth errors).
 var _ = []error{auth.ErrAuthFailed, auth.ErrNoRoleMapping, auth.ErrOperatorRevoked, errors.New("")}

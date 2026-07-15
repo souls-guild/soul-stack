@@ -12,32 +12,32 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// ClusterRegistry — read-поверхность Conclave-реестра живых Keeper-инстансов
-// (ADR-006 amend), нужная `GET /v1/cluster`. Реальная реализация — тонкая
-// обёртка над keeperredis.LiveKIDs / keeperredis.ReadInstanceMeta, собранная в
-// cmd/keeper (тот же Redis-клиент, что у Conclave-renewal). nil (single-Keeper
-// dev без Redis) → handler отдаёт self-only view (свой инстанс всегда виден).
+// ClusterRegistry — read surface of the Conclave registry of live Keeper instances
+// (ADR-006 amend), needed by `GET /v1/cluster`. The real implementation is a thin
+// wrapper over keeperredis.LiveKIDs / keeperredis.ReadInstanceMeta, assembled in
+// cmd/keeper (the same Redis client as Conclave renewal). nil (single-Keeper
+// dev without Redis) → the handler returns a self-only view (its own instance is always visible).
 type ClusterRegistry interface {
-	// LiveKIDs — KID-ы живых инстансов (SCAN presence-ключей keeper:instance:*).
+	// LiveKIDs — KIDs of live instances (SCAN of the keeper:instance:* presence keys).
 	LiveKIDs(ctx context.Context) ([]string, error)
-	// InstanceMeta — сырое value presence-ключа инстанса (`{started_at,kid}`-JSON);
-	// (_, false) если ключ истёк между LiveKIDs и этим чтением (гонка TTL).
+	// InstanceMeta — raw value of an instance's presence key (`{started_at,kid}` JSON);
+	// (_, false) if the key expired between LiveKIDs and this read (TTL race).
 	InstanceMeta(ctx context.Context, kid string) (string, bool, error)
 }
 
-// ClusterLeaderReader — read-поверхность «кто сейчас Reaper-лидер»: value ключа
-// reaper.LeaderLeaseKey = KID держателя lease. Реализация в cmd/keeper —
-// обёртка над keeperredis.PeekLeaseHolder(reaper.LeaderLeaseKey). nil / нет
-// лидера (lease свободен) → is_reaper_leader=false у всех.
+// ClusterLeaderReader — read surface for "who is the Reaper leader right now": the value
+// of key reaper.LeaderLeaseKey = KID of the lease holder. The cmd/keeper implementation is
+// a wrapper over keeperredis.PeekLeaseHolder(reaper.LeaderLeaseKey). nil / no
+// leader (lease is free) → is_reaper_leader=false for everyone.
 type ClusterLeaderReader interface {
-	// ReaperLeaderHolder — KID текущего Reaper-лидера; (_, false) если lease
-	// свободен (нет лидера прямо сейчас).
+	// ReaperLeaderHolder — KID of the current Reaper leader; (_, false) if the lease
+	// is free (no leader right now).
 	ReaperLeaderHolder(ctx context.Context) (string, bool, error)
 }
 
-// ClusterHandler — GET /v1/cluster: HA-список Keeper-инстансов из Conclave +
-// self-health текущего инстанса. Read-only, cluster-wide (без per-SID scope):
-// показывает топологию кластера, а не Soul-ресурсы. Все зависимости immutable;
+// ClusterHandler — GET /v1/cluster: HA list of Keeper instances from Conclave +
+// self-health of the current instance. Read-only, cluster-wide (no per-SID scope):
+// shows cluster topology, not Soul resources. All dependencies are immutable;
 // safe for concurrent use.
 type ClusterHandler struct {
 	registry   ClusterRegistry
@@ -47,11 +47,11 @@ type ClusterHandler struct {
 	logger     *slog.Logger
 }
 
-// NewClusterHandler собирает handler. registry / leader nil-tolerant
-// (single-Keeper dev без Redis → self-only view). selfKID — KID текущего
-// инстанса (из конфига soulstack.kid); он ВСЕГДА присутствует в ответе, даже
-// если Conclave-реестр недоступен. healthDeps — те же PG/Redis/Vault-pingers,
-// что у `/readyz` (self_health считается через health.Check — единый источник).
+// NewClusterHandler assembles the handler. registry / leader are nil-tolerant
+// (single-Keeper dev without Redis → self-only view). selfKID is the current
+// instance's KID (from config soulstack.kid); it is ALWAYS present in the response, even
+// if the Conclave registry is unavailable. healthDeps are the same PG/Redis/Vault pingers
+// as `/readyz` (self_health is computed via health.Check — a single source).
 func NewClusterHandler(registry ClusterRegistry, leader ClusterLeaderReader, healthDeps health.Deps, selfKID string, logger *slog.Logger) *ClusterHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -65,17 +65,17 @@ func NewClusterHandler(registry ClusterRegistry, leader ClusterLeaderReader, hea
 	}
 }
 
-// ClusterSpecStub — непустой *ClusterHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (parity SoulSpecStub): при dump доменный handler не исполняется, но
-// huma.Register требует non-nil.
+// ClusterSpecStub — a non-empty *ClusterHandler stub for generating the huma OpenAPI
+// fragment (parity SoulSpecStub): the domain handler does not execute during dump, but
+// huma.Register requires non-nil.
 func ClusterSpecStub() *ClusterHandler {
 	return &ClusterHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ClusterInstanceView — одна строка HA-списка (плоская доменная проекция). KID +
-// момент старта + alive-флаг + признак Reaper-лидерства. StartedAt — pointer-
-// optional: nil, если meta не прочиталась / не распарсилась (ключ истёк по гонке
-// TTL либо fail-safe-значение goloго KID вместо JSON).
+// ClusterInstanceView — one row of the HA list (flat domain projection). KID +
+// start moment + alive flag + Reaper-leadership marker. StartedAt is pointer-
+// optional: nil if meta failed to read / parse (key expired via TTL race, or a
+// fail-safe bare-KID value instead of JSON).
 type ClusterInstanceView struct {
 	KID            string
 	StartedAt      *time.Time
@@ -83,30 +83,30 @@ type ClusterInstanceView struct {
 	IsReaperLeader bool
 }
 
-// ClusterView — плоская доменная проекция 200-тела GET /v1/cluster. Instances —
-// non-nil slice (пустой Conclave → self-only). SelfKID — KID текущего инстанса.
-// SelfHealth — карта `postgres|redis|vault → "ok"|причина` (та же форма, что
-// checks в /readyz).
+// ClusterView — flat domain projection of the 200 body of GET /v1/cluster. Instances is a
+// non-nil slice (empty Conclave → self-only). SelfKID is the current instance's KID.
+// SelfHealth is a map `postgres|redis|vault → "ok"|reason` (the same shape as the
+// checks in /readyz).
 type ClusterView struct {
 	Instances  []ClusterInstanceView
 	SelfKID    string
 	SelfHealth map[string]string
 }
 
-// ClusterReply — результат [ClusterHandler.GetTyped] (handler-native). Body —
-// доменная проекция; пакет api проецирует её в native wire-DTO.
+// ClusterReply — result of [ClusterHandler.GetTyped] (handler-native). Body is a
+// domain projection; package api projects it into the native wire-DTO.
 type ClusterReply struct {
 	Body ClusterView
 }
 
-// GetTyped — доменная функция GET /v1/cluster: собирает HA-список из Conclave +
-// self-health. fail-safe (ОБРАТНО soul-list fail-closed): если Conclave-реестр
-// недоступен (Redis лёг) — НЕ 500, а self-only view (текущий инстанс всегда
-// виден; его self_health покажет redis:unreachable — оператор увидит причину).
+// GetTyped — domain function GET /v1/cluster: assembles the HA list from Conclave +
+// self-health. fail-safe (OPPOSITE of soul-list fail-closed): if the Conclave registry is
+// unavailable (Redis is down) — NOT 500, but a self-only view (the current instance is always
+// visible; its self_health shows redis:unreachable — the operator sees the reason).
 //
-// Reaper-лидер: value ключа reaper.LeaderLeaseKey сравнивается с каждым KID.
-// Ошибка чтения holder-а — fail-safe: is_reaper_leader=false у всех (не роняем
-// весь view из-за одного волатильного признака).
+// Reaper leader: the value of key reaper.LeaderLeaseKey is compared against each KID.
+// A holder read error is fail-safe: is_reaper_leader=false for everyone (we don't drop
+// the whole view over one volatile marker).
 func (h *ClusterHandler) GetTyped(ctx context.Context, _ *jwt.Claims) (ClusterReply, error) {
 	kids := h.liveKIDs(ctx)
 	leader, hasLeader := h.reaperLeader(ctx)
@@ -115,7 +115,7 @@ func (h *ClusterHandler) GetTyped(ctx context.Context, _ *jwt.Claims) (ClusterRe
 	for _, kid := range kids {
 		inst := ClusterInstanceView{
 			KID:            kid,
-			Alive:          true, // KID в LiveKIDs ⇒ presence-ключ жив.
+			Alive:          true, // KID in LiveKIDs ⇒ presence key is alive.
 			IsReaperLeader: hasLeader && kid == leader,
 		}
 		if startedAt, ok := h.instanceStartedAt(ctx, kid); ok {
@@ -124,8 +124,8 @@ func (h *ClusterHandler) GetTyped(ctx context.Context, _ *jwt.Claims) (ClusterRe
 		instances = append(instances, inst)
 	}
 
-	// Стабильный порядок (KID) — детерминированный вывод, не зависящий от
-	// порядка SCAN-курсора Redis.
+	// Stable ordering (KID) — deterministic output independent of the
+	// Redis SCAN cursor order.
 	sort.Slice(instances, func(i, j int) bool { return instances[i].KID < instances[j].KID })
 
 	selfHealth, _ := health.Check(ctx, h.healthDeps)
@@ -137,10 +137,10 @@ func (h *ClusterHandler) GetTyped(ctx context.Context, _ *jwt.Claims) (ClusterRe
 	}}, nil
 }
 
-// liveKIDs возвращает KID-ы живых инстансов из Conclave. fail-safe: nil-registry
-// (dev без Redis) либо ошибка SCAN-а → self-only ([selfKID]), чтобы `GET
-// /v1/cluster` всегда показывал хотя бы текущий инстанс. Если self отсутствует в
-// выборке (гонка регистрации на самом старте) — дописываем его.
+// liveKIDs returns the KIDs of live instances from Conclave. fail-safe: nil registry
+// (dev without Redis) or a SCAN error → self-only ([selfKID]), so `GET
+// /v1/cluster` always shows at least the current instance. If self is missing from the
+// result (registration race at startup) — we append it.
 func (h *ClusterHandler) liveKIDs(ctx context.Context) []string {
 	if h.registry == nil {
 		return h.selfOnly()
@@ -161,8 +161,8 @@ func (h *ClusterHandler) liveKIDs(ctx context.Context) []string {
 	return kids
 }
 
-// selfOnly — деградированный список только из текущего KID (пустой при
-// незаданном selfKID — теоретический dev-случай без конфига).
+// selfOnly — degraded list containing only the current KID (empty when
+// selfKID is unset — a theoretical dev case without config).
 func (h *ClusterHandler) selfOnly() []string {
 	if h.selfKID == "" {
 		return nil
@@ -170,9 +170,9 @@ func (h *ClusterHandler) selfOnly() []string {
 	return []string{h.selfKID}
 }
 
-// reaperLeader читает KID текущего Reaper-лидера (value reaper.LeaderLeaseKey).
-// fail-safe: nil-reader / ошибка / нет лидера → ("", false) (is_reaper_leader
-// false у всех — волатильный признак не роняет весь view).
+// reaperLeader reads the KID of the current Reaper leader (value reaper.LeaderLeaseKey).
+// fail-safe: nil reader / error / no leader → ("", false) (is_reaper_leader
+// false for everyone — a volatile marker doesn't drop the whole view).
 func (h *ClusterHandler) reaperLeader(ctx context.Context) (string, bool) {
 	if h.leader == nil {
 		return "", false
@@ -185,10 +185,10 @@ func (h *ClusterHandler) reaperLeader(ctx context.Context) (string, bool) {
 	return holder, ok
 }
 
-// instanceStartedAt читает и парсит started_at из meta presence-ключа. fail-safe:
-// nil-registry / истёкший ключ / не-JSON value (RegisterInstance fail-safe писал
-// голый KID) / битый timestamp → (_, false) (StartedAt в ответе опущен, инстанс
-// остаётся в списке — момент старта диагностический, не критичный).
+// instanceStartedAt reads and parses started_at from the presence key's meta. fail-safe:
+// nil registry / expired key / non-JSON value (RegisterInstance fail-safe wrote a
+// bare KID) / malformed timestamp → (_, false) (StartedAt is omitted from the response, the
+// instance stays in the list — the start moment is diagnostic, not critical).
 func (h *ClusterHandler) instanceStartedAt(ctx context.Context, kid string) (time.Time, bool) {
 	if h.registry == nil {
 		return time.Time{}, false

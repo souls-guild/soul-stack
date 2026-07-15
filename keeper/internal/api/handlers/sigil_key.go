@@ -1,18 +1,20 @@
-// Operator API handler-ы ротации trust-anchor-ключей подписи Sigil (ADR-026(h),
-// R3-S7) — тонкая HTTP-обёртка над [sigil.KeyService]. Тот же service вызывает
-// MCP-tool-handler (keeper.sigil.key.*), один источник правды.
+// Operator API handlers for rotating Sigil trust-anchor signing keys (ADR-026(h),
+// R3-S7) — a thin HTTP wrapper over [sigil.KeyService]. The same service is called
+// by the MCP tool handler (keeper.sigil.key.*), a single source of truth.
 //
-// Бизнес-логика (key-gen, Vault-write, CRUD реестра, publish anchors-changed) —
-// в [sigil.KeyService]; handler декодирует request → service-call → маппит
-// sentinel-ы в RFC 7807 и кодирует 2xx. RBAC — в middleware (router.go).
+// Business logic (key-gen, Vault write, registry CRUD, publish anchors-changed)
+// lives in [sigil.KeyService]; the handler decodes the request → service call →
+// maps sentinels to RFC 7807 and encodes 2xx. RBAC — in middleware (router.go).
 //
-// БЕЗОПАСНОСТЬ: приватник НИКОГДА не в ответе (KeyService его не возвращает) и
-// не в логах (handler логирует только key_id / by_aid).
+// SECURITY: the private key is NEVER in the response (KeyService does not return it)
+// and never in the logs (the handler logs only key_id / by_aid).
 //
-// T5d (handler-native): домен sigil-key отвязан от legacy-генерата. *Typed-функции возвращают
-// доменные result-ы с ПЛОСКИМИ wire-полями — native wire-DTO (схему OpenAPI) строит
-// пакет api из этих полей. (w,r)-оболочки сняты; HTTP обслуживает huma full-typed
-// (api/huma_sigil_key.go), MCP зовёт sigil.KeyService напрямую (мимо handler).
+// T5d (handler-native): the sigil-key domain is decoupled from the legacy
+// generator. The *Typed functions return domain results with FLAT wire fields —
+// package api builds the native wire-DTO (OpenAPI schema) from those fields. The
+// (w,r) wrappers are gone; HTTP is served by huma full-typed
+// (api/huma_sigil_key.go), MCP calls sigil.KeyService directly (bypassing the
+// handler).
 package handlers
 
 import (
@@ -29,20 +31,21 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// reSigilKeyID — формат key_id: ровно 64 нижних hex-символа (SHA-256(SPKI), hex).
-// Совпадает с конвенцией миграции 037 / [sigil.keyIDFromPublic]. path-сегмент
-// без слешей/`..` — безопасен от traversal.
+// reSigilKeyID — the key_id format: exactly 64 lowercase hex characters
+// (SHA-256(SPKI), hex). Matches the convention of migration 037 /
+// [sigil.keyIDFromPublic]. A path segment with no slashes/`..` — safe from
+// traversal.
 var reSigilKeyID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// SigilKeyHandler — четыре endpoint-а ротации ключей подписи (introduce / list /
-// set-primary / retire). Делегирует в [sigil.KeyService].
+// SigilKeyHandler — the four signing-key rotation endpoints (introduce / list /
+// set-primary / retire). Delegates to [sigil.KeyService].
 type SigilKeyHandler struct {
 	svc    *sigil.KeyService
 	logger *slog.Logger
 }
 
-// NewSigilKeyHandler создаёт handler. svc обязателен (паника при nil — единственная
-// точка misconfiguration; caller обязан передать non-nil).
+// NewSigilKeyHandler creates the handler. svc is required (panic on nil — the only
+// misconfiguration point; the caller must pass non-nil).
 func NewSigilKeyHandler(svc *sigil.KeyService, logger *slog.Logger) *SigilKeyHandler {
 	if svc == nil {
 		panic("handlers.NewSigilKeyHandler: sigil.KeyService is nil")
@@ -53,18 +56,19 @@ func NewSigilKeyHandler(svc *sigil.KeyService, logger *slog.Logger) *SigilKeyHan
 	return &SigilKeyHandler{svc: svc, logger: logger}
 }
 
-// SigilKeySpecStub — непустой *SigilKeyHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaSigilKeySpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [RoleSpecStub]).
+// SigilKeySpecStub — a non-nil *SigilKeyHandler stub for generating the huma
+// OpenAPI fragment (HumaSigilKeySpecYAML): on dump the domain handler is not
+// called, but huma.Register requires non-nil for its nil no-op check. svc nil — the
+// handler never executes in spec mode (parity with [RoleSpecStub]).
 func SigilKeySpecStub() *SigilKeyHandler {
 	return &SigilKeyHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// SigilKeyIntroduceView — ПЛОСКАЯ доменная проекция 201-тела POST /v1/sigil/keys
-// (handler-native T5d). Пакет api проецирует её в native-схему SigilKeyIntroduceReply.
-// Status — plain string домена (active/retired); native-тип в api держит enum-форму.
-// БЕЗ приватника (KeyService его не возвращает).
+// SigilKeyIntroduceView — a FLAT domain projection of the 201 body of POST
+// /v1/sigil/keys (handler-native T5d). Package api projects it into the native
+// SigilKeyIntroduceReply schema. Status — a plain domain string (active/retired);
+// the native type in api holds the enum form. No private key (KeyService does not
+// return it).
 type SigilKeyIntroduceView struct {
 	KeyID        string
 	PubkeyPEM    string
@@ -73,9 +77,10 @@ type SigilKeyIntroduceView struct {
 	IntroducedAt time.Time
 }
 
-// SigilKeyView — ПЛОСКАЯ доменная проекция active-ключа (element SigilKeyListPage.Items),
-// handler-native T5d. Пакет api проецирует её в native-схему SigilKeyView. БЕЗ vault_ref;
-// Status — plain string домена; IntroducedAt уже усечён до секунд (parity легаси-wire).
+// SigilKeyView — a FLAT domain projection of an active key (element
+// SigilKeyListPage.Items), handler-native T5d. Package api projects it into the
+// native SigilKeyView schema. No vault_ref; Status — a plain domain string;
+// IntroducedAt already truncated to seconds (parity with the legacy wire).
 type SigilKeyView struct {
 	KeyID        string
 	IsPrimary    bool
@@ -83,21 +88,22 @@ type SigilKeyView struct {
 	IntroducedAt time.Time
 }
 
-// SigilKeyListPage — доменный результат GET /v1/sigil/keys (handler-native T5d). Пакет
-// api проецирует Items → native SigilKeyListReply (items non-nil → `[]`).
+// SigilKeyListPage — the domain result of GET /v1/sigil/keys (handler-native T5d).
+// Package api projects Items → native SigilKeyListReply (items non-nil → `[]`).
 type SigilKeyListPage struct {
 	Items []SigilKeyView
 }
 
-// SigilKeyIntroduceReply — результат [SigilKeyHandler.IntroduceTyped] (handler-native).
-// Несёт доменную проекцию 201-тела (SigilKeyIntroduceView, БЕЗ приватника) + caller AID.
+// SigilKeyIntroduceReply — the result of [SigilKeyHandler.IntroduceTyped]
+// (handler-native). Carries the domain projection of the 201 body
+// (SigilKeyIntroduceView, no private key) + the caller AID.
 type SigilKeyIntroduceReply struct {
 	View      SigilKeyIntroduceView
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload introduce-роута (parity легаси: key_id +
-// is_primary + introduced_by_aid; БЕЗ приватника).
+// AuditPayload assembles the audit payload of the introduce route (parity with
+// legacy: key_id + is_primary + introduced_by_aid; no private key).
 func (r SigilKeyIntroduceReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"key_id":            r.View.KeyID,
@@ -106,10 +112,10 @@ func (r SigilKeyIntroduceReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// IntroduceTyped — доменная функция POST /v1/sigil/keys (handler-native): svc.Introduce
-// (key-gen + Vault-write + register) + sentinel→problem. Ошибки — *problemError; успех —
-// [SigilKeyIntroduceReply] (доменная проекция 201-тела + audit-поля). БЕЗОПАСНОСТЬ:
-// приватник никогда не покидает KeyService.
+// IntroduceTyped — the domain function of POST /v1/sigil/keys (handler-native):
+// svc.Introduce (key-gen + Vault write + register) + sentinel→problem. Errors —
+// *problemError; success — [SigilKeyIntroduceReply] (the domain projection of the
+// 201 body + audit fields). SECURITY: the private key never leaves KeyService.
 func (h *SigilKeyHandler) IntroduceTyped(ctx context.Context, claims *jwt.Claims, makePrimary bool) (SigilKeyIntroduceReply, error) {
 	var zero SigilKeyIntroduceReply
 	res, err := h.svc.Introduce(ctx, makePrimary, claims.Subject)
@@ -119,8 +125,9 @@ func (h *SigilKeyHandler) IntroduceTyped(ctx context.Context, claims *jwt.Claims
 		return zero, &problemError{problem.New(problem.TypeSigilKeyConcurrentChange, "",
 			"concurrent primary-key change; retry")}
 	default:
-		// БЕЗОПАСНОСТЬ: error может содержать обёрнутые Vault/PG-детали — в лог
-		// (не в ответ), и без приватника (KeyService его в err не кладёт).
+		// SECURITY: the error may contain wrapped Vault/PG details — to the log
+		// (not the response), and with no private key (KeyService does not put it in
+		// err).
 		h.logger.Error("sigil.key.introduce: service failed",
 			slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "introduce signing key failed")}
@@ -138,9 +145,10 @@ func (h *SigilKeyHandler) IntroduceTyped(ctx context.Context, claims *jwt.Claims
 	}, nil
 }
 
-// ListTyped — доменная функция GET /v1/sigil/keys (handler-native, READ без audit):
-// active-ключи (primary первым) → [SigilKeyListPage] (items non-nil). Ошибка чтения →
-// *problemError (500). vault_ref опущен; introduced_at → UTC+Truncate(Second).
+// ListTyped — the domain function of GET /v1/sigil/keys (handler-native, READ
+// without audit): active keys (primary first) → [SigilKeyListPage] (items
+// non-nil). A read error → *problemError (500). vault_ref omitted; introduced_at →
+// UTC+Truncate(Second).
 func (h *SigilKeyHandler) ListTyped(ctx context.Context) (SigilKeyListPage, error) {
 	keys, err := h.svc.List(ctx)
 	if err != nil {
@@ -159,15 +167,15 @@ func (h *SigilKeyHandler) ListTyped(ctx context.Context) (SigilKeyListPage, erro
 	return SigilKeyListPage{Items: items}, nil
 }
 
-// SigilKeySetPrimaryReply — извлечённый результат [SigilKeyHandler.SetPrimaryTyped]
-// (FULL-TYPED). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// SigilKeySetPrimaryReply — the extracted result of [SigilKeyHandler.SetPrimaryTyped]
+// (FULL-TYPED). Carries the audit fields (the HTTP response is an empty 204 body).
 type SigilKeySetPrimaryReply struct {
 	KeyID     string
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload set-primary-роута (parity легаси: key_id +
-// set_by_aid). Общий для (w,r) и huma-B.
+// AuditPayload assembles the audit payload of the set-primary route (parity with
+// legacy: key_id + set_by_aid). Shared by (w,r) and huma-B.
 func (r SigilKeySetPrimaryReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"key_id":     r.KeyID,
@@ -175,9 +183,10 @@ func (r SigilKeySetPrimaryReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// SetPrimaryTyped — извлечённая доменная функция POST /v1/sigil/keys/{key_id}/primary
-// (FULL-TYPED ADR-054 §Pattern (б)): валидация key_id + svc.SetPrimary + sentinel→
-// problem. Ошибки — *problemError; успех — [SigilKeySetPrimaryReply].
+// SetPrimaryTyped — the extracted domain function of POST
+// /v1/sigil/keys/{key_id}/primary (FULL-TYPED ADR-054 §Pattern (b)): key_id
+// validation + svc.SetPrimary + sentinel→problem. Errors — *problemError; success —
+// [SigilKeySetPrimaryReply].
 func (h *SigilKeyHandler) SetPrimaryTyped(ctx context.Context, claims *jwt.Claims, keyID string) (SigilKeySetPrimaryReply, error) {
 	var zero SigilKeySetPrimaryReply
 	if !reSigilKeyID.MatchString(keyID) {
@@ -206,15 +215,15 @@ func (h *SigilKeyHandler) SetPrimaryTyped(ctx context.Context, claims *jwt.Claim
 	return SigilKeySetPrimaryReply{KeyID: keyID, CallerAID: claims.Subject}, nil
 }
 
-// SigilKeyRetireReply — извлечённый результат [SigilKeyHandler.RetireTyped]
-// (FULL-TYPED). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// SigilKeyRetireReply — the extracted result of [SigilKeyHandler.RetireTyped]
+// (FULL-TYPED). Carries the audit fields (the HTTP response is an empty 204 body).
 type SigilKeyRetireReply struct {
 	KeyID     string
 	CallerAID string
 }
 
-// AuditPayload собирает audit-payload retire-роута (parity легаси: key_id +
-// retired_by_aid). Общий для (w,r) и huma-B.
+// AuditPayload assembles the audit payload of the retire route (parity with legacy:
+// key_id + retired_by_aid). Shared by (w,r) and huma-B.
 func (r SigilKeyRetireReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"key_id":         r.KeyID,
@@ -222,9 +231,9 @@ func (r SigilKeyRetireReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// RetireTyped — извлечённая доменная функция DELETE /v1/sigil/keys/{key_id}
-// (FULL-TYPED ADR-054 §Pattern (б)): валидация key_id + svc.Retire + sentinel→
-// problem (last-active/primary → 409). Ошибки — *problemError; успех —
+// RetireTyped — the extracted domain function of DELETE /v1/sigil/keys/{key_id}
+// (FULL-TYPED ADR-054 §Pattern (b)): key_id validation + svc.Retire + sentinel→
+// problem (last-active/primary → 409). Errors — *problemError; success —
 // [SigilKeyRetireReply].
 func (h *SigilKeyHandler) RetireTyped(ctx context.Context, claims *jwt.Claims, keyID string) (SigilKeyRetireReply, error) {
 	var zero SigilKeyRetireReply

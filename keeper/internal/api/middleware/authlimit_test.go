@@ -16,26 +16,26 @@ import (
 
 func authTestLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// fakeLoginGuard — управляемый [LoginGuard] для middleware-тестов. Симулирует
-// throttle (Allow), lockout (Locked) и счётчик неудач (RecordFailure) in-memory.
+// fakeLoginGuard — a controllable [LoginGuard] for middleware tests. Simulates
+// throttle (Allow), lockout (Locked) and the failure counter (RecordFailure) in-memory.
 type fakeLoginGuard struct {
 	mu sync.Mutex
 
-	// throttle: число оставшихся разрешений на принципал (scope:principal).
-	// Отсутствует ключ → берётся allowDefault.
+	// throttle: the number of remaining allowances per principal (scope:principal).
+	// Missing key → allowDefault is used.
 	allowance    map[string]int
 	allowDefault int
 
-	// lockout: блокированные принципалы (scope:principal → retryAfter).
+	// lockout: locked principals (scope:principal → retryAfter).
 	locked map[string]time.Duration
 
-	// ошибки для fail-closed/fail-open проверок.
+	// errors for fail-closed/fail-open checks.
 	allowErr  error
 	lockedErr error
 
-	// счётчик неудач: scope:principal → число RecordFailure.
+	// failure counter: scope:principal → the RecordFailure count.
 	failures      map[string]int
-	lockThreshold int // если >0 и failures>=threshold → выставить locked
+	lockThreshold int // if >0 and failures>=threshold → set locked
 }
 
 func newFakeGuard() *fakeLoginGuard {
@@ -99,7 +99,7 @@ func authTestCfg() AuthLoginLimitConfig {
 	}
 }
 
-// failingLoginHandler — handler, всегда возвращающий 401 (имитирует bad creds).
+// failingLoginHandler — a handler that always returns 401 (simulates bad creds).
 func failingLoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -119,9 +119,9 @@ func ldapReq(username string) *http.Request {
 	return r
 }
 
-// TestAuthLoginLimit_HIGH3_LockoutAfterNFailures — N+1 проваленных логинов за
-// окно → принципал блокируется (429); легитимный логин ПОСЛЕ снятия блока — OK.
-// Ядро HIGH-3 anti-bruteforce.
+// TestAuthLoginLimit_HIGH3_LockoutAfterNFailures — N+1 failed logins within the
+// window → the principal is locked (429); a legit login AFTER the lock is lifted — OK.
+// The core of HIGH-3 anti-bruteforce.
 func TestAuthLoginLimit_HIGH3_LockoutAfterNFailures(t *testing.T) {
 	guard := newFakeGuard()
 	cfg := authTestCfg() // threshold=3
@@ -129,7 +129,7 @@ func TestAuthLoginLimit_HIGH3_LockoutAfterNFailures(t *testing.T) {
 
 	failing := mw(failingLoginHandler())
 
-	// 3 неудачи (threshold=3) → на 3-й RecordFailure выставит lockout.
+	// 3 failures (threshold=3) → on the 3rd, RecordFailure sets lockout.
 	for i := 0; i < cfg.LockoutThreshold; i++ {
 		rec := httptest.NewRecorder()
 		failing.ServeHTTP(rec, ldapReq("alice"))
@@ -138,7 +138,7 @@ func TestAuthLoginLimit_HIGH3_LockoutAfterNFailures(t *testing.T) {
 		}
 	}
 
-	// Следующая попытка — принципал заблокирован (по IP И по username): 429.
+	// The next attempt — the principal is locked (by IP AND by username): 429.
 	rec := httptest.NewRecorder()
 	failing.ServeHTTP(rec, ldapReq("alice"))
 	if rec.Code != http.StatusTooManyRequests {
@@ -151,7 +151,7 @@ func TestAuthLoginLimit_HIGH3_LockoutAfterNFailures(t *testing.T) {
 		t.Errorf("429 must be application/problem+json, got %q", ct)
 	}
 
-	// Симулируем истечение блокировки → легитимный логин (OK-handler) проходит.
+	// Simulate the lock expiring → a legit login (OK handler) passes.
 	guard.mu.Lock()
 	delete(guard.locked, key(authScopeIP, "203.0.113.7"))
 	delete(guard.locked, key(authScopeUser, "alice"))
@@ -165,11 +165,11 @@ func TestAuthLoginLimit_HIGH3_LockoutAfterNFailures(t *testing.T) {
 	}
 }
 
-// TestAuthLoginLimit_HIGH3_ThrottleExhausted — исчерпание token-bucket троттла
-// частоты → 429 ДО handler-а (next не вызван).
+// TestAuthLoginLimit_HIGH3_ThrottleExhausted — exhausting the token-bucket rate
+// throttle → 429 BEFORE the handler (next not called).
 func TestAuthLoginLimit_HIGH3_ThrottleExhausted(t *testing.T) {
 	guard := newFakeGuard()
-	guard.allowDefault = 0 // первый же Allow → not allowed
+	guard.allowDefault = 0 // the very first Allow → not allowed
 	cfg := authTestCfg()
 
 	reached := false
@@ -189,11 +189,11 @@ func TestAuthLoginLimit_HIGH3_ThrottleExhausted(t *testing.T) {
 	}
 }
 
-// TestAuthLoginLimit_HIGH3_LockoutFailClosed — Redis-ошибка на Locked-проверке →
-// fail-CLOSED (429): login-периметр не открывается брутфорсу при недоступном Redis.
+// TestAuthLoginLimit_HIGH3_LockoutFailClosed — a Redis error on the Locked check →
+// fail-CLOSED (429): the login perimeter does not open to bruteforce when Redis is unavailable.
 func TestAuthLoginLimit_HIGH3_LockoutFailClosed(t *testing.T) {
 	guard := newFakeGuard()
-	guard.lockedErr = context.DeadlineExceeded // Redis недоступен
+	guard.lockedErr = context.DeadlineExceeded // Redis unavailable
 	cfg := authTestCfg()
 
 	reached := false
@@ -213,8 +213,8 @@ func TestAuthLoginLimit_HIGH3_LockoutFailClosed(t *testing.T) {
 	}
 }
 
-// TestAuthLoginLimit_NilGuardPassthrough — guard=nil (нет Redis) → passthrough
-// (login без throttle, OPTIONAL-tier).
+// TestAuthLoginLimit_NilGuardPassthrough — guard=nil (no Redis) → passthrough
+// (login without throttle, OPTIONAL tier).
 func TestAuthLoginLimit_NilGuardPassthrough(t *testing.T) {
 	reached := false
 	mw := AuthLoginLimit(nil, authTestCfg(), LDAPUsernameExtractor, true, authTestLogger())
@@ -227,8 +227,8 @@ func TestAuthLoginLimit_NilGuardPassthrough(t *testing.T) {
 	}
 }
 
-// TestAuthLoginLimit_SuccessDoesNotCountFailure — успешный логин (204) НЕ
-// инкрементит счётчик неудач (provision/role-смена — не bruteforce).
+// TestAuthLoginLimit_SuccessDoesNotCountFailure — a successful login (204) does NOT
+// increment the failure counter (provision/role-change — not bruteforce).
 func TestAuthLoginLimit_SuccessDoesNotCountFailure(t *testing.T) {
 	guard := newFakeGuard()
 	cfg := authTestCfg()
@@ -247,9 +247,9 @@ func TestAuthLoginLimit_SuccessDoesNotCountFailure(t *testing.T) {
 	}
 }
 
-// TestAuthLoginLimit_OIDCLoginNoUsernameNoFailure — OIDC-login (302, нет
-// username, extractUsername=nil): только per-IP throttle, успех-302 не считается
-// неудачей (isAuthFailure(302)=false).
+// TestAuthLoginLimit_OIDCLoginNoUsernameNoFailure — OIDC login (302, no
+// username, extractUsername=nil): only per-IP throttle, a 302 success does not count
+// as a failure (isAuthFailure(302)=false).
 func TestAuthLoginLimit_OIDCLoginRedirectNotFailure(t *testing.T) {
 	guard := newFakeGuard()
 	cfg := authTestCfg()
@@ -272,8 +272,8 @@ func TestAuthLoginLimit_OIDCLoginRedirectNotFailure(t *testing.T) {
 	}
 }
 
-// TestLDAPUsernameExtractor_RestoresBody — экстрактор читает username и ВОЗВРАЩАЕТ
-// тело handler-у целиком (handler перечитает password).
+// TestLDAPUsernameExtractor_RestoresBody — the extractor reads the username and RETURNS
+// the whole body to the handler (the handler re-reads the password).
 func TestLDAPUsernameExtractor_RestoresBody(t *testing.T) {
 	r := ldapReq("frank")
 	got := LDAPUsernameExtractor(r)
@@ -286,7 +286,7 @@ func TestLDAPUsernameExtractor_RestoresBody(t *testing.T) {
 	}
 }
 
-// TestWriteAuth429_AntiOracle — 429 detail не раскрывает scope/причину (anti-oracle).
+// TestWriteAuth429_AntiOracle — the 429 detail does not reveal the scope/reason (anti-oracle).
 func TestWriteAuth429_AntiOracle(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/auth/ldap/login", nil)

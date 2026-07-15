@@ -1,11 +1,11 @@
 package handlers
 
-// Guard-тесты релокации Trait per-soul → per-incarnation на handler-слое (ADR-060
+// Guard tests for the Trait relocation per-soul → per-incarnation at the handler layer (ADR-060
 // amend R1):
-//   - create с top-level `traits` → spec.traits → INSERT (источник истины, который
-//     sync-hook проецирует в souls.traits);
-//   - PUT .../traits (SetTraitsTyped) → целостная замена incarnation.traits;
-//   - доменная валидация trait-значений (422 на nested) и имени (422).
+//   - create with top-level `traits` → spec.traits → INSERT (the source of truth that the
+//     sync hook projects into souls.traits);
+//   - PUT .../traits (SetTraitsTyped) → wholesale replacement of incarnation.traits;
+//   - domain validation of trait values (422 on nested) and name (422).
 
 import (
 	"bytes"
@@ -19,9 +19,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// TestIncarnation_Create_TraitsProjectedToSpec — top-level `traits` на create
-// доезжает до spec.traits (а оттуда TraitsFromSpec → колонка incarnation.traits →
-// sync-hook в souls.traits). Проверяем jsonb-арг spec ($5) INSERT-а.
+// TestIncarnation_Create_TraitsProjectedToSpec — top-level `traits` on create
+// reaches spec.traits (and from there TraitsFromSpec → column incarnation.traits →
+// sync hook into souls.traits). We check the jsonb spec arg ($5) of the INSERT.
 func TestIncarnation_Create_TraitsProjectedToSpec(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -53,8 +53,8 @@ func TestIncarnation_Create_TraitsProjectedToSpec(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_NoTraits_NoSpecKey — без `traits` ключ spec.traits НЕ
-// появляется (отличимо для CEL от «traits заданы пустыми»).
+// TestIncarnation_Create_NoTraits_NoSpecKey — without `traits` the spec.traits key does NOT
+// appear (distinguishable for CEL from "traits set to empty").
 func TestIncarnation_Create_NoTraits_NoSpecKey(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -73,8 +73,8 @@ func TestIncarnation_Create_NoTraits_NoSpecKey(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_InvalidTraitValue_422 — nested-значение trait отбивается
-// доменом (TraitsFromSpec → ValidateTraitDelta) ДО insert.
+// TestIncarnation_Create_InvalidTraitValue_422 — a nested trait value is rejected
+// by the domain (TraitsFromSpec → ValidateTraitDelta) BEFORE the insert.
 func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -92,8 +92,8 @@ func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 
 // --- PUT /v1/incarnations/{name}/traits (SetTraitsTyped) ---
 
-// TestIncarnation_SetTraits_200_Replaces — успешная целостная замена: 200 +
-// incarnation.traits записан переданным набором (jsonb-арг UPDATE).
+// TestIncarnation_SetTraits_200_Replaces — successful wholesale replacement: 200 +
+// incarnation.traits written with the given set (jsonb arg of the UPDATE).
 func TestIncarnation_SetTraits_200_Replaces(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
@@ -118,7 +118,7 @@ func TestIncarnation_SetTraits_200_Replaces(t *testing.T) {
 	}
 }
 
-// TestIncarnation_SetTraits_EmptyClears — пустой/опущенный traits → `{}` (очистка).
+// TestIncarnation_SetTraits_EmptyClears — empty/omitted traits → `{}` (clears).
 func TestIncarnation_SetTraits_EmptyClears(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
@@ -135,8 +135,8 @@ func TestIncarnation_SetTraits_EmptyClears(t *testing.T) {
 	}
 }
 
-// TestIncarnation_SetTraits_InvalidValue_422 — nested-значение отбивается доменом
-// (ValidateTraitDelta) ДО UPDATE.
+// TestIncarnation_SetTraits_InvalidValue_422 — a nested value is rejected by the domain
+// (ValidateTraitDelta) BEFORE the UPDATE.
 func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
@@ -153,7 +153,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_SetTraits_InvalidName_422 — невалидное имя инкарнации → 422.
+// TestIncarnation_SetTraits_InvalidName_422 — invalid incarnation name → 422.
 func TestIncarnation_SetTraits_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -165,7 +165,7 @@ func TestIncarnation_SetTraits_InvalidName_422(t *testing.T) {
 	}
 }
 
-// TestIncarnation_SetTraits_404 — несуществующая инкарнация → 404.
+// TestIncarnation_SetTraits_404 — non-existent incarnation → 404.
 func TestIncarnation_SetTraits_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },

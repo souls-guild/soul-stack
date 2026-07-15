@@ -1,12 +1,12 @@
 package api
 
-// FULL-TYPED reveal-секретов инкарнации (NIM-74, code-first источник OpenAPI). Два
-// роута под правом incarnation.view-secrets:
-//   - POST /v1/incarnations/{name}/secrets/reveal — раскрытие plaintext (SELF-AUDIT
-//     incarnation.secret_revealed внутри RevealSecretTyped; newHumaCadenceAPI, без
-//     middleware-навески);
-//   - GET /v1/incarnations/{name}/secrets/revealable — discovery (READ, без audit).
-// Go-типы — единственный источник правды схемы.
+// FULL-TYPED reveal of incarnation secrets (NIM-74, code-first OpenAPI source). Two
+// routes under the incarnation.view-secrets right:
+//   - POST /v1/incarnations/{name}/secrets/reveal — plaintext reveal (SELF-AUDIT
+//     incarnation.secret_revealed inside RevealSecretTyped; newHumaCadenceAPI,
+//     without middleware wiring);
+//   - GET /v1/incarnations/{name}/secrets/revealable — discovery (READ, no audit).
+// The Go types are the single source of truth for the schema.
 
 import (
 	"context"
@@ -20,21 +20,22 @@ import (
 
 // --- POST .../secrets/reveal (SELF-AUDIT incarnation.secret_revealed) ---
 
-// incRevealSecretInput — huma-input POST .../secrets/reveal. Name — path; тело —
-// {secret_id, key}. Версию сервиса клиент НЕ задаёт (берётся inc.ServiceVersion).
+// incRevealSecretInput — huma input for POST .../secrets/reveal. Name — path; body —
+// {secret_id, key}. The client does NOT set the service version (taken from
+// inc.ServiceVersion).
 type incRevealSecretInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
 	Body IncarnationRevealSecretRequest
 }
 
-// IncarnationRevealSecretRequest — тело POST .../secrets/reveal.
+// IncarnationRevealSecretRequest — the body of POST .../secrets/reveal.
 type IncarnationRevealSecretRequest struct {
 	SecretID string `json:"secret_id" doc:"id раскрываемого секрета (revealable_secrets манифеста сервиса)"`
 	Key      string `json:"key" doc:"ключ элемента enumerate-массива текущего state (element.name)"`
 }
 
-// IncarnationRevealSecretReply — native 200-тело POST .../secrets/reveal. Value —
-// plaintext (санкционированное раскрытие: НЕ прогоняется через MaskSecrets).
+// IncarnationRevealSecretReply — the native 200 body of POST .../secrets/reveal.
+// Value — plaintext (a sanctioned reveal: NOT run through MaskSecrets).
 type IncarnationRevealSecretReply struct {
 	Value string `json:"value" doc:"plaintext-значение секрета"`
 }
@@ -44,10 +45,10 @@ type incRevealSecretOutput struct {
 	Body IncarnationRevealSecretReply
 }
 
-// incRevealSecretOperation — метаданные POST .../secrets/reveal. DefaultStatus=200.
-// Permission incarnation.view-secrets (RBAC-гейт — middleware до handler-а). Errors:
-// 403 нет права, 404 вне scope | нет secret_id | key не в state | нет значения,
-// 422 невалидный name/secret_id/key, 500.
+// incRevealSecretOperation — metadata for POST .../secrets/reveal.
+// DefaultStatus=200. Permission incarnation.view-secrets (RBAC gate — middleware
+// before the handler). Errors: 403 no right, 404 out of scope | no secret_id | key
+// not in state | no value, 422 invalid name/secret_id/key, 500.
 func incRevealSecretOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationRevealSecret",
@@ -61,8 +62,9 @@ func incRevealSecretOperation() huma.Operation {
 	}
 }
 
-// registerHumaIncarnationRevealSecret монтирует POST .../secrets/reveal (SELF-AUDIT:
-// handler пишет incarnation.secret_revealed внутри RevealSecretTyped). incH nil → no-op.
+// registerHumaIncarnationRevealSecret mounts POST .../secrets/reveal (SELF-AUDIT:
+// the handler writes incarnation.secret_revealed inside RevealSecretTyped). incH nil
+// → no-op.
 func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
@@ -80,14 +82,14 @@ func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.Incarn
 	})
 }
 
-// --- GET .../secrets/revealable (READ, без audit) ---
+// --- GET .../secrets/revealable (READ, no audit) ---
 
 // incRevealableSecretsInput — huma-input GET .../secrets/revealable.
 type incRevealableSecretsInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
 }
 
-// IncarnationRevealableSecretItem — элемент discovery-ответа.
+// IncarnationRevealableSecretItem — one item of the discovery response.
 type IncarnationRevealableSecretItem struct {
 	SecretID  string   `json:"secret_id" doc:"id секрета (передаётся в secret_id при reveal)"`
 	Label     string   `json:"label" doc:"подпись для UI"`
@@ -95,7 +97,7 @@ type IncarnationRevealableSecretItem struct {
 	Keys      []string `json:"keys" doc:"допустимые ключи (element.name текущего state)"`
 }
 
-// IncarnationRevealableSecretsReply — native 200-тело GET .../secrets/revealable.
+// IncarnationRevealableSecretsReply — the native 200 body of GET .../secrets/revealable.
 type IncarnationRevealableSecretsReply struct {
 	Items []IncarnationRevealableSecretItem `json:"items" doc:"раскрываемые секреты инкарнации"`
 }
@@ -105,9 +107,9 @@ type incRevealableSecretsOutput struct {
 	Body IncarnationRevealableSecretsReply
 }
 
-// incRevealableSecretsOperation — метаданные GET .../secrets/revealable.
-// DefaultStatus=200. READ (без audit). Permission incarnation.view-secrets
-// (existence-gate). Errors: 403, 404 вне scope, 422 невалидный name, 500.
+// incRevealableSecretsOperation — metadata for GET .../secrets/revealable.
+// DefaultStatus=200. READ (no audit). Permission incarnation.view-secrets
+// (existence gate). Errors: 403, 404 out of scope, 422 invalid name, 500.
 func incRevealableSecretsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationRevealableSecrets",
@@ -121,8 +123,8 @@ func incRevealableSecretsOperation() huma.Operation {
 	}
 }
 
-// registerHumaIncarnationRevealableSecrets монтирует GET .../secrets/revealable
-// (READ, без audit). incH nil → no-op.
+// registerHumaIncarnationRevealableSecrets mounts GET .../secrets/revealable
+// (READ, no audit). incH nil → no-op.
 func registerHumaIncarnationRevealableSecrets(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return

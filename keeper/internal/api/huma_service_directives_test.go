@@ -1,9 +1,9 @@
 package api
 
-// Guard-тесты GET /v1/services/{name}/directives (NIM-76): доставка каталога
-// директив redis.conf + ETag/Cache-Control immutable + version-сужение + 304.
-// Полная huma-навеска (RequirePermission service.list + huma-операция),
-// injectClaims заменяет RequireJWT.
+// Guard tests for GET /v1/services/{name}/directives (NIM-76): delivery of the
+// redis.conf directive catalog + ETag/Cache-Control immutable + version narrowing + 304.
+// Full huma wiring (RequirePermission service.list + huma operation),
+// injectClaims replaces RequireJWT.
 
 import (
 	"context"
@@ -23,19 +23,19 @@ import (
 
 const hDirSHA1 = "a1b2c3d4e5f600112233445566778899aabbccdd"
 
-// hDirSHARef — ref в immutable-форме (полный 40-hex commit SHA) для теста
-// Cache-Control immutable. Отличается от snapshot-SHA1 (ETag): ref — то, что
-// оператор запинил (?ref=), а SHA1 — content-hash разрешённого снапшота.
+// hDirSHARef — a ref in immutable form (full 40-hex commit SHA) for the
+// Cache-Control immutable test. Differs from snapshot-SHA1 (ETag): ref is what the
+// operator pinned (?ref=), while SHA1 is the content-hash of the resolved snapshot.
 const hDirSHARef = "0123456789abcdef0123456789abcdef01234567"
 
-// hDirLister — стаб DirectiveLister, отдающий фиксированный каталог + SHA1.
+// hDirLister — a stub DirectiveLister returning a fixed catalog + SHA1.
 type hDirLister struct{ catalog *artifact.DirectiveCatalog }
 
 func (l hDirLister) ListDirectives(context.Context, string, string, string) (*artifact.DirectiveCatalog, error) {
 	return l.catalog, nil
 }
 
-// hDirErrLister — стаб, возвращающий ошибку git-loader-а (502-tier).
+// hDirErrLister — a stub returning a git-loader error (502-tier).
 type hDirErrLister struct{}
 
 func (hDirErrLister) ListDirectives(context.Context, string, string, string) (*artifact.DirectiveCatalog, error) {
@@ -53,8 +53,8 @@ func hDirFullCatalog() *artifact.DirectiveCatalog {
 	}
 }
 
-// directivesTestRouter — минимальный роутер с /directives-роутом (parity
-// humaServiceRouter, но только этот sub-read). lister=nil → 500 «not configured».
+// directivesTestRouter — a minimal router with the /directives route (parity with
+// humaServiceRouter, but only this sub-read). lister=nil → 500 "not configured".
 func directivesTestRouter(t *testing.T, lister handlers.ServiceDirectivesLister) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -86,9 +86,9 @@ type hDirBody struct {
 	Directives map[string][]string `json:"directives"`
 }
 
-// TestDirectives_FullCatalog_ETag — guard #4 (тело+ETag): 200 + весь каталог; ETag
-// == "<sha1>" (snapshot SHA1); тело несёт service/ref/sha1/directives. Дефолтный ref
-// из реестра — "v1.0.0" (тег-имя → mutable) → Cache-Control no-cache (ревалидация).
+// TestDirectives_FullCatalog_ETag — guard #4 (body+ETag): 200 + full catalog; ETag
+// == "<sha1>" (snapshot SHA1); body carries service/ref/sha1/directives. The default ref
+// from the registry is "v1.0.0" (tag name → mutable) → Cache-Control no-cache (revalidation).
 func TestDirectives_FullCatalog_ETag(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -118,9 +118,9 @@ func TestDirectives_FullCatalog_ETag(t *testing.T) {
 	}
 }
 
-// TestDirectives_CacheControl_ImmutableForSHARef — guard #4 (immutable-ветка):
-// pinned commit-SHA ref (?ref=<40hex>) → Cache-Control immutable+год (содержимое
-// неизменно), ETag присутствует.
+// TestDirectives_CacheControl_ImmutableForSHARef — guard #4 (immutable branch):
+// pinned commit-SHA ref (?ref=<40hex>) → Cache-Control immutable+year (content is
+// immutable), ETag present.
 func TestDirectives_CacheControl_ImmutableForSHARef(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -137,8 +137,8 @@ func TestDirectives_CacheControl_ImmutableForSHARef(t *testing.T) {
 	}
 }
 
-// TestDirectives_CacheControl_RevalidateForBranchRef — mutable ветка-ref (?ref=main)
-// → Cache-Control no-cache (invalidateDirectives не застревает за годовым кешем).
+// TestDirectives_CacheControl_RevalidateForBranchRef — mutable branch-ref (?ref=main)
+// → Cache-Control no-cache (invalidateDirectives does not get stuck behind a year-long cache).
 func TestDirectives_CacheControl_RevalidateForBranchRef(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -152,8 +152,8 @@ func TestDirectives_CacheControl_RevalidateForBranchRef(t *testing.T) {
 	}
 }
 
-// TestDirectives_VersionNarrows — ?version=8.2.2 сужает тело до серии 8.2 (handler
-// фильтрует полный каталог lister-а).
+// TestDirectives_VersionNarrows — ?version=8.2.2 narrows the body to the 8.2 series (the handler
+// filters the lister's full catalog).
 func TestDirectives_VersionNarrows(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -169,14 +169,14 @@ func TestDirectives_VersionNarrows(t *testing.T) {
 	if len(body.Directives) != 1 || body.Directives["8.2"] == nil {
 		t.Fatalf("version=8.2.2 → серии %v, want ровно {8.2}", hDirKeys(body.Directives))
 	}
-	// ETag остаётся snapshot SHA1 (per-URL ресурс, тело меняется, ETag = версия снапшота).
+	// ETag stays snapshot SHA1 (per-URL resource, body changes, ETag = snapshot version).
 	if got := rec.Header().Get("ETag"); got != `"`+hDirSHA1+`"` {
 		t.Errorf("ETag = %q, want snapshot SHA1", got)
 	}
 }
 
-// TestDirectives_EmptyCatalog_200 — guard #3 (endpoint-половина): сервис без каталога
-// → directives:{} + HTTP 200 (НЕ 404).
+// TestDirectives_EmptyCatalog_200 — guard #3 (endpoint half): a service with no catalog
+// → directives:{} + HTTP 200 (NOT 404).
 func TestDirectives_EmptyCatalog_200(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: &artifact.DirectiveCatalog{SHA1: hDirSHA1, Directives: map[string][]string{}}})
 	rec := httptest.NewRecorder()
@@ -185,7 +185,7 @@ func TestDirectives_EmptyCatalog_200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (не 404); body=%s", rec.Code, rec.Body.String())
 	}
-	// directives обязан присутствовать как {} (не null) для мягкой деградации фронта.
+	// directives must be present as {} (not null) for graceful frontend degradation.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -195,8 +195,8 @@ func TestDirectives_EmptyCatalog_200(t *testing.T) {
 	}
 }
 
-// TestDirectives_IfNoneMatch_304 — conditional GET: If-None-Match совпал с ETag →
-// 304 без тела, ETag present.
+// TestDirectives_IfNoneMatch_304 — conditional GET: If-None-Match matched the ETag →
+// 304 with no body, ETag present.
 func TestDirectives_IfNoneMatch_304(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -215,7 +215,7 @@ func TestDirectives_IfNoneMatch_304(t *testing.T) {
 	}
 }
 
-// TestDirectives_IfNoneMatch_Stale200 — If-None-Match с ЧУЖИМ ETag → полный 200.
+// TestDirectives_IfNoneMatch_Stale200 — If-None-Match with a FOREIGN ETag → full 200.
 func TestDirectives_IfNoneMatch_Stale200(t *testing.T) {
 	r := directivesTestRouter(t, hDirLister{catalog: hDirFullCatalog()})
 	rec := httptest.NewRecorder()
@@ -228,7 +228,7 @@ func TestDirectives_IfNoneMatch_Stale200(t *testing.T) {
 	}
 }
 
-// TestDirectives_NilLister_500 — lister не сконфигурирован → 500 «not configured».
+// TestDirectives_NilLister_500 — lister not configured → 500 "not configured".
 func TestDirectives_NilLister_500(t *testing.T) {
 	r := directivesTestRouter(t, nil)
 	rec := httptest.NewRecorder()
@@ -238,7 +238,7 @@ func TestDirectives_NilLister_500(t *testing.T) {
 	}
 }
 
-// TestDirectives_LoaderError_502 — ошибка git-loader-а → 502 Bad Gateway.
+// TestDirectives_LoaderError_502 — git-loader error → 502 Bad Gateway.
 func TestDirectives_LoaderError_502(t *testing.T) {
 	r := directivesTestRouter(t, hDirErrLister{})
 	rec := httptest.NewRecorder()

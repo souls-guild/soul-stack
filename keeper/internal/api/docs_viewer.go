@@ -1,27 +1,28 @@
 package api
 
-// Визуальный OpenAPI-вьювер GET /docs — механизм A (ADR-054 doc-viewer):
+// Visual OpenAPI viewer GET /docs — mechanism A (ADR-054 doc-viewer):
 //
-//   - GET /docs — ПУБЛИЧНЫЙ shell (вне /v1, без auth). Отдаёт HTML-страницу с
-//     полем ввода Archon JWT. Неавторизованный видит ТОЛЬКО поле ввода —
-//     API-поверхность не раскрыта (она приходит лишь после успешного fetch
-//     спеки за JWT). XSS-гигиена: токен держим в sessionStorage (вкладка),
-//     НЕ в localStorage (переживает закрытие/доступен другим вкладкам).
-//   - GET /docs/assets/* — ПУБЛИЧНАЯ статика RapiDoc (web-component rapidoc-min.js,
-//     go:embed из пакета docsassets; стили у RapiDoc в Shadow DOM, отдельного CSS
-//     нет). Только GET, неизменна за процесс.
-//   - Сама спека GET /openapi.json — ЗА JWT (router.go), фетчится страницей с
-//     Bearer-заголовком и рендерится RapiDoc ИНЛАЙН через метод loadSpec(obj):
-//     RapiDoc.loadSpec трактует СТРОКУ как spec-URL (а url-фетч RapiDoc не несёт
-//     наш Bearer и упрётся в 401), поэтому отдаём JSON и подаём РАЗОБРАННЫЙ
-//     объект. Метод зовём после customElements.whenDefined('rapi-doc'). Тот же
-//     JWT прокидывается в <rapi-doc> для «Try It» через setApiKey(bearerAuth, jwt)
-//     — ЧИСТЫЙ jwt без префикса (RapiDoc сам добавит 'Bearer ' для http/bearer).
+//   - GET /docs — PUBLIC shell (outside /v1, no auth). Serves an HTML page with
+//     an Archon JWT input field. Unauthenticated users see ONLY the input — the
+//     API surface is not exposed (it arrives only after a successful spec fetch
+//     behind the JWT). XSS hygiene: the token lives in sessionStorage (per-tab),
+//     NOT in localStorage (which survives close / is shared across tabs).
+//   - GET /docs/assets/* — PUBLIC RapiDoc static assets (web-component
+//     rapidoc-min.js, go:embed from package docsassets; RapiDoc styles live in
+//     Shadow DOM, there is no separate CSS). GET only, immutable per process.
+//   - The spec itself GET /openapi.json — BEHIND the JWT (router.go), fetched by
+//     the page with a Bearer header and rendered by RapiDoc INLINE via
+//     loadSpec(obj): RapiDoc.loadSpec treats a STRING as a spec-URL (and a
+//     RapiDoc url-fetch does not carry our Bearer and hits 401), so we return
+//     JSON and hand it the PARSED object. Call it after
+//     customElements.whenDefined('rapi-doc'). The same JWT is passed into
+//     <rapi-doc> for "Try It" via setApiKey(bearerAuth, jwt) — the RAW jwt with
+//     no prefix (RapiDoc adds 'Bearer ' itself for http/bearer).
 //
-// БЕЗОПАСНОСТЬ: shell и ассеты публичны намеренно — они не содержат ни данных,
-// ни описания API; всё чувствительное (спека + Try It) требует валидный JWT,
-// проверяемый тем же RequireJWT, что и /v1. Mount ВНЕ /v1 → без RBAC/audit/
-// maxBody/metrics (как /healthz/openapi.yaml).
+// SECURITY: the shell and assets are public on purpose — they carry neither data
+// nor an API description; everything sensitive (spec + Try It) requires a valid
+// JWT, checked by the same RequireJWT as /v1. Mounted OUTSIDE /v1 → no RBAC/audit/
+// maxBody/metrics (like /healthz/openapi.yaml).
 
 import (
 	"net/http"
@@ -31,35 +32,36 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/docsassets"
 )
 
-// docsAssetsPrefix — URL-префикс, под которым раздаётся вшитая статика RapiDoc.
-// Совпадает с путём в docsPage (<script src>).
+// docsAssetsPrefix — the URL prefix under which the embedded RapiDoc static
+// assets are served. Matches the path in docsPage (<script src>).
 const docsAssetsPrefix = "/docs/assets/"
 
-// mountDocsViewer вешает публичные роуты вьювера на корневой router (ВНЕ /v1):
-// GET /docs (shell) и GET /docs/assets/* (вшитые ассеты). Вызывается из
-// buildRouter рядом с health/meta-mount-ом.
+// mountDocsViewer wires the viewer's public routes onto the root router (OUTSIDE
+// /v1): GET /docs (shell) and GET /docs/assets/* (embedded assets). Called from
+// buildRouter next to the health/meta mount.
 func mountDocsViewer(r chi.Router) {
 	r.Get("/docs", docsShellHandler)
-	// http.FileServer на embed.FS отдаёт rapidoc-min.js с корректным Content-Type
-	// (по расширению). StripPrefix снимает /docs/assets/.
+	// http.FileServer over embed.FS serves rapidoc-min.js with the correct
+	// Content-Type (by extension). StripPrefix strips /docs/assets/.
 	assetServer := http.StripPrefix(docsAssetsPrefix, http.FileServer(http.FS(docsassets.FS)))
 	r.Get(docsAssetsPrefix+"*", func(w http.ResponseWriter, req *http.Request) {
 		assetServer.ServeHTTP(w, req)
 	})
 }
 
-// docsShellHandler отдаёт HTML shell-страницу вьювера (200, text/html).
+// docsShellHandler serves the viewer's HTML shell page (200, text/html).
 func docsShellHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(docsPage))
 }
 
-// docsPage — статичный HTML shell вьювера. Самодостаточен: тянет вшитую статику
-// RapiDoc с /docs/assets/, спеку — fetch'ем /openapi.json с Bearer-заголовком.
-// Inline-render через loadSpec(ОБЪЕКТ): RapiDoc трактует СТРОКУ как spec-URL и
-// сам фетчит её БЕЗ нашего Bearer (→ 401), поэтому отдаём JSON и подаём
-// разобранный объект. setApiKey несёт тот же JWT в "Try It" (bearerAuth).
+// docsPage — the viewer's static HTML shell. Self-contained: pulls the embedded
+// RapiDoc assets from /docs/assets/, and the spec via a fetch of /openapi.json
+// with a Bearer header. Inline render via loadSpec(OBJECT): RapiDoc treats a
+// STRING as a spec-URL and fetches it WITHOUT our Bearer (→ 401), so we return
+// JSON and hand it the parsed object. setApiKey carries the same JWT into
+// "Try It" (bearerAuth).
 const docsPage = `<!DOCTYPE html>
 <html lang="en">
 <head>

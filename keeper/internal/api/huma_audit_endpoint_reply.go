@@ -1,27 +1,27 @@
 package api
 
-// HUMA-NATIVE reply-DTO AUDIT-ENDPOINT-домена (Teardown T5b, тираж по эталону T5a
-// huma_incarnation_reply.go). Reply/output Body GET /v1/audit — native Go-struct в пакете
-// api, НЕ генерёный legacy-генерата из рукописи. Паттерн (6 шагов) — в шапке
-// huma_incarnation_reply.go. Ключевое для audit:
+// HUMA-NATIVE reply-DTO of the AUDIT-ENDPOINT domain (Teardown T5b, rollout following the
+// T5a reference huma_incarnation_reply.go). The reply/output Body of GET /v1/audit is a native
+// Go struct in package api, NOT emitted by the legacy generator from a hand-written spec. The
+// pattern (6 steps) is in the header of huma_incarnation_reply.go. Key points for audit:
 //
-//   - ФОРМА байт-в-байт = legacy-генерата (json-теги/omitempty/date-time/nullable категории A-D).
-//   - ИМЯ СХЕМЫ = контрактное (AuditEvent / AuditEventListReply): huma DefaultSchemaNamer
-//     берёт reflect.Type.Name() → схема под тем же именем, что давал legacy-генерата.
-//   - archon_aid/correlation_id — `*string` С omitempty (nil → ключ опущен); payload —
-//     `map[string]interface{}` БЕЗ omitempty (всегда объект на wire); created_at —
-//     наносекундный time-wire (значение усекает handler-слой до секундной точности, не
-//     форма); source — enum-тип AuditEventSource (alias НЕ заведён, рукопись инлайнит
-//     `type: string` + enum — schema byte-identical для native и legacy, parity GitRefType).
-//   - AuditEventListReply здесь — НЕ generic-envelope (handler возвращает named Audit-
-//     EventListReply, не sharedapi.PagedResponse), а обычный reply с полем items[]AuditEvent
-//     + offset/limit/total. offset/limit/total — int (parity legacy-генерата) → `type: integer` без
-//     format (assertOffsetEnvelopeNoFormat). Переведён как top-level reply-DTO.
+//   - SHAPE byte-for-byte = the legacy generator's (json tags/omitempty/date-time/nullable categories A-D).
+//   - SCHEMA NAME = the contract one (AuditEvent / AuditEventListReply): huma DefaultSchemaNamer
+//     takes reflect.Type.Name() → the schema is under the same name the legacy generator produced.
+//   - archon_aid/correlation_id — `*string` with omitempty (nil → key omitted); payload —
+//     `map[string]interface{}` without omitempty (always an object on the wire); created_at —
+//     nanosecond time-wire (the value is truncated to second precision by the handler layer, not
+//     the shape); source — enum type AuditEventSource (no alias declared, the hand-written spec inlines
+//     `type: string` + enum — the schema is byte-identical for native and legacy, parity with GitRefType).
+//   - AuditEventListReply here is NOT a generic envelope (the handler returns a named
+//     AuditEventListReply, not sharedapi.PagedResponse), but a plain reply with an items[]AuditEvent
+//     field + offset/limit/total. offset/limit/total — int (parity with the legacy generator) → `type: integer`
+//     without format (assertOffsetEnvelopeNoFormat). Ported as a top-level reply-DTO.
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). id/correlation_id — машинно ULID (миграция
-// 001: audit_id/correlation_id «ULID»); archon_aid ← operator.AIDPattern. Формат для
-// клиент-кодогена; pattern не влияет на json.Marshal (golden byte-exact цел).
+// OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate the
+// response body (empirically 200, not 500). id/correlation_id — machine-generated ULID (migration
+// 001: audit_id/correlation_id "ULID"); archon_aid ← operator.AIDPattern. Format is for
+// client codegen; pattern does not affect json.Marshal (golden byte-exact intact).
 
 import (
 	"time"
@@ -29,24 +29,24 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежним legacy-генерата) ===
+// === top-level reply-DTO (shape 1:1 with the former legacy generator) ===
 
-// AuditEvent — native запись audit_log (element AuditEventListReply.items). Форма 1:1 с
-// прежним AuditEvent: archon_aid/correlation_id — `*string` С omitempty; payload — `map`
-// БЕЗ omitempty (всегда объект); created_at — наносекундный time-wire (значение усекает
-// handler-слой до секунд); source — native enum-тип AuditEventSource (huma_enums.go).
+// AuditEvent — a native audit_log record (element of AuditEventListReply.items). Shape 1:1 with
+// the former AuditEvent: archon_aid/correlation_id — `*string` with omitempty; payload — `map`
+// without omitempty (always an object); created_at — nanosecond time-wire (the value is truncated
+// to seconds by the handler layer); source — native enum type AuditEventSource (huma_enums.go).
 type AuditEvent struct {
 	ArchonAID     *string                `json:"archon_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	CorrelationID *string                `json:"correlation_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`  // ULID (миграция 001)
+	CorrelationID *string                `json:"correlation_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`  // ULID (migration 001)
 	CreatedAt     time.Time              `json:"created_at"`
-	ID            string                 `json:"id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (миграция 001)
+	ID            string                 `json:"id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (migration 001)
 	Payload       map[string]interface{} `json:"payload"`
 	Source        AuditEventSource       `json:"source"`
 	Type          string                 `json:"type"`
 }
 
-// AuditEventListReply — native 200-тело GET /v1/audit (offset-envelope: items/offset/limit/
-// total). items — native AuditEvent; offset/limit/total — int (parity прежнего legacy-генерата).
+// AuditEventListReply — the native 200 body of GET /v1/audit (offset-envelope: items/offset/limit/
+// total). items — native AuditEvent; offset/limit/total — int (parity with the former legacy generator).
 type AuditEventListReply struct {
 	Items  []AuditEvent `json:"items"`
 	Limit  int          `json:"limit"`
@@ -54,11 +54,11 @@ type AuditEventListReply struct {
 	Total  int          `json:"total"`
 }
 
-// === проекция доменной handlers.AuditListPage (плоские поля) → native wire-DTO ===
+// === projection of domain handlers.AuditListPage (flat fields) → native wire-DTO ===
 
-// newAuditEvent проецирует плоскую доменную handlers.AuditEventView в native AuditEvent.
-// Source — native enum-каст (тот же underlying string). created_at handler уже усёк до
-// секунд (byte-exact с легаси-wire).
+// newAuditEvent projects the flat domain handlers.AuditEventView into a native AuditEvent.
+// Source — a native enum cast (same underlying string). created_at is already truncated to
+// seconds by the handler (byte-exact with the legacy wire).
 func newAuditEvent(v handlers.AuditEventView) AuditEvent {
 	return AuditEvent{
 		ArchonAID:     v.ArchonAID,
@@ -71,9 +71,9 @@ func newAuditEvent(v handlers.AuditEventView) AuditEvent {
 	}
 }
 
-// newAuditEventListReply проецирует доменный handlers.AuditListPage в native
-// AuditEventListReply. Items сохраняют nil-vs-empty 1:1 (nil → null, [] → []) ради byte-exact
-// wire (категория B ADR-051) — ListTyped даёт non-nil [] (пустая лента → `[]`).
+// newAuditEventListReply projects the domain handlers.AuditListPage into a native
+// AuditEventListReply. Items preserve nil-vs-empty 1:1 (nil → null, [] → []) for byte-exact
+// wire (category B ADR-051) — ListTyped yields a non-nil [] (empty feed → `[]`).
 func newAuditEventListReply(p handlers.AuditListPage) AuditEventListReply {
 	var items []AuditEvent
 	if p.Items != nil {

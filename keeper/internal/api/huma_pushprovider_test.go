@@ -1,15 +1,15 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2b разворота PUSH-PROVIDER-домена ЦЕЛИКОМ на huma full-typed
-// (ADR-054 §Pattern, эталоны role/operator). create/update/delete — WRITE+AUDIT
-// (вариант B, huma-audit-middleware; события push-provider.created/.updated/.deleted);
-// list/get — read (БЕЗ audit). Доказывают инварианты кластера поверх chi:
+// Guard tests of ROLLOUT BATCH 2b that unfolds the PUSH-PROVIDER domain ENTIRELY onto huma
+// full-typed (ADR-054 §Pattern, role/operator references). create/update/delete — WRITE+AUDIT
+// (variant B, huma audit middleware; events push-provider.created/.updated/.deleted);
+// list/get — read (no audit). They prove the cluster invariants over chi:
 //
 //   - wire/golden: create 201 PushProvider; list 200 envelope; get 200; update 200
-//     (replace params); delete 204 пустое (byte-exact);
+//     (replace params); delete 204 empty (byte-exact);
 //   - unknown-field → 400; missing-required → 422; bad pagination → 400; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут (create/update/delete): полная huma-навеска пишет
-//     audit-event с НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route (create/update/delete): the full huma wiring writes an
+//     audit event with a NON-EMPTY payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -32,12 +32,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// ppAt — фиксированный created/updated_at для детерминированного golden wire.
+// ppAt — a fixed created/updated_at for a deterministic golden wire.
 var ppAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// hPushProviderPool — мок [pushprovider.ExecQueryRower] для huma-теста. Минимальная
-// имитация PG: name → entry в map с фиксированным временем ppAt (детерминированный
-// golden). Классификацию error-ов валидируют handlers/pushprovider_test.go.
+// hPushProviderPool — a mock [pushprovider.ExecQueryRower] for the huma test. A minimal PG
+// imitation: name → entry in a map with the fixed time ppAt (deterministic golden). Error
+// classification is validated by handlers/pushprovider_test.go.
 type hPushProviderPool struct {
 	entries map[string]*pushprovider.PushProvider
 }
@@ -213,10 +213,10 @@ func (r *hRowsPP) Values() ([]any, error)                       { return nil, ni
 func (r *hRowsPP) RawValues() [][]byte                          { return nil }
 func (r *hRowsPP) Conn() *pgx.Conn                              { return nil }
 
-// humaPushProviderRouter собирает chi-роутер со ВСЕМИ push-provider-роутами через
-// huma — продакшен-навеска из router.go: RequirePermission(push-provider.<action>) на
-// каждой группе + (для write) huma-audit-middleware вариант B + huma-операция.
-// injectClaims заменяет RequireJWT.
+// humaPushProviderRouter assembles a chi router with ALL push-provider routes via huma — the
+// production wiring from router.go: RequirePermission(push-provider.<action>) on each group +
+// (for write) huma audit middleware variant B + the huma operation. injectClaims replaces
+// RequireJWT.
 func humaPushProviderRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool *hPushProviderPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -353,7 +353,7 @@ func TestHumaAudit_PushProviderCreate_NoAudit_OnValidationFail(t *testing.T) {
 	}
 }
 
-// === LIST (READ-with-typed-query, БЕЗ audit) ===
+// === LIST (READ with typed query, no audit) ===
 
 func TestHumaPushProvider_List_GoldenWire(t *testing.T) {
 	pool := newHPushProviderPool().seed("vault-bastion", map[string]any{"vault_addr": "https://vault.example.com"})
@@ -452,7 +452,7 @@ func TestHumaPushProvider_List_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === GET (READ-with-path, БЕЗ audit) ===
+// === GET (READ with path, no audit) ===
 
 func TestHumaPushProvider_Get_GoldenWire(t *testing.T) {
 	pool := newHPushProviderPool().seed("vault-bastion", map[string]any{"vault_addr": "https://vault.example.com"})
@@ -616,7 +616,7 @@ func TestHumaAudit_PushProviderDelete_NoAudit_OnBadName(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ push-provider-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL push-provider operations from the FULL-TYPED Go types ===
 
 func TestHumaPushProvider_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaPushProviderSpecYAML()

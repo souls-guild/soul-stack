@@ -11,16 +11,16 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// makeIncRowWithState — pgx.Row-stub под SelectByName с контролируемым jsonb-
-// state (для form-prefill-тестов: значения, из которых резолвится prefill).
-// Зеркалит makeIncarnationRow, но даёт контроль над state-колонкой (idx 5).
+// makeIncRowWithState — a pgx.Row stub for SelectByName with a controlled jsonb
+// state (for form-prefill tests: the values from which prefill is resolved).
+// Mirrors makeIncarnationRow but gives control over the state column (idx 5).
 func makeIncRowWithState(name string, state map[string]any) pgx.Row {
 	return makeIncRowWithStateVersion(name, "v1", state)
 }
 
-// makeIncRowWithStateVersion — как makeIncRowWithState, но с явной
-// service_version (idx 2): version-pin-тесты сверяют, что снапшот грузится по
-// ServiceVersion инкарнации, а не по дефолту резолвера.
+// makeIncRowWithStateVersion — like makeIncRowWithState but with an explicit
+// service_version (idx 2): version-pin tests verify the snapshot is loaded by the
+// incarnation's ServiceVersion, not by the resolver default.
 func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.Row {
 	stateBytes, _ := json.Marshal(state)
 	now := time.Now()
@@ -31,13 +31,13 @@ func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
-		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
-// formPrefillHandler собирает IncarnationHandler с db (state-row) + loader
-// (scenario YAML + state_schema для secret-исключения) + services.
+// formPrefillHandler assembles an IncarnationHandler with db (state row) + loader
+// (scenario YAML + state_schema for the secret exclusion) + services.
 func formPrefillHandler(state map[string]any, scenarioYAML string, stateSchema map[string]any) *IncarnationHandler {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowWithState(name, state) },
@@ -50,12 +50,12 @@ func formPrefillHandler(state map[string]any, scenarioYAML string, stateSchema m
 	}
 }
 
-// allowAllScope — inScope-предикат «инкарнация всегда в scope» (RBAC-граница
-// проверяется отдельными тестами scope; здесь фокус на резолве prefill).
+// allowAllScope — an inScope predicate "incarnation is always in scope" (the RBAC
+// boundary is checked by separate scope tests; here the focus is prefill resolution).
 func allowAllScope(*incarnation.Incarnation) bool { return true }
 
-// TestFormPrefill_ResolvesDeclaredPaths — базовый успех: объявленные
-// prefill_from_state-пути резолвятся из incarnation.state в {values}.
+// TestFormPrefill_ResolvesDeclaredPaths — the basic happy path: declared
+// prefill_from_state paths resolve from incarnation.state into {values}.
 func TestFormPrefill_ResolvesDeclaredPaths(t *testing.T) {
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n" +
@@ -79,8 +79,8 @@ func TestFormPrefill_ResolvesDeclaredPaths(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_UncoveredPathOmitted — поле с prefill-путём, которого нет в
-// текущем state, ОПУСКАЕТСЯ (не null-значение, не ошибка).
+// TestFormPrefill_UncoveredPathOmitted — a field whose prefill path is absent from
+// the current state is OMITTED (not a null value, not an error).
 func TestFormPrefill_UncoveredPathOmitted(t *testing.T) {
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n" +
@@ -101,18 +101,18 @@ func TestFormPrefill_UncoveredPathOmitted(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_PathWhitelist — GUARD (инвариант b): резолвятся СТРОГО
-// объявленные в схеме prefill-пути. Поле БЕЗ prefill_from_state — даже если его
-// имя совпадает с state-ключом — в values НЕ попадает (клиент путь не задаёт,
-// произвольный state-доступ невозможен).
+// TestFormPrefill_PathWhitelist — GUARD (invariant b): ONLY the prefill paths
+// declared in the schema are resolved. A field WITHOUT prefill_from_state — even
+// if its name matches a state key — does NOT land in values (the client does not
+// supply the path, arbitrary state access is impossible).
 func TestFormPrefill_PathWhitelist(t *testing.T) {
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n" +
 		"  redis_version: { type: string, prefill_from_state: state.redis_version }\n" +
-		"  secret_token: { type: string }\n" // НЕТ prefill_from_state → не whitelisted
+		"  secret_token: { type: string }\n" // NO prefill_from_state → not whitelisted
 	state := map[string]any{
 		"redis_version": "7.2.4",
-		"secret_token":  "super-secret", // присутствует в state, но поле его не объявило
+		"secret_token":  "super-secret", // present in state, but the field did not declare it
 	}
 	h := formPrefillHandler(state, scenarioYAML, nil)
 
@@ -128,9 +128,9 @@ func TestFormPrefill_PathWhitelist(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_SecretExcluded — GUARD (инвариант c): поле, чей state-путь
-// помечен secret в state_schema, ИСКЛЮЧАЕТСЯ из prefill полностью (pre-fill
-// маски бесполезен). Несекретное поле остаётся.
+// TestFormPrefill_SecretExcluded — GUARD (invariant c): a field whose state path
+// is marked secret in state_schema is EXCLUDED from prefill entirely (pre-filling a
+// mask is useless). A non-secret field stays.
 func TestFormPrefill_SecretExcluded(t *testing.T) {
 	scenarioYAML := "name: rotate\nstate_changes: {}\ntasks: []\n" +
 		"input:\n" +
@@ -140,7 +140,7 @@ func TestFormPrefill_SecretExcluded(t *testing.T) {
 		"admin_token":   "s3cr3t-token",
 		"redis_version": "7.2.4",
 	}
-	// state_schema помечает admin_token secret → secretSchemaForIncarnation.IsSecret("state.admin_token")=true.
+	// state_schema marks admin_token secret → secretSchemaForIncarnation.IsSecret("state.admin_token")=true.
 	stateSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -162,8 +162,8 @@ func TestFormPrefill_SecretExcluded(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_OutOfScope404 — вне RBAC-scope → 404 (не палим существование,
-// parity GetTyped).
+// TestFormPrefill_OutOfScope404 — out of RBAC scope → 404 (do not reveal existence,
+// parity with GetTyped).
 func TestFormPrefill_OutOfScope404(t *testing.T) {
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
@@ -183,7 +183,7 @@ func TestFormPrefill_OutOfScope404(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_NilScope404 — nil-предикат → fail-closed 404.
+// TestFormPrefill_NilScope404 — a nil predicate → fail-closed 404.
 func TestFormPrefill_NilScope404(t *testing.T) {
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
@@ -194,8 +194,8 @@ func TestFormPrefill_NilScope404(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_NoPrefillFields — схема без prefill_from_state → пустые values
-// (не ошибка).
+// TestFormPrefill_NoPrefillFields — a schema without prefill_from_state → empty
+// values (not an error).
 func TestFormPrefill_NoPrefillFields(t *testing.T) {
 	scenarioYAML := "name: restart\nstate_changes: {}\ntasks: []\n" +
 		"input:\n  reason: { type: string }\n"
@@ -210,15 +210,15 @@ func TestFormPrefill_NoPrefillFields(t *testing.T) {
 	}
 }
 
-// TestFormPrefill_SchemaPinnedToServiceVersion — GUARD (анти version-craft):
-// схема для prefill (И path-whitelist, И secret-set) грузится СТРОГО по
-// inc.ServiceVersion, а не по произвольной клиентской версии. Клиент версию
-// больше не задаёт; тест фиксирует, что обе материализации снапшота
-// (prefillFieldsForScenario + secretSchemaForIncarnation) запросили ОДНУ
-// авторитетную версию = ServiceVersion. Регрессия (рассинхрон whitelist/secret
-// по разным версиям) → version-craft вектор возвращения sensitive-полей.
+// TestFormPrefill_SchemaPinnedToServiceVersion — GUARD (anti version-craft): the
+// prefill schema (BOTH the path-whitelist AND the secret-set) is loaded STRICTLY by
+// inc.ServiceVersion, not by an arbitrary client version. The client no longer
+// supplies the version; the test pins that both snapshot materializations
+// (prefillFieldsForScenario + secretSchemaForIncarnation) requested the SAME
+// authoritative version = ServiceVersion. A regression (whitelist/secret drift
+// across versions) → a version-craft vector for returning sensitive fields.
 func TestFormPrefill_SchemaPinnedToServiceVersion(t *testing.T) {
-	const wantVersion = "v2.0.0" // отлично от дефолта fakeResolver ("v1")
+	const wantVersion = "v2.0.0" // different from the fakeResolver default ("v1")
 	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
 	stateSchema := map[string]any{

@@ -1,20 +1,21 @@
 package handlers
 
-// Operator API handler-ы реестров Herald (каналы) и Tiding (правила подписки)
-// уведомлений о событиях прогонов (ADR-052, S4). ОДИН [HeraldHandler] обслуживает
-// ОБА ресурса. Тот же [herald.Service] вызывает MCP-tool-handler — один источник
-// правды для десяти herald.*/tiding.*-эндпоинтов.
+// Operator API handlers for the Herald (channels) and Tiding (subscription rules)
+// registries for run-event notifications (ADR-052, S4). ONE [HeraldHandler] serves
+// BOTH resources. The same [herald.Service] is called by the MCP tool handler — one
+// source of truth for the ten herald.*/tiding.* endpoints.
 //
-// T5d-2c (handler-native): домен herald+tiding отвязан от legacy-генерата. *Typed-функции
-// принимают NATIVE request-типы (handlers.HeraldCreateInput / TidingCreateInput /
-// HeraldUpdateInput / TidingUpdateInput; huma-input в пакете api биндит и валидирует
-// тело по этим полям) и возвращают доменные result-ы с ПЛОСКИМИ wire-полями
-// (handlers.HeraldView / TidingView) — НЕ legacy-генерата-Body. Native wire-DTO (схему
-// OpenAPI) строит пакет api из этих полей (register-func huma_herald.go), oapi-
-// генерёные типы в herald-домене не участвуют. (w,r)-оболочки сняты: HTTP
-// обслуживает huma full-typed, MCP зовёт herald.Service напрямую.
+// T5d-2c (handler-native): the herald+tiding domain is decoupled from the legacy
+// generator. *Typed functions take NATIVE request types (handlers.HeraldCreateInput /
+// TidingCreateInput / HeraldUpdateInput / TidingUpdateInput; the huma input in package
+// api binds and validates the body against these fields) and return domain results with
+// FLAT wire fields (handlers.HeraldView / TidingView) — NOT a legacy-generator Body.
+// The native wire-DTO (OpenAPI schema) is built by package api from these fields
+// (register func huma_herald.go); oapi-generated types don't participate in the herald
+// domain. The (w,r) wrappers are removed: HTTP is served by huma full-typed, MCP calls
+// herald.Service directly.
 //
-// RBAC-проверка — в middleware (api/router.go).
+// RBAC check — in middleware (api/router.go).
 
 import (
 	"context"
@@ -30,16 +31,16 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// HeraldHandler — endpoints CRUD реестров Herald (каналы) и Tiding (правила
-// подписки). Тонкая обёртка над [herald.Service]: тот же service вызывается
-// MCP-tool-handler-ом — один источник правды.
+// HeraldHandler — CRUD endpoints for the Herald (channels) and Tiding (subscription
+// rules) registries. A thin wrapper over [herald.Service]: the same service is called
+// by the MCP tool handler — one source of truth.
 type HeraldHandler struct {
 	svc    *herald.Service
 	logger *slog.Logger
 }
 
-// NewHeraldHandler создаёт handler. svc обязателен (panic при nil —
-// единственная точка misconfiguration, caller обязан передать non-nil).
+// NewHeraldHandler creates the handler. svc is required (panic on nil — the only
+// misconfiguration point, caller must pass non-nil).
 func NewHeraldHandler(svc *herald.Service, logger *slog.Logger) *HeraldHandler {
 	if svc == nil {
 		panic("handlers.NewHeraldHandler: herald.Service is nil")
@@ -50,21 +51,21 @@ func NewHeraldHandler(svc *herald.Service, logger *slog.Logger) *HeraldHandler {
 	return &HeraldHandler{svc: svc, logger: logger}
 }
 
-// HeraldSpecStub — непустой *HeraldHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaHeraldSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [AugurSpecStub]).
+// HeraldSpecStub is a non-nil *HeraldHandler stub for generating the huma-OpenAPI
+// fragment (HumaHeraldSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op nil check. svc is nil — the handler
+// never executes in spec mode (parity [AugurSpecStub]).
 func HeraldSpecStub() *HeraldHandler {
 	return &HeraldHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
 // --- Herald -----------------------------------------------------------
 
-// HeraldView — ПЛОСКАЯ wire-форма Herald-канала (create-201 / get-200 / update-200),
-// handler-native. config — map БЕЗ omitempty; secret_ref/created_by_aid — *string С
-// omitempty (nil → ключ опущен); type — плоская строка (пакет api проецирует в
-// native enum HeraldType). created_at/updated_at — UTC (наносекундный wire,
-// БЕЗ Truncate — паритет легаси `.UTC()`).
+// HeraldView is the FLAT wire form of a Herald channel (create-201 / get-200 /
+// update-200), handler-native. config — map without omitempty; secret_ref/
+// created_by_aid — *string with omitempty (nil → key omitted); type — flat string
+// (package api projects to the native enum HeraldType). created_at/updated_at — UTC
+// (nanosecond wire, no Truncate — parity with the legacy `.UTC()`).
 type HeraldView struct {
 	Name         string
 	Type         string
@@ -93,50 +94,50 @@ func toHeraldView(h *herald.Herald) HeraldView {
 	}
 }
 
-// HeraldCreateInput — NATIVE request-форма POST /v1/heralds (handler-native).
-// Заменяет HeraldCreateRequest: имя канала + type (enum webhook в MVP) +
-// config (per-type) + опц. secret_ref (vault-ref) + опц. enabled. Формат полей
-// валидирует service.
+// HeraldCreateInput is the NATIVE request form of POST /v1/heralds (handler-native).
+// Replaces HeraldCreateRequest: channel name + type (enum webhook in MVP) + config
+// (per-type) + optional secret_ref (vault-ref) + optional enabled. The service
+// validates field formats.
 type HeraldCreateInput struct {
 	Name      string
 	Type      string
 	Config    map[string]any
 	SecretRef *string
-	// Secret — опц. plaintext webhook signing-secret (dual-mode, ADR-064); XOR с
-	// SecretRef. Service материализует его в Vault, plaintext не персистится.
+	// Secret — optional plaintext webhook signing secret (dual-mode, ADR-064); XOR with
+	// SecretRef. The service materializes it into Vault; plaintext is not persisted.
 	Secret  *string
 	Enabled *bool
 }
 
-// HeraldUpdateInput — NATIVE request-форма PUT /v1/heralds/{name} (handler-native,
-// replace-семантика). name из path. Заменяет HeraldUpdateRequest.
+// HeraldUpdateInput is the NATIVE request form of PUT /v1/heralds/{name}
+// (handler-native, replace semantics). name from path. Replaces HeraldUpdateRequest.
 type HeraldUpdateInput struct {
 	Type      string
 	Config    map[string]any
 	SecretRef *string
-	// Secret — опц. plaintext webhook signing-secret (dual-mode, ADR-064); XOR с
-	// SecretRef. Перезаписывается в Vault по тому же пути (idempotent-write).
+	// Secret — optional plaintext webhook signing secret (dual-mode, ADR-064); XOR with
+	// SecretRef. Overwritten in Vault at the same path (idempotent write).
 	Secret  *string
 	Enabled *bool
 }
 
-// HeraldWriteReply — извлечённый результат write-роутов Herald-а (CreateHeraldTyped/
-// UpdateHeraldTyped). Несёт плоский 201/200-вид (View) + сам *herald.Herald для
-// audit-payload (heraldAuditPayload).
+// HeraldWriteReply is the extracted result of Herald write routes (CreateHeraldTyped/
+// UpdateHeraldTyped). Carries the flat 201/200 view (View) + the *herald.Herald itself
+// for the audit payload (heraldAuditPayload).
 type HeraldWriteReply struct {
 	View   HeraldView
 	herald *herald.Herald
 }
 
-// AuditPayload собирает audit-payload Herald write-роута (ADR-052(f), parity легаси
-// heraldAuditPayload).
+// AuditPayload assembles the audit payload of a Herald write route (ADR-052(f), parity
+// with the legacy heraldAuditPayload).
 func (r HeraldWriteReply) AuditPayload() middleware.AuditPayload {
 	return heraldAuditPayload(r.herald)
 }
 
-// CreateHeraldTyped — доменная функция POST /v1/heralds (handler-native): конверт
-// native req → доменная модель + svc.CreateHerald + sentinel→problem. Ошибки —
-// *problemError; успех — [HeraldWriteReply] (201-вид + audit-поля). callerAID —
+// CreateHeraldTyped is the domain function for POST /v1/heralds (handler-native):
+// convert native req → domain model + svc.CreateHerald + sentinel→problem. Errors —
+// *problemError; success — [HeraldWriteReply] (201 view + audit fields). callerAID —
 // claims.Subject.
 func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt.Claims, req HeraldCreateInput) (HeraldWriteReply, error) {
 	var zero HeraldWriteReply
@@ -156,10 +157,10 @@ func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt
 	return HeraldWriteReply{View: toHeraldView(created), herald: created}, nil
 }
 
-// UpdateHeraldTyped — доменная функция PUT /v1/heralds/{name} (handler-native,
-// replace-семантика). name из path; конверт native req → доменная модель +
-// svc.UpdateHerald + sentinel→problem. Ошибки — *problemError; успех —
-// [HeraldWriteReply] (200-вид + audit-поля).
+// UpdateHeraldTyped is the domain function for PUT /v1/heralds/{name} (handler-native,
+// replace semantics). name from path; convert native req → domain model +
+// svc.UpdateHerald + sentinel→problem. Errors — *problemError; success —
+// [HeraldWriteReply] (200 view + audit fields).
 func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req HeraldUpdateInput) (HeraldWriteReply, error) {
 	var zero HeraldWriteReply
 	hr := &herald.Herald{
@@ -177,20 +178,20 @@ func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req 
 	return HeraldWriteReply{View: toHeraldView(updated), herald: updated}, nil
 }
 
-// HeraldDeleteReply — извлечённый результат [HeraldHandler.DeleteHeraldTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// HeraldDeleteReply is the extracted result of [HeraldHandler.DeleteHeraldTyped]
+// (handler-native). Carries audit fields (HTTP response — empty 204 body).
 type HeraldDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload herald.delete-роута (parity легаси: name).
+// AuditPayload assembles the audit payload of the herald.delete route (parity with legacy: name).
 func (r HeraldDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteHeraldTyped — доменная функция DELETE /v1/heralds/{name} (handler-native):
-// валидация path-name + svc.DeleteHerald + sentinel→problem (каскад сносит
-// Tiding-ы). Ошибки — *problemError; успех — [HeraldDeleteReply].
+// DeleteHeraldTyped is the domain function for DELETE /v1/heralds/{name}
+// (handler-native): validate path name + svc.DeleteHerald + sentinel→problem (cascade
+// removes Tidings). Errors — *problemError; success — [HeraldDeleteReply].
 func (h *HeraldHandler) DeleteHeraldTyped(ctx context.Context, name string) (HeraldDeleteReply, error) {
 	var zero HeraldDeleteReply
 	if !herald.ValidName(name) {
@@ -203,9 +204,9 @@ func (h *HeraldHandler) DeleteHeraldTyped(ctx context.Context, name string) (Her
 	return HeraldDeleteReply{Name: name}, nil
 }
 
-// GetHeraldTyped — доменная функция GET /v1/heralds/{name} (handler-native, read-
-// with-path, БЕЗ audit): валидация path-name + svc.GetHerald + sentinel→problem
-// (404/422/500). Ошибки — *problemError; успех — [HeraldView].
+// GetHeraldTyped is the domain function for GET /v1/heralds/{name} (handler-native,
+// read-with-path, no audit): validate path name + svc.GetHerald + sentinel→problem
+// (404/422/500). Errors — *problemError; success — [HeraldView].
 func (h *HeraldHandler) GetHeraldTyped(ctx context.Context, name string) (HeraldView, error) {
 	var zero HeraldView
 	if !herald.ValidName(name) {
@@ -219,8 +220,8 @@ func (h *HeraldHandler) GetHeraldTyped(ctx context.Context, name string) (Herald
 	return toHeraldView(hr), nil
 }
 
-// HeraldListPage — доменный paged-результат GET /v1/heralds (handler-native). Пакет
-// api проецирует в native envelope HeraldListReply.
+// HeraldListPage is the domain paged result of GET /v1/heralds (handler-native).
+// Package api projects it into the native envelope HeraldListReply.
 type HeraldListPage struct {
 	Items  []HeraldView
 	Offset int
@@ -228,10 +229,10 @@ type HeraldListPage struct {
 	Total  int
 }
 
-// ListHeraldsTyped — доменная функция GET /v1/heralds (handler-native, read-with-
-// typed-query, БЕЗ audit). offset/limit приходят провалидированными (huma-bind
-// int32); диапазон enforce-ит CheckPageBounds → 400 (parity ParsePage). Ошибка
-// чтения → *problemError (500).
+// ListHeraldsTyped is the domain function for GET /v1/heralds (handler-native,
+// read-with-typed-query, no audit). offset/limit arrive pre-validated (huma-bind
+// int32); CheckPageBounds enforces the range → 400 (parity ParsePage). Read error →
+// *problemError (500).
 func (h *HeraldHandler) ListHeraldsTyped(ctx context.Context, offset, limit int) (HeraldListPage, error) {
 	var zero HeraldListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
@@ -249,9 +250,9 @@ func (h *HeraldHandler) ListHeraldsTyped(ctx context.Context, offset, limit int)
 	return HeraldListPage{Items: out, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// heraldError маппит sentinel-ошибки herald-слоя в *problemError. exists→409,
-// not-found→404, валидация (битый config/secret_ref/type)→422, прочее→500 (raw err
-// не пробрасывается клиенту, только в лог).
+// heraldError maps sentinel errors of the herald layer to *problemError. exists→409,
+// not-found→404, validation (bad config/secret_ref/type)→422, other→500 (raw err is
+// not propagated to the client, only logged).
 func (h *HeraldHandler) heraldError(err error, name, op string) error {
 	switch {
 	case errors.Is(err, herald.ErrHeraldExists):
@@ -267,9 +268,9 @@ func (h *HeraldHandler) heraldError(err error, name, op string) error {
 	}
 }
 
-// heraldAuditPayload — audit-поля Herald-CRUD (ADR-052(f), naming-rules):
-// name/type/url (для webhook — не секрет)/secret_ref (vault-ref, не секрет)/
-// created_by_aid. Значение url достаём из config (для webhook config.url).
+// heraldAuditPayload — audit fields for Herald CRUD (ADR-052(f), naming-rules):
+// name/type/url (for webhook — not a secret)/secret_ref (vault-ref, not a secret)/
+// created_by_aid. The url value is taken from config (for webhook, config.url).
 func heraldAuditPayload(h *herald.Herald) middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"name":    h.Name,
@@ -282,9 +283,9 @@ func heraldAuditPayload(h *herald.Herald) middleware.AuditPayload {
 	if h.SecretRef != nil {
 		p["secret_ref"] = *h.SecretRef
 	}
-	// plaintext_ingested — маркер записи секрета keeper-ом (ADR-064 audit-event):
-	// оператор передал секрет значением, keeper записал его в Vault. БЕЗ plaintext.
-	// Ключ без sensitive-фрагмента → не маскируется (в отличие от secret_ref).
+	// plaintext_ingested — marker that keeper wrote the secret (ADR-064 audit event):
+	// the operator passed the secret by value, keeper wrote it into Vault. No plaintext.
+	// A key without a sensitive fragment → not masked (unlike secret_ref).
 	if h.SecretWritten {
 		p["plaintext_ingested"] = true
 	}
@@ -303,10 +304,10 @@ func aidPtr(aid string) *string {
 
 // --- Tiding -----------------------------------------------------------
 
-// TidingView — ПЛОСКАЯ wire-форма Tiding-правила (create-201 / get-200 / update-200),
-// handler-native. event_types — []string БЕЗ omitempty; annotations — *map С
-// omitempty; cadence/created_by_aid/ephemeral/incarnation/projection/task/voyage_id —
-// опц. указатели С omitempty. created_at/updated_at — UTC (наносекундный wire).
+// TidingView is the FLAT wire form of a Tiding rule (create-201 / get-200 /
+// update-200), handler-native. event_types — []string without omitempty; annotations —
+// *map with omitempty; cadence/created_by_aid/ephemeral/incarnation/projection/task/
+// voyage_id — optional pointers with omitempty. created_at/updated_at — UTC (nanosecond wire).
 type TidingView struct {
 	Name         string
 	Herald       string
@@ -352,10 +353,10 @@ func toTidingView(t *herald.Tiding) TidingView {
 	}
 }
 
-// TidingCreateInput — NATIVE request-форма POST /v1/tidings (handler-native).
-// Заменяет TidingCreateRequest: имя правила + herald (FK) + event_types
-// (run-scope) + опц. фильтры/селекторы + annotations/projection. ephemeral/voyage_id
-// отсутствуют — серверные (ADR-052(g)). Формат полей валидирует service.
+// TidingCreateInput is the NATIVE request form of POST /v1/tidings (handler-native).
+// Replaces TidingCreateRequest: rule name + herald (FK) + event_types (run-scope) +
+// optional filters/selectors + annotations/projection. ephemeral/voyage_id are absent —
+// server-side (ADR-052(g)). The service validates field formats.
 type TidingCreateInput struct {
 	Name         string
 	Herald       string
@@ -370,9 +371,9 @@ type TidingCreateInput struct {
 	Enabled      *bool
 }
 
-// TidingUpdateInput — NATIVE request-форма PUT /v1/tidings/{name} (handler-native,
-// replace-семантика: omit==clear для опц. полей — урок N4). name из path. Заменяет
-// TidingUpdateRequest.
+// TidingUpdateInput is the NATIVE request form of PUT /v1/tidings/{name}
+// (handler-native, replace semantics: omit==clear for optional fields — lesson N4).
+// name from path. Replaces TidingUpdateRequest.
 type TidingUpdateInput struct {
 	Herald       string
 	EventTypes   []string
@@ -386,23 +387,23 @@ type TidingUpdateInput struct {
 	Enabled      *bool
 }
 
-// TidingWriteReply — извлечённый результат write-роутов Tiding-а (CreateTidingTyped/
-// UpdateTidingTyped). Несёт плоский 201/200-вид (View) + сам *herald.Tiding для
-// audit-payload (tidingAuditPayload).
+// TidingWriteReply is the extracted result of Tiding write routes (CreateTidingTyped/
+// UpdateTidingTyped). Carries the flat 201/200 view (View) + the *herald.Tiding itself
+// for the audit payload (tidingAuditPayload).
 type TidingWriteReply struct {
 	View   TidingView
 	tiding *herald.Tiding
 }
 
-// AuditPayload собирает audit-payload Tiding write-роута (ADR-052(f), parity легаси
-// tidingAuditPayload).
+// AuditPayload assembles the audit payload of a Tiding write route (ADR-052(f), parity
+// with the legacy tidingAuditPayload).
 func (r TidingWriteReply) AuditPayload() middleware.AuditPayload {
 	return tidingAuditPayload(r.tiding)
 }
 
-// CreateTidingTyped — доменная функция POST /v1/tidings (handler-native). Конверт
-// native req → доменная модель + svc.CreateTiding + sentinel→problem. Ошибки —
-// *problemError; успех — [TidingWriteReply] (201-вид + audit-поля).
+// CreateTidingTyped is the domain function for POST /v1/tidings (handler-native).
+// Convert native req → domain model + svc.CreateTiding + sentinel→problem. Errors —
+// *problemError; success — [TidingWriteReply] (201 view + audit fields).
 func (h *HeraldHandler) CreateTidingTyped(ctx context.Context, claims *keeperjwt.Claims, req TidingCreateInput) (TidingWriteReply, error) {
 	var zero TidingWriteReply
 	tg := &herald.Tiding{
@@ -426,11 +427,11 @@ func (h *HeraldHandler) CreateTidingTyped(ctx context.Context, claims *keeperjwt
 	return TidingWriteReply{View: toTidingView(created), tiding: created}, nil
 }
 
-// UpdateTidingTyped — доменная функция PUT /v1/tidings/{name} (handler-native,
-// replace-семантика). name из path. PUT-replace: omit==clear (урок N4) — req.Task=
-// nil/incarnation/cadence/annotations/projection очищаются, FE шлёт правило целиком.
-// svc.UpdateTiding + sentinel→problem. Ошибки — *problemError; успех —
-// [TidingWriteReply] (200-вид + audit-поля).
+// UpdateTidingTyped is the domain function for PUT /v1/tidings/{name} (handler-native,
+// replace semantics). name from path. PUT-replace: omit==clear (lesson N4) — req.Task=
+// nil/incarnation/cadence/annotations/projection are cleared, the FE sends the whole
+// rule. svc.UpdateTiding + sentinel→problem. Errors — *problemError; success —
+// [TidingWriteReply] (200 view + audit fields).
 func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, name string, req TidingUpdateInput) (TidingWriteReply, error) {
 	var zero TidingWriteReply
 	tg := &herald.Tiding{
@@ -453,20 +454,20 @@ func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, name string, req 
 	return TidingWriteReply{View: toTidingView(updated), tiding: updated}, nil
 }
 
-// TidingDeleteReply — извлечённый результат [HeraldHandler.DeleteTidingTyped]
-// (handler-native). Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// TidingDeleteReply is the extracted result of [HeraldHandler.DeleteTidingTyped]
+// (handler-native). Carries audit fields (HTTP response — empty 204 body).
 type TidingDeleteReply struct {
 	Name string
 }
 
-// AuditPayload собирает audit-payload tiding.delete-роута (parity легаси: name).
+// AuditPayload assembles the audit payload of the tiding.delete route (parity with legacy: name).
 func (r TidingDeleteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"name": r.Name}
 }
 
-// DeleteTidingTyped — доменная функция DELETE /v1/tidings/{name} (handler-native):
-// валидация path-name + svc.DeleteTiding + sentinel→problem. Ошибки — *problemError;
-// успех — [TidingDeleteReply].
+// DeleteTidingTyped is the domain function for DELETE /v1/tidings/{name}
+// (handler-native): validate path name + svc.DeleteTiding + sentinel→problem. Errors —
+// *problemError; success — [TidingDeleteReply].
 func (h *HeraldHandler) DeleteTidingTyped(ctx context.Context, name string) (TidingDeleteReply, error) {
 	var zero TidingDeleteReply
 	if !herald.ValidName(name) {
@@ -479,9 +480,9 @@ func (h *HeraldHandler) DeleteTidingTyped(ctx context.Context, name string) (Tid
 	return TidingDeleteReply{Name: name}, nil
 }
 
-// GetTidingTyped — доменная функция GET /v1/tidings/{name} (handler-native, read-
-// with-path, БЕЗ audit): валидация path-name + svc.GetTiding + sentinel→problem
-// (404/422/500). Ошибки — *problemError; успех — [TidingView].
+// GetTidingTyped is the domain function for GET /v1/tidings/{name} (handler-native,
+// read-with-path, no audit): validate path name + svc.GetTiding + sentinel→problem
+// (404/422/500). Errors — *problemError; success — [TidingView].
 func (h *HeraldHandler) GetTidingTyped(ctx context.Context, name string) (TidingView, error) {
 	var zero TidingView
 	if !herald.ValidName(name) {
@@ -495,8 +496,8 @@ func (h *HeraldHandler) GetTidingTyped(ctx context.Context, name string) (Tiding
 	return toTidingView(tg), nil
 }
 
-// TidingListPage — доменный paged-результат GET /v1/tidings (handler-native). Пакет
-// api проецирует в native envelope TidingListReply.
+// TidingListPage is the domain paged result of GET /v1/tidings (handler-native).
+// Package api projects it into the native envelope TidingListReply.
 type TidingListPage struct {
 	Items  []TidingView
 	Offset int
@@ -504,10 +505,10 @@ type TidingListPage struct {
 	Total  int
 }
 
-// ListTidingsTyped — доменная функция GET /v1/tidings (handler-native, read-with-
-// typed-query, БЕЗ audit). includeEphemeral — typed bool (huma-bind, bad bool → 400
-// на bind-фазе). offset/limit провалидированы huma-bind; диапазон enforce-ит
-// CheckPageBounds → 400 (parity ParsePage). Ошибка чтения → *problemError (500).
+// ListTidingsTyped is the domain function for GET /v1/tidings (handler-native,
+// read-with-typed-query, no audit). includeEphemeral — typed bool (huma-bind, bad bool
+// → 400 at the bind phase). offset/limit pre-validated by huma-bind; CheckPageBounds
+// enforces the range → 400 (parity ParsePage). Read error → *problemError (500).
 func (h *HeraldHandler) ListTidingsTyped(ctx context.Context, includeEphemeral bool, offset, limit int) (TidingListPage, error) {
 	var zero TidingListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
@@ -525,10 +526,10 @@ func (h *HeraldHandler) ListTidingsTyped(ctx context.Context, includeEphemeral b
 	return TidingListPage{Items: out, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// tidingError маппит sentinel-ошибки в *problemError. tiding-exists→409,
-// tiding-not-found→404, herald-not-found (FK)→404, валидация→422, прочее→500.
-// ErrHeraldNotFound проверяется ДО ErrTidingNotFound: FK-violation на отсутствующий
-// herald — отдельный смысл (создаётся правило к несуществующему каналу).
+// tidingError maps sentinel errors to *problemError. tiding-exists→409,
+// tiding-not-found→404, herald-not-found (FK)→404, validation→422, other→500.
+// ErrHeraldNotFound is checked BEFORE ErrTidingNotFound: an FK violation on a missing
+// herald has a distinct meaning (a rule is created for a nonexistent channel).
 func (h *HeraldHandler) tidingError(err error, name, op string) error {
 	switch {
 	case errors.Is(err, herald.ErrTidingExists):
@@ -546,9 +547,9 @@ func (h *HeraldHandler) tidingError(err error, name, op string) error {
 	}
 }
 
-// tidingAuditPayload — audit-поля Tiding-CRUD (ADR-052(f), naming-rules): все
-// значения публичны (area-glob-списки / имена, не секреты). omitempty-селекторы
-// пишутся только если заданы.
+// tidingAuditPayload — audit fields for Tiding CRUD (ADR-052(f), naming-rules): all
+// values are public (area-glob lists / names, not secrets). omitempty selectors are
+// written only when set.
 func tidingAuditPayload(t *herald.Tiding) middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"name":          t.Name,
@@ -580,10 +581,10 @@ func boolOr(p *bool, def bool) bool {
 	return *p
 }
 
-// derefAnnotations разыменовывает request-форму annotations (*map, top-level
-// объектность гарантирована типом) в domain-map. nil/пустой указатель → nil
-// (= нет статических полей; PUT-replace трактует это как очистку, domain
-// marshalAnnotations → `{}`).
+// derefAnnotations dereferences the request form of annotations (*map, top-level
+// object-ness guaranteed by the type) into a domain map. nil/empty pointer → nil
+// (= no static fields; PUT-replace treats this as a clear, domain marshalAnnotations →
+// `{}`).
 func derefAnnotations(a *map[string]any) map[string]any {
 	if a == nil {
 		return nil
@@ -591,9 +592,9 @@ func derefAnnotations(a *map[string]any) map[string]any {
 	return *a
 }
 
-// derefProjection разыменовывает request-форму projection (*[]string) в
-// domain-slice. nil-указатель → nil (PUT-replace = очистка, domain projectionArg →
-// пустой TEXT[]). Сам синтаксис путей валидирует domain (ValidateProjection).
+// derefProjection dereferences the request form of projection (*[]string) into a
+// domain slice. nil pointer → nil (PUT-replace = clear, domain projectionArg → empty
+// TEXT[]). The path syntax itself is validated by the domain (ValidateProjection).
 func derefProjection(p *[]string) []string {
 	if p == nil {
 		return nil
@@ -601,8 +602,8 @@ func derefProjection(p *[]string) []string {
 	return *p
 }
 
-// annotationsPtr — обратное преобразование для reply. nil → nil (omitempty: поле не
-// появится в JSON, симметрично «нет статических полей»).
+// annotationsPtr is the inverse conversion for the reply. nil → nil (omitempty: the
+// field won't appear in JSON, symmetric with "no static fields").
 func annotationsPtr(a map[string]any) *map[string]any {
 	if a == nil {
 		return nil
@@ -610,8 +611,8 @@ func annotationsPtr(a map[string]any) *map[string]any {
 	return &a
 }
 
-// projectionPtr — обратное преобразование для reply. nil/пустой → nil (omitempty:
-// полная форма payload, поле не появится в JSON).
+// projectionPtr is the inverse conversion for the reply. nil/empty → nil (omitempty:
+// full payload form, the field won't appear in JSON).
 func projectionPtr(p []string) *[]string {
 	if len(p) == 0 {
 		return nil

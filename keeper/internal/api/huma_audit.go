@@ -1,18 +1,18 @@
 package api
 
-// huma-audit-middleware (ВАРИАНТ B, ADR-054 §Audit) + generic spec-dump хелпер.
-// КЛЮЧЕВОЙ pattern тиража middleware-audit-доменов (role + operator + souls + synod
-// + service + sigil + augur + oracle …): домены, чей audit писался
-// [apimiddleware.Audit] (StatusRecorder в bridge) + handler-овский
-// [apimiddleware.SetAuditPayload], НЕ могут так писать audit на full-typed huma —
-// huma САМ пишет ответ через свой Context (chiContext.SetStatus → w.WriteHeader),
-// минуя StatusRecorder-обёртку [apimiddleware.Audit] → rec.status==0 → audit молча
-// не пишется (рецидив S6-регрессии). Решение — huma-native middleware, читающий
-// статус из huma-Context.Status() (поле *chiContext, НЕ http.ResponseWriter):
-// hctx.Status() доступен нативно ПОСЛЕ next, early-flush его не ломает, fallback-
-// обёртка не нужна. Payload пробрасывается handler → middleware через МУТИРУЕМЫЙ
-// carrier в request-context (seed ДО next, чтение ТОГО ЖЕ указателя после next).
-// Полный разбор спайка Status()/carrier — ADR-054 §Audit.
+// huma-audit-middleware (VARIANT B, ADR-054 §Audit) + a generic spec-dump helper.
+// The KEY rollout pattern for middleware-audit domains (role + operator + souls + synod
+// + service + sigil + augur + oracle …): domains whose audit was written by
+// [apimiddleware.Audit] (StatusRecorder in the bridge) + the handler's
+// [apimiddleware.SetAuditPayload] CANNOT write audit that way on full-typed huma —
+// huma writes the response ITSELF via its own Context (chiContext.SetStatus → w.WriteHeader),
+// bypassing the [apimiddleware.Audit] StatusRecorder wrapper → rec.status==0 → audit silently
+// not written (a recurrence of the S6 regression). The fix — a huma-native middleware that reads
+// the status from huma-Context.Status() (a *chiContext field, NOT http.ResponseWriter):
+// hctx.Status() is available natively AFTER next, early-flush does not break it, no fallback
+// wrapper is needed. Payload is passed handler → middleware via a MUTABLE
+// carrier in the request-context (seeded BEFORE next, read from THE SAME pointer after next).
+// Full analysis of the Status()/carrier spike — ADR-054 §Audit.
 
 import (
 	"context"
@@ -25,24 +25,24 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// humaAuditMiddleware — huma-native audit-middleware (вариант B). Навешивается на
-// huma.API через api.UseMiddleware ПОД chi-группой, уже несущей RequireJWT/
-// RequirePermission (claims кладёт RequireJWT в request-context ДО humachi).
+// humaAuditMiddleware — huma-native audit middleware (variant B). Attached to
+// huma.API via api.UseMiddleware UNDER a chi group already carrying RequireJWT/
+// RequirePermission (RequireJWT puts claims into the request-context BEFORE humachi).
 //
-// Контракт (parity apimiddleware.Audit):
-//   - вызывает next(hctx) с seed-нутым payload-carrier-ом;
-//   - ПОСЛЕ next читает hctx.Status(): status>=300 || status==0 → skip (4xx/5xx —
-//     операция не выполнена; 0 — panic/ранний отказ до SetStatus). 2xx → пишем;
-//   - claims из hctx.Context() (apimiddleware.ClaimsFromContext); нет claims →
+// Contract (parity apimiddleware.Audit):
+//   - calls next(hctx) with a seeded payload carrier;
+//   - AFTER next it reads hctx.Status(): status>=300 || status==0 → skip (4xx/5xx —
+//     operation not performed; 0 — panic/early rejection before SetStatus). 2xx → write;
+//   - claims from hctx.Context() (apimiddleware.ClaimsFromContext); no claims →
 //     warn + skip (parity Audit);
-//   - payload из carrier (handler положил через SetHumaAuditPayload); пуст → пишем
-//     event с nil-payload (как Audit без builder/override);
+//   - payload from the carrier (the handler set it via SetHumaAuditPayload); empty → write
+//     the event with a nil payload (like Audit without a builder/override);
 //   - writer.Write(ctx, &audit.Event{EventType:evt, Source:SourceAPI,
-//     ArchonAID:claims.Subject, Payload}). ctx — Background (parity Audit: request-
-//     ctx может быть отменён сразу после ответа — audit не должен теряться).
+//     ArchonAID:claims.Subject, Payload}). ctx — Background (parity Audit: the request
+//     ctx may be canceled right after the response — audit must not be lost).
 //
-// writer nil (dev без audit) → middleware прозрачен (только next). Ошибка
-// writer.Write логируется, на ответ не влияет (он уже улетел) — best-effort, как
+// writer nil (dev without audit) → the middleware is transparent (just next). A
+// writer.Write error is logged and does not affect the response (already sent) — best-effort, like
 // apimiddleware.Audit.
 func humaAuditMiddleware(writer audit.Writer, evt audit.EventType, logger *slog.Logger) func(huma.Context, func(huma.Context)) {
 	return func(hctx huma.Context, next func(huma.Context)) {
@@ -58,8 +58,8 @@ func humaAuditMiddleware(writer audit.Writer, evt audit.EventType, logger *slog.
 
 		status := hctx.Status()
 		if status >= 300 || status == 0 {
-			// 4xx/5xx — операция не выполнена; 0 — handler не дошёл до SetStatus
-			// (panic / ранний huma-отказ). В audit_log не пишем (parity Audit).
+			// 4xx/5xx — operation not performed; 0 — the handler did not reach SetStatus
+			// (panic / early huma rejection). Do not write to audit_log (parity Audit).
 			return
 		}
 
@@ -79,9 +79,9 @@ func humaAuditMiddleware(writer audit.Writer, evt audit.EventType, logger *slog.
 			ArchonAID: claims.Subject,
 			Payload:   carrier.Payload,
 		}
-		// Background-ctx, не request-ctx: HTTP-сервер может отменить request-ctx
-		// сразу после write-ответа (клиент разорвал соединение) — audit не должен
-		// теряться по этой причине (parity apimiddleware.Audit).
+		// Background ctx, not request-ctx: the HTTP server may cancel the request-ctx
+		// right after the write response (the client dropped the connection) — audit must not
+		// be lost for that reason (parity apimiddleware.Audit).
 		if err := writer.Write(context.Background(), ev); err != nil && logger != nil {
 			logger.Error("huma audit middleware: write failed",
 				slog.String("event_type", string(evt)),
@@ -92,24 +92,24 @@ func humaAuditMiddleware(writer audit.Writer, evt audit.EventType, logger *slog.
 	}
 }
 
-// newHumaAuditAPI собирает huma.API поверх chi-группы и навешивает audit-
-// middleware варианта B на ВСЕ операции этой API (api.UseMiddleware). Параллель
-// [newHumaCadenceAPI], но с audit-навеской: cadence пишет self-audit ВНУТРИ
-// CreateTyped (emitWrite), role и прочие middleware-audit-домены — снаружи, через
-// этот middleware. Одна huma.API на chi-группу с одним audit-event-типом.
+// newHumaAuditAPI builds a huma.API over a chi group and attaches the variant-B audit
+// middleware to ALL operations of that API (api.UseMiddleware). A parallel of
+// [newHumaCadenceAPI], but with audit wiring: cadence writes self-audit INSIDE
+// CreateTyped (emitWrite), role and the other middleware-audit domains — from the outside, via
+// this middleware. One huma.API per chi group with one audit event type.
 func newHumaAuditAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	api := newHumaCadenceAPI(r)
 	api.UseMiddleware(humaAuditMiddleware(writer, evt, logger))
 	return api
 }
 
-// humaDumpSpec — generic OpenAPI-фрагмент-дамп для guard/golden-тестов и спека-
-// мерж-таргета тиража: собирает huma.API на временном chi-роутере (БЕЗ монтирования
-// на реальный router/audit-навески — для генерации схемы достаточно
-// [newHumaCadenceAPI]), регистрирует операции домена через переданный register-
-// замыкатель (единый register-путь домена, нет дубля dump-vs-mount) и эмитит
-// 3.1.0-YAML (huma-дефолт). Сводит per-domain HumaCadenceSpecYAML/HumaRoleSpecYAML
-// и будущие домены к одной точке (ревью-nit pilot-2 ДО размножения тиража).
+// humaDumpSpec — a generic OpenAPI-fragment dump for guard/golden tests and the spec
+// merge target of the rollout: builds a huma.API on a temporary chi router (WITHOUT mounting
+// on the real router/audit wiring — [newHumaCadenceAPI] is enough to generate the schema),
+// registers the domain operations via the passed register
+// closure (a single register path per domain, no dump-vs-mount duplication) and emits
+// 3.1.0 YAML (huma default). Reduces the per-domain HumaCadenceSpecYAML/HumaRoleSpecYAML
+// and future domains to one place (a pilot-2 review nit BEFORE replicating the rollout).
 func humaDumpSpec(register func(huma.API) error) (string, error) {
 	installHumaErrorOverride()
 	api := newHumaCadenceAPI(chi.NewRouter())

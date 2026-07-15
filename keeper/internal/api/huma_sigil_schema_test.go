@@ -1,17 +1,17 @@
-// Доказательный гейт выравнивания имён SIGIL + SIGIL-KEY request-схем под committed-
-// рукопись (тираж-батч N4, по эталону huma_operator_schema_test.go). Собирает
-// агрегированную huma-спеку (HumaFullSpecYAML) и проверяет контрактные имена request-тел
-// + отсутствие технических huma-Go-имён.
+// Proof gate for aligning SIGIL + SIGIL-KEY request-schema names with the committed
+// hand-written spec (rollout batch N4, after huma_operator_schema_test.go). Assembles the
+// aggregated huma spec (HumaFullSpecYAML) and checks the contract names of request bodies
+// + absence of technical huma-Go names.
 //
-// МЕХАНИЗМЫ (сверены с рукописью):
+// MECHANISMS (checked against the hand-written spec):
 //   - SIGIL REQUEST-RENAME: sigilAllowHumaBody → PluginSigilAllowRequest (:5256, class C
-//     input-only; рукопись ссылается на него из requestBody POST /v1/plugins/sigils :2406).
-//     ВНИМАНИЕ: контрактное имя — PluginSigilAllowRequest (Plugin-prefix), НЕ SigilAllowRequest.
+//     input-only; the spec references it from requestBody POST /v1/plugins/sigils :2406).
+//     NOTE: the contract name is PluginSigilAllowRequest (Plugin-prefix), NOT SigilAllowRequest.
 //   - SIGIL-KEY REQUEST-RENAME: sigilKeyIntroduceHumaBody → SigilKeyIntroduceRequest (:5619,
-//     class C input-only; ref из POST /v1/sigil/keys :2484).
-//   - ENVELOPE/ENUM/NESTED: не применяются. Reply-схемы (PluginSigilAllowReply/
-//     PluginSigilListReply/SigilKeyIntroduceReply/SigilKeyListReply) УЖЕ named oapi-типы,
-//     контрактны сами; рукопись standalone enum/shared-nested для sigil НЕ объявляет.
+//     class C input-only; ref from POST /v1/sigil/keys :2484).
+//   - ENVELOPE/ENUM/NESTED: not applicable. Reply schemas (PluginSigilAllowReply/
+//     PluginSigilListReply/SigilKeyIntroduceReply/SigilKeyListReply) are ALREADY named oapi types,
+//     contract-stable themselves; the spec declares no standalone enum/shared-nested for sigil.
 package api
 
 import (
@@ -20,8 +20,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// sigilContractSchemas — request-имена sigil + sigil-key доменов ровно как в committed-
-// рукописи. Reply/view-схемы (named oapi) включены как контроль присутствия.
+// sigilContractSchemas — request names of the sigil + sigil-key domains exactly as in the
+// committed hand-written spec. Reply/view schemas (named oapi) included as a presence check.
 var sigilContractSchemas = []string{
 	"PluginSigilAllowRequest",
 	"SigilKeyIntroduceRequest",
@@ -31,7 +31,7 @@ var sigilContractSchemas = []string{
 	"SigilKeyListReply",
 }
 
-// sigilForbiddenSchemas — технические huma-Go-имена старых input-тел.
+// sigilForbiddenSchemas — technical huma-Go names of the old input bodies.
 var sigilForbiddenSchemas = []string{
 	"SigilAllowHumaBody",
 	"SigilKeyIntroduceHumaBody",
@@ -40,7 +40,7 @@ var sigilForbiddenSchemas = []string{
 	"SigilAllowRequest",
 }
 
-// TestSchemaNames_Sigil — гейт N4. Контрактные имена присутствуют, технические — нет.
+// TestSchemaNames_Sigil — gate N4. Contract names present, technical ones absent.
 func TestSchemaNames_Sigil(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range sigilContractSchemas {
@@ -55,9 +55,9 @@ func TestSchemaNames_Sigil(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_SigilRequestShapes — формы request-тел сверены с рукописью:
+// TestSchemaNames_SigilRequestShapes — request-body shapes checked against the hand-written spec:
 // PluginSigilAllowRequest.required=[namespace,name,ref] (:5275). SigilKeyIntroduceRequest —
-// все поля опциональны (make_primary; required-блока нет :5619).
+// all fields optional (make_primary; no required block :5619).
 func TestSchemaNames_SigilRequestShapes(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {

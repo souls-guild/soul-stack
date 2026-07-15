@@ -12,61 +12,61 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// claimsFor / wantProblem — общие test-helper-ы handlers-пакета (errand_test.go /
-// operator_test.go); handler-native T5d-тесты role/synod зовут *Typed напрямую через них.
+// claimsFor / wantProblem — shared test helpers of the handlers package (errand_test.go /
+// operator_test.go); handler-native T5d tests for role/synod call *Typed directly through them.
 
-// rbacFakePool — узкий мок [rbac.ServicePool] для unit-тестов RoleHandler-а.
-// Классифицирует SQL по подстроке и отдаёт заданный тестом исход. Покрывает
-// ТРАНСПОРТ (декод / маппинг sentinel→problem / статусы); консистентность
-// SQL-логики Service-а валидируют rbac/crud_integration_test.go (testcontainers
-// PG). Tx-обёртка проксирует Exec/Query обратно на pool; Commit/Rollback no-op.
+// rbacFakePool — narrow mock of [rbac.ServicePool] for RoleHandler unit tests.
+// Classifies SQL by substring and returns the test-provided outcome. Covers the
+// TRANSPORT (decode / sentinel→problem mapping / statuses); Service SQL-logic
+// consistency is validated by rbac/crud_integration_test.go (testcontainers
+// PG). The Tx wrapper proxies Exec/Query back to the pool; Commit/Rollback are no-op.
 type rbacFakePool struct {
-	// lockRole — исход SELECT builtin FOR UPDATE (lockRole):
-	// found=false → ErrRoleNotFound (пустой row-set); builtin → значение.
+	// lockRole — outcome of SELECT builtin FOR UPDATE (lockRole):
+	// found=false → ErrRoleNotFound (empty row-set); builtin → value.
 	lockRoleFound bool
 	lockRoleValue bool
 
-	// lockRoleOperatorFound — исход SELECT 1 FOR UPDATE (lockRoleOperator):
+	// lockRoleOperatorFound — outcome of SELECT 1 FOR UPDATE (lockRoleOperator):
 	// false → ErrRoleOperatorNotFound.
 	lockRoleOperatorFound bool
 
-	// rolePerms — permissions роли (rolePermissions SELECT): управляет тем,
-	// даёт ли роль `*` (→ нужна self-lockout-проба).
+	// rolePerms — the role's permissions (rolePermissions SELECT): controls whether
+	// the role grants `*` (→ a self-lockout probe is needed).
 	rolePerms []string
 
-	// callerPermsSet — эффективные permissions caller-а (subset-check
-	// SELECT rp.permission … JOIN). nil → дефолт `["*"]` (caller=cluster-admin),
-	// чтобы транспорт-тесты без явного least-privilege-сценария проходили
-	// subset-check. callerPermsExplicit отличает «не задано» (дефолт `*`) от
-	// «задано пустым» (caller без прав).
+	// callerPermsSet — the caller's effective permissions (subset-check
+	// SELECT rp.permission … JOIN). nil → default `["*"]` (caller=cluster-admin),
+	// so transport tests without an explicit least-privilege scenario pass the
+	// subset-check. callerPermsExplicit distinguishes "unset" (default `*`) from
+	// "set empty" (caller with no rights).
 	callerPermsSet      []string
 	callerPermsExplicit bool
 
-	// survivors — результат self-lockout-проб (lockWildcardAdmins*): пусто →
+	// survivors — result of the self-lockout probes (lockWildcardAdmins*): empty →
 	// ErrWouldLockOutCluster.
 	survivors []string
 
-	// roleScope — RAW default_scope роли (roleDefaultScope SELECT, ADR-047 S1):
-	// nil → NULL (роль без scope, bare-perms unrestricted — дефолт транспорт-
-	// тестов). Задаётся явно сценарием default_scope-эскалации.
+	// roleScope — the role's RAW default_scope (roleDefaultScope SELECT, ADR-047 S1):
+	// nil → NULL (a role without scope, bare-perms unrestricted — the transport-
+	// tests default). Set explicitly by the default_scope-escalation scenario.
 	roleScope *string
 
-	// insertRoleErr — ошибка INSERT INTO rbac_roles (Create): unique → 409.
+	// insertRoleErr — error from INSERT INTO rbac_roles (Create): unique → 409.
 	insertRoleErr error
 
-	// insertMembershipErr — ошибка INSERT membership (GrantOperator / Synod
+	// insertMembershipErr — error from INSERT membership (GrantOperator / Synod
 	// AddOperator / GrantRole): FK → 404.
 	insertMembershipErr error
 
-	// insertSynodErr — ошибка INSERT INTO synods (CreateSynod): unique → 409
-	// (ADR-049). lockSynodFound управляет существованием группы для мутаций.
+	// insertSynodErr — error from INSERT INTO synods (CreateSynod): unique → 409
+	// (ADR-049). lockSynodFound controls whether the group exists for mutations.
 	insertSynodErr  error
 	lockSynodFound  bool
 	lockSynodValue  bool
 	synodRolesValue []string
 
-	// updateSynodFound — исход UPDATE synods SET description (UpdateSynodDescription,
-	// ADR-049 amend): true → RowsAffected 1 (группа есть), false → 0 → ErrSynodNotFound.
+	// updateSynodFound — outcome of UPDATE synods SET description (UpdateSynodDescription,
+	// ADR-049 amend): true → RowsAffected 1 (group exists), false → 0 → ErrSynodNotFound.
 	updateSynodFound bool
 
 	beginErr error
@@ -92,7 +92,7 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 		return pgconn.NewCommandTag("DELETE 1"), nil
 	case contains(sql, "DELETE FROM rbac_roles"):
 		return pgconn.NewCommandTag("DELETE 1"), nil
-	// Synod-ветки (ADR-049) — transport-тесты SynodHandler-а делят этот fake.
+	// Synod branches (ADR-049) — SynodHandler transport tests share this fake.
 	case contains(sql, "INSERT INTO synods"):
 		if p.insertSynodErr != nil {
 			return pgconn.CommandTag{}, p.insertSynodErr
@@ -115,7 +115,7 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 	case contains(sql, "DELETE FROM synods"):
 		return pgconn.NewCommandTag("DELETE 1"), nil
 	case contains(sql, "UPDATE synods SET description"):
-		// UpdateSynodDescription (ADR-049 amend): found → 1 row, иначе 0 → 404.
+		// UpdateSynodDescription (ADR-049 amend): found → 1 row, else 0 → 404.
 		if p.updateSynodFound {
 			return pgconn.NewCommandTag("UPDATE 1"), nil
 		}
@@ -127,20 +127,20 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case contains(sql, "SELECT builtin FROM rbac_roles"):
-		// lockRole: пусто → ErrRoleNotFound; иначе один bool-row.
+		// lockRole: empty → ErrRoleNotFound; else a single bool row.
 		if !p.lockRoleFound {
 			return &boolRows{}, nil
 		}
 		return &boolRows{values: []bool{p.lockRoleValue}}, nil
 	case contains(sql, "SELECT 1 FROM rbac_role_operators"):
-		// lockRoleOperator: пусто → ErrRoleOperatorNotFound.
+		// lockRoleOperator: empty → ErrRoleOperatorNotFound.
 		if !p.lockRoleOperatorFound {
 			return &intRows{}, nil
 		}
 		return &intRows{values: []int{1}}, nil
 	case contains(sql, "SELECT rp.permission"):
-		// caller-perms (subset-check): дефолт — `["*"]` (caller=cluster-admin),
-		// если тест не задал набор явно.
+		// caller-perms (subset-check): default `["*"]` (caller=cluster-admin),
+		// unless the test set the list explicitly.
 		if p.callerPermsExplicit {
 			return &roleStringRows{values: p.callerPermsSet}, nil
 		}
@@ -148,39 +148,39 @@ func (p *rbacFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	case contains(sql, "SELECT permission FROM rbac_role_permissions"):
 		return &roleStringRows{values: p.rolePerms}, nil
 	case contains(sql, "SELECT default_scope FROM rbac_roles"):
-		// roleDefaultScope (subset-check granted-сторона): один nullable-row.
+		// roleDefaultScope (subset-check granted side): a single nullable row.
 		return &nullStringRows{value: p.roleScope}, nil
 	case contains(sql, "SELECT builtin FROM synods"):
-		// lockSynod: пусто → ErrSynodNotFound; иначе один bool-row.
+		// lockSynod: empty → ErrSynodNotFound; else a single bool row.
 		if !p.lockSynodFound {
 			return &boolRows{}, nil
 		}
 		return &boolRows{values: []bool{p.lockSynodValue}}, nil
 	case contains(sql, "SELECT 1 FROM synod_operators"):
-		// lockSynodOperator: пусто → ErrSynodOperatorNotFound.
+		// lockSynodOperator: empty → ErrSynodOperatorNotFound.
 		if !p.lockRoleOperatorFound {
 			return &intRows{}, nil
 		}
 		return &intRows{values: []int{1}}, nil
 	case contains(sql, "SELECT 1 FROM synod_roles"):
-		// lockSynodRole: пусто → ErrSynodRoleNotFound.
+		// lockSynodRole: empty → ErrSynodRoleNotFound.
 		if !p.lockRoleOperatorFound {
 			return &intRows{}, nil
 		}
 		return &intRows{values: []int{1}}, nil
 	case contains(sql, "SELECT role_name FROM synod_roles"):
-		// synodRoles (subset-check add-operator): набор ролей bundle.
+		// synodRoles (subset-check add-operator): the bundle's role set.
 		return &roleStringRows{values: p.synodRolesValue}, nil
 	case contains(sql, "FROM synod_roles sr"):
-		// synodGivesWildcard-проба: пусто → группа `*` не бандлит.
+		// synodGivesWildcard probe: empty → the group does not bundle `*`.
 		return &intRows{}, nil
 	case contains(sql, "FROM synod_operators"):
-		// Synod-ветка self-lockout-пробы (ADR-049(f)): второй locking-запрос
-		// по synod_operators. Эти handler-unit-сценарии групповых админов не
-		// моделируют — пусто; их покрывают rbac integration-guard-тесты.
+		// Synod branch of the self-lockout probe (ADR-049(f)): the second locking
+		// query over synod_operators. These handler-unit scenarios don't model
+		// group admins — empty; rbac integration-guard tests cover them.
 		return &roleStringRows{}, nil
 	case contains(sql, "FOR UPDATE OF ro, rp, o"):
-		// прямая self-lockout-проба (excluding role / pair / core).
+		// direct self-lockout probe (excluding role / pair / core).
 		return &roleStringRows{values: p.survivors}, nil
 	}
 	return nil, errors.New("rbacFakePool.Query: unexpected SQL: " + sql)
@@ -193,7 +193,7 @@ func (p *rbacFakePool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, erro
 	return &rbacFakeTx{pool: p}, nil
 }
 
-// contains — короткий substring-helper (bytes-free).
+// contains — a short substring helper (bytes-free).
 func contains(s, sub string) bool {
 	return len(sub) <= len(s) && indexOf(s, sub) >= 0
 }
@@ -207,8 +207,8 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-// rbacFakeTx проксирует Exec/Query на pool; остальное — panic (не должно
-// вызываться в scope-е этих тестов).
+// rbacFakeTx proxies Exec/Query to the pool; everything else panics (must not
+// be called in the scope of these tests).
 type rbacFakeTx struct{ pool *rbacFakePool }
 
 func (t *rbacFakeTx) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -237,7 +237,7 @@ func (t *rbacFakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 }
 func (t *rbacFakeTx) Conn() *pgx.Conn { return nil }
 
-// --- минимальные pgx.Rows-обёртки для bool / int / string одностолбцовых выборок ---
+// --- minimal pgx.Rows wrappers for single-column bool / int / string selects ---
 
 type boolRows struct {
 	values []bool
@@ -287,9 +287,9 @@ func (r *roleStringRows) Values() ([]any, error)                       { return 
 func (r *roleStringRows) RawValues() [][]byte                          { return nil }
 func (r *roleStringRows) Conn() *pgx.Conn                              { return nil }
 
-// nullStringRows — один row с nullable default_scope (scan в *string).
-// value=nil → NULL (роль без scope). Один row всегда (роль существует, её
-// заранее залочил lockRole).
+// nullStringRows — a single row with a nullable default_scope (scanned into *string).
+// value=nil → NULL (a role without scope). Always one row (the role exists, having
+// been locked earlier by lockRole).
 type nullStringRows struct {
 	value *string
 	done  bool
@@ -314,7 +314,7 @@ func (r *nullStringRows) Values() ([]any, error)                       { return 
 func (r *nullStringRows) RawValues() [][]byte                          { return nil }
 func (r *nullStringRows) Conn() *pgx.Conn                              { return nil }
 
-// newRoleHandler собирает RoleHandler поверх rbac.Service на fake-pool.
+// newRoleHandler assembles a RoleHandler over rbac.Service on a fake pool.
 func newRoleHandler(t *testing.T, pool *rbacFakePool) *RoleHandler {
 	t.Helper()
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: pool})
@@ -388,7 +388,7 @@ func TestRoleHandler_Delete_Builtin_409(t *testing.T) {
 }
 
 func TestRoleHandler_Delete_Lockout_409(t *testing.T) {
-	// Роль даёт `*`, выживших админов нет → ErrWouldLockOutCluster.
+	// The role grants `*`, no surviving admins → ErrWouldLockOutCluster.
 	pool := &rbacFakePool{lockRoleFound: true, lockRoleValue: false, rolePerms: []string{"*"}, survivors: nil}
 	h := newRoleHandler(t, pool)
 	_, err := h.DeleteTyped(context.Background(), "admins")
@@ -432,7 +432,7 @@ func TestRoleHandler_Update_BadPermission_422(t *testing.T) {
 }
 
 func TestRoleHandler_Update_Lockout_409(t *testing.T) {
-	// Старый набор даёт `*`, новый — нет, выживших нет → lockout.
+	// The old set grants `*`, the new one doesn't, no survivors → lockout.
 	pool := &rbacFakePool{lockRoleFound: true, lockRoleValue: false, rolePerms: []string{"*"}, survivors: nil}
 	h := newRoleHandler(t, pool)
 	_, err := h.UpdatePermissionsTyped(context.Background(), claimsFor("archon-alice"),
@@ -480,8 +480,8 @@ func TestRoleHandler_GrantOperator_OperatorNotFound_404(t *testing.T) {
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
-// TestRoleHandler_GrantOperator_CallerAIDFromClaims проверяет, что CallerAID
-// (granted_by_aid) берётся из claims subject и доезжает до Service-вызова.
+// TestRoleHandler_GrantOperator_CallerAIDFromClaims checks that CallerAID
+// (granted_by_aid) is taken from the claims subject and reaches the Service call.
 func TestRoleHandler_GrantOperator_CallerAIDFromClaims(t *testing.T) {
 	var gotGrantedBy any
 	pool := &grantSpyPool{rbacFakePool: rbacFakePool{lockRoleFound: true}, captured: &gotGrantedBy}
@@ -502,8 +502,8 @@ func TestRoleHandler_GrantOperator_CallerAIDFromClaims(t *testing.T) {
 	}
 }
 
-// grantSpyPool — rbacFakePool, перехватывающий granted_by_aid (3-й arg
-// INSERT-membership-а) для проверки проброса CallerAID из claims.
+// grantSpyPool — an rbacFakePool that captures granted_by_aid (the 3rd arg of
+// the INSERT membership) to verify CallerAID is threaded through from claims.
 type grantSpyPool struct {
 	rbacFakePool
 	captured *any
@@ -568,7 +568,7 @@ func TestRoleHandler_RevokeOperator_NotFound_404(t *testing.T) {
 }
 
 func TestRoleHandler_RevokeOperator_Lockout_409(t *testing.T) {
-	// membership есть, роль даёт `*`, выживших нет → lockout.
+	// membership exists, the role grants `*`, no survivors → lockout.
 	pool := &rbacFakePool{
 		lockRoleOperatorFound: true,
 		lockRoleFound:         true,
@@ -582,7 +582,7 @@ func TestRoleHandler_RevokeOperator_Lockout_409(t *testing.T) {
 
 // --- List ---
 
-// listFakePool отдаёт фиксированный каталог из трёх SELECT-ов (LoadRoleViews).
+// listFakePool returns a fixed catalog from three SELECTs (LoadRoleViews).
 type listFakePool struct{ rbacFakePool }
 
 func (p *listFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
@@ -613,7 +613,7 @@ func TestRoleHandler_List_200(t *testing.T) {
 	if len(page.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(page.Items))
 	}
-	// Детерминированный порядок (ORDER BY name): admins, ops.
+	// Deterministic order (ORDER BY name): admins, ops.
 	if page.Items[0].Name != "admins" || !page.Items[0].Builtin {
 		t.Errorf("item[0] = %+v", page.Items[0])
 	}
@@ -623,12 +623,12 @@ func TestRoleHandler_List_200(t *testing.T) {
 	if len(page.Items[0].Operators) != 1 || page.Items[0].Operators[0] != "archon-alice" {
 		t.Errorf("admins operators = %v", page.Items[0].Operators)
 	}
-	// ops без operators — non-nil пустой срез (на wire `[]`, native-проекция в api).
+	// ops without operators — a non-nil empty slice (on wire `[]`, native projection in api).
 	if page.Items[1].Operators == nil {
 		t.Errorf("ops operators is nil, want empty slice")
 	}
-	// ADR-047 S1: default_scope (handler-flat RoleView несёт RAW string) — admins
-	// "" (NULL), ops="coven=prod". Nullable-форму wire строит native-проекция.
+	// ADR-047 S1: default_scope (handler-flat RoleView carries a RAW string) — admins
+	// "" (NULL), ops="coven=prod". The native projection builds the nullable wire form.
 	if page.Items[0].DefaultScope != "" {
 		t.Errorf("admins default_scope = %q, want \"\" (NULL)", page.Items[0].DefaultScope)
 	}
@@ -637,11 +637,11 @@ func TestRoleHandler_List_200(t *testing.T) {
 	}
 }
 
-// ptrStr — *string-литерал для nullable default_scope в фикстурах.
+// ptrStr — a *string literal for the nullable default_scope in fixtures.
 func ptrStr(s string) *string { return &s }
 
-// roleViewRows — четырёхстолбцовые строки (name, description, builtin,
-// default_scope). default_scope nullable: row[3] == nil → NULL.
+// roleViewRows — four-column rows (name, description, builtin,
+// default_scope). default_scope is nullable: row[3] == nil → NULL.
 type roleViewRows struct {
 	rows [][4]any
 	idx  int
@@ -669,7 +669,7 @@ func (r *roleViewRows) Values() ([]any, error)                       { return ni
 func (r *roleViewRows) RawValues() [][]byte                          { return nil }
 func (r *roleViewRows) Conn() *pgx.Conn                              { return nil }
 
-// pairRows — двустолбцовые строки string/string.
+// pairRows — two-column string/string rows.
 type pairRows struct {
 	rows [][2]string
 	idx  int
@@ -692,9 +692,9 @@ func (r *pairRows) Conn() *pgx.Conn                              { return nil }
 
 // --- least-privilege subset-check (ErrPermissionNotHeld → 403) ---
 
-// Create роли с правом вне набора caller-а → 403 forbidden.
+// Create a role with a permission outside the caller's set → 403 forbidden.
 func TestRoleHandler_Create_PermissionNotHeld_403(t *testing.T) {
-	// caller держит только role.create; пытается создать роль с `*`.
+	// caller holds only role.create; tries to create a role with `*`.
 	pool := &rbacFakePool{callerPermsExplicit: true, callerPermsSet: []string{"role.create"}}
 	h := newRoleHandler(t, pool)
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-sub"),
@@ -702,10 +702,10 @@ func TestRoleHandler_Create_PermissionNotHeld_403(t *testing.T) {
 	wantProblem(t, err, problem.TypeForbidden)
 }
 
-// Update роли: добавление чужого права → 403 forbidden.
+// Update a role: adding a permission not held → 403 forbidden.
 func TestRoleHandler_Update_PermissionNotHeld_403(t *testing.T) {
-	// Старый набор роли — role.create; caller держит только role.create;
-	// добавляет operator.create (вне набора).
+	// The role's old set is role.create; caller holds only role.create;
+	// adds operator.create (outside the set).
 	pool := &rbacFakePool{
 		lockRoleFound:       true,
 		rolePerms:           []string{"role.create"},
@@ -718,9 +718,9 @@ func TestRoleHandler_Update_PermissionNotHeld_403(t *testing.T) {
 	wantProblem(t, err, problem.TypeForbidden)
 }
 
-// GrantOperator: грант роли, содержащей право вне набора caller-а → 403.
+// GrantOperator: granting a role that contains a permission outside the caller's set → 403.
 func TestRoleHandler_GrantOperator_PermissionNotHeld_403(t *testing.T) {
-	// Грантящаяся роль даёт `*` (rolePerms); caller держит только role.create.
+	// The granted role gives `*` (rolePerms); caller holds only role.create.
 	pool := &rbacFakePool{
 		lockRoleFound:       true,
 		rolePerms:           []string{"*"},

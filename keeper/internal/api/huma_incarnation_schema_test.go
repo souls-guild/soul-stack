@@ -1,8 +1,8 @@
-// Доказательный гейт выравнивания имён incarnation-схем под committed-рукопись
-// (T4b pilot). Собирает агрегированную huma-спеку ([HumaFullSpecYAML]) и проверяет, что
-// схемы incarnation-домена названы ТОЧНО как контракт (docs/keeper/openapi.yaml), а
-// технические huma-Go-имена (IncCreateHumaBody и пр.) в спеке ОТСУТСТВУЮТ. Мутация
-// (вернуть старое имя структуры) краснит этот тест.
+// Proof gate aligning incarnation schema names with the committed reference
+// (T4b pilot). Assembles the aggregated huma spec ([HumaFullSpecYAML]) and checks that
+// incarnation-domain schemas are named EXACTLY per the contract (docs/keeper/openapi.yaml), and
+// that technical huma Go names (IncCreateHumaBody etc.) are ABSENT from the spec. A mutation
+// (restoring the old struct name) reddens this test.
 package api
 
 import (
@@ -13,9 +13,9 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// incarnationContractSchemas — request/reply/view-имена incarnation-домена ровно как в
-// committed-рукописи (docs/keeper/openapi.yaml). Все обязаны присутствовать в собранной
-// спеке как components/schemas.
+// incarnationContractSchemas — request/reply/view names of the incarnation domain exactly as in
+// the committed reference (docs/keeper/openapi.yaml). All must be present in the assembled
+// spec as components/schemas.
 var incarnationContractSchemas = []string{
 	"IncarnationCreateRequest",
 	"IncarnationCreateReply",
@@ -38,9 +38,9 @@ var incarnationContractSchemas = []string{
 	"IncarnationHistoryReply",
 }
 
-// incarnationForbiddenSchemas — технические huma-Go-имена, которые DefaultSchemaNamer
-// дал БЫ из старых имён структур (incCreateHumaBody → IncCreateHumaBody). Ни одно не
-// должно остаться в спеке после выравнивания.
+// incarnationForbiddenSchemas — technical huma Go names that DefaultSchemaNamer
+// WOULD produce from the old struct names (incCreateHumaBody → IncCreateHumaBody). None
+// must remain in the spec after alignment.
 var incarnationForbiddenSchemas = []string{
 	"IncCreateHumaBody",
 	"IncRunHumaBody",
@@ -50,15 +50,15 @@ var incarnationForbiddenSchemas = []string{
 	"IncCheckDriftHumaBody",
 	"IncUpdateHostsHumaBody",
 	"IncHostHumaBody",
-	// Generic-имена, которые DefaultSchemaNamer дал БЫ из неаласенного
-	// sharedapi.PagedResponse[T] (скобки generic схлопываются в конкатенацию):
-	// envelope-alias обязан их вытеснить контрактными именами.
+	// Generic names that DefaultSchemaNamer WOULD produce from an unaliased
+	// sharedapi.PagedResponse[T] (generic brackets collapse into concatenation):
+	// the envelope alias must displace them with contract names.
 	"PagedResponseIncarnationGetReply",
 	"PagedResponseStateHistoryEntry",
 }
 
-// TestSchemaNames_Incarnation — гейт T4b. Доказывает, что собранная агрегатор-спека
-// несёт incarnation-схемы под КОНТРАКТНЫМИ именами и не несёт технических huma-имён.
+// TestSchemaNames_Incarnation — T4b gate. Proves the assembled aggregator spec
+// carries incarnation schemas under CONTRACT names and carries no technical huma names.
 func TestSchemaNames_Incarnation(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -87,10 +87,10 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 	}
 }
 
-// TestTraitsRelocation_OpenAPI — гейт релокации Trait per-soul → per-incarnation
-// (ADR-060 amend R1): (1) POST /v1/incarnations несёт top-level `traits`-поле;
-// (2) PUT /v1/incarnations/{name}/traits смонтирован (operationId setIncarnationTraits);
-// (3) per-soul POST /v1/souls/traits помечен deprecated:true. Любой откат краснит.
+// TestTraitsRelocation_OpenAPI — gate for the Trait relocation per-soul → per-incarnation
+// (ADR-060 amend R1): (1) POST /v1/incarnations carries a top-level `traits` field;
+// (2) PUT /v1/incarnations/{name}/traits is mounted (operationId setIncarnationTraits);
+// (3) per-soul POST /v1/souls/traits is marked deprecated:true. Any rollback reddens it.
 func TestTraitsRelocation_OpenAPI(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -109,12 +109,12 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 		t.Fatalf("спека не парсится: %v", err)
 	}
 
-	// (1) create-request несёт traits-поле.
+	// (1) create-request carries the traits field.
 	if _, ok := doc.Components.Schemas["IncarnationCreateRequest"].Properties["traits"]; !ok {
 		t.Error("IncarnationCreateRequest без поля traits — top-level create-traits не прокинут")
 	}
 
-	// (2) PUT .../traits смонтирован.
+	// (2) PUT .../traits is mounted.
 	put, ok := doc.Paths["/v1/incarnations/{name}/traits"]
 	if !ok {
 		t.Fatal("путь /v1/incarnations/{name}/traits ОТСУТСТВУЕТ в спеке")
@@ -146,9 +146,9 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_IncarnationStatusEnum — гейт T4b (enum). IncarnationStatus вынесен как
-// named-схема с enum-значениями (а не инлайн `type: string`), а status-поля reply-
-// структур ссылаются на неё через $ref (как в рукописи 3.0.3).
+// TestSchemaNames_IncarnationStatusEnum — T4b gate (enum). IncarnationStatus is extracted as a
+// named schema with enum values (not inline `type: string`), and the status fields of the reply
+// structs reference it via $ref (as in the 3.0.3 reference).
 func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -179,7 +179,7 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 			got[s] = struct{}{}
 		}
 	}
-	// Контракт-минимум: ключевые статусы из рукописи присутствуют.
+	// Contract minimum: the key statuses from the reference are present.
 	for _, want := range []string{"provisioning", "ready", "applying", "error_locked", "migration_failed", "drift", "destroying", "destroy_failed"} {
 		if _, ok := got[want]; !ok {
 			var have []string
@@ -191,17 +191,17 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 		}
 	}
 
-	// status-поля ссылаются на named-схему через $ref (не инлайн).
+	// status fields reference the named schema via $ref (not inline).
 	if !strings.Contains(y, "#/components/schemas/IncarnationStatus") {
 		t.Error("ни одно поле не ссылается на IncarnationStatus через $ref — статус остался инлайн")
 	}
 }
 
-// TestSchemaNames_IncarnationEnvelope — гейт T4b (ENVELOPE). list/history-envelope
-// вынесены как named-схемы под КОНТРАКТНЫМИ именами (IncarnationListReply/Incarnation-
-// HistoryReply) с КОНТРАКТНОЙ формой (ровно 4 поля int32 items/offset/limit/total БЕЗ
-// cursor-полей; items.$ref на контрактный element). Мутация (убрать envelope-alias)
-// краснит: huma эмитит generic-имя PagedResponse* — оба assert-блока падают.
+// TestSchemaNames_IncarnationEnvelope — T4b gate (ENVELOPE). The list/history envelopes are
+// extracted as named schemas under CONTRACT names (IncarnationListReply/Incarnation-
+// HistoryReply) with the CONTRACT shape (exactly 4 int32 fields items/offset/limit/total WITHOUT
+// cursor fields; items.$ref to the contract element). A mutation (removing the envelope alias)
+// reddens: huma emits the generic name PagedResponse* — both assert blocks fail.
 func TestSchemaNames_IncarnationEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -216,8 +216,8 @@ func TestSchemaNames_IncarnationEnvelope(t *testing.T) {
 	schemas, _ := comp["schemas"].(map[string]any)
 
 	cases := []struct {
-		schema  string // контрактное имя envelope-схемы
-		element string // контрактное имя element-схемы, на которую ссылается items.$ref
+		schema  string // contract name of the envelope schema
+		element string // contract name of the element schema referenced by items.$ref
 	}{
 		{"IncarnationListReply", "IncarnationGetReply"},
 		{"IncarnationHistoryReply", "StateHistoryEntry"},
@@ -227,10 +227,10 @@ func TestSchemaNames_IncarnationEnvelope(t *testing.T) {
 	}
 }
 
-// assertEnvelopeShape проверяет, что envelope-схема несёт РОВНО контрактную форму
-// рукописи: 4 поля (items/offset/limit/total), offset/limit/total — int32, items —
-// массив с $ref на контрактный element, БЕЗ cursor-полей (next_cursor/total_approximate
-// generic PagedResponse[T] не должны протечь — иначе envelope-alias не сработал).
+// assertEnvelopeShape checks that the envelope schema carries EXACTLY the contract shape
+// of the reference: 4 fields (items/offset/limit/total), offset/limit/total — int32, items —
+// an array with $ref to the contract element, WITHOUT cursor fields (next_cursor/total_approximate
+// of generic PagedResponse[T] must not leak — otherwise the envelope alias didn't work).
 func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element string) {
 	t.Helper()
 
@@ -243,7 +243,7 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 		t.Fatalf("%q без properties", name)
 	}
 
-	// Ровно 4 поля — cursor-поля (next_cursor/total_approximate) не должны протечь.
+	// Exactly 4 fields — cursor fields (next_cursor/total_approximate) must not leak.
 	wantFields := map[string]struct{}{"items": {}, "offset": {}, "limit": {}, "total": {}}
 	if len(props) != len(wantFields) {
 		var got []string
@@ -259,8 +259,8 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 		}
 	}
 
-	// offset/limit/total — integer int32. (huma эмитит OpenAPI 3.1, type может быть
-	// строкой "integer" — для не-nullable скаляра; nullable дал бы массив [..,"null"].)
+	// offset/limit/total — integer int32. (huma emits OpenAPI 3.1, type may be
+	// the string "integer" — for a non-nullable scalar; nullable would give an array [..,"null"].)
 	for _, f := range []string{"offset", "limit", "total"} {
 		fp, ok := props[f].(map[string]any)
 		if !ok {
@@ -274,8 +274,8 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 		}
 	}
 
-	// items — array c $ref на контрактный element. (3.1: slice nullable → type
-	// [array,null]; schemaTypeHas принимает обе нотации.)
+	// items — array with $ref to the contract element. (3.1: slice nullable → type
+	// [array,null]; schemaTypeHas accepts both notations.)
 	items, ok := props["items"].(map[string]any)
 	if !ok {
 		t.Fatalf("%q.items отсутствует", name)
@@ -293,9 +293,9 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 	}
 }
 
-// schemaTypeHas проверяет, что JSON-Schema-узел `type` содержит want. OpenAPI 3.1 (huma-
-// дефолт) кодирует type строкой ("integer") для не-nullable либо массивом (["array","null"])
-// для nullable — принимаем обе формы.
+// schemaTypeHas checks that the JSON-Schema `type` node contains want. OpenAPI 3.1 (huma
+// default) encodes type as a string ("integer") for non-nullable or an array (["array","null"])
+// for nullable — we accept both forms.
 func schemaTypeHas(raw any, want string) bool {
 	switch v := raw.(type) {
 	case string:

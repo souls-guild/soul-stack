@@ -1,16 +1,16 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2a разворота SIGIL-KEY-домена (/v1/sigil/keys) ЦЕЛИКОМ на
-// huma full-typed (ADR-054 §Pattern, эталоны role). introduce/set-primary/retire —
-// WRITE+AUDIT (вариант B, huma-audit-middleware; события sigil.key-introduced/
-// sigil.key-primary-set/sigil.key-retired); list — read-bare (БЕЗ audit). Доказывают:
+// Guard tests of ROLLOUT-BATCH-2a moving the SIGIL-KEY domain (/v1/sigil/keys) WHOLESALE onto
+// huma full-typed (ADR-054 §Pattern, role references). introduce/set-primary/retire —
+// WRITE+AUDIT (variant B, huma-audit-middleware; events sigil.key-introduced/
+// sigil.key-primary-set/sigil.key-retired); list — read-bare (no audit). They prove:
 //
-//   - wire/golden: introduce 201 (стабильные поля; key_id/pubkey ed25519-генерятся,
-//     не byte-exact); list 200 items[]; set-primary/retire 204 пустое;
+//   - wire/golden: introduce 201 (stable fields; key_id/pubkey are ed25519-generated,
+//     not byte-exact); list 200 items[]; set-primary/retire 204 empty;
 //   - unknown-field → 400; bad key_id path → 422; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут (introduce/set-primary/retire): полная huma-
-//     навеска пишет audit-event с НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type на 2xx и
-//     НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route (introduce/set-primary/retire): the full huma
+//     wiring writes an audit event with a NON-EMPTY payload + the CORRECT event type on 2xx and
+//     does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -33,21 +33,21 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// skTestKeyID — валидный key_id (64 hex) для set-primary/retire path-роутов.
+// skTestKeyID — a valid key_id (64 hex) for the set-primary/retire path routes.
 const skTestKeyID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 var skIntroducedAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// skVault — мок [sigil.VaultWriter] (WriteKV no-op).
+// skVault — mock [sigil.VaultWriter] (WriteKV no-op).
 type skVault struct{}
 
 func (skVault) WriteKV(context.Context, string, map[string]any) error { return nil }
 
-// skPool — мок [sigil.KeyStorePool] для всех sigil-key-success-путей huma-теста.
+// skPool — mock [sigil.KeyStorePool] for all sigil-key success paths of the huma test.
 // introduce: BeginTx → insert QueryRow(id, introduced_at) → Commit. set-primary:
 // selectKeyForUpdate → active non-primary → clear+set Exec → Commit. retire:
 // lockActive (count>1) → selectKeyForUpdate active non-primary → retire Exec(rows=1)
-// → Commit. list: listActiveKeys Query → один active non-primary ключ.
+// → Commit. list: listActiveKeys Query → one active non-primary key.
 type skPool struct{}
 
 func (skPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -59,7 +59,7 @@ func (skPool) QueryRow(context.Context, string, ...any) pgx.Row {
 func (skPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FROM sigil_signing_keys") && strings.Contains(sql, "status = 'active'") && strings.Contains(sql, "ORDER BY"):
-		return &skListRows{}, nil // listActiveKeys: один active non-primary ключ
+		return &skListRows{}, nil // listActiveKeys: one active non-primary key
 	case strings.Contains(sql, "FOR UPDATE"):
 		return &skLockRows{ids: []int64{1, 2}}, nil // countLockedActive>1 → retire ok
 	}
@@ -69,7 +69,7 @@ func (skPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return skTx{}, nil
 }
 
-// skTx — pgx.Tx под insert/select/exec-пути introduce/set-primary/retire.
+// skTx — a pgx.Tx for the insert/select/exec paths of introduce/set-primary/retire.
 type skTx struct{ pgx.Tx }
 
 func (skTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -83,7 +83,7 @@ func (skTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	case strings.Contains(sql, "INSERT INTO sigil_signing_keys"):
 		return skInsertRow{id: 1, at: skIntroducedAt}
 	case strings.Contains(sql, "WHERE key_id ="):
-		// selectKeyForUpdate: active non-primary целевой ключ (10 колонок).
+		// selectKeyForUpdate: active non-primary target key (10 columns).
 		return skKeyRow{}
 	}
 	return skErrRow{err: pgx.ErrNoRows}
@@ -95,7 +95,7 @@ type skErrRow struct{ err error }
 
 func (r skErrRow) Scan(...any) error { return r.err }
 
-// skInsertRow — RETURNING (id, introduced_at) insert-а introduce.
+// skInsertRow — RETURNING (id, introduced_at) of the introduce insert.
 type skInsertRow struct {
 	id int64
 	at time.Time
@@ -107,7 +107,7 @@ func (r skInsertRow) Scan(dest ...any) error {
 	return nil
 }
 
-// skKeyRow — selectKeyByIDForUpdate (10 колонок): active non-primary целевой ключ.
+// skKeyRow — selectKeyByIDForUpdate (10 columns): active non-primary target key.
 type skKeyRow struct{}
 
 func (skKeyRow) Scan(dest ...any) error {
@@ -115,7 +115,7 @@ func (skKeyRow) Scan(dest ...any) error {
 	*(dest[1].(*string)) = skTestKeyID       // key_id
 	*(dest[2].(*string)) = "pem"             // pubkey_pem
 	*(dest[3].(*string)) = "vault:ref"       // vault_ref
-	*(dest[4].(*bool)) = false               // is_primary (НЕ primary → retire/set-primary ok)
+	*(dest[4].(*bool)) = false               // is_primary (NOT primary → retire/set-primary ok)
 	*(dest[5].(*string)) = "active"          // status
 	*(dest[6].(*time.Time)) = skIntroducedAt // introduced_at
 	*(dest[7].(**string)) = nil              // introduced_by_aid
@@ -124,7 +124,7 @@ func (skKeyRow) Scan(dest ...any) error {
 	return nil
 }
 
-// skLockRows — countLockedActive (id-набор FOR UPDATE).
+// skLockRows — countLockedActive (id set FOR UPDATE).
 type skLockRows struct {
 	ids []int64
 	idx int
@@ -143,7 +143,7 @@ func (r *skLockRows) Values() ([]any, error)                       { return nil,
 func (r *skLockRows) RawValues() [][]byte                          { return nil }
 func (r *skLockRows) Conn() *pgx.Conn                              { return nil }
 
-// skListRows — listActiveKeys: один active non-primary ключ (10 колонок).
+// skListRows — listActiveKeys: one active non-primary key (10 columns).
 type skListRows struct{ done bool }
 
 func (r *skListRows) Next() bool {
@@ -162,9 +162,9 @@ func (r *skListRows) Values() ([]any, error)                       { return nil,
 func (r *skListRows) RawValues() [][]byte                          { return nil }
 func (r *skListRows) Conn() *pgx.Conn                              { return nil }
 
-// humaSigilKeyRouter собирает chi-роутер со ВСЕМИ sigil-key-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(sigil.key-*) на каждой группе +
-// (для write) huma-audit-middleware вариант B + huma-операция. injectClaims заменяет
+// humaSigilKeyRouter assembles a chi router with ALL sigil-key routes via huma —
+// the production wiring from router.go: RequirePermission(sigil.key-*) on each group +
+// (for write) huma-audit-middleware variant B + the huma operation. injectClaims replaces
 // RequireJWT.
 func humaSigilKeyRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer) *chi.Mux {
 	t.Helper()
@@ -215,17 +215,17 @@ func TestHumaSigilKey_Introduce_201(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
-	// key_id/pubkey ed25519-генерятся (не byte-exact); сторожим набор полей + типы.
+	// key_id/pubkey are ed25519-generated (not byte-exact); we guard the field set + types.
 	for _, k := range []string{"key_id", "pubkey_pem", "is_primary", "status", "introduced_at"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("introduce 201-тело без поля %q: %v", k, m)
 		}
 	}
 	if m["is_primary"] != true {
-		// makePrimary default — первый ключ становится primary (Introduce-семантика).
+		// makePrimary default — the first key becomes primary (Introduce semantics).
 		t.Logf("is_primary=%v (makePrimary=false; зависит от наличия active-primary)", m["is_primary"])
 	}
-	// pubkey НЕ должен нести приватник.
+	// pubkey must NOT carry the private key.
 	if pem, _ := m["pubkey_pem"].(string); strings.Contains(pem, "PRIVATE") {
 		t.Errorf("SECURITY: introduce-ответ несёт PRIVATE-материал: %q", pem)
 	}
@@ -293,7 +293,7 @@ func TestHumaAudit_SigilKeyIntroduce_NoAudit_OnRBACDeny(t *testing.T) {
 	}
 }
 
-// === LIST (READ-bare, БЕЗ audit) ===
+// === LIST (READ-bare, no audit) ===
 
 func TestHumaSigilKey_List_GoldenWire(t *testing.T) {
 	r := humaSigilKeyRouter(t, strictAllowAll{}, nil)
@@ -424,7 +424,7 @@ func TestHumaAudit_SigilKeyRetire_NoAudit_OnBadKeyID(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ sigil-key-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL sigil-key operations from FULL-TYPED Go types ===
 
 func TestHumaSigilKey_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaSigilKeySpecYAML()

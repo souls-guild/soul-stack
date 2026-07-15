@@ -1,22 +1,23 @@
 package api
 
-// GET /v1/incarnations/{name}/runs/{apply_id}/events — live-ход прогона инкарнации
-// (SSE, ADR-068 §A3). Симметрия существующему RunDetail-пути + прецеденту SSE
-// `/mcp/events`, но на Operator-плоскости /v1.
+// GET /v1/incarnations/{name}/runs/{apply_id}/events — live progress of an incarnation
+// run (SSE, ADR-068 §A3). Symmetric to the existing RunDetail path + the SSE precedent
+// `/mcp/events`, but on the Operator plane /v1.
 //
-// AUTH (ADR-068 §A0 = fetch-streaming): фронт открывает поток через `fetch()`+
-// `getReader()` и шлёт `Authorization: Bearer` (в отличие от EventSource, fetch умеет
-// заголовки) → токен НЕ в URL. Route под /v1 RequireJWT-цепочкой (`*/events`-путь).
-// Отдельного минтинг-эндпоинта/короткого query-token НЕТ (отброшен из ADR-068).
+// AUTH (ADR-068 §A0 = fetch-streaming): the frontend opens the stream via `fetch()`+
+// `getReader()` and sends `Authorization: Bearer` (unlike EventSource, fetch can set
+// headers) → the token is NOT in the URL. Route is under the /v1 RequireJWT chain (the
+// `*/events` path). There is NO separate minting endpoint / short query-token (dropped
+// from ADR-068).
 //
-// ПОЧЕМУ НЕ /mcp/events: та — MCP-плоскость (JSON-RPC tool-call streaming), свой auth.
-// Тащить web-UI в MCP-канал = смешение плоскостей. ★ /mcp/events этим слайсом НЕ
-// трогается — узкий дубль потока/маскинга здесь (ADR-068 §A3 «продублировать узко»,
-// вместо расшаривания кода из mcp/sse.go).
+// WHY NOT /mcp/events: that is the MCP plane (JSON-RPC tool-call streaming), its own auth.
+// Dragging the web UI into the MCP channel = mixing planes. ★ /mcp/events is NOT touched
+// by this slice — a narrow duplicate of the stream/masking lives here (ADR-068 §A3
+// "duplicate narrowly", instead of sharing code from mcp/sse.go).
 //
-// Регистрируется через huma.StreamResponse → операция попадает в OpenAPI-спеку
-// (drift-guard TestFullSpec_CoversAllRoutes) при полном контроле тела стрима
-// (heartbeat/max-lifetime/frame/маскинг/лимиты), которого huma/sse-хелпер не даёт.
+// Registered via huma.StreamResponse → the operation lands in the OpenAPI spec (drift-guard
+// TestFullSpec_CoversAllRoutes) with full control of the stream body
+// (heartbeat/max-lifetime/frame/masking/limits), which the huma/sse helper does not give.
 
 import (
 	"context"
@@ -37,9 +38,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// SSE-параметры (parity mcp/sse.go). Heartbeat не даёт proxy/LB закрыть idle-соединение;
-// max-lifetime — потолок против FD/goroutine-утечки «зависших» клиентов; conn-лимиты —
-// защита FD/goroutine-бюджета инстанса и от одного Архонта с сотнями стримов.
+// SSE parameters (parity with mcp/sse.go). Heartbeat keeps a proxy/LB from closing an idle
+// connection; max-lifetime is the ceiling against FD/goroutine leaks from "stuck" clients;
+// conn limits protect the instance's FD/goroutine budget and guard against a single Archon
+// with hundreds of streams.
 const (
 	sseHeartbeatInterval = 30 * time.Second
 	sseMaxLifetime       = 30 * time.Minute
@@ -47,14 +49,14 @@ const (
 	sseMaxConnsPerAID    = 16
 )
 
-// runEventsAccess — узкая поверхность резолва apply_id → владелец+incarnation для
-// RBAC SSE-подписки. Прод — [applyrun.SelectAccessByApplyID] поверх pool; тест
-// подставляет fake.
+// runEventsAccess — a narrow surface for resolving apply_id → owner+incarnation for the
+// RBAC SSE subscription. Prod uses [applyrun.SelectAccessByApplyID] over the pool; the test
+// substitutes a fake.
 type runEventsAccess interface {
 	Access(ctx context.Context, applyID string) (*applyrun.Access, error)
 }
 
-// runEventsPGAccess — прод-реализация [runEventsAccess] поверх Operator-pool-а.
+// runEventsPGAccess — the prod implementation of [runEventsAccess] over the Operator pool.
 type runEventsPGAccess struct {
 	db applyrun.ExecQueryRower
 }
@@ -63,9 +65,9 @@ func (a runEventsPGAccess) Access(ctx context.Context, applyID string) (*applyru
 	return applyrun.SelectAccessByApplyID(ctx, a.db, applyID)
 }
 
-// runEventsDeps — зависимости SSE-handler-а прогона. Bus/Access/RBAC обеспечивают
-// поток + RBAC-подписку; Limiter/Logger — resource-guard и наблюдаемость. Любой nil
-// (кроме Limiter/Logger) → подписка отклоняется fail-closed (см. [authorizeRunEventsSSE]).
+// runEventsDeps — dependencies of the run SSE handler. Bus/Access/RBAC provide the stream +
+// the RBAC subscription; Limiter/Logger are the resource-guard and observability. Any nil
+// (except Limiter/Logger) → the subscription is rejected fail-closed (see [authorizeRunEventsSSE]).
 type runEventsDeps struct {
 	Bus     *applybus.EventBus
 	Access  runEventsAccess
@@ -74,8 +76,8 @@ type runEventsDeps struct {
 	Logger  *slog.Logger
 }
 
-// newRunEventsDeps собирает прод-deps поверх applybus + Operator-pool + enforcer.
-// db/rbac/bus nil → SSE-route в router.go не монтируется (opt-in wire-up).
+// newRunEventsDeps assembles the prod deps over applybus + Operator-pool + enforcer.
+// db/rbac/bus nil → the SSE route is not mounted in router.go (opt-in wire-up).
 func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac apimiddleware.PermissionChecker, logger *slog.Logger) *runEventsDeps {
 	if bus == nil || db == nil || rbac == nil {
 		return nil
@@ -92,7 +94,7 @@ func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac a
 	}
 }
 
-// incRunEventsInput — huma-input GET .../runs/{apply_id}/events. Name/ApplyID — path.
+// incRunEventsInput — huma input for GET .../runs/{apply_id}/events. Name/ApplyID are path params.
 type incRunEventsInput struct {
 	Name    string `path:"name" doc:"имя инкарнации"`
 	ApplyID string `path:"apply_id" doc:"ULID прогона; чужой/несуществующий → 403 (anti-enum)"`
@@ -109,8 +111,8 @@ func incRunEventsOperation() huma.Operation {
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
-	// Явно декларируем text/event-stream (parity huma/sse-хелпера) — тело потоковое,
-	// именованной схемы не заводим (inline string), чтобы не плодить тех-имя в спеке.
+	// Explicitly declare text/event-stream (parity with the huma/sse helper) — the body is
+	// streaming; we do not create a named schema (inline string), to avoid a tech name in the spec.
 	op.Responses = map[string]*huma.Response{
 		"200": {
 			Description: "SSE-поток apply-событий прогона",
@@ -122,11 +124,11 @@ func incRunEventsOperation() huma.Operation {
 	return op
 }
 
-// registerHumaIncarnationRunEvents монтирует GET .../runs/{apply_id}/events как
-// потоковый (huma.StreamResponse). deps nil → no-op (opt-in wire-up). Route под /v1
-// RequireJWT-цепочкой (query-token */events из канона) БЕЗ chi-RequireAction: RBAC
-// «инициатор ИЛИ incarnation.get/history» не выражается existence-gate-ом (инициатор
-// может не иметь права) — вся авторизация in-handler (parity /mcp/events authorizeSSE).
+// registerHumaIncarnationRunEvents mounts GET .../runs/{apply_id}/events as a streaming
+// route (huma.StreamResponse). deps nil → no-op (opt-in wire-up). Route is under the /v1
+// RequireJWT chain (canonical query-token */events) WITHOUT a chi RequireAction: the RBAC
+// "initiator OR incarnation.get/history" is not expressible as an existence gate (the
+// initiator may lack the right) — all authorization is in-handler (parity /mcp/events authorizeSSE).
 func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 	if deps == nil {
 		return
@@ -136,13 +138,13 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 		if !ok || claims == nil {
 			return nil, incMissingClaims()
 		}
-		// anti-enum: ЛЮБОЙ отказ (не найден / чужая инкарнация / нет прав) → одинаковый
-		// 403, неотличимый от «нет доступа» (ULID угадываем, parity /mcp/events).
+		// anti-enum: ANY denial (not found / foreign incarnation / no rights) → the same
+		// 403, indistinguishable from "no access" (ULIDs are guessable, parity /mcp/events).
 		if !authorizeRunEventsSSE(ctx, deps, claims.Subject, in.Name, in.ApplyID) {
 			return nil, sseForbidden()
 		}
-		// conn-limit (M4): слот занимаем ТОЛЬКО под авторизованную подписку, освобождаем
-		// в defer тела стрима (huma гарантированно вызывает Body у StreamResponse).
+		// conn-limit (M4): take a slot ONLY for an authorized subscription, release it in the
+		// stream body's defer (huma is guaranteed to call Body on a StreamResponse).
 		if deps.Limiter != nil && !deps.Limiter.Acquire(claims.Subject) {
 			return nil, sseTooManyStreams()
 		}
@@ -157,12 +159,12 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 	})
 }
 
-// authorizeRunEventsSSE — RBAC-проверка подписки на apply_id (ADR-068 §A3, parity
-// /mcp/events authorizeSSE). fail-closed на любом сбое/nil-deps. Порядок:
-//   - Access/RBAC nil или lookup-ошибка/не найден → deny (anti-enum, неотличимо от отказа);
-//   - apply_id принадлежит ДРУГОЙ инкарнации (не path-{name}) → deny (чужой прогон);
-//   - инициатор прогона (started_by_aid == sub) → allow;
-//   - иначе allow при incarnation.get ЛИБО incarnation.history на инкарнации.
+// authorizeRunEventsSSE — RBAC check of the subscription to apply_id (ADR-068 §A3, parity
+// with /mcp/events authorizeSSE). fail-closed on any failure / nil deps. Order:
+//   - Access/RBAC nil or lookup error / not found → deny (anti-enum, indistinguishable from a denial);
+//   - apply_id belongs to a DIFFERENT incarnation (not path-{name}) → deny (foreign run);
+//   - the run initiator (started_by_aid == sub) → allow;
+//   - otherwise allow on incarnation.get OR incarnation.history on the incarnation.
 func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, applyID string) bool {
 	if deps.Access == nil {
 		return false
@@ -171,8 +173,8 @@ func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, 
 	if err != nil {
 		return false
 	}
-	// apply_id обязан быть прогоном ИМЕННО этой инкарнации (path-{name}); иначе — чужой
-	// прогон, deny без раскрытия, что apply_id живёт в другой инкарнации.
+	// apply_id must be a run of THIS exact incarnation (path-{name}); otherwise it is a foreign
+	// run, deny without revealing that apply_id lives in another incarnation.
 	if acc.IncarnationName != name {
 		return false
 	}
@@ -191,10 +193,10 @@ func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, 
 	return false
 }
 
-// streamRunEvents гонит apply-события applyID в SSE-поток до отключения клиента,
-// max-lifetime или закрытия шины. Frame `event/id/data`, heartbeat 30s (parity
-// mcp/sse.go). Payload маскируется [audit.MaskSecrets] на write-path (второй барьер
-// поверх секрет-гигиены publisher-ов).
+// streamRunEvents pushes applyID's apply events into the SSE stream until the client
+// disconnects, max-lifetime, or the bus closes. Frame `event/id/data`, heartbeat 30s (parity
+// with mcp/sse.go). The payload is masked by [audit.MaskSecrets] on the write path (a second
+// barrier over the publishers' secret hygiene).
 func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string) {
 	hctx.SetHeader("Content-Type", "text/event-stream")
 	hctx.SetHeader("Cache-Control", "no-cache")
@@ -204,14 +206,14 @@ func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string
 	bw := hctx.BodyWriter()
 	flusher := unwrapFlusher(bw)
 	if d := unwrapWriteDeadliner(bw); d != nil {
-		// SSE — long-lived: снимаем WriteTimeout http.Server для этого запроса.
+		// SSE is long-lived: clear the http.Server WriteTimeout for this request.
 		_ = d.SetWriteDeadline(time.Time{})
 	}
 
-	// Немедленный flush заголовков (200) + SSE-комментарий: EventSource onopen
-	// срабатывает ДО первого события/heartbeat (client-open immediacy, parity
-	// mcp/sse.go WriteHeader+Flush). Иначе huma коммитит 200 лишь на первой записи —
-	// клиент висел бы до heartbeat 30s.
+	// Immediate flush of the headers (200) + an SSE comment: EventSource onopen fires BEFORE
+	// the first event/heartbeat (client-open immediacy, parity with mcp/sse.go
+	// WriteHeader+Flush). Otherwise huma commits 200 only on the first write — the client would
+	// hang until the 30s heartbeat.
 	_, _ = bw.Write([]byte(":ok\n\n"))
 	flush(flusher)
 
@@ -249,8 +251,8 @@ func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string
 	}
 }
 
-// writeRunEventFrame сериализует apply-событие в SSE-frame `event/id/data` с маскингом
-// payload (H1, второй барьер). Узкий дубль mcp writeSSEEvent — /mcp/events не трогаем.
+// writeRunEventFrame serializes an apply event into the SSE frame `event/id/data` with payload
+// masking (H1, the second barrier). A narrow duplicate of mcp writeSSEEvent — /mcp/events is not touched.
 func writeRunEventFrame(w io.Writer, ev applybus.Event) error {
 	masked := maskRunEventPayload(ev.Payload)
 	payloadJSON, err := json.Marshal(masked)
@@ -261,8 +263,8 @@ func writeRunEventFrame(w io.Writer, ev applybus.Event) error {
 	return err
 }
 
-// maskRunEventPayload приводит payload к masked-форме (H1): map — напрямую MaskSecrets;
-// raw-JSON (cross-Keeper bridge) — декод→маск→map; иное — как есть. Узкий дубль mcp
+// maskRunEventPayload brings the payload to a masked form (H1): a map — directly MaskSecrets;
+// raw JSON (cross-Keeper bridge) — decode→mask→map; otherwise — as-is. A narrow duplicate of mcp
 // maskSSEPayload (ADR-068 §A3).
 func maskRunEventPayload(payload any) any {
 	switch p := payload.(type) {
@@ -287,7 +289,7 @@ func maskRunEventRawJSON(raw []byte) any {
 	return audit.MaskSecrets(m)
 }
 
-// --- потоковые helper-ы (unwrap flusher/deadliner из BodyWriter huma-адаптера) ---
+// --- streaming helpers (unwrap flusher/deadliner from the huma adapter's BodyWriter) ---
 
 func flush(f http.Flusher) {
 	if f != nil {
@@ -323,7 +325,7 @@ func unwrapWriteDeadliner(w io.Writer) writeDeadliner {
 	}
 }
 
-// --- problem-ответы SSE-route ---
+// --- problem responses for the SSE route ---
 
 func sseForbidden() huma.StatusError {
 	return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "forbidden: no access to this run")}
@@ -333,7 +335,7 @@ func sseTooManyStreams() huma.StatusError {
 	return humaProblemError{Details: problemWithStatus(problem.TypeTempoExceeded, http.StatusTooManyRequests, "too many concurrent event streams; retry later")}
 }
 
-// --- conn-limiter (глобальный + per-AID, parity mcp sseConnLimiter, узкий дубль) ---
+// --- conn-limiter (global + per-AID, parity with mcp sseConnLimiter, narrow duplicate) ---
 
 type sseConnLimiter struct {
 	mu        sync.Mutex
@@ -347,7 +349,7 @@ func newSSEConnLimiter(maxGlobal, maxPerAID int) *sseConnLimiter {
 	return &sseConnLimiter{maxGlobal: maxGlobal, maxPerAID: maxPerAID, perAID: make(map[string]int)}
 }
 
-// Acquire резервирует слот под aid; false при превышении global/per-AID лимита.
+// Acquire reserves a slot for aid; false when the global/per-AID limit is exceeded.
 func (l *sseConnLimiter) Acquire(aid string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -362,7 +364,7 @@ func (l *sseConnLimiter) Acquire(aid string) bool {
 	return true
 }
 
-// Release освобождает слот aid (ровно один раз на успешный Acquire).
+// Release frees aid's slot (exactly once per successful Acquire).
 func (l *sseConnLimiter) Release(aid string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

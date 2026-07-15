@@ -14,9 +14,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/profile"
 )
 
-// fakeProfilePool — in-memory имитация PG для profile-CRUD. providers — set
-// существующих Provider-имён (имитация FK profiles_provider_fk): INSERT с
-// несуществующим provider → FK-violation.
+// fakeProfilePool — an in-memory PG simulation for profile CRUD. providers is a set
+// of existing Provider names (simulates FK profiles_provider_fk): INSERT with a
+// nonexistent provider → FK violation.
 type fakeProfilePool struct {
 	entries   map[string]*profile.Profile
 	providers map[string]bool
@@ -123,7 +123,7 @@ func TestProfileHandler_CreateGetListDelete(t *testing.T) {
 	if reply.Body.Name != "web-small" || reply.Body.Provider != "wb-cloud" {
 		t.Fatalf("create body = %+v", reply.Body)
 	}
-	// Audit несёт params_keys (без values — секрет-гигиена).
+	// Audit carries params_keys (no values — secret hygiene).
 	keys, _ := reply.AuditPayload()["params_keys"].([]string)
 	if len(keys) != 2 {
 		t.Errorf("params_keys = %v, want 2 keys", keys)
@@ -167,7 +167,7 @@ func TestProfileHandler_DuplicateConflict(t *testing.T) {
 }
 
 func TestProfileHandler_MissingProvider422(t *testing.T) {
-	h := newProfileHandler(t, newFakeProfilePool()) // нет ни одного Provider
+	h := newProfileHandler(t, newFakeProfilePool()) // no Provider at all
 	_, err := h.CreateTyped(context.Background(), cloudClaims(), ProfileCreateInput{
 		Name: "orphan", Provider: "ghost",
 	})

@@ -1,11 +1,12 @@
 package handlers
 
-// Guard-тесты глобального read-view прогонов на handler-границе (AllRunsTyped /
-// RunsStatsTyped): валидация входа (limit-cap 100 / статус / имя инкарнации),
-// fail-closed Purview (nil claims / nil scoper / пустой scope → пустой ответ БЕЗ
-// захода в store), scope-pushdown (подзапрос по incarnation в SQL + bind-args) и
-// проекция store→View. Реальная SQL-семантика свёртки — в integration-тестах
-// applyrun (runsglobal_integration_test.go); здесь именно handler-слой.
+// Guard tests for the global read view of runs at the handler boundary
+// (AllRunsTyped / RunsStatsTyped): input validation (limit cap 100 / status /
+// incarnation name), fail-closed Purview (nil claims / nil scoper / empty scope →
+// empty response WITHOUT hitting the store), scope-pushdown (an incarnation subquery
+// in SQL + bind-args) and the store→View projection. The real SQL rollup semantics
+// live in the applyrun integration tests (runsglobal_integration_test.go); here it
+// is the handler layer.
 
 import (
 	"context"
@@ -22,13 +23,13 @@ import (
 
 func runsClaims() *keeperjwt.Claims { return &keeperjwt.Claims{Subject: "archon-alice"} }
 
-// newRunsHandler — handler с fake-БД и заданным scoper-ом (только db/scoper нужны
-// глобальному read-view).
+// newRunsHandler — a handler with a fake DB and the given scoper (only db/scoper are
+// needed by the global read view).
 func newRunsHandler(db *fakeIncDB, scoper PurviewResolver) *IncarnationHandler {
 	return NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, scoper, nil)
 }
 
-// --- AllRunsTyped: валидация входа -------------------------------------
+// --- AllRunsTyped: input validation -------------------------------------
 
 func TestAllRunsTyped_BadLimit_400(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
@@ -36,8 +37,8 @@ func TestAllRunsTyped_BadLimit_400(t *testing.T) {
 	requireProblemStatus(t, err, 400)
 }
 
-// TestAllRunsTyped_LimitOver100_400 — спец-cap /v1/runs: limit ≤ 100 (уже общего
-// MaxPageLimit=1000).
+// TestAllRunsTyped_LimitOver100_400 — special cap for /v1/runs: limit ≤ 100
+// (tighter than the shared MaxPageLimit=1000).
 func TestAllRunsTyped_LimitOver100_400(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(), AllRunsInput{Offset: 0, Limit: 101})
@@ -58,8 +59,8 @@ func TestAllRunsTyped_BadIncarnationName_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_BadSort_422 — не-whitelist поле сортировки → 422 (sentinel из
-// store, ADR-068 §B1).
+// TestAllRunsTyped_BadSort_422 — a non-whitelist sort field → 422 (sentinel from
+// the store, ADR-068 §B1).
 func TestAllRunsTyped_BadSort_422(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
@@ -67,7 +68,7 @@ func TestAllRunsTyped_BadSort_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_BadSortDir_422 — не-asc/desc направление → 422.
+// TestAllRunsTyped_BadSortDir_422 — a non-asc/desc direction → 422.
 func TestAllRunsTyped_BadSortDir_422(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
@@ -75,8 +76,8 @@ func TestAllRunsTyped_BadSortDir_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_ValidSort_OK — валидные sort/sort_dir прокидываются в store и
-// не роняют путь (реальный порядок — в integration-тестах applyrun).
+// TestAllRunsTyped_ValidSort_OK — valid sort/sort_dir are passed to the store and
+// do not break the path (the real ordering is in the applyrun integration tests).
 func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -89,14 +90,15 @@ func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_ServiceLongName_NoValidation422 — service-фильтр — точный
-// bound-match, НЕ доменный валидатор: легитимное имя сервиса длиной ≥64 (валидно
-// для реестра ^[a-z][a-z0-9-]*$, миграция 034 без cap длины; incarnation.service
-// без формат-CHECK, 005) не даёт 422, а доходит до store bind-аргом.
+// TestAllRunsTyped_ServiceLongName_NoValidation422 — the service filter is an exact
+// bound-match, NOT a domain validator: a legitimate service name of length ≥64
+// (valid for the registry ^[a-z][a-z0-9-]*$, migration 034 with no length cap;
+// incarnation.service has no format CHECK, 005) does not yield 422 but reaches the
+// store as a bind-arg.
 func TestAllRunsTyped_ServiceLongName_NoValidation422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
-	longSvc := strings.Repeat("a", 80) // валиден для реестра, но длиннее старого cap ValidName=63
+	longSvc := strings.Repeat("a", 80) // valid for the registry, but longer than the old ValidName=63 cap
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Service: longSvc, Offset: 0, Limit: 50}); err != nil {
 		t.Fatalf("AllRunsTyped(long service): неожиданно 422/ошибка на валидном сервисе: %v", err)
@@ -109,9 +111,9 @@ func TestAllRunsTyped_ServiceLongName_NoValidation422(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_ServiceGarbage_SafeBind — мусорный/инъекционный service —
-// bound bind-арг (не конкатенация): не 422 и не 500, доходит до store как
-// значение (на реальном PG exact-match даст пустую выдачу).
+// TestAllRunsTyped_ServiceGarbage_SafeBind — a garbage/injection service is a bound
+// bind-arg (not concatenation): neither 422 nor 500, reaches the store as a value
+// (on real PG an exact-match yields empty output).
 func TestAllRunsTyped_ServiceGarbage_SafeBind(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -125,13 +127,13 @@ func TestAllRunsTyped_ServiceGarbage_SafeBind(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_FilterCapByRunes — cap service/q считается в РУНАХ, не байтах:
-// 128 кириллических символов (256 байт) проходят, 129 — 422 (оба поля).
+// TestAllRunsTyped_FilterCapByRunes — the service/q cap is counted in RUNES, not
+// bytes: 128 Cyrillic characters (256 bytes) pass, 129 — 422 (both fields).
 func TestAllRunsTyped_FilterCapByRunes(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
-	okRunes := strings.Repeat("я", 128) // 256 байт — в байтовом cap отсеклось бы
-	tooLong := strings.Repeat("я", 129) // 129 символов — за границей
+	okRunes := strings.Repeat("я", 128) // 256 bytes — a byte cap would have cut it
+	tooLong := strings.Repeat("я", 129) // 129 characters — over the limit
 
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Q: okRunes, Offset: 0, Limit: 50}); err != nil {
@@ -149,7 +151,7 @@ func TestAllRunsTyped_FilterCapByRunes(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_BadStartedAfter_422 — малформед started_after (не RFC3339) → 422.
+// TestAllRunsTyped_BadStartedAfter_422 — malformed started_after (not RFC3339) → 422.
 func TestAllRunsTyped_BadStartedAfter_422(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
@@ -157,7 +159,7 @@ func TestAllRunsTyped_BadStartedAfter_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_BadStartedBefore_422 — малформед started_before → 422.
+// TestAllRunsTyped_BadStartedBefore_422 — malformed started_before → 422.
 func TestAllRunsTyped_BadStartedBefore_422(t *testing.T) {
 	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
 	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
@@ -165,8 +167,8 @@ func TestAllRunsTyped_BadStartedBefore_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
-// TestAllRunsTyped_TimeFilters_Bind — валидные RFC3339-границы парсятся и уходят в
-// store bind-аргами (time.Time), путь не роняется.
+// TestAllRunsTyped_TimeFilters_Bind — valid RFC3339 bounds are parsed and go to the
+// store as bind-args (time.Time), the path does not break.
 func TestAllRunsTyped_TimeFilters_Bind(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -191,8 +193,8 @@ func TestAllRunsTyped_TimeFilters_Bind(t *testing.T) {
 
 // --- AllRunsTyped: fail-closed Purview ----------------------------------
 
-// TestAllRunsTyped_NilClaims_FailClosed — нет claims → пустая страница (200), store
-// НЕ вызван (не палим прогоны всего флота).
+// TestAllRunsTyped_NilClaims_FailClosed — no claims → empty page (200), store NOT
+// called (do not leak runs across all incarnations).
 func TestAllRunsTyped_NilClaims_FailClosed(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -208,8 +210,8 @@ func TestAllRunsTyped_NilClaims_FailClosed(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_EmptyPurview_FailClosed — Purview без измерений → пустая
-// страница, store не вызван.
+// TestAllRunsTyped_EmptyPurview_FailClosed — Purview with no dimensions → empty
+// page, store not called.
 func TestAllRunsTyped_EmptyPurview_FailClosed(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{empty: true})
@@ -225,7 +227,7 @@ func TestAllRunsTyped_EmptyPurview_FailClosed(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_NilScoper_FailClosed — мис-wire-up (scoper nil) → пустая страница.
+// TestAllRunsTyped_NilScoper_FailClosed — mis-wire-up (scoper nil) → empty page.
 func TestAllRunsTyped_NilScoper_FailClosed(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, nil)
@@ -239,10 +241,10 @@ func TestAllRunsTyped_NilScoper_FailClosed(t *testing.T) {
 	}
 }
 
-// --- AllRunsTyped: scope-pushdown и проекция -----------------------------
+// --- AllRunsTyped: scope-pushdown and projection -----------------------------
 
-// TestAllRunsTyped_ScopePushdownSQL — coven-scoped оператор: scope уходит в SQL
-// подзапросом по incarnation (coven∪{name}-плечо), scope-значения — bind-args.
+// TestAllRunsTyped_ScopePushdownSQL — a coven-scoped operator: scope goes into SQL
+// as an incarnation subquery (the coven∪{name} arm), scope values — bind-args.
 func TestAllRunsTyped_ScopePushdownSQL(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{covens: []string{"prod"}})
@@ -269,8 +271,8 @@ func TestAllRunsTyped_ScopePushdownSQL(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_Unrestricted_NoScopeSubquery — Unrestricted-оператор: scope-
-// подзапрос в SQL отсутствует (полный список без ограничения).
+// TestAllRunsTyped_Unrestricted_NoScopeSubquery — an Unrestricted operator: no
+// scope subquery in SQL (the full list without restriction).
 func TestAllRunsTyped_Unrestricted_NoScopeSubquery(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -282,7 +284,7 @@ func TestAllRunsTyped_Unrestricted_NoScopeSubquery(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_Filters_Bind — фильтры status/incarnation уходят bind-аргами.
+// TestAllRunsTyped_Filters_Bind — the status/incarnation filters go as bind-args.
 func TestAllRunsTyped_Filters_Bind(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
@@ -295,8 +297,8 @@ func TestAllRunsTyped_Filters_Bind(t *testing.T) {
 	}
 }
 
-// TestAllRunsTyped_Projection_OK — happy-path проекции store→View: два прогона
-// разных инкарнаций, все поля перенесены.
+// TestAllRunsTyped_Projection_OK — happy path of the store→View projection: two runs
+// of different incarnations, all fields carried over.
 func TestAllRunsTyped_Projection_OK(t *testing.T) {
 	now := time.Now().UTC()
 	fin := now.Add(time.Minute)
@@ -344,8 +346,8 @@ func TestAllRunsTyped_Projection_OK(t *testing.T) {
 
 // --- RunsStatsTyped ------------------------------------------------------
 
-// TestRunsStatsTyped_NilClaims_ZeroStats — fail-closed: нулевой агрегат (200),
-// store не вызван.
+// TestRunsStatsTyped_NilClaims_ZeroStats — fail-closed: zero aggregate (200), store
+// not called.
 func TestRunsStatsTyped_NilClaims_ZeroStats(t *testing.T) {
 	storeCalled := false
 	db := &fakeIncDB{applyRunsRows: func() (pgx.Rows, error) { storeCalled = true; return &emptyRows{}, nil }}
@@ -362,7 +364,7 @@ func TestRunsStatsTyped_NilClaims_ZeroStats(t *testing.T) {
 	}
 }
 
-// TestRunsStatsTyped_OK — проекция store→View: счётчики по статусам + total.
+// TestRunsStatsTyped_OK — store→View projection: per-status counters + total.
 func TestRunsStatsTyped_OK(t *testing.T) {
 	db := &fakeIncDB{
 		applyRunsRows: func() (pgx.Rows, error) {
@@ -388,9 +390,9 @@ func TestRunsStatsTyped_OK(t *testing.T) {
 	}
 }
 
-// --- rows-стабы ----------------------------------------------------------
+// --- row stubs ----------------------------------------------------------
 
-// globalRunRow — одна строка глобального списка (порядок колонок listSQL
+// globalRunRow — one row of the global list (column order of listSQL
 // applyrun.ListRuns: apply_id/incarnation/scenario/service/started_at/
 // finished_at/started_by_aid/status).
 type globalRunRow struct {
@@ -404,7 +406,7 @@ type globalRunRow struct {
 	status      string
 }
 
-// globalRunRows — pgx.Rows-стаб глобального списка прогонов.
+// globalRunRows — a pgx.Rows stub for the global runs list.
 type globalRunRows struct {
 	rows []globalRunRow
 	idx  int
@@ -447,7 +449,7 @@ func (r *globalRunRows) Values() ([]any, error)                       { return n
 func (r *globalRunRows) RawValues() [][]byte                          { return nil }
 func (r *globalRunRows) Conn() *pgx.Conn                              { return nil }
 
-// runsStatsRows — pgx.Rows-стаб stats-запроса (status/total/last24h).
+// runsStatsRows — a pgx.Rows stub for the stats query (status/total/last24h).
 type runsStatsRows struct {
 	rows [][3]any
 	idx  int

@@ -1,9 +1,9 @@
 package middleware
 
-// РЕГРЕСС NIM-37: рекордеры /v1 (StatusRecorder из audit.go, statusRecorder из authlimit.go)
-// встраивают http.ResponseWriter. Без Unwrap/Flush цепочки unwrapFlusher/unwrapWriteDeadliner
-// SSE-хендлера live-хода прогона рвутся на них → flush=no-op → поток не долетает клиенту.
-// Пиним прозрачность обоих звеньев (в т.ч. вложенных) для Flush и Unwrap.
+// REGRESSION NIM-37: the /v1 recorders (StatusRecorder from audit.go, statusRecorder from authlimit.go)
+// embed http.ResponseWriter. Without Unwrap/Flush, the unwrapFlusher/unwrapWriteDeadliner chains of
+// the run's live-progress SSE handler break on them → flush=no-op → the stream does not reach the client.
+// We pin the transparency of both links (including nested) for Flush and Unwrap.
 
 import (
 	"net/http"
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// flushSpy — терминальный ResponseWriter, фиксирующий факт Flush() (роль реального сокета).
+// flushSpy — a terminal ResponseWriter that records the fact of Flush() (the role of a real socket).
 type flushSpy struct {
 	http.ResponseWriter
 	flushed bool
@@ -19,8 +19,8 @@ type flushSpy struct {
 
 func (f *flushSpy) Flush() { f.flushed = true }
 
-// walkFlusher повторяет unwrapFlusher SSE-хендлера: http.Flusher напрямую ИЛИ по цепочке
-// Unwrap() http.ResponseWriter. nil — цепочка порвалась (звено не отдаёт ни Flush, ни Unwrap).
+// walkFlusher replicates the SSE handler's unwrapFlusher: http.Flusher directly OR via the
+// Unwrap() http.ResponseWriter chain. nil — the chain broke (a link exposes neither Flush nor Unwrap).
 func walkFlusher(w http.ResponseWriter) http.Flusher {
 	var cur any = w
 	for {
@@ -35,8 +35,8 @@ func walkFlusher(w http.ResponseWriter) http.Flusher {
 	}
 }
 
-// walkToSpy идёт по Unwrap()-цепочке до терминального *flushSpy — параллель
-// unwrapWriteDeadliner (тот же Unwrap-обход ищет SetWriteDeadline реального сокета).
+// walkToSpy walks the Unwrap() chain to the terminal *flushSpy — a parallel of
+// unwrapWriteDeadliner (the same Unwrap traversal finds the real socket's SetWriteDeadline).
 func walkToSpy(w http.ResponseWriter) *flushSpy {
 	cur := w
 	for {

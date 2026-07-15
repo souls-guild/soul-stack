@@ -6,30 +6,30 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// TempoMetrics — keeper_tempo_*-counters Tempo per-AID rate-limiter-а
-// (ADR-050(g)). Реализует [apimiddleware.RateLimitMetrics]: middleware зовёт
-// IncTempoAllowed / IncTempoRejected на каждом разрешённом / отклонённом запросе.
+// TempoMetrics — keeper_tempo_* counters of the Tempo per-AID rate-limiter
+// (ADR-050(g)). Implements [apimiddleware.RateLimitMetrics]: the middleware calls
+// IncTempoAllowed / IncTempoRejected on every allowed / rejected request.
 //
-// Лейбл `endpoint` = логическое bucket-имя (`voyage_create`); AID-лейбла НЕТ —
-// число операторов не ограничено, AID в лейбле взорвал бы кардинальность
-// time-series (ADR-050(g), отвергнутая альтернатива (в)). Кто превышает — видно
-// в audit/логах по claims.Subject.
+// Label `endpoint` = the logical bucket name (`voyage_create`); NO AID label —
+// the number of operators is unbounded, and an AID in the label would blow up the
+// time-series cardinality (ADR-050(g), rejected alternative (c)). Who exceeds the limit is visible
+// in audit/logs by claims.Subject.
 //
-// nil-safe: методы проверяют nil-получатель, чтобы unit-тесты middleware
-// поднимались без obs.Registry (паттерн toll.Metrics / watchmanMetrics).
+// nil-safe: the methods check for a nil receiver, so middleware unit tests
+// come up without obs.Registry (toll.Metrics / watchmanMetrics pattern).
 type TempoMetrics struct {
-	// allowedTotal — counter пропущенных запросов (токен взят).
+	// allowedTotal — counter of passed requests (a token was taken).
 	allowedTotal *prometheus.CounterVec
 
-	// rejectedTotal — counter отклонённых запросов (бакет пуст → 429).
+	// rejectedTotal — counter of rejected requests (bucket empty → 429).
 	rejectedTotal *prometheus.CounterVec
 }
 
-// RegisterTempoMetrics создаёт keeper_tempo_*-collectors и регистрирует их в
-// [obs.Registry]. MustRegister — дубликат-регистрация programmer error (паттерн
-// toll.RegisterMetrics). Регистрируется безусловно (registry всегда поднят);
-// при выключенном Tempo (нет Redis / enabled=false) counters остаются на 0 —
-// валидный сигнал «лимитер не активен».
+// RegisterTempoMetrics creates the keeper_tempo_* collectors and registers them in
+// [obs.Registry]. MustRegister — a duplicate registration is a programmer error (toll.RegisterMetrics
+// pattern). Registered unconditionally (the registry is always up);
+// with Tempo disabled (no Redis / enabled=false) the counters stay at 0 —
+// a valid "limiter not active" signal.
 func RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics {
 	m := &TempoMetrics{
 		allowedTotal: prometheus.NewCounterVec(
@@ -51,7 +51,7 @@ func RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics {
 	return m
 }
 
-// IncTempoAllowed — +1 к keeper_tempo_allowed_total{endpoint}.
+// IncTempoAllowed — +1 to keeper_tempo_allowed_total{endpoint}.
 func (m *TempoMetrics) IncTempoAllowed(endpoint string) {
 	if m == nil {
 		return
@@ -59,7 +59,7 @@ func (m *TempoMetrics) IncTempoAllowed(endpoint string) {
 	m.allowedTotal.WithLabelValues(endpoint).Inc()
 }
 
-// IncTempoRejected — +1 к keeper_tempo_rejected_total{endpoint}.
+// IncTempoRejected — +1 to keeper_tempo_rejected_total{endpoint}.
 func (m *TempoMetrics) IncTempoRejected(endpoint string) {
 	if m == nil {
 		return

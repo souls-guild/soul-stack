@@ -1,10 +1,10 @@
 package api
 
-// Регистрация и spec-dump PROVIDER-домена (Cloud Provider CRUD, ADR-017) на huma
-// full-typed по эталону push-provider. create/delete — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; события provider.created/.deleted); list/get — read
-// (БЕЗ audit). Доменные *Typed-функции (handlers/provider.go) извлечены из (w,r);
-// MCP provider-tools зовут provider.Service напрямую.
+// Registration and spec-dump of the PROVIDER domain (Cloud Provider CRUD, ADR-017) on huma,
+// full-typed after the push-provider reference. create/delete — WRITE+AUDIT (variant B,
+// huma-audit-middleware; events provider.created/.deleted); list/get — read
+// (no audit). Domain *Typed functions (handlers/provider.go) extracted from (w,r);
+// MCP provider-tools call provider.Service directly.
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// newProvider проецирует плоский handlers.ProviderView в native Provider.
+// newProvider projects the flat handlers.ProviderView into a native Provider.
 func newProvider(v handlers.ProviderView) Provider {
 	return Provider{
 		CreatedAt:      v.CreatedAt,
@@ -32,9 +32,9 @@ func newProvider(v handlers.ProviderView) Provider {
 	}
 }
 
-// newProviderListReply проецирует доменный ProviderListPage в native envelope.
-// Items: nil → nil, иначе non-nil срез (handler делает make([]…, 0, n) → на
-// success Items всегда non-nil []).
+// newProviderListReply projects the domain ProviderListPage into a native envelope.
+// Items: nil → nil, otherwise a non-nil slice (handler does make([]…, 0, n) → on
+// success Items is always a non-nil []).
 func newProviderListReply(p handlers.ProviderListPage) ProviderListReply {
 	var items []Provider
 	if p.Items != nil {
@@ -46,7 +46,7 @@ func newProviderListReply(p handlers.ProviderListPage) ProviderListReply {
 	return ProviderListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// registerHumaProviderCreate монтирует POST /v1/providers (WRITE+AUDIT —
+// registerHumaProviderCreate mounts POST /v1/providers (WRITE+AUDIT —
 // provider.created). providerH nil → no-op.
 func registerHumaProviderCreate(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
@@ -73,8 +73,8 @@ func registerHumaProviderCreate(humaAPI huma.API, providerH *handlers.ProviderHa
 	})
 }
 
-// registerHumaProviderList монтирует GET /v1/providers (READ-with-typed-query,
-// БЕЗ audit). RBAC provider.read — на группе.
+// registerHumaProviderList mounts GET /v1/providers (READ with typed query,
+// no audit). RBAC provider.read — on the group.
 func registerHumaProviderList(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
 		return
@@ -88,8 +88,8 @@ func registerHumaProviderList(humaAPI huma.API, providerH *handlers.ProviderHand
 	})
 }
 
-// registerHumaProviderGet монтирует GET /v1/providers/{name} (READ-with-path,
-// БЕЗ audit). RBAC provider.read — на группе.
+// registerHumaProviderGet mounts GET /v1/providers/{name} (READ with path,
+// no audit). RBAC provider.read — on the group.
 func registerHumaProviderGet(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
 		return
@@ -103,7 +103,7 @@ func registerHumaProviderGet(humaAPI huma.API, providerH *handlers.ProviderHandl
 	})
 }
 
-// registerHumaProviderDelete монтирует DELETE /v1/providers/{name} (WRITE+AUDIT —
+// registerHumaProviderDelete mounts DELETE /v1/providers/{name} (WRITE+AUDIT —
 // provider.deleted). providerH nil → no-op.
 func registerHumaProviderDelete(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
@@ -119,13 +119,13 @@ func registerHumaProviderDelete(humaAPI huma.API, providerH *handlers.ProviderHa
 	})
 }
 
-// providerMissingClaims — defensive-ответ при отсутствии claims (недостижим:
-// RequireJWT кладёт claims до huma).
+// providerMissingClaims — defensive reply when claims are missing (unreachable:
+// RequireJWT sets claims before huma).
 func providerMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// providerProblem доставляет ошибку *Typed-функции через huma как problem+json.
+// providerProblem delivers a *Typed-function error through huma as problem+json.
 func providerProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -133,15 +133,15 @@ func providerProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaProviderAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип. Каждый write-роут (create/delete) —
-// своя chi-группа с собственным event-типом.
+// newHumaProviderAPI builds a huma.API over a chi group with huma-audit-middleware
+// (variant B) for the given event type. Each write route (create/delete) —
+// its own chi group with its own event type.
 func newHumaProviderAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaProviderSpecYAML собирает OpenAPI-фрагмент всех provider-роутов как
-// YAML-строку без монтирования (хук для spec-merge + guard-теста).
+// HumaProviderSpecYAML assembles the OpenAPI fragment of all provider routes as
+// a YAML string without mounting (hook for spec-merge + guard test).
 func HumaProviderSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ProviderSpecStub()

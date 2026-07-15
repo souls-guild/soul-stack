@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// stubFormPrepResolver — фейковый [FormPrepSIDResolver]: захватывает filter и
-// отдаёт заранее заданный результат.
+// stubFormPrepResolver — a fake [FormPrepSIDResolver]: captures the filter and
+// returns a preset result.
 type stubFormPrepResolver struct {
 	gotFilter FormPrepFilter
 	sids      []string
@@ -21,7 +21,7 @@ func (s *stubFormPrepResolver) ResolveSIDs(_ context.Context, f FormPrepFilter) 
 	return s.sids, s.truncated, s.err
 }
 
-// formPrepProblemType извлекает problem.Type из ошибки FormPrepTyped (nil → "").
+// formPrepProblemType extracts problem.Type from a FormPrepTyped error (nil → "").
 func formPrepProblemType(t *testing.T, err error) string {
 	t.Helper()
 	if err == nil {
@@ -66,15 +66,15 @@ func TestFormPrepTyped_Choir_OK(t *testing.T) {
 	if res.gotFilter.Choir == nil || res.gotFilter.Choir.Incarnation != "web" || res.gotFilter.Choir.Name != "primary" {
 		t.Fatalf("choir filter = %+v, want web/primary", res.gotFilter.Choir)
 	}
-	// Пустой результат → sids:[] (non-nil), не nil.
+	// Empty result → sids:[] (non-nil), not nil.
 	if out.Sids == nil {
 		t.Fatal("sids must be non-nil (json []), got null")
 	}
 }
 
-// TestFormPrepTyped_SourceValidation — доменная XOR-валидация source (ровно один
-// непустой вариант) → 422. Bind-фазовые кейсы (unknown field / malformed body → 400)
-// сняты — они покрыты huma-integration в пакете api (handler-native: тело декодит huma).
+// TestFormPrepTyped_SourceValidation — domain XOR validation of source (exactly one
+// non-empty variant) → 422. Bind-phase cases (unknown field / malformed body → 400) are
+// dropped — they're covered by huma-integration in the api package (handler-native: huma decodes the body).
 func TestFormPrepTyped_SourceValidation(t *testing.T) {
 	cases := []struct {
 		name string

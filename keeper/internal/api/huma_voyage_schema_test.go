@@ -1,25 +1,25 @@
-// Доказательный гейт выравнивания имён VOYAGE-схем под committed-рукопись (тираж-батч N3,
-// по эталону huma_operator_schema_test.go). Собирает агрегированную huma-спеку
-// (HumaFullSpecYAML) и проверяет, что схемы voyage-домена названы ТОЧНО как контракт
-// (docs/keeper/openapi.yaml), а техническое huma-Go-имя VoyageCreateHumaBody ОТСУТСТВУЕТ.
+// Proof gate: alignment of VOYAGE schema names to the committed hand-written spec (rollout
+// batch N3, following huma_operator_schema_test.go). Assembles the aggregated huma spec
+// (HumaFullSpecYAML) and checks that voyage-domain schemas are named EXACTLY as the contract
+// (docs/keeper/openapi.yaml), and that the technical huma-Go name VoyageCreateHumaBody is ABSENT.
 //
-// МЕХАНИЗМЫ для voyage (сверены с рукописью):
-//   - REQUEST-RENAME: voyageCreateHumaBody → VoyageCreateRequest (контрактное имя тела
-//     POST /v1/voyages; то же тело — preview). Применён.
-//   - ENUM-ALIAS: НЕ применяется. Рукопись НЕ объявляет standalone VoyageKind/VoyageStatus
-//     в components/schemas — kind инлайнится в VoyageCreateRequest (`enum: [scenario,
-//     command]`), статусы — в Voyage/VoyageTargetEntry. Standalone enum-схемы нет → named-
-//     схему НЕ создаём.
-//   - ENVELOPE: уже named oapi-тип (VoyageListReply — генерёная struct, НЕ generic
-//     PagedResponse) → DefaultSchemaNamer даёт контрактное имя сам; alias не нужен.
-//     СВЕРЯЕМ форму: 4-поля-offset plain `integer`, items.$ref на Voyage.
+// MECHANISMS for voyage (verified against the hand-written spec):
+//   - REQUEST-RENAME: voyageCreateHumaBody → VoyageCreateRequest (contract name of the
+//     POST /v1/voyages body; same body — preview). Applied.
+//   - ENUM-ALIAS: NOT applied. The hand-written spec declares no standalone VoyageKind/
+//     VoyageStatus in components/schemas — kind is inlined in VoyageCreateRequest (`enum:
+//     [scenario, command]`), statuses in Voyage/VoyageTargetEntry. No standalone enum schema
+//     → we do NOT create a named schema.
+//   - ENVELOPE: already a named oapi type (VoyageListReply — generated struct, NOT generic
+//     PagedResponse) → DefaultSchemaNamer yields the contract name itself; no alias needed.
+//     We VERIFY the shape: 4-field offset plain `integer`, items.$ref to Voyage.
 //
-// NESTED-ВЫРАВНИВАНИЕ (target/notify): вложенные shared-формы сведены в ЕДИНЫЕ Go-типы
-// api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go), shared voyage+cadence. В спеке
-// — ровно ОДНА VoyageTarget (input voyage+cadence + output voyage, единый native-тип)
-// и ОДНА VoyageNotify (input voyage+cadence, без output);
-// технические VoyageTargetHumaBody/CadenceTargetHumaBody/VoyageNotifyHumaBody/CadenceNotify-
-// HumaBody ОТСУТСТВУЮТ. Гейт — TestSchemaNames_VoyageNested.
+// NESTED ALIGNMENT (target/notify): nested shared forms are collapsed into SINGLE Go types
+// api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go), shared by voyage+cadence. The
+// spec has exactly ONE VoyageTarget (input voyage+cadence + output voyage, single native type)
+// and ONE VoyageNotify (input voyage+cadence, no output); the technical VoyageTargetHumaBody/
+// CadenceTargetHumaBody/VoyageNotifyHumaBody/CadenceNotifyHumaBody are ABSENT. Gate —
+// TestSchemaNames_VoyageNested.
 package api
 
 import (
@@ -28,31 +28,31 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// voyageContractSchemas — request/view/envelope-имена voyage-домена ровно как в committed-
-// рукописи. Все обязаны присутствовать в собранной спеке.
+// voyageContractSchemas — request/view/envelope names of the voyage domain exactly as in the
+// committed hand-written spec. All must be present in the assembled spec.
 var voyageContractSchemas = []string{
 	"VoyageCreateRequest",
 	"Voyage",
 	"VoyageListReply",
-	// Вложенные shared-формы (одна на оба домена, рукопись :7455/:7612).
+	// Nested shared forms (one for both domains, hand-written spec :7455/:7612).
 	"VoyageTarget",
 	"VoyageNotify",
 }
 
-// voyageForbiddenSchemas — техническое huma-Go-имя старой структуры тела. Не должно
-// остаться. Standalone-enum (VoyageKind/VoyageStatus) рукопись НЕ объявляет — отдельного
-// forbidden-имени для них нет (kind/status инлайнятся).
+// voyageForbiddenSchemas — technical huma-Go name of the old body struct. Must not remain.
+// The hand-written spec declares no standalone enum (VoyageKind/VoyageStatus) — there is no
+// separate forbidden name for them (kind/status are inlined).
 var voyageForbiddenSchemas = []string{
 	"VoyageCreateHumaBody",
-	// Технические huma-Go-имена схлопнутых вложенных форм — после nested-выравнивания
-	// их нет (одна VoyageTarget/VoyageNotify на оба домена).
+	// Technical huma-Go names of the collapsed nested forms — after nested alignment they
+	// are gone (one VoyageTarget/VoyageNotify for both domains).
 	"VoyageTargetHumaBody",
 	"CadenceTargetHumaBody",
 	"VoyageNotifyHumaBody",
 	"CadenceNotifyHumaBody",
 }
 
-// TestSchemaNames_Voyage — гейт N3. Контрактные имена присутствуют, техническое — нет.
+// TestSchemaNames_Voyage — gate N3. Contract names present, technical one absent.
 func TestSchemaNames_Voyage(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range voyageContractSchemas {
@@ -67,9 +67,9 @@ func TestSchemaNames_Voyage(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_VoyageEnvelope — гейт N3 (ENVELOPE). VoyageListReply несёт КОНТРАКТНУЮ
-// 4-поля-offset форму (items/offset/limit/total; items.$ref на Voyage). Format-agnostic
-// (рукопись — plain `integer`). Мутация (item-only/cursor/неверный $ref) краснит.
+// TestSchemaNames_VoyageEnvelope — gate N3 (ENVELOPE). VoyageListReply carries the CONTRACT
+// 4-field offset shape (items/offset/limit/total; items.$ref to Voyage). Format-agnostic
+// (hand-written spec — plain `integer`). A mutation (item-only/cursor/wrong $ref) turns it red.
 func TestSchemaNames_VoyageEnvelope(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -84,22 +84,22 @@ func TestSchemaNames_VoyageEnvelope(t *testing.T) {
 	assertOffsetEnvelopeNoFormat(t, schemas, "VoyageListReply", "Voyage")
 }
 
-// voyageTargetConsumers — схемы, поле `target` которых ОБЯЗАНО ссылаться на
-// #/components/schemas/VoyageTarget. Покрывает input(voyage+cadence) И output(voyage).
-// Имя cadence input-тела выровнено под рукопись (CadenceCreateRequest, N4).
+// voyageTargetConsumers — schemas whose `target` field MUST reference
+// #/components/schemas/VoyageTarget. Covers input(voyage+cadence) AND output(voyage).
+// The cadence input-body name is aligned to the hand-written spec (CadenceCreateRequest, N4).
 //
-// CadenceDTO (output cadence) В СПИСКЕ НЕТ: его поле target — pre-existing json.RawMessage
-// (free-form `{}` в спеке, не $ref) ещё ДО этого выравнивания; типизация cadence output-
-// target под VoyageTarget (и связанный rename CadenceDTO→Cadence) — отдельная задача, не
-// nested-схлопывание technical-дублей (см. N4-отчёт: blocked для N5).
+// CadenceDTO (output cadence) is NOT in the list: its target field is a pre-existing
+// json.RawMessage (free-form `{}` in the spec, not $ref) from BEFORE this alignment; typing
+// the cadence output target as VoyageTarget (and the related CadenceDTO→Cadence rename) is a
+// separate task, not nested collapsing of technical duplicates (see N4 report: blocked for N5).
 var voyageTargetConsumers = []string{
-	"VoyageCreateRequest",  // input voyage (create+preview — одна схема)
+	"VoyageCreateRequest",  // input voyage (create+preview — one schema)
 	"CadenceCreateRequest", // input cadence (N4)
-	"Voyage",               // output voyage (через alias VoyageTarget→VoyageTarget)
+	"Voyage",               // output voyage (via alias VoyageTarget→VoyageTarget)
 }
 
-// voyageNotifyConsumers — схемы, поле `notify[]` которых ОБЯЗАНО ссылаться на VoyageNotify
-// (класс B — только input, output-потребителя нет).
+// voyageNotifyConsumers — schemas whose `notify[]` field MUST reference VoyageNotify
+// (class B — input only, no output consumer).
 var voyageNotifyConsumers = []string{
 	"VoyageCreateRequest",
 	"CadenceCreateRequest", // N4

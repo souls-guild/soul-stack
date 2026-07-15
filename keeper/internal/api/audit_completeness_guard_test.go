@@ -1,38 +1,39 @@
-// Агрегатный structural guard против рецидива audit-регрессии (история S6-моста).
+// Aggregate structural guard against audit-regression recurrence (S6-bridge history).
 //
-// ПРОБЛЕМА. Аудит каждого мутирующего /v1-роута защищён РОССЫПЬЮ per-domain тестов
-// (*_RecordsOnSuccess / *_NoAudit в huma_<домен>_test.go). Единого инварианта
-// «множество write-роутов ⊆ множество audit-покрытых роутов» НЕТ → новый write-
-// домен БЕЗ audit-навески собирается молча и проходит сборку (именно так дал
-// крит-регрессию S6: write-роут есть, audit-emit нет, per-domain теста ещё нет).
+// PROBLEM. Audit of every mutating /v1 route is protected by a SCATTER of per-domain
+// tests (*_RecordsOnSuccess / *_NoAudit in huma_<domain>_test.go). There is NO single
+// invariant "set of write routes ⊆ set of audit-covered routes" → a new write domain
+// with no audit wiring builds silently and passes the build (exactly how S6 got its
+// critical regression: write route exists, no audit emit, no per-domain test yet).
 //
-// МЕХАНИЗМ ДЕТЕКЦИИ — декларативный реестр (вариант «в» ТЗ), а НЕ структурная
-// инспекция chi-цепочки. Почему НЕ structural:
+// DETECTION MECHANISM — a declarative registry (option "c" of the spec), NOT structural
+// inspection of the chi chain. Why NOT structural:
 //
-//   - audit на huma-доменах навешивается через api.UseMiddleware(humaAuditMiddleware)
-//     ВНУТРИ huma.API (newHumaAuditAPI / newHuma<Domain>API), а НЕ как chi-middleware.
-//     chi.Walk отдаёт 4-м аргументом ТОЛЬКО chi-цепочку роута — audit-навеска huma
-//     в неё не попадает. Структурно «есть ли audit-middleware» из chi-дерева не видно.
-//   - часть write-роутов пишут self-audit ВНУТРИ handler-а (*Typed → auditW.Write),
-//     вообще без middleware (incarnation rerun/destroy/…, choir, voyage, cadence
-//     patch/delete/…). Structural-проверка «middleware навешан» их бы ложно завалила.
-//   - и ключевой урок S6: «middleware навешан» ≠ «audit пишет». Наличие узла в цепочке
-//     НЕ доказывает запись (S6-bridge перехватывал ResponseWriter ДО рекордера —
-//     middleware был, запись молча терялась). Декларативный реестр заставляет инженера
-//     при добавлении write-роута ОСОЗНАННО внести его в auditedWriteRoutes (привязав к
-//     event-типам, которые per-domain *_RecordsOnSuccess-тест уже доказывает пишущимися)
-//     ИЛИ в writeRoutesNoAudit с обоснованием. Любой не учтённый write-роут краснит.
+//   - audit on huma domains is wired via api.UseMiddleware(humaAuditMiddleware) INSIDE
+//     huma.API (newHumaAuditAPI / newHuma<Domain>API), NOT as chi middleware. chi.Walk
+//     hands back ONLY the route's chi chain as its 4th arg — the huma audit wiring is
+//     not in it. Structurally "is audit middleware wired" is invisible from the chi tree.
+//   - some write routes write self-audit INSIDE the handler (*Typed → auditW.Write),
+//     with no middleware at all (incarnation rerun/destroy/…, choir, voyage, cadence
+//     patch/delete/…). A structural "middleware is wired" check would falsely fail them.
+//   - and the key S6 lesson: "middleware wired" ≠ "audit writes". A node in the chain
+//     does NOT prove the write (the S6 bridge intercepted the ResponseWriter BEFORE the
+//     recorder — middleware was present, the write silently lost). The declarative
+//     registry forces the engineer, when adding a write route, to CONSCIOUSLY list it in
+//     auditedWriteRoutes (bound to the event types a per-domain *_RecordsOnSuccess test
+//     already proves are written) OR in writeRoutesNoAudit with a rationale. Any
+//     unaccounted write route goes red.
 //
-// ИСТОЧНИК ПОЛНОГО МНОЖЕСТВА write-роутов — buildFullOpenAPISpec() (а НЕ collectRoutes):
-// full-spec содержит ВСЕ домены, включая opt-in (voyage/cadence/herald/push/errand/
-// choir/audit), которые drift-router монтирует с handler=nil. collectRoutes их не
-// увидел бы → дыра в покрытии guard-а.
+// SOURCE OF THE FULL SET OF write routes — buildFullOpenAPISpec() (NOT collectRoutes):
+// the full spec holds ALL domains, including opt-in (voyage/cadence/herald/push/errand/
+// choir/audit), which the drift router mounts with handler=nil. collectRoutes would not
+// see them → a hole in the guard's coverage.
 //
-// ДВУХУРОВНЕВАЯ ЗАЩИТА (этот тест + per-domain): здесь — «write-роут НЕ забыт в
-// audit-топологии» (полнота множества); per-domain *_RecordsOnSuccess — «event
-// реально пишется на 2xx» (S6-инвариант «пишет, не только навешан»). Один без
-// другого дыряв: реестр без per-domain не ловит молчащий middleware; per-domain без
-// реестра не ловит совсем не покрытый новый роут.
+// TWO-LEVEL DEFENCE (this test + per-domain): here — "write route is NOT forgotten in
+// the audit topology" (set completeness); per-domain *_RecordsOnSuccess — "event is
+// actually written on 2xx" (the S6 invariant "writes, not just wired"). One without the
+// other is leaky: the registry without per-domain misses a silent middleware; per-domain
+// without the registry misses an entirely uncovered new route.
 
 package api
 

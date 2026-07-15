@@ -1,7 +1,7 @@
-// GOLDEN byte-exact wire-guard для NATIVE wire-DTO SIGIL-домена (handler-native T5d). sigil
-// больше НЕ зависит от legacy-генерата — golden сверяет json native-значения с ЗАФИКСИРОВАННОЙ
-// строкой-эталоном (pinned). Покрыты обе ветки revoked_at (nil/non-nil; omitempty-nil → ключ
-// опущен). Мутация формы native-struct краснит case.
+// GOLDEN byte-exact wire-guard for the NATIVE wire-DTO SIGIL domain (handler-native T5d). sigil
+// no longer depends on the legacy generator — golden compares json native values against a pinned
+// reference string. Both revoked_at branches are covered (nil/non-nil; omitempty-nil → key
+// omitted). Mutating the native-struct shape reddens the case.
 package api
 
 import (
@@ -33,7 +33,7 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 		PluginSigilAllowReply{Name: "soul-mod-redis", Namespace: "mod", Ref: "v1.2.0", SHA256: sha},
 		`{"name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","sha256":"deadbeef0123456789abcdef"}`)
 
-	// --- PluginSigilView (nested): revoked_at omitempty — обе ветки ---
+	// --- PluginSigilView (nested): revoked_at omitempty — both branches ---
 	goldenSigilWire(t, "PluginSigilView/active",
 		PluginSigilView{AllowedAt: ts, AllowedByAID: "archon-alice", Name: "soul-mod-redis", Namespace: "mod", Ref: "v1.2.0", RevokedAt: nil, SHA256: sha},
 		`{"allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","sha256":"deadbeef0123456789abcdef"}`)
@@ -42,9 +42,9 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 		`{"allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","revoked_at":"2026-06-13T01:02:03.456789012Z","sha256":"deadbeef0123456789abcdef"}`)
 }
 
-// TestGoldenWire_SigilProjection проверяет, что проекция доменных handlers.Sigil*-result-ов
-// → native сохраняет byte-exact wire против зафиксированного эталона. Ловит регресс в маппинге
-// полей (вкл. list items[]).
+// TestGoldenWire_SigilProjection verifies that the projection of domain handlers.Sigil* results
+// → native keeps byte-exact wire against the pinned reference. Catches regressions in field
+// mapping (incl. list items[]).
 func TestGoldenWire_SigilProjection(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 0, 0, 123456789, time.UTC)
 	sha := "feedface"
@@ -60,7 +60,7 @@ func TestGoldenWire_SigilProjection(t *testing.T) {
 	pageV := handlers.SigilListPage{Items: []handlers.SigilView{viewV}}
 	goldenSigilWire(t, "proj/PluginSigilListReply", newPluginSigilListReply(pageV),
 		`{"items":[{"allowed_at":"2026-06-14T12:00:00.123456789Z","allowed_by_aid":"archon-bob","name":"n","namespace":"mod","ref":"v1","sha256":"feedface"}]}`)
-	// handler даёт make([]., 0): items=`[]` (non-nil), НЕ null
+	// handler returns make([]., 0): items=`[]` (non-nil), NOT null
 	pageEmpty := handlers.SigilListPage{Items: []handlers.SigilView{}}
 	goldenSigilWire(t, "proj/PluginSigilListReply/empty", newPluginSigilListReply(pageEmpty),
 		`{"items":[]}`)

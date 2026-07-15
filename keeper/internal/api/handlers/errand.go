@@ -19,30 +19,31 @@ import (
 	"github.com/souls-guild/soul-stack/shared/api"
 )
 
-// ErrandHandler — endpoints pull-ad-hoc Errand-ов (ADR-033):
+// ErrandHandler — endpoints for pull ad-hoc Errands (ADR-033):
 //
-//	POST /v1/souls/{sid}/exec       — запуск Errand (sync 200 / async 202)
-//	GET  /v1/errands/{errand_id}    — состояние Errand-а (poll)
-//	GET  /v1/errands?sid=&status=…  — список Errand-ов (RBAC-фильтр)
+//	POST /v1/souls/{sid}/exec       — run an Errand (sync 200 / async 202)
+//	GET  /v1/errands/{errand_id}    — Errand state (poll)
+//	GET  /v1/errands?sid=&status=…  — list Errands (RBAC filter)
 //
-// dispatcher / store обязательны при non-nil handler-е; nil-handler роутом
-// не подключается (см. router.go, паттерн PushHandler/OracleHandler).
+// dispatcher / store are required on a non-nil handler; a nil handler is not
+// wired to a route (see router.go, PushHandler/OracleHandler pattern).
 //
-// T5d-2c-full (handler-native): домен errand отвязан от legacy-генерата. *Typed-функции
-// принимают/возвращают NATIVE типы с плоскими wire-полями (ErrandRunInput /
-// ErrandResultView / ErrandListPage / ErrandAcceptedView); native wire-DTO (схему
-// OpenAPI) строит пакет api из этих полей (register-func huma_errand.go /
-// huma_soul.go). (w,r)-оболочки сняты: HTTP обслуживает huma full-typed, MCP зовёт
-// errand.Dispatcher/Store напрямую (мимо handler).
+// T5d-2c-full (handler-native): the errand domain is decoupled from the legacy
+// generator. Typed functions accept/return NATIVE types with flat wire fields
+// (ErrandRunInput / ErrandResultView / ErrandListPage / ErrandAcceptedView); the
+// native wire-DTO (OpenAPI schema) is built by the api package from these fields
+// (register funcs huma_errand.go / huma_soul.go). The (w,r) wrappers are gone: HTTP
+// is served by huma full-typed, MCP calls errand.Dispatcher/Store directly (bypassing
+// the handler).
 type ErrandHandler struct {
 	dispatcher *errand.Dispatcher
 	store      *errand.Store
 	logger     *slog.Logger
 }
 
-// NewErrandHandler конструирует handler. dispatcher/store обязательны
-// для production-вызовов; в drift-тесте/unit nil допустим только если
-// роуты не дёргают handler.
+// NewErrandHandler constructs the handler. dispatcher/store are required for
+// production calls; in a drift/unit test nil is allowed only if the routes do
+// not invoke the handler.
 func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, logger *slog.Logger) *ErrandHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -50,19 +51,19 @@ func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, logger
 	return &ErrandHandler{dispatcher: dispatcher, store: store, logger: logger}
 }
 
-// ErrandSpecStub — непустой *ErrandHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaErrandSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. dispatcher/store nil —
-// handler никогда не исполняется в spec-режиме (parity [AugurSpecStub]).
+// ErrandSpecStub — a non-empty *ErrandHandler stub for generating the huma OpenAPI
+// fragment (HumaErrandSpecYAML): on dump the domain handler is not called, but
+// huma.Register requires non-nil for its no-op nil check. dispatcher/store are nil —
+// the handler never executes in spec mode (parity [AugurSpecStub]).
 func ErrandSpecStub() *ErrandHandler {
 	return &ErrandHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// ErrandRunInput — NATIVE request-форма POST /v1/souls/{sid}/exec (handler-native
-// T5d-2c-full). Заменяет ErrandRunRequest: huma-input SOUL-домена (huma_soul.go)
-// биндит/валидирует тело и проецирует его в эти поля перед вызовом ExecTyped.
-// Опциональные поля — указатели (Input/TimeoutSeconds/DryRun), handler разыменовывает
-// их в errand.DispatchRequest.
+// ErrandRunInput — NATIVE request shape for POST /v1/souls/{sid}/exec (handler-native
+// T5d-2c-full). Replaces ErrandRunRequest: the SOUL-domain huma input (huma_soul.go)
+// binds/validates the body and projects it into these fields before calling ExecTyped.
+// Optional fields are pointers (Input/TimeoutSeconds/DryRun); the handler dereferences
+// them into errand.DispatchRequest.
 type ErrandRunInput struct {
 	Module         string
 	Input          *map[string]any
@@ -70,12 +71,13 @@ type ErrandRunInput struct {
 	DryRun         *bool
 }
 
-// ErrandResultView — ПЛОСКАЯ wire-форма результата Errand-а (200-тело errand-get-
-// терминал / sync-exec / element list-а), handler-native (заменяет ErrandResult).
-// Опц. поля — указатели С nil-при-пустом (паритет omitempty прежней формы); status —
-// плоская строка домен-статуса; started_at/finished_at — UTC+Truncate(Second) (byte-exact
-// с прежним секундным RFC3339). Пакет api проецирует ErrandResultView → native-схему
-// ErrandResult (register-func huma_errand.go), порядок полей wire фиксирует native-тип.
+// ErrandResultView — FLAT wire shape of an Errand result (200 body for errand-get
+// terminal / sync-exec / a list element), handler-native (replaces ErrandResult).
+// Optional fields are pointers with nil-when-empty (parity with the former omitempty);
+// status is a flat domain-status string; started_at/finished_at are UTC+Truncate(Second)
+// (byte-exact with the former second-precision RFC3339). The api package projects
+// ErrandResultView → the native ErrandResult schema (register func huma_errand.go); the
+// native type pins wire field order.
 type ErrandResultView struct {
 	DurationMs      *int64
 	ErrandID        string
@@ -94,9 +96,9 @@ type ErrandResultView struct {
 	StdoutTruncated *bool
 }
 
-// ErrandListPage — доменный paged-результат GET /v1/errands (handler-native). Плоские
-// offset/limit/total + срез ErrandResultView; пакет api проецирует его в native-envelope
-// ErrandListReply (register-func huma_errand.go).
+// ErrandListPage — domain paged result of GET /v1/errands (handler-native). Flat
+// offset/limit/total + a slice of ErrandResultView; the api package projects it into the
+// native ErrandListReply envelope (register func huma_errand.go).
 type ErrandListPage struct {
 	Items  []ErrandResultView
 	Offset int
@@ -104,38 +106,38 @@ type ErrandListPage struct {
 	Total  int
 }
 
-// ErrandAcceptedView — плоское 202-тело async-эскалации (sync-cap превышен) /
-// errand-get-running. errand_id + строковый status (домен-статус errand.Status). На wire
-// сериализуется register-func-ом (api проецирует в native ErrandAccepted byte-exact).
+// ErrandAcceptedView — flat 202 body for async escalation (sync cap exceeded) /
+// errand-get-running. errand_id + a string status (domain status errand.Status). Serialized
+// on the wire by the register func (api projects into native ErrandAccepted byte-exact).
 type ErrandAcceptedView struct {
 	ErrandID string
 	Status   string
 }
 
-// newErrandAcceptedView строит плоское 202-тело из errand_id + домен-статуса.
+// newErrandAcceptedView builds the flat 202 body from errand_id + domain status.
 func newErrandAcceptedView(errandID string, status errand.Status) ErrandAcceptedView {
 	return ErrandAcceptedView{ErrandID: errandID, Status: string(status)}
 }
 
-// ErrandExecReply — извлечённый результат [ErrandHandler.ExecTyped] (handler-native
-// T5d-2c-full). Async=true → 202-тело Accepted + Location-header; иначе 200-тело Result
-// (терминал получен до server-cap). Несёт audit-поля (event errand.invoked) — дублируются
-// для security navigation-trail middleware-я (dispatcher сам пишет audit-event source=api
-// внутри Dispatch).
+// ErrandExecReply — extracted result of [ErrandHandler.ExecTyped] (handler-native
+// T5d-2c-full). Async=true → 202 Accepted body + Location header; otherwise a 200 Result
+// body (terminal reached before the server cap). Carries audit fields (event errand.invoked)
+// — duplicated for the security navigation-trail middleware (the dispatcher itself writes the
+// audit event source=api inside Dispatch).
 type ErrandExecReply struct {
 	Async    bool
 	ErrandID string
 	Result   ErrandResultView
 	Accepted ErrandAcceptedView
-	// audit-поля (parity легаси SetAuditPayload).
+	// audit fields (parity with legacy SetAuditPayload).
 	sid        string
 	module     string
 	timeoutSec int
 	dryRun     bool
 }
 
-// AuditPayload собирает audit-поля errand.invoked-роута (parity легаси:
-// sid/module/errand_id/timeout_seconds/dry_run). Источник для huma-варианта B.
+// AuditPayload collects the audit fields of the errand.invoked route (parity with legacy:
+// sid/module/errand_id/timeout_seconds/dry_run). Source for huma variant B.
 func (r ErrandExecReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"sid":             r.sid,
@@ -146,12 +148,12 @@ func (r ErrandExecReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// ExecTyped — доменная функция POST /v1/souls/{sid}/exec (handler-native): валидация
-// SID (soul.ValidSID→422) + dispatcher.Dispatch + sentinel→problem. req — native
-// request-форма (SOUL-домен huma_soul.go биндит/валидирует тело и проецирует в неё; huma
-// отбивает unknown → 400 до вызова). Ошибки — *problemError (422 невалидный sid / пустой
-// module / timeout вне диапазона; 404 soul-not-connected; 400 dry_run verb-модуль; 500
-// dispatcher nil / БД-сбой); успех — [ErrandExecReply] (200 sync / 202 async).
+// ExecTyped — domain function for POST /v1/souls/{sid}/exec (handler-native): SID validation
+// (soul.ValidSID→422) + dispatcher.Dispatch + sentinel→problem. req is the native request
+// shape (the SOUL-domain huma_soul.go binds/validates the body and projects into it; huma
+// rejects unknown → 400 before the call). Errors are *problemError (422 invalid sid / empty
+// module / timeout out of range; 404 soul-not-connected; 400 dry_run on a verb module; 500
+// dispatcher nil / DB failure); success is [ErrandExecReply] (200 sync / 202 async).
 func (h *ErrandHandler) ExecTyped(ctx context.Context, claims *keeperjwt.Claims, sid string, req ErrandRunInput) (ErrandExecReply, error) {
 	var zero ErrandExecReply
 	if h.dispatcher == nil {
@@ -199,18 +201,18 @@ func (h *ErrandHandler) ExecTyped(ctx context.Context, claims *keeperjwt.Claims,
 	return reply, nil
 }
 
-// ErrandGetReply — извлечённый результат [ErrandHandler.GetTyped] (handler-native).
-// Running=true → 202-тело Accepted (Errand ещё бежит, async-poll); иначе 200-тело
-// Result (терминал). Один из двух полей значим по флагу Running.
+// ErrandGetReply — extracted result of [ErrandHandler.GetTyped] (handler-native).
+// Running=true → 202 Accepted body (Errand still running, async poll); otherwise a 200
+// Result body (terminal). One of the two fields is meaningful per the Running flag.
 type ErrandGetReply struct {
 	Running  bool
 	Accepted ErrandAcceptedView
 	Result   ErrandResultView
 }
 
-// GetTyped — доменная функция GET /v1/errands/{errand_id} (READ-with-path, БЕЗ audit):
-// валидация path-id + store.Get + sentinel→problem. running → 202-Accepted, терминал →
-// 200-Result. Ошибки — *problemError (404/422/500); store nil → 500.
+// GetTyped — domain function for GET /v1/errands/{errand_id} (READ with path, no audit):
+// path-id validation + store.Get + sentinel→problem. running → 202 Accepted, terminal →
+// 200 Result. Errors are *problemError (404/422/500); store nil → 500.
 func (h *ErrandHandler) GetTyped(ctx context.Context, errandID string) (ErrandGetReply, error) {
 	var zero ErrandGetReply
 	if h.store == nil {
@@ -234,10 +236,10 @@ func (h *ErrandHandler) GetTyped(ctx context.Context, errandID string) (ErrandGe
 	return ErrandGetReply{Result: rowToErrandResultView(row)}, nil
 }
 
-// ErrandListInput — провалидированный вход GET /v1/errands. sid/status —
-// string-фильтры (валидация формата/enum в ListTyped → 422); StartedAfter —
-// time.Time (нулевое = без фильтра, bad value уже отбит на bind-фазе → 400);
-// Modules — multi-value exact-match OR; Offset/Limit — пагинация.
+// ErrandListInput — validated input for GET /v1/errands. sid/status are string filters
+// (format/enum validation in ListTyped → 422); StartedAfter is time.Time (zero = no filter,
+// a bad value is already rejected at the bind phase → 400); Modules is a multi-value
+// exact-match OR; Offset/Limit are pagination.
 type ErrandListInput struct {
 	SID          string
 	Status       string
@@ -247,10 +249,11 @@ type ErrandListInput struct {
 	Limit        int
 }
 
-// ListTyped — доменная функция GET /v1/errands (READ-with-typed-query, БЕЗ audit).
-// offset/limit провалидированы huma-bind; диапазон enforce-ит CheckPageBounds → 400
-// (parity ParsePage). sid формат / status enum → 422. StartedAfter — bad value уже отбит
-// huma-bind date-time (400). Ошибка чтения → *problemError (500); store nil → 500.
+// ListTyped — domain function for GET /v1/errands (READ with typed query, no audit).
+// offset/limit are validated by huma bind; the range is enforced by CheckPageBounds → 400
+// (parity with ParsePage). sid format / status enum → 422. StartedAfter — a bad value is
+// already rejected by huma-bind date-time (400). A read error → *problemError (500); store
+// nil → 500.
 func (h *ErrandHandler) ListTyped(ctx context.Context, in ErrandListInput) (ErrandListPage, error) {
 	var zero ErrandListPage
 	if h.store == nil {
@@ -277,8 +280,8 @@ func (h *ErrandHandler) ListTyped(ctx context.Context, in ErrandListInput) (Erra
 	}
 	filter.StartedAfter = in.StartedAfter
 	if len(in.Modules) > 0 {
-		// Exact-match OR, без regex/glob (ТЗ). Дубликаты допустимы — пройдут в
-		// IN-предикат как есть, PG нормализует.
+		// Exact-match OR, no regex/glob (by spec). Duplicates are allowed — they pass
+		// into the IN predicate as-is, PG normalizes.
 		filter.Modules = in.Modules
 	}
 
@@ -301,22 +304,22 @@ func (h *ErrandHandler) ListTyped(ctx context.Context, in ErrandListInput) (Erra
 	}, nil
 }
 
-// ErrandCancelReply — извлечённый результат [ErrandHandler.CancelTyped] (handler-native).
-// Несёт audit-поля (HTTP-ответ — пустое 204-тело).
+// ErrandCancelReply — extracted result of [ErrandHandler.CancelTyped] (handler-native).
+// Carries audit fields (the HTTP response is an empty 204 body).
 type ErrandCancelReply struct {
 	ErrandID string
 }
 
-// AuditPayload собирает audit-payload errand.cancel-роута (parity легаси: errand_id).
-// dispatcher уже пишет audit-event source=api сам — payload дублируется для security-
-// navigation-trail middleware-я. Источник для huma-варианта B.
+// AuditPayload collects the audit payload of the errand.cancel route (parity with legacy:
+// errand_id). The dispatcher already writes the audit event source=api itself — the payload
+// is duplicated for the security navigation-trail middleware. Source for huma variant B.
 func (r ErrandCancelReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{"errand_id": r.ErrandID}
 }
 
-// CancelTyped — доменная функция DELETE /v1/errands/{errand_id} (handler-native):
-// валидация path-id + dispatcher.Cancel + sentinel→problem. Ошибки — *problemError;
-// успех — [ErrandCancelReply]. dispatcher nil → 500.
+// CancelTyped — domain function for DELETE /v1/errands/{errand_id} (handler-native):
+// path-id validation + dispatcher.Cancel + sentinel→problem. Errors are *problemError;
+// success is [ErrandCancelReply]. dispatcher nil → 500.
 func (h *ErrandHandler) CancelTyped(ctx context.Context, claims *keeperjwt.Claims, errandID string) (ErrandCancelReply, error) {
 	var zero ErrandCancelReply
 	if h.dispatcher == nil {
@@ -334,8 +337,8 @@ func (h *ErrandHandler) CancelTyped(ctx context.Context, claims *keeperjwt.Claim
 	return ErrandCancelReply{ErrandID: errandID}, nil
 }
 
-// cancelError маппит sentinel-ы errand.Dispatcher.Cancel в *problemError (доставляются
-// huma-обёрткой через AsProblemDetails).
+// cancelError maps errand.Dispatcher.Cancel sentinels to *problemError (delivered by the
+// huma wrapper via AsProblemDetails).
 func (h *ErrandHandler) cancelError(errandID string, err error) error {
 	switch {
 	case errors.Is(err, errand.ErrEmptyErrandID):
@@ -354,13 +357,13 @@ func (h *ErrandHandler) cancelError(errandID string, err error) error {
 	}
 }
 
-// rowToErrandResultView проецирует [errand.Row] в плоский [ErrandResultView]
-// (GET /v1/errands/{id} терминал + элемент list-а).
+// rowToErrandResultView projects [errand.Row] into a flat [ErrandResultView]
+// (GET /v1/errands/{id} terminal + a list element).
 //
-// date-time: прежний wire был секундным (`.Format(time.RFC3339)`), поэтому
-// `.UTC().Truncate(time.Second)` сохраняет байт-в-байт. Опциональные поля
-// (stdout/stderr/error_message — string omitempty; truncated-флаги — bool omitempty
-// в спеке) проецируются через nil-при-пустом-значении (паритет с прежним omitempty).
+// date-time: the former wire was second-precision (`.Format(time.RFC3339)`), so
+// `.UTC().Truncate(time.Second)` keeps it byte-for-byte. Optional fields
+// (stdout/stderr/error_message — string omitempty; truncated flags — bool omitempty
+// in the spec) are projected via nil-when-empty (parity with the former omitempty).
 func rowToErrandResultView(row *errand.Row) ErrandResultView {
 	res := ErrandResultView{
 		ErrandID:        row.ErrandID,
@@ -385,12 +388,12 @@ func rowToErrandResultView(row *errand.Row) ErrandResultView {
 	return res
 }
 
-// dispatchResultView строит sync-200-body POST /v1/souls/{sid}/exec из
-// [errand.DispatchResult] (терминал получен до server-cap). sid/module/aid
-// приходят из request-а — DispatchResult их не несёт. StartedAt — реальный
-// момент INSERT-а errands-строки (DispatchResult.StartedAt, тот же Clock()-now,
-// что персистирован в Row.StartedAt), а не время формирования ответа. Так
-// sync-`started_at` совпадает с тем, что вернёт последующий GET /v1/errands/{id}.
+// dispatchResultView builds the sync 200 body of POST /v1/souls/{sid}/exec from
+// [errand.DispatchResult] (terminal reached before the server cap). sid/module/aid
+// come from the request — DispatchResult does not carry them. StartedAt is the real
+// moment of the errands-row INSERT (DispatchResult.StartedAt, the same Clock()-now
+// persisted in Row.StartedAt), not the response-build time. This way the sync
+// `started_at` matches what a subsequent GET /v1/errands/{id} returns.
 func dispatchResultView(res *errand.DispatchResult, sid, module, startedByAID string) ErrandResultView {
 	return ErrandResultView{
 		ErrandID:        res.ErrandID,
@@ -410,8 +413,8 @@ func dispatchResultView(res *errand.DispatchResult, sid, module, startedByAID st
 	}
 }
 
-// ptrBoolIfTrue возвращает nil для false (паритет с omitempty над bool — поле
-// опускается), иначе указатель на true. truncated-флаги в спеке optional.
+// ptrBoolIfTrue returns nil for false (parity with omitempty over bool — the field is
+// omitted), otherwise a pointer to true. truncated flags are optional in the spec.
 func ptrBoolIfTrue(b bool) *bool {
 	if !b {
 		return nil
@@ -419,9 +422,9 @@ func ptrBoolIfTrue(b bool) *bool {
 	return &b
 }
 
-// dispatchError маппит sentinel-ошибки dispatcher.Dispatch в *problemError
-// (доставляются huma-обёрткой через AsProblemDetails). Path в problem.Details
-// пустой — заполняется на выводе.
+// dispatchError maps dispatcher.Dispatch sentinel errors to *problemError
+// (delivered by the huma wrapper via AsProblemDetails). Path in problem.Details is
+// empty — filled on output.
 func (h *ErrandHandler) dispatchError(err error) error {
 	switch {
 	case errors.Is(err, errand.ErrSIDEmpty):
@@ -439,9 +442,9 @@ func (h *ErrandHandler) dispatchError(err error) error {
 	}
 }
 
-// validErrandStatus — closed enum для query-фильтра. Совпадает со
-// списком CHECK errands_status_valid + StatusXxx-константами errand-
-// пакета. Один источник правды (валидируем сразу при парсинге query).
+// validErrandStatus — closed enum for the query filter. Matches the CHECK
+// errands_status_valid list + the StatusXxx constants of the errand package.
+// Single source of truth (validated right at query parsing).
 func validErrandStatus(s string) bool {
 	switch errand.Status(s) {
 	case errand.StatusRunning, errand.StatusSuccess, errand.StatusFailed,
@@ -451,12 +454,12 @@ func validErrandStatus(s string) bool {
 	return false
 }
 
-// ErrandSIDSelector — middleware-helper для RBAC: извлекает SID из
-// path-параметра `/v1/souls/{sid}/exec` для permission-проверки
-// (rbac.md §Errand → селекторы `host=<sid>`).
+// ErrandSIDSelector — a middleware helper for RBAC: extracts the SID from the
+// path parameter `/v1/souls/{sid}/exec` for the permission check
+// (rbac.md §Errand → selectors `host=<sid>`).
 //
-// Симметрично SoulSIDSelector — отдельный helper, чтобы router.go не
-// зависел от внутренних деталей errand-пакета.
+// Symmetric to SoulSIDSelector — a separate helper so router.go does not
+// depend on the errand package internals.
 func ErrandSIDSelector(r *http.Request) map[string]string {
 	sid := chi.URLParam(r, "sid")
 	if sid == "" {

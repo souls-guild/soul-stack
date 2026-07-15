@@ -1,19 +1,19 @@
 package middleware
 
-// Tempo rate-limit middleware (ADR-050) — per-AID ограничитель частоты
-// обращений оператора к resolver-тяжёлым write-эндпоинтам.
+// Tempo rate-limit middleware (ADR-050) — a per-AID limiter on the rate of an
+// operator's calls to resolver-heavy write endpoints.
 //
-// Навешивается ПОСЛЕ [RequireJWT]: AID берётся из claims в context
-// ([ClaimsFromContext], `claims.Subject`). До handler-а (до запуска
-// резолверов) — берётся один токен из per-AID-bucket-а в Redis; при
-// исчерпании — 429 + Retry-After + application/problem+json
-// ([problem.TypeTempoExceeded]), без вызова next.
+// Wired AFTER [RequireJWT]: the AID is taken from claims in the context
+// ([ClaimsFromContext], `claims.Subject`). Before the handler (before the
+// resolvers run) one token is taken from the per-AID bucket in Redis; on
+// exhaustion — 429 + Retry-After + application/problem+json
+// ([problem.TypeTempoExceeded]), without calling next.
 //
-// Образец — toll.DegradedMiddleware (keeper/internal/toll/middleware.go):
-// та же форма фабрики, тот же nil → passthrough, тот же fail-OPEN при
-// Redis-ошибке. Отличие: Tempo — per-AID 429 по частоте, Toll — cluster-wide
-// 503 по здоровью. Навеска (точечно на `POST /v1/voyages`) и конфиг
-// (`tempo:`-блок, rate/burst, hot-reload) — wire-up в keeper/cmd/keeper +
+// Reference — toll.DegradedMiddleware (keeper/internal/toll/middleware.go):
+// the same factory shape, the same nil → passthrough, the same fail-OPEN on a
+// Redis error. Difference: Tempo — per-AID 429 by rate, Toll — cluster-wide
+// 503 by health. Wiring (specifically on `POST /v1/voyages`) and config
+// (the `tempo:` block, rate/burst, hot-reload) — wire-up in keeper/cmd/keeper +
 // keeper/internal/api (S-R3/S-R4).
 
 import (
@@ -26,58 +26,58 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// RateLimiter — поверхность Tempo-token-bucket-а, нужная middleware.
-// Реализуется *redis.TokenBucket (keeper/internal/redis/ratelimit.go).
+// RateLimiter — the Tempo token-bucket surface the middleware needs.
+// Implemented by *redis.TokenBucket (keeper/internal/redis/ratelimit.go).
 //
-// Интерфейс (а не конкретный тип) — чтобы middleware жил в `api/middleware`
-// без import-зависимости на `internal/redis` и чтобы unit-тесты подменяли
-// limiter fake-ом (как DegradedReader у Toll). allowed/retryAfter/err — по
-// контракту TokenBucket.Allow.
+// An interface (not a concrete type) — so the middleware lives in `api/middleware`
+// without an import dependency on `internal/redis`, and so unit tests can swap the
+// limiter with a fake (like DegradedReader in Toll). allowed/retryAfter/err — per the
+// TokenBucket.Allow contract.
 type RateLimiter interface {
 	Allow(ctx context.Context, aid, bucket string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error)
 }
 
-// RateLimitMetrics — узкая metrics-поверхность Tempo (ADR-050(g)).
-// Реализуется keeper/internal/api/server-метриками; nil-safe (nil hook → emit
-// no-op). Лейбл endpoint = bucket-имя; AID-лейбла НЕТ (кардинальность).
+// RateLimitMetrics — a narrow Tempo metrics surface (ADR-050(g)).
+// Implemented by keeper/internal/api server metrics; nil-safe (nil hook → emit
+// no-op). Label endpoint = bucket name; NO AID label (cardinality).
 type RateLimitMetrics interface {
 	IncTempoAllowed(endpoint string)
 	IncTempoRejected(endpoint string)
 }
 
-// RateLimitLimits — текущие rate/burst bucket-а. Возвращается провайдером,
-// который читает живой config.Store snapshot (ADR-021 hot-reload): новый лимит
-// применяется со следующего запроса без рестарта, текущие бакеты в Redis
-// доживают по своему PEXPIRE.
+// RateLimitLimits — the current rate/burst of a bucket. Returned by a provider
+// that reads the live config.Store snapshot (ADR-021 hot-reload): a new limit
+// applies from the next request without a restart, and the current buckets in Redis
+// live out their own PEXPIRE.
 type RateLimitLimits struct {
 	Rate  float64
 	Burst int
 }
 
-// RateLimit возвращает chi/net-http-совместимый middleware Tempo-лимита для
-// конкретного логического bucket-а (`bucket`, напр. "voyage_create").
+// RateLimit returns a chi/net-http-compatible Tempo-limit middleware for a
+// specific logical bucket (`bucket`, e.g. "voyage_create").
 //
-// rate/burst читаются НЕ при сборке, а на каждом запросе через `limits`-провайдер
-// (hot-reload, ADR-050(f)/ADR-021): провайдер отдаёт живой config.Store snapshot.
-// Невалидные (≤0) значения провайдера трактуются как fail-OPEN passthrough —
-// limiter.Allow всё равно отверг бы их ошибкой, и на сбое конфига блокировать
-// нельзя (доступность > перестраховка, как при Redis-флапе).
+// rate/burst are read NOT at assembly but on every request via the `limits` provider
+// (hot-reload, ADR-050(f)/ADR-021): the provider returns the live config.Store snapshot.
+// Invalid (≤0) provider values are treated as fail-OPEN passthrough —
+// limiter.Allow would reject them with an error anyway, and blocking on a config failure
+// is not allowed (availability > caution, as on a Redis flap).
 //
-// limiter=nil → middleware no-op (passthrough). Симметрично toll-middleware
-// при reader=nil: dev/single-instance без Redis не блокирует ничего, и тесты
-// роутера, которым Tempo не нужен, не получают сюрпризов.
+// limiter=nil → middleware no-op (passthrough). Symmetric to the toll middleware
+// at reader=nil: dev/single-instance without Redis blocks nothing, and router
+// tests that don't need Tempo get no surprises.
 //
-// metrics=nil → emit no-op (unit-тесты без obs.Registry).
+// metrics=nil → emit no-op (unit tests without obs.Registry).
 //
-// Логика:
-//  1. limiter=nil → passthrough (решается на этапе фабрики, без overhead на
-//     запрос).
-//  2. Нет claims в context (middleware прицеплен без RequireJWT-цепочки) →
-//     fail-OPEN passthrough + warn. Это ошибка wire-up-а, но блокировать
-//     по «нет AID» нельзя — bucket per-AID, без AID лимит бессмыслен.
-//  3. limiter.Allow вернул ошибку (Redis-сбой / скрипт упал) → fail-OPEN
-//     passthrough + debug (ADR-050(b): доступность > перестраховка, как Toll).
-//  4. allowed=false → 429 + Retry-After + problem+json, next НЕ вызывается,
+// Logic:
+//  1. limiter=nil → passthrough (decided at the factory stage, no per-request
+//     overhead).
+//  2. No claims in context (the middleware is attached without the RequireJWT chain) →
+//     fail-OPEN passthrough + warn. This is a wire-up error, but blocking on
+//     "no AID" is not allowed — the bucket is per-AID, and without an AID the limit is meaningless.
+//  3. limiter.Allow returned an error (Redis failure / script crashed) → fail-OPEN
+//     passthrough + debug (ADR-050(b): availability > caution, like Toll).
+//  4. allowed=false → 429 + Retry-After + problem+json, next is NOT called,
 //     keeper_tempo_rejected_total{endpoint} +1.
 //  5. allowed=true → passthrough, keeper_tempo_allowed_total{endpoint} +1.
 func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits, metrics RateLimitMetrics, logger *slog.Logger) func(http.Handler) http.Handler {
@@ -88,9 +88,9 @@ func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFromContext(r.Context())
 			if !ok || claims.Subject == "" {
-				// Wire-up без RequireJWT перед Tempo — программная ошибка
-				// конфигурации сервера. Fail-OPEN: лимит per-AID без AID
-				// невычислим, блокировать нельзя.
+				// Wire-up without RequireJWT before Tempo is a server-configuration
+				// programming error. Fail-OPEN: a per-AID limit without an AID
+				// is uncomputable, blocking is not allowed.
 				logger.Warn("tempo: no AID in context — middleware навешан без RequireJWT? fail-open",
 					slog.String("path", r.URL.Path),
 				)
@@ -100,7 +100,7 @@ func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits
 
 			lim := limits()
 			if lim.Rate <= 0 || lim.Burst <= 0 {
-				// Битый/нулевой конфиг (hot-reload подсунул невалид) → fail-OPEN.
+				// Broken/zero config (hot-reload supplied an invalid value) → fail-OPEN.
 				logger.Debug("tempo: non-positive rate/burst from config — fail-open",
 					slog.Float64("rate", lim.Rate),
 					slog.Int("burst", lim.Burst),
@@ -112,8 +112,8 @@ func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits
 
 			allowed, retryAfter, err := limiter.Allow(r.Context(), claims.Subject, bucket, lim.Rate, lim.Burst)
 			if err != nil {
-				// Fail-OPEN: Redis-флап — частое явление, доступность важнее
-				// перестраховки (ADR-050(b)).
+				// Fail-OPEN: a Redis flap is common, availability matters more than
+				// caution (ADR-050(b)).
 				logger.Debug("tempo: limiter check failed — fail-open",
 					slog.Any("error", err),
 					slog.String("aid", claims.Subject),
@@ -138,10 +138,10 @@ func RateLimit(limiter RateLimiter, bucket string, limits func() RateLimitLimits
 	}
 }
 
-// writeTempo429 пишет 429 + Retry-After + RFC 7807 problem+json
-// ([problem.TypeTempoExceeded]). Retry-After — секунды до пополнения хотя бы
-// одного токена, округление ВВЕРХ (раньше срока ретрай снова упрётся в пустой
-// бакет). Минимум 1с: заголовок Retry-After в секундах, 0 ввёл бы клиента в
+// writeTempo429 writes 429 + Retry-After + RFC 7807 problem+json
+// ([problem.TypeTempoExceeded]). Retry-After — the seconds until at least one token
+// refills, rounded UP (a retry before that would hit an empty bucket again). Minimum
+// 1s: the Retry-After header is in seconds, and 0 would send the client into
 // busy-retry.
 func writeTempo429(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	secs := int(retryAfter / time.Second)

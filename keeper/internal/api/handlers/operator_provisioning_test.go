@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// fakeProvisioningGate — управляемый ProvisioningGate для handler-теста.
+// fakeProvisioningGate — controllable ProvisioningGate for the handler test.
 type fakeProvisioningGate struct {
 	allowed map[string]bool
 }
@@ -19,9 +19,9 @@ func (g fakeProvisioningGate) ProvisioningMethodAllowed(method string) bool {
 	return g.allowed[method]
 }
 
-// TestOperatorCreateTyped_UserDisabled_403 — B5 кейс 1: политика без "user" →
-// POST /v1/operators (CreateTyped) отдаёт problem provisioning_method_disabled
-// (403), svc.Create НЕ вызывается (оператор не создаётся).
+// TestOperatorCreateTyped_UserDisabled_403 — B5 case 1: policy without "user" →
+// POST /v1/operators (CreateTyped) returns problem provisioning_method_disabled
+// (403), svc.Create is NOT called (operator not created).
 func TestOperatorCreateTyped_UserDisabled_403(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(string) (*operator.Operator, error) {
@@ -34,7 +34,7 @@ func TestOperatorCreateTyped_UserDisabled_403(t *testing.T) {
 			{Name: "creator", Operators: []string{"archon-alice"}, Permissions: []string{"operator.create"}},
 		},
 	})
-	h.SetProvisioningGate(fakeProvisioningGate{allowed: map[string]bool{"ldap": true}}) // user запрещён
+	h.SetProvisioningGate(fakeProvisioningGate{allowed: map[string]bool{"ldap": true}}) // user disallowed
 
 	_, err := h.CreateTyped(context.Background(), claims("archon-alice"),
 		OperatorCreateInput{AID: "archon-bob", DisplayName: "Bob"})
@@ -53,8 +53,8 @@ func TestOperatorCreateTyped_UserDisabled_403(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_UserAllowed_Proceeds — позитив: user∈methods →
-// CreateTyped проходит (оператор создаётся).
+// TestOperatorCreateTyped_UserAllowed_Proceeds — positive: user∈methods →
+// CreateTyped proceeds (operator created).
 func TestOperatorCreateTyped_UserAllowed_Proceeds(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(aid string) (*operator.Operator, error) {
@@ -86,8 +86,8 @@ func TestOperatorCreateTyped_UserAllowed_Proceeds(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_NilGate_Proceeds — gate не сконфигурирован (nil) →
-// CreateTyped проходит (back-compat).
+// TestOperatorCreateTyped_NilGate_Proceeds — gate not configured (nil) →
+// CreateTyped proceeds (back-compat).
 func TestOperatorCreateTyped_NilGate_Proceeds(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(aid string) (*operator.Operator, error) {
@@ -99,7 +99,7 @@ func TestOperatorCreateTyped_NilGate_Proceeds(t *testing.T) {
 			{Name: "creator", Operators: []string{"archon-alice"}, Permissions: []string{"operator.create"}},
 		},
 	})
-	// gate НЕ выставлен.
+	// gate NOT set.
 	if _, err := h.CreateTyped(context.Background(), claims("archon-alice"),
 		OperatorCreateInput{AID: "archon-bob"}); err != nil {
 		t.Fatalf("CreateTyped с nil-gate err=%v, want nil (back-compat)", err)
@@ -109,7 +109,7 @@ func TestOperatorCreateTyped_NilGate_Proceeds(t *testing.T) {
 	}
 }
 
-// проверка, что provisioning_method_disabled действительно 403.
+// verifies provisioning_method_disabled really is 403.
 func TestProvisioningMethodDisabled_Status403(t *testing.T) {
 	d := problem.New(problem.TypeProvisioningMethodDisabled, "", "x")
 	if d.Status != 403 {

@@ -14,7 +14,7 @@ import (
 	oidcauth "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 )
 
-// stubOIDCAuthenticator — фиктивный OIDC-аутентификатор для endpoint-теста.
+// stubOIDCAuthenticator — a fake OIDC authenticator for the endpoint test.
 type stubOIDCAuthenticator struct {
 	authz       oidcauth.Authorization
 	beginErr    error
@@ -33,7 +33,7 @@ func (s *stubOIDCAuthenticator) CompleteLogin(_ context.Context, code, state str
 	return s.ext, s.completeErr
 }
 
-// mountOIDC поднимает chi-router с /auth/oidc/* на переданных deps.
+// mountOIDC brings up a chi router with /auth/oidc/* on the given deps.
 func mountOIDC(d *OIDCAuthDeps) http.Handler {
 	r := chi.NewRouter()
 	r.Route("/auth", func(r chi.Router) {
@@ -49,7 +49,7 @@ func doGet(h http.Handler, target string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestOIDCLogin_RedirectsToIdP — /auth/oidc/login → 302 на authorization-URL IdP.
+// TestOIDCLogin_RedirectsToIdP — /auth/oidc/login → 302 to the IdP authorization URL.
 func TestOIDCLogin_RedirectsToIdP(t *testing.T) {
 	authn := &stubOIDCAuthenticator{authz: oidcauth.Authorization{
 		RedirectTo: "https://idp.example.com/authorize?state=abc&code_challenge=xyz",
@@ -66,9 +66,9 @@ func TestOIDCLogin_RedirectsToIdP(t *testing.T) {
 	}
 }
 
-// TestOIDCCallback_SetsSecureCookieAndRedirects — ★ happy: 302 на UI + cookie
-// HttpOnly+Secure+SameSite=Lax (Lax — чтобы пережить cross-site redirect от IdP);
-// JWT в cookie, не в теле; audit operator.login(method=oidc) записан.
+// TestOIDCCallback_SetsSecureCookieAndRedirects — ★ happy: 302 to the UI + a cookie
+// HttpOnly+Secure+SameSite=Lax (Lax — to survive the cross-site redirect from the IdP);
+// JWT in the cookie, not in the body; audit operator.login(method=oidc) recorded.
 func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	issuer := &loginStubIssuer{token: "ey.oidc.jwt"}
 	aw := &authTestAudit{}
@@ -88,7 +88,7 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	if loc := rec.Header().Get("Location"); loc != oidcCallbackSuccessRedirect {
 		t.Errorf("Location = %q, want %q", loc, oidcCallbackSuccessRedirect)
 	}
-	// authenticator получил code+state из query.
+	// authenticator received code+state from the query.
 	if authn.gotCode != "AUTHCODE" || authn.gotState != "STATE123" {
 		t.Errorf("authenticator got code=%q state=%q, want AUTHCODE/STATE123", authn.gotCode, authn.gotState)
 	}
@@ -107,9 +107,9 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	if !c.Secure {
 		t.Errorf("cookie must be Secure")
 	}
-	// MED-фикс (2026-06-24): SameSite унифицирован со Strict (parity LDAP,
-	// ADR-058(g)). Strict безопасен на callback-е: cookie СТАВИТСЯ на ответе
-	// callback-а, ОТПРАВЛЯЕТСЯ на последующей same-site навигации /ui (302).
+	// MED fix (2026-06-24): SameSite unified to Strict (parity LDAP,
+	// ADR-058(g)). Strict is safe on the callback: the cookie is SET on the callback
+	// response and SENT on the subsequent same-site navigation to /ui (302).
 	if c.SameSite != http.SameSiteStrictMode {
 		t.Errorf("cookie SameSite = %v, want Strict (унифицировано с LDAP, MED-фикс)", c.SameSite)
 	}
@@ -124,7 +124,7 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	}
 }
 
-// TestOIDCCallback_AuthFailedIs401 — CompleteLogin ErrAuthFailed → 401, без cookie.
+// TestOIDCCallback_AuthFailedIs401 — CompleteLogin ErrAuthFailed → 401, no cookie.
 func TestOIDCCallback_AuthFailedIs401(t *testing.T) {
 	authn := &stubOIDCAuthenticator{completeErr: auth.ErrAuthFailed}
 	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
@@ -139,6 +139,8 @@ func TestOIDCCallback_AuthFailedIs401(t *testing.T) {
 }
 
 // TestOIDCCallback_NoRoleMappingIs403 — Mapper ErrNoRoleMapping → 403.
+//
+//nolint:dupl // parity with the sibling ProvisioningDisabled case
 func TestOIDCCallback_NoRoleMappingIs403(t *testing.T) {
 	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "bob"}}
 	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrNoRoleMapping}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
@@ -150,7 +152,7 @@ func TestOIDCCallback_NoRoleMappingIs403(t *testing.T) {
 }
 
 // TestOIDCCallback_ProvisioningDisabledIs403 — Mapper ErrProvisioningDisabled →
-// 403 (политика provisioning_allowed_methods без oidc; переиспользует policy-gate).
+// 403 (provisioning_allowed_methods policy without oidc; reuses the policy gate).
 func TestOIDCCallback_ProvisioningDisabledIs403(t *testing.T) {
 	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "newbie"}}
 	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrProvisioningDisabled}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
@@ -161,8 +163,8 @@ func TestOIDCCallback_ProvisioningDisabledIs403(t *testing.T) {
 	}
 }
 
-// TestOIDCCallback_IdPError — IdP вернул error=access_denied → 401, без cookie,
-// CompleteLogin даже не вызывается.
+// TestOIDCCallback_IdPError — IdP returned error=access_denied → 401, no cookie,
+// CompleteLogin is not even called.
 func TestOIDCCallback_IdPError(t *testing.T) {
 	authn := &stubOIDCAuthenticator{}
 	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
@@ -176,7 +178,7 @@ func TestOIDCCallback_IdPError(t *testing.T) {
 	}
 }
 
-// TestOIDC_NilDepsNoMount — d=nil → роуты не монтируются (404).
+// TestOIDC_NilDepsNoMount — d=nil → routes are not mounted (404).
 func TestOIDC_NilDepsNoMount(t *testing.T) {
 	var d *OIDCAuthDeps
 	h := mountOIDC(d)
@@ -188,5 +190,5 @@ func TestOIDC_NilDepsNoMount(t *testing.T) {
 	}
 }
 
-// compile-time: stub реализует узкий oidcAuthenticator.
+// compile-time: the stub implements the narrow oidcAuthenticator.
 var _ oidcAuthenticator = (*stubOIDCAuthenticator)(nil)

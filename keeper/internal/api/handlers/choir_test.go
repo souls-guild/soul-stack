@@ -1,11 +1,11 @@
 package handlers
 
-// T5d-2c handler-native: choir/voice (w,r)-оболочки сняты — HTTP обслуживает huma
+// T5d-2c handler-native: choir/voice (w,r) wrappers removed — HTTP is served by huma
 // full-typed (huma_choir_test.go: golden-wire / unknown-field-400 / bad-name-422 /
-// RBAC-deny-403 / self-audit на реальной huma-навеске). Эти unit-тесты проверяют то,
-// что huma-integration НЕ покрывает: ДОМЕННУЮ классификацию ошибок *Typed-функций
-// (sentinel→problem.Type) + created_by_aid/added_by_aid из JWT (НЕ из тела). Зовут
-// *Typed напрямую, без httptest(w,r).
+// RBAC-deny-403 / self-audit on the real huma wiring). These unit tests cover what
+// huma-integration does NOT: the DOMAIN error classification of *Typed functions
+// (sentinel→problem.Type) + created_by_aid/added_by_aid from JWT (NOT from the body).
+// They call *Typed directly, without httptest(w,r).
 
 import (
 	"context"
@@ -20,22 +20,22 @@ import (
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// choirClaims конструирует keeperjwt.Claims для вызова *Typed напрямую.
+// choirClaims builds keeperjwt.Claims for calling *Typed directly.
 func choirClaims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: subject} }
 
 // --- fake ChoirDB ------------------------------------------------------
 
-// fakeChoirDB — настраиваемый мок [ChoirDB] для unit-теста ChoirHandler.
-// Диспетчеризует по подстроке SQL (insert/select/list/delete/membership).
-// Каждое поле задаёт исход соответствующей операции; nil-исход → success-
-// по-умолчанию. fakeChoirDB сам реализует pgx.Tx (через delegate-методы),
-// поэтому BeginTx возвращает себя.
+// fakeChoirDB is a configurable [ChoirDB] mock for the ChoirHandler unit test.
+// Dispatches by SQL substring (insert/select/list/delete/membership). Each field
+// sets the outcome of the matching operation; nil outcome → success by default.
+// fakeChoirDB implements pgx.Tx itself (via delegate methods), so BeginTx returns
+// itself.
 type fakeChoirDB struct {
 	// CreateChoir: QueryRow(insertChoirSQL).Scan(&CreatedAt).
 	insertChoirErr error
 	// AddVoice: QueryRow(selectChoirForUpdateSQL).Scan(&dummy).
-	choirLockRows pgx.Row // nil → success (отдаёт 1); errRow{pgx.ErrNoRows} → ErrChoirNotFound
-	// AddVoice: Query(membershipSQL) — какие SID-ы реально члены инкарнации.
+	choirLockRows pgx.Row // nil → success (returns 1); errRow{pgx.ErrNoRows} → ErrChoirNotFound
+	// AddVoice: Query(membershipSQL) — which SIDs are actually members of the incarnation.
 	memberSIDs []string
 	// AddVoice: QueryRow(insertVoiceSQL).Scan(&AddedAt).
 	insertVoiceErr error
@@ -95,12 +95,12 @@ func (f *fakeChoirDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 	return &fakeChoirRows{}, nil
 }
 
-// BeginTx возвращает сам fakeChoirDB как pgx.Tx (delegate Exec/Query/QueryRow).
+// BeginTx returns the fakeChoirDB itself as pgx.Tx (delegate Exec/Query/QueryRow).
 func (f *fakeChoirDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	return &fakeChoirTx{db: f}, nil
 }
 
-// fakeChoirTx — pgx.Tx-обёртка над fakeChoirDB.
+// fakeChoirTx is a pgx.Tx wrapper over fakeChoirDB.
 type fakeChoirTx struct{ db *fakeChoirDB }
 
 func (t *fakeChoirTx) Begin(ctx context.Context) (pgx.Tx, error) { return t, nil }
@@ -127,7 +127,7 @@ func (t *fakeChoirTx) QueryRow(ctx context.Context, sql string, args ...any) pgx
 }
 func (t *fakeChoirTx) Conn() *pgx.Conn { return nil }
 
-// fakeChoirRows — pgx.Rows над [][]any (scan по типам dest).
+// fakeChoirRows is a pgx.Rows over [][]any (scan by dest types).
 type fakeChoirRows struct {
 	rows [][]any
 	idx  int
@@ -176,7 +176,7 @@ func (r *fakeChoirRows) Values() ([]any, error)                       { return n
 func (r *fakeChoirRows) RawValues() [][]byte                          { return nil }
 func (r *fakeChoirRows) Conn() *pgx.Conn                              { return nil }
 
-// wantChoirProblem проверяет, что err — доменный *problemError с ожидаемым problem.Type.
+// wantChoirProblem checks that err is a domain *problemError with the expected problem.Type.
 func wantChoirProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -297,10 +297,10 @@ func TestChoir_AddVoiceTyped_ChoirNotFound_404(t *testing.T) {
 	wantChoirProblem(t, err, problem.TypeNotFound)
 }
 
-// TestChoir_AddVoiceTyped_NotMembers_422 — SID не член инкарнации (membership-query
-// не вернула его) → ErrNotMembers → 422 (TZ-инвариант ADR-044 пункт 3).
+// TestChoir_AddVoiceTyped_NotMembers_422 — SID is not a member of the incarnation
+// (membership query didn't return it) → ErrNotMembers → 422 (invariant ADR-044 item 3).
 func TestChoir_AddVoiceTyped_NotMembers_422(t *testing.T) {
-	db := &fakeChoirDB{memberSIDs: nil} // никто не член
+	db := &fakeChoirDB{memberSIDs: nil} // nobody is a member
 	h := NewChoirHandler(db, nil, nil)
 	_, err := h.AddVoiceTyped(context.Background(), choirClaims("archon-alice"), "redis", "redis_primary", VoiceAddInput{SID: "stranger.example.com"})
 	wantChoirProblem(t, err, problem.TypeValidationFailed)

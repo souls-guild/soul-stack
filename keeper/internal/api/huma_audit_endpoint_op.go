@@ -1,17 +1,17 @@
 package api
 
-// FULL-TYPED форма GET /v1/audit (code-first источник OpenAPI, ADR-054 §Pattern
-// ЧЕТВЁРТЫЙ tier — read-with-typed-query). Go-типы — единственный источник правды:
-// huma строит из них И JSON Schema OpenAPI-фрагмента (query-параметры с типами/
-// границами/enum), И typed-bind входа, И typed-output. ЭТАЛОН ~13-15 list-эндпоинтов
-// с типизированной query.
+// FULL-TYPED shape of GET /v1/audit (code-first OpenAPI source, ADR-054 §Pattern
+// the FOURTH tier — read with typed query). Go types are the single source of truth:
+// huma builds from them BOTH the JSON Schema of the OpenAPI fragment (query params with types/
+// bounds/enum), AND the typed-bind of the input, AND the typed output. The REFERENCE for ~13-15
+// list endpoints with a typed query.
 //
-// КЛЮЧЕВОЙ инвариант tier-а (контракт сохранён, решение A 2026-06-13): bad-value
+// The KEY invariant of the tier (contract preserved, decision A 2026-06-13): a bad-value
 // typed-query (started_after/before date-time, offset/limit int) → 400
-// TypeMalformedRequest (huma parseInto-фейл → error-override hasQueryParseError); bad
-// source-enum → 422 TypeValidationFailed (schema-validate enum-mismatch — другой
-// Message, в parse-набор не попадает). Это продолжение ADR-051 Amendment (strict
-// bind-фаза давала тот же 400/422), без product-fork.
+// TypeMalformedRequest (huma parseInto failure → error-override hasQueryParseError); a bad
+// source-enum → 422 TypeValidationFailed (schema-validate enum mismatch — a different
+// Message, not in the parse set). This continues ADR-051 Amendment (the strict
+// bind phase gave the same 400/422), without a product fork.
 
 import (
 	"net/http"
@@ -20,40 +20,40 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// auditListInput — huma-input GET /v1/audit (FULL-TYPED typed-query). КАЖДОЕ поле
-// несёт `query:"<name>"`-тег → huma биндит из url.Values и валидирует по схеме из
-// тегов. RequestBody у GET НЕТ (huma не выводит body без Body-поля).
+// auditListInput — the huma-input of GET /v1/audit (FULL-TYPED typed-query). EVERY field
+// carries a `query:"<name>"` tag → huma binds from url.Values and validates against the schema
+// from the tags. GET has NO RequestBody (huma emits no body without a Body field).
 //
-// Семантика bind-фазы (parity легаси AuditHandler.List → ListTyped):
-//   - Types/Sources — multi-value (`?type=X&type=Y`), OR-семантика в доменной
-//     ListTyped (event_type/source IN (...)); пустой slice → фильтр не применять.
-//     `query:"…,explode"` ОБЯЗАТЕЛЕН на этих []string-полях: huma-дефолт query-
-//     array — explode=false (читает comma-separated `?source=a,b` КАК ОДНО "a,b"
-//     и эмитит `explode: false` в спеку → сгенерённый клиент закодирует составное
-//     значение → сломанный OR-фильтр). `,explode` → huma читает повторяющийся
-//     ключ `?source=a&source=b` И эмитит `explode: true` (huma v2.38 huma.go:157,
-//     openapi.go Param.Explode); совпадает с committed-спекой (style:form +
-//     explode:true) — match multi-value контракта тиража;
-//   - Sources несёт `enum:"…"` — huma отбивает значение вне набора на 422
-//     (schema-validate, НЕ parseInto) → error-override классифицирует как
-//     TypeValidationFailed (КЛЮЧЕВОЙ контракт-инвариант: enum→422, не 400). Набор
-//     enum = ПОЛНЫЙ доменный valid-set audit.Source.Valid() (signal/api/mcp/
+// Bind-phase semantics (parity with the legacy AuditHandler.List → ListTyped):
+//   - Types/Sources — multi-value (`?type=X&type=Y`), OR semantics in the domain
+//     ListTyped (event_type/source IN (...)); an empty slice → do not apply the filter.
+//     `query:"…,explode"` is REQUIRED on these []string fields: the huma default for a query
+//     array is explode=false (reads comma-separated `?source=a,b` AS ONE "a,b"
+//     and emits `explode: false` in the spec → the generated client encodes a composite
+//     value → a broken OR filter). `,explode` → huma reads a repeated
+//     key `?source=a&source=b` AND emits `explode: true` (huma v2.38 huma.go:157,
+//     openapi.go Param.Explode); matches the committed spec (style:form +
+//     explode:true) — matches the rollout multi-value contract;
+//   - Sources carries `enum:"…"` — huma rejects a value outside the set with 422
+//     (schema-validate, NOT parseInto) → error-override classifies it as
+//     TypeValidationFailed (the KEY contract invariant: enum→422, not 400). The
+//     enum set = the FULL domain valid-set audit.Source.Valid() (signal/api/mcp/
 //     keeper_internal/soul_grpc/background/config_bootstrap): config_bootstrap
-//     реально эмитится (push/auto_import.go) и принимается доменом → его пропуск
-//     отбивал бы рабочий фильтр `?source=config_bootstrap` на 422 (wire-regression
-//     200→422). enum-тег синхронизируется С ДОМЕНОМ, committed-спека — следом;
-//   - StartedAfter/StartedBefore — time.Time: huma parseInto на bad-value даёт
+//     is actually emitted (push/auto_import.go) and accepted by the domain → dropping it
+//     would reject the working filter `?source=config_bootstrap` with 422 (wire regression
+//     200→422). The enum tag syncs WITH THE DOMAIN, the committed spec follows;
+//   - StartedAfter/StartedBefore — time.Time: huma parseInto on a bad value gives
 //     "invalid date/time for format …" → 400 (hasQueryParseError); zero-time
-//     (параметр опущен) → доменный фильтр не применяет границу (filter.IsZero);
-//   - Offset/Limit — int32 (НЕ Go-int: huma на int эмитит format:int64, committed-
-//     спека/OffsetQuery/LimitQuery несут int32; пагинация влезает в int32) с
-//     `default` (offset 0, limit 50), совпадающим с shared/api.
-//     ParsePage. bad-int (нечисловое) → 400 (parseInto). ГРАНИЦЫ диапазона (offset≥0,
-//     limit∈[1,1000]) НЕ выражены huma-тегами `minimum`/`maximum` СОЗНАТЕЛЬНО: huma
-//     отбивал бы out-of-range на 422 (schema-validate), а легаси/strict-контракт
-//     даёт на limit=0/1001/offset<0 ровно 400 (ParsePage TypeMalformedRequest). Диапазон
-//     enforce-ит ДОМЕННАЯ ListTyped тем же сообщением ParsePage → 400 — иначе
-//     wire-change. Документация диапазона несётся через `doc:` (не через schema-min/max).
+//     (parameter omitted) → the domain filter applies no bound (filter.IsZero);
+//   - Offset/Limit — int32 (NOT Go int: huma emits format:int64 for int, the committed
+//     spec/OffsetQuery/LimitQuery carry int32; pagination fits in int32) with
+//     `default` (offset 0, limit 50) matching shared/api.
+//     ParsePage. A bad int (non-numeric) → 400 (parseInto). The range BOUNDS (offset≥0,
+//     limit∈[1,1000]) are NOT expressed via huma `minimum`/`maximum` tags DELIBERATELY: huma
+//     would reject out-of-range with 422 (schema-validate), while the legacy/strict contract
+//     gives exactly 400 for limit=0/1001/offset<0 (ParsePage TypeMalformedRequest). The range is
+//     enforced by the DOMAIN ListTyped with the same ParsePage message → 400 — otherwise a
+//     wire change. The range is documented via `doc:` (not via schema-min/max).
 type auditListInput struct {
 	Types         []string  `query:"type,explode" doc:"multi-value ?type=X&type=Y — exact-match OR по event_type"`
 	Sources       []string  `query:"source,explode" enum:"signal,api,mcp,keeper_internal,soul_grpc,background,config_bootstrap" doc:"multi-value ?source=api&source=mcp — exact-match OR; значение вне enum → 422"`
@@ -67,21 +67,21 @@ type auditListInput struct {
 	Limit         int32     `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
 
-// auditListOutput — huma-output GET /v1/audit (FULL-TYPED). Body — native 200-тело
-// (AuditEventListReply, тот же envelope {items,offset,limit,total}, что отдавала легаси
-// writeJSON). Проекция доменной handlers.AuditListPage → native — на границе register-func
-// (newAuditEventListReply). Wire-форма (items non-nil [], Source native enum-тип, created_at
-// секундной точности) зафиксирована golden-JSON byte-exact-тестом (главный guard tier-а).
+// auditListOutput — the huma-output of GET /v1/audit (FULL-TYPED). Body — the native 200 body
+// (AuditEventListReply, the same envelope {items,offset,limit,total} the legacy
+// writeJSON returned). Projection of the domain handlers.AuditListPage → native is on the register-func
+// boundary (newAuditEventListReply). The wire shape (items non-nil [], Source native enum type, created_at
+// second-precision) is pinned by a golden-JSON byte-exact test (the tier's main guard).
 type auditListOutput struct {
 	Body AuditEventListReply
 }
 
-// auditListOperation — метаданные GET /v1/audit. Path = "/audit" относительно
-// chi-группы /v1 (huma.API смонтирован на ней; chi.Walk видит /v1/audit, drift-test
-// зелёный — абсолютный, как permissionsListOperation, чтобы distinct-path исключал
-// коллизию операций на общей /v1-API). DefaultStatus=200. READ-роут: audit НЕ навешан
-// (чтение audit_log само audit-event не порождает — рекурсия). Errors: 400 (bad
-// typed-query bind), 422 (bad source-enum / out-of-range pagination), 500 (БД).
+// auditListOperation — metadata for GET /v1/audit. Path = "/audit" relative to the
+// chi group /v1 (huma.API is mounted on it; chi.Walk sees /v1/audit, drift-test
+// green — absolute, like permissionsListOperation, so a distinct path excludes
+// an operation collision on the shared /v1 API). DefaultStatus=200. READ route: audit not wired
+// (reading audit_log spawns no audit event itself — recursion). Errors: 400 (bad
+// typed-query bind), 422 (bad source-enum / out-of-range pagination), 500 (DB).
 func auditListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listAuditEvents",

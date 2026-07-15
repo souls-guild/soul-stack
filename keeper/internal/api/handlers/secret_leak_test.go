@@ -1,9 +1,9 @@
 package handlers
 
-// Guard-leak тест sink-а AUDIT (ADR-064 митигация b, NIM-11): при dual-mode
-// plaintext-приёме секрет НЕ попадает в audit-payload write-роутов Herald/
-// Provider; маркер plaintext_ingested присутствует (без значения). Полный путь
-// handler → service → материализация → reply.AuditPayload.
+// Guard-leak test for the AUDIT sink (ADR-064 mitigation b, NIM-11): under dual-mode
+// plaintext ingestion the secret does NOT reach the audit-payload of Herald/Provider
+// write routes; the plaintext_ingested marker is present (without a value). Full path:
+// handler → service → materialization → reply.AuditPayload.
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 
 const leakHandlerPlaintext = "PLAINTEXT-HANDLER-SECRET-1a2b3c"
 
-// leakVault реализует и herald.SecretWriter (WriteString), и provider.SecretWriter
-// (WriteMap) — keeper-side материализация в Vault.
+// leakVault implements both herald.SecretWriter (WriteString) and provider.SecretWriter
+// (WriteMap) — keeper-side materialization into Vault.
 type leakVault struct{}
 
 func (leakVault) WriteString(_ context.Context, domain, entity, field, _ string) (string, error) {
@@ -34,8 +34,8 @@ func (leakVault) WriteMap(_ context.Context, domain, entity, field string, _ map
 	return "vault:secret/" + domain + "/" + entity + "/" + field, nil
 }
 
-// leakPool — ExecQueryRower (herald + provider): QueryRow отдаёт scannable
-// timestamps, Exec — успех.
+// leakPool — an ExecQueryRower (herald + provider): QueryRow returns scannable
+// timestamps, Exec succeeds.
 type leakPool struct{}
 
 func (leakPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -57,7 +57,7 @@ func (leakTSRow) Scan(dst ...any) error {
 	return nil
 }
 
-// TestHeraldAuditNoPlaintext — audit-payload create-роута Herald БЕЗ plaintext.
+// TestHeraldAuditNoPlaintext — audit-payload of the Herald create route without plaintext.
 func TestHeraldAuditNoPlaintext(t *testing.T) {
 	svc, err := herald.NewService(herald.ServiceDeps{
 		Pool: leakPool{}, SecretWriter: leakVault{}, AcceptPlaintext: true,
@@ -85,13 +85,13 @@ func TestHeraldAuditNoPlaintext(t *testing.T) {
 	if !strings.Contains(string(auditJSON), "plaintext_ingested") {
 		t.Fatalf("маркер plaintext_ingested отсутствует в audit: %s", auditJSON)
 	}
-	// Возвращаемый View тоже чист.
+	// The returned View is clean too.
 	if viewJSON, _ := json.Marshal(reply.View); strings.Contains(string(viewJSON), leakHandlerPlaintext) {
 		t.Fatalf("plaintext утёк в herald View: %s", viewJSON)
 	}
 }
 
-// TestProviderAuditNoPlaintext — audit-payload create-роута Provider БЕЗ plaintext.
+// TestProviderAuditNoPlaintext — audit-payload of the Provider create route without plaintext.
 func TestProviderAuditNoPlaintext(t *testing.T) {
 	svc, err := provider.NewService(provider.ServiceDeps{
 		Pool: leakPool{}, SecretWriter: leakVault{}, AcceptPlaintext: true,

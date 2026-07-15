@@ -1,17 +1,17 @@
-// Permission-catalog-handler Operator API (`GET /v1/permissions`) — публикует
-// машиночитаемый каталог RBAC-permissions (источник правды — rbac.catalog.go,
-// closed enum `<resource>.<action>`). Назначение — UI назначения прав роли
-// (`PATCH /v1/roles/{name}/permissions`): UI фетчит реальные имена из каталога
-// вместо хардкода (фикс бага «unknown_permission» при guessed-имени).
+// Permission-catalog handler, Operator API (`GET /v1/permissions`) — publishes the
+// machine-readable RBAC permission catalog (source of truth: rbac.catalog.go,
+// closed enum `<resource>.<action>`). Purpose — the role-permission assignment UI
+// (`PATCH /v1/roles/{name}/permissions`): the UI fetches real names from the catalog
+// instead of hardcoding them (fixes the "unknown_permission" bug on a guessed name).
 //
-// RBAC — только аутентификация (валидный JWT), БЕЗ отдельной permission: каталог
-// самоописывающий, требование права на чтение списка прав даёт «курицу-яйцо»
-// (оператор не узнает, какое право ему назначить, не имея уже какого-то права).
-// Симметрично health/meta нет audit-записи (read-самоописание API).
+// RBAC — authentication only (valid JWT), no dedicated permission: the catalog is
+// self-describing, and requiring a read permission on the permission list is a chicken-and-egg
+// (an operator can't learn which permission to assign without already holding one).
+// Like health/meta, no audit record (self-describing read API).
 //
-// selector_keys — ОБЩИЙ список допустимых ключей скоупа ([rbac.SelectorKeys]):
-// per-permission-метаданных скоупа в каталоге MVP нет, поэтому не выдумываем
-// per-permission, отдаём один и тот же общий список для каждого action.
+// selector_keys — the COMMON list of allowed scope keys ([rbac.SelectorKeys]):
+// the MVP catalog has no per-permission scope metadata, so we don't invent it
+// per-permission and return the same common list for every action.
 package handlers
 
 import (
@@ -23,13 +23,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// PermissionCatalogHandler — `GET /v1/permissions`. Состояние не держит (каталог
-// read-only-статика из пакета rbac); safe for concurrent use.
+// PermissionCatalogHandler — `GET /v1/permissions`. Holds no state (the catalog is
+// read-only static data from package rbac); safe for concurrent use.
 type PermissionCatalogHandler struct {
 	logger *slog.Logger
 }
 
-// NewPermissionCatalogHandler создаёт handler. logger nil → io.Discard.
+// NewPermissionCatalogHandler creates the handler. logger nil → io.Discard.
 func NewPermissionCatalogHandler(logger *slog.Logger) *PermissionCatalogHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -37,56 +37,56 @@ func NewPermissionCatalogHandler(logger *slog.Logger) *PermissionCatalogHandler 
 	return &PermissionCatalogHandler{logger: logger}
 }
 
-// Тела ответа — ПЛОСКИЕ доменные типы (handler-native T5d). Пакет api проецирует
-// их в native-схему PermissionCatalogReply (register-func). selector_keys — общий
-// список допустимых ключей скоупа (см. doc-комментарий пакета).
+// Response bodies — FLAT domain types (handler-native T5d). Package api projects
+// them into the native PermissionCatalogReply schema (register func). selector_keys — the common
+// list of allowed scope keys (see the package doc comment).
 type (
-	// permissionAction — один action в составе resource.
+	// permissionAction — a single action within a resource.
 	permissionAction = PermissionActionView
-	// permissionResource — группа actions одного resource.
+	// permissionResource — a group of actions of one resource.
 	permissionResource = PermissionCatalogItemView
 )
 
-// PermissionActionView — ПЛОСКАЯ доменная запись action (action + selector_keys).
+// PermissionActionView — a FLAT domain action record (action + selector_keys).
 type PermissionActionView struct {
 	Action       string
 	SelectorKeys []string
 }
 
-// PermissionCatalogItemView — ПЛОСКАЯ группа actions одного resource.
+// PermissionCatalogItemView — a FLAT group of actions of one resource.
 type PermissionCatalogItemView struct {
 	Resource string
 	Actions  []PermissionActionView
 }
 
-// PermissionCatalog — ПЛОСКОЕ доменное тело `GET /v1/permissions` (handler-native T5d).
+// PermissionCatalog — the FLAT domain body of `GET /v1/permissions` (handler-native T5d).
 type PermissionCatalog struct {
 	Items []PermissionCatalogItemView
 }
 
-// ListTyped — доменная функция `GET /v1/permissions` (handler-native T5d, READ без
-// audit): собирает каталог без http.ResponseWriter/*http.Request. Каталог — read-only-
-// статика из пакета rbac, ошибки невозможны → возвращает только значение (native-
-// проекция в api строит wire). Wire-форма (items non-nil, сортировка resource/action)
-// сохранена — golden фиксирует её байт-в-байт.
+// ListTyped — the domain function for `GET /v1/permissions` (handler-native T5d, READ, no
+// audit): assembles the catalog without http.ResponseWriter/*http.Request. The catalog is read-only
+// static data from package rbac, errors are impossible → returns only the value (the native
+// projection in api builds the wire). The wire shape (items non-nil, resource/action sort order)
+// is preserved — a golden pins it byte-for-byte.
 func (h *PermissionCatalogHandler) ListTyped() PermissionCatalog {
 	return PermissionCatalog{Items: buildPermissionCatalog()}
 }
 
-// buildPermissionCatalog разбирает rbac.AllowedPermissions (ключи
-// `<resource>.<action>`) в сгруппированную по resource форму. selector_keys —
-// общий rbac.SelectorKeys() для каждого action. Порядок детерминирован.
+// buildPermissionCatalog parses rbac.AllowedPermissions (keys
+// `<resource>.<action>`) into a form grouped by resource. selector_keys —
+// the common rbac.SelectorKeys() for every action. Order is deterministic.
 func buildPermissionCatalog() []permissionResource {
 	selectorKeys := rbac.SelectorKeys()
 
 	byResource := make(map[string][]string)
 	for name := range rbac.AllowedPermissions {
-		// Грамматика каталога — ровно `<resource>.<action>` (action может
-		// содержать дефис: `soul.ssh-target-update`). Делим по ПЕРВОЙ точке —
-		// resource не содержит точки в MVP-каталоге.
+		// The catalog grammar is exactly `<resource>.<action>` (an action may
+		// contain a hyphen: `soul.ssh-target-update`). Split on the FIRST dot —
+		// a resource holds no dot in the MVP catalog.
 		dot := strings.IndexByte(name, '.')
 		if dot < 0 {
-			continue // защитно: каталог гарантирует точку, но не падаем на drift
+			continue // defensive: the catalog guarantees a dot, but don't crash on drift
 		}
 		resource, action := name[:dot], name[dot+1:]
 		byResource[resource] = append(byResource[resource], action)

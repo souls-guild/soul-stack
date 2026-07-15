@@ -1,24 +1,24 @@
 package api
 
-// Served-механизм GET /openapi.yaml и GET /openapi.json. Спека отдаётся из
-// КОДА — runtime-дамп агрегатора huma-операций ([HumaFullSpecYAML] /
-// [buildFullOpenAPISpec], FastAPI-стиль), OpenAPI 3.1.0. Источник один —
-// huma-агрегатор; committed docs/keeper/openapi.yaml — его производный снимок
-// для UI-vendor (make gen-openapi), а не отдельная рукопись.
+// Served mechanism of GET /openapi.yaml and GET /openapi.json. The spec is served from
+// CODE — a runtime dump of the huma-operation aggregator ([HumaFullSpecYAML] /
+// [buildFullOpenAPISpec], FastAPI-style), OpenAPI 3.1.0. There is one source —
+// the huma aggregator; committed docs/keeper/openapi.yaml is its derived snapshot
+// for the UI vendor (make gen-openapi), not a separate reference.
 //
-// YAML vs JSON: оба варианта собираются из ОДНОГО source-of-truth (huma-
-// агрегатор). YAML (.YAML()) — для людей и тулов; JSON (json.Marshal) — для
-// inline-рендера вьювера /docs (RapiDoc loadSpec ждёт ОБЪЕКТ, JSON парсится на
-// клиенте; YAML-текст RapiDoc трактовал бы как URL). huma .YAML() сам под
-// капотом маршалит JSON → конвертит в YAML, так что оба формата эквивалентны.
+// YAML vs JSON: both variants are built from ONE source of truth (the huma
+// aggregator). YAML (.YAML()) — for humans and tools; JSON (json.Marshal) — for
+// the inline render of the /docs viewer (RapiDoc loadSpec expects an OBJECT, the JSON is parsed on
+// the client; RapiDoc would treat YAML text as a URL). huma .YAML() itself under
+// the hood marshals JSON → converts to YAML, so both formats are equivalent.
 //
-// КЕШ: huma-reflection дорогая, а спека неизменна за жизнь процесса (операции
-// регистрируются статически). Поэтому каждый дамп собирается РОВНО ОДИН РАЗ
-// через sync.Once при первом обращении и кешируется в []byte; каждый
-// последующий GET отдаёт буфер без пересборки.
+// CACHE: huma reflection is expensive, and the spec is immutable for the process lifetime (operations
+// are registered statically). So each dump is built EXACTLY ONCE
+// via sync.Once on first access and cached in a []byte; every
+// subsequent GET returns the buffer without rebuilding.
 //
-// БЕЗОПАСНОСТЬ: оба роута за JWT (security в спеке) — монтируются ПРЯМЫМ
-// chi-mount ВНЕ группы /v1 c RequireJWT, поэтому НЕ несут RBAC/audit (см.
+// SECURITY: both routes are behind JWT (security in the spec) — mounted by a DIRECT
+// chi mount OUTSIDE the /v1 group with RequireJWT, so they carry NO RBAC/audit (see
 // router.go).
 
 import (
@@ -28,33 +28,33 @@ import (
 	"sync"
 )
 
-// contentTypeOpenAPI — application/yaml per RFC 9512. Держим локально, чтобы
-// served-хендлер был самодостаточен.
+// contentTypeOpenAPI — application/yaml per RFC 9512. Kept locally so the
+// served handler is self-contained.
 const contentTypeOpenAPI = "application/yaml; charset=utf-8"
 
-// contentTypeOpenAPIJSON — application/json для JSON-варианта спеки (inline-
-// рендер RapiDoc на /docs).
+// contentTypeOpenAPIJSON — application/json for the JSON variant of the spec (inline
+// RapiDoc render on /docs).
 const contentTypeOpenAPIJSON = "application/json; charset=utf-8"
 
-// servedSpec лениво собирает и кеширует YAML-дамп полной huma-спеки. buildErr
-// фиксируется один раз: если первая сборка упала (коллизия merge — гейт а/б
-// агрегатора), хендлер отдаёт 500, а не пересобирает на каждый запрос.
+// servedSpec lazily builds and caches the YAML dump of the full huma spec. buildErr
+// is recorded once: if the first build failed (merge collision — aggregator a/b
+// gate), the handler returns 500 rather than rebuilding on every request.
 var servedSpec struct {
 	once  sync.Once
 	bytes []byte
 	err   error
 }
 
-// servedSpecJSON — JSON-аналог servedSpec (тот же source-of-truth, отдельный
-// кеш и Once, т.к. формат другой).
+// servedSpecJSON — the JSON analog of servedSpec (same source of truth, a separate
+// cache and Once, since the format differs).
 var servedSpecJSON struct {
 	once  sync.Once
 	bytes []byte
 	err   error
 }
 
-// openAPISpecBytes возвращает закешированный YAML-дамп полной huma-спеки,
-// собирая его при первом вызове. Потокобезопасно (sync.Once).
+// openAPISpecBytes returns the cached YAML dump of the full huma spec,
+// building it on first call. Thread-safe (sync.Once).
 func openAPISpecBytes() ([]byte, error) {
 	servedSpec.once.Do(func() {
 		y, err := HumaFullSpecYAML()
@@ -67,9 +67,9 @@ func openAPISpecBytes() ([]byte, error) {
 	return servedSpec.bytes, servedSpec.err
 }
 
-// openAPISpecJSONBytes возвращает закешированный JSON-дамп полной huma-спеки.
-// Source-of-truth — тот же buildFullOpenAPISpec, что и у YAML; *huma.OpenAPI
-// реализует MarshalJSON, поэтому json.Marshal даёт каноничный 3.1-JSON.
+// openAPISpecJSONBytes returns the cached JSON dump of the full huma spec.
+// The source of truth is the same buildFullOpenAPISpec as YAML; *huma.OpenAPI
+// implements MarshalJSON, so json.Marshal yields canonical 3.1 JSON.
 func openAPISpecJSONBytes() ([]byte, error) {
 	servedSpecJSON.once.Do(func() {
 		spec, err := buildFullOpenAPISpec()
@@ -87,10 +87,10 @@ func openAPISpecJSONBytes() ([]byte, error) {
 	return servedSpecJSON.bytes, servedSpecJSON.err
 }
 
-// servedOpenAPIHandler отдаёт закешированный 3.1-дамп huma-спеки со статусом 200
-// (Content-Type application/yaml, Content-Length из длины буфера). Метод GET —
-// единственный; router.go вешает через r.Get(...). Если агрегатор не собрался
-// (merge-коллизия) — 500 без тела спеки.
+// servedOpenAPIHandler serves the cached 3.1 dump of the huma spec with status 200
+// (Content-Type application/yaml, Content-Length from the buffer length). GET is the
+// only method; router.go mounts it via r.Get(...). If the aggregator didn't build
+// (merge collision) — 500 without a spec body.
 func servedOpenAPIHandler(w http.ResponseWriter, _ *http.Request) {
 	spec, err := openAPISpecBytes()
 	if err != nil {
@@ -103,10 +103,10 @@ func servedOpenAPIHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(spec)
 }
 
-// servedOpenAPIJSONHandler — JSON-аналог servedOpenAPIHandler. Нужен вьюверу
-// /docs: RapiDoc.loadSpec принимает ОБЪЕКТ, страница парсит этот JSON и подаёт
-// разобранный объект (строку RapiDoc трактовал бы как spec-URL). 200/500 как
-// у YAML-варианта.
+// servedOpenAPIJSONHandler — the JSON analog of servedOpenAPIHandler. Needed by the
+// /docs viewer: RapiDoc.loadSpec accepts an OBJECT, the page parses this JSON and feeds the
+// parsed object (RapiDoc would treat a string as a spec URL). 200/500 as in
+// the YAML variant.
 func servedOpenAPIJSONHandler(w http.ResponseWriter, _ *http.Request) {
 	spec, err := openAPISpecJSONBytes()
 	if err != nil {

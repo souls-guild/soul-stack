@@ -14,9 +14,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 )
 
-// fakeProviderPool — in-memory имитация PG для provider-CRUD: INSERT/SELECT/
-// DELETE/COUNT/LIST. Single-thread (unit-test). hasProfiles → delete отдаёт
-// FK-violation (имитация profiles_provider_fk RESTRICT).
+// fakeProviderPool — an in-memory PG simulation for provider CRUD: INSERT/SELECT/
+// DELETE/COUNT/LIST. Single-thread (unit test). hasProfiles → delete returns an
+// FK violation (simulates profiles_provider_fk RESTRICT).
 type fakeProviderPool struct {
 	entries     map[string]*provider.Provider
 	hasProfiles map[string]bool
@@ -114,8 +114,8 @@ func (r *fakeProvRows) Values() ([]any, error)                       { return ni
 func (r *fakeProvRows) RawValues() [][]byte                          { return nil }
 func (r *fakeProvRows) Conn() *pgx.Conn                              { return nil }
 
-// assignScan копирует значения из src в dst-указатели (минимальный сканер для
-// конкретных типов provider/profile-CRUD).
+// assignScan copies values from src into dst pointers (a minimal scanner for the
+// specific provider/profile CRUD types).
 func assignScan(dst, src []any) error {
 	for i := range dst {
 		switch d := dst[i].(type) {
@@ -181,7 +181,7 @@ func TestProviderHandler_CreateGetListDelete(t *testing.T) {
 	if reply.Body.Name != "wb-cloud" || reply.Body.CredentialsRef != "vault:secret/cloud/wb" {
 		t.Fatalf("create body = %+v", reply.Body)
 	}
-	// Audit-payload несёт credentials_ref как ПУТЬ (не секрет).
+	// The audit payload carries credentials_ref as a PATH (not the secret).
 	if reply.AuditPayload()["credentials_ref"] != "vault:secret/cloud/wb" {
 		t.Errorf("audit credentials_ref = %v", reply.AuditPayload()["credentials_ref"])
 	}

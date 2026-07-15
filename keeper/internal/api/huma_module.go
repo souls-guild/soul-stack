@@ -1,12 +1,13 @@
 package api
 
-// Регистрация и spec-dump MODULE-домена на huma full-typed (ТИРАЖ-БАТЧ-2e по эталону
-// catalog read-bare + form-prep read-with-body, ADR-054 §Pattern). list/get — read-каталог
-// (RBAC service.list), form-prep — read-резолв SID под форму (RBAC incarnation.run). Все три
-// — READ-only, audit НЕ навешивается ни на один роут. Доменные *Typed-функции
-// (handlers/modulecatalog.go + moduleformprep.go) извлечены из (w,r); старый (w,r) —
-// тонкая strict-оболочка. MCP module-домена НЕТ (каталог без MCP-tool-ов — извлечение
-// ничего в mcp не затрагивает).
+// Registration and spec-dump of the MODULE domain on huma full-typed (rollout batch
+// 2e following the catalog read-bare + form-prep read-with-body reference pattern,
+// ADR-054 §Pattern). list/get — a read catalog (RBAC service.list), form-prep — a
+// read resolve of SIDs for the form (RBAC incarnation.run). All three are READ-only,
+// audit is not wired on any route. The domain *Typed functions
+// (handlers/modulecatalog.go + moduleformprep.go) are extracted from (w,r); the old
+// (w,r) is a thin strict wrapper. There is NO MCP for the module domain (a catalog
+// without MCP tools — the extraction touches nothing in mcp).
 
 import (
 	"context"
@@ -17,9 +18,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// registerHumaModuleList монтирует GET /v1/modules через huma (READ-with-typed-query,
-// БЕЗ audit). moduleCatalogH nil → no-op. Handler: typed-query (errand_safe) → ListTyped →
-// typed envelope-output. RBAC service.list — на группе (huma наследует).
+// registerHumaModuleList mounts GET /v1/modules via huma (READ with typed query, no
+// audit). moduleCatalogH nil → no-op. Handler: typed-query (errand_safe) → ListTyped
+// → typed envelope output. RBAC service.list — on the group (huma inherits it).
 func registerHumaModuleList(humaAPI huma.API, moduleCatalogH *handlers.ModuleCatalogHandler) {
 	if moduleCatalogH == nil {
 		return
@@ -33,9 +34,9 @@ func registerHumaModuleList(humaAPI huma.API, moduleCatalogH *handlers.ModuleCat
 	})
 }
 
-// registerHumaModuleGet монтирует GET /v1/modules/{name} через huma (READ-with-path,
-// БЕЗ audit). moduleCatalogH nil → no-op. Handler: GetTyped(name) → typed output
-// (404 через problem). RBAC service.list — на группе.
+// registerHumaModuleGet mounts GET /v1/modules/{name} via huma (READ with path, no
+// audit). moduleCatalogH nil → no-op. Handler: GetTyped(name) → typed output (404
+// via problem). RBAC service.list — on the group.
 func registerHumaModuleGet(humaAPI huma.API, moduleCatalogH *handlers.ModuleCatalogHandler) {
 	if moduleCatalogH == nil {
 		return
@@ -49,9 +50,10 @@ func registerHumaModuleGet(humaAPI huma.API, moduleCatalogH *handlers.ModuleCata
 	})
 }
 
-// registerHumaModuleFormPrep монтирует POST /v1/modules/{name}/form-prep через huma
-// (READ-with-body, БЕЗ audit — read-only-резолв). moduleFormPrepH nil → no-op. Handler:
-// конверт typed-body → FormPrepTyped → typed output. RBAC incarnation.run — на группе.
+// registerHumaModuleFormPrep mounts POST /v1/modules/{name}/form-prep via huma (READ
+// with body, no audit — a read-only resolve). moduleFormPrepH nil → no-op. Handler:
+// typed-body envelope → FormPrepTyped → typed output. RBAC incarnation.run — on the
+// group.
 func registerHumaModuleFormPrep(humaAPI huma.API, moduleFormPrepH *handlers.ModuleFormPrepHandler) {
 	if moduleFormPrepH == nil {
 		return
@@ -65,8 +67,9 @@ func registerHumaModuleFormPrep(humaAPI huma.API, moduleFormPrepH *handlers.Modu
 	})
 }
 
-// moduleProblem доставляет ошибку *Typed-функции через huma как problem+json. Доменный
-// *handlers.problemError → humaProblemError; не-problem → 500 (parity roleProblem).
+// moduleProblem delivers a *Typed function's error through huma as problem+json. A
+// domain *handlers.problemError → humaProblemError; a non-problem → 500 (parity with
+// roleProblem).
 func moduleProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -74,10 +77,11 @@ func moduleProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaModuleSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma module-роутов
-// (list/get/form-prep) как YAML-строку, БЕЗ монтирования на реальный router. Хук для
-// спека-мерж-таргета тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же
-// register-функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaModuleSpecYAML assembles the OpenAPI fragment of ALL module routes migrated to
+// huma (list/get/form-prep) as a YAML string, WITHOUT mounting on a real router. A
+// hook for the rollout's spec-merge target and a guard test. Delegates to the
+// generic [humaDumpSpec] through the same register functions (a single register
+// path). Returns a 3.1.0 spec (the huma default).
 func HumaModuleSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		registerHumaModuleList(api, handlers.ModuleCatalogSpecStub())

@@ -1,23 +1,23 @@
 package api
 
-// Выравнивание имени scenarios-list-envelope SERVICE-домена под committed-рукопись
-// (ENVELOPE-механизм, тираж-батч N1 по эталону huma_incarnation_envelope.go).
+// Aligns the name of the scenarios-list envelope of the SERVICE domain to the committed
+// hand-written spec (ENVELOPE mechanism, rollout batch N1 following huma_incarnation_envelope.go).
 //
-// ПРОБЛЕМА. GET /v1/services/{name}/scenarios несёт в Body тип handlers.ServiceScenariosReply
-// (НЕ alias на ServiceScenariosListReply: его элемент — domain artifact.Scenario с
-// plain-string Kind, а не типизированный enum, см. handlers/service.go). huma
-// DefaultSchemaNamer берёт reflect.Type.Name() → эмитит схему "ServiceScenariosReply".
-// Рукопись (docs/keeper/openapi.yaml) объявляет envelope как "ServiceScenariosListReply"
-// — UI ждёт именно его. Прочие service-list-envelope (ServiceListReply / ServiceRefsList-
-// Reply) уже несут oapi-типы с контрактными именами — им выравнивание не нужно.
+// PROBLEM. GET /v1/services/{name}/scenarios carries the type handlers.ServiceScenariosReply
+// in Body (NOT an alias for ServiceScenariosListReply: its element is the domain
+// artifact.Scenario with a plain-string Kind, not a typed enum, see handlers/service.go). huma
+// DefaultSchemaNamer takes reflect.Type.Name() → emits the schema "ServiceScenariosReply".
+// The hand-written spec (docs/keeper/openapi.yaml) declares the envelope as "ServiceScenariosListReply"
+// — the UI expects exactly that. The other service-list envelopes (ServiceListReply / ServiceRefsList-
+// Reply) already carry oapi types with contract names — they need no alignment.
 //
-// МЕХАНИЗМ (структурный аналог incarnation-envelope): named-struct serviceScenariosListReply
-// с контрактной формой (service/ref/scenarios[], сверено с рукописью ServiceScenarios-
-// ListReply) + element artifact.Scenario (тот же тип, что в handler-типе → items.$ref на
-// контрактный "Scenario") + RegisterTypeAlias(handlers.ServiceScenariosReply → named) в
-// registerServiceEnvelopes (зовётся из newHumaCadenceAPI). Wire-тип (тело
-// handlers.ServiceScenariosReply) НЕ меняется — те же json-поля; меняется лишь имя
-// OpenAPI-схемы Body.
+// MECHANISM (structural analog of the incarnation-envelope): a named struct serviceScenariosListReply
+// with the contract shape (service/ref/scenarios[], checked against hand-written ServiceScenarios-
+// ListReply) + element artifact.Scenario (the same type as in the handler type → items.$ref to the
+// contract "Scenario") + RegisterTypeAlias(handlers.ServiceScenariosReply → named) in
+// registerServiceEnvelopes (called from newHumaCadenceAPI). The wire type (body of
+// handlers.ServiceScenariosReply) does NOT change — the same json fields; only the name of the
+// Body OpenAPI schema changes.
 
 import (
 	"reflect"
@@ -28,11 +28,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// serviceScenariosListReply — alias-цель схемы GET /v1/services/{name}/scenarios envelope.
-// Форма сверена с committed-рукописью (docs/keeper/openapi.yaml → ServiceScenariosListReply):
-// service/ref (string) + scenarios[] (required все три). items-element — artifact.Scenario
-// (тот же domain-тип, что несёт handlers.ServiceScenariosReply) → items.$ref на контрактный
-// "Scenario". Имя типа = контрактное имя схемы (huma DefaultSchemaNamer капитализирует →
+// serviceScenariosListReply — alias target for the GET /v1/services/{name}/scenarios envelope schema.
+// Shape checked against the committed hand-written spec (docs/keeper/openapi.yaml → ServiceScenariosListReply):
+// service/ref (string) + scenarios[] (all three required). items-element — artifact.Scenario
+// (the same domain type handlers.ServiceScenariosReply carries) → items.$ref to the contract
+// "Scenario". The type name = the contract schema name (huma DefaultSchemaNamer capitalizes →
 // "ServiceScenariosListReply").
 type serviceScenariosListReply struct {
 	Service   string              `json:"service" doc:"имя Service-а (дубль path-параметра)"`
@@ -40,10 +40,10 @@ type serviceScenariosListReply struct {
 	Scenarios []artifact.Scenario `json:"scenarios" doc:"scenario из снапшота git-репо Service-а"`
 }
 
-// registerServiceEnvelopes вешает на registry huma-alias handlers.ServiceScenariosReply →
-// named-struct envelope, чтобы huma строил схему scenarios-Body под контрактным именем
-// (ServiceScenariosListReply вместо handler-Go-имени ServiceScenariosReply). Вызывается в
-// newHumaCadenceAPI для каждой собранной huma.API. Wire-тип НЕ меняется.
+// registerServiceEnvelopes registers a huma alias handlers.ServiceScenariosReply →
+// the named-struct envelope on the registry, so huma builds the scenarios-Body schema under the
+// contract name (ServiceScenariosListReply instead of the handler Go name ServiceScenariosReply).
+// Called in newHumaCadenceAPI for each assembled huma.API. The wire type does NOT change.
 func registerServiceEnvelopes(api huma.API) {
 	api.OpenAPI().Components.Schemas.RegisterTypeAlias(
 		reflect.TypeFor[handlers.ServiceScenariosReply](),

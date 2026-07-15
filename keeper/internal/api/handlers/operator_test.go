@@ -15,18 +15,18 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// T5d handler-native PILOT: operator (w,r)-оболочки сняты — HTTP обслуживает huma
+// T5d handler-native PILOT: operator (w,r) wrappers removed — HTTP is served by huma
 // full-typed (huma_operator_test.go: golden-wire / unknown-field-400 / bind-enum-422 /
-// bind-bool-400 / RBAC-403 / S6-audit на реальной huma-навеске). Эти unit-тесты
-// проверяют то, что huma-integration НЕ покрывает: ДОМЕННУЮ классификацию ошибок
-// *Typed-функций (sentinel→problem.Type) и atomic create+grant. Зовут *Typed
-// напрямую, без httptest(w,r) — bind/decode-фазу (JSON-decode / enum-validate /
-// bool-parse) держит huma на границе, не handler.
+// bind-bool-400 / RBAC-403 / S6-audit on the real huma wiring). These unit tests
+// cover what huma integration does NOT: the DOMAIN error classification of the
+// *Typed functions (sentinel→problem.Type) and atomic create+grant. They call *Typed
+// directly, without httptest(w,r) — the bind/decode phase (JSON-decode / enum-validate /
+// bool-parse) is held by huma at the boundary, not the handler.
 
-// claims конструирует keeperjwt.Claims для вызова *Typed напрямую.
+// claims builds keeperjwt.Claims to call *Typed directly.
 func claims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: subject} }
 
-// wantProblem проверяет, что err — доменный *problemError с ожидаемым problem.Type.
+// wantProblem checks that err is a domain *problemError with the expected problem.Type.
 func wantProblem(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
@@ -41,7 +41,7 @@ func wantProblem(t *testing.T, err error, want string) {
 	}
 }
 
-// fakeIssuer — minimal JWTIssuer-mock: возвращает фиксированный токен.
+// fakeIssuer — minimal JWTIssuer mock: returns a fixed token.
 type fakeIssuer struct {
 	called bool
 	err    error
@@ -55,12 +55,12 @@ func (f *fakeIssuer) Issue(aid string, roles []string, ttl time.Duration, _ bool
 	return "fake-jwt-" + aid, nil
 }
 
-// fakePool — узкий мок [handlers.OperatorPool]. Реализует Exec/QueryRow/Query
-// для CRUD-операторов + BeginTx, возвращающую fakeTx-обёртку. Tx-методы
-// (Commit/Rollback) — no-op; tx-обёртка просто проксирует Exec/QueryRow/Query
-// на родительский fakePool. Race-условия мы тут не тестируем (это integration-
-// тест в /internal/api/integration_test.go); revoke-handler в unit-тесте
-// просто проверяет, что lockout-логика собралась и Revoke вызывается.
+// fakePool — narrow mock [handlers.OperatorPool]. Implements Exec/QueryRow/Query
+// for operator CRUD + BeginTx returning a fakeTx wrapper. Tx methods
+// (Commit/Rollback) are no-ops; the tx wrapper just proxies Exec/QueryRow/Query
+// to the parent fakePool. We don't test race conditions here (that's an integration
+// test in /internal/api/integration_test.go); the revoke handler unit test
+// just checks that the lockout logic assembled and Revoke is called.
 type fakePool struct {
 	insertErr   error
 	insertCalls int
@@ -71,12 +71,12 @@ type fakePool struct {
 	activeFn func() ([]string, error)
 	listFn   func() ([]*operator.Operator, int, error)
 
-	// roleGrants — лог membership-INSERT-ов на atomic create+grant пути
-	// (POST /v1/operators с roles[]).
+	// roleGrants — log of membership INSERTs on the atomic create+grant path
+	// (POST /v1/operators with roles[]).
 	roleGrants []string
-	// grantErrFor — мапа role → ошибка INSERT-а membership-а (FK-violation
-	// эмуляция). Тестам нужно проверить, что 422 на несуществующую роль идёт
-	// корректно и tx откатывается.
+	// grantErrFor — map role → membership INSERT error (FK-violation
+	// emulation). Tests need to check that 404 on a nonexistent role works
+	// correctly and the tx rolls back.
 	grantErrFor map[string]error
 
 	beginErr error
@@ -108,7 +108,7 @@ func (f *fakePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.Co
 	}
 	if strings.Contains(sql, "UPDATE operators") {
 		if f.revokeFn != nil {
-			// SQL с reason → args=[aid, reason]; без reason → args=[aid].
+			// SQL with reason → args=[aid, reason]; without reason → args=[aid].
 			aid := args[0].(string)
 			reason := ""
 			if len(args) > 1 {
@@ -127,8 +127,8 @@ func (f *fakePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.Co
 
 func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, "COUNT(*) FROM operators") {
-		// List-COUNT — ставится перед SELECT operators в List(); тестам важно
-		// только, что число согласовано с listFn (или 0 без listFn).
+		// List-COUNT — issued before SELECT operators in List(); tests care
+		// only that the number is consistent with listFn (or 0 without listFn).
 		if f.listFn != nil {
 			_, total, err := f.listFn()
 			if err != nil {
@@ -170,19 +170,19 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 }
 
 func (f *fakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	// Synod-ветка self-lockout-ядра (ADR-049(f), эпик Synod S2):
-	// LockEffectiveClusterAdmins шлёт второй locking-запрос по synod_operators.
-	// operator-handler-сценарии групповых админов не моделируют — пусто; их
-	// покрывают rbac integration-guard-тесты. Проверяется ПЕРЕД прямой веткой
-	// (маркер synod_operators однозначен).
+	// Synod branch of the self-lockout core (ADR-049(f), Synod epic S2):
+	// LockEffectiveClusterAdmins sends a second locking query over synod_operators.
+	// operator-handler scenarios don't model group admins — empty; they're
+	// covered by rbac integration-guard tests. Checked BEFORE the direct branch
+	// (the synod_operators marker is unambiguous).
 	if strings.Contains(sql, "FROM synod_operators") {
 		return &stringRows{}, nil
 	}
-	// Slice 3: lockout-probe идёт через rbac.LockEffectiveClusterAdmins —
+	// Slice 3: the lockout probe goes through rbac.LockEffectiveClusterAdmins —
 	// SELECT ro.aid FROM rbac_role_operators JOIN … FOR UPDATE OF ro,rp,o.
-	// activeFn возвращает уже-эффективный набор активных `*`-admin-ов из БД
-	// (раньше admin-set брался из in-memory снимка и пересекался с active-AID-ами;
-	// теперь весь admin-set приходит из БД-источника — пересечение лишнее).
+	// activeFn returns the already-effective set of active `*`-admins from the DB
+	// (the whole admin set comes from the DB source, so no intersection with
+	// active AIDs is needed).
 	if strings.Contains(sql, "FROM rbac_role_operators") {
 		var admins []string
 		if f.activeFn != nil {
@@ -195,9 +195,9 @@ func (f *fakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 		return &stringRows{values: admins}, nil
 	}
 	if strings.Contains(sql, "FROM operators") {
-		// List(operators) → ORDER BY created_at DESC. Тесты не валидируют WHERE-
-		// предикат точно — это уровень operator.crud_test; здесь убеждаемся,
-		// что handler корректно прокидывает rows из service-слоя.
+		// List(operators) → ORDER BY created_at DESC. Tests don't validate the WHERE
+		// predicate precisely — that's operator.crud_test's level; here we ensure
+		// the handler correctly passes rows through from the service layer.
 		if f.listFn != nil {
 			rows, _, err := f.listFn()
 			if err != nil {
@@ -216,9 +216,9 @@ type sqlErr struct{ sql string }
 
 func (e *sqlErr) Error() string { return "fakePool: unexpected SQL: " + e.sql }
 
-// operatorRows — pgx.Rows-stub для list-операторов. Возвращает строки в
-// порядке слайса (сортировку DB не симулируем — тест проверяет форму,
-// не SQL).
+// operatorRows — pgx.Rows stub for listing operators. Returns rows in
+// slice order (we don't simulate DB sorting — the test checks the shape,
+// not the SQL).
 type operatorRows struct {
 	rows []*operator.Operator
 	idx  int
@@ -261,9 +261,9 @@ func (r *operatorRows) Values() ([]any, error)                       { return ni
 func (r *operatorRows) RawValues() [][]byte                          { return nil }
 func (r *operatorRows) Conn() *pgx.Conn                              { return nil }
 
-// BeginTx возвращает fakeTx, делегирующую обратно в fakePool. Этого
-// достаточно для unit-тестов revoke-handler-а: важно, что транзакционный
-// path собран; consistency-тестируют integration-тесты (testcontainers PG).
+// BeginTx returns a fakeTx delegating back to fakePool. That's
+// enough for revoke-handler unit tests: what matters is that the transactional
+// path assembled; consistency is tested by integration tests (testcontainers PG).
 func (f *fakePool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	if f.beginErr != nil {
 		return nil, f.beginErr
@@ -271,11 +271,10 @@ func (f *fakePool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	return &fakeTx{pool: f}, nil
 }
 
-// fakeTx — обёртка над fakePool для unit-тестов: реализует pgx.Tx через
-// pgx.Tx-stub из pgx (можно встроить заглушку всех методов через
-// composition с no-op-структурой). Для нашего scope-а нужны только
-// Exec/Query/QueryRow/Commit/Rollback; остальное — panic при обращении,
-// поскольку не должно вызываться.
+// fakeTx — a fakePool wrapper for unit tests: implements pgx.Tx via a
+// pgx.Tx stub (all methods can be stubbed via composition with a no-op
+// struct). Our scope needs only Exec/Query/QueryRow/Commit/Rollback;
+// the rest panic on call, since they must not be invoked.
 type fakeTx struct {
 	pool *fakePool
 }
@@ -445,8 +444,8 @@ func TestOperatorCreateTyped_MissingAID_422(t *testing.T) {
 
 // TestOperatorCreateTyped_AID_Boundaries — pattern
 // ^[a-z0-9][a-z0-9._@-]{1,127}$ (ADR-014 amendment 2026-05-29):
-// старт с alphanumeric обязателен, charset a-z0-9._@-, общая длина 2..128.
-// Префикс archon- больше НЕ обязателен; email-подобные / ldap-uid валидны.
+// must start with alphanumeric, charset a-z0-9._@-, total length 2..128.
+// The archon- prefix is no longer required; email-like / ldap-uid are valid.
 func TestOperatorCreateTyped_AID_Boundaries(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -486,8 +485,8 @@ func TestOperatorCreateTyped_AID_Boundaries(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_DisplayName_Boundaries — длина display_name:
-// пустой → ok (service подставит AID), max 200 → ok, 201 → 422.
+// TestOperatorCreateTyped_DisplayName_Boundaries — display_name length:
+// empty → ok (service substitutes AID), max 200 → ok, 201 → 422.
 func TestOperatorCreateTyped_DisplayName_Boundaries(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -548,7 +547,7 @@ func TestOperatorRevokeTyped_204(t *testing.T) {
 func TestOperatorRevokeTyped_SelfLockout_409(t *testing.T) {
 	pool := &fakePool{
 		activeFn: func() ([]string, error) {
-			return []string{"archon-alice"}, nil // alice — единственный active
+			return []string{"archon-alice"}, nil // alice — the only active
 		},
 	}
 	h, _ := newHandler(t, pool, &rbactest.Config{
@@ -562,8 +561,8 @@ func TestOperatorRevokeTyped_SelfLockout_409(t *testing.T) {
 
 func TestOperatorRevokeTyped_NotFound_404(t *testing.T) {
 	pool := &fakePool{
-		// Lockout-probe: БД-admin-set пуст (activeFn nil) → target вне набора,
-		// lockout невозможен. Revoke возвращает ErrOperatorNotFound (AID нет в реестре).
+		// Lockout probe: DB admin set empty (activeFn nil) → target outside the set,
+		// lockout impossible. Revoke returns ErrOperatorNotFound (AID not in the registry).
 		revokeFn: func(aid, reason string) error { return operator.ErrOperatorNotFound },
 	}
 	h, _ := newHandler(t, pool, nil)
@@ -665,9 +664,9 @@ func TestOperatorListTyped_200(t *testing.T) {
 	}
 }
 
-// TestOperatorListTyped_OutOfRange_400 — границы пагинации enforce-ит ListTyped
-// (sharedapi.CheckPageBounds): out-of-range → 400 (parity ParsePage), а НЕ 422.
-// huma typed-int НЕ несёт schema-minimum/maximum, поэтому проверка живёт в домене.
+// TestOperatorListTyped_OutOfRange_400 — pagination bounds are enforced by ListTyped
+// (sharedapi.CheckPageBounds): out-of-range → 400 (parity ParsePage), NOT 422.
+// A huma typed-int carries no schema minimum/maximum, so the check lives in the domain.
 func TestOperatorListTyped_OutOfRange_400(t *testing.T) {
 	h, _ := newHandler(t, &fakePool{}, nil)
 	for _, c := range []struct {
@@ -720,8 +719,8 @@ func TestOperatorGetTyped_InvalidAID_422(t *testing.T) {
 
 // --- Create with roles[] (atomic create+grant, UX-fix) ---------------
 
-// TestOperatorCreateTyped_WithRoles_201 — happy path: roles[] возвращены в reply,
-// INSERT operator + grant-ы прошли в одной tx.
+// TestOperatorCreateTyped_WithRoles_201 — happy path: roles[] returned in reply,
+// INSERT operator + grants ran in one tx.
 func TestOperatorCreateTyped_WithRoles_201(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(aid string) (*operator.Operator, error) {
@@ -747,8 +746,8 @@ func TestOperatorCreateTyped_WithRoles_201(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_WithRoles_UnknownRole_404 — FK-violation на role_name:
-// 404 (role-not-found) + tx откатывается, roleGrants пуст.
+// TestOperatorCreateTyped_WithRoles_UnknownRole_404 — FK-violation on role_name:
+// 404 (role-not-found) + tx rolls back, roleGrants empty.
 func TestOperatorCreateTyped_WithRoles_UnknownRole_404(t *testing.T) {
 	pool := &fakePool{
 		grantErrFor: map[string]error{
@@ -768,8 +767,8 @@ func TestOperatorCreateTyped_WithRoles_UnknownRole_404(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_WithRoles_InvalidRoleName_422 — мусорный role-name ловится
-// pre-валидацией ДО tx (regex не пропускает), 422 validation-failed.
+// TestOperatorCreateTyped_WithRoles_InvalidRoleName_422 — garbage role-name caught
+// by pre-validation BEFORE tx (regex rejects it), 422 validation-failed.
 func TestOperatorCreateTyped_WithRoles_InvalidRoleName_422(t *testing.T) {
 	pool := &fakePool{}
 	h, _ := newHandler(t, pool, nil)
@@ -782,8 +781,8 @@ func TestOperatorCreateTyped_WithRoles_InvalidRoleName_422(t *testing.T) {
 	}
 }
 
-// TestOperatorCreateTyped_WithoutRoles_201_BackwardCompat — запросы без roles
-// работают как раньше: reply без GrantedRoles, INSERT без tx.
+// TestOperatorCreateTyped_WithoutRoles_201_BackwardCompat — requests without roles
+// work as before: reply without GrantedRoles, INSERT without tx.
 func TestOperatorCreateTyped_WithoutRoles_201_BackwardCompat(t *testing.T) {
 	pool := &fakePool{
 		selectFn: func(aid string) (*operator.Operator, error) {

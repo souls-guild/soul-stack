@@ -1,10 +1,10 @@
 package api
 
-// Регистрация и spec-dump PROVISIONING-POLICY-домена (runtime-политика способов
-// СОЗДАНИЯ операторов, ADR-058 Часть B) на huma full-typed. GET — read (БЕЗ audit);
-// PUT — WRITE+AUDIT (вариант B, huma-audit-middleware, event
-// provisioning.policy_changed). Доменные *Typed-функции (handlers/provisioning.go)
-// несут бизнес-логику; register-func проецирует их результат в native wire-DTO.
+// Registration and spec-dump of the PROVISIONING-POLICY domain (runtime policy for the
+// methods of CREATING operators, ADR-058 Part B) on huma full-typed. GET — read (no audit);
+// PUT — WRITE+AUDIT (variant B, huma-audit-middleware, event
+// provisioning.policy_changed). The domain *Typed functions (handlers/provisioning.go)
+// carry the business logic; the register func projects their result into a native wire-DTO.
 
 import (
 	"context"
@@ -19,9 +19,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaProvisioningPolicyGet монтирует GET /v1/provisioning-policy через huma
-// (READ, БЕЗ audit). h nil → no-op. Handler: GetTyped → typed envelope-output. RBAC
-// provisioning.read — на группе.
+// registerHumaProvisioningPolicyGet mounts GET /v1/provisioning-policy via huma
+// (READ, no audit). h nil → no-op. Handler: GetTyped → typed envelope output. RBAC
+// provisioning.read — on the group.
 func registerHumaProvisioningPolicyGet(humaAPI huma.API, h *handlers.ProvisioningPolicyHandler) {
 	if h == nil {
 		return
@@ -31,9 +31,9 @@ func registerHumaProvisioningPolicyGet(humaAPI huma.API, h *handlers.Provisionin
 	})
 }
 
-// registerHumaProvisioningPolicyPut монтирует PUT /v1/provisioning-policy через huma
-// (WRITE+AUDIT вариант B — event provisioning.policy_changed). h nil → no-op. Handler:
-// claims → PutTyped (валидация + SetSetting + invalidate) → audit-payload → 200 С ТЕЛОМ.
+// registerHumaProvisioningPolicyPut mounts PUT /v1/provisioning-policy via huma
+// (WRITE+AUDIT variant B — event provisioning.policy_changed). h nil → no-op. Handler:
+// claims → PutTyped (validation + SetSetting + invalidate) → audit-payload → 200 WITH BODY.
 func registerHumaProvisioningPolicyPut(humaAPI huma.API, h *handlers.ProvisioningPolicyHandler) {
 	if h == nil {
 		return
@@ -54,14 +54,14 @@ func registerHumaProvisioningPolicyPut(humaAPI huma.API, h *handlers.Provisionin
 	})
 }
 
-// provisioningMissingClaims — defensive-ответ при отсутствии claims (недостижим:
-// RequireJWT кладёт claims до huma). parity serviceMissingClaims.
+// provisioningMissingClaims — defensive response when claims are absent (unreachable:
+// RequireJWT sets claims before huma). parity with serviceMissingClaims.
 func provisioningMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// provisioningProblem доставляет ошибку *Typed-функции через huma как problem+json
-// (parity serviceProblem). Не-problem → 500.
+// provisioningProblem delivers a *Typed-function error through huma as problem+json
+// (parity with serviceProblem). Non-problem → 500.
 func provisioningProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -69,16 +69,16 @@ func provisioningProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaProvisioningAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaServiceAPI). PUT-роут
-// монтируется на СВОЕЙ chi-группе с собственным event-типом.
+// newHumaProvisioningAPI builds a huma.API over a chi group with huma-audit-middleware
+// (variant B) under the given event type (parity with newHumaServiceAPI). The PUT route
+// is mounted on its OWN chi group with its own event type.
 func newHumaProvisioningAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaProvisioningSpecYAML собирает OpenAPI-фрагмент provisioning-policy-роутов как
-// YAML-строку, БЕЗ монтирования на реальный router (хук спека-мерж-таргета +
-// guard-теста; parity HumaServiceSpecYAML).
+// HumaProvisioningSpecYAML assembles the OpenAPI fragment of the provisioning-policy routes
+// as a YAML string, WITHOUT mounting on a real router (hook for the spec-merge target +
+// guard-test; parity with HumaServiceSpecYAML).
 func HumaProvisioningSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.ProvisioningPolicySpecStub()

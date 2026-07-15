@@ -14,14 +14,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// D1: MCP-инициированный Voyage обязан писать audit-source=mcp, а не api.
-// Источник прокидывается через ctx (middleware.WithScenarioInvocationSource);
-// REST-handler Create/Cancel читает его в emitCreated/emitCancelled. Обычный
-// HTTP-запрос (ctx без ключа) сохраняет дефолт api — поведение Operator-API
-// не меняется.
+// D1: an MCP-initiated Voyage must write audit source=mcp, not api. The source is
+// threaded through ctx (middleware.WithScenarioInvocationSource); the REST handler
+// Create/Cancel reads it in emitCreated/emitCancelled. A normal HTTP request (ctx
+// without the key) keeps the default api — Operator-API behavior is unchanged.
 
-// captureAudit — мок [audit.Writer], копящий записанные события (базовый
-// newVoyageHandler передаёт nil-writer, для source-проверок нужен реальный).
+// captureAudit is an [audit.Writer] mock accumulating written events (the base
+// newVoyageHandler passes a nil writer; source checks need a real one).
 type captureAudit struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -35,7 +34,7 @@ func (c *captureAudit) Write(_ context.Context, ev *audit.Event) error {
 }
 
 func newVoyageHandlerWithAudit(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf middleware.PermissionChecker, aw audit.Writer) *VoyageHandler {
-	return NewVoyageHandler(store, sc, cmd, nil, enf, nil /*scoper*/, aw, nil /*tidingInvalidator*/, 0 /*maxScope*/, 0 /*maxBatchSize → безлимит*/, nil)
+	return NewVoyageHandler(store, sc, cmd, nil, enf, nil /*scoper*/, aw, nil /*tidingInvalidator*/, 0 /*maxScope*/, 0 /*maxBatchSize → unlimited*/, nil)
 }
 
 func TestVoyageCreate_Scenario_AuditSourceMCP(t *testing.T) {
@@ -106,8 +105,8 @@ func TestVoyageCancel_AuditSourceMCP(t *testing.T) {
 	}
 }
 
-// TestVoyageCreate_AuditDefaultsToAPI — обычный HTTP-запрос (ctx без source-
-// ключа) сохраняет дефолт api: правка D1 не меняет поведение Operator-API.
+// TestVoyageCreate_AuditDefaultsToAPI — a normal HTTP request (ctx without the source
+// key) keeps the default api: the D1 change doesn't alter Operator-API behavior.
 func TestVoyageCreate_AuditDefaultsToAPI(t *testing.T) {
 	aw := &captureAudit{}
 	h := newVoyageHandlerWithAudit(&fakeVoyageStore{}, &fakeVoyageScenarioResolver{out: []string{"inc-a"}}, &fakeVoyageCommandResolver{}, allowAll(), aw)

@@ -1,15 +1,15 @@
-// Synod-handler-ы Operator API (RBAC Synod, ADR-049) — доменный слой над
-// [rbac.Service]. *Typed-функции несут бизнес-логику без http.ResponseWriter/
-// *http.Request; HTTP обслуживает huma full-typed (api/huma_synod.go), MCP зовёт
-// rbac.Service напрямую (мимо handler).
+// Synod handlers of the Operator API (RBAC Synod, ADR-049) — the domain layer over
+// [rbac.Service]. The *Typed functions carry business logic without http.ResponseWriter/
+// *http.Request; HTTP is served by huma full-typed (api/huma_synod.go), MCP calls
+// rbac.Service directly (bypassing the handler).
 //
-// T5d (handler-native): домен synod отвязан от legacy-генерата. *Typed принимают NATIVE
-// request-типы (огранизованы huma-input-ом в пакете api) и возвращают доменные
-// result-ы с ПЛОСКИМИ wire-полями. (w,r)-оболочки сняты.
+// T5d (handler-native): the synod domain is detached from the legacy generator. *Typed accept NATIVE
+// request types (assembled by the huma input in package api) and return domain
+// results with FLAT wire fields. The (w,r) wrappers are gone.
 //
-// Бизнес-логика (builtin-граница, self-lockout, least-privilege subset,
-// валидация name/aid) — в [rbac.Service]; handler маппит sentinel-ошибки в RFC 7807.
-// RBAC-проверка — в middleware (см. api/router.go), здесь её нет.
+// Business logic (builtin boundary, self-lockout, least-privilege subset,
+// name/aid validation) lives in [rbac.Service]; the handler maps sentinel errors to RFC 7807.
+// The RBAC check is in middleware (see api/router.go), not here.
 package handlers
 
 import (
@@ -25,16 +25,16 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// SynodHandler — семь endpoint-ов Synod-CRUD (группы / membership / bundle).
-// Делегирует бизнес-логику в [rbac.Service]. Все зависимости immutable; safe
+// SynodHandler — the seven Synod-CRUD endpoints (groups / membership / bundle).
+// Delegates business logic to [rbac.Service]. All dependencies immutable; safe
 // for concurrent use.
 type SynodHandler struct {
 	svc    *rbac.Service
 	logger *slog.Logger
 }
 
-// NewSynodHandler создаёт handler. svc обязателен (паника при nil — caller
-// обязан передать non-nil).
+// NewSynodHandler creates the handler. svc is required (panic on nil — the caller
+// must pass non-nil).
 func NewSynodHandler(svc *rbac.Service, logger *slog.Logger) *SynodHandler {
 	if svc == nil {
 		panic("handlers.NewSynodHandler: rbac.Service is nil")
@@ -45,22 +45,22 @@ func NewSynodHandler(svc *rbac.Service, logger *slog.Logger) *SynodHandler {
 	return &SynodHandler{svc: svc, logger: logger}
 }
 
-// SynodCreateInput — NATIVE request-форма POST /v1/synods (handler-native T5d).
-// name обязателен; Description — `*string` (nil → без описания), parity легаси-декода.
+// SynodCreateInput — the NATIVE request form of POST /v1/synods (handler-native T5d).
+// name is required; Description — `*string` (nil → no description), parity with the legacy decode.
 type SynodCreateInput struct {
 	Name        string
 	Description *string
 }
 
-// SynodUpdateInput — NATIVE request-форма PATCH /v1/synods/{name} (handler-native
-// T5d). Description обязателен (мутируется ТОЛЬКО он; name (PK) immutable — из path).
+// SynodUpdateInput — the NATIVE request form of PATCH /v1/synods/{name} (handler-native
+// T5d). Description is required (ONLY it is mutated; name (PK) is immutable — from the path).
 type SynodUpdateInput struct {
 	Description string
 }
 
-// SynodView — ПЛОСКАЯ доменная проекция Synod-группы (GET /v1/synods items[]),
-// handler-native T5d. Description — RAW string (пустая = без описания); nullable/
-// []-vs-null wire-форму держит native-проекция в api (newSynodView).
+// SynodView — the FLAT domain projection of a Synod group (GET /v1/synods items[]),
+// handler-native T5d. Description — RAW string (empty = no description); the nullable/
+// []-vs-null wire shape is held by the native projection in api (newSynodView).
 type SynodView struct {
 	Name        string
 	Description string
@@ -69,23 +69,23 @@ type SynodView struct {
 	Operators   []string
 }
 
-// SynodListPage — доменный список Synod-групп GET /v1/synods (handler-native T5d).
+// SynodListPage — the domain list of Synod groups for GET /v1/synods (handler-native T5d).
 type SynodListPage struct {
 	Items []SynodView
 }
 
-// SynodSpecStub — непустой *SynodHandler-заглушка для генерации huma-OpenAPI-
-// фрагмента (HumaSynodSpecYAML): при dump доменный handler не вызывается, но
-// huma.Register требует non-nil для no-op-проверки на nil. svc nil — handler
-// никогда не исполняется в spec-режиме (parity [RoleSpecStub]).
+// SynodSpecStub — a non-empty *SynodHandler stub for generating the huma OpenAPI
+// fragment (HumaSynodSpecYAML): on dump the domain handler is never called, but
+// huma.Register requires non-nil for its no-op nil check. svc nil — the handler
+// never executes in spec mode (parity with [RoleSpecStub]).
 func SynodSpecStub() *SynodHandler {
 	return &SynodHandler{logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 }
 
-// toSynodResponse проецирует доменный [rbac.SynodView] в ПЛОСКУЮ [SynodView]
-// (handler-native T5d): поле-в-поле passthrough; nullable/[]-vs-null wire-форму
-// (Description всегда "", roles/operators `[]`) строит native-проекция в api.
-// Roles/Operators — non-nil срез (`[]`, не `null`).
+// toSynodResponse projects the domain [rbac.SynodView] into the FLAT [SynodView]
+// (handler-native T5d): field-by-field passthrough; the nullable/[]-vs-null wire shape
+// (Description always "", roles/operators `[]`) is built by the native projection in api.
+// Roles/Operators — non-nil slice (`[]`, not `null`).
 func toSynodResponse(v rbac.SynodView) SynodView {
 	return SynodView{
 		Name:        v.Name,
@@ -96,18 +96,18 @@ func toSynodResponse(v rbac.SynodView) SynodView {
 	}
 }
 
-// SynodCreateReply — результат [SynodHandler.CreateTyped] (FULL-TYPED разворот
-// ADR-054 §Pattern). 201-тело synod.create ПУСТОЕ (легаси-контракт: openapi.yaml
-// `POST /v1/synods` отдаёт 201 без `content`), поэтому reply несёт не wire-поля
-// ответа, а МЕТАДАННЫЕ для audit-payload (имя группы + AID создателя). 204/201-
-// тело пустое.
+// SynodCreateReply — the result of [SynodHandler.CreateTyped] (FULL-TYPED expansion,
+// ADR-054 §Pattern). The synod.create 201 body is EMPTY (legacy contract: openapi.yaml
+// `POST /v1/synods` returns 201 with no `content`), so the reply carries not response
+// wire fields but METADATA for the audit payload (group name + creator AID). The 204/201
+// body is empty.
 type SynodCreateReply struct {
 	Name         string
 	CreatedByAID string
 }
 
-// AuditPayload собирает audit-payload create-роута (parity легаси SetAuditPayload).
-// ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B.
+// AuditPayload assembles the audit payload for the create route (parity with legacy SetAuditPayload).
+// The SINGLE source for both the (w,r) wrapper AND huma variant B.
 func (r SynodCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
@@ -115,11 +115,11 @@ func (r SynodCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// CreateTyped — извлечённая доменная функция POST /v1/synods (FULL-TYPED разворот
-// ADR-054 §Pattern (б)): бизнес-логика без http.ResponseWriter/*http.Request.
-// claims и req приходят аргументами (декод/auth — на вызывающем слое); ошибки —
-// *problemError (доставляются huma-обёрткой через [AsProblemDetails] либо
-// (w,r)-оболочкой через [writeProblemError]), успех — [SynodCreateReply].
+// CreateTyped — the extracted domain function for POST /v1/synods (FULL-TYPED expansion,
+// ADR-054 §Pattern (b)): business logic without http.ResponseWriter/*http.Request.
+// claims and req arrive as arguments (decode/auth on the calling layer); errors —
+// *problemError (delivered by the huma wrapper via [AsProblemDetails] or the
+// (w,r) wrapper via [writeProblemError]), success — [SynodCreateReply].
 func (h *SynodHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req SynodCreateInput) (SynodCreateReply, error) {
 	var zero SynodCreateReply
 	if req.Name == "" {
@@ -157,10 +157,10 @@ func (h *SynodHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req 
 	return SynodCreateReply{Name: req.Name, CreatedByAID: claims.Subject}, nil
 }
 
-// ListTyped — доменная функция GET /v1/synods (handler-native T5d, READ без audit):
-// читает каталог групп и собирает [SynodListPage] (плоские SynodView) без http.
-// ResponseWriter/*http.Request. Ошибка чтения → *problemError (500). Wire-форму
-// items (toSynodResponse + native-проекция) строит api.
+// ListTyped — the domain function for GET /v1/synods (handler-native T5d, READ, no audit):
+// reads the group catalog and assembles [SynodListPage] (flat SynodView) without http.
+// ResponseWriter/*http.Request. A read error → *problemError (500). The items wire shape
+// (toSynodResponse + native projection) is built by api.
 func (h *SynodHandler) ListTyped(ctx context.Context) (SynodListPage, error) {
 	views, err := h.svc.ListSynods(ctx)
 	if err != nil {
@@ -175,15 +175,15 @@ func (h *SynodHandler) ListTyped(ctx context.Context) (SynodListPage, error) {
 	return SynodListPage{Items: items}, nil
 }
 
-// SynodNameReply — результат write-операций, чей audit-payload несёт лишь имя
-// группы (delete). 204-тело пустое; reply — МЕТАДАННЫЕ для audit.
+// SynodNameReply — the result of write operations whose audit payload carries only the group
+// name (delete). The 204 body is empty; the reply is METADATA for audit.
 type SynodNameReply struct {
 	Name string
 }
 
-// DeleteTyped — извлечённая доменная функция DELETE /v1/synods/{name} (FULL-TYPED
-// разворот ADR-054 §Pattern (б)). name приходит аргументом; ошибки — *problemError,
-// успех — [SynodNameReply] (audit-payload). 204-тело пустое.
+// DeleteTyped — the extracted domain function for DELETE /v1/synods/{name} (FULL-TYPED
+// expansion, ADR-054 §Pattern (b)). name arrives as an argument; errors — *problemError,
+// success — [SynodNameReply] (audit payload). The 204 body is empty.
 func (h *SynodHandler) DeleteTyped(ctx context.Context, name string) (SynodNameReply, error) {
 	var zero SynodNameReply
 	err := h.svc.DeleteSynod(ctx, name)
@@ -206,15 +206,15 @@ func (h *SynodHandler) DeleteTyped(ctx context.Context, name string) (SynodNameR
 	return SynodNameReply{Name: name}, nil
 }
 
-// SynodUpdateReply — результат [SynodHandler.UpdateTyped]: МЕТАДАННЫЕ для audit-
-// payload (имя группы + новое описание). 204-тело пустое.
+// SynodUpdateReply — the result of [SynodHandler.UpdateTyped]: METADATA for the audit
+// payload (group name + new description). The 204 body is empty.
 type SynodUpdateReply struct {
 	Name        string
 	Description string
 }
 
-// AuditPayload собирает audit-payload update-роута. ЕДИНЫЙ источник для
-// (w,r)-оболочки И huma-варианта B (parity [SynodCreateReply.AuditPayload]).
+// AuditPayload assembles the audit payload for the update route. The SINGLE source for
+// both the (w,r) wrapper AND huma variant B (parity with [SynodCreateReply.AuditPayload]).
 func (r SynodUpdateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":        r.Name,
@@ -222,10 +222,10 @@ func (r SynodUpdateReply) AuditPayload() middleware.AuditPayload {
 	}
 }
 
-// UpdateTyped — извлечённая доменная функция PATCH /v1/synods/{name} (FULL-TYPED
-// разворот ADR-054 §Pattern (б)): валидация description + замена, без
-// http.ResponseWriter/*http.Request. claims/name/req приходят аргументами; ошибки
-// — *problemError, успех — [SynodUpdateReply] (audit-payload).
+// UpdateTyped — the extracted domain function for PATCH /v1/synods/{name} (FULL-TYPED
+// expansion, ADR-054 §Pattern (b)): description validation + replace, without
+// http.ResponseWriter/*http.Request. claims/name/req arrive as arguments; errors
+// — *problemError, success — [SynodUpdateReply] (audit payload).
 func (h *SynodHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, name string, req SynodUpdateInput) (SynodUpdateReply, error) {
 	var zero SynodUpdateReply
 	if req.Description == "" {
@@ -253,18 +253,18 @@ func (h *SynodHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, name
 	return SynodUpdateReply{Name: name, Description: req.Description}, nil
 }
 
-// SynodOperatorReply — результат add/remove-operator: МЕТАДАННЫЕ для audit-payload
-// (имя группы + AID; add дополнительно несёт AddedByAID). 204-тело пустое.
+// SynodOperatorReply — the result of add/remove-operator: METADATA for the audit payload
+// (group name + AID; add additionally carries AddedByAID). The 204 body is empty.
 type SynodOperatorReply struct {
 	Name       string
 	AID        string
 	AddedByAID string
 }
 
-// AddOperatorAuditPayload собирает audit-payload add-operator-роута (несёт
-// added_by_aid). ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B. Отдельно
-// от [RemoveOperatorAuditPayload]: один reply-тип обслуживает оба роута, но их
-// payload-наборы различаются (remove added_by_aid не несёт).
+// AddOperatorAuditPayload assembles the audit payload for the add-operator route (carries
+// added_by_aid). The SINGLE source for both the (w,r) wrapper AND huma variant B. Separate
+// from [RemoveOperatorAuditPayload]: one reply type serves both routes, but their
+// payload sets differ (remove does not carry added_by_aid).
 func (r SynodOperatorReply) AddOperatorAuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":         r.Name,
@@ -273,8 +273,8 @@ func (r SynodOperatorReply) AddOperatorAuditPayload() middleware.AuditPayload {
 	}
 }
 
-// RemoveOperatorAuditPayload собирает audit-payload remove-operator-роута (БЕЗ
-// added_by_aid). ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B.
+// RemoveOperatorAuditPayload assembles the audit payload for the remove-operator route (no
+// added_by_aid). The SINGLE source for both the (w,r) wrapper AND huma variant B.
 func (r SynodOperatorReply) RemoveOperatorAuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name": r.Name,
@@ -282,11 +282,11 @@ func (r SynodOperatorReply) RemoveOperatorAuditPayload() middleware.AuditPayload
 	}
 }
 
-// AddOperatorTyped — извлечённая доменная функция POST /v1/synods/{name}/operators
-// (FULL-TYPED разворот ADR-054 §Pattern (б)): валидация AID (required + формат) +
-// привязка члена к группе, без http.ResponseWriter/*http.Request. AddedByAID — из
-// claims. claims/name/aid приходят аргументами; ошибки — *problemError, успех —
-// [SynodOperatorReply]. Идемпотентно (повтор — no-op в service).
+// AddOperatorTyped — the extracted domain function for POST /v1/synods/{name}/operators
+// (FULL-TYPED expansion, ADR-054 §Pattern (b)): AID validation (required + format) +
+// binding the member to the group, without http.ResponseWriter/*http.Request. AddedByAID — from
+// claims. claims/name/aid arrive as arguments; errors — *problemError, success —
+// [SynodOperatorReply]. Idempotent (a repeat is a no-op in the service).
 func (h *SynodHandler) AddOperatorTyped(ctx context.Context, claims *jwt.Claims, name, aid string) (SynodOperatorReply, error) {
 	var zero SynodOperatorReply
 	if aid == "" {
@@ -323,11 +323,11 @@ func (h *SynodHandler) AddOperatorTyped(ctx context.Context, claims *jwt.Claims,
 	return SynodOperatorReply{Name: name, AID: aid, AddedByAID: claims.Subject}, nil
 }
 
-// RemoveOperatorTyped — извлечённая доменная функция DELETE /v1/synods/{name}/
-// operators/{aid} (FULL-TYPED разворот ADR-054 §Pattern (б)): валидация path-AID +
-// снятие membership-строки, без http.ResponseWriter/*http.Request. name/aid
-// приходят аргументами; ошибки — *problemError, успех — [SynodOperatorReply]
-// (audit-payload; AddedByAID пуст — remove его не несёт).
+// RemoveOperatorTyped — the extracted domain function for DELETE /v1/synods/{name}/
+// operators/{aid} (FULL-TYPED expansion, ADR-054 §Pattern (b)): path-AID validation +
+// removing the membership row, without http.ResponseWriter/*http.Request. name/aid
+// arrive as arguments; errors — *problemError, success — [SynodOperatorReply]
+// (audit payload; AddedByAID empty — remove does not carry it).
 func (h *SynodHandler) RemoveOperatorTyped(ctx context.Context, name, aid string) (SynodOperatorReply, error) {
 	var zero SynodOperatorReply
 	if !operator.ValidAID(aid) {
@@ -357,18 +357,18 @@ func (h *SynodHandler) RemoveOperatorTyped(ctx context.Context, name, aid string
 	return SynodOperatorReply{Name: name, AID: aid}, nil
 }
 
-// SynodRoleReply — результат grant/revoke-role: МЕТАДАННЫЕ для audit-payload
-// (имя группы + роль; grant дополнительно несёт GrantedByAID). 204-тело пустое.
+// SynodRoleReply — the result of grant/revoke-role: METADATA for the audit payload
+// (group name + role; grant additionally carries GrantedByAID). The 204 body is empty.
 type SynodRoleReply struct {
 	Name         string
 	Role         string
 	GrantedByAID string
 }
 
-// GrantRoleAuditPayload собирает audit-payload grant-role-роута (несёт
-// granted_by_aid). ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B. Отдельно
-// от [RevokeRoleAuditPayload]: один reply-тип обслуживает оба роута, но их
-// payload-наборы различаются (revoke granted_by_aid не несёт).
+// GrantRoleAuditPayload assembles the audit payload for the grant-role route (carries
+// granted_by_aid). The SINGLE source for both the (w,r) wrapper AND huma variant B. Separate
+// from [RevokeRoleAuditPayload]: one reply type serves both routes, but their
+// payload sets differ (revoke does not carry granted_by_aid).
 func (r SynodRoleReply) GrantRoleAuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
@@ -377,8 +377,8 @@ func (r SynodRoleReply) GrantRoleAuditPayload() middleware.AuditPayload {
 	}
 }
 
-// RevokeRoleAuditPayload собирает audit-payload revoke-role-роута (БЕЗ
-// granted_by_aid). ЕДИНЫЙ источник для (w,r)-оболочки И huma-варианта B.
+// RevokeRoleAuditPayload assembles the audit payload for the revoke-role route (no
+// granted_by_aid). The SINGLE source for both the (w,r) wrapper AND huma variant B.
 func (r SynodRoleReply) RevokeRoleAuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name": r.Name,
@@ -386,11 +386,11 @@ func (r SynodRoleReply) RevokeRoleAuditPayload() middleware.AuditPayload {
 	}
 }
 
-// GrantRoleTyped — извлечённая доменная функция POST /v1/synods/{name}/roles
-// (FULL-TYPED разворот ADR-054 §Pattern (б)): валидация role (required) +
-// добавление роли в bundle, без http.ResponseWriter/*http.Request. GrantedByAID —
-// из claims. claims/name/role приходят аргументами; ошибки — *problemError, успех
-// — [SynodRoleReply]. Идемпотентно.
+// GrantRoleTyped — the extracted domain function for POST /v1/synods/{name}/roles
+// (FULL-TYPED expansion, ADR-054 §Pattern (b)): role validation (required) +
+// adding the role to the bundle, without http.ResponseWriter/*http.Request. GrantedByAID —
+// from claims. claims/name/role arrive as arguments; errors — *problemError, success
+// — [SynodRoleReply]. Idempotent.
 func (h *SynodHandler) GrantRoleTyped(ctx context.Context, claims *jwt.Claims, name, role string) (SynodRoleReply, error) {
 	var zero SynodRoleReply
 	if role == "" {
@@ -425,10 +425,10 @@ func (h *SynodHandler) GrantRoleTyped(ctx context.Context, claims *jwt.Claims, n
 	return SynodRoleReply{Name: name, Role: role, GrantedByAID: callerAID}, nil
 }
 
-// RevokeRoleTyped — извлечённая доменная функция DELETE /v1/synods/{name}/roles/
-// {role_name} (FULL-TYPED разворот ADR-054 §Pattern (б)): снятие роли из bundle,
-// без http.ResponseWriter/*http.Request. name/role приходят аргументами; ошибки —
-// *problemError, успех — [SynodRoleReply] (audit-payload; GrantedByAID пуст).
+// RevokeRoleTyped — the extracted domain function for DELETE /v1/synods/{name}/roles/
+// {role_name} (FULL-TYPED expansion, ADR-054 §Pattern (b)): removing the role from the bundle,
+// without http.ResponseWriter/*http.Request. name/role arrive as arguments; errors —
+// *problemError, success — [SynodRoleReply] (audit payload; GrantedByAID empty).
 func (h *SynodHandler) RevokeRoleTyped(ctx context.Context, name, role string) (SynodRoleReply, error) {
 	var zero SynodRoleReply
 	err := h.svc.RevokeRole(ctx, rbac.RevokeRoleInput{

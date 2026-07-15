@@ -1,13 +1,13 @@
 package api
 
-// Регистрация и spec-dump SYNOD-домена (группы / membership / bundle) на huma
-// full-typed (ТИРАЖ-БАТЧ-2d по эталонам role/operator/augur/herald, ADR-054
+// Registration and spec-dump of the SYNOD domain (groups / membership / bundle) on huma
+// full-typed (ROLLOUT BATCH 2d following role/operator/augur/herald, ADR-054
 // §Pattern). synod create/update/delete + add/remove-operator + grant/revoke-role —
-// WRITE+AUDIT (вариант B, huma-audit-middleware; события synod.created/.updated/
+// WRITE+AUDIT (variant B, huma-audit-middleware; events synod.created/.updated/
 // .deleted/.operator-added/.operator-removed/.role-granted/.role-revoked); synod
-// list — read (БЕЗ audit). Доменные *Typed-функции (handlers/synod.go) извлечены
-// из (w,r); старый (w,r) — тонкая strict-оболочка (synod-MCP-tools зовут rbac.Service
-// напрямую, мимо handler — извлечение не затрагивает).
+// list — read (no audit). The domain *Typed functions (handlers/synod.go) are extracted
+// from (w,r); the old (w,r) is a thin strict wrapper (synod MCP tools call rbac.Service
+// directly, bypassing the handler — the extraction does not affect them).
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaSynodCreate монтирует POST /v1/synods через huma (WRITE+AUDIT
-// вариант B — event synod.created). synodH nil → no-op. Handler: claims →
-// CreateTyped → audit-payload на huma-ctx (SetHumaAuditPayload) → пустой 201-output.
+// registerHumaSynodCreate mounts POST /v1/synods via huma (WRITE+AUDIT
+// variant B — event synod.created). synodH nil → no-op. Handler: claims →
+// CreateTyped → audit-payload on the huma ctx (SetHumaAuditPayload) → empty 201 output.
 func registerHumaSynodCreate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -46,9 +46,9 @@ func registerHumaSynodCreate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	})
 }
 
-// registerHumaSynodList монтирует GET /v1/synods через huma (READ, БЕЗ audit).
-// synodH nil → no-op. Handler: ListTyped → typed envelope-output. RBAC synod.list —
-// на группе.
+// registerHumaSynodList mounts GET /v1/synods via huma (READ, no audit).
+// synodH nil → no-op. Handler: ListTyped → typed envelope output. RBAC synod.list —
+// on the group.
 func registerHumaSynodList(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -62,9 +62,9 @@ func registerHumaSynodList(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	})
 }
 
-// registerHumaSynodUpdate монтирует PATCH /v1/synods/{name} через huma (WRITE+AUDIT
-// вариант B — event synod.updated). synodH nil → no-op. Handler: claims →
-// UpdateTyped (меняет description) → audit-payload → пустой 204-output.
+// registerHumaSynodUpdate mounts PATCH /v1/synods/{name} via huma (WRITE+AUDIT
+// variant B — event synod.updated). synodH nil → no-op. Handler: claims →
+// UpdateTyped (changes description) → audit-payload → empty 204 output.
 func registerHumaSynodUpdate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -85,9 +85,9 @@ func registerHumaSynodUpdate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	})
 }
 
-// registerHumaSynodDelete монтирует DELETE /v1/synods/{name} через huma (WRITE+AUDIT
-// вариант B — event synod.deleted). synodH nil → no-op. Handler: DeleteTyped →
-// audit-payload → пустой 204-output.
+// registerHumaSynodDelete mounts DELETE /v1/synods/{name} via huma (WRITE+AUDIT
+// variant B — event synod.deleted). synodH nil → no-op. Handler: DeleteTyped →
+// audit-payload → empty 204 output.
 func registerHumaSynodDelete(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -102,10 +102,10 @@ func registerHumaSynodDelete(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	})
 }
 
-// registerHumaSynodAddOperator монтирует POST /v1/synods/{name}/operators через huma
-// (WRITE+AUDIT вариант B — event synod.operator-added). synodH nil → no-op.
-// Handler: claims → AddOperatorTyped (валидация AID + привязка) → audit-payload →
-// пустой 204-output.
+// registerHumaSynodAddOperator mounts POST /v1/synods/{name}/operators via huma
+// (WRITE+AUDIT variant B — event synod.operator-added). synodH nil → no-op.
+// Handler: claims → AddOperatorTyped (AID validation + binding) → audit-payload →
+// empty 204 output.
 func registerHumaSynodAddOperator(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -124,10 +124,10 @@ func registerHumaSynodAddOperator(humaAPI huma.API, synodH *handlers.SynodHandle
 	})
 }
 
-// registerHumaSynodRemoveOperator монтирует DELETE /v1/synods/{name}/operators/{aid}
-// через huma (WRITE+AUDIT вариант B — event synod.operator-removed). synodH nil →
-// no-op. Handler: RemoveOperatorTyped (валидация path-AID + снятие) → audit-payload
-// → пустой 204-output.
+// registerHumaSynodRemoveOperator mounts DELETE /v1/synods/{name}/operators/{aid}
+// via huma (WRITE+AUDIT variant B — event synod.operator-removed). synodH nil →
+// no-op. Handler: RemoveOperatorTyped (path-AID validation + removal) → audit-payload
+// → empty 204 output.
 func registerHumaSynodRemoveOperator(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -142,10 +142,10 @@ func registerHumaSynodRemoveOperator(humaAPI huma.API, synodH *handlers.SynodHan
 	})
 }
 
-// registerHumaSynodGrantRole монтирует POST /v1/synods/{name}/roles через huma
-// (WRITE+AUDIT вариант B — event synod.role-granted). synodH nil → no-op. Handler:
-// claims → GrantRoleTyped (валидация role + добавление в bundle) → audit-payload →
-// пустой 204-output.
+// registerHumaSynodGrantRole mounts POST /v1/synods/{name}/roles via huma
+// (WRITE+AUDIT variant B — event synod.role-granted). synodH nil → no-op. Handler:
+// claims → GrantRoleTyped (role validation + adding to the bundle) → audit-payload →
+// empty 204 output.
 func registerHumaSynodGrantRole(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -164,9 +164,9 @@ func registerHumaSynodGrantRole(humaAPI huma.API, synodH *handlers.SynodHandler)
 	})
 }
 
-// registerHumaSynodRevokeRole монтирует DELETE /v1/synods/{name}/roles/{role_name}
-// через huma (WRITE+AUDIT вариант B — event synod.role-revoked). synodH nil → no-op.
-// Handler: RevokeRoleTyped (снятие роли из bundle) → audit-payload → пустой 204-output.
+// registerHumaSynodRevokeRole mounts DELETE /v1/synods/{name}/roles/{role_name}
+// via huma (WRITE+AUDIT variant B — event synod.role-revoked). synodH nil → no-op.
+// Handler: RevokeRoleTyped (removing the role from the bundle) → audit-payload → empty 204 output.
 func registerHumaSynodRevokeRole(humaAPI huma.API, synodH *handlers.SynodHandler) {
 	if synodH == nil {
 		return
@@ -181,14 +181,14 @@ func registerHumaSynodRevokeRole(humaAPI huma.API, synodH *handlers.SynodHandler
 	})
 }
 
-// synodMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
+// synodMissingClaims — defensive response when claims are absent from ctx (unreachable:
+// RequireJWT sets claims before huma). problem+json (parity with roleMissingClaims).
 func synodMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// synodProblem доставляет ошибку *Typed-функции через huma как problem+json.
-// Доменный *handlers.problemError → humaProblemError; не-problem → 500 (parity
+// synodProblem delivers a *Typed-function error through huma as problem+json.
+// A domain *handlers.problemError → humaProblemError; non-problem → 500 (parity with
 // roleProblem).
 func synodProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
@@ -197,18 +197,18 @@ func synodProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// newHumaSynodAPI собирает huma.API поверх chi-группы с huma-audit-middleware
-// (вариант B) под переданный event-тип (parity newHumaRoleAPI). Каждый write-роут
-// synod (create/update/delete, add/remove-operator, grant/revoke-role) монтируется
-// на СВОЕЙ chi-группе с собственным event-типом.
+// newHumaSynodAPI builds a huma.API over a chi group with huma-audit-middleware
+// (variant B) under the given event type (parity with newHumaRoleAPI). Each synod write route
+// (create/update/delete, add/remove-operator, grant/revoke-role) is mounted
+// on its OWN chi group with its own event type.
 func newHumaSynodAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }
 
-// HumaSynodSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma synod-роутов
-// как YAML-строку, БЕЗ монтирования на реальный router. Хук для спека-мерж-таргета
-// тиража и guard-теста. Делегирует generic [humaDumpSpec] через те же register-
-// функции (единый register-путь). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaSynodSpecYAML assembles the OpenAPI fragment of ALL synod routes migrated to huma
+// as a YAML string, WITHOUT mounting on a real router. A hook for the rollout spec-merge
+// target and the guard-test. Delegates to the generic [humaDumpSpec] through the same
+// register functions (a single register path). Returns a 3.1.0 spec (huma default).
 func HumaSynodSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.SynodSpecStub()

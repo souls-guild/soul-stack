@@ -15,8 +15,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// makeIncRowSvc — pgx.Row-stub под SelectByName с кастомным service (idx 1) и
-// state; version "v1". Нужен reveal-тестам prefix-allowlist (сервис — сегмент пути).
+// makeIncRowSvc is a pgx.Row stub for SelectByName with a custom service (idx 1) and
+// state; version "v1". Needed by the prefix-allowlist reveal tests (the service is a
+// path segment).
 func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
 	stateBytes, _ := json.Marshal(state)
 	now := time.Now()
@@ -32,8 +33,8 @@ func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
 	}}
 }
 
-// fakeVaultReader — мок [VaultKVReader] для reveal-тестов: фиксирует запрошенные
-// logical-пути (доказать, что traversal-guard режет ДО ReadKV) и отдаёт data/err.
+// fakeVaultReader is a [VaultKVReader] mock for reveal tests: records the requested
+// logical paths (to prove the traversal guard cuts BEFORE ReadKV) and returns data/err.
 type fakeVaultReader struct {
 	data       map[string]any
 	err        error
@@ -48,7 +49,7 @@ func (f *fakeVaultReader) ReadKV(_ context.Context, path string) (map[string]any
 	return f.data, nil
 }
 
-// redisUsersState — типовой state с массивом redis_users (enumerate-источник).
+// redisUsersState is a typical state with a redis_users array (enumerate source).
 func redisUsersState(names ...string) map[string]any {
 	users := make([]any, 0, len(names))
 	for _, n := range names {
@@ -57,9 +58,9 @@ func redisUsersState(names ...string) map[string]any {
 	return map[string]any{"redis_users": users}
 }
 
-// userPasswordSecret — типовая декларация revealable_secrets (redis-конвенция).
-// vault_ref привязан к {service}/{incarnation} — резолвится в тот же
-// secret/redis/<inc>/users/<name>#password (сервис=redis).
+// userPasswordSecret is a typical revealable_secrets declaration (redis convention).
+// vault_ref is bound to {service}/{incarnation} — resolves to the same
+// secret/redis/<inc>/users/<name>#password (service=redis).
 func userPasswordSecret() config.RevealableSecret {
 	return config.RevealableSecret{
 		ID:        "user_password",
@@ -69,7 +70,7 @@ func userPasswordSecret() config.RevealableSecret {
 	}
 }
 
-// revealHandler собирает IncarnationHandler под reveal-тесты (db+loader+services+
+// revealHandler builds an IncarnationHandler for reveal tests (db+loader+services+
 // scoper+vault+auditW). logger=nil → discard (NewIncarnationHandler).
 func revealHandler(state map[string]any, revealable []config.RevealableSecret, vr VaultKVReader, scoper PurviewResolver, aw audit.Writer) *IncarnationHandler {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncRowWithState(name, state) }}
@@ -81,8 +82,8 @@ func revealHandler(state map[string]any, revealable []config.RevealableSecret, v
 
 func revealClaims() *jwt.Claims { return &jwt.Claims{Subject: "archon-alice"} }
 
-// TestRevealSecret_Happy — успех: mock Vault → пароль; проверяем значение и что
-// ReadKV вызван с корректным logical-путём (подстановка {incarnation}/{key}).
+// TestRevealSecret_Happy — success: mock Vault → password; check the value and that
+// ReadKV is called with the correct logical path (substitution of {incarnation}/{key}).
 func TestRevealSecret_Happy(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "s3cr3t-plaintext"}}
 	h := revealHandler(redisUsersState("alice", "bob"),
@@ -100,8 +101,8 @@ func TestRevealSecret_Happy(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_KeyNotInState_404 — key вне enumerate-массива текущего state →
-// 404 (анти-произвол), Vault НЕ трогаем.
+// TestRevealSecret_KeyNotInState_404 — a key outside the enumerate array of the current
+// state → 404 (anti-arbitrary), Vault is NOT touched.
 func TestRevealSecret_KeyNotInState_404(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "x"}}
 	h := revealHandler(redisUsersState("alice", "bob"),
@@ -114,7 +115,7 @@ func TestRevealSecret_KeyNotInState_404(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_UnknownSecretID_404 — secret_id, которого нет в манифесте → 404.
+// TestRevealSecret_UnknownSecretID_404 — a secret_id not in the manifest → 404.
 func TestRevealSecret_UnknownSecretID_404(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "x"}}
 	h := revealHandler(redisUsersState("alice"),
@@ -127,7 +128,7 @@ func TestRevealSecret_UnknownSecretID_404(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_OutOfScope_404 — вне RBAC-scope → 404 (parity Get, не палим существование).
+// TestRevealSecret_OutOfScope_404 — out of RBAC scope → 404 (parity Get, don't leak existence).
 func TestRevealSecret_OutOfScope_404(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "x"}}
 	h := revealHandler(redisUsersState("alice"),
@@ -150,7 +151,7 @@ func TestRevealSecret_VaultNotFound_404(t *testing.T) {
 	assertRevealStatus(t, err, 404)
 }
 
-// TestRevealSecret_NoField_404 — секрет есть, но поля #password нет → 404.
+// TestRevealSecret_NoField_404 — the secret exists, but the #password field is missing → 404.
 func TestRevealSecret_NoField_404(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"other": "x"}}
 	h := revealHandler(redisUsersState("alice"),
@@ -160,7 +161,7 @@ func TestRevealSecret_NoField_404(t *testing.T) {
 	assertRevealStatus(t, err, 404)
 }
 
-// TestRevealSecret_InvalidKey_422 — key невалидной формы → 422, Vault НЕ трогаем.
+// TestRevealSecret_InvalidKey_422 — a malformed key → 422, Vault is NOT touched.
 func TestRevealSecret_InvalidKey_422(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "x"}}
 	h := revealHandler(redisUsersState("alice"),
@@ -175,8 +176,8 @@ func TestRevealSecret_InvalidKey_422(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_TraversalGuard — vault.ParseRef режет `..` ДАЖЕ если манифест
-// (author-error / вредоносный) содержит traversal в шаблоне пути: 404, Vault НЕ вызван.
+// TestRevealSecret_TraversalGuard — vault.ParseRef cuts `..` EVEN if the manifest
+// (author error / malicious) contains traversal in the path template: 404, Vault is NOT called.
 func TestRevealSecret_TraversalGuard(t *testing.T) {
 	malicious := config.RevealableSecret{
 		ID:        "user_password",
@@ -195,9 +196,9 @@ func TestRevealSecret_TraversalGuard(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_LeakGuard — ★ КРИТИЧНО (ADR-064 b): plaintext уходит ТОЛЬКО в
-// тело ответа, НИКОГДА в audit. Payload несёт {name, secret_id, key, path} и НЕ
-// содержит значения; path == logical (не секрет).
+// TestRevealSecret_LeakGuard — ★ CRITICAL (ADR-064 b): plaintext goes ONLY into the
+// response body, NEVER into audit. The payload carries {name, secret_id, key, path} and
+// does NOT contain the value; path == logical (not a secret).
 func TestRevealSecret_LeakGuard(t *testing.T) {
 	const plaintext = "s3cr3t-plaintext-value"
 	aw := &fakeAuditWriter{}
@@ -222,7 +223,7 @@ func TestRevealSecret_LeakGuard(t *testing.T) {
 	if ev.ArchonAID != "archon-alice" {
 		t.Errorf("ArchonAID = %q, want archon-alice", ev.ArchonAID)
 	}
-	// Значение НЕ должно присутствовать НИГДЕ в payload (сериализуем целиком).
+	// The value must NOT appear ANYWHERE in the payload (serialize the whole thing).
 	payloadJSON, _ := json.Marshal(ev.Payload)
 	if strings.Contains(string(payloadJSON), plaintext) {
 		t.Fatalf("★ УТЕЧКА: plaintext секрета попал в audit-payload: %s", payloadJSON)
@@ -238,7 +239,7 @@ func TestRevealSecret_LeakGuard(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_Discovery — discovery отдаёт items с keys из state.
+// TestRevealableSecrets_Discovery — discovery returns items with keys from state.
 func TestRevealableSecrets_Discovery(t *testing.T) {
 	h := revealHandler(redisUsersState("alice", "bob"),
 		[]config.RevealableSecret{userPasswordSecret()}, &fakeVaultReader{}, fakeIncScoper{unrestricted: true}, &fakeAuditWriter{})
@@ -259,7 +260,7 @@ func TestRevealableSecrets_Discovery(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_OutOfScope_404 — discovery вне scope → 404.
+// TestRevealableSecrets_OutOfScope_404 — discovery out of scope → 404.
 func TestRevealableSecrets_OutOfScope_404(t *testing.T) {
 	h := revealHandler(redisUsersState("alice"),
 		[]config.RevealableSecret{userPasswordSecret()}, &fakeVaultReader{}, fakeIncScoper{empty: true}, &fakeAuditWriter{})
@@ -268,8 +269,8 @@ func TestRevealableSecrets_OutOfScope_404(t *testing.T) {
 	assertRevealStatus(t, err, 404)
 }
 
-// TestRevealableSecrets_NoDeclarations_Empty — сервис без revealable_secrets →
-// пустой список (валиден, не ошибка).
+// TestRevealableSecrets_NoDeclarations_Empty — a service without revealable_secrets →
+// empty list (valid, not an error).
 func TestRevealableSecrets_NoDeclarations_Empty(t *testing.T) {
 	h := revealHandler(redisUsersState("alice"), nil, &fakeVaultReader{}, fakeIncScoper{unrestricted: true}, &fakeAuditWriter{})
 
@@ -282,16 +283,16 @@ func TestRevealableSecrets_NoDeclarations_Empty(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_OutOfServiceScope_KeeperSecret_404 — ★ C1 (главный guard):
-// вредоносный манифест, чей путь вне secret/<service>/<incarnation>/ (тут — прямо
-// в secret/keeper/), → reveal 404, ReadKV НЕ вызван (значение НЕ прочитано), audit
+// TestRevealSecret_OutOfServiceScope_KeeperSecret_404 — ★ C1 (the main guard):
+// a malicious manifest whose path is outside secret/<service>/<incarnation>/ (here —
+// straight into secret/keeper/), → reveal 404, ReadKV NOT called (value NOT read), audit
 // denied reason=out_of_service_scope.
 func TestRevealSecret_OutOfServiceScope_KeeperSecret_404(t *testing.T) {
 	evil := config.RevealableSecret{
 		ID:        "user_password",
 		Label:     "x",
 		Enumerate: "state.redis_users",
-		VaultRef:  "secret/keeper/{incarnation}/{key}#private_key", // вне secret/redis/redis-prod/
+		VaultRef:  "secret/keeper/{incarnation}/{key}#private_key", // outside secret/redis/redis-prod/
 	}
 	aw := &fakeAuditWriter{}
 	vr := &fakeVaultReader{data: map[string]any{"private_key": "KEEPER-SIGNING-KEY"}}
@@ -312,8 +313,9 @@ func TestRevealSecret_OutOfServiceScope_KeeperSecret_404(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_OutOfServiceScope_SiblingService_404 — путь под ДРУГИМ сервисом
-// (secret/foo/…), хоть и с {service}/{incarnation} где-то в пути, → out_of_service_scope.
+// TestRevealSecret_OutOfServiceScope_SiblingService_404 — a path under a DIFFERENT
+// service (secret/foo/…), even with {service}/{incarnation} somewhere in the path, →
+// out_of_service_scope.
 func TestRevealSecret_OutOfServiceScope_SiblingService_404(t *testing.T) {
 	evil := config.RevealableSecret{
 		ID: "user_password", Label: "x", Enumerate: "state.redis_users",
@@ -330,8 +332,9 @@ func TestRevealSecret_OutOfServiceScope_SiblingService_404(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_PrefixConfusion_404 — trailing `/` в allowlist: путь соседней
-// инкарнации redis-prod-other НЕ матчит scope redis-prod (иначе prefix-confusion).
+// TestRevealSecret_PrefixConfusion_404 — trailing `/` in the allowlist: the path of the
+// neighbor incarnation redis-prod-other does NOT match scope redis-prod (otherwise
+// prefix confusion).
 func TestRevealSecret_PrefixConfusion_404(t *testing.T) {
 	evil := config.RevealableSecret{
 		ID: "user_password", Label: "x", Enumerate: "state.redis_users",
@@ -348,9 +351,9 @@ func TestRevealSecret_PrefixConfusion_404(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_FloorBackstop_ServiceNamedKeeper — floor как backstop: сервис с
-// зарезервированным именем `keeper` проходит prefix-allowlist (secret/keeper/<inc>/),
-// но floor DeniedByVaultFloor его режет → 404, ReadKV НЕ вызван, reason=floor_denied.
+// TestRevealSecret_FloorBackstop_ServiceNamedKeeper — floor as a backstop: a service
+// with the reserved name `keeper` passes the prefix allowlist (secret/keeper/<inc>/),
+// but the floor DeniedByVaultFloor cuts it → 404, ReadKV NOT called, reason=floor_denied.
 func TestRevealSecret_FloorBackstop_ServiceNamedKeeper(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row {
 		return makeIncRowSvc(name, "keeper", redisUsersState("alice"))
@@ -374,8 +377,8 @@ func TestRevealSecret_FloorBackstop_ServiceNamedKeeper(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_DeniedAudit_KeyNotInState — B: denied-reveal (key не в state)
-// пишет audit с reason и БЕЗ значения.
+// TestRevealSecret_DeniedAudit_KeyNotInState — B: a denied reveal (key not in state)
+// writes audit with a reason and WITHOUT the value.
 func TestRevealSecret_DeniedAudit_KeyNotInState(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	vr := &fakeVaultReader{data: map[string]any{"password": "s3cr3t"}}
@@ -400,7 +403,7 @@ func TestRevealSecret_DeniedAudit_KeyNotInState(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_DeniedAudit_OutOfScope — B: вне scope пишет audit denied/out_of_scope.
+// TestRevealSecret_DeniedAudit_OutOfScope — B: out of scope writes audit denied/out_of_scope.
 func TestRevealSecret_DeniedAudit_OutOfScope(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := revealHandler(redisUsersState("alice"),
@@ -413,10 +416,10 @@ func TestRevealSecret_DeniedAudit_OutOfScope(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_VersionCraft_PinsServiceVersion — ★ анти version-craft: манифест
-// грузится СТРОГО по inc.ServiceVersion (не по дефолту резолвера).
+// TestRevealSecret_VersionCraft_PinsServiceVersion — ★ anti version-craft: the manifest
+// is loaded STRICTLY by inc.ServiceVersion (not by the resolver default).
 func TestRevealSecret_VersionCraft_PinsServiceVersion(t *testing.T) {
-	const wantVersion = "v2.0.0" // отлично от дефолта fakeResolver ("v1")
+	const wantVersion = "v2.0.0" // different from fakeResolver default ("v1")
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row {
 		return makeIncRowWithStateVersion(name, wantVersion, redisUsersState("alice"))
 	}}
@@ -437,8 +440,8 @@ func TestRevealSecret_VersionCraft_PinsServiceVersion(t *testing.T) {
 	}
 }
 
-// TestRevealSecret_EnumerateNotArray_404 — E: enumerate указывает на не-массив
-// (map/scalar) → 404 (key_not_in_state), без паники и без 500.
+// TestRevealSecret_EnumerateNotArray_404 — E: enumerate points to a non-array
+// (map/scalar) → 404 (key_not_in_state), without panic and without 500.
 func TestRevealSecret_EnumerateNotArray_404(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"not": "an-array"}}
 	h := revealHandler(state, []config.RevealableSecret{userPasswordSecret()},
@@ -448,22 +451,23 @@ func TestRevealSecret_EnumerateNotArray_404(t *testing.T) {
 	assertRevealStatus(t, err, 404)
 }
 
-// TestRevealSecret_BadName_422 / bad secret_id — E: 422 на битые идентификаторы.
+// TestRevealSecret_BadName_422 / bad secret_id — E: 422 on malformed identifiers.
 func TestRevealSecret_BadIdentifiers_422(t *testing.T) {
 	h := revealHandler(redisUsersState("alice"), []config.RevealableSecret{userPasswordSecret()},
 		&fakeVaultReader{}, fakeIncScoper{unrestricted: true}, &fakeAuditWriter{})
-	// битый name
+	// malformed name
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "Redis_Prod!", "user_password", "alice")
 	assertRevealStatus(t, err, 422)
-	// битый secret_id
+	// malformed secret_id
 	_, err = h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "../etc", "alice")
 	assertRevealStatus(t, err, 422)
 }
 
-// TestRevealableSecrets_DiscoveryFiltersNonConformingKeys — D: ключ с именем вне
-// reRevealIdent НЕ рекламируется discovery (иначе reveal отобьёт его 422).
+// TestRevealableSecrets_DiscoveryFiltersNonConformingKeys — D: a key whose name is
+// outside reRevealIdent is NOT advertised by discovery (otherwise reveal would reject it
+// with 422).
 func TestRevealableSecrets_DiscoveryFiltersNonConformingKeys(t *testing.T) {
-	// "Alice" (заглавная) и "" — не проходят reRevealIdent; "bob" — проходит.
+	// "Alice" (uppercase) and "" — don't pass reRevealIdent; "bob" — passes.
 	state := map[string]any{"redis_users": []any{
 		map[string]any{"name": "Alice"},
 		map[string]any{"name": "bob"},
@@ -482,7 +486,7 @@ func TestRevealableSecrets_DiscoveryFiltersNonConformingKeys(t *testing.T) {
 	}
 }
 
-// TestRevealableSecrets_MultipleDeclarations — E: discovery отдаёт ВСЕ декларации.
+// TestRevealableSecrets_MultipleDeclarations — E: discovery returns ALL declarations.
 func TestRevealableSecrets_MultipleDeclarations(t *testing.T) {
 	state := map[string]any{
 		"redis_users":  []any{map[string]any{"name": "alice"}},
@@ -503,26 +507,26 @@ func TestRevealableSecrets_MultipleDeclarations(t *testing.T) {
 	}
 }
 
-// TestEnumerateStateKeys_Coverage — E: unit-покрытие enumerateStateKeys —
-// nil/пустой state, отсутствие массива, элемент без name/name не строка, дедуп.
+// TestEnumerateStateKeys_Coverage — E: unit coverage of enumerateStateKeys —
+// nil/empty state, missing array, element without name/name not a string, dedup.
 func TestEnumerateStateKeys_Coverage(t *testing.T) {
-	// nil state / нет ключа → nil (без паники).
+	// nil state / no key → nil (no panic).
 	if got := enumerateStateKeys(nil, "state.redis_users"); got != nil {
 		t.Errorf("nil state → %#v, want nil", got)
 	}
 	if got := enumerateStateKeys(map[string]any{}, "state.redis_users"); got != nil {
 		t.Errorf("empty state → %#v, want nil", got)
 	}
-	// scalar вместо массива → nil.
+	// scalar instead of an array → nil.
 	if got := enumerateStateKeys(map[string]any{"redis_users": "scalar"}, "state.redis_users"); got != nil {
 		t.Errorf("scalar → %#v, want nil", got)
 	}
-	// элемент без name / name не строка / дубли → пропуск + дедуп.
+	// element without name / name not a string / duplicates → skip + dedup.
 	state := map[string]any{"redis_users": []any{
 		map[string]any{"name": "alice"},
-		map[string]any{"name": "alice"}, // дубль
-		map[string]any{"name": 123},     // не строка
-		map[string]any{"perms": "x"},    // нет name
+		map[string]any{"name": "alice"}, // duplicate
+		map[string]any{"name": 123},     // not a string
+		map[string]any{"perms": "x"},    // no name
 		"not-a-map",
 	}}
 	got := enumerateStateKeys(state, "state.redis_users")
@@ -531,7 +535,7 @@ func TestEnumerateStateKeys_Coverage(t *testing.T) {
 	}
 }
 
-// assertRevealStatus — общий assert доменного *problemError с ожидаемым HTTP-статусом.
+// assertRevealStatus is a shared assert of a domain *problemError with the expected HTTP status.
 func assertRevealStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	if err == nil {

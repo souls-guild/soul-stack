@@ -1,9 +1,9 @@
 package handlers
 
-// Unit на traitScalarEquals (GET-плечо trait-scope, ADR-047 amendment / ADR-060
-// п.7 slice 1) — scalar-only семантика, выровненная с SQL-плечом List
-// (incarnation.appendScopeClause `traits->>$ = $`, BUG #1 fix). Самодостаточный
-// (чистая функция от map[string]any), не зависит от shared-fake-ов пакета.
+// Unit test for traitScalarEquals (GET arm of trait-scope, ADR-047 amendment / ADR-060
+// §7 slice 1) — scalar-only semantics, aligned with the List SQL arm
+// (incarnation.appendScopeClause `traits->>$ = $`, BUG #1 fix). Self-contained
+// (a pure function of map[string]any), independent of the package's shared fakes.
 
 import (
 	"encoding/json"
@@ -70,8 +70,8 @@ func TestTraitScalarEquals_Table(t *testing.T) {
 	}
 }
 
-// TestTraitScalarEquals_JSONNumber — значения, пришедшие как json.Number (decoder
-// с UseNumber), тоже матчатся по строковой форме (scalar-ветка покрывает json.Number).
+// TestTraitScalarEquals_JSONNumber — values that arrive as json.Number (decoder
+// with UseNumber) also match by their string form (the scalar branch covers json.Number).
 func TestTraitScalarEquals_JSONNumber(t *testing.T) {
 	dec := json.NewDecoder(strings.NewReader(`{"shard": 7}`))
 	dec.UseNumber()

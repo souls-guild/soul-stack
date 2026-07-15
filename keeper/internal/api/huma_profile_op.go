@@ -1,12 +1,12 @@
 package api
 
-// FULL-TYPED форма PROFILE-домена (Cloud Profile CRUD, ADR-017). Операции:
+// FULL-TYPED shape of the PROFILE domain (Cloud Profile CRUD, ADR-017). Operations:
 // create (WRITE+AUDIT profile.created), list (read-with-typed-query +
-// provider-фильтр), get (read-with-path), delete (WRITE+AUDIT profile.deleted).
-// БЕЗ update (parity Provider: иммутабельность VM-spec).
+// provider filter), get (read-with-path), delete (WRITE+AUDIT profile.deleted).
+// No update (parity Provider: VM-spec immutability).
 //
-// params — opaque VM-spec (additionalProperties:true внутри, валидируется
-// против CloudDriver.Schema на scenario-слое); cloud_init — опц. userdata.
+// params — opaque VM-spec (additionalProperties:true inside, validated
+// against CloudDriver.Schema at the scenario layer); cloud_init — optional userdata.
 
 import (
 	"net/http"
@@ -20,9 +20,9 @@ type profileCreateInput struct {
 	Body ProfileCreateRequest
 }
 
-// ProfileCreateRequest — Go-форма тела POST /v1/profiles. name — kebab; provider
-// — имя существующего Provider-а (FK, 422 на missing); params — opaque VM-spec
-// (опц., nil → {}); cloud_init — опц. userdata.
+// ProfileCreateRequest — the Go shape of the POST /v1/profiles body. name — kebab; provider
+// — the name of an existing Provider (FK, 422 on missing); params — opaque VM-spec
+// (optional, nil → {}); cloud_init — optional userdata.
 type ProfileCreateRequest struct {
 	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а (kebab)"`
 	Provider  string         `json:"provider" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя существующего Cloud-Provider-а"`
@@ -48,7 +48,7 @@ func profileCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/profiles (list) — READ-with-typed-query (БЕЗ audit) ===
+// === GET /v1/profiles (list) — READ with typed query (no audit) ===
 
 type profileListInput struct {
 	Provider string `query:"provider" doc:"фильтр по имени Provider-а (опц.)"`
@@ -73,7 +73,7 @@ func profileListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/profiles/{name} (get) — READ-with-path (БЕЗ audit) ===
+// === GET /v1/profiles/{name} (get) — READ with path (no audit) ===
 
 type profileGetInput struct {
 	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а"`
@@ -102,7 +102,7 @@ type profileDeleteInput struct {
 	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а"`
 }
 
-// profileNoContentOutput — 204 No Content (без Body).
+// profileNoContentOutput — 204 No Content (no Body).
 type profileNoContentOutput struct {
 	Status int `json:"-"`
 }

@@ -1,22 +1,22 @@
-// Доказательный гейт выравнивания имён MODULE form-prep-схем под committed-рукопись
-// (тираж-батч N4, по эталону huma_voyage_schema_test.go). Собирает агрегированную
-// huma-спеку (HumaFullSpecYAML) и проверяет контрактные имена form-prep request +
-// nested-цепочки (class C input-only) + отсутствие технических huma-Go-имён.
+// Evidence gate aligning MODULE form-prep schema names to the committed hand-written spec
+// (rollout batch N4, following the huma_voyage_schema_test.go pattern). Assembles the
+// aggregated huma spec (HumaFullSpecYAML) and checks the contract names of the form-prep request +
+// nested chains (class C input-only) + absence of technical huma-Go names.
 //
-// МЕХАНИЗМЫ для module form-prep (сверены с рукописью):
+// MECHANISMS for module form-prep (checked against the hand-written spec):
 //   - REQUEST-RENAME: moduleFormPrepHumaBody → ModuleFormPrepRequest (:5433).
-//   - NESTED class C (input-only, single consumer каждая):
-//     moduleFormPrepSourceHumaBody → ModuleFormPrepSource (:5447, ref только из
+//   - NESTED class C (input-only, single consumer each):
+//     moduleFormPrepSourceHumaBody → ModuleFormPrepSource (:5447, ref only from
 //     ModuleFormPrepRequest);
-//     moduleFormPrepChoirSourceHumaBody → ModuleFormPrepChoirSource (:5457, ref только
-//     из ModuleFormPrepSource).
-//     class C = обычный rename Go-структуры (БЕЗ alias — нет output-потребителя).
+//     moduleFormPrepChoirSourceHumaBody → ModuleFormPrepChoirSource (:5457, ref only
+//     from ModuleFormPrepSource).
+//     class C = a plain Go-struct rename (no alias — no output consumer).
 //
-// CATALOG-домен (GET /v1/modules, /v1/modules/{name}) — батч N6: handler-local-структуры
-// moduleCatalogResponse/moduleItem переименованы в moduleCatalogReply/moduleCatalogItem (обычный
-// rename Go-структур, handler-types сериализуют их) → DefaultSchemaNamer даёт контрактные
-// ModuleCatalogReply (:5424) / ModuleCatalogItem (:5392). Дрейф-имена ModuleCatalogResponse/
-// ModuleItem вытеснены (forbidden).
+// CATALOG domain (GET /v1/modules, /v1/modules/{name}) — batch N6: handler-local structs
+// moduleCatalogResponse/moduleItem renamed to moduleCatalogReply/moduleCatalogItem (a plain
+// Go-struct rename, handler-types serialize them) → DefaultSchemaNamer produces the contract
+// ModuleCatalogReply (:5424) / ModuleCatalogItem (:5392). Drift names ModuleCatalogResponse/
+// ModuleItem are displaced (forbidden).
 package api
 
 import (
@@ -25,20 +25,20 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// moduleContractSchemas — form-prep request + nested-цепочка ровно как в committed-
-// рукописи. ModuleFormPrepReply (200-тело) — УЖЕ named oapi-тип, контрактен сам.
+// moduleContractSchemas — form-prep request + nested chain exactly as in the committed
+// hand-written spec. ModuleFormPrepReply (200 body) is ALREADY a named oapi type, contract by itself.
 var moduleContractSchemas = []string{
 	"ModuleFormPrepRequest",
 	"ModuleFormPrepSource",
 	"ModuleFormPrepChoirSource",
 	"ModuleFormPrepReply",
-	// CATALOG-домен (батч N6).
+	// CATALOG domain (batch N6).
 	"ModuleCatalogReply",
 	"ModuleCatalogItem",
 }
 
-// moduleForbiddenSchemas — технические huma-Go-имена form-prep request + nested + дрейф-имена
-// catalog-домена (батч N6).
+// moduleForbiddenSchemas — technical huma-Go names of the form-prep request + nested + drift names
+// of the catalog domain (batch N6).
 var moduleForbiddenSchemas = []string{
 	"ModuleFormPrepHumaBody",
 	"ModuleFormPrepSourceHumaBody",
@@ -47,8 +47,8 @@ var moduleForbiddenSchemas = []string{
 	"ModuleItem",            // → ModuleCatalogItem
 }
 
-// TestSchemaNames_Module — гейт N4 (form-prep). Контрактные имена присутствуют,
-// технические — нет.
+// TestSchemaNames_Module — gate N4 (form-prep). Contract names present,
+// technical ones absent.
 func TestSchemaNames_Module(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range moduleContractSchemas {
@@ -63,10 +63,10 @@ func TestSchemaNames_Module(t *testing.T) {
 	}
 }
 
-// TestSchemaNames_ModuleFormPrepNested — nested-цепочка class C: ModuleFormPrepRequest.source
+// TestSchemaNames_ModuleFormPrepNested — nested chain class C: ModuleFormPrepRequest.source
 // → $ref ModuleFormPrepSource; ModuleFormPrepSource.choir → $ref ModuleFormPrepChoirSource.
-// Мутация (инлайн вместо $ref / неверное имя) краснит — гарантирует, что цепочка собрана
-// под контрактными именами.
+// A mutation (inline instead of $ref / wrong name) fails it — guarantees the chain is assembled
+// under the contract names.
 func TestSchemaNames_ModuleFormPrepNested(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -88,7 +88,7 @@ func TestSchemaNames_ModuleFormPrepNested(t *testing.T) {
 		t.Errorf("ModuleFormPrepSource.choir → %q, ожидался %q", got, choirRef)
 	}
 
-	// Форма ModuleFormPrepRequest сверена с рукописью (:5433 — required:[source]).
+	// ModuleFormPrepRequest shape checked against the hand-written spec (:5433 — required:[source]).
 	req, _ := schemas["ModuleFormPrepRequest"].(map[string]any)
 	if req == nil {
 		t.Fatal("ModuleFormPrepRequest отсутствует")

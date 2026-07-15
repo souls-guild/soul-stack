@@ -1,19 +1,19 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2c разворота HERALD-домена (heralds + tidings) ЦЕЛИКОМ на
-// huma full-typed (ADR-054 §Pattern, эталоны role/operator/augur/push-provider).
-// herald create/update/delete + tiding create/update/delete — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; события herald.created/.updated/.deleted и tiding.created/
-// .updated/.deleted); herald/tiding list/get — read (БЕЗ audit). Доказывают инварианты
-// кластера поверх chi:
+// Guard tests for ROLLOUT-BATCH-2c, migrating the HERALD domain (heralds + tidings) ENTIRELY to
+// huma full-typed (ADR-054 §Pattern, references role/operator/augur/push-provider).
+// herald create/update/delete + tiding create/update/delete — WRITE+AUDIT (variant B,
+// huma-audit middleware; events herald.created/.updated/.deleted and tiding.created/
+// .updated/.deleted); herald/tiding list/get — read (no audit). They prove the cluster
+// invariants over chi:
 //
 //   - wire/golden: herald create 201 Herald; herald list 200 envelope; herald get 200;
-//     herald update 200 Herald; herald delete 204 пустое; tiding create 201 Tiding;
+//     herald update 200 Herald; herald delete 204 empty; tiding create 201 Tiding;
 //     tiding list 200; tiding delete 204 (byte-exact);
 //   - unknown-field → 400; missing-required → 422; bad type enum → 422; bad pagination
 //     → 400; bad include_ephemeral bool → 400; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут: полная huma-навеска пишет audit-event с НЕПУСТЫМ
-//     payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route: full huma wiring writes an audit event with a NON-EMPTY
+//     payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -36,13 +36,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// heraldAt — фиксированный created_at/updated_at, который все herald-success-пути
-// отдают (детерминированный golden wire).
+// heraldAt — the fixed created_at/updated_at that all herald success paths
+// return (deterministic golden wire).
 var heraldAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 
-// hHeraldPool — узкий мок [herald.ExecQueryRower] для huma-теста (Exec/QueryRow/Query).
-// Классифицирует SQL по подстроке и отдаёт детерминированный success-исход;
-// error-классификацию валидируют handlers/herald-юнит-тесты.
+// hHeraldPool — narrow mock of [herald.ExecQueryRower] for the huma test (Exec/QueryRow/Query).
+// Classifies SQL by substring and returns a deterministic success outcome;
+// the error classification is validated by the handlers/herald unit tests.
 type hHeraldPool struct {
 	heraldDeleteRows int64
 	heraldUpdateRows int64
@@ -56,8 +56,8 @@ type hHeraldPool struct {
 func (p *hHeraldPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
 	switch {
 	case strings.Contains(sql, "UPDATE heralds"), strings.Contains(sql, "UPDATE tidings"):
-		// heraldUpdateRows реюзится для обоих UPDATE-роутов (herald.update / tiding.update):
-		// тест навешивает СВОЙ pool на отдельный кейс, коллизии нет.
+		// heraldUpdateRows is reused for both UPDATE routes (herald.update / tiding.update):
+		// each test wires its OWN pool per case, so there is no collision.
 		return pgconn.NewCommandTag("UPDATE " + hHeraldItoa(p.heraldUpdateRows)), nil
 	case strings.Contains(sql, "DELETE FROM heralds"):
 		return pgconn.NewCommandTag("DELETE " + hHeraldItoa(p.heraldDeleteRows)), nil
@@ -101,13 +101,13 @@ func (p *hHeraldPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 	return nil, &hHeraldErr{"hHeraldPool: unexpected Query SQL: " + sql}
 }
 
-// heraldScanRow — колонки scanHerald: name, type, config(jsonb-bytes), secret_ref,
+// heraldScanRow — scanHerald columns: name, type, config(jsonb-bytes), secret_ref,
 // enabled, created_at, updated_at, created_by_aid.
 func heraldScanRow() []any {
 	return []any{"ops-webhook", "webhook", []byte(`{"url":"https://hook.test/notify"}`), nil, true, heraldAt, heraldAt, nil}
 }
 
-// tidingScanRow — колонки scanTiding: name, herald, event_types, only_failures,
+// tidingScanRow — scanTiding columns: name, herald, event_types, only_failures,
 // only_changes, incarnation, cadence, task, ephemeral, voyage_id,
 // created_from_cadence_id, annotations(jsonb-bytes), projection([]string), enabled,
 // created_at, updated_at, created_by_aid.
@@ -130,8 +130,8 @@ func hHeraldItoa(n int64) string {
 	return "1"
 }
 
-// hHeraldRow — staticRow для herald/tiding-колонок (string/time/int/bool/[]byte/
-// []string + nullable-указатели).
+// hHeraldRow — staticRow for herald/tiding columns (string/time/int/bool/[]byte/
+// []string + nullable pointers).
 type hHeraldRow struct {
 	values []any
 	err    error
@@ -188,10 +188,10 @@ func (r *hHeraldRows) Values() ([]any, error)                       { return nil
 func (r *hHeraldRows) RawValues() [][]byte                          { return nil }
 func (r *hHeraldRows) Conn() *pgx.Conn                              { return nil }
 
-// humaHeraldRouter собирает chi-роутер со ВСЕМИ herald/tiding-роутами через huma —
-// продакшен-навеска из router.go: RequirePermission(herald/tiding.<action>) на каждой
-// группе + (для write) huma-audit-middleware вариант B + huma-операция. injectClaims
-// заменяет RequireJWT.
+// humaHeraldRouter assembles a chi router with ALL herald/tiding routes via huma —
+// the production wiring from router.go: RequirePermission(herald/tiding.<action>) on each
+// group + (for write) huma-audit middleware variant B + the huma operation. injectClaims
+// replaces RequireJWT.
 func humaHeraldRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool *hHeraldPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -356,7 +356,7 @@ func TestHumaAudit_HeraldCreate_NoAudit_OnValidationFail(t *testing.T) {
 	}
 }
 
-// === HERALD LIST (READ-with-typed-query, БЕЗ audit) ===
+// === HERALD LIST (READ with typed query, no audit) ===
 
 func TestHumaHerald_List_GoldenWire(t *testing.T) {
 	pool := &hHeraldPool{heraldListRows: [][]any{heraldScanRow()}}
@@ -434,7 +434,7 @@ func TestHumaHerald_List_NoAudit(t *testing.T) {
 	}
 }
 
-// === HERALD GET (READ-with-path, БЕЗ audit) ===
+// === HERALD GET (READ with path, no audit) ===
 
 func TestHumaHerald_Get_GoldenWire(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
@@ -654,7 +654,7 @@ func TestHumaAudit_TidingCreate_RecordsOnSuccess(t *testing.T) {
 	})
 }
 
-// === TIDING LIST (READ-with-typed-query, БЕЗ audit) ===
+// === TIDING LIST (READ with typed query, no audit) ===
 
 func TestHumaTiding_List_GoldenWire(t *testing.T) {
 	pool := &hHeraldPool{tidingListRows: [][]any{tidingScanRow()}}
@@ -712,7 +712,7 @@ func TestHumaTiding_List_NoAudit(t *testing.T) {
 	}
 }
 
-// === TIDING GET (READ-with-path, БЕЗ audit) ===
+// === TIDING GET (READ with path, no audit) ===
 
 func TestHumaTiding_Get_NotFound_404(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{tidingGetMissing: true})
@@ -729,7 +729,7 @@ func TestHumaTiding_Get_NotFound_404(t *testing.T) {
 
 func TestHumaAudit_TidingUpdate_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	// UPDATE tidings → rows affected >0 (через UpdateTiding tag), затем re-read SELECT.
+	// UPDATE tidings → rows affected >0 (via the UpdateTiding tag), then re-read SELECT.
 	r := humaHeraldRouter(t, strictAllowAll{}, auditCap, &hHeraldPool{heraldUpdateRows: 1})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/v1/tidings/on-fail",
@@ -784,7 +784,7 @@ func TestHumaAudit_TidingDelete_NoAudit_OnNotFound(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ herald/tiding-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL herald/tiding operations from FULL-TYPED Go types ===
 
 func TestHumaHerald_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaHeraldSpecYAML()

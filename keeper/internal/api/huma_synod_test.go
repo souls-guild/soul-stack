@@ -1,17 +1,17 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2d разворота SYNOD-домена (группы / membership / bundle)
-// ЦЕЛИКОМ на huma full-typed (ADR-054 §Pattern, эталоны role/operator/augur/herald).
+// Guard tests of ROLLOUT BATCH 2d that unfolds the SYNOD domain (groups / membership / bundle)
+// ENTIRELY onto huma full-typed (ADR-054 §Pattern, role/operator/augur/herald references).
 // synod create/update/delete + add/remove-operator + grant/revoke-role — WRITE+AUDIT
-// (вариант B, huma-audit-middleware; события synod.created/.updated/.deleted/
+// (variant B, huma audit middleware; events synod.created/.updated/.deleted/
 // .operator-added/.operator-removed/.role-granted/.role-revoked); synod list — read
-// (БЕЗ audit). Доказывают инварианты кластера поверх chi:
+// (no audit). They prove the cluster invariants over chi:
 //
-//   - wire/golden: synod create 201 пустое тело; synod list 200 SynodView[] байт-в-
-//     байт (Description всегда, Roles/Operators []-vs-null); write-204 пустое;
+//   - wire/golden: synod create 201 empty body; synod list 200 SynodView[] byte-for-
+//     byte (Description always, Roles/Operators []-vs-null); write-204 empty;
 //   - unknown-field → 400; missing-required → 422; bad path-AID → 422; RBAC-deny → 403;
-//   - S6-GUARD на КАЖДЫЙ write-роут: полная huma-навеска пишет audit-event с НЕПУСТЫМ
-//     payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+//   - S6-GUARD on EVERY write route: the full huma wiring writes an audit event with a
+//     NON-EMPTY payload + the CORRECT event-type on 2xx and does NOT write on 4xx/403.
 
 import (
 	"context"
@@ -33,14 +33,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// synodSuccessPool — узкий мок [rbac.ServicePool] для success-path всех synod-write-
-// роутов huma-теста: lockSynod=found+не-builtin, synod-roles=пусто (группа не даёт
-// `*` → self-lockout-проба не дёргается), lock membership/bundle=found, caller-
-// subset-check тривиален (required пуст). Покрывает ТОЛЬКО 2xx-путь (S6-guard) —
-// error-классификацию валидируют handler-unit-тесты (handlers/synod_test.go) и
-// rbac-integration. Tx проксирует Exec/Query на pool.
+// synodSuccessPool — a narrow mock [rbac.ServicePool] for the success path of all synod
+// write routes in the huma test: lockSynod=found+non-builtin, synod-roles=empty (the group
+// grants no `*` → the self-lockout probe is not invoked), lock membership/bundle=found, the
+// caller subset-check is trivial (required is empty). Covers ONLY the 2xx path (S6-guard) —
+// error classification is validated by the handler unit tests (handlers/synod_test.go) and
+// rbac-integration. Tx proxies Exec/Query to the pool.
 type synodSuccessPool struct {
-	listRows [][]any // строки synod.list (LoadSynodViews), для GoldenWire
+	listRows [][]any // synod.list rows (LoadSynodViews), for GoldenWire
 }
 
 func (synodSuccessPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -52,18 +52,18 @@ func (synodSuccessPool) QueryRow(context.Context, string, ...any) pgx.Row {
 func (p synodSuccessPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FOR UPDATE"):
-		// lockSynod (builtin=false) / lockSynodRole / lockSynodOperator — строка
-		// есть. lockSynod скан-ит один bool (builtin); прочие lock-и тело строки не
-		// читают (rows.Next() достаточно). bool-строка покрывает все случаи.
+		// lockSynod (builtin=false) / lockSynodRole / lockSynodOperator — the row
+		// exists. lockSynod scans one bool (builtin); the other locks do not read the
+		// row body (rows.Next() is enough). A bool row covers all cases.
 		return &synodBoolRows{values: []bool{false}}, nil
 	case strings.Contains(sql, "rp.permission = '*'"):
-		return &synodEmptyRows{}, nil // группа НЕ даёт `*` → self-lockout-проба пропущена
+		return &synodEmptyRows{}, nil // the group grants no `*` → self-lockout probe skipped
 	case strings.Contains(sql, "FROM synod_roles WHERE synod_name"):
-		return &synodStrRows{}, nil // у группы нет ролей → subset-check тривиален
+		return &synodStrRows{}, nil // the group has no roles → subset-check is trivial
 	case strings.Contains(sql, "FROM rbac_role_permissions"):
-		return &synodStrRows{}, nil // у роли нет permissions (grant/revoke-role: не даёт `*`)
+		return &synodStrRows{}, nil // the role has no permissions (grant/revoke-role: grants no `*`)
 	case strings.Contains(sql, "default_scope FROM rbac_roles"):
-		return &synodEmptyRows{}, nil // роль без scope (grant-role: roleDefaultScope → nil)
+		return &synodEmptyRows{}, nil // the role has no scope (grant-role: roleDefaultScope → nil)
 	case strings.Contains(sql, "FROM synods ORDER BY name"):
 		return &synodViewRows{rows: p.listRows}, nil
 	case strings.Contains(sql, "FROM synod_roles"):
@@ -81,8 +81,8 @@ type synodErrRow struct{ err error }
 
 func (r synodErrRow) Scan(...any) error { return r.err }
 
-// synodSuccessTx — pgx.Tx, проксирующий Exec/Query обратно на success-pool;
-// Commit/Rollback no-op.
+// synodSuccessTx — a pgx.Tx that proxies Exec/Query back to the success pool;
+// Commit/Rollback are no-ops.
 type synodSuccessTx struct{ pgx.Tx }
 
 func (synodSuccessTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -94,7 +94,7 @@ func (synodSuccessTx) Query(ctx context.Context, sql string, args ...any) (pgx.R
 func (synodSuccessTx) Commit(context.Context) error   { return nil }
 func (synodSuccessTx) Rollback(context.Context) error { return nil }
 
-// --- минимальные pgx.Rows-обёртки (api-пакет) ---
+// --- minimal pgx.Rows wrappers (api package) ---
 
 type synodBoolRows struct {
 	values []bool
@@ -138,7 +138,7 @@ func (r *synodStrRows) Values() ([]any, error)                       { return ni
 func (r *synodStrRows) RawValues() [][]byte                          { return nil }
 func (r *synodStrRows) Conn() *pgx.Conn                              { return nil }
 
-// synodViewRows — строки synod.list (LoadSynodViews loadSynodViewRows):
+// synodViewRows — synod.list rows (LoadSynodViews loadSynodViewRows):
 // name, description, builtin.
 type synodViewRows struct {
 	rows [][]any
@@ -161,7 +161,7 @@ func (r *synodViewRows) Values() ([]any, error)                       { return n
 func (r *synodViewRows) RawValues() [][]byte                          { return nil }
 func (r *synodViewRows) Conn() *pgx.Conn                              { return nil }
 
-// synodPairRows — пустые (synod, role|aid)-строки synod-view roles/operators.
+// synodPairRows — empty (synod, role|aid) rows for synod-view roles/operators.
 type synodPairRows struct{}
 
 func (synodPairRows) Next() bool                                   { return false }
@@ -174,10 +174,10 @@ func (synodPairRows) Values() ([]any, error)                       { return nil,
 func (synodPairRows) RawValues() [][]byte                          { return nil }
 func (synodPairRows) Conn() *pgx.Conn                              { return nil }
 
-// humaSynodRouter собирает chi-роутер со ВСЕМИ synod-роутами через huma —
-// продакшен-навеска буквально из router.go: RequirePermission(synod.<action>) на
-// каждой группе + (для write) huma-audit-middleware варианта B + huma-операция.
-// injectClaims заменяет RequireJWT.
+// humaSynodRouter assembles a chi router with ALL synod routes via huma — the production
+// wiring literally from router.go: RequirePermission(synod.<action>) on each group + (for
+// write) huma audit middleware variant B + the huma operation. injectClaims replaces
+// RequireJWT.
 func humaSynodRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool rbac.ServicePool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -235,7 +235,7 @@ func TestHumaSynod_Create_GoldenEmptyBody(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	const golden = "" // легаси POST /v1/synods 201 — без тела
+	const golden = "" // legacy POST /v1/synods 201 — no body
 	if got := rec.Body.String(); got != golden {
 		t.Errorf("GOLDEN wire-дрейф synod.create 201-тела: got=%q want=%q", got, golden)
 	}
@@ -301,7 +301,7 @@ func TestHumaAudit_SynodCreate_NoAudit_OnRBACDeny(t *testing.T) {
 	}
 }
 
-// === LIST (READ, БЕЗ audit) ===
+// === LIST (READ, no audit) ===
 
 func TestHumaSynod_List_GoldenWire(t *testing.T) {
 	pool := synodSuccessPool{listRows: [][]any{
@@ -610,7 +610,7 @@ func TestHumaAudit_SynodRevokeRole_NoAudit_OnRBACDeny(t *testing.T) {
 	}
 }
 
-// === OpenAPI-фрагмент: ВСЕ synod-операции из FULL-TYPED Go-типов ===
+// === OpenAPI fragment: ALL synod operations from the FULL-TYPED Go types ===
 
 func TestHumaSynod_OpenAPIFragment_3_1(t *testing.T) {
 	frag, err := HumaSynodSpecYAML()

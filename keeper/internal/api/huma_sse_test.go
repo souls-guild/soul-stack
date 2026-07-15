@@ -1,9 +1,9 @@
 package api
 
-// Guard-инварианты ADR-068 §A3 (SSE-route live-хода прогона). Фокус — БЕЗОПАСНОСТЬ:
-// RBAC/anti-enum 403, секрет-гигиена frame-payload, auth через `*/events`-chain
-// (fetch-streaming Authorization: Bearer, §A0). Интеграция поверх минимального
-// /v1-роутера (RequireJWT + huma), без PG (fake access-store) и без /mcp/events.
+// Guard invariants for ADR-068 §A3 (the SSE route for a run's live progress). Focus — SECURITY:
+// RBAC/anti-enum 403, secret hygiene of the frame payload, auth via the `*/events` chain
+// (fetch-streaming Authorization: Bearer, §A0). Integration over a minimal
+// /v1 router (RequireJWT + huma), without PG (fake access-store) and without /mcp/events.
 
 import (
 	"bufio"
@@ -42,7 +42,7 @@ func (f fakeRunAccess) Access(context.Context, string) (*applyrun.Access, error)
 	return f.acc, f.err
 }
 
-// stubRBACChecker — PermissionChecker с явным allow-set по "resource.action".
+// stubRBACChecker — a PermissionChecker with an explicit allow-set keyed by "resource.action".
 type stubRBACChecker struct{ allow map[string]bool }
 
 func (s stubRBACChecker) Check(_, resource, action string, _ map[string]string) error {
@@ -56,8 +56,8 @@ func ptrStr(s string) *string { return &s }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
 
-// sseTestHarness — минимальный /v1-роутер (RequireJWT + huma) с SSE-route +
-// функция минтинга operator-JWT. access nil → run-events не монтируется.
+// sseTestHarness — a minimal /v1 router (RequireJWT + huma) with the SSE route +
+// a function that mints an operator JWT. access nil → run-events is not mounted.
 func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac apimiddleware.PermissionChecker) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
@@ -104,8 +104,8 @@ func sseURL(srv *httptest.Server, name, applyID string) string {
 	return srv.URL + "/v1/incarnations/" + name + "/runs/" + applyID + "/events"
 }
 
-// getStatus делает GET с Bearer и возвращает статус (тело закрывает сразу — для
-// не-стрим-ответов и быстрого 4xx).
+// getStatus does a GET with Bearer and returns the status (closes the body immediately — for
+// non-stream responses and a fast 4xx).
 func getStatus(t *testing.T, url, bearer string) int {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
@@ -120,7 +120,7 @@ func getStatus(t *testing.T, url, bearer string) int {
 	return resp.StatusCode
 }
 
-// === A3: authorizeRunEventsSSE (unit-матрица) ===
+// === A3: authorizeRunEventsSSE (unit matrix) ===
 
 func TestAuthorizeRunEventsSSE_Matrix(t *testing.T) {
 	const sub, name = "archon-op", "redis-prod"
@@ -152,7 +152,7 @@ func TestAuthorizeRunEventsSSE_Matrix(t *testing.T) {
 	}
 }
 
-// === A3: HTTP-интеграция ===
+// === A3: HTTP integration ===
 
 func TestRunEventsSSE_MissingAuth_401(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
@@ -180,7 +180,7 @@ func TestRunEventsSSE_ForbiddenNotFound_AntiEnum(t *testing.T) {
 
 func TestRunEventsSSE_ForbiddenForeignIncarnation(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
-	// apply_id принадлежит other-inc, path — redis-prod → 403 (чужой прогон).
+	// apply_id belongs to other-inc, path is redis-prod → 403 (someone else's run).
 	srv, mint := sseTestHarness(t, bus, fakeRunAccess{acc: &applyrun.Access{IncarnationName: "other-inc", StartedByAID: ptrStr("archon-op")}}, stubRBACChecker{allow: map[string]bool{"incarnation.get": true}})
 	if got := getStatus(t, sseURL(srv, "redis-prod", "01APPLY00000000000000000000"), mint("archon-op")); got != http.StatusForbidden {
 		t.Errorf("foreign-incarnation status = %d, want 403", got)
@@ -195,9 +195,9 @@ func TestRunEventsSSE_ForbiddenNoPerm(t *testing.T) {
 	}
 }
 
-// TestRunEventsSSE_OwnerStreamsAndMasks — owner открывает поток (200 + text/event-stream),
-// опубликованное task.executed приходит frame-ом `event: task.executed`, а секрет-shaped
-// поле в payload замаскировано (H1 write-path-барьер).
+// TestRunEventsSSE_OwnerStreamsAndMasks — the owner opens the stream (200 + text/event-stream),
+// a published task.executed arrives as a frame `event: task.executed`, and a secret-shaped
+// field in the payload is masked (H1 write-path barrier).
 func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	const applyID = "01APPLYOWNED00000000000000"
@@ -217,7 +217,7 @@ func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
 	}
 
-	// Ждём регистрации подписчика, затем публикуем событие с секрет-shaped полем.
+	// Wait for the subscriber to register, then publish an event with a secret-shaped field.
 	waitSubscribed(t, bus, applyID)
 	bus.Publish(applybus.Event{
 		ApplyID: applyID,
@@ -228,7 +228,7 @@ func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 			"sid":             "keeper",
 			"task_idx":        int32(0),
 			"task_status":     "TASK_STATUS_CHANGED",
-			"bootstrap_token": "s.SUPERSECRETVALUE", // secret-shaped → должно замаскироваться
+			"bootstrap_token": "s.SUPERSECRETVALUE", // secret-shaped → must be masked
 		},
 	})
 
@@ -248,16 +248,16 @@ func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 	}
 }
 
-// TestRunEventsSSE_QueryTokenAllowed — SSE-route принимает и ?access_token= (canon
-// middleware для */events), помимо основного Authorization: Bearer (fetch-streaming
-// §A0). Guard: канон-путь query-token не сломан этим слайсом.
+// TestRunEventsSSE_QueryTokenAllowed — the SSE route also accepts ?access_token= (the canon
+// middleware for */events), besides the main Authorization: Bearer (fetch-streaming
+// §A0). Guard: the canonical query-token path is not broken by this slice.
 func TestRunEventsSSE_QueryTokenAllowed(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	const applyID = "01APPLYQUERYTOK00000000000"
 	srv, mint := sseTestHarness(t, bus, fakeRunAccess{acc: &applyrun.Access{IncarnationName: "redis-prod", StartedByAID: ptrStr("archon-op")}}, stubRBACChecker{})
 
 	url := sseURL(srv, "redis-prod", applyID) + "?access_token=" + mint("archon-op")
-	resp, err := http.Get(url) // БЕЗ Authorization-header
+	resp, err := http.Get(url) // without an Authorization header
 	if err != nil {
 		t.Fatalf("GET query-token: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestRunEventsSSE_QueryTokenAllowed(t *testing.T) {
 	}
 }
 
-// --- потоковые helper-ы теста ---
+// --- streaming test helpers ---
 
 func waitSubscribed(t *testing.T, bus *applybus.EventBus, applyID string) {
 	t.Helper()
@@ -281,8 +281,8 @@ func waitSubscribed(t *testing.T, bus *applybus.EventBus, applyID string) {
 	t.Fatal("подписчик SSE не зарегистрировался за 2s")
 }
 
-// readFirstSSEFrame читает первый event/data-frame из потока (пропуская `:`-комментарии
-// и heartbeat), с таймаутом.
+// readFirstSSEFrame reads the first event/data frame from the stream (skipping `:` comments
+// and heartbeat), with a timeout.
 func readFirstSSEFrame(t *testing.T, r io.Reader) (event, data string) {
 	t.Helper()
 	type frame struct{ event, data string }

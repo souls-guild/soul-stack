@@ -1,21 +1,21 @@
 package handlers
 
-// HUMA-NATIVE доменные view-DTO INCARNATION-домена (T5d-2c-full handler-native). *Typed-
-// функции (incarnation_typed.go) возвращают ПЛОСКИЕ доменные view-структуры этого файла —
-// БЕЗ legacy-генерата. Пакет api проецирует их в native reply-DTO (huma_incarnation_reply.go →
-// newIncarnationGetReply / newStateHistoryEntry). Этим из handler-слоя вырезана последняя
-// live-зависимость от legacy-генерата (прежние toIncarnationGetReply/toStateHistoryEntry строили
-// legacy-генерата; конвертеры в api сняты — register-func строит native напрямую из view).
+// HUMA-NATIVE domain view-DTOs of the INCARNATION domain (T5d-2c-full handler-native). The *Typed
+// functions (incarnation_typed.go) return the FLAT domain view structs in this file —
+// no legacy generator. Package api projects them into native reply-DTOs (huma_incarnation_reply.go →
+// newIncarnationGetReply / newStateHistoryEntry). This cuts the last live handler-layer
+// dependency on the legacy generator (the former toIncarnationGetReply/toStateHistoryEntry built
+// legacy output; the api converters are gone — the register func builds native directly from the view).
 //
-// ИНВАРИАНТЫ (★ wire byte-exact, проекция api сохраняет форму 1:1):
-//   - View несёт ДОМЕННЫЕ типы (time.Time as-is, map[string]any, string-status). Проекция в
-//     api кастует status-string → native enum (тот же underlying string → byte-exact) и
-//     оборачивает map → *map (nil-различимость сохранена).
-//   - date-time created_at/updated_at/last_drift_check_at/scanned_at — НАНОСЕКУНДНЫЙ wire
-//     (.UTC() БЕЗ Truncate, incarnation-поля — голый time.Time; усечение сломало бы байт).
-//   - covens — non-nil slice (coalesceCoven → `[]` при nil), как прежний DTO.
-//   - spec/state прогоняются через [audit.MaskSecrets] (defense-in-depth, вариант D) ровно
-//     как прежний toDTO — наружу секреты уходят замаскированными, в БД хранится оригинал.
+// INVARIANTS (★ wire byte-exact, the api projection keeps shape 1:1):
+//   - The view carries DOMAIN types (time.Time as-is, map[string]any, string status). The api
+//     projection casts the status string → native enum (same underlying string → byte-exact) and
+//     wraps map → *map (nil-distinguishability preserved).
+//   - date-time created_at/updated_at/last_drift_check_at/scanned_at — NANOSECOND wire
+//     (.UTC() without Truncate; incarnation fields are a bare time.Time — truncation would break the byte).
+//   - covens — non-nil slice (coalesceCoven → `[]` when nil), like the former DTO.
+//   - spec/state run through [audit.MaskSecrets] (defense-in-depth, variant D) exactly
+//     like the former toDTO — secrets leave masked, the original stays stored in the DB.
 
 import (
 	"time"
@@ -24,13 +24,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// IncarnationGetView — ПЛОСКАЯ доменная проекция incarnation для 200-тела GET /v1/incarnations/
-// {name} (и list-element, и PATCH .../hosts). Пакет api проецирует её в native IncarnationGetReply.
-// Status — RAW string домена (native-тип в api держит enum-форму). Spec/State/StatusDetails —
-// map[string]any (nil → `null` через *map в проекции). CreatedByAID/LastDriftCheckAt/
+// IncarnationGetView — FLAT domain projection of incarnation for the 200 body of GET /v1/incarnations/
+// {name} (also list element and PATCH .../hosts). Package api projects it into native IncarnationGetReply.
+// Status — RAW domain string (the native api type holds the enum form). Spec/State/StatusDetails —
+// map[string]any (nil → `null` via *map in the projection). CreatedByAID/LastDriftCheckAt/
 // LastDriftSummary — pointer-optional. covens — non-nil slice. Traits (operator-set
-// метки, ADR-060) и CreatedScenario (стартовый сценарий, механизм нескольких create)
-// проецируются с omitempty (пустой map / пустая строка → ключ опущен).
+// labels, ADR-060) and CreatedScenario (start scenario, multi-create mechanism)
+// project with omitempty (empty map / empty string → key omitted).
 type IncarnationGetView struct {
 	ApplyingApplyID    *string
 	Covens             []string
@@ -51,8 +51,8 @@ type IncarnationGetView struct {
 	UpdatedAt          time.Time
 }
 
-// DriftScanSummaryView — native counts-агрегат last_drift_summary (доменная форма). int (не
-// int32) — parity wire. ScannedAt — наносекундный time-wire.
+// DriftScanSummaryView — native counts aggregate of last_drift_summary (domain form). int (not
+// int32) — wire parity. ScannedAt — nanosecond time-wire.
 type DriftScanSummaryView struct {
 	HostsClean       int
 	HostsDrifted     int
@@ -62,9 +62,9 @@ type DriftScanSummaryView struct {
 	TotalHosts       int
 }
 
-// StateHistoryView — native элемент history.items (доменная форма). ChangedByAID — *string
-// (пустая строка → nil → ключ опущен в проекции). StateBefore/StateAfter — map (nil → `null`).
-// CreatedAt — наносекундный time-wire.
+// StateHistoryView — native history.items element (domain form). ChangedByAID — *string
+// (empty string → nil → key omitted in the projection). StateBefore/StateAfter — map (nil → `null`).
+// CreatedAt — nanosecond time-wire.
 type StateHistoryView struct {
 	ApplyID      string
 	ChangedByAID *string
@@ -75,11 +75,11 @@ type StateHistoryView struct {
 	StateBefore  map[string]any
 }
 
-// maskWithSchema — единая точка read-path-маскинга spec/state/history payload
-// ([ADR-010] §7.4): при наличии secret-схемы сервиса — декларативный слой через
-// [audit.MaskSecretsWithSchema] (schema+vault+regex с regex-алармом), иначе —
-// [audit.MaskSecrets] (vault+regex, БЕЗ алармa). nil-схема → байт-в-байт прежнее
-// поведение (List без schema-прокидки — снапшот не материализуется per-элемент).
+// maskWithSchema — the single read-path masking point for spec/state/history payloads
+// ([ADR-010] §7.4): when a service secret schema is present, the declarative layer via
+// [audit.MaskSecretsWithSchema] (schema+vault+regex with a regex alarm), otherwise
+// [audit.MaskSecrets] (vault+regex, no alarm). nil schema → byte-for-byte the former
+// behavior (List does not thread a schema — the snapshot is not materialized per element).
 func maskWithSchema(payload map[string]any, schema audit.SecretSchema) map[string]any {
 	if schema == nil {
 		return audit.MaskSecrets(payload)
@@ -87,14 +87,14 @@ func maskWithSchema(payload map[string]any, schema audit.SecretSchema) map[strin
 	return audit.MaskSecretsWithSchema(payload, schema)
 }
 
-// toIncarnationGetView проецирует incarnation в доменный [IncarnationGetView].
-// Маскировка spec/state — через [maskWithSchema] (декларативный слой ADR-010
-// §7.4 + vault+regex; единый источник defense-in-depth, parity прежнего toDTO).
-// schema — secret-схема сервиса ([secretSchemaForIncarnation]); nil → деградация
-// к MaskSecrets, БИТ-В-БИТ. date-time — `.UTC()` БЕЗ Truncate. covens nil → `[]`.
+// toIncarnationGetView projects incarnation into the domain [IncarnationGetView].
+// spec/state masking goes through [maskWithSchema] (declarative layer ADR-010
+// §7.4 + vault+regex; single defense-in-depth source, parity with the former toDTO).
+// schema — the service secret schema ([secretSchemaForIncarnation]); nil → degrades
+// to MaskSecrets, BIT-FOR-BIT. date-time — `.UTC()` without Truncate. covens nil → `[]`.
 func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchema) IncarnationGetView {
 	view := IncarnationGetView{
-		ApplyingApplyID:    inc.ApplyingApplyID, // ADR-068 §A1: линковка на live-run
+		ApplyingApplyID:    inc.ApplyingApplyID, // ADR-068 §A1: link to the live run
 		Covens:             coalesceCoven(inc.Covens),
 		CreatedAt:          inc.CreatedAt.UTC(),
 		CreatedByAID:       inc.CreatedByAID,
@@ -118,9 +118,9 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 	return view
 }
 
-// toDriftScanSummaryView проецирует typed-домен [incarnation.DriftScanSummary] в доменный
-// view. nil (колонка NULL) → nil (проекция api опускает ключ через omitempty). ScannedAt —
-// наносекундный wire (тот же json-контракт, что пишет scry).
+// toDriftScanSummaryView projects the typed domain [incarnation.DriftScanSummary] into the domain
+// view. nil (NULL column) → nil (the api projection omits the key via omitempty). ScannedAt —
+// nanosecond wire (the same json contract that scry writes).
 func toDriftScanSummaryView(s *incarnation.DriftScanSummary) *DriftScanSummaryView {
 	if s == nil {
 		return nil
@@ -135,11 +135,11 @@ func toDriftScanSummaryView(s *incarnation.DriftScanSummary) *DriftScanSummaryVi
 	}
 }
 
-// toStateHistoryView проецирует state_history-row в доменный [StateHistoryView].
-// state_before/state_after — через [maskWithSchema] (декларативный слой ADR-010
-// §7.4 + vault+regex; parity прежнего toHistoryDTO). schema — secret-схема
-// сервиса (nil → MaskSecrets, БИТ-В-БИТ). changed_by_aid — *string (пустой → nil →
-// ключ опущен). created_at — `.UTC()` без Truncate.
+// toStateHistoryView projects a state_history row into the domain [StateHistoryView].
+// state_before/state_after — via [maskWithSchema] (declarative layer ADR-010
+// §7.4 + vault+regex; parity with the former toHistoryDTO). schema — the service
+// secret schema (nil → MaskSecrets, BIT-FOR-BIT). changed_by_aid — *string (empty → nil →
+// key omitted). created_at — `.UTC()` without Truncate.
 func toStateHistoryView(e *incarnation.HistoryEntry, schema audit.SecretSchema) StateHistoryView {
 	view := StateHistoryView{
 		HistoryID:   e.HistoryID,
