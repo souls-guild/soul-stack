@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-// TestBaseDriverSchemaEmpty — дефолт BaseDriver.Schema возвращает пустой
-// SchemaReply без ошибки (no-op перед переопределением автором).
+// TestBaseDriverSchemaEmpty verifies the BaseDriver.Schema default returns an
+// empty SchemaReply without error (no-op before the author overrides it).
 func TestBaseDriverSchemaEmpty(t *testing.T) {
 	var b BaseDriver
 	reply, err := b.Schema(context.Background(), &pluginv1.SchemaRequest{})
@@ -23,7 +23,7 @@ func TestBaseDriverSchemaEmpty(t *testing.T) {
 	}
 }
 
-// TestBaseDriverValidateOk — дефолт BaseDriver.Validate возвращает Ok=true.
+// TestBaseDriverValidateOk verifies the BaseDriver.Validate default returns Ok=true.
 func TestBaseDriverValidateOk(t *testing.T) {
 	var b BaseDriver
 	reply, err := b.Validate(context.Background(), &pluginv1.ValidateProfileRequest{})
@@ -35,8 +35,8 @@ func TestBaseDriverValidateOk(t *testing.T) {
 	}
 }
 
-// TestBaseDriverStreamsEmpty — дефолт Create/Destroy/List закрывают stream
-// без событий и возвращают nil.
+// TestBaseDriverStreamsEmpty verifies the Create/Destroy/List defaults close
+// the stream without events and return nil.
 func TestBaseDriverStreamsEmpty(t *testing.T) {
 	var b BaseDriver
 	createStream := &fakeCreateStream{}
@@ -64,7 +64,7 @@ func TestBaseDriverStreamsEmpty(t *testing.T) {
 	}
 }
 
-// TestBaseDriverStatusEmpty — дефолт Status возвращает пустой StatusReply.
+// TestBaseDriverStatusEmpty verifies the Status default returns an empty StatusReply.
 func TestBaseDriverStatusEmpty(t *testing.T) {
 	var b BaseDriver
 	reply, err := b.Status(context.Background(), &pluginv1.StatusRequest{VmId: "i-1"})
@@ -76,8 +76,8 @@ func TestBaseDriverStatusEmpty(t *testing.T) {
 	}
 }
 
-// TestServerAdapterDelegates — adapter проксирует вызовы к user-impl
-// с правильными параметрами и пробрасывает ошибки.
+// TestServerAdapterDelegates verifies the adapter proxies calls to the
+// user-impl with the correct parameters and propagates errors.
 func TestServerAdapterDelegates(t *testing.T) {
 	wantErr := errors.New("boom")
 	impl := &fakeDriver{
@@ -132,7 +132,7 @@ func TestServerAdapterDelegates(t *testing.T) {
 	}
 }
 
-// fakeDriver — mock-implementation CloudDriver для adapter-тестов.
+// fakeDriver is a mock CloudDriver implementation for adapter tests.
 type fakeDriver struct {
 	schemaCalled  bool
 	validateReply *pluginv1.ValidateProfileReply
@@ -183,14 +183,15 @@ func (f *fakeDriver) Resize(req *pluginv1.ResizeRequest, stream grpc.ServerStrea
 	return stream.Send(&pluginv1.ResizeEvent{Results: results})
 }
 
-// resizableDriver — fakeDriver, ДОПОЛНИТЕЛЬНО объявивший Resizable-capability.
+// resizableDriver is a fakeDriver that ADDITIONALLY declares the Resizable capability.
 type resizableDriver struct{ fakeDriver }
 
 func (*resizableDriver) Resizable() {}
 
-// fakeCreateStream / fakeDestroyStream / fakeListStream — минимальные mock
-// grpc.ServerStreamingServer для in-process unit-тестов (без поднятия реального
-// grpc-server-а). Симметрично fakePlanStream/fakeApplyStream в sdk/module.
+// fakeCreateStream / fakeDestroyStream / fakeListStream are minimal mock
+// grpc.ServerStreamingServer implementations for in-process unit tests
+// (without spinning up a real grpc-server). Symmetric with
+// fakePlanStream/fakeApplyStream in sdk/module.
 type fakeCreateStream struct {
 	grpc.ServerStreamingServer[pluginv1.CreateEvent]
 	sent []*pluginv1.CreateEvent
@@ -239,8 +240,9 @@ func (s *fakeResizeStream) Send(e *pluginv1.ResizeEvent) error {
 
 func (s *fakeResizeStream) Context() context.Context { return context.Background() }
 
-// TestBaseDriverNotResizable — BaseDriver СОЗНАТЕЛЬНО не реализует Resizable:
-// драйвер на BaseDriver получает default-deny на resize (паттерн PlanReadSafe).
+// TestBaseDriverNotResizable verifies BaseDriver DELIBERATELY does not
+// implement Resizable: a driver built on BaseDriver gets default-deny on
+// resize (the PlanReadSafe pattern).
 func TestBaseDriverNotResizable(t *testing.T) {
 	var b BaseDriver
 	if _, ok := any(b).(Resizable); ok {
@@ -248,8 +250,8 @@ func TestBaseDriverNotResizable(t *testing.T) {
 	}
 }
 
-// TestResizableDetect — явная реализация Resizable распознаётся
-// type-assertion-ом (как это делает serverAdapter/host).
+// TestResizableDetect verifies an explicit Resizable implementation is
+// detected via type assertion (the way serverAdapter/host does it).
 func TestResizableDetect(t *testing.T) {
 	var fake CloudDriver = &fakeDriver{}
 	if _, ok := fake.(Resizable); ok {
@@ -261,8 +263,8 @@ func TestResizableDetect(t *testing.T) {
 	}
 }
 
-// TestBaseDriverResizeDefaultDeny — BaseDriver.Resize шлёт failed-event
-// resize.unsupported, НЕ панику и НЕ ложный успех.
+// TestBaseDriverResizeDefaultDeny verifies BaseDriver.Resize sends a
+// failed-event resize.unsupported — NOT a panic, NOT a false success.
 func TestBaseDriverResizeDefaultDeny(t *testing.T) {
 	var b BaseDriver
 	stream := &fakeResizeStream{}
@@ -277,8 +279,8 @@ func TestBaseDriverResizeDefaultDeny(t *testing.T) {
 	}
 }
 
-// TestServerAdapterResizeDefaultDeny — serverAdapter не вызывает impl.Resize
-// и возвращает resize.unsupported, если impl НЕ реализует Resizable.
+// TestServerAdapterResizeDefaultDeny verifies serverAdapter does not call
+// impl.Resize and returns resize.unsupported if impl does NOT implement Resizable.
 func TestServerAdapterResizeDefaultDeny(t *testing.T) {
 	impl := &fakeDriver{}
 	adapter := &serverAdapter{impl: impl}
@@ -295,8 +297,8 @@ func TestServerAdapterResizeDefaultDeny(t *testing.T) {
 	}
 }
 
-// TestServerAdapterResizeDelegates — serverAdapter ПРОКСИРУЕТ Resize к impl,
-// если impl реализует Resizable.
+// TestServerAdapterResizeDelegates verifies serverAdapter PROXIES Resize to
+// impl if impl implements Resizable.
 func TestServerAdapterResizeDelegates(t *testing.T) {
 	impl := &resizableDriver{}
 	adapter := &serverAdapter{impl: impl}

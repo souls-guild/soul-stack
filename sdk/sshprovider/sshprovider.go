@@ -1,7 +1,7 @@
-// Package sshprovider — SDK Soul Stack для авторов SshProvider-плагинов
-// (kind: ssh_provider, бинари soul-ssh-<provider>).
+// Package sshprovider is the Soul Stack SDK for SshProvider plugin authors
+// (kind: ssh_provider, binaries soul-ssh-<provider>).
 //
-// Минимальный путь автора плагина:
+// Minimal plugin author path:
 //
 //	type VaultSshProvider struct { sshprovider.BaseProvider }
 //
@@ -13,11 +13,12 @@
 //	    if err := sshprovider.Serve(&VaultSshProvider{}); err != nil { os.Exit(1) }
 //	}
 //
-// BaseProvider даёт no-op-реализации: Sign возвращает пустой SignReply,
-// Authorize отвечает allowed=true (allowlist по умолчанию приемлем только в
-// dev/тестах — production-провайдер обязан переопределить хотя бы Authorize).
-// Serve открывает Unix-socket, делает gRPC-stdio handshake и обрабатывает
-// SIGTERM (см. sdk/handshake).
+// BaseProvider provides no-op implementations: Sign returns an empty
+// SignReply, Authorize responds allowed=true (an allow-by-default is
+// acceptable only in dev/tests — a production provider must override at
+// least Authorize).
+// Serve opens a Unix socket, performs the gRPC-stdio handshake, and handles
+// SIGTERM (see sdk/handshake).
 package sshprovider
 
 import (
@@ -28,23 +29,23 @@ import (
 	"google.golang.org/grpc"
 )
 
-// protocolVersion — версия plugin-протокола MVP (docs/keeper/plugins.md →
-// Versioning). Симметрично sdk/module и sdk/clouddriver.
+// protocolVersion is the MVP plugin protocol version (docs/keeper/plugins.md →
+// Versioning). Symmetric with sdk/module and sdk/clouddriver.
 const protocolVersion = 1
 
-// SshProvider — интерфейс, который реализует плагин-автор. Сигнатуры повторяют
-// pluginv1.SshProviderServer, но без must-embed-требования к
-// pluginv1.UnimplementedSshProviderServer: SDK берёт forward-compat на себя
-// через внутренний adapter.
+// SshProvider is the interface implemented by the plugin author. Signatures
+// mirror pluginv1.SshProviderServer, but without the must-embed requirement
+// for pluginv1.UnimplementedSshProviderServer: the SDK takes forward-compat
+// on itself via an internal adapter.
 type SshProvider interface {
 	Sign(ctx context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error)
 	Authorize(ctx context.Context, req *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error)
 }
 
-// BaseProvider — embeddable default-реализация SshProvider:
-// Sign возвращает пустой SignReply, Authorize — allowed=true.
-// Дефолт Authorize=true допустим только для тестовых плагинов;
-// production-провайдер обязан переопределить хотя бы Authorize.
+// BaseProvider is an embeddable default implementation of SshProvider:
+// Sign returns an empty SignReply, Authorize returns allowed=true.
+// The Authorize=true default is acceptable only for test plugins;
+// a production provider must override at least Authorize.
 type BaseProvider struct{}
 
 func (BaseProvider) Sign(context.Context, *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
@@ -55,8 +56,9 @@ func (BaseProvider) Authorize(context.Context, *pluginv1.AuthorizeRequest) (*plu
 	return &pluginv1.AuthorizeReply{Allowed: true}, nil
 }
 
-// Serve — типовой main() SshProvider-плагина: оборачивает sdk/handshake.Serve
-// + регистрирует grpc-service pluginv1.SshProvider с автор-impl.
+// Serve is the typical main() of an SshProvider plugin: wraps
+// sdk/handshake.Serve + registers the pluginv1.SshProvider grpc-service with
+// the author's impl.
 func Serve(impl SshProvider) error {
 	return handshake.Serve(handshake.Config{
 		ProtocolVersion: protocolVersion,
@@ -66,9 +68,9 @@ func Serve(impl SshProvider) error {
 	})
 }
 
-// serverAdapter — мост между SDK-интерфейсом SshProvider и
-// pluginv1.SshProviderServer; embed Unimplemented обеспечивает forward-compat
-// при добавлении новых RPC в proto/plugin/v2/.
+// serverAdapter is the bridge between the SDK's SshProvider interface and
+// pluginv1.SshProviderServer; embedding Unimplemented provides forward-compat
+// when new RPCs are added in proto/plugin/v2/.
 type serverAdapter struct {
 	pluginv1.UnimplementedSshProviderServer
 	impl SshProvider

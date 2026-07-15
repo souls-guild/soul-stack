@@ -13,10 +13,10 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
 
-// newErrandCmd — корень команд по реестру Errand-ов (ADR-033):
+// newErrandCmd is the command root for the Errand registry (ADR-033):
 // `soulctl errand list` / `get <errand_id>` (read) + `cancel <errand_id>`
-// (slice E5). Запуск Errand-а — `soulctl soul exec <sid> …`
-// (singular `soul`, см. souls.go).
+// (slice E5). Running an Errand is `soulctl soul exec <sid> …`
+// (singular `soul`, see souls.go).
 func newErrandCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "errand",
@@ -27,8 +27,8 @@ func newErrandCmd() *cobra.Command {
 }
 
 // newErrandCancelCmd — `soulctl errand cancel <errand_id>` (ADR-033 slice E5).
-// Permission: errand.cancel. Возвращает успех на 204; финальный статус
-// (cancelled/success/failed) виден через `soulctl errand get <id>`.
+// Permission: errand.cancel. Returns success on 204; the final status
+// (cancelled/success/failed) is visible via `soulctl errand get <id>`.
 func newErrandCancelCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "cancel <errand_id>",
@@ -133,9 +133,10 @@ func newErrandGetCmd() *cobra.Command {
 	return c
 }
 
-// pollErrandToTerminal — periodic GET /v1/errands/{errand_id} до терминала.
-// Backoff — линейный 1s..5s (мелкое окно: Errand типично terminate-ит за <1m).
-// Ошибки — пробрасываем как есть; ctx-Done выходит немедленно.
+// pollErrandToTerminal issues periodic GET /v1/errands/{errand_id} calls
+// until a terminal state. Backoff is linear 1s..5s (small window: an Errand
+// typically terminates within <1m). Errors are propagated as-is; ctx-Done
+// exits immediately.
 func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID string, stderrW io.Writer) (client.ErrandResult, error) {
 	delay := time.Second
 	const maxDelay = 5 * time.Second
@@ -148,8 +149,8 @@ func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID strin
 		}
 		res, async, err := cl.Errand.Get(ctx, errandID)
 		if err != nil {
-			// 404 после нашего же Exec невозможно (мы только что вставили строку);
-			// 5xx — пробрасываем, чтобы оператор увидел реальную ошибку.
+			// A 404 right after our own Exec is impossible (we just inserted
+			// the row); 5xx is propagated so the operator sees the real error.
 			return client.ErrandResult{}, renderAPIError(err)
 		}
 		if !async {
@@ -161,9 +162,9 @@ func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID strin
 	}
 }
 
-// renderErrandResult — table-style вывод одной строки Errand-а: статус, exit,
-// duration, stdout/stderr с truncation-меткой. Для JSON-режима caller
-// использует output.JSON напрямую (renderErrandResult не вызывается).
+// renderErrandResult prints a table-style view of a single Errand: status,
+// exit, duration, stdout/stderr with a truncation marker. For JSON mode the
+// caller uses output.JSON directly (renderErrandResult isn't called).
 func renderErrandResult(w io.Writer, res client.ErrandResult) error {
 	if _, err := fmt.Fprintf(w, "Errand:   %s\n", res.ErrandID); err != nil {
 		return err
@@ -219,7 +220,7 @@ func endsWithNewline(s string) bool {
 	return len(s) > 0 && s[len(s)-1] == '\n'
 }
 
-// exitCodeShort — табличный helper: nil → "-", иначе itoa.
+// exitCodeShort is a table helper: nil → "-", otherwise itoa.
 func exitCodeShort(code *int32) string {
 	if code == nil {
 		return "-"
@@ -227,7 +228,7 @@ func exitCodeShort(code *int32) string {
 	return fmt.Sprintf("%d", *code)
 }
 
-// durationShort — табличный helper: nil → "-", иначе "<N>ms".
+// durationShort is a table helper: nil → "-", otherwise "<N>ms".
 func durationShort(ms *int64) string {
 	if ms == nil {
 		return "-"

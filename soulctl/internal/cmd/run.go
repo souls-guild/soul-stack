@@ -2,16 +2,17 @@ package cmd
 
 import "github.com/spf13/cobra"
 
-// newRunCmd — корень `soulctl run <sub>`. UX-зонтик (Salt-parity), C1.
-// Coexist с `soulctl incarnation run` / `soulctl errand exec` без deprecation
-// (low-level прямой путь для CI/скриптов; `run` — оператор-frontend).
+// newRunCmd is the root of `soulctl run <sub>`. A UX umbrella (Salt-parity), C1.
+// Coexists with `soulctl incarnation run` / `soulctl errand exec` without
+// deprecation (those are the low-level direct path for CI/scripts; `run` is
+// the operator-facing frontend).
 //
-// Sub-команды:
+// Sub-commands:
 //   - scenario <service>/<scenario> → POST /v1/voyages (kind=scenario, ADR-043).
 //   - cmd <command>                 → POST /v1/voyages (kind=command, ADR-043).
 //   - push <destiny@ref>            → POST /v1/push/apply.
 //
-// Все три sub-команды разделяют `--target-*` флаги (см. run_target.go).
+// All three sub-commands share the `--target-*` flags (see run_target.go).
 func newRunCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "run",

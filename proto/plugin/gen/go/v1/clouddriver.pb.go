@@ -22,8 +22,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SchemaRequest — запрос Schema. Параметров нет; отдельный message для
-// forward-compat (добавление полей без breaking).
+// SchemaRequest — the Schema request. No parameters; a separate message for
+// forward-compat (fields can be added without breaking).
 type SchemaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -60,7 +60,7 @@ func (*SchemaRequest) Descriptor() ([]byte, []int) {
 	return file_v1_clouddriver_proto_rawDescGZIP(), []int{0}
 }
 
-// SchemaReply — JSON Schema VM-профиля (draft 2020-12).
+// SchemaReply — the VM profile JSON Schema (draft 2020-12).
 type SchemaReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProfileSchema *structpb.Struct       `protobuf:"bytes,1,opt,name=profile_schema,json=profileSchema,proto3" json:"profile_schema,omitempty"`
@@ -105,12 +105,12 @@ func (x *SchemaReply) GetProfileSchema() *structpb.Struct {
 	return nil
 }
 
-// ValidateProfileRequest — запрос Validate для CloudDriver.
-// Имя отличается от ValidateRequest в soulmodule.proto, чтобы пакет
-// `soulstack.plugin.v1` не имел коллизии типов.
+// ValidateProfileRequest — the Validate request for CloudDriver.
+// Named differently from ValidateRequest in soulmodule.proto so the
+// `soulstack.plugin.v1` package has no type collision.
 type ValidateProfileRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Параметры VM-профиля, соответствующие profile_schema.
+	// VM profile parameters, matching profile_schema.
 	Profile       *structpb.Struct `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -153,7 +153,7 @@ func (x *ValidateProfileRequest) GetProfile() *structpb.Struct {
 	return nil
 }
 
-// ValidateProfileReply — результат Validate для CloudDriver.
+// ValidateProfileReply — the Validate result for CloudDriver.
 type ValidateProfileReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -206,46 +206,49 @@ func (x *ValidateProfileReply) GetErrors() []string {
 	return nil
 }
 
-// CreateRequest — запрос Create.
+// CreateRequest — the Create request.
 type CreateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Параметры VM-профиля (соответствуют profile_schema).
+	// VM profile parameters (matching profile_schema).
 	Profile *structpb.Struct `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
-	// Сколько VM создать. Default 1.
+	// How many VMs to create. Default 1.
 	Count int32 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
-	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра
-	// (credentials A-flow, docs/keeper/cloud.md → Credentials-flow): Keeper
-	// читает `providers.credentials_ref` (vault:<mount>/<path>) и кладёт сюда
-	// plain-секрет; драйвер в Vault НЕ ходит. Содержимое provider-specific
-	// (AWS: access_key_id/secret_access_key/session_token; YC: service-account-key
-	// и т.д.). Сюда же Keeper кладёт `region` из Provider-реестра — это
-	// provider-specific параметр (у Proxmox/OpenStack своего `region` нет),
-	// поэтому он живёт внутри credentials/profile Struct, а не отдельным полем.
-	// forward-compat only-add (ADR-012(c) стиль): added v1.
+	// Provider credentials, resolved by Keeper from the Provider registry
+	// (credentials A-flow, docs/keeper/cloud.md → Credentials flow): Keeper
+	// reads `providers.credentials_ref` (vault:<mount>/<path>) and places the
+	// plain secret here; the driver never talks to Vault. Contents are
+	// provider-specific (AWS: access_key_id/secret_access_key/session_token;
+	// YC: service-account-key, etc.). Keeper also puts `region` from the
+	// Provider registry here — it's a provider-specific parameter
+	// (Proxmox/OpenStack have no `region` of their own), so it lives inside
+	// the credentials/profile Struct rather than as a separate field.
+	// forward-compat only-add (ADR-012(c) style): added v1.
 	Credentials *structpb.Struct `protobuf:"bytes,3,opt,name=credentials,proto3" json:"credentials,omitempty"`
-	// Cloud-init userdata для bootstrap soul-агента на свежей VM (PM-decision:
-	// cloud-init userdata). Сырой userdata-blob, который драйвер передаёт
-	// провайдеру при создании (AWS RunInstances UserData). Применяется ко ВСЕМ
-	// VM батча одинаково.
+	// Cloud-init userdata for bootstrapping the soul agent on a fresh VM
+	// (PM decision: cloud-init userdata). Raw userdata blob the driver passes
+	// to the provider on create (AWS RunInstances UserData). Applied
+	// identically to every VM in the batch.
 	//
-	// Self-onboard (ADR-017(h) amendment «Вариант T»): когда Keeper задаёт `name`
-	// (ниже) и знает FQDN-суффикс провайдера, он ПРЕДСКАЗЫВАЕТ FQDN каждой VM
-	// (`<name>-<index>.<suffix>`) ещё ДО create и запекает per-VM bootstrap-токены
-	// в этот userdata (общий blob несёт map FQDN→token; cloud-init на VM выбирает
-	// свой токен по hostname). Без self-onboard userdata токенов не несёт (B-flat,
-	// токен доставляется отдельным шагом core.bootstrap.delivered).
+	// Self-onboard (ADR-017(h) amendment "Variant T"): when Keeper sets
+	// `name` (below) and knows the provider's FQDN suffix, it PREDICTS each
+	// VM's FQDN (`<name>-<index>.<suffix>`) BEFORE create and bakes per-VM
+	// bootstrap tokens into this userdata (the shared blob carries an
+	// FQDN→token map; cloud-init on the VM picks its own token by hostname).
+	// Without self-onboard, userdata carries no tokens (B-flat, the token is
+	// delivered via a separate core.bootstrap.delivered step).
 	// forward-compat only-add: added v1.
 	Userdata string `protobuf:"bytes,4,opt,name=userdata,proto3" json:"userdata,omitempty"`
-	// Базовое имя VM-батча, заданное Keeper-ом (self-onboard «Вариант T»,
-	// ADR-017(h) amendment). Драйвер ОБЯЗАН именовать i-ю VM батча как
-	// `<name>-<index>` (index 0-based), чтобы FQDN (`<name>-<index>.<suffix>`)
-	// был ПРЕДСКАЗУЕМ Keeper-ом ДО create — это снимает chicken-egg «SID=FQDN
-	// известен только после create» и позволяет запечь per-VM токены в userdata.
+	// Base name for the VM batch, set by Keeper (self-onboard "Variant T",
+	// ADR-017(h) amendment). The driver MUST name the batch's i-th VM
+	// `<name>-<index>` (0-based index) so the FQDN (`<name>-<index>.<suffix>`)
+	// is PREDICTABLE by Keeper BEFORE create — this removes the chicken-egg
+	// problem of "SID=FQDN is known only after create" and lets per-VM
+	// tokens be baked into userdata.
 	//
-	// Пустое значение (default) → драйвер именует VM по своему усмотрению
-	// (прежнее поведение: auto-slug/timestamp) — self-onboard тогда недоступен.
-	// Имя обязано укладываться в name-ограничения провайдера (Keeper не знает их
-	// per-provider — за формат отвечает автор сценария/провайдера).
+	// Empty (default) → the driver names VMs however it likes (previous
+	// behavior: auto-slug/timestamp) — self-onboard is then unavailable. The
+	// name must fit the provider's naming constraints (Keeper doesn't know
+	// per-provider limits — the scenario/provider author owns the format).
 	// forward-compat only-add: added v1.
 	Name          string `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -317,15 +320,15 @@ func (x *CreateRequest) GetName() string {
 	return ""
 }
 
-// CreateEvent — событие из Create-stream-а.
-// Финальное событие переносит созданные VM (vms[]), промежуточные —
-// диагностические message-ы.
+// CreateEvent — an event from the Create stream.
+// The final event carries the created VMs (vms[]); intermediate ones are
+// diagnostic messages.
 type CreateEvent struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Message string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	// Заполнено только в финальном событии — список созданных VM.
+	// Populated only in the final event — the list of created VMs.
 	Vms []*VmInfo `protobuf:"bytes,2,rep,name=vms,proto3" json:"vms,omitempty"`
-	// Заполнено при ошибке. Stream закрывается после первого failed=true.
+	// Populated on error. The stream closes after the first failed=true.
 	Failed        bool `protobuf:"varint,3,opt,name=failed,proto3" json:"failed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -382,15 +385,15 @@ func (x *CreateEvent) GetFailed() bool {
 	return false
 }
 
-// DestroyRequest — запрос Destroy.
+// DestroyRequest — the Destroy request.
 type DestroyRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// VM-идентификаторы для удаления (формат provider-specific).
+	// VM identifiers to delete (provider-specific format).
 	VmIds []string `protobuf:"bytes,1,rep,name=vm_ids,json=vmIds,proto3" json:"vm_ids,omitempty"`
-	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
-	// CreateRequest.credentials (тот же A-flow). Без них драйвер не может
-	// аутентифицироваться в provider API для TerminateInstances.
-	// forward-compat only-add (ADR-012(c) стиль): added v1.
+	// Provider credentials, resolved by Keeper from the Provider registry —
+	// see CreateRequest.credentials (same A-flow). Without them the driver
+	// can't authenticate to the provider API for TerminateInstances.
+	// forward-compat only-add (ADR-012(c) style): added v1.
 	Credentials   *structpb.Struct `protobuf:"bytes,2,opt,name=credentials,proto3" json:"credentials,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -440,7 +443,7 @@ func (x *DestroyRequest) GetCredentials() *structpb.Struct {
 	return nil
 }
 
-// DestroyEvent — событие из Destroy-stream-а.
+// DestroyEvent — an event from the Destroy stream.
 type DestroyEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
@@ -501,14 +504,15 @@ func (x *DestroyEvent) GetFailed() bool {
 	return false
 }
 
-// StatusRequest — запрос Status.
+// StatusRequest — the Status request.
 type StatusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	VmId  string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
-	// CreateRequest.credentials (тот же A-flow). Без них драйвер не может
-	// аутентифицироваться в provider API для DescribeInstances/Get-операции.
-	// forward-compat only-add (ADR-012(c) стиль): added v1.
+	// Provider credentials, resolved by Keeper from the Provider registry —
+	// see CreateRequest.credentials (same A-flow). Without them the driver
+	// can't authenticate to the provider API for a DescribeInstances/Get
+	// operation.
+	// forward-compat only-add (ADR-012(c) style): added v1.
 	Credentials   *structpb.Struct `protobuf:"bytes,2,opt,name=credentials,proto3" json:"credentials,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -558,13 +562,13 @@ func (x *StatusRequest) GetCredentials() *structpb.Struct {
 	return nil
 }
 
-// StatusReply — результат Status.
+// StatusReply — the Status result.
 type StatusReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Состояние VM в терминах провайдера (provider-specific строка).
-	// Нормализация до общего enum — отдельная задача keeper.cloud (post-MVP).
+	// VM state in provider terms (provider-specific string).
+	// Normalizing to a common enum is a separate keeper.cloud task (post-MVP).
 	State string `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	// Дополнительная provider-specific информация.
+	// Additional provider-specific information.
 	Attributes    *structpb.Struct `protobuf:"bytes,2,opt,name=attributes,proto3" json:"attributes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -614,16 +618,17 @@ func (x *StatusReply) GetAttributes() *structpb.Struct {
 	return nil
 }
 
-// ListRequest — запрос List.
+// ListRequest — the List request.
 type ListRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Provider-specific фильтр (теги, регион, и т.п.); пустой = все.
+	// Provider-specific filter (tags, region, etc.); empty = all.
 	Filter *structpb.Struct `protobuf:"bytes,1,opt,name=filter,proto3" json:"filter,omitempty"`
-	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
-	// CreateRequest.credentials (тот же A-flow). До v1 это поле отсутствовало,
-	// драйверы как workaround клали creds внутрь filter — миграция убрала
-	// workaround, чтобы 5 драйверов тиража не повторяли его × 5.
-	// forward-compat only-add (ADR-012(c) стиль): added v1.
+	// Provider credentials, resolved by Keeper from the Provider registry —
+	// see CreateRequest.credentials (same A-flow). Before v1 this field didn't
+	// exist and drivers worked around it by stuffing creds inside filter; the
+	// migration removed that workaround so the 5 replicated drivers wouldn't
+	// each repeat it.
+	// forward-compat only-add (ADR-012(c) style): added v1.
 	Credentials   *structpb.Struct `protobuf:"bytes,2,opt,name=credentials,proto3" json:"credentials,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -673,16 +678,16 @@ func (x *ListRequest) GetCredentials() *structpb.Struct {
 	return nil
 }
 
-// ResizeSpec — целевые ресурсы VM. Единицы — НАШИ канонические (драйвер
-// конвертит в provider-нативные: WB-байты и т.п.):
-//   - cpu_cores: целевое число vCPU (ядра).
-//   - ram_mb: целевой объём RAM в МЕГАБАЙТАХ.
-//   - disk_gb: целевой АБСОЛЮТНЫЙ размер диска в ГИГАБАЙТАХ (НЕ дельта) —
-//     идемпотентно: повторный resize к тому же размеру = no-op.
+// ResizeSpec — target VM resources. Units are OUR canonical ones (the
+// driver converts to provider-native, WB-bytes, etc.):
+//   - cpu_cores: target vCPU count (cores).
+//   - ram_mb: target RAM size in MEGABYTES.
+//   - disk_gb: target ABSOLUTE disk size in GIGABYTES (NOT a delta) —
+//     idempotent: resizing again to the same size is a no-op.
 //
-// Все поля опциональные: 0 = «не менять это измерение». Драйвер меняет только
-// заданные (>0) поля. Разделение cpu/ram (требуют stop/start у части провайдеров)
-// и disk (online add) — на стороне драйвера.
+// All fields are optional: 0 = "don't change this dimension." The driver
+// only changes fields that are set (>0). Splitting cpu/ram (which need
+// stop/start on some providers) from disk (online add) is the driver's job.
 type ResizeSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CpuCores      int32                  `protobuf:"varint,1,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
@@ -743,22 +748,22 @@ func (x *ResizeSpec) GetDiskGb() int64 {
 	return 0
 }
 
-// ResizeRequest — запрос Resize.
+// ResizeRequest — the Resize request.
 type ResizeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// VM-идентификаторы для resize (формат provider-specific). Один батч —
-	// одинаковый target ко всем VM (как userdata в Create).
+	// VM identifiers to resize (provider-specific format). One batch — the
+	// same target applied to every VM (like userdata in Create).
 	VmIds []string `protobuf:"bytes,1,rep,name=vm_ids,json=vmIds,proto3" json:"vm_ids,omitempty"`
-	// Целевые ресурсы (наши единицы). Поля с 0 не меняются.
+	// Target resources (our units). Fields left at 0 are unchanged.
 	Desired *ResizeSpec `protobuf:"bytes,2,opt,name=desired,proto3" json:"desired,omitempty"`
-	// Разрешён ли downtime (stop/start VM для применения cpu/ram). false →
-	// драйвер обязан отказать (или применить только то, что online, например
-	// disk-add) вместо незапланированного перезапуска. caused_downtime в
-	// per-vm результате сообщает, был ли downtime фактически.
+	// Whether downtime is allowed (stop/start the VM to apply cpu/ram
+	// changes). false → the driver must refuse (or apply only what's online,
+	// e.g. disk-add) instead of an unplanned restart. caused_downtime in the
+	// per-vm result reports whether downtime actually happened.
 	AllowDowntime bool `protobuf:"varint,3,opt,name=allow_downtime,json=allowDowntime,proto3" json:"allow_downtime,omitempty"`
-	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
-	// CreateRequest.credentials (тот же A-flow). Без них драйвер не может
-	// аутентифицироваться в provider API для update-операции.
+	// Provider credentials, resolved by Keeper from the Provider registry —
+	// see CreateRequest.credentials (same A-flow). Without them the driver
+	// can't authenticate to the provider API for the update operation.
 	Credentials   *structpb.Struct `protobuf:"bytes,4,opt,name=credentials,proto3" json:"credentials,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -822,15 +827,16 @@ func (x *ResizeRequest) GetCredentials() *structpb.Struct {
 	return nil
 }
 
-// VmResizeResult — per-VM результат resize (в финальном ResizeEvent).
+// VmResizeResult — per-VM resize result (in the final ResizeEvent).
 type VmResizeResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Provider-specific идентификатор VM.
+	// Provider-specific VM identifier.
 	VmId string `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	// true, если для применения изменений потребовался stop/start VM.
+	// true if applying the change required a VM stop/start.
 	CausedDowntime bool `protobuf:"varint,2,opt,name=caused_downtime,json=causedDowntime,proto3" json:"caused_downtime,omitempty"`
-	// Заполнено при per-VM ошибке (provider отверг конкретную VM). Пустое —
-	// успех. Stream-level failed (ResizeEvent.failed) — это сбой всей операции.
+	// Populated on a per-VM error (the provider rejected this particular VM).
+	// Empty = success. Stream-level failure (ResizeEvent.failed) means the
+	// whole operation failed.
 	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -887,21 +893,21 @@ func (x *VmResizeResult) GetError() string {
 	return ""
 }
 
-// ResizeEvent — событие из Resize-stream-а. Промежуточные — диагностические
-// message-ы по фазам (quota-check / stopping / updating / starting);
-// финальное переносит per-vm результаты (results[]).
+// ResizeEvent — an event from the Resize stream. Intermediate events are
+// diagnostic messages per phase (quota-check / stopping / updating /
+// starting); the final one carries per-vm results (results[]).
 type ResizeEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Диагностическое сообщение фазы (опц.) — для прогресса long-running resize.
+	// Diagnostic phase message (optional) — for long-running resize progress.
 	Message string `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	// Имя текущей фазы (опц., машинно-читаемое: "quota" / "stop" / "update" /
-	// "start"). Заполняется на промежуточных событиях прогресса.
+	// Current phase name (optional, machine-readable: "quota" / "stop" /
+	// "update" / "start"). Set on intermediate progress events.
 	Phase string `protobuf:"bytes,2,opt,name=phase,proto3" json:"phase,omitempty"`
-	// Заполнено только в финальном событии — per-vm результаты.
+	// Populated only in the final event — per-vm results.
 	Results []*VmResizeResult `protobuf:"bytes,3,rep,name=results,proto3" json:"results,omitempty"`
-	// Заполнено при сбое всей операции. Stream закрывается после первого
-	// failed=true (per-VM отказы переносятся в VmResizeResult.error без
-	// stream-level failed).
+	// Populated when the whole operation fails. The stream closes after the
+	// first failed=true (per-VM failures are carried in VmResizeResult.error
+	// without a stream-level failed).
 	Failed        bool `protobuf:"varint,4,opt,name=failed,proto3" json:"failed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -965,16 +971,17 @@ func (x *ResizeEvent) GetFailed() bool {
 	return false
 }
 
-// VmInfo — описание одной VM (используется в Create и List).
+// VmInfo — describes a single VM (used in Create and List).
 type VmInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Provider-specific идентификатор VM (instance-id для AWS, id для GCP, и т.п.).
+	// Provider-specific VM identifier (instance-id for AWS, id for GCP, etc.).
 	VmId string `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	// FQDN, если provider присвоил — будет использован как SID при онбординге Soul.
+	// FQDN, if the provider assigned one — used as the SID when onboarding
+	// the Soul.
 	Fqdn string `protobuf:"bytes,2,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
-	// Основной IP-адрес.
+	// Primary IP address.
 	PrimaryIp string `protobuf:"bytes,3,opt,name=primary_ip,json=primaryIp,proto3" json:"primary_ip,omitempty"`
-	// Provider-specific дополнительные атрибуты.
+	// Provider-specific additional attributes.
 	Attributes    *structpb.Struct `protobuf:"bytes,4,opt,name=attributes,proto3" json:"attributes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

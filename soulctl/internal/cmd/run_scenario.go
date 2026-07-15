@@ -14,16 +14,17 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
 
-// newRunScenarioCmd — `soulctl run scenario <service>/<scenario>`. Батчевый
-// scenario-прогон через Voyage `kind=scenario` (ADR-043, паритет с UI). Backend:
+// newRunScenarioCmd — `soulctl run scenario <service>/<scenario>`. A batched
+// scenario run via Voyage `kind=scenario` (ADR-043, UI parity). Backend:
 // POST /v1/voyages body `{kind: "scenario", scenario_name, target:{...}, ...}`.
-// Резолв набора инкарнаций:
-//   - явный `--incarnation` (одна цель);
-//   - либо auto-detect по service (ровно одна incarnation на сервис).
+// Resolving the incarnation:
+//   - explicit `--incarnation` (a single target);
+//   - or auto-detect by service (exactly one incarnation per service).
 //
-// target-флаги (`--target-*`) применимы только к `run cmd` (kind=command) и
-// `run push` — для scenario-прогона цель — инкарнация, не хост; передача
-// `--target-*` к scenario — ошибка (явный сигнал, что выбран не тот sub-command).
+// The `--target-*` flags apply only to `run cmd` (kind=command) and
+// `run push` — a scenario run targets an incarnation, not a host; passing
+// `--target-*` to scenario is an error (a clear signal the wrong sub-command
+// was picked).
 func newRunScenarioCmd() *cobra.Command {
 	var (
 		incarnation string
@@ -47,8 +48,8 @@ func newRunScenarioCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// target-флаги не применимы к scenario-пути (только cmd/push):
-			// цель scenario-прогона — инкарнация, не хост.
+			// target flags don't apply to the scenario path (only cmd/push):
+			// a scenario run targets an incarnation, not a host.
 			if target, _ := tflags.resolve(); target.hasAny() {
 				return fmt.Errorf("--target-* флаги не применимы к `run scenario` " +
 					"(цель — инкарнация); используйте `run cmd` для ad-hoc " +
@@ -138,8 +139,9 @@ func newRunScenarioCmd() *cobra.Command {
 	return c
 }
 
-// parseServiceScenario разбирает `<service>/<scenario>` строго на две непустые
-// части. Лишний `/` (вложенный путь) — ошибка: scenario не может содержать `/`.
+// parseServiceScenario splits `<service>/<scenario>` into exactly two
+// non-empty parts. An extra `/` (nested path) is an error: scenario cannot
+// contain `/`.
 func parseServiceScenario(raw string) (service, scenario string, err error) {
 	parts := strings.SplitN(raw, "/", 2)
 	if len(parts) != 2 {
@@ -156,8 +158,8 @@ func parseServiceScenario(raw string) (service, scenario string, err error) {
 	return service, scenario, nil
 }
 
-// autoDetectIncarnation возвращает единственную incarnation сервиса; 0 или N —
-// ошибка с подсказкой указать `--incarnation` явно.
+// autoDetectIncarnation returns the service's single incarnation; 0 or N is
+// an error hinting to pass `--incarnation` explicitly.
 func autoDetectIncarnation(ctx context.Context, cl *client.Client, service string) (string, error) {
 	page, err := cl.Incarnations.List(ctx, client.IncarnationListOptions{Service: service, Limit: 100})
 	if err != nil {

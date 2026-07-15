@@ -6,85 +6,91 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
 
-// SoulModule — service-контракт плагинов `kind: soul_module`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт SoulModule).
+// SoulModule — service contract for `kind: soul_module` plugins
+// (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
 //
-// Host — `soul`-бинарь. Бинари плагинов — soul-mod-<name>.
-// Адресация шага destiny — <namespace>.<name>.<state>.
+// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Destiny step addressing is <namespace>.<name>.<state>.
 //
-// rpc Manifest() в MVP НЕ вводится — манифест читается host-ом из статического
-// `manifest.yaml` (ADR-020(a)).
+// rpc Manifest() is NOT introduced in MVP — the host reads the manifest
+// from a static `manifest.yaml` (ADR-020(a)).
 service SoulModule {
-  // Runtime-проверки параметров: семантика, требующая доступа к системе host-а.
-  // Полная input-схема уже проверена `soul-lint`-ом по manifest.spec.states.<state>.input.
+  // Runtime parameter checks: semantics that need access to the host
+  // system. The full input schema is already checked by `soul-lint`
+  // against manifest.spec.states.<state>.input.
   rpc Validate(ValidateRequest) returns (ValidateReply);
 
-  // Dry-run: расчёт изменений без применения. Stream диагностических событий.
+  // Dry-run: computes changes without applying them. Streams diagnostic
+  // events.
   rpc Plan(PlanRequest) returns (stream PlanEvent);
 
-  // Применение изменений. Stream-события прогресса агрегируются на Soul-е;
-  // наружу через TaskEvent идёт только финальный результат (ADR-012, MVP).
+  // Applies changes. Progress events are aggregated on the Soul; only the
+  // final result goes out via TaskEvent (ADR-012, MVP).
   rpc Apply(ApplyRequest) returns (stream ApplyEvent);
 }
 
-// ValidateRequest — запрос Validate.
+// ValidateRequest — the Validate request.
 message ValidateRequest {
-  // Имя state из manifest.spec.states (`installed` / `running` / …).
+  // State name from manifest.spec.states (`installed` / `running` / …).
   string state = 1;
 
-  // Параметры задачи destiny, выровненные по input-схеме state.
+  // Destiny task params, aligned to the state's input schema.
   google.protobuf.Struct params = 2;
 }
 
-// ValidateReply — результат Validate.
+// ValidateReply — the Validate result.
 message ValidateReply {
   bool ok = 1;
   repeated string errors = 2;
 }
 
-// PlanRequest — запрос Plan.
+// PlanRequest — the Plan request.
 message PlanRequest {
   string state = 1;
   google.protobuf.Struct params = 2;
 }
 
-// PlanEvent — событие из Plan-stream-а.
+// PlanEvent — an event from the Plan stream.
 //
-// Plan — pure-read dry-run (ADR-031 Scry): модуль читает текущее состояние
-// ресурса (тот же read, что в начале Apply) и сообщает, разошлось ли оно с
-// желаемым, НЕ мутируя хост. Финальное событие переносит машинный `changed`
-// (симметрия с ApplyEvent.changed), промежуточные — диагностические message-ы.
+// Plan is a pure-read dry-run (ADR-031 Scry): the module reads the
+// resource's current state (the same read Apply starts with) and reports
+// whether it has drifted from the desired state, WITHOUT mutating the
+// host. The final event carries the machine-readable `changed` field
+// (mirroring ApplyEvent.changed); intermediate ones are diagnostic
+// messages.
 message PlanEvent {
   string message = 1;
 
-  // changed — расходится ли ресурс с желаемым состоянием (drift). true =
-  // Apply изменил бы хост; false = ресурс уже в нужном состоянии (clean).
-  // Семантика и форма симметричны ApplyEvent.changed (only-add, ADR-012(c)).
-  // Старый модуль без этого поля шлёт changed=false по wire-default — поэтому
-  // host НЕ трактует «нет PlanEvent» / «старый модуль» как clean: drift на
-  // dry_run считается только для модулей, объявивших read-safe-capability
-  // (ADR-031 default-deny), остальные получают явный отказ, не false-clean.
+  // changed — whether the resource has drifted from the desired state.
+  // true = Apply would change the host; false = the resource is already in
+  // the desired state (clean). Semantics and shape mirror
+  // ApplyEvent.changed (only-add, ADR-012(c)). An old module without this
+  // field sends changed=false via the wire default — so the host does NOT
+  // treat "no PlanEvent" / "old module" as clean: drift on dry_run is only
+  // computed for modules that declare the read-safe capability (ADR-031
+  // default-deny); others get an explicit refusal, not a false clean.
   bool changed = 2;
 }
 
-// ApplyRequest — запрос Apply.
+// ApplyRequest — the Apply request.
 message ApplyRequest {
   string state = 1;
   google.protobuf.Struct params = 2;
 }
 
-// ApplyEvent — событие из Apply-stream-а.
-// Финальное событие переносит итог задачи (changed/failed + output),
-// промежуточные — диагностические message-ы.
+// ApplyEvent — an event from the Apply stream.
+// The final event carries the task outcome (changed/failed + output);
+// intermediate ones are diagnostic messages.
 //
-// Семантика changed/failed/output — DSL-ядро register.<task>.* (docs/destiny/tasks.md);
-// агрегация на Soul → TaskEvent (см. keeper-proto).
+// changed/failed/output semantics come from the DSL core register.<task>.*
+// (docs/destiny/tasks.md); aggregated on the Soul into TaskEvent (see
+// keeper-proto).
 message ApplyEvent {
   string message = 1;
   bool changed = 2;
   bool failed = 3;
 
-  // Output, декларированный через output:-блок destiny.
-  // Передаётся в register.<task>.* и в RunResult.state_changes.
+  // Output declared via destiny's output: block.
+  // Passed into register.<task>.* and into RunResult.state_changes.
   google.protobuf.Struct output = 4;
 }

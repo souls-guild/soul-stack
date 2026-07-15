@@ -7,12 +7,12 @@ import (
 	"strconv"
 )
 
-// ErrandAPI — типизированные методы /v1/souls/{sid}/exec и /v1/errands*.
+// ErrandAPI holds typed methods for /v1/souls/{sid}/exec and /v1/errands*.
 type ErrandAPI struct {
 	c *Client
 }
 
-// ErrandExecRequest — body POST /v1/souls/{sid}/exec. SID живёт в path.
+// ErrandExecRequest is the body for POST /v1/souls/{sid}/exec. SID lives in the path.
 type ErrandExecRequest struct {
 	SID            string         `json:"-"`
 	Module         string         `json:"module"`
@@ -21,10 +21,10 @@ type ErrandExecRequest struct {
 	DryRun         bool           `json:"dry_run,omitempty"`
 }
 
-// ErrandResult — JSON-форма ответа /v1/souls/{sid}/exec (200) и
-// /v1/errands/{errand_id} (200). Поля те же, что у keeper-side
-// errandResultResponse — клиент держит локальную копию, чтобы не зависеть
-// от внутренних пакетов keeper-а.
+// ErrandResult is the JSON response shape for /v1/souls/{sid}/exec (200) and
+// /v1/errands/{errand_id} (200). Same fields as the keeper-side
+// errandResultResponse — the client keeps a local copy to avoid depending on
+// keeper's internal packages.
 type ErrandResult struct {
 	ErrandID        string         `json:"errand_id"`
 	SID             string         `json:"sid"`
@@ -43,14 +43,15 @@ type ErrandResult struct {
 	FinishedAt      string         `json:"finished_at,omitempty"`
 }
 
-// errandAcceptedResponse — 202 body при async-эскалации (Errand-результат
-// продолжится в фоне). errand_id + status — единственные стабильные поля.
+// errandAcceptedResponse is the 202 body on async escalation (the Errand
+// result continues in the background). errand_id + status are the only
+// stable fields.
 type errandAcceptedResponse struct {
 	ErrandID string `json:"errand_id"`
 	Status   string `json:"status"`
 }
 
-// ErrandListOptions — query-фильтры GET /v1/errands.
+// ErrandListOptions holds query filters for GET /v1/errands.
 type ErrandListOptions struct {
 	SID          string
 	Status       string
@@ -59,7 +60,7 @@ type ErrandListOptions struct {
 	Offset       int
 }
 
-// ErrandListReply — страница списка (paged-response).
+// ErrandListReply is a list page (paged response).
 type ErrandListReply struct {
 	Items  []ErrandResult `json:"items"`
 	Offset int            `json:"offset"`
@@ -67,10 +68,10 @@ type ErrandListReply struct {
 	Total  int            `json:"total"`
 }
 
-// Exec — POST /v1/souls/{sid}/exec. Возвращает result+async-флаг:
+// Exec is POST /v1/souls/{sid}/exec. Returns result + an async flag:
 //   - 200 → (result, false, nil).
-//   - 202 → (result-with-only-id-and-running-status, true, nil); caller
-//     дальше делает poll через Get.
+//   - 202 → (result-with-only-id-and-running-status, true, nil); the caller
+//     then polls via Get.
 //   - 4xx/5xx → (zero, false, *APIError).
 func (a *ErrandAPI) Exec(ctx context.Context, req ErrandExecRequest) (ErrandResult, bool, error) {
 	if req.SID == "" {
@@ -81,32 +82,27 @@ func (a *ErrandAPI) Exec(ctx context.Context, req ErrandExecRequest) (ErrandResu
 	}
 	path := "/v1/souls/" + url.PathEscape(req.SID) + "/exec"
 
-	// 202 / 200 различаются по форме body. Чтобы не делать второй raw-call,
-	// используем общий []byte-канал: декодируем сперва в acceptedResponse, и
-	// если status="running" + остальные поля пусты → async; иначе full result.
-	// Простейший путь — отдельный Do-метод. Но текущий Do укладывает 4xx в
-	// *APIError и парсит JSON. Здесь подход: пытаемся декодировать в полную
-	// форму; если sid пуст (т.е. result не пришёл) — считаем 202.
-	//
-	// Альтернатива — добавить специальный канал. Делаем так: декодим в
-	// специально устроенный wrapper, который держит и accept, и full.
+	// 202 and 200 differ only in body shape. Instead of a second raw-bytes
+	// call, decode directly into a struct embedding ErrandResult: an empty
+	// sid means no full result arrived, i.e. a 202/async response.
 	var raw struct {
 		ErrandResult
-		// поля errandAcceptedResponse уже включены в ErrandResult (errand_id, status).
+		// errandAcceptedResponse's fields are already covered by ErrandResult (errand_id, status).
 	}
 	if err := a.c.Do(ctx, "POST", path, req, &raw); err != nil {
 		return ErrandResult{}, false, err
 	}
-	// Async признак: ErrandResult.Status == "running" и нет finished_at — Keeper
-	// в этом случае отдал минимальный 202-body (errand_id + status). На терминал-
-	// строке status ∈ {success/failed/timed_out/cancelled/module_not_allowed},
-	// finished_at заполнен.
+	// Async marker: ErrandResult.Status == "running" and no finished_at — Keeper
+	// returned the minimal 202 body (errand_id + status) in this case. On a
+	// terminal status ∈ {success/failed/timed_out/cancelled/module_not_allowed},
+	// finished_at is populated.
 	async := raw.Status == "running" && raw.FinishedAt == ""
 	return raw.ErrandResult, async, nil
 }
 
-// Get — GET /v1/errands/{errand_id}. Keeper отдаёт 200 на терминалы и 202 на
-// running. Для CLI обе формы одинаково полезны: возвращаем result + async-флаг.
+// Get is GET /v1/errands/{errand_id}. Keeper returns 200 for terminal states
+// and 202 for running. Both forms are equally useful for the CLI: return
+// result + an async flag.
 func (a *ErrandAPI) Get(ctx context.Context, errandID string) (ErrandResult, bool, error) {
 	if errandID == "" {
 		return ErrandResult{}, false, fmt.Errorf("errand_id пуст")
@@ -119,10 +115,10 @@ func (a *ErrandAPI) Get(ctx context.Context, errandID string) (ErrandResult, boo
 	return raw, async, nil
 }
 
-// Cancel — DELETE /v1/errands/{errand_id} (ADR-033 slice E5). Permission:
-// errand.cancel. Возвращает nil на 204; *APIError на 404/409/500. Финальный
-// статус cancelled оператор увидит через Get (poll) — Soul пришлёт
-// ErrandResult{CANCELLED} после получения CancelErrand-сигнала.
+// Cancel is DELETE /v1/errands/{errand_id} (ADR-033 slice E5). Permission:
+// errand.cancel. Returns nil on 204; *APIError on 404/409/500. The operator
+// sees the final cancelled status via Get (poll) — Soul sends
+// ErrandResult{CANCELLED} after receiving the CancelErrand signal.
 func (a *ErrandAPI) Cancel(ctx context.Context, errandID string) error {
 	if errandID == "" {
 		return fmt.Errorf("errand_id пуст")
@@ -130,7 +126,7 @@ func (a *ErrandAPI) Cancel(ctx context.Context, errandID string) error {
 	return a.c.Do(ctx, "DELETE", "/v1/errands/"+url.PathEscape(errandID), nil, nil)
 }
 
-// List — GET /v1/errands. Query-параметры собираются из opts.
+// List is GET /v1/errands. Query parameters are built from opts.
 func (a *ErrandAPI) List(ctx context.Context, opts ErrandListOptions) (*ErrandListReply, error) {
 	q := url.Values{}
 	if opts.SID != "" {

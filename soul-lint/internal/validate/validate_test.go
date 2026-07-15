@@ -37,8 +37,8 @@ func TestGolden_DestinyExample(t *testing.T) {
 }
 
 func TestGolden_DestinyExample_FromRepo(t *testing.T) {
-	// Полный пример из examples/destiny/redis/destiny.yml должен
-	// валидироваться напрямую с 0 diagnostics — это контракт регрессии.
+	// The full example from examples/destiny/redis/destiny.yml must validate
+	// directly with 0 diagnostics — a regression contract.
 	runExpect(t, "../../../examples/destiny/redis/destiny.yml", KindDestiny, false, ExitOK, nil)
 }
 
@@ -47,8 +47,8 @@ func TestGolden_ServiceExample(t *testing.T) {
 }
 
 func TestGolden_ServiceExample_FromRepo(t *testing.T) {
-	// Полный пример из examples/service/redis/service.yml (консолидированный
-	// redis) должен валидироваться напрямую с 0 diagnostics — контракт регрессии.
+	// The full example from examples/service/redis/service.yml (the consolidated
+	// redis) must validate directly with 0 diagnostics — a regression contract.
 	runExpect(t, "../../../examples/service/redis/service.yml", KindService, false, ExitOK, nil)
 }
 
@@ -56,48 +56,52 @@ func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
 }
 
-// TestGolden_ScenarioConditionalInclude — условный include со СТАТИЧЕСКИМ when:
-// (input.*) ВАЛИДЕН (conditional-include group-drop, ADR-009 amendment). Проходит
-// линт (ExitOK): include-when статичен → не падает include_when_dynamic_unsupported;
-// include-цель офлайн не резолвится → лишь HINT, exit OK. Реверс (статический
-// include-when ошибочно зарезан) → ExitHasErrors → тест падает.
+// TestGolden_ScenarioConditionalInclude — a conditional include with a
+// STATIC when: (input.*) is VALID (conditional-include group-drop, ADR-009
+// amendment). Passes lint (ExitOK): a static include-when doesn't trigger
+// include_when_dynamic_unsupported; an offline-unresolvable include target
+// is just a HINT, exit OK. Reverse (a static include-when wrongly rejected)
+// → ExitHasErrors → this test fails.
 func TestGolden_ScenarioConditionalInclude(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/conditional-include.yml", KindScenario, false, ExitOK, nil)
 }
 
-// TestGolden_ScenarioAssertPrecondition — assert-задача (ADR-009 amendment
-// 2026-06-23): валидная форма (that[] CEL-bool со soulprint.hosts, message-строка)
-// проходит линт (ExitOK). Реверс (assert ошибочно зарезан) → ExitHasErrors → тест
-// падает.
+// TestGolden_ScenarioAssertPrecondition — an assert task (ADR-009 amendment
+// 2026-06-23): a valid form (that[] CEL-bool with soulprint.hosts, a message
+// string) passes lint (ExitOK). Reverse (assert wrongly rejected) →
+// ExitHasErrors → this test fails.
 func TestGolden_ScenarioAssertPrecondition(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/assert-precondition.yml", KindScenario, false, ExitOK, nil)
 }
 
-// TestGolden_ScenarioValidatePrecondition — top-level validate:-блок (ADR-009
-// amendment 2026-06-23, DSL wave 2): декларативные input-инварианты
-// [{that, message}] проходят линт (ExitOK). Guard против регресса, где soul-lint
-// поднимал бы unknown_key на «validate» (поле ScenarioManifest.Validate +
-// reflect-walker stop-point validateRuleSliceType + AST-валидатор
-// validateValidateBlock). Реверс (validate: ошибочно зарезан как unknown_key) →
-// ExitHasErrors → тест падает.
+// TestGolden_ScenarioValidatePrecondition — the top-level validate: block
+// (ADR-009 amendment 2026-06-23, DSL wave 2): declarative input invariants
+// [{that, message}] pass lint (ExitOK). Guards against a regression where
+// soul-lint would raise unknown_key on "validate" (field
+// ScenarioManifest.Validate + reflect-walker stop-point
+// validateRuleSliceType + AST validator validateValidateBlock). Reverse
+// (validate: wrongly rejected as unknown_key) → ExitHasErrors → this test
+// fails.
 func TestGolden_ScenarioValidatePrecondition(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/validate-precondition.yml", KindScenario, false, ExitOK, nil)
 }
 
-// TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (read-only
-// снимок incarnation.state в scenario render, ADR-009/010 Вариант A) ВАЛИДЕН в
-// предикате и apply.input. Контракт: каноническая форма НЕ ловится
-// state_naked_reference (его режет только голый `state.*` без префикса). Реверс
-// (incarnation.state ошибочно зарезан) → ExitHasErrors → тест падает.
+// TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (a
+// read-only snapshot of incarnation.state in scenario render, ADR-009/010
+// Variant A) is VALID in a predicate and in apply.input. Contract: the
+// canonical form is NOT caught by state_naked_reference (that only rejects
+// a bare `state.*` without the prefix). Reverse (incarnation.state wrongly
+// rejected) → ExitHasErrors → this test fails.
 func TestGolden_ScenarioIncarnationStateRead(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/incarnation-state-read.yml", KindScenario, false, ExitOK, nil)
 }
 
-// TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) ВАЛИДЕН (ADR-056
-// §S4 amend, S-2D1): рестрикт serial_staged_unsupported снят, 2D serial×passage
-// реализован. Сценарий проходит линт с ExitOK и passage_plan HINT (структура
-// Passage), БЕЗ ошибки serial_staged_unsupported. Реверс (рестрикт вернулся) →
-// ExitHasErrors → этот тест падает.
+// TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) is VALID
+// (ADR-056 §S4 amend, S-2D1): the serial_staged_unsupported restriction was
+// lifted, 2D serial×passage is implemented. The scenario passes lint with
+// ExitOK and a passage_plan HINT (Passage structure), WITHOUT the
+// serial_staged_unsupported error. Reverse (the restriction came back) →
+// ExitHasErrors → this test fails.
 func TestGolden_ScenarioSerialStaged(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Run(Options{Path: "../../testdata/scenario-golden/serial-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
@@ -124,16 +128,19 @@ func TestGolden_ScenarioSerialStaged(t *testing.T) {
 	}
 }
 
-// TestGolden_ScenarioVaultStaged — vault-secrets-generated passage-ось (ADR-056
-// amendment, Вариант A) ВИДНА офлайн-линтером. Эмиттер core.vault.kv-present уводит
-// vault()-читающую задачу в следующий Passage; сценарий self-contained (эмиттер и
-// потребитель в одном файле — иначе read-задача за include-границей офлайн не видна).
-// Контракт: линт проходит ExitOK и эмитит passage_plan со staged-структурой (>1
-// Passage). Реверс-смысл (симметрия с serial-staged): если vault-ось сломают —
-// kv-present перестанет расщеплять vault()-read — план схлопнется в single-passage,
-// сообщение passage_plan станет "single-passage", и проверка на "staged-прогон"
-// покраснеет. Это офлайн-аналог guard-тестов trial (redis_create_from_souls_secrets_
-// passage_test.go), которые ловят тот же регресс на keeper-side плане.
+// TestGolden_ScenarioVaultStaged — the vault-secrets-generated passage axis
+// (ADR-056 amendment, Variant A) is VISIBLE to the offline linter. The
+// core.vault.kv-present emitter pushes a vault()-reading task into the next
+// Passage; the scenario is self-contained (emitter and consumer in the same
+// file — otherwise a read task across an include boundary isn't visible
+// offline). Contract: lint passes with ExitOK and emits passage_plan with a
+// staged structure (>1 Passage). Reverse meaning (symmetric with
+// serial-staged): if the vault axis breaks, kv-present stops splitting
+// vault()-read, the plan collapses to single-passage, the passage_plan
+// message becomes "single-passage", and the check for a staged-run message
+// goes red. This is the offline analog of the trial guard tests
+// (redis_create_from_souls_secrets_passage_test.go), which catch the same
+// regression on the keeper-side plan.
 func TestGolden_ScenarioVaultStaged(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Run(Options{Path: "../../testdata/scenario-golden/vault-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
@@ -150,8 +157,9 @@ func TestGolden_ScenarioVaultStaged(t *testing.T) {
 			}
 			t.Fatalf("json decode: %v", err)
 		}
-		// passage_plan со staged-структурой подтверждает, что vault-ось расщепила план
-		// на >1 Passage. single-passage-сообщение (план схлопнулся) staged НЕ выставит.
+		// A passage_plan with a staged structure confirms the vault axis split the
+		// plan into >1 Passage. A single-passage message (plan collapsed) will NOT
+		// set staged.
 		if d.Code == "passage_plan" && strings.Contains(d.Message, "staged-прогон") {
 			staged = true
 		}
@@ -173,10 +181,11 @@ func TestGolden_ManifestSSHProvider(t *testing.T) {
 	runExpect(t, "../../testdata/manifest-golden/ssh-provider.yaml", KindManifest, false, ExitOK, nil)
 }
 
-// TestGolden_ManifestExamplesFromRepo — каждый из трёх примеров в examples/module/
-// должен валидироваться напрямую с 0 errors. Контракт регрессии: если ADR-020
-// или docs/keeper/plugins.md меняется, examples/ обновляются, и тест либо
-// упадёт (если новый pattern не учли в валидаторе), либо пройдёт.
+// TestGolden_ManifestExamplesFromRepo — each of the three examples in
+// examples/module/ must validate directly with 0 errors. Regression
+// contract: if ADR-020 or docs/keeper/plugins.md changes and examples/ are
+// updated, this test will either fail (if the validator doesn't account for
+// the new pattern) or pass.
 func TestGolden_ManifestExamplesFromRepo(t *testing.T) {
 	cases := []string{
 		"../../../examples/module/soul-mod-redis-failover/manifest.yaml",
@@ -191,8 +200,8 @@ func TestGolden_ManifestExamplesFromRepo(t *testing.T) {
 	}
 }
 
-// TestBroken_ManifestFixtures — симметрия с другими TestBroken_*: для каждой
-// .yaml-фикстуры обязателен .expected.json с полным множеством кодов.
+// TestBroken_ManifestFixtures — symmetric with the other TestBroken_*: every
+// .yaml fixture requires a companion .expected.json with the full set of codes.
 func TestBroken_ManifestFixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/manifest-broken/*.yaml")
 	if err != nil {
@@ -216,16 +225,16 @@ func TestBroken_ManifestFixtures(t *testing.T) {
 			if jerr := json.Unmarshal(raw, &exp); jerr != nil {
 				t.Fatalf("decode %s: %v", expPath, jerr)
 			}
-			// Subset-семантика (как в scenario-broken): фикстура утверждает,
-			// что конкретный code должен подняться; побочные коды (warning-
-			// уровень про missing description, type_mismatch от decoder-а)
-			// допустимы. Полный набор кодов тестируется в shared/plugin.
+			// Subset semantics (as in scenario-broken): the fixture asserts that
+			// a specific code must be raised; incidental codes (warning-level
+			// about missing description, decoder type_mismatch) are allowed.
+			// The full code set is tested in shared/plugin.
 			runExpectJSONSubset(t, p, KindManifest, ExitHasErrors, exp.Codes)
 		})
 	}
 }
 
-// TestBroken_ScenarioFixtures — симметрия с TestBroken_DestinyFixtures по scenario-broken/.
+// TestBroken_ScenarioFixtures — symmetric with TestBroken_DestinyFixtures for scenario-broken/.
 func TestBroken_ScenarioFixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/scenario-broken/*.yml")
 	if err != nil {
@@ -254,7 +263,7 @@ func TestBroken_ScenarioFixtures(t *testing.T) {
 	}
 }
 
-// TestBroken_ServiceFixtures — симметрия с TestBroken_DestinyFixtures по service-broken/.
+// TestBroken_ServiceFixtures — symmetric with TestBroken_DestinyFixtures for service-broken/.
 func TestBroken_ServiceFixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/service-broken/*.yml")
 	if err != nil {
@@ -283,19 +292,19 @@ func TestBroken_ServiceFixtures(t *testing.T) {
 	}
 }
 
-// Negative-фикстуры — table-driven по `*.yml` в testdata/broken/.
-// Для каждой `.yml` обязателен companion `.expected.json` вида
-// `{"codes": ["<code1>", ...]}` — полный набор diagnostic-кодов, которые
-// должна вернуть проверка. Сравниваем как множества: ожидаемые ⊆ полученные
-// И полученные ⊆ ожидаемые (любое расхождение → fail). Это ловит регрессии,
-// добавляющие посторонние коды.
+// Negative fixtures — table-driven over `*.yml` in testdata/broken/. Every
+// `.yml` requires a companion `.expected.json` of the form
+// `{"codes": ["<code1>", ...]}` — the full set of diagnostic codes the
+// check must return. Compared as sets: expected ⊆ got AND got ⊆ expected
+// (any mismatch → fail). This catches regressions that add stray codes.
 func TestBroken_Fixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/broken/*.yml")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-	// keeper-partial-decode.yml — уже покрыт TestLoadKeeperFromBytes_PartialDecode,
-	// дублировать e2e не нужно (см. delegation).
+	// keeper-partial-decode.yml is already covered by
+	// TestLoadKeeperFromBytes_PartialDecode; no need to duplicate the e2e case
+	// (see delegation).
 	skip := map[string]bool{"keeper-partial-decode.yml": true}
 	for _, p := range matches {
 		p := p
@@ -320,8 +329,9 @@ func TestBroken_Fixtures(t *testing.T) {
 	}
 }
 
-// TestBroken_DestinyFixtures — симметрия с TestBroken_Fixtures по destiny-broken/.
-// Каждая .yml сопровождается .expected.json с полным набором кодов.
+// TestBroken_DestinyFixtures — symmetric with TestBroken_Fixtures for
+// destiny-broken/. Every .yml is accompanied by an .expected.json with the
+// full set of codes.
 func TestBroken_DestinyFixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/destiny-broken/*.yml")
 	if err != nil {
@@ -360,7 +370,7 @@ func TestBroken_JSONLines(t *testing.T) {
 	if code != ExitHasErrors {
 		t.Fatalf("exit code: got %d, want %d", code, ExitHasErrors)
 	}
-	// Минимум одна JSON-строка с code=kid_invalid_format.
+	// At least one JSON line with code=kid_invalid_format.
 	dec := json.NewDecoder(&out)
 	foundCode := false
 	for {
@@ -380,8 +390,9 @@ func TestBroken_JSONLines(t *testing.T) {
 	}
 }
 
-// UTF-8 BOM (EF BB BF) перед валидным конфигом не должна ломать ни auto-detect,
-// ни парсер — это стандартное поведение YAML 1.2 (silent strip).
+// A UTF-8 BOM (EF BB BF) before a valid config must not break either
+// auto-detect or the parser — this is standard YAML 1.2 behavior (silent
+// strip).
 func TestBOM_KeeperGoldenStillOK(t *testing.T) {
 	src, err := os.ReadFile("../../testdata/golden/keeper.yml")
 	if err != nil {
@@ -408,8 +419,8 @@ func TestIOFatal(t *testing.T) {
 	}
 }
 
-// runExpect — общий helper для негативных и позитивных кейсов.
-// `expectErrorOutput` — флаг «ожидаем непустой stdout с диагностикой».
+// runExpect is a shared helper for negative and positive cases.
+// `expectErrorOutput` is a flag meaning "expect non-empty stdout with a diagnostic".
 func runExpect(t *testing.T, path string, kind Kind, expectErrorOutput bool, wantCode int, requireCodes []string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -427,9 +438,9 @@ func runExpect(t *testing.T, path string, kind Kind, expectErrorOutput bool, wan
 	}
 }
 
-// runExpectJSONSet — JSON-Lines режим, сравнивает множество diagnostic-кодов
-// в потоке с ожидаемым множеством. Любое расхождение (потерянный или лишний
-// код) → fail. Так ловятся регрессии, добавляющие посторонние diagnostic-и.
+// runExpectJSONSet — JSON-Lines mode; compares the set of diagnostic codes
+// in the stream against the expected set. Any mismatch (missing or extra
+// code) → fail. This catches regressions that add stray diagnostics.
 func runExpectJSONSet(t *testing.T, path string, kind Kind, wantCode int, expectCodes []string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -461,12 +472,13 @@ func runExpectJSONSet(t *testing.T, path string, kind Kind, wantCode int, expect
 	}
 }
 
-// runExpectJSONSubset — слабее runExpectJSONSet: ожидает, что **каждый** код из
-// `expectCodes` присутствует в потоке (subset), не запрещая дополнительные.
-// Используется для scenario-broken фикстур, где побочные коды (например,
-// task_discriminator_missing вместе с register_on_block_invalid) допустимы:
-// фикстура утверждает «этот конкретный код должен подняться», но не
-// фиксирует полный набор — это сделают unit-тесты в shared/config.
+// runExpectJSONSubset — weaker than runExpectJSONSet: expects that
+// **every** code in `expectCodes` is present in the stream (subset),
+// without forbidding extra ones. Used for scenario-broken fixtures, where
+// incidental codes (e.g. task_discriminator_missing alongside
+// register_on_block_invalid) are allowed: the fixture only asserts "this
+// specific code must be raised", not the full set — that's covered by
+// unit tests in shared/config.
 func runExpectJSONSubset(t *testing.T, path string, kind Kind, wantCode int, expectCodes []string) {
 	t.Helper()
 	var out, errOut bytes.Buffer

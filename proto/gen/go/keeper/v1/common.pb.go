@@ -21,8 +21,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// TaskError описывает структурированную ошибку выполнения задачи.
-// Каталог конкретных code-значений — отдельная задача (post-MVP).
+// TaskError describes a structured task execution error.
+// A catalog of specific code values is separate future work (post-MVP).
 type TaskError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`

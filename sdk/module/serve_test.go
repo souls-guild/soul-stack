@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// shortSockPath — Unix-socket-имена на darwin ограничены ~104 байтами sun_path.
-// Симметрично хелперу из sdk/handshake.
+// shortSockPath — Unix-socket names on darwin are limited to ~104 bytes of
+// sun_path. Mirrors the helper in sdk/handshake.
 func shortSockPath(t *testing.T, name string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ss-mod-")
@@ -35,8 +35,8 @@ func shortSockPath(t *testing.T, name string) string {
 	return p
 }
 
-// captureStdout подменяет os.Stdout на pipe и возвращает канал с первой строкой
-// (handshake-строка), + restore-функцию.
+// captureStdout swaps os.Stdout for a pipe and returns a channel with the
+// first line (the handshake line), plus a restore function.
 func captureStdout(t *testing.T) (<-chan string, func()) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -64,8 +64,8 @@ func captureStdout(t *testing.T) (<-chan string, func()) {
 	return lineCh, restore
 }
 
-// recordingModule — impl, фиксирующий аргументы вызовов через реальный
-// gRPC-стек (не in-process adapter): Serve→handshake→register→adapter end-to-end.
+// recordingModule is an impl that records call arguments via the real
+// gRPC stack (not the in-process adapter): Serve→handshake→register→adapter end-to-end.
 type recordingModule struct {
 	validateState string
 	planState     string
@@ -87,9 +87,9 @@ func (m *recordingModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	return stream.Send(&pluginv1.ApplyEvent{})
 }
 
-// TestServeEndToEnd поднимает Serve(impl) на реальном unix-socket, проверяет
-// handshake-строку, дёргает все три RPC реальным gRPC-клиентом (включая чтение
-// событий из server-stream) и завершает по SIGTERM.
+// TestServeEndToEnd brings up Serve(impl) on a real unix socket, checks the
+// handshake line, drives all three RPCs with a real gRPC client (including
+// reading events off the server stream), and shuts down via SIGTERM.
 func TestServeEndToEnd(t *testing.T) {
 	addr := shortSockPath(t, "m.sock")
 	t.Setenv(handshake.SocketEnv, addr)
@@ -177,8 +177,8 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 }
 
-// TestServePropagatesHandshakeError — обёртка Serve пробрасывает ошибку
-// нижележащего handshake.Serve (отсутствие адреса сокета).
+// TestServePropagatesHandshakeError checks that the Serve wrapper propagates
+// an error from the underlying handshake.Serve (missing socket address).
 func TestServePropagatesHandshakeError(t *testing.T) {
 	t.Setenv(handshake.SocketEnv, "")
 	err := Serve(&BaseModule{})
@@ -187,7 +187,7 @@ func TestServePropagatesHandshakeError(t *testing.T) {
 	}
 }
 
-// drainStream считывает все события из server-stream до io.EOF и возвращает их число.
+// drainStream reads all events from the server stream until io.EOF and returns their count.
 func drainStream[E any](t *testing.T, name string, open func() (interface{ Recv() (*E, error) }, error)) int {
 	t.Helper()
 	stream, err := open()

@@ -22,29 +22,30 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Hello — первое сообщение Soul → Keeper в EventStream после mTLS-handshake.
+// Hello is the first Soul -> Keeper message on EventStream after the mTLS handshake.
 type Hello struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// SID echoed for logging only; authoritative source is the mTLS peer certificate.
 	SidEcho string `protobuf:"bytes,1,opt,name=sid_echo,json=sidEcho,proto3" json:"sid_echo,omitempty"`
-	// Версия soul-бинаря.
+	// Version of the soul binary.
 	SoulVersion string `protobuf:"bytes,2,opt,name=soul_version,json=soulVersion,proto3" json:"soul_version,omitempty"`
-	// capabilities — набор фичей протокола, которые этот Soul-бинарь поддерживает
-	// (ADR-056 §S5 forward-compat). Анонс при connect-е; Keeper персистит его рядом
-	// с presence (Redis, жизненный цикл = SID-lease) и сверяет ДО dispatch-а
-	// фич-зависимых прогонов.
+	// capabilities: the set of protocol features this Soul binary supports
+	// (ADR-056 §S5 forward-compat). Announced at connect time; Keeper persists it
+	// alongside presence (Redis, lifecycle = SID-lease) and checks it BEFORE
+	// dispatching feature-dependent runs.
 	//
-	// Канон строковых значений — naming-rules.md → «Soul-capabilities». MVP:
-	//   - "passage" — Soul эхает ApplyRequest.passage в TaskEvent/RunResult, то есть
-	//     умеет участвовать в staged-render (N>1 Passage, ADR-056). Soul без этого
-	//     признака под staged-сценарием отвергается keeper-ом ДО dispatch
-	//     (`soul_passage_unsupported`, fail-closed) — иначе barrier следующего Passage
-	//     ждал бы терминал, которого старый бинарь не пришлёт (зависание в applying).
+	// Canonical string values — naming-rules.md -> "Soul capabilities". MVP:
+	//   - "passage": Soul echoes ApplyRequest.passage in TaskEvent/RunResult, i.e. it
+	//     can take part in a staged render (N>1 Passage, ADR-056). A Soul without
+	//     this flag is rejected by keeper BEFORE dispatch under a staged scenario
+	//     (`soul_passage_unsupported`, fail-closed) — otherwise the next Passage's
+	//     barrier would wait for a terminal an old binary would never send (a hang
+	//     in applying).
 	//
-	// Пустой набор = старый Soul без capability-анонса (forward-compat, ADR-012(c)
-	// only-add): keeper трактует его как не поддерживающий НИ ОДНОЙ фичи (fail-closed
-	// для фич-зависимых прогонов; N=1-прогоны совместимы как раньше). Только
-	// never-reuse номера поля.
+	// An empty set = an old Soul with no capability announcement (forward-compat,
+	// ADR-012(c) only-add): keeper treats it as supporting NO features at all
+	// (fail-closed for feature-dependent runs; N=1 runs remain compatible as
+	// before). Never reuse this field number.
 	Capabilities  []string `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -101,14 +102,14 @@ func (x *Hello) GetCapabilities() []string {
 	return nil
 }
 
-// HelloReply — ответ Keeper-а с метаданными сессии.
+// HelloReply is Keeper's response carrying session metadata.
 type HelloReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// ULID, уникален в рамках Keeper-кластера. Используется для трассировки стрима в логах/OTel.
+	// ULID, unique within the Keeper cluster. Used to trace the stream in logs/OTel.
 	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// KID Keeper-инстанса, обслуживающего этот стрим.
+	// KID of the Keeper instance serving this stream.
 	Kid string `protobuf:"bytes,2,opt,name=kid,proto3" json:"kid,omitempty"`
-	// Серверное время — для диагностики clock skew между Keeper и Soul.
+	// Server time — for diagnosing clock skew between Keeper and Soul.
 	ServerTime    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -165,11 +166,11 @@ func (x *HelloReply) GetServerTime() *timestamppb.Timestamp {
 	return nil
 }
 
-// SeedRotationRequest — Soul просит выпустить новый SoulSeed по живому стриму
-// (за not_after - 24h, см. docs/soul/identity.md).
+// SeedRotationRequest is Soul asking to issue a new SoulSeed over the live stream
+// (at not_after - 24h, see docs/soul/identity.md).
 type SeedRotationRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Новый CSR. Public key нового seed; private key Soul-а никогда не покидает хост.
+	// The new CSR. Public key of the new seed; Soul's private key never leaves the host.
 	CsrPem        []byte `protobuf:"bytes,1,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -212,7 +213,7 @@ func (x *SeedRotationRequest) GetCsrPem() []byte {
 	return nil
 }
 
-// SeedRotationReply — выпущенный новый seed.
+// SeedRotationReply is the newly issued seed.
 type SeedRotationReply struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CertificatePem []byte                 `protobuf:"bytes,1,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
@@ -273,20 +274,22 @@ func (x *SeedRotationReply) GetNotAfter() *timestamppb.Timestamp {
 	return nil
 }
 
-// WardRoster — Soul-reconcile (ADR-027(g), S6): декларация ведомых apply-прогонов
-// на (re)connect-е. Закрывает dispatched-orphan дыру «Keeper и Soul оба мертвы
-// после отдачи»: строка apply_runs застряла бы в `dispatched` навсегда (reclaim
-// сужен до `claimed`, Reaper dispatched-timeout сознательно не делаем). Soul на
-// reconnect шлёт ПОЛНЫЙ снимок (ReplaceAll) сразу после Hello и ДО первого
-// app-сообщения; Keeper по нему терминалит осиротевшие `dispatched`-строки SID-а,
-// которых нет в наборе.
+// WardRoster is the Soul-reconcile mechanism (ADR-027(g), S6): a declaration of
+// apply runs Soul is minding, sent on (re)connect. Closes the dispatched-orphan
+// hole "Keeper and Soul both died right after dispatch": an apply_runs row would
+// otherwise stay stuck in `dispatched` forever (reclaim is scoped to `claimed`
+// only; we deliberately don't add a Reaper dispatched-timeout). On reconnect,
+// Soul sends a FULL snapshot (ReplaceAll) right after Hello and BEFORE the first
+// app message; Keeper uses it to terminate this SID's orphaned `dispatched` rows
+// that are missing from the set.
 //
-// Пустой active[] = явная декларация «ни одного apply в полёте» (например, после
-// рестарта Soul-процесса: in-memory набор обнулён, in-flight физически нет). Это
-// штатный сигнал терминалить ВСЕ dispatched-строки этого SID-а — корректно.
+// An empty active[] is an explicit declaration of "no apply in flight" (e.g.
+// after a Soul process restart: the in-memory set is reset, nothing is
+// physically in flight). This is a normal signal to terminate ALL of this SID's
+// dispatched rows — and it's correct to do so.
 //
-// Старый Soul без WardRoster никогда не шлёт это сообщение → Keeper sweep НЕ
-// запускает (fail-safe висяк, forward-compat only-add ADR-012(c)).
+// An old Soul without WardRoster never sends this message -> Keeper does NOT run
+// the sweep (a fail-safe hang, forward-compat only-add ADR-012(c)).
 type WardRoster struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Active        []*ActiveApply         `protobuf:"bytes,1,rep,name=active,proto3" json:"active,omitempty"`
@@ -331,14 +334,15 @@ func (x *WardRoster) GetActive() []*ActiveApply {
 	return nil
 }
 
-// ActiveApply — одна запись набора [WardRoster]: ведомый Soul-ом apply-прогон.
+// ActiveApply is one entry in the [WardRoster] set: an apply run Soul is minding.
 type ActiveApply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// apply_id ведомого прогона (echo ApplyRequest.apply_id).
+	// apply_id of the run being minded (echo of ApplyRequest.apply_id).
 	ApplyId string `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// attempt — fencing-epoch, эхо принятого ApplyRequest.attempt (ADR-027(g)).
-	// Keeper epoch-guard-ом сверяет его с apply_runs.attempt: запись в наборе с
-	// меньшим attempt, чем строка (произошёл пере-claim) — НЕ защищает от orphan.
+	// attempt: fencing epoch, an echo of the accepted ApplyRequest.attempt
+	// (ADR-027(g)). Keeper's epoch guard compares it against apply_runs.attempt: an
+	// entry in the set with a smaller attempt than the row (a re-claim happened)
+	// does NOT protect against orphaning.
 	Attempt       int32 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -21,36 +21,36 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// PluginSigil — транспорт одной печати доверия Sigil (ADR-026) от Keeper к
-// Soul по EventStream-у (only-add в FromKeeper.oneof, slice S2b).
+// PluginSigil transports one Sigil trust seal (ADR-026) from Keeper to Soul over
+// EventStream (only-add in FromKeeper.oneof, slice S2b).
 //
-// Самодостаточен для Soul-side verify (slice S6): несёт всё, что нужно
-// re-собрать подписываемый блок и проверить ed25519-подпись trust-anchor-ом из
-// bootstrap (BootstrapReply.sigil_pubkey_pem):
+// Self-contained for Soul-side verify (slice S6): carries everything needed to
+// re-assemble the signed block and check the ed25519 signature with the trust
+// anchor from bootstrap (BootstrapReply.sigil_pubkey_pem):
 //
-//   - namespace + name + ref — идентичность допущенного плагина;
-//   - binary_sha256 — хеш бинаря, который Soul сверяет с локальным бинарём;
-//   - signature — ed25519-подпись блока (ns, name, ref, binary_sha256, manifest);
-//   - manifest — сырые байты manifest.yaml (M1), которые Soul прогоняет через
-//     shared/pluginhost.NormalizeManifestBytes перед хешированием (S3↔S6-инвариант).
+//   - namespace + name + ref: identity of the allowed plugin;
+//   - binary_sha256: hash of the binary, which Soul checks against the local binary;
+//   - signature: ed25519 signature of the block (ns, name, ref, binary_sha256, manifest);
+//   - manifest: raw bytes of manifest.yaml (M1), which Soul runs through
+//     shared/pluginhost.NormalizeManifestBytes before hashing (the S3<->S6 invariant).
 //
-// S2b вводит ТОЛЬКО этот контракт. Раздача PluginSigil-сообщений Keeper-ом и
-// сам verify на Soul-е — slice S6.
+// S2b introduces ONLY this contract. Keeper distributing PluginSigil messages and
+// the actual verify on Soul are slice S6.
 type PluginSigil struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// namespace плагина (например `core`, `community`).
+	// Plugin namespace (e.g. `core`, `community`).
 	Namespace string `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// name плагина внутри namespace.
+	// Plugin name within the namespace.
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	// ref — operator-asserted метка версии допуска (вариант C ADR-026); в
-	// целостность бинаря НЕ участвует, но входит в подписываемый блок.
+	// ref: an operator-asserted version label for the grant (ADR-026 Variant C);
+	// NOT part of binary integrity, but is included in the signed block.
 	Ref string `protobuf:"bytes,3,opt,name=ref,proto3" json:"ref,omitempty"`
-	// SHA-256 бинаря плагина, hex lowercase (64 символа).
+	// SHA-256 of the plugin binary, hex lowercase (64 characters).
 	BinarySha256 string `protobuf:"bytes,4,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
-	// Сырая ed25519-подпись блока (64 байта, без base64/PEM).
+	// Raw ed25519 signature of the block (64 bytes, no base64/PEM).
 	Signature []byte `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
-	// Сырые байты manifest.yaml (M1). Канон для verify — эти байты через
-	// NormalizeManifestBytes, не parsed-форма.
+	// Raw bytes of manifest.yaml (M1). The canonical form for verify is these bytes
+	// through NormalizeManifestBytes, not the parsed form.
 	Manifest      []byte `protobuf:"bytes,6,opt,name=manifest,proto3" json:"manifest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -128,14 +128,14 @@ func (x *PluginSigil) GetManifest() []byte {
 	return nil
 }
 
-// SigilSnapshot — ПОЛНЫЙ active-набор допусков плагинов (replace-семантика,
-// ADR-026). Едет only-add в FromKeeper.oneof существующего EventStream-а.
+// SigilSnapshot is the FULL active set of plugin grants (replace semantics,
+// ADR-026). Rides only-add in the existing EventStream's FromKeeper.oneof.
 //
-// Soul применяет его как ReplaceAll: ЗАМЕНЯЕТ весь свой локальный набор Sigil-ов
-// этим списком, НЕ делает upsert. Допуск, отсутствующий в snapshot, Soul
-// забывает — так срабатывает revoke/retire: после revoke Архонтом Keeper шлёт
-// новый snapshot без отозванного допуска, и near-instant revoke (S6c) закрывает
-// доступ без перезапуска Soul-а. Пустой sigils[] = ни один плагин не допущен.
+// Soul applies it as a ReplaceAll: it REPLACES its whole local Sigil set with
+// this list, it does NOT upsert. A grant missing from the snapshot is forgotten
+// by Soul — this is how revoke/retire takes effect: after an Archon revokes a
+// grant, Keeper sends a new snapshot without it, and near-instant revoke (S6c)
+// closes access without restarting Soul. An empty sigils[] = no plugin is granted.
 type SigilSnapshot struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sigils        []*PluginSigil         `protobuf:"bytes,1,rep,name=sigils,proto3" json:"sigils,omitempty"`
@@ -180,10 +180,10 @@ func (x *SigilSnapshot) GetSigils() []*PluginSigil {
 	return nil
 }
 
-// PluginFetchRequest — запрос байтов SoulModule-плагина (FetchModule, эпик
-// core.module.installed S2). Авторитет допуска — binary_sha256
-// (content-addressed, формат как PluginSigil.binary_sha256: hex lowercase,
-// 64 символа); namespace/name — контекст для логов/аудита Keeper-а.
+// PluginFetchRequest requests a SoulModule plugin's bytes (FetchModule, epic
+// core.module.installed S2). The authority for the grant is binary_sha256
+// (content-addressed, same format as PluginSigil.binary_sha256: hex lowercase,
+// 64 characters); namespace/name are context for Keeper's logs/audit.
 type PluginFetchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
@@ -244,9 +244,10 @@ func (x *PluginFetchRequest) GetBinarySha256() string {
 	return ""
 }
 
-// PluginChunk — один чанк байтов бинаря в server-streaming ответе FetchModule.
-// Целостность собранного файла Soul сверяет по sha256 запроса (S3); отдельные
-// offset/checksum-поля не требуются (при необходимости — only-add).
+// PluginChunk is one chunk of a binary's bytes in FetchModule's server-streaming
+// response. Soul verifies the assembled file's integrity against the request's
+// sha256 (S3); separate offset/checksum fields aren't needed (add only-add if
+// ever required).
 type PluginChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
@@ -291,14 +292,15 @@ func (x *PluginChunk) GetData() []byte {
 	return nil
 }
 
-// SigilTrustAnchors — ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (replace-
-// семантика, ADR-026, ротация R3). Едет only-add в FromKeeper.oneof.
+// SigilTrustAnchors is the FULL set of Sigil signing trust anchors (replace
+// semantics, ADR-026, R3 rotation). Rides only-add in FromKeeper.oneof.
 //
-// Soul применяет его как ReplaceAll по тем же правилам, что SigilSnapshot:
-// ЗАМЕНЯЕТ весь свой набор anchor-ов этим списком (multi-anchor поддержка для
-// безразрывной ротации ключа подписи). Anchor, отсутствующий в наборе, Soul
-// забывает (retire старого ключа). Каждый элемент — SPKI PEM публичного
-// ed25519-ключа подписи Sigil (тот же формат, что BootstrapReply.sigil_pubkey_pem).
+// Soul applies it as a ReplaceAll under the same rules as SigilSnapshot: it
+// REPLACES its whole anchor set with this list (multi-anchor support for
+// zero-downtime signing-key rotation). An anchor missing from the set is
+// forgotten by Soul (retiring the old key). Each element is the SPKI PEM of a
+// Sigil signing public ed25519 key (same format as
+// BootstrapReply.sigil_pubkey_pem).
 type SigilTrustAnchors struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PubkeyPem     []string               `protobuf:"bytes,1,rep,name=pubkey_pem,json=pubkeyPem,proto3" json:"pubkey_pem,omitempty"`

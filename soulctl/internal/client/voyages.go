@@ -7,15 +7,16 @@ import (
 	"strconv"
 )
 
-// VoyagesAPI — типизированные методы /v1/voyages/* (ADR-043). Voyage —
-// унифицированный батчевый прогон (kind=scenario|command), async-by-default.
+// VoyagesAPI holds typed methods for /v1/voyages/* (ADR-043). A Voyage is a
+// unified batch run (kind=scenario|command), async by default.
 type VoyagesAPI struct {
 	c *Client
 }
 
-// VoyageTarget — invocation-time scope Voyage-а (ADR-043 §4). Для kind=scenario
-// значимы Incarnations/Service/Coven (резолв в имена инкарнаций); для
-// kind=command — SIDs/Coven/Where (AND-merge → SID-snapshot).
+// VoyageTarget is a Voyage's invocation-time scope (ADR-043 §4). For
+// kind=scenario, Incarnations/Service/Coven matter (resolved into
+// incarnation names); for kind=command, SIDs/Coven/Where matter (AND-merged
+// into a SID snapshot).
 type VoyageTarget struct {
 	Incarnations []string `json:"incarnations,omitempty"`
 	Service      string   `json:"service,omitempty"`
@@ -24,12 +25,13 @@ type VoyageTarget struct {
 	Where        string   `json:"where,omitempty"`
 }
 
-// VoyageCreateRequest — body POST /v1/voyages. kind обязателен;
-// scenario_name — для kind=scenario, module — для kind=command.
+// VoyageCreateRequest is the body for POST /v1/voyages. kind is required;
+// scenario_name is for kind=scenario, module is for kind=command.
 //
-// Batch/MaxFailures — сырые строки формата N|N% (ADR-043 amend). Клиент их НЕ
-// парсит и НЕ валидирует: авторитет грамматики — Keeper (fail-closed 422 при
-// мусоре/конфликте форматов). Пусто/опущено = не задано.
+// Batch/MaxFailures are raw strings in N|N% format (ADR-043 amend). The
+// client does NOT parse or validate them: Keeper is the grammar authority
+// (fail-closed 422 on garbage/conflicting formats). Empty/omitted means
+// unset.
 type VoyageCreateRequest struct {
 	Kind         string         `json:"kind"`
 	ScenarioName string         `json:"scenario_name,omitempty"`
@@ -45,7 +47,7 @@ type VoyageCreateRequest struct {
 	ScheduleAt   string         `json:"schedule_at,omitempty"`
 }
 
-// VoyageCreateReply — 202-ответ Create.
+// VoyageCreateReply is Create's 202 response.
 type VoyageCreateReply struct {
 	VoyageID  string `json:"voyage_id"`
 	Kind      string `json:"kind"`
@@ -54,7 +56,7 @@ type VoyageCreateReply struct {
 	Location  string `json:"location"`
 }
 
-// VoyageSummary — агрегированный итог прогона (jsonb-колонка summary).
+// VoyageSummary is the aggregated run outcome (jsonb summary column).
 type VoyageSummary struct {
 	Total     int `json:"total"`
 	Succeeded int `json:"succeeded"`
@@ -62,7 +64,7 @@ type VoyageSummary struct {
 	Cancelled int `json:"cancelled"`
 }
 
-// Voyage — snapshot одного Voyage-а (GET /v1/voyages/{id}).
+// Voyage is a snapshot of a single Voyage (GET /v1/voyages/{id}).
 type Voyage struct {
 	VoyageID    string         `json:"voyage_id"`
 	Kind        string         `json:"kind"`
@@ -74,7 +76,7 @@ type Voyage struct {
 	Summary     *VoyageSummary `json:"summary,omitempty"`
 }
 
-// VoyageListOptions — фильтры GET /v1/voyages.
+// VoyageListOptions holds filters for GET /v1/voyages.
 type VoyageListOptions struct {
 	Kind   string
 	Status []string
@@ -82,7 +84,7 @@ type VoyageListOptions struct {
 	Limit  int
 }
 
-// VoyageListReply — страница списка.
+// VoyageListReply is a list page.
 type VoyageListReply struct {
 	Items  []Voyage `json:"items"`
 	Offset int      `json:"offset"`
@@ -90,13 +92,13 @@ type VoyageListReply struct {
 	Total  int      `json:"total"`
 }
 
-// VoyageCancelReply — ответ DELETE /v1/voyages/{id}.
+// VoyageCancelReply is the response for DELETE /v1/voyages/{id}.
 type VoyageCancelReply struct {
 	VoyageID string `json:"voyage_id"`
 	Status   string `json:"status"`
 }
 
-// Create — POST /v1/voyages (ADR-043). Async-by-default: всегда 202.
+// Create is POST /v1/voyages (ADR-043). Async by default: always 202.
 func (a *VoyagesAPI) Create(ctx context.Context, req VoyageCreateRequest) (*VoyageCreateReply, error) {
 	if req.Kind == "" {
 		return nil, fmt.Errorf("kind пуст")
@@ -108,7 +110,7 @@ func (a *VoyagesAPI) Create(ctx context.Context, req VoyageCreateRequest) (*Voya
 	return &reply, nil
 }
 
-// Get — GET /v1/voyages/{id}.
+// Get is GET /v1/voyages/{id}.
 func (a *VoyagesAPI) Get(ctx context.Context, voyageID string) (*Voyage, error) {
 	if voyageID == "" {
 		return nil, fmt.Errorf("voyage_id пуст")
@@ -120,7 +122,7 @@ func (a *VoyagesAPI) Get(ctx context.Context, voyageID string) (*Voyage, error) 
 	return &reply, nil
 }
 
-// List — GET /v1/voyages (multi-value status, OR-семантика).
+// List is GET /v1/voyages (multi-value status, OR semantics).
 func (a *VoyagesAPI) List(ctx context.Context, opts VoyageListOptions) (*VoyageListReply, error) {
 	q := url.Values{}
 	if opts.Kind != "" {
@@ -146,7 +148,7 @@ func (a *VoyagesAPI) List(ctx context.Context, opts VoyageListOptions) (*VoyageL
 	return &reply, nil
 }
 
-// Cancel — DELETE /v1/voyages/{id} (ADR-043 S5): отмена pending/scheduled.
+// Cancel is DELETE /v1/voyages/{id} (ADR-043 S5): cancels pending/scheduled.
 func (a *VoyagesAPI) Cancel(ctx context.Context, voyageID string) (*VoyageCancelReply, error) {
 	if voyageID == "" {
 		return nil, fmt.Errorf("voyage_id пуст")

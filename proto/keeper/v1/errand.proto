@@ -6,62 +6,63 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
-// ErrandRequest — Keeper → Soul: pull-ad-hoc exec одиночного модуля (ADR-033).
+// ErrandRequest is Keeper -> Soul: a pull ad-hoc exec of a single module (ADR-033).
 //
-// Errand — это НЕ scenario и НЕ apply: incarnation/state не задействованы, нет
-// state_changes/RunResult/cross-host barrier. Только дёргание одного модуля на
-// конкретном SID через уже доверенный mTLS-канал EventStream.
+// An Errand is NOT a scenario and NOT an apply: incarnation/state aren't
+// involved, there's no state_changes/RunResult/cross-host barrier. It's just
+// invoking one module on a specific SID over the already-trusted mTLS EventStream
+// channel.
 //
-// Whitelist на Soul-side (defense-in-depth): жёсткий список
-// `core.cmd.shell`/`core.exec.run` либо marker-интерфейс `ErrandReadSafe` в
-// sdk/module/. Любой другой модуль → ErrandResult.status = MODULE_NOT_ALLOWED
-// без вызова `SoulModule.Apply`.
+// Soul-side whitelist (defense-in-depth): a hard-coded list of
+// `core.cmd.shell`/`core.exec.run`, or the `ErrandReadSafe` marker interface in
+// sdk/module/. Any other module -> ErrandResult.status = MODULE_NOT_ALLOWED
+// without calling `SoulModule.Apply`.
 message ErrandRequest {
-  string errand_id = 1;                 // ULID, выписан Keeper-ом при приёме запроса.
+  string errand_id = 1;                 // ULID, issued by Keeper when the request is accepted.
   string module = 2;                    // Fully-qualified `<ns>.<name>.<state>`.
-  google.protobuf.Struct input = 3;     // Прошёл input-validation + CEL-render на Keeper-side.
-  int32 timeout_seconds = 4;            // 1..300, server-cap; Soul применяет тот же cap defense-in-depth.
-  bool dry_run = 5;                     // Только для модулей с PlanReadSafe; иначе 400 errand_dry_run_unsupported.
+  google.protobuf.Struct input = 3;     // Passed through input validation + CEL render on Keeper's side.
+  int32 timeout_seconds = 4;            // 1..300, server cap; Soul applies the same cap for defense-in-depth.
+  bool dry_run = 5;                     // Only for modules with PlanReadSafe; otherwise 400 errand_dry_run_unsupported.
 }
 
-// ErrandResult — Soul → Keeper: финальный отчёт Errand (ADR-033).
+// ErrandResult is Soul -> Keeper: the final Errand report (ADR-033).
 //
-// Симметричен `RunResult` для apply-цепочки, но НЕСЁТ другой контракт:
-//   - state_changes отсутствуют (Errand не мутирует incarnation.state);
-//   - stdout/stderr — captured вывод verb-модулей (cap 64 KiB, маскированный
-//     общим secret-masking, при превышении флаг `*_truncated`=true);
-//   - `output` — структурный output для read-safe модулей (например, будущий
-//     `core.http.probe` положит сюда status/headers/elapsed_ms).
+// Symmetric to `RunResult` for the apply chain, but carries a different contract:
+//   - no state_changes (an Errand doesn't mutate incarnation.state);
+//   - stdout/stderr are the captured output of verb modules (capped at 64 KiB,
+//     masked by the common secret-masking, with `*_truncated`=true set on overflow);
+//   - `output` is structured output for read-safe modules (e.g. the future
+//     `core.http.probe` will put status/headers/elapsed_ms here).
 message ErrandResult {
   string errand_id = 1;
   ErrandStatus status = 2;
   int32 exit_code = 3;
-  string stdout = 4;                    // cap 64 KiB, маскированный.
-  string stderr = 5;                    // cap 64 KiB, маскированный.
+  string stdout = 4;                    // capped at 64 KiB, masked.
+  string stderr = 5;                    // capped at 64 KiB, masked.
   bool stdout_truncated = 6;
   bool stderr_truncated = 7;
   int64 duration_ms = 8;
-  string error_message = 9;             // маскированный; для FAILED/MODULE_NOT_ALLOWED/TIMED_OUT.
-  google.protobuf.Struct output = 10;   // Структурный output read-safe модулей; для shell/exec — пустой.
+  string error_message = 9;             // masked; for FAILED/MODULE_NOT_ALLOWED/TIMED_OUT.
+  google.protobuf.Struct output = 10;   // Structured output for read-safe modules; empty for shell/exec.
 }
 
-// CancelErrand — Keeper → Soul: запрос на отмену in-flight Errand-а (ADR-033
-// slice E5). Keeper отправляет сообщение в FromKeeper-stream целевого SID
-// (тот же путь, что и ErrandRequest), Soul-side errandrunner находит активную
-// Run-горутину по `errand_id` и отменяет её ctx → Run возвращает
-// `ErrandResult{status: CANCELLED}` через тот же EventStream-канал.
+// CancelErrand is Keeper -> Soul: a request to cancel an in-flight Errand
+// (ADR-033 slice E5). Keeper sends the message on the target SID's
+// FromKeeper stream (the same path as ErrandRequest); the Soul-side errandrunner
+// finds the active Run goroutine by `errand_id` and cancels its ctx -> Run returns
+// `ErrandResult{status: CANCELLED}` over the same EventStream channel.
 //
-// Best-effort signal: Soul может уже терминалить Errand к моменту прибытия
-// CancelErrand (race), либо `errand_id` неизвестен (закончился до cancel) —
-// тогда сообщение тихо игнорируется без отправки результата. Keeper-side
-// Dispatcher маркирует строку как cancelled только при получении валидного
-// ErrandResult{status: CANCELLED} от Soul-а.
+// Best-effort signal: Soul may already be terminating the Errand by the time
+// CancelErrand arrives (a race), or `errand_id` may be unknown (it finished
+// before the cancel) — in that case the message is silently ignored and no result
+// is sent. The Keeper-side Dispatcher only marks the row cancelled on receiving a
+// valid ErrandResult{status: CANCELLED} from Soul.
 message CancelErrand {
   string errand_id = 1;
 }
 
-// ErrandStatus — терминальные статусы Errand. UNSPECIFIED — служебный
-// (forward-compat-маркер), не должен встречаться в финальном ErrandResult.
+// ErrandStatus lists an Errand's terminal statuses. UNSPECIFIED is a service
+// value (a forward-compat marker) and should never appear in a final ErrandResult.
 enum ErrandStatus {
   ERRAND_STATUS_UNSPECIFIED = 0;
   ERRAND_STATUS_RUNNING = 1;

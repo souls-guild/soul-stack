@@ -1,9 +1,9 @@
-// soulctl — клиентский CLI оператора Soul Stack, тонкая обёртка над Operator API
-// Keeper-а.
+// soulctl is the Soul Stack operator's client CLI, a thin wrapper over
+// Keeper's Operator API.
 //
-// Этот entrypoint только собирает корневую команду (cmd.NewRoot) и запускает её.
-// Дерево подкоманд — в internal/cmd: группы incarnation / souls / soul / errand /
-// archon / push-providers / run.
+// This entrypoint only assembles the root command (cmd.NewRoot) and runs it.
+// The subcommand tree lives in internal/cmd: the incarnation / souls / soul /
+// errand / archon / push-providers / run groups.
 package main
 
 import (
@@ -13,8 +13,9 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/cmd"
 )
 
-// soulctlVersion — версия бинаря, инжектится через -ldflags '-X ...soulctlVersion=...'
-// (см. Makefile, симметрия с soulVersion). На голой сборке без ldflags = "0.0.0-dev".
+// soulctlVersion is the binary version, injected via
+// -ldflags '-X ...soulctlVersion=...' (see Makefile, symmetric with
+// soulVersion). On a bare build without ldflags it's "0.0.0-dev".
 var soulctlVersion = "0.0.0-dev"
 
 func main() {

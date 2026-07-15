@@ -29,20 +29,20 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Keeper — контракт Keeper↔Soul по ADR-012.
+// Keeper is the Keeper<->Soul contract per ADR-012.
 type KeeperClient interface {
-	// Pilot RPC, оставлен для smoke-test генерации и health-check.
+	// Pilot RPC, kept for generation smoke-tests and health checks.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingReply, error)
-	// Onboarding: unary RPC, server-only TLS, отдельный listener Keeper-а.
-	// Запускается командой `soul init` единожды.
+	// Onboarding: unary RPC, server-only TLS, a separate Keeper listener.
+	// Triggered once by the `soul init` command.
 	Bootstrap(ctx context.Context, in *BootstrapRequest, opts ...grpc.CallOption) (*BootstrapReply, error)
-	// EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
-	// Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
+	// EventStream: a long-lived bidirectional gRPC stream with mTLS.
+	// The only communication channel after onboarding (ADR-002, ADR-012(a)).
 	EventStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[FromSoul, FromKeeper], error)
-	// FetchModule: server-streaming раздача байтов SoulModule-плагина по
-	// content-addressed sha256 (эпик core.module.installed, S2). Тот же
-	// mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
-	// control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+	// FetchModule: server-streaming delivery of a SoulModule plugin's bytes by
+	// content-addressed sha256 (epic core.module.installed, S2). Same mTLS listener
+	// as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
+	// only ever serves a sigil-allowed binary (fail-closed).
 	FetchModule(ctx context.Context, in *PluginFetchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginChunk], error)
 }
 
@@ -110,20 +110,20 @@ type Keeper_FetchModuleClient = grpc.ServerStreamingClient[PluginChunk]
 // All implementations must embed UnimplementedKeeperServer
 // for forward compatibility.
 //
-// Keeper — контракт Keeper↔Soul по ADR-012.
+// Keeper is the Keeper<->Soul contract per ADR-012.
 type KeeperServer interface {
-	// Pilot RPC, оставлен для smoke-test генерации и health-check.
+	// Pilot RPC, kept for generation smoke-tests and health checks.
 	Ping(context.Context, *PingRequest) (*PingReply, error)
-	// Onboarding: unary RPC, server-only TLS, отдельный listener Keeper-а.
-	// Запускается командой `soul init` единожды.
+	// Onboarding: unary RPC, server-only TLS, a separate Keeper listener.
+	// Triggered once by the `soul init` command.
 	Bootstrap(context.Context, *BootstrapRequest) (*BootstrapReply, error)
-	// EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
-	// Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
+	// EventStream: a long-lived bidirectional gRPC stream with mTLS.
+	// The only communication channel after onboarding (ADR-002, ADR-012(a)).
 	EventStream(grpc.BidiStreamingServer[FromSoul, FromKeeper]) error
-	// FetchModule: server-streaming раздача байтов SoulModule-плагина по
-	// content-addressed sha256 (эпик core.module.installed, S2). Тот же
-	// mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
-	// control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+	// FetchModule: server-streaming delivery of a SoulModule plugin's bytes by
+	// content-addressed sha256 (epic core.module.installed, S2). Same mTLS listener
+	// as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
+	// only ever serves a sigil-allowed binary (fail-closed).
 	FetchModule(*PluginFetchRequest, grpc.ServerStreamingServer[PluginChunk]) error
 	mustEmbedUnimplementedKeeperServer()
 }

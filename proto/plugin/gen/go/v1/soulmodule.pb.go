@@ -22,12 +22,12 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ValidateRequest — запрос Validate.
+// ValidateRequest — the Validate request.
 type ValidateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Имя state из manifest.spec.states (`installed` / `running` / …).
+	// State name from manifest.spec.states (`installed` / `running` / …).
 	State string `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	// Параметры задачи destiny, выровненные по input-схеме state.
+	// Destiny task params, aligned to the state's input schema.
 	Params        *structpb.Struct `protobuf:"bytes,2,opt,name=params,proto3" json:"params,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -77,7 +77,7 @@ func (x *ValidateRequest) GetParams() *structpb.Struct {
 	return nil
 }
 
-// ValidateReply — результат Validate.
+// ValidateReply — the Validate result.
 type ValidateReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -130,7 +130,7 @@ func (x *ValidateReply) GetErrors() []string {
 	return nil
 }
 
-// PlanRequest — запрос Plan.
+// PlanRequest — the Plan request.
 type PlanRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
@@ -183,22 +183,25 @@ func (x *PlanRequest) GetParams() *structpb.Struct {
 	return nil
 }
 
-// PlanEvent — событие из Plan-stream-а.
+// PlanEvent — an event from the Plan stream.
 //
-// Plan — pure-read dry-run (ADR-031 Scry): модуль читает текущее состояние
-// ресурса (тот же read, что в начале Apply) и сообщает, разошлось ли оно с
-// желаемым, НЕ мутируя хост. Финальное событие переносит машинный `changed`
-// (симметрия с ApplyEvent.changed), промежуточные — диагностические message-ы.
+// Plan is a pure-read dry-run (ADR-031 Scry): the module reads the
+// resource's current state (the same read Apply starts with) and reports
+// whether it has drifted from the desired state, WITHOUT mutating the
+// host. The final event carries the machine-readable `changed` field
+// (mirroring ApplyEvent.changed); intermediate ones are diagnostic
+// messages.
 type PlanEvent struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Message string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
-	// changed — расходится ли ресурс с желаемым состоянием (drift). true =
-	// Apply изменил бы хост; false = ресурс уже в нужном состоянии (clean).
-	// Семантика и форма симметричны ApplyEvent.changed (only-add, ADR-012(c)).
-	// Старый модуль без этого поля шлёт changed=false по wire-default — поэтому
-	// host НЕ трактует «нет PlanEvent» / «старый модуль» как clean: drift на
-	// dry_run считается только для модулей, объявивших read-safe-capability
-	// (ADR-031 default-deny), остальные получают явный отказ, не false-clean.
+	// changed — whether the resource has drifted from the desired state.
+	// true = Apply would change the host; false = the resource is already in
+	// the desired state (clean). Semantics and shape mirror
+	// ApplyEvent.changed (only-add, ADR-012(c)). An old module without this
+	// field sends changed=false via the wire default — so the host does NOT
+	// treat "no PlanEvent" / "old module" as clean: drift on dry_run is only
+	// computed for modules that declare the read-safe capability (ADR-031
+	// default-deny); others get an explicit refusal, not a false clean.
 	Changed       bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -248,7 +251,7 @@ func (x *PlanEvent) GetChanged() bool {
 	return false
 }
 
-// ApplyRequest — запрос Apply.
+// ApplyRequest — the Apply request.
 type ApplyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
@@ -301,19 +304,20 @@ func (x *ApplyRequest) GetParams() *structpb.Struct {
 	return nil
 }
 
-// ApplyEvent — событие из Apply-stream-а.
-// Финальное событие переносит итог задачи (changed/failed + output),
-// промежуточные — диагностические message-ы.
+// ApplyEvent — an event from the Apply stream.
+// The final event carries the task outcome (changed/failed + output);
+// intermediate ones are diagnostic messages.
 //
-// Семантика changed/failed/output — DSL-ядро register.<task>.* (docs/destiny/tasks.md);
-// агрегация на Soul → TaskEvent (см. keeper-proto).
+// changed/failed/output semantics come from the DSL core register.<task>.*
+// (docs/destiny/tasks.md); aggregated on the Soul into TaskEvent (see
+// keeper-proto).
 type ApplyEvent struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Message string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	Changed bool                   `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
 	Failed  bool                   `protobuf:"varint,3,opt,name=failed,proto3" json:"failed,omitempty"`
-	// Output, декларированный через output:-блок destiny.
-	// Передаётся в register.<task>.* и в RunResult.state_changes.
+	// Output declared via destiny's output: block.
+	// Passed into register.<task>.* and into RunResult.state_changes.
 	Output        *structpb.Struct `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

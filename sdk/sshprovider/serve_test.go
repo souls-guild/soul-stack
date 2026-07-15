@@ -18,9 +18,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// shortSockPath — Unix-socket-имена на darwin ограничены ~104 байтами sun_path,
-// поэтому стандартный t.TempDir() (под /var/folders/...) не подходит.
-// Симметрично хелперу из sdk/handshake.
+// shortSockPath works around darwin's ~104-byte sun_path limit on Unix
+// socket names, so the standard t.TempDir() (under /var/folders/...) doesn't
+// work. Symmetric with the helper in sdk/handshake.
 func shortSockPath(t *testing.T, name string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ss-ssh-")
@@ -35,8 +35,9 @@ func shortSockPath(t *testing.T, name string) string {
 	return p
 }
 
-// captureStdout подменяет os.Stdout на pipe и возвращает канал с первой строкой,
-// записанной плагином (handshake-строка), + restore-функцию.
+// captureStdout swaps os.Stdout for a pipe and returns a channel with the
+// first line written by the plugin (the handshake line), plus a restore
+// function.
 func captureStdout(t *testing.T) (<-chan string, func()) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -64,9 +65,9 @@ func captureStdout(t *testing.T) (<-chan string, func()) {
 	return lineCh, restore
 }
 
-// recordingProvider — impl, фиксирующий аргументы вызовов через реальный
-// gRPC-стек (не in-process adapter), чтобы Serve→handshake→register→adapter
-// были покрыты end-to-end.
+// recordingProvider is an impl that records call arguments through a real
+// gRPC stack (not an in-process adapter), so Serve→handshake→register→adapter
+// is covered end-to-end.
 type recordingProvider struct {
 	signHost string
 	authHost string
@@ -84,8 +85,8 @@ func (p *recordingProvider) Authorize(_ context.Context, req *pluginv1.Authorize
 	return &pluginv1.AuthorizeReply{Allowed: false, Reason: "denied " + req.User}, nil
 }
 
-// TestServeEndToEnd поднимает Serve(impl) на реальном unix-socket, проверяет
-// handshake-строку, дёргает оба RPC реальным gRPC-клиентом и завершает по SIGTERM.
+// TestServeEndToEnd brings up Serve(impl) on a real unix socket, checks the
+// handshake line, calls both RPCs with a real gRPC client, and shuts down via SIGTERM.
 func TestServeEndToEnd(t *testing.T) {
 	addr := shortSockPath(t, "p.sock")
 	t.Setenv(handshake.SocketEnv, addr)
@@ -162,8 +163,8 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 }
 
-// TestServePropagatesHandshakeError — обёртка Serve пробрасывает ошибку
-// нижележащего handshake.Serve (здесь — отсутствие адреса сокета).
+// TestServePropagatesHandshakeError verifies the Serve wrapper propagates an
+// error from the underlying handshake.Serve (here — a missing socket address).
 func TestServePropagatesHandshakeError(t *testing.T) {
 	t.Setenv(handshake.SocketEnv, "")
 	err := Serve(&BaseProvider{})

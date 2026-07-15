@@ -23,24 +23,24 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SoulprintReport — периодический фоновый push фактов о хосте (refresh_interval).
+// SoulprintReport is the periodic background push of host facts (refresh_interval).
 //
-// Forward-compat: typed-схема в typed_facts (field 3, ADR-018);
-// facts (field 2, google.protobuf.Struct) — deprecated stub из ADR-012(g),
-// оставлен для wire-compat (only-add политика, see ADR-012(c)).
+// Forward-compat: the typed schema lives in typed_facts (field 3, ADR-018);
+// facts (field 2, google.protobuf.Struct) is a deprecated stub from ADR-012(g),
+// kept for wire-compat (only-add policy, see ADR-012(c)).
 type SoulprintReport struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Soul-side timestamp момента сбора фактов. Keeper-side received_at
-	// хранится отдельно в Postgres-storage, не часть wire-format.
-	// При расхождении received_at - collected_at > 10 min → warn в OTel.
+	// Soul-side timestamp of when the facts were collected. Keeper-side
+	// received_at is stored separately in Postgres storage, not part of the
+	// wire format. If received_at - collected_at > 10 min, warn in OTel.
 	CollectedAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=collected_at,json=collectedAt,proto3" json:"collected_at,omitempty"`
-	// DEPRECATED: stub из ADR-012(g). Используй typed_facts вместо.
-	// Сохранён для wire-compat (forward-compat only-add).
+	// DEPRECATED: a stub from ADR-012(g). Use typed_facts instead.
+	// Kept for wire-compat (forward-compat only-add).
 	//
 	// Deprecated: Marked as deprecated in keeper/v1/soulprint.proto.
 	Facts *structpb.Struct `protobuf:"bytes,2,opt,name=facts,proto3" json:"facts,omitempty"`
-	// Typed-факты по ADR-018. Заполняется Soul-агентами новых версий;
-	// Keeper толерантен к обоим полям.
+	// Typed facts per ADR-018. Populated by newer Soul agents;
+	// Keeper tolerates either field.
 	TypedFacts    *SoulprintFacts `protobuf:"bytes,3,opt,name=typed_facts,json=typedFacts,proto3" json:"typed_facts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -98,13 +98,13 @@ func (x *SoulprintReport) GetTypedFacts() *SoulprintFacts {
 	return nil
 }
 
-// SoulprintFacts — корневое сообщение typed-схемы (ADR-018).
-// Полная спека — docs/soul/soulprint.md.
+// SoulprintFacts is the root message of the typed schema (ADR-018).
+// Full spec — docs/soul/soulprint.md.
 type SoulprintFacts struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Echo SID для логов; authority — mTLS peer cert.
+	// Echo SID for logs; authority is the mTLS peer cert.
 	Sid string `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
-	// Короткое имя хоста (без домена), uname -n.
+	// Short hostname (no domain), uname -n.
 	Hostname      string        `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	Os            *OsFacts      `protobuf:"bytes,3,opt,name=os,proto3" json:"os,omitempty"`
 	Kernel        *KernelFacts  `protobuf:"bytes,4,opt,name=kernel,proto3" json:"kernel,omitempty"`
@@ -194,10 +194,10 @@ func (x *SoulprintFacts) GetNetwork() *NetworkFacts {
 	return nil
 }
 
-// OsFacts — факты об операционной системе.
-// pkg_mgr и init_system собираются Soul-агентом через таблицу маппинга
-// family+distro → pkg_mgr/init_system. Читаются напрямую core.pkg.* и
-// core.service.* для абстракции через native pkg-mgr/init.
+// OsFacts holds facts about the operating system.
+// pkg_mgr and init_system are collected by the Soul agent via a
+// family+distro -> pkg_mgr/init_system mapping table. Read directly by
+// core.pkg.* and core.service.* for native pkg-mgr/init abstraction.
 type OsFacts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Family        string                 `protobuf:"bytes,1,opt,name=family,proto3" json:"family,omitempty"`                           // debian / rhel / alpine / windows / darwin
@@ -290,11 +290,11 @@ func (x *OsFacts) GetInitSystem() string {
 	return ""
 }
 
-// KernelFacts — факты о ядре.
+// KernelFacts holds facts about the kernel.
 type KernelFacts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"` // полная версия с дистрибутив-suffix (5.15.0-101-generic)
-	Release       string                 `protobuf:"bytes,2,opt,name=release,proto3" json:"release,omitempty"` // только версия ядра (5.15.0)
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"` // full version with distro suffix (5.15.0-101-generic)
+	Release       string                 `protobuf:"bytes,2,opt,name=release,proto3" json:"release,omitempty"` // kernel version only (5.15.0)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -343,11 +343,11 @@ func (x *KernelFacts) GetRelease() string {
 	return ""
 }
 
-// CpuFacts — факты о процессорах.
+// CpuFacts holds facts about the CPUs.
 type CpuFacts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`  // количество logical CPUs (с учётом HT/SMT)
-	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`   // маркетинговое имя (Intel Xeon E5-2670)
+	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`  // number of logical CPUs (including HT/SMT)
+	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`   // marketing name (Intel Xeon E5-2670)
 	Vendor        string                 `protobuf:"bytes,3,opt,name=vendor,proto3" json:"vendor,omitempty"` // GenuineIntel / AuthenticAMD / ARM / Apple
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -404,12 +404,12 @@ func (x *CpuFacts) GetVendor() string {
 	return ""
 }
 
-// MemoryFacts — факты о памяти. Все объёмы в МБ, не байты.
+// MemoryFacts holds facts about memory. All sizes are in MB, not bytes.
 type MemoryFacts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TotalMb       int64                  `protobuf:"varint,1,opt,name=total_mb,json=totalMb,proto3" json:"total_mb,omitempty"`             // полный объём RAM
-	AvailableMb   int64                  `protobuf:"varint,2,opt,name=available_mb,json=availableMb,proto3" json:"available_mb,omitempty"` // свободно сейчас
-	SwapMb        int64                  `protobuf:"varint,3,opt,name=swap_mb,json=swapMb,proto3" json:"swap_mb,omitempty"`                // объём swap
+	TotalMb       int64                  `protobuf:"varint,1,opt,name=total_mb,json=totalMb,proto3" json:"total_mb,omitempty"`             // total RAM
+	AvailableMb   int64                  `protobuf:"varint,2,opt,name=available_mb,json=availableMb,proto3" json:"available_mb,omitempty"` // free right now
+	SwapMb        int64                  `protobuf:"varint,3,opt,name=swap_mb,json=swapMb,proto3" json:"swap_mb,omitempty"`                // swap size
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -465,16 +465,16 @@ func (x *MemoryFacts) GetSwapMb() int64 {
 	return 0
 }
 
-// NetworkFacts — факты о сети хоста.
+// NetworkFacts holds facts about the host's network.
 type NetworkFacts struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Основной IPv4, тот, что bind по умолчанию.
-	// Эвристика Soul-агента: интерфейс с default-route → его primary IPv4.
-	// Используется в 90% случаев (например, bind-адрес сервиса).
+	// The primary IPv4, the one bound by default.
+	// Soul agent's heuristic: the interface with the default route -> its primary IPv4.
+	// Used in 90% of cases (e.g. as a service's bind address).
 	PrimaryIp string `protobuf:"bytes,1,opt,name=primary_ip,json=primaryIp,proto3" json:"primary_ip,omitempty"`
-	// Полный FQDN (обычно == SID, но отдельный факт о системе).
+	// Full FQDN (usually == SID, but tracked as a separate system fact).
 	Fqdn string `protobuf:"bytes,2,opt,name=fqdn,proto3" json:"fqdn,omitempty"`
-	// Полный список сетевых интерфейсов для multi-homed/VLAN-aware случаев.
+	// Full list of network interfaces, for multi-homed/VLAN-aware cases.
 	Interfaces    []*NetworkInterface `protobuf:"bytes,3,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -531,15 +531,15 @@ func (x *NetworkFacts) GetInterfaces() []*NetworkInterface {
 	return nil
 }
 
-// NetworkInterface — сетевой интерфейс хоста.
+// NetworkInterface is one of the host's network interfaces.
 type NetworkInterface struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // eth0 / ens3 / wlan0 / lo
-	// IPv4-адреса интерфейса в CIDR-нотации (10.0.0.1/24).
+	// Interface IPv4 addresses in CIDR notation (10.0.0.1/24).
 	Ipv4 []string `protobuf:"bytes,2,rep,name=ipv4,proto3" json:"ipv4,omitempty"`
-	// IPv6-адреса.
+	// IPv6 addresses.
 	Ipv6          []string `protobuf:"bytes,3,rep,name=ipv6,proto3" json:"ipv6,omitempty"`
-	Mac           string   `protobuf:"bytes,4,opt,name=mac,proto3" json:"mac,omitempty"` // MAC-адрес
+	Mac           string   `protobuf:"bytes,4,opt,name=mac,proto3" json:"mac,omitempty"` // MAC address
 	Mtu           int32    `protobuf:"varint,5,opt,name=mtu,proto3" json:"mtu,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

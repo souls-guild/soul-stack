@@ -21,16 +21,16 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SignRequest — запрос Sign.
+// SignRequest — the Sign request.
 type SignRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// FQDN или IP целевого хоста.
+	// FQDN or IP of the target host.
 	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	// Имя SSH-пользователя для входа.
+	// SSH username to log in as.
 	User string `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
-	// Public key, под который провайдер должен выдать сертификат
-	// (для CA-провайдеров). PEM-encoded openssh public key.
-	// Для static-key провайдеров может быть пустым (возвращается готовая пара).
+	// Public key the provider should certify (for CA providers). PEM-encoded
+	// openssh public key.
+	// May be empty for static-key providers (a ready-made pair is returned).
 	PublicKey     string `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -87,28 +87,31 @@ func (x *SignRequest) GetPublicKey() string {
 	return ""
 }
 
-// SignReply — выпущенные SSH-credentials.
+// SignReply — the issued SSH credentials.
 type SignReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// SSH-сертификат (PEM-encoded openssh certificate).
-	// Для static-key провайдеров — пустая строка.
+	// SSH certificate (PEM-encoded openssh certificate).
+	// Empty string for static-key providers.
 	Certificate string `protobuf:"bytes,1,opt,name=certificate,proto3" json:"certificate,omitempty"`
-	// Приватный ключ. SENSITIVE: never log.
-	// Заполняется только для провайдеров, выдающих ephemeral keypair.
-	// Для CA-провайдеров (Vault SSH CA): пустая строка, клиент уже владеет ключом.
+	// Private key. SENSITIVE: never log.
+	// Populated only for providers that issue an ephemeral keypair.
+	// Empty string for CA providers (Vault SSH CA): the client already owns
+	// the key.
 	PrivateKey string `protobuf:"bytes,2,opt,name=private_key,json=privateKey,proto3" json:"private_key,omitempty"`
-	// TTL в секундах. Используется для планирования refresh credentials.
+	// TTL in seconds. Used to schedule credential refresh.
 	TtlSeconds int64 `protobuf:"varint,3,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
-	// Bastion / SSH-proxy в формате `[user@]host:port` (например, Teleport
-	// proxy: `proxy.example.com:3023`). Заполняется провайдерами, для которых
-	// доступ к целевому хосту идёт через посредника, а не голым `net.Dial(host:port)`.
-	// Пустая строка = прямой коннект.
+	// Bastion / SSH proxy as `[user@]host:port` (e.g. Teleport proxy:
+	// `proxy.example.com:3023`). Populated by providers where reaching the
+	// target host goes through an intermediary rather than a bare
+	// `net.Dial(host:port)`.
+	// Empty string = direct connect.
 	//
-	// ВАЖНО: dispatcher proxy_jump support — ОТДЕЛЬНЫЙ слайс. На момент введения
-	// этого поля `keeper.push` ИГНОРИРУЕТ его (см. docs/keeper/push.md).
-	// Плагин может его заполнять (это already only-add forward-compat); оператор
-	// увидит значение в reason при non-Teleport-flow ошибке. Полная реализация
-	// proxy_jump в dispatcher — S3 после пилота soul-ssh-teleport.
+	// IMPORTANT: dispatcher proxy_jump support is a SEPARATE slice. As of
+	// this field's introduction, `keeper.push` IGNORES it (see
+	// docs/keeper/push.md). The plugin may populate it (already only-add
+	// forward-compat); the operator will see the value in the reason on a
+	// non-Teleport-flow error. Full proxy_jump support in the dispatcher is
+	// S3, after the soul-ssh-teleport pilot.
 	ProxyJump     string `protobuf:"bytes,4,opt,name=proxy_jump,json=proxyJump,proto3" json:"proxy_jump,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -172,7 +175,7 @@ func (x *SignReply) GetProxyJump() string {
 	return ""
 }
 
-// AuthorizeRequest — запрос Authorize.
+// AuthorizeRequest — the Authorize request.
 type AuthorizeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
@@ -225,11 +228,11 @@ func (x *AuthorizeRequest) GetUser() string {
 	return ""
 }
 
-// AuthorizeReply — результат Authorize.
+// AuthorizeReply — the Authorize result.
 type AuthorizeReply struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Allowed bool                   `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`
-	// Если allowed=false — человекочитаемая причина (для аудита/UI).
+	// If allowed=false — a human-readable reason (for audit/UI).
 	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -22,11 +22,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ValidateVigilRequest — params-фаза при старте Vigil.
+// ValidateVigilRequest — the params phase on Vigil start.
 type ValidateVigilRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// params — содержимое VigilDef.params (Struct), переданное оператором при
-	// создании Vigil. Семантика params — plugin-specific.
+	// params — contents of VigilDef.params (Struct), supplied by the
+	// operator when creating the Vigil. params semantics are plugin-specific.
 	Params        *structpb.Struct `protobuf:"bytes,1,opt,name=params,proto3" json:"params,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -69,8 +69,8 @@ func (x *ValidateVigilRequest) GetParams() *structpb.Struct {
 	return nil
 }
 
-// ValidateVigilReply — результат Validate (форма симметрична
-// pluginv1.ValidateReply из soulmodule.proto: ok + errors[]).
+// ValidateVigilReply — result of Validate (shape mirrors
+// pluginv1.ValidateReply from soulmodule.proto: ok + errors[]).
 type ValidateVigilReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -123,15 +123,16 @@ func (x *ValidateVigilReply) GetErrors() []string {
 	return nil
 }
 
-// CheckRequest — запрос Check.
+// CheckRequest — the Check request.
 type CheckRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// params — VigilDef.params (тот же Struct, что в ValidateVigilRequest).
+	// params — VigilDef.params (the same Struct as in ValidateVigilRequest).
 	Params *structpb.Struct `protobuf:"bytes,1,opt,name=params,proto3" json:"params,omitempty"`
-	// state_cookie — opaque-state, который плагин вернул на предыдущем тике
-	// (CheckReply.state_cookie). NULL/пусто на первом тике после старта Vigil
-	// (или после рестарта Soul-демона). Плагин сам выбирает кодировку (CBOR /
-	// JSON / proto-encoded message); host НЕ интерпретирует.
+	// state_cookie — opaque state the plugin returned on the previous tick
+	// (CheckReply.state_cookie). NULL/empty on the first tick after the
+	// Vigil starts (or after the Soul daemon restarts). The plugin picks
+	// its own encoding (CBOR / JSON / a proto-encoded message); the host
+	// does NOT interpret it.
 	StateCookie   []byte `protobuf:"bytes,2,opt,name=state_cookie,json=stateCookie,proto3" json:"state_cookie,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -181,25 +182,25 @@ func (x *CheckRequest) GetStateCookie() []byte {
 	return nil
 }
 
-// CheckReply — результат проверки.
+// CheckReply — the check result.
 type CheckReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// state — текущее наблюдаемое состояние хоста. Plugin может вернуть любую
-	// строку; scheduler сравнивает её с last-state per-Vigil для
-	// edge-triggered Portent. Conventions (не обязательны): "ok" / "alerted" /
-	// "degraded" / "unknown".
+	// state — the currently observed host state. The plugin may return any
+	// string; the scheduler compares it against the per-Vigil last state
+	// for edge-triggered Portents. Conventions (not mandatory): "ok" /
+	// "alerted" / "degraded" / "unknown".
 	State string `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	// payload — structured data для PortentEvent.payload.custom (Struct, ветка
-	// oneof, V5-1). Host wrap-ит в PortentEvent.payload.custom при формировании
-	// события.
+	// payload — structured data for PortentEvent.payload.custom (Struct,
+	// oneof branch, V5-1). The host wraps it in PortentEvent.payload.custom
+	// when building the event.
 	Payload *structpb.Struct `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
-	// state_cookie — opaque-state для следующего тика (passback). Если плагин
-	// не нуждается в межтиковом state — оставляет пустым.
+	// state_cookie — opaque state for the next tick (passback). Leave empty
+	// if the plugin doesn't need cross-tick state.
 	StateCookie []byte `protobuf:"bytes,3,opt,name=state_cookie,json=stateCookie,proto3" json:"state_cookie,omitempty"`
-	// error — non-fatal error message (например permission denied на чтение
-	// файла). Host логирует, scheduler пропускает тик (last-state НЕ
-	// обновляется, Portent НЕ эмитится: ошибка проверки ≠ смена состояния
-	// хоста — симметрия с встроенным [beacon.Beacon].Check err).
+	// error — non-fatal error message (e.g. permission denied reading a
+	// file). The host logs it, the scheduler skips the tick (last-state is
+	// NOT updated, no Portent is emitted: a check error is not the same as
+	// a host state change — mirrors the built-in [beacon.Beacon].Check err).
 	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

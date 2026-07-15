@@ -92,8 +92,9 @@ func newIncarnationGetCmd() *cobra.Command {
 			if err != nil {
 				return renderAPIError(err)
 			}
-			// get-команды печатают raw response: и в table, и в json. table-форма
-			// для get осмысленна как «всё подряд» без рамок таблицы — JSON pretty.
+			// get commands print the raw response in both table and json mode.
+			// For get, "table" mode makes sense as a flat dump with no table
+			// framing — JSON pretty-printed.
 			return output.JSON(cmd.OutOrStdout(), item)
 		},
 	}
@@ -191,9 +192,9 @@ func newIncarnationHistoryCmd() *cobra.Command {
 					h.ApplyID, h.Scenario, "", "", h.ChangedByAID, h.CreatedAt,
 				})
 			}
-			// STATUS/DURATION у state_history нет (запись появляется только при
-			// успешном коммите), оставлены пустые ячейки для симметрии заголовков
-			// из ТЗ.
+			// state_history has no STATUS/DURATION (a record only appears
+			// after a successful commit); left as empty cells to keep the
+			// header columns symmetric with the spec.
 			return output.Table(cmd.OutOrStdout(),
 				[]string{"APPLY_ID", "SCENARIO", "STATUS", "DURATION", "STARTED_BY", "STARTED_AT"},
 				rows)
@@ -219,8 +220,8 @@ func newIncarnationCheckDriftCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Drift-проверка sync, но Soul-side обходит весь scenario с mod.Plan —
-			// 30s мало; ставим 5 минут.
+			// The drift check is sync, but the Soul side walks the entire
+			// scenario with mod.Plan — 30s isn't enough, so use 5 minutes.
 			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
 			defer cancel()
 			report, err := cl.Incarnations.CheckDrift(ctx, args[0], input)
@@ -262,7 +263,7 @@ func printDriftReport(cmd *cobra.Command, r *client.DriftReport) error {
 	return output.Table(out, []string{"SID", "STATUS", "TASKS_DRIFTED"}, rows)
 }
 
-// parseInputJSON — нормализация флага --input. Пустая строка → nil input.
+// parseInputJSON normalizes the --input flag. Empty string → nil input.
 func parseInputJSON(s string) (map[string]any, error) {
 	if s == "" {
 		return nil, nil
@@ -274,8 +275,8 @@ func parseInputJSON(s string) (map[string]any, error) {
 	return out, nil
 }
 
-// formatTimeShort обрезает RFC3339 до YYYY-MM-DD HH:MM (UTC). Пустая строка
-// остаётся пустой, чтобы output.Table заменила её на <none>.
+// formatTimeShort truncates RFC3339 to YYYY-MM-DD HH:MM (UTC). An empty
+// string stays empty, so output.Table replaces it with <none>.
 func formatTimeShort(rfc3339 string) string {
 	if rfc3339 == "" {
 		return ""
@@ -287,24 +288,24 @@ func formatTimeShort(rfc3339 string) string {
 	return t.UTC().Format("2006-01-02 15:04")
 }
 
-// waitResult — итог waitForApply: финальный status incarnation + запись из
-// history (если её удалось дождаться).
+// waitResult is the outcome of waitForApply: the final incarnation status +
+// the history entry (if one showed up in time).
 type waitResult struct {
 	ApplyID      string                    `json:"apply_id"`
 	FinalStatus  string                    `json:"final_status"`
 	HistoryEntry *client.StateHistoryEntry `json:"history_entry,omitempty"`
 }
 
-// waitForApply — poll-цикл по openapi MVP-контракту:
-//   - /v1/incarnations/{name}/history — запись с apply_id появится после успешного commit.
-//   - /v1/incarnations/{name}        — текущий status (applying → ready / error_locked / migration_failed).
+// waitForApply — poll loop per the openapi MVP contract:
+//   - /v1/incarnations/{name}/history — a record with apply_id shows up after a successful commit.
+//   - /v1/incarnations/{name}        — current status (applying → ready / error_locked / migration_failed).
 //
-// Стоп-условия:
-//   - history содержит запись с apply_id (успех — final_status = текущий status incarnation);
-//   - status стал блокирующим (error_locked / migration_failed / destroy_failed);
-//   - превышен waitTimeout (возврат осмысленной ошибки).
+// Stop conditions:
+//   - history contains a record with apply_id (success — final_status = the current incarnation status);
+//   - status becomes blocking (error_locked / migration_failed / destroy_failed);
+//   - waitTimeout exceeded (returns a meaningful error).
 //
-// Отдельного /v1/applies/{apply_id} в MVP нет (operator-api.md → Async operations).
+// There's no separate /v1/applies/{apply_id} in the MVP (operator-api.md → Async operations).
 func waitForApply(parent context.Context, cl *client.Client, name, applyID string, timeout time.Duration) (*waitResult, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -318,7 +319,7 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("ожидание apply прервано: %w", err)
 		}
-		// 1. history — самый авторитетный сигнал успеха.
+		// 1. history is the most authoritative success signal.
 		hist, err := cl.Incarnations.History(ctx, name, 50, 0)
 		if err != nil {
 			return nil, err
@@ -336,7 +337,7 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 				}, nil
 			}
 		}
-		// 2. status incarnation — fail-fast при блокирующем статусе.
+		// 2. incarnation status — fail-fast on a blocking status.
 		current, err := cl.Incarnations.Get(ctx, name)
 		if err != nil {
 			return nil, err

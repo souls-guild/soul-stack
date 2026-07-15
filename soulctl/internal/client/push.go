@@ -5,14 +5,14 @@ import (
 	"fmt"
 )
 
-// PushAPI — тонкие методы push-flow (`POST /v1/push/apply`). Per-id чтение,
-// list/cleanup — расширить отдельным slice-ом по мере появления потребности
-// (сейчас зовётся из `soulctl run push`).
+// PushAPI holds thin methods for the push flow (`POST /v1/push/apply`).
+// Per-id read, list/cleanup — extend with a separate slice once the need
+// arises (currently called from `soulctl run push`).
 type PushAPI struct {
 	c *Client
 }
 
-// PushApplyRequest — body POST /v1/push/apply (openapi PushApplyRequest).
+// PushApplyRequest is the body for POST /v1/push/apply (openapi PushApplyRequest).
 type PushApplyRequest struct {
 	Inventory            []string       `json:"inventory"`
 	Destiny              string         `json:"destiny"`
@@ -21,12 +21,12 @@ type PushApplyRequest struct {
 	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty"`
 }
 
-// PushApplyReply — 202-ответ.
+// PushApplyReply is the 202 response.
 type PushApplyReply struct {
 	ApplyID string `json:"apply_id"`
 }
 
-// Apply — POST /v1/push/apply. Inventory/Destiny обязательны.
+// Apply is POST /v1/push/apply. Inventory/Destiny are required.
 func (a *PushAPI) Apply(ctx context.Context, req PushApplyRequest) (*PushApplyReply, error) {
 	if len(req.Inventory) == 0 {
 		return nil, fmt.Errorf("inventory пуст: требуется хотя бы один SID")

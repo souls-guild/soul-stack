@@ -7,19 +7,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// targetFlags — общий набор `--target-*` флагов всех `soulctl run <sub>`
-// подкоманд (C1). Все три sub-команды собирают тот же selector → разные
-// backend-эндпоинты переводят его в свою форму body (см. build).
+// targetFlags — the common set of `--target-*` flags shared by all
+// `soulctl run <sub>` subcommands (C1). All three sub-commands gather the
+// same selector → different backend endpoints translate it into their own
+// body shape (see build).
 //
-// Семантика:
-//   - sids/coven — exact-match списки (CSV в флаге → []string).
-//   - glob → CEL-выражение `sid.glob("X")` (shared/cel.glob, member-overload).
-//   - regex → CEL-выражение `sid.matches("X")` (stdlib).
-//   - where → raw CEL (оператор-asserted).
+// Semantics:
+//   - sids/coven — exact-match lists (CSV in the flag → []string).
+//   - glob → CEL expression `sid.glob("X")` (shared/cel.glob, member-overload).
+//   - regex → CEL expression `sid.matches("X")` (stdlib).
+//   - where → raw CEL (operator-asserted).
 //
-// AND-merge: glob/regex/where склеиваются `&&` в один итоговый `where`. sids и
-// coven остаются отдельными полями — backend сам делает AND-пересечение
-// (ADR-040/ADR-041 security invariant: invocation сужает scope, не расширяет).
+// AND-merge: glob/regex/where are joined with `&&` into one final `where`.
+// sids and coven stay separate fields — the backend does the AND-intersection
+// itself (ADR-040/ADR-041 security invariant: an invocation narrows scope,
+// never widens it).
 type targetFlags struct {
 	SIDs  string
 	Coven string
@@ -28,8 +30,8 @@ type targetFlags struct {
 	Where string
 }
 
-// bind навешивает `--target-*` флаги на cobra-команду. Имена совпадают у всех
-// `run` sub-команд (отсюда общий helper, без дубликата).
+// bind attaches the `--target-*` flags to a cobra command. Names match across
+// all `run` sub-commands (hence a shared helper instead of duplication).
 func (t *targetFlags) bind(c *cobra.Command) {
 	c.Flags().StringVar(&t.SIDs, "target-sids", "",
 		"CSV exact-match SID-ов (`host1,host2`)")
@@ -43,22 +45,23 @@ func (t *targetFlags) bind(c *cobra.Command) {
 		"raw CEL-предикат (`soulprint.self.os.family == \"debian\"`)")
 }
 
-// resolvedTarget — итог парсинга/склейки. Любой пустой компонент остаётся
-// пустым; вызывающая sub-команда сама решает, какие поля укладывать в body.
+// resolvedTarget — the result of parsing/merging. Any empty component stays
+// empty; the calling sub-command decides which fields to put in the body.
 type resolvedTarget struct {
 	SIDs  []string
 	Coven []string
 	Where string
 }
 
-// hasAny — хоть один компонент target-а задан.
+// hasAny reports whether at least one target component is set.
 func (r resolvedTarget) hasAny() bool {
 	return len(r.SIDs) > 0 || len(r.Coven) > 0 || r.Where != ""
 }
 
-// resolve парсит CSV-поля, склеивает glob/regex/where в итоговый CEL. Пустые
-// токены CSV отбрасываются (`a,,b` → `[a, b]`); валидация формы pattern-а —
-// серверная (soul-lint валидирует CEL, синтаксис filepath.Match — runtime).
+// resolve parses the CSV fields and joins glob/regex/where into the final
+// CEL. Empty CSV tokens are dropped (`a,,b` → `[a, b]`); pattern-shape
+// validation is server-side (soul-lint validates CEL; filepath.Match syntax
+// is checked at runtime).
 func (t targetFlags) resolve() (resolvedTarget, error) {
 	out := resolvedTarget{
 		SIDs:  splitCSV(t.SIDs),
@@ -72,16 +75,16 @@ func (t targetFlags) resolve() (resolvedTarget, error) {
 		parts = append(parts, "sid.matches("+quoteCEL(t.Regex)+")")
 	}
 	if t.Where != "" {
-		// Заворачиваем raw CEL в скобки — оператор мог написать `a || b`,
-		// без скобок AND-склейка изменила бы приоритет.
+		// Wrap raw CEL in parens — the operator may have written `a || b`;
+		// without parens the AND-merge would change precedence.
 		parts = append(parts, "("+t.Where+")")
 	}
 	out.Where = strings.Join(parts, " && ")
 	return out, nil
 }
 
-// require — проверка «target обязан быть задан». Используется sub-командами,
-// где scope без target бессмыслен (cmd: без хостов нечего запускать).
+// require checks that "a target must be set." Used by sub-commands where a
+// scope without a target is meaningless (cmd: nothing to run without hosts).
 func (r resolvedTarget) require() error {
 	if !r.hasAny() {
 		return errors.New("требуется хотя бы один `--target-*` флаг (sids/coven/glob/regex/where)")
@@ -89,8 +92,8 @@ func (r resolvedTarget) require() error {
 	return nil
 }
 
-// splitCSV режет строку по запятой, тримит пробелы, отбрасывает пустые токены.
-// Пустой вход → nil (а не []string{}), чтобы json-omitempty корректно работало.
+// splitCSV splits a string on commas, trims whitespace, and drops empty
+// tokens. Empty input → nil (not []string{}) so json-omitempty works right.
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -109,9 +112,9 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// quoteCEL экранирует строковый литерал для CEL. CEL принимает double-quoted
-// строки с escape-семантикой Go (cel-spec § Lexical analysis → string), поэтому
-// достаточно экранировать `\` и `"`.
+// quoteCEL escapes a string literal for CEL. CEL accepts double-quoted
+// strings with Go escape semantics (cel-spec § Lexical analysis → string), so
+// escaping `\` and `"` is enough.
 func quoteCEL(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 2)

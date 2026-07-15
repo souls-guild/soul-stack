@@ -10,13 +10,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Офлайн-проверка $type-ссылок против каталога типов сервиса. Фикстура — мини-
-// сервис на диске: <root>/types.yml + <root>/scenario/<name>/main.yml. Линтуем
-// main.yml, проверяем, что unknown/cycle/duplicate из каталога и резолва ловятся.
+// Offline validation of $type references against the service's type
+// catalog. Fixture — a mini-service on disk: <root>/types.yml +
+// <root>/scenario/<name>/main.yml. Lint main.yml, verify that
+// unknown/cycle/duplicate from the catalog and the resolve are caught.
 
-// writeMiniService раскладывает мини-сервис: types.yml в корне + scenario/<name>/
-// main.yml. typesYAML=="" → types.yml не создаётся (каталог отсутствует).
-// Возвращает путь к main.yml.
+// writeMiniService lays out a mini-service: types.yml at the root +
+// scenario/<name>/main.yml. typesYAML=="" → types.yml isn't created (no
+// catalog). Returns the path to main.yml.
 func writeMiniService(t *testing.T, typesYAML, scenarioName, mainYAML string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -36,7 +37,7 @@ func writeMiniService(t *testing.T, typesYAML, scenarioName, mainYAML string) st
 	return mainPath
 }
 
-// runJSON прогоняет линт сценария в JSON-режиме, возвращает диагностики.
+// runJSON runs scenario lint in JSON mode and returns the diagnostics.
 func runJSON(t *testing.T, mainPath string) []diag.Diagnostic {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -62,7 +63,7 @@ func hasCode(diags []diag.Diagnostic, code string) bool {
 	return false
 }
 
-// Валидная ссылка на существующий тип — без ошибок типов.
+// A valid reference to an existing type — no type errors.
 func TestTypeRefs_ValidRef_OK(t *testing.T) {
 	types := `types:
   Endpoint:
@@ -86,7 +87,7 @@ tasks: []
 	}
 }
 
-// Ссылка на отсутствующий тип → input_type_unknown.
+// A reference to a missing type → input_type_unknown.
 func TestTypeRefs_Unknown(t *testing.T) {
 	types := `types:
   Endpoint:
@@ -108,7 +109,8 @@ tasks: []
 	}
 }
 
-// Цикл между типами в каталоге → input_type_cycle (НЕ зависание линтера).
+// A cycle between types in the catalog → input_type_cycle (NOT a linter
+// hang).
 func TestTypeRefs_CatalogCycle(t *testing.T) {
 	types := `types:
   A:
@@ -135,7 +137,7 @@ tasks: []
 	}
 }
 
-// Дубликат имени типа в каталоге → input_type_duplicate.
+// A duplicate type name in the catalog → input_type_duplicate.
 func TestTypeRefs_Duplicate(t *testing.T) {
 	types := `types:
   Dup:
@@ -156,8 +158,8 @@ tasks: []
 	}
 }
 
-// $type + inline type на узле → input_type_ref_conflict (ловит парс сценария,
-// каталог не нужен).
+// $type + an inline type on a node → input_type_ref_conflict (caught by
+// scenario parse, no catalog needed).
 func TestTypeRefs_Conflict(t *testing.T) {
 	main := `name: deploy
 input:
@@ -173,7 +175,8 @@ tasks: []
 	}
 }
 
-// Back-compat: сценарий без $type не требует types.yml и не ломается.
+// Back-compat: a scenario without $type doesn't require types.yml and
+// doesn't break.
 func TestTypeRefs_NoRef_BackCompat(t *testing.T) {
 	main := `name: deploy
 input:

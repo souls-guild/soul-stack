@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 )
 
-// TestErrandExec_Sync — 200 от Keeper-а → возврат full result, async=false.
+// TestErrandExec_Sync — 200 from the Keeper → returns the full result, async=false.
 func TestErrandExec_Sync(t *testing.T) {
 	exit := int32(0)
 	dur := int64(123)
@@ -65,8 +65,8 @@ func TestErrandExec_Sync(t *testing.T) {
 	}
 }
 
-// TestErrandExec_Async — 202-форма (только errand_id + status:running без
-// finished_at) → клиент должен пометить async=true.
+// TestErrandExec_Async — the 202 form (only errand_id + status:running,
+// no finished_at) → the client must mark async=true.
 func TestErrandExec_Async(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/souls/long.example.com/exec": func(w http.ResponseWriter, _ *http.Request) {
@@ -97,7 +97,7 @@ func TestErrandExec_Async(t *testing.T) {
 	}
 }
 
-// TestErrandExec_Forbidden — 403 от Keeper-а → APIError со Status=403.
+// TestErrandExec_Forbidden — 403 from the Keeper → APIError with Status=403.
 func TestErrandExec_Forbidden(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/souls/web-01.example.com/exec": func(w http.ResponseWriter, _ *http.Request) {
@@ -127,7 +127,7 @@ func TestErrandExec_Forbidden(t *testing.T) {
 	}
 }
 
-// TestErrandGet_Terminal — 200 с finished_at → async=false, full result.
+// TestErrandGet_Terminal — 200 with finished_at → async=false, full result.
 func TestErrandGet_Terminal(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/errands/01HFTEST": func(w http.ResponseWriter, _ *http.Request) {
@@ -154,7 +154,7 @@ func TestErrandGet_Terminal(t *testing.T) {
 	}
 }
 
-// TestErrandList_Filters — query-параметры sid / status / limit прокидываются.
+// TestErrandList_Filters — the sid / status / limit query parameters are passed through.
 func TestErrandList_Filters(t *testing.T) {
 	called := int32(0)
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -210,7 +210,7 @@ func TestErrandCancel_Happy(t *testing.T) {
 	}
 }
 
-// TestErrandCancel_Conflict — 409 (терминальный Errand) пробрасывается APIError-ом.
+// TestErrandCancel_Conflict — 409 (terminal Errand) is propagated as an APIError.
 func TestErrandCancel_Conflict(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/errands/01HFDONE": func(w http.ResponseWriter, _ *http.Request) {
@@ -234,7 +234,7 @@ func TestErrandCancel_Conflict(t *testing.T) {
 	}
 }
 
-// TestErrandCancel_EmptyID — клиент сам отвергает пустой errand_id.
+// TestErrandCancel_EmptyID — the client itself rejects an empty errand_id.
 func TestErrandCancel_EmptyID(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{})
 	if err := cl.Errand.Cancel(context.Background(), ""); err == nil {
@@ -244,7 +244,7 @@ func TestErrandCancel_EmptyID(t *testing.T) {
 	}
 }
 
-// TestErrandGet_NotFound — 404 на не найденный errand_id.
+// TestErrandGet_NotFound — 404 for an errand_id that doesn't exist.
 func TestErrandGet_NotFound(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/errands/01HFNOSUCH": func(w http.ResponseWriter, _ *http.Request) {

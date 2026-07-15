@@ -15,8 +15,8 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/config"
 )
 
-// makeJWT — собирает JWT с произвольными claims (header/signature — заглушки).
-// Подпись не проверяется на клиенте, поэтому достаточно валидного base64.
+// makeJWT builds a JWT with arbitrary claims (header/signature are stubs).
+// The client doesn't verify the signature, so a valid base64 blob is enough.
 func makeJWT(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))

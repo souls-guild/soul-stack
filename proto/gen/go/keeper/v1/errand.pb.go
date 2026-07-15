@@ -22,8 +22,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ErrandStatus — терминальные статусы Errand. UNSPECIFIED — служебный
-// (forward-compat-маркер), не должен встречаться в финальном ErrandResult.
+// ErrandStatus lists an Errand's terminal statuses. UNSPECIFIED is a service
+// value (a forward-compat marker) and should never appear in a final ErrandResult.
 type ErrandStatus int32
 
 const (
@@ -85,23 +85,24 @@ func (ErrandStatus) EnumDescriptor() ([]byte, []int) {
 	return file_keeper_v1_errand_proto_rawDescGZIP(), []int{0}
 }
 
-// ErrandRequest — Keeper → Soul: pull-ad-hoc exec одиночного модуля (ADR-033).
+// ErrandRequest is Keeper -> Soul: a pull ad-hoc exec of a single module (ADR-033).
 //
-// Errand — это НЕ scenario и НЕ apply: incarnation/state не задействованы, нет
-// state_changes/RunResult/cross-host barrier. Только дёргание одного модуля на
-// конкретном SID через уже доверенный mTLS-канал EventStream.
+// An Errand is NOT a scenario and NOT an apply: incarnation/state aren't
+// involved, there's no state_changes/RunResult/cross-host barrier. It's just
+// invoking one module on a specific SID over the already-trusted mTLS EventStream
+// channel.
 //
-// Whitelist на Soul-side (defense-in-depth): жёсткий список
-// `core.cmd.shell`/`core.exec.run` либо marker-интерфейс `ErrandReadSafe` в
-// sdk/module/. Любой другой модуль → ErrandResult.status = MODULE_NOT_ALLOWED
-// без вызова `SoulModule.Apply`.
+// Soul-side whitelist (defense-in-depth): a hard-coded list of
+// `core.cmd.shell`/`core.exec.run`, or the `ErrandReadSafe` marker interface in
+// sdk/module/. Any other module -> ErrandResult.status = MODULE_NOT_ALLOWED
+// without calling `SoulModule.Apply`.
 type ErrandRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	ErrandId       string                 `protobuf:"bytes,1,opt,name=errand_id,json=errandId,proto3" json:"errand_id,omitempty"`                    // ULID, выписан Keeper-ом при приёме запроса.
+	ErrandId       string                 `protobuf:"bytes,1,opt,name=errand_id,json=errandId,proto3" json:"errand_id,omitempty"`                    // ULID, issued by Keeper when the request is accepted.
 	Module         string                 `protobuf:"bytes,2,opt,name=module,proto3" json:"module,omitempty"`                                        // Fully-qualified `<ns>.<name>.<state>`.
-	Input          *structpb.Struct       `protobuf:"bytes,3,opt,name=input,proto3" json:"input,omitempty"`                                          // Прошёл input-validation + CEL-render на Keeper-side.
-	TimeoutSeconds int32                  `protobuf:"varint,4,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // 1..300, server-cap; Soul применяет тот же cap defense-in-depth.
-	DryRun         bool                   `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`                         // Только для модулей с PlanReadSafe; иначе 400 errand_dry_run_unsupported.
+	Input          *structpb.Struct       `protobuf:"bytes,3,opt,name=input,proto3" json:"input,omitempty"`                                          // Passed through input validation + CEL render on Keeper's side.
+	TimeoutSeconds int32                  `protobuf:"varint,4,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // 1..300, server cap; Soul applies the same cap for defense-in-depth.
+	DryRun         bool                   `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`                         // Only for modules with PlanReadSafe; otherwise 400 errand_dry_run_unsupported.
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -171,26 +172,26 @@ func (x *ErrandRequest) GetDryRun() bool {
 	return false
 }
 
-// ErrandResult — Soul → Keeper: финальный отчёт Errand (ADR-033).
+// ErrandResult is Soul -> Keeper: the final Errand report (ADR-033).
 //
-// Симметричен `RunResult` для apply-цепочки, но НЕСЁТ другой контракт:
-//   - state_changes отсутствуют (Errand не мутирует incarnation.state);
-//   - stdout/stderr — captured вывод verb-модулей (cap 64 KiB, маскированный
-//     общим secret-masking, при превышении флаг `*_truncated`=true);
-//   - `output` — структурный output для read-safe модулей (например, будущий
-//     `core.http.probe` положит сюда status/headers/elapsed_ms).
+// Symmetric to `RunResult` for the apply chain, but carries a different contract:
+//   - no state_changes (an Errand doesn't mutate incarnation.state);
+//   - stdout/stderr are the captured output of verb modules (capped at 64 KiB,
+//     masked by the common secret-masking, with `*_truncated`=true set on overflow);
+//   - `output` is structured output for read-safe modules (e.g. the future
+//     `core.http.probe` will put status/headers/elapsed_ms here).
 type ErrandResult struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ErrandId        string                 `protobuf:"bytes,1,opt,name=errand_id,json=errandId,proto3" json:"errand_id,omitempty"`
 	Status          ErrandStatus           `protobuf:"varint,2,opt,name=status,proto3,enum=soulstack.keeper.v1.ErrandStatus" json:"status,omitempty"`
 	ExitCode        int32                  `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	Stdout          string                 `protobuf:"bytes,4,opt,name=stdout,proto3" json:"stdout,omitempty"` // cap 64 KiB, маскированный.
-	Stderr          string                 `protobuf:"bytes,5,opt,name=stderr,proto3" json:"stderr,omitempty"` // cap 64 KiB, маскированный.
+	Stdout          string                 `protobuf:"bytes,4,opt,name=stdout,proto3" json:"stdout,omitempty"` // capped at 64 KiB, masked.
+	Stderr          string                 `protobuf:"bytes,5,opt,name=stderr,proto3" json:"stderr,omitempty"` // capped at 64 KiB, masked.
 	StdoutTruncated bool                   `protobuf:"varint,6,opt,name=stdout_truncated,json=stdoutTruncated,proto3" json:"stdout_truncated,omitempty"`
 	StderrTruncated bool                   `protobuf:"varint,7,opt,name=stderr_truncated,json=stderrTruncated,proto3" json:"stderr_truncated,omitempty"`
 	DurationMs      int64                  `protobuf:"varint,8,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
-	ErrorMessage    string                 `protobuf:"bytes,9,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // маскированный; для FAILED/MODULE_NOT_ALLOWED/TIMED_OUT.
-	Output          *structpb.Struct       `protobuf:"bytes,10,opt,name=output,proto3" json:"output,omitempty"`                                // Структурный output read-safe модулей; для shell/exec — пустой.
+	ErrorMessage    string                 `protobuf:"bytes,9,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // masked; for FAILED/MODULE_NOT_ALLOWED/TIMED_OUT.
+	Output          *structpb.Struct       `protobuf:"bytes,10,opt,name=output,proto3" json:"output,omitempty"`                                // Structured output for read-safe modules; empty for shell/exec.
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -295,17 +296,17 @@ func (x *ErrandResult) GetOutput() *structpb.Struct {
 	return nil
 }
 
-// CancelErrand — Keeper → Soul: запрос на отмену in-flight Errand-а (ADR-033
-// slice E5). Keeper отправляет сообщение в FromKeeper-stream целевого SID
-// (тот же путь, что и ErrandRequest), Soul-side errandrunner находит активную
-// Run-горутину по `errand_id` и отменяет её ctx → Run возвращает
-// `ErrandResult{status: CANCELLED}` через тот же EventStream-канал.
+// CancelErrand is Keeper -> Soul: a request to cancel an in-flight Errand
+// (ADR-033 slice E5). Keeper sends the message on the target SID's
+// FromKeeper stream (the same path as ErrandRequest); the Soul-side errandrunner
+// finds the active Run goroutine by `errand_id` and cancels its ctx -> Run returns
+// `ErrandResult{status: CANCELLED}` over the same EventStream channel.
 //
-// Best-effort signal: Soul может уже терминалить Errand к моменту прибытия
-// CancelErrand (race), либо `errand_id` неизвестен (закончился до cancel) —
-// тогда сообщение тихо игнорируется без отправки результата. Keeper-side
-// Dispatcher маркирует строку как cancelled только при получении валидного
-// ErrandResult{status: CANCELLED} от Soul-а.
+// Best-effort signal: Soul may already be terminating the Errand by the time
+// CancelErrand arrives (a race), or `errand_id` may be unknown (it finished
+// before the cancel) — in that case the message is silently ignored and no result
+// is sent. The Keeper-side Dispatcher only marks the row cancelled on receiving a
+// valid ErrandResult{status: CANCELLED} from Soul.
 type CancelErrand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ErrandId      string                 `protobuf:"bytes,1,opt,name=errand_id,json=errandId,proto3" json:"errand_id,omitempty"`

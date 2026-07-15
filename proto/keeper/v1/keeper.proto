@@ -13,23 +13,23 @@ import "keeper/v1/errand.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
-// Keeper — контракт Keeper↔Soul по ADR-012.
+// Keeper is the Keeper<->Soul contract per ADR-012.
 service Keeper {
-  // Pilot RPC, оставлен для smoke-test генерации и health-check.
+  // Pilot RPC, kept for generation smoke-tests and health checks.
   rpc Ping(PingRequest) returns (PingReply);
 
-  // Onboarding: unary RPC, server-only TLS, отдельный listener Keeper-а.
-  // Запускается командой `soul init` единожды.
+  // Onboarding: unary RPC, server-only TLS, a separate Keeper listener.
+  // Triggered once by the `soul init` command.
   rpc Bootstrap(BootstrapRequest) returns (BootstrapReply);
 
-  // EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
-  // Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
+  // EventStream: a long-lived bidirectional gRPC stream with mTLS.
+  // The only communication channel after onboarding (ADR-002, ADR-012(a)).
   rpc EventStream(stream FromSoul) returns (stream FromKeeper);
 
-  // FetchModule: server-streaming раздача байтов SoulModule-плагина по
-  // content-addressed sha256 (эпик core.module.installed, S2). Тот же
-  // mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
-  // control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+  // FetchModule: server-streaming delivery of a SoulModule plugin's bytes by
+  // content-addressed sha256 (epic core.module.installed, S2). Same mTLS listener
+  // as EventStream; a separate HTTP/2 stream keeps the control plane free. Keeper
+  // only ever serves a sigil-allowed binary (fail-closed).
   rpc FetchModule(PluginFetchRequest) returns (stream PluginChunk);
 }
 
@@ -39,7 +39,7 @@ message PingReply {
   string version = 1;
 }
 
-// FromSoul — wrapper-message для сообщений Soul → Keeper в EventStream.
+// FromSoul is the wrapper message for Soul -> Keeper messages on EventStream.
 message FromSoul {
   oneof payload {
     Hello hello = 1;
@@ -54,7 +54,7 @@ message FromSoul {
   }
 }
 
-// FromKeeper — wrapper-message для сообщений Keeper → Soul в EventStream.
+// FromKeeper is the wrapper message for Keeper -> Soul messages on EventStream.
 message FromKeeper {
   oneof payload {
     HelloReply hello_reply = 1;

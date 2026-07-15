@@ -22,19 +22,19 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// AugurStatus — исход авторизации/исполнения Augur-запроса на Keeper-е.
+// AugurStatus is the outcome of authorizing/executing an Augur request on Keeper.
 type AugurStatus int32
 
 const (
-	// Не задан. Soul трактует как DENIED (default-deny): отсутствие явного OK —
-	// это запрет, а не «продолжить».
+	// Unset. Soul treats this as DENIED (default-deny): the absence of an explicit
+	// OK is a refusal, not "go ahead".
 	AugurStatus_AUGUR_STATUS_UNSPECIFIED AugurStatus = 0
-	// Доступ разрешён и данные/credential приложены в AugurReply.result.
+	// Access granted, data/credential attached in AugurReply.result.
 	AugurStatus_AUGUR_STATUS_OK AugurStatus = 1
-	// Доступ запрещён авторизацией (Omen не найден / Soul не в Rite / query вне
-	// allow-list). error может нести человекочитаемую причину.
+	// Access denied by authorization (Omen not found / Soul not in the Rite / query
+	// outside the allow-list). error may carry a human-readable reason.
 	AugurStatus_AUGUR_STATUS_DENIED AugurStatus = 2
-	// Сбой исполнения на стороне Keeper-а/Omen (внешняя система недоступна и т.п.).
+	// Execution failure on Keeper/Omen's side (external system unavailable, etc.).
 	AugurStatus_AUGUR_STATUS_ERROR AugurStatus = 3
 )
 
@@ -81,25 +81,27 @@ func (AugurStatus) EnumDescriptor() ([]byte, []int) {
 	return file_keeper_v1_augur_proto_rawDescGZIP(), []int{0}
 }
 
-// AugurRequest — запрос Soul → Keeper на живой доступ к внешней системе через
-// брокер Augur (ADR-025). Едет only-add в FromSoul.oneof существующего
-// EventStream-а — нового RPC нет.
+// AugurRequest is Soul -> Keeper's request for live access to an external system
+// through the Augur broker (ADR-025). Rides only-add in the existing
+// EventStream's FromSoul.oneof — no new RPC.
 //
-// SID в payload НЕ передаётся: авторитет идентичности Soul-а — mTLS peer cert
-// (ADR-012(i)). Keeper резолвит SID из сертификата, по нему — covens, и сверяет
-// доступ с реестром Rite (субъект coven XOR sid → Omen → allow-list).
+// SID is NOT sent in the payload: the authority for Soul's identity is the mTLS
+// peer cert (ADR-012(i)). Keeper resolves SID from the certificate, covens from
+// that, and checks access against the Rite registry (subject coven XOR sid ->
+// Omen -> allow-list).
 type AugurRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Корреляция request↔reply внутри одного EventStream-а: Keeper эхо-вернёт его
-	// в AugurReply.request_id, Soul по нему сопоставит ответ со своим ожиданием.
+	// Correlates request<->reply within one EventStream: Keeper echoes it back in
+	// AugurReply.request_id, and Soul matches the reply to its pending request by it.
 	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	// apply_id прогона, в рамках которого запрошен доступ. Используется для аудита
-	// (audit-event `augur.*` пишется с correlation_id = apply_id, ADR-025).
+	// The apply_id of the run this access request belongs to. Used for audit
+	// (the `augur.*` audit event is written with correlation_id = apply_id, ADR-025).
 	ApplyId string `protobuf:"bytes,2,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// Имя Omen (omens.name) — внешней системы, к которой запрашивается доступ.
+	// Omen name (omens.name) — the external system access is being requested for.
 	OmenName string `protobuf:"bytes,3,opt,name=omen_name,json=omenName,proto3" json:"omen_name,omitempty"`
-	// Запрос к Omen: KV-путь (vault) / promQL (prometheus) / index-query (elk).
-	// Keeper сверяет его с allow-list-ом соответствующего Rite перед исполнением.
+	// The query sent to the Omen: a KV path (vault) / promQL (prometheus) /
+	// index query (elk). Keeper checks it against the matching Rite's allow-list
+	// before executing.
 	Query         string `protobuf:"bytes,4,opt,name=query,proto3" json:"query,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -163,16 +165,16 @@ func (x *AugurRequest) GetQuery() string {
 	return ""
 }
 
-// ScopedVaultToken — эфемерный scoped Vault-токен для delegate=true (MVP-2):
-// Soul ходит в Vault напрямую этим токеном. Сейчас вводится ТОЛЬКО контракт —
-// минтинг на Keeper-е и прямой fetch на Soul-е реализуются в MVP-2.
+// ScopedVaultToken is an ephemeral scoped Vault token for delegate=true (MVP-2):
+// Soul talks to Vault directly with this token. Only the contract is introduced
+// now — minting on Keeper and direct fetch on Soul are implemented in MVP-2.
 type ScopedVaultToken struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// SENSITIVE: never log. Сам Vault-токен.
+	// SENSITIVE: never log. The Vault token itself.
 	Token string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
-	// TTL токена. Формат — convention `duration` Soul Stack (Go-duration "5m" и т.п.).
+	// Token TTL. Format is Soul Stack's `duration` convention (Go-duration "5m", etc.).
 	Ttl string `protobuf:"bytes,2,opt,name=ttl,proto3" json:"ttl,omitempty"`
-	// num_uses токена (число допустимых использований до самоотзыва Vault-ом).
+	// Token num_uses (how many times it may be used before Vault self-revokes it).
 	NumUses       int32 `protobuf:"varint,3,opt,name=num_uses,json=numUses,proto3" json:"num_uses,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -229,12 +231,12 @@ func (x *ScopedVaultToken) GetNumUses() int32 {
 	return 0
 }
 
-// ScopedStaticCred — scoped read-only static credential для delegate=true
-// (MVP-2): pre-scoped read-key для prometheus/elk, Soul делает прямой
-// read-only-запрос. Сейчас вводится ТОЛЬКО контракт (см. ScopedVaultToken).
+// ScopedStaticCred is a scoped read-only static credential for delegate=true
+// (MVP-2): a pre-scoped read key for prometheus/elk, Soul makes a direct
+// read-only request. Only the contract is introduced now (see ScopedVaultToken).
 type ScopedStaticCred struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// SENSITIVE: never log. Сам credential (pre-scoped read-key).
+	// SENSITIVE: never log. The credential itself (pre-scoped read key).
 	Credential    string `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -277,18 +279,18 @@ func (x *ScopedStaticCred) GetCredential() string {
 	return ""
 }
 
-// AugurReply — ответ Keeper → Soul на AugurRequest. Едет only-add в
-// FromKeeper.oneof существующего EventStream-а.
+// AugurReply is Keeper -> Soul's response to AugurRequest. Rides only-add in the
+// existing EventStream's FromKeeper.oneof.
 type AugurReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Эхо AugurRequest.request_id для корреляции.
+	// Echo of AugurRequest.request_id for correlation.
 	RequestId string      `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	Status    AugurStatus `protobuf:"varint,2,opt,name=status,proto3,enum=soulstack.keeper.v1.AugurStatus" json:"status,omitempty"`
-	// Человекочитаемая причина для DENIED/ERROR (для логов/диагностики Soul-а).
-	// Пусто при OK.
+	// Human-readable reason for DENIED/ERROR (for Soul's logs/diagnostics).
+	// Empty when OK.
 	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	// result заполнен только при status = OK. Ветвь выбирается на Keeper-е по
-	// delegate / source_type соответствующего Rite (ADR-025).
+	// result is populated only when status = OK. The branch is picked on Keeper by
+	// the matching Rite's delegate / source_type (ADR-025).
 	//
 	// Types that are valid to be assigned to Result:
 	//
@@ -390,17 +392,17 @@ type isAugurReply_Result interface {
 }
 
 type AugurReply_InlineData struct {
-	// delegate=false (MVP-1): Keeper сам сходил в Omen и вернул данные inline.
+	// delegate=false (MVP-1): Keeper queried the Omen itself and returned data inline.
 	InlineData *structpb.Struct `protobuf:"bytes,4,opt,name=inline_data,json=inlineData,proto3,oneof"`
 }
 
 type AugurReply_ScopedVaultToken struct {
-	// delegate=true + vault (MVP-2): эфемерный scoped Vault-токен.
+	// delegate=true + vault (MVP-2): an ephemeral scoped Vault token.
 	ScopedVaultToken *ScopedVaultToken `protobuf:"bytes,5,opt,name=scoped_vault_token,json=scopedVaultToken,proto3,oneof"`
 }
 
 type AugurReply_ScopedStaticCred struct {
-	// delegate=true + prometheus/elk (MVP-2): scoped read-only static cred.
+	// delegate=true + prometheus/elk (MVP-2): a scoped read-only static cred.
 	ScopedStaticCred *ScopedStaticCred `protobuf:"bytes,6,opt,name=scoped_static_cred,json=scopedStaticCred,proto3,oneof"`
 }
 

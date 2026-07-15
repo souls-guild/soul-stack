@@ -6,39 +6,40 @@ import (
 	"fmt"
 )
 
-// FailClass — единая таксономия причин отказа CloudDriver-операции, общая для
-// всех провайдеров (AWS/GCP/Azure/YC/Proxmox/OpenStack). Per-provider код
-// маппит свои API-ошибки в один из этих классов через [ClassifyFunc], а
-// SDK формирует консистентный человекочитаемый message — иначе тираж 5
-// драйверов даст 5 диалектов error-сообщений.
+// FailClass is the unified taxonomy of CloudDriver operation failure
+// reasons, shared across all providers (AWS/GCP/Azure/YC/Proxmox/OpenStack).
+// Per-provider code maps its API errors to one of these classes via
+// [ClassifyFunc], and the SDK builds a consistent human-readable message —
+// otherwise a lineup of 5 drivers would produce 5 dialects of error
+// messages.
 type FailClass int
 
 const (
-	// FailUnknown — причина не распознана классификатором провайдера.
-	// Транзиентность неизвестна → не ретраится (см. [FailClass.Transient]).
+	// FailUnknown means the reason wasn't recognized by the provider's
+	// classifier. Transience is unknown → not retried (see [FailClass.Transient]).
 	FailUnknown FailClass = iota
 
-	// FailNotFound — запрошенный ресурс отсутствует (образ/subnet/VM/квота-объект).
+	// FailNotFound means the requested resource is missing (image/subnet/VM/quota object).
 	FailNotFound
 
-	// FailQuota — превышена квота/лимит провайдера (instances, vCPU, IP).
+	// FailQuota means the provider's quota/limit was exceeded (instances, vCPU, IP).
 	FailQuota
 
-	// FailAuth — отказ аутентификации/авторизации (битые/просроченные
-	// credentials, нет прав на действие).
+	// FailAuth means authentication/authorization was refused (broken/expired
+	// credentials, no permission for the action).
 	FailAuth
 
-	// FailInvalidParams — параметры профиля невалидны на стороне провайдера
-	// (несовместимый instance_type для AMI, неверный формат и т.п.).
+	// FailInvalidParams means the profile parameters are invalid on the
+	// provider's side (incompatible instance_type for the AMI, bad format, etc.).
 	FailInvalidParams
 
-	// FailTransient — временная ошибка (throttling, 5xx, сетевой сбой):
-	// ретраится с backoff (см. [Retry]).
+	// FailTransient means a temporary error (throttling, 5xx, network
+	// failure): retried with backoff (see [Retry]).
 	FailTransient
 )
 
-// String — стабильный машинно-читаемый код класса (идёт в message-префикс,
-// используется тестами тиража для assert-ов).
+// String returns the stable machine-readable class code (goes into the
+// message prefix, used by lineup tests for assertions).
 func (c FailClass) String() string {
 	switch c {
 	case FailNotFound:
@@ -56,22 +57,23 @@ func (c FailClass) String() string {
 	}
 }
 
-// Transient — true для классов, которые имеет смысл ретраить ([Retry]
-// опирается на это). Только [FailTransient] транзиентен; auth/quota/not_found/
-// invalid_params — детерминированные отказы, ретрай их не починит.
+// Transient returns true for classes worth retrying ([Retry] relies on
+// this). Only [FailTransient] is transient; auth/quota/not_found/
+// invalid_params are deterministic failures that a retry won't fix.
 func (c FailClass) Transient() bool { return c == FailTransient }
 
-// ClassifyFunc — per-provider классификатор: разбирает нативную ошибку
-// провайдерского SDK в [FailClass]. Единственное, что драйвер обязан написать
-// сам; backoff/retry/маппинг-в-event берёт на себя SDK. ctx-ошибки
-// (Canceled/DeadlineExceeded) драйвер классифицировать НЕ должен — их ловит
-// [Classify] до вызова func.
+// ClassifyFunc is a per-provider classifier: parses a native error from the
+// provider's SDK into a [FailClass]. The only thing a driver must write
+// itself; backoff/retry/mapping-to-event is handled by the SDK. The driver
+// must NOT classify ctx errors (Canceled/DeadlineExceeded) — [Classify]
+// catches those before calling func.
 type ClassifyFunc func(err error) FailClass
 
-// Classify — обёртка над per-provider [ClassifyFunc] с общей предобработкой:
+// Classify wraps a per-provider [ClassifyFunc] with common preprocessing:
 // nil → [FailUnknown]; context.Canceled/DeadlineExceeded → [FailTransient]
-// (отмена/таймаут — повод свернуться, но это не детерминированный отказ).
-// Остальное делегируется fn (nil fn → [FailUnknown]).
+// (a cancellation/timeout is a reason to wind down, but it's not a
+// deterministic failure). Everything else is delegated to fn (nil fn →
+// [FailUnknown]).
 func Classify(fn ClassifyFunc, err error) FailClass {
 	if err == nil {
 		return FailUnknown
@@ -85,9 +87,10 @@ func Classify(fn ClassifyFunc, err error) FailClass {
 	return fn(err)
 }
 
-// FailMessage — консолидированный message для failed-event: `<class>: <op>: <err>`.
-// `op` — короткое имя фазы («RunInstances», «wait-until-ready»). Формат един
-// для всех драйверов, чтобы Keeper/оператор видели одинаковую структуру.
+// FailMessage builds the consolidated message for a failed-event:
+// `<class>: <op>: <err>`. `op` is a short phase name ("RunInstances",
+// "wait-until-ready"). The format is uniform across all drivers, so
+// Keeper/the operator sees the same structure.
 func FailMessage(class FailClass, op string, err error) string {
 	return fmt.Sprintf("%s: %s: %v", class, op, err)
 }

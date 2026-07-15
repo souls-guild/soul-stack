@@ -1,19 +1,20 @@
-// Package plugininit реализует подкоманду `soul-lint plugin-init`.
+// Package plugininit implements the `soul-lint plugin-init` subcommand.
 //
-// Scaffold нового SoulModule-плагина по спецификации [ADR-016 amendment
-// 2026-05-27] и [ADR-020]. Все артефакты (manifest.yaml / main.go / handler.go
-// / Makefile / README.md / tests/) embedded через go:embed из
-// `template/`-каталога этого пакета — единого источника правды для CLI и
-// (через периодическую копию) для git-template-репо
+// It scaffolds a new SoulModule plugin per [ADR-016 amendment 2026-05-27]
+// and [ADR-020]. All artifacts (manifest.yaml / main.go / handler.go /
+// Makefile / README.md / tests/) are embedded via go:embed from this
+// package's `template/` directory — the single source of truth for the CLI
+// and, via a periodic copy, for the git template repo
 // `github.com/co-cy/soul-stack-plugins`.
 //
-// Контракт: оба пути (CLI и `git clone soul-stack-plugins/soul-mod-template`)
-// должны выдавать идентичное дерево после substitution placeholder-ов; sync
-// между двумя копиями — manual / scripts/sync-template.sh.
+// Contract: both paths (the CLI and `git clone
+// soul-stack-plugins/soul-mod-template`) must produce an identical tree
+// after placeholder substitution; syncing the two copies is manual, via
+// scripts/sync-template.sh.
 //
-// Exit-codes симметричны остальным `soul-lint`-подкомандам:
+// Exit codes mirror the other `soul-lint` subcommands:
 //
-//	0 — ok (scaffold создан)
+//	0 — ok (scaffold created)
 //	2 — usage / I/O fatal
 package plugininit
 
@@ -30,44 +31,47 @@ import (
 	"text/template"
 )
 
-// Embedded template-tree. `all:` обязателен — иначе go:embed по умолчанию
-// игнорирует имена, начинающиеся с `.` (например, `.gitignore.tmpl`).
+// Embedded template tree. `all:` is required — otherwise go:embed ignores
+// names starting with `.` by default (e.g. `.gitignore.tmpl`).
 //
 //go:embed all:template
 var templateFS embed.FS
 
-// Текущая версия plugin-протокола, проставляется в manifest.yaml.
-// Должна совпадать с shared/plugin.SupportedProtocolVersions[0] и
-// pluginhost.SupportedProtocolVersions. Дублирование осознанное:
-// soul-lint не импортирует pluginhost; shared/plugin тянет goccy-yaml-парсер
-// (тяжёлая зависимость, лишняя для scaffold-команды).
+// Current plugin protocol version, stamped into manifest.yaml. Must match
+// shared/plugin.SupportedProtocolVersions[0] and
+// pluginhost.SupportedProtocolVersions. The duplication is deliberate:
+// soul-lint doesn't import pluginhost, and shared/plugin pulls in the
+// goccy YAML parser — a heavy dependency the scaffold command doesn't need.
 const currentProtocolVersion = 1
 
-// Exit-codes — стабильный CLI-контракт (см. soul-lint/cmd/soul-lint/main.go).
+// Exit codes are a stable CLI contract (see soul-lint/cmd/soul-lint/main.go).
 const (
 	ExitOK      = 0
 	ExitIOFatal = 2
 )
 
-// Options — параметры одного запуска `plugin-init`.
+// Options — parameters for one `plugin-init` run.
 type Options struct {
-	// Namespace — коллекция плагина, например `official` или `community`.
-	// Валидируется regex'ом плагин-манифеста (shared/plugin → namespace).
+	// Namespace is the plugin's collection, e.g. `official` or `community`.
+	// Validated against the plugin manifest's namespace regex (shared/plugin).
 	Namespace string
-	// Name — имя плагина внутри коллекции, например `postgres-user`.
+	// Name is the plugin's name within its collection, e.g. `postgres-user`.
 	Name string
-	// Out — выходная директория. Пустая = `./soul-mod-<namespace>-<name>` в CWD.
+	// Out is the output directory. Empty means `./soul-mod-<namespace>-<name>`
+	// in the CWD.
 	Out string
-	// Description — заполняется в README.md / manifest. Пустая → placeholder.
+	// Description fills README.md / the manifest. Empty falls back to a
+	// placeholder.
 	Description string
-	// Author — заполняется в README.md / manifest. Пустая → placeholder.
+	// Author fills README.md / the manifest. Empty falls back to a
+	// placeholder.
 	Author string
-	// Force — перезаписать out-dir, если она существует и не пуста.
+	// Force overwrites out-dir if it exists and isn't empty.
 	Force bool
 }
 
-// Run выполняет scaffold. Печатает диагностики в out / errOut, возвращает
-// exit-code (0/2).
+// Run performs the scaffold. It prints diagnostics to out / errOut and
+// returns an exit code (0/2).
 func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	vars, err := buildVars(opts)
 	if err != nil {
@@ -94,38 +98,41 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	return ExitOK
 }
 
-// TemplateVars — данные, доступные внутри .tmpl-файлов как `{{.Field}}`.
+// TemplateVars — data available inside .tmpl files as `{{.Field}}`.
 type TemplateVars struct {
-	// Namespace — `official` / `community` / автор-собственная коллекция.
+	// Namespace — `official` / `community` / an author's own collection.
 	Namespace string
 	// Name — kebab-case, `postgres-user`.
 	Name string
-	// NameSnake — snake_case, `postgres_user` (для Go-identifier-ов в шаблонах).
-	// NB: имя поля сохраняем (передаётся в .tmpl), но реальное использование
-	// сведено к NamePackage (см. ниже): snake_case Go-пакет = тот же `postgres_user`.
+	// NameSnake — snake_case, `postgres_user` (for Go identifiers in
+	// templates). NB: the field is kept (passed into .tmpl), but actual use
+	// is via NamePackage below: the snake_case Go package is the same
+	// `postgres_user`.
 	NameSnake string
-	// NamePascal — PascalCase, `PostgresUser` (для Go-type-ов).
+	// NamePascal — PascalCase, `PostgresUser` (for Go types).
 	NamePascal string
-	// NamePackage — то же, что NameSnake; отдельное имя, чтобы шаблоны явно
-	// различали роль (имя Go-пакета внутри internal/ vs «snake-форма для других целей»).
+	// NamePackage — same value as NameSnake; a separate name so templates can
+	// tell apart "the Go package name under internal/" from "the snake_case
+	// form used elsewhere".
 	NamePackage string
-	// BinaryName — `soul-mod-<namespace>-<name>`, имя итогового бинаря.
+	// BinaryName — `soul-mod-<namespace>-<name>`, the resulting binary's name.
 	BinaryName string
-	// GoModulePath — module path в go.mod нового плагина. По умолчанию
-	// `github.com/<author>/soul-mod-<namespace>-<name>`; placeholder для
-	// пустого автора — `github.com/EXAMPLE/...`.
+	// GoModulePath — the module path in the new plugin's go.mod. Defaults to
+	// `github.com/<author>/soul-mod-<namespace>-<name>`; falls back to
+	// `github.com/EXAMPLE/...` for an empty author.
 	GoModulePath string
-	// AuthorName — заполняется в README.md / manifest. Default — `EXAMPLE`.
+	// AuthorName fills README.md / the manifest. Defaults to `EXAMPLE`.
 	AuthorName string
-	// Description — пользовательское описание.
+	// Description is the user-supplied description.
 	Description string
-	// ProtocolVersion — plugin protocol_version, см. shared/plugin.
+	// ProtocolVersion is the plugin protocol_version, see shared/plugin.
 	ProtocolVersion int
 }
 
-// ParseSpec парсит spec вида `<namespace>/<name>` (например `official/postgres-user`).
-// Возвращает namespace и name отдельно. Спецификация — обязательное позиционное
-// поле первой команды (`plugin-init official/postgres-user`).
+// ParseSpec parses a spec of the form `<namespace>/<name>` (e.g.
+// `official/postgres-user`) and returns namespace and name separately. The
+// spec is the first command's required positional argument (`plugin-init
+// official/postgres-user`).
 func ParseSpec(spec string) (namespace, name string, err error) {
 	if spec == "" {
 		return "", "", errors.New("spec is empty (expected <namespace>/<name>)")
@@ -142,9 +149,9 @@ func ParseSpec(spec string) (namespace, name string, err error) {
 	return ns, nm, nil
 }
 
-// Regex-ы повторяют shared/plugin.reNamespace / reName (kebab-case,
-// 1..63 chars, начинается с буквы). Дублирование — чтобы plugininit не тянул
-// goccy-yaml-парсер из shared/plugin ради двух regex-ов.
+// These regexes mirror shared/plugin.reNamespace / reName (kebab-case,
+// 1..63 chars, starts with a letter). Duplicated so plugininit doesn't pull
+// in shared/plugin's goccy YAML parser just for two regexes.
 var (
 	reNamespace = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	reName      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
@@ -169,8 +176,9 @@ func buildVars(opts Options) (TemplateVars, error) {
 		description = "TODO: краткое описание плагина (1-2 параграфа)."
 	}
 
-	// `<author>` в module-path — kebab-case (как GitHub username); strip пробелы,
-	// для имени с пробелами/нелатиницей оставляем EXAMPLE (не угадываем).
+	// `<author>` in the module path is kebab-case (like a GitHub username);
+	// strip whitespace. For names with spaces/non-Latin chars we fall back to
+	// EXAMPLE instead of guessing.
 	authorSlug := author
 	if !reName.MatchString(strings.ToLower(authorSlug)) {
 		authorSlug = "EXAMPLE"
@@ -205,8 +213,8 @@ func kebabToPascal(s string) string {
 		if p == "" {
 			continue
 		}
-		// ASCII upper: name проходит regex `^[a-z][a-z0-9-]{0,62}$`, поэтому
-		// все символы — [a-z0-9-], unicode-кейс не релевантен.
+		// ASCII upper: name matches `^[a-z][a-z0-9-]{0,62}$`, so every
+		// char is [a-z0-9-] and unicode case handling does not apply.
 		b := []byte(p)
 		b[0] = b[0] - 'a' + 'A'
 		parts[i] = string(b)
@@ -228,7 +236,7 @@ func prepareOutDir(dir string, force bool) error {
 	if !info.IsDir() {
 		return fmt.Errorf("out-dir %s exists and is not a directory", dir)
 	}
-	// Каталог существует — проверяем, что он пуст; иначе --force.
+	// The directory exists — check that it's empty; otherwise require --force.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read out-dir %s: %w", dir, err)
@@ -252,15 +260,16 @@ func renderTree(outDir string, vars TemplateVars) error {
 			return nil
 		}
 		rel := strings.TrimPrefix(path, root+"/")
-		// Подмена директории `cmd/soul-mod-EXAMPLE/` → `cmd/<BinaryName>/`.
+		// Rewrite the `cmd/soul-mod-EXAMPLE/` directory to `cmd/<BinaryName>/`.
 		rel = strings.ReplaceAll(rel, "cmd/soul-mod-EXAMPLE", "cmd/"+vars.BinaryName)
-		// Подмена директории `internal/PACKAGE/` → `internal/<NamePackage>/`
-		// (snake_case Go-пакет, на который ссылается cmd/<BinaryName>/main.go).
-		// Литерал в имени директории — потому что text/template работает на
-		// содержимом файла, не на пути; альтернатива через filepath.Walk
-		// + per-segment Execute() — избыточна для одной фиксированной подмены.
+		// Rewrite the `internal/PACKAGE/` directory to
+		// `internal/<NamePackage>/` (the snake_case Go package that
+		// cmd/<BinaryName>/main.go imports). The literal directory name is
+		// needed because text/template only renders file content, not paths;
+		// a filepath.Walk + per-segment Execute() alternative would be
+		// overkill for one fixed substitution.
 		rel = strings.ReplaceAll(rel, "internal/PACKAGE", "internal/"+vars.NamePackage)
-		// Strip `.tmpl`-суффикс на выходе.
+		// Strip the `.tmpl` suffix on output.
 		rel = strings.TrimSuffix(rel, ".tmpl")
 
 		dst := filepath.Join(outDir, rel)
@@ -276,9 +285,10 @@ func renderTree(outDir string, vars TemplateVars) error {
 			return fmt.Errorf("read embedded %s: %w", path, err)
 		}
 
-		// `.tmpl` идёт через text/template; не-`.tmpl` (например, бинарные
-		// артефакты будущих расширений) копируется as-is. Сейчас всё в дереве —
-		// `.tmpl`, но проверка дешёвая и страхует от регрессии.
+		// `.tmpl` files go through text/template; non-`.tmpl` files (e.g.
+		// binary artifacts from future extensions) are copied as-is.
+		// Everything in the tree is `.tmpl` today, but the check is cheap and
+		// guards against regressions.
 		if strings.HasSuffix(path, ".tmpl") {
 			rendered, rerr := renderBytes(path, data, vars)
 			if rerr != nil {

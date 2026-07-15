@@ -24,8 +24,8 @@ func newSoulsCmd() *cobra.Command {
 // newSoulsSshTargetCmd — `soulctl souls ssh-target set <sid> --port … --user …
 // --soul-path … [--ssh-provider <name>]` ↔ PUT /v1/souls/{sid}/ssh-target
 // (ADR-032 amendment 2026-05-26 S7-1 + amendment 2026-05-27 P2 W-1). Plus
-// `bulk-set --coven <name> --ssh-provider <name>` — массовый PATCH SID-ов в
-// конкретном Coven-е.
+// `bulk-set --coven <name> --ssh-provider <name>` — bulk PATCH of SIDs in a
+// given Coven.
 func newSoulsSshTargetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ssh-target",
@@ -83,13 +83,14 @@ func newSoulsSshTargetSetCmd() *cobra.Command {
 }
 
 // newSoulsSshTargetBulkSetCmd — `soulctl souls ssh-target bulk-set --coven=Z
-// --ssh-provider=Y` (P2 W-4): массовый PATCH ssh_provider для всех Souls в
-// указанном Coven-е.
+// --ssh-provider=Y` (P2 W-4): bulk-PATCHes ssh_provider for every Soul in the
+// given Coven.
 //
-// Реализация client-side: list-by-coven → per-SID PUT (server-side bulk-эндпоинта
-// для ssh-target нет; добавлять отдельный route ради CLI-команды избыточно).
-// При большом флоте оператору видна сводка success/fail без abort-on-first —
-// fail на одном SID не прерывает остальные.
+// Client-side implementation: list-by-coven → per-SID PUT (there's no
+// server-side bulk endpoint for ssh-target; adding a dedicated route just for
+// this CLI command would be overkill). With many Souls, the operator sees a
+// success/fail summary without abort-on-first — one SID failing doesn't stop
+// the rest.
 func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 	var (
 		coven       string
@@ -171,10 +172,10 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 	return c
 }
 
-// newSoulCmd — singular root для single-target операций (exec и пр.).
+// newSoulCmd — the singular root for single-target operations (exec, etc.).
 // `soulctl soul exec <sid> ...` ↔ `POST /v1/souls/{sid}/exec` (ADR-033).
-// Намеренно отделён от `souls` (множественное) — тот про реестр (list/get
-// нескольких хостов), `soul` — про действия на одном.
+// Deliberately separate from `souls` (plural) — that one is about the
+// registry (list/get across hosts); `soul` is about acting on one.
 func newSoulCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "soul",
@@ -185,8 +186,8 @@ func newSoulCmd() *cobra.Command {
 }
 
 // newSoulExecCmd — `soulctl soul exec <sid> --module … --input …` ↔
-// POST /v1/souls/{sid}/exec (Errand, ADR-033). Whitelist модулей и cap
-// stdout/stderr (64 KiB) применяет Soul-side errand-runner.
+// POST /v1/souls/{sid}/exec (Errand, ADR-033). The module whitelist and the
+// stdout/stderr cap (64 KiB) are enforced by the Soul-side errand-runner.
 func newSoulExecCmd() *cobra.Command {
 	var (
 		module  string
@@ -222,9 +223,9 @@ Examples:
 			if err != nil {
 				return err
 			}
-			// Полный ctx-таймаут shall быть больше server-cap (30s) и больше
-			// requested timeout-а: иначе CLI снимется до того, как Keeper
-			// отдаст 202 при async-эскалации.
+			// The overall ctx timeout shall be greater than the server cap (30s)
+			// and greater than the requested timeout — otherwise the CLI would
+			// bail out before Keeper returns 202 on async escalation.
 			ctxTimeout := time.Duration(timeout)*time.Second + 60*time.Second
 			ctx, cancel := context.WithTimeout(cmd.Context(), ctxTimeout)
 			defer cancel()

@@ -1,8 +1,8 @@
-// Package cmd собирает дерево cobra-команд soulctl.
+// Package cmd assembles the soulctl cobra command tree.
 //
-// Структура — семь верхних групп команд (incarnation / souls / soul / errand / archon / push-providers / run),
-// каждая в своём файле. Глобальные флаги (`--output`, `--config`) живут на root и читаются
-// командами через RootFlags(cmd).
+// Structure: seven top-level command groups (incarnation / souls / soul / errand / archon / push-providers / run),
+// each in its own file. Global flags (`--output`, `--config`) live on root and are read
+// by commands via RootFlags(cmd).
 package cmd
 
 import (
@@ -25,8 +25,8 @@ const (
 	flagConfig = "config"
 )
 
-// rootFlags — типизированная проекция глобальных флагов. Хранится в
-// cmd.Context() через withRootFlags, чтобы подкоманды читали без рефлексии.
+// rootFlags is a typed projection of the global flags. Stored in
+// cmd.Context() via withRootFlags so subcommands can read it without reflection.
 type rootFlags struct {
 	Output     output.Format
 	ConfigPath string
@@ -38,9 +38,9 @@ func withRootFlags(ctx context.Context, f rootFlags) context.Context {
 	return context.WithValue(ctx, rootFlagsKey{}, f)
 }
 
-// RootFlags извлекает rootFlags из cmd.Context(). Если флаги не были выставлены
-// (например в unit-тестах без Execute) — возвращает zero-value, что эквивалентно
-// table-output и DefaultPath credentials.
+// RootFlags extracts rootFlags from cmd.Context(). If the flags were never
+// set (e.g. in unit tests that don't call Execute), it returns the zero
+// value, which is equivalent to table output and the DefaultPath credentials.
 func RootFlags(cmd *cobra.Command) rootFlags {
 	if f, ok := cmd.Context().Value(rootFlagsKey{}).(rootFlags); ok {
 		return f
@@ -48,7 +48,7 @@ func RootFlags(cmd *cobra.Command) rootFlags {
 	return rootFlags{Output: output.FormatTable}
 }
 
-// NewRoot строит корневую команду soulctl.
+// NewRoot builds the soulctl root command.
 func NewRoot(version string) *cobra.Command {
 	var outputFlag string
 	var configFlag string
@@ -89,8 +89,8 @@ func NewRoot(version string) *cobra.Command {
 	return root
 }
 
-// signalContext — context, отменяемый по SIGINT/SIGTERM. Подкоманды
-// долгоживущих poll-операций должны его использовать.
+// signalContext is a context cancelled on SIGINT/SIGTERM. Subcommands with
+// long-running poll operations should use it.
 func signalContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	ch := make(chan os.Signal, 1)
@@ -106,7 +106,7 @@ func signalContext(parent context.Context) (context.Context, context.CancelFunc)
 	return ctx, cancel
 }
 
-// loadClient — общая загрузка credentials + клиент для команд, требующих API.
+// loadClient is the shared credentials + client loader for commands that need the API.
 func loadClient(cmd *cobra.Command) (*client.Client, error) {
 	rf := RootFlags(cmd)
 	creds, err := config.Load(rf.ConfigPath)
@@ -116,8 +116,8 @@ func loadClient(cmd *cobra.Command) (*client.Client, error) {
 	return client.New(creds)
 }
 
-// renderAPIError — единая обёртка ошибки HTTP-вызова к kubectl-подобной форме:
-// 401 → подсказка про login, 403 → отсутствие permission, 404 → not found,
+// renderAPIError wraps an HTTP call error into a kubectl-like form:
+// 401 → a hint to log in, 403 → missing permission, 404 → not found,
 // 5xx → keeper error.
 func renderAPIError(err error) error {
 	apiErr, ok := client.AsAPIError(err)

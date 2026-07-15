@@ -1,21 +1,21 @@
-// soul-lint — офлайн-линтер Destiny / Essence / конфигов Soul Stack +
-// scaffold-tool для авторов SoulModule-плагинов.
+// soul-lint is the offline linter for Destiny / Essence / Soul Stack
+// configs, and the scaffold tool for SoulModule plugin authors.
 //
-// MVP-набор подкоманд:
+// MVP subcommand set:
 //
-//	validate-config   <path> [--json]  — валидация keeper.yml или soul.yml.
-//	validate-destiny  <path> [--json]  — валидация destiny.yml (корневой
-//	                                     манифест destiny).
-//	validate-service  <path> [--json]  — валидация service.yml (корневой
-//	                                     манифест сервиса).
-//	validate-scenario <path> [--json]  — валидация scenario/<name>/main.yml.
-//	validate-manifest <path> [--json]  — валидация manifest.yaml плагина
-//	                                     (kind: soul_module / cloud_driver /
-//	                                     ssh_provider).
-//	plugin-init       <namespace>/<name> [flags]  — scaffold-нового SoulModule
-//	                                     плагина (ADR-016 amendment 2026-05-27).
+//	validate-config   <path> [--json]  validate keeper.yml or soul.yml.
+//	validate-destiny  <path> [--json]  validate destiny.yml (the destiny
+//	                                    root manifest).
+//	validate-service  <path> [--json]  validate service.yml (the service
+//	                                    root manifest).
+//	validate-scenario <path> [--json]  validate scenario/<name>/main.yml.
+//	validate-manifest <path> [--json]  validate a plugin's manifest.yaml
+//	                                    (kind: soul_module / cloud_driver /
+//	                                    ssh_provider).
+//	plugin-init       <namespace>/<name> [flags]  scaffold a new SoulModule
+//	                                    plugin (ADR-016 amendment 2026-05-27).
 //
-// Exit-codes: 0 = ok, 1 = есть errors, 2 = I/O fatal / usage.
+// Exit codes: 0 = ok, 1 = has errors, 2 = I/O fatal / usage.
 package main
 
 import (
@@ -56,8 +56,8 @@ func main() {
 	}
 }
 
-// runSubcommand — общий разбор флагов и positional <path>.
-// Идентичная форма у всех validate-* подкоманд (см. ТЗ M1.2.a, симметрия с M0).
+// runSubcommand parses flags and the positional <path>. Same shape across
+// all validate-* subcommands (spec M1.2.a, symmetric with M0).
 func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 	usageLine := "Usage: soul-lint " + usage
 	var (
@@ -94,8 +94,8 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 	}, os.Stdout, os.Stderr)
 }
 
-// runPluginInit — разбор флагов `plugin-init <namespace>/<name> [flags]`.
-// Аргументный стиль повторяет validate-* (ручной argparse без cobra).
+// runPluginInit parses flags for `plugin-init <namespace>/<name> [flags]`.
+// Its argument style mirrors validate-* (manual argparse, no cobra).
 func runPluginInit(args []string) int {
 	const usageLine = "Usage: soul-lint plugin-init <namespace>/<name> [--out DIR] [--description TEXT] [--author NAME] [--force]"
 	var (

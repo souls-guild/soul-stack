@@ -1,18 +1,18 @@
-// Package handshake — общий helper SDK Soul Stack для авторов плагинов.
+// Package handshake is a shared Soul Stack SDK helper for plugin authors.
 //
-// Реализует gRPC-stdio handshake-протокол всех трёх kind-ов плагинов
-// (soul_module / cloud_driver / ssh_provider) по спецификации
-// docs/keeper/plugins.md → Handshake / Lifecycle и ADR-020.
+// It implements the gRPC-stdio handshake protocol shared by all three
+// plugin kinds (soul_module / cloud_driver / ssh_provider) per the
+// docs/keeper/plugins.md → Handshake / Lifecycle spec and ADR-020.
 //
-// Контракт SDK с host-ом:
+// SDK-to-host contract:
 //
-//   - Host передаёт путь к Unix-socket через env-var SOUL_PLUGIN_SOCKET
-//     (ADR-020(d), naming-rules.md → SOUL_PLUGIN_SOCKET).
-//   - Плагин слушает gRPC на этом сокете.
-//   - Плагин пишет в stdout ровно одну строку с JSON-payload поля
-//     Handshake (`soul_stack:"plugin-v1"`) и переводом строки.
-//   - При получении SIGTERM/SIGINT плагин завершает in-flight RPC
-//     в течение ShutdownGrace, по истечении — жёсткий Stop().
+//   - The host passes the Unix-socket path via the SOUL_PLUGIN_SOCKET env
+//     var (ADR-020(d), naming-rules.md → SOUL_PLUGIN_SOCKET).
+//   - The plugin listens for gRPC on that socket.
+//   - The plugin writes exactly one line to stdout with the JSON payload of
+//     the Handshake message (`soul_stack:"plugin-v1"`) followed by a newline.
+//   - On SIGTERM/SIGINT, the plugin finishes in-flight RPCs within
+//     ShutdownGrace, then does a hard Stop() once that elapses.
 package handshake
 
 import (
@@ -31,62 +31,66 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// SocketEnv — имя env-var, через который host передаёт плагину путь к
-// Unix-socket. Значение фиксировано в naming-rules.md и ADR-020(d).
+// SocketEnv is the name of the env var through which the host passes the
+// plugin its Unix-socket path. The value is fixed in naming-rules.md and
+// ADR-020(d).
 const SocketEnv = "SOUL_PLUGIN_SOCKET"
 
-// Magic — значение поля Handshake.SoulStack, маркер формата handshake-строки v1.
-// Меняется только при breaking-смене самого формата (отдельный ADR).
+// Magic is the value of the Handshake.SoulStack field, the format marker for
+// handshake-line v1. Changes only on a breaking change to the format itself
+// (a separate ADR).
 const Magic = "plugin-v1"
 
-// NetworkUnix — единственное значение Handshake.Network в MVP
-// (docs/keeper/plugins.md → Handshake). Расширение named_pipe/tcp — post-MVP.
+// NetworkUnix is the only value of Handshake.Network in the MVP
+// (docs/keeper/plugins.md → Handshake). named_pipe/tcp support is post-MVP.
 const NetworkUnix = "unix"
 
-// defaultShutdownGrace дублирует plugin_runtime.shutdown_grace (ADR-020(d))
-// для случая, когда плагин-автор не задал явное значение в Config.
-// Host со своей стороны держит свой таймер на тот же интервал.
+// defaultShutdownGrace duplicates plugin_runtime.shutdown_grace (ADR-020(d))
+// for when the plugin author didn't set an explicit value in Config. The
+// host keeps its own timer at the same interval.
 const defaultShutdownGrace = 10 * time.Second
 
-// Config — параметры handshake-сессии.
+// Config holds the parameters of a handshake session.
 //
-// Address и ServerCert опциональны: Address по умолчанию читается из
-// env-var SocketEnv, ServerCert в MVP всегда пустой (mTLS — post-MVP,
-// ADR-020(h)).
+// Address and ServerCert are optional: Address defaults to reading the
+// SocketEnv env var, ServerCert is always empty in the MVP (mTLS is
+// post-MVP, ADR-020(h)).
 type Config struct {
-	// ProtocolVersion — версия plugin-протокола; должна совпадать с
-	// manifest.protocol_version. В MVP единственное допустимое значение — 1.
+	// ProtocolVersion is the plugin-protocol version; must match
+	// manifest.protocol_version. The only allowed value in the MVP is 1.
 	ProtocolVersion int32
 
-	// Kind — kind плагина. Должен совпадать с manifest.kind, иначе host
-	// отвергает плагин (ADR-020(c)).
+	// Kind is the plugin kind. Must match manifest.kind, otherwise the host
+	// rejects the plugin (ADR-020(c)).
 	Kind pluginv1.Kind
 
-	// Address — путь к Unix-socket; если пуст, берётся из env-var SocketEnv.
+	// Address is the Unix-socket path; if empty, it's read from the
+	// SocketEnv env var.
 	Address string
 
-	// ShutdownGrace — окно от SIGTERM до жёсткого Stop(). По умолчанию 10s
-	// (ADR-020(d) — симметрично host-side таймеру).
+	// ShutdownGrace is the window from SIGTERM to a hard Stop(). Defaults to
+	// 10s (ADR-020(d) — mirrors the host-side timer).
 	ShutdownGrace time.Duration
 }
 
-// Register — функция, регистрирующая service-implementation на сервере.
-// Вызывается ровно один раз внутри Serve до записи handshake-строки.
+// Register is a function that registers a service implementation on the
+// server. Called exactly once inside Serve, before the handshake line is
+// written.
 type Register func(*grpc.Server)
 
-// Serve — типовой main() плагина.
+// Serve is the typical main() of a plugin.
 //
-// Жизненный цикл:
+// Lifecycle:
 //
-//  1. читает Address (явный или из env);
-//  2. слушает Unix-socket;
-//  3. создаёт grpc.Server, передаёт его register-callback;
-//  4. пишет JSON-handshake в stdout;
-//  5. подписывается на SIGTERM/SIGINT/SIGHUP, по сигналу — GracefulStop
-//     с тайм-аутом ShutdownGrace, по истечении — жёсткий Stop;
-//  6. блокирует на grpc.Server.Serve до завершения.
+//  1. reads Address (explicit or from env);
+//  2. listens on the Unix socket;
+//  3. creates a grpc.Server and hands it to the register callback;
+//  4. writes the JSON handshake to stdout;
+//  5. subscribes to SIGTERM/SIGINT/SIGHUP; on signal, GracefulStop with a
+//     ShutdownGrace timeout, then a hard Stop once that elapses;
+//  6. blocks on grpc.Server.Serve until it returns.
 //
-// Возвращает первую ошибку из listen/serve/marshal.
+// Returns the first error from listen/serve/marshal.
 func Serve(cfg Config, register Register) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -94,9 +98,9 @@ func Serve(cfg Config, register Register) error {
 	return serveWithStop(cfg, register, os.Stdout, sigCh)
 }
 
-// serveWithStop — testable-форма Serve: канал остановки и destination для
-// handshake-строки внедряются параметрами. Внешний Serve тривиально
-// проксирует через os.Stdout + signal.Notify.
+// serveWithStop is a testable form of Serve: the stop channel and the
+// destination for the handshake line are injected as parameters. The
+// exported Serve simply forwards to it via os.Stdout + signal.Notify.
 func serveWithStop(cfg Config, register Register, stdout io.Writer, stop <-chan os.Signal) error {
 	if register == nil {
 		return errors.New("handshake: nil register callback")
@@ -152,11 +156,11 @@ func serveWithStop(cfg Config, register Register, stdout io.Writer, stop <-chan 
 		select {
 		case <-done:
 		case <-time.After(grace):
-			// GracefulStop держит in-flight raw-коннекты, которые могут
-			// застрять в HTTP/2 handshake-state и не отпускать сервер
-			// даже после Stop(). Принудительно закрываем все accepted
-			// коннекты, потом вызываем Stop — accept-loop возвращается,
-			// GracefulStop разблокируется.
+			// GracefulStop holds on to in-flight raw connections, which can
+			// get stuck in HTTP/2 handshake state and keep the server from
+			// releasing even after Stop(). Force-close all accepted
+			// connections, then call Stop — the accept loop returns and
+			// GracefulStop unblocks.
 			listener.closeAllConns()
 			server.Stop()
 			<-done
@@ -171,10 +175,10 @@ func serveWithStop(cfg Config, register Register, stdout io.Writer, stop <-chan 
 	return nil
 }
 
-// trackingListener — net.Listener, который запоминает все принятые
-// коннекты и умеет закрыть их разом. Нужен для hard-stop сценария:
-// grpc.Server.Stop сам по себе не закрывает raw-коннект, застрявший
-// в HTTP/2 handshake (см. shutdown-логику в Serve).
+// trackingListener is a net.Listener that remembers every accepted
+// connection and can close them all at once. Needed for the hard-stop
+// scenario: grpc.Server.Stop by itself doesn't close a raw connection stuck
+// in the HTTP/2 handshake (see the shutdown logic in Serve).
 type trackingListener struct {
 	net.Listener
 	mu    sync.Mutex
@@ -205,7 +209,7 @@ func (t *trackingListener) closeAllConns() {
 	}
 	t.conns = make(map[net.Conn]struct{})
 	t.mu.Unlock()
-	// Close без удержания mu — trackedConn.Close возьмёт mu сам.
+	// Close without holding mu — trackedConn.Close takes mu itself.
 	for _, c := range conns {
 		_ = c.Close()
 	}
@@ -232,8 +236,8 @@ func marshalHandshake(cfg Config, addr string) (string, error) {
 		Address:         addr,
 		ServerCert:      "",
 	}
-	// protojson по умолчанию даёт многострочный pretty-output; плагин обязан
-	// писать ровно одну строку (ADR-020(b)).
+	// protojson defaults to multi-line pretty-output; the plugin must write
+	// exactly one line (ADR-020(b)).
 	m := protojson.MarshalOptions{
 		UseProtoNames:   true,
 		EmitUnpopulated: true,

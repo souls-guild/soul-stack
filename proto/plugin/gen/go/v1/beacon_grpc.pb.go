@@ -27,38 +27,41 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SoulBeacon — service-контракт плагинов `kind: soul_beacon` (ADR-020 amendment
-// V5-2, 2026-05-26, четвёртый kind после soul_module / cloud_driver / ssh_provider).
+// SoulBeacon — service contract for `kind: soul_beacon` plugins (ADR-020
+// amendment V5-2, 2026-05-26, the fourth kind after soul_module /
+// cloud_driver / ssh_provider).
 //
-// Host — `soul`-бинарь (соответствие semantic «beacon observes host»). Бинари
-// плагинов — soul-beacon-<name>. Адресация Vigil — `<namespace>.<name>` в поле
-// `VigilDef.check`; диспетчер Soul-side различает встроенные `core.beacon.*` от
-// plugin-beacon по namespace.
+// Host is the `soul` binary (matches the "beacon observes host" semantics).
+// Plugin binaries are soul-beacon-<name>. Vigil addressing is
+// `<namespace>.<name>` in `VigilDef.check`; the Soul-side dispatcher tells
+// built-in `core.beacon.*` apart from plugin beacons by namespace.
 //
-// Lifecycle (one-shot per Spawn по ADR-020(d)): Soul-side scheduler вызывает
-// плагин per-tick (interval из VigilDef.interval) — Spawn → Check → Close. Поле
-// `state_cookie` в Reply/Request позволяет плагину сохранять inotify-fd /
-// in-memory state между ticks без long-lived процесса: host передаёт cookie
-// предыдущего тика обратно при следующем Spawn (NULL на первом).
+// Lifecycle (one-shot per Spawn per ADR-020(d)): the Soul-side scheduler
+// invokes the plugin per tick (interval from VigilDef.interval) — Spawn →
+// Check → Close. The `state_cookie` field in Reply/Request lets the plugin
+// carry inotify-fd / in-memory state across ticks without a long-lived
+// process: the host passes back the previous tick's cookie on the next
+// Spawn (NULL on the first).
 //
-// stream-формы (`Start`) сознательно НЕ вводятся — ADR-030(d) one-shot
-// lifecycle и edge-triggered scheduler уже на Soul-side; stream дал бы
-// дублирующую ответственность планирования.
+// Streaming forms (`Start`) are deliberately NOT introduced — ADR-030(d)'s
+// one-shot lifecycle and edge-triggered scheduler already live Soul-side;
+// streaming would duplicate scheduling responsibility.
 type SoulBeaconClient interface {
-	// Validate — runtime-проверки params Vigil (то, что не выражается JSON Schema
-	// manifest-а: достижимость пути, валидность regex и т.п.). Вызывается host-ом
-	// ОПЦИОНАЛЬНО при первом старте Vigil в snapshot; ошибки/Ok=false → Vigil не
-	// запускается (scheduler логирует, baseline не устанавливается).
+	// Validate — runtime checks of Vigil params (what JSON Schema in the
+	// manifest can't express: path reachability, regex validity, etc.).
+	// Called by the host OPTIONALLY on first Vigil start in a snapshot;
+	// errors/Ok=false → the Vigil doesn't start (scheduler logs it, no
+	// baseline is set).
 	//
-	// Имя ValidateVigilRequest/Reply отличается от ValidateRequest/Reply в
-	// soulmodule.proto: в пределах одного proto-пакета имена message-ей должны
-	// быть уникальны (cross-import между soulmodule.proto и beacon.proto не
-	// нужен — это разные kind-ы плагинов).
+	// Named ValidateVigilRequest/Reply, distinct from ValidateRequest/Reply
+	// in soulmodule.proto: message names must be unique within one proto
+	// package (no cross-import needed between soulmodule.proto and
+	// beacon.proto — these are different plugin kinds).
 	Validate(ctx context.Context, in *ValidateVigilRequest, opts ...grpc.CallOption) (*ValidateVigilReply, error)
-	// Check — invoked per-tick для одной Vigil-row. Возвращает state (opaque
-	// строка для edge-triggered сравнения), payload (Struct для
-	// PortentEvent.payload.custom) и state_cookie (passback host для следующего
-	// тика).
+	// Check — invoked per tick for one Vigil row. Returns state (an opaque
+	// string for edge-triggered comparison), payload (a Struct for
+	// PortentEvent.payload.custom), and state_cookie (passed back to the
+	// host for the next tick).
 	Check(ctx context.Context, in *CheckRequest, opts ...grpc.CallOption) (*CheckReply, error)
 }
 
@@ -94,38 +97,41 @@ func (c *soulBeaconClient) Check(ctx context.Context, in *CheckRequest, opts ...
 // All implementations must embed UnimplementedSoulBeaconServer
 // for forward compatibility.
 //
-// SoulBeacon — service-контракт плагинов `kind: soul_beacon` (ADR-020 amendment
-// V5-2, 2026-05-26, четвёртый kind после soul_module / cloud_driver / ssh_provider).
+// SoulBeacon — service contract for `kind: soul_beacon` plugins (ADR-020
+// amendment V5-2, 2026-05-26, the fourth kind after soul_module /
+// cloud_driver / ssh_provider).
 //
-// Host — `soul`-бинарь (соответствие semantic «beacon observes host»). Бинари
-// плагинов — soul-beacon-<name>. Адресация Vigil — `<namespace>.<name>` в поле
-// `VigilDef.check`; диспетчер Soul-side различает встроенные `core.beacon.*` от
-// plugin-beacon по namespace.
+// Host is the `soul` binary (matches the "beacon observes host" semantics).
+// Plugin binaries are soul-beacon-<name>. Vigil addressing is
+// `<namespace>.<name>` in `VigilDef.check`; the Soul-side dispatcher tells
+// built-in `core.beacon.*` apart from plugin beacons by namespace.
 //
-// Lifecycle (one-shot per Spawn по ADR-020(d)): Soul-side scheduler вызывает
-// плагин per-tick (interval из VigilDef.interval) — Spawn → Check → Close. Поле
-// `state_cookie` в Reply/Request позволяет плагину сохранять inotify-fd /
-// in-memory state между ticks без long-lived процесса: host передаёт cookie
-// предыдущего тика обратно при следующем Spawn (NULL на первом).
+// Lifecycle (one-shot per Spawn per ADR-020(d)): the Soul-side scheduler
+// invokes the plugin per tick (interval from VigilDef.interval) — Spawn →
+// Check → Close. The `state_cookie` field in Reply/Request lets the plugin
+// carry inotify-fd / in-memory state across ticks without a long-lived
+// process: the host passes back the previous tick's cookie on the next
+// Spawn (NULL on the first).
 //
-// stream-формы (`Start`) сознательно НЕ вводятся — ADR-030(d) one-shot
-// lifecycle и edge-triggered scheduler уже на Soul-side; stream дал бы
-// дублирующую ответственность планирования.
+// Streaming forms (`Start`) are deliberately NOT introduced — ADR-030(d)'s
+// one-shot lifecycle and edge-triggered scheduler already live Soul-side;
+// streaming would duplicate scheduling responsibility.
 type SoulBeaconServer interface {
-	// Validate — runtime-проверки params Vigil (то, что не выражается JSON Schema
-	// manifest-а: достижимость пути, валидность regex и т.п.). Вызывается host-ом
-	// ОПЦИОНАЛЬНО при первом старте Vigil в snapshot; ошибки/Ok=false → Vigil не
-	// запускается (scheduler логирует, baseline не устанавливается).
+	// Validate — runtime checks of Vigil params (what JSON Schema in the
+	// manifest can't express: path reachability, regex validity, etc.).
+	// Called by the host OPTIONALLY on first Vigil start in a snapshot;
+	// errors/Ok=false → the Vigil doesn't start (scheduler logs it, no
+	// baseline is set).
 	//
-	// Имя ValidateVigilRequest/Reply отличается от ValidateRequest/Reply в
-	// soulmodule.proto: в пределах одного proto-пакета имена message-ей должны
-	// быть уникальны (cross-import между soulmodule.proto и beacon.proto не
-	// нужен — это разные kind-ы плагинов).
+	// Named ValidateVigilRequest/Reply, distinct from ValidateRequest/Reply
+	// in soulmodule.proto: message names must be unique within one proto
+	// package (no cross-import needed between soulmodule.proto and
+	// beacon.proto — these are different plugin kinds).
 	Validate(context.Context, *ValidateVigilRequest) (*ValidateVigilReply, error)
-	// Check — invoked per-tick для одной Vigil-row. Возвращает state (opaque
-	// строка для edge-triggered сравнения), payload (Struct для
-	// PortentEvent.payload.custom) и state_cookie (passback host для следующего
-	// тика).
+	// Check — invoked per tick for one Vigil row. Returns state (an opaque
+	// string for edge-triggered comparison), payload (a Struct for
+	// PortentEvent.payload.custom), and state_cookie (passed back to the
+	// host for the next tick).
 	Check(context.Context, *CheckRequest) (*CheckReply, error)
 	mustEmbedUnimplementedSoulBeaconServer()
 }

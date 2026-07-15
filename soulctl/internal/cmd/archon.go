@@ -183,8 +183,8 @@ func newArchonLogoutCmd() *cobra.Command {
 	}
 }
 
-// readJWTFile читает JWT из файла, trim-ит whitespace и trailing newline.
-// JWT в файле — одна строка; multiline → ошибка.
+// readJWTFile reads the JWT from a file, trimming whitespace and the
+// trailing newline. The file must hold a single line; multiline → error.
 func readJWTFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -200,8 +200,8 @@ func readJWTFile(path string) (string, error) {
 	return jwt, nil
 }
 
-// saveCredentials записывает creds в credentials.yaml с mode 0600. Возвращает
-// фактический путь записи.
+// saveCredentials writes creds to credentials.yaml with mode 0600. Returns
+// the actual path written.
 func saveCredentials(override string, creds *config.Credentials) (string, error) {
 	path := override
 	if path == "" {
@@ -218,7 +218,7 @@ func saveCredentials(override string, creds *config.Credentials) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("сериализовать credentials: %w", err)
 	}
-	// Атомарная запись через tmp+rename, чтобы не оставить полу-файл при сбое.
+	// Atomic write via tmp+rename, so a failure never leaves a half-written file.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return "", fmt.Errorf("записать %s: %w", tmp, err)

@@ -72,8 +72,9 @@ func TestBuildVars_HappyPath(t *testing.T) {
 }
 
 func TestBuildVars_DefaultsAndInvalidAuthor(t *testing.T) {
-	// Пустой description / author → placeholder. Невалидный (с пробелом)
-	// author → EXAMPLE, но AuthorName сохраняется как есть в README.
+	// Empty description/author fall back to a placeholder. An invalid author
+	// (with a space) falls back to EXAMPLE, but AuthorName is still kept
+	// as-is in README.
 	v, err := buildVars(Options{
 		Namespace: "official",
 		Name:      "redis-acl",
@@ -133,7 +134,7 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 		t.Fatalf("Run: code=%d, stderr=%s", code, errOut.String())
 	}
 
-	// Ожидаемые файлы должны существовать и быть отрендерены.
+	// Expected files must exist and be rendered.
 	want := []string{
 		"manifest.yaml",
 		"go.mod",
@@ -157,12 +158,12 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 		}
 	}
 
-	// Placeholder-substitution: ни одного нерендерёного `{{.Foo}}` в выводе.
+	// Placeholder substitution: no unrendered `{{.Foo}}` left in the output.
 	if err := assertNoUnrenderedPlaceholders(outDir); err != nil {
 		t.Errorf("placeholders: %v", err)
 	}
 
-	// Подстановки в характерных файлах.
+	// Substitutions in representative files.
 	mustContain(t, filepath.Join(outDir, "manifest.yaml"),
 		"namespace: official",
 		"name: postgres-user",
@@ -176,8 +177,8 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 		"Manages PostgreSQL roles",
 		"official.postgres-user",
 	)
-	// internal/<package>/handler.go должен ссылаться на пакет postgres_user
-	// и компилироваться: cmd/<binary>/main.go импортирует .../internal/postgres_user.
+	// internal/<package>/handler.go must reference the postgres_user package
+	// and compile: cmd/<binary>/main.go imports .../internal/postgres_user.
 	mustContain(t, filepath.Join(outDir, "internal", "postgres_user", "handler.go"),
 		"package postgres_user",
 		"PostgresUserModule",
@@ -188,11 +189,11 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 	)
 }
 
-// TestRun_GeneratedManifestPassesValidate — sanity-check: manifest, который
-// scaffold кладёт «из коробки», обязан проходить `validate-manifest` без
-// errors. Покрывает регрессии вроде secret-без-pattern (semantic rule
-// input_secret_without_vault_pattern), drift между шаблоном и схемой
-// shared/plugin и т.п.
+// TestRun_GeneratedManifestPassesValidate — sanity check: the manifest the
+// scaffold ships out of the box must pass `validate-manifest` with no
+// errors. Covers regressions like a secret without a pattern (the
+// input_secret_without_vault_pattern semantic rule), drift between the
+// template and the shared/plugin schema, and similar cases.
 func TestRun_GeneratedManifestPassesValidate(t *testing.T) {
 	tmp := t.TempDir()
 	outDir := filepath.Join(tmp, "soul-mod-official-postgres-user")
@@ -242,8 +243,8 @@ func TestRun_OutDirNotEmptyWithoutForce(t *testing.T) {
 }
 
 func TestRun_DefaultOutPath(t *testing.T) {
-	// Run с пустым Options.Out пишет в CWD. Прыгаем в TempDir, чтобы не
-	// замусорить рабочее дерево.
+	// Run with an empty Options.Out writes to the CWD. Hop into a TempDir so
+	// we don't litter the working tree.
 	tmp := t.TempDir()
 	prev, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(prev) })
@@ -284,9 +285,10 @@ func mustContain(t *testing.T, path string, needles ...string) {
 	}
 }
 
-// assertNoUnrenderedPlaceholders — после рендера в дереве не должно остаться
-// маркеров `{{.X}}` (text/template). Любой такой маркер в *.go-файле сломает
-// компиляцию плагина, в README/manifest введёт пользователя в заблуждение.
+// assertNoUnrenderedPlaceholders — after rendering, no `{{.X}}` (text/
+// template) markers should remain in the tree. Any such marker in a *.go
+// file would break the plugin's build; in README/manifest it would mislead
+// the user.
 func assertNoUnrenderedPlaceholders(outDir string) error {
 	var bad []string
 	_ = filepath.Walk(outDir, func(path string, info os.FileInfo, walkErr error) error {

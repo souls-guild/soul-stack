@@ -13,8 +13,8 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 )
 
-// fakeServer создаёт httptest.NewServer с роутом-маппером. Возвращает сервер +
-// клиент, готовый к использованию в команде.
+// fakeServer creates an httptest.NewServer with a route mapper. Returns the
+// server + a client ready to use in a command.
 func fakeServer(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.Server, *client.Client) {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -30,10 +30,10 @@ func fakeServer(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.S
 	return srv, cl
 }
 
-// runWithClient — вставляет cl в команду через монки-патч loadClient через
-// контекст. Проще: переписать cmd.go было бы много; вместо этого здесь мы
-// напрямую дёргаем client-методы (логику вывода тестируем отдельно при
-// необходимости).
+// runWithClient injects cl into a command by monkey-patching loadClient via
+// the context. Simpler than rewriting cmd.go for this; instead we call the
+// client methods directly here (output-formatting logic is tested
+// separately where needed).
 func TestIncarnationsList(t *testing.T) {
 	called := int32(0)
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -236,7 +236,7 @@ func TestWaitForApplySuccess(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
 		"/v1/incarnations/redis-prod/history": func(w http.ResponseWriter, _ *http.Request) {
 			n := atomic.AddInt32(&historyHits, 1)
-			// На первом обращении нет нужной записи, на втором — есть.
+			// The first call has no matching record, the second one does.
 			items := []map[string]any{}
 			if n >= 2 {
 				items = append(items, map[string]any{
@@ -261,8 +261,8 @@ func TestWaitForApplySuccess(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// waitForApply использует 2s-тики, пометим тест как быстрый через отдельный
-	// контекст с большим запасом.
+	// waitForApply uses 2s ticks; keep the test fast via a dedicated
+	// context with a generous margin.
 	result, err := waitForApply(ctx, cl, "redis-prod", "01HX_TEST", 0)
 	if err != nil {
 		t.Fatalf("waitForApply: %v", err)

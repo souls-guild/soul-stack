@@ -8,11 +8,11 @@ require (
 	google.golang.org/grpc v1.81.1
 )
 
-// TODO: до публикации модуля в community-listing — настройте versioned-deps
-// (git ref на core-repo) и удалите replace-инструкции, добавленные при
-// локальной разработке против checkout-а core-репо.
+// TODO: before publishing the module to the community listing, switch to
+// versioned deps (a git ref on the core repo) and remove the replace
+// directives added for local development against a checkout of the core repo.
 //
-// Пример локальной разработки:
+// Local development example:
 //   replace (
 //       github.com/souls-guild/soul-stack/proto/plugin => ../soul-stack/proto/plugin
 //       github.com/souls-guild/soul-stack/sdk         => ../soul-stack/sdk

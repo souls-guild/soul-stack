@@ -5,24 +5,25 @@ import (
 	"time"
 )
 
-// BackoffConfig — параметры экспоненциального backoff для [Retry] и [WaitUntilReady].
-// Общий канон для всех драйверов: единый шейп ретраев вместо per-provider
-// диалектов. Нулевая структура НЕ валидна — используйте [DefaultBackoff].
+// BackoffConfig holds exponential backoff parameters for [Retry] and
+// [WaitUntilReady]. A common canon for all drivers: one retry shape instead
+// of per-provider dialects. The zero struct is NOT valid — use
+// [DefaultBackoff].
 type BackoffConfig struct {
-	// Initial — задержка перед первым повтором.
+	// Initial is the delay before the first retry.
 	Initial time.Duration
-	// Max — потолок задержки (экспонента упирается в него).
+	// Max is the delay ceiling (the exponent caps out at it).
 	Max time.Duration
-	// Factor — множитель роста задержки между попытками (обычно 2.0).
+	// Factor is the delay growth multiplier between attempts (usually 2.0).
 	Factor float64
-	// MaxAttempts — максимум попыток (включая первую). 0 → без лимита по
-	// числу (ограничение только ctx-дедлайном); для [Retry] это means
-	// «ретраить до успеха или ctx-cancel».
+	// MaxAttempts is the maximum number of attempts (including the first).
+	// 0 means no limit on count (bounded only by the ctx deadline); for
+	// [Retry] this means "retry until success or ctx-cancel".
 	MaxAttempts int
 }
 
-// DefaultBackoff — разумный дефолт для cloud API (throttling-friendly):
-// 1s → 2s → 4s → … → 30s, до 8 попыток.
+// DefaultBackoff is a sane default for cloud APIs (throttling-friendly):
+// 1s → 2s → 4s → … → 30s, up to 8 attempts.
 func DefaultBackoff() BackoffConfig {
 	return BackoffConfig{
 		Initial:     1 * time.Second,
@@ -32,7 +33,7 @@ func DefaultBackoff() BackoffConfig {
 	}
 }
 
-// next вычисляет задержку для попытки attempt (0-based: attempt=0 → Initial).
+// next computes the delay for attempt (0-based: attempt=0 → Initial).
 func (b BackoffConfig) next(attempt int) time.Duration {
 	d := float64(b.Initial)
 	for i := 0; i < attempt; i++ {
@@ -47,14 +48,15 @@ func (b BackoffConfig) next(attempt int) time.Duration {
 	return time.Duration(d)
 }
 
-// Retry выполняет op с экспоненциальным backoff, пока op возвращает ошибку,
-// классифицируемую как transient (через [Classify]+classify). Не-transient
-// ошибка возвращается немедленно (нет смысла ретраить auth/quota/not_found).
+// Retry runs op with exponential backoff, as long as op returns an error
+// classified as transient (via [Classify]+classify). A non-transient error
+// is returned immediately (no point retrying auth/quota/not_found).
 //
-// Возвращает nil при первом успехе; последнюю ошибку — при исчерпании
-// MaxAttempts; ctx.Err() — при отмене/таймауте во время ожидания backoff.
-// Это общий канон для всех драйверов: idempotent-операции (DescribeImages,
-// RunInstances при throttling) оборачиваются им единообразно.
+// Returns nil on first success; the last error once MaxAttempts is
+// exhausted; ctx.Err() on cancellation/timeout while waiting for backoff.
+// This is a common canon for all drivers: idempotent operations
+// (DescribeImages, RunInstances under throttling) are wrapped by it
+// uniformly.
 func Retry(ctx context.Context, cfg BackoffConfig, classify ClassifyFunc, op func() error) error {
 	attempt := 0
 	for {
@@ -75,12 +77,12 @@ func Retry(ctx context.Context, cfg BackoffConfig, classify ClassifyFunc, op fun
 	}
 }
 
-// sleepCtx ждёт d либо ctx-cancel. Возвращает ctx.Err() при отмене, nil по
-// истечении d. Единая точка ожидания для Retry/WaitUntilReady (ctx-aware,
-// без утечки таймеров).
+// sleepCtx waits for d or ctx-cancel, whichever comes first. Returns
+// ctx.Err() on cancellation, nil once d elapses. The single wait point for
+// Retry/WaitUntilReady (ctx-aware, no timer leaks).
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
-		// Уважаем уже-отменённый ctx даже при нулевой задержке.
+		// Honor an already-cancelled ctx even with a zero delay.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

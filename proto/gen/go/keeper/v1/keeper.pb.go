@@ -101,7 +101,7 @@ func (x *PingReply) GetVersion() string {
 	return ""
 }
 
-// FromSoul — wrapper-message для сообщений Soul → Keeper в EventStream.
+// FromSoul is the wrapper message for Soul -> Keeper messages on EventStream.
 type FromSoul struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -296,7 +296,7 @@ func (*FromSoul_WardRoster) isFromSoul_Payload() {}
 
 func (*FromSoul_ErrandResult) isFromSoul_Payload() {}
 
-// FromKeeper — wrapper-message для сообщений Keeper → Soul в EventStream.
+// FromKeeper is the wrapper message for Keeper -> Soul messages on EventStream.
 type FromKeeper struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:

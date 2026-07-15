@@ -1,7 +1,7 @@
-// Package validate реализует подкоманду `soul-lint validate-config`.
+// Package validate implements the `soul-lint validate-config` subcommand.
 //
-// Auto-detect kind (keeper vs soul) по top-level ключу `kid:` / `sid:`,
-// делегирование в shared/config, форматирование вывода (human / JSON).
+// Auto-detects kind (keeper vs soul) from the top-level `kid:` / `sid:` key,
+// delegates to shared/config, and formats output (human / JSON).
 package validate
 
 import (
@@ -19,41 +19,41 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// Exit codes — стабильный контракт CLI (см. delegation.md).
+// Exit codes are a stable CLI contract (see delegation.md).
 const (
 	ExitOK        = 0
 	ExitHasErrors = 1
 	ExitIOFatal   = 2
 )
 
-// Kind — какой документ валидируем. Прокидывается из CLI (своя подкоманда
-// на каждый kind); внутри Run выбирается соответствующий Load*-вызов.
+// Kind is the document type being validated. Passed in from the CLI (each
+// kind has its own subcommand); Run selects the matching Load* call.
 type Kind int
 
 const (
-	// KindConfig — keeper.yml / soul.yml (auto-detect между ними по
-	// top-level ключу `kid:` / `sid:`).
+	// KindConfig is keeper.yml / soul.yml (auto-detected between the two via
+	// the top-level `kid:` / `sid:` key).
 	KindConfig Kind = iota
-	// KindDestiny — destiny.yml (корневой манифест destiny).
+	// KindDestiny is destiny.yml (the root destiny manifest).
 	KindDestiny
-	// KindService — service.yml (корневой манифест сервиса).
+	// KindService is service.yml (the root service manifest).
 	KindService
-	// KindScenario — scenario/<name>/main.yml.
+	// KindScenario is scenario/<name>/main.yml.
 	KindScenario
-	// KindManifest — manifest.yaml плагина (kind: soul_module / cloud_driver /
-	// ssh_provider). Парсер и валидатор — `shared/plugin`.
+	// KindManifest is a plugin manifest.yaml (kind: soul_module /
+	// cloud_driver / ssh_provider). Parsed and validated by `shared/plugin`.
 	KindManifest
 )
 
-// Options — параметры одного запуска validate-* подкоманды.
+// Options holds the parameters for a single validate-* subcommand run.
 type Options struct {
 	Path string
 	JSON bool
 	Kind Kind
 }
 
-// Run выполняет одну валидацию. Печатает диагностики в `out`, возвращает
-// exit-code согласно контракту (0/1/2).
+// Run performs a single validation. It prints diagnostics to `out` and
+// returns an exit code per the contract (0/1/2).
 func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	src, ioErr := os.ReadFile(opts.Path)
 	if ioErr != nil {
@@ -82,12 +82,12 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		}
 	case KindDestiny:
 		_, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, config.ValidateOptions{})
-		// Кросс-файловая проверка коллизии destiny-локалов: соседний `vars.yml`
-		// (file-level vars) против task-level `vars:` из `tasks/main.yml`. Вариант A
-		// (vars.md) детерминирован, но коллизия имён — частый источник недоразумений
-		// → warn. Отсутствие любого из соседей → проверка пропускается (vars.yml
-		// опционален, tasks/main.yml может лежать иначе — линтер манифеста на это не
-		// падает).
+		// Cross-file check for destiny-local collisions: sibling `vars.yml`
+		// (file-level vars) vs. task-level `vars:` in `tasks/main.yml`. Variant A
+		// (vars.md) is deterministic, but name collisions are a common source of
+		// confusion, hence the warn. Skipped if either neighbor is missing
+		// (vars.yml is optional, tasks/main.yml may live elsewhere — the
+		// manifest linter doesn't fail on that).
 		diags = append(diags, destinyVarsCollisionDiags(opts.Path)...)
 	case KindService:
 		_, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
@@ -95,23 +95,26 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document
 		scn, scnDoc, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
-		// covenant-резолв ПЕРЕД semantic/cross-ref: сливает covenant.yml (по
-		// scn.Extends, корень линтуемого репо = `<service>/scenario/<name>/main.yml`
-		// → `<service>/`) и валидирует form пост-merge. ОБЯЗАТЕЛЬНО до typeRef/stage:
-		// без него линт covenant-сценария давал бы ЛОЖНЫЕ form_field_unknown (form
-		// гейтнут до merge в semantic-фазе) и пропускал бы $type covenant-полей.
-		// No-op для non-extends (без ФС-обращения) — бит-в-бит как до фичи.
+		// covenant resolution BEFORE semantic/cross-ref: merges covenant.yml (via
+		// scn.Extends; the linted repo root is `<service>/scenario/<name>/main.yml`
+		// → `<service>/`) and validates the form post-merge. MUST run before
+		// typeRef/stage: without it, linting a covenant scenario would raise
+		// FALSE form_field_unknown (form is gated before merge in the semantic
+		// phase) and would skip $type on covenant fields. No-op for non-extends
+		// (no FS access) — bit-for-bit identical to before this feature.
 		diags = append(diags, config.ResolveScenarioCovenant(scn, scnDoc, scenarioServiceRoot(opts.Path))...)
-		// Stage-валидация (ADR-056 §S5): офлайн Passage-стратификация той же
-		// функцией config.Stratify, что рантайм делает перед dispatch. Ловит
-		// register-цикл и serial+staged ДО apply (config-валидатор уже поднял
-		// unknown_register на парсе). Прогоняется даже при наличии диагностик парса
-		// (stageDiagnostics сам решает по nil scn, надёжен ли граф).
+		// Stage validation (ADR-056 §S5): offline Passage stratification using
+		// the same config.Stratify function the runtime calls before dispatch.
+		// Catches register cycles and serial+staged BEFORE apply (the config
+		// validator already raises unknown_register at parse time). Runs even
+		// if parse diagnostics exist (stageDiagnostics decides for itself, via
+		// nil scn, whether the graph is reliable).
 		diags = append(diags, stageDiagnostics(opts.Path, scn)...)
-		// Резолв $type-ссылок против каталога типов сервиса (`../../types.yml`):
-		// ловит input_type_unknown/cycle/duplicate ДО keeper. Структурный
-		// $type-ref-conflict config-валидатор уже поднял на парсе сценария.
-		// Резолвит и covenant-поля (merge выше уже влил их в scn.Input).
+		// Resolves $type references against the service type catalog
+		// (`../../types.yml`): catches input_type_unknown/cycle/duplicate BEFORE
+		// keeper. Structural $type-ref-conflict is already raised by the config
+		// validator at scenario parse time. Also resolves covenant fields
+		// (already merged into scn.Input above).
 		diags = append(diags, typeRefDiagnostics(opts.Path, scn)...)
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
@@ -127,23 +130,26 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	return ExitOK
 }
 
-// scenarioServiceRoot выводит корень линтуемого service-репо из пути main.yml
-// сценария. Раскладка `<service>/scenario/<name>/main.yml` → `<service>` (три Dir
-// вверх; та же база, что typeRefDiagnostics строит для types.yml). Корень несёт
-// covenant.yml-семейство (сиблинг service.yml/types.yml), который резолвит extends.
+// scenarioServiceRoot derives the linted service repo root from a
+// scenario's main.yml path. Layout `<service>/scenario/<name>/main.yml` →
+// `<service>` (three Dir calls up; same base typeRefDiagnostics builds for
+// types.yml). The root holds the covenant.yml family (sibling of
+// service.yml/types.yml) that extends resolves against.
 func scenarioServiceRoot(scenarioPath string) string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(scenarioPath)))
 }
 
-// destinyVarsCollisionDiags поднимает warn на каждое имя, объявленное И в
-// соседнем `vars.yml` (file-level destiny-локалы), И в task-level `vars:` хотя бы
-// одной задачи `tasks/main.yml`. Вариант A детерминирован (task переопределяет
-// file, vars.md), но коллизия — частый источник недоразумений.
+// destinyVarsCollisionDiags raises a warn for every name declared BOTH in
+// the sibling `vars.yml` (file-level destiny locals) AND in the task-level
+// `vars:` of at least one task in `tasks/main.yml`. Variant A is
+// deterministic (task overrides file, vars.md), but the collision is a
+// common source of confusion.
 //
-// manifestPath — путь к destiny.yml; соседи берутся из его каталога. Любая I/O-
-// или parse-ошибка соседа → пропуск (vars.yml опционален; ошибки самих задач
-// ловит validate-scenario/рантайм — здесь только коллизия). Не падает, если
-// соседей нет.
+// manifestPath is the path to destiny.yml; neighbors are read from its
+// directory. Any I/O or parse error on a neighbor skips the check (vars.yml
+// is optional; errors in the tasks themselves are caught by
+// validate-scenario/runtime — this only checks for the collision). Doesn't
+// fail when neighbors are absent.
 func destinyVarsCollisionDiags(manifestPath string) []diag.Diagnostic {
 	dir := filepath.Dir(manifestPath)
 
@@ -177,9 +183,10 @@ func destinyVarsCollisionDiags(manifestPath string) []diag.Diagnostic {
 	return out
 }
 
-// printDiagnostics форматирует и пишет диагностики в `w` в выбранном режиме.
-// JSON-mode: одна строка JSON на диагностику (JSON-Lines); 0 диагностик —
-// пустой stdout. Human-mode: gcc-style + при 0 ошибках одна строка `OK: <path>`.
+// printDiagnostics formats and writes diagnostics to `w` in the selected
+// mode. JSON mode: one JSON line per diagnostic (JSON-Lines); 0 diagnostics
+// → empty stdout. Human mode: gcc-style, plus a single `OK: <path>` line
+// when there are 0 errors.
 func printDiagnostics(opts Options, diags []diag.Diagnostic, w io.Writer) {
 	if opts.JSON {
 		bw := bufio.NewWriter(w)
@@ -203,9 +210,9 @@ func writeHumanDiag(w io.Writer, d diag.Diagnostic) {
 	if file == "" {
 		file = "<input>"
 	}
-	// gcc-style `file:line:col: level: [code] message`. Когда line/col
-	// неизвестны (cross-field invariant) — секции просто опускаются,
-	// без пустого ":" → исчезает двойной пробел в `path: error:`.
+	// gcc-style `file:line:col: level: [code] message`. When line/col are
+	// unknown (cross-field invariant), those sections are simply omitted,
+	// without an empty ":" — avoids a double space in `path: error:`.
 	prefix := file + ":"
 	if d.Line > 0 {
 		if d.Column > 0 {
@@ -223,16 +230,17 @@ func writeHumanDiag(w io.Writer, d diag.Diagnostic) {
 	}
 }
 
-// detectKind — auto-detect по составу top-level ключей.
+// detectKind auto-detects kind from the set of top-level keys.
 //
-// Приоритет 1: `kid:` → keeper, `sid:` → soul (одно из двух явно есть).
-// Приоритет 2: если ни `kid:`, ни `sid:` — голосование по уникальным
-// top-level ключам (`postgres`/`vault`/`plugins`/… → keeper; `keeper`/`paths`/
-// `soulprint`/`cleanup`/`metrics` → soul). Это нужно, потому что `sid:` в
-// soul.yml опционален (вычисляется из FQDN хоста по умолчанию).
+// Priority 1: `kid:` → keeper, `sid:` → soul (either one is explicitly
+// present). Priority 2: if neither `kid:` nor `sid:` is present, vote by
+// unique top-level keys (`postgres`/`vault`/`plugins`/… → keeper;
+// `keeper`/`paths`/`soulprint`/`cleanup`/`metrics` → soul). Needed because
+// `sid:` in soul.yml is optional (defaults to being computed from the host
+// FQDN).
 //
-// Возвращает `kindIndeterminate`, если оба явных ключа присутствуют либо ни
-// один признак не найден / голосование неоднозначно.
+// Returns `kindIndeterminate` if both explicit keys are present, or if no
+// signal is found / the vote is ambiguous.
 func detectKind(src []byte) configKind {
 	keys := readTopLevelKeys(src)
 	hasKID, hasSID := keys["kid"], keys["sid"]
@@ -248,11 +256,11 @@ func detectKind(src []byte) configKind {
 	soulVotes := 0
 	for k := range keys {
 		switch k {
-		// `services`/`default_destiny_source`/`default_module_source` исключены из
-		// голосования: реестр Service-ов и скаляры перенесены в Postgres (ADR-029
-		// hard-cut), в keeper.yml их больше нет — детектировать keeper по ним
-		// нельзя. `rbac` исключён ранее (ADR-028). Сигнатура keeper остаётся
-		// сильной (postgres/vault/auth/plugins/reaper).
+		// `services`/`default_destiny_source`/`default_module_source` are
+		// excluded from the vote: the Service registry and these scalars moved
+		// to Postgres (ADR-029 hard-cut), so they're no longer in keeper.yml and
+		// can't be used to detect keeper. `rbac` was excluded earlier (ADR-028).
+		// The keeper signature is still strong (postgres/vault/auth/plugins/reaper).
 		case "postgres", "vault", "auth", "plugins", "reaper":
 			keeperVotes++
 		case "keeper", "paths", "soulprint", "cleanup", "metrics":
@@ -302,9 +310,9 @@ const (
 	kindSoul
 )
 
-// stripBOM — локальный helper для синхронизации с shared/config (тот же strip
-// делает goccy-парсер через LoadKeeperFromBytes/LoadSoulFromBytes). Без него
-// detectKind не нашёл бы `kid:`/`sid:` под ведущим BOM.
+// stripBOM is a local helper kept in sync with shared/config (the goccy
+// parser does the same strip via LoadKeeperFromBytes/LoadSoulFromBytes).
+// Without it, detectKind wouldn't find `kid:`/`sid:` under a leading BOM.
 func stripBOM(data []byte) []byte {
 	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
 		return data[3:]

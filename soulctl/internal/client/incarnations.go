@@ -8,14 +8,14 @@ import (
 	"strconv"
 )
 
-// IncarnationsAPI — типизированные методы для /v1/incarnations/*. Открыт как
-// поле Client.Incarnations.
+// IncarnationsAPI holds typed methods for /v1/incarnations/*. Exposed as the
+// Client.Incarnations field.
 type IncarnationsAPI struct {
 	c *Client
 }
 
-// IncarnationListOptions — фильтры list. service/status/coven — query-params,
-// limit/offset — pagination (operator-api.md → Pagination).
+// IncarnationListOptions holds list filters. service/status/coven are
+// query params, limit/offset is pagination (operator-api.md → Pagination).
 type IncarnationListOptions struct {
 	Service string
 	Status  string
@@ -24,9 +24,9 @@ type IncarnationListOptions struct {
 	Offset  int
 }
 
-// IncarnationListItem повторяет shape IncarnationGetReply (openapi.yaml). Имена
-// snake_case — UseProtoNames в HTTP-фасаде Keeper-а (operator-api.md → JSON
-// field naming).
+// IncarnationListItem mirrors the IncarnationGetReply shape (openapi.yaml).
+// snake_case names come from UseProtoNames in Keeper's HTTP facade
+// (operator-api.md → JSON field naming).
 type IncarnationListItem struct {
 	Name               string          `json:"name"`
 	Service            string          `json:"service"`
@@ -44,7 +44,7 @@ type IncarnationListItem struct {
 	LastDriftSummary   json.RawMessage `json:"last_drift_summary,omitempty"`
 }
 
-// IncarnationListReply — страница списка.
+// IncarnationListReply is a list page.
 type IncarnationListReply struct {
 	Items  []IncarnationListItem `json:"items"`
 	Offset int32                 `json:"offset"`
@@ -52,11 +52,12 @@ type IncarnationListReply struct {
 	Total  int32                 `json:"total"`
 }
 
-// List — GET /v1/incarnations. `coven` openapi-схемой не задан как фильтр на
-// этом endpoint-е (фильтр coven есть только у /v1/souls), поэтому фильтр
-// применяется client-side после получения страницы. Сервер вернёт offset/limit/total
-// для service/status, для coven значения будут не консистентны с total — это
-// known limitation, отражена в README.
+// List is GET /v1/incarnations. `coven` isn't defined as a filter on this
+// endpoint by the openapi schema (the coven filter only exists on
+// /v1/souls), so the filter is applied client-side after fetching the page.
+// The server returns offset/limit/total for service/status; for coven the
+// values won't be consistent with total — this is a known limitation,
+// documented in the README.
 func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions) (*IncarnationListReply, error) {
 	q := url.Values{}
 	if opts.Service != "" {
@@ -94,7 +95,7 @@ func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions)
 	return &reply, nil
 }
 
-// Get — GET /v1/incarnations/{name}.
+// Get is GET /v1/incarnations/{name}.
 func (a *IncarnationsAPI) Get(ctx context.Context, name string) (*IncarnationListItem, error) {
 	if name == "" {
 		return nil, fmt.Errorf("incarnation name пуст")
@@ -106,21 +107,22 @@ func (a *IncarnationsAPI) Get(ctx context.Context, name string) (*IncarnationLis
 	return &item, nil
 }
 
-// IncarnationRunRequest — тело POST /v1/incarnations/{name}/scenarios/{scenario}.
+// IncarnationRunRequest is the body for POST /v1/incarnations/{name}/scenarios/{scenario}.
 type IncarnationRunRequest struct {
 	Input map[string]any `json:"input,omitempty"`
 }
 
-// IncarnationRunReply — 202-ответ с apply_id (ULID).
+// IncarnationRunReply is the 202 response with apply_id (ULID).
 type IncarnationRunReply struct {
 	ApplyID     string `json:"apply_id"`
 	Incarnation string `json:"incarnation"`
 	Scenario    string `json:"scenario"`
 }
 
-// Run — POST /v1/incarnations/{name}/scenarios/{scenario}. dry_run сервер
-// принимает как query-параметр (по openapi явного описания не вижу; передадим
-// как query, сервер либо примет, либо проигнорирует — это безопасно).
+// Run is POST /v1/incarnations/{name}/scenarios/{scenario}. The server
+// accepts dry_run as a query parameter (no explicit description in openapi;
+// we pass it as a query param — the server will either honor it or ignore
+// it, which is safe either way).
 func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input map[string]any, dryRun bool) (*IncarnationRunReply, error) {
 	if name == "" || scenario == "" {
 		return nil, fmt.Errorf("incarnation/scenario пусты")
@@ -137,7 +139,7 @@ func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input 
 	return &reply, nil
 }
 
-// StateHistoryEntry — запись /v1/incarnations/{name}/history.
+// StateHistoryEntry is a record from /v1/incarnations/{name}/history.
 type StateHistoryEntry struct {
 	HistoryID    string          `json:"history_id"`
 	Scenario     string          `json:"scenario"`
@@ -148,7 +150,7 @@ type StateHistoryEntry struct {
 	CreatedAt    string          `json:"created_at"`
 }
 
-// IncarnationHistoryReply — страница state_history.
+// IncarnationHistoryReply is a state_history page.
 type IncarnationHistoryReply struct {
 	Items  []StateHistoryEntry `json:"items"`
 	Offset int32               `json:"offset"`
@@ -156,7 +158,7 @@ type IncarnationHistoryReply struct {
 	Total  int32               `json:"total"`
 }
 
-// History — GET /v1/incarnations/{name}/history.
+// History is GET /v1/incarnations/{name}/history.
 func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offset int) (*IncarnationHistoryReply, error) {
 	if name == "" {
 		return nil, fmt.Errorf("incarnation name пуст")
@@ -179,8 +181,8 @@ func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offse
 	return &reply, nil
 }
 
-// DriftReport — POST /v1/incarnations/{name}/check-drift. Полная shape
-// в openapi.yaml → DriftReport / DriftHostReport / DriftSummary.
+// DriftReport is the response for POST /v1/incarnations/{name}/check-drift.
+// Full shape in openapi.yaml → DriftReport / DriftHostReport / DriftSummary.
 type DriftReport struct {
 	CheckedAt   string             `json:"checked_at"`
 	Incarnation string             `json:"incarnation"`
@@ -210,7 +212,7 @@ type DriftSummaryCounts struct {
 	HostsFailed      int `json:"hosts_failed"`
 }
 
-// CheckDrift — POST /v1/incarnations/{name}/check-drift с опциональным input.
+// CheckDrift is POST /v1/incarnations/{name}/check-drift with optional input.
 func (a *IncarnationsAPI) CheckDrift(ctx context.Context, name string, input map[string]any) (*DriftReport, error) {
 	if name == "" {
 		return nil, fmt.Errorf("incarnation name пуст")

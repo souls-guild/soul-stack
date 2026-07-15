@@ -13,14 +13,14 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
 
-// newRunCmdCmd — `soulctl run cmd '<command>'`. Ad-hoc shell-команда на N
-// хостов через Voyage `kind=command` (ADR-043). Backend: POST /v1/voyages body
+// newRunCmdCmd — `soulctl run cmd '<command>'`. An ad-hoc shell command on N
+// hosts via Voyage `kind=command` (ADR-043). Backend: POST /v1/voyages body
 // `{kind: "command", module: "core.cmd.shell", input: {cmd: "<command>"}, target, ...}`.
 //
 // Behaviour:
-//   - target обязателен (нет смысла запускать прогон без scope).
-//   - 202 → печать voyage_id + scope_size + location.
-//   - `--wait` → polling GET /v1/voyages/{id} с интервалом 3s до терминала.
+//   - target is required (no point running without a scope).
+//   - 202 → prints voyage_id + scope_size + location.
+//   - `--wait` → polls GET /v1/voyages/{id} every 3s until terminal.
 func newRunCmdCmd() *cobra.Command {
 	var (
 		module      string
@@ -121,8 +121,8 @@ func newRunCmdCmd() *cobra.Command {
 	return c
 }
 
-// waitForVoyage — polling 3s до терминала (succeeded/failed/partial_failed/
-// cancelled). Используется только при --wait.
+// waitForVoyage — polls every 3s until terminal (succeeded/failed/
+// partial_failed/cancelled). Used only when --wait is set.
 func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, timeout time.Duration) (*client.Voyage, error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Minute

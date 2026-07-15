@@ -6,52 +6,52 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
-// BootstrapRequest — запрос Soul-а на онбординг.
-// Передаётся ДО mTLS-стрима, на отдельном listener-е с server-only TLS
-// (у Soul-а ещё нет SoulSeed-сертификата).
+// BootstrapRequest is Soul's onboarding request.
+// Sent BEFORE the mTLS stream, on a separate listener with server-only TLS
+// (Soul doesn't have a SoulSeed certificate yet).
 message BootstrapRequest {
-  // FQDN хоста (= SID). Совпадает с CN/SAN будущего выпускаемого сертификата.
+  // Host FQDN (= SID). Matches the CN/SAN of the certificate about to be issued.
   string sid = 1;
 
-  // SENSITIVE: never log. Однократный токен онбординга.
-  // Server-side немедленно хешируется (SHA-256) и сверяется с bootstrap_tokens.token_hash.
-  // Plain-значение нигде не сохраняется.
+  // SENSITIVE: never log. One-time onboarding token.
+  // Immediately hashed server-side (SHA-256) and checked against
+  // bootstrap_tokens.token_hash. The plain value is never stored anywhere.
   string bootstrap_token = 2;
 
-  // PEM-encoded CSR. Несёт public key Soul-а; private key никогда не покидает хост.
+  // PEM-encoded CSR. Carries Soul's public key; the private key never leaves the host.
   bytes csr_pem = 3;
 
-  // Версия soul-бинаря — для аудита онбординга.
+  // Version of the soul binary — for onboarding audit.
   string soul_version = 4;
 }
 
-// BootstrapReply — успешный выпуск SoulSeed.
+// BootstrapReply is a successful SoulSeed issuance.
 message BootstrapReply {
-  // Выпущенный SoulSeed-сертификат в PEM.
+  // The issued SoulSeed certificate in PEM.
   bytes certificate_pem = 1;
 
-  // CA-цепочка для верификации серверного сертификата Keeper-а при последующем mTLS.
+  // CA chain for verifying Keeper's server certificate on subsequent mTLS.
   bytes ca_chain_pem = 2;
 
-  // expires_at сертификата — используется Soul-ом для планирования ротации.
+  // Certificate expires_at — used by Soul to schedule rotation.
   google.protobuf.Timestamp not_after = 3;
 
-  // KID Keeper-инстанса, выпустившего seed. Аудит и диагностика.
+  // KID of the Keeper instance that issued the seed. For audit and diagnostics.
   string kid = 4;
 
-  // PEM (SPKI) публичного ed25519-ключа подписи Sigil (ADR-026, slice S2b).
-  // Edет Soul-у как trust-anchor: Soul персистит его рядом с SoulSeed и
-  // верифицирует им подпись допусков плагинов (PluginSigil) в pull-режиме
-  // (slice S6). Пусто — Sigil на Keeper-е не настроен (sigil.signing_key_ref
-  // отсутствует/пуст); тогда verify плагинов выключен на этом хосте.
-  // optional: пустое значение — валидное «Sigil выключен».
+  // PEM (SPKI) of the Sigil signing public ed25519 key (ADR-026, slice S2b).
+  // Sent to Soul as a trust anchor: Soul persists it alongside SoulSeed and uses
+  // it to verify plugin sigil (PluginSigil) signatures in pull mode (slice S6).
+  // Empty means Sigil isn't configured on Keeper (sigil.signing_key_ref is
+  // missing/empty); plugin verify is then disabled on this host.
+  // optional: an empty value is a valid "Sigil disabled" state.
   optional string sigil_pubkey_pem = 5;
 
-  // ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (SPKI PEM публичных ed25519-
-  // ключей) — поддержка multi-anchor ротации (ADR-026, R3). При наличии набора
-  // Soul использует ИМЕННО его (любой anchor из набора верифицирует подпись).
-  // Одиночное sigil_pubkey_pem (field 5) — legacy single-anchor для wire-compat;
-  // если set непуст, single-поле игнорируется. Пустой набор = «Sigil выключен»
-  // (как пустое одиночное поле).
+  // The FULL set of Sigil signing trust anchors (SPKI PEM of public ed25519
+  // keys) — supports multi-anchor rotation (ADR-026, R3). When the set is
+  // present, Soul uses IT (any anchor in the set can verify a signature). The
+  // single sigil_pubkey_pem (field 5) is a legacy single-anchor for wire-compat;
+  // if the set is non-empty, the single field is ignored. An empty set = "Sigil
+  // disabled" (same as an empty single field).
   repeated string sigil_pubkey_pem_set = 6;
 }

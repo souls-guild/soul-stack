@@ -23,57 +23,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// PortentEvent — событие, которое Soul-side проверка (Vigil) поднимает наверх к
-// Keeper-у при смене состояния хоста (ADR-030, beacons-контур). Едет only-add в
-// FromSoul.oneof существующего EventStream-а — нового RPC нет. Получив Portent,
-// Oracle (reactor-роутер Keeper-а) сопоставляет его с реестром Decree и ставит
-// named-scenario в work-queue (ADR-027).
+// PortentEvent is an event a Soul-side check (Vigil) raises up to Keeper when a
+// host's state changes (ADR-030, beacons contour). Rides only-add in the existing
+// EventStream's FromSoul.oneof — no new RPC. On receiving a Portent, Oracle
+// (Keeper's reactor router) matches it against the Decree registry and enqueues a
+// named scenario on the work queue (ADR-027).
 //
-// SID в payload — ECHO для логов/корреляции: авторитет идентичности Soul-а —
-// mTLS peer cert (ADR-012(i)). Keeper резолвит SID из сертификата, по нему —
-// covens, и сверяет с субъектом Decree (coven XOR sid → match → action).
+// SID in the payload is an ECHO for logs/correlation: the authority for Soul's
+// identity is the mTLS peer cert (ADR-012(i)). Keeper resolves SID from the
+// certificate, covens from that, and checks it against the Decree's subject
+// (coven XOR sid -> match -> action).
 //
-// Beacon-событие = НЕДОВЕРЕННЫЙ вход (ADR-030): Soul может быть скомпрометирован,
-// поэтому action ограничен whitelist-ом named-scenario (raw-команда отвергнута),
-// а Decree — default-deny с субъектной привязкой.
+// A beacon event = an UNTRUSTED input (ADR-030): Soul could be compromised, so
+// action is restricted to a named-scenario whitelist (a raw command is rejected),
+// and Decree is default-deny with subject binding.
 //
-// Typed payload (V5-1, ADR-030 amendment 2026-05-26): `oneof payload` несёт
-// 6 typed-message для встроенных core-beacon (parity с typed Soulprint, ADR-018)
-// + `custom: Struct` для plugin-beacon (V5-2, soul_beacon-kind). Поле `data`
-// (Struct) — DEPRECATED, 1-release WARN deprecation: Soul в течение одного
-// production-релиза заполняет ОБЕ ветки, после — `data` удаляется hard-cut
-// (parity с push S7 deprecation-decision). Oracle CEL-where при typed payload
-// читает `event.<typed_branch>.<field>` (typed-field-access), при legacy `data`
-// продолжает читать `event.data.<field>` (backward-compat).
+// Typed payload (V5-1, ADR-030 amendment 2026-05-26): `oneof payload` carries
+// 6 typed messages for the built-in core beacons (parity with typed Soulprint,
+// ADR-018) plus `custom: Struct` for plugin beacons (V5-2, soul_beacon kind). The
+// `data` field (Struct) is DEPRECATED, with a 1-release WARN deprecation: for one
+// production release Soul populates BOTH branches, after which `data` is removed
+// as a hard cut (parity with the push S7 deprecation decision). Oracle's CEL
+// where-clause reads `event.<typed_branch>.<field>` for typed payloads
+// (typed-field access), and keeps reading `event.data.<field>` for legacy `data`
+// (backward-compat).
 type PortentEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Имя сработавшего Vigil (vigils.name) — какая именно проверка подняла событие.
-	// Oracle матчит по нему Decree (`on_vigil`).
+	// Name of the Vigil that fired (vigils.name) — which check raised the event.
+	// Oracle matches Decree (`on_vigil`) against it.
 	BeaconName string `protobuf:"bytes,1,opt,name=beacon_name,json=beaconName,proto3" json:"beacon_name,omitempty"`
-	// DEPRECATED (ADR-030 amendment 2026-05-26): legacy free-form payload. Soul в
-	// течение 1 production-релиза заполняет ОБЕ ветки (data + payload) ради
-	// backward-compat для существующих where-CEL `event.data.<field>`. После
-	// 1-release — удаляется hard-cut (S5-final). Новый код пишет в `payload`.
+	// DEPRECATED (ADR-030 amendment 2026-05-26): legacy free-form payload. For one
+	// production release Soul populates BOTH branches (data + payload) for
+	// backward-compat with existing where-CEL `event.data.<field>`. Removed as a
+	// hard cut after that release (S5-final). New code writes to `payload`.
 	//
 	// Deprecated: Marked as deprecated in keeper/v1/beacon.proto.
 	Data *structpb.Struct `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
-	// Время сбора события на Soul-стороне (как SoulprintReport.collected_at —
-	// авторитетное Soul-side время; Keeper-side received_at — отдельно при приёме).
+	// Time the event was collected on Soul's side (like SoulprintReport.collected_at
+	// — the authoritative Soul-side time; Keeper-side received_at is tracked
+	// separately on receipt).
 	CollectedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=collected_at,json=collectedAt,proto3" json:"collected_at,omitempty"`
-	// SID хоста — ECHO для логов и корреляции. НЕ identity-claim: авторитет — mTLS
-	// peer cert (ADR-012(i)).
+	// Host SID — ECHO for logs and correlation. NOT an identity claim: the
+	// authority is the mTLS peer cert (ADR-012(i)).
 	Sid string `protobuf:"bytes,4,opt,name=sid,proto3" json:"sid,omitempty"`
-	// Опц. ключ дедупликации: при шторме одинаковых событий Soul/Oracle схлопывает
-	// повторы с одним dedup_key (часть loop-prevention, ADR-030). Пусто — без дедупа.
+	// Optional dedup key: during a storm of identical events, Soul/Oracle collapses
+	// repeats sharing one dedup_key (part of loop prevention, ADR-030). Empty = no dedup.
 	DedupKey string `protobuf:"bytes,5,opt,name=dedup_key,json=dedupKey,proto3" json:"dedup_key,omitempty"`
-	// Опц. серьёзность события (free-form в MVP, например "info"/"warning"/
-	// "critical"). Для приоритизации/фильтрации в Oracle и аудите.
+	// Optional event severity (free-form in the MVP, e.g. "info"/"warning"/
+	// "critical"). Used for prioritization/filtering in Oracle and in audit.
 	Severity string `protobuf:"bytes,6,opt,name=severity,proto3" json:"severity,omitempty"`
-	// Typed payload (V5-1, ADR-030 amendment 2026-05-26). Заполняется Soul-side
-	// emit-mapper-ом по типу beacon-а; oneof-форма гарантирует ровно один вариант.
-	// Field-numbers начинаются с 7 (1–6 заняты ранее объявленными полями), новые
-	// typed-message добавляются only-add (ADR-012). `custom` зарезервирован под
-	// plugin-beacon (V5-2 soul_beacon-kind).
+	// Typed payload (V5-1, ADR-030 amendment 2026-05-26). Populated Soul-side by an
+	// emit-mapper keyed on beacon type; the oneof shape guarantees exactly one
+	// variant. Field numbers start at 7 (1-6 belong to previously declared fields),
+	// new typed messages are added only-add (ADR-012). `custom` is reserved for
+	// plugin beacons (V5-2 soul_beacon kind).
 	//
 	// Types that are valid to be assigned to Payload:
 	//
@@ -294,16 +297,16 @@ func (*PortentEvent_Custom) isPortentEvent_Payload() {}
 
 func (*PortentEvent_Inotify) isPortentEvent_Payload() {}
 
-// FileChangedPortent — typed payload от `core.beacon.file_changed`. Shape
-// совпадает с data-полями `soul/internal/beacon/file_changed.go::fileData`
-// (path + sha256). Отсутствующий файл — `sha256` пустая строка, state-сигнал
-// `missing` несёт `PortentEvent.beacon_name` уровнем выше (не дублируем в
-// payload — типизация State — это ответственность scheduler-а).
+// FileChangedPortent is the typed payload from `core.beacon.file_changed`. Shape
+// matches the data fields of `soul/internal/beacon/file_changed.go::fileData`
+// (path + sha256). A missing file leaves `sha256` an empty string; the `missing`
+// state signal is carried one level up by `PortentEvent.beacon_name` (not
+// duplicated in the payload — typing the State is the scheduler's responsibility).
 type FileChangedPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Абсолютный путь к наблюдаемому файлу (param `path` Vigil-а).
+	// Absolute path to the watched file (Vigil param `path`).
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// SHA-256 hex содержимого; пусто, если файла нет (state "missing").
+	// SHA-256 hex of the contents; empty if the file doesn't exist (state "missing").
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -353,16 +356,16 @@ func (x *FileChangedPortent) GetSha256() string {
 	return ""
 }
 
-// ServiceDownPortent — typed payload от `core.beacon.service_down`. Shape
-// совпадает с data-полями `service_down.go::serviceData` (service + active +
+// ServiceDownPortent is the typed payload from `core.beacon.service_down`. Shape
+// matches the data fields of `service_down.go::serviceData` (service + active +
 // init_system).
 type ServiceDownPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Имя юнита (param `service` Vigil-а).
+	// Unit name (Vigil param `service`).
 	Service string `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
-	// Активен ли сервис в момент Check (true = "up", false = "down").
+	// Whether the service is active at Check time (true = "up", false = "down").
 	Active bool `protobuf:"varint,2,opt,name=active,proto3" json:"active,omitempty"`
-	// Определённая init-система: "systemd" / "openrc" / "sysv" / "unknown".
+	// Detected init system: "systemd" / "openrc" / "sysv" / "unknown".
 	InitSystem    string `protobuf:"bytes,3,opt,name=init_system,json=initSystem,proto3" json:"init_system,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -419,13 +422,13 @@ func (x *ServiceDownPortent) GetInitSystem() string {
 	return ""
 }
 
-// PortClosedPortent — typed payload от `core.beacon.port_closed`. Shape
-// совпадает с data-полями `port_closed.go::portData` (host + port).
+// PortClosedPortent is the typed payload from `core.beacon.port_closed`. Shape
+// matches the data fields of `port_closed.go::portData` (host + port).
 type PortClosedPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Целевой хост/IP (param `host` Vigil-а, дефолт 127.0.0.1).
+	// Target host/IP (Vigil param `host`, default 127.0.0.1).
 	Host string `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	// TCP-порт 1..65535 (param `port` Vigil-а).
+	// TCP port 1..65535 (Vigil param `port`).
 	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -475,16 +478,16 @@ func (x *PortClosedPortent) GetPort() int32 {
 	return 0
 }
 
-// DiskFullPortent — typed payload от `core.beacon.disk_full`. Shape совпадает с
-// data-полями `disk_full.go::diskData` (path + used_percent + threshold).
+// DiskFullPortent is the typed payload from `core.beacon.disk_full`. Shape
+// matches the data fields of `disk_full.go::diskData` (path + used_percent + threshold).
 type DiskFullPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Точка монтирования или путь внутри ФС (param `path` Vigil-а).
+	// Mount point or path within the filesystem (Vigil param `path`).
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// Процент занятого места по statfs ((Blocks - Bavail) / Blocks * 100).
+	// Percent used space per statfs ((Blocks - Bavail) / Blocks * 100).
 	UsedPercent float64 `protobuf:"fixed64,2,opt,name=used_percent,json=usedPercent,proto3" json:"used_percent,omitempty"`
-	// Порог "full", взведено при used_percent >= threshold (param
-	// `threshold_percent` Vigil-а, дефолт 90).
+	// "Full" threshold, tripped when used_percent >= threshold (Vigil param
+	// `threshold_percent`, default 90).
 	Threshold     float64 `protobuf:"fixed64,3,opt,name=threshold,proto3" json:"threshold,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -541,11 +544,11 @@ func (x *DiskFullPortent) GetThreshold() float64 {
 	return 0
 }
 
-// ProcessAbsentPortent — typed payload от `core.beacon.process_absent`. Shape
-// совпадает с data-полями `process_absent.go::processData` (только pattern).
+// ProcessAbsentPortent is the typed payload from `core.beacon.process_absent`.
+// Shape matches the data fields of `process_absent.go::processData` (pattern only).
 type ProcessAbsentPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// pgrep-style паттерн имени процесса (param `pattern` Vigil-а).
+	// pgrep-style process name pattern (Vigil param `pattern`).
 	Pattern       string `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -588,15 +591,15 @@ func (x *ProcessAbsentPortent) GetPattern() string {
 	return ""
 }
 
-// HttpUnhealthyPortent — typed payload от `core.beacon.http_unhealthy`. Shape
-// совпадает с data-полями `http_unhealthy.go::httpData` (url + status). Тело и
-// заголовки ответа НЕ кладём (sensitive-by-construction, ADR-010 §7.4) — beacon
-// не светит payload в Portent/логи.
+// HttpUnhealthyPortent is the typed payload from `core.beacon.http_unhealthy`.
+// Shape matches the data fields of `http_unhealthy.go::httpData` (url + status).
+// Response body and headers are NOT included (sensitive-by-construction,
+// ADR-010 §7.4) — the beacon never exposes payload data in Portent/logs.
 type HttpUnhealthyPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Целевой эндпоинт (param `url` Vigil-а).
+	// Target endpoint (Vigil param `url`).
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
-	// HTTP-статус-код ответа; 0 — транспортная ошибка (DNS/TLS/timeout/SSRF-guard).
+	// HTTP response status code; 0 = transport error (DNS/TLS/timeout/SSRF guard).
 	Status        int32 `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -646,19 +649,20 @@ func (x *HttpUnhealthyPortent) GetStatus() int32 {
 	return 0
 }
 
-// InotifyPortent — typed payload от `core.beacon.inotify` (V5-3, ADR-030
-// amendment 2026-05-26). Linux-only (kernel inotify syscall). Fold-adapter в
-// Soul-side: события accumulate в background-goroutine между Check-ами, при
-// смене state quiet→events эмитится один Portent со списком накопленных событий
-// за окно. MVP: НЕ recursive, НЕ throttle (см. core/beacon/README.md).
+// InotifyPortent is the typed payload from `core.beacon.inotify` (V5-3, ADR-030
+// amendment 2026-05-26). Linux-only (kernel inotify syscall). Fold-adapter on the
+// Soul side: events accumulate in a background goroutine between Checks; on the
+// quiet->events state change, one Portent is emitted with the list of events
+// accumulated over the window. MVP: NOT recursive, NOT throttled (see
+// core/beacon/README.md).
 type InotifyPortent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Абсолютный путь к наблюдаемому файлу или каталогу (param `path` Vigil-а).
+	// Absolute path to the watched file or directory (Vigil param `path`).
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// События, накопленные за текущее окно (между предыдущим и текущим Check).
+	// Events accumulated over the current window (between the previous and current Check).
 	Events []*InotifyEvent `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
-	// Сколько событий в окне (len(events) после aggregation). Avoids повторного
-	// size() в where-CEL-предикате `event.inotify.count > 0`.
+	// How many events are in the window (len(events) after aggregation). Avoids a
+	// repeated size() call in the where-CEL predicate `event.inotify.count > 0`.
 	Count         int32 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -715,19 +719,19 @@ func (x *InotifyPortent) GetCount() int32 {
 	return 0
 }
 
-// InotifyEvent — одно kernel-событие inotify, спроецированное на нашу
-// семантику. Сырой `mask` НЕ передаётся — beacon приводит флаги к стабильному
-// строковому типу (`created`/`modified`/`deleted`/`moved`/`attrib`), чтобы
-// where-CEL Decree не зависел от kernel-констант inotify.
+// InotifyEvent is one kernel inotify event projected onto our semantics. The raw
+// `mask` is NOT passed through — the beacon converts flags to a stable string
+// type (`created`/`modified`/`deleted`/`moved`/`attrib`) so Decree's where-CEL
+// doesn't depend on inotify's kernel constants.
 type InotifyEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Тип события: "created" / "modified" / "deleted" / "moved" / "attrib".
+	// Event type: "created" / "modified" / "deleted" / "moved" / "attrib".
 	Type string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
-	// Имя файла в наблюдаемом каталоге для watch на directory; пусто для watch
-	// на отдельный файл (kernel в этом случае поле `name` не выставляет).
+	// File name within the watched directory, for a directory watch; empty for a
+	// single-file watch (the kernel doesn't set the `name` field in that case).
 	File string `protobuf:"bytes,2,opt,name=file,proto3" json:"file,omitempty"`
-	// Время регистрации события Soul-side в unix-seconds (НЕ kernel-time —
-	// inotify не даёт времени события, ставит beacon).
+	// Time the event was recorded Soul-side, in unix seconds (NOT kernel time —
+	// inotify doesn't provide an event timestamp, the beacon stamps it).
 	At            int64 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -784,23 +788,24 @@ func (x *InotifyEvent) GetAt() int64 {
 	return 0
 }
 
-// VigilDef — одно определение Soul-side проверки (Vigil) в наборе, который Keeper
-// раздаёт хосту. Read-only по конструкции: Vigil наблюдает, НЕ мутирует хост.
-// Источник правды — реестр `vigils` в Postgres (managed OpenAPI/MCP, ADR-030);
-// набор резолвится по covens хоста и едет ему через VigilSnapshot.
+// VigilDef is one definition of a Soul-side check (Vigil) within the set Keeper
+// hands out to a host. Read-only by construction: a Vigil observes, it does NOT
+// mutate the host. Source of truth is the `vigils` registry in Postgres (managed
+// via OpenAPI/MCP, ADR-030); the set is resolved by the host's covens and sent to
+// it via VigilSnapshot.
 type VigilDef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Имя Vigil (vigils.name, kebab-case) — стабильный идентификатор; едет обратно
-	// в PortentEvent.beacon_name.
+	// Vigil name (vigils.name, kebab-case) — stable identifier; sent back in
+	// PortentEvent.beacon_name.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Период опроса проверки. Формат — convention `duration` Soul Stack
-	// (Go-duration "30s"/"5m" и т.п.), как Augur token_ttl / soul.yml refresh.
+	// Check polling interval. Format is Soul Stack's `duration` convention
+	// (Go-duration "30s"/"5m", etc.), same as Augur token_ttl / soul.yml refresh.
 	Interval string `protobuf:"bytes,2,opt,name=interval,proto3" json:"interval,omitempty"`
-	// Адрес core-beacon (или soul_beacon-плагина, S5), реализующего тело проверки,
-	// например "core.beacon.file_changed" / "core.beacon.service_down".
+	// Address of the core beacon (or soul_beacon plugin, S5) implementing the check
+	// body, e.g. "core.beacon.file_changed" / "core.beacon.service_down".
 	Check string `protobuf:"bytes,3,opt,name=check,proto3" json:"check,omitempty"`
-	// Параметры проверки (path / service-name / порог и т.п.). Struct в MVP —
-	// typed-схема params откладывается вместе с typed-payload (ADR-030).
+	// Check params (path / service name / threshold, etc.). Struct in the MVP —
+	// a typed params schema is deferred alongside typed payload (ADR-030).
 	Params        *structpb.Struct `protobuf:"bytes,4,opt,name=params,proto3" json:"params,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -864,14 +869,15 @@ func (x *VigilDef) GetParams() *structpb.Struct {
 	return nil
 }
 
-// VigilSnapshot — ПОЛНЫЙ active-набор Vigil для этого SID (replace-семантика,
-// ADR-030). Едет only-add в FromKeeper.oneof существующего EventStream-а.
+// VigilSnapshot is the FULL active set of Vigils for this SID (replace semantics,
+// ADR-030). Rides only-add in the existing EventStream's FromKeeper.oneof.
 //
-// Soul применяет его как ReplaceAll (паттерн SigilSnapshot / SigilTrustAnchors из
-// ADR-026): ЗАМЕНЯЕТ весь свой локальный набор Vigil этим списком, НЕ делает
-// upsert. Vigil, отсутствующий в snapshot, Soul-scheduler останавливает и
-// забывает — так срабатывает disable/удаление Vigil без перезапуска Soul-а.
-// Пустой vigils[] = ни одной активной проверки на хосте.
+// Soul applies it as a ReplaceAll (the same pattern as SigilSnapshot /
+// SigilTrustAnchors from ADR-026): it REPLACES its whole local Vigil set with this
+// list, it does NOT upsert. A Vigil missing from the snapshot is stopped and
+// forgotten by the Soul-side scheduler — this is how disabling/removing a Vigil
+// takes effect without restarting Soul. An empty vigils[] = no active checks on
+// the host.
 type VigilSnapshot struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vigils        []*VigilDef            `protobuf:"bytes,1,rep,name=vigils,proto3" json:"vigils,omitempty"`

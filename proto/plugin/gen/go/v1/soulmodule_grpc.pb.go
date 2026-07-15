@@ -28,22 +28,24 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SoulModule — service-контракт плагинов `kind: soul_module`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт SoulModule).
+// SoulModule — service contract for `kind: soul_module` plugins
+// (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
 //
-// Host — `soul`-бинарь. Бинари плагинов — soul-mod-<name>.
-// Адресация шага destiny — <namespace>.<name>.<state>.
+// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Destiny step addressing is <namespace>.<name>.<state>.
 //
-// rpc Manifest() в MVP НЕ вводится — манифест читается host-ом из статического
-// `manifest.yaml` (ADR-020(a)).
+// rpc Manifest() is NOT introduced in MVP — the host reads the manifest
+// from a static `manifest.yaml` (ADR-020(a)).
 type SoulModuleClient interface {
-	// Runtime-проверки параметров: семантика, требующая доступа к системе host-а.
-	// Полная input-схема уже проверена `soul-lint`-ом по manifest.spec.states.<state>.input.
+	// Runtime parameter checks: semantics that need access to the host
+	// system. The full input schema is already checked by `soul-lint`
+	// against manifest.spec.states.<state>.input.
 	Validate(ctx context.Context, in *ValidateRequest, opts ...grpc.CallOption) (*ValidateReply, error)
-	// Dry-run: расчёт изменений без применения. Stream диагностических событий.
+	// Dry-run: computes changes without applying them. Streams diagnostic
+	// events.
 	Plan(ctx context.Context, in *PlanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PlanEvent], error)
-	// Применение изменений. Stream-события прогресса агрегируются на Soul-е;
-	// наружу через TaskEvent идёт только финальный результат (ADR-012, MVP).
+	// Applies changes. Progress events are aggregated on the Soul; only the
+	// final result goes out via TaskEvent (ADR-012, MVP).
 	Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyEvent], error)
 }
 
@@ -107,22 +109,24 @@ type SoulModule_ApplyClient = grpc.ServerStreamingClient[ApplyEvent]
 // All implementations must embed UnimplementedSoulModuleServer
 // for forward compatibility.
 //
-// SoulModule — service-контракт плагинов `kind: soul_module`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт SoulModule).
+// SoulModule — service contract for `kind: soul_module` plugins
+// (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
 //
-// Host — `soul`-бинарь. Бинари плагинов — soul-mod-<name>.
-// Адресация шага destiny — <namespace>.<name>.<state>.
+// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Destiny step addressing is <namespace>.<name>.<state>.
 //
-// rpc Manifest() в MVP НЕ вводится — манифест читается host-ом из статического
-// `manifest.yaml` (ADR-020(a)).
+// rpc Manifest() is NOT introduced in MVP — the host reads the manifest
+// from a static `manifest.yaml` (ADR-020(a)).
 type SoulModuleServer interface {
-	// Runtime-проверки параметров: семантика, требующая доступа к системе host-а.
-	// Полная input-схема уже проверена `soul-lint`-ом по manifest.spec.states.<state>.input.
+	// Runtime parameter checks: semantics that need access to the host
+	// system. The full input schema is already checked by `soul-lint`
+	// against manifest.spec.states.<state>.input.
 	Validate(context.Context, *ValidateRequest) (*ValidateReply, error)
-	// Dry-run: расчёт изменений без применения. Stream диагностических событий.
+	// Dry-run: computes changes without applying them. Streams diagnostic
+	// events.
 	Plan(*PlanRequest, grpc.ServerStreamingServer[PlanEvent]) error
-	// Применение изменений. Stream-события прогресса агрегируются на Soul-е;
-	// наружу через TaskEvent идёт только финальный результат (ADR-012, MVP).
+	// Applies changes. Progress events are aggregated on the Soul; only the
+	// final result goes out via TaskEvent (ADR-012, MVP).
 	Apply(*ApplyRequest, grpc.ServerStreamingServer[ApplyEvent]) error
 	mustEmbedUnimplementedSoulModuleServer()
 }

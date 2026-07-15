@@ -1,12 +1,12 @@
-// Package output — рендереры табличного и JSON-вывода soulctl.
+// Package output renders soulctl's table and JSON output.
 //
-// Стиль таблицы — kubectl-like: колонки, выровненные через text/tabwriter
-// (минимум 3 пробела между колонками). JSON-вывод — pretty-printed
-// (json.MarshalIndent с двухпробельным отступом), чтобы быть удобным для
-// `jq` и для глаз.
+// Table style is kubectl-like: columns aligned via text/tabwriter (at least
+// 3 spaces between columns). JSON output is pretty-printed
+// (json.MarshalIndent with 2-space indent) to be friendly to both `jq` and
+// the eye.
 //
-// Соглашение: пустые значения в таблице печатаются как `<none>` (kubectl-стиль),
-// чтобы оператор сразу видел отсутствие данных, а не пустую ячейку.
+// Convention: empty table values print as `<none>` (kubectl style), so the
+// operator immediately sees missing data instead of a blank cell.
 package output
 
 import (
@@ -17,16 +17,16 @@ import (
 	"text/tabwriter"
 )
 
-// Format — режим вывода. Глобальный флаг --output на root-команде soulctl.
+// Format is the output mode. The global --output flag on soulctl's root command.
 type Format string
 
 const (
 	FormatTable Format = "table"
 	FormatJSON  Format = "json"
-	FormatYAML  Format = "yaml" // зарезервировано: пока совпадает с JSON
+	FormatYAML  Format = "yaml" // reserved: currently identical to JSON
 )
 
-// ParseFormat — нормализация значения флага. Пустая строка = FormatTable.
+// ParseFormat normalizes the flag value. Empty string means FormatTable.
 func ParseFormat(v string) (Format, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "table":
@@ -40,7 +40,7 @@ func ParseFormat(v string) (Format, error) {
 	}
 }
 
-// JSON печатает v как pretty-JSON в w. nil-значения сериализуются как `null`.
+// JSON prints v as pretty JSON to w. nil values serialize as `null`.
 func JSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -48,8 +48,8 @@ func JSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// Table печатает строки rows под заголовком header через tabwriter.
-// Пустая ячейка заменяется на `<none>`.
+// Table prints rows under the header via tabwriter. An empty cell is
+// replaced with `<none>`.
 func Table(w io.Writer, header []string, rows [][]string) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.Join(header, "\t")); err != nil {
@@ -71,7 +71,7 @@ func Table(w io.Writer, header []string, rows [][]string) error {
 	return tw.Flush()
 }
 
-// JoinList — компактный join для колонок-списков. Пустой список → "".
+// JoinList is a compact join for list columns. An empty list becomes "".
 func JoinList(items []string) string {
 	if len(items) == 0 {
 		return ""

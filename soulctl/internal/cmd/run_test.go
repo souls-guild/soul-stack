@@ -16,7 +16,7 @@ import (
 )
 
 // TestRunCmd_BuildPayload — `soulctl run cmd 'uptime' --target-coven dev
-// --target-glob 'web-*'` → POST /v1/voyages с правильным body (kind=command).
+// --target-glob 'web-*'` → POST /v1/voyages with the right body (kind=command).
 func TestRunCmd_BuildPayload(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -89,7 +89,7 @@ func TestRunCmd_BuildPayload(t *testing.T) {
 	}
 }
 
-// TestRunCmd_TargetSIDs — exact-match через --target-sids.
+// TestRunCmd_TargetSIDs — exact-match via --target-sids.
 func TestRunCmd_TargetSIDs(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -122,8 +122,8 @@ func TestRunCmd_TargetSIDs(t *testing.T) {
 	}
 }
 
-// TestRunCmd_BatchAndMaxFailures — сырые --batch/--max-failures проброшены в body
-// как строки (клиент не парсит, авторитет — Keeper).
+// TestRunCmd_BatchAndMaxFailures — raw --batch/--max-failures are forwarded
+// into the body as strings (the client doesn't parse them; Keeper is authoritative).
 func TestRunCmd_BatchAndMaxFailures(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -158,8 +158,8 @@ func TestRunCmd_BatchAndMaxFailures(t *testing.T) {
 	}
 }
 
-// TestVoyageCreate_BatchOmittedWhenEmpty — пустые batch/max_failures не попадают
-// в body (omitempty): «не задано» != пустая строка для Keeper.
+// TestVoyageCreate_BatchOmittedWhenEmpty — empty batch/max_failures don't end
+// up in the body (omitempty): "unset" != empty string for Keeper.
 func TestVoyageCreate_BatchOmittedWhenEmpty(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -192,9 +192,9 @@ func TestVoyageCreate_BatchOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-// writeCreds — пишет временный credentials.yaml, указывающий на fake-Keeper.
-// Возвращает путь для передачи через --config. Гарантирует, что cobra-команда
-// дойдёт до loadClient и ударит по httptest-серверу, а не по реальному хосту.
+// writeCreds writes a temporary credentials.yaml pointing at the fake Keeper.
+// Returns the path to pass via --config. Ensures the cobra command reaches
+// loadClient and hits the httptest server instead of a real host.
 func writeCreds(t *testing.T, keeperURL string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "credentials.yaml")
@@ -206,9 +206,10 @@ func writeCreds(t *testing.T, keeperURL string) string {
 }
 
 // TestRunCmdCobra_BatchFlagsForwarded — cobra-level guard: `run cmd ... --batch
-// 25% --max-failures 3` реально пробрасывает флаги в тело POST /v1/voyages.
-// Мутационная цель — зануление `Batch`/`MaxFailures` в RunE (run_cmd.go:73-74):
-// при этом этот тест должен покраснеть (сериализационные тесты — нет).
+// 25% --max-failures 3` actually forwards the flags into the POST /v1/voyages
+// body. Mutation target — zeroing `Batch`/`MaxFailures` in RunE
+// (run_cmd.go:73-74): this test must go red for that (the serialization
+// tests won't).
 func TestRunCmdCobra_BatchFlagsForwarded(t *testing.T) {
 	var captured map[string]any
 	srv, _ := fakeServer(t, map[string]http.HandlerFunc{
@@ -246,9 +247,9 @@ func TestRunCmdCobra_BatchFlagsForwarded(t *testing.T) {
 	}
 }
 
-// TestRunScenarioCobra_BatchFlagsForwarded — cobra-level guard для второй
-// независимой точки проброса (run_scenario.go:88-89). Зануление `Batch`/
-// `MaxFailures` в этом RunE должно покраснить тест.
+// TestRunScenarioCobra_BatchFlagsForwarded — cobra-level guard for the second,
+// independent forwarding point (run_scenario.go:88-89). Zeroing `Batch`/
+// `MaxFailures` in this RunE must turn the test red.
 func TestRunScenarioCobra_BatchFlagsForwarded(t *testing.T) {
 	var captured map[string]any
 	srv, _ := fakeServer(t, map[string]http.HandlerFunc{
@@ -287,7 +288,7 @@ func TestRunScenarioCobra_BatchFlagsForwarded(t *testing.T) {
 }
 
 // TestRunScenario_BuildPayload — `run scenario redis/converge` → POST /v1/voyages
-// (kind=scenario) с target.incarnations.
+// (kind=scenario) with target.incarnations.
 func TestRunScenario_BuildPayload(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -328,7 +329,7 @@ func TestRunScenario_BuildPayload(t *testing.T) {
 	}
 }
 
-// TestRunPush_BuildPayload — --target-sids → inventory, ssh_provider пробрасывается.
+// TestRunPush_BuildPayload — --target-sids → inventory, ssh_provider is forwarded.
 func TestRunPush_BuildPayload(t *testing.T) {
 	var captured map[string]any
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -367,7 +368,7 @@ func TestRunPush_BuildPayload(t *testing.T) {
 	}
 }
 
-// TestRunPush_RejectsDynamicTarget — push поддерживает только exact SIDs.
+// TestRunPush_RejectsDynamicTarget — push only supports exact SIDs.
 func TestRunPush_RejectsDynamicTarget(t *testing.T) {
 	cases := []targetFlags{
 		{Glob: "web-*"},
@@ -390,7 +391,7 @@ func TestRunPush_RejectsDynamicTarget(t *testing.T) {
 	}
 }
 
-// TestParseServiceScenario — формат `<service>/<scenario>`.
+// TestParseServiceScenario — the `<service>/<scenario>` format.
 func TestParseServiceScenario(t *testing.T) {
 	svc, sc, err := parseServiceScenario("redis/create")
 	if err != nil {
@@ -408,7 +409,7 @@ func TestParseServiceScenario(t *testing.T) {
 	}
 }
 
-// TestAutoDetectIncarnation — ровно одна → ok; 0 или N — ошибка.
+// TestAutoDetectIncarnation — exactly one → ok; 0 or N → error.
 func TestAutoDetectIncarnation(t *testing.T) {
 	cases := []struct {
 		items   []map[string]any
@@ -451,7 +452,7 @@ func TestAutoDetectIncarnation(t *testing.T) {
 	}
 }
 
-// TestRunScenario_AutoDetect_Many — служебно: smoke что ошибка содержит список.
+// TestRunScenario_AutoDetect_Many — smoke test: the error contains the list.
 func TestRunScenario_AutoDetect_Many(t *testing.T) {
 	called := int32(0)
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -475,7 +476,7 @@ func TestRunScenario_AutoDetect_Many(t *testing.T) {
 	}
 }
 
-// TestIsVoyageTerminal — статусные предикаты Voyage.
+// TestIsVoyageTerminal — Voyage status predicates.
 func TestIsVoyageTerminal(t *testing.T) {
 	terminal := []string{"succeeded", "failed", "partial_failed", "cancelled"}
 	for _, s := range terminal {

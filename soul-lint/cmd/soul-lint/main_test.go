@@ -9,13 +9,13 @@ import (
 	"github.com/souls-guild/soul-stack/soul-lint/internal/validate"
 )
 
-// CLI-функция main вызывает os.Exit, поэтому проверять её напрямую через
-// тесты — плохая идея. Тестируем runSubcommand, через который main делегирует
-// validate-* и который полностью покрывает разбор флагов CLI. Сама `validate`
-// уже протестирована в `validate_test.go`.
+// The CLI's main function calls os.Exit, so testing it directly is a bad
+// idea. We test runSubcommand instead — main delegates validate-* to it, and
+// it fully covers CLI flag parsing. `validate` itself is already tested in
+// `validate_test.go`.
 
 func TestRunSubcommand_ValidateManifestGolden(t *testing.T) {
-	// Полный путь до golden-фикстуры — относительный, как в validate-тестах.
+	// Full path to the golden fixture — relative, same as in the validate tests.
 	path := filepath.Join("..", "..", "testdata", "manifest-golden", "soul-module.yaml")
 	code := runSubcommand("validate-manifest", "validate-manifest <path> [--json]", validate.KindManifest, []string{path})
 	if code != validate.ExitOK {
@@ -46,7 +46,7 @@ func TestRunSubcommand_UnknownFlag(t *testing.T) {
 }
 
 func TestRunSubcommand_JSONFlag(t *testing.T) {
-	// Sanity-check: --json флаг распознаётся, и команда продолжает работать.
+	// Sanity check: the --json flag is recognized and the command keeps working.
 	path := filepath.Join("..", "..", "testdata", "manifest-golden", "soul-module.yaml")
 	code := runSubcommand("validate-manifest", "validate-manifest <path> [--json]", validate.KindManifest, []string{"--json", path})
 	if code != validate.ExitOK {
@@ -54,28 +54,27 @@ func TestRunSubcommand_JSONFlag(t *testing.T) {
 	}
 }
 
-// TestPrintUsage_MentionsValidateManifest — usage должен публиковать новую
-// подкоманду; иначе пользователь не узнает о её существовании.
+// TestPrintUsage_MentionsValidateManifest — usage must advertise the new
+// subcommand, or users would never learn it exists.
 func TestPrintUsage_MentionsValidateManifest(t *testing.T) {
 	var buf bytes.Buffer
-	// printUsage берёт *os.File; временный файл — оверкилл, используем
-	// сборку usage-строки вручную через captureUsage helper. Здесь проще
-	// проверить через strings.Contains после buffer-copy: но printUsage
-	// пишет именно в *os.File. Для теста нам достаточно проверить, что
-	// строка «validate-manifest» присутствует в одном из fmt.Fprintln —
-	// делаем это через сборку отдельной usage-таблицы в коде.
-	// Если printUsage эволюционирует, тест ловит регрессию через CLI bin.
+	// printUsage takes a *os.File; spinning up a temp file is overkill, so
+	// this stays a `_ = buf` no-op instead of wiring a captureUsage helper.
+	// It'd be simpler to strings.Contains a buffer copy, but printUsage
+	// writes straight to *os.File — for this test it's enough to know
+	// "validate-manifest" shows up via runSubcommand's own usage table
+	// below. If printUsage regresses, the CLI binary still catches it.
 	_ = buf
-	// Проверка через subprocess избыточна для unit-теста; ограничимся
-	// проверкой через runSubcommand --help (см. ниже).
+	// A subprocess check would be excessive for a unit test; we settle for
+	// checking runSubcommand --help below.
 	code := runSubcommand("validate-manifest", "validate-manifest <path> [--json]", validate.KindManifest, []string{"--help"})
 	if code != validate.ExitOK {
 		t.Fatalf("--help must return ExitOK, got %d", code)
 	}
 }
 
-// TestRunSubcommand_HelpFlag — `-h` / `--help` отвечают 0, не уходят в
-// IO-fatal-ветку «нет path».
+// TestRunSubcommand_HelpFlag — `-h` / `--help` return 0 instead of falling
+// into the "no path" IO-fatal branch.
 func TestRunSubcommand_HelpFlag(t *testing.T) {
 	for _, f := range []string{"-h", "--help"} {
 		code := runSubcommand("validate-manifest", "validate-manifest <path> [--json]", validate.KindManifest, []string{f})
@@ -85,6 +84,6 @@ func TestRunSubcommand_HelpFlag(t *testing.T) {
 	}
 }
 
-// Sanity-tracker: ловит ситуацию, когда usage-строка main-а перестаёт
-// упоминать validate-manifest (например, после рефакторинга).
+// Sanity tracker: catches main's usage string dropping the mention of
+// validate-manifest (e.g. after a refactor).
 var _ = strings.Contains

@@ -1,9 +1,9 @@
-// Package {{.NamePackage}} реализует SoulModule {{.Namespace}}.{{.Name}}.
+// Package {{.NamePackage}} implements the {{.Namespace}}.{{.Name}} SoulModule.
 //
-// Плагин-контракт: pluginv1.SoulModule (Validate / Plan / Apply). SDK
-// (sdk/module.BaseModule) даёт no-op default для Validate/Plan/Apply;
-// автор переопределяет минимум Apply, опционально Plan (под drift-detect,
-// ADR-031 Scry — требует marker PlanReadSafe).
+// Plugin contract: pluginv1.SoulModule (Validate / Plan / Apply). The SDK
+// (sdk/module.BaseModule) provides no-op defaults for Validate/Plan/Apply;
+// authors override Apply at minimum, and optionally Plan (for drift
+// detection, ADR-031 Scry — requires the PlanReadSafe marker).
 package {{.NamePackage}}
 
 import (
@@ -12,40 +12,42 @@ import (
 	"google.golang.org/grpc"
 )
 
-// {{.NamePascal}}Module — реализация SoulModule {{.Namespace}}.{{.Name}}.
+// {{.NamePascal}}Module implements the {{.Namespace}}.{{.Name}} SoulModule.
 type {{.NamePascal}}Module struct {
 	module.BaseModule
 }
 
-// Apply применяет запрошенный state на ресурс.
+// Apply applies the requested state to the resource.
 //
-// Контракт: idempotent. Шаги:
-//  1. Распарсить req.Task.Input против spec.states.<state>.input (manifest).
-//  2. Прочитать текущее состояние ресурса (resource-specific API).
-//  3. Если desired == current — no-op, emit финальный ApplyEvent с changed=false.
-//  4. Иначе — применить изменение, emit стрим ApplyEvent (stdout/stderr/state_change).
-//  5. На фейле — emit ApplyEvent с exit_code != 0 или вернуть error.
+// Contract: idempotent. Steps:
+//  1. Parse req.Task.Input against spec.states.<state>.input (manifest).
+//  2. Read the resource's current state (resource-specific API).
+//  3. If desired == current — no-op, emit a final ApplyEvent with changed=false.
+//  4. Otherwise — apply the change, emit a stream of ApplyEvent (stdout/stderr/state_change).
+//  5. On failure — emit an ApplyEvent with exit_code != 0, or return an error.
 func (m *{{.NamePascal}}Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	// TODO: реализуйте Apply под ваш ресурс.
+	// TODO: implement Apply for your resource.
 	_ = req
 	_ = stream
 	return nil
 }
 
-// Plan — pure-read dry-run (опционально). Раскомментируйте, если модуль умеет
-// читать состояние без мутации хоста. ADR-031 Scry: host зовёт Plan вместо
-// Apply на dry_run-задачах; без реализации PlanReadSafe-marker host применяет
-// default-deny (drift не определяется, явный отказ — не ложное «нет дрифта»).
+// Plan is a pure-read dry-run (optional). Uncomment if the module can read
+// state without mutating the host. ADR-031 Scry: the host calls Plan instead
+// of Apply for dry_run tasks; without a PlanReadSafe marker implementation,
+// the host applies default-deny (drift is left undetermined — an explicit
+// refusal, not a false "no drift").
 //
-// Контракт PlanReadSafe: РОВНО ОДИН финальный PlanEvent с машинным `changed`
-// до возврата из метода (без ошибки). Возврат nil без события → host трактует
-// как FAILED plan.no_result.
+// PlanReadSafe contract: EXACTLY ONE final PlanEvent with a machine-readable
+// `changed` before returning from the method (without an error). Returning
+// nil without an event → the host treats it as a FAILED plan.no_result.
 //
 // func (m *{{.NamePascal}}Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
-//     // TODO: прочитать текущее состояние, посчитать changed, emit финальный PlanEvent.
+//     // TODO: read the current state, compute changed, emit the final PlanEvent.
 //     return nil
 // }
 //
-// // PlanReadSafe — marker-интерфейс: модуль ОБЪЯВЛЯЕТ, что Plan безопасен к
-// // dry_run (читает, не мутирует). Реализуйте ТОЛЬКО после написания pure-read Plan.
+// // PlanReadSafe is a marker interface: the module DECLARES that Plan is
+// // safe for dry_run (reads, doesn't mutate). Implement ONLY after writing a
+// // pure-read Plan.
 // func (m *{{.NamePascal}}Module) PlanReadSafe() {}

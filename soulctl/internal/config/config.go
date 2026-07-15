@@ -1,14 +1,15 @@
-// Package config загружает credentials оператора для soulctl.
+// Package config loads operator credentials for soulctl.
 //
-// Формат файла — YAML с двумя полями:
+// The file format is YAML with two fields:
 //
 //	keeper_url: https://keeper.example.com:8443
 //	archon_jwt: <JWT>
 //
-// Расположение по умолчанию — ~/.config/soul-stack/credentials.yaml. Если файла
-// нет — возвращается осмысленная ошибка с подсказкой запустить `soulctl archon login`.
-// Парсинг секретов в файлы за пределами home — намеренно НЕ поддерживается (любой
-// override — отдельная задача через флаг --credentials, если потребуется).
+// The default location is ~/.config/soul-stack/credentials.yaml. If the file
+// is missing, a meaningful error is returned with a hint to run
+// `soulctl archon login`. Reading secrets from files outside home is
+// intentionally NOT supported (any override is a separate task via a
+// --credentials flag, if needed).
 package config
 
 import (
@@ -21,13 +22,13 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// Credentials — содержимое credentials.yaml оператора.
+// Credentials is the content of the operator's credentials.yaml.
 type Credentials struct {
 	KeeperURL string `yaml:"keeper_url"`
 	ArchonJWT string `yaml:"archon_jwt"`
 }
 
-// DefaultPath — каноническое расположение credentials-файла под $HOME.
+// DefaultPath is the canonical location of the credentials file under $HOME.
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -36,11 +37,12 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".config", "soul-stack", "credentials.yaml"), nil
 }
 
-// Load читает credentials из указанного пути. Если path пуст — берётся DefaultPath().
+// Load reads credentials from the given path. If path is empty, DefaultPath()
+// is used.
 //
-// Возвращаемые ошибки:
-//   - отсутствует файл                → подсказка `soulctl archon login`;
-//   - YAML невалиден / пустые поля    → конкретная диагностика.
+// Errors returned:
+//   - missing file                 → hint to run `soulctl archon login`;
+//   - invalid YAML / empty fields  → specific diagnostics.
 func Load(path string) (*Credentials, error) {
 	if path == "" {
 		var err error

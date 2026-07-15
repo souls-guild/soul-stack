@@ -17,7 +17,7 @@ func TestClassify_CtxAndNil(t *testing.T) {
 	if got := Classify(nil, context.DeadlineExceeded); got != FailTransient {
 		t.Errorf("ctx.DeadlineExceeded class=%v, want transient", got)
 	}
-	// fn=nil + произвольная ошибка → unknown (драйвер не задал классификатор).
+	// fn=nil + arbitrary error → unknown (driver didn't set a classifier).
 	if got := Classify(nil, errors.New("x")); got != FailUnknown {
 		t.Errorf("nil fn class=%v, want unknown", got)
 	}
@@ -179,15 +179,15 @@ func TestWaitUntilReady_TerminalErr(t *testing.T) {
 	}
 }
 
-// TestWaitUntilReady_CtxCancel_AntiOrphan — ключевой reference-приём: при
-// ctx-cancel возвращаются per-VM результаты для уже опрошенных VM (с
-// заполненным VMID), чтобы драйвер пометил недоехавшие failed → Keeper
-// сможет их Destroy.
+// TestWaitUntilReady_CtxCancel_AntiOrphan covers the key reference technique:
+// on ctx-cancel, per-VM results are returned for VMs already polled (with
+// VMID filled in), so the driver can mark the ones that didn't make it as
+// failed → Keeper can Destroy them.
 func TestWaitUntilReady_CtxCancel_AntiOrphan(t *testing.T) {
 	cfg := BackoffConfig{Initial: 50 * time.Millisecond, Max: time.Second, Factor: 2, MaxAttempts: 50}
 	ctx, cancel := context.WithCancel(context.Background())
 	probe := func(_ context.Context, _ string) ProbeResult {
-		return ProbeResult{Ready: false} // никогда не готовы
+		return ProbeResult{Ready: false} // never ready
 	}
 	go func() { time.Sleep(10 * time.Millisecond); cancel() }()
 	res, err := WaitUntilReady(ctx, cfg, []string{"i-1", "i-2"}, probe, nil)

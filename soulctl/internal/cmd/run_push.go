@@ -12,16 +12,17 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
 
-// newRunPushCmd — `soulctl run push <destiny@ref>` (C1). Тонкая обёртка над
+// newRunPushCmd — `soulctl run push <destiny@ref>` (C1). A thin wrapper over
 // POST /v1/push/apply.
 //
-// Особенности target-флагов в push:
-//   - inventory PushApply строго список SID-ов; coven/glob/regex/where сюда
-//     приходят только через `--target-sids` (exact-match).
-//   - coven/glob/regex/where для push НЕ поддерживаются backend-ом, ошибка
-//     валидации на CLI до запроса (security: явно сказать оператору, что
-//     push не делает dynamic-resolution; если нужно — клиент должен составить
-//     список SID-ов сам, например через `soulctl souls list`).
+// Target-flag specifics for push:
+//   - PushApply's inventory is strictly a list of SIDs; coven/glob/regex/where
+//     can only reach it via `--target-sids` (exact-match).
+//   - coven/glob/regex/where are NOT supported by the backend for push; the
+//     CLI rejects them with a validation error before the request (security:
+//     tell the operator explicitly that push does no dynamic resolution — if
+//     needed, the client must build the SID list itself, e.g. via
+//     `soulctl souls list`).
 func newRunPushCmd() *cobra.Command {
 	var (
 		sshProvider          string
@@ -88,9 +89,9 @@ func newRunPushCmd() *cobra.Command {
 	return c
 }
 
-// validatePushTarget — push-flow target ограничен `--target-sids` (см. ADR-032
-// PushApplyRequest.inventory). Любой динамический селектор → явная ошибка с
-// подсказкой, как получить inventory отдельной командой.
+// validatePushTarget — the push-flow target is limited to `--target-sids` (see
+// ADR-032 PushApplyRequest.inventory). Any dynamic selector → explicit error
+// with a hint on how to get the inventory via a separate command.
 func validatePushTarget(t resolvedTarget) error {
 	if len(t.SIDs) == 0 {
 		return errors.New("push требует --target-sids <host1,host2,...> (inventory exact-match)")

@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// writeDestinyDir кладёт destiny.yml + tasks/main.yml (+опц. vars.yml) в каталог
-// и возвращает путь к destiny.yml.
+// writeDestinyDir writes destiny.yml + tasks/main.yml (+ optional vars.yml)
+// into a directory and returns the path to destiny.yml.
 func writeDestinyDir(t *testing.T, name, varsYml, tasksYml string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -30,9 +30,9 @@ func writeDestinyDir(t *testing.T, name, varsYml, tasksYml string) string {
 	return filepath.Join(dir, "destiny.yml")
 }
 
-// TestValidateDestiny_VarsCollisionWarn — имя, объявленное и в vars.yml, и в
-// task-level vars: одной задачи → warn vars_collision (Вариант A); exit-code OK
-// (warning не ошибка).
+// TestValidateDestiny_VarsCollisionWarn — a name declared in both vars.yml
+// and a task-level vars: of one task → warn vars_collision (Variant A);
+// exit code OK (a warning is not an error).
 func TestValidateDestiny_VarsCollisionWarn(t *testing.T) {
 	tasks := `- name: t
   module: core.exec.run
@@ -57,7 +57,7 @@ func TestValidateDestiny_VarsCollisionWarn(t *testing.T) {
 	}
 }
 
-// TestValidateDestiny_NoCollision_Clean — непересекающиеся имена → OK без warn.
+// TestValidateDestiny_NoCollision_Clean — non-overlapping names → OK, no warn.
 func TestValidateDestiny_NoCollision_Clean(t *testing.T) {
 	tasks := `- name: t
   module: core.exec.run
@@ -78,8 +78,8 @@ func TestValidateDestiny_NoCollision_Clean(t *testing.T) {
 	}
 }
 
-// TestValidateDestiny_NoVarsYml_Clean — без vars.yml кросс-проверка пропускается
-// (vars.yml опционален); манифест валиден → OK.
+// TestValidateDestiny_NoVarsYml_Clean — without vars.yml, the cross-check is
+// skipped (vars.yml is optional); the manifest is valid → OK.
 func TestValidateDestiny_NoVarsYml_Clean(t *testing.T) {
 	tasks := `- name: t
   module: core.exec.run

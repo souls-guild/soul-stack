@@ -22,20 +22,20 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// BootstrapRequest — запрос Soul-а на онбординг.
-// Передаётся ДО mTLS-стрима, на отдельном listener-е с server-only TLS
-// (у Soul-а ещё нет SoulSeed-сертификата).
+// BootstrapRequest is Soul's onboarding request.
+// Sent BEFORE the mTLS stream, on a separate listener with server-only TLS
+// (Soul doesn't have a SoulSeed certificate yet).
 type BootstrapRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// FQDN хоста (= SID). Совпадает с CN/SAN будущего выпускаемого сертификата.
+	// Host FQDN (= SID). Matches the CN/SAN of the certificate about to be issued.
 	Sid string `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
-	// SENSITIVE: never log. Однократный токен онбординга.
-	// Server-side немедленно хешируется (SHA-256) и сверяется с bootstrap_tokens.token_hash.
-	// Plain-значение нигде не сохраняется.
+	// SENSITIVE: never log. One-time onboarding token.
+	// Immediately hashed server-side (SHA-256) and checked against
+	// bootstrap_tokens.token_hash. The plain value is never stored anywhere.
 	BootstrapToken string `protobuf:"bytes,2,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"`
-	// PEM-encoded CSR. Несёт public key Soul-а; private key никогда не покидает хост.
+	// PEM-encoded CSR. Carries Soul's public key; the private key never leaves the host.
 	CsrPem []byte `protobuf:"bytes,3,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
-	// Версия soul-бинаря — для аудита онбординга.
+	// Version of the soul binary — for onboarding audit.
 	SoulVersion   string `protobuf:"bytes,4,opt,name=soul_version,json=soulVersion,proto3" json:"soul_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -99,30 +99,30 @@ func (x *BootstrapRequest) GetSoulVersion() string {
 	return ""
 }
 
-// BootstrapReply — успешный выпуск SoulSeed.
+// BootstrapReply is a successful SoulSeed issuance.
 type BootstrapReply struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Выпущенный SoulSeed-сертификат в PEM.
+	// The issued SoulSeed certificate in PEM.
 	CertificatePem []byte `protobuf:"bytes,1,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
-	// CA-цепочка для верификации серверного сертификата Keeper-а при последующем mTLS.
+	// CA chain for verifying Keeper's server certificate on subsequent mTLS.
 	CaChainPem []byte `protobuf:"bytes,2,opt,name=ca_chain_pem,json=caChainPem,proto3" json:"ca_chain_pem,omitempty"`
-	// expires_at сертификата — используется Soul-ом для планирования ротации.
+	// Certificate expires_at — used by Soul to schedule rotation.
 	NotAfter *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	// KID Keeper-инстанса, выпустившего seed. Аудит и диагностика.
+	// KID of the Keeper instance that issued the seed. For audit and diagnostics.
 	Kid string `protobuf:"bytes,4,opt,name=kid,proto3" json:"kid,omitempty"`
-	// PEM (SPKI) публичного ed25519-ключа подписи Sigil (ADR-026, slice S2b).
-	// Edет Soul-у как trust-anchor: Soul персистит его рядом с SoulSeed и
-	// верифицирует им подпись допусков плагинов (PluginSigil) в pull-режиме
-	// (slice S6). Пусто — Sigil на Keeper-е не настроен (sigil.signing_key_ref
-	// отсутствует/пуст); тогда verify плагинов выключен на этом хосте.
-	// optional: пустое значение — валидное «Sigil выключен».
+	// PEM (SPKI) of the Sigil signing public ed25519 key (ADR-026, slice S2b).
+	// Sent to Soul as a trust anchor: Soul persists it alongside SoulSeed and uses
+	// it to verify plugin sigil (PluginSigil) signatures in pull mode (slice S6).
+	// Empty means Sigil isn't configured on Keeper (sigil.signing_key_ref is
+	// missing/empty); plugin verify is then disabled on this host.
+	// optional: an empty value is a valid "Sigil disabled" state.
 	SigilPubkeyPem *string `protobuf:"bytes,5,opt,name=sigil_pubkey_pem,json=sigilPubkeyPem,proto3,oneof" json:"sigil_pubkey_pem,omitempty"`
-	// ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (SPKI PEM публичных ed25519-
-	// ключей) — поддержка multi-anchor ротации (ADR-026, R3). При наличии набора
-	// Soul использует ИМЕННО его (любой anchor из набора верифицирует подпись).
-	// Одиночное sigil_pubkey_pem (field 5) — legacy single-anchor для wire-compat;
-	// если set непуст, single-поле игнорируется. Пустой набор = «Sigil выключен»
-	// (как пустое одиночное поле).
+	// The FULL set of Sigil signing trust anchors (SPKI PEM of public ed25519
+	// keys) — supports multi-anchor rotation (ADR-026, R3). When the set is
+	// present, Soul uses IT (any anchor in the set can verify a signature). The
+	// single sigil_pubkey_pem (field 5) is a legacy single-anchor for wire-compat;
+	// if the set is non-empty, the single field is ignored. An empty set = "Sigil
+	// disabled" (same as an empty single field).
 	SigilPubkeyPemSet []string `protobuf:"bytes,6,rep,name=sigil_pubkey_pem_set,json=sigilPubkeyPemSet,proto3" json:"sigil_pubkey_pem_set,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache

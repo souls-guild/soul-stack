@@ -1,7 +1,7 @@
-// Package module — SDK Soul Stack для авторов SoulModule-плагинов
-// (kind: soul_module, бинари soul-mod-<name>).
+// Package module is the Soul Stack SDK for SoulModule plugin authors
+// (kind: soul_module, binaries soul-mod-<name>).
 //
-// Минимальный путь автора плагина:
+// Minimal path for a plugin author:
 //
 //	type RedisFailover struct { module.BaseModule }
 //
@@ -13,9 +13,10 @@
 //	    if err := module.Serve(&RedisFailover{}); err != nil { os.Exit(1) }
 //	}
 //
-// BaseModule даёт no-op-реализации Validate (ok=true) и Plan (empty stream);
-// автор переопределяет только Apply. Serve открывает Unix-socket, делает
-// gRPC-stdio handshake и обрабатывает SIGTERM (см. sdk/handshake).
+// BaseModule provides no-op implementations of Validate (ok=true) and Plan
+// (empty stream); the author only overrides Apply. Serve opens a Unix
+// socket, performs the gRPC-stdio handshake, and handles SIGTERM (see
+// sdk/handshake).
 package module
 
 import (
@@ -26,93 +27,98 @@ import (
 	"google.golang.org/grpc"
 )
 
-// protocolVersion — версия plugin-протокола MVP (docs/keeper/plugins.md →
-// Versioning, единственная поддерживаемая host-ами версия в SupportedProtocolVersions).
+// protocolVersion is the MVP plugin-protocol version (docs/keeper/plugins.md
+// → Versioning; the only version hosts support in SupportedProtocolVersions).
 const protocolVersion = 1
 
-// SoulModule — интерфейс, который реализует плагин-автор. Сигнатуры повторяют
-// pluginv1.SoulModuleServer, но без must-embed-требования к
-// pluginv1.UnimplementedSoulModuleServer: SDK берёт forward-compat на себя
-// через внутренний adapter.
+// SoulModule is the interface a plugin author implements. Its signatures
+// mirror pluginv1.SoulModuleServer, but without the must-embed requirement
+// for pluginv1.UnimplementedSoulModuleServer: the SDK takes forward-compat
+// on itself via an internal adapter.
 //
-// Контракт Plan (ADR-031 Scry) — pure-read dry-run: модуль ЧИТАЕТ текущее
-// состояние ресурса (тот же read, что в начале Apply) и шлёт финальный
-// PlanEvent с машинным `changed` — «Apply изменил бы ресурс?» (drift). Plan
-// НЕ МУТИРУЕТ хост: никаких install/write/start. Host (Soul) на dry_run зовёт
-// Plan ВМЕСТО Apply. Модуль без настоящей pure-read-реализации Plan должен
-// объявить это, НЕ реализуя [PlanReadSafe] — тогда host применит default-deny
-// (Plan не вызывается, задача получает явный «drift не поддержан», не ложное
-// «нет дрифта»). См. [PlanReadSafe].
+// Plan's contract (ADR-031 Scry) is a pure-read dry-run: the module READS
+// the resource's current state (the same read Apply starts with) and sends a
+// final PlanEvent with a machine-readable `changed` — "would Apply change
+// the resource?" (drift). Plan MUST NOT MUTATE the host: no install/write/
+// start. On dry_run, the host (Soul) calls Plan INSTEAD OF Apply. A module
+// without a genuine pure-read Plan must declare that by NOT implementing
+// [PlanReadSafe] — the host then applies default-deny (Plan isn't called,
+// the task gets an explicit "drift not supported" instead of a false "no
+// drift"). See [PlanReadSafe].
 //
-// **Инвариант (read-safe Plan):** реализация Plan, объявившая [PlanReadSafe],
-// ОБЯЗАНА отправить РОВНО ОДИН финальный PlanEvent с машинным `changed` ДО
-// возврата из метода (без ошибки). Возврат `nil` без финального события host
-// трактует как FAILED `plan.no_result` (защита от misbehaving-модуля,
-// который «молча → clean»). Возврат ошибки → FAILED `plan.error`.
+// **Invariant (read-safe Plan):** a Plan implementation that declares
+// [PlanReadSafe] MUST send EXACTLY ONE final PlanEvent with a
+// machine-readable `changed` BEFORE returning from the method (with no
+// error). The host treats a `nil` return with no final event as FAILED
+// `plan.no_result` (a guard against a misbehaving module that silently
+// "goes clean"). Returning an error yields FAILED `plan.error`.
 type SoulModule interface {
 	Validate(ctx context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error)
 	Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error
 	Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error
 }
 
-// PlanReadSafe — опциональный marker-интерфейс (ADR-031 Scry, default-deny):
-// модуль реализует его, чтобы ОБЪЯВИТЬ, что его Plan — настоящая pure-read
-// реализация, безопасная к вызову на dry_run (читает состояние, НЕ мутирует
-// хост). Host (Soul) на dry_run зовёт Plan ТОЛЬКО для модулей, реализующих этот
-// интерфейс; всё остальное (custom-плагин на BaseModule, core-модуль без
-// pure-read Plan) — default-deny: Plan не вызывается, задача получает явный
-// отказ «drift не поддержан», а НЕ ложное clean.
+// PlanReadSafe is an optional marker interface (ADR-031 Scry, default-deny):
+// a module implements it to DECLARE that its Plan is a genuine pure-read
+// implementation, safe to call on dry_run (reads state, does NOT mutate the
+// host). On dry_run, the host (Soul) calls Plan ONLY for modules that
+// implement this interface; everything else (a custom plugin on BaseModule,
+// a core module without a pure-read Plan) gets default-deny: Plan isn't
+// called, the task gets an explicit "drift not supported" refusal, NOT a
+// false clean.
 //
-// Метод-маркер без аргументов: его наличие = декларация capability. Реализуют
-// его ТОЛЬКО модули с проверенным pure-read Plan; BaseModule его НЕ реализует
-// (no-op Plan не определяет drift), поэтому плагин на BaseModule по умолчанию
-// получает безопасный default-deny без действий автора.
+// A no-argument marker method: its mere presence declares the capability.
+// Only modules with a verified pure-read Plan implement it; BaseModule does
+// NOT implement it (its no-op Plan doesn't determine drift), so a plugin
+// built on BaseModule gets safe default-deny with no action from the author.
 type PlanReadSafe interface {
-	// PlanReadSafe — маркер; вызывается host-ом как type-assertion, тело не важно.
+	// PlanReadSafe is the marker; the host invokes it via type assertion, its body doesn't matter.
 	PlanReadSafe()
 }
 
-// ErrandReadSafe — опциональный marker-интерфейс (ADR-033 Errand, default-deny):
-// модуль реализует его, чтобы ОБЪЯВИТЬ, что его Apply безопасен к вызову через
-// Errand pull-ad-hoc контур (не мутирует incarnation.state, не имеет побочных
-// эффектов вне декларированных в `side_effects` манифеста). Soul-side
-// Errand-runner проверяет реализацию ДО вызова Apply и ОТВЕРГАЕТ
-// не-помеченные модули с `ErrandResult.status = MODULE_NOT_ALLOWED`
-// (defense-in-depth, симметрично [PlanReadSafe] из ADR-031).
+// ErrandReadSafe is an optional marker interface (ADR-033 Errand,
+// default-deny): a module implements it to DECLARE that its Apply is safe to
+// invoke through the Errand pull-ad-hoc path (doesn't mutate
+// incarnation.state, has no side effects beyond those declared in the
+// manifest's `side_effects`). The Soul-side Errand runner checks the
+// implementation BEFORE calling Apply and REJECTS unmarked modules with
+// `ErrandResult.status = MODULE_NOT_ALLOWED` (defense-in-depth, mirroring
+// [PlanReadSafe] from ADR-031).
 //
-// Жёсткий список `core.cmd.shell` / `core.exec.run` обходит этот интерфейс —
-// verb-модули императивные by-design и Errand-runner допускает их по имени
-// без marker-check-а (ADR-033 §2).
+// The hardcoded `core.cmd.shell` / `core.exec.run` list bypasses this
+// interface — verb modules are imperative by design, and the Errand runner
+// allows them by name without a marker check (ADR-033 §2).
 //
-// BaseModule НЕ реализует [ErrandReadSafe] — плагин на BaseModule по умолчанию
-// получает безопасный default-deny на Errand-вызов. Автор плагина, чей Apply
-// действительно безопасен к ad-hoc invocation, переопределяет Apply И
-// реализует ErrandReadSafe явно.
+// BaseModule does NOT implement [ErrandReadSafe] — a plugin built on
+// BaseModule gets safe default-deny on an Errand call by default. An author
+// whose Apply really is safe for ad-hoc invocation overrides Apply AND
+// implements ErrandReadSafe explicitly.
 type ErrandReadSafe interface {
-	// ErrandReadSafe — маркер; вызывается host-ом как type-assertion, тело не важно.
+	// ErrandReadSafe is the marker; the host invokes it via type assertion, its body doesn't matter.
 	ErrandReadSafe()
 }
 
-// BaseModule — embeddable default-реализация SoulModule:
-// Validate возвращает Ok=true, Plan не шлёт событий, Apply — TODO для автора.
+// BaseModule is an embeddable default implementation of SoulModule: Validate
+// returns Ok=true, Plan sends no events, Apply is a TODO for the author.
 //
-// Apply здесь намеренно тоже no-op: embed-ер обязан переопределить его,
-// иначе плагин не делает ничего полезного. Это допустимо для тестовых
-// плагинов и smoke-test-ов.
+// Apply is intentionally a no-op here too: the embedder must override it, or
+// the plugin does nothing useful. Fine for test plugins and smoke tests.
 //
-// BaseModule НЕ реализует [PlanReadSafe] СОЗНАТЕЛЬНО: его Plan — no-op (drift
-// не определяет), и плагин на BaseModule по умолчанию должен получать безопасный
-// default-deny на dry_run (host не зовёт Plan → явный «drift не поддержан»),
-// а не молча выдавать «нет дрифта». Автор плагина с настоящим pure-read Plan
-// переопределяет Plan И реализует PlanReadSafe явно (ADR-031 Scry).
+// BaseModule deliberately does NOT implement [PlanReadSafe]: its Plan is a
+// no-op (doesn't determine drift), and a plugin built on BaseModule should
+// get safe default-deny on dry_run by default (the host doesn't call Plan →
+// explicit "drift not supported"), rather than silently reporting "no
+// drift". An author with a genuine pure-read Plan overrides Plan AND
+// implements PlanReadSafe explicitly (ADR-031 Scry).
 type BaseModule struct{}
 
 func (BaseModule) Validate(context.Context, *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	return &pluginv1.ValidateReply{Ok: true}, nil
 }
 
-// Plan — no-op default: событий не шлёт, drift не определяет. Host применяет
-// default-deny к модулю без [PlanReadSafe] — этот Plan не вызывается на dry_run.
+// Plan is a no-op default: sends no events, doesn't determine drift. The
+// host applies default-deny to a module without [PlanReadSafe] — this Plan
+// isn't called on dry_run.
 func (BaseModule) Plan(*pluginv1.PlanRequest, grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
@@ -121,8 +127,9 @@ func (BaseModule) Apply(*pluginv1.ApplyRequest, grpc.ServerStreamingServer[plugi
 	return nil
 }
 
-// Serve — типовой main() SoulModule-плагина: оборачивает sdk/handshake.Serve
-// + регистрирует grpc-service pluginv1.SoulModule с автор-impl.
+// Serve is the typical main() of a SoulModule plugin: it wraps
+// sdk/handshake.Serve and registers the pluginv1.SoulModule grpc-service
+// with the author's impl.
 func Serve(impl SoulModule) error {
 	return handshake.Serve(handshake.Config{
 		ProtocolVersion: protocolVersion,
@@ -132,9 +139,9 @@ func Serve(impl SoulModule) error {
 	})
 }
 
-// serverAdapter — мост между SDK-интерфейсом SoulModule и
-// pluginv1.SoulModuleServer; embed Unimplemented обеспечивает forward-compat
-// при добавлении новых RPC в proto/plugin/v2/.
+// serverAdapter bridges the SDK's SoulModule interface and
+// pluginv1.SoulModuleServer; embedding Unimplemented provides forward-compat
+// when new RPCs are added in proto/plugin/v2/.
 type serverAdapter struct {
 	pluginv1.UnimplementedSoulModuleServer
 	impl SoulModule

@@ -32,39 +32,39 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// CloudDriver — service-контракт плагинов `kind: cloud_driver`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт CloudDriver).
+// CloudDriver — service contract for `kind: cloud_driver` plugins
+// (ADR-020, docs/keeper/plugins.md → CloudDriver service contract).
 //
-// Host — `keeper` (модуль `keeper.cloud`, docs/keeper/cloud.md).
-// Бинари плагинов — soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
+// Host is `keeper` (module `keeper.cloud`, docs/keeper/cloud.md).
+// Plugin binaries are soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
 //
-// Cloud-create встроен в сценарии как шаг с `on: keeper`
-// (модуль core.cloud.provisioned, ADR-017).
+// Cloud-create is embedded in scenarios as an `on: keeper` step
+// (module core.cloud.provisioned, ADR-017).
 type CloudDriverClient interface {
-	// Публикует profile_schema (должен совпадать с manifest.spec.profile_schema).
-	// Используется при создании Profile через OpenAPI/MCP для валидации.
+	// Publishes profile_schema (must match manifest.spec.profile_schema).
+	// Used when creating a Profile via OpenAPI/MCP for validation.
 	Schema(ctx context.Context, in *SchemaRequest, opts ...grpc.CallOption) (*SchemaReply, error)
-	// Runtime-проверки параметров профиля: квоты, доступность образа, валидность
-	// subnet-а — то, что не выражается JSON Schema.
+	// Runtime checks of profile parameters: quotas, image availability,
+	// subnet validity — whatever JSON Schema can't express.
 	Validate(ctx context.Context, in *ValidateProfileRequest, opts ...grpc.CallOption) (*ValidateProfileReply, error)
-	// Создаёт VM (одну или N), стримит прогресс.
+	// Creates VM(s) (one or N), streaming progress.
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CreateEvent], error)
-	// Удаляет VM. Под guard-rails — см. docs/keeper/cloud.md → Безопасность destroy.
+	// Deletes a VM. Guard-railed — see docs/keeper/cloud.md → Destroy safety.
 	Destroy(ctx context.Context, in *DestroyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DestroyEvent], error)
-	// Расширяет ресурсы VM (resize): cpu_cores / ram_mb / disk_gb (наши единицы,
-	// драйвер конвертит в provider-нативные). Драйвер инкапсулирует всю
-	// последовательность (quota-check → stop → update → start для cpu/ram +
-	// online disk-add) — Keeper агностичен к stop/start. Стримит прогресс по
-	// фазам, как Create.
+	// Resizes VM resources: cpu_cores / ram_mb / disk_gb (our units; the
+	// driver converts to provider-native ones). The driver encapsulates the
+	// whole sequence (quota-check → stop → update → start for cpu/ram +
+	// online disk-add) — Keeper stays agnostic to stop/start. Streams
+	// progress by phase, like Create.
 	//
-	// forward-compat only-add (ADR-012(c)/ADR-020): новый RPC, без reuse
-	// field-номеров, без удаления. Старый драйвер без capability-marker
-	// `Resizable` (sdk/clouddriver) → host вернёт resize.unsupported, а не
-	// сырой Unimplemented.
+	// forward-compat only-add (ADR-012(c)/ADR-020): a new RPC, no field-number
+	// reuse, no removals. An old driver without the `Resizable`
+	// capability-marker (sdk/clouddriver) → host returns resize.unsupported
+	// instead of a raw Unimplemented.
 	Resize(ctx context.Context, in *ResizeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResizeEvent], error)
-	// Опрос состояния конкретной VM.
+	// Polls the state of one VM.
 	Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusReply, error)
-	// Перечисление VM, известных провайдеру.
+	// Lists VMs known to the provider.
 	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VmInfo], error)
 }
 
@@ -186,39 +186,39 @@ type CloudDriver_ListClient = grpc.ServerStreamingClient[VmInfo]
 // All implementations must embed UnimplementedCloudDriverServer
 // for forward compatibility.
 //
-// CloudDriver — service-контракт плагинов `kind: cloud_driver`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт CloudDriver).
+// CloudDriver — service contract for `kind: cloud_driver` plugins
+// (ADR-020, docs/keeper/plugins.md → CloudDriver service contract).
 //
-// Host — `keeper` (модуль `keeper.cloud`, docs/keeper/cloud.md).
-// Бинари плагинов — soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
+// Host is `keeper` (module `keeper.cloud`, docs/keeper/cloud.md).
+// Plugin binaries are soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
 //
-// Cloud-create встроен в сценарии как шаг с `on: keeper`
-// (модуль core.cloud.provisioned, ADR-017).
+// Cloud-create is embedded in scenarios as an `on: keeper` step
+// (module core.cloud.provisioned, ADR-017).
 type CloudDriverServer interface {
-	// Публикует profile_schema (должен совпадать с manifest.spec.profile_schema).
-	// Используется при создании Profile через OpenAPI/MCP для валидации.
+	// Publishes profile_schema (must match manifest.spec.profile_schema).
+	// Used when creating a Profile via OpenAPI/MCP for validation.
 	Schema(context.Context, *SchemaRequest) (*SchemaReply, error)
-	// Runtime-проверки параметров профиля: квоты, доступность образа, валидность
-	// subnet-а — то, что не выражается JSON Schema.
+	// Runtime checks of profile parameters: quotas, image availability,
+	// subnet validity — whatever JSON Schema can't express.
 	Validate(context.Context, *ValidateProfileRequest) (*ValidateProfileReply, error)
-	// Создаёт VM (одну или N), стримит прогресс.
+	// Creates VM(s) (one or N), streaming progress.
 	Create(*CreateRequest, grpc.ServerStreamingServer[CreateEvent]) error
-	// Удаляет VM. Под guard-rails — см. docs/keeper/cloud.md → Безопасность destroy.
+	// Deletes a VM. Guard-railed — see docs/keeper/cloud.md → Destroy safety.
 	Destroy(*DestroyRequest, grpc.ServerStreamingServer[DestroyEvent]) error
-	// Расширяет ресурсы VM (resize): cpu_cores / ram_mb / disk_gb (наши единицы,
-	// драйвер конвертит в provider-нативные). Драйвер инкапсулирует всю
-	// последовательность (quota-check → stop → update → start для cpu/ram +
-	// online disk-add) — Keeper агностичен к stop/start. Стримит прогресс по
-	// фазам, как Create.
+	// Resizes VM resources: cpu_cores / ram_mb / disk_gb (our units; the
+	// driver converts to provider-native ones). The driver encapsulates the
+	// whole sequence (quota-check → stop → update → start for cpu/ram +
+	// online disk-add) — Keeper stays agnostic to stop/start. Streams
+	// progress by phase, like Create.
 	//
-	// forward-compat only-add (ADR-012(c)/ADR-020): новый RPC, без reuse
-	// field-номеров, без удаления. Старый драйвер без capability-marker
-	// `Resizable` (sdk/clouddriver) → host вернёт resize.unsupported, а не
-	// сырой Unimplemented.
+	// forward-compat only-add (ADR-012(c)/ADR-020): a new RPC, no field-number
+	// reuse, no removals. An old driver without the `Resizable`
+	// capability-marker (sdk/clouddriver) → host returns resize.unsupported
+	// instead of a raw Unimplemented.
 	Resize(*ResizeRequest, grpc.ServerStreamingServer[ResizeEvent]) error
-	// Опрос состояния конкретной VM.
+	// Polls the state of one VM.
 	Status(context.Context, *StatusRequest) (*StatusReply, error)
-	// Перечисление VM, известных провайдеру.
+	// Lists VMs known to the provider.
 	List(*ListRequest, grpc.ServerStreamingServer[VmInfo]) error
 	mustEmbedUnimplementedCloudDriverServer()
 }

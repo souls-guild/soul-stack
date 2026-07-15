@@ -21,18 +21,19 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Kind — дискриминатор типа плагина (ADR-020(e)).
-// Соответствует полю `kind:` в `manifest.yaml` и handshake-строке.
-// Closed enum: расширение — через PR в `proto/plugin/vN/manifest.proto`, не breaking
-// (docs/keeper/plugins.md → Расширение manifest).
+// Kind — plugin type discriminator (ADR-020(e)).
+// Matches the `kind:` field in `manifest.yaml` and the handshake string.
+// Closed enum: extending it goes through a PR to
+// `proto/plugin/vN/manifest.proto`, non-breaking (docs/keeper/plugins.md →
+// Extending the manifest).
 type Kind int32
 
 const (
 	Kind_KIND_UNSPECIFIED  Kind = 0
-	Kind_KIND_SOUL_MODULE  Kind = 1 // Soul-side: бинарь soul-mod-<name>, реализует шаги Destiny.
-	Kind_KIND_CLOUD_DRIVER Kind = 2 // Keeper-side: бинарь soul-cloud-<provider>, создание/удаление VM.
-	Kind_KIND_SSH_PROVIDER Kind = 3 // Keeper-side: бинарь soul-ssh-<provider>, SSH-credentials для push.
-	Kind_KIND_SOUL_BEACON  Kind = 4 // Soul-side: бинарь soul-beacon-<name>, наблюдает состояние хоста (ADR-030 V5-2).
+	Kind_KIND_SOUL_MODULE  Kind = 1 // Soul-side: soul-mod-<name> binary, implements Destiny steps.
+	Kind_KIND_CLOUD_DRIVER Kind = 2 // Keeper-side: soul-cloud-<provider> binary, creates/deletes VMs.
+	Kind_KIND_SSH_PROVIDER Kind = 3 // Keeper-side: soul-ssh-<provider> binary, SSH credentials for push.
+	Kind_KIND_SOUL_BEACON  Kind = 4 // Soul-side: soul-beacon-<name> binary, observes host state (ADR-030 V5-2).
 )
 
 // Enum value maps for Kind.
@@ -80,20 +81,20 @@ func (Kind) EnumDescriptor() ([]byte, []int) {
 	return file_v1_common_proto_rawDescGZIP(), []int{0}
 }
 
-// Capability — closed enum capabilities плагина (ADR-020(f),
-// docs/keeper/plugins.md → required_capabilities-таблица).
-// Плагин декларирует, что ему нужно от системы host-а;
-// `soul-lint` сверяет с `plugin_runtime.allowed_capabilities`.
+// Capability — closed enum of plugin capabilities (ADR-020(f),
+// docs/keeper/plugins.md → required_capabilities table).
+// The plugin declares what it needs from the host system;
+// `soul-lint` checks this against `plugin_runtime.allowed_capabilities`.
 type Capability int32
 
 const (
 	Capability_CAPABILITY_UNSPECIFIED      Capability = 0
-	Capability_CAPABILITY_RUN_AS_ROOT      Capability = 1 // host-процесс должен иметь UID 0.
-	Capability_CAPABILITY_NETWORK_OUTBOUND Capability = 2 // исходящие сетевые вызовы (cloud API, vault, mirror).
-	Capability_CAPABILITY_NETWORK_INBOUND  Capability = 3 // плагин слушает порт.
-	Capability_CAPABILITY_VAULT_ACCESS     Capability = 4 // обращение к Vault через клиентский helper SDK.
-	Capability_CAPABILITY_FS_WRITE_ROOT    Capability = 5 // пишет за пределы /var/lib/soul-stack/.
-	Capability_CAPABILITY_EXEC_SUBPROCESS  Capability = 6 // запуск внешних команд через os/exec.
+	Capability_CAPABILITY_RUN_AS_ROOT      Capability = 1 // host process must run as UID 0.
+	Capability_CAPABILITY_NETWORK_OUTBOUND Capability = 2 // outbound network calls (cloud API, vault, mirror).
+	Capability_CAPABILITY_NETWORK_INBOUND  Capability = 3 // plugin listens on a port.
+	Capability_CAPABILITY_VAULT_ACCESS     Capability = 4 // talks to Vault via the client helper SDK.
+	Capability_CAPABILITY_FS_WRITE_ROOT    Capability = 5 // writes outside /var/lib/soul-stack/.
+	Capability_CAPABILITY_EXEC_SUBPROCESS  Capability = 6 // spawns external commands via os/exec.
 )
 
 // Enum value maps for Capability.
@@ -145,23 +146,23 @@ func (Capability) EnumDescriptor() ([]byte, []int) {
 	return file_v1_common_proto_rawDescGZIP(), []int{1}
 }
 
-// ResourceType — closed enum типов ресурсов в `side_effects` (ADR-020(g),
-// docs/keeper/plugins.md → side_effects-таблица).
-// Strict-контракт touched ресурсов: runtime-нарушение
-// (плагин трогает ресурс не из side_effects) → шаг помечается failed,
-// причина `policy_violation`.
+// ResourceType — closed enum of resource types in `side_effects` (ADR-020(g),
+// docs/keeper/plugins.md → side_effects table).
+// Strict contract of touched resources: a runtime violation (plugin touches
+// a resource not listed in side_effects) marks the step failed, reason
+// `policy_violation`.
 type ResourceType int32
 
 const (
 	ResourceType_RESOURCE_TYPE_UNSPECIFIED ResourceType = 0
-	ResourceType_RESOURCE_TYPE_SERVICE     ResourceType = 1 // имя сервиса (haproxy).
-	ResourceType_RESOURCE_TYPE_FILE        ResourceType = 2 // абсолютный путь к файлу.
-	ResourceType_RESOURCE_TYPE_PACKAGE     ResourceType = 3 // имя пакета OS.
-	ResourceType_RESOURCE_TYPE_PORT        ResourceType = 4 // tcp/udp-порт (значение — десятичное в SideEffect.value).
-	ResourceType_RESOURCE_TYPE_USER        ResourceType = 5 // имя OS-пользователя.
-	ResourceType_RESOURCE_TYPE_GROUP       ResourceType = 6 // имя OS-группы.
-	ResourceType_RESOURCE_TYPE_DIRECTORY   ResourceType = 7 // абсолютный путь к директории.
-	ResourceType_RESOURCE_TYPE_CRON        ResourceType = 8 // имя cron-задачи.
+	ResourceType_RESOURCE_TYPE_SERVICE     ResourceType = 1 // service name (haproxy).
+	ResourceType_RESOURCE_TYPE_FILE        ResourceType = 2 // absolute file path.
+	ResourceType_RESOURCE_TYPE_PACKAGE     ResourceType = 3 // OS package name.
+	ResourceType_RESOURCE_TYPE_PORT        ResourceType = 4 // tcp/udp port (value is decimal in SideEffect.value).
+	ResourceType_RESOURCE_TYPE_USER        ResourceType = 5 // OS user name.
+	ResourceType_RESOURCE_TYPE_GROUP       ResourceType = 6 // OS group name.
+	ResourceType_RESOURCE_TYPE_DIRECTORY   ResourceType = 7 // absolute directory path.
+	ResourceType_RESOURCE_TYPE_CRON        ResourceType = 8 // cron job name.
 	ResourceType_RESOURCE_TYPE_MOUNT       ResourceType = 9 // mountpoint.
 )
 
@@ -220,13 +221,15 @@ func (ResourceType) EnumDescriptor() ([]byte, []int) {
 	return file_v1_common_proto_rawDescGZIP(), []int{2}
 }
 
-// SideEffect — одна пара (type, value) из списка `side_effects` манифеста.
-// Грамматика: запись в YAML — объект ровно с одной парой <resource_type>: <value>;
-// несколько разных ресурсов = несколько записей (CG-6 / ADR-020(g),
-// docs/keeper/plugins.md → Грамматика записей side_effects).
+// SideEffect — one (type, value) pair from the manifest's `side_effects`
+// list. Grammar: a YAML entry is an object with exactly one
+// <resource_type>: <value> pair; multiple different resources = multiple
+// entries (CG-6 / ADR-020(g), docs/keeper/plugins.md → side_effects entry
+// grammar).
 //
-// value — строковое представление; для PORT — десятичное число строкой
-// (унификация типа value на этом уровне; numeric-парсинг — задача host-а).
+// value — a string representation; for PORT it's a decimal number as a
+// string (value's type is unified at this level; numeric parsing is the
+// host's job).
 type SideEffect struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          ResourceType           `protobuf:"varint,1,opt,name=type,proto3,enum=soulstack.plugin.v1.ResourceType" json:"type,omitempty"`

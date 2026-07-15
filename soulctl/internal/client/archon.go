@@ -8,24 +8,25 @@ import (
 	"strings"
 )
 
-// ArchonAPI — методы под archon-команды soulctl. Whoami-эндпоинта в openapi
-// MVP нет (см. soulctl/README.md), поэтому он реализуется client-side через
-// декодирование JWT claims + ping любым авторизованным endpoint-ом.
+// ArchonAPI holds the methods behind soulctl's archon commands. The MVP
+// openapi has no whoami endpoint (see soulctl/README.md), so it's
+// implemented client-side by decoding JWT claims + pinging any authorized
+// endpoint.
 type ArchonAPI struct {
 	c *Client
 }
 
-// Ping — проверка JWT через лёгкий list-эндпоинт. Возвращает APIError при
-// 401/403, осмысленную ошибку транспорта при сети.
+// Ping checks the JWT via a lightweight list endpoint. Returns an APIError
+// on 401/403, or a meaningful transport error on network failure.
 //
-// Используется `GET /v1/incarnations?limit=1` (минимальная страница, permission
-// incarnation.list; cluster-admin его всегда имеет, оператор без прав получит
-// 403 и узнает об этом сразу).
+// Uses `GET /v1/incarnations?limit=1` (minimal page, permission
+// incarnation.list; cluster-admin always has it, an operator without the
+// permission gets a 403 and finds out immediately).
 func (a *ArchonAPI) Ping(ctx context.Context) error {
 	return a.c.Do(ctx, "GET", "/v1/incarnations?limit=1", nil, nil)
 }
 
-// JWTClaims — клейм-набор JWT по ADR-014 / operator-api.md → § Auth.
+// JWTClaims is the JWT claim set per ADR-014 / operator-api.md → § Auth.
 type JWTClaims struct {
 	Iss              string   `json:"iss,omitempty"`
 	Sub              string   `json:"sub"` // AID
@@ -35,11 +36,12 @@ type JWTClaims struct {
 	BootstrapInitial bool     `json:"bootstrap_initial,omitempty"`
 }
 
-// DecodeJWTClaims — парсит claims из payload части JWT БЕЗ верификации подписи.
-// Это допустимо для whoami: подпись уже проверена Keeper-ом при `archon login`
-// (ping вернул 200) — soulctl лишь декодирует уже принятые credentials.
+// DecodeJWTClaims parses claims from the JWT payload segment WITHOUT
+// signature verification. This is fine for whoami: the signature was
+// already verified by Keeper during `archon login` (ping returned 200) —
+// soulctl just decodes already-accepted credentials.
 //
-// Возвращает осмысленную ошибку при битом формате.
+// Returns a meaningful error on malformed input.
 func DecodeJWTClaims(jwt string) (*JWTClaims, error) {
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 {
@@ -47,7 +49,7 @@ func DecodeJWTClaims(jwt string) (*JWTClaims, error) {
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		// Некоторые имплементации добавляют padding — попробуем std-base64 fallback.
+		// Some implementations add padding — try the std-base64 fallback.
 		payload, err = base64.URLEncoding.DecodeString(parts[1])
 		if err != nil {
 			return nil, fmt.Errorf("декодировать JWT payload: %w", err)
@@ -60,7 +62,7 @@ func DecodeJWTClaims(jwt string) (*JWTClaims, error) {
 	return &claims, nil
 }
 
-// Whoami — комбинация Ping + DecodeJWTClaims. Возвращает claims или ошибку.
+// Whoami combines Ping + DecodeJWTClaims. Returns the claims or an error.
 func (a *ArchonAPI) Whoami(ctx context.Context) (*JWTClaims, error) {
 	if err := a.c.Ping(ctx); err != nil {
 		return nil, err
@@ -68,5 +70,5 @@ func (a *ArchonAPI) Whoami(ctx context.Context) (*JWTClaims, error) {
 	return DecodeJWTClaims(a.c.jwt)
 }
 
-// Ping — публичный shortcut на Archon.Ping.
+// Ping is a public shortcut to Archon.Ping.
 func (c *Client) Ping(ctx context.Context) error { return c.Archon.Ping(ctx) }

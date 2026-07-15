@@ -13,7 +13,7 @@ import (
 )
 
 // newPushProvidersCmd — `soulctl push-providers …` (ADR-032 amendment 2026-05-26, S7-2).
-// Замещает inline-форму `keeper.yml::push.providers[]` (pilot S6 / S7-1).
+// Replaces the inline `keeper.yml::push.providers[]` form (pilot S6 / S7-1).
 func newPushProvidersCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:     "push-providers",

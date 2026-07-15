@@ -1,20 +1,23 @@
 package validate
 
-// Stage-валидация scenario (ADR-056 §S5): офлайн-прогон ТОЙ ЖЕ Passage-
-// стратификации, что keeper-рантайм делает перед dispatch ([config.Stratify]),
-// чтобы автор сценария ловил staged-ошибки ДО apply. Переиспользует канон
-// shared/config (Stratify над тем же []Task-планом + config-валидатор reads==refs):
-// один граф register-зависимости для линтера и рантайма (дубль = silent-wrong-target).
+// Stage validation for scenarios (ADR-056 §S5): an offline run of the SAME
+// Passage stratification the keeper runtime performs before dispatch
+// ([config.Stratify]), so the scenario author catches staged errors BEFORE
+// apply. Reuses the canonical shared/config (Stratify over the same []Task
+// plan + the config validator's reads==refs check): one register-dependency
+// graph for both linter and runtime (a duplicate would mean silent-wrong-target).
 //
-// Что детектит ОФЛАЙН (поверх unknown_register_reference, который config-валидатор
-// уже ловит на парсе):
-//   - register-цикл (StratifyCycle) — ОШИБКА: топологического порядка нет, прогон
-//     не стартовал бы.
-//   - структура passage (сколько Passage, по сколько задач) — HINT (info автору).
+// What this detects OFFLINE (on top of unknown_register_reference, already
+// caught by the config validator at parse time):
+//   - register cycle (StratifyCycle) — ERROR: no topological order exists,
+//     the run would never have started.
+//   - passage structure (how many Passages, how many tasks each) — HINT
+//     (informational, for the author).
 //
-// serial: + staged (N>1 Passage) больше НЕ ошибка (ADR-056 §S4 amend, S-2D1): 2D
-// serial×passage реализован — каждый Passage катит serial-волны по своему per-Passage
-// width. Такой сценарий проходит линт с обычным passage_plan HINT.
+// serial: + staged (N>1 Passage) is no longer an error (ADR-056 §S4 amend,
+// S-2D1): 2D serial×passage is implemented — each Passage runs its serial
+// waves at its own per-Passage width. Such a scenario now passes lint with
+// a plain passage_plan HINT.
 
 import (
 	"errors"
@@ -27,16 +30,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// stageDiagnostics прогоняет Passage-стратификацию над уже распарсенным сценарием
-// и возвращает дополнительные диагностики (info/ошибки), которые caller дописывает
-// к диагностикам парса. scenarioPath — путь к main.yml (директория используется для
-// scenario-local резолва include-целей, как двухуровневый резолв keeper-а, но без
-// service-слоя — он офлайн недоступен).
+// stageDiagnostics runs Passage stratification over an already-parsed
+// scenario and returns additional diagnostics (info/errors) that the caller
+// appends to the parse diagnostics. scenarioPath is the path to main.yml
+// (its directory is used for scenario-local resolution of include targets,
+// mirroring the keeper's two-level resolve, but without the service layer —
+// unavailable offline).
 //
-// m==nil (парс упал error-ами) → нет смысла стратифицировать (граф недостоверен) →
-// nil. Ошибка резолва include → HINT «stage-граф проверен только по локально-
-// резолвнутым задачам» + стратификация по тому, что раскрылось (не падаем: include
-// мог указывать в service-слой, недоступный офлайн).
+// m==nil (parse failed with errors) → no point stratifying (the graph is
+// unreliable) → nil. An include resolve error → HINT "stage graph checked
+// only against locally-resolved tasks" + stratification over whatever did
+// resolve (we don't fail: the include may have pointed into the service
+// layer, unavailable offline).
 func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Diagnostic {
 	if m == nil {
 		return nil
@@ -45,19 +50,22 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	dir := filepath.Dir(scenarioPath)
 	var out []diag.Diagnostic
 
-	// Условный include с динамическим `when:` (register./soulprint.) — статическая
-	// ОШИБКА офлайн (conditional-include group-drop, ADR-009 amendment). Это свойство
-	// САМОЙ include-задачи в m.Tasks, не зависит от резолва цели (поэтому проверяем ДО
-	// ExpandIncludes — иначе downgrade-в-HINT ниже замаскировал бы её). include
-	// раскрывается ДО Stratify: register предыдущих задач ещё не собран, per-host
-	// soulprint неизвестен → допустим только статический предикат. Прод тоже отвергнет
-	// (ExpandIncludes → include_when_dynamic_unsupported), но соул-линт ловит офлайн.
+	// A conditional include with a dynamic `when:` (register./soulprint.) is a
+	// static ERROR offline (conditional-include group-drop, ADR-009 amendment).
+	// This is a property of the include task itself in m.Tasks, independent of
+	// target resolution (so we check it BEFORE ExpandIncludes — otherwise the
+	// downgrade-to-HINT below would mask it). Includes expand BEFORE Stratify:
+	// register from earlier tasks isn't collected yet, per-host soulprint is
+	// unknown → only a static predicate is allowed. Prod rejects this too
+	// (ExpandIncludes → include_when_dynamic_unsupported), but soul-lint catches
+	// it offline.
 	out = append(out, dynamicIncludeWhenDiagnostics(scenarioPath, m.Tasks)...)
 
 	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioLocalIncludeResolver(dir))
-	// include-резолв офлайн неполон (нет service-слоя): error-диагностики expand-а
-	// downgrade-им в HINT, чтобы не маскировать stage-валидацию ложным провалом.
-	// Если include реально битый, его поднимет полная валидация на keeper-е.
+	// Offline include resolution is incomplete (no service layer): downgrade
+	// expand's error diagnostics to HINT so they don't mask stage validation
+	// with a false failure. A genuinely broken include is caught by full
+	// validation on the keeper.
 	for _, d := range expandDiags {
 		if d.Level == diag.LevelError {
 			out = append(out, diag.Diagnostic{
@@ -89,16 +97,19 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return out
 	}
 
-	// serial + staged (N>1) больше НЕ ошибка (ADR-056 §S4 amend, S-2D1): 2D
-	// serial×passage реализован — каждый Passage катит свои serial-волны по своему
-	// per-Passage width. Стратификация даёт обычный passage_plan HINT (ниже).
+	// serial + staged (N>1) is no longer an error (ADR-056 §S4 amend, S-2D1): 2D
+	// serial×passage is implemented — each Passage runs its own serial waves at
+	// its own per-Passage width. Stratification yields a plain passage_plan HINT
+	// (below).
 
-	// Within-block register-зависимость — ОШИБКА (ADR-056, §«Риски — silent-wrong-
-	// target»). Потомок block:, читающий register соседнего потомка ТОГО ЖЕ блока,
-	// невозможен на render: block атомарен по Passage, peer-register доступен Soul-side
-	// только ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch → where
-	// отберёт хосты по устаревшему/внешнему register молча. Stratify это не ловит
-	// (внутри-блочное ребро не пересекает границу top-level задач). Ловим офлайн ДО apply.
+	// A within-block register dependency is an ERROR (ADR-056, §"Risks —
+	// silent-wrong-target"). A block: child reading the register of a sibling
+	// child in the SAME block is impossible at render time: a block is atomic
+	// per Passage, peer register is available Soul-side only AFTER probe, while
+	// where/when/params are resolved Keeper-side BEFORE dispatch → where would
+	// silently select hosts by a stale/foreign register. Stratify doesn't catch
+	// this (the within-block edge doesn't cross a top-level task boundary).
+	// Caught offline BEFORE apply.
 	if info, bad := config.WithinBlockRegisterDependency(tasks); bad {
 		out = append(out, diag.Diagnostic{
 			Level:   diag.LevelError,
@@ -111,14 +122,16 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return out
 	}
 
-	// Cross-passage when-gating — ОШИБКА (ADR-056:85 amend, FC-5). Задача гейтит
-	// `when:`/`changed_when:`/`failed_when:` по register, эмитнутому в БОЛЕЕ РАННЕМ
-	// Passage. flow-control = Soul-side per-task gating (ADR-012(d)), видит только
-	// register СВОЕГО Passage; cross-passage register ему недоступен (другой
-	// ApplyRequest) → `no such key` молча → задача FAILED. После narrow-fix flow-
-	// control сам Passage НЕ расщепляет, но probe мог уехать в ранний Passage по
-	// ДРУГОЙ причине (иная задача с `where: register.X`). where: это умеет (Keeper
-	// пере-рендерит с накопленным register), when: — нет. Fail-closed reject офлайн.
+	// Cross-passage when-gating is an ERROR (ADR-056:85 amend, FC-5). A task
+	// gates `when:`/`changed_when:`/`failed_when:` on a register emitted in an
+	// EARLIER Passage. flow-control is Soul-side per-task gating (ADR-012(d)),
+	// visible only within its OWN Passage; a cross-passage register is
+	// unavailable to it (a different ApplyRequest) → silent `no such key` →
+	// the task FAILS. After the narrow-fix, flow-control itself doesn't split
+	// the Passage, but a probe may have landed in an earlier Passage for a
+	// DIFFERENT reason (another task with `where: register.X`). where: can do
+	// this (Keeper re-renders with accumulated register), when: cannot.
+	// Fail-closed reject, offline.
 	if info, bad := config.CrossPassageWhenGating(tasks, plan); bad {
 		out = append(out, diag.Diagnostic{
 			Level:   diag.LevelError,
@@ -131,7 +144,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return out
 	}
 
-	// Структура passage — HINT (info автору): сколько Passage и по сколько задач.
+	// Passage structure — HINT (informational, for the author): how many
+	// Passages and how many tasks each.
 	out = append(out, diag.Diagnostic{
 		Level:   diag.LevelHint,
 		Phase:   diag.PhaseSemanticValidate,
@@ -143,8 +157,9 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	return out
 }
 
-// passagePlanSummary — человекочитаемое описание стратификации: число Passage и
-// размер каждого (N=1 → один проход, БИТ-В-БИТ как до staged-render).
+// passagePlanSummary is a human-readable description of the stratification:
+// the number of Passages and the size of each (N=1 → a single pass,
+// BIT-FOR-BIT identical to pre-staged-render behavior).
 func passagePlanSummary(plan config.Passage) string {
 	counts := make([]int, plan.Count)
 	for _, p := range plan.TaskPassage {
@@ -158,14 +173,16 @@ func passagePlanSummary(plan config.Passage) string {
 	return fmt.Sprintf("staged-прогон: %d Passage по register-зависимости, задач в каждом %v (потребитель register исполняется строго после probe)", plan.Count, counts)
 }
 
-// dynamicIncludeWhenDiagnostics поднимает include_when_dynamic_unsupported для
-// каждой include-задачи с непустым НЕстатическим `when:` (conditional-include
-// group-drop, ADR-009 amendment). Резолв цели НЕ нужен — это свойство include-узла
-// (предикат), поэтому статвалидация офлайн полна и не зависит от service-слоя. Обход
-// рекурсивен через block: (include-потомок block в пилоте отвергается раньше как
-// ErrUnexpandedInclude, но обход симметричен на случай будущей поддержки).
-// IsStaticIncludeWhen — тот же критерий, что прод ExpandIncludes (input./essence./
-// incarnation./vars. — да; register./soulprint. — нет).
+// dynamicIncludeWhenDiagnostics raises include_when_dynamic_unsupported for
+// every include task with a non-empty NON-static `when:` (conditional-include
+// group-drop, ADR-009 amendment). Target resolution is NOT needed — this is a
+// property of the include node itself (the predicate), so offline static
+// validation is complete and independent of the service layer. The walk
+// recurses through block: (an include child of a block is rejected earlier
+// in the pilot as ErrUnexpandedInclude, but the walk stays symmetric in case
+// of future support). IsStaticIncludeWhen is the same criterion prod's
+// ExpandIncludes uses (input./essence./incarnation./vars. — allowed;
+// register./soulprint. — not).
 func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for i := range tasks {
@@ -187,13 +204,14 @@ func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []d
 	return out
 }
 
-// scenarioLocalIncludeResolver — within-scenario [config.IncludeResolver] для
-// офлайн-линта: include-цели резолвятся из директории main.yml (scenario-local
-// слой двухуровневого резолва ADR-009; service-слой офлайн недоступен).
-// path.Clean клампит выход за пределы директории сценария (`..`/абсолютный).
+// scenarioLocalIncludeResolver is a within-scenario [config.IncludeResolver]
+// for the offline linter: include targets resolve from main.yml's directory
+// (the scenario-local layer of the ADR-009 two-level resolve; the service
+// layer is unavailable offline). path.Clean clamps escapes outside the
+// scenario directory (`..`/absolute paths).
 func scenarioLocalIncludeResolver(dir string) config.IncludeResolver {
 	return func(name string) ([]byte, string, error) {
-		rel := path.Clean("/" + name)[1:] // отрезает ведущий `..`/абсолют до scenario-root.
+		rel := path.Clean("/" + name)[1:] // strips a leading `..`/absolute path up to scenario-root.
 		full := filepath.Join(dir, rel)
 		data, err := os.ReadFile(full)
 		if err != nil {

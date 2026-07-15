@@ -27,19 +27,20 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SshProvider — service-контракт плагинов `kind: ssh_provider`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт SshProvider).
+// SshProvider — service contract for `kind: ssh_provider` plugins
+// (ADR-020, docs/keeper/plugins.md → SshProvider service contract).
 //
-// Host — `keeper` (модуль `keeper.push`, docs/keeper/push.md).
-// Бинари плагинов — soul-ssh-<provider> (soul-ssh-vault, soul-ssh-static, soul-ssh-teleport).
+// Host is `keeper` (module `keeper.push`, docs/keeper/push.md).
+// Plugin binaries are soul-ssh-<provider> (soul-ssh-vault, soul-ssh-static,
+// soul-ssh-teleport).
 //
-// Под этот контракт укладываются Vault SSH CA, static-key, Teleport.
+// Vault SSH CA, static-key, and Teleport all fit this contract.
 type SshProviderClient interface {
-	// Выдать SSH-сертификат/ключ для текущей сессии (например, Vault SSH CA
-	// выпускает короткоживущий сертификат).
+	// Issues an SSH certificate/key for the current session (e.g. Vault SSH
+	// CA issues a short-lived certificate).
 	Sign(ctx context.Context, in *SignRequest, opts ...grpc.CallOption) (*SignReply, error)
-	// Подтвердить право Keeper-а ходить на конкретный хост
-	// (политика провайдера, если она есть).
+	// Confirms Keeper's right to reach a given host (provider policy, if
+	// any).
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeReply, error)
 }
 
@@ -75,19 +76,20 @@ func (c *sshProviderClient) Authorize(ctx context.Context, in *AuthorizeRequest,
 // All implementations must embed UnimplementedSshProviderServer
 // for forward compatibility.
 //
-// SshProvider — service-контракт плагинов `kind: ssh_provider`
-// (ADR-020, docs/keeper/plugins.md → Service-контракт SshProvider).
+// SshProvider — service contract for `kind: ssh_provider` plugins
+// (ADR-020, docs/keeper/plugins.md → SshProvider service contract).
 //
-// Host — `keeper` (модуль `keeper.push`, docs/keeper/push.md).
-// Бинари плагинов — soul-ssh-<provider> (soul-ssh-vault, soul-ssh-static, soul-ssh-teleport).
+// Host is `keeper` (module `keeper.push`, docs/keeper/push.md).
+// Plugin binaries are soul-ssh-<provider> (soul-ssh-vault, soul-ssh-static,
+// soul-ssh-teleport).
 //
-// Под этот контракт укладываются Vault SSH CA, static-key, Teleport.
+// Vault SSH CA, static-key, and Teleport all fit this contract.
 type SshProviderServer interface {
-	// Выдать SSH-сертификат/ключ для текущей сессии (например, Vault SSH CA
-	// выпускает короткоживущий сертификат).
+	// Issues an SSH certificate/key for the current session (e.g. Vault SSH
+	// CA issues a short-lived certificate).
 	Sign(context.Context, *SignRequest) (*SignReply, error)
-	// Подтвердить право Keeper-а ходить на конкретный хост
-	// (политика провайдера, если она есть).
+	// Confirms Keeper's right to reach a given host (provider policy, if
+	// any).
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeReply, error)
 	mustEmbedUnimplementedSshProviderServer()
 }

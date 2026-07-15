@@ -1,8 +1,9 @@
-// Package client — тонкий HTTP-клиент к Operator API Keeper-а.
+// Package client is a thin HTTP client for Keeper's Operator API.
 //
-// Контракт API — docs/keeper/operator-api.md + docs/keeper/openapi.yaml. Здесь
-// только транспорт + типизированные обёртки `Incarnations`/`Souls` для команд
-// soulctl. Бизнес-логика (форматирование, валидация) — на стороне cmd-пакета.
+// The API contract is docs/keeper/operator-api.md + docs/keeper/openapi.yaml.
+// This package holds only the transport + typed `Incarnations`/`Souls`
+// wrappers for soulctl commands. Business logic (formatting, validation)
+// lives in the cmd package.
 package client
 
 import (
@@ -20,14 +21,14 @@ import (
 	"github.com/souls-guild/soul-stack/soulctl/internal/config"
 )
 
-// HTTPDoer — минимальный интерфейс над http.Client для подмены в тестах
-// (httptest.NewServer возвращает реальный *http.Client; мок-Doer полезнее
-// для unit-тестов команд soulctl).
+// HTTPDoer is a minimal interface over http.Client for swapping in tests
+// (httptest.NewServer returns a real *http.Client; a mock Doer is more
+// useful for soulctl command unit tests).
 type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// Client — обёртка над HTTPDoer с base URL Keeper-а и JWT-bearer header.
+// Client wraps HTTPDoer with Keeper's base URL and a JWT bearer header.
 type Client struct {
 	baseURL string
 	jwt     string
@@ -42,8 +43,8 @@ type Client struct {
 	Push          *PushAPI
 }
 
-// New собирает клиент из credentials. Базовый URL нормализуется (убирается
-// trailing slash). Возвращает осмысленную ошибку, если credentials неполные.
+// New builds a client from credentials. The base URL is normalized (trailing
+// slash stripped). Returns a meaningful error if credentials are incomplete.
 func New(c *config.Credentials) (*Client, error) {
 	if c == nil || c.KeeperURL == "" || c.ArchonJWT == "" {
 		return nil, errors.New("credentials пусты")
@@ -64,8 +65,8 @@ func New(c *config.Credentials) (*Client, error) {
 	return cl, nil
 }
 
-// NewWithDoer — для тестов: даёт подменить транспорт (httptest или мок).
-// Валидацию URL/JWT повторяет, чтобы поведение совпадало с New.
+// NewWithDoer is for tests: lets you swap the transport (httptest or mock).
+// Repeats URL/JWT validation so behavior matches New.
 func NewWithDoer(baseURL, jwt string, doer HTTPDoer) (*Client, error) {
 	if baseURL == "" {
 		return nil, errors.New("baseURL пуст")
@@ -89,8 +90,9 @@ func (c *Client) bindAPIs() {
 	c.Push = &PushAPI{c: c}
 }
 
-// APIError — структурированная ошибка HTTP-ответа Keeper-а. Несёт HTTP-статус,
-// тип/title/detail из RFC 7807 ProblemDetails (если ответ — application/problem+json).
+// APIError is a structured error for Keeper's HTTP response. Carries the
+// HTTP status and the type/title/detail from RFC 7807 ProblemDetails (if the
+// response is application/problem+json).
 type APIError struct {
 	Status  int    `json:"status"`
 	Type    string `json:"type,omitempty"`
@@ -101,8 +103,8 @@ type APIError struct {
 	Path    string `json:"-"`
 }
 
-// Error — человекочитаемое представление; команды поверх форматируют 401/403/404
-// в типовые подсказки (см. internal/cmd/errors.go).
+// Error returns a human-readable representation; commands on top format
+// 401/403/404 into standard hints (see internal/cmd/errors.go).
 func (e *APIError) Error() string {
 	switch {
 	case e.Detail != "":
@@ -116,7 +118,7 @@ func (e *APIError) Error() string {
 	}
 }
 
-// AsAPIError — удобный switch для cmd-слоя: errors.As + проверка статуса.
+// AsAPIError is a convenience switch for the cmd layer: errors.As + status check.
 func AsAPIError(err error) (*APIError, bool) {
 	var ae *APIError
 	if errors.As(err, &ae) {
@@ -125,12 +127,13 @@ func AsAPIError(err error) (*APIError, bool) {
 	return nil, false
 }
 
-// Do выполняет HTTP-запрос с авторизацией и JSON-сериализацией body (если не nil).
-// При HTTP-статусе ≥400 возвращает *APIError (RFC 7807 распарсен по возможности).
+// Do performs an HTTP request with authorization and JSON-serializes body
+// (if not nil). On HTTP status ≥400 it returns *APIError (RFC 7807 parsed
+// when possible).
 //
-// `out` — указатель на структуру для декодинга JSON-ответа; nil = ответ
-// игнорируется. Если body пустое (204 No Content) и out != nil — ошибки нет,
-// out остаётся zero-value.
+// `out` is a pointer to a struct for decoding the JSON response; nil means
+// the response is ignored. If the body is empty (204 No Content) and
+// out != nil, there's no error — out stays zero-value.
 func (c *Client) Do(ctx context.Context, method, path string, body, out any) error {
 	var reqBody io.Reader
 	if body != nil {
@@ -162,7 +165,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 			Method:  method,
 			Path:    path,
 		}
-		// RFC 7807 — application/problem+json. Если парсинг не удался, оставим RawBody.
+		// RFC 7807 — application/problem+json. If parsing fails, keep RawBody.
 		_ = json.Unmarshal(payload, apiErr)
 		return apiErr
 	}
@@ -174,8 +177,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	return nil
 }
 
-// JWT возвращает текущий JWT клиента (для archon whoami — декодирование claims).
+// JWT returns the client's current JWT (for archon whoami — decoding claims).
 func (c *Client) JWT() string { return c.jwt }
 
-// BaseURL возвращает базовый URL (для дианостики в whoami).
+// BaseURL returns the base URL (for diagnostics in whoami).
 func (c *Client) BaseURL() string { return c.baseURL }

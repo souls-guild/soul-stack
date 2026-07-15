@@ -6,91 +6,93 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
 
-// AugurRequest — запрос Soul → Keeper на живой доступ к внешней системе через
-// брокер Augur (ADR-025). Едет only-add в FromSoul.oneof существующего
-// EventStream-а — нового RPC нет.
+// AugurRequest is Soul -> Keeper's request for live access to an external system
+// through the Augur broker (ADR-025). Rides only-add in the existing
+// EventStream's FromSoul.oneof — no new RPC.
 //
-// SID в payload НЕ передаётся: авторитет идентичности Soul-а — mTLS peer cert
-// (ADR-012(i)). Keeper резолвит SID из сертификата, по нему — covens, и сверяет
-// доступ с реестром Rite (субъект coven XOR sid → Omen → allow-list).
+// SID is NOT sent in the payload: the authority for Soul's identity is the mTLS
+// peer cert (ADR-012(i)). Keeper resolves SID from the certificate, covens from
+// that, and checks access against the Rite registry (subject coven XOR sid ->
+// Omen -> allow-list).
 message AugurRequest {
-  // Корреляция request↔reply внутри одного EventStream-а: Keeper эхо-вернёт его
-  // в AugurReply.request_id, Soul по нему сопоставит ответ со своим ожиданием.
+  // Correlates request<->reply within one EventStream: Keeper echoes it back in
+  // AugurReply.request_id, and Soul matches the reply to its pending request by it.
   string request_id = 1;
 
-  // apply_id прогона, в рамках которого запрошен доступ. Используется для аудита
-  // (audit-event `augur.*` пишется с correlation_id = apply_id, ADR-025).
+  // The apply_id of the run this access request belongs to. Used for audit
+  // (the `augur.*` audit event is written with correlation_id = apply_id, ADR-025).
   string apply_id = 2;
 
-  // Имя Omen (omens.name) — внешней системы, к которой запрашивается доступ.
+  // Omen name (omens.name) — the external system access is being requested for.
   string omen_name = 3;
 
-  // Запрос к Omen: KV-путь (vault) / promQL (prometheus) / index-query (elk).
-  // Keeper сверяет его с allow-list-ом соответствующего Rite перед исполнением.
+  // The query sent to the Omen: a KV path (vault) / promQL (prometheus) /
+  // index query (elk). Keeper checks it against the matching Rite's allow-list
+  // before executing.
   string query = 4;
 }
 
-// AugurStatus — исход авторизации/исполнения Augur-запроса на Keeper-е.
+// AugurStatus is the outcome of authorizing/executing an Augur request on Keeper.
 enum AugurStatus {
-  // Не задан. Soul трактует как DENIED (default-deny): отсутствие явного OK —
-  // это запрет, а не «продолжить».
+  // Unset. Soul treats this as DENIED (default-deny): the absence of an explicit
+  // OK is a refusal, not "go ahead".
   AUGUR_STATUS_UNSPECIFIED = 0;
 
-  // Доступ разрешён и данные/credential приложены в AugurReply.result.
+  // Access granted, data/credential attached in AugurReply.result.
   AUGUR_STATUS_OK = 1;
 
-  // Доступ запрещён авторизацией (Omen не найден / Soul не в Rite / query вне
-  // allow-list). error может нести человекочитаемую причину.
+  // Access denied by authorization (Omen not found / Soul not in the Rite / query
+  // outside the allow-list). error may carry a human-readable reason.
   AUGUR_STATUS_DENIED = 2;
 
-  // Сбой исполнения на стороне Keeper-а/Omen (внешняя система недоступна и т.п.).
+  // Execution failure on Keeper/Omen's side (external system unavailable, etc.).
   AUGUR_STATUS_ERROR = 3;
 }
 
-// ScopedVaultToken — эфемерный scoped Vault-токен для delegate=true (MVP-2):
-// Soul ходит в Vault напрямую этим токеном. Сейчас вводится ТОЛЬКО контракт —
-// минтинг на Keeper-е и прямой fetch на Soul-е реализуются в MVP-2.
+// ScopedVaultToken is an ephemeral scoped Vault token for delegate=true (MVP-2):
+// Soul talks to Vault directly with this token. Only the contract is introduced
+// now — minting on Keeper and direct fetch on Soul are implemented in MVP-2.
 message ScopedVaultToken {
-  // SENSITIVE: never log. Сам Vault-токен.
+  // SENSITIVE: never log. The Vault token itself.
   string token = 1;
 
-  // TTL токена. Формат — convention `duration` Soul Stack (Go-duration "5m" и т.п.).
+  // Token TTL. Format is Soul Stack's `duration` convention (Go-duration "5m", etc.).
   string ttl = 2;
 
-  // num_uses токена (число допустимых использований до самоотзыва Vault-ом).
+  // Token num_uses (how many times it may be used before Vault self-revokes it).
   int32 num_uses = 3;
 }
 
-// ScopedStaticCred — scoped read-only static credential для delegate=true
-// (MVP-2): pre-scoped read-key для prometheus/elk, Soul делает прямой
-// read-only-запрос. Сейчас вводится ТОЛЬКО контракт (см. ScopedVaultToken).
+// ScopedStaticCred is a scoped read-only static credential for delegate=true
+// (MVP-2): a pre-scoped read key for prometheus/elk, Soul makes a direct
+// read-only request. Only the contract is introduced now (see ScopedVaultToken).
 message ScopedStaticCred {
-  // SENSITIVE: never log. Сам credential (pre-scoped read-key).
+  // SENSITIVE: never log. The credential itself (pre-scoped read key).
   string credential = 1;
 }
 
-// AugurReply — ответ Keeper → Soul на AugurRequest. Едет only-add в
-// FromKeeper.oneof существующего EventStream-а.
+// AugurReply is Keeper -> Soul's response to AugurRequest. Rides only-add in the
+// existing EventStream's FromKeeper.oneof.
 message AugurReply {
-  // Эхо AugurRequest.request_id для корреляции.
+  // Echo of AugurRequest.request_id for correlation.
   string request_id = 1;
 
   AugurStatus status = 2;
 
-  // Человекочитаемая причина для DENIED/ERROR (для логов/диагностики Soul-а).
-  // Пусто при OK.
+  // Human-readable reason for DENIED/ERROR (for Soul's logs/diagnostics).
+  // Empty when OK.
   string error = 3;
 
-  // result заполнен только при status = OK. Ветвь выбирается на Keeper-е по
-  // delegate / source_type соответствующего Rite (ADR-025).
+  // result is populated only when status = OK. The branch is picked on Keeper by
+  // the matching Rite's delegate / source_type (ADR-025).
   oneof result {
-    // delegate=false (MVP-1): Keeper сам сходил в Omen и вернул данные inline.
+    // delegate=false (MVP-1): Keeper queried the Omen itself and returned data inline.
     google.protobuf.Struct inline_data = 4;
 
-    // delegate=true + vault (MVP-2): эфемерный scoped Vault-токен.
+    // delegate=true + vault (MVP-2): an ephemeral scoped Vault token.
     ScopedVaultToken scoped_vault_token = 5;
 
-    // delegate=true + prometheus/elk (MVP-2): scoped read-only static cred.
+    // delegate=true + prometheus/elk (MVP-2): a scoped read-only static cred.
     ScopedStaticCred scoped_static_cred = 6;
   }
 }

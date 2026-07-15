@@ -16,9 +16,9 @@ import (
 	"google.golang.org/grpc"
 )
 
-// shortSockPath — Unix-socket-имена на darwin ограничены ~104 байтами sun_path,
-// поэтому стандартный t.TempDir() (под /var/folders/...) не подходит.
-// Создаём временный каталог под /tmp с коротким суффиксом и подчищаем сами.
+// shortSockPath — Unix-socket names on darwin are limited to ~104 bytes of
+// sun_path, so the standard t.TempDir() (under /var/folders/...) doesn't fit.
+// We create a temp dir under /tmp with a short suffix and clean it up ourselves.
 func shortSockPath(t *testing.T, name string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ss-hs-")
@@ -105,8 +105,8 @@ func TestServeMissingAddress(t *testing.T) {
 	}
 }
 
-// TestServeAddressFromEnv проверяет, что Address по умолчанию резолвится из
-// env-var SOUL_PLUGIN_SOCKET и сокет действительно поднят.
+// TestServeAddressFromEnv checks that Address defaults to resolving from the
+// SOUL_PLUGIN_SOCKET env var and that the socket actually comes up.
 func TestServeAddressFromEnv(t *testing.T) {
 	addr := shortSockPath(t, "x.sock")
 	t.Setenv(SocketEnv, addr)
@@ -146,7 +146,7 @@ func TestServeAddressFromEnv(t *testing.T) {
 	}
 }
 
-// TestServeExplicitAddressOverridesEnv — Config.Address имеет приоритет.
+// TestServeExplicitAddressOverridesEnv checks that Config.Address takes priority.
 func TestServeExplicitAddressOverridesEnv(t *testing.T) {
 	envAddr := shortSockPath(t, "env.sock")
 	explicitAddr := shortSockPath(t, "explicit.sock")
@@ -174,8 +174,9 @@ func TestServeExplicitAddressOverridesEnv(t *testing.T) {
 	<-doneCh
 }
 
-// TestServeShutdownGraceTriggersHardStop — открытый клиентский коннект
-// удерживал бы GracefulStop, но короткий grace заставляет SDK перейти на Stop.
+// TestServeShutdownGraceTriggersHardStop checks that an open client connection
+// would normally hold up GracefulStop, but a short grace forces the SDK over
+// to Stop instead.
 func TestServeShutdownGraceTriggersHardStop(t *testing.T) {
 	addr := shortSockPath(t, "x.sock")
 
@@ -215,7 +216,7 @@ func TestServeShutdownGraceTriggersHardStop(t *testing.T) {
 	}
 }
 
-// safeBuffer — thread-safe bytes.Buffer для приёма stdout из goroutine.
+// safeBuffer is a thread-safe bytes.Buffer for receiving stdout from a goroutine.
 type safeBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

@@ -22,7 +22,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// TaskStatus — финальный статус одной задачи. Соответствует DSL-ядру register.<name>.*.
+// TaskStatus is one task's final status. Corresponds to DSL core register.<name>.*.
 type TaskStatus int32
 
 const (
@@ -30,9 +30,9 @@ const (
 	TaskStatus_TASK_STATUS_OK          TaskStatus = 1 // changed=false, failed=false
 	TaskStatus_TASK_STATUS_CHANGED     TaskStatus = 2 // changed=true, failed=false
 	TaskStatus_TASK_STATUS_FAILED      TaskStatus = 3 // failed=true
-	TaskStatus_TASK_STATUS_TIMED_OUT   TaskStatus = 4 // timed_out=true (является частным случаем failed)
-	TaskStatus_TASK_STATUS_SKIPPED     TaskStatus = 5 // задача пропущена по requisite/условию (onchanges/when/onfail/require) — не выполнялась
-	TaskStatus_TASK_STATUS_CANCELLED   TaskStatus = 6 // прервана по CancelApply от Keeper-а (см. CancelApply / RunStatus.CANCELLED)
+	TaskStatus_TASK_STATUS_TIMED_OUT   TaskStatus = 4 // timed_out=true (a special case of failed)
+	TaskStatus_TASK_STATUS_SKIPPED     TaskStatus = 5 // task skipped by a requisite/condition (onchanges/when/onfail/require) — never ran
+	TaskStatus_TASK_STATUS_CANCELLED   TaskStatus = 6 // aborted by Keeper's CancelApply (see CancelApply / RunStatus.CANCELLED)
 )
 
 // Enum value maps for TaskStatus.
@@ -84,7 +84,7 @@ func (TaskStatus) EnumDescriptor() ([]byte, []int) {
 	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{0}
 }
 
-// RunStatus — финальный статус всего прогона.
+// RunStatus is the whole run's final status.
 type RunStatus int32
 
 const (
@@ -140,140 +140,147 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 	return file_keeper_v1_apply_proto_rawDescGZIP(), []int{1}
 }
 
-// RenderedTask — задача после Keeper-side рендера (CEL и text/template-фазы УЖЕ применены, ADR-010, ADR-012(d)).
-// Soul только исполняет, не рендерит.
+// RenderedTask is a task after Keeper-side rendering (CEL and text/template phases
+// already applied, ADR-010, ADR-012(d)). Soul only executes it, never renders.
 type RenderedTask struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Имя задачи из destiny/scenario.
+	// Task name from destiny/scenario.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Адресация модуля: <namespace>.<module>.<state>, например "core.pkg.installed".
+	// Module address: <namespace>.<module>.<state>, e.g. "core.pkg.installed".
 	Module string `protobuf:"bytes,2,opt,name=module,proto3" json:"module,omitempty"`
-	// Параметры модуля после рендера, типизированы согласно манифесту модуля.
+	// Module params after render, typed per the module's manifest.
 	Params *structpb.Struct `protobuf:"bytes,3,opt,name=params,proto3" json:"params,omitempty"`
-	// Если true — Soul не логирует params и output этой задачи (DSL-ядро no_log:, см. destiny/tasks.md).
+	// If true, Soul does not log this task's params and output (DSL core no_log:, see destiny/tasks.md).
 	NoLog bool `protobuf:"varint,4,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
-	// Per-task жёсткий лимит на одну попытку Apply (DSL-ядро timeout:, destiny/tasks.md §9).
-	// Формат — convention `duration` Soul Stack (Go-duration "30s"/"5m"/"1h30m"
-	// ИЛИ суффикс `<N>d`, см. docs/keeper/config.md → «Конвенции типов»); пусто =
-	// нет per-task лимита (действует только scenario-ceiling).
-	// Формат валидируется при ПАРСЕ destiny/scenario (config-валидатор);
-	// render/dispatch протягивают строку как есть, без повторной проверки. Soul
-	// re-парсит тем же config.ParseDuration и при истечении ставит
-	// TaskEvent.status = TASK_STATUS_TIMED_OUT (неположительная duration = «нет лимита»).
+	// Per-task hard limit on a single Apply attempt (DSL core timeout:, destiny/tasks.md §9).
+	// Format is Soul Stack's `duration` convention (Go-duration "30s"/"5m"/"1h30m",
+	// or a `<N>d` suffix — see docs/keeper/config.md → "Type conventions"); empty =
+	// no per-task limit (only the scenario ceiling applies).
+	// Format is validated when destiny/scenario is PARSED (config validator);
+	// render/dispatch pass the string through unchanged. Soul re-parses it with the
+	// same config.ParseDuration and, on expiry, sets TaskEvent.status =
+	// TASK_STATUS_TIMED_OUT (a non-positive duration means "no limit").
 	Timeout string `protobuf:"bytes,5,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	// Индексы задач-источников для DSL-ядра `onchanges:` (destiny/tasks.md §8):
-	// ссылаются на позицию RenderedTask в ApplyRequest.tasks[] (= TaskEvent.task_idx).
-	// Keeper-side резолвит register-имена `onchanges:` в эти индексы (Variant A:
-	// имена резолвятся на Keeper-е, Soul оперирует только индексами — проще на
-	// Soul, корректно для MVP single-host; cross-host onchanges — отдельной
-	// работой позже). Семантика gating: задача исполняется, только если хотя бы
-	// у одного из перечисленных источников register.changed == true; пусто =
-	// безусловный запуск.
+	// Source-task indices for DSL core `onchanges:` (destiny/tasks.md §8): they
+	// reference a RenderedTask's position in ApplyRequest.tasks[] (= TaskEvent.task_idx).
+	// Keeper-side resolves `onchanges:` register names into these indices (Variant A:
+	// names are resolved on Keeper, Soul only deals with indices — simpler for Soul,
+	// correct for single-host MVP; cross-host onchanges is separate future work).
+	// Gating semantics: the task runs only if at least one listed source has
+	// register.changed == true; empty = unconditional run.
 	OnchangesIdx []int32 `protobuf:"varint,6,rep,packed,name=onchanges_idx,json=onchangesIdx,proto3" json:"onchanges_idx,omitempty"`
-	// when — CEL-предикат gating ДО Apply (destiny/tasks.md §9). Soul вычисляет
-	// ПЕРЕД вызовом mod.Apply: false → задача SKIPPED (Apply не вызывается); пусто
-	// = безусловный запуск. Связка с onchanges — AND (исполняется только при
+	// when: CEL predicate gating BEFORE Apply (destiny/tasks.md §9). Soul evaluates
+	// it BEFORE calling mod.Apply: false -> task SKIPPED (Apply is not called); empty
+	// = unconditional run. Combines with onchanges via AND (runs only when
 	// when && onchanges-satisfied).
 	When string `protobuf:"bytes,7,opt,name=when,proto3" json:"when,omitempty"`
-	// changed_when — CEL-предикат override register.self.changed, вычисляется
-	// ПОСЛЕ Apply (destiny/tasks.md §9). Keeper протягивает CEL-строкой, Soul
-	// вычисляет sandboxed-движком после module.Apply: true → задача CHANGED, false
-	// → changed снимается (классический `changed_when: false` на probe). НЕ трогает
-	// failed.
+	// changed_when: CEL predicate overriding register.self.changed, evaluated
+	// AFTER Apply (destiny/tasks.md §9). Keeper passes it through as a CEL string,
+	// Soul evaluates it in the sandboxed engine after module.Apply: true -> task
+	// CHANGED, false -> changed is cleared (the classic `changed_when: false` on a
+	// probe). Does NOT touch failed.
 	ChangedWhen string `protobuf:"bytes,8,opt,name=changed_when,json=changedWhen,proto3" json:"changed_when,omitempty"`
-	// failed_when — CEL-предикат override register.self.failed, вычисляется ПОСЛЕ
-	// Apply (destiny/tasks.md §9). Keeper протягивает CEL-строкой, Soul вычисляет
-	// sandboxed-движком после changed_when: true при OK-модуле → FAILED (искусственный
-	// провал по бизнес-условию); `failed_when: "false"` при упавшем модуле = ignore_errors
-	// (статус НЕ FAILED, исходная ошибка сохраняется в register.self.ignored_error и
-	// TaskEvent.error информационно, прогон не ломается). НЕ применяется к TIMED_OUT —
-	// таймаут инфраструктурный, остаётся терминальным fail-stop.
+	// failed_when: CEL predicate overriding register.self.failed, evaluated AFTER
+	// Apply (destiny/tasks.md §9). Keeper passes it through as a CEL string, Soul
+	// evaluates it in the sandboxed engine after changed_when: true on an otherwise-OK
+	// module -> FAILED (an artificial failure on a business condition); `failed_when:
+	// "false"` on a failed module = ignore_errors (status stays NOT FAILED, the
+	// original error is kept in register.self.ignored_error and TaskEvent.error for
+	// information, the run doesn't break). Not applied to TIMED_OUT — a timeout is
+	// infrastructural and remains a terminal fail-stop.
 	FailedWhen string `protobuf:"bytes,9,opt,name=failed_when,json=failedWhen,proto3" json:"failed_when,omitempty"`
-	// flow_context — литеральный per-host снапшот НЕ-register части CEL-контекста
-	// flow-control-предикатов: { input, vars, essence, incarnation, self }. Keeper
-	// собирает его на CEL-фазе (то же, что для рендера params, МИНУС soulprint.hosts
-	// и loop), Soul читает как ДАННЫЕ (не код): биндит soulprint.self ← flow_context.self,
-	// остальное — top-level переменными активации. Host-вариативен (self per-host),
-	// исключён из per-host-сверки host-инвариантности params.
+	// flow_context: a literal per-host snapshot of the non-register part of the
+	// flow-control predicates' CEL context: { input, vars, essence, incarnation, self }.
+	// Keeper builds it in the CEL phase (same as for rendering params, MINUS
+	// soulprint.hosts and loop), Soul reads it as DATA (not code): binds
+	// soulprint.self <- flow_context.self, the rest becomes top-level activation
+	// variables. Varies per host (self is per-host), so it's excluded from the
+	// per-host params host-invariance check.
 	FlowContext *structpb.Struct `protobuf:"bytes,10,opt,name=flow_context,json=flowContext,proto3" json:"flow_context,omitempty"`
-	// onfail_idx — индексы задач-источников DSL-ядра `onfail:` (destiny/tasks.md §8):
-	// ссылаются на позицию RenderedTask в ApplyRequest.tasks[] (= TaskEvent.task_idx),
-	// зеркало onchanges_idx. Keeper-side резолвит register-имена `onfail:` в эти
-	// индексы (Variant A, как onchanges_idx). Семантика gating: задача исполняется,
-	// ТОЛЬКО если хотя бы у одного из перечисленных источников register.failed == true
-	// (TIMED_OUT — частный случай failed, тоже триггерит); пусто = не-onfail-задача
-	// (gating не применяется). onfail-задача (rescue/cleanup) — единственное, что
-	// исполняется после первого провала прогона: см. изменение fail-stop в
-	// applyrunner.Run (failed-задача больше не делает немедленный break, но прогон
-	// остаётся FAILED — onfail это cleanup, а не отмена провала).
+	// onfail_idx: source-task indices for DSL core `onfail:` (destiny/tasks.md §8):
+	// reference a RenderedTask's position in ApplyRequest.tasks[] (= TaskEvent.task_idx),
+	// mirroring onchanges_idx. Keeper-side resolves `onfail:` register names into
+	// these indices (Variant A, same as onchanges_idx). Gating semantics: the task
+	// runs ONLY if at least one listed source has register.failed == true
+	// (TIMED_OUT is a special case of failed and also triggers it); empty = not an
+	// onfail task (no gating applied). An onfail task (rescue/cleanup) is the only
+	// thing that still runs after the run's first failure: see the fail-stop change
+	// in applyrunner.Run (a failed task no longer breaks immediately, but the run
+	// still ends FAILED — onfail is cleanup, not an undo of the failure).
 	OnfailIdx []int32 `protobuf:"varint,12,rep,packed,name=onfail_idx,json=onfailIdx,proto3" json:"onfail_idx,omitempty"`
-	// until — CEL-предикат выхода из retry-петли (DSL-ядро retry.until,
-	// destiny/tasks.md §9). Soul-side, та же sandboxed-песочница, что и failed_when
-	// (shared/cel.NewFlowControl). Вычисляется ПОСЛЕ каждой попытки (после
-	// changed_when/failed_when override): true → выход из петли (финальный статус =
-	// статус попытки КАК ЕСТЬ, until НЕ override-ит failed); false → пауза retry_delay
-	// и следующая попытка. После retry_count попыток с until-false → задача FAILED
-	// (код flowcontrol.until_exhausted), ДАЖЕ если последняя попытка OK/CHANGED.
-	// Пусто = until-условие не задано (retry-петля управляется только статусом
-	// попытки). На TIMED_OUT-попытке until НЕ вычисляется (таймаут — «неуспех,
-	// повторить если попытки остались»).
+	// until: CEL predicate for exiting the retry loop (DSL core retry.until,
+	// destiny/tasks.md §9). Soul-side, same sandboxed engine as failed_when
+	// (shared/cel.NewFlowControl). Evaluated AFTER each attempt (after the
+	// changed_when/failed_when override): true -> exit the loop (final status = the
+	// attempt's status AS-IS, until does NOT override failed); false -> wait
+	// retry_delay and try again. After retry_count attempts all with until=false ->
+	// task FAILED (code flowcontrol.until_exhausted), EVEN if the last attempt was
+	// OK/CHANGED. Empty = no until condition (the retry loop is driven only by
+	// attempt status). until is NOT evaluated on a TIMED_OUT attempt (a timeout is
+	// "failure, retry if attempts remain").
 	Until string `protobuf:"bytes,11,opt,name=until,proto3" json:"until,omitempty"`
-	// retry_count — максимум попыток ВКЛЮЧАЯ первую (DSL-ядро retry.count,
-	// destiny/tasks.md §9). 0/1/пусто = одна попытка (обратная совместимость:
-	// поведение как без retry). БЕЗ until: повтор пока попытка FAILED/TIMED_OUT,
-	// первый не-FAILED исход (OK/CHANGED) → выход; все исчерпаны → финальный статус
-	// ПОСЛЕДНЕЙ попытки (FAILED или TIMED_OUT — НЕ схлопывается в FAILED). С until:
-	// см. поле until.
+	// retry_count: max attempts INCLUDING the first (DSL core retry.count,
+	// destiny/tasks.md §9). 0/1/empty = a single attempt (backward compatible:
+	// behaves as without retry). WITHOUT until: retries while the attempt is
+	// FAILED/TIMED_OUT, the first non-FAILED outcome (OK/CHANGED) exits; once
+	// exhausted, the final status is the LAST attempt's status (FAILED or
+	// TIMED_OUT — not collapsed into FAILED). With until: see the until field.
 	RetryCount int32 `protobuf:"varint,14,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
-	// retry_delay — пауза между попытками (DSL-ядро retry.delay, destiny/tasks.md §9).
-	// Формат — convention `duration` Soul Stack (как timeout=5: Go-duration "10s"/"5m"
-	// ИЛИ суффикс `<N>d`), Soul парсит тем же config.ParseDuration. Пусто/невалид =
-	// default 5s. Применяется ТОЛЬКО между попытками (не перед первой, не после
-	// последней) и прерывается отменой прогона (CancelApply). В per-task timeout НЕ
-	// входит — отдельного ceiling на всю петлю нет.
+	// retry_delay: pause between attempts (DSL core retry.delay, destiny/tasks.md §9).
+	// Format is Soul Stack's `duration` convention (like timeout=5: Go-duration
+	// "10s"/"5m", or a `<N>d` suffix), Soul parses it with the same
+	// config.ParseDuration. Empty/invalid = default 5s. Applied ONLY between
+	// attempts (not before the first, not after the last) and is interrupted by run
+	// cancellation (CancelApply). Not counted in the per-task timeout — there's no
+	// separate ceiling for the whole loop.
 	RetryDelay string `protobuf:"bytes,15,opt,name=retry_delay,json=retryDelay,proto3" json:"retry_delay,omitempty"`
-	// register — register-имя результата задачи (destiny/tasks.md §6, register:).
-	// Soul строит registerByName[register] = register-payload, чтобы flow-control-
-	// предикаты последующих задач писали `register.<name>.*`. Пусто = задача не
-	// регистрирует результат под именем (доступна только своим idx). Отличается от
-	// TaskEvent.register_data: то — payload, это — ИМЯ, под которым он адресуется.
+	// register: the register name for this task's result (destiny/tasks.md §6,
+	// register:). Soul builds registerByName[register] = register payload, so later
+	// tasks' flow-control predicates can reference `register.<name>.*`. Empty = the
+	// task doesn't register a result under a name (only reachable by its own idx).
+	// Distinct from TaskEvent.register_data: that's the payload, this is the NAME it's
+	// addressed by.
 	Register string `protobuf:"bytes,13,opt,name=register,proto3" json:"register,omitempty"`
-	// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс задачи в ПОЛНОМ плане прогона (по
-	// ВСЕМ Passage staged-render, ADR-056), = RenderedTask.Index на Keeper-е
-	// (pipeline.go). В отличие от позиции в ApplyRequest.tasks[] (она ЛОКАЛЬНА:
-	// подмножество задач одного Passage, отфильтрованное per-host через where:),
-	// plan_index уникален по всему плану И не зависит от per-host where: — это
-	// стабильный ключ register-корреляции на Keeper-е (apply_task_register.plan_index,
-	// миграция 079). Soul эхает его в TaskEvent.plan_index; для register-резолва
-	// (buildRegisterByHost) Keeper мапит nameByIdx[Index] против plan_index, а НЕ
-	// против локального task_idx — иначе при passage>0 или разном per-host where:
-	// имена разъезжаются (latent-баг task_idx-коллизии, ADR-056 §S1 fix Variant B).
+	// plan_index: the task's GLOBAL index across the FULL run plan (spanning ALL
+	// Passages of the staged render, ADR-056) = RenderedTask.Index on Keeper
+	// (pipeline.go). Unlike the position in ApplyRequest.tasks[] (which is LOCAL: a
+	// subset of one Passage's tasks, filtered per-host via where:), plan_index is
+	// unique across the whole plan AND independent of per-host where: — it's the
+	// stable key for register correlation on Keeper (apply_task_register.plan_index,
+	// migration 079). Soul echoes it back in TaskEvent.plan_index; for register
+	// resolution (buildRegisterByHost) Keeper maps nameByIdx[Index] against
+	// plan_index, NOT against the local task_idx — otherwise names drift apart when
+	// passage > 0 or per-host where: differs (a latent task_idx collision bug,
+	// ADR-056 §S1 fix Variant B).
 	//
-	// 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (один Passage, локальный==глобальный):
-	// forward-compat (ADR-012(c) only-add). Для N=1 plan_index==task_idx, корреляция
-	// совпадает с прежним поведением БИТ-В-БИТ. Только never-reuse номера поля.
+	// 0/empty = an old Soul with no echo, OR an N=1 run (single Passage, local ==
+	// global): forward-compat (ADR-012(c) only-add). For N=1, plan_index == task_idx,
+	// so correlation matches prior behavior bit-for-bit. Never reuse this field number.
 	PlanIndex int32 `protobuf:"varint,16,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
-	// aggregate_of — локальные позиции дочерних задач (в ЭТОМ ApplyRequest.tasks[],
-	// как onchanges_idx/onfail_idx) одной applier-задачи (`apply:`+`register:`),
-	// итог которой агрегирует ТЕРМИНАЛЬНАЯ синтетическая задача `core.noop.run` с
-	// этим полем (orchestration.md §2.1.1, материализация applier-register, Вариант B).
+	// aggregate_of: local positions (in THIS ApplyRequest.tasks[], like
+	// onchanges_idx/onfail_idx) of the child tasks of one applier task
+	// (`apply:`+`register:`), whose combined outcome is aggregated by the TERMINAL
+	// synthetic `core.noop.run` task carrying this field (orchestration.md §2.1.1,
+	// applier-register materialization, Variant B).
 	//
-	// Зачем: при `apply: destiny` + `register: X` сам register.X должен отражать
-	// СВОДНЫЙ итог destiny-прогона (`.changed = OR(child.changed)`, аналогично
-	// failed/timed_out), чтобы внешний `onchanges: [X]` / `when: register.X.changed`
-	// резолвился. Keeper материализует это синтетической `core.noop.run` (Register=X)
-	// ПОСЛЕ всех дочерних задач этой applier; Soul строит её register_data НЕ из
-	// ApplyEvent (noop тривиально changed=false), а агрегатом по индексам отсюда:
-	// `changed = OR(registerByIdx[i].changed)`, аналогично failed/timed_out. Терминал
-	// последний в группе → все дочерние уже в registerByIdx на момент его исполнения.
+	// Why: for `apply: destiny` + `register: X`, register.X itself must reflect the
+	// COMBINED outcome of the destiny run (`.changed = OR(child.changed)`, likewise
+	// for failed/timed_out), so an external `onchanges: [X]` / `when: register.X.changed`
+	// can resolve. Keeper materializes this as a synthetic `core.noop.run` (Register=X)
+	// AFTER all of that applier's child tasks; Soul builds its register_data not from
+	// an ApplyEvent (a noop is trivially changed=false) but by aggregating over these
+	// indices: `changed = OR(registerByIdx[i].changed)`, likewise for failed/timed_out.
+	// The terminal is last in the group, so all children are already in registerByIdx
+	// by the time it runs.
 	//
-	// Индексы РЕМАПЯТСЯ global→local при сборке ApplyRequest (ToProtoTasks,
-	// remapRequisites), как onchanges_idx: они ссылаются на ЛОКАЛЬНУЮ позицию в
-	// tasks[] этого среза. Отфильтрованный where:/cross-passage источник кодируется
-	// sentinel-ом (-1) — Soul трактует его как changed/failed=false (вклад в OR нулевой).
+	// Indices are REMAPPED global->local when the ApplyRequest is assembled
+	// (ToProtoTasks, remapRequisites), same as onchanges_idx: they reference the
+	// LOCAL position in this slice's tasks[]. A source filtered out by where:/across
+	// passages is encoded with a sentinel (-1) — Soul treats it as changed/failed=false
+	// (zero contribution to the OR).
 	//
-	// Пусто = задача не агрегирует (обычная задача / applier БЕЗ register:):
-	// forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+	// Empty = the task doesn't aggregate (a regular task, or an applier WITHOUT
+	// register:): forward-compat (ADR-012(c) only-add). Never reuse this field number.
 	AggregateOf   []int32 `protobuf:"varint,17,rep,packed,name=aggregate_of,json=aggregateOf,proto3" json:"aggregate_of,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -428,55 +435,59 @@ func (x *RenderedTask) GetAggregateOf() []int32 {
 	return nil
 }
 
-// ApplyRequest — команда Keeper → Soul на выполнение прогона.
+// ApplyRequest is Keeper -> Soul's command to run a job.
 type ApplyRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// ULID, уникальный идентификатор прогона.
+	// ULID, the run's unique identifier.
 	ApplyId string `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// План задач после Keeper-side рендера.
+	// The task plan after Keeper-side rendering.
 	Tasks []*RenderedTask `protobuf:"bytes,2,rep,name=tasks,proto3" json:"tasks,omitempty"`
-	// W3C traceparent родительского span-а grpc.apply_dispatch. Soul извлекает его и
-	// стартует apply.run как child (ADR-024 cross-process trace-propagation).
+	// W3C traceparent of the parent grpc.apply_dispatch span. Soul extracts it and
+	// starts apply.run as a child span (ADR-024 cross-process trace propagation).
 	TraceContext string `protobuf:"bytes,3,opt,name=trace_context,json=traceContext,proto3" json:"trace_context,omitempty"`
-	// attempt — fencing-epoch прогона на этом хосте (ADR-027(g), Phase 2). Echo из
-	// apply_runs.attempt на момент claim: ClaimNext инкрементит его при каждом
-	// захвате Ward, поэтому пере-claim протухшего задания (recovery-скан вернул его
-	// planned → новый claim) приезжает с БОЛЬШИМ attempt, чем оригинал.
+	// attempt: this run's fencing epoch on this host (ADR-027(g), Phase 2). Echoed
+	// from apply_runs.attempt at claim time: ClaimNext increments it on every Ward
+	// acquisition, so re-claiming a stale job (a recovery scan returned it to
+	// planned -> new claim) arrives with a LARGER attempt than the original.
 	//
-	// Soul-side guard (runtime.ApplyRunner.AcceptAttempt) отвергает ApplyRequest с
-	// attempt < последнего виденного для этого apply_id — это отсекает stale-дубль
-	// (мёртвый Ward, чей apply ещё в полёте), не полагаясь на идемпотентность
-	// модулей. Барьер Keeper-а закрывает оригинальный (больший attempt) своим
-	// RunResult; отвергнутый дубль молча дропается (ADR-027 barrier-B1).
+	// The Soul-side guard (runtime.ApplyRunner.AcceptAttempt) rejects any
+	// ApplyRequest with attempt < the last one seen for this apply_id — this filters
+	// out a stale duplicate (a dead Ward whose apply is still in flight) without
+	// relying on module idempotency. Keeper's barrier closes out the original
+	// (larger-attempt) run with its RunResult; the rejected duplicate is silently
+	// dropped (ADR-027 barrier-B1).
 	//
-	// 0/пусто = старый Keeper без fencing (forward-compat, ADR-012(c) only-add):
-	// guard такой запрос НЕ отвергает (fencing деградирует до защиты по apply_id +
-	// SID-lease). Только never-reuse: новый номер поля при breaking change.
+	// 0/empty = an old Keeper without fencing (forward-compat, ADR-012(c) only-add):
+	// the guard does NOT reject such a request (fencing degrades to apply_id +
+	// SID-lease protection only). Never reuse this number: a breaking change gets a
+	// new field number.
 	Attempt int32 `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	// passage — индекс Passage (0-based) staged-render, к которому относится это
-	// задание (ADR-056). Прогон сценария исполняется как N≥1 упорядоченных Passage
-	// (render → dispatch → barrier → сбор register); этот ApplyRequest несёт
-	// подмножество задач ОДНОГО Passage. Корреляция per-Passage задания с его
-	// терминалом — по (apply_id, sid, passage) (echo в TaskEvent/RunResult).
+	// passage: the 0-based staged-render Passage index this job belongs to
+	// (ADR-056). A scenario run executes as N>=1 ordered Passages (render ->
+	// dispatch -> barrier -> register collection); this ApplyRequest carries a
+	// subset of tasks from ONE Passage. A per-Passage job correlates with its
+	// terminal by (apply_id, sid, passage) (echoed in TaskEvent/RunResult).
 	//
-	// 0/пусто = единственный Passage (forward-compat, ADR-012(c) only-add):
-	// N=1-сценарий (без register-зависимостей) и старый Keeper без поля шлют
-	// passage=0 — поведение БИТ-В-БИТ как до staged-render (один проход). Soul
-	// эхает passage в TaskEvent/RunResult как есть. Только never-reuse номера поля.
-	// Стратификация на N>1 и stage-loop — S2/S3; S1 несёт только транспорт+схему.
+	// 0/empty = a single Passage (forward-compat, ADR-012(c) only-add): an N=1
+	// scenario (no register dependencies) and an old Keeper without this field both
+	// send passage=0 — behavior matches pre-staged-render bit-for-bit (a single
+	// pass). Soul echoes passage back in TaskEvent/RunResult unchanged. Never reuse
+	// this field number. Stratifying into N>1 and the stage loop is S2/S3; S1 only
+	// carries the transport + schema.
 	Passage int32 `protobuf:"varint,6,opt,name=passage,proto3" json:"passage,omitempty"`
-	// dry_run — режим Scry (ADR-031): Soul НЕ применяет задачи, а для каждой зовёт
-	// SoulModule.Plan (pure-read, НЕ мутирует хост) и собирает машинный
-	// PlanEvent.changed — «Apply изменил бы ресурс?» (drift). Хост ничего не
-	// меняет: на dry_run module.Apply физически не вызывается (read-only гарантия
-	// структурная, не «модуль обещал»). Default-deny: для задачи, чей модуль не
-	// объявил read-safe-capability (custom-плагин / non-core), Plan НЕ вызывается —
-	// задача получает явный отказ «drift не поддержан», не ложное clean.
+	// dry_run: Scry mode (ADR-031): Soul does NOT apply tasks; instead it calls
+	// SoulModule.Plan for each one (pure-read, does NOT mutate the host) and
+	// collects a machine-readable PlanEvent.changed — "would Apply change this
+	// resource?" (drift). The host is left untouched: module.Apply is never
+	// physically called on dry_run (the read-only guarantee is structural, not "the
+	// module promised"). Default-deny: for a task whose module hasn't declared a
+	// read-safe capability (custom plugin / non-core), Plan is NOT called — the
+	// task gets an explicit "drift not supported" refusal instead of a false clean.
 	//
-	// false/пусто = обычный apply (forward-compat, ADR-012(c) only-add): старый
-	// Keeper поля не шлёт → Soul исполняет прогон как раньше. Только never-reuse
-	// номера поля. Slice A несёт только транспорт+soul-механику; keeper-side
-	// check-drift flow (что именно dry-run-ить) — Slice B.
+	// false/empty = a regular apply (forward-compat, ADR-012(c) only-add): an old
+	// Keeper that doesn't send this field means Soul runs as before. Never reuse
+	// this field number. Slice A only carries the transport + soul mechanics;
+	// the keeper-side check-drift flow (what exactly to dry-run) is Slice B.
 	DryRun        bool `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -554,40 +565,43 @@ func (x *ApplyRequest) GetDryRun() bool {
 	return false
 }
 
-// TaskEvent — финальный результат одной задачи (агрегация на Soul-е после завершения
-// SoulModule sub-process-а). Прогресс long-running шагов в MVP не передаётся (post-MVP).
+// TaskEvent is one task's final result (aggregated on Soul after the SoulModule
+// sub-process finishes). Progress for long-running steps isn't sent in the MVP
+// (post-MVP).
 type TaskEvent struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	ApplyId string                 `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// Индекс задачи в ApplyRequest.tasks[].
+	// Task index in ApplyRequest.tasks[].
 	TaskIdx int32      `protobuf:"varint,2,opt,name=task_idx,json=taskIdx,proto3" json:"task_idx,omitempty"`
 	Status  TaskStatus `protobuf:"varint,3,opt,name=status,proto3,enum=soulstack.keeper.v1.TaskStatus" json:"status,omitempty"`
-	// register-payload: DSL-ядро (.changed/.failed/.timed_out) + декларированные в destiny output:-поля.
+	// register payload: DSL core (.changed/.failed/.timed_out) + fields declared via destiny output:.
 	RegisterData *structpb.Struct `protobuf:"bytes,4,opt,name=register_data,json=registerData,proto3" json:"register_data,omitempty"`
-	// Заполнено только при status = FAILED или TIMED_OUT.
+	// Populated only when status = FAILED or TIMED_OUT.
 	Error *TaskError `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	// Эхо RenderedTask.no_log — keeper-side audit-suppression по этому флагу
-	// (multi-Keeper-safe: TaskEvent мог прийти не на тот инстанс, что держит
-	// []RenderedTask). При true keeper не пишет register_data/error.message в audit.
+	// Echo of RenderedTask.no_log — drives keeper-side audit suppression via this
+	// flag (multi-Keeper-safe: the TaskEvent may land on a different instance than
+	// the one holding []RenderedTask). When true, keeper does not write
+	// register_data/error.message to the audit log.
 	NoLog bool `protobuf:"varint,6,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
-	// passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
-	// которому принадлежит задача. Soul возвращает его как есть. Keeper копит
-	// register per-(apply_id, sid, passage): render следующего Passage читает
-	// register предыдущих (staged-render). 0/пусто = единственный Passage
-	// (forward-compat, ADR-012(c) only-add) — поведение как до staged-render.
-	// Только never-reuse номера поля.
+	// passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
+	// this task belongs to. Soul returns it unchanged. Keeper accumulates register
+	// per (apply_id, sid, passage): rendering the next Passage reads the previous
+	// Passages' register (staged render). 0/empty = a single Passage
+	// (forward-compat, ADR-012(c) only-add) — behaves as before staged render.
+	// Never reuse this field number.
 	Passage int32 `protobuf:"varint,7,opt,name=passage,proto3" json:"passage,omitempty"`
-	// plan_index — эхо RenderedTask.plan_index (ADR-056 §S1 fix Variant B):
-	// ГЛОБАЛЬНЫЙ сквозной индекс задачи в полном плане прогона (по всем Passage),
-	// которым Keeper корелирует register-данные (apply_task_register.plan_index,
-	// миграция 079). Soul берёт его из req.Tasks[idx].plan_index и эхает как есть —
-	// task_idx (field 2) остаётся ЛОКАЛЬНОЙ позицией в ApplyRequest.tasks[] (его
-	// семантика НЕ меняется: онлайн-gating onchanges_idx/onfail_idx ссылается на
-	// локальный индекс среза). plan_index — отдельный глобальный ключ для
-	// Keeper-side register-корреляции через Passage.
+	// plan_index: echo of RenderedTask.plan_index (ADR-056 §S1 fix Variant B): the
+	// task's GLOBAL index across the full run plan (spanning all Passages), used by
+	// Keeper to correlate register data (apply_task_register.plan_index, migration
+	// 079). Soul takes it from req.Tasks[idx].plan_index and echoes it back
+	// unchanged — task_idx (field 2) remains the LOCAL position in
+	// ApplyRequest.tasks[] (its semantics don't change: the online
+	// onchanges_idx/onfail_idx gating still refers to the local slice index).
+	// plan_index is a separate global key for Keeper-side register correlation
+	// across Passages.
 	//
-	// 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (plan_index==task_idx):
-	// forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+	// 0/empty = an old Soul with no echo, OR an N=1 run (plan_index == task_idx):
+	// forward-compat (ADR-012(c) only-add). Never reuse this field number.
 	PlanIndex     int32 `protobuf:"varint,8,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -679,34 +693,35 @@ func (x *TaskEvent) GetPlanIndex() int32 {
 	return 0
 }
 
-// RunResult — финальный отчёт о прогоне apply.
-// Заменяет ранее предлагавшееся "StateReport" (конфликт с incarnation.state в naming-rules).
+// RunResult is the final report of an apply run.
+// Replaces the earlier-proposed "StateReport" (conflicted with incarnation.state
+// in naming-rules).
 type RunResult struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	ApplyId string                 `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
 	Status  RunStatus              `protobuf:"varint,2,opt,name=status,proto3,enum=soulstack.keeper.v1.RunStatus" json:"status,omitempty"`
-	// Агрегированные state_changes для последующего commit-а incarnation.state Keeper-ом.
-	// Структура — соответствует docs/scenario/orchestration.md (state_changes-блок).
+	// Aggregated state_changes for Keeper's later incarnation.state commit.
+	// Structure matches docs/scenario/orchestration.md (the state_changes block).
 	StateChanges *structpb.Struct `protobuf:"bytes,3,opt,name=state_changes,json=stateChanges,proto3" json:"state_changes,omitempty"`
-	// attempt — fencing-epoch прогона, ЭХО из ApplyRequest.attempt (ADR-027(g),
-	// gate-1 recovery-передизайн). Soul возвращает его как есть. Keeper на ПРИЁМЕ
-	// (correlateRunResult) сверяет с apply_runs.attempt: меньше текущего → результат
-	// от устаревшей попытки (существует пере-claim с бОльшим epoch), коммит state
-	// ОТВЕРГАЕТСЯ (stale-drop). Симметрия с Soul-side AcceptAttempt: фенсим и
-	// исполнение, и приём результата.
+	// attempt: the run's fencing epoch, an ECHO of ApplyRequest.attempt (ADR-027(g),
+	// gate-1 recovery redesign). Soul returns it unchanged. On receipt
+	// (correlateRunResult), Keeper compares it against apply_runs.attempt: smaller
+	// than current -> the result is from a stale attempt (a re-claim with a larger
+	// epoch exists), the state commit is REJECTED (stale-drop). Symmetric with the
+	// Soul-side AcceptAttempt: both execution and result receipt are fenced.
 	//
-	// 0/пусто = старый Soul без эхо (forward-compat, ADR-012(c) only-add):
-	// проверка актуальности НЕ применяется (деградирует до append-only single-winner
-	// guard по статусу). Только never-reuse номера поля.
+	// 0/empty = an old Soul with no echo (forward-compat, ADR-012(c) only-add): the
+	// freshness check is NOT applied (degrades to an append-only single-winner
+	// guard by status). Never reuse this field number.
 	Attempt int32 `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	// passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
-	// терминал которого несёт этот отчёт. Корреляция RunResult → строка прогона —
-	// по (apply_id, sid, passage). Barrier каждого Passage ждёт терминалы своего
-	// среза; финальный итог прогона и единственный commit incarnation.state —
-	// после терминала ПОСЛЕДНЕГО Passage (state-commit НЕ дробится по-Passage,
-	// ADR-056 §г / ADR-009 §7). 0/пусто = единственный Passage (forward-compat,
-	// ADR-012(c) only-add) — поведение как до staged-render. Только never-reuse
-	// номера поля.
+	// passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
+	// whose terminal carries this report. RunResult correlates to a run row by
+	// (apply_id, sid, passage). Each Passage's barrier waits for its own slice's
+	// terminals; the run's final outcome and the single incarnation.state commit
+	// happen after the LAST Passage's terminal (the state commit is NOT split
+	// per-Passage, ADR-056 §d / ADR-009 §7). 0/empty = a single Passage
+	// (forward-compat, ADR-012(c) only-add) — behaves as before staged render.
+	// Never reuse this field number.
 	Passage       int32 `protobuf:"varint,5,opt,name=passage,proto3" json:"passage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -777,12 +792,13 @@ func (x *RunResult) GetPassage() int32 {
 	return 0
 }
 
-// CancelApply — команда Keeper → Soul на отмену текущего прогона.
-// Soul пытается остановить in-flight SoulModule sub-process и шлёт RunResult со status=CANCELLED.
+// CancelApply is Keeper -> Soul's command to cancel the current run.
+// Soul tries to stop the in-flight SoulModule sub-process and sends a RunResult
+// with status=CANCELLED.
 type CancelApply struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	ApplyId string                 `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// Человекочитаемая причина отмены (для логов/аудита).
+	// Human-readable cancellation reason (for logs/audit).
 	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

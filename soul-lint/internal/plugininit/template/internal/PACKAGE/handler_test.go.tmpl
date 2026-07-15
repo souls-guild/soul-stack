@@ -1,5 +1,5 @@
-// L0 unit-skeleton: мок stream-server из pluginv1 + sanity-check Apply.
-// Полноценные L0/L1/L3b — см. tests/ и docs/module-author-guide.md.
+// L0 unit skeleton: mocks the pluginv1 stream server + sanity-checks Apply.
+// Full L0/L1/L3b tests live in tests/ and docs/module-author-guide.md.
 package {{.NamePackage}}
 
 import (
@@ -11,9 +11,9 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// fakeApplyStream — minimal stream-server-stub для unit-теста Apply.
-// Реализует grpc.ServerStreamingServer[pluginv1.ApplyEvent] через no-op
-// gRPC-метаданные и буфер отправленных событий.
+// fakeApplyStream is a minimal stream-server stub for unit-testing Apply.
+// Implements grpc.ServerStreamingServer[pluginv1.ApplyEvent] via no-op
+// gRPC metadata and a buffer of sent events.
 type fakeApplyStream struct {
 	grpc.ServerStream
 	ctx    context.Context
@@ -37,6 +37,6 @@ func TestApply_NoopByDefault(t *testing.T) {
 		t.Fatalf("Apply: unexpected error: %v", err)
 	}
 
-	// TODO: после реализации Apply — заменить на ассерт корректного state_change.
+	// TODO: once Apply is implemented, replace with an assertion on the correct state_change.
 	_ = stream.events
 }

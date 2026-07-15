@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestBaseBeaconValidateOk — дефолт BaseBeacon.Validate возвращает Ok=true.
+// TestBaseBeaconValidateOk checks that the BaseBeacon.Validate default returns Ok=true.
 func TestBaseBeaconValidateOk(t *testing.T) {
 	var b BaseBeacon
 	reply, err := b.Validate(context.Background(), &pluginv1.ValidateVigilRequest{})
@@ -22,8 +22,8 @@ func TestBaseBeaconValidateOk(t *testing.T) {
 	}
 }
 
-// TestBaseBeaconCheckUnknown — дефолт BaseBeacon.Check возвращает State="unknown"
-// без payload/error.
+// TestBaseBeaconCheckUnknown checks that the BaseBeacon.Check default returns
+// State="unknown" with no payload/error.
 func TestBaseBeaconCheckUnknown(t *testing.T) {
 	var b BaseBeacon
 	reply, err := b.Check(context.Background(), &pluginv1.CheckRequest{})
@@ -38,10 +38,11 @@ func TestBaseBeaconCheckUnknown(t *testing.T) {
 	}
 }
 
-// TestServerAdapterDelegates — adapter проксирует Validate/Check к user-impl и
-// пробрасывает ошибки/значения. Покрывает контракт adapter (Spawn-RPC заранит
-// эти же методы из shared/pluginhost; L1-тест pluginhost-а делает реальный
-// gRPC-roundtrip через testdata/beacon-plugin).
+// TestServerAdapterDelegates checks that the adapter proxies Validate/Check to
+// the user impl and propagates errors/values. Covers the adapter's contract
+// (the Spawn-RPC path exercises these same methods from shared/pluginhost;
+// the pluginhost L1 test does a real gRPC roundtrip through
+// testdata/beacon-plugin).
 func TestServerAdapterDelegates(t *testing.T) {
 	wantErr := errors.New("check_boom")
 	payload, _ := structpb.NewStruct(map[string]any{"path": "/etc/nginx.conf"})
@@ -74,7 +75,7 @@ func TestServerAdapterDelegates(t *testing.T) {
 		t.Fatal("Check not called on impl")
 	}
 
-	// Теперь — ошибка пробрасывается.
+	// Now check that the error propagates.
 	impl.mu.Lock()
 	impl.checkErr = wantErr
 	impl.checkCalled = false
@@ -84,7 +85,7 @@ func TestServerAdapterDelegates(t *testing.T) {
 	}
 }
 
-// fakeBeacon — mock Beacon для adapter-тестов.
+// fakeBeacon is a mock Beacon for adapter tests.
 type fakeBeacon struct {
 	mu            sync.Mutex
 	validateReply *pluginv1.ValidateVigilReply

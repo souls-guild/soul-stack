@@ -5,47 +5,51 @@ import (
 	"strconv"
 )
 
-// ProbeResult — итог одного опроса готовности VM поллером [WaitUntilReady].
+// ProbeResult is the outcome of a single VM readiness poll by the
+// [WaitUntilReady] poller.
 type ProbeResult struct {
-	// Ready — VM достигла целевого состояния (running + есть IP/DNS): поллер
-	// перестаёт её опрашивать.
+	// Ready means the VM reached its target state (running + has an
+	// IP/DNS): the poller stops polling it.
 	Ready bool
-	// Err — terminal-ошибка опроса (VM ушла в error/terminated, либо
-	// провайдер вернул детерминированный отказ). Поллер прекращает опрос этой
-	// VM и помечает её failed. Транзиентные ошибки опроса драйвер НЕ возвращает
-	// сюда — он их глотает (вернёт Ready=false, Err=nil) и поллер повторит.
+	// Err is a terminal poll error (the VM went to error/terminated, or the
+	// provider returned a deterministic failure). The poller stops polling
+	// this VM and marks it failed. The driver must NOT return transient poll
+	// errors here — it swallows them (returning Ready=false, Err=nil) and
+	// the poller retries.
 	Err error
 }
 
-// ReadyProbe — per-provider предикат готовности одной VM. Единственное, что
-// драйвер пишет сам для wait-фазы; цикл поллинга/backoff/ctx-cancel/anti-orphan
-// берёт на себя SDK. Драйвер опрашивает VM (DescribeInstances) и возвращает
-// [ProbeResult]. ctx уважать не обязан — поллер сам прерывает ожидание между
-// раундами по ctx.
+// ReadyProbe is a per-provider readiness predicate for a single VM. The
+// only thing a driver writes itself for the wait phase; the
+// polling/backoff/ctx-cancel/anti-orphan loop is handled by the SDK. The
+// driver polls the VM (DescribeInstances) and returns a [ProbeResult]. It
+// doesn't need to honor ctx — the poller itself interrupts the wait between
+// rounds based on ctx.
 type ReadyProbe func(ctx context.Context, vmID string) ProbeResult
 
-// WaitResult — результат [WaitUntilReady] по одной VM.
+// WaitResult is the [WaitUntilReady] outcome for a single VM.
 type WaitResult struct {
 	VMID string
-	// Ready — VM дождалась готовности.
+	// Ready means the VM reached readiness.
 	Ready bool
-	// Err — terminal-ошибка опроса (если была); nil для Ready и для
-	// прерванных по ctx (для них Ready=false, Err=nil — отличить можно по
-	// возврату самого WaitUntilReady = ctx.Err()).
+	// Err is the terminal poll error, if any; nil for Ready and for VMs
+	// interrupted by ctx (for those, Ready=false, Err=nil — distinguish by
+	// WaitUntilReady's own return value = ctx.Err()).
 	Err error
 }
 
-// WaitUntilReady опрашивает все vmIDs предикатом probe с backoff-интервалами,
-// пока каждая VM не станет Ready либо не вернёт terminal-Err. progress — опц.
-// колбэк диагностики (message на каждый раунд), nil допустим.
+// WaitUntilReady polls all vmIDs with the probe predicate at backoff
+// intervals until each VM becomes Ready or returns a terminal Err. progress
+// is an optional diagnostic callback (message on each round); nil is fine.
 //
-// Anti-orphan (reference-приём для тиража): при ctx-cancel/timeout функция НЕ
-// бросает всё — возвращает per-VM [WaitResult] для УЖЕ опрошенных VM (готовые
-// помечены Ready=true, ещё-не-готовые — Ready=false) + ctx.Err(). Драйвер по
-// этому списку понимает, какие VM создались, но не доехали, и помечает их
-// failed с заполненным vm_id — чтобы Keeper мог их Destroy (см. RunInstances-
-// flow в soul-cloud-aws). Без этого ctx-cancel в фазе wait оставил бы orphan-VM
-// без vm_id у Keeper-а.
+// Anti-orphan (a reference technique for the lineup): on ctx-cancel/timeout
+// the function does NOT throw everything away — it returns per-VM
+// [WaitResult] for the VMs ALREADY polled (ready ones marked Ready=true,
+// not-yet-ready ones Ready=false) + ctx.Err(). From this list the driver
+// knows which VMs were created but didn't make it, and marks them failed
+// with vm_id filled in — so Keeper can Destroy them (see the RunInstances
+// flow in soul-cloud-aws). Without this, a ctx-cancel during the wait phase
+// would leave Keeper with orphan VMs lacking a vm_id.
 func WaitUntilReady(ctx context.Context, cfg BackoffConfig, vmIDs []string, probe ReadyProbe, progress func(string)) ([]WaitResult, error) {
 	results := make([]WaitResult, len(vmIDs))
 	for i, id := range vmIDs {
@@ -76,7 +80,7 @@ func WaitUntilReady(ctx context.Context, cfg BackoffConfig, vmIDs []string, prob
 		if progress != nil {
 			progress(waitProgressMsg(len(pending), len(vmIDs), attempt))
 		}
-		// ctx-aware ожидание следующего раунда; отмена → anti-orphan возврат.
+		// ctx-aware wait for the next round; cancellation → anti-orphan return.
 		if err := sleepCtx(ctx, cfg.next(attempt)); err != nil {
 			return results, err
 		}
@@ -88,9 +92,10 @@ func WaitUntilReady(ctx context.Context, cfg BackoffConfig, vmIDs []string, prob
 	return results, nil
 }
 
-// ErrWaitDeadline — wait-поллер исчерпал MaxAttempts, не дождавшись готовности
-// всех VM. Симметрично ctx.DeadlineExceeded, но без зависимости от наличия
-// дедлайна в ctx (лимит задан числом попыток).
+// ErrWaitDeadline means the wait poller exhausted MaxAttempts without all
+// VMs reaching readiness. Symmetric with ctx.DeadlineExceeded, but without
+// depending on a deadline being present in ctx (the limit is set by attempt
+// count).
 var ErrWaitDeadline = waitDeadlineError{}
 
 type waitDeadlineError struct{}

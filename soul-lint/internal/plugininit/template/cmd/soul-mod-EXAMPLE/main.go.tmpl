@@ -1,8 +1,8 @@
-// {{.BinaryName}} — entry-point плагина SoulModule {{.Namespace}}.{{.Name}}.
+// {{.BinaryName}} is the entry point for the {{.Namespace}}.{{.Name}} SoulModule plugin.
 //
-// Плагин запускается host-ом (Soul-демоном) как sub-process с gRPC-stdio
-// handshake (ADR-020). Конкретная реализация Apply / Plan / Validate живёт
-// в internal/{{.NamePackage}}/.
+// The plugin is launched by the host (the Soul daemon) as a sub-process via
+// gRPC-stdio handshake (ADR-020). The actual Apply / Plan / Validate
+// implementation lives in internal/{{.NamePackage}}/.
 package main
 
 import (

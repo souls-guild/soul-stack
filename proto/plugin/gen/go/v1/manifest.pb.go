@@ -22,33 +22,38 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Manifest — корневой документ `manifest.yaml` плагина (ADR-020(a, e),
+// Manifest — the root document of a plugin's `manifest.yaml` (ADR-020(a, e),
 // docs/keeper/plugins.md → Manifest).
 //
-// Парсится `soul-lint`-ом БЕЗ запуска бинаря (требование ADR-009).
-// Wire-формат — YAML на диске; в Go-runtime — это сообщение
-// (parse через YAML→JSON→protojson или через выровненный YAML-парсинг).
+// Parsed by `soul-lint` WITHOUT running the binary (ADR-009 requirement).
+// Wire format is YAML on disk; in the Go runtime it's this message
+// (parsed via YAML→JSON→protojson or aligned YAML parsing).
 type Manifest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Дискриминатор типа плагина (ADR-020(e)). Закрытый enum, см. common.proto.
+	// Plugin type discriminator (ADR-020(e)). Closed enum, see common.proto.
 	Kind Kind `protobuf:"varint,1,opt,name=kind,proto3,enum=soulstack.plugin.v1.Kind" json:"kind,omitempty"`
-	// Версия plugin-протокола, соответствует `proto/plugin/vN/` (ADR-020(c)).
-	// Дублируется в handshake-строке; cross-check внутри плагина и vs
-	// SupportedProtocolVersions host-а. MVP — 1.
-	// Это compat-флаг API, не версия артефакта (исключение из ADR-007).
+	// Plugin protocol version, matching `proto/plugin/vN/` (ADR-020(c)).
+	// Duplicated in the handshake string; cross-checked inside the plugin and
+	// against the host's SupportedProtocolVersions. MVP — 1.
+	// This is an API compat flag, not an artifact version (exception to
+	// ADR-007).
 	ProtocolVersion int32 `protobuf:"varint,2,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	// Коллекция плагина: `core` для встроенных, `wb` / `community` / имя организации.
-	// Regex: `^[a-z][a-z0-9-]{0,30}$` (docs/naming-rules.md → Plugin manifest: regex имён).
+	// Plugin collection: `core` for built-ins, `wb` / `community` / an
+	// organization name.
+	// Regex: `^[a-z][a-z0-9-]{0,30}$` (docs/naming-rules.md → Plugin
+	// manifest: name regexes).
 	Namespace string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// Имя плагина внутри коллекции. Адресация модуля — <namespace>.<name>.<state>.
+	// Plugin name within its collection. Module addressing is
+	// <namespace>.<name>.<state>.
 	// Regex: `^[a-z][a-z0-9-]{0,62}$`.
 	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	// Closed enum capabilities (ADR-020(f), см. common.proto).
+	// Closed enum of capabilities (ADR-020(f), see common.proto).
 	RequiredCapabilities []Capability `protobuf:"varint,5,rep,packed,name=required_capabilities,json=requiredCapabilities,proto3,enum=soulstack.plugin.v1.Capability" json:"required_capabilities,omitempty"`
-	// Strict-контракт touched ресурсов (ADR-020(g), см. common.proto).
+	// Strict contract of touched resources (ADR-020(g), see common.proto).
 	SideEffects []*SideEffect `protobuf:"bytes,6,rep,name=side_effects,json=sideEffects,proto3" json:"side_effects,omitempty"`
-	// Kind-specific блок; форма зависит от `kind:`.
-	// Парсер manifest-а валидирует соответствие kind ↔ заполненного варианта oneof.
+	// Kind-specific block; shape depends on `kind:`.
+	// The manifest parser validates that kind matches the populated oneof
+	// variant.
 	//
 	// Types that are valid to be assigned to Spec:
 	//
@@ -57,11 +62,12 @@ type Manifest struct {
 	//	*Manifest_SshProvider
 	//	*Manifest_SoulBeacon
 	Spec isManifest_Spec `protobuf_oneof:"spec"`
-	// SHA-256-отпечаток бинаря плагина: hex lowercase, ровно 64 символа.
-	// Optional (пусто до подписи Sigil, ADR-026(e)) — proto3 scalar,
-	// пустая строка = «не задано», presence-различие не требуется.
-	// Тип string (hex), а не bytes — консистентно с plugin_sigils.sha256
-	// (TEXT CHECK hex64) и computeFileDigest (hex.EncodeToString lowercase).
+	// SHA-256 fingerprint of the plugin binary: lowercase hex, exactly 64
+	// characters. Optional (empty until signed by Sigil, ADR-026(e)) — a
+	// proto3 scalar; empty string means "unset," no presence distinction
+	// needed.
+	// Type is string (hex), not bytes — consistent with plugin_sigils.sha256
+	// (TEXT CHECK hex64) and computeFileDigest (hex.EncodeToString lowercase).
 	BinarySha256  string `protobuf:"bytes,10,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -217,13 +223,13 @@ func (*Manifest_SshProvider) isManifest_Spec() {}
 
 func (*Manifest_SoulBeacon) isManifest_Spec() {}
 
-// SoulModuleSpec — kind-specific spec для `kind: soul_module`
-// (docs/keeper/plugins.md → spec для kind: soul_module).
+// SoulModuleSpec — kind-specific spec for `kind: soul_module`
+// (docs/keeper/plugins.md → spec for kind: soul_module).
 type SoulModuleSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Map поддерживаемых состояний модуля. Ключ — <state-name>,
+	// Map of the module's supported states. Key is <state-name>,
 	// regex `^[a-z][a-z0-9-]{0,30}$` (`installed` / `running` / `restarted` / …).
-	// Адресация шага destiny — <namespace>.<name>.<state>.
+	// Destiny step addressing is <namespace>.<name>.<state>.
 	States        map[string]*StateDef `protobuf:"bytes,1,rep,name=states,proto3" json:"states,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -266,15 +272,15 @@ func (x *SoulModuleSpec) GetStates() map[string]*StateDef {
 	return nil
 }
 
-// StateDef — одно state модуля внутри SoulModuleSpec.states.
+// StateDef — a single module state within SoulModuleSpec.states.
 type StateDef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Input-схема Soul Stack input-DSL (docs/input.md).
-	// Используется `Struct`, потому что input-DSL — собственный DSL,
-	// не имеющий фиксированной proto-схемы.
-	// `soul-lint` валидирует params: каждой задачи destiny против этой схемы.
+	// Input schema in the Soul Stack input DSL (docs/input.md).
+	// Uses `Struct` because the input DSL is its own DSL with no fixed proto
+	// schema.
+	// `soul-lint` validates each destiny task's params against this schema.
 	Input *structpb.Struct `protobuf:"bytes,1,opt,name=input,proto3" json:"input,omitempty"`
-	// Человекочитаемое описание для документации / UI.
+	// Human-readable description for documentation / UI.
 	Description   string `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -324,16 +330,16 @@ func (x *StateDef) GetDescription() string {
 	return ""
 }
 
-// CloudDriverSpec — kind-specific spec для `kind: cloud_driver`
-// (docs/keeper/plugins.md → spec для kind: cloud_driver).
+// CloudDriverSpec — kind-specific spec for `kind: cloud_driver`
+// (docs/keeper/plugins.md → spec for kind: cloud_driver).
 type CloudDriverSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Семейство cloud-провайдера (`aws` / `gcp` / `yandex-cloud` / `openstack`).
-	// Информативное поле. Optional.
+	// Cloud provider family (`aws` / `gcp` / `yandex-cloud` / `openstack`).
+	// Informational field. Optional.
 	ProviderKind string `protobuf:"bytes,1,opt,name=provider_kind,json=providerKind,proto3" json:"provider_kind,omitempty"`
-	// JSON Schema VM-профиля (draft 2020-12).
-	// Используется при создании Profile через OpenAPI/MCP для валидации
-	// (docs/keeper/cloud.md). `Struct` — потому что JSON Schema свободной формы.
+	// VM profile JSON Schema (draft 2020-12).
+	// Used when creating a Profile via OpenAPI/MCP for validation
+	// (docs/keeper/cloud.md). `Struct` because JSON Schema is free-form.
 	ProfileSchema *structpb.Struct `protobuf:"bytes,2,opt,name=profile_schema,json=profileSchema,proto3" json:"profile_schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -383,15 +389,15 @@ func (x *CloudDriverSpec) GetProfileSchema() *structpb.Struct {
 	return nil
 }
 
-// SshProviderSpec — kind-specific spec для `kind: ssh_provider`
-// (docs/keeper/plugins.md → spec для kind: ssh_provider).
+// SshProviderSpec — kind-specific spec for `kind: ssh_provider`
+// (docs/keeper/plugins.md → spec for kind: ssh_provider).
 type SshProviderSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Тип SSH-провайдера: convention disambiguation
+	// SSH provider type: a convention for disambiguation
 	// (`vault_ssh_ca` / `static_key` / `teleport` / …).
-	// Влияет на UI/документацию, но не на контракт Sign/Authorize.
+	// Affects UI/documentation but not the Sign/Authorize contract.
 	ProviderKind string `protobuf:"bytes,1,opt,name=provider_kind,json=providerKind,proto3" json:"provider_kind,omitempty"`
-	// JSON Schema параметров провайдера (например, `vault_mount` для `vault_ssh_ca`).
+	// JSON Schema for provider params (e.g. `vault_mount` for `vault_ssh_ca`).
 	// Optional, default `{}`.
 	ParamsSchema  *structpb.Struct `protobuf:"bytes,2,opt,name=params_schema,json=paramsSchema,proto3" json:"params_schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -442,18 +448,19 @@ func (x *SshProviderSpec) GetParamsSchema() *structpb.Struct {
 	return nil
 }
 
-// SoulBeaconSpec — kind-specific spec для `kind: soul_beacon`
-// (ADR-030 V5-2, docs/keeper/plugins.md → spec для kind: soul_beacon).
+// SoulBeaconSpec — kind-specific spec for `kind: soul_beacon`
+// (ADR-030 V5-2, docs/keeper/plugins.md → spec for kind: soul_beacon).
 //
-// Beacon — read-only по конструкции (наблюдает, не мутирует хост). states-map
-// SoulModule здесь не нужна: у beacon один тип операции (Check); семантика
-// «состояния» — на уровне scheduler-а (last-state edge-triggered). Vigil
-// адресуется как `<namespace>.<name>` в `VigilDef.check`.
+// Beacon is read-only by construction (observes, never mutates the host).
+// No states-map like SoulModule is needed here: a beacon has one operation
+// type (Check); "state" semantics live at the scheduler level
+// (edge-triggered last-state). A Vigil is addressed as `<namespace>.<name>`
+// in `VigilDef.check`.
 type SoulBeaconSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// JSON Schema params Vigil (draft 2020-12). Используется оператором при
-	// создании Vigil через OpenAPI/MCP для валидации; runtime-проверки —
-	// через SoulBeacon.Validate.
+	// JSON Schema for Vigil params (draft 2020-12). Used by the operator when
+	// creating a Vigil via OpenAPI/MCP for validation; runtime checks go
+	// through SoulBeacon.Validate.
 	ParamsSchema  *structpb.Struct `protobuf:"bytes,1,opt,name=params_schema,json=paramsSchema,proto3" json:"params_schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

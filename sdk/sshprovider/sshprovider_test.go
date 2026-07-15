@@ -8,8 +8,8 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// TestBaseProviderSignEmpty — дефолт BaseProvider.Sign возвращает пустой
-// SignReply без ошибки (no-op перед переопределением автором).
+// TestBaseProviderSignEmpty verifies the BaseProvider.Sign default returns
+// an empty SignReply without error (no-op before the author overrides it).
 func TestBaseProviderSignEmpty(t *testing.T) {
 	var b BaseProvider
 	reply, err := b.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "root"})
@@ -21,8 +21,8 @@ func TestBaseProviderSignEmpty(t *testing.T) {
 	}
 }
 
-// TestBaseProviderAuthorizeAllowed — дефолт BaseProvider.Authorize отдаёт
-// allowed=true (allowlist по умолчанию для smoke-test-ов).
+// TestBaseProviderAuthorizeAllowed verifies the BaseProvider.Authorize
+// default returns allowed=true (allow-by-default for smoke tests).
 func TestBaseProviderAuthorizeAllowed(t *testing.T) {
 	var b BaseProvider
 	reply, err := b.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: "h", User: "root"})
@@ -34,8 +34,8 @@ func TestBaseProviderAuthorizeAllowed(t *testing.T) {
 	}
 }
 
-// TestServerAdapterDelegates — adapter проксирует вызовы к user-impl
-// с правильными параметрами и пробрасывает ошибки.
+// TestServerAdapterDelegates verifies the adapter proxies calls to the
+// user-impl with the correct parameters and propagates errors.
 func TestServerAdapterDelegates(t *testing.T) {
 	wantErr := errors.New("vault down")
 	impl := &fakeProvider{
@@ -66,7 +66,7 @@ func TestServerAdapterDelegates(t *testing.T) {
 	}
 }
 
-// fakeProvider — mock-implementation SshProvider для adapter-тестов.
+// fakeProvider is a mock SshProvider implementation for adapter tests.
 type fakeProvider struct {
 	signHost       string
 	signUser       string

@@ -1,14 +1,14 @@
-// L0 — hermetic-тесты без внешних зависимостей. Цель: проверить, что плагин
-// корректно отвечает на pluginv1.SoulModule_ApplyServer через сабмок (без
-// поднятия настоящего gRPC-сервера и host-а).
+// L0 — hermetic tests with no external dependencies. Goal: verify that the
+// plugin responds correctly to pluginv1.SoulModule_ApplyServer via a submock
+// (without spinning up a real gRPC server or host).
 //
-// Реальные test cases пишутся в internal/{{.NamePackage}}/handler_test.go;
-// этот файл — only placeholder для L0-pipeline (`make test`).
+// Real test cases belong in internal/{{.NamePackage}}/handler_test.go;
+// this file is only a placeholder for the L0 pipeline (`make test`).
 package tests_test
 
 import "testing"
 
 func TestL0_Placeholder(t *testing.T) {
-	// TODO: реализовать сценарии L0 после Apply-имплементации.
+	// TODO: implement L0 scenarios once Apply is implemented.
 	t.Skip("L0 skeleton: см. internal/{{.NamePackage}}/handler_test.go")
 }

@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// Статвалидатор (через shared/config) обязан знать ключ source: и format: sid
-// (ADR-044 S-T1) — иначе они поднимаются как unknown_key / input_format_invalid.
+// The static validator (via shared/config) must know the source: key and
+// format: sid (ADR-044 S-T1) — otherwise they'd be raised as unknown_key /
+// input_format_invalid.
 
 func TestInputSourceFormatSID_NotUnknown(t *testing.T) {
 	src := `name: x
